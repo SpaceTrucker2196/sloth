@@ -5,6 +5,8 @@
 
 #include "ntop.h"
 #include "tui.h"
+#include "history.h"
+#include "views/iface.h"
 
 static ntop_state_t g_state;
 static volatile int g_quit = 0;
@@ -17,6 +19,33 @@ static void poll_data(ntop_state_t *s) {
 #ifdef WITH_WIFI
     s->ap_count = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);
 #endif
+    history_update(s);
+    /* clamp selection in case interface count shrunk */
+    if (s->iface_sel >= s->iface_count && s->iface_count > 0)
+        s->iface_sel = s->iface_count - 1;
+}
+
+static void handle_key(ntop_state_t *s, int key) {
+    switch (key) {
+    case 'q': case 'Q':
+        g_quit = 1;
+        return;
+    case '1': s->active_view = VIEW_IFACE;   return;
+    case '2': s->active_view = VIEW_CONNS;   return;
+    case '3': s->active_view = VIEW_WIFI;    return;
+    case '4': s->active_view = VIEW_PACKETS; return;
+    case '\t':
+        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
+        return;
+    default:
+        break;
+    }
+
+    /* delegate remaining keys to the active view */
+    switch (s->active_view) {
+    case VIEW_IFACE: view_iface_key(s, key); break;
+    default: break;
+    }
 }
 
 int main(void) {
@@ -33,22 +62,7 @@ int main(void) {
     while (!g_quit) {
         poll_data(&g_state);
         tui_draw(&g_state);
-
-        int key = tui_poll_key(g_state.poll_ms);
-        switch (key) {
-        case 'q': case 'Q':
-            g_quit = 1;
-            break;
-        case '1': g_state.active_view = VIEW_IFACE;   break;
-        case '2': g_state.active_view = VIEW_CONNS;   break;
-        case '3': g_state.active_view = VIEW_WIFI;    break;
-        case '4': g_state.active_view = VIEW_PACKETS; break;
-        case '\t':
-            g_state.active_view = (view_t)((g_state.active_view + 1) % VIEW_COUNT);
-            break;
-        default:
-            break;
-        }
+        handle_key(&g_state, tui_poll_key(g_state.poll_ms));
     }
 
     tui_cleanup();

@@ -3,13 +3,18 @@
 
 #include <stdint.h>
 
-#define NTOP_VERSION "0.1.0"
+#define NTOP_VERSION "0.2.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
 #define MAX_WIFI_APS 64
 #define MAX_PACKETS  256
 #define POLL_MS      1000
+#define HIST_LEN     30    /* rate history samples per interface (sparkline) */
+
+/* Cross-platform key codes — outside ASCII range, returned by tui_poll_key() */
+#define NTOP_KEY_UP   0x101
+#define NTOP_KEY_DOWN 0x102
 
 /* ── Views ──────────────────────────────────────────────── */
 typedef enum {
@@ -30,6 +35,15 @@ typedef struct {
     double   rx_rate;   /* bytes/sec since last poll */
     double   tx_rate;
 } iface_stat_t;
+
+/* ── Interface rate history (sparkline data) ────────────── */
+typedef struct {
+    char   name[16];
+    double rx[HIST_LEN];
+    double tx[HIST_LEN];
+    int    head;    /* next write slot */
+    int    count;   /* entries populated (≤ HIST_LEN) */
+} iface_hist_t;
 
 /* ── Connections ────────────────────────────────────────── */
 #define PROTO_TCP 6
@@ -75,6 +89,10 @@ typedef struct {
 
     iface_stat_t  ifaces[MAX_IFACES];
     int           iface_count;
+    iface_hist_t  iface_hist[MAX_IFACES];  /* rate history, keyed by name */
+    int           iface_sel;               /* selected row in iface view */
+    char          iface_hidden[MAX_IFACES][16]; /* hidden interface names */
+    int           iface_hidden_count;
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;

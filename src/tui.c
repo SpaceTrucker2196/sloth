@@ -96,7 +96,10 @@ void tui_draw(const ntop_state_t *s) {
 int tui_poll_key(int timeout_ms) {
     timeout(timeout_ms);
     int ch = getch();
-    return (ch == ERR) ? 0 : ch;
+    if (ch == ERR)      return 0;
+    if (ch == KEY_UP)   return NTOP_KEY_UP;
+    if (ch == KEY_DOWN) return NTOP_KEY_DOWN;
+    return ch;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -141,11 +144,11 @@ void tui_draw(const ntop_state_t *s) {
     fflush(stdout);
 }
 
-int tui_poll_key(int timeout_ms) {
+static int read_char_timeout(int us) {
     fd_set fds;
     struct timeval tv;
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    tv.tv_sec  = 0;
+    tv.tv_usec = us;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
     if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
@@ -153,7 +156,35 @@ int tui_poll_key(int timeout_ms) {
         if (read(STDIN_FILENO, &c, 1) == 1)
             return (int)c;
     }
-    return 0;
+    return -1;
+}
+
+int tui_poll_key(int timeout_ms) {
+    fd_set fds;
+    struct timeval tv;
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
+        return 0;
+
+    unsigned char c = 0;
+    if (read(STDIN_FILENO, &c, 1) != 1)
+        return 0;
+
+    if (c != '\033')
+        return (int)c;
+
+    /* ESC — try to read an ANSI escape sequence within 10 ms */
+    int b = read_char_timeout(10000);
+    if (b != '[')
+        return '\033';   /* bare ESC or unrecognised sequence */
+
+    int d = read_char_timeout(10000);
+    if (d == 'A') return NTOP_KEY_UP;
+    if (d == 'B') return NTOP_KEY_DOWN;
+    return '\033';
 }
 
 #endif /* WITH_NCURSES */

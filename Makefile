@@ -10,6 +10,7 @@ WITH_WIFI    ?= 1
 
 SRCS = src/main.c          \
        src/tui.c           \
+       src/history.c       \
        src/views/iface.c   \
        src/views/conns.c   \
        src/views/wifi.c    \
@@ -18,6 +19,7 @@ SRCS = src/main.c          \
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
     SRCS   += src/platform/linux.c
+    SRCS   += src/platform/linux_parse.c
     CFLAGS += -DPLATFORM_LINUX
 else ifeq ($(UNAME),Darwin)
     SRCS   += src/platform/bsd.c
@@ -79,6 +81,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_rates.c         \
             tests/test_state.c         \
             tests/test_scenario.c      \
+            src/history.c              \
             src/platform/linux_parse.c \
             src/views/iface.c          \
             src/views/conns.c          \

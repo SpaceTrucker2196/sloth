@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "ntop.h"
+#include "history.h"
 
 /* Tests for ntop_state_t logic — view switching, ring buffer, etc. */
 
@@ -99,6 +100,153 @@ void test_state_zero_init(void) {
     ASSERT_EQ((int)s.active_view, 0);
 }
 
+/* ── iface history ───────────────────────────────────────── */
+
+void test_history_find_new_slot(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    iface_hist_t *h = history_find(&s, "eth0");
+    ASSERT(h != NULL);
+    ASSERT_STR(h->name, "eth0");
+    ASSERT_EQ(h->count, 0);
+}
+
+void test_history_find_same_slot(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    iface_hist_t *a = history_find(&s, "eth0");
+    iface_hist_t *b = history_find(&s, "eth0");
+    ASSERT(a == b);   /* same pointer */
+}
+
+void test_history_update_pushes_rates(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+
+    s.iface_count = 1;
+    memcpy(s.ifaces[0].name, "eth0", 5);
+    s.ifaces[0].rx_rate = 10e6;
+    s.ifaces[0].tx_rate =  5e6;
+
+    history_update(&s);
+
+    iface_hist_t *h = history_find(&s, "eth0");
+    ASSERT(h != NULL);
+    ASSERT_EQ(h->count, 1);
+    /* head advanced to 1; last-written slot is head-1 = 0 */
+    ASSERT_NEAR(h->rx[0], 10e6, 1.0);
+    ASSERT_NEAR(h->tx[0],  5e6, 1.0);
+}
+
+void test_history_update_multiple_polls(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.iface_count = 1;
+    memcpy(s.ifaces[0].name, "eth0", 5);
+
+    for (int i = 0; i < HIST_LEN; i++) {
+        s.ifaces[0].rx_rate = (double)(i * 1000);
+        history_update(&s);
+    }
+
+    iface_hist_t *h = history_find(&s, "eth0");
+    ASSERT(h != NULL);
+    ASSERT_EQ(h->count, HIST_LEN);
+    ASSERT_EQ(h->head, 0);   /* wrapped back to 0 */
+}
+
+void test_history_update_wraps_ring(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.iface_count = 1;
+    memcpy(s.ifaces[0].name, "eth0", 5);
+
+    /* overfill by 5 */
+    for (int i = 0; i < HIST_LEN + 5; i++) {
+        s.ifaces[0].rx_rate = (double)(i);
+        history_update(&s);
+    }
+
+    iface_hist_t *h = history_find(&s, "eth0");
+    ASSERT_EQ(h->count, HIST_LEN);   /* capped */
+    /* newest value is HIST_LEN+4, stored at head-1 */
+    int last = (h->head - 1 + HIST_LEN) % HIST_LEN;
+    ASSERT_NEAR(h->rx[last], (double)(HIST_LEN + 4), 0.5);
+}
+
+void test_history_multiple_interfaces(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.iface_count = 2;
+    memcpy(s.ifaces[0].name, "eth0",  5);
+    memcpy(s.ifaces[1].name, "wlan0", 6);
+    s.ifaces[0].rx_rate = 100e6;
+    s.ifaces[1].rx_rate =  50e6;
+
+    history_update(&s);
+
+    iface_hist_t *h0 = history_find(&s, "eth0");
+    iface_hist_t *h1 = history_find(&s, "wlan0");
+    ASSERT(h0 != h1);
+    ASSERT_NEAR(h0->rx[0], 100e6, 1.0);
+    ASSERT_NEAR(h1->rx[0],  50e6, 1.0);
+}
+
+/* ── iface toggle ────────────────────────────────────────── */
+
+#include "views/iface.h"
+
+static ntop_state_t make_state_with_ifaces(int n) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    static const char *names[] = { "eth0", "wlan0", "lo", "tun0" };
+    s.iface_count = n < 4 ? n : 4;
+    for (int i = 0; i < s.iface_count; i++)
+        memcpy(s.ifaces[i].name, names[i], strlen(names[i]) + 1);
+    return s;
+}
+
+void test_toggle_hide(void) {
+    ntop_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;   /* eth0 selected */
+    view_iface_key(&s, 't');
+    ASSERT_EQ(s.iface_hidden_count, 1);
+    ASSERT_STR(s.iface_hidden[0], "eth0");
+}
+
+void test_toggle_unhide(void) {
+    ntop_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 't');   /* hide eth0 */
+    view_iface_key(&s, 't');   /* unhide eth0 */
+    ASSERT_EQ(s.iface_hidden_count, 0);
+}
+
+void test_toggle_navigation(void) {
+    ntop_state_t s = make_state_with_ifaces(3);
+    ASSERT_EQ(s.iface_sel, 0);
+    view_iface_key(&s, NTOP_KEY_DOWN);
+    ASSERT_EQ(s.iface_sel, 1);
+    view_iface_key(&s, NTOP_KEY_DOWN);
+    ASSERT_EQ(s.iface_sel, 2);
+    view_iface_key(&s, NTOP_KEY_DOWN);
+    ASSERT_EQ(s.iface_sel, 2);   /* clamped at max */
+    view_iface_key(&s, NTOP_KEY_UP);
+    ASSERT_EQ(s.iface_sel, 1);
+    view_iface_key(&s, NTOP_KEY_UP);
+    ASSERT_EQ(s.iface_sel, 0);
+    view_iface_key(&s, NTOP_KEY_UP);
+    ASSERT_EQ(s.iface_sel, 0);   /* clamped at 0 */
+}
+
+void test_toggle_hides_selected(void) {
+    ntop_state_t s = make_state_with_ifaces(3);
+    view_iface_key(&s, NTOP_KEY_DOWN);   /* sel = 1 (wlan0) */
+    view_iface_key(&s, 't');
+    ASSERT_EQ(s.iface_hidden_count, 1);
+    ASSERT_STR(s.iface_hidden[0], "wlan0");
+}
+
 void run_state_tests(void) {
     TEST_SUITE("view switching");
     RUN_TEST(test_view_tab_cycles_forward);
@@ -114,4 +262,18 @@ void run_state_tests(void) {
 
     TEST_SUITE("state defaults");
     RUN_TEST(test_state_zero_init);
+
+    TEST_SUITE("iface history");
+    RUN_TEST(test_history_find_new_slot);
+    RUN_TEST(test_history_find_same_slot);
+    RUN_TEST(test_history_update_pushes_rates);
+    RUN_TEST(test_history_update_multiple_polls);
+    RUN_TEST(test_history_update_wraps_ring);
+    RUN_TEST(test_history_multiple_interfaces);
+
+    TEST_SUITE("iface toggle + navigation");
+    RUN_TEST(test_toggle_hide);
+    RUN_TEST(test_toggle_unhide);
+    RUN_TEST(test_toggle_navigation);
+    RUN_TEST(test_toggle_hides_selected);
 }
