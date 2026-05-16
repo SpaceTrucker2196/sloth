@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <locale.h>
 
 #ifdef WITH_NCURSES
 #  include <curses.h>
@@ -56,6 +57,7 @@ void tui_sel(void)    { attrset(COLOR_PAIR(CP_NORMAL) | A_REVERSE); }
 void tui_reset(void)  { attrset(COLOR_PAIR(CP_NORMAL)); }
 
 void tui_init(void) {
+    setlocale(LC_ALL, "");  /* must precede initscr() for UTF-8 to work */
     initscr();
     cbreak();
     noecho();
