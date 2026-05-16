@@ -50,15 +50,32 @@ typedef struct {
 #define PROTO_UDP 17
 
 typedef struct {
-    char     local_addr[46];
-    char     remote_addr[46];
-    uint16_t local_port;
-    uint16_t remote_port;
-    int      proto;
-    int      state;
-    int      pid;
-    char     proc[16];
+    char          local_addr[46];
+    char          remote_addr[46];
+    uint16_t      local_port;
+    uint16_t      remote_port;
+    int           proto;
+    int           state;
+    int           pid;
+    char          proc[16];
+    unsigned long inode;   /* socket inode for PID resolution */
 } conn_t;
+
+/* ── Connection view state ──────────────────────────────── */
+typedef enum {
+    CONN_SORT_STATE = 0,
+    CONN_SORT_PROTO = 1,
+    CONN_SORT_LPORT = 2,
+    CONN_SORT_PID   = 3,
+    CONN_SORT_COUNT
+} conn_sort_t;
+
+typedef enum {
+    CONN_FILTER_ALL = 0,
+    CONN_FILTER_TCP = 1,
+    CONN_FILTER_UDP = 2,
+    CONN_FILTER_COUNT
+} conn_filter_t;
 
 /* ── WiFi APs ───────────────────────────────────────────── */
 typedef struct {
@@ -96,6 +113,11 @@ typedef struct {
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;
+    int           conn_sel;
+    conn_sort_t   conn_sort;
+    conn_filter_t conn_filter;
+    int           conn_idx[MAX_CONNS]; /* sorted+filtered indices into conns[] */
+    int           conn_idx_count;
 
     wifi_ap_t     aps[MAX_WIFI_APS];
     int           ap_count;

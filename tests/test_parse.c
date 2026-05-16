@@ -236,6 +236,83 @@ void test_parse_conns_max_limit(void) {
     ASSERT_EQ(n, 1);
 }
 
+/* ── /proc/net/tcp6 fixture ─────────────────────────────── */
+/*
+ * ::1 local port 53 (LISTEN), remote ::  port 0
+ * w[3] = 0x01000000 → b[12..15] = 00 00 00 01 → ::1
+ */
+static const char *PROC_NET_TCP6 =
+    "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    "   0: 00000000000000000000000001000000:0035 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000   101        0 55555\n";
+
+/* ── parse_hex_addr6 tests ──────────────────────────────── */
+
+void test_hex_addr6_loopback(void) {
+    char addr[46];
+    uint16_t port;
+    /* ::1, port 80 */
+    parse_hex_addr6("00000000000000000000000001000000:0050", addr, &port);
+    ASSERT_STR(addr, "::1");
+    ASSERT_EQ(port, 80);
+}
+
+void test_hex_addr6_all_zeros(void) {
+    char addr[46];
+    uint16_t port;
+    parse_hex_addr6("00000000000000000000000000000000:0000", addr, &port);
+    ASSERT_STR(addr, "::");
+    ASSERT_EQ(port, 0);
+}
+
+void test_hex_addr6_ipv4_mapped(void) {
+    char addr[46];
+    uint16_t port;
+    /* ::ffff:8.8.8.8 (port 443) */
+    parse_hex_addr6("0000000000000000ffff000008080808:01BB", addr, &port);
+    ASSERT_STR(addr, "::ffff:8.8.8.8");
+    ASSERT_EQ(port, 443);
+}
+
+/* ── parse_proc_conns6 tests ────────────────────────────── */
+
+void test_parse_conns6_listen(void) {
+    FILE *f = tmpfile();
+    fputs(PROC_NET_TCP6, f);
+    rewind(f);
+
+    conn_t conns[MAX_CONNS];
+    int n = 0;
+    parse_proc_conns6(f, PROTO_TCP, conns, MAX_CONNS, &n);
+    fclose(f);
+
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(conns[0].proto, PROTO_TCP);
+    ASSERT_EQ(conns[0].state, 0x0A);  /* LISTEN */
+    ASSERT_STR(conns[0].local_addr, "::1");
+    ASSERT_EQ(conns[0].local_port, 53);
+    ASSERT_EQ(conns[0].inode, 55555UL);
+}
+
+void test_parse_conns6_appends(void) {
+    /* Verify conns6 appends after existing IPv4 entries */
+    FILE *f4 = tmpfile();
+    FILE *f6 = tmpfile();
+    fputs(PROC_NET_TCP, f4);
+    fputs(PROC_NET_TCP6, f6);
+    rewind(f4);
+    rewind(f6);
+
+    conn_t conns[MAX_CONNS];
+    int n = 0;
+    parse_proc_conns(f4,  PROTO_TCP, conns, MAX_CONNS, &n);
+    parse_proc_conns6(f6, PROTO_TCP, conns, MAX_CONNS, &n);
+    fclose(f4);
+    fclose(f6);
+
+    ASSERT_EQ(n, 4);  /* 3 IPv4 + 1 IPv6 */
+    ASSERT_STR(conns[3].local_addr, "::1");
+}
+
 void run_parse_tests(void) {
     TEST_SUITE("parse_hex_addr");
     RUN_TEST(test_hex_addr_loopback);
@@ -255,4 +332,13 @@ void run_parse_tests(void) {
     RUN_TEST(test_parse_conns_udp_basic);
     RUN_TEST(test_parse_conns_appends);
     RUN_TEST(test_parse_conns_max_limit);
+
+    TEST_SUITE("parse_hex_addr6");
+    RUN_TEST(test_hex_addr6_loopback);
+    RUN_TEST(test_hex_addr6_all_zeros);
+    RUN_TEST(test_hex_addr6_ipv4_mapped);
+
+    TEST_SUITE("parse_proc_conns6");
+    RUN_TEST(test_parse_conns6_listen);
+    RUN_TEST(test_parse_conns6_appends);
 }

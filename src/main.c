@@ -7,6 +7,7 @@
 #include "tui.h"
 #include "history.h"
 #include "views/iface.h"
+#include "views/conns.h"
 
 static ntop_state_t g_state;
 static volatile int g_quit = 0;
@@ -20,6 +21,7 @@ static void poll_data(ntop_state_t *s) {
     s->ap_count = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);
 #endif
     history_update(s);
+    conn_rebuild_idx(s);
     /* clamp selection in case interface count shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
         s->iface_sel = s->iface_count - 1;
@@ -43,7 +45,8 @@ static void handle_key(ntop_state_t *s, int key) {
 
     /* delegate remaining keys to the active view */
     switch (s->active_view) {
-    case VIEW_IFACE: view_iface_key(s, key); break;
+    case VIEW_IFACE: view_iface_key(s, key);  break;
+    case VIEW_CONNS: view_conns_key(s, key);  break;
     default: break;
     }
 }

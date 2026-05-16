@@ -6,6 +6,7 @@
 
 #include "ntop.h"
 #include "platform/linux_parse.h"
+#include "platform/linux_pid.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -63,14 +64,11 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
 int linux_get_conns(conn_t *out, int max) {
     int n = 0;
     FILE *f;
-    if ((f = fopen("/proc/net/tcp", "r")) != NULL) {
-        parse_proc_conns(f, PROTO_TCP, out, max, &n);
-        fclose(f);
-    }
-    if ((f = fopen("/proc/net/udp", "r")) != NULL) {
-        parse_proc_conns(f, PROTO_UDP, out, max, &n);
-        fclose(f);
-    }
+    if ((f = fopen("/proc/net/tcp",  "r")) != NULL) { parse_proc_conns(f,  PROTO_TCP, out, max, &n); fclose(f); }
+    if ((f = fopen("/proc/net/tcp6", "r")) != NULL) { parse_proc_conns6(f, PROTO_TCP, out, max, &n); fclose(f); }
+    if ((f = fopen("/proc/net/udp",  "r")) != NULL) { parse_proc_conns(f,  PROTO_UDP, out, max, &n); fclose(f); }
+    if ((f = fopen("/proc/net/udp6", "r")) != NULL) { parse_proc_conns6(f, PROTO_UDP, out, max, &n); fclose(f); }
+    resolve_pids(out, n);
     return n;
 }
 

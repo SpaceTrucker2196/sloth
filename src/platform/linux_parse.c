@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+#include <arpa/inet.h>   /* inet_ntop — Linux/POSIX */
 #include "ntop.h"
 #include "platform/linux_parse.h"
+
+/* ── IPv4 helpers ────────────────────────────────────────── */
 
 void parse_hex_addr(const char *hex, char *addr, uint16_t *port) {
     unsigned long ip = 0;
@@ -15,6 +19,28 @@ void parse_hex_addr(const char *hex, char *addr, uint16_t *port) {
              (ip >> 24) & 0xffUL);
     *port = (uint16_t)p;
 }
+
+/* ── IPv6 helpers ────────────────────────────────────────── */
+
+void parse_hex_addr6(const char *hex, char *addr, uint16_t *port) {
+    /* hex is 32 hex chars (4 × 8-char LE words) followed by ":PPPP" */
+    uint32_t w[4] = {0, 0, 0, 0};
+    unsigned int p = 0;
+    sscanf(hex, "%08X%08X%08X%08X:%X", &w[0], &w[1], &w[2], &w[3], &p);
+
+    /* reconstruct IPv6 bytes from little-endian 32-bit words */
+    uint8_t b[16];
+    for (int i = 0; i < 4; i++) {
+        b[i*4+0] = (uint8_t)((w[i]      ) & 0xff);
+        b[i*4+1] = (uint8_t)((w[i] >>  8) & 0xff);
+        b[i*4+2] = (uint8_t)((w[i] >> 16) & 0xff);
+        b[i*4+3] = (uint8_t)((w[i] >> 24) & 0xff);
+    }
+    inet_ntop(AF_INET6, b, addr, 46);
+    *port = (uint16_t)p;
+}
+
+/* ── /proc/net/dev parser ────────────────────────────────── */
 
 int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
     char line[256];
@@ -30,8 +56,8 @@ int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
         char *name = line;
         while (*name == ' ') name++;
 
-        /* columns: rx(bytes pkts errs drop fifo frame cmp mcast)
-                    tx(bytes pkts errs drop fifo colls carrier cmp) */
+        /* rx: bytes pkts errs drop fifo frame cmp mcast
+           tx: bytes pkts errs drop fifo colls carrier cmp */
         unsigned long long v[16] = {0};
         if (sscanf(colon + 1,
                    "%llu %llu %llu %llu %llu %llu %llu %llu"
@@ -54,11 +80,12 @@ int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
         s->rx_packets = (uint64_t)v[1];
         s->tx_bytes   = (uint64_t)v[8];
         s->tx_packets = (uint64_t)v[9];
-        /* rx_rate / tx_rate stay zero — caller computes with timestamps */
         n++;
     }
     return n;
 }
+
+/* ── /proc/net/tcp|udp parser (IPv4) ─────────────────────── */
 
 void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
     char line[512];
@@ -67,7 +94,12 @@ void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
     while (*n < max && fgets(line, sizeof(line), f)) {
         char local[32], remote[32];
         unsigned int state = 0;
-        if (sscanf(line, " %*d: %31s %31s %X", local, remote, &state) < 3)
+        unsigned long inode = 0;
+        /* fields after slot#: local remote state tx:rx tr:tm retrnsmt uid timeout inode */
+        if (sscanf(line,
+                   " %*d: %31s %31s %X"
+                   " %*X:%*X %*X:%*X %*X %*u %*u %lu",
+                   local, remote, &state, &inode) < 3)
             continue;
 
         conn_t *c = &out[*n];
@@ -76,6 +108,35 @@ void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
         parse_hex_addr(remote, c->remote_addr, &c->remote_port);
         c->proto = proto;
         c->state = (int)state;
+        c->inode = inode;
+        (*n)++;
+    }
+}
+
+/* ── /proc/net/tcp6|udp6 parser (IPv6) ───────────────────── */
+
+void parse_proc_conns6(FILE *f, int proto, conn_t *out, int max, int *n) {
+    char line[640];
+    fgets(line, sizeof(line), f);   /* skip header */
+
+    while (*n < max && fgets(line, sizeof(line), f)) {
+        /* IPv6 address fields are 32+1+4 = 37 chars each */
+        char local[40], remote[40];
+        unsigned int  state = 0;
+        unsigned long inode = 0;
+        if (sscanf(line,
+                   " %*d: %39s %39s %X"
+                   " %*X:%*X %*X:%*X %*X %*u %*u %lu",
+                   local, remote, &state, &inode) < 3)
+            continue;
+
+        conn_t *c = &out[*n];
+        memset(c, 0, sizeof(*c));
+        parse_hex_addr6(local,  c->local_addr,  &c->local_port);
+        parse_hex_addr6(remote, c->remote_addr, &c->remote_port);
+        c->proto = proto;
+        c->state = (int)state;
+        c->inode = inode;
         (*n)++;
     }
 }
