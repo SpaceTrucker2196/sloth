@@ -49,11 +49,11 @@ static void dispatch_view(const ntop_state_t *s) {
    ═══════════════════════════════════════════════════════════ */
 #ifdef WITH_NCURSES
 
-void tui_bright(void) { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_BOLD); }
-void tui_normal(void) { attrset(COLOR_PAIR(CP_PHOSPHOR)); }
-void tui_dim(void)    { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_DIM);  }
-void tui_sel(void)    { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_REVERSE); }
-void tui_reset(void)  { attrset(COLOR_PAIR(CP_PHOSPHOR)); }
+void tui_bright(void) { attrset(COLOR_PAIR(CP_BRIGHT)); }
+void tui_normal(void) { attrset(COLOR_PAIR(CP_NORMAL)); }
+void tui_dim(void)    { attrset(COLOR_PAIR(CP_DIM));    }
+void tui_sel(void)    { attrset(COLOR_PAIR(CP_NORMAL) | A_REVERSE); }
+void tui_reset(void)  { attrset(COLOR_PAIR(CP_NORMAL)); }
 
 void tui_init(void) {
     initscr();
@@ -63,10 +63,16 @@ void tui_init(void) {
     curs_set(0);
     if (has_colors()) {
         start_color();
-        /* nuclear teal-green: no red, full green, ~51% blue (0-1000 scale) */
-        if (can_change_color())
-            init_color(COLOR_GREEN, 0, 843, 510);
-        init_pair(CP_PHOSPHOR, COLOR_GREEN, COLOR_BLACK);
+        if (COLORS >= 256) {
+            /* xterm-256 nuclear teal-green: no red, high green, ~69% blue */
+            init_pair(CP_BRIGHT, 49, 0);   /* #00ffaf rgb(0,255,175) */
+            init_pair(CP_NORMAL, 43, 0);   /* #00d7af rgb(0,215,175) */
+            init_pair(CP_DIM,    29, 0);   /* #00875f rgb(0,135,95)  */
+        } else {
+            init_pair(CP_BRIGHT, COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_NORMAL, COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_DIM,    COLOR_GREEN, COLOR_BLACK);
+        }
     }
 }
 
@@ -89,7 +95,7 @@ static void draw_tabbar(const ntop_state_t *s) {
 
 void tui_draw(const ntop_state_t *s) {
     erase();
-    bkgd(COLOR_PAIR(CP_PHOSPHOR));
+    bkgd(COLOR_PAIR(CP_NORMAL));
     move(0, 0);
     draw_tabbar(s);
     move(1, 0);

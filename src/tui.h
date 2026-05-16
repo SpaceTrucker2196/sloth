@@ -16,8 +16,10 @@ void tui_draw(const ntop_state_t *s);
 int  tui_poll_key(int timeout_ms); /* blocks up to timeout_ms, returns key or 0 */
 void tui_bar(double val, double max, int width, char *out); /* ASCII bar graph */
 
-/* ── Phosphor theme ─────────────────────────────────────── */
-#define CP_PHOSPHOR 1
+/* ── Nuclear phosphor theme — 256-color pairs ───────────── */
+#define CP_BRIGHT 1   /* #00ffaf rgb(0,255,175) — intense glow  */
+#define CP_NORMAL 2   /* #00d7af rgb(0,215,175) — standard text */
+#define CP_DIM    3   /* #00875f rgb(0,135,95)  — faint labels  */
 
 void tui_bright(void); /* intense glow: title, active values, key fields */
 void tui_normal(void); /* standard phosphor: data rows                   */
