@@ -7,6 +7,7 @@
 #include "ntop.h"
 #include "platform/linux_parse.h"
 #include "platform/linux_pid.h"
+#include "platform/linux_wifi.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -72,12 +73,13 @@ int linux_get_conns(conn_t *out, int max) {
     return n;
 }
 
-/* ── WiFi scan — Week 4: nl80211 ────────────────────────── */
-
+/* ── WiFi scan — real impl in linux_wifi.c when WITH_WIFI=1 ── */
+#ifndef WITH_WIFI
 int linux_wifi_scan(wifi_ap_t *out, int max) {
     (void)out; (void)max;
     return 0;
 }
+#endif
 
 static void linux_init(void)    {}
 static void linux_cleanup(void) {}

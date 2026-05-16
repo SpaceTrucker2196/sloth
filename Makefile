@@ -22,6 +22,9 @@ ifeq ($(UNAME),Linux)
     SRCS   += src/platform/linux_parse.c
     SRCS   += src/platform/linux_pid.c
     CFLAGS += -DPLATFORM_LINUX
+    ifeq ($(WITH_WIFI),1)
+        SRCS += src/platform/linux_wifi.c
+    endif
 else ifeq ($(UNAME),Darwin)
     SRCS   += src/platform/bsd.c
     CFLAGS += -DPLATFORM_BSD
@@ -85,8 +88,10 @@ TEST_SRCS = tests/main_test.c          \
             src/history.c              \
             src/platform/linux_parse.c \
             src/platform/linux_pid.c   \
+            src/platform/linux_wifi.c  \
             src/views/iface.c          \
             tests/test_conns.c         \
+            tests/test_wifi.c          \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c

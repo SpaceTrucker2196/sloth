@@ -121,6 +121,7 @@ typedef struct {
 
     wifi_ap_t     aps[MAX_WIFI_APS];
     int           ap_count;
+    int           wifi_sel;  /* selected row in wifi view */
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
