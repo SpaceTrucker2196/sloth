@@ -151,6 +151,86 @@ void test_procs_draw_with_data(void) {
     ASSERT(1);
 }
 
+/* ── detail panel key handler tests ──────────────────── */
+
+void test_proc_detail_open_on_enter(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_conn(&s, 42, "nginx", PROTO_TCP, 80);
+    s.proc_sel = 0;
+    view_procs_draw(&s);          /* populate g_procs */
+    view_procs_key(&s, '\r');
+    ASSERT_EQ(s.proc_detail, 1);
+}
+
+void test_proc_detail_not_open_for_unresolved(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_conn(&s, 0, "", PROTO_TCP, 80);  /* goes to unresolved bucket */
+    view_procs_draw(&s);
+    s.proc_sel = 0;               /* unresolved is at index 0 */
+    view_procs_key(&s, '\r');
+    ASSERT_EQ(s.proc_detail, 0);
+}
+
+void test_proc_detail_not_open_when_empty(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    view_procs_draw(&s);
+    view_procs_key(&s, '\r');
+    ASSERT_EQ(s.proc_detail, 0);
+}
+
+void test_proc_detail_close_on_esc(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.proc_detail = 1;
+    view_procs_key(&s, '\033');
+    ASSERT_EQ(s.proc_detail, 0);
+}
+
+void test_proc_detail_close_on_enter(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.proc_detail = 1;
+    view_procs_key(&s, '\r');
+    ASSERT_EQ(s.proc_detail, 0);
+}
+
+void test_proc_detail_blocks_nav(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_conn(&s, 1, "a", PROTO_TCP, 80);
+    push_conn(&s, 2, "b", PROTO_TCP, 443);
+    view_procs_draw(&s);
+    s.proc_sel    = 0;
+    s.proc_detail = 1;
+    view_procs_key(&s, NTOP_KEY_DOWN);
+    ASSERT_EQ(s.proc_sel, 0);    /* nav key consumed, sel unchanged */
+}
+
+void test_proc_detail_draw_no_crash(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_conn(&s, 99, "test", PROTO_TCP, 443);
+    s.proc_sel    = 0;
+    s.proc_detail = 1;
+    view_procs_draw(&s);
+    ASSERT(1);
+}
+
+void test_proc_detail_draw_back_to_list(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_conn(&s, 7, "daemon", PROTO_TCP, 22);
+    view_procs_draw(&s);
+    view_procs_key(&s, '\r');     /* open */
+    ASSERT_EQ(s.proc_detail, 1);
+    view_procs_draw(&s);          /* draw detail panel */
+    view_procs_key(&s, '\033');   /* close */
+    ASSERT_EQ(s.proc_detail, 0);
+}
+
 void run_procs_tests(void) {
     TEST_SUITE("procs_aggregate");
     RUN_TEST(test_procs_empty);
@@ -166,4 +246,14 @@ void run_procs_tests(void) {
     TEST_SUITE("view_procs_draw");
     RUN_TEST(test_procs_draw_empty);
     RUN_TEST(test_procs_draw_with_data);
+
+    TEST_SUITE("proc detail panel");
+    RUN_TEST(test_proc_detail_open_on_enter);
+    RUN_TEST(test_proc_detail_not_open_for_unresolved);
+    RUN_TEST(test_proc_detail_not_open_when_empty);
+    RUN_TEST(test_proc_detail_close_on_esc);
+    RUN_TEST(test_proc_detail_close_on_enter);
+    RUN_TEST(test_proc_detail_blocks_nav);
+    RUN_TEST(test_proc_detail_draw_no_crash);
+    RUN_TEST(test_proc_detail_draw_back_to_list);
 }

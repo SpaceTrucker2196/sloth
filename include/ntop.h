@@ -159,6 +159,7 @@ typedef struct {
     int  pkt_detail;           /* non-zero = detail panel open */
 
     int           proc_sel;    /* selected row in procs view */
+    int           proc_detail; /* non-zero = detail panel open */
     int           dns_enabled; /* non-zero = show hostnames instead of IPs */
 
     conn_bw_t     conn_bw[MAX_CONNS];
