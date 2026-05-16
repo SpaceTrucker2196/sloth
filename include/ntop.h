@@ -126,6 +126,8 @@ typedef struct {
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
     int           pkt_count;            /* total written (capped at MAX_PACKETS) */
+    int           pkt_sel;             /* selected row in packets view */
+    int           pkt_paused;          /* non-zero = freeze auto-scroll */
 } ntop_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */

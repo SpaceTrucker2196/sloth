@@ -46,7 +46,8 @@ endif
 
 ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
-    LDFLAGS += -lpcap
+    LDFLAGS += -lpcap -lpthread
+    SRCS    += src/capture/capture.c
 endif
 
 ifeq ($(WITH_WIFI),1)
@@ -92,6 +93,7 @@ TEST_SRCS = tests/main_test.c          \
             src/views/iface.c          \
             tests/test_conns.c         \
             tests/test_wifi.c          \
+            tests/test_packets.c       \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c

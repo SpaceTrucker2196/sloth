@@ -9,6 +9,10 @@
 #include "views/iface.h"
 #include "views/conns.h"
 #include "views/wifi.h"
+#include "views/packets.h"
+#ifdef WITH_PCAP
+#  include "capture/capture.h"
+#endif
 
 static ntop_state_t g_state;
 static volatile int g_quit = 0;
@@ -50,7 +54,8 @@ static void handle_key(ntop_state_t *s, int key) {
     switch (s->active_view) {
     case VIEW_IFACE: view_iface_key(s, key);  break;
     case VIEW_CONNS: view_conns_key(s, key);  break;
-    case VIEW_WIFI:  view_wifi_key(s, key);   break;
+    case VIEW_WIFI:    view_wifi_key(s, key);    break;
+    case VIEW_PACKETS: view_packets_key(s, key); break;
     default: break;
     }
 }
@@ -64,6 +69,9 @@ int main(void) {
     g_state.active_view = VIEW_IFACE;
 
     g_platform.init();
+#ifdef WITH_PCAP
+    capture_start(&g_state);
+#endif
     tui_init();
 
     while (!g_quit) {
@@ -73,6 +81,9 @@ int main(void) {
     }
 
     tui_cleanup();
+#ifdef WITH_PCAP
+    capture_stop();
+#endif
     g_platform.cleanup();
     return 0;
 }
