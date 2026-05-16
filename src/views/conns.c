@@ -17,6 +17,28 @@ static const char *tcp_state_name(int st) {
     return names[st];
 }
 
+/* Phosphor intensity for a TCP state: bright = active, dim = dying. */
+static void phos_tcp_state(int proto, int state) {
+    if (proto != PROTO_TCP) { tui_normal(); return; }
+    switch (state) {
+    case 1:  /* ESTABLISHED */
+    case 2:  /* SYN_SENT   */
+    case 3:  /* SYN_RECV   */
+    case 10: /* LISTEN      */
+        tui_bright(); break;
+    case 4:  /* FIN_WAIT1  */
+    case 5:  /* FIN_WAIT2  */
+    case 6:  /* TIME_WAIT  */
+    case 7:  /* CLOSE      */
+    case 8:  /* CLOSE_WAIT */
+    case 9:  /* LAST_ACK   */
+    case 11: /* CLOSING    */
+        tui_dim(); break;
+    default:
+        tui_normal(); break;
+    }
+}
+
 /* ── Sort ───────────────────────────────────────────────── */
 
 static const conn_t *g_sort_conns;
@@ -75,34 +97,38 @@ void view_conns_draw(const ntop_state_t *s) {
 #endif
 
     /* status bar */
-    TPRINT(" Conns: %d", s->conn_idx_count);
-    if (s->conn_idx_count != s->conn_count)
-        TPRINT("/%d", s->conn_count);
-    TPRINT("  filter: %-3s  sort: %-5s",
-           filter_names[s->conn_filter],
-           sort_names[s->conn_sort]);
+    tui_normal(); TPRINT(" Conns: ");
+    tui_bright();
+    TPRINT("%d", s->conn_idx_count);
+    if (s->conn_idx_count != s->conn_count) {
+        tui_dim(); TPRINT("/%d", s->conn_count);
+    }
+    tui_dim();  TPRINT("  filter: ");
+    tui_bright(); TPRINT("%-3s", filter_names[s->conn_filter]);
+    tui_dim();  TPRINT("  sort: ");
+    tui_bright(); TPRINT("%-5s", sort_names[s->conn_sort]);
 #ifndef WITH_NCURSES
-    TPRINT("  [s]ort [f]ilter");
+    tui_dim(); TPRINT("  [s]ort [f]ilter");
 #endif
     TPRINT("\n");
 
     /* column headers */
+    tui_dim();
     TPRINT(" %-21s  %-21s  %-5s  %-13s  %5s  %-14s\n",
            "Local", "Remote", "Proto", "State", "PID", "Process");
     TPRINT(" %-21s  %-21s  %-5s  %-13s  %-5s  %-14s\n",
            "---------------------", "---------------------",
            "-----", "-------------", "-----", "--------------");
+    tui_normal();
 
     if (s->conn_idx_count == 0) {
-        TPRINT(" (no connections)\n");
+        tui_dim(); TPRINT(" (no connections)\n"); tui_normal();
         return;
     }
 
-    /* viewport: keep conn_sel roughly centred */
     int top = s->conn_sel - page / 2;
     if (top + page > s->conn_idx_count) top = s->conn_idx_count - page;
     if (top < 0) top = 0;
-
     int end = top + page;
     if (end > s->conn_idx_count) end = s->conn_idx_count;
 
@@ -120,18 +146,44 @@ void view_conns_draw(const ntop_state_t *s) {
         if (c->pid > 0) snprintf(pid_str, sizeof(pid_str), "%d", c->pid);
 
 #ifdef WITH_NCURSES
-        if (row == s->conn_sel) attron(A_REVERSE);
-        TPRINT(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s\n",
-               local, remote, proto, state, pid_str,
-               c->pid > 0 ? c->proc : "");
-        if (row == s->conn_sel) attroff(A_REVERSE);
+        if (row == s->conn_sel) {
+            tui_sel();
+            printw(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s\n",
+                   local, remote, proto, state, pid_str,
+                   c->pid > 0 ? c->proc : "");
+            tui_reset();
+        } else {
+            tui_normal();
+            printw(" %-21.21s  %-21.21s  %-5s  ", local, remote, proto);
+            phos_tcp_state(c->proto, c->state);
+            printw("%-13s", state);
+            tui_dim();
+            printw("  %5s  ", pid_str);
+            if (c->pid > 0) { tui_bright(); printw("%-14.14s", c->proc); }
+            else            { tui_dim();    printw("%-14s", ""); }
+            tui_normal(); printw("\n");
+        }
 #else
-        TPRINT("%c%-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s\n",
-               (row == s->conn_sel) ? '>' : ' ',
-               local, remote, proto, state, pid_str,
-               c->pid > 0 ? c->proc : "");
+        if (row == s->conn_sel) {
+            tui_sel();
+            printf(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s",
+                   local, remote, proto, state, pid_str,
+                   c->pid > 0 ? c->proc : "");
+            tui_reset(); printf("\n");
+        } else {
+            tui_normal();
+            printf(" %-21.21s  %-21.21s  %-5s  ", local, remote, proto);
+            phos_tcp_state(c->proto, c->state);
+            printf("%-13s", state);
+            tui_dim();
+            printf("  %5s  ", pid_str);
+            if (c->pid > 0) { tui_bright(); printf("%-14.14s", c->proc); }
+            else            { tui_dim();    printf("%-14s", ""); }
+            tui_normal(); printf("\n");
+        }
 #endif
     }
+    tui_normal();
 }
 
 /* ── Key handler ────────────────────────────────────────── */

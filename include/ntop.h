@@ -13,8 +13,9 @@
 #define HIST_LEN     30    /* rate history samples per interface (sparkline) */
 
 /* Cross-platform key codes — outside ASCII range, returned by tui_poll_key() */
-#define NTOP_KEY_UP   0x101
-#define NTOP_KEY_DOWN 0x102
+#define NTOP_KEY_UP        0x101
+#define NTOP_KEY_DOWN      0x102
+#define NTOP_KEY_BACKSPACE 0x103
 
 /* ── Views ──────────────────────────────────────────────── */
 typedef enum {
@@ -128,6 +129,12 @@ typedef struct {
     int           pkt_count;            /* total written (capped at MAX_PACKETS) */
     int           pkt_sel;             /* selected row in packets view */
     int           pkt_paused;          /* non-zero = freeze auto-scroll */
+
+    char pkt_filter[256];      /* active BPF expression ("" = none) */
+    char pkt_filter_buf[256];  /* working buffer while user is typing */
+    int  pkt_filter_len;       /* length of pkt_filter_buf */
+    int  pkt_filter_mode;      /* non-zero = filter input prompt is open */
+    char pkt_filter_err[128];  /* last compile/apply error, "" = ok */
 } ntop_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */

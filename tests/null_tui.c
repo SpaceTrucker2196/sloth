@@ -7,6 +7,12 @@ void tui_cleanup(void)               {}
 void tui_draw(const ntop_state_t *s) { (void)s; }
 int  tui_poll_key(int ms)            { (void)ms; return 0; }
 
+void tui_bright(void) {}
+void tui_normal(void) {}
+void tui_dim(void)    {}
+void tui_sel(void)    {}
+void tui_reset(void)  {}
+
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;
     if (filled > width) filled = width;

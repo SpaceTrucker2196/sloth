@@ -195,4 +195,17 @@ void capture_stop(void) {
     if (g_handle) { pcap_close(g_handle); g_handle = NULL; }
 }
 
+int capture_set_filter(const char *expr, char *errbuf, int errsz) {
+    if (!g_handle) return 0;
+    struct bpf_program fp;
+    if (pcap_compile(g_handle, &fp, expr, 1, PCAP_NETMASK_UNKNOWN) < 0) {
+        if (errbuf && errsz > 0)
+            snprintf(errbuf, errsz, "%s", pcap_geterr(g_handle));
+        return -1;
+    }
+    pcap_setfilter(g_handle, &fp);
+    pcap_freecode(&fp);
+    return 0;
+}
+
 #endif /* WITH_PCAP */

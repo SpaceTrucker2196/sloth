@@ -46,6 +46,12 @@ static void dispatch_view(const ntop_state_t *s) {
    ═══════════════════════════════════════════════════════════ */
 #ifdef WITH_NCURSES
 
+void tui_bright(void) { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_BOLD); }
+void tui_normal(void) { attrset(COLOR_PAIR(CP_PHOSPHOR)); }
+void tui_dim(void)    { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_DIM);  }
+void tui_sel(void)    { attrset(COLOR_PAIR(CP_PHOSPHOR) | A_REVERSE); }
+void tui_reset(void)  { attrset(COLOR_PAIR(CP_PHOSPHOR)); }
+
 void tui_init(void) {
     initscr();
     cbreak();
@@ -54,11 +60,7 @@ void tui_init(void) {
     curs_set(0);
     if (has_colors()) {
         start_color();
-        use_default_colors();
-        init_pair(1, COLOR_GREEN,  -1);
-        init_pair(2, COLOR_CYAN,   -1);
-        init_pair(3, COLOR_YELLOW, -1);
-        init_pair(4, COLOR_RED,    -1);
+        init_pair(CP_PHOSPHOR, COLOR_GREEN, COLOR_BLACK);
     }
 }
 
@@ -67,28 +69,27 @@ void tui_cleanup(void) {
 }
 
 static void draw_tabbar(const ntop_state_t *s) {
-    attron(A_BOLD);
+    tui_bright();
     printw(" ntop v" NTOP_VERSION);
-    attroff(A_BOLD);
-    printw("  ");
     for (int i = 0; i < VIEW_COUNT; i++) {
-        if (i == (int)s->active_view)
-            attron(A_REVERSE | A_BOLD);
+        tui_dim(); printw("  ");
+        if (i == (int)s->active_view) tui_sel(); else tui_dim();
         printw(" %s ", view_labels[i]);
-        if (i == (int)s->active_view)
-            attroff(A_REVERSE | A_BOLD);
-        printw(" ");
     }
-    printw(" [Tab] cycle  [q]uit");
+    tui_dim();
+    printw("  [Tab] cycle  [q]uit");
+    tui_normal();
 }
 
 void tui_draw(const ntop_state_t *s) {
     erase();
+    bkgd(COLOR_PAIR(CP_PHOSPHOR));
     move(0, 0);
     draw_tabbar(s);
     move(1, 0);
-    hline(ACS_HLINE, getmaxx(stdscr));
+    tui_dim(); hline(ACS_HLINE, getmaxx(stdscr));
     move(2, 0);
+    tui_normal();
     dispatch_view(s);
     refresh();
 }
@@ -96,9 +97,11 @@ void tui_draw(const ntop_state_t *s) {
 int tui_poll_key(int timeout_ms) {
     timeout(timeout_ms);
     int ch = getch();
-    if (ch == ERR)      return 0;
-    if (ch == KEY_UP)   return NTOP_KEY_UP;
-    if (ch == KEY_DOWN) return NTOP_KEY_DOWN;
+    if (ch == ERR)            return 0;
+    if (ch == KEY_UP)         return NTOP_KEY_UP;
+    if (ch == KEY_DOWN)       return NTOP_KEY_DOWN;
+    if (ch == KEY_BACKSPACE ||
+        ch == 127 || ch == 8) return NTOP_KEY_BACKSPACE;
     return ch;
 }
 
@@ -106,6 +109,12 @@ int tui_poll_key(int timeout_ms) {
    ANSI fallback (embedded / no-ncurses)
    ═══════════════════════════════════════════════════════════ */
 #else
+
+void tui_bright(void) { printf("\033[1;32m"); }
+void tui_normal(void) { printf("\033[0;32m"); }
+void tui_dim(void)    { printf("\033[2;32m"); }
+void tui_sel(void)    { printf("\033[7;32m"); }
+void tui_reset(void)  { printf("\033[0;32m"); }
 
 static struct termios g_saved_term;
 
@@ -125,22 +134,23 @@ void tui_cleanup(void) {
 }
 
 static void draw_tabbar(const ntop_state_t *s) {
-    printf("\033[1m ntop v" NTOP_VERSION "\033[0m  ");
+    tui_bright(); printf(" ntop v" NTOP_VERSION);
     for (int i = 0; i < VIEW_COUNT; i++) {
-        if (i == (int)s->active_view)
-            printf("\033[7m %s \033[0m", view_labels[i]);
-        else
-            printf(" %s ", view_labels[i]);
-        printf(" ");
+        tui_dim(); printf("  ");
+        if (i == (int)s->active_view) tui_sel(); else tui_dim();
+        printf(" %s ", view_labels[i]);
     }
-    printf(" [Tab] cycle  [q]uit\n");
+    tui_dim(); printf("  [Tab] cycle  [q]uit\n");
     printf("------------------------------------------------------------\n");
+    tui_normal();
 }
 
 void tui_draw(const ntop_state_t *s) {
     printf("\033[2J\033[H");
+    tui_normal();
     draw_tabbar(s);
     dispatch_view(s);
+    tui_reset();
     fflush(stdout);
 }
 
@@ -173,13 +183,14 @@ int tui_poll_key(int timeout_ms) {
     if (read(STDIN_FILENO, &c, 1) != 1)
         return 0;
 
+    if (c == 127 || c == 8)
+        return NTOP_KEY_BACKSPACE;
     if (c != '\033')
         return (int)c;
 
-    /* ESC — try to read an ANSI escape sequence within 10 ms */
     int b = read_char_timeout(10000);
     if (b != '[')
-        return '\033';   /* bare ESC or unrecognised sequence */
+        return '\033';
 
     int d = read_char_timeout(10000);
     if (d == 'A') return NTOP_KEY_UP;

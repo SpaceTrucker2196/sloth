@@ -16,4 +16,13 @@ void tui_draw(const ntop_state_t *s);
 int  tui_poll_key(int timeout_ms); /* blocks up to timeout_ms, returns key or 0 */
 void tui_bar(double val, double max, int width, char *out); /* ASCII bar graph */
 
+/* ── Phosphor theme ─────────────────────────────────────── */
+#define CP_PHOSPHOR 1
+
+void tui_bright(void); /* intense glow: title, active values, key fields */
+void tui_normal(void); /* standard phosphor: data rows                   */
+void tui_dim(void);    /* faint glow: labels, borders, hints              */
+void tui_sel(void);    /* reversed: selected row highlight                */
+void tui_reset(void);  /* back to normal                                  */
+
 #endif /* TUI_H */
