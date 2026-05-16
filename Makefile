@@ -12,6 +12,7 @@ SRCS = src/main.c          \
        src/tui.c           \
        src/history.c       \
        src/bandwidth.c     \
+       src/dns.c           \
        src/views/iface.c   \
        src/views/conns.c   \
        src/views/wifi.c    \
@@ -46,9 +47,11 @@ ifeq ($(WITH_NCURSES),1)
     LDFLAGS += -lncursesw
 endif
 
+LDFLAGS += -lpthread
+
 ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
-    LDFLAGS += -lpcap -lpthread
+    LDFLAGS += -lpcap
     SRCS    += src/capture/capture.c
 endif
 
@@ -90,6 +93,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_scenario.c      \
             src/history.c              \
             src/bandwidth.c            \
+            src/dns.c                  \
             src/platform/linux_parse.c \
             src/platform/linux_pid.c   \
             src/platform/linux_wifi.c  \
@@ -99,6 +103,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_packets.c       \
             tests/test_procs.c         \
             tests/test_bw.c            \
+            tests/test_dns.c           \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \
@@ -111,7 +116,7 @@ test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 $(TEST_BIN): $(TEST_SRCS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm -lpthread
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 clean:

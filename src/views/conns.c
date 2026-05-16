@@ -4,6 +4,7 @@
 #include "ntop.h"
 #include "tui.h"
 #include "bandwidth.h"
+#include "dns.h"
 #include "views/conns.h"
 
 #define CONNS_PAGE 30
@@ -148,6 +149,8 @@ void view_conns_draw(const ntop_state_t *s) {
     tui_bright(); TPRINT("%-3s", filter_names[s->conn_filter]);
     tui_dim();  TPRINT("  sort: ");
     tui_bright(); TPRINT("%-5s", sort_names[s->conn_sort]);
+    tui_dim();  TPRINT("  [n] ");
+    tui_bright(); TPRINT("%s", s->dns_enabled ? "names" : "numeric");
 #ifndef WITH_NCURSES
     tui_dim(); TPRINT("  [s]ort [f]ilter");
 #endif
@@ -179,8 +182,11 @@ void view_conns_draw(const ntop_state_t *s) {
         const conn_t *c = &s->conns[s->conn_idx[row]];
 
         char local[56], remote[56];
-        snprintf(local,  sizeof(local),  "%s:%u", c->local_addr,  c->local_port);
-        snprintf(remote, sizeof(remote), "%s:%u", c->remote_addr, c->remote_port);
+        snprintf(local, sizeof(local), "%s:%u", c->local_addr, c->local_port);
+        if (s->dns_enabled)
+            dns_fmt_addr(c->remote_addr, c->remote_port, remote, sizeof(remote));
+        else
+            snprintf(remote, sizeof(remote), "%s:%u", c->remote_addr, c->remote_port);
 
         const char *proto = (c->proto == PROTO_TCP) ? "TCP" : "UDP";
         const char *state = (c->proto == PROTO_TCP) ? tcp_state_name(c->state) : "";

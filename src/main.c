@@ -12,6 +12,7 @@
 #include "views/packets.h"
 #include "views/procs.h"
 #include "bandwidth.h"
+#include "dns.h"
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
 #endif
@@ -50,6 +51,9 @@ static void handle_key(ntop_state_t *s, int key) {
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
+    case 'n': case 'N':
+        s->dns_enabled = !s->dns_enabled;
+        return;
     default:
         break;
     }
@@ -74,6 +78,7 @@ int main(void) {
     g_state.active_view = VIEW_IFACE;
 
     g_platform.init();
+    dns_init();
 #ifdef WITH_PCAP
     capture_start(&g_state);
 #endif
@@ -89,6 +94,7 @@ int main(void) {
 #ifdef WITH_PCAP
     capture_stop();
 #endif
+    dns_cleanup();
     g_platform.cleanup();
     return 0;
 }

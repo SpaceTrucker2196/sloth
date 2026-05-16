@@ -3,6 +3,7 @@
 #include "ntop.h"
 #include "tui.h"
 #include "capture/capture.h"
+#include "dns.h"
 #include "views/packets.h"
 
 #define PKTS_PAGE 30
@@ -22,11 +23,19 @@ static void draw_detail(const ntop_state_t *s) {
     int idx = (start + sel) % MAX_PACKETS;
     const packet_info_t *p = &s->packets[idx];
 
-    char src[48], dst[48];
-    if (p->src_port) snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
-    else             snprintf(src, sizeof(src), "%s",    p->src);
-    if (p->dst_port) snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
-    else             snprintf(dst, sizeof(dst), "%s",    p->dst);
+    char src[64], dst[64];
+    if (p->src_port) {
+        if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
+        else snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
+    } else {
+        snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
+    }
+    if (p->dst_port) {
+        if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
+        else snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
+    } else {
+        snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
+    }
 
     tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 PACKET DETAIL \xe2\x94\x80\xe2\x94\x80\n");
 
@@ -118,6 +127,8 @@ void view_packets_draw(const ntop_state_t *s) {
     if (s->pkt_filter_err[0]) {
         tui_dim(); TPRINT("  [ERR: %s]", s->pkt_filter_err);
     }
+    tui_dim(); TPRINT("  [n] ");
+    tui_bright(); TPRINT("%s", s->dns_enabled ? "names" : "numeric");
 #ifndef WITH_NCURSES
     tui_dim(); TPRINT("  [p]ause  [/] filter  [x] clear  [up/dn] navigate");
 #endif
@@ -157,11 +168,19 @@ void view_packets_draw(const ntop_state_t *s) {
         int                  idx = (start + row) % MAX_PACKETS;
         const packet_info_t *p   = &s->packets[idx];
 
-        char src[48], dst[48];
-        if (p->src_port) snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
-        else             snprintf(src, sizeof(src), "%s",    p->src);
-        if (p->dst_port) snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
-        else             snprintf(dst, sizeof(dst), "%s",    p->dst);
+        char src[64], dst[64];
+        if (p->src_port) {
+            if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
+            else snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
+        } else {
+            snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
+        }
+        if (p->dst_port) {
+            if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
+            else snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
+        } else {
+            snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
+        }
 
 #ifdef WITH_NCURSES
         if (row == sel) {
