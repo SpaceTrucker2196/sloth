@@ -14,6 +14,7 @@ void run_conns_tests(void);
 void run_wifi_tests(void);
 void run_packets_tests(void);
 void run_procs_tests(void);
+void run_bw_tests(void);
 
 int main(void) {
     printf("ntop test suite\n");
@@ -27,6 +28,7 @@ int main(void) {
     run_wifi_tests();
     run_packets_tests();
     run_procs_tests();
+    run_bw_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

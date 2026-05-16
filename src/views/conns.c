@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "ntop.h"
 #include "tui.h"
+#include "bandwidth.h"
 #include "views/conns.h"
 
 #define CONNS_PAGE 30
@@ -39,10 +40,38 @@ static void phos_tcp_state(int proto, int state) {
     }
 }
 
+/* ── Rate formatting & sparkline helpers ────────────────── */
+
+static void fmt_rate(double bps, char *buf, int sz) {
+    bw_fmt_rate(bps, buf, sz);
+}
+
+static void bw_spark(const conn_bw_t *bw, char *out, int w) {
+    static const char lvl[] = " ._-=+#";
+    int nlvl = 7;
+    float mx = 1.0f;
+    for (int i = 0; i < bw->hist_count; i++) {
+        int hi = (bw->hist_head - bw->hist_count + i + CONN_BW_HIST) % CONN_BW_HIST;
+        if (bw->rx_hist[hi] > mx) mx = bw->rx_hist[hi];
+        if (bw->tx_hist[hi] > mx) mx = bw->tx_hist[hi];
+    }
+    for (int i = 0; i < w; i++) {
+        if (i >= bw->hist_count) { out[i] = ' '; continue; }
+        int hi = (bw->hist_head - w + i + CONN_BW_HIST) % CONN_BW_HIST;
+        int li = (int)(bw->rx_hist[hi] / mx * (float)(nlvl - 1) + 0.5f);
+        if (li < 0) li = 0;
+        if (li >= nlvl) li = nlvl - 1;
+        out[i] = lvl[li];
+    }
+    out[w] = '\0';
+}
+
 /* ── Sort ───────────────────────────────────────────────── */
 
-static const conn_t *g_sort_conns;
-static conn_sort_t   g_sort_key;
+static const conn_t       *g_sort_conns;
+static conn_sort_t         g_sort_key;
+static const ntop_state_t *g_sort_state;
+static double              g_sort_rates[MAX_CONNS];
 
 static int conn_cmp(const void *a, const void *b) {
     int ia = *(const int *)a, ib = *(const int *)b;
@@ -59,6 +88,11 @@ static int conn_cmp(const void *a, const void *b) {
         return (int)ca->local_port - (int)cb->local_port;
     case CONN_SORT_PID:
         return ca->pid - cb->pid;
+    case CONN_SORT_BW:
+        /* descending by total rate */
+        if (g_sort_rates[ia] > g_sort_rates[ib]) return -1;
+        if (g_sort_rates[ia] < g_sort_rates[ib]) return  1;
+        return 0;
     default:
         return 0;
     }
@@ -73,8 +107,15 @@ void conn_rebuild_idx(ntop_state_t *s) {
     }
     s->conn_idx_count = n;
 
+    /* precompute rates so the comparator stays O(1) */
+    for (int i = 0; i < s->conn_count; i++) {
+        const conn_bw_t *bw = bw_lookup(s, &s->conns[i]);
+        g_sort_rates[i] = bw ? (bw->rx_rate + bw->tx_rate) : 0.0;
+    }
+
     g_sort_conns = s->conns;
     g_sort_key   = s->conn_sort;
+    g_sort_state = s;
     qsort(s->conn_idx, (size_t)n, sizeof(int), conn_cmp);
 
     if (s->conn_idx_count == 0)
@@ -86,7 +127,7 @@ void conn_rebuild_idx(ntop_state_t *s) {
 /* ── Draw ───────────────────────────────────────────────── */
 
 void view_conns_draw(const ntop_state_t *s) {
-    static const char *sort_names[]   = {"STATE", "PROTO", "LPORT", "PID"};
+    static const char *sort_names[]   = {"STATE", "PROTO", "LPORT", "PID", "BW"};
     static const char *filter_names[] = {"ALL", "TCP", "UDP"};
 
 #ifdef WITH_NCURSES
@@ -114,11 +155,13 @@ void view_conns_draw(const ntop_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-21s  %-21s  %-5s  %-13s  %5s  %-14s\n",
-           "Local", "Remote", "Proto", "State", "PID", "Process");
-    TPRINT(" %-21s  %-21s  %-5s  %-13s  %-5s  %-14s\n",
+    TPRINT(" %-21s  %-21s  %-5s  %-13s  %5s  %-14s  %-16s %s\n",
+           "Local", "Remote", "Proto", "State", "PID", "Process",
+           "Rate (rx/tx)", "Trend");
+    TPRINT(" %-21s  %-21s  %-5s  %-13s  %-5s  %-14s  %-16s %s\n",
            "---------------------", "---------------------",
-           "-----", "-------------", "-----", "--------------");
+           "-----", "-------------", "-----", "--------------",
+           "----------------", "--------");
     tui_normal();
 
     if (s->conn_idx_count == 0) {
@@ -145,12 +188,26 @@ void view_conns_draw(const ntop_state_t *s) {
         char pid_str[12] = "";
         if (c->pid > 0) snprintf(pid_str, sizeof(pid_str), "%d", c->pid);
 
+        /* bandwidth annotation */
+        const conn_bw_t *bw = bw_lookup(s, c);
+        char rx_s[10], tx_s[10], rate_col[28], spark[9];
+        if (bw) {
+            fmt_rate(bw->rx_rate, rx_s, sizeof(rx_s));
+            fmt_rate(bw->tx_rate, tx_s, sizeof(tx_s));
+            snprintf(rate_col, sizeof(rate_col), "%s\xe2\x86\x93 %s\xe2\x86\x91",
+                     rx_s, tx_s);
+            bw_spark(bw, spark, 8);
+        } else {
+            snprintf(rate_col, sizeof(rate_col), "--");
+            memset(spark, ' ', 8); spark[8] = '\0';
+        }
+
 #ifdef WITH_NCURSES
         if (row == s->conn_sel) {
             tui_sel();
-            printw(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s\n",
+            printw(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s  %-16s %s\n",
                    local, remote, proto, state, pid_str,
-                   c->pid > 0 ? c->proc : "");
+                   c->pid > 0 ? c->proc : "", rate_col, spark);
             tui_reset();
         } else {
             tui_normal();
@@ -161,14 +218,18 @@ void view_conns_draw(const ntop_state_t *s) {
             printw("  %5s  ", pid_str);
             if (c->pid > 0) { tui_bright(); printw("%-14.14s", c->proc); }
             else            { tui_dim();    printw("%-14s", ""); }
+            if (bw && (bw->rx_rate > 0 || bw->tx_rate > 0)) tui_bright();
+            else tui_dim();
+            printw("  %-16s ", rate_col);
+            tui_dim(); printw("%s", spark);
             tui_normal(); printw("\n");
         }
 #else
         if (row == s->conn_sel) {
             tui_sel();
-            printf(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s",
+            printf(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s  %-16s %s",
                    local, remote, proto, state, pid_str,
-                   c->pid > 0 ? c->proc : "");
+                   c->pid > 0 ? c->proc : "", rate_col, spark);
             tui_reset(); printf("\n");
         } else {
             tui_normal();
@@ -179,6 +240,10 @@ void view_conns_draw(const ntop_state_t *s) {
             printf("  %5s  ", pid_str);
             if (c->pid > 0) { tui_bright(); printf("%-14.14s", c->proc); }
             else            { tui_dim();    printf("%-14s", ""); }
+            if (bw && (bw->rx_rate > 0 || bw->tx_rate > 0)) tui_bright();
+            else tui_dim();
+            printf("  %-16s ", rate_col);
+            tui_dim(); printf("%s", spark);
             tui_normal(); printf("\n");
         }
 #endif

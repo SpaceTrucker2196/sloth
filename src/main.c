@@ -11,6 +11,7 @@
 #include "views/wifi.h"
 #include "views/packets.h"
 #include "views/procs.h"
+#include "bandwidth.h"
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
 #endif
@@ -28,6 +29,7 @@ static void poll_data(ntop_state_t *s) {
 #endif
     history_update(s);
     conn_rebuild_idx(s);
+    bw_update(s);
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
         s->iface_sel = s->iface_count - 1;

@@ -63,12 +63,30 @@ typedef struct {
     unsigned long inode;   /* socket inode for PID resolution */
 } conn_t;
 
+/* ── Per-connection bandwidth snapshot ──────────────────── */
+#define CONN_BW_HIST 20
+
+typedef struct {
+    char     local_addr[46];
+    uint16_t local_port;
+    char     remote_addr[46];
+    uint16_t remote_port;
+    int      proto;
+    double   rx_rate;              /* bytes/sec */
+    double   tx_rate;
+    float    rx_hist[CONN_BW_HIST];
+    float    tx_hist[CONN_BW_HIST];
+    int      hist_head;
+    int      hist_count;
+} conn_bw_t;
+
 /* ── Connection view state ──────────────────────────────── */
 typedef enum {
     CONN_SORT_STATE = 0,
     CONN_SORT_PROTO = 1,
     CONN_SORT_LPORT = 2,
     CONN_SORT_PID   = 3,
+    CONN_SORT_BW    = 4,
     CONN_SORT_COUNT
 } conn_sort_t;
 
@@ -141,6 +159,10 @@ typedef struct {
     int  pkt_detail;           /* non-zero = detail panel open */
 
     int           proc_sel;    /* selected row in procs view */
+
+    conn_bw_t     conn_bw[MAX_CONNS];
+    int           conn_bw_count;
+    int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
 } ntop_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */

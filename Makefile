@@ -11,6 +11,7 @@ WITH_WIFI    ?= 1
 SRCS = src/main.c          \
        src/tui.c           \
        src/history.c       \
+       src/bandwidth.c     \
        src/views/iface.c   \
        src/views/conns.c   \
        src/views/wifi.c    \
@@ -88,6 +89,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_state.c         \
             tests/test_scenario.c      \
             src/history.c              \
+            src/bandwidth.c            \
             src/platform/linux_parse.c \
             src/platform/linux_pid.c   \
             src/platform/linux_wifi.c  \
@@ -96,6 +98,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_wifi.c          \
             tests/test_packets.c       \
             tests/test_procs.c         \
+            tests/test_bw.c            \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \
