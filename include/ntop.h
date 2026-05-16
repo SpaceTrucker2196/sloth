@@ -2,6 +2,7 @@
 #define NTOP_H
 
 #include <stdint.h>
+#include <time.h>
 
 #define NTOP_VERSION "0.2.0"
 
@@ -24,6 +25,7 @@ typedef enum {
     VIEW_WIFI    = 2,
     VIEW_PACKETS = 3,
     VIEW_PROCS   = 4,
+    VIEW_STATS   = 5,
     VIEW_COUNT
 } view_t;
 
@@ -165,6 +167,16 @@ typedef struct {
     conn_bw_t     conn_bw[MAX_CONNS];
     int           conn_bw_count;
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
+
+    /* ── Session stats baseline ─────────────────────────── */
+    time_t   stats_start;                    /* time of last reset */
+    int      stats_init;                     /* 0 = baseline not yet taken */
+    uint64_t stats_base_rx[MAX_IFACES];      /* rx_bytes at baseline */
+    uint64_t stats_base_tx[MAX_IFACES];      /* tx_bytes at baseline */
+    uint64_t stats_base_rxp[MAX_IFACES];     /* rx_packets at baseline */
+    uint64_t stats_base_txp[MAX_IFACES];     /* tx_packets at baseline */
+    char     stats_base_name[MAX_IFACES][16];/* iface name for each slot */
+    int      stats_base_count;               /* number of baseline slots */
 } ntop_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */

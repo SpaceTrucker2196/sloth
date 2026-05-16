@@ -16,6 +16,7 @@ void run_packets_tests(void);
 void run_procs_tests(void);
 void run_bw_tests(void);
 void run_dns_tests(void);
+void run_stats_tests(void);
 
 int main(void) {
     printf("ntop test suite\n");
@@ -31,6 +32,7 @@ int main(void) {
     run_procs_tests();
     run_bw_tests();
     run_dns_tests();
+    run_stats_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

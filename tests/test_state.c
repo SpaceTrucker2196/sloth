@@ -13,6 +13,7 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_WIFI);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_PACKETS);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_PROCS);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_STATS);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
@@ -27,7 +28,7 @@ void test_view_direct_key_select(void) {
 
 void test_view_count_matches_labels(void) {
     /* VIEW_COUNT must stay in sync with actual views */
-    ASSERT_EQ(VIEW_COUNT, 5);
+    ASSERT_EQ(VIEW_COUNT, 6);
 }
 
 /* ── packet ring buffer ──────────────────────────────────── */

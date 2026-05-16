@@ -17,7 +17,8 @@ SRCS = src/main.c          \
        src/views/conns.c   \
        src/views/wifi.c    \
        src/views/packets.c \
-       src/views/procs.c
+       src/views/procs.c   \
+       src/views/stats.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -104,10 +105,12 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_procs.c         \
             tests/test_bw.c            \
             tests/test_dns.c           \
+            tests/test_stats.c         \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \
-            src/views/procs.c
+            src/views/procs.c          \
+            src/views/stats.c
 
 TEST_BIN = ntop_test
 
