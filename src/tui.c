@@ -63,6 +63,9 @@ void tui_init(void) {
     curs_set(0);
     if (has_colors()) {
         start_color();
+        /* nuclear teal-green: no red, full green, ~51% blue (0-1000 scale) */
+        if (can_change_color())
+            init_color(COLOR_GREEN, 0, 843, 510);
         init_pair(CP_PHOSPHOR, COLOR_GREEN, COLOR_BLACK);
     }
 }
@@ -113,11 +116,12 @@ int tui_poll_key(int timeout_ms) {
    ═══════════════════════════════════════════════════════════ */
 #else
 
-void tui_bright(void) { printf("\033[1;32m"); }
-void tui_normal(void) { printf("\033[0;32m"); }
-void tui_dim(void)    { printf("\033[2;32m"); }
-void tui_sel(void)    { printf("\033[7;32m"); }
-void tui_reset(void)  { printf("\033[0;32m"); }
+/* nuclear teal-green: rgb(0, 215, 130) bright / rgb(0, 175, 105) normal / rgb(0, 100, 58) dim */
+void tui_bright(void) { printf("\033[38;2;0;215;130m\033[1m"); }
+void tui_normal(void) { printf("\033[0m\033[38;2;0;175;105m"); }
+void tui_dim(void)    { printf("\033[0m\033[38;2;0;100;58m");  }
+void tui_sel(void)    { printf("\033[0m\033[38;2;0;175;105m\033[7m"); }
+void tui_reset(void)  { printf("\033[0m\033[38;2;0;175;105m"); }
 
 static struct termios g_saved_term;
 
