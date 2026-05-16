@@ -64,16 +64,32 @@ void tui_init(void) {
     if (has_colors()) {
         start_color();
         if (COLORS >= 256) {
-            /* xterm-256 nuclear teal-green: no red, high green, ~69% blue */
-            init_pair(CP_BRIGHT, 49, 0);   /* #00ffaf rgb(0,255,175) */
-            init_pair(CP_NORMAL, 43, 0);   /* #00d7af rgb(0,215,175) */
-            init_pair(CP_DIM,    29, 0);   /* #00875f rgb(0,135,95)  */
+            /* nuclear teal-green pairs */
+            init_pair(CP_BRIGHT, 49, 0);        /* #00ffaf rgb(0,255,175) */
+            init_pair(CP_NORMAL, 43, 0);        /* #00d7af rgb(0,215,175) */
+            init_pair(CP_DIM,    29, 0);        /* #00875f rgb(0,135,95)  */
+            /* heat gradient pairs: grey → amber → orange → red */
+            init_pair(CP_HEAT_LO,   241, 0);   /* rgb(98,98,98)   */
+            init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
+            init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
+            init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
         } else {
-            init_pair(CP_BRIGHT, COLOR_GREEN, COLOR_BLACK);
-            init_pair(CP_NORMAL, COLOR_GREEN, COLOR_BLACK);
-            init_pair(CP_DIM,    COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_DIM,       COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_HEAT_LO,   COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_HEAT_MID,  COLOR_YELLOW, COLOR_BLACK);
+            init_pair(CP_HEAT_HI,   COLOR_YELLOW, COLOR_BLACK);
+            init_pair(CP_HEAT_PEAK, COLOR_RED,   COLOR_BLACK);
         }
     }
+}
+
+void tui_heat(double frac) {
+    if      (frac < 0.15) attrset(COLOR_PAIR(CP_HEAT_LO));
+    else if (frac < 0.40) attrset(COLOR_PAIR(CP_HEAT_MID));
+    else if (frac < 0.70) attrset(COLOR_PAIR(CP_HEAT_HI));
+    else                  attrset(COLOR_PAIR(CP_HEAT_PEAK));
 }
 
 void tui_cleanup(void) {
@@ -128,6 +144,14 @@ void tui_normal(void) { printf("\033[0m\033[38;2;0;175;105m"); }
 void tui_dim(void)    { printf("\033[0m\033[38;2;0;100;58m");  }
 void tui_sel(void)    { printf("\033[0m\033[38;2;0;175;105m\033[7m"); }
 void tui_reset(void)  { printf("\033[0m\033[38;2;0;175;105m"); }
+
+/* heat gradient: grey → amber → orange → red */
+void tui_heat(double frac) {
+    if      (frac < 0.15) printf("\033[38;2;98;98;98m");
+    else if (frac < 0.40) printf("\033[38;2;215;175;0m");
+    else if (frac < 0.70) printf("\033[38;2;255;135;0m");
+    else                  printf("\033[38;2;220;20;0m");
+}
 
 static struct termios g_saved_term;
 

@@ -8,8 +8,21 @@
 
 /* ── sparkline ───────────────────────────────────────────── */
 
-static const char SPARK[] = " ._-=+|#";
+/* Unicode vertical block chars: levels 0 (empty) through 8 (full). */
+static const char *SPARK_GLYPH[] = {
+    " ",
+    "\xe2\x96\x81",  /* ▁ */
+    "\xe2\x96\x82",  /* ▂ */
+    "\xe2\x96\x83",  /* ▃ */
+    "\xe2\x96\x84",  /* ▄ */
+    "\xe2\x96\x85",  /* ▅ */
+    "\xe2\x96\x86",  /* ▆ */
+    "\xe2\x96\x87",  /* ▇ */
+    "\xe2\x96\x88",  /* █ */
+};
+#define SPARK_LEVELS 9
 
+/* Build a UTF-8 sparkline string into out (must hold width*3+1 bytes). */
 static void make_sparkline(const iface_hist_t *h, int use_rx,
                             char *out, int width) {
     double max_val = 1.0;
@@ -20,20 +33,23 @@ static void make_sparkline(const iface_hist_t *h, int use_rx,
     }
     int pad = width - h->count;
     if (pad < 0) pad = 0;
+    int pos = 0;
     for (int i = 0; i < pad && i < width; i++)
-        out[i] = ' ';
+        out[pos++] = ' ';
     for (int i = 0; i < h->count && (pad + i) < width; i++) {
         int idx = ((h->head - h->count + i) % HIST_LEN + HIST_LEN) % HIST_LEN;
         double v = use_rx ? h->rx[idx] : h->tx[idx];
-        int lv = (int)((v / max_val) * 7.999);
-        if (lv > 7) lv = 7;
-        out[pad + i] = SPARK[lv];
+        int lv = (int)((v / max_val) * (SPARK_LEVELS - 1 - 0.001));
+        if (lv < 0) lv = 0;
+        if (lv >= SPARK_LEVELS) lv = SPARK_LEVELS - 1;
+        const char *g = SPARK_GLYPH[lv];
+        while (*g) out[pos++] = *g++;
     }
-    out[width] = '\0';
+    out[pos] = '\0';
 }
 
-/* Print the sparkline char-by-char varying phosphor intensity by amplitude. */
-static void print_sparkline_phosphor(const iface_hist_t *h, int use_rx, int width) {
+/* Print sparkline char-by-char with heat-gradient colour (grey→red). */
+static void print_sparkline_heat(const iface_hist_t *h, int use_rx, int width) {
     double max_val = 1.0;
     for (int i = 0; i < h->count; i++) {
         int idx = ((h->head - h->count + i) % HIST_LEN + HIST_LEN) % HIST_LEN;
@@ -48,12 +64,12 @@ static void print_sparkline_phosphor(const iface_hist_t *h, int use_rx, int widt
     for (int i = 0; i < h->count && (pad + i) < width; i++) {
         int idx = ((h->head - h->count + i) % HIST_LEN + HIST_LEN) % HIST_LEN;
         double v = use_rx ? h->rx[idx] : h->tx[idx];
-        int lv = (int)((v / max_val) * 7.999);
-        if (lv > 7) lv = 7;
-        if      (lv <= 2) tui_dim();
-        else if (lv <= 4) tui_normal();
-        else              tui_bright();
-        TPRINT("%c", SPARK[lv]);
+        double frac = v / max_val;
+        int lv = (int)(frac * (SPARK_LEVELS - 1 - 0.001));
+        if (lv < 0) lv = 0;
+        if (lv >= SPARK_LEVELS) lv = SPARK_LEVELS - 1;
+        tui_heat(frac);
+        TPRINT("%s", SPARK_GLYPH[lv]);
     }
 }
 
@@ -70,7 +86,7 @@ static int is_hidden(const ntop_state_t *s, const char *name) {
 /* ── draw ────────────────────────────────────────────────── */
 
 void view_iface_draw(const ntop_state_t *s) {
-    char spark[HIST_LEN + 1];
+    char spark[HIST_LEN * 3 + 1];  /* 3 UTF-8 bytes per block glyph */
     char rx_r[16], tx_r[16], rx_b[16], tx_b[16];
 
 #ifdef WITH_NCURSES
@@ -125,9 +141,9 @@ void view_iface_draw(const ntop_state_t *s) {
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
             printw("  %-11s  [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
             /* sparkline: per-char intensity */
-            if (h) print_sparkline_phosphor(h, 1, HIST_LEN);
+            if (h) print_sparkline_heat(h, 1, HIST_LEN);
             else { tui_dim(); printw("%*s", HIST_LEN, ""); }
-            /* totals: dim (background info) */
+            /* totals */
             tui_dim();
             printw("]  %-10s  %-10s\n",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
@@ -191,7 +207,7 @@ void view_iface_draw(const ntop_state_t *s) {
             printf("  %-11s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
             printf("  %-11s  [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
-            if (h) print_sparkline_phosphor(h, 1, HIST_LEN);
+            if (h) print_sparkline_heat(h, 1, HIST_LEN);
             else { tui_dim(); printf("%*s", HIST_LEN, ""); }
             tui_dim();
             printf("]  %-10s  %-10s\n",
