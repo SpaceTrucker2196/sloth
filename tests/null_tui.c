@@ -1,0 +1,16 @@
+/* No-op TUI for the test binary — no terminal, no ncurses */
+#include "ntop.h"
+#include "tui.h"
+
+void tui_init(void)                  {}
+void tui_cleanup(void)               {}
+void tui_draw(const ntop_state_t *s) { (void)s; }
+int  tui_poll_key(int ms)            { (void)ms; return 0; }
+
+void tui_bar(double val, double max, int width, char *out) {
+    int filled = (max > 0.0) ? (int)((val / max) * width) : 0;
+    if (filled > width) filled = width;
+    for (int i = 0; i < width; i++)
+        out[i] = (i < filled) ? '#' : '.';
+    out[width] = '\0';
+}
