@@ -54,6 +54,7 @@ ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
     LDFLAGS += -lpcap
     SRCS    += src/capture/capture.c
+    SRCS    += src/capture/probe.c
 endif
 
 ifeq ($(WITH_WIFI),1)
@@ -106,11 +107,13 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_bw.c            \
             tests/test_dns.c           \
             tests/test_stats.c         \
+            tests/test_probe.c         \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \
             src/views/procs.c          \
-            src/views/stats.c
+            src/views/stats.c          \
+            src/views/probe.c
 
 TEST_BIN = ntop_test
 

@@ -18,6 +18,7 @@
 #include "views/packets.h"
 #include "views/procs.h"
 #include "views/stats.h"
+#include "views/probe.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -26,6 +27,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[4] Packets",
     "[5] Processes",
     "[6] Stats",
+    "[7] Probe",
 };
 
 void tui_bar(double val, double max, int width, char *out) {
@@ -44,6 +46,7 @@ static void dispatch_view(const ntop_state_t *s) {
     case VIEW_PACKETS: view_packets_draw(s); break;
     case VIEW_PROCS:   view_procs_draw(s);   break;
     case VIEW_STATS:   view_stats_draw(s);   break;
+    case VIEW_PROBE:   view_probe_draw(s);   break;
     default: break;
     }
 }

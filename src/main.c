@@ -12,10 +12,12 @@
 #include "views/packets.h"
 #include "views/procs.h"
 #include "views/stats.h"
+#include "views/probe.h"
 #include "bandwidth.h"
 #include "dns.h"
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
+#  include "capture/probe.h"
 #endif
 
 static ntop_state_t g_state;
@@ -33,6 +35,9 @@ static void poll_data(ntop_state_t *s) {
     conn_rebuild_idx(s);
     bw_update(s);
     if (!s->stats_init) stats_take_baseline(s);
+#ifdef WITH_PCAP
+    probe_snapshot(s);
+#endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
         s->iface_sel = s->iface_count - 1;
@@ -51,6 +56,7 @@ static void handle_key(ntop_state_t *s, int key) {
     case '4': s->active_view = VIEW_PACKETS; return;
     case '5': s->active_view = VIEW_PROCS;   return;
     case '6': s->active_view = VIEW_STATS;   return;
+    case '7': s->active_view = VIEW_PROBE;   return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -69,6 +75,7 @@ static void handle_key(ntop_state_t *s, int key) {
     case VIEW_PACKETS: view_packets_key(s, key);  break;
     case VIEW_PROCS:   view_procs_key(s, key);    break;
     case VIEW_STATS:   view_stats_key(s, key);    break;
+    case VIEW_PROBE:   view_probe_key(s, key);    break;
     default: break;
     }
 }
@@ -85,6 +92,7 @@ int main(void) {
     dns_init();
 #ifdef WITH_PCAP
     capture_start(&g_state);
+    probe_start(&g_state);
 #endif
     tui_init();
 
@@ -96,6 +104,7 @@ int main(void) {
 
     tui_cleanup();
 #ifdef WITH_PCAP
+    probe_stop();
     capture_stop();
 #endif
     dns_cleanup();

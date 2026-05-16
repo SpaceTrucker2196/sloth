@@ -26,6 +26,7 @@ typedef enum {
     VIEW_PACKETS = 3,
     VIEW_PROCS   = 4,
     VIEW_STATS   = 5,
+    VIEW_PROBE   = 6,
     VIEW_COUNT
 } view_t;
 
@@ -108,6 +109,19 @@ typedef struct {
     char enc[16];
 } wifi_ap_t;
 
+/* ── Probe clients (802.11 unassociated devices) ────────── */
+#define MAX_PROBE_CLIENTS 128
+#define PROBE_AGE_SECS    120
+
+typedef struct {
+    uint8_t mac[6];       /* source MAC */
+    char    ssid[33];     /* last-probed SSID, "" = wildcard */
+    int8_t  signal_dbm;
+    int     channel;
+    time_t  last_seen;
+    int     frame_count;
+} probe_client_t;
+
 /* ── Packets ────────────────────────────────────────────── */
 typedef struct {
     uint32_t ts_sec;
@@ -167,6 +181,12 @@ typedef struct {
     conn_bw_t     conn_bw[MAX_CONNS];
     int           conn_bw_count;
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
+
+    /* ── Probe clients ──────────────────────────────────── */
+    probe_client_t probe_clients[MAX_PROBE_CLIENTS];
+    int            probe_count;
+    int            probe_sel;
+    char           probe_iface[16]; /* monitor iface name, "" = none found */
 
     /* ── Session stats baseline ─────────────────────────── */
     time_t   stats_start;                    /* time of last reset */
