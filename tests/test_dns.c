@@ -29,15 +29,15 @@ static void test_inject_then_fmt_addr(void) {
     dns_set_resolved("10.0.0.2", "router");
     char buf[64];
     dns_fmt_addr("10.0.0.2", 80, buf, sizeof(buf));
-    ASSERT_STR(buf, "router:80");
+    ASSERT_STR(buf, "router:http");
 }
 
 static void test_fmt_addr_no_entry(void) {
     dns_reset();
     char buf[64];
     dns_fmt_addr("203.0.113.5", 443, buf, sizeof(buf));
-    /* Not resolved yet — raw IP:port */
-    ASSERT_STR(buf, "203.0.113.5:443");
+    /* Not resolved yet — raw IP, but port resolved to service name */
+    ASSERT_STR(buf, "203.0.113.5:https");
 }
 
 static void test_reset_clears_cache(void) {

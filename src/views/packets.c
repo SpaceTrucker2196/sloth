@@ -4,6 +4,7 @@
 #include "tui.h"
 #include "capture/capture.h"
 #include "dns.h"
+#include "services.h"
 #include "views/packets.h"
 
 #define PKTS_PAGE 30
@@ -26,13 +27,13 @@ static void draw_detail(const ntop_state_t *s) {
     char src[64], dst[64];
     if (p->src_port) {
         if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
-        else snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
+        else svc_fmt_addr(src, sizeof(src), p->src, p->src_port);
     } else {
         snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
     }
     if (p->dst_port) {
         if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
-        else snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
+        else svc_fmt_addr(dst, sizeof(dst), p->dst, p->dst_port);
     } else {
         snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
     }
@@ -171,13 +172,13 @@ void view_packets_draw(const ntop_state_t *s) {
         char src[64], dst[64];
         if (p->src_port) {
             if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
-            else snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
+            else svc_fmt_addr(src, sizeof(src), p->src, p->src_port);
         } else {
             snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
         }
         if (p->dst_port) {
             if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
-            else snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
+            else svc_fmt_addr(dst, sizeof(dst), p->dst, p->dst_port);
         } else {
             snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
         }

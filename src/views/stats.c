@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "bandwidth.h"
 #include "dns.h"
+#include "services.h"
 #include "views/stats.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -92,11 +93,11 @@ static void draw_top_bw(const ntop_state_t *s) {
         if (total <= 0.0) break;
 
         char local[56], remote[56], rx_s[12], tx_s[12], rate_col[32];
-        snprintf(local, sizeof(local), "%s:%u", bw->local_addr, bw->local_port);
+        svc_fmt_addr(local, sizeof(local), bw->local_addr, bw->local_port);
         if (s->dns_enabled)
             dns_fmt_addr(bw->remote_addr, bw->remote_port, remote, sizeof(remote));
         else
-            snprintf(remote, sizeof(remote), "%s:%u", bw->remote_addr, bw->remote_port);
+            svc_fmt_addr(remote, sizeof(remote), bw->remote_addr, bw->remote_port);
         bw_fmt_rate(bw->rx_rate, rx_s, sizeof(rx_s));
         bw_fmt_rate(bw->tx_rate, tx_s, sizeof(tx_s));
         snprintf(rate_col, sizeof(rate_col), "%s\xe2\x86\x93 %s\xe2\x86\x91", rx_s, tx_s);

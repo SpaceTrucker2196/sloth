@@ -4,6 +4,7 @@
 #include "ntop.h"
 #include "tui.h"
 #include "dns.h"
+#include "services.h"
 #include "views/procs.h"
 
 #define PROCS_PAGE 30
@@ -179,11 +180,11 @@ static void draw_proc_detail(const ntop_state_t *s) {
         if (c->pid != p->pid) continue;
 
         char local[56], remote[56];
-        snprintf(local, sizeof(local), "%s:%u", c->local_addr, c->local_port);
+        svc_fmt_addr(local, sizeof(local), c->local_addr, c->local_port);
         if (s->dns_enabled)
             dns_fmt_addr(c->remote_addr, c->remote_port, remote, sizeof(remote));
         else
-            snprintf(remote, sizeof(remote), "%s:%u", c->remote_addr, c->remote_port);
+            svc_fmt_addr(remote, sizeof(remote), c->remote_addr, c->remote_port);
 
         const char *proto = (c->proto == PROTO_TCP) ? "TCP" : "UDP";
         const char *state = (c->proto == PROTO_TCP) ? proc_tcp_state(c->state) : "";

@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 
 #include "dns.h"
+#include "services.h"
 
 /* ── Tunables ────────────────────────────────────────────── */
 
@@ -231,5 +232,9 @@ const char *dns_lookup(const char *ip) {
 
 void dns_fmt_addr(const char *ip, uint16_t port, char *buf, int sz) {
     const char *host = dns_lookup(ip);
-    snprintf(buf, sz, "%s:%u", host, (unsigned)port);
+    const char *svc  = svc_name(port);
+    if (svc)
+        snprintf(buf, sz, "%s:%s", host, svc);
+    else
+        snprintf(buf, sz, "%s:%u", host, (unsigned)port);
 }

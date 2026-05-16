@@ -14,6 +14,7 @@ SRCS = src/main.c          \
        src/bandwidth.c     \
        src/dns.c           \
        src/oui.c           \
+       src/services.c      \
        src/views/iface.c   \
        src/views/conns.c   \
        src/views/wifi.c    \
@@ -98,6 +99,7 @@ TEST_SRCS = tests/main_test.c          \
             src/bandwidth.c            \
             src/dns.c                  \
             src/oui.c                  \
+            src/services.c             \
             src/platform/linux_parse.c \
             src/platform/linux_pid.c   \
             src/platform/linux_wifi.c  \
@@ -111,6 +113,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_stats.c         \
             tests/test_probe.c         \
             tests/test_oui.c           \
+            tests/test_services.c      \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \
