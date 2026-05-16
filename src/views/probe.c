@@ -3,6 +3,7 @@
 #include <time.h>
 #include "ntop.h"
 #include "tui.h"
+#include "oui.h"
 #include "capture/probe.h"
 #include "views/probe.h"
 
@@ -55,11 +56,11 @@ void view_probe_draw(const ntop_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-17s  %6s  %3s  %5s  %5s  %s\n",
-           "MAC", "Signal", "Ch", "Seen", "Pkts", "Probing");
-    TPRINT(" %-17s  %6s  %3s  %5s  %5s  %s\n",
-           "-----------------", "------", "---", "-----", "-----",
-           "-------");
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %s\n",
+           "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts", "Probing");
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %s\n",
+           "-----------------", "------------", "------", "---",
+           "-----", "-----", "-------");
     tui_normal();
 
     if (s->probe_count == 0) {
@@ -88,17 +89,20 @@ void view_probe_draw(const ntop_state_t *s) {
         char mac[18], age[8];
         fmt_mac(c->mac, mac, sizeof(mac));
         fmt_age(c->last_seen, age, sizeof(age));
-        const char *ssid = c->ssid[0] ? c->ssid : "(wildcard)";
+        const char *ssid   = c->ssid[0] ? c->ssid : "(wildcard)";
+        const char *vendor = oui_lookup(c->mac);
+        const char *vstr   = vendor ? vendor : "";
 
 #ifdef WITH_NCURSES
         if (row == s->probe_sel) {
             tui_sel();
-            printw(" %-17s  %6d  %3d  %5s  %5d  %.32s\n",
-                   mac, (int)c->signal_dbm, c->channel, age,
+            printw(" %-17s  %-12.12s  %6d  %3d  %5s  %5d  %.32s\n",
+                   mac, vstr, (int)c->signal_dbm, c->channel, age,
                    c->frame_count, ssid);
             tui_reset();
         } else {
             tui_dim(); printw(" %s", mac);
+            tui_dim(); printw("  %-12.12s", vstr);
             phos_signal(c->signal_dbm);
             printw("  %6d  %3d", (int)c->signal_dbm, c->channel);
             tui_dim(); printw("  %5s  %5d  ", age, c->frame_count);
@@ -109,12 +113,13 @@ void view_probe_draw(const ntop_state_t *s) {
 #else
         if (row == s->probe_sel) {
             tui_sel();
-            printf(" %-17s  %6d  %3d  %5s  %5d  %.32s",
-                   mac, (int)c->signal_dbm, c->channel, age,
+            printf(" %-17s  %-12.12s  %6d  %3d  %5s  %5d  %.32s",
+                   mac, vstr, (int)c->signal_dbm, c->channel, age,
                    c->frame_count, ssid);
             tui_reset(); printf("\n");
         } else {
             tui_dim(); printf(" %s", mac);
+            tui_dim(); printf("  %-12.12s", vstr);
             phos_signal(c->signal_dbm);
             printf("  %6d  %3d", (int)c->signal_dbm, c->channel);
             tui_dim(); printf("  %5s  %5d  ", age, c->frame_count);

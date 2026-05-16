@@ -2,6 +2,7 @@
 #include <string.h>
 #include "ntop.h"
 #include "tui.h"
+#include "oui.h"
 #include "views/wifi.h"
 
 #define WIFI_PAGE 20
@@ -57,11 +58,11 @@ void view_wifi_draw(const ntop_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-32s  %-17s  %3s  %-14s  %s\n",
-           "SSID", "BSSID", "Ch", "Signal", "Enc");
-    TPRINT(" %-32s  %-17s  %3s  %-14s  %s\n",
+    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %s\n",
+           "SSID", "BSSID", "Vendor", "Ch", "Signal", "Enc");
+    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %s\n",
            "--------------------------------", "-----------------",
-           "---", "--------------", "---");
+           "------------", "---", "--------------", "---");
     tui_normal();
 
     if (s->ap_count == 0) {
@@ -78,6 +79,9 @@ void view_wifi_draw(const ntop_state_t *s) {
     for (int row = top; row < end; row++) {
         const wifi_ap_t *ap = &s->aps[row];
 
+        const char *vendor = oui_lookup_str(ap->bssid);
+        const char *vstr   = vendor ? vendor : "";
+
         if (row == s->wifi_sel) {
             /* selected: uniform bright reverse */
             char bar[12];
@@ -88,8 +92,8 @@ void view_wifi_draw(const ntop_state_t *s) {
             for (int i = 0; i < 10; i++) bar[i] = (i < filled) ? '#' : '.';
             bar[10] = '\0';
             tui_sel();
-            TPRINT(" %-32.32s  %-17s  %3d  [%-10s]%4d  %-4s\n",
-                   ap->ssid, ap->bssid, ap->channel,
+            TPRINT(" %-32.32s  %-17s  %-12.12s  %3d  [%-10s]%4d  %-4s\n",
+                   ap->ssid, ap->bssid, vstr, ap->channel,
                    bar, ap->signal_dbm, ap->enc);
             tui_reset();
         } else {
@@ -97,6 +101,8 @@ void view_wifi_draw(const ntop_state_t *s) {
             tui_bright(); TPRINT(" %-32.32s", ap->ssid);
             /* BSSID: dim — secondary identifier */
             tui_dim();    TPRINT("  %-17s", ap->bssid);
+            /* Vendor: dim */
+            tui_dim();    TPRINT("  %-12.12s", vstr);
             /* Channel: normal */
             tui_normal(); TPRINT("  %3d  [", ap->channel);
             /* Signal bar: gradient */
