@@ -10,6 +10,7 @@
 #include "views/conns.h"
 #include "views/wifi.h"
 #include "views/packets.h"
+#include "views/procs.h"
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
 #endif
@@ -43,6 +44,7 @@ static void handle_key(ntop_state_t *s, int key) {
     case '2': s->active_view = VIEW_CONNS;   return;
     case '3': s->active_view = VIEW_WIFI;    return;
     case '4': s->active_view = VIEW_PACKETS; return;
+    case '5': s->active_view = VIEW_PROCS;   return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -52,10 +54,11 @@ static void handle_key(ntop_state_t *s, int key) {
 
     /* delegate remaining keys to the active view */
     switch (s->active_view) {
-    case VIEW_IFACE: view_iface_key(s, key);  break;
-    case VIEW_CONNS: view_conns_key(s, key);  break;
-    case VIEW_WIFI:    view_wifi_key(s, key);    break;
-    case VIEW_PACKETS: view_packets_key(s, key); break;
+    case VIEW_IFACE:   view_iface_key(s, key);   break;
+    case VIEW_CONNS:   view_conns_key(s, key);   break;
+    case VIEW_WIFI:    view_wifi_key(s, key);     break;
+    case VIEW_PACKETS: view_packets_key(s, key);  break;
+    case VIEW_PROCS:   view_procs_key(s, key);    break;
     default: break;
     }
 }

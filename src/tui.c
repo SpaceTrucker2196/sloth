@@ -15,12 +15,14 @@
 #include "views/conns.h"
 #include "views/wifi.h"
 #include "views/packets.h"
+#include "views/procs.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
     "[2] Connections",
     "[3] WiFi",
     "[4] Packets",
+    "[5] Processes",
 };
 
 void tui_bar(double val, double max, int width, char *out) {
@@ -37,6 +39,7 @@ static void dispatch_view(const ntop_state_t *s) {
     case VIEW_CONNS:   view_conns_draw(s);   break;
     case VIEW_WIFI:    view_wifi_draw(s);    break;
     case VIEW_PACKETS: view_packets_draw(s); break;
+    case VIEW_PROCS:   view_procs_draw(s);   break;
     default: break;
     }
 }
