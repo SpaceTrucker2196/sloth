@@ -275,6 +275,80 @@ void test_draw_no_crash_with_packets(void) {
     ASSERT(1);
 }
 
+/* ── Detail panel ────────────────────────────────────────── */
+
+void test_detail_open_when_paused(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 5);
+    s.pkt_paused = 1;
+    s.pkt_sel    = 2;
+    ASSERT_EQ(s.pkt_detail, 0);
+    view_packets_key(&s, '\r');
+    ASSERT_EQ(s.pkt_detail, 1);
+}
+
+void test_detail_not_open_when_live(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 5);
+    s.pkt_paused = 0;
+    view_packets_key(&s, '\r');
+    ASSERT_EQ(s.pkt_detail, 0);
+}
+
+void test_detail_not_open_when_empty(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    s.pkt_paused = 1;
+    view_packets_key(&s, '\r');
+    ASSERT_EQ(s.pkt_detail, 0);
+}
+
+void test_detail_close_on_enter(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 5);
+    s.pkt_paused = 1;
+    s.pkt_detail = 1;
+    view_packets_key(&s, '\r');
+    ASSERT_EQ(s.pkt_detail, 0);
+}
+
+void test_detail_close_on_esc(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 5);
+    s.pkt_paused = 1;
+    s.pkt_detail = 1;
+    view_packets_key(&s, '\033');
+    ASSERT_EQ(s.pkt_detail, 0);
+}
+
+void test_detail_blocks_nav(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 5);
+    s.pkt_paused = 1;
+    s.pkt_sel    = 2;
+    s.pkt_detail = 1;
+    view_packets_key(&s, NTOP_KEY_UP);
+    ASSERT_EQ(s.pkt_sel, 2);  /* unchanged */
+    view_packets_key(&s, NTOP_KEY_DOWN);
+    ASSERT_EQ(s.pkt_sel, 2);  /* unchanged */
+}
+
+void test_detail_draw_no_crash(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 3);
+    s.pkt_paused = 1;
+    s.pkt_sel    = 1;
+    s.pkt_detail = 1;
+    view_packets_draw(&s);
+    ASSERT(1);
+}
+
 void run_packets_tests(void) {
     TEST_SUITE("view_packets_key/pause");
     RUN_TEST(test_pause_toggle);
@@ -308,4 +382,13 @@ void run_packets_tests(void) {
     RUN_TEST(test_draw_no_crash_empty);
     RUN_TEST(test_draw_no_crash_with_packets);
     RUN_TEST(test_filter_draw_in_filter_mode);
+
+    TEST_SUITE("view_packets_key/detail");
+    RUN_TEST(test_detail_open_when_paused);
+    RUN_TEST(test_detail_not_open_when_live);
+    RUN_TEST(test_detail_not_open_when_empty);
+    RUN_TEST(test_detail_close_on_enter);
+    RUN_TEST(test_detail_close_on_esc);
+    RUN_TEST(test_detail_blocks_nav);
+    RUN_TEST(test_detail_draw_no_crash);
 }

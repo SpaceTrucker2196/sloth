@@ -13,6 +13,63 @@ static void ring_range(const ntop_state_t *s, int *count, int *start) {
 }
 
 #ifdef WITH_PCAP
+/* ── Detail panel ───────────────────────────────────────── */
+
+static void draw_detail(const ntop_state_t *s) {
+    int count, start;
+    ring_range(s, &count, &start);
+    int sel = (count > 0) ? s->pkt_sel : 0;
+    int idx = (start + sel) % MAX_PACKETS;
+    const packet_info_t *p = &s->packets[idx];
+
+    char src[48], dst[48];
+    if (p->src_port) snprintf(src, sizeof(src), "%s:%u", p->src, p->src_port);
+    else             snprintf(src, sizeof(src), "%s",    p->src);
+    if (p->dst_port) snprintf(dst, sizeof(dst), "%s:%u", p->dst, p->dst_port);
+    else             snprintf(dst, sizeof(dst), "%s",    p->dst);
+
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 PACKET DETAIL \xe2\x94\x80\xe2\x94\x80\n");
+
+    tui_dim();   TPRINT("  Time:     "); tui_bright(); TPRINT("%04u.%06u\n",
+                 (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec);
+    tui_dim();   TPRINT("  Source:   "); tui_bright(); TPRINT("%s\n", src);
+    tui_dim();   TPRINT("  Dest:     "); tui_bright(); TPRINT("%s\n", dst);
+    tui_dim();   TPRINT("  Protocol: "); tui_bright(); TPRINT("%d\n", p->proto);
+    tui_dim();   TPRINT("  Length:   "); tui_bright(); TPRINT("%u\n", (unsigned)p->len);
+    tui_dim();   TPRINT("  Info:     "); tui_bright(); TPRINT("%s\n", p->info);
+
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 HEX DUMP (%u bytes) \xe2\x94\x80\xe2\x94\x80\n",
+                      (unsigned)p->raw_len);
+
+    if (p->raw_len == 0) {
+        tui_dim(); TPRINT("  (no raw bytes \xe2\x80\x94 build with WITH_PCAP=1)\n");
+    } else {
+        int total = (int)p->raw_len;
+        for (int off = 0; off < total; off += 16) {
+            tui_dim(); TPRINT("  %04x  ", (unsigned)off);
+            int line = total - off;
+            if (line > 16) line = 16;
+            /* hex bytes — two groups of 8 */
+            for (int b = 0; b < 16; b++) {
+                if (b == 8) TPRINT(" ");
+                if (b < line) { tui_normal(); TPRINT("%02x ", (unsigned)p->raw[off + b]); }
+                else          { tui_dim();    TPRINT("   "); }
+            }
+            TPRINT(" ");
+            /* ASCII */
+            for (int b = 0; b < line; b++) {
+                unsigned char c = p->raw[off + b];
+                if (c >= 32 && c < 127) { tui_bright(); TPRINT("%c", (int)c); }
+                else                    { tui_dim();    TPRINT("."); }
+            }
+            TPRINT("\n");
+        }
+    }
+
+    tui_dim(); TPRINT(" [Enter/Esc] back to packet list\n");
+    tui_normal();
+}
+
 /* Phosphor intensity by IP protocol number. */
 static void phos_proto(int proto) {
     switch (proto) {
@@ -37,6 +94,8 @@ void view_packets_draw(const ntop_state_t *s) {
     tui_dim(); TPRINT("  Packet capture disabled (build with WITH_PCAP=1)\n");
     tui_normal(); return;
 #else
+    if (s->pkt_detail) { draw_detail(s); return; }
+
 #ifdef WITH_NCURSES
     int page = LINES - 5;
     if (page < 1) page = 1;
@@ -143,6 +202,13 @@ void view_packets_draw(const ntop_state_t *s) {
 /* ── Key handler ────────────────────────────────────────── */
 
 void view_packets_key(ntop_state_t *s, int key) {
+    if (s->pkt_detail) {
+        if (key == '\r' || key == '\n' || key == '\033')
+            s->pkt_detail = 0;
+        /* all other keys consumed — do nothing */
+        return;
+    }
+
     if (s->pkt_filter_mode) {
         if (key == '\r' || key == '\n') {
             s->pkt_filter_buf[s->pkt_filter_len] = '\0';
@@ -171,6 +237,9 @@ void view_packets_key(ntop_state_t *s, int key) {
     (void)start;
 
     switch (key) {
+    case '\r': case '\n':
+        if (s->pkt_paused && count > 0) s->pkt_detail = 1;
+        break;
     case '/': case 'f': case 'F':
         s->pkt_filter_mode = 1;
         s->pkt_filter_len  = (int)strlen(s->pkt_filter);

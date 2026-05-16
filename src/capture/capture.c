@@ -148,6 +148,10 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     pkt.len     = hdr->len;
     decode_frame(data, (int)hdr->caplen, pcap_datalink(g_handle), &pkt);
 
+    int rl = (int)hdr->caplen < 64 ? (int)hdr->caplen : 64;
+    memcpy(pkt.raw, data, (size_t)rl);
+    pkt.raw_len = (uint16_t)rl;
+
     pthread_mutex_lock(&g_mu);
     g_state->packets[g_state->pkt_head] = pkt;
     g_state->pkt_head = (g_state->pkt_head + 1) % MAX_PACKETS;

@@ -23,6 +23,7 @@ typedef enum {
     VIEW_CONNS   = 1,
     VIEW_WIFI    = 2,
     VIEW_PACKETS = 3,
+    VIEW_PROCS   = 4,
     VIEW_COUNT
 } view_t;
 
@@ -98,6 +99,8 @@ typedef struct {
     int      proto;
     uint32_t len;
     char     info[64];
+    uint8_t  raw[64];
+    uint16_t raw_len;
 } packet_info_t;
 
 /* ── App state ──────────────────────────────────────────── */
@@ -135,6 +138,9 @@ typedef struct {
     int  pkt_filter_len;       /* length of pkt_filter_buf */
     int  pkt_filter_mode;      /* non-zero = filter input prompt is open */
     char pkt_filter_err[128];  /* last compile/apply error, "" = ok */
+    int  pkt_detail;           /* non-zero = detail panel open */
+
+    int           proc_sel;    /* selected row in procs view */
 } ntop_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */
