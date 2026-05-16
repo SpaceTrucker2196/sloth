@@ -43,7 +43,7 @@ endif
 
 ifeq ($(WITH_NCURSES),1)
     CFLAGS  += -DWITH_NCURSES
-    LDFLAGS += -lncurses
+    LDFLAGS += -lncursesw
 endif
 
 ifeq ($(WITH_PCAP),1)
