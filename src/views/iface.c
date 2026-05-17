@@ -149,6 +149,64 @@ static void draw_series(const iface_hist_t *hist, int is_rx) {
     tui_normal();
 }
 
+static void draw_iface_detail_stats(const iface_stat_t *iface) {
+    char rx_b[16], tx_b[16], rxp_b[16], txp_b[16];
+
+    /* line 1: speed / MTU */
+    tui_dim(); TPRINT("  Speed: ");
+    if (iface->speed_mbps > 0) {
+        tui_bright();
+        if (iface->speed_mbps >= 1000)
+            TPRINT("%d Gbps", iface->speed_mbps / 1000);
+        else
+            TPRINT("%d Mbps", iface->speed_mbps);
+    } else {
+        tui_dim(); TPRINT("--");
+    }
+    tui_dim(); TPRINT("   MTU: ");
+    if (iface->mtu > 0) { tui_bright(); TPRINT("%u", iface->mtu); }
+    else                 { tui_dim();    TPRINT("--"); }
+    TPRINT("\n");
+
+    /* line 2: cumulative bytes / packets */
+    fmt_bytes(iface->rx_bytes, rx_b, (int)sizeof(rx_b));
+    fmt_bytes(iface->tx_bytes, tx_b, (int)sizeof(tx_b));
+    fmt_bytes(iface->rx_packets, rxp_b, (int)sizeof(rxp_b));
+    fmt_bytes(iface->tx_packets, txp_b, (int)sizeof(txp_b));
+
+    tui_dim();   TPRINT("  Total RX: ");
+    tui_bright(); TPRINT("%-10s", rx_b);
+    tui_dim();   TPRINT("  TX: ");
+    tui_bright(); TPRINT("%-10s", tx_b);
+    tui_dim();   TPRINT("  pkts rx/tx: ");
+    tui_bright(); TPRINT("%s / %s", rxp_b, txp_b);
+    TPRINT("\n");
+
+    /* line 3: errors / drops — only shown when non-zero */
+    int have_err = (iface->rx_errors || iface->rx_drops ||
+                    iface->tx_errors || iface->tx_drops);
+    if (have_err) {
+        tui_bright(); TPRINT("  Errors ");
+        tui_dim();    TPRINT("rx: ");
+        if (iface->rx_errors) { tui_bright(); TPRINT("%llu ", (unsigned long long)iface->rx_errors); }
+        else                  { tui_dim();    TPRINT("-- "); }
+        tui_dim(); TPRINT("drop: ");
+        if (iface->rx_drops)  { tui_bright(); TPRINT("%llu  ", (unsigned long long)iface->rx_drops); }
+        else                  { tui_dim();    TPRINT("--  "); }
+        tui_dim(); TPRINT("tx: ");
+        if (iface->tx_errors) { tui_bright(); TPRINT("%llu ", (unsigned long long)iface->tx_errors); }
+        else                  { tui_dim();    TPRINT("-- "); }
+        tui_dim(); TPRINT("drop: ");
+        if (iface->tx_drops)  { tui_bright(); TPRINT("%llu", (unsigned long long)iface->tx_drops); }
+        else                  { tui_dim();    TPRINT("--"); }
+        TPRINT("\n");
+    } else {
+        tui_dim(); TPRINT("  Errors: --\n");
+    }
+    TPRINT("\n");
+    tui_normal();
+}
+
 static void draw_iface_graph(const ntop_state_t *s) {
     if (s->iface_count == 0) {
         tui_dim(); TPRINT("  (no interfaces)\n"); tui_normal(); return;
@@ -159,6 +217,8 @@ static void draw_iface_graph(const ntop_state_t *s) {
 
     tui_bright();
     TPRINT(" \xe2\x94\x80\xe2\x94\x80 %s  [Esc] back \xe2\x94\x80\xe2\x94\x80\n\n", iface->name);
+
+    draw_iface_detail_stats(iface);
 
     draw_series(hist, 1);
     TPRINT("\n");

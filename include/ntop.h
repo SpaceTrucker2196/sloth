@@ -38,8 +38,14 @@ typedef struct {
     uint64_t tx_bytes;
     uint64_t rx_packets;
     uint64_t tx_packets;
-    double   rx_rate;   /* bytes/sec since last poll */
+    uint64_t rx_errors;
+    uint64_t rx_drops;
+    uint64_t tx_errors;
+    uint64_t tx_drops;
+    double   rx_rate;      /* bytes/sec since last poll */
     double   tx_rate;
+    uint32_t mtu;          /* 0 = unknown */
+    int32_t  speed_mbps;   /* -1 = unknown */
 } iface_stat_t;
 
 /* ── Interface rate history (sparkline data) ────────────── */

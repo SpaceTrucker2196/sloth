@@ -40,6 +40,24 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
     int n = parse_proc_ifaces(f, out, max);
     fclose(f);
 
+    /* read MTU and link speed from sysfs */
+    for (int i = 0; i < n; i++) {
+        char path[72];
+        FILE *sf;
+        snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", out[i].name);
+        if ((sf = fopen(path, "r")) != NULL) {
+            fscanf(sf, "%u", &out[i].mtu);
+            fclose(sf);
+        }
+        snprintf(path, sizeof(path), "/sys/class/net/%s/speed", out[i].name);
+        if ((sf = fopen(path, "r")) != NULL) {
+            int spd = -1;
+            if (fscanf(sf, "%d", &spd) == 1 && spd > 0)
+                out[i].speed_mbps = spd;
+            fclose(sf);
+        }
+    }
+
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < g_prev_n; j++) {
             if (strncmp(g_prev[j].name, out[i].name, 16) != 0) continue;

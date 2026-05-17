@@ -78,8 +78,13 @@ int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
 
         s->rx_bytes   = (uint64_t)v[0];
         s->rx_packets = (uint64_t)v[1];
+        s->rx_errors  = (uint64_t)v[2];
+        s->rx_drops   = (uint64_t)v[3];
         s->tx_bytes   = (uint64_t)v[8];
         s->tx_packets = (uint64_t)v[9];
+        s->tx_errors  = (uint64_t)v[10];
+        s->tx_drops   = (uint64_t)v[11];
+        s->speed_mbps = -1;
         n++;
     }
     return n;
