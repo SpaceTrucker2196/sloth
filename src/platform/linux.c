@@ -9,6 +9,7 @@
 #include "platform/linux_pid.h"
 #include "platform/linux_wifi.h"
 #include "platform/linux_dhcp.h"
+#include "platform/linux_tcpdiag.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -71,6 +72,7 @@ int linux_get_conns(conn_t *out, int max) {
     if ((f = fopen("/proc/net/udp",  "r")) != NULL) { parse_proc_conns(f,  PROTO_UDP, out, max, &n); fclose(f); }
     if ((f = fopen("/proc/net/udp6", "r")) != NULL) { parse_proc_conns6(f, PROTO_UDP, out, max, &n); fclose(f); }
     resolve_pids(out, n);
+    linux_tcpdiag_fill(out, n);
     return n;
 }
 

@@ -93,22 +93,24 @@ void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
 
     while (*n < max && fgets(line, sizeof(line), f)) {
         char local[32], remote[32];
-        unsigned int state = 0;
-        unsigned long inode = 0;
-        /* fields after slot#: local remote state tx:rx tr:tm retrnsmt uid timeout inode */
+        unsigned int  state    = 0;
+        unsigned int  retrnsmt = 0;
+        unsigned long inode    = 0;
+        /* fields: local remote state tx:rx tr:tm retrnsmt uid timeout inode */
         if (sscanf(line,
                    " %*d: %31s %31s %X"
-                   " %*X:%*X %*X:%*X %*X %*u %*u %lu",
-                   local, remote, &state, &inode) < 3)
+                   " %*X:%*X %*X:%*X %X %*u %*u %lu",
+                   local, remote, &state, &retrnsmt, &inode) < 3)
             continue;
 
         conn_t *c = &out[*n];
         memset(c, 0, sizeof(*c));
         parse_hex_addr(local,  c->local_addr,  &c->local_port);
         parse_hex_addr(remote, c->remote_addr, &c->remote_port);
-        c->proto = proto;
-        c->state = (int)state;
-        c->inode = inode;
+        c->proto   = proto;
+        c->state   = (int)state;
+        c->inode   = inode;
+        c->retrans = retrnsmt;
         (*n)++;
     }
 }

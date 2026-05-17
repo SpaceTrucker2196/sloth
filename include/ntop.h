@@ -64,7 +64,9 @@ typedef struct {
     int           state;
     int           pid;
     char          proc[16];
-    unsigned long inode;   /* socket inode for PID resolution */
+    unsigned long inode;    /* socket inode for PID resolution */
+    uint32_t      rtt_us;   /* smoothed RTT in microseconds (TCP only, 0=unknown) */
+    uint32_t      retrans;  /* total retransmissions (TCP only) */
 } conn_t;
 
 /* ── Per-connection bandwidth snapshot ──────────────────── */
@@ -91,6 +93,7 @@ typedef enum {
     CONN_SORT_LPORT = 2,
     CONN_SORT_PID   = 3,
     CONN_SORT_BW    = 4,
+    CONN_SORT_RTT   = 5,
     CONN_SORT_COUNT
 } conn_sort_t;
 

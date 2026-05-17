@@ -29,6 +29,7 @@ ifeq ($(UNAME),Linux)
     SRCS   += src/platform/linux_parse.c
     SRCS   += src/platform/linux_pid.c
     SRCS   += src/platform/linux_dhcp.c
+    SRCS   += src/platform/linux_tcpdiag.c
     CFLAGS += -DPLATFORM_LINUX
     ifeq ($(WITH_WIFI),1)
         SRCS += src/platform/linux_wifi.c
@@ -131,9 +132,11 @@ TEST_SRCS = tests/main_test.c          \
             src/views/procs.c          \
             src/views/stats.c          \
             src/views/probe.c          \
-            src/views/arp.c            \
-            tests/test_dhcp.c          \
-            src/platform/linux_dhcp.c
+            src/views/arp.c                \
+            tests/test_dhcp.c              \
+            src/platform/linux_dhcp.c      \
+            tests/test_rtt.c               \
+            src/platform/linux_tcpdiag.c
 
 TEST_BIN = ntop_test
 
