@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include "sloth.h"
 #include "dns_log.h"
+#include "jsonl.h"
 
 static dns_log_entry_t g_log[MAX_DNS_LOG];
 static int             g_head  = 0;
@@ -144,6 +145,7 @@ void dns_log_record(const dns_log_entry_t *e)
     g_head = (g_head + 1) % MAX_DNS_LOG;
     if (g_count < MAX_DNS_LOG) g_count++;
     pthread_mutex_unlock(&g_mu);
+    jsonl_emit_dns(e);
 }
 
 void dns_log_snapshot(sloth_state_t *s)

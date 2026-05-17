@@ -4,6 +4,7 @@
 #include "alerts.h"
 #include "threat_intel.h"
 #include "beacon_detect.h"
+#include "jsonl.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -74,6 +75,8 @@ static void fire(alert_type_t type, alert_sev_t sev,
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
+    /* New alert keys are interesting enough to log. */
+    jsonl_emit_alert(a);
 }
 
 /* ── Rules ───────────────────────────────────────────────── */

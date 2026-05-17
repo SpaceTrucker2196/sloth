@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <ctype.h>
 #include "ntp_log.h"
+#include "jsonl.h"
 
 /* RFC 5905 — NTPv3/v4 fixed header (48 bytes minimum):
  *
@@ -98,6 +99,7 @@ void ntp_log_record(const ntp_log_entry_t *e) {
     ntp_head = (ntp_head + 1) % MAX_NTP_LOG;
     if (ntp_count < MAX_NTP_LOG) ntp_count++;
     pthread_mutex_unlock(&ntp_mu);
+    jsonl_emit_ntp(e);
 }
 
 void ntp_log_snapshot(sloth_state_t *s) {

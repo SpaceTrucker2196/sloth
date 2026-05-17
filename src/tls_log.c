@@ -5,6 +5,7 @@
 #include "sloth.h"
 #include "tls_log.h"
 #include "md5.h"
+#include "jsonl.h"
 
 static tls_log_entry_t g_log[MAX_TLS_LOG];
 static int             g_head  = 0;
@@ -234,6 +235,7 @@ void tls_log_record(const tls_log_entry_t *e)
     g_head = (g_head + 1) % MAX_TLS_LOG;
     if (g_count < MAX_TLS_LOG) g_count++;
     pthread_mutex_unlock(&g_mu);
+    jsonl_emit_tls(e);
 }
 
 void tls_log_snapshot(sloth_state_t *s)

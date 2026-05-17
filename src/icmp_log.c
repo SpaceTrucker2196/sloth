@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "icmp_log.h"
+#include "jsonl.h"
 
 /* ICMP header (RFC 792 / RFC 4443):
  *   0       1       2       3
@@ -100,6 +101,7 @@ void icmp_log_record(const icmp_log_entry_t *e) {
     icmp_head = (icmp_head + 1) % MAX_ICMP_LOG;
     if (icmp_count < MAX_ICMP_LOG) icmp_count++;
     pthread_mutex_unlock(&icmp_mu);
+    jsonl_emit_icmp(e);
 }
 
 void icmp_log_snapshot(sloth_state_t *s) {

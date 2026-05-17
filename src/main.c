@@ -44,6 +44,7 @@
 #include "alerts.h"
 #include "devices.h"
 #include "beacon_detect.h"
+#include "jsonl.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -162,9 +163,38 @@ static void handle_key(sloth_state_t *s, int key) {
     }
 }
 
-int main(void) {
+static void print_usage(const char *argv0) {
+    fprintf(stderr,
+            "usage: %s [-o FILE]\n"
+            "  -o, --out FILE   append JSONL forensic log of all observed\n"
+            "                   events to FILE (created if it doesn't exist)\n",
+            argv0);
+}
+
+int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+
+    const char *jsonl_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
+            jsonl_path = argv[++i];
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "unknown argument: %s\n", argv[i]);
+            print_usage(argv[0]);
+            return 2;
+        }
+    }
+
+    if (jsonl_path) {
+        if (!jsonl_open(jsonl_path)) {
+            fprintf(stderr, "could not open jsonl output %s\n", jsonl_path);
+            return 1;
+        }
+    }
 
     memset(&g_state, 0, sizeof(g_state));
     g_state.poll_ms     = POLL_MS;
@@ -191,5 +221,6 @@ int main(void) {
 #endif
     dns_cleanup();
     g_platform.cleanup();
+    jsonl_close();
     return 0;
 }

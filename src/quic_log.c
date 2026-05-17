@@ -5,6 +5,7 @@
 #include "sloth.h"
 #include "quic_snoop.h"
 #include "quic_log.h"
+#include "jsonl.h"
 
 static quic_log_entry_t g_log[MAX_QUIC_LOG];
 static int              g_head  = 0;
@@ -34,6 +35,7 @@ void quic_log_record(const quic_log_entry_t *e)
     g_head = (g_head + 1) % MAX_QUIC_LOG;
     if (g_count < MAX_QUIC_LOG) g_count++;
     pthread_mutex_unlock(&g_mu);
+    jsonl_emit_quic(e);
 }
 
 void quic_log_snapshot(sloth_state_t *s)

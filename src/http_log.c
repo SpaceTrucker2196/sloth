@@ -1,8 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
 #include "http_log.h"
+#include "jsonl.h"
 
 static http_log_entry_t g_log[MAX_HTTP_LOG];
 static int              g_head  = 0;   /* next write slot */
@@ -98,7 +100,7 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
     memcpy(out->method, (const char *)data, (size_t)msz);
     out->method[msz] = '\0';
 
-    strncpy(out->host, host, sizeof(out->host) - 1);
+    snprintf(out->host, sizeof(out->host), "%s", host);
 
     int psz = plen < 127 ? plen : 127;
     memcpy(out->path, path_start, (size_t)psz);
@@ -117,6 +119,7 @@ void http_log_record(const http_log_entry_t *e)
     g_head = (g_head + 1) % MAX_HTTP_LOG;
     if (g_count < MAX_HTTP_LOG) g_count++;
     pthread_mutex_unlock(&g_mu);
+    jsonl_emit_http(e);
 }
 
 void http_log_snapshot(sloth_state_t *s)
