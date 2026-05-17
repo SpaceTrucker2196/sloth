@@ -44,9 +44,10 @@ static void poll_data(ntop_state_t *s) {
         s->iface_sel = s->iface_count - 1;
     if (s->wifi_sel >= s->ap_count && s->ap_count > 0)
         s->wifi_sel = s->ap_count - 1;
-    s->arp_count = g_platform.get_arp(s->arp_entries, MAX_ARP_ENTRIES);
+    s->arp_count  = g_platform.get_arp(s->arp_entries, MAX_ARP_ENTRIES);
     if (s->arp_sel >= s->arp_count && s->arp_count > 0)
         s->arp_sel = s->arp_count - 1;
+    s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
 }
 
 static void handle_key(ntop_state_t *s, int key) {

@@ -30,6 +30,10 @@ static int fake_get_arp(arp_entry_t *out, int max) {
     (void)out; (void)max; return 0;
 }
 
+static int fake_get_dhcp(dhcp_lease_t *out, int max) {
+    (void)out; (void)max; return 0;
+}
+
 static void fake_init(void)    {}
 static void fake_cleanup(void) {}
 
@@ -39,6 +43,7 @@ platform_ops_t g_platform = {
     fake_get_conns,
     fake_wifi_scan,
     fake_get_arp,
+    fake_get_dhcp,
     fake_init,
     fake_cleanup,
 };

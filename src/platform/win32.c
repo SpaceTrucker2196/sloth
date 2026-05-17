@@ -10,6 +10,7 @@ int win32_get_ifaces(iface_stat_t *out, int max) { (void)out; (void)max; return 
 int win32_get_conns(conn_t *out, int max)         { (void)out; (void)max; return 0; }
 int win32_wifi_scan(wifi_ap_t *out, int max)      { (void)out; (void)max; return 0; }
 int win32_get_arp(arp_entry_t *out, int max)      { (void)out; (void)max; return 0; }
+int win32_get_dhcp(dhcp_lease_t *out, int max)    { (void)out; (void)max; return 0; }
 
 static void win32_init(void)    {}
 static void win32_cleanup(void) {}
@@ -19,6 +20,7 @@ platform_ops_t g_platform = {
     win32_get_conns,
     win32_wifi_scan,
     win32_get_arp,
+    win32_get_dhcp,
     win32_init,
     win32_cleanup,
 };

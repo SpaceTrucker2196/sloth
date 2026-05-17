@@ -102,13 +102,20 @@ typedef enum {
 } conn_filter_t;
 
 /* ── ARP neighbors ──────────────────────────────────────── */
-#define MAX_ARP_ENTRIES 256
+#define MAX_ARP_ENTRIES  256
+#define MAX_DHCP_LEASES   64
 
 typedef struct {
     char    ip[46];
     uint8_t mac[6];
     char    iface[16];
 } arp_entry_t;
+
+typedef struct {
+    char   ip[46];
+    char   hostname[64];
+    time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
+} dhcp_lease_t;
 
 /* ── WiFi APs ───────────────────────────────────────────── */
 typedef struct {
@@ -196,9 +203,13 @@ typedef struct {
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
 
     /* ── ARP neighbor table ────────────────────────────── */
-    arp_entry_t arp_entries[MAX_ARP_ENTRIES];
-    int         arp_count;
-    int         arp_sel;
+    arp_entry_t  arp_entries[MAX_ARP_ENTRIES];
+    int          arp_count;
+    int          arp_sel;
+
+    /* ── DHCP leases (hostname lookup for ARP view) ─────── */
+    dhcp_lease_t dhcp_leases[MAX_DHCP_LEASES];
+    int          dhcp_count;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
@@ -223,6 +234,7 @@ typedef struct {
     int  (*get_conns)(conn_t *out, int max);
     int  (*wifi_scan)(wifi_ap_t *out, int max);
     int  (*get_arp)(arp_entry_t *out, int max);
+    int  (*get_dhcp)(dhcp_lease_t *out, int max);
     void (*init)(void);
     void (*cleanup)(void);
 } platform_ops_t;

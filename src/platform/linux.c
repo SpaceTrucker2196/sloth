@@ -8,6 +8,7 @@
 #include "platform/linux_parse.h"
 #include "platform/linux_pid.h"
 #include "platform/linux_wifi.h"
+#include "platform/linux_dhcp.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -120,6 +121,7 @@ platform_ops_t g_platform = {
     linux_get_conns,
     linux_wifi_scan,
     linux_get_arp,
+    linux_get_dhcp,
     linux_init,
     linux_cleanup,
 };
