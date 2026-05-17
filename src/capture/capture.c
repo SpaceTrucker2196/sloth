@@ -18,6 +18,7 @@
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
 #include "quic_log.h"
+#include "dns_log.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
 #include "http_log.h"
@@ -115,6 +116,9 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
             if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+            dns_log_entry_t dqe;
+            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe))
+                dns_log_record(&dqe);
         } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
             mdns_snoop(tp + 8, tlen - 8);
             snprintf(pkt->info, sizeof(pkt->info), "mDNS");
@@ -174,6 +178,9 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
             if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+            dns_log_entry_t dqe;
+            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe))
+                dns_log_record(&dqe);
         } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
             mdns_snoop(tp + 8, tlen - 8);
             snprintf(pkt->info, sizeof(pkt->info), "mDNS");

@@ -37,6 +37,7 @@ typedef enum {
     VIEW_HTTP    = 14,
     VIEW_TLS     = 15,
     VIEW_QUIC    = 16,
+    VIEW_DNS     = 17,
     VIEW_COUNT
 } view_t;
 
@@ -225,6 +226,19 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── DNS query log ──────────────────────────────────────── */
+#define MAX_DNS_LOG  256
+#define DNS_NAME_LEN  64
+
+typedef struct {
+    char   src[46];             /* source IP of the DNS packet */
+    char   qname[DNS_NAME_LEN]; /* query name (truncated at 63 chars) */
+    char   qtype[8];            /* "A", "AAAA", "PTR", "MX", "NS", "CNAME", "TXT", "SRV", "?" */
+    char   answer[46];          /* first A/AAAA IP, "NXDOMAIN", or "" */
+    int    is_resp;             /* 0 = query, 1 = response */
+    time_t ts;
+} dns_log_entry_t;
+
 /* ── QUIC session log ───────────────────────────────────── */
 #define MAX_QUIC_LOG 256
 
@@ -384,6 +398,12 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── DNS query log ──────────────────────────────────────── */
+    dns_log_entry_t dns_log[MAX_DNS_LOG];
+    int             dns_log_head;
+    int             dns_log_count;
+    int             dns_log_sel;
 
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
