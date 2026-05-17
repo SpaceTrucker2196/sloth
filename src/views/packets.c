@@ -6,6 +6,7 @@
 #include "dns.h"
 #include "services.h"
 #include "views/packets.h"
+#include "pcap_write.h"
 
 #define PKTS_PAGE 30
 
@@ -128,10 +129,13 @@ void view_packets_draw(const ntop_state_t *s) {
     if (s->pkt_filter_err[0]) {
         tui_dim(); TPRINT("  [ERR: %s]", s->pkt_filter_err);
     }
+    if (s->pkt_export_msg[0]) {
+        tui_dim(); TPRINT("  %s", s->pkt_export_msg);
+    }
     tui_dim(); TPRINT("  [n] ");
     tui_bright(); TPRINT("%s", s->dns_enabled ? "names" : "numeric");
 #ifndef WITH_NCURSES
-    tui_dim(); TPRINT("  [p]ause  [/] filter  [x] clear  [up/dn] navigate");
+    tui_dim(); TPRINT("  [p]ause  [/] filter  [x] clear  [w] save  [up/dn] navigate");
 #endif
     TPRINT("\n");
 
@@ -282,6 +286,17 @@ void view_packets_key(ntop_state_t *s, int key) {
     case NTOP_KEY_DOWN:
         if (s->pkt_paused && count > 0 && s->pkt_sel < count - 1) s->pkt_sel++;
         break;
+    case 'w': case 'W': {
+        char path[128] = "";
+        int n = pcap_export(s, path, sizeof(path));
+        if (n < 0)
+            snprintf(s->pkt_export_msg, sizeof(s->pkt_export_msg),
+                     "export failed");
+        else
+            snprintf(s->pkt_export_msg, sizeof(s->pkt_export_msg),
+                     "saved %d pkts -> %.50s", n, path);
+        break;
+    }
     default:
         break;
     }

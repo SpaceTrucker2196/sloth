@@ -183,6 +183,8 @@ typedef struct {
     int  pkt_filter_mode;      /* non-zero = filter input prompt is open */
     char pkt_filter_err[128];  /* last compile/apply error, "" = ok */
     int  pkt_detail;           /* non-zero = detail panel open */
+    int  pkt_linktype;         /* pcap DLT link type (set by capture_start) */
+    char pkt_export_msg[80];   /* last pcap export result shown in status */
 
     int           proc_sel;    /* selected row in procs view */
     int           proc_detail; /* non-zero = detail panel open */

@@ -60,6 +60,8 @@ ifeq ($(WITH_PCAP),1)
     SRCS    += src/capture/probe.c
 endif
 
+SRCS += src/pcap_write.c
+
 ifeq ($(WITH_WIFI),1)
     CFLAGS += -DWITH_WIFI
 endif
@@ -116,6 +118,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_oui.c           \
             tests/test_services.c      \
             tests/test_arp.c           \
+            tests/test_pcap_write.c    \
+            src/pcap_write.c           \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \

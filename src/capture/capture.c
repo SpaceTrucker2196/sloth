@@ -187,6 +187,7 @@ void capture_start(ntop_state_t *s) {
     }
     if (!g_handle) return;  /* silently disabled — show live hint in view */
 
+    s->pkt_linktype = pcap_datalink(g_handle);
     g_running = 1;
     pthread_create(&g_thread, NULL, capture_thread, NULL);
 }
