@@ -3,8 +3,9 @@
 A terminal-based network monitor for Linux, written in C99. Passive-only — no packets are injected and no kernel state is modified.
 
 ```
-[1] Interfaces  [2] Connections  [3] WiFi  [4] Packets  [5] Processes
-[6] Stats       [7] Probe        [8] ARP   [9] mDNS
+[1] Interfaces  [2] Connections  [3] WiFi     [4] Packets  [5] Processes
+[6] Stats       [7] Probe        [8] ARP      [9] mDNS
+[0] NBNS        [d] DHCP         [s] SSDP     [b] Beacons
 ```
 
 ## Features
@@ -20,6 +21,10 @@ A terminal-based network monitor for Linux, written in C99. Passive-only — no 
 | **Probe** | 802.11 probe-request sniffer — unassociated devices, SSIDs being searched, signal |
 | **ARP** | Layer-2 neighbor table with OUI vendor lookup and DHCP hostname/lease expiry |
 | **mDNS** | Bonjour/Zeroconf service table built from passive UDP/5353 observation |
+| **NBNS** | NetBIOS Name Service table — Windows/Samba hostnames from UDP/137 |
+| **DHCP** | Live DHCP event log — DISCOVER/REQUEST/ACK with hostname and IP |
+| **SSDP** | UPnP device table from passive UDP/1900 NOTIFY/M-SEARCH traffic |
+| **Beacons** | Passive 802.11 beacon sniffer — APs observed on monitor iface with SSID, BSSID, signal, channel, encryption, beacon interval |
 
 Passive snooping features active when pcap capture is running:
 

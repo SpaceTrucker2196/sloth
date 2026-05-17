@@ -24,6 +24,7 @@
 #include "views/nbns.h"
 #include "views/dhcp_snoop.h"
 #include "views/ssdp.h"
+#include "views/beacon.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -38,6 +39,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[0] NBNS",
     "[d] DHCP",
     "[s] SSDP",
+    "[b] Beacons",
 };
 
 void tui_bar(double val, double max, int width, char *out) {
@@ -62,6 +64,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_NBNS:    view_nbns_draw(s);         break;
     case VIEW_DHCP:    view_dhcp_snoop_draw(s);   break;
     case VIEW_SSDP:    view_ssdp_draw(s);         break;
+    case VIEW_BEACON:  view_beacon_draw(s);        break;
     default: break;
     }
 }

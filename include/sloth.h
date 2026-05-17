@@ -32,6 +32,7 @@ typedef enum {
     VIEW_NBNS    = 9,
     VIEW_DHCP    = 10,
     VIEW_SSDP    = 11,
+    VIEW_BEACON  = 12,
     VIEW_COUNT
 } view_t;
 
@@ -220,6 +221,21 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── Beacon APs (passively observed 802.11 access points) ── */
+#define MAX_BEACON_APS  256
+#define BEACON_AGE_SECS 300
+
+typedef struct {
+    char     ssid[33];      /* "" = hidden/broadcast network */
+    uint8_t  bssid[6];
+    int8_t   signal_dbm;
+    int      channel;
+    char     enc[10];       /* OPEN WEP WPA WPA2 WPA3 */
+    uint16_t beacon_ms;     /* beacon interval in ms */
+    time_t   last_seen;
+    int      frame_count;
+} beacon_ap_t;
+
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
 #define PROBE_AGE_SECS    120
@@ -313,6 +329,11 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── Beacon APs (passive 802.11 beacon sniff) ──────────── */
+    beacon_ap_t beacon_aps[MAX_BEACON_APS];
+    int         beacon_count;
+    int         beacon_sel;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];

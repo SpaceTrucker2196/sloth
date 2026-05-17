@@ -9,6 +9,7 @@
 
 #include "sloth.h"
 #include "capture/probe.h"
+#include "beacon_snoop.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -164,7 +165,17 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     uint8_t type = (fc0 >> 2) & 0x03;
     uint8_t sub  = (fc0 >> 4) & 0x0f;
 
-    if (type != 0 || sub != 4) return;  /* management / probe request only */
+    if (type != 0) return;  /* management frames only */
+
+    if (sub == 8) {
+        /* Beacon frame — passive AP discovery */
+        char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;
+        if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel, enc, &bms))
+            beacon_record(bssid, ssid, signal, channel, enc, bms);
+        return;
+    }
+
+    if (sub != 4) return;  /* only probe requests beyond this point */
 
     /* Source Address: bytes 10-15 */
     const uint8_t *sa = dot11 + 10;
