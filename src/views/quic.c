@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/quic.h"
 #include "quic_log.h"
+#include "filter.h"
 
 #define QUIC_PAGE 30
 
@@ -19,6 +20,7 @@ void view_quic_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" QUIC sessions: ");
     tui_bright();  TPRINT("%d", s->quic_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -44,6 +46,10 @@ void view_quic_draw(const sloth_state_t *s) {
 
     for (int row = page_top; row < page_end; row++) {
         const quic_log_entry_t *e = &s->quic_log[row];
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, e->src, e->dst,
+                              e->host, e->ver, NULL))
+            continue;
 
         char ts_buf[10];
         struct tm *tm = localtime(&e->ts);

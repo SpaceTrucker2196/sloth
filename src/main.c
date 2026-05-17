@@ -99,7 +99,50 @@ static void poll_data(sloth_state_t *s) {
     devices_update(s);
 }
 
+static void handle_filter_input(sloth_state_t *s, int key) {
+    if (key == 10 || key == 13) {            /* Enter — commit */
+        s->filter_editing = 0;
+        return;
+    }
+    if (key == 27) {                          /* Esc — cancel + clear */
+        s->filter[0]      = '\0';
+        s->filter_editing = 0;
+        return;
+    }
+    if (key == SLOTH_KEY_BACKSPACE) {
+        int n = (int)strlen(s->filter);
+        if (n > 0) s->filter[n - 1] = '\0';
+        return;
+    }
+    if (key >= 32 && key <= 126) {
+        int n = (int)strlen(s->filter);
+        if (n + 1 < (int)sizeof(s->filter)) {
+            s->filter[n]     = (char)key;
+            s->filter[n + 1] = '\0';
+        }
+    }
+}
+
 static void handle_key(sloth_state_t *s, int key) {
+    if (key == 0) return;
+
+    /* While editing the filter, capture all input. */
+    if (s->filter_editing) {
+        handle_filter_input(s, key);
+        return;
+    }
+
+    if (key == '/') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 1;
+        return;
+    }
+    if (key == '\\') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 0;
+        return;
+    }
+
     switch (key) {
     case 'q': case 'Q':
         g_quit = 1;

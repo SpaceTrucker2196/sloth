@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/icmp.h"
 #include "icmp_log.h"
+#include "filter.h"
 
 #define ICMP_PAGE 30
 
@@ -19,6 +20,7 @@ void view_icmp_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" ICMP messages: ");
     tui_bright();  TPRINT("%d", s->icmp_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -44,6 +46,10 @@ void view_icmp_draw(const sloth_state_t *s) {
 
     for (int row = page_top; row < page_end; row++) {
         const icmp_log_entry_t *e = &s->icmp_log[row];
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, e->src, e->dst,
+                              e->desc, NULL, NULL))
+            continue;
 
         char ts_buf[10];
         struct tm *tm = localtime(&e->ts);

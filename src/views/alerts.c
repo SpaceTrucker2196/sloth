@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/alerts.h"
 #include "../alerts.h"
+#include "filter.h"
 
 #define ALERTS_PAGE 30
 
@@ -39,6 +40,7 @@ void view_alerts_draw(const sloth_state_t *s) {
     if (warns > 0) { tui_heat(0.7);  TPRINT("%d warn ", warns); }
     tui_bright();  TPRINT("%d total", s->alert_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -64,6 +66,10 @@ void view_alerts_draw(const sloth_state_t *s) {
 
     for (int row = page_top; row < page_end; row++) {
         const alert_t *a = &s->alerts[row];
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, a->title, a->detail,
+                              a->key, NULL, NULL))
+            continue;
 
         char ts_buf[10];
         struct tm *tm = localtime(&a->last_seen);

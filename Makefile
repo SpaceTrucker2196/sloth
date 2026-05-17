@@ -59,7 +59,8 @@ SRCS = src/main.c          \
        src/views/devices.c   \
        src/beacon_detect.c   \
        src/jsonl.c           \
-       src/views/help.c
+       src/views/help.c      \
+       src/filter.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -237,7 +238,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_beacon_detect.c     \
             src/jsonl.c                    \
             tests/test_jsonl.c             \
-            src/views/help.c
+            src/views/help.c               \
+            src/filter.c                   \
+            tests/test_filter.c
 
 TEST_BIN = sloth_test
 

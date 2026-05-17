@@ -62,6 +62,17 @@ static const char *view_labels[VIEW_COUNT] = {
     "[?] Help",
 };
 
+void tui_filter_status(const sloth_state_t *s) {
+    if (!s) return;
+    if (s->filter_editing) {
+        tui_heat(0.9); TPRINT("  /%s_", s->filter);
+        tui_normal();
+    } else if (s->filter[0]) {
+        tui_heat(0.5); TPRINT("  /%s/", s->filter);
+        tui_normal();
+    }
+}
+
 /* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;

@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/dns_log.h"
 #include "../dns_log.h"
+#include "filter.h"
 
 #define DNS_PAGE 30
 
@@ -19,6 +20,7 @@ void view_dns_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" DNS log: ");
     tui_bright();  TPRINT("%d", s->dns_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -44,6 +46,10 @@ void view_dns_draw(const sloth_state_t *s) {
 
     for (int row = page_top; row < page_end; row++) {
         const dns_log_entry_t *e = &s->dns_log[row];
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, e->src, e->qname,
+                              e->answer, e->qtype, NULL))
+            continue;
 
         char ts_buf[10];
         struct tm *tm = localtime(&e->ts);

@@ -518,6 +518,10 @@ typedef struct {
     int      device_count;
     int      device_sel;
 
+    /* ── Filter (case-insensitive substring, applied to log views) ── */
+    char     filter[48];
+    int      filter_editing;   /* 1 while user is typing the filter */
+
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
     int              quic_log_head;

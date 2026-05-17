@@ -34,4 +34,8 @@ void tui_sel(void);    /* reversed: selected row highlight                */
 void tui_reset(void);  /* back to normal                                  */
 void tui_heat(double frac); /* heat gradient 0=grey … 1=red              */
 
+/* If a filter is set (or being edited), emit a small status label.
+ * Call after the view-specific header text on the same line. */
+void tui_filter_status(const sloth_state_t *s);
+
 #endif /* TUI_H */

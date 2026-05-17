@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/tls.h"
 #include "tls_log.h"
+#include "filter.h"
 
 #define TLS_PAGE 30
 
@@ -19,6 +20,7 @@ void view_tls_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" TLS connections: ");
     tui_bright();  TPRINT("%d", s->tls_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -45,6 +47,10 @@ void view_tls_draw(const sloth_state_t *s) {
 
     for (int row = page_top; row < page_end; row++) {
         const tls_log_entry_t *e = &s->tls_log[row];
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, e->src, e->dst,
+                              e->host, e->ja3, e->tls_ver))
+            continue;
 
         char ts_buf[10];
         struct tm *tm = localtime(&e->ts);

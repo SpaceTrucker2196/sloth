@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/devices.h"
+#include "filter.h"
 
 #define DEV_PAGE 30
 
@@ -36,6 +37,7 @@ void view_devices_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" Devices: ");
     tui_bright();  TPRINT("%d", s->device_count);
     tui_dim();     TPRINT("  [up/dn] navigate  (joined from ARP/DHCP/Beacon/Probe/STA, newest first)");
+    tui_filter_status(s);
     TPRINT("\n");
 
     tui_dim();
@@ -62,6 +64,10 @@ void view_devices_draw(const sloth_state_t *s) {
     for (int row = page_top; row < page_end; row++) {
         const device_t *d = &s->devices[row];
         char mac[20]; mac_str(d->mac, mac, sizeof(mac));
+        if (s->filter[0] &&
+            !filter_match_any(s->filter, mac, d->ip, d->vendor,
+                              d->hostname, d->last_ssid))
+            continue;
         char src[8];  sources_str(d->sources, src);
 
         /* The "name" column: hostname preferred, else last probed SSID,
