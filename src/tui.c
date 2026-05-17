@@ -33,6 +33,7 @@
 #include "views/ntp.h"
 #include "views/icmp.h"
 #include "views/alerts.h"
+#include "views/devices.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -56,6 +57,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[p] NTP",
     "[i] ICMP",
     "[v] Alerts",
+    "[g] Devices",
 };
 
 /* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
@@ -93,6 +95,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_NTP:     view_ntp_draw(s);           break;
     case VIEW_ICMP:    view_icmp_draw(s);          break;
     case VIEW_ALERTS:  view_alerts_draw(s);        break;
+    case VIEW_DEVICES: view_devices_draw(s);       break;
     default: break;
     }
 }

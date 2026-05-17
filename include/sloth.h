@@ -41,6 +41,7 @@ typedef enum {
     VIEW_NTP     = 18,
     VIEW_ICMP    = 19,
     VIEW_ALERTS  = 20,
+    VIEW_DEVICES = 21,
     VIEW_COUNT
 } view_t;
 
@@ -254,6 +255,29 @@ typedef struct {
     uint8_t stratum;   /* 0=unspec, 1=primary, 2..15=secondary, 16=unsync */
     time_t ts;
 } ntp_log_entry_t;
+
+/* ── Devices (synthesized device profiles, keyed by MAC) ─ */
+#define MAX_DEVICES  256
+
+#define DEV_SRC_ARP     (1 << 0)
+#define DEV_SRC_DHCP    (1 << 1)
+#define DEV_SRC_MDNS    (1 << 2)
+#define DEV_SRC_BEACON  (1 << 3)
+#define DEV_SRC_PROBE   (1 << 4)
+#define DEV_SRC_STA     (1 << 5)
+
+typedef struct {
+    uint8_t mac[6];
+    char    ip[46];          /* best-known IP, "" if unknown */
+    char    hostname[64];    /* DHCP/mDNS hostname, "" if unknown */
+    char    vendor[32];      /* OUI vendor short name, "" if unknown */
+    char    last_ssid[33];   /* most recent probed SSID, "" if none */
+    int     is_ap;           /* seen emitting beacons */
+    int8_t  signal_dbm;      /* most recent WiFi signal, 0 if none */
+    int     probe_count;     /* total probe frames */
+    int     sources;         /* bitmask of DEV_SRC_* */
+    time_t  last_seen;
+} device_t;
 
 /* ── Alerts ─────────────────────────────────────────────── */
 #define MAX_ALERTS         128
@@ -486,6 +510,11 @@ typedef struct {
     alert_t alerts[MAX_ALERTS];
     int     alert_count;
     int     alert_sel;
+
+    /* ── Devices ────────────────────────────────────────────── */
+    device_t devices[MAX_DEVICES];
+    int      device_count;
+    int      device_sel;
 
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
