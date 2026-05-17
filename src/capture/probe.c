@@ -276,4 +276,32 @@ void probe_clear(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
+void probe_set_iface(ntop_state_t *s, const char *iface) {
+    if (!iface || iface[0] == '\0') return;
+
+    /* already scanning on this exact interface */
+    if (g_running && strcmp(s->probe_iface, iface) == 0) return;
+
+    if (g_running) probe_stop();
+
+    g_state = s;
+    char errbuf[PCAP_ERRBUF_SIZE];
+    g_ph = pcap_open_live(iface, 65535, 1, 100, errbuf);
+    if (!g_ph) {
+        s->probe_iface[0] = '\0';
+        return;
+    }
+
+    if (pcap_datalink(g_ph) != DLT_IEEE802_11_RADIO) {
+        pcap_close(g_ph);
+        g_ph = NULL;
+        s->probe_iface[0] = '\0';
+        return;
+    }
+
+    snprintf(s->probe_iface, sizeof(s->probe_iface), "%s", iface);
+    g_running = 1;
+    pthread_create(&g_thread, NULL, probe_thread, NULL);
+}
+
 #endif /* WITH_PCAP */

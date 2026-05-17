@@ -5,6 +5,7 @@
 #include "history.h"
 #include "util.h"
 #include "views/iface.h"
+#include "capture/probe.h"
 
 /* ── sparkline ───────────────────────────────────────────── */
 
@@ -261,7 +262,9 @@ void view_iface_draw(const ntop_state_t *s) {
 
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden = is_hidden(s, f->name);
+        int hidden  = is_hidden(s, f->name);
+        int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
+        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -275,21 +278,21 @@ void view_iface_draw(const ntop_state_t *s) {
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
             printw("  %c%-12s  %-11s  %-11s  [%s]  %-10s  %-10s%s\n",
-                   hidden ? 'h' : ' ', f->name,
+                   pfx, f->name,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   hidden ? "  (hidden)" : "");
+                   is_scan ? "  [scanning]" : (hidden ? "  (hidden)" : ""));
             tui_reset();
         } else if (hidden) {
             tui_dim();
             printw("  h%-12s  (hidden)\n", f->name);
             tui_reset();
         } else {
-            /* interface name: bright */
-            tui_bright(); printw("  %-13s", f->name);
+            if (is_scan) tui_bright(); else tui_normal();
+            printw("  %c%-12s", pfx, f->name);
             /* RX rate */
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
             printw("  %-11s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
@@ -301,9 +304,11 @@ void view_iface_draw(const ntop_state_t *s) {
             else { tui_dim(); printw("%*s", HIST_LEN, ""); }
             /* totals */
             tui_dim();
-            printw("]  %-10s  %-10s\n",
+            printw("]  %-10s  %-10s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
+            if (is_scan) { tui_bright(); printw("  [scanning]"); }
+            printw("\n");
             tui_normal();
         }
     }
@@ -314,7 +319,7 @@ void view_iface_draw(const ntop_state_t *s) {
 
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
-             " ↑↓ navigate   t toggle hidden   Enter graph   %d interface%s",
+             " ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s",
              s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 
@@ -330,8 +335,10 @@ void view_iface_draw(const ntop_state_t *s) {
 
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden = is_hidden(s, f->name);
-        int sel    = (i == s->iface_sel);
+        int hidden  = is_hidden(s, f->name);
+        int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
+        int sel     = (i == s->iface_sel);
+        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -345,20 +352,21 @@ void view_iface_draw(const ntop_state_t *s) {
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
             printf(" >%c%-12s  %-11s  %-11s  [%s]  %-10s  %-10s%s",
-                   hidden ? 'h' : ' ', f->name,
+                   pfx, f->name,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   hidden ? "  (hidden)" : "");
+                   is_scan ? "  [scanning]" : (hidden ? "  (hidden)" : ""));
             tui_reset(); printf("\n");
         } else if (hidden) {
             tui_dim();
             printf("   h%-12s  (hidden)\n", f->name);
             tui_normal();
         } else {
-            tui_bright(); printf("   %-13s", f->name);
+            if (is_scan) tui_bright(); else tui_normal();
+            printf("  %c%-12s", pfx, f->name);
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
             printf("  %-11s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
@@ -366,9 +374,11 @@ void view_iface_draw(const ntop_state_t *s) {
             if (h) print_sparkline_heat(h, 1, HIST_LEN);
             else { tui_dim(); printf("%*s", HIST_LEN, ""); }
             tui_dim();
-            printf("]  %-10s  %-10s\n",
+            printf("]  %-10s  %-10s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
+            if (is_scan) { tui_bright(); printf("  [scanning]"); }
+            printf("\n");
             tui_normal();
         }
     }
@@ -378,7 +388,7 @@ void view_iface_draw(const ntop_state_t *s) {
     }
 
     tui_dim();
-    printf("\n  ↑↓ navigate   t toggle hidden   Enter graph   %d interface%s\n",
+    printf("\n  ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s\n",
            s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 #endif
@@ -395,6 +405,11 @@ void view_iface_key(ntop_state_t *s, int key) {
     switch (key) {
     case '\r': case '\n':
         if (s->iface_count > 0) s->iface_graph = 1;
+        break;
+
+    case 'm': case 'M':
+        if (s->iface_count > 0)
+            probe_set_iface(s, s->ifaces[s->iface_sel].name);
         break;
 
     case NTOP_KEY_UP:

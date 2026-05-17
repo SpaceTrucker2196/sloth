@@ -191,6 +191,47 @@ static void test_detail_gigabit_speed_label(void) {
     ASSERT(1);
 }
 
+/* ── Scan interface indicator tests ──────────────────────── */
+
+static void test_scan_key_m_no_crash(void) {
+    ntop_state_t s = make_state(2);
+    s.iface_sel = 1;
+    /* probe_set_iface is a no-op in test build (no WITH_PCAP); must not crash */
+    view_iface_key(&s, 'm');
+    view_iface_key(&s, 'M');
+    ASSERT(1);
+}
+
+static void test_scan_key_m_no_crash_no_ifaces(void) {
+    ntop_state_t s;
+    memset(&s, 0, sizeof(s));
+    view_iface_key(&s, 'm');
+    ASSERT(1);
+}
+
+static void test_scan_indicator_draw_selected(void) {
+    ntop_state_t s = make_state(2);
+    s.iface_sel = 0;
+    memcpy(s.probe_iface, "eth0", 5);
+    view_iface_draw(&s);   /* selected row should show [scanning] */
+    ASSERT(1);
+}
+
+static void test_scan_indicator_draw_unselected(void) {
+    ntop_state_t s = make_state(2);
+    s.iface_sel = 0;
+    memcpy(s.probe_iface, "wlan0", 6);  /* wlan0 is row 1, not selected */
+    view_iface_draw(&s);   /* unselected row with 's' prefix */
+    ASSERT(1);
+}
+
+static void test_scan_indicator_no_probe_iface(void) {
+    ntop_state_t s = make_state(2);
+    s.probe_iface[0] = '\0';
+    view_iface_draw(&s);   /* no scan marker anywhere */
+    ASSERT(1);
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_iface_graph_tests(void) {
@@ -217,4 +258,11 @@ void run_iface_graph_tests(void) {
     RUN_TEST(test_detail_draw_unknown_speed_mtu);
     RUN_TEST(test_detail_draw_with_packets);
     RUN_TEST(test_detail_gigabit_speed_label);
+
+    TEST_SUITE("iface scan indicator");
+    RUN_TEST(test_scan_key_m_no_crash);
+    RUN_TEST(test_scan_key_m_no_crash_no_ifaces);
+    RUN_TEST(test_scan_indicator_draw_selected);
+    RUN_TEST(test_scan_indicator_draw_unselected);
+    RUN_TEST(test_scan_indicator_no_probe_iface);
 }
