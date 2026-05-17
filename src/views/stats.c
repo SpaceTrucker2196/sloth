@@ -7,6 +7,7 @@
 #include "dns.h"
 #include "services.h"
 #include "views/stats.h"
+#include "geo.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -50,6 +51,58 @@ void stats_take_baseline(ntop_state_t *s) {
     }
     s->stats_base_count = n;
     s->stats_init       = 1;
+}
+
+/* ── Connection geography ────────────────────────────────── */
+
+#define GEO_TRACK 16
+#define GEO_BAR   32
+
+static void draw_geo(const ntop_state_t *s) {
+    char codes[GEO_TRACK][4];
+    int  counts[GEO_TRACK];
+    int  n = 0;
+
+    for (int i = 0; i < s->conn_count; i++) {
+        const char *cc = geo_lookup_str(s->conns[i].remote_addr);
+        if (!cc) continue;  /* IPv6 or unparseable — skip */
+
+        int found = 0;
+        for (int j = 0; j < n; j++) {
+            if (strcmp(codes[j], cc) == 0) { counts[j]++; found = 1; break; }
+        }
+        if (!found && n < GEO_TRACK) {
+            strncpy(codes[n], cc, 3); codes[n][3] = '\0';
+            counts[n++] = 1;
+        }
+    }
+
+    if (n == 0) {
+        tui_dim(); TPRINT("  (no connections)\n"); return;
+    }
+
+    /* selection sort descending by count */
+    for (int i = 0; i < n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (counts[j] > counts[best]) best = j;
+        if (best != i) {
+            int  ti = counts[i]; counts[i] = counts[best]; counts[best] = ti;
+            char tc[4]; memcpy(tc, codes[i], 4);
+            memcpy(codes[i], codes[best], 4); memcpy(codes[best], tc, 4);
+        }
+    }
+
+    int max_c = counts[0];
+    int show  = n < 8 ? n : 8;
+    for (int i = 0; i < show; i++) {
+        int bar_w = (max_c > 0) ? (counts[i] * GEO_BAR / max_c) : 0;
+        tui_dim(); TPRINT("  %-2s  ", codes[i]);
+        tui_bright();
+        for (int b = 0; b < bar_w; b++) TPRINT("\xe2\x96\x88");
+        tui_dim(); TPRINT("  %d\n", counts[i]);
+    }
+    tui_normal();
 }
 
 /* ── Top-N by bandwidth ──────────────────────────────────── */
@@ -204,6 +257,11 @@ void view_stats_draw(const ntop_state_t *s) {
     /* ── Top-5 by bandwidth ── */
     TPRINT("\n");
     draw_top_bw(s);
+
+    /* ── Connection geography ── */
+    TPRINT("\n");
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 Connection geography \xe2\x94\x80\xe2\x94\x80\n");
+    draw_geo(s);
 
     /* ── Packet capture stats ── */
 #ifdef WITH_PCAP

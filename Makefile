@@ -61,6 +61,7 @@ ifeq ($(WITH_PCAP),1)
 endif
 
 SRCS += src/pcap_write.c
+SRCS += src/geo.c
 
 ifeq ($(WITH_WIFI),1)
     CFLAGS += -DWITH_WIFI
@@ -120,6 +121,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_arp.c           \
             tests/test_pcap_write.c    \
             tests/test_iface_graph.c   \
+            tests/test_geo.c           \
+            src/geo.c                  \
             src/pcap_write.c           \
             src/views/conns.c          \
             src/views/wifi.c           \

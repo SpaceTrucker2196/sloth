@@ -23,6 +23,7 @@ void run_services_tests(void);
 void run_arp_tests(void);
 void run_pcap_write_tests(void);
 void run_iface_graph_tests(void);
+void run_geo_tests(void);
 
 int main(void) {
     printf("ntop test suite\n");
@@ -45,6 +46,7 @@ int main(void) {
     run_arp_tests();
     run_pcap_write_tests();
     run_iface_graph_tests();
+    run_geo_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

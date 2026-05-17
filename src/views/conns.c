@@ -7,6 +7,7 @@
 #include "dns.h"
 #include "services.h"
 #include "views/conns.h"
+#include "geo.h"
 
 #define CONNS_PAGE 30
 
@@ -159,11 +160,11 @@ void view_conns_draw(const ntop_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-21s  %-21s  %-5s  %-13s  %5s  %-14s  %-16s %s\n",
-           "Local", "Remote", "Proto", "State", "PID", "Process",
+    TPRINT(" %-21s  %-21s  %-2s  %-5s  %-13s  %5s  %-14s  %-16s %s\n",
+           "Local", "Remote", "CC", "Proto", "State", "PID", "Process",
            "Rate (rx/tx)", "Trend");
-    TPRINT(" %-21s  %-21s  %-5s  %-13s  %-5s  %-14s  %-16s %s\n",
-           "---------------------", "---------------------",
+    TPRINT(" %-21s  %-21s  %-2s  %-5s  %-13s  %-5s  %-14s  %-16s %s\n",
+           "---------------------", "---------------------", "--",
            "-----", "-------------", "-----", "--------------",
            "----------------", "--------");
     tui_normal();
@@ -189,6 +190,7 @@ void view_conns_draw(const ntop_state_t *s) {
         else
             svc_fmt_addr(remote, sizeof(remote), c->remote_addr, c->remote_port);
 
+        const char *cc    = geo_lookup_str(c->remote_addr);
         const char *proto = (c->proto == PROTO_TCP) ? "TCP" : "UDP";
         const char *state = (c->proto == PROTO_TCP) ? tcp_state_name(c->state) : "";
 
@@ -212,13 +214,15 @@ void view_conns_draw(const ntop_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->conn_sel) {
             tui_sel();
-            printw(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s  %-16s %s\n",
-                   local, remote, proto, state, pid_str,
+            printw(" %-21.21s  %-21.21s  %-2s  %-5s  %-13s  %5s  %-14.14s  %-16s %s\n",
+                   local, remote, cc ? cc : "", proto, state, pid_str,
                    c->pid > 0 ? c->proc : "", rate_col, spark);
             tui_reset();
         } else {
             tui_normal();
-            printw(" %-21.21s  %-21.21s  %-5s  ", local, remote, proto);
+            printw(" %-21.21s  %-21.21s  ", local, remote);
+            tui_dim(); printw("%-2s  ", cc ? cc : "");
+            tui_normal(); printw("%-5s  ", proto);
             phos_tcp_state(c->proto, c->state);
             printw("%-13s", state);
             tui_dim();
@@ -234,13 +238,15 @@ void view_conns_draw(const ntop_state_t *s) {
 #else
         if (row == s->conn_sel) {
             tui_sel();
-            printf(" %-21.21s  %-21.21s  %-5s  %-13s  %5s  %-14.14s  %-16s %s",
-                   local, remote, proto, state, pid_str,
+            printf(" %-21.21s  %-21.21s  %-2s  %-5s  %-13s  %5s  %-14.14s  %-16s %s",
+                   local, remote, cc ? cc : "", proto, state, pid_str,
                    c->pid > 0 ? c->proc : "", rate_col, spark);
             tui_reset(); printf("\n");
         } else {
             tui_normal();
-            printf(" %-21.21s  %-21.21s  %-5s  ", local, remote, proto);
+            printf(" %-21.21s  %-21.21s  ", local, remote);
+            tui_dim(); printf("%-2s  ", cc ? cc : "");
+            tui_normal(); printf("%-5s  ", proto);
             phos_tcp_state(c->proto, c->state);
             printf("%-13s", state);
             tui_dim();
