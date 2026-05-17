@@ -27,6 +27,7 @@
 #include "views/beacon.h"
 #include "views/deauth.h"
 #include "views/http.h"
+#include "views/tls.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -44,6 +45,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[b] Beacons",
     "[a] Deauth",
     "[h] HTTP",
+    "[t] TLS",
 };
 
 void tui_bar(double val, double max, int width, char *out) {
@@ -71,6 +73,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_BEACON:  view_beacon_draw(s);        break;
     case VIEW_DEAUTH:  view_deauth_draw(s);        break;
     case VIEW_HTTP:    view_http_draw(s);          break;
+    case VIEW_TLS:     view_tls_draw(s);           break;
     default: break;
     }
 }

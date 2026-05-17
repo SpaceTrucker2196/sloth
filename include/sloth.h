@@ -35,6 +35,7 @@ typedef enum {
     VIEW_BEACON  = 12,
     VIEW_DEAUTH  = 13,
     VIEW_HTTP    = 14,
+    VIEW_TLS     = 15,
     VIEW_COUNT
 } view_t;
 
@@ -223,6 +224,17 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── TLS connection log ─────────────────────────────────── */
+#define MAX_TLS_LOG 256
+
+typedef struct {
+    char   src[46];
+    char   dst[46];
+    char   host[64];    /* SNI hostname, "" if absent */
+    char   tls_ver[8];  /* "TLS 1.3" "TLS 1.2" "TLS 1.1" "TLS 1.0" "TLS" */
+    time_t ts;
+} tls_log_entry_t;
+
 /* ── HTTP request log ───────────────────────────────────── */
 #define MAX_HTTP_LOG 256
 
@@ -360,6 +372,12 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── TLS connection log ──────────────────────────────────── */
+    tls_log_entry_t tls_log[MAX_TLS_LOG];
+    int             tls_log_head;
+    int             tls_log_count;
+    int             tls_log_sel;
 
     /* ── HTTP request log ────────────────────────────────────── */
     http_log_entry_t http_log[MAX_HTTP_LOG];  /* ring buffer */

@@ -21,6 +21,7 @@
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
 #include "http_log.h"
+#include "tls_log.h"
 #include "dns.h"
 
 /* ── Thread state ─────────────────────────────────────────── */
@@ -58,11 +59,13 @@ static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     int tcp_hdr = (tp[12] >> 4) * 4;
     if (tcp_hdr < 20 || tcp_hdr > tlen) return;
     int pay_len = tlen - tcp_hdr;
-    if (pay_len < 9) return;   /* too short for TLS record + ClientHello type */
-    char host[64];
-    if (!sni_snoop(tp + tcp_hdr, pay_len, host, sizeof(host))) return;
-    dns_set_resolved(pkt->dst, host);
-    snprintf(pkt->info, sizeof(pkt->info), "TLS %.54s", host);
+    if (pay_len < 9) return;
+    tls_log_entry_t entry;
+    if (!tls_log_parse(tp + tcp_hdr, pay_len, pkt->src, pkt->dst, &entry)) return;
+    if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
+    snprintf(pkt->info, sizeof(pkt->info), "%s %.46s",
+             entry.tls_ver, entry.host[0] ? entry.host : pkt->dst);
+    tls_log_record(&entry);
 }
 
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
