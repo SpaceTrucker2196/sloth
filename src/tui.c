@@ -28,6 +28,7 @@
 #include "views/deauth.h"
 #include "views/http.h"
 #include "views/tls.h"
+#include "views/quic.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -46,6 +47,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[a] Deauth",
     "[h] HTTP",
     "[t] TLS",
+    "[u] QUIC",
 };
 
 /* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
@@ -78,6 +80,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_DEAUTH:  view_deauth_draw(s);        break;
     case VIEW_HTTP:    view_http_draw(s);          break;
     case VIEW_TLS:     view_tls_draw(s);           break;
+    case VIEW_QUIC:    view_quic_draw(s);          break;
     default: break;
     }
 }

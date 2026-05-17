@@ -36,6 +36,7 @@ typedef enum {
     VIEW_DEAUTH  = 13,
     VIEW_HTTP    = 14,
     VIEW_TLS     = 15,
+    VIEW_QUIC    = 16,
     VIEW_COUNT
 } view_t;
 
@@ -224,6 +225,17 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── QUIC session log ───────────────────────────────────── */
+#define MAX_QUIC_LOG 256
+
+typedef struct {
+    char   src[46];
+    char   dst[46];
+    char   host[64];  /* hostname from DNS cache, "" if unknown */
+    char   ver[8];    /* "v1", "v2", "draft" */
+    time_t ts;
+} quic_log_entry_t;
+
 /* ── TLS connection log ─────────────────────────────────── */
 #define MAX_TLS_LOG 256
 
@@ -372,6 +384,12 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── QUIC session log ───────────────────────────────────── */
+    quic_log_entry_t quic_log[MAX_QUIC_LOG];
+    int              quic_log_head;
+    int              quic_log_count;
+    int              quic_log_sel;
 
     /* ── TLS connection log ──────────────────────────────────── */
     tls_log_entry_t tls_log[MAX_TLS_LOG];

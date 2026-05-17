@@ -17,7 +17,7 @@
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
-#include "quic_snoop.h"
+#include "quic_log.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
 #include "http_log.h"
@@ -126,14 +126,14 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
-            char qver[8] = "";
-            if (quic_detect(tp + 8, tlen - 8, qver, sizeof(qver))) {
-                const char *ip = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-                const char *host = dns_lookup(ip);
-                if (host && host[0])
-                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %.52s", host);
-                else
-                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %s", qver);
+            const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
+            const char *host   = dns_lookup(remote);
+            quic_log_entry_t qe;
+            if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
+                               host && host[0] ? host : NULL, &qe)) {
+                snprintf(pkt->info, sizeof(pkt->info), "QUIC %.58s",
+                         qe.host[0] ? qe.host : qe.ver);
+                quic_log_record(&qe);
             } else {
                 snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
             }
@@ -185,14 +185,14 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
-            char qver[8] = "";
-            if (quic_detect(tp + 8, tlen - 8, qver, sizeof(qver))) {
-                const char *ip = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-                const char *host = dns_lookup(ip);
-                if (host && host[0])
-                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %.52s", host);
-                else
-                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %s", qver);
+            const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
+            const char *host   = dns_lookup(remote);
+            quic_log_entry_t qe;
+            if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
+                               host && host[0] ? host : NULL, &qe)) {
+                snprintf(pkt->info, sizeof(pkt->info), "QUIC %.58s",
+                         qe.host[0] ? qe.host : qe.ver);
+                quic_log_record(&qe);
             } else {
                 snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
             }

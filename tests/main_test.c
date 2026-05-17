@@ -40,6 +40,7 @@ void run_beacon_snoop_tests(void);
 void run_deauth_snoop_tests(void);
 void run_http_log_tests(void);
 void run_tls_log_tests(void);
+void run_quic_log_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -79,6 +80,7 @@ int main(void) {
     run_deauth_snoop_tests();
     run_http_log_tests();
     run_tls_log_tests();
+    run_quic_log_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

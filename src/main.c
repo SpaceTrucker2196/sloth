@@ -22,6 +22,7 @@
 #include "views/deauth.h"
 #include "views/http.h"
 #include "views/tls.h"
+#include "views/quic.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -31,6 +32,7 @@
 #include "deauth_snoop.h"
 #include "http_log.h"
 #include "tls_log.h"
+#include "quic_log.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -64,6 +66,7 @@ static void poll_data(sloth_state_t *s) {
     deauth_snapshot(s);
     http_log_snapshot(s);
     tls_log_snapshot(s);
+    quic_log_snapshot(s);
 #endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
@@ -98,6 +101,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
     case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
     case 't': case 'T': s->active_view = VIEW_TLS;    return;
+    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -126,6 +130,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_DEAUTH:  view_deauth_key(s, key);        break;
     case VIEW_HTTP:    view_http_key(s, key);          break;
     case VIEW_TLS:     view_tls_key(s, key);           break;
+    case VIEW_QUIC:    view_quic_key(s, key);          break;
     default: break;
     }
 }
