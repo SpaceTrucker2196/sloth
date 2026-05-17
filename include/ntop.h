@@ -142,13 +142,34 @@ typedef struct {
 } dhcp_lease_t;
 
 /* ── WiFi APs ───────────────────────────────────────────── */
+/* BSS status values (mirror of NL80211_BSS_STATUS_* enum) */
+#define WIFI_STATUS_NONE        (-1)
+#define WIFI_STATUS_AUTH        0
+#define WIFI_STATUS_ASSOC       1
+#define WIFI_STATUS_IBSS_JOINED 2
+
 typedef struct {
     char ssid[33];
     char bssid[18];
     int  signal_dbm;
     int  channel;
     char enc[16];
+    int  status;   /* NL80211_BSS_STATUS_* value, or -1 if not current */
 } wifi_ap_t;
+
+/* ── WiFi stations (our link to AP in managed mode, or clients in AP mode) ── */
+#define MAX_WIFI_STAS 16
+
+typedef struct {
+    char     mac[18];          /* station MAC (= AP bssid when we are a client) */
+    int8_t   signal_dbm;
+    uint32_t tx_rate_kbps;     /* TX link rate in kbps */
+    uint32_t rx_rate_kbps;
+    uint32_t connected_secs;
+    uint32_t inactive_ms;
+    uint64_t tx_bytes;
+    uint64_t rx_bytes;
+} wifi_sta_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
@@ -201,7 +222,11 @@ typedef struct {
 
     wifi_ap_t     aps[MAX_WIFI_APS];
     int           ap_count;
-    int           wifi_sel;  /* selected row in wifi view */
+    int           wifi_sel;    /* selected row in wifi view */
+    int           wifi_detail; /* non-zero = detail panel open for selected AP */
+
+    wifi_sta_t    wifi_stas[MAX_WIFI_STAS];
+    int           wifi_sta_count;
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
@@ -261,6 +286,7 @@ typedef struct {
     int  (*get_ifaces)(iface_stat_t *out, int max);
     int  (*get_conns)(conn_t *out, int max);
     int  (*wifi_scan)(wifi_ap_t *out, int max);
+    int  (*get_wifi_stations)(wifi_sta_t *out, int max);
     int  (*get_arp)(arp_entry_t *out, int max);
     int  (*get_dhcp)(dhcp_lease_t *out, int max);
     void (*init)(void);

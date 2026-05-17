@@ -10,4 +10,11 @@
    strength (strongest first). */
 int linux_wifi_scan(wifi_ap_t *out, int max);
 
+/* Query station info via nl80211 (NL80211_CMD_GET_STATION dump).
+   In managed mode returns one entry (the AP we're linked to).
+   In AP mode returns all associated clients.
+   Returns 0 when not associated, no wlan interfaces found, or kernel
+   call fails. */
+int linux_wifi_get_stations(wifi_sta_t *out, int max);
+
 #endif /* LINUX_WIFI_H */

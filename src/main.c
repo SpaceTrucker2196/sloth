@@ -31,7 +31,8 @@ static void poll_data(ntop_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
     s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
 #ifdef WITH_WIFI
-    s->ap_count = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);
+    s->ap_count      = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);
+    s->wifi_sta_count = g_platform.get_wifi_stations(s->wifi_stas, MAX_WIFI_STAS);
 #endif
     history_update(s);
     conn_rebuild_idx(s);

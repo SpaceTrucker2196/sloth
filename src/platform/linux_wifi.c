@@ -179,6 +179,7 @@ static int parse_scan_msg(const struct nlmsghdr *nlh,
         uint16_t       cap      = 0;
         const uint8_t *ies      = NULL;
         int            ies_len  = 0;
+        int            bss_status = WIFI_STATUS_NONE;
 
         while (na_ok(ba, brem)) {
             int t = NA_TYPE(ba);
@@ -193,11 +194,14 @@ static int parse_scan_msg(const struct nlmsghdr *nlh,
                 ies_len = (int)(ba->nla_len - NA_HDRLEN);
             } else if (t == NL80211_BSS_CAPABILITY)
                 cap = *(const uint16_t *)NA_DATA(ba);
+            else if (t == NL80211_BSS_STATUS)
+                bss_status = (int)(*(const uint32_t *)NA_DATA(ba));
             ba = na_next(ba, &brem);
         }
 
         wifi_ap_t *ap = &out[n++];
         memset(ap, 0, sizeof(*ap));
+        ap->status = bss_status;
         snprintf(ap->bssid, sizeof(ap->bssid),
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -289,6 +293,151 @@ int linux_wifi_scan(wifi_ap_t *out, int max) {
     if (n > 1)
         qsort(out, (size_t)n, sizeof(wifi_ap_t), ap_cmp);
 
+    return n;
+}
+
+/* ── Station info parser for NL80211_ATTR_STA_INFO (nested) ── */
+
+static void parse_sta_info(struct nlattr *sa, int slen, wifi_sta_t *st) {
+    while (na_ok(sa, slen)) {
+        int t = NA_TYPE(sa);
+        switch (t) {
+        case NL80211_STA_INFO_INACTIVE_TIME:
+            st->inactive_ms = *(const uint32_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_RX_BYTES:
+            if (st->rx_bytes == 0)
+                st->rx_bytes = *(const uint32_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_TX_BYTES:
+            if (st->tx_bytes == 0)
+                st->tx_bytes = *(const uint32_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_RX_BYTES64:
+            st->rx_bytes = *(const uint64_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_TX_BYTES64:
+            st->tx_bytes = *(const uint64_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_SIGNAL:
+            st->signal_dbm = *(const int8_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_CONNECTED_TIME:
+            st->connected_secs = *(const uint32_t *)NA_DATA(sa);
+            break;
+        case NL80211_STA_INFO_TX_BITRATE:
+        case NL80211_STA_INFO_RX_BITRATE: {
+            uint32_t kbps = 0;
+            int rrem = (int)(sa->nla_len) - (int)NA_HDRLEN;
+            struct nlattr *ra = (struct nlattr *)NA_DATA(sa);
+            while (na_ok(ra, rrem)) {
+                int rt = NA_TYPE(ra);
+                if (rt == NL80211_RATE_INFO_BITRATE32) {
+                    kbps = *(const uint32_t *)NA_DATA(ra) * 100u;
+                    break;
+                } else if (rt == NL80211_RATE_INFO_BITRATE) {
+                    kbps = (uint32_t)(*(const uint16_t *)NA_DATA(ra)) * 100u;
+                }
+                ra = na_next(ra, &rrem);
+            }
+            if (t == NL80211_STA_INFO_TX_BITRATE)
+                st->tx_rate_kbps = kbps;
+            else
+                st->rx_rate_kbps = kbps;
+            break;
+        }
+        default: break;
+        }
+        sa = na_next(sa, &slen);
+    }
+}
+
+int linux_wifi_get_stations(wifi_sta_t *out, int max) {
+    char ifaces[8][16];
+    int nifaces = find_wlan_ifaces(ifaces, 8);
+    if (nifaces == 0) return 0;
+
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (fd < 0) return 0;
+
+    int family = get_nl80211_id(fd);
+    if (family < 0) { close(fd); return 0; }
+
+    int n = 0;
+
+    for (int ii = 0; ii < nifaces && n < max; ii++) {
+        unsigned ifidx = if_nametoindex(ifaces[ii]);
+        if (ifidx == 0) continue;
+
+        const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN
+                            + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
+        uint8_t sbuf[64];
+        memset(sbuf, 0, sizeof(sbuf));
+
+        struct nlmsghdr  *nlh = (struct nlmsghdr *)sbuf;
+        struct genlmsghdr *gh = (struct genlmsghdr *)NLMSG_DATA(nlh);
+        struct nlattr     *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
+
+        nlh->nlmsg_len   = (uint32_t)msg_sz;
+        nlh->nlmsg_type  = (uint16_t)family;
+        nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+        nlh->nlmsg_seq   = 3;
+        gh->cmd          = NL80211_CMD_GET_STATION;
+        na->nla_type     = NL80211_ATTR_IFINDEX;
+        na->nla_len      = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
+        *(uint32_t *)NA_DATA(na) = ifidx;
+
+        struct sockaddr_nl sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.nl_family = AF_NETLINK;
+        if (sendto(fd, sbuf, msg_sz, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+            continue;
+
+        static uint8_t rbuf[16 * 1024];
+        int done = 0;
+        while (!done) {
+            ssize_t r = recv(fd, rbuf, sizeof(rbuf), 0);
+            if (r <= 0) break;
+            int len = (int)r;
+            struct nlmsghdr *nlhr = (struct nlmsghdr *)rbuf;
+            while (NLMSG_OK(nlhr, len)) {
+                if (nlhr->nlmsg_type == NLMSG_DONE)  { done = 1; break; }
+                if (nlhr->nlmsg_type == NLMSG_ERROR) { done = 1; break; }
+
+                const struct genlmsghdr *rgh =
+                    (const struct genlmsghdr *)NLMSG_DATA(nlhr);
+                if (rgh->cmd == NL80211_CMD_NEW_STATION && n < max) {
+                    wifi_sta_t *st = &out[n];
+                    memset(st, 0, sizeof(*st));
+
+                    int rem = (int)(nlhr->nlmsg_len) - NLMSG_HDRLEN - GENL_HDRLEN;
+                    struct nlattr *a =
+                        (struct nlattr *)((char *)rgh + GENL_HDRLEN);
+
+                    while (na_ok(a, rem)) {
+                        int at = NA_TYPE(a);
+                        if (at == NL80211_ATTR_MAC &&
+                                (int)a->nla_len >= (int)NA_HDRLEN + 6) {
+                            const uint8_t *m = (const uint8_t *)NA_DATA(a);
+                            snprintf(st->mac, sizeof(st->mac),
+                                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                                     m[0],m[1],m[2],m[3],m[4],m[5]);
+                        } else if (at == NL80211_ATTR_STA_INFO) {
+                            int slen = (int)(a->nla_len) - (int)NA_HDRLEN;
+                            parse_sta_info((struct nlattr *)NA_DATA(a),
+                                           slen, st);
+                        }
+                        a = na_next(a, &rem);
+                    }
+
+                    if (st->mac[0]) n++;
+                }
+                nlhr = NLMSG_NEXT(nlhr, len);
+            }
+        }
+    }
+
+    close(fd);
     return n;
 }
 

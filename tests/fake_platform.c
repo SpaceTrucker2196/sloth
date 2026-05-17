@@ -26,6 +26,10 @@ static int fake_wifi_scan(wifi_ap_t *out, int max) {
     return n;
 }
 
+static int fake_get_wifi_stations(wifi_sta_t *out, int max) {
+    (void)out; (void)max; return 0;
+}
+
 static int fake_get_arp(arp_entry_t *out, int max) {
     (void)out; (void)max; return 0;
 }
@@ -42,6 +46,7 @@ platform_ops_t g_platform = {
     fake_get_ifaces,
     fake_get_conns,
     fake_wifi_scan,
+    fake_get_wifi_stations,
     fake_get_arp,
     fake_get_dhcp,
     fake_init,

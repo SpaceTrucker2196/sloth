@@ -100,6 +100,10 @@ int linux_wifi_scan(wifi_ap_t *out, int max) {
     (void)out; (void)max;
     return 0;
 }
+int linux_wifi_get_stations(wifi_sta_t *out, int max) {
+    (void)out; (void)max;
+    return 0;
+}
 #endif
 
 /* ── ARP neighbor table ────────────────────────────────── */
@@ -140,6 +144,7 @@ platform_ops_t g_platform = {
     linux_get_ifaces,
     linux_get_conns,
     linux_wifi_scan,
+    linux_wifi_get_stations,
     linux_get_arp,
     linux_get_dhcp,
     linux_init,
