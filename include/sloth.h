@@ -34,6 +34,7 @@ typedef enum {
     VIEW_SSDP    = 11,
     VIEW_BEACON  = 12,
     VIEW_DEAUTH  = 13,
+    VIEW_HTTP    = 14,
     VIEW_COUNT
 } view_t;
 
@@ -222,6 +223,17 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── HTTP request log ───────────────────────────────────── */
+#define MAX_HTTP_LOG 256
+
+typedef struct {
+    char   src[46];       /* source IP */
+    char   method[10];    /* GET POST PUT etc */
+    char   host[64];      /* Host header value */
+    char   path[128];     /* request URI */
+    time_t ts;
+} http_log_entry_t;
+
 /* ── Deauth / Disassoc events ───────────────────────────── */
 #define MAX_DEAUTH_ENTRIES    128
 #define DEAUTH_AGE_SECS        60   /* drop events older than this */
@@ -348,6 +360,12 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── HTTP request log ────────────────────────────────────── */
+    http_log_entry_t http_log[MAX_HTTP_LOG];  /* ring buffer */
+    int              http_log_head;           /* next write slot */
+    int              http_log_count;          /* entries written (capped at MAX_HTTP_LOG) */
+    int              http_log_sel;
 
     /* ── Deauth / Disassoc events ────────────────────────────── */
     deauth_event_t deauth_events[MAX_DEAUTH_ENTRIES];

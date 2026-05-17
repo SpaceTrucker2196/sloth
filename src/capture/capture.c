@@ -20,6 +20,7 @@
 #include "quic_snoop.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
+#include "http_log.h"
 #include "dns.h"
 
 /* ── Thread state ─────────────────────────────────────────── */
@@ -46,10 +47,11 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (tcp_hdr < 20 || tcp_hdr > tlen) return;
     int pay_len = tlen - tcp_hdr;
     if (pay_len < 16) return;
-    char host[64];
-    if (!http_snoop(tp + tcp_hdr, pay_len, host, sizeof(host))) return;
-    dns_set_resolved(pkt->dst, host);
-    snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", host);
+    http_log_entry_t entry;
+    if (!http_log_parse(tp + tcp_hdr, pay_len, pkt->src, &entry)) return;
+    if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
+    snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", entry.host[0] ? entry.host : "?");
+    http_log_record(&entry);
 }
 
 static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
