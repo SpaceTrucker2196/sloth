@@ -6,6 +6,8 @@
 typedef struct {
     char     proc[16];
     int      pid;         /* -1 = unresolved bucket */
+    int      ppid;        /* parent PID (from /proc/<pid>/status; 0 = unknown) */
+    int      depth;       /* indentation level in tree view */
     int      conn_count;
     int      tcp_count;
     int      udp_count;

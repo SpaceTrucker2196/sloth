@@ -136,7 +136,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_dhcp.c              \
             src/platform/linux_dhcp.c      \
             tests/test_rtt.c               \
-            src/platform/linux_tcpdiag.c
+            src/platform/linux_tcpdiag.c   \
+            tests/test_tree.c
 
 TEST_BIN = ntop_test
 
