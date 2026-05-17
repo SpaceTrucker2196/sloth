@@ -26,9 +26,9 @@ static void print_signal_bar_phosphor(int dbm, int width) {
             if      (pos < 0.33) tui_dim();
             else if (pos < 0.66) tui_normal();
             else                 tui_bright();
-            TPRINT("#");
+            TPRINT("\xe2\x96\x88");   /* █ */
         } else {
-            tui_dim(); TPRINT(".");
+            tui_dim(); TPRINT("\xe2\x96\x91");  /* ░ */
         }
     }
 }
@@ -198,17 +198,16 @@ void view_wifi_draw(const sloth_state_t *s) {
 
         if (row == s->wifi_sel) {
             /* selected: uniform bright reverse */
-            char bar[12];
             double pct    = (ap->signal_dbm < -90) ? 0.0
                           : (ap->signal_dbm > -30) ? 1.0
                           : (ap->signal_dbm + 90.0) / 60.0;
             int    filled = (int)(pct * 10);
-            for (int i = 0; i < 10; i++) bar[i] = (i < filled) ? '#' : '.';
-            bar[10] = '\0';
             tui_sel();
-            TPRINT("%c%-32.32s  %-17s  %-12.12s  %3d  [%-10s]%4d  %-4s\n",
-                   assoc, ap->ssid, ap->bssid, vstr, ap->channel,
-                   bar, ap->signal_dbm, ap->enc);
+            TPRINT("%c%-32.32s  %-17s  %-12.12s  %3d  [",
+                   assoc, ap->ssid, ap->bssid, vstr, ap->channel);
+            for (int i = 0; i < 10; i++)
+                TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
+            TPRINT("]%4d  %-4s\n", ap->signal_dbm, ap->enc);
             tui_reset();
         } else {
             /* associated marker */

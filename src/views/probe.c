@@ -31,7 +31,7 @@ static void phos_age(time_t last_seen) {
     else               tui_dim();
 }
 
-/* 6-char phosphor signal bar; left third dim, mid normal, right bright. */
+/* 6-cell phosphor signal bar; left third dim, mid normal, right bright. */
 static void probe_signal_bar(int8_t dbm) {
     double pct    = (dbm < -90) ? 0.0 : (dbm > -30) ? 1.0 : (dbm + 90.0) / 60.0;
     int    filled = (int)(pct * 6);
@@ -41,19 +41,16 @@ static void probe_signal_bar(int8_t dbm) {
             if      (pos < 0.33) tui_dim();
             else if (pos < 0.66) tui_normal();
             else                 tui_bright();
-            TPRINT("#");
+            TPRINT("\xe2\x96\x88");   /* █ */
         } else {
-            tui_dim(); TPRINT(".");
+            tui_dim(); TPRINT("\xe2\x96\x91");  /* ░ */
         }
     }
 }
 
-/* Pre-build a 6-char bar string (no color) for selected-row use. */
-static void sigbar_str(int8_t dbm, char *out) {
-    double pct    = (dbm < -90) ? 0.0 : (dbm > -30) ? 1.0 : (dbm + 90.0) / 60.0;
-    int    filled = (int)(pct * 6);
-    for (int i = 0; i < 6; i++) out[i] = (i < filled) ? '#' : '.';
-    out[6] = '\0';
+static int sigbar_filled(int8_t dbm) {
+    double pct = (dbm < -90) ? 0.0 : (dbm > -30) ? 1.0 : (dbm + 90.0) / 60.0;
+    return (int)(pct * 6);
 }
 
 /* ── Draw ────────────────────────────────────────────────── */
@@ -132,11 +129,13 @@ void view_probe_draw(const sloth_state_t *s) {
         const char *vstr   = vendor ? vendor : "";
 
         if (row == s->probe_sel) {
-            char bar[7];
-            sigbar_str(c->signal_dbm, bar);
+            int filled = sigbar_filled(c->signal_dbm);
             tui_sel();
-            TPRINT(" %-17s  %-12.12s  %6s  %3d  %5s  %5d  %.32s\n",
-                   mac, vstr, bar, c->channel, age, c->frame_count, ssid);
+            TPRINT(" %-17s  %-12.12s  ", mac, vstr);
+            for (int i = 0; i < 6; i++)
+                TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
+            TPRINT("  %3d  %5s  %5d  %.32s\n",
+                   c->channel, age, c->frame_count, ssid);
             tui_reset();
         } else {
             /* MAC: intensity by age */

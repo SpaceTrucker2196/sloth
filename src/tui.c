@@ -48,12 +48,16 @@ static const char *view_labels[VIEW_COUNT] = {
     "[t] TLS",
 };
 
+/* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;
     if (filled > width) filled = width;
-    for (int i = 0; i < width; i++)
-        out[i] = (i < filled) ? '#' : '.';
-    out[width] = '\0';
+    int pos = 0;
+    for (int i = 0; i < width; i++) {
+        const char *g = (i < filled) ? "\xe2\x96\x88" : "\xe2\x96\x91";  /* █ : ░ */
+        out[pos++] = g[0]; out[pos++] = g[1]; out[pos++] = g[2];
+    }
+    out[pos] = '\0';
 }
 
 static void dispatch_view(const sloth_state_t *s) {

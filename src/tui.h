@@ -14,7 +14,7 @@ void tui_init(void);
 void tui_cleanup(void);
 void tui_draw(const sloth_state_t *s);
 int  tui_poll_key(int timeout_ms); /* blocks up to timeout_ms, returns key or 0 */
-void tui_bar(double val, double max, int width, char *out); /* ASCII bar graph */
+void tui_bar(double val, double max, int width, char *out); /* block bar; out needs width*3+1 bytes */
 
 /* ── Nuclear phosphor theme — 256-color pairs ───────────── */
 #define CP_BRIGHT     1   /* #00ffaf rgb(0,255,175) — intense glow  */
