@@ -19,12 +19,14 @@
 #include "views/dhcp_snoop.h"
 #include "views/ssdp.h"
 #include "views/beacon.h"
+#include "views/deauth.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
 #include "ssdp_snoop.h"
 #include "beacon_snoop.h"
+#include "deauth_snoop.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -55,6 +57,7 @@ static void poll_data(sloth_state_t *s) {
     dhcp_snoop_snapshot(s);
     ssdp_snapshot(s);
     beacon_snapshot(s);
+    deauth_snapshot(s);
 #endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
@@ -86,6 +89,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'd': case 'D': s->active_view = VIEW_DHCP; return;
     case 's': case 'S': s->active_view = VIEW_SSDP;   return;
     case 'b': case 'B': s->active_view = VIEW_BEACON; return;
+    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -111,6 +115,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_DHCP:    view_dhcp_snoop_key(s, key);    break;
     case VIEW_SSDP:    view_ssdp_key(s, key);          break;
     case VIEW_BEACON:  view_beacon_key(s, key);        break;
+    case VIEW_DEAUTH:  view_deauth_key(s, key);        break;
     default: break;
     }
 }

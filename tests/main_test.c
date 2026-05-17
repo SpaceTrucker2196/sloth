@@ -37,6 +37,7 @@ void run_dhcp_snoop_tests(void);
 void run_quic_snoop_tests(void);
 void run_ssdp_snoop_tests(void);
 void run_beacon_snoop_tests(void);
+void run_deauth_snoop_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -73,6 +74,7 @@ int main(void) {
     run_quic_snoop_tests();
     run_ssdp_snoop_tests();
     run_beacon_snoop_tests();
+    run_deauth_snoop_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

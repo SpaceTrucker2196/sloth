@@ -36,7 +36,9 @@ SRCS = src/main.c          \
        src/ssdp_snoop.c      \
        src/views/ssdp.c      \
        src/beacon_snoop.c    \
-       src/views/beacon.c
+       src/views/beacon.c    \
+       src/deauth_snoop.c    \
+       src/views/deauth.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -178,7 +180,10 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_ssdp_snoop.c        \
             src/beacon_snoop.c             \
             src/views/beacon.c             \
-            tests/test_beacon_snoop.c
+            tests/test_beacon_snoop.c      \
+            src/deauth_snoop.c             \
+            src/views/deauth.c             \
+            tests/test_deauth_snoop.c
 
 TEST_BIN = sloth_test
 

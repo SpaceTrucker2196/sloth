@@ -10,6 +10,7 @@
 #include "sloth.h"
 #include "capture/probe.h"
 #include "beacon_snoop.h"
+#include "deauth_snoop.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -172,6 +173,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;
         if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel, enc, &bms))
             beacon_record(bssid, ssid, signal, channel, enc, bms);
+        return;
+    }
+
+    if (sub == 10 || sub == 12) {
+        /* Disassoc (10) or Deauth (12) */
+        uint8_t src[6], dst[6], bssid[6]; uint16_t reason; uint8_t st;
+        if (deauth_parse(dot11, dot11_len, signal, src, dst, bssid, &reason, &st))
+            deauth_record(src, dst, bssid, reason, st);
         return;
     }
 

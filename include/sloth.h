@@ -33,6 +33,7 @@ typedef enum {
     VIEW_DHCP    = 10,
     VIEW_SSDP    = 11,
     VIEW_BEACON  = 12,
+    VIEW_DEAUTH  = 13,
     VIEW_COUNT
 } view_t;
 
@@ -221,6 +222,24 @@ typedef struct {
     uint64_t rx_bytes;
 } wifi_sta_t;
 
+/* ── Deauth / Disassoc events ───────────────────────────── */
+#define MAX_DEAUTH_ENTRIES    128
+#define DEAUTH_AGE_SECS        60   /* drop events older than this */
+#define DEAUTH_FLOOD_THRESH     5   /* frames per burst to raise flood flag */
+#define DEAUTH_FLOOD_WIN_SECS   5   /* burst window in seconds */
+
+typedef struct {
+    uint8_t  src[6];
+    uint8_t  dst[6];     /* ff:ff:ff:ff:ff:ff = broadcast deauth */
+    uint8_t  bssid[6];
+    uint16_t reason;     /* 802.11 reason code */
+    uint8_t  subtype;    /* 10=disassoc 12=deauth */
+    time_t   first_seen;
+    time_t   last_seen;
+    int      count;
+    int      flood;      /* count exceeded DEAUTH_FLOOD_THRESH in window */
+} deauth_event_t;
+
 /* ── Beacon APs (passively observed 802.11 access points) ── */
 #define MAX_BEACON_APS  256
 #define BEACON_AGE_SECS 300
@@ -329,6 +348,12 @@ typedef struct {
     /* ── Port scan detection ─────────────────────────────── */
     scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
     int          scan_count;
+
+    /* ── Deauth / Disassoc events ────────────────────────────── */
+    deauth_event_t deauth_events[MAX_DEAUTH_ENTRIES];
+    int            deauth_count;
+    int            deauth_sel;
+    int            deauth_flood_active;  /* any entry currently flooded */
 
     /* ── Beacon APs (passive 802.11 beacon sniff) ──────────── */
     beacon_ap_t beacon_aps[MAX_BEACON_APS];
