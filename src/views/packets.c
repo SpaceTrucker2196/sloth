@@ -121,6 +121,20 @@ void view_packets_draw(const ntop_state_t *s) {
     tui_normal(); TPRINT(" Packets: ");
     tui_bright();  TPRINT("%d", count);
     if (s->pkt_count > MAX_PACKETS) { tui_dim(); TPRINT(" (ring)"); }
+    if (s->pkt_iface[0]) {
+        tui_dim();    TPRINT("  iface: ");
+        tui_bright(); TPRINT("%s", s->pkt_iface);
+    }
+    /* show associated WiFi network if known */
+#ifdef WITH_WIFI
+    for (int i = 0; i < s->ap_count; i++) {
+        if (s->aps[i].status == WIFI_STATUS_ASSOC && s->aps[i].ssid[0]) {
+            tui_dim();    TPRINT("  WiFi: ");
+            tui_bright(); TPRINT("%.24s", s->aps[i].ssid);
+            break;
+        }
+    }
+#endif
     if (s->pkt_paused) { tui_bright(); TPRINT("  [PAUSED]"); }
     if (s->pkt_filter[0]) {
         tui_dim(); TPRINT("  filter: ");

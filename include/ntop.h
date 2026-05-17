@@ -242,6 +242,7 @@ typedef struct {
     int  pkt_detail;           /* non-zero = detail panel open */
     int  pkt_linktype;         /* pcap DLT link type (set by capture_start) */
     char pkt_export_msg[80];   /* last pcap export result shown in status */
+    char pkt_iface[32];        /* pcap capture interface, "" if none */
 
     int           proc_sel;    /* selected row in procs view */
     int           proc_detail; /* non-zero = detail panel open */

@@ -181,9 +181,12 @@ void capture_start(ntop_state_t *s) {
         /* "any" unavailable — try first enumerated device */
         pcap_if_t *devs = NULL;
         if (pcap_findalldevs(&devs, errbuf) == 0 && devs) {
+            snprintf(s->pkt_iface, sizeof(s->pkt_iface), "%s", devs->name);
             g_handle = pcap_open_live(devs->name, 65535, 1, 100, errbuf);
             pcap_freealldevs(devs);
         }
+    } else {
+        snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
     }
     if (!g_handle) return;  /* silently disabled — show live hint in view */
 
