@@ -322,6 +322,7 @@ typedef struct {
     char   dst[46];
     char   host[64];    /* SNI hostname, "" if absent */
     char   tls_ver[8];  /* "TLS 1.3" "TLS 1.2" "TLS 1.1" "TLS 1.0" "TLS" */
+    char   ja3[33];     /* MD5 of JA3 string, lowercase hex; "" if not computed */
     time_t ts;
 } tls_log_entry_t;
 

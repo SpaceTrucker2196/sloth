@@ -53,7 +53,8 @@ SRCS = src/main.c          \
        src/views/icmp.c      \
        src/threat_intel.c    \
        src/alerts.c          \
-       src/views/alerts.c
+       src/views/alerts.c    \
+       src/md5.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -221,7 +222,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_threat_intel.c      \
             src/alerts.c                   \
             src/views/alerts.c             \
-            tests/test_alerts.c
+            tests/test_alerts.c            \
+            src/md5.c                      \
+            tests/test_md5.c
 
 TEST_BIN = sloth_test
 

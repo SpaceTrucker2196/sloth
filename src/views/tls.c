@@ -22,11 +22,12 @@ void view_tls_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-8s  %-15s  %-15s  %-26s  %s\n",
-           "Time", "Src", "Dst", "Host (SNI)", "Ver");
-    TPRINT(" %-8s  %-15s  %-15s  %-26s  %s\n",
-           "--------", "---------------", "---------------",
-           "--------------------------", "-------");
+    TPRINT(" %-8s  %-15s  %-26s  %-7s  %-12s  %s\n",
+           "Time", "Src", "Host (SNI)", "Ver", "JA3", "Dst");
+    TPRINT(" %-8s  %-15s  %-26s  %-7s  %-12s  %s\n",
+           "--------", "---------------",
+           "--------------------------", "-------",
+           "------------", "---------------");
     tui_normal();
 
     if (s->tls_log_count == 0) {
@@ -57,15 +58,20 @@ void view_tls_draw(const sloth_state_t *s) {
                     strcmp(e->tls_ver, "TLS 1.0") == 0 ||
                     strcmp(e->tls_ver, "TLS")     == 0);
 
+        /* short JA3: first 12 hex chars is enough to recognise common
+           clients (Chrome, Firefox, curl) at a glance. */
+        char ja3_short[13];
+        snprintf(ja3_short, sizeof(ja3_short), "%.12s",
+                 e->ja3[0] ? e->ja3 : "-");
+
         if (row == s->tls_log_sel) {
             tui_sel();
-            TPRINT(" %-8s  %-15.15s  %-15.15s  %-26.26s  %s\n",
-                   ts_buf, e->src, e->dst, host, e->tls_ver);
+            TPRINT(" %-8s  %-15.15s  %-26.26s  %-7s  %-12s  %s\n",
+                   ts_buf, e->src, host, e->tls_ver, ja3_short, e->dst);
             tui_reset();
         } else {
             tui_dim();  TPRINT(" %-8s", ts_buf);
             tui_dim();  TPRINT("  %-15.15s", e->src);
-            tui_dim();  TPRINT("  %-15.15s", e->dst);
 
             /* host: no-SNI entries dimmed */
             if (!e->host[0]) tui_dim(); else tui_normal();
@@ -75,7 +81,12 @@ void view_tls_draw(const sloth_state_t *s) {
             if (is13)     tui_bright();
             else if (old) tui_heat(0.6);
             else          tui_normal();
-            TPRINT("  %s\n", e->tls_ver);
+            TPRINT("  %-7s", e->tls_ver);
+
+            /* JA3 in dim phosphor */
+            tui_dim(); TPRINT("  %-12s", ja3_short);
+
+            tui_dim(); TPRINT("  %s\n", e->dst);
             tui_normal();
         }
     }
