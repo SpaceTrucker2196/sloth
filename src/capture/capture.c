@@ -19,6 +19,8 @@
 #include "dhcp_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
+#include "ntp_log.h"
+#include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
 #include "http_log.h"
@@ -144,11 +146,23 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
             if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
+            ntp_log_entry_t ne;
+            if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {
+                snprintf(pkt->info, sizeof(pkt->info),
+                         "NTP v%u %.6s str=%u", ne.version, ne.mode, ne.stratum);
+                ntp_log_record(&ne);
+            } else {
+                snprintf(pkt->info, sizeof(pkt->info), "NTP");
+            }
         } else {
             snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
         }
     } else if (pkt->proto == 1 && tlen >= 2) {
         decode_icmp(tp[0], tp[1], pkt->info, sizeof(pkt->info));
+        icmp_log_entry_t ie;
+        if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 0, &ie))
+            icmp_log_record(&ie);
     } else {
         snprintf(pkt->info, sizeof(pkt->info), "IP proto %u", pkt->proto);
     }
@@ -206,11 +220,23 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
             if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
+            ntp_log_entry_t ne;
+            if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {
+                snprintf(pkt->info, sizeof(pkt->info),
+                         "NTP v%u %.6s str=%u", ne.version, ne.mode, ne.stratum);
+                ntp_log_record(&ne);
+            } else {
+                snprintf(pkt->info, sizeof(pkt->info), "NTP");
+            }
         } else {
             snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
         }
     } else if (pkt->proto == 58 && tlen >= 2) {
         snprintf(pkt->info, sizeof(pkt->info), "ICMPv6 type=%u", tp[0]);
+        icmp_log_entry_t ie;
+        if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 1, &ie))
+            icmp_log_record(&ie);
     } else {
         snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%u", pkt->proto);
     }

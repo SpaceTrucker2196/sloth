@@ -46,7 +46,11 @@ SRCS = src/main.c          \
        src/quic_log.c        \
        src/views/quic.c      \
        src/dns_log.c         \
-       src/views/dns_log.c
+       src/views/dns_log.c   \
+       src/ntp_log.c         \
+       src/views/ntp.c       \
+       src/icmp_log.c        \
+       src/views/icmp.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -203,7 +207,13 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_quic_log.c          \
             src/dns_log.c                  \
             src/views/dns_log.c            \
-            tests/test_dns_log.c
+            tests/test_dns_log.c           \
+            src/ntp_log.c                  \
+            src/views/ntp.c                \
+            tests/test_ntp_log.c           \
+            src/icmp_log.c                 \
+            src/views/icmp.c               \
+            tests/test_icmp_log.c
 
 TEST_BIN = sloth_test
 

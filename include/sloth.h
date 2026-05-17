@@ -38,6 +38,8 @@ typedef enum {
     VIEW_TLS     = 15,
     VIEW_QUIC    = 16,
     VIEW_DNS     = 17,
+    VIEW_NTP     = 18,
+    VIEW_ICMP    = 19,
     VIEW_COUNT
 } view_t;
 
@@ -239,6 +241,33 @@ typedef struct {
     time_t ts;
 } dns_log_entry_t;
 
+/* ── NTP log ────────────────────────────────────────────── */
+#define MAX_NTP_LOG 256
+
+typedef struct {
+    char   src[46];
+    char   dst[46];
+    char   mode[10];   /* "client", "server", "sym-act", "sym-pas", "bcast", "ctrl", "?" */
+    char   ref[16];    /* reference ID (server name like "GPS", "DCF", or IP) */
+    uint8_t version;   /* NTP version 1..4 */
+    uint8_t stratum;   /* 0=unspec, 1=primary, 2..15=secondary, 16=unsync */
+    time_t ts;
+} ntp_log_entry_t;
+
+/* ── ICMP log ───────────────────────────────────────────── */
+#define MAX_ICMP_LOG 256
+
+typedef struct {
+    char     src[46];
+    char     dst[46];
+    char     desc[24];  /* "Echo Req", "Echo Reply", "Unreachable", "TTL Exceeded", ... */
+    uint16_t seq;       /* sequence (echo) or 0 */
+    uint8_t  type;
+    uint8_t  code;
+    uint8_t  is_v6;     /* 0=ICMPv4, 1=ICMPv6 */
+    time_t   ts;
+} icmp_log_entry_t;
+
 /* ── QUIC session log ───────────────────────────────────── */
 #define MAX_QUIC_LOG 256
 
@@ -404,6 +433,18 @@ typedef struct {
     int             dns_log_head;
     int             dns_log_count;
     int             dns_log_sel;
+
+    /* ── NTP log ────────────────────────────────────────────── */
+    ntp_log_entry_t ntp_log[MAX_NTP_LOG];
+    int             ntp_log_head;
+    int             ntp_log_count;
+    int             ntp_log_sel;
+
+    /* ── ICMP log ───────────────────────────────────────────── */
+    icmp_log_entry_t icmp_log[MAX_ICMP_LOG];
+    int              icmp_log_head;
+    int              icmp_log_count;
+    int              icmp_log_sel;
 
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
