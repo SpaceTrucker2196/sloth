@@ -73,6 +73,100 @@ static void print_sparkline_heat(const iface_hist_t *h, int use_rx, int width) {
     }
 }
 
+/* ── read-only history lookup ────────────────────────────── */
+
+static const iface_hist_t *find_hist_ro(const ntop_state_t *s, const char *name) {
+    for (int i = 0; i < MAX_IFACES; i++) {
+        if (s->iface_hist[i].count > 0 &&
+            strncmp(s->iface_hist[i].name, name, 16) == 0)
+            return &s->iface_hist[i];
+    }
+    return NULL;
+}
+
+/* ── 2-D bar graph ───────────────────────────────────────── */
+
+#define GRAPH_H 8
+
+static void draw_series(const iface_hist_t *hist, int is_rx) {
+    double vals[HIST_LEN];
+    memset(vals, 0, sizeof(vals));
+    int count = 0;
+
+    if (hist) {
+        count = (hist->count < HIST_LEN) ? hist->count : HIST_LEN;
+        int start = (hist->count < HIST_LEN) ? 0 : hist->head;
+        for (int i = 0; i < count; i++) {
+            int slot = (start + i) % HIST_LEN;
+            int col  = HIST_LEN - count + i;  /* right-align: newest at HIST_LEN-1 */
+            vals[col] = is_rx ? hist->rx[slot] : hist->tx[slot];
+        }
+    }
+
+    double max_val = 1.0;
+    for (int c = 0; c < HIST_LEN; c++)
+        if (vals[c] > max_val) max_val = vals[c];
+
+    char max_str[12], mid_str[12];
+    fmt_rate(max_val, max_str, (int)sizeof(max_str));
+    fmt_rate(max_val / 2.0, mid_str, (int)sizeof(mid_str));
+
+    tui_bright();
+    TPRINT("  %s  (peak: %s)\n", is_rx ? "RX" : "TX", max_str);
+
+    for (int draw_r = GRAPH_H - 1; draw_r >= 0; draw_r--) {
+        double threshold = max_val * draw_r / GRAPH_H;
+
+        /* Y-axis: " %8.8s ┤" or "          │" (11 display chars each) */
+        if (draw_r == GRAPH_H - 1) {
+            tui_dim(); TPRINT(" %8.8s \xe2\x94\xa4", max_str);
+        } else if (draw_r == GRAPH_H / 2) {
+            tui_dim(); TPRINT(" %8.8s \xe2\x94\xa4", mid_str);
+        } else if (draw_r == 0) {
+            tui_dim(); TPRINT(" %8s \xe2\x94\xa4", "0");
+        } else {
+            tui_dim(); TPRINT("          \xe2\x94\x82");
+        }
+
+        /* Data columns */
+        for (int c = 0; c < HIST_LEN; c++) {
+            int filled = (vals[c] > threshold);
+            if (draw_r == 0 && !filled) {
+                tui_dim(); TPRINT("\xe2\x94\x80");      /* ─ baseline */
+            } else if (filled) {
+                if (is_rx) tui_bright(); else tui_dim();
+                TPRINT("\xe2\x96\x88");                 /* █ */
+            } else {
+                tui_dim(); TPRINT(" ");
+            }
+        }
+        TPRINT("\n");
+    }
+
+    /* X-axis label */
+    tui_dim();
+    TPRINT("           %-*snow\n", HIST_LEN - 3, "older");
+    tui_normal();
+}
+
+static void draw_iface_graph(const ntop_state_t *s) {
+    if (s->iface_count == 0) {
+        tui_dim(); TPRINT("  (no interfaces)\n"); tui_normal(); return;
+    }
+
+    const iface_stat_t *iface = &s->ifaces[s->iface_sel];
+    const iface_hist_t *hist  = find_hist_ro(s, iface->name);
+
+    tui_bright();
+    TPRINT(" \xe2\x94\x80\xe2\x94\x80 %s  [Esc] back \xe2\x94\x80\xe2\x94\x80\n\n", iface->name);
+
+    draw_series(hist, 1);
+    TPRINT("\n");
+    draw_series(hist, 0);
+
+    tui_normal();
+}
+
 /* ── hidden helper ───────────────────────────────────────── */
 
 static int is_hidden(const ntop_state_t *s, const char *name) {
@@ -86,6 +180,8 @@ static int is_hidden(const ntop_state_t *s, const char *name) {
 /* ── draw ────────────────────────────────────────────────── */
 
 void view_iface_draw(const ntop_state_t *s) {
+    if (s->iface_graph) { draw_iface_graph(s); return; }
+
     char spark[HIST_LEN * 3 + 1];  /* 3 UTF-8 bytes per block glyph */
     char rx_r[16], tx_r[16], rx_b[16], tx_b[16];
 
@@ -158,7 +254,7 @@ void view_iface_draw(const ntop_state_t *s) {
 
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
-             " ↑↓ navigate   t toggle hidden   %d interface%s",
+             " ↑↓ navigate   t toggle hidden   Enter graph   %d interface%s",
              s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 
@@ -222,7 +318,7 @@ void view_iface_draw(const ntop_state_t *s) {
     }
 
     tui_dim();
-    printf("\n  ↑↓ navigate   t toggle hidden   %d interface%s\n",
+    printf("\n  ↑↓ navigate   t toggle hidden   Enter graph   %d interface%s\n",
            s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 #endif
@@ -231,7 +327,16 @@ void view_iface_draw(const ntop_state_t *s) {
 /* ── key handler ─────────────────────────────────────────── */
 
 void view_iface_key(ntop_state_t *s, int key) {
+    if (s->iface_graph) {
+        if (key == '\033') s->iface_graph = 0;
+        return;
+    }
+
     switch (key) {
+    case '\r': case '\n':
+        if (s->iface_count > 0) s->iface_graph = 1;
+        break;
+
     case NTOP_KEY_UP:
         if (s->iface_sel > 0) s->iface_sel--;
         break;

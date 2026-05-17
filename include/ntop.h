@@ -156,6 +156,7 @@ typedef struct {
     int           iface_count;
     iface_hist_t  iface_hist[MAX_IFACES];  /* rate history, keyed by name */
     int           iface_sel;               /* selected row in iface view */
+    int           iface_graph;             /* non-zero = rx/tx graph panel open */
     char          iface_hidden[MAX_IFACES][16]; /* hidden interface names */
     int           iface_hidden_count;
 

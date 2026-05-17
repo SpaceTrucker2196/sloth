@@ -119,6 +119,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_services.c      \
             tests/test_arp.c           \
             tests/test_pcap_write.c    \
+            tests/test_iface_graph.c   \
             src/pcap_write.c           \
             src/views/conns.c          \
             src/views/wifi.c           \
