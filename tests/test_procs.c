@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/procs.h"
 
-static void push_conn(ntop_state_t *s, int pid, const char *proc, int proto, uint16_t rport) {
+static void push_conn(sloth_state_t *s, int pid, const char *proc, int proto, uint16_t rport) {
     if (s->conn_count >= MAX_CONNS) return;
     conn_t *c = &s->conns[s->conn_count++];
     memset(c, 0, sizeof(*c));
@@ -18,7 +18,7 @@ static void push_conn(ntop_state_t *s, int pid, const char *proc, int proto, uin
 /* ── procs_aggregate tests ────────────────────────────── */
 
 void test_procs_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     proc_stat_t out[MAX_PROCS];
     int n = procs_aggregate(&s, out, MAX_PROCS);
@@ -26,7 +26,7 @@ void test_procs_empty(void) {
 }
 
 void test_procs_single_pid(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 42, "nginx", PROTO_TCP, 80);
     push_conn(&s, 42, "nginx", PROTO_TCP, 443);
@@ -39,7 +39,7 @@ void test_procs_single_pid(void) {
 }
 
 void test_procs_multi_pid(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 10, "curl",  PROTO_TCP, 80);
     push_conn(&s, 20, "sshd",  PROTO_TCP, 22);
@@ -49,7 +49,7 @@ void test_procs_multi_pid(void) {
 }
 
 void test_procs_sorted_by_count(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* pid A: 1 conn, pid B: 3 conns — B should be first */
     push_conn(&s, 1, "procA", PROTO_TCP, 80);
@@ -66,7 +66,7 @@ void test_procs_sorted_by_count(void) {
 }
 
 void test_procs_tcp_udp_counts(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 5, "daemon", PROTO_TCP, 80);
     push_conn(&s, 5, "daemon", PROTO_TCP, 443);
@@ -80,7 +80,7 @@ void test_procs_tcp_udp_counts(void) {
 }
 
 void test_procs_unresolved_pid_zero(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 0, "", PROTO_TCP, 80);
     push_conn(&s, 0, "", PROTO_UDP, 53);
@@ -92,7 +92,7 @@ void test_procs_unresolved_pid_zero(void) {
 }
 
 void test_procs_port_dedup(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 7, "app", PROTO_TCP, 80);
     push_conn(&s, 7, "app", PROTO_TCP, 80);   /* duplicate port */
@@ -105,7 +105,7 @@ void test_procs_port_dedup(void) {
 }
 
 void test_procs_port_cap(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* 10 unique remote ports — should be capped at MAX_PROC_PORTS */
     uint16_t ports[] = {1,2,3,4,5,6,7,8,9,10};
@@ -119,7 +119,7 @@ void test_procs_port_cap(void) {
 }
 
 void test_procs_unresolved_last(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s,  0, "",      PROTO_TCP, 80);   /* unresolved */
     push_conn(&s, 10, "nginx", PROTO_TCP, 443);  /* known */
@@ -134,14 +134,14 @@ void test_procs_unresolved_last(void) {
 /* ── view_procs_draw smoke tests ─────────────────────── */
 
 void test_procs_draw_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_procs_draw(&s);
     ASSERT(1);
 }
 
 void test_procs_draw_with_data(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 100, "curl",  PROTO_TCP, 443);
     push_conn(&s, 100, "curl",  PROTO_TCP, 80);
@@ -154,7 +154,7 @@ void test_procs_draw_with_data(void) {
 /* ── detail panel key handler tests ──────────────────── */
 
 void test_proc_detail_open_on_enter(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 42, "nginx", PROTO_TCP, 80);
     s.proc_sel = 0;
@@ -164,7 +164,7 @@ void test_proc_detail_open_on_enter(void) {
 }
 
 void test_proc_detail_not_open_for_unresolved(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 0, "", PROTO_TCP, 80);  /* goes to unresolved bucket */
     view_procs_draw(&s);
@@ -174,7 +174,7 @@ void test_proc_detail_not_open_for_unresolved(void) {
 }
 
 void test_proc_detail_not_open_when_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_procs_draw(&s);
     view_procs_key(&s, '\r');
@@ -182,7 +182,7 @@ void test_proc_detail_not_open_when_empty(void) {
 }
 
 void test_proc_detail_close_on_esc(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.proc_detail = 1;
     view_procs_key(&s, '\033');
@@ -190,7 +190,7 @@ void test_proc_detail_close_on_esc(void) {
 }
 
 void test_proc_detail_close_on_enter(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.proc_detail = 1;
     view_procs_key(&s, '\r');
@@ -198,19 +198,19 @@ void test_proc_detail_close_on_enter(void) {
 }
 
 void test_proc_detail_blocks_nav(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 1, "a", PROTO_TCP, 80);
     push_conn(&s, 2, "b", PROTO_TCP, 443);
     view_procs_draw(&s);
     s.proc_sel    = 0;
     s.proc_detail = 1;
-    view_procs_key(&s, NTOP_KEY_DOWN);
+    view_procs_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.proc_sel, 0);    /* nav key consumed, sel unchanged */
 }
 
 void test_proc_detail_draw_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 99, "test", PROTO_TCP, 443);
     s.proc_sel    = 0;
@@ -220,7 +220,7 @@ void test_proc_detail_draw_no_crash(void) {
 }
 
 void test_proc_detail_draw_back_to_list(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_conn(&s, 7, "daemon", PROTO_TCP, 22);
     view_procs_draw(&s);

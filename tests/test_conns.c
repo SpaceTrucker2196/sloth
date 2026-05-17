@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/conns.h"
 
 /* Build a state with n_tcp TCP and n_udp UDP connections.
    TCP ports 1000..1000+n_tcp-1, UDP ports 5000..5000+n_udp-1.
    PIDs assigned sequentially starting at 100. */
-static void make_test_state(ntop_state_t *s, int n_tcp, int n_udp) {
+static void make_test_state(sloth_state_t *s, int n_tcp, int n_udp) {
     memset(s, 0, sizeof(*s));
     int n = 0;
     for (int i = 0; i < n_tcp && n < MAX_CONNS; i++, n++) {
@@ -30,14 +30,14 @@ static void make_test_state(ntop_state_t *s, int n_tcp, int n_udp) {
 /* ── conn_rebuild_idx filter tests ──────────────────────── */
 
 void test_rebuild_filter_all(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 2);
     conn_rebuild_idx(&s);
     ASSERT_EQ(s.conn_idx_count, 5);
 }
 
 void test_rebuild_filter_tcp(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 2);
     s.conn_filter = CONN_FILTER_TCP;
     conn_rebuild_idx(&s);
@@ -47,7 +47,7 @@ void test_rebuild_filter_tcp(void) {
 }
 
 void test_rebuild_filter_udp(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 2);
     s.conn_filter = CONN_FILTER_UDP;
     conn_rebuild_idx(&s);
@@ -57,7 +57,7 @@ void test_rebuild_filter_udp(void) {
 }
 
 void test_rebuild_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 0, 0);
     conn_rebuild_idx(&s);
     ASSERT_EQ(s.conn_idx_count, 0);
@@ -67,7 +67,7 @@ void test_rebuild_empty(void) {
 /* ── conn_rebuild_idx sort tests ─────────────────────────── */
 
 void test_sort_by_lport(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 4, 0);
     s.conns[0].local_port = 1003;
     s.conns[1].local_port = 1001;
@@ -84,7 +84,7 @@ void test_sort_by_lport(void) {
 }
 
 void test_sort_by_pid(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 0);
     s.conns[0].pid = 300;
     s.conns[1].pid = 100;
@@ -98,7 +98,7 @@ void test_sort_by_pid(void) {
 }
 
 void test_sort_by_proto(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 2, 2);
     s.conn_sort = CONN_SORT_PROTO;
     conn_rebuild_idx(&s);
@@ -113,7 +113,7 @@ void test_sort_by_proto(void) {
 /* ── conn_sel clamping ───────────────────────────────────── */
 
 void test_conn_sel_clamped_on_filter(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 5, 5);
     s.conn_filter = CONN_FILTER_ALL;
     conn_rebuild_idx(&s);
@@ -128,7 +128,7 @@ void test_conn_sel_clamped_on_filter(void) {
 /* ── view_conns_key tests ────────────────────────────────── */
 
 void test_key_sort_cycles(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 2, 0);
     s.conn_sort = CONN_SORT_STATE;
     conn_rebuild_idx(&s);
@@ -140,7 +140,7 @@ void test_key_sort_cycles(void) {
 }
 
 void test_key_filter_cycles(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 2, 2);
     s.conn_filter = CONN_FILTER_ALL;
     conn_rebuild_idx(&s);
@@ -151,34 +151,34 @@ void test_key_filter_cycles(void) {
 }
 
 void test_key_nav_down_up(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 5, 0);
     conn_rebuild_idx(&s);
     s.conn_sel = 0;
 
-    view_conns_key(&s, NTOP_KEY_DOWN);
+    view_conns_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.conn_sel, 1);
-    view_conns_key(&s, NTOP_KEY_UP);
+    view_conns_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.conn_sel, 0);
 }
 
 void test_key_nav_up_at_top(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 0);
     conn_rebuild_idx(&s);
     s.conn_sel = 0;
 
-    view_conns_key(&s, NTOP_KEY_UP);
+    view_conns_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.conn_sel, 0);  /* stays at top */
 }
 
 void test_key_nav_down_at_bottom(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_test_state(&s, 3, 0);
     conn_rebuild_idx(&s);
     s.conn_sel = 2;  /* last entry */
 
-    view_conns_key(&s, NTOP_KEY_DOWN);
+    view_conns_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.conn_sel, 2);  /* stays at bottom */
 }
 

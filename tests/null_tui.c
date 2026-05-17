@@ -1,10 +1,10 @@
 /* No-op TUI for the test binary — no terminal, no ncurses */
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 
 void tui_init(void)                  {}
 void tui_cleanup(void)               {}
-void tui_draw(const ntop_state_t *s) { (void)s; }
+void tui_draw(const sloth_state_t *s) { (void)s; }
 int  tui_poll_key(int ms)            { (void)ms; return 0; }
 
 void tui_bright(void)        {}

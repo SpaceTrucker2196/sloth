@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "oui.h"
 #include "views/arp.h"
@@ -24,7 +24,7 @@ static void fmt_lease_age(time_t expire, char *buf, int sz) {
         snprintf(buf, sz, "%dm", (int)(rem / 60));
 }
 
-static const char *dhcp_lookup(const ntop_state_t *s, const char *ip) {
+static const char *dhcp_lookup(const sloth_state_t *s, const char *ip) {
     for (int i = 0; i < s->dhcp_count; i++) {
         if (strcmp(s->dhcp_leases[i].ip, ip) == 0)
             return s->dhcp_leases[i].hostname[0] ? s->dhcp_leases[i].hostname : NULL;
@@ -32,7 +32,7 @@ static const char *dhcp_lookup(const ntop_state_t *s, const char *ip) {
     return NULL;
 }
 
-static time_t dhcp_expire(const ntop_state_t *s, const char *ip) {
+static time_t dhcp_expire(const sloth_state_t *s, const char *ip) {
     for (int i = 0; i < s->dhcp_count; i++) {
         if (strcmp(s->dhcp_leases[i].ip, ip) == 0)
             return s->dhcp_leases[i].expire;
@@ -42,7 +42,7 @@ static time_t dhcp_expire(const ntop_state_t *s, const char *ip) {
 
 /* ── Draw ────────────────────────────────────────────────── */
 
-void view_arp_draw(const ntop_state_t *s) {
+void view_arp_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
     int page = LINES - 5;
     if (page < 1) page = 1;
@@ -133,12 +133,12 @@ void view_arp_draw(const ntop_state_t *s) {
 
 /* ── Key handler ─────────────────────────────────────────── */
 
-void view_arp_key(ntop_state_t *s, int key) {
+void view_arp_key(sloth_state_t *s, int key) {
     switch (key) {
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->arp_sel > 0) s->arp_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->arp_count > 0 && s->arp_sel < s->arp_count - 1)
             s->arp_sel++;
         break;

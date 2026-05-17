@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "oui.h"
 #include "capture/probe.h"
@@ -58,7 +58,7 @@ static void sigbar_str(int8_t dbm, char *out) {
 
 /* ── Draw ────────────────────────────────────────────────── */
 
-void view_probe_draw(const ntop_state_t *s) {
+void view_probe_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
     int page = LINES - 5;
     if (page < 1) page = 1;
@@ -85,6 +85,11 @@ void view_probe_draw(const ntop_state_t *s) {
         tui_bright(); TPRINT("%s", s->probe_iface);
     } else {
         tui_dim(); TPRINT("  (no monitor interface)");
+    }
+    if (s->probe_err[0]) {
+        tui_dim(); TPRINT("  [err: ");
+        tui_bright(); TPRINT("%s", s->probe_err);
+        tui_dim(); TPRINT("]");
     }
 #ifndef WITH_NCURSES
     tui_dim(); TPRINT("  [up/dn] navigate  [c] clear");
@@ -170,12 +175,12 @@ void view_probe_draw(const ntop_state_t *s) {
 
 /* ── Key handler ─────────────────────────────────────────── */
 
-void view_probe_key(ntop_state_t *s, int key) {
+void view_probe_key(sloth_state_t *s, int key) {
     switch (key) {
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->probe_sel > 0) s->probe_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->probe_count > 0 && s->probe_sel < s->probe_count - 1)
             s->probe_sel++;
         break;

@@ -1,5 +1,5 @@
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 
 /* Tests for the rate calculation formula used in linux.c.
    The formula is: rate = (curr - prev) / dt

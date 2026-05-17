@@ -10,7 +10,7 @@
 #include <linux/inet_diag.h>
 #include <linux/tcp.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_tcpdiag.h"
 
 #define RECV_BUF 65536

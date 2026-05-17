@@ -2,12 +2,12 @@
 #include <string.h>
 #include <unistd.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/procs.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static void push(ntop_state_t *s, int pid, const char *proc, int proto) {
+static void push(sloth_state_t *s, int pid, const char *proc, int proto) {
     if (s->conn_count >= MAX_CONNS) return;
     conn_t *c = &s->conns[s->conn_count++];
     memset(c, 0, sizeof(*c));
@@ -35,7 +35,7 @@ static void test_depth_field_exists(void) {
 }
 
 static void test_aggregate_zeros_ppid_depth(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 10, "nginx", PROTO_TCP);
     proc_stat_t out[MAX_PROCS];
@@ -48,14 +48,14 @@ static void test_aggregate_zeros_ppid_depth(void) {
 /* ── Draw smoke tests ────────────────────────────────────── */
 
 static void test_tree_draw_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_procs_draw(&s);
     ASSERT(1);
 }
 
 static void test_tree_draw_single(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 100, "sshd", PROTO_TCP);
     view_procs_draw(&s);
@@ -63,7 +63,7 @@ static void test_tree_draw_single(void) {
 }
 
 static void test_tree_draw_multiple_roots(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 100, "nginx",  PROTO_TCP);
     push(&s, 200, "sshd",   PROTO_TCP);
@@ -73,7 +73,7 @@ static void test_tree_draw_multiple_roots(void) {
 }
 
 static void test_tree_draw_unresolved(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 0, "", PROTO_TCP);
     push(&s, 0, "", PROTO_UDP);
@@ -88,7 +88,7 @@ static void test_tree_real_parent_child(void) {
     pid_t parent = getppid();
     if (self == parent) { ASSERT(1); return; }  /* degenerate, skip */
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* parent has more conns → appears first after procs_aggregate sort */
     push(&s, (int)parent, "parent_proc", PROTO_TCP);
@@ -108,60 +108,60 @@ static void test_tree_real_parent_child(void) {
 /* ── Navigation tests ────────────────────────────────────── */
 
 static void test_tree_nav_down(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 10, "a", PROTO_TCP);
     push(&s, 20, "b", PROTO_TCP);
     s.proc_sel = 0;
     view_procs_draw(&s);
-    view_procs_key(&s, NTOP_KEY_DOWN);
+    view_procs_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.proc_sel, 1);
 }
 
 static void test_tree_nav_up(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 10, "a", PROTO_TCP);
     push(&s, 20, "b", PROTO_TCP);
     s.proc_sel = 1;
     view_procs_draw(&s);
-    view_procs_key(&s, NTOP_KEY_UP);
+    view_procs_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.proc_sel, 0);
 }
 
 static void test_tree_nav_top_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 10, "a", PROTO_TCP);
     s.proc_sel = 0;
     view_procs_draw(&s);
-    view_procs_key(&s, NTOP_KEY_UP);
+    view_procs_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.proc_sel, 0);
 }
 
 static void test_tree_nav_bottom_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 10, "a", PROTO_TCP);
     s.proc_sel = 0;
     view_procs_draw(&s);
-    view_procs_key(&s, NTOP_KEY_DOWN);
+    view_procs_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.proc_sel, 0);
 }
 
 static void test_tree_nav_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.proc_sel = 0;
     view_procs_draw(&s);
-    view_procs_key(&s, NTOP_KEY_DOWN);
+    view_procs_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.proc_sel, 0);
 }
 
 /* ── Detail panel: leaf → opens, not-leaf → does not open ── */
 
 static void test_tree_enter_leaf_opens_detail(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 42, "solo", PROTO_TCP);
     s.proc_sel = 0;
@@ -171,7 +171,7 @@ static void test_tree_enter_leaf_opens_detail(void) {
 }
 
 static void test_tree_enter_unresolved_no_detail(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 0, "", PROTO_TCP);
     s.proc_sel = 0;
@@ -187,7 +187,7 @@ static void test_tree_enter_real_child_folds(void) {
     pid_t parent = getppid();
     if (self == parent) { ASSERT(1); return; }
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, (int)parent, "parent", PROTO_TCP);
     push(&s, (int)parent, "parent", PROTO_TCP);  /* 2 conns → sorts first */
@@ -212,7 +212,7 @@ static void test_tree_enter_real_child_folds(void) {
 /* ── Detail close ────────────────────────────────────────── */
 
 static void test_tree_detail_close_esc(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.proc_detail = 1;
     view_procs_key(&s, '\033');
@@ -220,14 +220,14 @@ static void test_tree_detail_close_esc(void) {
 }
 
 static void test_tree_detail_blocks_nav(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push(&s, 1, "a", PROTO_TCP);
     push(&s, 2, "b", PROTO_TCP);
     view_procs_draw(&s);
     s.proc_sel    = 0;
     s.proc_detail = 1;
-    view_procs_key(&s, NTOP_KEY_DOWN);
+    view_procs_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.proc_sel, 0);  /* nav consumed by detail mode */
 }
 

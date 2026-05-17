@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "bandwidth.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -30,7 +30,7 @@ static void make_pkt(packet_info_t *p, const char *src, uint16_t sp,
 }
 
 /* Push a packet into the ring, advancing pkt_head. */
-static void push_pkt(ntop_state_t *s, const packet_info_t *p) {
+static void push_pkt(sloth_state_t *s, const packet_info_t *p) {
     s->packets[s->pkt_head] = *p;
     s->pkt_head = (s->pkt_head + 1) % MAX_PACKETS;
     if (s->pkt_count < MAX_PACKETS) s->pkt_count++;
@@ -39,7 +39,7 @@ static void push_pkt(ntop_state_t *s, const packet_info_t *p) {
 /* ── Tests ───────────────────────────────────────────────── */
 
 void test_bw_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
     bw_update(&s);
@@ -47,7 +47,7 @@ void test_bw_empty(void) {
 }
 
 void test_bw_new_conn_zero_rate(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
     make_conn(&s.conns[0], "192.168.1.1", 12345, "8.8.8.8", 443, PROTO_TCP);
@@ -59,7 +59,7 @@ void test_bw_new_conn_zero_rate(void) {
 }
 
 void test_bw_lookup_found(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
     make_conn(&s.conns[0], "10.0.0.1", 9999, "1.2.3.4", 80, PROTO_TCP);
@@ -70,7 +70,7 @@ void test_bw_lookup_found(void) {
 }
 
 void test_bw_lookup_not_found(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
     s.conn_bw_count = 0;  /* empty snapshot */
@@ -81,7 +81,7 @@ void test_bw_lookup_not_found(void) {
 }
 
 void test_bw_conn_evicted_when_gone(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -97,7 +97,7 @@ void test_bw_conn_evicted_when_gone(void) {
 }
 
 void test_bw_sparkline_fills(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -112,7 +112,7 @@ void test_bw_sparkline_fills(void) {
 }
 
 void test_bw_sparkline_caps_at_hist_len(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -126,7 +126,7 @@ void test_bw_sparkline_caps_at_hist_len(void) {
 }
 
 void test_bw_identity_preserved_across_polls(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -169,7 +169,7 @@ void test_bw_fmt_rate_mega(void) {
 }
 
 void test_bw_multiple_conns_independent(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -195,7 +195,7 @@ void test_bw_multiple_conns_independent(void) {
 /* ── Packet attribution tests (pcap ring, no WITH_PCAP needed) ── */
 
 void test_bw_cursor_advances(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 
@@ -212,7 +212,7 @@ void test_bw_cursor_advances(void) {
 }
 
 void test_bw_no_double_count(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     bw_reset();
 

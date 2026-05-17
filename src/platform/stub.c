@@ -1,6 +1,6 @@
 #ifdef PLATFORM_STUB
 
-#include "ntop.h"
+#include "sloth.h"
 
 /* No-op fallback for unsupported or embedded platforms.
    Implement get_ifaces / get_conns / wifi_scan using

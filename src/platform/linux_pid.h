@@ -1,7 +1,7 @@
 #ifndef LINUX_PID_H
 #define LINUX_PID_H
 
-#include "ntop.h"
+#include "sloth.h"
 
 /* Scan /proc/[pid]/fd for socket inodes and fill conn_t.pid + .proc.
    Best-effort: connections owned by other users may be skipped.

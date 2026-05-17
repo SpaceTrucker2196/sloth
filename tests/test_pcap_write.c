@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "pcap_write.h"
 #include "views/packets.h"
 
@@ -13,7 +13,7 @@ static uint32_t read_u32le(FILE *f) {
            ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
 }
 
-static void push_raw_pkt(ntop_state_t *s, uint32_t ts_sec,
+static void push_raw_pkt(sloth_state_t *s, uint32_t ts_sec,
                          uint8_t fill, uint16_t raw_len) {
     packet_info_t p;
     memset(&p, 0, sizeof(p));
@@ -29,7 +29,7 @@ static void push_raw_pkt(ntop_state_t *s, uint32_t ts_sec,
 /* ── Tests ───────────────────────────────────────────────── */
 
 static void test_export_empty_ring(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     char path[128] = "";
     int n = pcap_export(&s, path, sizeof(path));
@@ -45,7 +45,7 @@ static void test_export_empty_ring(void) {
 }
 
 static void test_export_magic(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     char path[128] = "";
     pcap_export(&s, path, sizeof(path));
@@ -58,7 +58,7 @@ static void test_export_magic(void) {
 }
 
 static void test_export_default_dlt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* pkt_linktype == 0 → must default to DLT_EN10MB (1) */
     char path[128] = "";
@@ -73,7 +73,7 @@ static void test_export_default_dlt(void) {
 }
 
 static void test_export_custom_dlt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.pkt_linktype = 113;  /* DLT_LINUX_SLL */
     char path[128] = "";
@@ -88,7 +88,7 @@ static void test_export_custom_dlt(void) {
 }
 
 static void test_export_skips_no_raw(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* raw_len==0 → push_raw_pkt leaves p.raw_len as 0 */
     for (int i = 0; i < 5; i++)
@@ -106,7 +106,7 @@ static void test_export_skips_no_raw(void) {
 }
 
 static void test_export_counts_and_size(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_raw_pkt(&s, 1001, 0xAA, 20);
     push_raw_pkt(&s, 1002, 0xBB, 20);
@@ -125,7 +125,7 @@ static void test_export_counts_and_size(void) {
 }
 
 static void test_export_path_ends_with_pcap(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     char path[128] = "";
     pcap_export(&s, path, sizeof(path));
@@ -136,7 +136,7 @@ static void test_export_path_ends_with_pcap(void) {
 }
 
 static void test_export_mixed_raw(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_raw_pkt(&s, 2001, 0x11, 14);   /* raw_len > 0 → counted */
     push_raw_pkt(&s, 2002, 0x00,  0);   /* raw_len == 0 → skipped */
@@ -157,7 +157,7 @@ static void test_export_mixed_raw(void) {
 /* ── Key handler integration ─────────────────────────────── */
 
 static void test_w_key_sets_export_msg(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_raw_pkt(&s, 3001, 0xFF, 10);
     ASSERT_EQ(s.pkt_export_msg[0], '\0');

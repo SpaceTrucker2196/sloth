@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "oui.h"
 #include "util.h"
@@ -51,7 +51,7 @@ static void fmt_connected(uint32_t secs, char *buf, int len) {
 }
 
 /* Find the first station whose MAC matches ap->bssid. */
-static const wifi_sta_t *find_sta(const ntop_state_t *s, const wifi_ap_t *ap) {
+static const wifi_sta_t *find_sta(const sloth_state_t *s, const wifi_ap_t *ap) {
     for (int i = 0; i < s->wifi_sta_count; i++) {
         if (strcmp(s->wifi_stas[i].mac, ap->bssid) == 0)
             return &s->wifi_stas[i];
@@ -61,7 +61,7 @@ static const wifi_sta_t *find_sta(const ntop_state_t *s, const wifi_ap_t *ap) {
 
 /* ── Detail panel ───────────────────────────────────────── */
 
-static void draw_wifi_detail(const ntop_state_t *s) {
+static void draw_wifi_detail(const sloth_state_t *s) {
     if (s->ap_count == 0 || s->wifi_sel >= s->ap_count) {
         tui_dim(); TPRINT("  (no AP selected)\n"); tui_normal(); return;
     }
@@ -144,7 +144,7 @@ static void draw_wifi_detail(const ntop_state_t *s) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
-void view_wifi_draw(const ntop_state_t *s) {
+void view_wifi_draw(const sloth_state_t *s) {
 #ifndef WITH_WIFI
     (void)s;
     tui_dim(); TPRINT("  WiFi scanning disabled (build with WITH_WIFI=1)\n");
@@ -239,7 +239,7 @@ void view_wifi_draw(const ntop_state_t *s) {
 
 /* ── Key handler ────────────────────────────────────────── */
 
-void view_wifi_key(ntop_state_t *s, int key) {
+void view_wifi_key(sloth_state_t *s, int key) {
     if (s->wifi_detail) {
         if (key == '\033') s->wifi_detail = 0;
         return;
@@ -249,10 +249,10 @@ void view_wifi_key(ntop_state_t *s, int key) {
     case '\r': case '\n':
         if (s->ap_count > 0) s->wifi_detail = 1;
         break;
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->wifi_sel > 0) s->wifi_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->ap_count > 0 && s->wifi_sel < s->ap_count - 1)
             s->wifi_sel++;
         break;

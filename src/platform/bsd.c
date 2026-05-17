@@ -9,7 +9,7 @@
 #include <net/if.h>
 #include <net/if_dl.h>   /* struct if_data — BSD/macOS */
 
-#include "ntop.h"
+#include "sloth.h"
 
 /* ── Rate tracking ───────────────────────────────────────── */
 

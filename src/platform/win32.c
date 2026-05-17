@@ -1,6 +1,6 @@
 #ifdef PLATFORM_WIN32
 
-#include "ntop.h"
+#include "sloth.h"
 
 /* Week 2: GetIfTable2 for interface stats               */
 /* Week 3: GetExtendedTcpTable for connection table      */

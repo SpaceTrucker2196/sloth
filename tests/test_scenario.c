@@ -3,16 +3,24 @@
 #include <stdio.h>
 
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "fake_platform.h"
 #include "scenarios.h"
 #include "views/iface.h"
 #include "views/conns.h"
 #include "views/wifi.h"
 #include "views/packets.h"
+#include "views/procs.h"
+#include "views/stats.h"
+#include "views/probe.h"
+#include "views/arp.h"
+#include "views/mdns.h"
+#include "views/nbns.h"
+#include "views/dhcp_snoop.h"
+#include "views/ssdp.h"
 
 /* Helper: run one full poll against the fake platform */
-static void do_poll(ntop_state_t *s) {
+static void do_poll(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
     s->conn_count  = g_platform.get_conns(s->conns,   MAX_CONNS);
     s->ap_count    = g_platform.wifi_scan(s->aps,      MAX_WIFI_APS);
@@ -24,7 +32,7 @@ void test_scenario_empty_yields_zero_counts(void) {
     fake_net_reset();
     scenario_empty();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -39,7 +47,7 @@ void test_scenario_idle_iface_count(void) {
     fake_net_reset();
     scenario_idle();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -52,7 +60,7 @@ void test_scenario_idle_conn_count(void) {
     fake_net_reset();
     scenario_idle();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -63,7 +71,7 @@ void test_scenario_idle_wifi_aps(void) {
     fake_net_reset();
     scenario_idle();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -77,7 +85,7 @@ void test_scenario_busy_saturated_rate(void) {
     fake_net_reset();
     scenario_busy();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -92,7 +100,7 @@ void test_scenario_many_conns_count(void) {
     fake_net_reset();
     scenario_many_conns();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -104,7 +112,7 @@ void test_scenario_many_conns_mixed_protocols(void) {
     fake_net_reset();
     scenario_many_conns();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -123,7 +131,7 @@ void test_scenario_wifi_crowded_count(void) {
     fake_net_reset();
     scenario_wifi_crowded();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -134,7 +142,7 @@ void test_scenario_wifi_crowded_signal_range(void) {
     fake_net_reset();
     scenario_wifi_crowded();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -153,7 +161,7 @@ void test_render_idle_all_views(void) {
     fake_net_reset();
     scenario_idle();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -167,6 +175,14 @@ void test_render_idle_all_views(void) {
         view_conns_draw(&s);
         view_wifi_draw(&s);
         view_packets_draw(&s);
+        view_procs_draw(&s);
+        view_stats_draw(&s);
+        view_probe_draw(&s);
+        view_arp_draw(&s);
+        view_mdns_draw(&s);
+        view_nbns_draw(&s);
+        view_dhcp_snoop_draw(&s);
+        view_ssdp_draw(&s);
         stdout = old_stdout;
         fclose(devnull);
     }
@@ -177,7 +193,7 @@ void test_render_empty_all_views(void) {
     fake_net_reset();
     scenario_empty();
 
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     do_poll(&s);
 
@@ -185,10 +201,18 @@ void test_render_empty_all_views(void) {
     FILE *old_stdout = stdout;
     if (devnull) {
         stdout = devnull;
-        view_iface_draw(&s);   /* should print "(no interfaces found)" */
-        view_conns_draw(&s);   /* should print "(no connections)" */
-        view_wifi_draw(&s);    /* should print "scanning..." */
+        view_iface_draw(&s);
+        view_conns_draw(&s);
+        view_wifi_draw(&s);
         view_packets_draw(&s);
+        view_procs_draw(&s);
+        view_stats_draw(&s);
+        view_probe_draw(&s);
+        view_arp_draw(&s);
+        view_mdns_draw(&s);
+        view_nbns_draw(&s);
+        view_dhcp_snoop_draw(&s);
+        view_ssdp_draw(&s);
         stdout = old_stdout;
         fclose(devnull);
     }

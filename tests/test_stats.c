@@ -1,12 +1,12 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/stats.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static void push_iface(ntop_state_t *s, const char *name,
+static void push_iface(sloth_state_t *s, const char *name,
                        uint64_t rx, uint64_t tx,
                        uint64_t rxp, uint64_t txp) {
     if (s->iface_count >= MAX_IFACES) return;
@@ -22,7 +22,7 @@ static void push_iface(ntop_state_t *s, const char *name,
 /* ── Baseline tests ──────────────────────────────────────── */
 
 static void test_baseline_taken_once(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "eth0", 1000, 500, 10, 5);
 
@@ -33,7 +33,7 @@ static void test_baseline_taken_once(void) {
 }
 
 static void test_baseline_stores_values(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "eth0", 9999, 4444, 100, 50);
     stats_take_baseline(&s);
@@ -44,7 +44,7 @@ static void test_baseline_stores_values(void) {
 }
 
 static void test_baseline_stores_name(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "lo", 0, 0, 0, 0);
     stats_take_baseline(&s);
@@ -52,7 +52,7 @@ static void test_baseline_stores_name(void) {
 }
 
 static void test_baseline_multiple_ifaces(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "eth0", 100, 50, 1, 1);
     push_iface(&s, "lo",   200, 200, 2, 2);
@@ -61,7 +61,7 @@ static void test_baseline_multiple_ifaces(void) {
 }
 
 static void test_reset_clears_init(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "eth0", 100, 50, 1, 1);
     stats_take_baseline(&s);
@@ -78,7 +78,7 @@ static void test_reset_clears_init(void) {
 /* ── key handler tests ───────────────────────────────────── */
 
 static void test_r_key_clears_init(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.stats_init = 1;
     view_stats_key(&s, 'r');
@@ -86,7 +86,7 @@ static void test_r_key_clears_init(void) {
 }
 
 static void test_R_key_clears_init(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.stats_init = 1;
     view_stats_key(&s, 'R');
@@ -94,7 +94,7 @@ static void test_R_key_clears_init(void) {
 }
 
 static void test_other_key_noop(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.stats_init = 1;
     view_stats_key(&s, 'x');
@@ -104,14 +104,14 @@ static void test_other_key_noop(void) {
 /* ── draw smoke tests ────────────────────────────────────── */
 
 static void test_draw_empty_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_stats_draw(&s);
     ASSERT(1);
 }
 
 static void test_draw_with_ifaces_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_iface(&s, "eth0", 5000000, 2000000, 5000, 2000);
     push_iface(&s, "lo",   1000,    1000,    10,   10);
@@ -124,7 +124,7 @@ static void test_draw_with_ifaces_no_crash(void) {
 }
 
 static void test_draw_with_conns_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     /* add a few conns */
     for (int i = 0; i < 5; i++) {

@@ -1,10 +1,10 @@
-#ifndef NTOP_H
-#define NTOP_H
+#ifndef SLOTH_H
+#define SLOTH_H
 
 #include <stdint.h>
 #include <time.h>
 
-#define NTOP_VERSION "0.2.0"
+#define SLOTH_VERSION "0.2.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -14,9 +14,9 @@
 #define HIST_LEN     30    /* rate history samples per interface (sparkline) */
 
 /* Cross-platform key codes — outside ASCII range, returned by tui_poll_key() */
-#define NTOP_KEY_UP        0x101
-#define NTOP_KEY_DOWN      0x102
-#define NTOP_KEY_BACKSPACE 0x103
+#define SLOTH_KEY_UP        0x101
+#define SLOTH_KEY_DOWN      0x102
+#define SLOTH_KEY_BACKSPACE 0x103
 
 /* ── Views ──────────────────────────────────────────────── */
 typedef enum {
@@ -28,6 +28,10 @@ typedef enum {
     VIEW_STATS   = 5,
     VIEW_PROBE   = 6,
     VIEW_ARP     = 7,
+    VIEW_MDNS    = 8,
+    VIEW_NBNS    = 9,
+    VIEW_DHCP    = 10,
+    VIEW_SSDP    = 11,
     VIEW_COUNT
 } view_t;
 
@@ -124,6 +128,51 @@ typedef struct {
     time_t   last_seen;
     int      flagged;               /* port_count >= SCAN_PORT_THRESH */
 } scan_entry_t;
+
+/* ── NetBIOS Name Service entries ───────────────────────── */
+#define MAX_NBNS_NAMES 64
+
+typedef struct {
+    char    name[16];   /* decoded NetBIOS name, NUL-terminated  */
+    char    ip[46];     /* resolved IP, "" = not yet known       */
+    uint8_t suffix;     /* service type: 0x00=workstation 0x20=SMB … */
+    time_t  last_seen;
+} nbns_name_t;
+
+/* ── mDNS local services ────────────────────────────────── */
+#define MAX_MDNS_SERVICES 64
+
+typedef struct {
+    char     instance[64];   /* "My Printer._ipp._tcp.local" */
+    char     service[32];    /* "_ipp._tcp"                  */
+    char     host[64];       /* SRV target hostname          */
+    char     ip[46];         /* resolved IP, "" = unknown    */
+    uint16_t port;           /* SRV port, 0 = unknown        */
+    time_t   last_seen;
+} mdns_service_t;
+
+/* ── SSDP/UPnP devices ──────────────────────────────────── */
+#define MAX_SSDP_DEVICES 64
+
+typedef struct {
+    char   ip[46];         /* source IP of the announcing device    */
+    char   type[80];       /* NT (notify) or ST (search target)     */
+    char   usn[96];        /* Unique Service Name                   */
+    char   location[96];   /* LOCATION: URL, "" = unknown           */
+    char   nts[16];        /* "alive", "byebye", "search"          */
+    time_t last_seen;
+} ssdp_device_t;
+
+/* ── Live DHCP snoop events ─────────────────────────────── */
+#define MAX_DHCP_EVENTS 128
+
+typedef struct {
+    char    mac[18];       /* "aa:bb:cc:dd:ee:ff"              */
+    char    ip[46];        /* assigned IP, "" = not yet known  */
+    char    hostname[64];  /* option 12, "" = unknown          */
+    uint8_t msg_type;      /* 1=DISCOVER 3=REQUEST 5=ACK …     */
+    time_t  last_seen;
+} dhcp_event_t;
 
 /* ── ARP neighbors ──────────────────────────────────────── */
 #define MAX_ARP_ENTRIES  256
@@ -270,6 +319,27 @@ typedef struct {
     int            probe_count;
     int            probe_sel;
     char           probe_iface[16]; /* monitor iface name, "" = none found */
+    char           probe_err[80];   /* last probe open/set error, "" = ok */
+
+    /* ── mDNS services ────────────────────────────────────── */
+    mdns_service_t mdns_services[MAX_MDNS_SERVICES];
+    int            mdns_count;
+    int            mdns_sel;
+
+    /* ── NetBIOS names ─────────────────────────────────────── */
+    nbns_name_t    nbns_names[MAX_NBNS_NAMES];
+    int            nbns_count;
+    int            nbns_sel;
+
+    /* ── Live DHCP events ──────────────────────────────────── */
+    dhcp_event_t   dhcp_events[MAX_DHCP_EVENTS];
+    int            dhcp_event_count;
+    int            dhcp_event_sel;
+
+    /* ── SSDP/UPnP devices ─────────────────────────────────── */
+    ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];
+    int            ssdp_count;
+    int            ssdp_sel;
 
     /* ── Session stats baseline ─────────────────────────── */
     time_t   stats_start;                    /* time of last reset */
@@ -280,7 +350,7 @@ typedef struct {
     uint64_t stats_base_txp[MAX_IFACES];     /* tx_packets at baseline */
     char     stats_base_name[MAX_IFACES][16];/* iface name for each slot */
     int      stats_base_count;               /* number of baseline slots */
-} ntop_state_t;
+} sloth_state_t;
 
 /* ── Platform ops vtable ────────────────────────────────── */
 typedef struct {
@@ -296,4 +366,4 @@ typedef struct {
 
 extern platform_ops_t g_platform;
 
-#endif /* NTOP_H */
+#endif /* SLOTH_H */

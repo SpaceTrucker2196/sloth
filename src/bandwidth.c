@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "bandwidth.h"
 
 /* ── Internal per-connection tracking entry ─────────────────── */
@@ -68,7 +68,7 @@ static bw_entry_t *bw_get_or_create(const conn_t *c,
 
 /* ── Public API ─────────────────────────────────────────────── */
 
-void bw_update(ntop_state_t *s) {
+void bw_update(sloth_state_t *s) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
@@ -165,7 +165,7 @@ void bw_update(ntop_state_t *s) {
     g_bw_n = n;
 }
 
-const conn_bw_t *bw_lookup(const ntop_state_t *s, const conn_t *c) {
+const conn_bw_t *bw_lookup(const sloth_state_t *s, const conn_t *c) {
     for (int i = 0; i < s->conn_bw_count; i++) {
         const conn_bw_t *bw = &s->conn_bw[i];
         if (bw->proto      == c->proto      &&

@@ -13,6 +13,9 @@ SRCS = src/main.c          \
        src/history.c       \
        src/bandwidth.c     \
        src/dns.c           \
+       src/dns_snoop.c     \
+       src/sni_snoop.c     \
+       src/http_snoop.c    \
        src/oui.c           \
        src/services.c      \
        src/views/iface.c   \
@@ -22,7 +25,16 @@ SRCS = src/main.c          \
        src/views/procs.c   \
        src/views/stats.c   \
        src/views/probe.c   \
-       src/views/arp.c
+       src/views/arp.c     \
+       src/mdns_snoop.c    \
+       src/nbns_snoop.c    \
+       src/dhcp_snoop.c    \
+       src/quic_snoop.c    \
+       src/views/mdns.c    \
+       src/views/nbns.c    \
+       src/views/dhcp_snoop.c \
+       src/ssdp_snoop.c      \
+       src/views/ssdp.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -72,7 +84,7 @@ ifeq ($(WITH_WIFI),1)
 endif
 
 OBJS   = $(SRCS:.c=.o)
-TARGET = ntop
+TARGET = sloth
 
 .PHONY: all clean install embedded
 
@@ -106,6 +118,9 @@ TEST_SRCS = tests/main_test.c          \
             src/history.c              \
             src/bandwidth.c            \
             src/dns.c                  \
+            src/dns_snoop.c            \
+            src/sni_snoop.c            \
+            src/http_snoop.c           \
             src/oui.c                  \
             src/services.c             \
             src/platform/linux_parse.c \
@@ -141,9 +156,26 @@ TEST_SRCS = tests/main_test.c          \
             src/platform/linux_tcpdiag.c   \
             tests/test_tree.c              \
             src/scan.c                     \
-            tests/test_scan.c
+            tests/test_scan.c              \
+            tests/test_dns_snoop.c         \
+            tests/test_sni_snoop.c         \
+            src/mdns_snoop.c               \
+            src/nbns_snoop.c               \
+            src/dhcp_snoop.c               \
+            src/quic_snoop.c               \
+            src/views/mdns.c               \
+            src/views/nbns.c               \
+            src/views/dhcp_snoop.c         \
+            tests/test_mdns_snoop.c        \
+            tests/test_http_snoop.c        \
+            tests/test_nbns_snoop.c        \
+            tests/test_dhcp_snoop.c        \
+            tests/test_quic_snoop.c        \
+            src/ssdp_snoop.c               \
+            src/views/ssdp.c               \
+            tests/test_ssdp_snoop.c
 
-TEST_BIN = ntop_test
+TEST_BIN = sloth_test
 
 .PHONY: test
 test: $(TEST_BIN)

@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "bandwidth.h"
 #include "dns.h"
@@ -81,7 +81,7 @@ static void bw_spark(const conn_bw_t *bw, char *out, int w) {
 
 static const conn_t       *g_sort_conns;
 static conn_sort_t         g_sort_key;
-static const ntop_state_t *g_sort_state;
+static const sloth_state_t *g_sort_state;
 static double              g_sort_rates[MAX_CONNS];
 
 static int conn_cmp(const void *a, const void *b) {
@@ -114,7 +114,7 @@ static int conn_cmp(const void *a, const void *b) {
     }
 }
 
-void conn_rebuild_idx(ntop_state_t *s) {
+void conn_rebuild_idx(sloth_state_t *s) {
     int n = 0;
     for (int i = 0; i < s->conn_count && n < MAX_CONNS; i++) {
         if (s->conn_filter == CONN_FILTER_TCP && s->conns[i].proto != PROTO_TCP) continue;
@@ -142,7 +142,7 @@ void conn_rebuild_idx(ntop_state_t *s) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
-void view_conns_draw(const ntop_state_t *s) {
+void view_conns_draw(const sloth_state_t *s) {
     static const char *sort_names[]   = {"STATE", "PROTO", "LPORT", "PID", "BW", "RTT"};
     static const char *filter_names[] = {"ALL", "TCP", "UDP"};
 
@@ -324,7 +324,7 @@ void view_conns_draw(const ntop_state_t *s) {
 
 /* ── Key handler ────────────────────────────────────────── */
 
-void view_conns_key(ntop_state_t *s, int key) {
+void view_conns_key(sloth_state_t *s, int key) {
     switch (key) {
     case 's': case 'S':
         s->conn_sort = (conn_sort_t)((s->conn_sort + 1) % CONN_SORT_COUNT);
@@ -334,10 +334,10 @@ void view_conns_key(ntop_state_t *s, int key) {
         s->conn_filter = (conn_filter_t)((s->conn_filter + 1) % CONN_FILTER_COUNT);
         conn_rebuild_idx(s);
         break;
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->conn_sel > 0) s->conn_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->conn_idx_count > 0 && s->conn_sel < s->conn_idx_count - 1)
             s->conn_sel++;
         break;

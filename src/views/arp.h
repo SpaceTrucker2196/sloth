@@ -1,9 +1,9 @@
 #ifndef VIEWS_ARP_H
 #define VIEWS_ARP_H
 
-#include "ntop.h"
+#include "sloth.h"
 
-void view_arp_draw(const ntop_state_t *s);
-void view_arp_key(ntop_state_t *s, int key);
+void view_arp_draw(const sloth_state_t *s);
+void view_arp_key(sloth_state_t *s, int key);
 
 #endif /* VIEWS_ARP_H */

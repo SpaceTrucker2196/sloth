@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "dns.h"
 #include "services.h"
@@ -29,7 +29,7 @@ static int proc_cmp_desc(const void *a, const void *b) {
     return pb->conn_count - pa->conn_count;   /* descending */
 }
 
-int procs_aggregate(const ntop_state_t *s, proc_stat_t *out, int max) {
+int procs_aggregate(const sloth_state_t *s, proc_stat_t *out, int max) {
     if (max <= 0) return 0;
 
     int n = 0;
@@ -259,7 +259,7 @@ static const char *proc_tcp_state(int st) {
 
 /* ── Detail panel ───────────────────────────────────────── */
 
-static void draw_proc_detail(const ntop_state_t *s) {
+static void draw_proc_detail(const sloth_state_t *s) {
     int vis_sel = (g_vis_count > 0)
                   ? (s->proc_sel < g_vis_count ? s->proc_sel : g_vis_count - 1)
                   : 0;
@@ -329,7 +329,7 @@ static void draw_proc_detail(const ntop_state_t *s) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
-void view_procs_draw(const ntop_state_t *s) {
+void view_procs_draw(const sloth_state_t *s) {
     int n = procs_aggregate(s, g_procs, MAX_PROCS);
     g_proc_count = n;
     build_tree();
@@ -468,7 +468,7 @@ void view_procs_draw(const ntop_state_t *s) {
 
 /* ── Key handler ────────────────────────────────────────── */
 
-void view_procs_key(ntop_state_t *s, int key) {
+void view_procs_key(sloth_state_t *s, int key) {
     if (s->proc_detail) {
         if (key == '\r' || key == '\n' || key == '\033')
             s->proc_detail = 0;
@@ -491,10 +491,10 @@ void view_procs_key(ntop_state_t *s, int key) {
         }
         break;
     }
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->proc_sel > 0) s->proc_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->proc_sel < g_vis_count - 1) s->proc_sel++;
         break;
     default:

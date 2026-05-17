@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/packets.h"
 
 /* Push n synthetic packets into the ring buffer. */
-static void push_packets(ntop_state_t *s, int n) {
+static void push_packets(sloth_state_t *s, int n) {
     for (int i = 0; i < n; i++) {
         packet_info_t p;
         memset(&p, 0, sizeof(p));
@@ -25,7 +25,7 @@ static void push_packets(ntop_state_t *s, int n) {
 /* ── Pause / unpause ─────────────────────────────────────── */
 
 void test_pause_toggle(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     ASSERT_EQ(s.pkt_paused, 0);
@@ -38,7 +38,7 @@ void test_pause_toggle(void) {
 }
 
 void test_pause_space_key(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 3);
 
@@ -49,7 +49,7 @@ void test_pause_space_key(void) {
 }
 
 void test_pause_jumps_to_newest(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 10);
     s.pkt_sel = 0;  /* at oldest */
@@ -61,66 +61,66 @@ void test_pause_jumps_to_newest(void) {
 /* ── Navigation (only when paused) ──────────────────────── */
 
 void test_nav_up_when_paused(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
     s.pkt_sel    = 3;
 
-    view_packets_key(&s, NTOP_KEY_UP);
+    view_packets_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.pkt_sel, 2);
 }
 
 void test_nav_down_when_paused(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
     s.pkt_sel    = 2;
 
-    view_packets_key(&s, NTOP_KEY_DOWN);
+    view_packets_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.pkt_sel, 3);
 }
 
 void test_nav_ignored_when_live(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 0;
     s.pkt_sel    = 2;
 
-    view_packets_key(&s, NTOP_KEY_UP);
+    view_packets_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.pkt_sel, 2);   /* unchanged — navigation blocked */
-    view_packets_key(&s, NTOP_KEY_DOWN);
+    view_packets_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.pkt_sel, 2);
 }
 
 void test_nav_top_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 3);
     s.pkt_paused = 1;
     s.pkt_sel    = 0;
 
-    view_packets_key(&s, NTOP_KEY_UP);
+    view_packets_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.pkt_sel, 0);  /* stays at top */
 }
 
 void test_nav_bottom_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 3);
     s.pkt_paused = 1;
     s.pkt_sel    = 2;  /* last */
 
-    view_packets_key(&s, NTOP_KEY_DOWN);
+    view_packets_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.pkt_sel, 2);  /* stays at bottom */
 }
 
 /* ── Ring buffer overflow ────────────────────────────────── */
 
 void test_ring_overflows_correctly(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, MAX_PACKETS + 10);
 
@@ -133,7 +133,7 @@ void test_ring_overflows_correctly(void) {
 /* ── BPF filter input state machine ─────────────────────── */
 
 void test_filter_slash_enters_mode(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     ASSERT_EQ(s.pkt_filter_mode, 0);
     view_packets_key(&s, '/');
@@ -141,14 +141,14 @@ void test_filter_slash_enters_mode(void) {
 }
 
 void test_filter_f_key_enters_mode(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, 'f');
     ASSERT_EQ(s.pkt_filter_mode, 1);
 }
 
 void test_filter_prefills_active_filter(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     strncpy(s.pkt_filter, "port 80", sizeof(s.pkt_filter) - 1);
     view_packets_key(&s, '/');
@@ -158,7 +158,7 @@ void test_filter_prefills_active_filter(void) {
 }
 
 void test_filter_type_appends_chars(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, '/');
     view_packets_key(&s, 'p');
@@ -171,27 +171,27 @@ void test_filter_type_appends_chars(void) {
 }
 
 void test_filter_backspace_removes_char(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, '/');
     view_packets_key(&s, 'a');
     view_packets_key(&s, 'b');
     ASSERT_EQ(s.pkt_filter_len, 2);
-    view_packets_key(&s, NTOP_KEY_BACKSPACE);
+    view_packets_key(&s, SLOTH_KEY_BACKSPACE);
     ASSERT_EQ(s.pkt_filter_len, 1);
 }
 
 void test_filter_backspace_at_zero_is_noop(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, '/');
     ASSERT_EQ(s.pkt_filter_len, 0);
-    view_packets_key(&s, NTOP_KEY_BACKSPACE);
+    view_packets_key(&s, SLOTH_KEY_BACKSPACE);
     ASSERT_EQ(s.pkt_filter_len, 0);
 }
 
 void test_filter_esc_cancels(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     strncpy(s.pkt_filter, "port 80", sizeof(s.pkt_filter) - 1);
     view_packets_key(&s, '/');
@@ -203,7 +203,7 @@ void test_filter_esc_cancels(void) {
 }
 
 void test_filter_enter_applies(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, '/');
     view_packets_key(&s, 'p');
@@ -216,7 +216,7 @@ void test_filter_enter_applies(void) {
 }
 
 void test_filter_normal_keys_blocked_in_mode(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 0;
@@ -228,7 +228,7 @@ void test_filter_normal_keys_blocked_in_mode(void) {
 }
 
 void test_filter_buf_limit(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_key(&s, '/');
     /* fill to max (255 chars) */
@@ -238,7 +238,7 @@ void test_filter_buf_limit(void) {
 }
 
 void test_filter_clear_x(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     strncpy(s.pkt_filter, "port 443", sizeof(s.pkt_filter) - 1);
     view_packets_key(&s, 'x');
@@ -247,7 +247,7 @@ void test_filter_clear_x(void) {
 }
 
 void test_filter_draw_in_filter_mode(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 3);
     view_packets_key(&s, '/');
@@ -259,14 +259,14 @@ void test_filter_draw_in_filter_mode(void) {
 /* ── Draw smoke test ─────────────────────────────────────── */
 
 void test_draw_no_crash_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_draw(&s);
     ASSERT(1);
 }
 
 void test_draw_no_crash_with_packets(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
@@ -278,7 +278,7 @@ void test_draw_no_crash_with_packets(void) {
 /* ── Detail panel ────────────────────────────────────────── */
 
 void test_detail_open_when_paused(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
@@ -289,7 +289,7 @@ void test_detail_open_when_paused(void) {
 }
 
 void test_detail_not_open_when_live(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 0;
@@ -298,7 +298,7 @@ void test_detail_not_open_when_live(void) {
 }
 
 void test_detail_not_open_when_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.pkt_paused = 1;
     view_packets_key(&s, '\r');
@@ -306,7 +306,7 @@ void test_detail_not_open_when_empty(void) {
 }
 
 void test_detail_close_on_enter(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
@@ -316,7 +316,7 @@ void test_detail_close_on_enter(void) {
 }
 
 void test_detail_close_on_esc(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
@@ -326,20 +326,20 @@ void test_detail_close_on_esc(void) {
 }
 
 void test_detail_blocks_nav(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 5);
     s.pkt_paused = 1;
     s.pkt_sel    = 2;
     s.pkt_detail = 1;
-    view_packets_key(&s, NTOP_KEY_UP);
+    view_packets_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.pkt_sel, 2);  /* unchanged */
-    view_packets_key(&s, NTOP_KEY_DOWN);
+    view_packets_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.pkt_sel, 2);  /* unchanged */
 }
 
 void test_detail_draw_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     push_packets(&s, 3);
     s.pkt_paused = 1;

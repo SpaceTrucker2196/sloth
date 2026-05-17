@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "capture/capture.h"
 #include "dns.h"
@@ -10,7 +10,7 @@
 
 #define PKTS_PAGE 30
 
-static void ring_range(const ntop_state_t *s, int *count, int *start) {
+static void ring_range(const sloth_state_t *s, int *count, int *start) {
     *count = (s->pkt_count < MAX_PACKETS) ? s->pkt_count : MAX_PACKETS;
     *start = (s->pkt_count < MAX_PACKETS) ? 0            : s->pkt_head;
 }
@@ -18,7 +18,7 @@ static void ring_range(const ntop_state_t *s, int *count, int *start) {
 #ifdef WITH_PCAP
 /* ── Detail panel ───────────────────────────────────────── */
 
-static void draw_detail(const ntop_state_t *s) {
+static void draw_detail(const sloth_state_t *s) {
     int count, start;
     ring_range(s, &count, &start);
     int sel = (count > 0) ? s->pkt_sel : 0;
@@ -99,7 +99,7 @@ static void phos_proto(int proto) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
-void view_packets_draw(const ntop_state_t *s) {
+void view_packets_draw(const sloth_state_t *s) {
 #ifndef WITH_PCAP
     (void)s;
     tui_dim(); TPRINT("  Packet capture disabled (build with WITH_PCAP=1)\n");
@@ -239,7 +239,7 @@ void view_packets_draw(const ntop_state_t *s) {
 
 /* ── Key handler ────────────────────────────────────────── */
 
-void view_packets_key(ntop_state_t *s, int key) {
+void view_packets_key(sloth_state_t *s, int key) {
     if (s->pkt_detail) {
         if (key == '\r' || key == '\n' || key == '\033')
             s->pkt_detail = 0;
@@ -261,7 +261,7 @@ void view_packets_key(ntop_state_t *s, int key) {
         } else if (key == '\033') {
             s->pkt_filter_mode = 0;
             s->pkt_filter_err[0] = '\0';
-        } else if (key == NTOP_KEY_BACKSPACE) {
+        } else if (key == SLOTH_KEY_BACKSPACE) {
             if (s->pkt_filter_len > 0) s->pkt_filter_len--;
         } else if (key >= 32 && key < 127) {
             if (s->pkt_filter_len < (int)sizeof(s->pkt_filter_buf) - 1)
@@ -294,10 +294,10 @@ void view_packets_key(ntop_state_t *s, int key) {
         s->pkt_paused = !s->pkt_paused;
         s->pkt_sel = count > 0 ? count - 1 : 0;
         break;
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->pkt_paused && s->pkt_sel > 0) s->pkt_sel--;
         break;
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->pkt_paused && count > 0 && s->pkt_sel < count - 1) s->pkt_sel++;
         break;
     case 'w': case 'W': {

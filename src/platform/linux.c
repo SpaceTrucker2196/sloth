@@ -4,7 +4,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_parse.h"
 #include "platform/linux_pid.h"
 #include "platform/linux_wifi.h"

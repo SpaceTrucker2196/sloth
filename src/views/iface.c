@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "history.h"
 #include "util.h"
@@ -76,7 +76,7 @@ static void print_sparkline_heat(const iface_hist_t *h, int use_rx, int width) {
 
 /* ── read-only history lookup ────────────────────────────── */
 
-static const iface_hist_t *find_hist_ro(const ntop_state_t *s, const char *name) {
+static const iface_hist_t *find_hist_ro(const sloth_state_t *s, const char *name) {
     for (int i = 0; i < MAX_IFACES; i++) {
         if (s->iface_hist[i].count > 0 &&
             strncmp(s->iface_hist[i].name, name, 16) == 0)
@@ -208,7 +208,7 @@ static void draw_iface_detail_stats(const iface_stat_t *iface) {
     tui_normal();
 }
 
-static void draw_iface_graph(const ntop_state_t *s) {
+static void draw_iface_graph(const sloth_state_t *s) {
     if (s->iface_count == 0) {
         tui_dim(); TPRINT("  (no interfaces)\n"); tui_normal(); return;
     }
@@ -230,7 +230,7 @@ static void draw_iface_graph(const ntop_state_t *s) {
 
 /* ── hidden helper ───────────────────────────────────────── */
 
-static int is_hidden(const ntop_state_t *s, const char *name) {
+static int is_hidden(const sloth_state_t *s, const char *name) {
     for (int i = 0; i < s->iface_hidden_count; i++) {
         if (strncmp(s->iface_hidden[i], name, 16) == 0)
             return 1;
@@ -240,7 +240,7 @@ static int is_hidden(const ntop_state_t *s, const char *name) {
 
 /* ── draw ────────────────────────────────────────────────── */
 
-void view_iface_draw(const ntop_state_t *s) {
+void view_iface_draw(const sloth_state_t *s) {
     if (s->iface_graph) { draw_iface_graph(s); return; }
 
     char spark[HIST_LEN * 3 + 1];  /* 3 UTF-8 bytes per block glyph */
@@ -396,7 +396,7 @@ void view_iface_draw(const ntop_state_t *s) {
 
 /* ── key handler ─────────────────────────────────────────── */
 
-void view_iface_key(ntop_state_t *s, int key) {
+void view_iface_key(sloth_state_t *s, int key) {
     if (s->iface_graph) {
         if (key == '\033') s->iface_graph = 0;
         return;
@@ -412,11 +412,11 @@ void view_iface_key(ntop_state_t *s, int key) {
             probe_set_iface(s, s->ifaces[s->iface_sel].name);
         break;
 
-    case NTOP_KEY_UP:
+    case SLOTH_KEY_UP:
         if (s->iface_sel > 0) s->iface_sel--;
         break;
 
-    case NTOP_KEY_DOWN:
+    case SLOTH_KEY_DOWN:
         if (s->iface_count > 0 && s->iface_sel < s->iface_count - 1)
             s->iface_sel++;
         break;

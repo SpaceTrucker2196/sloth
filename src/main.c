@@ -3,7 +3,7 @@
 #include <string.h>
 #include <signal.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "history.h"
 #include "views/iface.h"
@@ -14,7 +14,15 @@
 #include "views/stats.h"
 #include "views/probe.h"
 #include "views/arp.h"
+#include "views/mdns.h"
+#include "views/nbns.h"
+#include "views/dhcp_snoop.h"
+#include "views/ssdp.h"
 #include "bandwidth.h"
+#include "mdns_snoop.h"
+#include "nbns_snoop.h"
+#include "dhcp_snoop.h"
+#include "ssdp_snoop.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -22,12 +30,12 @@
 #  include "capture/probe.h"
 #endif
 
-static ntop_state_t g_state;
+static sloth_state_t g_state;
 static volatile int g_quit = 0;
 
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
 
-static void poll_data(ntop_state_t *s) {
+static void poll_data(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
     s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
 #ifdef WITH_WIFI
@@ -40,6 +48,10 @@ static void poll_data(ntop_state_t *s) {
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);
+    mdns_snapshot(s);
+    nbns_snapshot(s);
+    dhcp_snoop_snapshot(s);
+    ssdp_snapshot(s);
 #endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
@@ -53,7 +65,7 @@ static void poll_data(ntop_state_t *s) {
     scan_update(s);
 }
 
-static void handle_key(ntop_state_t *s, int key) {
+static void handle_key(sloth_state_t *s, int key) {
     switch (key) {
     case 'q': case 'Q':
         g_quit = 1;
@@ -66,6 +78,10 @@ static void handle_key(ntop_state_t *s, int key) {
     case '6': s->active_view = VIEW_STATS;   return;
     case '7': s->active_view = VIEW_PROBE;   return;
     case '8': s->active_view = VIEW_ARP;     return;
+    case '9': s->active_view = VIEW_MDNS;    return;
+    case '0': s->active_view = VIEW_NBNS;    return;
+    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
+    case 's': case 'S': s->active_view = VIEW_SSDP; return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -86,6 +102,10 @@ static void handle_key(ntop_state_t *s, int key) {
     case VIEW_STATS:   view_stats_key(s, key);    break;
     case VIEW_PROBE:   view_probe_key(s, key);    break;
     case VIEW_ARP:     view_arp_key(s, key);      break;
+    case VIEW_MDNS:    view_mdns_key(s, key);     break;
+    case VIEW_NBNS:    view_nbns_key(s, key);          break;
+    case VIEW_DHCP:    view_dhcp_snoop_key(s, key);    break;
+    case VIEW_SSDP:    view_ssdp_key(s, key);          break;
     default: break;
     }
 }

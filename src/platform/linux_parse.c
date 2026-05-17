@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <arpa/inet.h>   /* inet_ntop — Linux/POSIX */
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_parse.h"
 
 /* ── IPv4 helpers ────────────────────────────────────────── */

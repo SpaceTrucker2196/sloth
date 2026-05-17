@@ -1,7 +1,7 @@
 #ifndef LINUX_WIFI_H
 #define LINUX_WIFI_H
 
-#include "ntop.h"
+#include "sloth.h"
 
 /* Read cached scan results via nl80211 (NL80211_CMD_GET_SCAN dump).
    No root required for reading cached results.

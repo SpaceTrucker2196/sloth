@@ -1,8 +1,9 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <time.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "scenarios.h"
 
 /* ── helpers ────────────────────────────────────────────── */
@@ -170,6 +171,73 @@ void scenario_wifi_crowded(void) {
 void scenario_no_wifi(void) {
     scenario_idle();
     g_fake_net.ap_count = 0;
+}
+
+void scenario_monitor_env(void) {
+    fake_net_reset();
+
+    /* wlan0 managed mode, associated to HomeNetwork */
+    g_fake_net.ifaces[0] = make_iface("wlan0", 5e6, 1e6, 50000000, 10000000);
+    g_fake_net.iface_count = 1;
+
+    wifi_ap_t ap0 = make_ap("HomeNetwork", "AA:BB:CC:DD:EE:01", -48, 6, "WPA2");
+    ap0.status = WIFI_STATUS_ASSOC;
+    g_fake_net.aps[0] = ap0;
+    g_fake_net.aps[1] = make_ap("Neighbor",    "AA:BB:CC:DD:EE:02", -74, 11, "WPA2");
+    g_fake_net.aps[1].status = WIFI_STATUS_NONE;
+    g_fake_net.ap_count = 2;
+
+    /* associated station (wlan0's AP) */
+    wifi_sta_t sta;
+    memset(&sta, 0, sizeof(sta));
+    snprintf(sta.mac, sizeof(sta.mac), "AA:BB:CC:DD:EE:01");
+    sta.signal_dbm     = -48;
+    sta.tx_rate_kbps   = 144400;
+    sta.rx_rate_kbps   = 144400;
+    sta.connected_secs = 3600;
+    sta.tx_bytes       = 12345678;
+    sta.rx_bytes       = 87654321;
+    g_fake_net.wifi_stas[0] = sta;
+    g_fake_net.wifi_sta_count = 1;
+
+    /* wlan1mon as monitor interface */
+    snprintf(g_fake_net.probe_iface, sizeof(g_fake_net.probe_iface), "wlan1mon");
+
+    /* probe clients with diverse ages, signals, SSIDs */
+    time_t now = time(NULL);
+    struct {
+        const char *mac;
+        const char *ssid;
+        int8_t      sig;
+        int         ch;
+        time_t      age;    /* seconds ago */
+        int         frames;
+    } clients[] = {
+        { "aa:bb:cc:dd:ee:01", "HomeNetwork",  -45,  6,   1,  3  }, /* fresh, strong */
+        { "aa:bb:cc:dd:ee:02", "WorkSSID",     -60,  11,  3,  12 }, /* fresh, medium */
+        { "aa:bb:cc:dd:ee:03", "",             -75,  1,   8,  7  }, /* medium-age, wildcard */
+        { "aa:bb:cc:dd:ee:04", "CoffeeShop",   -82,  6,  20,  25 }, /* medium-age, weak */
+        { "aa:bb:cc:dd:ee:05", "GuestNet",     -55,  36, 45,  50 }, /* stale, 50 frames=max heat */
+        { "aa:bb:cc:dd:ee:06", "",             -90,  11, 90,  1  }, /* very stale, floor signal */
+        { "aa:bb:cc:dd:ee:07", "TargetSSID",   -30,  6,   2,  99 }, /* fresh, ceiling signal, >50 frames */
+        { "aa:bb:cc:dd:ee:08", "IoT_Device",   -68,  1,  15,  0  }, /* medium-age, 0 frames */
+    };
+    int nc = (int)(sizeof(clients) / sizeof(clients[0]));
+    for (int i = 0; i < nc && i < MAX_PROBE_CLIENTS; i++) {
+        probe_client_t *c = &g_fake_net.probe_clients[i];
+        memset(c, 0, sizeof(*c));
+        unsigned b0,b1,b2,b3,b4,b5;
+        sscanf(clients[i].mac, "%x:%x:%x:%x:%x:%x",
+               &b0,&b1,&b2,&b3,&b4,&b5);
+        c->mac[0]=(uint8_t)b0; c->mac[1]=(uint8_t)b1; c->mac[2]=(uint8_t)b2;
+        c->mac[3]=(uint8_t)b3; c->mac[4]=(uint8_t)b4; c->mac[5]=(uint8_t)b5;
+        strncpy(c->ssid, clients[i].ssid, sizeof(c->ssid) - 1);
+        c->signal_dbm  = clients[i].sig;
+        c->channel     = clients[i].ch;
+        c->last_seen   = now - clients[i].age;
+        c->frame_count = clients[i].frames;
+    }
+    g_fake_net.probe_count = nc;
 }
 
 /* ── simulation ──────────────────────────────────────────── */

@@ -28,9 +28,17 @@ void run_dhcp_tests(void);
 void run_rtt_tests(void);
 void run_tree_tests(void);
 void run_scan_tests(void);
+void run_dns_snoop_tests(void);
+void run_sni_snoop_tests(void);
+void run_mdns_snoop_tests(void);
+void run_http_snoop_tests(void);
+void run_nbns_snoop_tests(void);
+void run_dhcp_snoop_tests(void);
+void run_quic_snoop_tests(void);
+void run_ssdp_snoop_tests(void);
 
 int main(void) {
-    printf("ntop test suite\n");
+    printf("sloth test suite\n");
     printf("===============\n");
 
     run_parse_tests();
@@ -55,6 +63,14 @@ int main(void) {
     run_rtt_tests();
     run_tree_tests();
     run_scan_tests();
+    run_dns_snoop_tests();
+    run_sni_snoop_tests();
+    run_mdns_snoop_tests();
+    run_http_snoop_tests();
+    run_nbns_snoop_tests();
+    run_dhcp_snoop_tests();
+    run_quic_snoop_tests();
+    run_ssdp_snoop_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

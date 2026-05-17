@@ -10,15 +10,24 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "capture/capture.h"
+#include "dns_snoop.h"
+#include "sni_snoop.h"
+#include "mdns_snoop.h"
+#include "nbns_snoop.h"
+#include "dhcp_snoop.h"
+#include "quic_snoop.h"
+#include "ssdp_snoop.h"
+#include "http_snoop.h"
+#include "dns.h"
 
 /* ── Thread state ─────────────────────────────────────────── */
 
 static volatile int    g_running = 0;
 static pthread_t       g_thread;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
-static ntop_state_t   *g_state;
+static sloth_state_t   *g_state;
 static pcap_t         *g_handle;
 
 /* ── Byte helpers ─────────────────────────────────────────── */
@@ -28,6 +37,31 @@ static uint16_t u16be(const uint8_t *p) {
 }
 
 /* ── Protocol decoders ────────────────────────────────────── */
+
+/* Try to decode TLS SNI from a TCP segment. Updates pkt->info and
+   calls dns_set_resolved if an SNI hostname is found. */
+/* Try to decode HTTP Host header from a TCP segment. */
+static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 16) return;
+    char host[64];
+    if (!http_snoop(tp + tcp_hdr, pay_len, host, sizeof(host))) return;
+    dns_set_resolved(pkt->dst, host);
+    snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", host);
+}
+
+static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 9) return;   /* too short for TLS record + ClientHello type */
+    char host[64];
+    if (!sni_snoop(tp + tcp_hdr, pay_len, host, sizeof(host))) return;
+    dns_set_resolved(pkt->dst, host);
+    snprintf(pkt->info, sizeof(pkt->info), "TLS %.54s", host);
+}
 
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
     snprintf(buf, sz, "TCP%s%s%s%s%s%s",
@@ -65,10 +99,45 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
         decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
+        try_sni(tp, tlen, pkt);
+        if (pkt->dst_port == 80 || pkt->src_port == 80 ||
+            pkt->dst_port == 8080 || pkt->src_port == 8080 ||
+            pkt->dst_port == 8000 || pkt->src_port == 8000)
+            try_http(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
-        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
+            if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
+            mdns_snoop(tp + 8, tlen - 8);
+            snprintf(pkt->info, sizeof(pkt->info), "mDNS");
+        } else if ((pkt->src_port == 137 || pkt->dst_port == 137) && tlen > 8) {
+            if (!nbns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "NBNS");
+        } else if ((pkt->src_port == 67 || pkt->dst_port == 67 ||
+                    pkt->src_port == 68 || pkt->dst_port == 68) && tlen > 8) {
+            if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "DHCP");
+        } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
+            char qver[8] = "";
+            if (quic_detect(tp + 8, tlen - 8, qver, sizeof(qver))) {
+                const char *ip = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
+                const char *host = dns_lookup(ip);
+                if (host && host[0])
+                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %.52s", host);
+                else
+                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %s", qver);
+            } else {
+                snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
+            }
+        } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
+            if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else {
+            snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        }
     } else if (pkt->proto == 1 && tlen >= 2) {
         decode_icmp(tp[0], tp[1], pkt->info, sizeof(pkt->info));
     } else {
@@ -89,10 +158,45 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
         decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
+        try_sni(tp, tlen, pkt);
+        if (pkt->dst_port == 80 || pkt->src_port == 80 ||
+            pkt->dst_port == 8080 || pkt->src_port == 8080 ||
+            pkt->dst_port == 8000 || pkt->src_port == 8000)
+            try_http(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
-        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
+            if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
+            mdns_snoop(tp + 8, tlen - 8);
+            snprintf(pkt->info, sizeof(pkt->info), "mDNS");
+        } else if ((pkt->src_port == 137 || pkt->dst_port == 137) && tlen > 8) {
+            if (!nbns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "NBNS");
+        } else if ((pkt->src_port == 67 || pkt->dst_port == 67 ||
+                    pkt->src_port == 68 || pkt->dst_port == 68) && tlen > 8) {
+            if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "DHCP");
+        } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
+            char qver[8] = "";
+            if (quic_detect(tp + 8, tlen - 8, qver, sizeof(qver))) {
+                const char *ip = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
+                const char *host = dns_lookup(ip);
+                if (host && host[0])
+                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %.52s", host);
+                else
+                    snprintf(pkt->info, sizeof(pkt->info), "QUIC %s", qver);
+            } else {
+                snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
+            }
+        } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
+            if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else {
+            snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        }
     } else if (pkt->proto == 58 && tlen >= 2) {
         snprintf(pkt->info, sizeof(pkt->info), "ICMPv6 type=%u", tp[0]);
     } else {
@@ -172,7 +276,7 @@ static void *capture_thread(void *arg) {
 
 /* ── Public API ───────────────────────────────────────────── */
 
-void capture_start(ntop_state_t *s) {
+void capture_start(sloth_state_t *s) {
     char errbuf[PCAP_ERRBUF_SIZE];
     g_state  = s;
     g_handle = pcap_open_live("any", 65535, 1, 100, errbuf);

@@ -2,7 +2,7 @@
 #define LINUX_PARSE_H
 
 #include <stdio.h>
-#include "ntop.h"
+#include "sloth.h"
 
 /* Parse /proc/net/dev format. Returns count.
    rx_rate / tx_rate left zero — caller applies delta calculation. */

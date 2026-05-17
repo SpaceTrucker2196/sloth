@@ -1,11 +1,11 @@
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/arp.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static void inject_entry(ntop_state_t *s, const char *ip,
+static void inject_entry(sloth_state_t *s, const char *ip,
                           const char *mac_str, const char *iface) {
     if (s->arp_count >= MAX_ARP_ENTRIES) return;
     arp_entry_t *e = &s->arp_entries[s->arp_count++];
@@ -24,14 +24,14 @@ static void inject_entry(ntop_state_t *s, const char *ip,
 /* ── Draw smoke tests ────────────────────────────────────── */
 
 static void test_arp_draw_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_arp_draw(&s);
     ASSERT(1);
 }
 
 static void test_arp_draw_with_entries(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "192.168.1.1",   "b8:27:eb:aa:bb:cc", "eth0");
     inject_entry(&s, "192.168.1.100", "18:fe:34:11:22:33", "eth0");
@@ -41,7 +41,7 @@ static void test_arp_draw_with_entries(void) {
 }
 
 static void test_arp_draw_known_vendor(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "dc:a6:32:00:00:01", "wlan0");
     view_arp_draw(&s);
@@ -51,62 +51,62 @@ static void test_arp_draw_known_vendor(void) {
 /* ── Navigation tests ────────────────────────────────────── */
 
 static void test_arp_nav_down(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "aa:bb:cc:dd:ee:01", "eth0");
     inject_entry(&s, "10.0.0.2", "aa:bb:cc:dd:ee:02", "eth0");
     s.arp_sel = 0;
-    view_arp_key(&s, NTOP_KEY_DOWN);
+    view_arp_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.arp_sel, 1);
 }
 
 static void test_arp_nav_up(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "aa:bb:cc:dd:ee:01", "eth0");
     inject_entry(&s, "10.0.0.2", "aa:bb:cc:dd:ee:02", "eth0");
     s.arp_sel = 1;
-    view_arp_key(&s, NTOP_KEY_UP);
+    view_arp_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.arp_sel, 0);
 }
 
 static void test_arp_nav_top_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "aa:bb:cc:dd:ee:01", "eth0");
     s.arp_sel = 0;
-    view_arp_key(&s, NTOP_KEY_UP);
+    view_arp_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.arp_sel, 0);
 }
 
 static void test_arp_nav_bottom_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "aa:bb:cc:dd:ee:01", "eth0");
     s.arp_sel = 0;
-    view_arp_key(&s, NTOP_KEY_DOWN);
+    view_arp_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.arp_sel, 0);  /* only 1 entry, can't go lower */
 }
 
 static void test_arp_nav_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.arp_sel = 0;
-    view_arp_key(&s, NTOP_KEY_DOWN);
+    view_arp_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.arp_sel, 0);
 }
 
 /* ── State tests ─────────────────────────────────────────── */
 
 static void test_arp_zero_init(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     ASSERT_EQ(s.arp_count, 0);
     ASSERT_EQ(s.arp_sel, 0);
 }
 
-static void test_view_count_is_8(void) {
-    ASSERT_EQ(VIEW_COUNT, 8);
+static void test_view_count_is_12(void) {
+    ASSERT_EQ(VIEW_COUNT, 12);
 }
 
 /* ── Entry point ─────────────────────────────────────────── */
@@ -126,5 +126,5 @@ void run_arp_tests(void) {
 
     TEST_SUITE("ARP state");
     RUN_TEST(test_arp_zero_init);
-    RUN_TEST(test_view_count_is_8);
+    RUN_TEST(test_view_count_is_12);
 }

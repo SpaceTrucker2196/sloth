@@ -5,7 +5,7 @@
 #include <time.h>
 #include <dirent.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_dhcp.h"
 
 /* ── ISC dhclient.leases parser ──────────────────────────

@@ -1,12 +1,12 @@
 #include <string.h>
 #include <time.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/arp.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static void inject_arp(ntop_state_t *s, const char *ip,
+static void inject_arp(sloth_state_t *s, const char *ip,
                        const char *mac_str, const char *iface) {
     if (s->arp_count >= MAX_ARP_ENTRIES) return;
     arp_entry_t *e = &s->arp_entries[s->arp_count++];
@@ -22,7 +22,7 @@ static void inject_arp(ntop_state_t *s, const char *ip,
     }
 }
 
-static void inject_lease(ntop_state_t *s, const char *ip,
+static void inject_lease(sloth_state_t *s, const char *ip,
                          const char *hostname, time_t expire) {
     if (s->dhcp_count >= MAX_DHCP_LEASES) return;
     dhcp_lease_t *l = &s->dhcp_leases[s->dhcp_count++];
@@ -35,7 +35,7 @@ static void inject_lease(ntop_state_t *s, const char *ip,
 /* ── State tests ─────────────────────────────────────────── */
 
 static void test_dhcp_zero_init(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     ASSERT_EQ(s.dhcp_count, 0);
 }
@@ -47,14 +47,14 @@ static void test_dhcp_max_leases_defined(void) {
 /* ── Draw smoke tests ────────────────────────────────────── */
 
 static void test_draw_no_arp_no_leases(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_arp_draw(&s);
     ASSERT(1);
 }
 
 static void test_draw_arp_with_lease(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "192.168.1.1", "b8:27:eb:aa:bb:cc", "eth0");
     inject_lease(&s, "192.168.1.1", "router",  time(NULL) + 3600);
@@ -64,7 +64,7 @@ static void test_draw_arp_with_lease(void) {
 }
 
 static void test_draw_arp_no_lease_for_ip(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "10.0.0.1",   "aa:bb:cc:dd:ee:01", "eth0");
     inject_lease(&s, "10.0.0.99",  "other",   time(NULL) + 7200);
@@ -74,7 +74,7 @@ static void test_draw_arp_no_lease_for_ip(void) {
 }
 
 static void test_draw_multiple_leases(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "192.168.1.1",   "b8:27:eb:aa:bb:cc", "eth0");
     inject_arp(&s,   "192.168.1.100", "18:fe:34:11:22:33", "eth0");
@@ -87,7 +87,7 @@ static void test_draw_multiple_leases(void) {
 }
 
 static void test_draw_expired_lease(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "10.0.0.5", "aa:bb:cc:dd:ee:05", "eth0");
     inject_lease(&s, "10.0.0.5", "oldhost", (time_t)1);  /* very old */
@@ -96,7 +96,7 @@ static void test_draw_expired_lease(void) {
 }
 
 static void test_draw_unknown_expire(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "10.0.0.6", "aa:bb:cc:dd:ee:06", "eth0");
     inject_lease(&s, "10.0.0.6", "nas", 0);  /* expire=0 → unknown */
@@ -105,7 +105,7 @@ static void test_draw_unknown_expire(void) {
 }
 
 static void test_draw_empty_hostname_ignored(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     inject_arp(&s,   "10.0.0.7", "aa:bb:cc:dd:ee:07", "eth0");
     /* hostname="" → dhcp_lookup returns NULL */

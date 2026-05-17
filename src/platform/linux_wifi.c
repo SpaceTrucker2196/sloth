@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
 
 #include <sys/socket.h>
 #include <linux/netlink.h>
@@ -13,7 +14,7 @@
 #include <linux/nl80211.h>
 #include <net/if.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_wifi.h"
 
 /* ── Netlink attribute helpers ───────────────────────────── */
@@ -229,6 +230,45 @@ static int ap_cmp(const void *a, const void *b) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
+/* Fire NL80211_CMD_TRIGGER_SCAN on a disposable fd and close immediately.
+   Rate-limited to once per 5 s per interface.  Errors (EBUSY = scan already
+   in progress, EPERM = no CAP_NET_ADMIN) are silently discarded — the
+   GET_SCAN below will return whatever cached results the kernel holds. */
+static void trigger_scan_async(int family, unsigned ifidx) {
+    static time_t g_last_trigger = 0;
+    time_t now = time(NULL);
+    if (now - g_last_trigger < 5) return;
+
+    int tfd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (tfd < 0) return;
+
+    const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN
+                        + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
+    uint8_t sbuf[64];
+    memset(sbuf, 0, sizeof(sbuf));
+
+    struct nlmsghdr  *nlh = (struct nlmsghdr *)sbuf;
+    struct genlmsghdr *gh = (struct genlmsghdr *)NLMSG_DATA(nlh);
+    struct nlattr     *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
+
+    nlh->nlmsg_len   = (uint32_t)msg_sz;
+    nlh->nlmsg_type  = (uint16_t)family;
+    nlh->nlmsg_flags = NLM_F_REQUEST;   /* no ACK: success is silent */
+    nlh->nlmsg_seq   = 99;
+    gh->cmd          = NL80211_CMD_TRIGGER_SCAN;
+    na->nla_type     = NL80211_ATTR_IFINDEX;
+    na->nla_len      = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
+    *(uint32_t *)NA_DATA(na) = ifidx;
+
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nl_family = AF_NETLINK;
+    sendto(tfd, sbuf, msg_sz, 0, (struct sockaddr *)&sa, sizeof(sa));
+    close(tfd);
+
+    g_last_trigger = now;
+}
+
 int linux_wifi_scan(wifi_ap_t *out, int max) {
     char ifaces[8][16];
     int nifaces = find_wlan_ifaces(ifaces, 8);
@@ -245,6 +285,9 @@ int linux_wifi_scan(wifi_ap_t *out, int max) {
     for (int ii = 0; ii < nifaces && n < max; ii++) {
         unsigned ifidx = if_nametoindex(ifaces[ii]);
         if (ifidx == 0) continue;
+
+        /* kick a background scan so the cache reflects all visible APs */
+        trigger_scan_async(family, ifidx);
 
         /* build NL80211_CMD_GET_SCAN dump request */
         const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN

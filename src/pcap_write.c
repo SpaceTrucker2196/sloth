@@ -21,7 +21,7 @@ static void write_u16le(FILE *f, uint16_t v) {
     fwrite(b, 1, 2, f);
 }
 
-int pcap_export(const ntop_state_t *s, char *path_out, int path_sz) {
+int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
     char path[128];
     time_t now = time(NULL);
     struct tm *t = localtime(&now);

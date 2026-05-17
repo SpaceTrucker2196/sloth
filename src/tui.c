@@ -10,7 +10,7 @@
 #  include <sys/select.h>
 #endif
 
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -20,6 +20,10 @@
 #include "views/stats.h"
 #include "views/probe.h"
 #include "views/arp.h"
+#include "views/mdns.h"
+#include "views/nbns.h"
+#include "views/dhcp_snoop.h"
+#include "views/ssdp.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -30,6 +34,10 @@ static const char *view_labels[VIEW_COUNT] = {
     "[6] Stats",
     "[7] Probe",
     "[8] ARP",
+    "[9] mDNS",
+    "[0] NBNS",
+    "[d] DHCP",
+    "[s] SSDP",
 };
 
 void tui_bar(double val, double max, int width, char *out) {
@@ -40,7 +48,7 @@ void tui_bar(double val, double max, int width, char *out) {
     out[width] = '\0';
 }
 
-static void dispatch_view(const ntop_state_t *s) {
+static void dispatch_view(const sloth_state_t *s) {
     switch (s->active_view) {
     case VIEW_IFACE:   view_iface_draw(s);   break;
     case VIEW_CONNS:   view_conns_draw(s);   break;
@@ -50,6 +58,10 @@ static void dispatch_view(const ntop_state_t *s) {
     case VIEW_STATS:   view_stats_draw(s);   break;
     case VIEW_PROBE:   view_probe_draw(s);   break;
     case VIEW_ARP:     view_arp_draw(s);     break;
+    case VIEW_MDNS:    view_mdns_draw(s);    break;
+    case VIEW_NBNS:    view_nbns_draw(s);         break;
+    case VIEW_DHCP:    view_dhcp_snoop_draw(s);   break;
+    case VIEW_SSDP:    view_ssdp_draw(s);         break;
     default: break;
     }
 }
@@ -107,9 +119,9 @@ void tui_cleanup(void) {
     endwin();
 }
 
-static void draw_tabbar(const ntop_state_t *s) {
+static void draw_tabbar(const sloth_state_t *s) {
     tui_bright();
-    printw(" ntop v" NTOP_VERSION);
+    printw(" sloth v" SLOTH_VERSION);
     for (int i = 0; i < VIEW_COUNT; i++) {
         tui_dim(); printw("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
@@ -120,7 +132,7 @@ static void draw_tabbar(const ntop_state_t *s) {
     tui_normal();
 }
 
-void tui_draw(const ntop_state_t *s) {
+void tui_draw(const sloth_state_t *s) {
     erase();
     bkgd(COLOR_PAIR(CP_NORMAL));
     move(0, 0);
@@ -137,10 +149,10 @@ int tui_poll_key(int timeout_ms) {
     timeout(timeout_ms);
     int ch = getch();
     if (ch == ERR)            return 0;
-    if (ch == KEY_UP)         return NTOP_KEY_UP;
-    if (ch == KEY_DOWN)       return NTOP_KEY_DOWN;
+    if (ch == KEY_UP)         return SLOTH_KEY_UP;
+    if (ch == KEY_DOWN)       return SLOTH_KEY_DOWN;
     if (ch == KEY_BACKSPACE ||
-        ch == 127 || ch == 8) return NTOP_KEY_BACKSPACE;
+        ch == 127 || ch == 8) return SLOTH_KEY_BACKSPACE;
     return ch;
 }
 
@@ -181,8 +193,8 @@ void tui_cleanup(void) {
     printf("\033[0m\n");
 }
 
-static void draw_tabbar(const ntop_state_t *s) {
-    tui_bright(); printf(" ntop v" NTOP_VERSION);
+static void draw_tabbar(const sloth_state_t *s) {
+    tui_bright(); printf(" sloth v" SLOTH_VERSION);
     for (int i = 0; i < VIEW_COUNT; i++) {
         tui_dim(); printf("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
@@ -193,7 +205,7 @@ static void draw_tabbar(const ntop_state_t *s) {
     tui_normal();
 }
 
-void tui_draw(const ntop_state_t *s) {
+void tui_draw(const sloth_state_t *s) {
     printf("\033[2J\033[H");
     tui_normal();
     draw_tabbar(s);
@@ -232,7 +244,7 @@ int tui_poll_key(int timeout_ms) {
         return 0;
 
     if (c == 127 || c == 8)
-        return NTOP_KEY_BACKSPACE;
+        return SLOTH_KEY_BACKSPACE;
     if (c != '\033')
         return (int)c;
 
@@ -241,8 +253,8 @@ int tui_poll_key(int timeout_ms) {
         return '\033';
 
     int d = read_char_timeout(10000);
-    if (d == 'A') return NTOP_KEY_UP;
-    if (d == 'B') return NTOP_KEY_DOWN;
+    if (d == 'A') return SLOTH_KEY_UP;
+    if (d == 'B') return SLOTH_KEY_DOWN;
     return '\033';
 }
 

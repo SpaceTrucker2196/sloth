@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_parse.h"
 
 /* ── /proc/net/dev fixtures ─────────────────────────────── */

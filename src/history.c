@@ -1,8 +1,8 @@
 #include <string.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "history.h"
 
-iface_hist_t *history_find(ntop_state_t *s, const char *name) {
+iface_hist_t *history_find(sloth_state_t *s, const char *name) {
     iface_hist_t *empty = NULL;
     for (int i = 0; i < MAX_IFACES; i++) {
         if (strncmp(s->iface_hist[i].name, name, 16) == 0)
@@ -19,7 +19,7 @@ iface_hist_t *history_find(ntop_state_t *s, const char *name) {
     return empty;
 }
 
-void history_update(ntop_state_t *s) {
+void history_update(sloth_state_t *s) {
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *iface = &s->ifaces[i];
         iface_hist_t *h = history_find(s, iface->name);

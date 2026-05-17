@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "scan.h"
 
 /* ── Routable-IP filter ──────────────────────────────────
@@ -25,7 +25,7 @@ static int scan_is_routable(const char *ip) {
 
 /* ── Core functions ──────────────────────────────────────── */
 
-void scan_update(ntop_state_t *s) {
+void scan_update(sloth_state_t *s) {
     time_t now = time(NULL);
 
     /* Walk TCP connections: track distinct local_port per remote_addr */
@@ -75,7 +75,7 @@ void scan_update(ntop_state_t *s) {
     s->scan_count = new_n;
 }
 
-int scan_is_flagged(const ntop_state_t *s, const char *ip) {
+int scan_is_flagged(const sloth_state_t *s, const char *ip) {
     for (int i = 0; i < s->scan_count; i++) {
         const scan_entry_t *e = &s->scan_entries[i];
         if (e->flagged && strcmp(e->ip, ip) == 0)

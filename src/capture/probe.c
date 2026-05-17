@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <pcap.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "capture/probe.h"
 
 #ifdef PLATFORM_LINUX
@@ -25,7 +25,7 @@ static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
 static volatile int  g_running = 0;
 static pthread_t     g_thread;
 static pcap_t       *g_ph      = NULL;
-static ntop_state_t *g_state   = NULL;
+static sloth_state_t *g_state   = NULL;
 
 /* ── Monitor interface discovery ─────────────────────────── */
 
@@ -206,20 +206,30 @@ static void *probe_thread(void *arg) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
-void probe_start(ntop_state_t *s) {
+void probe_start(sloth_state_t *s) {
     g_state = s;
+    s->probe_err[0] = '\0';
 
     char iface[16] = "";
-    if (!find_monitor_iface(iface, sizeof(iface))) return;
+    if (!find_monitor_iface(iface, sizeof(iface))) {
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "no monitor-mode iface found (need type 803)");
+        return;
+    }
 
     char errbuf[PCAP_ERRBUF_SIZE];
     g_ph = pcap_open_live(iface, 65535, 1, 100, errbuf);
-    if (!g_ph) return;
+    if (!g_ph) {
+        snprintf(s->probe_err, sizeof(s->probe_err), "pcap(%s): %.50s", iface, errbuf);
+        return;
+    }
 
-    /* must be radiotap link type */
-    if (pcap_datalink(g_ph) != DLT_IEEE802_11_RADIO) {
+    int dlt = pcap_datalink(g_ph);
+    if (dlt != DLT_IEEE802_11_RADIO) {
         pcap_close(g_ph);
         g_ph = NULL;
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%s: DLT %d not radiotap", iface, dlt);
         return;
     }
 
@@ -236,7 +246,7 @@ void probe_stop(void) {
     if (g_ph) { pcap_close(g_ph); g_ph = NULL; }
 }
 
-void probe_snapshot(ntop_state_t *s) {
+void probe_snapshot(sloth_state_t *s) {
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
 
@@ -276,7 +286,7 @@ void probe_clear(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
-void probe_set_iface(ntop_state_t *s, const char *iface) {
+void probe_set_iface(sloth_state_t *s, const char *iface) {
     if (!iface || iface[0] == '\0') return;
 
     /* already scanning on this exact interface */
@@ -284,17 +294,22 @@ void probe_set_iface(ntop_state_t *s, const char *iface) {
 
     if (g_running) probe_stop();
 
+    s->probe_err[0] = '\0';
     g_state = s;
     char errbuf[PCAP_ERRBUF_SIZE];
     g_ph = pcap_open_live(iface, 65535, 1, 100, errbuf);
     if (!g_ph) {
+        snprintf(s->probe_err, sizeof(s->probe_err), "pcap(%s): %.50s", iface, errbuf);
         s->probe_iface[0] = '\0';
         return;
     }
 
-    if (pcap_datalink(g_ph) != DLT_IEEE802_11_RADIO) {
+    int dlt = pcap_datalink(g_ph);
+    if (dlt != DLT_IEEE802_11_RADIO) {
         pcap_close(g_ph);
         g_ph = NULL;
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%s: DLT %d not radiotap (not in monitor mode?)", iface, dlt);
         s->probe_iface[0] = '\0';
         return;
     }

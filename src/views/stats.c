@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "ntop.h"
+#include "sloth.h"
 #include "tui.h"
 #include "bandwidth.h"
 #include "dns.h"
@@ -27,7 +27,7 @@ static void fmt_uptime(time_t secs, char *buf, int sz) {
 }
 
 /* Find baseline index for iface name; returns -1 if not found. */
-static int baseline_find(const ntop_state_t *s, const char *name) {
+static int baseline_find(const sloth_state_t *s, const char *name) {
     for (int i = 0; i < s->stats_base_count; i++) {
         if (strcmp(s->stats_base_name[i], name) == 0) return i;
     }
@@ -36,7 +36,7 @@ static int baseline_find(const ntop_state_t *s, const char *name) {
 
 /* ── Baseline ────────────────────────────────────────────── */
 
-void stats_take_baseline(ntop_state_t *s) {
+void stats_take_baseline(sloth_state_t *s) {
     s->stats_start      = time(NULL);
     s->stats_base_count = 0;
     int n = s->iface_count < MAX_IFACES ? s->iface_count : MAX_IFACES;
@@ -58,7 +58,7 @@ void stats_take_baseline(ntop_state_t *s) {
 #define GEO_TRACK 16
 #define GEO_BAR   32
 
-static void draw_geo(const ntop_state_t *s) {
+static void draw_geo(const sloth_state_t *s) {
     char codes[GEO_TRACK][4];
     int  counts[GEO_TRACK];
     int  n = 0;
@@ -109,7 +109,7 @@ static void draw_geo(const ntop_state_t *s) {
 
 #define STATS_TOP 5
 
-static void draw_top_bw(const ntop_state_t *s) {
+static void draw_top_bw(const sloth_state_t *s) {
     /* partial selection sort for top STATS_TOP entries */
     int indices[MAX_CONNS];
     int n = s->conn_bw_count < MAX_CONNS ? s->conn_bw_count : MAX_CONNS;
@@ -165,7 +165,7 @@ static void draw_top_bw(const ntop_state_t *s) {
 
 /* ── Draw ────────────────────────────────────────────────── */
 
-void view_stats_draw(const ntop_state_t *s) {
+void view_stats_draw(const sloth_state_t *s) {
     /* uptime */
     time_t now    = time(NULL);
     time_t uptime = s->stats_init ? (now - s->stats_start) : 0;
@@ -280,7 +280,7 @@ void view_stats_draw(const ntop_state_t *s) {
 
 /* ── Key handler ─────────────────────────────────────────── */
 
-void view_stats_key(ntop_state_t *s, int key) {
+void view_stats_key(sloth_state_t *s, int key) {
     switch (key) {
     case 'r': case 'R':
         s->stats_init = 0;   /* next poll_data call re-takes baseline */

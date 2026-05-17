@@ -1,11 +1,11 @@
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/conns.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static void add_tcp(ntop_state_t *s, uint16_t lport, uint32_t rtt_us,
+static void add_tcp(sloth_state_t *s, uint16_t lport, uint32_t rtt_us,
                     uint32_t retrans) {
     if (s->conn_count >= MAX_CONNS) return;
     conn_t *c = &s->conns[s->conn_count++];
@@ -19,7 +19,7 @@ static void add_tcp(ntop_state_t *s, uint16_t lport, uint32_t rtt_us,
     snprintf(c->remote_addr, sizeof(c->remote_addr), "8.8.8.8");
 }
 
-static void add_udp(ntop_state_t *s, uint16_t lport) {
+static void add_udp(sloth_state_t *s, uint16_t lport) {
     if (s->conn_count >= MAX_CONNS) return;
     conn_t *c = &s->conns[s->conn_count++];
     memset(c, 0, sizeof(*c));
@@ -61,7 +61,7 @@ static void test_conn_retrans_field_assigned(void) {
 /* ── CONN_SORT_RTT ───────────────────────────────────────── */
 
 static void test_sort_rtt_orders_descending(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 1001,  5000, 0);   /* 5ms */
     add_tcp(&s, 1002, 50000, 0);   /* 50ms — should sort first */
@@ -76,7 +76,7 @@ static void test_sort_rtt_orders_descending(void) {
 }
 
 static void test_sort_rtt_zero_last(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 1001,     0, 0);   /* unknown (0) */
     add_tcp(&s, 1002, 10000, 0);   /* 10ms */
@@ -95,14 +95,14 @@ static void test_sort_rtt_enum_value(void) {
 /* ── Draw smoke tests ────────────────────────────────────── */
 
 static void test_draw_no_conns(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_conns_draw(&s);
     ASSERT(1);
 }
 
 static void test_draw_tcp_with_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 443, 12500, 3);   /* 12.5ms, 3 retransmits */
     s.conn_sort   = CONN_SORT_STATE;
@@ -113,7 +113,7 @@ static void test_draw_tcp_with_rtt(void) {
 }
 
 static void test_draw_tcp_no_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 22, 0, 0);   /* unknown RTT */
     conn_rebuild_idx(&s);
@@ -122,7 +122,7 @@ static void test_draw_tcp_no_rtt(void) {
 }
 
 static void test_draw_udp_no_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_udp(&s, 5353);
     conn_rebuild_idx(&s);
@@ -131,7 +131,7 @@ static void test_draw_udp_no_rtt(void) {
 }
 
 static void test_draw_mixed_conns(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 443,  8000, 0);
     add_tcp(&s, 80,  85000, 5);   /* 85ms, 5 retransmits */
@@ -143,7 +143,7 @@ static void test_draw_mixed_conns(void) {
 }
 
 static void test_draw_sort_by_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 443, 3000, 0);
     add_tcp(&s, 80,  9000, 2);
@@ -157,7 +157,7 @@ static void test_draw_sort_by_rtt(void) {
 /* ── Key handler: RTT sort cycle ─────────────────────────── */
 
 static void test_sort_cycles_include_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.conn_sort   = CONN_SORT_BW;
     s.conn_filter = CONN_FILTER_ALL;
@@ -166,7 +166,7 @@ static void test_sort_cycles_include_rtt(void) {
 }
 
 static void test_sort_wraps_after_rtt(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     memset(&s, 0, sizeof(s));
     s.conn_sort   = CONN_SORT_RTT;
     s.conn_filter = CONN_FILTER_ALL;

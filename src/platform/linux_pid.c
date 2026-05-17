@@ -5,7 +5,7 @@
 #include <dirent.h>
 #include <unistd.h>
 
-#include "ntop.h"
+#include "sloth.h"
 #include "platform/linux_pid.h"
 
 /* ── inode → pid map ─────────────────────────────────────── */

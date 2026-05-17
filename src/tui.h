@@ -1,7 +1,7 @@
 #ifndef TUI_H
 #define TUI_H
 
-#include "ntop.h"
+#include "sloth.h"
 
 #ifdef WITH_NCURSES
 #  include <curses.h>
@@ -12,7 +12,7 @@
 
 void tui_init(void);
 void tui_cleanup(void);
-void tui_draw(const ntop_state_t *s);
+void tui_draw(const sloth_state_t *s);
 int  tui_poll_key(int timeout_ms); /* blocks up to timeout_ms, returns key or 0 */
 void tui_bar(double val, double max, int width, char *out); /* ASCII bar graph */
 

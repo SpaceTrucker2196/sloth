@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
-#include "ntop.h"
+#include "sloth.h"
 #include "views/wifi.h"
 
-static void make_wifi_state(ntop_state_t *s, int n) {
+static void make_wifi_state(sloth_state_t *s, int n) {
     memset(s, 0, sizeof(*s));
     for (int i = 0; i < n && i < MAX_WIFI_APS; i++) {
         snprintf(s->aps[i].ssid,  sizeof(s->aps[i].ssid),  "AP%d", i);
@@ -21,69 +21,69 @@ static void make_wifi_state(ntop_state_t *s, int n) {
 /* ── Navigation tests ────────────────────────────────────── */
 
 void test_wifi_nav_down(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 5);
 
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 1);
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 2);
 }
 
 void test_wifi_nav_up(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 5);
     s.wifi_sel = 3;
 
-    view_wifi_key(&s, NTOP_KEY_UP);
+    view_wifi_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.wifi_sel, 2);
-    view_wifi_key(&s, NTOP_KEY_UP);
+    view_wifi_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.wifi_sel, 1);
 }
 
 void test_wifi_nav_top_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.wifi_sel = 0;
 
-    view_wifi_key(&s, NTOP_KEY_UP);
+    view_wifi_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.wifi_sel, 0);  /* stays at top */
 }
 
 void test_wifi_nav_bottom_bound(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.wifi_sel = 2;  /* last */
 
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 2);  /* stays at bottom */
 }
 
 void test_wifi_nav_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 0);
 
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 0);
-    view_wifi_key(&s, NTOP_KEY_UP);
+    view_wifi_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.wifi_sel, 0);
 }
 
 void test_wifi_nav_single(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 1);
     s.wifi_sel = 0;
 
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 0);  /* no movement with one entry */
-    view_wifi_key(&s, NTOP_KEY_UP);
+    view_wifi_key(&s, SLOTH_KEY_UP);
     ASSERT_EQ(s.wifi_sel, 0);
 }
 
 /* ── Render smoke test (no crash with APs) ───────────────── */
 
 void test_wifi_draw_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 5);
     s.wifi_sel = 2;
     view_wifi_draw(&s);   /* just must not crash */
@@ -91,7 +91,7 @@ void test_wifi_draw_no_crash(void) {
 }
 
 void test_wifi_draw_empty_no_crash(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 0);
     view_wifi_draw(&s);
     ASSERT(1);
@@ -100,7 +100,7 @@ void test_wifi_draw_empty_no_crash(void) {
 /* ── Detail panel tests ──────────────────────────────────── */
 
 void test_wifi_enter_opens_detail(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.wifi_sel    = 1;
     s.wifi_detail = 0;
@@ -110,7 +110,7 @@ void test_wifi_enter_opens_detail(void) {
 }
 
 void test_wifi_esc_closes_detail(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.wifi_sel    = 1;
     s.wifi_detail = 1;
@@ -120,18 +120,18 @@ void test_wifi_esc_closes_detail(void) {
 }
 
 void test_wifi_nav_blocked_in_detail(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.wifi_sel    = 0;
     s.wifi_detail = 1;
 
     /* navigation keys must not change wifi_sel while detail is open */
-    view_wifi_key(&s, NTOP_KEY_DOWN);
+    view_wifi_key(&s, SLOTH_KEY_DOWN);
     ASSERT_EQ(s.wifi_sel, 0);
 }
 
 void test_wifi_enter_noop_when_empty(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 0);
     s.wifi_detail = 0;
 
@@ -140,7 +140,7 @@ void test_wifi_enter_noop_when_empty(void) {
 }
 
 void test_wifi_detail_draw_no_sta(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 2);
     s.wifi_sel      = 0;
     s.wifi_detail   = 1;
@@ -150,7 +150,7 @@ void test_wifi_detail_draw_no_sta(void) {
 }
 
 void test_wifi_detail_draw_with_sta(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 2);
     s.wifi_sel    = 0;
     s.wifi_detail = 1;
@@ -171,7 +171,7 @@ void test_wifi_detail_draw_with_sta(void) {
 }
 
 void test_wifi_associated_status(void) {
-    ntop_state_t s;
+    sloth_state_t s;
     make_wifi_state(&s, 3);
     s.aps[1].status = WIFI_STATUS_ASSOC;
 
