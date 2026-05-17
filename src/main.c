@@ -16,6 +16,7 @@
 #include "views/arp.h"
 #include "bandwidth.h"
 #include "dns.h"
+#include "scan.h"
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
 #  include "capture/probe.h"
@@ -48,6 +49,7 @@ static void poll_data(ntop_state_t *s) {
     if (s->arp_sel >= s->arp_count && s->arp_count > 0)
         s->arp_sel = s->arp_count - 1;
     s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
+    scan_update(s);
 }
 
 static void handle_key(ntop_state_t *s, int key) {

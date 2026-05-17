@@ -64,6 +64,7 @@ endif
 
 SRCS += src/pcap_write.c
 SRCS += src/geo.c
+SRCS += src/scan.c
 
 ifeq ($(WITH_WIFI),1)
     CFLAGS += -DWITH_WIFI
@@ -137,7 +138,9 @@ TEST_SRCS = tests/main_test.c          \
             src/platform/linux_dhcp.c      \
             tests/test_rtt.c               \
             src/platform/linux_tcpdiag.c   \
-            tests/test_tree.c
+            tests/test_tree.c              \
+            src/scan.c                     \
+            tests/test_scan.c
 
 TEST_BIN = ntop_test
 

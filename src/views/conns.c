@@ -8,6 +8,7 @@
 #include "services.h"
 #include "views/conns.h"
 #include "geo.h"
+#include "scan.h"
 
 #define CONNS_PAGE 30
 
@@ -170,6 +171,30 @@ void view_conns_draw(const ntop_state_t *s) {
 #endif
     TPRINT("\n");
 
+    /* scan alert banner */
+    int scan_flagged = 0;
+    for (int i = 0; i < s->scan_count; i++)
+        if (s->scan_entries[i].flagged) scan_flagged++;
+    if (scan_flagged > 0) {
+        tui_bright(); TPRINT(" [SCAN ALERT]");
+        tui_dim();    TPRINT("  %d suspicious IP%s: ",
+                             scan_flagged, scan_flagged == 1 ? "" : "s");
+        int shown = 0;
+        for (int i = 0; i < s->scan_count && shown < 4; i++) {
+            const scan_entry_t *se = &s->scan_entries[i];
+            if (!se->flagged) continue;
+            tui_bright(); TPRINT("%s", se->ip);
+            tui_dim();    TPRINT("(%d)", se->port_count);
+            if (shown < scan_flagged - 1) TPRINT("  ");
+            shown++;
+        }
+        if (scan_flagged > 4) {
+            tui_dim(); TPRINT("  +%d more", scan_flagged - 4);
+        }
+        TPRINT("\n");
+        tui_normal();
+    }
+
     /* column headers */
     tui_dim();
     TPRINT(" %-21s  %-21s  %-2s  %-5s  %-13s  %5s  %-14s  %-16s %-8s  %-7s  %s\n",
@@ -202,7 +227,9 @@ void view_conns_draw(const ntop_state_t *s) {
         else
             svc_fmt_addr(remote, sizeof(remote), c->remote_addr, c->remote_port);
 
-        const char *cc    = geo_lookup_str(c->remote_addr);
+        const char *cc_geo = geo_lookup_str(c->remote_addr);
+        int         cc_scan = scan_is_flagged(s, c->remote_addr);
+        const char *cc    = cc_scan ? "!!" : (cc_geo ? cc_geo : "");
         const char *proto = (c->proto == PROTO_TCP) ? "TCP" : "UDP";
         const char *state = (c->proto == PROTO_TCP) ? tcp_state_name(c->state) : "";
 
@@ -242,7 +269,8 @@ void view_conns_draw(const ntop_state_t *s) {
         } else {
             tui_normal();
             printw(" %-21.21s  %-21.21s  ", local, remote);
-            tui_dim(); printw("%-2s  ", cc ? cc : "");
+            if (cc_scan) tui_bright(); else tui_dim();
+            printw("%-2s  ", cc);
             tui_normal(); printw("%-5s  ", proto);
             phos_tcp_state(c->proto, c->state);
             printw("%-13s", state);
@@ -270,7 +298,8 @@ void view_conns_draw(const ntop_state_t *s) {
         } else {
             tui_normal();
             printf(" %-21.21s  %-21.21s  ", local, remote);
-            tui_dim(); printf("%-2s  ", cc ? cc : "");
+            if (cc_scan) tui_bright(); else tui_dim();
+            printf("%-2s  ", cc);
             tui_normal(); printf("%-5s  ", proto);
             phos_tcp_state(c->proto, c->state);
             printf("%-13s", state);

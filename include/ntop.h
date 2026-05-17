@@ -104,6 +104,21 @@ typedef enum {
     CONN_FILTER_COUNT
 } conn_filter_t;
 
+/* ── Port scan detection ────────────────────────────────── */
+#define MAX_SCAN_ENTRIES  32
+#define MAX_SCAN_PORTS    64
+#define SCAN_PORT_THRESH   8   /* distinct local ports from one IP to flag */
+#define SCAN_TTL_SECS     60   /* seconds to keep entry after last activity */
+
+typedef struct {
+    char     ip[46];
+    uint16_t ports[MAX_SCAN_PORTS]; /* distinct local ports seen from this IP */
+    int      port_count;
+    time_t   first_seen;
+    time_t   last_seen;
+    int      flagged;               /* port_count >= SCAN_PORT_THRESH */
+} scan_entry_t;
+
 /* ── ARP neighbors ──────────────────────────────────────── */
 #define MAX_ARP_ENTRIES  256
 #define MAX_DHCP_LEASES   64
@@ -213,6 +228,10 @@ typedef struct {
     /* ── DHCP leases (hostname lookup for ARP view) ─────── */
     dhcp_lease_t dhcp_leases[MAX_DHCP_LEASES];
     int          dhcp_count;
+
+    /* ── Port scan detection ─────────────────────────────── */
+    scan_entry_t scan_entries[MAX_SCAN_ENTRIES];
+    int          scan_count;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
