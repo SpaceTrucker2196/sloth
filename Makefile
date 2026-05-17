@@ -21,6 +21,7 @@ SRCS = src/main.c          \
        src/views/packets.c \
        src/views/procs.c   \
        src/views/stats.c   \
+       src/views/probe.c   \
        src/views/arp.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
