@@ -3,6 +3,7 @@
 #include <time.h>
 #include "alerts.h"
 #include "threat_intel.h"
+#include "beacon_detect.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -161,7 +162,7 @@ static void rule_threat_domain(const sloth_state_t *s, time_t now) {
         char detail[ALERT_DETAIL_LEN];
         snprintf(key,    sizeof(key),    "threat-d:%s", ioc);
         snprintf(detail, sizeof(detail),
-                 "%s queried %s (IOC %s)",
+                 "%.30s queried %.30s (IOC %.16s)",
                  e->src[0] ? e->src : "?", e->qname, ioc);
         fire(ALERT_TYPE_THREAT_DOMAIN, ALERT_SEV_CRIT,
              "THREAT_DOMAIN", detail, key, now);
@@ -183,6 +184,35 @@ static void rule_threat_ip(const sloth_state_t *s, time_t now) {
         fire(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT,
              "THREAT_IP", detail, key, now);
     }
+}
+
+/* Closure used by bd_each to drive fire(). */
+struct beacon_cb {
+    time_t now;
+};
+
+static int beacon_cb_fire(const bd_track_t *t, void *ud) {
+    if (!bd_is_strong(t->remote_ip, t->remote_port)) return 0;
+    struct beacon_cb *bc = (struct beacon_cb *)ud;
+    double mean = 0, jitter = 0;
+    int n = bd_stats(t->remote_ip, t->remote_port, &mean, &jitter);
+
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key,    sizeof(key),    "beacon:%.39s:%u",
+             t->remote_ip, (unsigned)t->remote_port);
+    snprintf(detail, sizeof(detail),
+             "%.39s:%u every %.0fs (jitter=%.1fs, n=%d)",
+             t->remote_ip, (unsigned)t->remote_port, mean, jitter, n);
+    fire(ALERT_TYPE_BEACONING, ALERT_SEV_WARN,
+         "BEACONING", detail, key, bc->now);
+    return 0;
+}
+
+static void rule_beaconing(const sloth_state_t *s, time_t now) {
+    (void)s;
+    struct beacon_cb bc = { .now = now };
+    bd_each(beacon_cb_fire, &bc);
 }
 
 /* ── Snapshot ────────────────────────────────────────────── */
@@ -221,6 +251,7 @@ void alerts_update(sloth_state_t *s) {
     rule_nxdomain_burst(s, now);
     rule_threat_domain(s, now);
     rule_threat_ip(s, now);
+    rule_beaconing(s, now);
     snapshot(s);
 }
 

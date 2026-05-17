@@ -56,7 +56,8 @@ SRCS = src/main.c          \
        src/views/alerts.c    \
        src/md5.c             \
        src/devices.c         \
-       src/views/devices.c
+       src/views/devices.c   \
+       src/beacon_detect.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -88,7 +89,7 @@ ifeq ($(WITH_NCURSES),1)
     LDFLAGS += -lncursesw
 endif
 
-LDFLAGS += -lpthread
+LDFLAGS += -lpthread -lm
 
 ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
@@ -229,7 +230,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_md5.c               \
             src/devices.c                  \
             src/views/devices.c            \
-            tests/test_devices.c
+            tests/test_devices.c           \
+            src/beacon_detect.c            \
+            tests/test_beacon_detect.c
 
 TEST_BIN = sloth_test
 

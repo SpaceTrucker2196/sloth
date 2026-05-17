@@ -43,6 +43,7 @@
 #include "icmp_log.h"
 #include "alerts.h"
 #include "devices.h"
+#include "beacon_detect.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -91,6 +92,7 @@ static void poll_data(sloth_state_t *s) {
         s->arp_sel = s->arp_count - 1;
     s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
     scan_update(s);
+    bd_update(s, time(NULL));
     alerts_update(s);
     devices_update(s);
 }

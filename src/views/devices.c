@@ -66,11 +66,11 @@ void view_devices_draw(const sloth_state_t *s) {
 
         /* The "name" column: hostname preferred, else last probed SSID,
            else the AP marker. */
-        char name[32];
+        char name[40];
         if (d->hostname[0])
-            snprintf(name, sizeof(name), "%s", d->hostname);
+            snprintf(name, sizeof(name), "%.31s", d->hostname);
         else if (d->last_ssid[0])
-            snprintf(name, sizeof(name), "ssid:%s", d->last_ssid);
+            snprintf(name, sizeof(name), "ssid:%.26s", d->last_ssid);
         else if (d->is_ap)
             snprintf(name, sizeof(name), "(access point)");
         else
