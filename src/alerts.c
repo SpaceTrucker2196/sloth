@@ -5,6 +5,7 @@
 #include "threat_intel.h"
 #include "beacon_detect.h"
 #include "jsonl.h"
+#include "alert_pcap.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -46,10 +47,13 @@ static int evict_oldest(void) {
 
 /* Either bumps an existing alert under `key`, or appends a fresh one.
  * `detail` may be regenerated each tick — we always overwrite it so the
- * latest observation wins. */
+ * latest observation wins. `match_ip`/`match_port` are set only on new
+ * alerts (so the criteria represent the first time we saw this key). */
 static void fire(alert_type_t type, alert_sev_t sev,
                  const char *title, const char *detail,
-                 const char *key, time_t now) {
+                 const char *key,
+                 const char *match_ip, uint16_t match_port,
+                 time_t now) {
     int idx = find_by_key(key);
     if (idx >= 0) {
         engine[idx].count++;
@@ -75,6 +79,9 @@ static void fire(alert_type_t type, alert_sev_t sev,
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
+    if (match_ip && match_ip[0])
+        snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
+    a->match_port = match_port;
     /* New alert keys are interesting enough to log. */
     jsonl_emit_alert(a);
 }
@@ -91,7 +98,7 @@ static void rule_port_scan(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail), "%s scanned %d distinct ports",
                  e->ip, e->port_count);
         fire(ALERT_TYPE_PORT_SCAN, ALERT_SEV_CRIT,
-             "PORT_SCAN", detail, key, now);
+             "PORT_SCAN", detail, key, e->ip, 0, now);
     }
 }
 
@@ -110,7 +117,7 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
                  "target=%s bssid=%s reason=%u count=%d",
                  tgt, bss, e->reason, e->count);
         fire(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN,
-             "DEAUTH_FLOOD", detail, key, now);
+             "DEAUTH_FLOOD", detail, key, NULL, 0, now);
     }
 }
 
@@ -150,7 +157,7 @@ static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
                  buckets[i].src, buckets[i].count,
                  ALERT_NXDOMAIN_WINDOW_S);
         fire(ALERT_TYPE_NXDOMAIN_BURST, ALERT_SEV_WARN,
-             "NXDOMAIN_BURST", detail, key, now);
+             "NXDOMAIN_BURST", detail, key, buckets[i].src, 53, now);
     }
 }
 
@@ -168,7 +175,7 @@ static void rule_threat_domain(const sloth_state_t *s, time_t now) {
                  "%.30s queried %.30s (IOC %.16s)",
                  e->src[0] ? e->src : "?", e->qname, ioc);
         fire(ALERT_TYPE_THREAT_DOMAIN, ALERT_SEV_CRIT,
-             "THREAT_DOMAIN", detail, key, now);
+             "THREAT_DOMAIN", detail, key, e->src, 53, now);
     }
 }
 
@@ -185,7 +192,7 @@ static void rule_threat_ip(const sloth_state_t *s, time_t now) {
                  "connection to %s:%u (IOC %s)",
                  c->remote_addr, c->remote_port, ioc);
         fire(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT,
-             "THREAT_IP", detail, key, now);
+             "THREAT_IP", detail, key, c->remote_addr, c->remote_port, now);
     }
 }
 
@@ -208,7 +215,8 @@ static int beacon_cb_fire(const bd_track_t *t, void *ud) {
              "%.39s:%u every %.0fs (jitter=%.1fs, n=%d)",
              t->remote_ip, (unsigned)t->remote_port, mean, jitter, n);
     fire(ALERT_TYPE_BEACONING, ALERT_SEV_WARN,
-         "BEACONING", detail, key, bc->now);
+         "BEACONING", detail, key,
+         t->remote_ip, t->remote_port, bc->now);
     return 0;
 }
 
@@ -246,6 +254,19 @@ static void snapshot(sloth_state_t *s) {
     if (s->alert_sel < 0) s->alert_sel = 0;
 }
 
+/* For any engine entry that has match_ip set and hasn't yet had its
+ * packets dumped, walk s->packets[] and write a per-alert pcap. */
+static void dump_new_alert_pcaps(const sloth_state_t *s) {
+    if (!alert_pcap_enabled()) return;
+    for (int i = 0; i < engine_count; i++) {
+        alert_t *a = &engine[i];
+        if (a->pcap_dumped) continue;
+        if (!a->match_ip[0]) continue;
+        alert_pcap_dump(s, a, NULL, 0);
+        a->pcap_dumped = 1;
+    }
+}
+
 void alerts_update(sloth_state_t *s) {
     if (!s) return;
     time_t now = time(NULL);
@@ -255,6 +276,7 @@ void alerts_update(sloth_state_t *s) {
     rule_threat_domain(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
+    dump_new_alert_pcaps(s);
     snapshot(s);
 }
 

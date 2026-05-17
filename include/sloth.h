@@ -313,6 +313,12 @@ typedef struct {
     int          count;                   /* observations under this key */
     time_t       first_seen;
     time_t       last_seen;
+    /* Optional pcap export criteria — set by rules that have a concrete
+     * (ip[, port]) the alert is *about*. Empty for rules where the alert
+     * is broader than a single flow. */
+    char         match_ip[46];
+    uint16_t     match_port;              /* 0 = any port */
+    int          pcap_dumped;             /* engine-internal flag */
 } alert_t;
 
 /* ── ICMP log ───────────────────────────────────────────── */

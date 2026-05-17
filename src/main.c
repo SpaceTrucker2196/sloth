@@ -46,6 +46,7 @@
 #include "devices.h"
 #include "beacon_detect.h"
 #include "jsonl.h"
+#include "alert_pcap.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -213,9 +214,12 @@ static void handle_key(sloth_state_t *s, int key) {
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s [-o FILE]\n"
-            "  -o, --out FILE   append JSONL forensic log of all observed\n"
-            "                   events to FILE (created if it doesn't exist)\n",
+            "usage: %s [-o FILE] [--pcap-dir DIR]\n"
+            "  -o, --out FILE     append JSONL forensic log of all observed\n"
+            "                     events to FILE (created if it doesn't exist)\n"
+            "  --pcap-dir DIR     when a critical alert fires with a known\n"
+            "                     flow, write the matching packets to a fresh\n"
+            "                     pcap file under DIR\n",
             argv0);
 }
 
@@ -224,9 +228,12 @@ int main(int argc, char **argv) {
     signal(SIGTERM, on_signal);
 
     const char *jsonl_path = NULL;
+    const char *pcap_dir   = NULL;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
+        } else if (!strcmp(argv[i], "--pcap-dir") && i + 1 < argc) {
+            pcap_dir = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage(argv[0]);
             return 0;
@@ -242,6 +249,9 @@ int main(int argc, char **argv) {
             fprintf(stderr, "could not open jsonl output %s\n", jsonl_path);
             return 1;
         }
+    }
+    if (pcap_dir) {
+        alert_pcap_set_dir(pcap_dir);
     }
 
     memset(&g_state, 0, sizeof(g_state));
