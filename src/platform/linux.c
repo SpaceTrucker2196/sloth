@@ -81,6 +81,37 @@ int linux_wifi_scan(wifi_ap_t *out, int max) {
 }
 #endif
 
+/* ── ARP neighbor table ────────────────────────────────── */
+
+static int linux_get_arp(arp_entry_t *out, int max) {
+    FILE *f = fopen("/proc/net/arp", "r");
+    if (!f) return 0;
+    char line[256];
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return 0; }  /* skip header */
+    int n = 0;
+    while (n < max && fgets(line, sizeof(line), f)) {
+        char ip[46], hw[10], flags_str[10], mac_str[20], mask[10], iface[16];
+        if (sscanf(line, "%45s %9s %9s %19s %9s %15s",
+                   ip, hw, flags_str, mac_str, mask, iface) != 6)
+            continue;
+        unsigned m0,m1,m2,m3,m4,m5;
+        if (sscanf(mac_str, "%x:%x:%x:%x:%x:%x",
+                   &m0,&m1,&m2,&m3,&m4,&m5) != 6)
+            continue;
+        /* skip incomplete entries (all-zero MAC) */
+        if (m0==0 && m1==0 && m2==0 && m3==0 && m4==0 && m5==0)
+            continue;
+        snprintf(out[n].ip, sizeof(out[n].ip), "%s", ip);
+        out[n].mac[0]=(uint8_t)m0; out[n].mac[1]=(uint8_t)m1;
+        out[n].mac[2]=(uint8_t)m2; out[n].mac[3]=(uint8_t)m3;
+        out[n].mac[4]=(uint8_t)m4; out[n].mac[5]=(uint8_t)m5;
+        snprintf(out[n].iface, sizeof(out[n].iface), "%s", iface);
+        n++;
+    }
+    fclose(f);
+    return n;
+}
+
 static void linux_init(void)    {}
 static void linux_cleanup(void) {}
 
@@ -88,6 +119,7 @@ platform_ops_t g_platform = {
     linux_get_ifaces,
     linux_get_conns,
     linux_wifi_scan,
+    linux_get_arp,
     linux_init,
     linux_cleanup,
 };

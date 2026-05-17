@@ -13,6 +13,7 @@
 #include "views/procs.h"
 #include "views/stats.h"
 #include "views/probe.h"
+#include "views/arp.h"
 #include "bandwidth.h"
 #include "dns.h"
 #ifdef WITH_PCAP
@@ -43,6 +44,9 @@ static void poll_data(ntop_state_t *s) {
         s->iface_sel = s->iface_count - 1;
     if (s->wifi_sel >= s->ap_count && s->ap_count > 0)
         s->wifi_sel = s->ap_count - 1;
+    s->arp_count = g_platform.get_arp(s->arp_entries, MAX_ARP_ENTRIES);
+    if (s->arp_sel >= s->arp_count && s->arp_count > 0)
+        s->arp_sel = s->arp_count - 1;
 }
 
 static void handle_key(ntop_state_t *s, int key) {
@@ -57,6 +61,7 @@ static void handle_key(ntop_state_t *s, int key) {
     case '5': s->active_view = VIEW_PROCS;   return;
     case '6': s->active_view = VIEW_STATS;   return;
     case '7': s->active_view = VIEW_PROBE;   return;
+    case '8': s->active_view = VIEW_ARP;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -76,6 +81,7 @@ static void handle_key(ntop_state_t *s, int key) {
     case VIEW_PROCS:   view_procs_key(s, key);    break;
     case VIEW_STATS:   view_stats_key(s, key);    break;
     case VIEW_PROBE:   view_probe_key(s, key);    break;
+    case VIEW_ARP:     view_arp_key(s, key);      break;
     default: break;
     }
 }

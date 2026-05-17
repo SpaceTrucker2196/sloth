@@ -88,6 +88,7 @@ int bsd_get_conns(conn_t *out, int max) { (void)out; (void)max; return 0; }
 /* ── WiFi scan — Week 4: CoreWLAN / net80211 ────────────── */
 
 int bsd_wifi_scan(wifi_ap_t *out, int max) { (void)out; (void)max; return 0; }
+int bsd_get_arp(arp_entry_t *out, int max) { (void)out; (void)max; return 0; }
 
 static void bsd_init(void)    {}
 static void bsd_cleanup(void) {}
@@ -96,6 +97,7 @@ platform_ops_t g_platform = {
     bsd_get_ifaces,
     bsd_get_conns,
     bsd_wifi_scan,
+    bsd_get_arp,
     bsd_init,
     bsd_cleanup,
 };

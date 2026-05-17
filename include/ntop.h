@@ -27,6 +27,7 @@ typedef enum {
     VIEW_PROCS   = 4,
     VIEW_STATS   = 5,
     VIEW_PROBE   = 6,
+    VIEW_ARP     = 7,
     VIEW_COUNT
 } view_t;
 
@@ -99,6 +100,15 @@ typedef enum {
     CONN_FILTER_UDP = 2,
     CONN_FILTER_COUNT
 } conn_filter_t;
+
+/* ── ARP neighbors ──────────────────────────────────────── */
+#define MAX_ARP_ENTRIES 256
+
+typedef struct {
+    char    ip[46];
+    uint8_t mac[6];
+    char    iface[16];
+} arp_entry_t;
 
 /* ── WiFi APs ───────────────────────────────────────────── */
 typedef struct {
@@ -182,6 +192,11 @@ typedef struct {
     int           conn_bw_count;
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
 
+    /* ── ARP neighbor table ────────────────────────────── */
+    arp_entry_t arp_entries[MAX_ARP_ENTRIES];
+    int         arp_count;
+    int         arp_sel;
+
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
     int            probe_count;
@@ -204,6 +219,7 @@ typedef struct {
     int  (*get_ifaces)(iface_stat_t *out, int max);
     int  (*get_conns)(conn_t *out, int max);
     int  (*wifi_scan)(wifi_ap_t *out, int max);
+    int  (*get_arp)(arp_entry_t *out, int max);
     void (*init)(void);
     void (*cleanup)(void);
 } platform_ops_t;
