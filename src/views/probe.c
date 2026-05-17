@@ -23,11 +23,37 @@ static void fmt_age(time_t last_seen, char *buf, int sz) {
     else                 snprintf(buf, sz, "%lldh", (long long)(age / 3600));
 }
 
-/* Signal strength → phosphor intensity */
-static void phos_signal(int8_t dbm) {
-    if      (dbm > -55) tui_bright();
-    else if (dbm > -70) tui_normal();
-    else                tui_dim();
+/* Age bucket: < 5s = bright, < 30s = normal, older = dim. */
+static void phos_age(time_t last_seen) {
+    time_t age = time(NULL) - last_seen;
+    if      (age <  5) tui_bright();
+    else if (age < 30) tui_normal();
+    else               tui_dim();
+}
+
+/* 6-char phosphor signal bar; left third dim, mid normal, right bright. */
+static void probe_signal_bar(int8_t dbm) {
+    double pct    = (dbm < -90) ? 0.0 : (dbm > -30) ? 1.0 : (dbm + 90.0) / 60.0;
+    int    filled = (int)(pct * 6);
+    for (int i = 0; i < 6; i++) {
+        if (i < filled) {
+            double pos = (double)i / 6.0;
+            if      (pos < 0.33) tui_dim();
+            else if (pos < 0.66) tui_normal();
+            else                 tui_bright();
+            TPRINT("#");
+        } else {
+            tui_dim(); TPRINT(".");
+        }
+    }
+}
+
+/* Pre-build a 6-char bar string (no color) for selected-row use. */
+static void sigbar_str(int8_t dbm, char *out) {
+    double pct    = (dbm < -90) ? 0.0 : (dbm > -30) ? 1.0 : (dbm + 90.0) / 60.0;
+    int    filled = (int)(pct * 6);
+    for (int i = 0; i < 6; i++) out[i] = (i < filled) ? '#' : '.';
+    out[6] = '\0';
 }
 
 /* ── Draw ────────────────────────────────────────────────── */
@@ -40,11 +66,22 @@ void view_probe_draw(const ntop_state_t *s) {
     int page = PROBE_PAGE;
 #endif
 
+    /* count devices seen in last 5 seconds */
+    time_t now = time(NULL);
+    int active = 0;
+    for (int i = 0; i < s->probe_count; i++)
+        if (now - s->probe_clients[i].last_seen < 5) active++;
+
     /* status bar */
     tui_normal(); TPRINT(" Probe clients: ");
     tui_bright();  TPRINT("%d", s->probe_count);
+    if (active > 0) {
+        tui_dim();    TPRINT("  (");
+        tui_bright(); TPRINT("%d active", active);
+        tui_dim();    TPRINT(")");
+    }
     if (s->probe_iface[0]) {
-        tui_dim(); TPRINT("  iface: ");
+        tui_dim();    TPRINT("  iface: ");
         tui_bright(); TPRINT("%s", s->probe_iface);
     } else {
         tui_dim(); TPRINT("  (no monitor interface)");
@@ -73,11 +110,7 @@ void view_probe_draw(const ntop_state_t *s) {
         return;
     }
 
-#ifdef WITH_NCURSES
     int page_top = s->probe_sel - page / 2;
-#else
-    int page_top = s->probe_sel - page / 2;
-#endif
     if (page_top + page > s->probe_count) page_top = s->probe_count - page;
     if (page_top < 0) page_top = 0;
     int page_end = page_top + page;
@@ -93,41 +126,44 @@ void view_probe_draw(const ntop_state_t *s) {
         const char *vendor = oui_lookup(c->mac);
         const char *vstr   = vendor ? vendor : "";
 
-#ifdef WITH_NCURSES
         if (row == s->probe_sel) {
+            char bar[7];
+            sigbar_str(c->signal_dbm, bar);
             tui_sel();
-            printw(" %-17s  %-12.12s  %6d  %3d  %5s  %5d  %.32s\n",
-                   mac, vstr, (int)c->signal_dbm, c->channel, age,
-                   c->frame_count, ssid);
+            TPRINT(" %-17s  %-12.12s  %6s  %3d  %5s  %5d  %.32s\n",
+                   mac, vstr, bar, c->channel, age, c->frame_count, ssid);
             tui_reset();
         } else {
-            tui_dim(); printw(" %s", mac);
-            tui_dim(); printw("  %-12.12s", vstr);
-            phos_signal(c->signal_dbm);
-            printw("  %6d  %3d", (int)c->signal_dbm, c->channel);
-            tui_dim(); printw("  %5s  %5d  ", age, c->frame_count);
-            if (c->ssid[0]) tui_normal(); else tui_dim();
-            printw("%.32s\n", ssid);
+            /* MAC: intensity by age */
+            phos_age(c->last_seen);
+            TPRINT(" %s", mac);
+
+            /* Vendor: secondary, always dim */
+            tui_dim(); TPRINT("  %-12.12s  ", vstr);
+
+            /* Signal: 6-char phosphor bar */
+            probe_signal_bar(c->signal_dbm);
+
+            /* Channel: dim */
+            tui_dim(); TPRINT("  %3d", c->channel);
+
+            /* Age: colored by recency */
+            phos_age(c->last_seen);
+            TPRINT("  %5s", age);
+
+            /* Frame count: heat gradient (50 frames = max heat) */
+            double frac = (c->frame_count > 0)
+                ? (c->frame_count < 50 ? c->frame_count / 50.0 : 1.0)
+                : 0.0;
+            tui_heat(frac);
+            TPRINT("  %5d", c->frame_count);
+
+            /* SSID: bright for named targets, dim for wildcards */
+            if (c->ssid[0]) tui_bright(); else tui_dim();
+            TPRINT("  %.32s\n", ssid);
+
             tui_normal();
         }
-#else
-        if (row == s->probe_sel) {
-            tui_sel();
-            printf(" %-17s  %-12.12s  %6d  %3d  %5s  %5d  %.32s",
-                   mac, vstr, (int)c->signal_dbm, c->channel, age,
-                   c->frame_count, ssid);
-            tui_reset(); printf("\n");
-        } else {
-            tui_dim(); printf(" %s", mac);
-            tui_dim(); printf("  %-12.12s", vstr);
-            phos_signal(c->signal_dbm);
-            printf("  %6d  %3d", (int)c->signal_dbm, c->channel);
-            tui_dim(); printf("  %5s  %5d  ", age, c->frame_count);
-            if (c->ssid[0]) tui_normal(); else tui_dim();
-            printf("%.32s\n", ssid);
-            tui_normal();
-        }
-#endif
     }
     tui_normal();
 }
