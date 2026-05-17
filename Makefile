@@ -50,7 +50,10 @@ SRCS = src/main.c          \
        src/ntp_log.c         \
        src/views/ntp.c       \
        src/icmp_log.c        \
-       src/views/icmp.c
+       src/views/icmp.c      \
+       src/threat_intel.c    \
+       src/alerts.c          \
+       src/views/alerts.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -213,7 +216,12 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_ntp_log.c           \
             src/icmp_log.c                 \
             src/views/icmp.c               \
-            tests/test_icmp_log.c
+            tests/test_icmp_log.c          \
+            src/threat_intel.c             \
+            tests/test_threat_intel.c      \
+            src/alerts.c                   \
+            src/views/alerts.c             \
+            tests/test_alerts.c
 
 TEST_BIN = sloth_test
 

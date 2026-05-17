@@ -44,6 +44,8 @@ void run_quic_log_tests(void);
 void run_dns_log_tests(void);
 void run_ntp_log_tests(void);
 void run_icmp_log_tests(void);
+void run_threat_intel_tests(void);
+void run_alerts_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -87,6 +89,8 @@ int main(void) {
     run_dns_log_tests();
     run_ntp_log_tests();
     run_icmp_log_tests();
+    run_threat_intel_tests();
+    run_alerts_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

@@ -26,6 +26,7 @@
 #include "views/dns_log.h"
 #include "views/ntp.h"
 #include "views/icmp.h"
+#include "views/alerts.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -39,6 +40,7 @@
 #include "dns_log.h"
 #include "ntp_log.h"
 #include "icmp_log.h"
+#include "alerts.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -87,6 +89,7 @@ static void poll_data(sloth_state_t *s) {
         s->arp_sel = s->arp_count - 1;
     s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
     scan_update(s);
+    alerts_update(s);
 }
 
 static void handle_key(sloth_state_t *s, int key) {
@@ -114,6 +117,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'r': case 'R': s->active_view = VIEW_DNS;    return;
     case 'p': case 'P': s->active_view = VIEW_NTP;    return;
     case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
+    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -146,6 +150,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_DNS:     view_dns_key(s, key);           break;
     case VIEW_NTP:     view_ntp_key(s, key);           break;
     case VIEW_ICMP:    view_icmp_key(s, key);          break;
+    case VIEW_ALERTS:  view_alerts_key(s, key);        break;
     default: break;
     }
 }

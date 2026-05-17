@@ -40,6 +40,7 @@ typedef enum {
     VIEW_DNS     = 17,
     VIEW_NTP     = 18,
     VIEW_ICMP    = 19,
+    VIEW_ALERTS  = 20,
     VIEW_COUNT
 } view_t;
 
@@ -254,6 +255,40 @@ typedef struct {
     time_t ts;
 } ntp_log_entry_t;
 
+/* ── Alerts ─────────────────────────────────────────────── */
+#define MAX_ALERTS         128
+#define ALERT_TITLE_LEN     20
+#define ALERT_DETAIL_LEN    96
+#define ALERT_KEY_LEN       80
+#define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
+#define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
+
+typedef enum {
+    ALERT_SEV_INFO = 0,
+    ALERT_SEV_WARN = 1,
+    ALERT_SEV_CRIT = 2,
+} alert_sev_t;
+
+typedef enum {
+    ALERT_TYPE_PORT_SCAN = 0,
+    ALERT_TYPE_DEAUTH_FLOOD,
+    ALERT_TYPE_NXDOMAIN_BURST,
+    ALERT_TYPE_THREAT_DOMAIN,
+    ALERT_TYPE_THREAT_IP,
+    ALERT_TYPE_COUNT,
+} alert_type_t;
+
+typedef struct {
+    alert_type_t type;
+    alert_sev_t  sev;
+    char         title[ALERT_TITLE_LEN];
+    char         detail[ALERT_DETAIL_LEN];
+    char         key[ALERT_KEY_LEN];      /* dedup id (type:identifier) */
+    int          count;                   /* observations under this key */
+    time_t       first_seen;
+    time_t       last_seen;
+} alert_t;
+
 /* ── ICMP log ───────────────────────────────────────────── */
 #define MAX_ICMP_LOG 256
 
@@ -445,6 +480,11 @@ typedef struct {
     int              icmp_log_head;
     int              icmp_log_count;
     int              icmp_log_sel;
+
+    /* ── Alerts ─────────────────────────────────────────────── */
+    alert_t alerts[MAX_ALERTS];
+    int     alert_count;
+    int     alert_sel;
 
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
