@@ -28,6 +28,7 @@
 #include "views/icmp.h"
 #include "views/alerts.h"
 #include "views/devices.h"
+#include "views/help.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -125,6 +126,9 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
     case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
     case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
+    case '?':           s->active_view = (s->active_view == VIEW_HELP)
+                                          ? VIEW_IFACE : VIEW_HELP;
+                        return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -159,6 +163,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_ICMP:    view_icmp_key(s, key);          break;
     case VIEW_ALERTS:  view_alerts_key(s, key);        break;
     case VIEW_DEVICES: view_devices_key(s, key);       break;
+    case VIEW_HELP:    view_help_key(s, key);          break;
     default: break;
     }
 }

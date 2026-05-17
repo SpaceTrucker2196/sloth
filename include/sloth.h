@@ -42,6 +42,7 @@ typedef enum {
     VIEW_ICMP    = 19,
     VIEW_ALERTS  = 20,
     VIEW_DEVICES = 21,
+    VIEW_HELP    = 22,
     VIEW_COUNT
 } view_t;
 
