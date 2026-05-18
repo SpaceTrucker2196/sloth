@@ -9,6 +9,17 @@
 #include "ip_color.h"
 #include "ip_owner.h"
 
+/* Box-drawing / arrow glyphs used by the dashboard. UTF-8 byte sequences;
+ * each occupies exactly one terminal column when the font supports them
+ * (Fira Code, DejaVu Sans Mono, anything reasonable). */
+#define G_HORIZ   "\xe2\x94\x80"   /* ─  U+2500 */
+#define G_VERT    "\xe2\x94\x82"   /* │  U+2502 */
+#define G_TL      "\xe2\x94\x8c"   /* ┌  U+250C */
+#define G_TR      "\xe2\x94\x90"   /* ┐  U+2510 */
+#define G_BL      "\xe2\x94\x94"   /* └  U+2514 */
+#define G_BR      "\xe2\x94\x98"   /* ┘  U+2518 */
+#define G_ARROW   "\xe2\x86\x92"   /* →  U+2192 */
+
 /* Compact byte-count formatter — kept local. */
 static void fmt_bytes(uint64_t b, char *buf, int sz) {
     if      (b >= (uint64_t)1 << 30)
@@ -171,11 +182,16 @@ static void panel_title(int y, int x, int w, const char *name) {
     move(y, x);
     int filled = 0;
     int len = (int)strlen(name);
-    for (int i = 0; i < 3  && filled < w; i++, filled++) addch('-');
+    /* 2 leading horizontals + space */
+    if (filled + 2 <= w) { addstr(G_HORIZ); addstr(G_HORIZ); filled += 2; }
+    if (filled     <  w) { addch(' '); filled++; }
+    /* name (highlighted) */
+    attrset(COLOR_PAIR(CP_BRIGHT));
+    for (int i = 0; i < len && filled < w; i++, filled++)
+        addch((chtype)(unsigned char)name[i]);
+    attrset(COLOR_PAIR(CP_DIM));
     if (filled < w) { addch(' '); filled++; }
-    for (int i = 0; i < len && filled < w; i++, filled++) addch(name[i]);
-    if (filled < w) { addch(' '); filled++; }
-    for (; filled < w; filled++) addch('-');
+    while (filled < w) { addstr(G_HORIZ); filled++; }
 }
 
 /* ── Interfaces row with sparklines ──────────────────────── */
@@ -259,7 +275,8 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
     panel_title(y0, x0, w, "Connections");
 
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x0, w, "  %-21s -> %-25s %-5s %5s %5s  %s",
+    clipline(y0 + 1, x0, w,
+             "  %-21s " G_ARROW " %-25s %-5s %5s %5s  %s",
              "Local", "Remote", "Proto", "St", "PID", "Process");
 
     int rows = h - 2;
@@ -305,8 +322,8 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
         }
         xc += 21;
         move(y0 + 2 + (i - top), xc);
-        printw(" -> ");
-        xc += 4;
+        printw(" " G_ARROW " ");
+        xc += 3;
         if (i != s->conn_sel) tui_ip_addstr(c->remote_addr, cat);
         else                  addstr(c->remote_addr);
         if (i == s->conn_sel) tui_sel();
@@ -475,7 +492,7 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
     while (used++ < src_w) addch(' ');
     x += src_w;
 
-    move(y, x); tui_pkt_bg_cat(cat); printw(" -> "); x += 4;
+    move(y, x); tui_pkt_bg_cat(cat); printw(" " G_ARROW " "); x += 3;
 
     /* dst column: 21 cols */
     int dst_w = 21;
@@ -503,7 +520,8 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
 static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
     draw_packets_title(s, y0, w);
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, 0, w, "  %-8s  %-21s -> %-21s  %-5s  %s",
+    clipline(y0 + 1, 0, w,
+             "  %-8s  %-21s " G_ARROW " %-21s  %-5s  %s",
              "time", "src", "dst", "proto", "info");
 
     int rows = h - 2;
