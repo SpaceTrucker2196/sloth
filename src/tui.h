@@ -27,6 +27,11 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 #define CP_HEAT_HI    6   /* xterm-256 208  rgb(255,135,0)  — hot   */
 #define CP_HEAT_PEAK  7   /* xterm-256 196  rgb(255,0,0)    — peak  */
 
+/* ── Packet-type row backgrounds ─────────────────────────── */
+#define CP_PKT_TCP    8   /* dark-blue bg for TCP rows  */
+#define CP_PKT_UDP    9   /* dark-green bg for UDP rows */
+#define CP_PKT_ICMP  10   /* dark-magenta bg for ICMPv4/v6 rows */
+
 void tui_bright(void); /* intense glow: title, active values, key fields */
 void tui_normal(void); /* standard phosphor: data rows                   */
 void tui_dim(void);    /* faint glow: labels, borders, hints              */
@@ -37,5 +42,10 @@ void tui_heat(double frac); /* heat gradient 0=grey … 1=red              */
 /* If a filter is set (or being edited), emit a small status label.
  * Call after the view-specific header text on the same line. */
 void tui_filter_status(const sloth_state_t *s);
+
+/* Set the row colour-pair for a packet whose IP protocol number is `proto`.
+ * TCP=6, UDP=17, ICMP=1, ICMPv6=58 each get a distinct background; anything
+ * else falls back to the normal phosphor pair. */
+void tui_pkt_bg(int proto);
 
 #endif /* TUI_H */

@@ -245,22 +245,26 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
 /* DLT_LINUX_SLL (113) — Linux cooked capture used by "any" */
 #define MY_DLT_LINUX_SLL 113
 
-static void decode_frame(const uint8_t *data, int caplen, int dlt,
-                         packet_info_t *pkt) {
+/* Returns 1 if the frame was decoded as IPv4 or IPv6 (worth keeping in the
+ * packets view); 0 for ARP, LLC frames (ethertype < 0x0600), unknown DLTs
+ * and any other ethertype. Those drop on the floor — VIEW_ARP and the
+ * per-protocol logs cover the data we still care about, and they were
+ * otherwise polluting the live list with zero-IP rows. */
+static int decode_frame(const uint8_t *data, int caplen, int dlt,
+                        packet_info_t *pkt) {
     int       offset    = 0;
     uint16_t  ethertype = 0;
 
     if (dlt == DLT_EN10MB) {
-        if (caplen < 14) return;
+        if (caplen < 14) return 0;
         ethertype = u16be(data + 12);
         offset    = 14;
     } else if (dlt == MY_DLT_LINUX_SLL) {
-        if (caplen < 16) return;
+        if (caplen < 16) return 0;
         ethertype = u16be(data + 14);
         offset    = 16;
     } else {
-        snprintf(pkt->info, sizeof(pkt->info), "DLT %d", dlt);
-        return;
+        return 0;
     }
 
     /* strip 802.1Q VLAN tag */
@@ -269,13 +273,17 @@ static void decode_frame(const uint8_t *data, int caplen, int dlt,
         offset   += 4;
     }
 
+    /* IEEE 802.3 / LLC frames put a length value (< 0x0600) where ethernet II
+     * puts an ethertype. We don't decode them — drop. */
+    if (ethertype < 0x0600) return 0;
+
     const uint8_t *payload = data + offset;
     int            plen    = caplen - offset;
 
-    if      (ethertype == 0x0800) decode_ipv4(payload, plen, pkt);
-    else if (ethertype == 0x86DD) decode_ipv6(payload, plen, pkt);
-    else if (ethertype == 0x0806) memcpy(pkt->info, "ARP", 4);
-    else snprintf(pkt->info, sizeof(pkt->info), "EtherType 0x%04x", ethertype);
+    if      (ethertype == 0x0800) { decode_ipv4(payload, plen, pkt); return 1; }
+    else if (ethertype == 0x86DD) { decode_ipv6(payload, plen, pkt); return 1; }
+    /* ARP and the rest are dropped on purpose. */
+    return 0;
 }
 
 /* ── pcap callback ────────────────────────────────────────── */
@@ -288,7 +296,8 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     pkt.ts_sec  = (uint32_t)hdr->ts.tv_sec;
     pkt.ts_usec = (uint32_t)hdr->ts.tv_usec;
     pkt.len     = hdr->len;
-    decode_frame(data, (int)hdr->caplen, pcap_datalink(g_handle), &pkt);
+    if (!decode_frame(data, (int)hdr->caplen, pcap_datalink(g_handle), &pkt))
+        return;  /* drop ARP / LLC / unknown — see decode_frame() comment */
 
     int rl = (int)hdr->caplen < 64 ? (int)hdr->caplen : 64;
     memcpy(pkt.raw, data, (size_t)rl);

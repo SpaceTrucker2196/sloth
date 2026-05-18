@@ -81,20 +81,6 @@ static void draw_detail(const sloth_state_t *s) {
     tui_normal();
 }
 
-/* Phosphor intensity by IP protocol number. */
-static void phos_proto(int proto) {
-    switch (proto) {
-    case 1:  /* ICMP   */
-    case 58: /* ICMPv6 */
-        tui_bright(); break;
-    case 6:  /* TCP */
-    case 17: /* UDP */
-        tui_normal(); break;
-    case 0:  /* ARP / unknown ethertype */
-    default:
-        tui_dim(); break;
-    }
-}
 #endif /* WITH_PCAP */
 
 /* ── Draw ───────────────────────────────────────────────── */
@@ -204,33 +190,21 @@ void view_packets_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == sel) {
             tui_sel();
-            printw(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
-                   (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
-                   src, dst, p->proto, (unsigned)p->len, p->info);
-            tui_reset();
         } else {
-            tui_dim();
-            printw(" %04u.%06u  ", (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec);
-            phos_proto(p->proto);
-            printw("%-21.21s  %-21.21s  %5d  %5u  %.40s\n",
-                   src, dst, p->proto, (unsigned)p->len, p->info);
-            tui_normal();
+            tui_pkt_bg(p->proto);
         }
+        printw(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
+               (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
+               src, dst, p->proto, (unsigned)p->len, p->info);
+        if (row == sel) tui_reset();
+        else            tui_normal();
 #else
-        if (row == sel) {
-            tui_sel();
-            printf(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s",
-                   (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
-                   src, dst, p->proto, (unsigned)p->len, p->info);
-            tui_reset(); printf("\n");
-        } else {
-            tui_dim();
-            printf(" %04u.%06u  ", (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec);
-            phos_proto(p->proto);
-            printf("%-21.21s  %-21.21s  %5d  %5u  %.40s\n",
-                   src, dst, p->proto, (unsigned)p->len, p->info);
-            tui_normal();
-        }
+        if (row == sel) tui_sel();
+        else            tui_normal();
+        printf(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
+               (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
+               src, dst, p->proto, (unsigned)p->len, p->info);
+        if (row == sel) tui_reset();
 #endif
     }
     tui_normal();

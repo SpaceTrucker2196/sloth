@@ -14,6 +14,7 @@ void tui_sel(void)           {}
 void tui_reset(void)         {}
 void tui_heat(double frac)   { (void)frac; }
 void tui_filter_status(const sloth_state_t *s) { (void)s; }
+void tui_pkt_bg(int proto)   { (void)proto; }
 
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;

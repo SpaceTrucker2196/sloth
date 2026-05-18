@@ -320,7 +320,7 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
         snprintf(src, sizeof(src), "%s:%u", p->src, (unsigned)p->src_port);
         snprintf(dst, sizeof(dst), "%s:%u", p->dst, (unsigned)p->dst_port);
 
-        attrset(COLOR_PAIR(CP_NORMAL));
+        tui_pkt_bg(p->proto);
         clipline(y0 + 2 + i, 0, w,
                  "  %-8s  %-21.21s -> %-21.21s  %-5s  %.*s",
                  ts_buf, src, dst, proto_short(p->proto),

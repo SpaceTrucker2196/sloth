@@ -64,6 +64,15 @@ static const char *view_labels[VIEW_COUNT] = {
     "[o] Dash",
 };
 
+void tui_pkt_bg(int proto) {
+    switch (proto) {
+    case 6:                attrset(COLOR_PAIR(CP_PKT_TCP));  break;
+    case 17:               attrset(COLOR_PAIR(CP_PKT_UDP));  break;
+    case 1: case 58:       attrset(COLOR_PAIR(CP_PKT_ICMP)); break;
+    default:               attrset(COLOR_PAIR(CP_NORMAL));   break;
+    }
+}
+
 void tui_filter_status(const sloth_state_t *s) {
     if (!s) return;
     if (s->filter_editing) {
@@ -147,6 +156,10 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
+            /* packet-row backgrounds: bright fg on a dark hue bg */
+            init_pair(CP_PKT_TCP,  255,  17);  /* white on #00005f (dark blue) */
+            init_pair(CP_PKT_UDP,  255,  22);  /* white on #005f00 (dark green) */
+            init_pair(CP_PKT_ICMP, 255,  53);  /* white on #5f005f (dark mag.) */
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -155,6 +168,9 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_HI,   COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_PEAK, COLOR_RED,   COLOR_BLACK);
+            init_pair(CP_PKT_TCP,   COLOR_WHITE,  COLOR_BLUE);
+            init_pair(CP_PKT_UDP,   COLOR_BLACK,  COLOR_GREEN);
+            init_pair(CP_PKT_ICMP,  COLOR_WHITE,  COLOR_MAGENTA);
         }
     }
 }
