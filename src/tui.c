@@ -299,24 +299,31 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category greys: progressively lighter from TCP to ICMP.
-             * All chosen so brightness stays <=40% (xterm-256 grey 240 is
-             * ~34.5% — anything above 241 would exceed the cap). */
-            static const short grey_bg[5] = { 0, 234, 236, 238, 240 };
+            /* Packet-category "greys" with a phosphor (green/teal/amber)
+             * cast — all under 40% luminance:
+             *   OTHER -> default terminal bg
+             *   TCP   -> 22  #005f00  dark phosphor green   (~22%)
+             *   UDP   -> 23  #005f5f  dark phosphor teal    (~26%)
+             *   DNS   -> 58  #5f5f00  amber phosphor olive  (~33%)
+             *   ICMP  -> 29  #00875f  mid phosphor green-teal (~35%) */
+            static const short grey_bg[5] = { 0, 22, 23, 58, 29 };
             init_pair(CP_PKT_TCP,  255, grey_bg[1]);
             init_pair(CP_PKT_UDP,  255, grey_bg[2]);
             init_pair(CP_PKT_DNS,  255, grey_bg[3]);
             init_pair(CP_PKT_ICMP, 255, grey_bg[4]);
-            /* 8 IP fg colours × 5 row bgs */
+            /* 8 IP fg colours × 5 row bgs.
+             * Fallout-inspired phosphor palette — teal phosphor (already
+             * the project's base CP_NORMAL = 43) is the anchor; these eight
+             * orbit it with related hues a CRT might glow at: */
             static const short ip_fg[8] = {
-                51,    /* cyan       */
-                117,   /* light blue */
-                226,   /* yellow     */
-                220,   /* gold       */
-                201,   /* magenta    */
-                213,   /* pink       */
-                156,   /* pale green */
-                214,   /* orange     */
+                50,    /* #00ffd7  bright phosphor teal      */
+                80,    /* #5fd7d7  aged dim phosphor cyan    */
+                121,   /* #87ffaf  rad-green                  */
+                156,   /* #afff87  mutated lime               */
+                178,   /* #d7af00  amber CRT dial             */
+                215,   /* #ffaf5f  hazmat orange              */
+                174,   /* #d78787  faded crimson (Nuka)       */
+                110,   /* #87afd7  Vault-Tec blue             */
             };
             for (int i = 0; i < 8; i++) {
                 init_pair(CP_IP_BASE_OTHER + i, ip_fg[i], grey_bg[0]);
