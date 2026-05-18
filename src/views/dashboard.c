@@ -627,13 +627,17 @@ static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int 
 static void draw_mdns_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "mDNS services");
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x, w, "  %-22s %-6s", "instance", "port");
+    /* Layout: 2 (margin) + instance_w + 1 (sep) + 6 (port) = w */
+    int instance_w = w - 9;
+    if (instance_w < 8) instance_w = 8;
+    clipline(y0 + 1, x, w, "  %-*s %-6s", instance_w, "instance", "port");
     int rows = h - 2;
     int n = s->mdns_count < rows ? s->mdns_count : rows;
     for (int i = 0; i < n; i++) {
         const mdns_service_t *m = &s->mdns_services[i];
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w, "  %-22.22s %-6u",
+        clipline(y0 + 2 + i, x, w, "  %-*.*s %-6u",
+                 instance_w, instance_w,
                  m->instance[0] ? m->instance : m->service,
                  (unsigned)m->port);
     }
