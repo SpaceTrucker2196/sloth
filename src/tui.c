@@ -299,34 +299,28 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category "greys" with a phosphor cast.
-             *
-             * Every background sits at ~10% perceptual luminance (Rec. 601
-             * weights: 0.299 R + 0.587 G + 0.114 B = 100/1000). The hue
-             * differences come from how that 10% is distributed across
-             * channels — green for TCP, teal for UDP, amber for DNS,
-             * green-teal for ICMP — so the rows still read as four
-             * categories even though they're all the same darkness.
-             *
-             * Done via init_color() because the xterm-256 cube's darkest
-             * non-zero step is already brighter than we need; falls back
-             * to the closest cube codes when can_change_color() is false. */
+            /* Packet-category backgrounds: neutral greys in a 5%/10%/15%/
+             * 20%/25% ramp. Hue differentiation is now carried by the IP
+             * and brand fg colour pairs, not the background. */
             short grey_bg[5];
-            grey_bg[0] = 0;
             if (can_change_color()) {
-                init_color(100,   0, 170,   0);   /* TCP : green       */
-                init_color(101,   0, 143, 143);   /* UDP : teal        */
-                init_color(102, 113, 113,   0);   /* DNS : amber       */
-                init_color(103,   0, 151, 106);   /* ICMP: green-teal  */
+                init_color(99,   50,  50,  50);   /* OTHER:  5% */
+                init_color(100, 100, 100, 100);   /* TCP  : 10% */
+                init_color(101, 150, 150, 150);   /* UDP  : 15% */
+                init_color(102, 200, 200, 200);   /* DNS  : 20% */
+                init_color(103, 250, 250, 250);   /* ICMP : 25% */
+                grey_bg[0] = 99;
                 grey_bg[1] = 100;
                 grey_bg[2] = 101;
                 grey_bg[3] = 102;
                 grey_bg[4] = 103;
             } else {
-                grey_bg[1] = 22;   /* #005f00 */
-                grey_bg[2] = 23;   /* #005f5f */
-                grey_bg[3] = 58;   /* #5f5f00 */
-                grey_bg[4] = 29;   /* #00875f */
+                /* Closest xterm-256 greyscale slots */
+                grey_bg[0] = 232;   /* ~3% */
+                grey_bg[1] = 234;   /* ~11% */
+                grey_bg[2] = 235;   /* ~15% */
+                grey_bg[3] = 236;   /* ~19% */
+                grey_bg[4] = 238;   /* ~27% */
             }
             init_pair(CP_PKT_TCP,  255, grey_bg[1]);
             init_pair(CP_PKT_UDP,  255, grey_bg[2]);
