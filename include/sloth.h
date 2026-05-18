@@ -43,6 +43,7 @@ typedef enum {
     VIEW_ALERTS  = 20,
     VIEW_DEVICES = 21,
     VIEW_HELP    = 22,
+    VIEW_DASH    = 23,
     VIEW_COUNT
 } view_t;
 

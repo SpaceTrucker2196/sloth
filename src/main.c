@@ -29,6 +29,7 @@
 #include "views/alerts.h"
 #include "views/devices.h"
 #include "views/help.h"
+#include "views/dashboard.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -173,6 +174,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
+    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
@@ -208,6 +210,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_ALERTS:  view_alerts_key(s, key);        break;
     case VIEW_DEVICES: view_devices_key(s, key);       break;
     case VIEW_HELP:    view_help_key(s, key);          break;
+    case VIEW_DASH:    view_dashboard_key(s, key);     break;
     default: break;
     }
 }
