@@ -16,6 +16,24 @@ static void seed_iface(sloth_state_t *s, const char *name) {
     I->rx_rate = 1e6; I->tx_rate = 2e5;
     I->rx_bytes = (uint64_t)5 << 30;   /* 5 GB */
     I->tx_bytes = (uint64_t)1 << 30;
+
+    /* Seed the rate history slot for this iface so the sparkline path
+       exercises non-zero glyphs. */
+    if (s->iface_count <= MAX_IFACES) {
+        iface_hist_t *H = &s->iface_hist[s->iface_count - 1];
+        snprintf(H->name, sizeof(H->name), "%s", name);
+        H->head  = HIST_LEN / 2;
+        H->count = HIST_LEN;
+        for (int i = 0; i < HIST_LEN; i++) {
+            /* triangle: 0 -> HIST_LEN -> 0, then a few zeros to exercise '_' */
+            double v = (i < HIST_LEN / 2)
+                       ? (double)i
+                       : (double)(HIST_LEN - i);
+            H->rx[i] = v * 1e5;
+            H->tx[i] = v * 5e4;
+            if (i % 5 == 0) H->rx[i] = 0;   /* sprinkle zeros */
+        }
+    }
 }
 
 static void seed_conn(sloth_state_t *s, const char *remote, uint16_t rport) {
@@ -48,6 +66,50 @@ static void seed_probe(sloth_state_t *s, const uint8_t mac[6],
     p->signal_dbm = (int8_t)sig;
 }
 
+static void seed_packet(sloth_state_t *s, const char *src, const char *dst,
+                        uint16_t sport, uint16_t dport, const char *info) {
+    if (s->pkt_count >= MAX_PACKETS) return;
+    int slot = s->pkt_head;
+    packet_info_t *p = &s->packets[slot];
+    memset(p, 0, sizeof(*p));
+    snprintf(p->src, sizeof(p->src), "%s", src);
+    snprintf(p->dst, sizeof(p->dst), "%s", dst);
+    snprintf(p->info, sizeof(p->info), "%s", info);
+    p->src_port = sport;
+    p->dst_port = dport;
+    p->proto    = PROTO_TCP;
+    p->ts_sec   = 1700000000;
+    s->pkt_head = (s->pkt_head + 1) % MAX_PACKETS;
+    if (s->pkt_count < MAX_PACKETS) s->pkt_count++;
+}
+
+static void seed_mdns(sloth_state_t *s, const char *instance, uint16_t port) {
+    if (s->mdns_count >= MAX_MDNS_SERVICES) return;
+    mdns_service_t *m = &s->mdns_services[s->mdns_count++];
+    memset(m, 0, sizeof(*m));
+    snprintf(m->instance, sizeof(m->instance), "%s", instance);
+    snprintf(m->service,  sizeof(m->service),  "_http._tcp");
+    m->port = port;
+}
+
+static void seed_dhcp_event(sloth_state_t *s, const char *ip,
+                            const char *host, uint8_t msg) {
+    if (s->dhcp_event_count >= MAX_DHCP_EVENTS) return;
+    dhcp_event_t *e = &s->dhcp_events[s->dhcp_event_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->ip,       sizeof(e->ip),       "%s", ip);
+    snprintf(e->hostname, sizeof(e->hostname), "%s", host);
+    e->msg_type = msg;
+}
+
+static void seed_ssdp(sloth_state_t *s, const char *ip, const char *type) {
+    if (s->ssdp_count >= MAX_SSDP_DEVICES) return;
+    ssdp_device_t *d = &s->ssdp_devices[s->ssdp_count++];
+    memset(d, 0, sizeof(*d));
+    snprintf(d->ip,   sizeof(d->ip),   "%s", ip);
+    snprintf(d->type, sizeof(d->type), "%s", type);
+}
+
 static void seed_beacon(sloth_state_t *s, const char *ssid, int sig, int ch) {
     beacon_ap_t *b = &s->beacon_aps[s->beacon_count++];
     memset(b, 0, sizeof(*b));
@@ -70,6 +132,8 @@ static void test_draw_populated(void) {
     seed_iface(&s, "wlan0");
     seed_conn(&s, "142.250.80.46", 443);
     seed_conn(&s, "1.1.1.1",       443);
+    seed_packet(&s, "192.168.1.5", "1.1.1.1",       33445, 443, "TLS handshake");
+    seed_packet(&s, "1.1.1.1",     "192.168.1.5",   443,   33445, "ACK");
     seed_ap(&s, "home_5g",       -42, 36);
     seed_ap(&s, "neighbor_24",   -67, 11);
     uint8_t mac1[6] = { 0xde,0xad,0xbe,0xef,0x00,0x01 };
@@ -78,6 +142,11 @@ static void test_draw_populated(void) {
     seed_probe(&s, mac2, "",          -71);
     seed_beacon(&s, "home_5g",     -42, 36);
     seed_beacon(&s, "neighbor_24", -67, 11);
+    seed_mdns(&s, "My Printer._ipp._tcp", 631);
+    seed_mdns(&s, "Apple TV._airplay._tcp", 7000);
+    seed_dhcp_event(&s, "192.168.1.100", "raspberrypi", 5);
+    seed_dhcp_event(&s, "192.168.1.101", "laptop",      3);
+    seed_ssdp(&s, "192.168.1.1", "urn:schemas-upnp-org:device:InternetGatewayDevice:2");
     view_dashboard_draw(&s);
     ASSERT(1);
 }
