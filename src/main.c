@@ -45,6 +45,7 @@
 #include "icmp_log.h"
 #include "alerts.h"
 #include "devices.h"
+#include "top_hosts.h"
 #include "beacon_detect.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
@@ -99,6 +100,7 @@ static void poll_data(sloth_state_t *s) {
     bd_update(s, time(NULL));
     alerts_update(s);
     devices_update(s);
+    top_hosts_update(s);
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {

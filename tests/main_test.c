@@ -55,6 +55,7 @@ void run_alert_pcap_tests(void);
 void run_ip_owner_tests(void);
 void run_dashboard_tests(void);
 void run_ip_color_tests(void);
+void run_top_hosts_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -109,6 +110,7 @@ int main(void) {
     run_ip_owner_tests();
     run_dashboard_tests();
     run_ip_color_tests();
+    run_top_hosts_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

@@ -258,6 +258,21 @@ typedef struct {
     time_t ts;
 } ntp_log_entry_t;
 
+/* ── Top hosts (aggregated remote IPs across all conns) ── */
+#define MAX_TOP_HOSTS   32
+#define TOP_HOST_STALE_S 600   /* drop a host not seen for this long */
+
+typedef struct {
+    char     ip[46];
+    char     hostname[64];   /* DNS-resolved name, "" if unresolved/pending */
+    char     owner[32];      /* hosting org from embedded IP_OWNER table */
+    time_t   first_seen;
+    time_t   last_seen;
+    int      conn_count;     /* distinct flows to this IP this poll */
+    double   rx_rate;        /* B/s summed across all flows */
+    double   tx_rate;
+} top_host_t;
+
 /* ── Devices (synthesized device profiles, keyed by MAC) ─ */
 #define MAX_DEVICES  256
 
@@ -524,6 +539,10 @@ typedef struct {
     device_t devices[MAX_DEVICES];
     int      device_count;
     int      device_sel;
+
+    /* ── Top hosts (aggregated remote IPs from conns + bw) ─── */
+    top_host_t top_hosts[MAX_TOP_HOSTS];
+    int        top_host_count;
 
     /* ── Filter (case-insensitive substring, applied to log views) ── */
     char     filter[48];

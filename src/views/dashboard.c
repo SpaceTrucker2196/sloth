@@ -7,6 +7,7 @@
 #include "views/dashboard.h"
 #include "bandwidth.h"
 #include "ip_color.h"
+#include "ip_owner.h"
 
 /* Compact byte-count formatter — kept local. */
 static void fmt_bytes(uint64_t b, char *buf, int sz) {
@@ -254,11 +255,11 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
 
 /* ── Connections (scrollable, follows conn_sel) ──────────── */
 
-static void draw_conn_band(const sloth_state_t *s, int y0, int h, int w) {
-    panel_title(y0, 0, w, "Connections");
+static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
+    panel_title(y0, x0, w, "Connections");
 
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, 0, w, "  %-21s -> %-25s %-5s %5s %5s  %s",
+    clipline(y0 + 1, x0, w, "  %-21s -> %-25s %-5s %5s %5s  %s",
              "Local", "Remote", "Proto", "St", "PID", "Process");
 
     int rows = h - 2;
@@ -283,9 +284,9 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int w) {
         /* Paint full-row bg first */
         if (i == s->conn_sel) tui_sel();
         else                  attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + (i - top), 0, w, "");
+        clipline(y0 + 2 + (i - top), x0, w, "");
 
-        int xc = 0;
+        int xc = x0;
         move(y0 + 2 + (i - top), xc);
         if (i == s->conn_sel) tui_sel();
         else                  attrset(COLOR_PAIR(CP_NORMAL));
@@ -326,8 +327,94 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int w) {
        leaving stale entries behind. */
     for (int i = end - top; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, 0, w, "");
+        clipline(y0 + 2 + i, x0, w, "");
     }
+}
+
+/* Render a "5m20s" / "1h23m" / "2d4h" age, capped at 9999 in each unit. */
+static void fmt_age(time_t now, time_t first_seen, char *buf, int sz) {
+    long secs = (long)(now - first_seen);
+    if (secs < 0)     secs = 0;
+    if (secs > 99999) secs = 99999;
+    if      (secs < 60)       snprintf(buf, sz, "%lds",   secs);
+    else if (secs < 3600)     snprintf(buf, sz, "%ldm%02lds",
+                                       secs / 60, secs % 60);
+    else if (secs < 86400)    snprintf(buf, sz, "%ldh%02ldm",
+                                       secs / 3600, (secs % 3600) / 60);
+    else                       snprintf(buf, sz, "%ldd%02ldh",
+                                       secs / 86400, (secs % 86400) / 3600);
+}
+
+/* ── Top hosts panel (sits next to the connections panel) ── */
+
+static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
+                                  int x0, int w) {
+    panel_title(y0, x0, w, "Top hosts");
+    attrset(COLOR_PAIR(CP_DIM));
+    /* Reserve: ip(15) + host(var) + owner(var) + age(7) + cnt(4) + 5 sep */
+    int spare = w - (15 + 7 + 4 + 6);   /* 6 = paddings/margins */
+    int host_w  = spare * 6 / 10;
+    int owner_w = spare - host_w;
+    if (host_w  < 8) host_w  = 8;
+    if (owner_w < 6) owner_w = 6;
+
+    clipline(y0 + 1, x0, w, "  %-15s %-*s %-*s %-7s %4s",
+             "ip", host_w, "host", owner_w, "owner",
+             "age", "conn");
+
+    int rows = h - 2;
+    int n = s->top_host_count < rows ? s->top_host_count : rows;
+    time_t now = time(NULL);
+
+    for (int i = 0; i < n; i++) {
+        const top_host_t *e = &s->top_hosts[i];
+        char age[12];
+        fmt_age(now, e->first_seen, age, sizeof(age));
+
+        /* paint a clean line first */
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x0, w, "");
+
+        int xc = x0;
+        move(y0 + 2 + i, xc);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        addstr("  ");
+        xc += 2;
+
+        /* IP — coloured + bold if cross-panel */
+        tui_ip_addstr(e->ip, (int)PKT_CAT_OTHER);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        {
+            int ip_len = (int)strlen(e->ip);
+            for (int j = ip_len; j < 15; j++) addch(' ');
+            addch(' ');
+        }
+        xc += 16;
+
+        /* hostname — brand-coloured */
+        move(y0 + 2 + i, xc);
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%-*.*s",
+                     host_w, host_w, e->hostname[0] ? e->hostname : "-");
+            tui_brand_addstr(buf, (int)PKT_CAT_OTHER);
+        }
+        xc += host_w;
+        attrset(COLOR_PAIR(CP_NORMAL));
+        move(y0 + 2 + i, xc);
+        addch(' ');
+        xc += 1;
+
+        /* owner — dim if unknown */
+        if (e->owner[0]) attrset(COLOR_PAIR(CP_BRIGHT));
+        else             attrset(COLOR_PAIR(CP_DIM));
+        printw("%-*.*s", owner_w, owner_w, e->owner[0] ? e->owner : "?");
+        xc += owner_w;
+
+        attrset(COLOR_PAIR(CP_NORMAL));
+        printw(" %-7s %4d", age, e->conn_count);
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x0, w, "");
 }
 
 /* ── Packets (real-time scroll: newest at top each frame) ── */
@@ -827,7 +914,13 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int packets_y = bot4_y  + bot4_h;
 
     draw_iface_band(s, iface_y, iface_h, cols);
-    draw_conn_band (s, conn_y,  conn_h,  cols);
+
+    /* Split the connections row: 60% conn table on the left, 40% top
+     * hosts panel on the right. */
+    int conn_w = (cols * 6) / 10;
+    int hosts_w = cols - conn_w;
+    draw_conn_band      (s, conn_y, conn_h, 0,      conn_w);
+    draw_top_hosts_panel(s, conn_y, conn_h, conn_w, hosts_w);
 
     int pw1 = cols / 3;
     int pw2 = cols / 3;
