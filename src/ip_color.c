@@ -6,7 +6,11 @@
 
 pkt_category_t pkt_categorize(int proto, uint16_t sport, uint16_t dport) {
     if (proto == 1 || proto == 58)            return PKT_CAT_ICMP;
-    if (sport == 53 || dport == 53)           return PKT_CAT_DNS;
+    if (sport == 53  || dport == 53)          return PKT_CAT_DNS;
+    if (sport == 443 || dport == 443)         return PKT_CAT_TLS;
+    if (sport == 80  || dport == 80  ||
+        sport == 8080 || dport == 8080 ||
+        sport == 8000 || dport == 8000)       return PKT_CAT_HTTP;
     if (proto == 6)                            return PKT_CAT_TCP;
     if (proto == 17)                           return PKT_CAT_UDP;
     return PKT_CAT_OTHER;

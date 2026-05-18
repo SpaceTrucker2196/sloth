@@ -71,6 +71,8 @@ static int cp_for_bg_cat(int cat) {
     case 2: return CP_PKT_UDP;
     case 3: return CP_PKT_DNS;
     case 4: return CP_PKT_ICMP;
+    case 5: return CP_PKT_HTTP;
+    case 6: return CP_PKT_TLS;
     default: return CP_NORMAL;
     }
 }
@@ -82,6 +84,8 @@ static int cp_for_ip_on_cat(int cat, int ip_idx) {
     case 2: base = CP_IP_BASE_UDP;   break;
     case 3: base = CP_IP_BASE_DNS;   break;
     case 4: base = CP_IP_BASE_ICMP;  break;
+    case 5: base = CP_IP_BASE_HTTP;  break;
+    case 6: base = CP_IP_BASE_TLS;   break;
     default: base = CP_IP_BASE_OTHER; break;
     }
     return base + (ip_idx & 7);
@@ -119,6 +123,8 @@ static int cp_for_brand_on_cat(int cat, int brand_idx) {
     case 2: base = CP_BR_BASE_UDP;   break;
     case 3: base = CP_BR_BASE_DNS;   break;
     case 4: base = CP_BR_BASE_ICMP;  break;
+    case 5: base = CP_BR_BASE_HTTP;  break;
+    case 6: base = CP_BR_BASE_TLS;   break;
     default: base = CP_BR_BASE_OTHER; break;
     }
     return base + (brand_idx & 7);
@@ -209,7 +215,11 @@ void tui_pkt_bg(int proto, uint16_t sport, uint16_t dport) {
      * ip_color.h. The two implementations must agree. */
     int cat;
     if      (proto == 1 || proto == 58)          cat = 4;  /* ICMP */
-    else if (sport == 53 || dport == 53)         cat = 3;  /* DNS  */
+    else if (sport == 53  || dport == 53)        cat = 3;  /* DNS  */
+    else if (sport == 443 || dport == 443)       cat = 6;  /* TLS  */
+    else if (sport == 80  || dport == 80  ||
+             sport == 8080 || dport == 8080 ||
+             sport == 8000 || dport == 8000)     cat = 5;  /* HTTP */
     else if (proto == 6)                         cat = 1;  /* TCP  */
     else if (proto == 17)                        cat = 2;  /* UDP  */
     else                                          cat = 0;  /* OTHER */
@@ -299,33 +309,40 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category backgrounds: neutral greys in a 5%/10%/15%/
-             * 20%/25% ramp. Hue differentiation is now carried by the IP
-             * and brand fg colour pairs, not the background. */
-            short grey_bg[5];
+            /* Packet-category backgrounds: neutral greys in a
+             * 5/10/15/20/25/30/35 % ramp.  Hue is carried by the IP /
+             * brand / SSID foreground pairs. */
+            short grey_bg[7];
             if (can_change_color()) {
                 init_color(99,   50,  50,  50);   /* OTHER:  5% */
                 init_color(100, 100, 100, 100);   /* TCP  : 10% */
                 init_color(101, 150, 150, 150);   /* UDP  : 15% */
                 init_color(102, 200, 200, 200);   /* DNS  : 20% */
                 init_color(103, 250, 250, 250);   /* ICMP : 25% */
+                init_color(104, 300, 300, 300);   /* HTTP : 30% */
+                init_color(105, 350, 350, 350);   /* TLS  : 35% */
                 grey_bg[0] = 99;
                 grey_bg[1] = 100;
                 grey_bg[2] = 101;
                 grey_bg[3] = 102;
                 grey_bg[4] = 103;
+                grey_bg[5] = 104;
+                grey_bg[6] = 105;
             } else {
-                /* Closest xterm-256 greyscale slots */
-                grey_bg[0] = 232;   /* ~3% */
+                grey_bg[0] = 232;   /* ~3%  */
                 grey_bg[1] = 234;   /* ~11% */
                 grey_bg[2] = 235;   /* ~15% */
                 grey_bg[3] = 236;   /* ~19% */
                 grey_bg[4] = 238;   /* ~27% */
+                grey_bg[5] = 239;   /* ~31% */
+                grey_bg[6] = 240;   /* ~35% */
             }
             init_pair(CP_PKT_TCP,  255, grey_bg[1]);
             init_pair(CP_PKT_UDP,  255, grey_bg[2]);
             init_pair(CP_PKT_DNS,  255, grey_bg[3]);
             init_pair(CP_PKT_ICMP, 255, grey_bg[4]);
+            init_pair(CP_PKT_HTTP, 255, grey_bg[5]);
+            init_pair(CP_PKT_TLS,  255, grey_bg[6]);
             /* 8 IP fg colours × 5 row bgs.
              * Fallout-inspired phosphor palette — teal phosphor (already
              * the project's base CP_NORMAL = 43) is the anchor; these eight
@@ -346,6 +363,8 @@ void tui_init(void) {
                 init_pair(CP_IP_BASE_UDP   + i, ip_fg[i], grey_bg[2]);
                 init_pair(CP_IP_BASE_DNS   + i, ip_fg[i], grey_bg[3]);
                 init_pair(CP_IP_BASE_ICMP  + i, ip_fg[i], grey_bg[4]);
+                init_pair(CP_IP_BASE_HTTP  + i, ip_fg[i], grey_bg[5]);
+                init_pair(CP_IP_BASE_TLS   + i, ip_fg[i], grey_bg[6]);
             }
             /* Brand colour palette: slot indices match BR_* in tui.h */
             static const short brand_fg[8] = {
@@ -364,6 +383,8 @@ void tui_init(void) {
                 init_pair(CP_BR_BASE_UDP   + i, brand_fg[i], grey_bg[2]);
                 init_pair(CP_BR_BASE_DNS   + i, brand_fg[i], grey_bg[3]);
                 init_pair(CP_BR_BASE_ICMP  + i, brand_fg[i], grey_bg[4]);
+                init_pair(CP_BR_BASE_HTTP  + i, brand_fg[i], grey_bg[5]);
+                init_pair(CP_BR_BASE_TLS   + i, brand_fg[i], grey_bg[6]);
             }
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
@@ -378,15 +399,19 @@ void tui_init(void) {
             init_pair(CP_PKT_UDP,  COLOR_WHITE, COLOR_BLACK);
             init_pair(CP_PKT_DNS,  COLOR_WHITE, COLOR_BLACK);
             init_pair(CP_PKT_ICMP, COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_PKT_HTTP, COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_PKT_TLS,  COLOR_WHITE, COLOR_BLACK);
             static const short ip_fg_8[8] = {
                 COLOR_CYAN,    COLOR_BLUE,    COLOR_YELLOW,  3,
                 COLOR_MAGENTA, COLOR_RED,     COLOR_GREEN,   COLOR_WHITE,
             };
-            for (int b = 0; b < 5; b++) {
+            for (int b = 0; b < 7; b++) {
                 int base = (b == 0) ? CP_IP_BASE_OTHER :
                            (b == 1) ? CP_IP_BASE_TCP   :
                            (b == 2) ? CP_IP_BASE_UDP   :
-                           (b == 3) ? CP_IP_BASE_DNS   : CP_IP_BASE_ICMP;
+                           (b == 3) ? CP_IP_BASE_DNS   :
+                           (b == 4) ? CP_IP_BASE_ICMP  :
+                           (b == 5) ? CP_IP_BASE_HTTP  : CP_IP_BASE_TLS;
                 for (int i = 0; i < 8; i++)
                     init_pair(base + i, ip_fg_8[i], COLOR_BLACK);
             }
@@ -395,11 +420,13 @@ void tui_init(void) {
                 COLOR_BLUE,    COLOR_RED,    COLOR_YELLOW, COLOR_GREEN,
                 COLOR_YELLOW,  COLOR_RED,    COLOR_WHITE,  COLOR_WHITE,
             };
-            for (int b = 0; b < 5; b++) {
+            for (int b = 0; b < 7; b++) {
                 int base = (b == 0) ? CP_BR_BASE_OTHER :
                            (b == 1) ? CP_BR_BASE_TCP   :
                            (b == 2) ? CP_BR_BASE_UDP   :
-                           (b == 3) ? CP_BR_BASE_DNS   : CP_BR_BASE_ICMP;
+                           (b == 3) ? CP_BR_BASE_DNS   :
+                           (b == 4) ? CP_BR_BASE_ICMP  :
+                           (b == 5) ? CP_BR_BASE_HTTP  : CP_BR_BASE_TLS;
                 for (int i = 0; i < 8; i++)
                     init_pair(base + i, brand_fg_8[i], COLOR_BLACK);
             }

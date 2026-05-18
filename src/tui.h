@@ -27,20 +27,24 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 #define CP_HEAT_HI    6   /* xterm-256 208  rgb(255,135,0)  — hot   */
 #define CP_HEAT_PEAK  7   /* xterm-256 196  rgb(255,0,0)    — peak  */
 
-/* ── Packet-category row backgrounds (greyscale) ─────────── */
-#define CP_PKT_TCP    8   /* very-dark grey  */
-#define CP_PKT_UDP    9   /* dark grey       */
-#define CP_PKT_DNS   10   /* medium-dark grey */
-#define CP_PKT_ICMP  11   /* medium grey     */
+/* ── Packet-category row backgrounds (greyscale ramp) ────── */
+#define CP_PKT_TCP    8   /* 10% */
+#define CP_PKT_UDP    9   /* 15% */
+#define CP_PKT_DNS   10   /* 20% */
+#define CP_PKT_ICMP  11   /* 25% */
+#define CP_PKT_HTTP  12   /* 30% */
+#define CP_PKT_TLS   13   /* 35% */
 
 /* ── IP-foreground palette × category-bg ─────────────────── *
  * 8 colours per row, 5 row-bg categories.  Pair number is
  *   CP_IP_BASE_<cat> + ip_color_index */
-#define CP_IP_BASE_OTHER 16   /* on default bg     (16..23) */
-#define CP_IP_BASE_TCP   24   /* on TCP grey       (24..31) */
-#define CP_IP_BASE_UDP   32   /* on UDP grey       (32..39) */
-#define CP_IP_BASE_DNS   40   /* on DNS grey       (40..47) */
-#define CP_IP_BASE_ICMP  48   /* on ICMP grey      (48..55) */
+#define CP_IP_BASE_OTHER 16    /* on default bg (16..23)  */
+#define CP_IP_BASE_TCP   24    /* on TCP grey   (24..31)  */
+#define CP_IP_BASE_UDP   32    /* on UDP grey   (32..39)  */
+#define CP_IP_BASE_DNS   40    /* on DNS grey   (40..47)  */
+#define CP_IP_BASE_ICMP  48    /* on ICMP grey  (48..55)  */
+#define CP_IP_BASE_HTTP  128   /* on HTTP grey  (128..135) */
+#define CP_IP_BASE_TLS   136   /* on TLS grey   (136..143) */
 
 /* ── Brand-name palette × category-bg ────────────────────── *
  * 8 brand colour slots per row, 5 row-bg categories.
@@ -49,11 +53,13 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
  *   1 = Google red         5 = Cloudflare red
  *   2 = Google yellow      6 = example.org grey
  *   3 = Google green       7 = (reserved) */
-#define CP_BR_BASE_OTHER 56   /* on default bg (56..63) */
-#define CP_BR_BASE_TCP   64   /* on TCP grey   (64..71) */
-#define CP_BR_BASE_UDP   72   /* on UDP grey   (72..79) */
-#define CP_BR_BASE_DNS   80   /* on DNS grey   (80..87) */
-#define CP_BR_BASE_ICMP  88   /* on ICMP grey  (88..95) */
+#define CP_BR_BASE_OTHER 56    /* on default bg (56..63)   */
+#define CP_BR_BASE_TCP   64    /* on TCP grey   (64..71)   */
+#define CP_BR_BASE_UDP   72    /* on UDP grey   (72..79)   */
+#define CP_BR_BASE_DNS   80    /* on DNS grey   (80..87)   */
+#define CP_BR_BASE_ICMP  88    /* on ICMP grey  (88..95)   */
+#define CP_BR_BASE_HTTP  144   /* on HTTP grey  (144..151) */
+#define CP_BR_BASE_TLS   152   /* on TLS grey   (152..159) */
 
 /* Brand-colour slot indices (match the layout above). */
 #define BR_GOOGLE_BLUE    0

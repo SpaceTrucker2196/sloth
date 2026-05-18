@@ -6,11 +6,28 @@
 /* ── Categorisation ──────────────────────────────────────── */
 
 static void test_categorize_tcp(void) {
-    ASSERT_EQ((int)pkt_categorize(6, 12345, 443), (int)PKT_CAT_TCP);
+    /* Generic TCP — not on a recognised app-layer port */
+    ASSERT_EQ((int)pkt_categorize(6, 12345, 22), (int)PKT_CAT_TCP);
 }
 
 static void test_categorize_udp(void) {
-    ASSERT_EQ((int)pkt_categorize(17, 33445, 443), (int)PKT_CAT_UDP);
+    /* Generic UDP — not on 53/443/80 */
+    ASSERT_EQ((int)pkt_categorize(17, 33445, 123), (int)PKT_CAT_UDP);
+}
+
+static void test_categorize_tls(void) {
+    /* Port 443 in either direction, over TCP or UDP (QUIC) */
+    ASSERT_EQ((int)pkt_categorize(6,  12345, 443),   (int)PKT_CAT_TLS);
+    ASSERT_EQ((int)pkt_categorize(6,  443,   12345), (int)PKT_CAT_TLS);
+    ASSERT_EQ((int)pkt_categorize(17, 33445, 443),   (int)PKT_CAT_TLS);
+}
+
+static void test_categorize_http(void) {
+    /* Ports 80 / 8080 / 8000 over TCP */
+    ASSERT_EQ((int)pkt_categorize(6, 12345, 80),   (int)PKT_CAT_HTTP);
+    ASSERT_EQ((int)pkt_categorize(6, 80,    12345), (int)PKT_CAT_HTTP);
+    ASSERT_EQ((int)pkt_categorize(6, 12345, 8080), (int)PKT_CAT_HTTP);
+    ASSERT_EQ((int)pkt_categorize(6, 12345, 8000), (int)PKT_CAT_HTTP);
 }
 
 static void test_categorize_dns_either_direction(void) {
@@ -18,6 +35,11 @@ static void test_categorize_dns_either_direction(void) {
     ASSERT_EQ((int)pkt_categorize(17, 12345, 53), (int)PKT_CAT_DNS);
     ASSERT_EQ((int)pkt_categorize(17, 53,    12345), (int)PKT_CAT_DNS);
     ASSERT_EQ((int)pkt_categorize(6,  12345, 53), (int)PKT_CAT_DNS);
+}
+
+static void test_categorize_icmp_beats_port_match(void) {
+    /* Even if (improbably) the ports look like 443, ICMP wins */
+    ASSERT_EQ((int)pkt_categorize(1, 443, 443), (int)PKT_CAT_ICMP);
 }
 
 static void test_categorize_icmp(void) {
@@ -117,8 +139,11 @@ void run_ip_color_tests(void) {
     TEST_SUITE("ip_color pkt_categorize");
     RUN_TEST(test_categorize_tcp);
     RUN_TEST(test_categorize_udp);
+    RUN_TEST(test_categorize_tls);
+    RUN_TEST(test_categorize_http);
     RUN_TEST(test_categorize_dns_either_direction);
     RUN_TEST(test_categorize_icmp);
+    RUN_TEST(test_categorize_icmp_beats_port_match);
     RUN_TEST(test_categorize_other);
 
     TEST_SUITE("ip_color index");

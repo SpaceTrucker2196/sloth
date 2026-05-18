@@ -12,6 +12,8 @@ typedef enum {
     PKT_CAT_UDP   = 2,
     PKT_CAT_DNS   = 3,
     PKT_CAT_ICMP  = 4,
+    PKT_CAT_HTTP  = 5,
+    PKT_CAT_TLS   = 6,
     PKT_CAT_COUNT
 } pkt_category_t;
 
