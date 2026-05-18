@@ -12,4 +12,8 @@
 const char *geo_lookup(uint32_t ip_host);   /* host byte order */
 const char *geo_lookup_str(const char *ip); /* dotted-decimal IPv4 */
 
+/* Map a two-letter region code (as returned by geo_lookup_str) to a readable
+ * name. Returns NULL for unknown codes. */
+const char *geo_region_name(const char *code);
+
 #endif /* GEO_H */

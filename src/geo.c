@@ -62,6 +62,19 @@ const char *geo_lookup(uint32_t ip) {
     return g_geo8[ip >> 24];
 }
 
+const char *geo_region_name(const char *code) {
+    if (!code) return NULL;
+    if (code[0] == 'U' && code[1] == 'S') return "ARIN (US/CA)";
+    if (code[0] == 'E' && code[1] == 'U') return "RIPE NCC (EU/MEA)";
+    if (code[0] == 'A' && code[1] == 'P') return "APNIC (Asia-Pac)";
+    if (code[0] == 'S' && code[1] == 'A') return "LACNIC (LatAm)";
+    if (code[0] == 'A' && code[1] == 'F') return "AFRINIC (Africa)";
+    if (code[0] == 'L' && code[1] == 'O') return "Loopback";
+    if (code[0] == 'M' && code[1] == 'C') return "Multicast";
+    if (code[0] == '-' && code[1] == '-') return "Private / Reserved";
+    return NULL;
+}
+
 const char *geo_lookup_str(const char *ip) {
     if (!ip || !*ip || strchr(ip, ':')) return NULL;  /* null or IPv6 */
     unsigned a, b, c, d;

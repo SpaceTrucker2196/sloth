@@ -6,6 +6,8 @@
 #include "views/alerts.h"
 #include "../alerts.h"
 #include "filter.h"
+#include "geo.h"
+#include "ip_owner.h"
 
 #define ALERTS_PAGE 30
 
@@ -19,6 +21,48 @@ static const char *sev_label(alert_sev_t sev) {
 
 static int sev_is_crit(alert_sev_t sev) { return sev == ALERT_SEV_CRIT; }
 static int sev_is_warn(alert_sev_t sev) { return sev == ALERT_SEV_WARN; }
+
+/* Render a one-line enrichment panel for the selected alert when it has a
+ * concrete match_ip. Shows region (RIR-level geo) and owner (well-known
+ * orgs only — NULL means we don't know it). */
+static void draw_enrichment(const alert_t *a) {
+    if (!a || !a->match_ip[0]) {
+        tui_dim();
+        TPRINT("\n  (select an alert with a known flow to see IP context)\n");
+        tui_normal();
+        return;
+    }
+
+    const char *region_code = geo_lookup_str(a->match_ip);
+    const char *region_name = geo_region_name(region_code);
+    const char *owner       = ip_owner_lookup_str(a->match_ip);
+
+    tui_dim();    TPRINT("\n  context  ");
+    tui_normal(); TPRINT("ip=");
+    tui_bright(); TPRINT("%-15s", a->match_ip);
+    if (a->match_port != 0) {
+        tui_normal(); TPRINT("  port=");
+        tui_bright(); TPRINT("%-5u", (unsigned)a->match_port);
+    } else {
+        TPRINT("        ");
+    }
+
+    tui_normal(); TPRINT("  region=");
+    if (region_name) {
+        tui_bright(); TPRINT("%-20s", region_name);
+    } else {
+        tui_dim();    TPRINT("%-20s", "unknown");
+    }
+
+    tui_normal(); TPRINT("  owner=");
+    if (owner) {
+        tui_bright(); TPRINT("%s", owner);
+    } else {
+        tui_dim();    TPRINT("(unknown / not in embedded list)");
+    }
+    tui_normal();
+    TPRINT("\n");
+}
 
 void view_alerts_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
@@ -57,6 +101,9 @@ void view_alerts_draw(const sloth_state_t *s) {
         tui_normal();
         return;
     }
+
+    /* Reserve one line at the bottom for the enrichment footer. */
+    if (page > 2) page -= 2;
 
     int page_top = s->alert_sel - page / 2;
     if (page_top + page > s->alert_count) page_top = s->alert_count - page;
@@ -98,6 +145,11 @@ void view_alerts_draw(const sloth_state_t *s) {
             tui_normal();
         }
     }
+
+    /* Footer: enrichment for the selected alert. */
+    if (s->alert_sel >= 0 && s->alert_sel < s->alert_count)
+        draw_enrichment(&s->alerts[s->alert_sel]);
+
     tui_normal();
 }
 

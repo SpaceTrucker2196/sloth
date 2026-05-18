@@ -52,6 +52,7 @@ void run_beacon_detect_tests(void);
 void run_jsonl_tests(void);
 void run_filter_tests(void);
 void run_alert_pcap_tests(void);
+void run_ip_owner_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -103,6 +104,7 @@ int main(void) {
     run_jsonl_tests();
     run_filter_tests();
     run_alert_pcap_tests();
+    run_ip_owner_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

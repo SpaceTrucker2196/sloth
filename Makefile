@@ -61,7 +61,8 @@ SRCS = src/main.c          \
        src/jsonl.c           \
        src/views/help.c      \
        src/filter.c          \
-       src/alert_pcap.c
+       src/alert_pcap.c      \
+       src/ip_owner.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -243,7 +244,9 @@ TEST_SRCS = tests/main_test.c          \
             src/filter.c                   \
             tests/test_filter.c            \
             src/alert_pcap.c               \
-            tests/test_alert_pcap.c
+            tests/test_alert_pcap.c        \
+            src/ip_owner.c                 \
+            tests/test_ip_owner.c
 
 TEST_BIN = sloth_test
 
