@@ -110,6 +110,27 @@ static void seed_ssdp(sloth_state_t *s, const char *ip, const char *type) {
     snprintf(d->type, sizeof(d->type), "%s", type);
 }
 
+static void seed_arp(sloth_state_t *s, const char *ip,
+                     const uint8_t mac[6]) {
+    if (s->arp_count >= MAX_ARP_ENTRIES) return;
+    arp_entry_t *a = &s->arp_entries[s->arp_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->ip, sizeof(a->ip), "%s", ip);
+    memcpy(a->mac, mac, 6);
+    snprintf(a->iface, sizeof(a->iface), "eth0");
+}
+
+static void seed_deauth(sloth_state_t *s, const uint8_t dst[6],
+                        uint16_t reason, int flood) {
+    if (s->deauth_count >= MAX_DEAUTH_ENTRIES) return;
+    deauth_event_t *e = &s->deauth_events[s->deauth_count++];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->dst, dst, 6);
+    e->reason = reason;
+    e->count  = 12;
+    e->flood  = flood;
+}
+
 static void seed_beacon(sloth_state_t *s, const char *ssid, int sig, int ch) {
     beacon_ap_t *b = &s->beacon_aps[s->beacon_count++];
     memset(b, 0, sizeof(*b));
@@ -147,6 +168,10 @@ static void test_draw_populated(void) {
     seed_dhcp_event(&s, "192.168.1.100", "raspberrypi", 5);
     seed_dhcp_event(&s, "192.168.1.101", "laptop",      3);
     seed_ssdp(&s, "192.168.1.1", "urn:schemas-upnp-org:device:InternetGatewayDevice:2");
+    uint8_t arp_mac[6] = { 0xb8, 0x27, 0xeb, 0x11, 0x22, 0x33 };
+    seed_arp(&s, "192.168.1.100", arp_mac);
+    uint8_t deauth_dst[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+    seed_deauth(&s, deauth_dst, 7, 1);
     view_dashboard_draw(&s);
     ASSERT(1);
 }

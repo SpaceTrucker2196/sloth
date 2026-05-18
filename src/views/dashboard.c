@@ -50,15 +50,10 @@ static const iface_hist_t *hist_lookup(const sloth_state_t *s, const char *name)
     return NULL;
 }
 
-/* Build a UTF-8 sparkline of `width` glyphs from the most recent samples
- * in `vals` (a ring of capacity HIST_LEN with `head` pointing to the next
- * write slot, `n` samples populated).
- *
- *   0           -> '_'  (single byte, per request)
- *   >0..max     -> '▁'..'█' (block-eighths, 3 UTF-8 bytes each)
- *   missing     -> '_'  (no data that far back)
- *
- * `out` should be at least width*3+1 bytes. */
+#ifndef WITH_NCURSES
+/* Build a plain-ASCII / UTF-8 sparkline into a string buffer. Only used by
+ * the ANSI fallback — the ncurses path uses draw_sparkline_at() which
+ * renders directly with per-glyph color attributes. */
 static void sparkline(const double *vals, int head, int n,
                       int width, char *out, int outsz) {
     double max = 0.0;
@@ -102,15 +97,57 @@ static void sparkline(const double *vals, int head, int n,
     }
     out[pos] = '\0';
 }
+#endif /* !WITH_NCURSES */
 
 /* sparkline width in glyph cells — used by both builds. */
-#define SPARK_W 12
+#define SPARK_W 24
 
 #ifdef WITH_NCURSES
 
 #define DASH_TOP_Y     2        /* below tabbar + hline */
-#define IFACE_BAND_H   7
-#define BOTTOM_BAND_H  7
+#define MIN_PANEL_H    4        /* title + header + 2 data rows */
+
+/* Render a sparkline directly to (y,x) with heat-graded colors per glyph.
+ * Levels:
+ *   0      -> CP_DIM '_'
+ *   1..2   -> CP_NORMAL  (cool phosphor — quiet)
+ *   3..4   -> CP_HEAT_MID
+ *   5..6   -> CP_HEAT_HI
+ *   7..8   -> CP_HEAT_PEAK */
+static void draw_sparkline_at(int y, int x, int width,
+                              const double *vals, int head, int n) {
+    double max = 0.0;
+    for (int i = 0; i < n && i < HIST_LEN; i++)
+        if (vals[i] > max) max = vals[i];
+
+    static const char *glyph[9] = {
+        "_",
+        "\xe2\x96\x81", "\xe2\x96\x82", "\xe2\x96\x83",
+        "\xe2\x96\x84", "\xe2\x96\x85", "\xe2\x96\x86",
+        "\xe2\x96\x87", "\xe2\x96\x88",
+    };
+
+    move(y, x);
+    for (int i = 0; i < width; i++) {
+        int age = (width - 1) - i;
+        int lvl = 0;
+        if (age < n) {
+            int slot = (head - 1 - age + HIST_LEN) % HIST_LEN;
+            double v = vals[slot];
+            if (v > 0.0 && max > 0.0) {
+                lvl = (int)((v / max) * 8.0 + 0.5);
+                if (lvl < 1) lvl = 1;
+                if (lvl > 8) lvl = 8;
+            }
+        }
+        if      (lvl == 0)  attrset(COLOR_PAIR(CP_DIM));
+        else if (lvl <= 2)  attrset(COLOR_PAIR(CP_NORMAL));
+        else if (lvl <= 4)  attrset(COLOR_PAIR(CP_HEAT_MID));
+        else if (lvl <= 6)  attrset(COLOR_PAIR(CP_HEAT_HI));
+        else                attrset(COLOR_PAIR(CP_HEAT_PEAK));
+        addstr(glyph[lvl]);
+    }
+}
 
 /* Position then print one line, padded to `w` chars. ASCII / single-byte. */
 static void clipline(int y, int x, int w, const char *fmt, ...) {
@@ -141,14 +178,29 @@ static void panel_title(int y, int x, int w, const char *name) {
 
 /* ── Interfaces row with sparklines ──────────────────────── */
 
+/* Column geometry: 2 (margin) + 8 (name) + 10 (rx/s) + 10 (tx/s) +
+ * 10 (rx tot) + 10 (tx tot) + 2 (sep) + SPARK_W + 2 (sep) + SPARK_W
+ * + trailing fill. With SPARK_W=24 the fixed-width prefix ends at col 54
+ * and each sparkline occupies the next 24 cols. */
+#define IFACE_FIXED_W   54
+#define IFACE_RX_X      IFACE_FIXED_W
+#define IFACE_TX_X      (IFACE_FIXED_W + SPARK_W + 2)
+#define IFACE_END_X     (IFACE_TX_X + SPARK_W)
+
 static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
     panel_title(y0, 0, w, "Interfaces");
 
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, 0, w,
-             "  %-10s  %10s  %10s  %10s  %10s   %-*s  %-*s",
-             "iface", "rx/s", "tx/s", "rx total", "tx total",
-             SPARK_W, "rx graph", SPARK_W, "tx graph");
+    clipline(y0 + 1, 0, IFACE_FIXED_W,
+             "  %-8s  %10s  %10s  %10s  %10s",
+             "iface", "rx/s", "tx/s", "rx total", "tx total");
+    /* sparkline column headers */
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, IFACE_RX_X, SPARK_W,     "rx graph");
+    clipline(y0 + 1, IFACE_TX_X, SPARK_W,     "tx graph");
+    /* clear remainder of the header line so the full-width band stays clean */
+    if (IFACE_END_X < w)
+        clipline(y0 + 1, IFACE_END_X, w - IFACE_END_X, "");
 
     int rows = h - 2;
     int n    = s->iface_count < rows ? s->iface_count : rows;
@@ -160,26 +212,34 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
         fmt_bytes(I->rx_bytes, rxt, sizeof(rxt));
         fmt_bytes(I->tx_bytes, txt, sizeof(txt));
 
-        char rx_spark[SPARK_W * 3 + 1] = "____________";
-        char tx_spark[SPARK_W * 3 + 1] = "____________";
+        int y = y0 + 2 + i;
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y, 0, IFACE_FIXED_W,
+                 "  %-8.8s  %10s  %10s  %10s  %10s",
+                 I->name, rxr, txr, rxt, txt);
+
         const iface_hist_t *H = hist_lookup(s, I->name);
         if (H) {
-            sparkline(H->rx, H->head, H->count,
-                      SPARK_W, rx_spark, sizeof(rx_spark));
-            sparkline(H->tx, H->head, H->count,
-                      SPARK_W, tx_spark, sizeof(tx_spark));
+            draw_sparkline_at(y, IFACE_RX_X, SPARK_W, H->rx, H->head, H->count);
+            draw_sparkline_at(y, IFACE_TX_X, SPARK_W, H->tx, H->head, H->count);
+        } else {
+            /* no history yet — paint underscores */
+            attrset(COLOR_PAIR(CP_DIM));
+            move(y, IFACE_RX_X);
+            for (int j = 0; j < SPARK_W; j++) addch('_');
+            move(y, IFACE_TX_X);
+            for (int j = 0; j < SPARK_W; j++) addch('_');
         }
-
+        /* erase trailing cols so the full-width band stays clean */
+        if (IFACE_END_X < w) {
+            attrset(COLOR_PAIR(CP_NORMAL));
+            clipline(y, IFACE_END_X, w - IFACE_END_X, "");
+        }
+    }
+    /* erase any unused iface rows so prior frames don't leak through */
+    for (int i = n; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
-        int y = y0 + 2 + i;
-        /* Fixed-width portion via clipline. */
-        clipline(y, 0, 64,
-                 "  %-10.10s  %10s  %10s  %10s  %10s   ",
-                 I->name, rxr, txr, rxt, txt);
-        /* Sparklines via raw addstr (UTF-8 is multi-byte; mvprintw
-           would miscount columns). */
-        move(y, 64);  addstr(rx_spark);
-        move(y, 64 + SPARK_W + 2); addstr(tx_spark);
+        clipline(y0 + 2 + i, 0, w, "");
     }
 }
 
@@ -359,6 +419,91 @@ static void draw_dhcp_panel(const sloth_state_t *s, int y0, int h, int x, int w)
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
 
+static void draw_arp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "ARP table");
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, x, w, "  %-15s %-17s", "ip", "mac");
+    int rows = h - 2;
+    int n = s->arp_count < rows ? s->arp_count : rows;
+    for (int i = 0; i < n; i++) {
+        const arp_entry_t *a = &s->arp_entries[i];
+        char mac[20];
+        snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 a->mac[0], a->mac[1], a->mac[2],
+                 a->mac[3], a->mac[4], a->mac[5]);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x, w, "  %-15.15s %-17s", a->ip, mac);
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+}
+
+static void draw_deauth_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "Deauth");
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, x, w, "  %-17s %5s %s",
+             "target", "rsn", "flood");
+    int rows = h - 2;
+    int n = s->deauth_count < rows ? s->deauth_count : rows;
+    for (int i = 0; i < n; i++) {
+        const deauth_event_t *e = &s->deauth_events[i];
+        char dst[20];
+        snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 e->dst[0], e->dst[1], e->dst[2],
+                 e->dst[3], e->dst[4], e->dst[5]);
+        if (e->flood) attrset(COLOR_PAIR(CP_HEAT_PEAK));
+        else          attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x, w, "  %-17s %5u %s",
+                 dst, (unsigned)e->reason, e->flood ? "FLOOD" : "");
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+}
+
+static void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "Summary");
+    /* Compose a few summary counters. */
+    int crit_n = 0, warn_n = 0;
+    for (int i = 0; i < s->alert_count; i++) {
+        if (s->alerts[i].sev == ALERT_SEV_CRIT) crit_n++;
+        else if (s->alerts[i].sev == ALERT_SEV_WARN) warn_n++;
+    }
+    int tcp_n = 0, udp_n = 0;
+    for (int i = 0; i < s->conn_count; i++) {
+        if (s->conns[i].proto == PROTO_TCP)      tcp_n++;
+        else if (s->conns[i].proto == PROTO_UDP) udp_n++;
+    }
+
+    struct { const char *label; char val[40]; } rows_data[6];
+    int rc = 0;
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d / %d", s->iface_count, s->ap_count); rows_data[rc++].label = "iface/ap ";
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d (TCP %d, UDP %d)", s->conn_count, tcp_n, udp_n);
+                                                       rows_data[rc++].label = "conns    ";
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d", s->device_count);                  rows_data[rc++].label = "devices  ";
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d (DNS %d / TLS %d)",
+             s->dns_log_count + s->tls_log_count +
+             s->quic_log_count + s->http_log_count,
+             s->dns_log_count, s->tls_log_count);     rows_data[rc++].label = "log evts ";
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d crit %d warn", crit_n, warn_n);      rows_data[rc++].label = "alerts   ";
+    snprintf(rows_data[rc].val, sizeof(rows_data[rc].val),
+             "%d", s->scan_count);                     rows_data[rc++].label = "scanners ";
+
+    int rows = h - 1;          /* no header line — just the panel title */
+    int n = rc < rows ? rc : rows;
+    for (int i = 0; i < n; i++) {
+        attrset(COLOR_PAIR(CP_DIM));
+        clipline(y0 + 1 + i, x, w, "  %-9s", rows_data[i].label);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        /* overprint the value to the right of the label */
+        move(y0 + 1 + i, x + 2 + 9 + 1);
+        addstr(rows_data[i].val);
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 1 + i, x, w, "");
+}
+
 static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "SSDP / UPnP");
     attrset(COLOR_PAIR(CP_DIM));
@@ -383,46 +528,78 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int lines = LINES;
     int cols  = COLS;
 
-    /* Reserve fixed bands: header(2) + iface(7) + bottom_r1(7) + bottom_r2(7)
-     * = 23, plus at least 3 each for conn and packets. So minimum is 29. */
-    if (lines < 29 || cols < 90) {
+    /* Minimum viable layout:
+     *   header(2) + iface(3, =2 hdr + 1 iface)
+     *   + 5 panel rows each MIN_PANEL_H (=4) (3 bottom rows + 2 doubles for
+     *     conn + packets, but conn/packets each are 2*MIN_PANEL_H=8)
+     *   = 2 + 3 + 3*4 + 2*8 = 33 lines */
+    int min_lines = 2 + 3 + 3 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
+    if (lines < min_lines || cols < IFACE_END_X + 2) {
         tui_dim();
         TPRINT(" Dashboard: terminal too small "
-               "(need >=90 cols, >=29 rows; this is %dx%d)\n",
-               cols, lines);
+               "(need >=%d cols, >=%d rows; this is %dx%d)\n",
+               IFACE_END_X + 2, min_lines, cols, lines);
         tui_normal();
         return;
     }
 
     int iface_y = DASH_TOP_Y;
-    int iface_h = IFACE_BAND_H;
+    /* iface band expands as needed to show every iface (title + header +
+     * one row per iface). Cap at a third of the screen so a host with
+     * 20 ifaces can't smother the rest of the dashboard. */
+    int iface_cap = lines / 3;
+    int desired_iface = 2 + (s->iface_count > 0 ? s->iface_count : 1);
+    int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
-    int bot1_h = BOTTOM_BAND_H;
-    int bot2_h = BOTTOM_BAND_H;
+    /* Remaining space split among 5 bands:
+     *   conn    = 2H   (twice the bottom rows)
+     *   packets = 2H
+     *   bot1    = H
+     *   bot2    = H
+     *   bot3    = H
+     *   total   = 7H
+     * Spare rows from the integer divide go to conn and packets so the
+     * dashboard fills the terminal exactly. */
+    int avail = lines - iface_y - iface_h;
+    int H = avail / 7;
+    if (H < MIN_PANEL_H) H = MIN_PANEL_H;
 
-    int bot2_y = lines - bot2_h;
-    int bot1_y = bot2_y - bot1_h;
+    int bot1_h    = H;
+    int bot2_h    = H;
+    int bot3_h    = H;
+    int conn_h    = 2 * H;
+    int packets_h = 2 * H;
+    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h;
+    int extra     = avail - used;
+    if (extra > 0) {
+        conn_h    += extra / 2;
+        packets_h += extra - extra / 2;
+    }
 
-    int middle_y = iface_y + iface_h;
-    int middle_h = bot1_y - middle_y;
-    /* Split middle into Connections (top) and Packets (bottom). */
-    int conn_h    = middle_h / 2;
-    int packets_h = middle_h - conn_h;
-    int conn_y    = middle_y;
-    int packets_y = conn_y + conn_h;
+    int conn_y    = iface_y + iface_h;
+    int packets_y = conn_y    + conn_h;
+    int bot1_y    = packets_y + packets_h;
+    int bot2_y    = bot1_y    + bot1_h;
+    int bot3_y    = bot2_y    + bot2_h;
 
     draw_iface_band  (s, iface_y,   iface_h,   cols);
     draw_conn_band   (s, conn_y,    conn_h,    cols);
     draw_packets_band(s, packets_y, packets_h, cols);
 
-    int pw = cols / 3;
-    draw_wifi_panel  (s, bot1_y, bot1_h, 0,            pw);
-    draw_probe_panel (s, bot1_y, bot1_h, pw,           pw);
-    draw_beacon_panel(s, bot1_y, bot1_h, pw * 2,       cols - pw * 2);
+    int pw1 = cols / 3;
+    int pw2 = cols / 3;
+    int pw3 = cols - pw1 - pw2;
+    draw_wifi_panel  (s, bot1_y, bot1_h, 0,                 pw1);
+    draw_probe_panel (s, bot1_y, bot1_h, pw1,               pw2);
+    draw_beacon_panel(s, bot1_y, bot1_h, pw1 + pw2,         pw3);
 
-    draw_mdns_panel  (s, bot2_y, bot2_h, 0,            pw);
-    draw_dhcp_panel  (s, bot2_y, bot2_h, pw,           pw);
-    draw_ssdp_panel  (s, bot2_y, bot2_h, pw * 2,       cols - pw * 2);
+    draw_mdns_panel  (s, bot2_y, bot2_h, 0,                 pw1);
+    draw_dhcp_panel  (s, bot2_y, bot2_h, pw1,               pw2);
+    draw_ssdp_panel  (s, bot2_y, bot2_h, pw1 + pw2,         pw3);
+
+    draw_arp_panel   (s, bot3_y, bot3_h, 0,                 pw1);
+    draw_deauth_panel(s, bot3_y, bot3_h, pw1,               pw2);
+    draw_stats_panel (s, bot3_y, bot3_h, pw1 + pw2,         pw3);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else
@@ -513,6 +690,26 @@ void view_dashboard_draw(const sloth_state_t *s) {
     for (int i = 0; i < s->ssdp_count && i < 3; i++)
         TPRINT("  SSDP  %s  %s\n",
                s->ssdp_devices[i].ip, s->ssdp_devices[i].type);
+
+    tui_dim();    TPRINT("\n -- ARP / Deauth / Stats --\n");
+    tui_normal();
+    for (int i = 0; i < s->arp_count && i < 3; i++) {
+        const arp_entry_t *a = &s->arp_entries[i];
+        TPRINT("  ARP   %-15s  %02x:%02x:%02x:%02x:%02x:%02x\n",
+               a->ip,
+               a->mac[0], a->mac[1], a->mac[2],
+               a->mac[3], a->mac[4], a->mac[5]);
+    }
+    for (int i = 0; i < s->deauth_count && i < 3; i++) {
+        const deauth_event_t *e = &s->deauth_events[i];
+        TPRINT("  Deauth dst=%02x:%02x:%02x:%02x:%02x:%02x rsn=%u %s\n",
+               e->dst[0], e->dst[1], e->dst[2],
+               e->dst[3], e->dst[4], e->dst[5],
+               (unsigned)e->reason, e->flood ? "FLOOD" : "");
+    }
+    TPRINT("  Summary: ifaces=%d aps=%d conns=%d devices=%d alerts=%d\n",
+           s->iface_count, s->ap_count, s->conn_count,
+           s->device_count, s->alert_count);
 #endif
 }
 
