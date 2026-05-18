@@ -102,6 +102,108 @@ void tui_ip_addstr(const char *ip, int cat) {
     addstr(ip);
 }
 
+void tui_ssid_addstr(const char *ssid, int cat) {
+    extern int ip_color_index(const char *);
+    if (!ssid || !ssid[0]) return;
+    int idx = ip_color_index(ssid);
+    attrset(COLOR_PAIR(cp_for_ip_on_cat(cat, idx)));
+    addstr(ssid);
+}
+
+/* ── Brand colourisation ─────────────────────────────────── */
+
+static int cp_for_brand_on_cat(int cat, int brand_idx) {
+    int base;
+    switch (cat) {
+    case 1: base = CP_BR_BASE_TCP;   break;
+    case 2: base = CP_BR_BASE_UDP;   break;
+    case 3: base = CP_BR_BASE_DNS;   break;
+    case 4: base = CP_BR_BASE_ICMP;  break;
+    default: base = CP_BR_BASE_OTHER; break;
+    }
+    return base + (brand_idx & 7);
+}
+
+static int ci_strncmp(const char *a, const char *b, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
+        if (ca != cb) return ca - cb;
+        if (ca == 0)  return 0;
+    }
+    return 0;
+}
+
+/* Find the earliest brand match at or after `s`. Returns the start offset,
+ * or -1 if none. *brand and *match_len receive the brand id and the
+ * matched substring's length. */
+static int find_brand(const char *s, int *brand_out, int *len_out) {
+    static const struct { int brand; const char *sub; } tbl[] = {
+        { BR_GOOGLE_BLUE, "google"      },
+        { BR_FIREFOX,     "firefox"     },
+        { BR_CLOUDFLARE,  "cloudflare"  },
+        { BR_EXAMPLE,     "example.org" },
+    };
+    int best = -1, best_brand = 0, best_len = 0;
+    for (int i = 0; i < (int)(sizeof(tbl) / sizeof(tbl[0])); i++) {
+        int sublen = (int)strlen(tbl[i].sub);
+        for (int j = 0; s[j]; j++) {
+            if (ci_strncmp(s + j, tbl[i].sub, sublen) == 0) {
+                if (best < 0 || j < best) {
+                    best = j;
+                    best_brand = tbl[i].brand;
+                    best_len = sublen;
+                }
+                break;  /* first match for this brand is enough */
+            }
+        }
+    }
+    if (best < 0) return -1;
+    *brand_out = best_brand;
+    *len_out   = best_len;
+    return best;
+}
+
+void tui_brand_addstr(const char *text, int cat) {
+    if (!text || !*text) return;
+
+    int brand, mlen;
+    int start = find_brand(text, &brand, &mlen);
+    if (start < 0) {
+        /* No brand match — render in the row's plain pair. */
+        attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
+        addstr(text);
+        return;
+    }
+
+    /* Prefix in default colour */
+    if (start > 0) {
+        attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
+        addnstr(text, start);
+    }
+
+    if (brand == BR_GOOGLE_BLUE) {
+        /* G-o-o-g-l-e: blue / red / yellow / blue / green / red */
+        static const int gseq[] = {
+            BR_GOOGLE_BLUE, BR_GOOGLE_RED, BR_GOOGLE_YELLOW,
+            BR_GOOGLE_BLUE, BR_GOOGLE_GREEN, BR_GOOGLE_RED,
+        };
+        for (int i = 0; i < mlen; i++) {
+            int slot = gseq[i % 6];
+            attrset(COLOR_PAIR(cp_for_brand_on_cat(cat, slot)));
+            addch((chtype)(unsigned char)text[start + i]);
+        }
+    } else {
+        attrset(COLOR_PAIR(cp_for_brand_on_cat(cat, brand)));
+        addnstr(text + start, mlen);
+    }
+
+    /* Recurse for any further brand matches in the rest of the string. */
+    tui_brand_addstr(text + start + mlen, cat);
+}
+
 void tui_pkt_bg(int proto, uint16_t sport, uint16_t dport) {
     /* Mirror pkt_categorize() — kept local so tui.c doesn't depend on
      * ip_color.h. The two implementations must agree. */
@@ -197,8 +299,10 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category greys: progressively lighter from TCP to ICMP */
-            static const short grey_bg[5] = { 0, 234, 237, 240, 244 };
+            /* Packet-category greys: progressively lighter from TCP to ICMP.
+             * All chosen so brightness stays <=40% (xterm-256 grey 240 is
+             * ~34.5% — anything above 241 would exceed the cap). */
+            static const short grey_bg[5] = { 0, 234, 236, 238, 240 };
             init_pair(CP_PKT_TCP,  255, grey_bg[1]);
             init_pair(CP_PKT_UDP,  255, grey_bg[2]);
             init_pair(CP_PKT_DNS,  255, grey_bg[3]);
@@ -220,6 +324,24 @@ void tui_init(void) {
                 init_pair(CP_IP_BASE_UDP   + i, ip_fg[i], grey_bg[2]);
                 init_pair(CP_IP_BASE_DNS   + i, ip_fg[i], grey_bg[3]);
                 init_pair(CP_IP_BASE_ICMP  + i, ip_fg[i], grey_bg[4]);
+            }
+            /* Brand colour palette: slot indices match BR_* in tui.h */
+            static const short brand_fg[8] = {
+                33,    /* Google blue     #0087ff */
+                167,   /* Google red      #d75f5f */
+                220,   /* Google yellow   #ffd700 */
+                35,    /* Google green    #00af5f */
+                208,   /* Firefox orange  #ff8700 */
+                196,   /* Cloudflare red  #ff0000 */
+                244,   /* example grey    #808080 */
+                253,   /* reserved        #dadada */
+            };
+            for (int i = 0; i < 8; i++) {
+                init_pair(CP_BR_BASE_OTHER + i, brand_fg[i], grey_bg[0]);
+                init_pair(CP_BR_BASE_TCP   + i, brand_fg[i], grey_bg[1]);
+                init_pair(CP_BR_BASE_UDP   + i, brand_fg[i], grey_bg[2]);
+                init_pair(CP_BR_BASE_DNS   + i, brand_fg[i], grey_bg[3]);
+                init_pair(CP_BR_BASE_ICMP  + i, brand_fg[i], grey_bg[4]);
             }
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
@@ -245,6 +367,19 @@ void tui_init(void) {
                            (b == 3) ? CP_IP_BASE_DNS   : CP_IP_BASE_ICMP;
                 for (int i = 0; i < 8; i++)
                     init_pair(base + i, ip_fg_8[i], COLOR_BLACK);
+            }
+            /* 8-colour fallback for brand pairs */
+            static const short brand_fg_8[8] = {
+                COLOR_BLUE,    COLOR_RED,    COLOR_YELLOW, COLOR_GREEN,
+                COLOR_YELLOW,  COLOR_RED,    COLOR_WHITE,  COLOR_WHITE,
+            };
+            for (int b = 0; b < 5; b++) {
+                int base = (b == 0) ? CP_BR_BASE_OTHER :
+                           (b == 1) ? CP_BR_BASE_TCP   :
+                           (b == 2) ? CP_BR_BASE_UDP   :
+                           (b == 3) ? CP_BR_BASE_DNS   : CP_BR_BASE_ICMP;
+                for (int i = 0; i < 8; i++)
+                    init_pair(base + i, brand_fg_8[i], COLOR_BLACK);
             }
         }
     }

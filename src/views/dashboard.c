@@ -440,15 +440,25 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
 static void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "WiFi APs");
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x, w, "  %-18s %4s %3s", "SSID", "sig", "ch");
+    clipline(y0 + 1, x, w, "  %-*s %4s %3s",
+             w - 12 > 8 ? w - 12 : 8, "SSID", "sig", "ch");
     int rows = h - 2;
     int n = s->ap_count < rows ? s->ap_count : rows;
+    int ssid_w = w - 12;
+    if (ssid_w < 8) ssid_w = 8;
     for (int i = 0; i < n; i++) {
         const wifi_ap_t *a = &s->aps[i];
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w, "  %-18.18s %4d %3d",
-                 a->ssid[0] ? a->ssid : "(hidden)",
-                 a->signal_dbm, a->channel);
+        clipline(y0 + 2 + i, x, w, "");
+        move(y0 + 2 + i, x);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        addstr("  ");
+        const char *ssid = a->ssid[0] ? a->ssid : "(hidden)";
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
+        tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        printw(" %4d %3d", a->signal_dbm, a->channel);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
@@ -456,8 +466,11 @@ static void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w)
 static void draw_probe_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "Probe clients");
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x, w, "  %-17s %-12s %4s",
-             "MAC", "SSID", "sig");
+    /* MAC(17) + 1 + SSID + 1 + sig(4) -> SSID = w - 24 */
+    int ssid_w = w - 24;
+    if (ssid_w < 8) ssid_w = 8;
+    clipline(y0 + 1, x, w, "  %-17s %-*s %4s",
+             "MAC", ssid_w, "SSID", "sig");
     int rows = h - 2;
     int n = s->probe_count < rows ? s->probe_count : rows;
     for (int i = 0; i < n; i++) {
@@ -467,9 +480,16 @@ static void draw_probe_panel(const sloth_state_t *s, int y0, int h, int x, int w
                  p->mac[0], p->mac[1], p->mac[2],
                  p->mac[3], p->mac[4], p->mac[5]);
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w, "  %-17s %-12.12s %4d",
-                 mac, p->ssid[0] ? p->ssid : "(any)",
-                 p->signal_dbm);
+        clipline(y0 + 2 + i, x, w, "");
+        move(y0 + 2 + i, x);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        printw("  %-17s ", mac);
+        const char *ssid = p->ssid[0] ? p->ssid : "(any)";
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
+        tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        printw(" %4d", p->signal_dbm);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
@@ -477,15 +497,24 @@ static void draw_probe_panel(const sloth_state_t *s, int y0, int h, int x, int w
 static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "Beacons");
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x, w, "  %-18s %4s %3s", "SSID", "sig", "ch");
+    int ssid_w = w - 12;
+    if (ssid_w < 8) ssid_w = 8;
+    clipline(y0 + 1, x, w, "  %-*s %4s %3s", ssid_w, "SSID", "sig", "ch");
     int rows = h - 2;
     int n = s->beacon_count < rows ? s->beacon_count : rows;
     for (int i = 0; i < n; i++) {
         const beacon_ap_t *b = &s->beacon_aps[i];
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w, "  %-18.18s %4d %3d",
-                 b->ssid[0] ? b->ssid : "(hidden)",
-                 b->signal_dbm, b->channel);
+        clipline(y0 + 2 + i, x, w, "");
+        move(y0 + 2 + i, x);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        addstr("  ");
+        const char *ssid = b->ssid[0] ? b->ssid : "(hidden)";
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
+        tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
+        attrset(COLOR_PAIR(CP_NORMAL));
+        printw(" %4d %3d", b->signal_dbm, b->channel);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
@@ -638,10 +667,16 @@ static void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int
         printw("  %-3s %-5.5s ",
                e->is_resp ? "R" : "Q", e->qtype);
         xc += 12;
-        /* qname column (no IP) */
+        /* qname column — brand-coloured (Google rainbow, Firefox orange, …) */
         move(y0 + 2 + i, xc);
         tui_pkt_bg_cat(cat);
-        printw("%-*.*s ", qname_w, qname_w, e->qname);
+        {
+            char qbuf[64];
+            snprintf(qbuf, sizeof(qbuf), "%-*.*s", qname_w, qname_w, e->qname);
+            tui_brand_addstr(qbuf, cat);
+        }
+        tui_pkt_bg_cat(cat);
+        addch(' ');
         xc += qname_w + 1;
         /* answer column — IP if it looks like one */
         move(y0 + 2 + i, xc);

@@ -42,6 +42,28 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 #define CP_IP_BASE_DNS   40   /* on DNS grey       (40..47) */
 #define CP_IP_BASE_ICMP  48   /* on ICMP grey      (48..55) */
 
+/* ── Brand-name palette × category-bg ────────────────────── *
+ * 8 brand colour slots per row, 5 row-bg categories.
+ * Slot index meanings — see tui.c for the actual 256-colour codes:
+ *   0 = Google blue        4 = Firefox orange
+ *   1 = Google red         5 = Cloudflare red
+ *   2 = Google yellow      6 = example.org grey
+ *   3 = Google green       7 = (reserved) */
+#define CP_BR_BASE_OTHER 56   /* on default bg (56..63) */
+#define CP_BR_BASE_TCP   64   /* on TCP grey   (64..71) */
+#define CP_BR_BASE_UDP   72   /* on UDP grey   (72..79) */
+#define CP_BR_BASE_DNS   80   /* on DNS grey   (80..87) */
+#define CP_BR_BASE_ICMP  88   /* on ICMP grey  (88..95) */
+
+/* Brand-colour slot indices (match the layout above). */
+#define BR_GOOGLE_BLUE    0
+#define BR_GOOGLE_RED     1
+#define BR_GOOGLE_YELLOW  2
+#define BR_GOOGLE_GREEN   3
+#define BR_FIREFOX        4
+#define BR_CLOUDFLARE     5
+#define BR_EXAMPLE        6
+
 void tui_bright(void); /* intense glow: title, active values, key fields */
 void tui_normal(void); /* standard phosphor: data rows                   */
 void tui_dim(void);    /* faint glow: labels, borders, hints              */
@@ -68,5 +90,18 @@ void tui_pkt_bg(int proto, uint16_t sport, uint16_t dport);
  * the caller will restore the row's plain-bg pair before printing the
  * non-IP portion of the line. */
 void tui_ip_addstr(const char *ip, int cat);
+
+/* Like tui_ip_addstr but for SSID strings — uses the IP colour palette
+ * with a separate hash, so the same SSID has the same colour everywhere. */
+void tui_ssid_addstr(const char *ssid, int cat);
+
+/* Render `text` with brand-name highlighting:
+ *   "google"      -> G-o-o-g-l-e in B-R-Y-B-G-R per the Google logo
+ *   "firefox"     -> orange
+ *   "cloudflare"  -> red
+ *   "example.org" -> grey
+ * Non-matching characters render in the row's default white-on-cat pair.
+ * Matches are case-insensitive. */
+void tui_brand_addstr(const char *text, int cat);
 
 #endif /* TUI_H */
