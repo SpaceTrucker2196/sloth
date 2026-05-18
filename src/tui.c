@@ -301,27 +301,23 @@ void tui_init(void) {
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
             /* Packet-category "greys" with a phosphor cast.
              *
-             * The xterm-256 cube can't go any darker than ~22% per channel
-             * without falling to black, so to actually take 60% off the
-             * previous luminance we redefine slots 100..103 via
-             * init_color() when the terminal supports it. The new shades
-             * land at roughly:
-             *   TCP   ~9%   (was ~22%)  dim phosphor green
-             *   UDP   ~10%  (was ~26%)  dim phosphor teal
-             *   DNS   ~13%  (was ~33%)  dim amber
-             *   ICMP  ~14%  (was ~35%)  dim green-teal
-             * If can_change_color() is false we fall back to the previous
-             * cube codes (less dim, but at least the hues are right). */
+             * Every background sits at ~10% perceptual luminance (Rec. 601
+             * weights: 0.299 R + 0.587 G + 0.114 B = 100/1000). The hue
+             * differences come from how that 10% is distributed across
+             * channels — green for TCP, teal for UDP, amber for DNS,
+             * green-teal for ICMP — so the rows still read as four
+             * categories even though they're all the same darkness.
+             *
+             * Done via init_color() because the xterm-256 cube's darkest
+             * non-zero step is already brighter than we need; falls back
+             * to the closest cube codes when can_change_color() is false. */
             short grey_bg[5];
             grey_bg[0] = 0;
             if (can_change_color()) {
-                /* init_color values are on a 0..1000 scale.
-                 * Previous values were (0,372,0), (0,372,372),
-                 * (372,372,0), (0,529,372).  Multiply each by 0.4. */
-                init_color(100, 0,   149,   0);   /* dim phosphor green */
-                init_color(101, 0,   149, 149);   /* dim phosphor teal  */
-                init_color(102, 149, 149,   0);   /* dim amber          */
-                init_color(103, 0,   212, 149);   /* dim green-teal     */
+                init_color(100,   0, 170,   0);   /* TCP : green       */
+                init_color(101,   0, 143, 143);   /* UDP : teal        */
+                init_color(102, 113, 113,   0);   /* DNS : amber       */
+                init_color(103,   0, 151, 106);   /* ICMP: green-teal  */
                 grey_bg[1] = 100;
                 grey_bg[2] = 101;
                 grey_bg[3] = 102;
