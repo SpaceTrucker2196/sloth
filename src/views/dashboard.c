@@ -504,6 +504,52 @@ static void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w
     for (int i = n; i < rows; i++) clipline(y0 + 1 + i, x, w, "");
 }
 
+static void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "DNS log");
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, x, w, "  %-3s %-5s %-22s %s",
+             "Q/R", "type", "qname", "answer");
+    int rows = h - 2;
+    int n = s->dns_log_count < rows ? s->dns_log_count : rows;
+    for (int i = 0; i < n; i++) {
+        const dns_log_entry_t *e = &s->dns_log[i];
+        int is_nx = (strcmp(e->answer, "NXDOMAIN") == 0);
+        if (is_nx)              attrset(COLOR_PAIR(CP_HEAT_HI));
+        else if (e->is_resp)    attrset(COLOR_PAIR(CP_BRIGHT));
+        else                    attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x, w,
+                 "  %-3s %-5.5s %-22.22s %.*s",
+                 e->is_resp ? "R" : "Q", e->qtype,
+                 e->qname, w - 35 > 0 ? w - 35 : 10,
+                 e->answer[0] ? e->answer : "-");
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+}
+
+static void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "ICMP log");
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, x, w, "  %-3s %-15s %s",
+             "v",  "src", "type");
+    int rows = h - 2;
+    int n = s->icmp_log_count < rows ? s->icmp_log_count : rows;
+    for (int i = 0; i < n; i++) {
+        const icmp_log_entry_t *e = &s->icmp_log[i];
+        int is_err = e->is_v6
+            ? (e->type >= 1 && e->type <= 4)
+            : (e->type == 3 || e->type == 11 || e->type == 12);
+        int is_req = e->is_v6 ? (e->type == 128) : (e->type == 8);
+        if (is_err)      attrset(COLOR_PAIR(CP_HEAT_HI));
+        else if (is_req) attrset(COLOR_PAIR(CP_BRIGHT));
+        else             attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x, w,
+                 "  %-3s %-15.15s %.*s",
+                 e->is_v6 ? "v6" : "v4", e->src,
+                 w - 24 > 0 ? w - 24 : 8, e->desc);
+    }
+    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+}
+
 static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "SSDP / UPnP");
     attrset(COLOR_PAIR(CP_DIM));
@@ -528,12 +574,16 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int lines = LINES;
     int cols  = COLS;
 
-    /* Minimum viable layout:
-     *   header(2) + iface(3, =2 hdr + 1 iface)
-     *   + 5 panel rows each MIN_PANEL_H (=4) (3 bottom rows + 2 doubles for
-     *     conn + packets, but conn/packets each are 2*MIN_PANEL_H=8)
-     *   = 2 + 3 + 3*4 + 2*8 = 33 lines */
-    int min_lines = 2 + 3 + 3 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
+    /* Bands in vertical order:
+     *   iface           (2 + iface_count, capped)
+     *   conn            = 2H
+     *   bot1: wifi/probe/beacons    = H
+     *   bot2: mdns/dhcp/ssdp        = H
+     *   bot3: arp/deauth/stats      = H
+     *   bot4: dns log / icmp log    = H   (added 2026-05-18)
+     *   packets         = 2H         (now at the very bottom)
+     *   total           = 7H + iface */
+    int min_lines = 2 + 3 + 4 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
     if (lines < min_lines || cols < IFACE_END_X + 2) {
         tui_dim();
         TPRINT(" Dashboard: terminal too small "
@@ -544,62 +594,63 @@ void view_dashboard_draw(const sloth_state_t *s) {
     }
 
     int iface_y = DASH_TOP_Y;
-    /* iface band expands as needed to show every iface (title + header +
-     * one row per iface). Cap at a third of the screen so a host with
-     * 20 ifaces can't smother the rest of the dashboard. */
     int iface_cap = lines / 3;
     int desired_iface = 2 + (s->iface_count > 0 ? s->iface_count : 1);
     int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
-    /* Remaining space split among 5 bands:
-     *   conn    = 2H   (twice the bottom rows)
-     *   packets = 2H
-     *   bot1    = H
-     *   bot2    = H
-     *   bot3    = H
-     *   total   = 7H
-     * Spare rows from the integer divide go to conn and packets so the
-     * dashboard fills the terminal exactly. */
     int avail = lines - iface_y - iface_h;
-    int H = avail / 7;
+    /* 2H + H + H + H + H + 2H = 8H */
+    int H = avail / 8;
     if (H < MIN_PANEL_H) H = MIN_PANEL_H;
 
     int bot1_h    = H;
     int bot2_h    = H;
     int bot3_h    = H;
+    int bot4_h    = H;
     int conn_h    = 2 * H;
     int packets_h = 2 * H;
-    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h;
+    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h + bot4_h;
     int extra     = avail - used;
+    /* Spare rows: prefer to grow conn first, then packets so the bottom
+     * band always reaches the last line of the terminal. */
     if (extra > 0) {
         conn_h    += extra / 2;
         packets_h += extra - extra / 2;
     }
 
     int conn_y    = iface_y + iface_h;
-    int packets_y = conn_y    + conn_h;
-    int bot1_y    = packets_y + packets_h;
-    int bot2_y    = bot1_y    + bot1_h;
-    int bot3_y    = bot2_y    + bot2_h;
+    int bot1_y    = conn_y  + conn_h;
+    int bot2_y    = bot1_y  + bot1_h;
+    int bot3_y    = bot2_y  + bot2_h;
+    int bot4_y    = bot3_y  + bot3_h;
+    int packets_y = bot4_y  + bot4_h;
 
-    draw_iface_band  (s, iface_y,   iface_h,   cols);
-    draw_conn_band   (s, conn_y,    conn_h,    cols);
-    draw_packets_band(s, packets_y, packets_h, cols);
+    draw_iface_band(s, iface_y, iface_h, cols);
+    draw_conn_band (s, conn_y,  conn_h,  cols);
 
     int pw1 = cols / 3;
     int pw2 = cols / 3;
     int pw3 = cols - pw1 - pw2;
-    draw_wifi_panel  (s, bot1_y, bot1_h, 0,                 pw1);
-    draw_probe_panel (s, bot1_y, bot1_h, pw1,               pw2);
-    draw_beacon_panel(s, bot1_y, bot1_h, pw1 + pw2,         pw3);
+    draw_wifi_panel  (s, bot1_y, bot1_h, 0,         pw1);
+    draw_probe_panel (s, bot1_y, bot1_h, pw1,       pw2);
+    draw_beacon_panel(s, bot1_y, bot1_h, pw1 + pw2, pw3);
 
-    draw_mdns_panel  (s, bot2_y, bot2_h, 0,                 pw1);
-    draw_dhcp_panel  (s, bot2_y, bot2_h, pw1,               pw2);
-    draw_ssdp_panel  (s, bot2_y, bot2_h, pw1 + pw2,         pw3);
+    draw_mdns_panel(s, bot2_y, bot2_h, 0,         pw1);
+    draw_dhcp_panel(s, bot2_y, bot2_h, pw1,       pw2);
+    draw_ssdp_panel(s, bot2_y, bot2_h, pw1 + pw2, pw3);
 
-    draw_arp_panel   (s, bot3_y, bot3_h, 0,                 pw1);
-    draw_deauth_panel(s, bot3_y, bot3_h, pw1,               pw2);
-    draw_stats_panel (s, bot3_y, bot3_h, pw1 + pw2,         pw3);
+    draw_arp_panel   (s, bot3_y, bot3_h, 0,         pw1);
+    draw_deauth_panel(s, bot3_y, bot3_h, pw1,       pw2);
+    draw_stats_panel (s, bot3_y, bot3_h, pw1 + pw2, pw3);
+
+    /* DNS log + ICMP log: two equal half-width panels. */
+    int half1 = cols / 2;
+    int half2 = cols - half1;
+    draw_dns_log_panel (s, bot4_y, bot4_h, 0,     half1);
+    draw_icmp_log_panel(s, bot4_y, bot4_h, half1, half2);
+
+    /* Packets live at the very bottom. */
+    draw_packets_band(s, packets_y, packets_h, cols);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else
@@ -639,18 +690,6 @@ void view_dashboard_draw(const sloth_state_t *s) {
                c->local_addr,  (unsigned)c->local_port,
                c->remote_addr, (unsigned)c->remote_port,
                proto_short(c->proto), c->pid, c->proc);
-    }
-
-    tui_dim();    TPRINT("\n -- Packets (live) --\n");
-    tui_normal();
-    int pn = s->pkt_count < 5 ? s->pkt_count : 5;
-    for (int i = 0; i < pn; i++) {
-        int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
-        const packet_info_t *p = &s->packets[slot];
-        TPRINT("  %s:%u -> %s:%u  %s  %s\n",
-               p->src, (unsigned)p->src_port,
-               p->dst, (unsigned)p->dst_port,
-               proto_short(p->proto), p->info);
     }
 
     tui_dim();    TPRINT("\n -- WiFi / Probe / Beacons --\n");
@@ -710,6 +749,32 @@ void view_dashboard_draw(const sloth_state_t *s) {
     TPRINT("  Summary: ifaces=%d aps=%d conns=%d devices=%d alerts=%d\n",
            s->iface_count, s->ap_count, s->conn_count,
            s->device_count, s->alert_count);
+
+    tui_dim();    TPRINT("\n -- DNS log / ICMP log --\n");
+    tui_normal();
+    for (int i = 0; i < s->dns_log_count && i < 3; i++) {
+        const dns_log_entry_t *e = &s->dns_log[i];
+        TPRINT("  DNS  %s %-5s %s -> %s\n",
+               e->is_resp ? "R" : "Q", e->qtype,
+               e->qname, e->answer[0] ? e->answer : "-");
+    }
+    for (int i = 0; i < s->icmp_log_count && i < 3; i++) {
+        const icmp_log_entry_t *e = &s->icmp_log[i];
+        TPRINT("  ICMP %s %s -> %s  %s\n",
+               e->is_v6 ? "v6" : "v4", e->src, e->dst, e->desc);
+    }
+
+    tui_dim();    TPRINT("\n -- Packets (live) --\n");
+    tui_normal();
+    int pn = s->pkt_count < 5 ? s->pkt_count : 5;
+    for (int i = 0; i < pn; i++) {
+        int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
+        const packet_info_t *p = &s->packets[slot];
+        TPRINT("  %s:%u -> %s:%u  %s  %s\n",
+               p->src, (unsigned)p->src_port,
+               p->dst, (unsigned)p->dst_port,
+               proto_short(p->proto), p->info);
+    }
 #endif
 }
 

@@ -120,6 +120,29 @@ static void seed_arp(sloth_state_t *s, const char *ip,
     snprintf(a->iface, sizeof(a->iface), "eth0");
 }
 
+static void seed_dns_log(sloth_state_t *s, const char *qname,
+                         const char *answer, int is_resp) {
+    if (s->dns_log_count >= MAX_DNS_LOG) return;
+    dns_log_entry_t *e = &s->dns_log[s->dns_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->qname,  sizeof(e->qname),  "%s", qname);
+    snprintf(e->qtype,  sizeof(e->qtype),  "A");
+    snprintf(e->answer, sizeof(e->answer), "%s", answer);
+    snprintf(e->src,    sizeof(e->src),    "192.168.1.5");
+    e->is_resp = is_resp;
+}
+
+static void seed_icmp_log(sloth_state_t *s, const char *src, const char *desc,
+                          int is_v6) {
+    if (s->icmp_log_count >= MAX_ICMP_LOG) return;
+    icmp_log_entry_t *e = &s->icmp_log[s->icmp_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src,  sizeof(e->src),  "%s", src);
+    snprintf(e->dst,  sizeof(e->dst),  "8.8.8.8");
+    snprintf(e->desc, sizeof(e->desc), "%s", desc);
+    e->is_v6 = (uint8_t)is_v6;
+}
+
 static void seed_deauth(sloth_state_t *s, const uint8_t dst[6],
                         uint16_t reason, int flood) {
     if (s->deauth_count >= MAX_DEAUTH_ENTRIES) return;
@@ -172,6 +195,12 @@ static void test_draw_populated(void) {
     seed_arp(&s, "192.168.1.100", arp_mac);
     uint8_t deauth_dst[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
     seed_deauth(&s, deauth_dst, 7, 1);
+    seed_dns_log(&s, "example.com",     "93.184.216.34", 1);
+    seed_dns_log(&s, "missing.example", "NXDOMAIN",      1);
+    seed_dns_log(&s, "google.com",      "",              0);
+    seed_icmp_log(&s, "192.168.1.5", "Echo Req",    0);
+    seed_icmp_log(&s, "8.8.8.8",     "Echo Reply",  0);
+    seed_icmp_log(&s, "fe80::1",     "Neigh Sol",   1);
     view_dashboard_draw(&s);
     ASSERT(1);
 }
