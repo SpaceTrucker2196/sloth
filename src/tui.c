@@ -64,17 +64,12 @@ static const char *view_labels[VIEW_COUNT] = {
     "[o] Dash",
 };
 
-/* category -> pair index for the "white on grey" plain-row pair */
+/* Row-bg lookup: backgrounds were retired, so every category collapses
+ * to the project's default phosphor pair. The IP / brand / SSID
+ * helpers still take a `cat` for API stability — currently a no-op. */
 static int cp_for_bg_cat(int cat) {
-    switch (cat) {
-    case 1: return CP_PKT_TCP;
-    case 2: return CP_PKT_UDP;
-    case 3: return CP_PKT_DNS;
-    case 4: return CP_PKT_ICMP;
-    case 5: return CP_PKT_HTTP;
-    case 6: return CP_PKT_TLS;
-    default: return CP_NORMAL;
-    }
+    (void)cat;
+    return CP_NORMAL;
 }
 
 static int cp_for_ip_on_cat(int cat, int ip_idx) {
@@ -309,40 +304,10 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category backgrounds: neutral greys in a
-             * 5/10/15/20/25/30/35 % ramp.  Hue is carried by the IP /
-             * brand / SSID foreground pairs. */
-            short grey_bg[7];
-            if (can_change_color()) {
-                init_color(99,   50,  50,  50);   /* OTHER:  5% */
-                init_color(100, 100, 100, 100);   /* TCP  : 10% */
-                init_color(101, 150, 150, 150);   /* UDP  : 15% */
-                init_color(102, 200, 200, 200);   /* DNS  : 20% */
-                init_color(103, 250, 250, 250);   /* ICMP : 25% */
-                init_color(104, 300, 300, 300);   /* HTTP : 30% */
-                init_color(105, 350, 350, 350);   /* TLS  : 35% */
-                grey_bg[0] = 99;
-                grey_bg[1] = 100;
-                grey_bg[2] = 101;
-                grey_bg[3] = 102;
-                grey_bg[4] = 103;
-                grey_bg[5] = 104;
-                grey_bg[6] = 105;
-            } else {
-                grey_bg[0] = 232;   /* ~3%  */
-                grey_bg[1] = 234;   /* ~11% */
-                grey_bg[2] = 235;   /* ~15% */
-                grey_bg[3] = 236;   /* ~19% */
-                grey_bg[4] = 238;   /* ~27% */
-                grey_bg[5] = 239;   /* ~31% */
-                grey_bg[6] = 240;   /* ~35% */
-            }
-            init_pair(CP_PKT_TCP,  255, grey_bg[1]);
-            init_pair(CP_PKT_UDP,  255, grey_bg[2]);
-            init_pair(CP_PKT_DNS,  255, grey_bg[3]);
-            init_pair(CP_PKT_ICMP, 255, grey_bg[4]);
-            init_pair(CP_PKT_HTTP, 255, grey_bg[5]);
-            init_pair(CP_PKT_TLS,  255, grey_bg[6]);
+            /* Backgrounds disabled: every row sits on the terminal's
+             * default bg. Hue and category cues are carried entirely by
+             * the IP / brand / SSID foreground palettes. */
+            short grey_bg[7] = { 0, 0, 0, 0, 0, 0, 0 };
             /* 8 IP fg colours × 5 row bgs.
              * Fallout-inspired phosphor palette — teal phosphor (already
              * the project's base CP_NORMAL = 43) is the anchor; these eight
@@ -394,13 +359,8 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_HI,   COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_PEAK, COLOR_RED,   COLOR_BLACK);
-            /* 8-color fallback: same fg+bg for all 4 categories */
-            init_pair(CP_PKT_TCP,  COLOR_WHITE, COLOR_BLACK);
-            init_pair(CP_PKT_UDP,  COLOR_WHITE, COLOR_BLACK);
-            init_pair(CP_PKT_DNS,  COLOR_WHITE, COLOR_BLACK);
-            init_pair(CP_PKT_ICMP, COLOR_WHITE, COLOR_BLACK);
-            init_pair(CP_PKT_HTTP, COLOR_WHITE, COLOR_BLACK);
-            init_pair(CP_PKT_TLS,  COLOR_WHITE, COLOR_BLACK);
+            /* CP_PKT_* pairs are no longer needed since the row-bg
+             * lookup goes through cp_for_bg_cat()->CP_NORMAL. */
             static const short ip_fg_8[8] = {
                 COLOR_CYAN,    COLOR_BLUE,    COLOR_YELLOW,  3,
                 COLOR_MAGENTA, COLOR_RED,     COLOR_GREEN,   COLOR_WHITE,
