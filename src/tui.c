@@ -299,14 +299,39 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* Packet-category "greys" with a phosphor (green/teal/amber)
-             * cast — all under 40% luminance:
-             *   OTHER -> default terminal bg
-             *   TCP   -> 22  #005f00  dark phosphor green   (~22%)
-             *   UDP   -> 23  #005f5f  dark phosphor teal    (~26%)
-             *   DNS   -> 58  #5f5f00  amber phosphor olive  (~33%)
-             *   ICMP  -> 29  #00875f  mid phosphor green-teal (~35%) */
-            static const short grey_bg[5] = { 0, 22, 23, 58, 29 };
+            /* Packet-category "greys" with a phosphor cast.
+             *
+             * The xterm-256 cube can't go any darker than ~22% per channel
+             * without falling to black, so to actually take 60% off the
+             * previous luminance we redefine slots 100..103 via
+             * init_color() when the terminal supports it. The new shades
+             * land at roughly:
+             *   TCP   ~9%   (was ~22%)  dim phosphor green
+             *   UDP   ~10%  (was ~26%)  dim phosphor teal
+             *   DNS   ~13%  (was ~33%)  dim amber
+             *   ICMP  ~14%  (was ~35%)  dim green-teal
+             * If can_change_color() is false we fall back to the previous
+             * cube codes (less dim, but at least the hues are right). */
+            short grey_bg[5];
+            grey_bg[0] = 0;
+            if (can_change_color()) {
+                /* init_color values are on a 0..1000 scale.
+                 * Previous values were (0,372,0), (0,372,372),
+                 * (372,372,0), (0,529,372).  Multiply each by 0.4. */
+                init_color(100, 0,   149,   0);   /* dim phosphor green */
+                init_color(101, 0,   149, 149);   /* dim phosphor teal  */
+                init_color(102, 149, 149,   0);   /* dim amber          */
+                init_color(103, 0,   212, 149);   /* dim green-teal     */
+                grey_bg[1] = 100;
+                grey_bg[2] = 101;
+                grey_bg[3] = 102;
+                grey_bg[4] = 103;
+            } else {
+                grey_bg[1] = 22;   /* #005f00 */
+                grey_bg[2] = 23;   /* #005f5f */
+                grey_bg[3] = 58;   /* #5f5f00 */
+                grey_bg[4] = 29;   /* #00875f */
+            }
             init_pair(CP_PKT_TCP,  255, grey_bg[1]);
             init_pair(CP_PKT_UDP,  255, grey_bg[2]);
             init_pair(CP_PKT_DNS,  255, grey_bg[3]);
