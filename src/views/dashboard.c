@@ -88,19 +88,26 @@ static void sparkline(const double *vals, int head, int n,
     int pos = 0;
     out[0] = '\0';
     for (int i = 0; i < width; i++) {
-        int age = (width - 1) - i;  /* 0 = newest, width-1 = oldest */
-        if (age >= n) {
-            if (pos + 1 < outsz) out[pos++] = '_';
-            continue;
+        int lvl = 0;
+        if (n > 0) {
+            /* Stretch n samples across width screen columns.
+             * i=0 is oldest (leftmost); i=width-1 is newest (rightmost). */
+            int age;
+            if (width <= 1) age = 0;
+            else            age = ((width - 1 - i) * (n - 1)) / (width - 1);
+            if (age < 0)   age = 0;
+            if (age >= n)  age = n - 1;
+            int slot = (head - 1 - age + HIST_LEN) % HIST_LEN;
+            double v = vals[slot];
+            if (v > 0.0 && max > 0.0) {
+                lvl = (int)((v / max) * 8.0 + 0.5);
+                if (lvl < 1) lvl = 1;
+                if (lvl > 8) lvl = 8;
+            }
         }
-        int slot = (head - 1 - age + HIST_LEN) % HIST_LEN;
-        double v = vals[slot];
-        if (v <= 0.0 || max <= 0.0) {
+        if (lvl == 0) {
             if (pos + 1 < outsz) out[pos++] = '_';
         } else {
-            int lvl = (int)((v / max) * 8.0 + 0.5);
-            if (lvl < 1) lvl = 1;
-            if (lvl > 8) lvl = 8;
             if (pos + 3 < outsz) {
                 out[pos++] = glyph[lvl][0];
                 out[pos++] = glyph[lvl][1];
@@ -142,9 +149,14 @@ static void draw_sparkline_at(int y, int x, int width,
 
     move(y, x);
     for (int i = 0; i < width; i++) {
-        int age = (width - 1) - i;
         int lvl = 0;
-        if (age < n) {
+        if (n > 0) {
+            /* Stretch n samples across width screen columns. */
+            int age;
+            if (width <= 1) age = 0;
+            else            age = ((width - 1 - i) * (n - 1)) / (width - 1);
+            if (age < 0)   age = 0;
+            if (age >= n)  age = n - 1;
             int slot = (head - 1 - age + HIST_LEN) % HIST_LEN;
             double v = vals[slot];
             if (v > 0.0 && max > 0.0) {
@@ -202,9 +214,12 @@ static void panel_title(int y, int x, int w, const char *name) {
 #define IFACE_FIXED_W   50
 
 static int iface_spark_w(int w) {
+    /* Fill the rest of the row after the text columns. No HIST_LEN cap —
+     * draw_sparkline_at / sparkline() now stretch n samples across any
+     * width, so a 200-col terminal gets two ~72-col graphs rather than
+     * leaving the row half-empty. */
     int sw = (w - IFACE_FIXED_W - 4) / 2;  /* 4 cols for separators */
-    if (sw > HIST_LEN) sw = HIST_LEN;
-    if (sw < 8)        sw = 8;
+    if (sw < 8) sw = 8;
     return sw;
 }
 
