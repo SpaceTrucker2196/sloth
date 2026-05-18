@@ -191,7 +191,7 @@ void view_packets_draw(const sloth_state_t *s) {
         if (row == sel) {
             tui_sel();
         } else {
-            tui_pkt_bg(p->proto);
+            tui_pkt_bg(p->proto, p->src_port, p->dst_port);
         }
         printw(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
                (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,

@@ -64,13 +64,54 @@ static const char *view_labels[VIEW_COUNT] = {
     "[o] Dash",
 };
 
-void tui_pkt_bg(int proto) {
-    switch (proto) {
-    case 6:                attrset(COLOR_PAIR(CP_PKT_TCP));  break;
-    case 17:               attrset(COLOR_PAIR(CP_PKT_UDP));  break;
-    case 1: case 58:       attrset(COLOR_PAIR(CP_PKT_ICMP)); break;
-    default:               attrset(COLOR_PAIR(CP_NORMAL));   break;
+/* category -> pair index for the "white on grey" plain-row pair */
+static int cp_for_bg_cat(int cat) {
+    switch (cat) {
+    case 1: return CP_PKT_TCP;
+    case 2: return CP_PKT_UDP;
+    case 3: return CP_PKT_DNS;
+    case 4: return CP_PKT_ICMP;
+    default: return CP_NORMAL;
     }
+}
+
+static int cp_for_ip_on_cat(int cat, int ip_idx) {
+    int base;
+    switch (cat) {
+    case 1: base = CP_IP_BASE_TCP;   break;
+    case 2: base = CP_IP_BASE_UDP;   break;
+    case 3: base = CP_IP_BASE_DNS;   break;
+    case 4: base = CP_IP_BASE_ICMP;  break;
+    default: base = CP_IP_BASE_OTHER; break;
+    }
+    return base + (ip_idx & 7);
+}
+
+void tui_pkt_bg_cat(int cat) {
+    attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
+}
+
+void tui_ip_addstr(const char *ip, int cat) {
+    extern int ip_color_index(const char *);              /* ip_color.h */
+    extern int ip_index_is_cross_panel(const char *);
+    if (!ip || !ip[0]) return;
+    int idx = ip_color_index(ip);
+    attr_t a  = COLOR_PAIR(cp_for_ip_on_cat(cat, idx));
+    if (ip_index_is_cross_panel(ip)) a |= A_BOLD;
+    attrset(a);
+    addstr(ip);
+}
+
+void tui_pkt_bg(int proto, uint16_t sport, uint16_t dport) {
+    /* Mirror pkt_categorize() — kept local so tui.c doesn't depend on
+     * ip_color.h. The two implementations must agree. */
+    int cat;
+    if      (proto == 1 || proto == 58)          cat = 4;  /* ICMP */
+    else if (sport == 53 || dport == 53)         cat = 3;  /* DNS  */
+    else if (proto == 6)                         cat = 1;  /* TCP  */
+    else if (proto == 17)                        cat = 2;  /* UDP  */
+    else                                          cat = 0;  /* OTHER */
+    tui_pkt_bg_cat(cat);
 }
 
 void tui_filter_status(const sloth_state_t *s) {
@@ -156,10 +197,30 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
             init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
             init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
-            /* packet-row backgrounds: bright fg on a dark hue bg */
-            init_pair(CP_PKT_TCP,  255,  17);  /* white on #00005f (dark blue) */
-            init_pair(CP_PKT_UDP,  255,  22);  /* white on #005f00 (dark green) */
-            init_pair(CP_PKT_ICMP, 255,  53);  /* white on #5f005f (dark mag.) */
+            /* Packet-category greys: progressively lighter from TCP to ICMP */
+            static const short grey_bg[5] = { 0, 234, 237, 240, 244 };
+            init_pair(CP_PKT_TCP,  255, grey_bg[1]);
+            init_pair(CP_PKT_UDP,  255, grey_bg[2]);
+            init_pair(CP_PKT_DNS,  255, grey_bg[3]);
+            init_pair(CP_PKT_ICMP, 255, grey_bg[4]);
+            /* 8 IP fg colours × 5 row bgs */
+            static const short ip_fg[8] = {
+                51,    /* cyan       */
+                117,   /* light blue */
+                226,   /* yellow     */
+                220,   /* gold       */
+                201,   /* magenta    */
+                213,   /* pink       */
+                156,   /* pale green */
+                214,   /* orange     */
+            };
+            for (int i = 0; i < 8; i++) {
+                init_pair(CP_IP_BASE_OTHER + i, ip_fg[i], grey_bg[0]);
+                init_pair(CP_IP_BASE_TCP   + i, ip_fg[i], grey_bg[1]);
+                init_pair(CP_IP_BASE_UDP   + i, ip_fg[i], grey_bg[2]);
+                init_pair(CP_IP_BASE_DNS   + i, ip_fg[i], grey_bg[3]);
+                init_pair(CP_IP_BASE_ICMP  + i, ip_fg[i], grey_bg[4]);
+            }
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -168,9 +229,23 @@ void tui_init(void) {
             init_pair(CP_HEAT_MID,  COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_HI,   COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_HEAT_PEAK, COLOR_RED,   COLOR_BLACK);
-            init_pair(CP_PKT_TCP,   COLOR_WHITE,  COLOR_BLUE);
-            init_pair(CP_PKT_UDP,   COLOR_BLACK,  COLOR_GREEN);
-            init_pair(CP_PKT_ICMP,  COLOR_WHITE,  COLOR_MAGENTA);
+            /* 8-color fallback: same fg+bg for all 4 categories */
+            init_pair(CP_PKT_TCP,  COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_PKT_UDP,  COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_PKT_DNS,  COLOR_WHITE, COLOR_BLACK);
+            init_pair(CP_PKT_ICMP, COLOR_WHITE, COLOR_BLACK);
+            static const short ip_fg_8[8] = {
+                COLOR_CYAN,    COLOR_BLUE,    COLOR_YELLOW,  3,
+                COLOR_MAGENTA, COLOR_RED,     COLOR_GREEN,   COLOR_WHITE,
+            };
+            for (int b = 0; b < 5; b++) {
+                int base = (b == 0) ? CP_IP_BASE_OTHER :
+                           (b == 1) ? CP_IP_BASE_TCP   :
+                           (b == 2) ? CP_IP_BASE_UDP   :
+                           (b == 3) ? CP_IP_BASE_DNS   : CP_IP_BASE_ICMP;
+                for (int i = 0; i < 8; i++)
+                    init_pair(base + i, ip_fg_8[i], COLOR_BLACK);
+            }
         }
     }
 }

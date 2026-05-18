@@ -6,6 +6,7 @@
 #include "tui.h"
 #include "views/dashboard.h"
 #include "bandwidth.h"
+#include "ip_color.h"
 
 /* Compact byte-count formatter — kept local. */
 static void fmt_bytes(uint64_t b, char *buf, int sz) {
@@ -178,29 +179,37 @@ static void panel_title(int y, int x, int w, const char *name) {
 
 /* ── Interfaces row with sparklines ──────────────────────── */
 
-/* Column geometry: 2 (margin) + 8 (name) + 10 (rx/s) + 10 (tx/s) +
- * 10 (rx tot) + 10 (tx tot) + 2 (sep) + SPARK_W + 2 (sep) + SPARK_W
- * + trailing fill. With SPARK_W=24 the fixed-width prefix ends at col 54
- * and each sparkline occupies the next 24 cols. */
-#define IFACE_FIXED_W   54
-#define IFACE_RX_X      IFACE_FIXED_W
-#define IFACE_TX_X      (IFACE_FIXED_W + SPARK_W + 2)
-#define IFACE_END_X     (IFACE_TX_X + SPARK_W)
+/* Fixed text portion: 2 (margin) + 8 (name) + 10 + 10 + 10 + 10 = 50 cols.
+ * Each sparkline expands to fill half the remaining width, capped at
+ * HIST_LEN since that's the depth of the history ring. */
+#define IFACE_FIXED_W   50
+
+static int iface_spark_w(int w) {
+    int sw = (w - IFACE_FIXED_W - 4) / 2;  /* 4 cols for separators */
+    if (sw > HIST_LEN) sw = HIST_LEN;
+    if (sw < 8)        sw = 8;
+    return sw;
+}
+
+#define IFACE_END_X(w)  (IFACE_FIXED_W + 2 + iface_spark_w(w) + 2 + iface_spark_w(w))
 
 static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
+    int spark_w = iface_spark_w(w);
+    int rx_x = IFACE_FIXED_W + 2;
+    int tx_x = rx_x + spark_w + 2;
+    int end_x = tx_x + spark_w;
+
     panel_title(y0, 0, w, "Interfaces");
 
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, 0, IFACE_FIXED_W,
              "  %-8s  %10s  %10s  %10s  %10s",
              "iface", "rx/s", "tx/s", "rx total", "tx total");
-    /* sparkline column headers */
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, IFACE_RX_X, SPARK_W,     "rx graph");
-    clipline(y0 + 1, IFACE_TX_X, SPARK_W,     "tx graph");
-    /* clear remainder of the header line so the full-width band stays clean */
-    if (IFACE_END_X < w)
-        clipline(y0 + 1, IFACE_END_X, w - IFACE_END_X, "");
+    clipline(y0 + 1, rx_x, spark_w, "rx graph");
+    clipline(y0 + 1, tx_x, spark_w, "tx graph");
+    if (end_x < w)
+        clipline(y0 + 1, end_x, w - end_x, "");
 
     int rows = h - 2;
     int n    = s->iface_count < rows ? s->iface_count : rows;
@@ -220,20 +229,20 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
 
         const iface_hist_t *H = hist_lookup(s, I->name);
         if (H) {
-            draw_sparkline_at(y, IFACE_RX_X, SPARK_W, H->rx, H->head, H->count);
-            draw_sparkline_at(y, IFACE_TX_X, SPARK_W, H->tx, H->head, H->count);
+            draw_sparkline_at(y, rx_x, spark_w, H->rx, H->head, H->count);
+            draw_sparkline_at(y, tx_x, spark_w, H->tx, H->head, H->count);
         } else {
             /* no history yet — paint underscores */
             attrset(COLOR_PAIR(CP_DIM));
-            move(y, IFACE_RX_X);
-            for (int j = 0; j < SPARK_W; j++) addch('_');
-            move(y, IFACE_TX_X);
-            for (int j = 0; j < SPARK_W; j++) addch('_');
+            move(y, rx_x);
+            for (int j = 0; j < spark_w; j++) addch('_');
+            move(y, tx_x);
+            for (int j = 0; j < spark_w; j++) addch('_');
         }
         /* erase trailing cols so the full-width band stays clean */
-        if (IFACE_END_X < w) {
+        if (end_x < w) {
             attrset(COLOR_PAIR(CP_NORMAL));
-            clipline(y, IFACE_END_X, w - IFACE_END_X, "");
+            clipline(y, end_x, w - end_x, "");
         }
     }
     /* erase any unused iface rows so prior frames don't leak through */
@@ -262,23 +271,56 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int w) {
     int end = top + rows;
     if (end > n)        end = n;
 
+    /* Column geometry: fixed prefix = 2 + 21 + 4 + 25 + 1 + 5 + 1 + 5 + 1 + 5 + 2 = 72
+       Process gets the remainder. */
+    int proc_w = w - 72;
+    if (proc_w < 12) proc_w = 12;
+
     for (int i = top; i < end; i++) {
         const conn_t *c = &s->conns[i];
-        char local[64], remote[64];
-        snprintf(local,  sizeof(local),  "%s:%u",
-                 c->local_addr,  (unsigned)c->local_port);
-        snprintf(remote, sizeof(remote), "%s:%u",
-                 c->remote_addr, (unsigned)c->remote_port);
+        int cat = (int)pkt_categorize(c->proto, c->local_port, c->remote_port);
 
-        if (i == s->conn_sel)
-            attrset(A_REVERSE | COLOR_PAIR(CP_BRIGHT));
-        else
-            attrset(COLOR_PAIR(CP_NORMAL));
+        /* Paint full-row bg first */
+        if (i == s->conn_sel) tui_sel();
+        else                  attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + (i - top), 0, w, "");
 
-        clipline(y0 + 2 + (i - top), 0, w,
-                 "  %-21.21s -> %-25.25s %-5s %5d %5d  %.16s",
-                 local, remote, proto_short(c->proto),
-                 c->state, c->pid, c->proc);
+        int xc = 0;
+        move(y0 + 2 + (i - top), xc);
+        if (i == s->conn_sel) tui_sel();
+        else                  attrset(COLOR_PAIR(CP_NORMAL));
+        printw("  ");
+        xc += 2;
+        /* local IP (coloured) */
+        if (i != s->conn_sel) tui_ip_addstr(c->local_addr, cat);
+        else                  addstr(c->local_addr);
+        if (i == s->conn_sel) tui_sel();
+        else                  attrset(COLOR_PAIR(CP_NORMAL));
+        {
+            int llen = (int)strlen(c->local_addr);
+            printw(":%-5u", (unsigned)c->local_port);
+            int pad = 21 - (llen + 1 + 5);
+            for (int j = 0; j < pad; j++) addch(' ');
+        }
+        xc += 21;
+        move(y0 + 2 + (i - top), xc);
+        printw(" -> ");
+        xc += 4;
+        if (i != s->conn_sel) tui_ip_addstr(c->remote_addr, cat);
+        else                  addstr(c->remote_addr);
+        if (i == s->conn_sel) tui_sel();
+        else                  attrset(COLOR_PAIR(CP_NORMAL));
+        {
+            int rlen = (int)strlen(c->remote_addr);
+            printw(":%-5u", (unsigned)c->remote_port);
+            int pad = 25 - (rlen + 1 + 5);
+            if (pad > 0) for (int j = 0; j < pad; j++) addch(' ');
+        }
+        xc += 25;
+        move(y0 + 2 + (i - top), xc);
+        printw(" %-5s %5d %5d  %-*.*s",
+               proto_short(c->proto),
+               c->state, c->pid, proc_w, proc_w, c->proc);
     }
     /* Erase any trailing rows so the conn band can shrink without
        leaving stale entries behind. */
@@ -290,8 +332,89 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int w) {
 
 /* ── Packets (real-time scroll: newest at top each frame) ── */
 
+/* Build the packets band title with capture iface + WiFi network so the
+ * operator can tell at a glance where the packets are coming from. */
+static void draw_packets_title(const sloth_state_t *s, int y, int w) {
+    char title[160];
+    int n = snprintf(title, sizeof(title), "Packets (live)");
+    if (s->pkt_iface[0])
+        n += snprintf(title + n, sizeof(title) - n,
+                      "  iface=%s", s->pkt_iface);
+#ifdef WITH_WIFI
+    for (int i = 0; i < s->ap_count; i++) {
+        if (s->aps[i].status == WIFI_STATUS_ASSOC && s->aps[i].ssid[0]) {
+            n += snprintf(title + n, sizeof(title) - n,
+                          "  ssid=%.24s", s->aps[i].ssid);
+            break;
+        }
+    }
+#endif
+    panel_title(y, 0, w, title);
+}
+
+/* Print one row of the packets band: time | src(IP-color) : port -> dst(IP-color) : port | proto | info.
+ * The full row uses the per-category grey bg; the IP substrings carry their own colour pairs. */
+static void draw_packet_row(int y, int w, const packet_info_t *p) {
+    int cat = (int)pkt_categorize(p->proto, p->src_port, p->dst_port);
+
+    char ts_buf[12];
+    time_t t = (time_t)p->ts_sec;
+    struct tm *tm = localtime(&t);
+    if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
+    else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
+
+    /* Pre-format src/dst with port for length budgeting. */
+    char src_full[28], dst_full[28];
+    snprintf(src_full, sizeof(src_full), "%s:%u", p->src, (unsigned)p->src_port);
+    snprintf(dst_full, sizeof(dst_full), "%s:%u", p->dst, (unsigned)p->dst_port);
+
+    /* Paint the full-row grey bg first. */
+    tui_pkt_bg_cat(cat);
+    clipline(y, 0, w, "");
+
+    /* Now overprint structured content with column positions. */
+    int x = 0;
+    move(y, x); x += 2;
+    tui_pkt_bg_cat(cat); printw("  %-8s  ", ts_buf); x += 10;  /* "  HH:MM:SS  " is 12 cols */
+
+    /* src column: 21 cols wide */
+    int src_w = 21;
+    move(y, x);
+    tui_ip_addstr(p->src, cat);
+    tui_pkt_bg_cat(cat);
+    printw(":%-5u", (unsigned)p->src_port);
+    /* pad to src_w */
+    int used = (int)strlen(p->src) + 1 + 5;
+    while (used++ < src_w) addch(' ');
+    x += src_w;
+
+    move(y, x); tui_pkt_bg_cat(cat); printw(" -> "); x += 4;
+
+    /* dst column: 21 cols */
+    int dst_w = 21;
+    move(y, x);
+    tui_ip_addstr(p->dst, cat);
+    tui_pkt_bg_cat(cat);
+    printw(":%-5u", (unsigned)p->dst_port);
+    used = (int)strlen(p->dst) + 1 + 5;
+    while (used++ < dst_w) addch(' ');
+    x += dst_w;
+
+    /* proto column */
+    move(y, x); tui_pkt_bg_cat(cat); printw("  %-5s  ", proto_short(p->proto)); x += 9;
+
+    /* info column: fills remaining width */
+    int info_w = w - x;
+    if (info_w < 1) info_w = 1;
+    move(y, x);
+    tui_pkt_bg_cat(cat);
+    printw("%.*s", info_w, p->info);
+    /* trailing pad already handled by the initial clipline() */
+    (void)src_full; (void)dst_full;
+}
+
 static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
-    panel_title(y0, 0, w, "Packets (live)");
+    draw_packets_title(s, y0, w);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, 0, w, "  %-8s  %-21s -> %-21s  %-5s  %s",
              "time", "src", "dst", "proto", "info");
@@ -308,23 +431,7 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
         }
         /* newest first */
         int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
-        const packet_info_t *p = &s->packets[slot];
-
-        char ts_buf[12];
-        time_t t = (time_t)p->ts_sec;
-        struct tm *tm = localtime(&t);
-        if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
-        else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
-
-        char src[28], dst[28];
-        snprintf(src, sizeof(src), "%s:%u", p->src, (unsigned)p->src_port);
-        snprintf(dst, sizeof(dst), "%s:%u", p->dst, (unsigned)p->dst_port);
-
-        tui_pkt_bg(p->proto);
-        clipline(y0 + 2 + i, 0, w,
-                 "  %-8s  %-21.21s -> %-21.21s  %-5s  %.*s",
-                 ts_buf, src, dst, proto_short(p->proto),
-                 w - 70 > 0 ? w - 70 : 8, p->info);
+        draw_packet_row(y0 + 2 + i, w, &s->packets[slot]);
     }
 }
 
@@ -506,48 +613,102 @@ static void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w
 
 static void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "DNS log");
-    attrset(COLOR_PAIR(CP_DIM));
+    /* DNS log shares the DNS category grey with DNS rows in the packets band. */
+    int cat = (int)PKT_CAT_DNS;
+    tui_pkt_bg_cat(cat);
     clipline(y0 + 1, x, w, "  %-3s %-5s %-22s %s",
              "Q/R", "type", "qname", "answer");
     int rows = h - 2;
     int n = s->dns_log_count < rows ? s->dns_log_count : rows;
+    /* fixed prefix width = 2 + 3 + 1 + 5 + 1 + qname_w + 1 = 13 + qname_w
+       Variable: qname grows, answer fills the remainder. */
+    int qname_w  = (w - 13) / 2;
+    if (qname_w < 16) qname_w = 16;
+    int answer_w = w - (13 + qname_w);
+    if (answer_w < 8) answer_w = 8;
     for (int i = 0; i < n; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
-        int is_nx = (strcmp(e->answer, "NXDOMAIN") == 0);
-        if (is_nx)              attrset(COLOR_PAIR(CP_HEAT_HI));
-        else if (e->is_resp)    attrset(COLOR_PAIR(CP_BRIGHT));
-        else                    attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w,
-                 "  %-3s %-5.5s %-22.22s %.*s",
-                 e->is_resp ? "R" : "Q", e->qtype,
-                 e->qname, w - 35 > 0 ? w - 35 : 10,
-                 e->answer[0] ? e->answer : "-");
+        /* Paint grey bg first, then overprint. */
+        tui_pkt_bg_cat(cat);
+        clipline(y0 + 2 + i, x, w, "");
+        /* status prefix: Q/R */
+        int xc = x;
+        move(y0 + 2 + i, xc);
+        tui_pkt_bg_cat(cat);
+        printw("  %-3s %-5.5s ",
+               e->is_resp ? "R" : "Q", e->qtype);
+        xc += 12;
+        /* qname column (no IP) */
+        move(y0 + 2 + i, xc);
+        tui_pkt_bg_cat(cat);
+        printw("%-*.*s ", qname_w, qname_w, e->qname);
+        xc += qname_w + 1;
+        /* answer column — IP if it looks like one */
+        move(y0 + 2 + i, xc);
+        if (strchr(e->answer, '.') && e->answer[0] >= '0' &&
+            e->answer[0] <= '9') {
+            tui_ip_addstr(e->answer, cat);
+        } else {
+            int is_nx = (strcmp(e->answer, "NXDOMAIN") == 0);
+            if (is_nx)           tui_pkt_bg_cat(cat), attrset(COLOR_PAIR(CP_HEAT_HI));
+            else if (e->is_resp) tui_pkt_bg_cat(cat), attrset(COLOR_PAIR(CP_BRIGHT));
+            else                 tui_pkt_bg_cat(cat);
+            printw("%.*s", answer_w, e->answer[0] ? e->answer : "-");
+        }
     }
-    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+    for (int i = n; i < rows; i++) {
+        tui_pkt_bg_cat(cat);
+        clipline(y0 + 2 + i, x, w, "");
+    }
 }
 
 static void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "ICMP log");
-    attrset(COLOR_PAIR(CP_DIM));
+    int cat = (int)PKT_CAT_ICMP;
+    tui_pkt_bg_cat(cat);
     clipline(y0 + 1, x, w, "  %-3s %-15s %s",
              "v",  "src", "type");
     int rows = h - 2;
     int n = s->icmp_log_count < rows ? s->icmp_log_count : rows;
+    /* fixed prefix: 2 + 3 + 1 + 15 + 1 = 22 chars  */
+    int desc_w = w - 22;
+    if (desc_w < 8) desc_w = 8;
     for (int i = 0; i < n; i++) {
         const icmp_log_entry_t *e = &s->icmp_log[i];
+
+        /* full-row grey bg */
+        tui_pkt_bg_cat(cat);
+        clipline(y0 + 2 + i, x, w, "");
+
+        int xc = x;
+        move(y0 + 2 + i, xc);
+        tui_pkt_bg_cat(cat);
+        printw("  %-3s ", e->is_v6 ? "v6" : "v4");
+        xc += 6;
+        /* src IP coloured */
+        move(y0 + 2 + i, xc);
+        tui_ip_addstr(e->src, cat);
+        /* pad to 15 chars + trailing space */
+        tui_pkt_bg_cat(cat);
+        int srclen = (int)strlen(e->src);
+        for (int j = srclen; j < 15; j++) addch(' ');
+        addch(' ');
+        xc += 16;
+        /* desc column, colour-coded by class */
         int is_err = e->is_v6
             ? (e->type >= 1 && e->type <= 4)
             : (e->type == 3 || e->type == 11 || e->type == 12);
         int is_req = e->is_v6 ? (e->type == 128) : (e->type == 8);
         if (is_err)      attrset(COLOR_PAIR(CP_HEAT_HI));
         else if (is_req) attrset(COLOR_PAIR(CP_BRIGHT));
-        else             attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w,
-                 "  %-3s %-15.15s %.*s",
-                 e->is_v6 ? "v6" : "v4", e->src,
-                 w - 24 > 0 ? w - 24 : 8, e->desc);
+        else             tui_pkt_bg_cat(cat);
+        move(y0 + 2 + i, xc);
+        printw("%.*s", desc_w, e->desc);
     }
-    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+    for (int i = n; i < rows; i++) {
+        tui_pkt_bg_cat(cat);
+        clipline(y0 + 2 + i, x, w, "");
+    }
 }
 
 static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
@@ -570,6 +731,9 @@ static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w)
 /* ── Public draw / key ───────────────────────────────────── */
 
 void view_dashboard_draw(const sloth_state_t *s) {
+    /* Per-frame index: which IPs appear across multiple panels. Used by
+     * tui_ip_addstr() inside every panel below for the bold flag. */
+    ip_index_build(s);
 #ifdef WITH_NCURSES
     int lines = LINES;
     int cols  = COLS;
@@ -584,11 +748,13 @@ void view_dashboard_draw(const sloth_state_t *s) {
      *   packets         = 2H         (now at the very bottom)
      *   total           = 7H + iface */
     int min_lines = 2 + 3 + 4 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
-    if (lines < min_lines || cols < IFACE_END_X + 2) {
+    /* iface band minimum: text 50 cols + 2*8 sparkline + 4 separators = 70 */
+    int min_cols  = IFACE_FIXED_W + 2 + 8 + 2 + 8;
+    if (lines < min_lines || cols < min_cols) {
         tui_dim();
         TPRINT(" Dashboard: terminal too small "
                "(need >=%d cols, >=%d rows; this is %dx%d)\n",
-               IFACE_END_X + 2, min_lines, cols, lines);
+               min_cols, min_lines, cols, lines);
         tui_normal();
         return;
     }
@@ -668,13 +834,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
         fmt_bytes(I->rx_bytes, rxt, sizeof(rxt));
         fmt_bytes(I->tx_bytes, txt, sizeof(txt));
         char spark[SPARK_W * 3 + 1] = "____________";
-        const iface_hist_t *H = NULL;
-        for (int j = 0; j < MAX_IFACES; j++) {
-            if (s->iface_hist[j].name[0] &&
-                strcmp(s->iface_hist[j].name, I->name) == 0) {
-                H = &s->iface_hist[j]; break;
-            }
-        }
+        const iface_hist_t *H = hist_lookup(s, I->name);
         if (H) sparkline(H->rx, H->head, H->count,
                          SPARK_W, spark, sizeof(spark));
         TPRINT("  %-10s  rx/s=%-10s  tx/s=%-10s  rx=%-10s  tx=%-10s  rx:%s\n",

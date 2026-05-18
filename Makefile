@@ -63,6 +63,7 @@ SRCS = src/main.c          \
        src/filter.c          \
        src/alert_pcap.c      \
        src/ip_owner.c        \
+       src/ip_color.c        \
        src/views/dashboard.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
@@ -248,6 +249,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_alert_pcap.c        \
             src/ip_owner.c                 \
             tests/test_ip_owner.c          \
+            src/ip_color.c                 \
+            tests/test_ip_color.c          \
             src/views/dashboard.c          \
             tests/test_dashboard.c
 
