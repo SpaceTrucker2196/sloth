@@ -151,6 +151,13 @@ typedef enum {
  * Visible to both builds for the same reason as the enum above. */
 static int g_dash_focus;
 
+/* Connections sort order — populated by draw_conn_band each frame,
+ * read by the cross-panel highlight in view_dashboard_draw so
+ * s->conn_sel (the ordinal in the sorted view) resolves back to the
+ * underlying conn index. */
+int g_conn_order_buf[MAX_CONNS];
+int g_conn_order_n;
+
 /* Map a focused panel to the view it deep-dives into when Enter is hit. */
 static view_t panel_to_view(int p) {
     switch (p) {
@@ -407,6 +414,10 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
     if (rows < 1) return;
 
     int n = s->conn_count;
+    /* Sort is computed up-front in view_dashboard_draw and shared via
+     * g_conn_order_buf so the cross-panel highlight can use it too. */
+    int *order = g_conn_order_buf;
+
     int top = s->conn_sel - rows / 2;
     if (top + rows > n) top = n - rows;
     if (top < 0)        top = 0;
@@ -426,7 +437,7 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
     if (proc_w < 8) proc_w = 8;
 
     for (int i = top; i < end; i++) {
-        const conn_t *c = &s->conns[i];
+        const conn_t *c = &s->conns[order[i]];
         int cat = (int)pkt_categorize(c->proto, c->local_port, c->remote_port);
 
         /* Paint full-row bg first */
@@ -1272,13 +1283,51 @@ void view_dashboard_draw(const sloth_state_t *s) {
      * tui_ip_addstr() inside every panel below for the bold flag. */
     ip_index_build(s);
 
+    /* Per-frame conn sort by combined rx+tx rate (descending).
+     * Shared via g_conn_order_buf so the conn band and the cross-panel
+     * highlight both see the same order. */
+    {
+        int n = s->conn_count;
+        static double rates[MAX_CONNS];
+        for (int i = 0; i < n; i++) {
+            g_conn_order_buf[i] = i;
+            const conn_t *c = &s->conns[i];
+            double r = 0.0;
+            for (int b = 0; b < s->conn_bw_count; b++) {
+                const conn_bw_t *bw = &s->conn_bw[b];
+                if (bw->proto       == c->proto       &&
+                    bw->local_port  == c->local_port  &&
+                    bw->remote_port == c->remote_port &&
+                    strcmp(bw->local_addr,  c->local_addr)  == 0 &&
+                    strcmp(bw->remote_addr, c->remote_addr) == 0) {
+                    r = bw->rx_rate + bw->tx_rate;
+                    break;
+                }
+            }
+            rates[i] = r;
+        }
+        for (int i = 0; i < n - 1; i++) {
+            int best = i;
+            for (int j = i + 1; j < n; j++)
+                if (rates[g_conn_order_buf[j]] >
+                    rates[g_conn_order_buf[best]]) best = j;
+            if (best != i) {
+                int tmp = g_conn_order_buf[i];
+                g_conn_order_buf[i] = g_conn_order_buf[best];
+                g_conn_order_buf[best] = tmp;
+            }
+        }
+        g_conn_order_n = n;
+    }
+
     /* Cross-panel highlight: when the conn panel has focus and a row is
      * selected, light up that row's local+remote IPs everywhere else.
-     * Clear when focus moves off so other panels go back to normal. */
+     * conn_sel is the ordinal in the sorted view — translate via
+     * g_conn_order_buf. */
     if (s->dash_focus == DASH_PANEL_CONN &&
         s->conn_count > 0 &&
-        s->conn_sel >= 0 && s->conn_sel < s->conn_count) {
-        const conn_t *cc = &s->conns[s->conn_sel];
+        s->conn_sel >= 0 && s->conn_sel < g_conn_order_n) {
+        const conn_t *cc = &s->conns[g_conn_order_buf[s->conn_sel]];
         tui_set_highlight_ips(cc->local_addr, cc->remote_addr);
     } else {
         tui_set_highlight_ips(NULL, NULL);
@@ -1322,7 +1371,10 @@ void view_dashboard_draw(const sloth_state_t *s) {
 
     int bot1_h    = H;
     int bot2_h    = H;
-    int bot3_h    = H;
+    /* bot3 (ARP / Deauth) is the least-frequently-active row — shrunk
+     * to half-height to give the busier bands more breathing room. */
+    int bot3_h    = H / 2;
+    if (bot3_h < 3) bot3_h = 3;   /* title + header + 1 data row */
     int bot4_h    = H;
     int crit_h    = H;
     int conn_h    = 2 * H;
@@ -1336,13 +1388,16 @@ void view_dashboard_draw(const sloth_state_t *s) {
         packets_h += extra - extra / 2;
     }
 
-    int conn_y    = iface_y + iface_h;
+    /* CRIT alerts moved up to row 2 (right after iface+summary) so the
+     * worst stuff lives at eye level. Everything else slides down by
+     * crit_h relative to the previous layout. */
+    int crit_y    = iface_y + iface_h;
+    int conn_y    = crit_y  + crit_h;
     int bot1_y    = conn_y  + conn_h;
     int bot2_y    = bot1_y  + bot1_h;
     int bot3_y    = bot2_y  + bot2_h;
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
-    int crit_y    = packets_y + packets_h;
 
     /* 5-col left margin so the dashboard isn't flush against the
      * terminal edge. Every layout width derives from `usable` and
@@ -1359,6 +1414,9 @@ void view_dashboard_draw(const sloth_state_t *s) {
     /* Vertical divider after each panel column (skip the title row). */
     attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < iface_h; dy++) mvaddstr(iface_y + dy, x0 + iface_w, G_VERT);
+
+    /* Row 2: CRIT alerts (full width). */
+    draw_crit_alerts_band(s, crit_y, crit_h, x0, usable);
 
     /* Connections row: 60% conn table + 40% top hosts. */
     int conn_w  = (usable * 6) / 10;
@@ -1407,9 +1465,6 @@ void view_dashboard_draw(const sloth_state_t *s) {
     for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
     draw_packets_band(s, packets_y, packets_h, x0, usable);
-
-    /* New very-bottom band: CRIT alerts only, in heat-1.0 red. */
-    draw_crit_alerts_band(s, crit_y, crit_h, x0, usable);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else
