@@ -178,6 +178,9 @@ static void handle_key(sloth_state_t *s, int key) {
                         return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
+        /* The dashboard uses Tab to cycle its own panels — let its
+         * view-specific handler see this key. */
+        if (s->active_view == VIEW_DASH) break;
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;
     case 'n': case 'N':
@@ -261,7 +264,7 @@ int main(int argc, char **argv) {
 
     memset(&g_state, 0, sizeof(g_state));
     g_state.poll_ms     = POLL_MS;
-    g_state.active_view = VIEW_IFACE;
+    g_state.active_view = VIEW_DASH;
 
     g_platform.init();
     dns_init();

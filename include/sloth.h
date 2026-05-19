@@ -548,6 +548,9 @@ typedef struct {
     char     filter[48];
     int      filter_editing;   /* 1 while user is typing the filter */
 
+    /* ── Dashboard panel focus (tab navigation) ──────────────── */
+    int      dash_focus;       /* dash_panel_t index — see views/dashboard.c */
+
     /* ── QUIC session log ───────────────────────────────────── */
     quic_log_entry_t quic_log[MAX_QUIC_LOG];
     int              quic_log_head;

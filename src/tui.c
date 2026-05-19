@@ -405,27 +405,55 @@ void tui_cleanup(void) {
     endwin();
 }
 
-static void draw_tabbar(const sloth_state_t *s) {
+/* Draw the tab bar, wrapping onto extra rows as needed. Returns the
+ * number of rows consumed by the bar (>= 1). */
+static int draw_tabbar(const sloth_state_t *s) {
+    int max_x = getmaxx(stdscr);
+    int y     = 0;
+    int x     = 0;
+
+    move(y, x);
     tui_bright();
-    printw(" sloth v" SLOTH_VERSION);
+    static const char *banner = " sloth v" SLOTH_VERSION;
+    int banner_w = (int)strlen(banner);
+    printw("%s", banner);
+    x = banner_w;
+
     for (int i = 0; i < VIEW_COUNT; i++) {
-        tui_dim(); printw("  ");
+        /* "  [n] Label "  ≈ 2 sep + 2 label-padding + label width */
+        int lbl_w = (int)strlen(view_labels[i]) + 4;
+        if (x + lbl_w >= max_x) {
+            y++; x = 0;
+            move(y, x);
+        }
+        tui_dim();   printw("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
         printw(" %s ", view_labels[i]);
+        x += lbl_w;
     }
-    tui_dim();
-    printw("  [Tab] cycle  [q]uit");
     tui_normal();
+    return y + 1;
 }
 
 void tui_draw(const sloth_state_t *s) {
     erase();
     bkgd(COLOR_PAIR(CP_NORMAL));
-    move(0, 0);
-    draw_tabbar(s);
-    move(1, 0);
+
+    /* The dashboard owns the whole screen — no tab bar above it.
+     * Switch into a detail view (Enter on a focused panel, or any
+     * direct view key) to bring the bar back. */
+    if (s->active_view == VIEW_DASH) {
+        move(0, 0);
+        tui_normal();
+        dispatch_view(s);
+        refresh();
+        return;
+    }
+
+    int tabbar_h = draw_tabbar(s);
+    move(tabbar_h, 0);
     tui_dim(); hline(ACS_HLINE, getmaxx(stdscr));
-    move(2, 0);
+    move(tabbar_h + 1, 0);
     tui_normal();
     dispatch_view(s);
     refresh();

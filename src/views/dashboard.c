@@ -124,9 +124,57 @@ static void sparkline(const double *vals, int head, int n,
 /* sparkline width in glyph cells — used by both builds. */
 #define SPARK_W 24
 
+/* Tab-cycle order. Visible to both builds because view_dashboard_key
+ * (outside the ncurses guard) needs DASH_PANEL_COUNT. */
+typedef enum {
+    DASH_PANEL_IFACE = 0,
+    DASH_PANEL_SUMMARY,
+    DASH_PANEL_CONN,
+    DASH_PANEL_TOP_HOSTS,
+    DASH_PANEL_PACKETS,
+    DASH_PANEL_WIFI,
+    DASH_PANEL_ROAMING,
+    DASH_PANEL_BEACONS,
+    DASH_PANEL_MDNS,
+    DASH_PANEL_DHCP,
+    DASH_PANEL_SSDP,
+    DASH_PANEL_ARP,
+    DASH_PANEL_DEAUTH,
+    DASH_PANEL_DNS,
+    DASH_PANEL_ICMP,
+    DASH_PANEL_COUNT
+} dash_panel_t;
+
+/* Set at the top of view_dashboard_draw so panel_title can read it without
+ * needing the sloth_state_t pointer threaded through every panel call.
+ * Visible to both builds for the same reason as the enum above. */
+static int g_dash_focus;
+
+/* Map a focused panel to the view it deep-dives into when Enter is hit. */
+static view_t panel_to_view(int p) {
+    switch (p) {
+    case DASH_PANEL_IFACE:     return VIEW_IFACE;
+    case DASH_PANEL_SUMMARY:   return VIEW_STATS;
+    case DASH_PANEL_CONN:      return VIEW_CONNS;
+    case DASH_PANEL_TOP_HOSTS: return VIEW_CONNS;   /* no dedicated view */
+    case DASH_PANEL_PACKETS:   return VIEW_PACKETS;
+    case DASH_PANEL_WIFI:      return VIEW_WIFI;
+    case DASH_PANEL_ROAMING:   return VIEW_PROBE;
+    case DASH_PANEL_BEACONS:   return VIEW_BEACON;
+    case DASH_PANEL_MDNS:      return VIEW_MDNS;
+    case DASH_PANEL_DHCP:      return VIEW_DHCP;
+    case DASH_PANEL_SSDP:      return VIEW_SSDP;
+    case DASH_PANEL_ARP:       return VIEW_ARP;
+    case DASH_PANEL_DEAUTH:    return VIEW_DEAUTH;
+    case DASH_PANEL_DNS:       return VIEW_DNS;
+    case DASH_PANEL_ICMP:      return VIEW_ICMP;
+    default:                   return VIEW_DASH;
+    }
+}
+
 #ifdef WITH_NCURSES
 
-#define DASH_TOP_Y     2        /* below tabbar + hline */
+#define DASH_TOP_Y     0        /* dashboard owns the screen — no tabbar above */
 #define MIN_PANEL_H    4        /* title + header + 2 data rows */
 
 /* Render a sparkline directly to (y,x) with heat-graded colors per glyph.
@@ -191,7 +239,8 @@ static void clipline(int y, int x, int w, const char *fmt, ...) {
     for (int i = n; i < w; i++) addch(' ');
 }
 
-static void panel_title(int y, int x, int w, const char *name) {
+static void panel_title(int y, int x, int w, const char *name, int panel_id) {
+    int focused = (panel_id == g_dash_focus);
     attrset(COLOR_PAIR(CP_DIM));
     move(y, x);
     int filled = 0;
@@ -199,8 +248,10 @@ static void panel_title(int y, int x, int w, const char *name) {
     /* 2 leading horizontals + space */
     if (filled + 2 <= w) { addstr(G_HORIZ); addstr(G_HORIZ); filled += 2; }
     if (filled     <  w) { addch(' '); filled++; }
-    /* name (highlighted) */
-    attrset(COLOR_PAIR(CP_BRIGHT));
+    /* name — bright; inverted if this is the focused panel */
+    attr_t name_attr = COLOR_PAIR(CP_BRIGHT);
+    if (focused) name_attr |= A_REVERSE;
+    attrset(name_attr);
     for (int i = 0; i < len && filled < w; i++, filled++)
         addch((chtype)(unsigned char)name[i]);
     attrset(COLOR_PAIR(CP_DIM));
@@ -233,7 +284,7 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
     int tx_x = rx_x + spark_w + 2;
     int end_x = tx_x + spark_w;
 
-    panel_title(y0, 0, w, "Interfaces");
+    panel_title(y0, 0, w, "Interfaces", DASH_PANEL_IFACE);
 
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, 0, IFACE_FIXED_W,
@@ -289,7 +340,7 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
 /* ── Connections (scrollable, follows conn_sel) ──────────── */
 
 static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
-    panel_title(y0, x0, w, "Connections");
+    panel_title(y0, x0, w, "Connections", DASH_PANEL_CONN);
 
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x0, w,
@@ -383,7 +434,7 @@ static void fmt_age(time_t now, time_t first_seen, char *buf, int sz) {
 
 static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
                                   int x0, int w) {
-    panel_title(y0, x0, w, "Top hosts");
+    panel_title(y0, x0, w, "Top hosts", DASH_PANEL_TOP_HOSTS);
     attrset(COLOR_PAIR(CP_DIM));
     /* Reserve: ip(15) + host(var) + owner(var) + age(7) + cnt(4) + 5 sep */
     int spare = w - (15 + 7 + 4 + 6);   /* 6 = paddings/margins */
@@ -470,7 +521,7 @@ static void draw_packets_title(const sloth_state_t *s, int y, int w) {
         }
     }
 #endif
-    panel_title(y, 0, w, title);
+    panel_title(y, 0, w, title, DASH_PANEL_PACKETS);
 }
 
 /* Print one row of the packets band: time | src(IP-color) : port -> dst(IP-color) : port | proto | info.
@@ -560,7 +611,7 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
 /* ── Bottom panels ───────────────────────────────────────── */
 
 static void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "WiFi APs");
+    panel_title(y0, x, w, "WiFi APs", DASH_PANEL_WIFI);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-*s %4s %3s",
              w - 12 > 8 ? w - 12 : 8, "SSID", "sig", "ch");
@@ -606,7 +657,7 @@ static double rssi_to_meters(int8_t rssi) {
  * just exposes more of the radio metadata. */
 static void draw_radio_clients_panel(const sloth_state_t *s,
                                       int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Roaming clients");
+    panel_title(y0, x, w, "Roaming clients", DASH_PANEL_ROAMING);
     attrset(COLOR_PAIR(CP_DIM));
     /* Geometry: 2 (margin) + 17 (MAC) + 1 + 14 (vendor) + 1 + ssid +
      *           1 + 4 (sig) + 1 + 5 (dist) = 46 + ssid_w. */
@@ -687,7 +738,7 @@ static void draw_radio_clients_panel(const sloth_state_t *s,
 }
 
 static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Beacons");
+    panel_title(y0, x, w, "Beacons", DASH_PANEL_BEACONS);
     attrset(COLOR_PAIR(CP_DIM));
     int ssid_w = w - 12;
     if (ssid_w < 8) ssid_w = 8;
@@ -712,7 +763,7 @@ static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int 
 }
 
 static void draw_mdns_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "mDNS services");
+    panel_title(y0, x, w, "mDNS services", DASH_PANEL_MDNS);
     attrset(COLOR_PAIR(CP_DIM));
     /* Layout: 2 (margin) + instance_w + 1 (sep) + 6 (port) = w */
     int instance_w = w - 9;
@@ -732,7 +783,7 @@ static void draw_mdns_panel(const sloth_state_t *s, int y0, int h, int x, int w)
 }
 
 static void draw_dhcp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "DHCP events");
+    panel_title(y0, x, w, "DHCP events", DASH_PANEL_DHCP);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-9s %-15s %s", "msg", "ip", "host");
     int rows = h - 2;
@@ -752,7 +803,7 @@ static void draw_dhcp_panel(const sloth_state_t *s, int y0, int h, int x, int w)
 }
 
 static void draw_arp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "ARP table");
+    panel_title(y0, x, w, "ARP table", DASH_PANEL_ARP);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-15s %-17s", "ip", "mac");
     int rows = h - 2;
@@ -770,7 +821,7 @@ static void draw_arp_panel(const sloth_state_t *s, int y0, int h, int x, int w) 
 }
 
 static void draw_deauth_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Deauth");
+    panel_title(y0, x, w, "Deauth", DASH_PANEL_DEAUTH);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-17s %5s %s",
              "target", "rsn", "flood");
@@ -791,7 +842,7 @@ static void draw_deauth_panel(const sloth_state_t *s, int y0, int h, int x, int 
 }
 
 static void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Summary");
+    panel_title(y0, x, w, "Summary", DASH_PANEL_SUMMARY);
     /* Compose a few summary counters. */
     int crit_n = 0, warn_n = 0;
     for (int i = 0; i < s->alert_count; i++) {
@@ -837,7 +888,7 @@ static void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w
 }
 
 static void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "DNS log");
+    panel_title(y0, x, w, "DNS log", DASH_PANEL_DNS);
     /* DNS log shares the DNS category grey with DNS rows in the packets band. */
     int cat = (int)PKT_CAT_DNS;
     tui_pkt_bg_cat(cat);
@@ -894,7 +945,7 @@ static void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int
 }
 
 static void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "ICMP log");
+    panel_title(y0, x, w, "ICMP log", DASH_PANEL_ICMP);
     int cat = (int)PKT_CAT_ICMP;
     tui_pkt_bg_cat(cat);
     clipline(y0 + 1, x, w, "  %-3s %-15s %s",
@@ -943,7 +994,7 @@ static void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, in
 }
 
 static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "SSDP / UPnP");
+    panel_title(y0, x, w, "SSDP / UPnP", DASH_PANEL_SSDP);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-15s %s", "ip", "type");
     int rows = h - 2;
@@ -962,6 +1013,12 @@ static void draw_ssdp_panel(const sloth_state_t *s, int y0, int h, int x, int w)
 /* ── Public draw / key ───────────────────────────────────── */
 
 void view_dashboard_draw(const sloth_state_t *s) {
+    /* Cache focused panel so panel_title can read it without threading
+     * the state through every panel helper. */
+    g_dash_focus = s->dash_focus;
+    if (g_dash_focus < 0 || g_dash_focus >= DASH_PANEL_COUNT)
+        g_dash_focus = 0;
+
     /* Per-frame index: which IPs appear across multiple panels. Used by
      * tui_ip_addstr() inside every panel below for the bold flag. */
     ip_index_build(s);
@@ -1022,11 +1079,15 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
 
-    draw_iface_band(s, iface_y, iface_h, cols);
+    /* Top row: Interfaces (70%) + Summary (30%). The iface band's
+     * sparkline widths re-derive from this narrower width. */
+    int iface_w   = (cols * 7) / 10;
+    int summary_w = cols - iface_w;
+    draw_iface_band (s, iface_y, iface_h, iface_w);
+    draw_stats_panel(s, iface_y, iface_h, iface_w, summary_w);
 
-    /* Split the connections row: 60% conn table on the left, 40% top
-     * hosts panel on the right. */
-    int conn_w = (cols * 6) / 10;
+    /* Connections row: 60% conn table + 40% top hosts. */
+    int conn_w  = (cols * 6) / 10;
     int hosts_w = cols - conn_w;
     draw_conn_band      (s, conn_y, conn_h, 0,      conn_w);
     draw_top_hosts_panel(s, conn_y, conn_h, conn_w, hosts_w);
@@ -1034,21 +1095,21 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int pw1 = cols / 3;
     int pw2 = cols / 3;
     int pw3 = cols - pw1 - pw2;
-    /* Top panel row: WiFi APs | Summary | Beacons.
-     * Summary moves up here from its old bot3-right slot so high-level
-     * counters sit near the iface band; the freed bot3-right slot
-     * carries the new Roaming clients panel (enhanced Probe). */
-    draw_wifi_panel  (s, bot1_y, bot1_h, 0,         pw1);
-    draw_stats_panel (s, bot1_y, bot1_h, pw1,       pw2);
-    draw_beacon_panel(s, bot1_y, bot1_h, pw1 + pw2, pw3);
+    /* bot1: WiFi | Roaming clients | Beacons (Roaming clients moves up
+     * from bot3 to take Summary's freed slot). */
+    draw_wifi_panel         (s, bot1_y, bot1_h, 0,         pw1);
+    draw_radio_clients_panel(s, bot1_y, bot1_h, pw1,       pw2);
+    draw_beacon_panel       (s, bot1_y, bot1_h, pw1 + pw2, pw3);
 
     draw_mdns_panel(s, bot2_y, bot2_h, 0,         pw1);
     draw_dhcp_panel(s, bot2_y, bot2_h, pw1,       pw2);
     draw_ssdp_panel(s, bot2_y, bot2_h, pw1 + pw2, pw3);
 
-    draw_arp_panel          (s, bot3_y, bot3_h, 0,         pw1);
-    draw_deauth_panel       (s, bot3_y, bot3_h, pw1,       pw2);
-    draw_radio_clients_panel(s, bot3_y, bot3_h, pw1 + pw2, pw3);
+    /* bot3 now has only two panels — 50/50 split. */
+    int arp_w    = cols / 2;
+    int deauth_w = cols - arp_w;
+    draw_arp_panel   (s, bot3_y, bot3_h, 0,      arp_w);
+    draw_deauth_panel(s, bot3_y, bot3_h, arp_w,  deauth_w);
 
     /* DNS log + ICMP log: two equal half-width panels. */
     int half1 = cols / 2;
@@ -1187,6 +1248,12 @@ void view_dashboard_key(sloth_state_t *s, int key) {
     case SLOTH_KEY_DOWN:
         if (s->conn_count > 0 && s->conn_sel < s->conn_count - 1)
             s->conn_sel++;
+        break;
+    case '\t':
+        s->dash_focus = (s->dash_focus + 1) % DASH_PANEL_COUNT;
+        break;
+    case '\r': case '\n':
+        s->active_view = panel_to_view(s->dash_focus);
         break;
     default:
         break;
