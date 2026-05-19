@@ -2,12 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include "sloth.h"
 #include "tui.h"
 #include "views/dashboard.h"
 #include "bandwidth.h"
 #include "ip_color.h"
 #include "ip_owner.h"
+#include "oui.h"
 
 /* Box-drawing / arrow glyphs used by the dashboard. UTF-8 byte sequences;
  * each occupies exactly one terminal column when the font supports them
@@ -583,35 +585,105 @@ static void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w)
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
 
-static void draw_probe_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Probe clients");
+/* Estimate distance from RSSI using the log-distance path-loss model:
+ *     P(d) = P(d0) - 10 * n * log10(d / d0)
+ *   -> d  = d0 * 10^((P(d0) - P) / (10*n))
+ * Defaults: P(d0) = -30 dBm at d0 = 1 m, n = 3.0 (typical indoor with walls).
+ *
+ * This is wildly environment-dependent — real-world distance depends on
+ * obstacles, antennas, frequency, multipath. Treat the number as a rough
+ * order-of-magnitude hint, not a metric measurement. */
+static double rssi_to_meters(int8_t rssi) {
+    if (rssi >= -30) return 1.0;
+    double exponent = ((-30.0) - (double)rssi) / 30.0;  /* 10 * n=3 */
+    if (exponent > 5.0) exponent = 5.0;
+    return pow(10.0, exponent);
+}
+
+/* "Roaming clients" panel: enhanced Probe view with vendor + estimated
+ * distance. Pulls from the same probe_clients[] source the old Probe
+ * panel used. Replaces draw_probe_panel — the data is identical, this
+ * just exposes more of the radio metadata. */
+static void draw_radio_clients_panel(const sloth_state_t *s,
+                                      int y0, int h, int x, int w) {
+    panel_title(y0, x, w, "Roaming clients");
     attrset(COLOR_PAIR(CP_DIM));
-    /* MAC(17) + 1 + SSID + 1 + sig(4) -> SSID = w - 24 */
-    int ssid_w = w - 24;
-    if (ssid_w < 8) ssid_w = 8;
-    clipline(y0 + 1, x, w, "  %-17s %-*s %4s",
-             "MAC", ssid_w, "SSID", "sig");
+    /* Geometry: 2 (margin) + 17 (MAC) + 1 + 14 (vendor) + 1 + ssid +
+     *           1 + 4 (sig) + 1 + 5 (dist) = 46 + ssid_w. */
+    int ssid_w = w - 46;
+    if (ssid_w < 6) ssid_w = 6;
+    clipline(y0 + 1, x, w, "  %-17s %-14s %-*s %4s %5s",
+             "MAC", "vendor", ssid_w, "ssid", "sig", "dist");
+
     int rows = h - 2;
     int n = s->probe_count < rows ? s->probe_count : rows;
     for (int i = 0; i < n; i++) {
         const probe_client_t *p = &s->probe_clients[i];
+
         char mac[20];
         snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
                  p->mac[0], p->mac[1], p->mac[2],
                  p->mac[3], p->mac[4], p->mac[5]);
+
+        /* Locally-administered (random) MAC: low bit of the U/L flag */
+        const char *vendor;
+        int is_random = (p->mac[0] & 0x02) != 0;
+        if (is_random)              vendor = "(random)";
+        else                        vendor = oui_lookup(p->mac);
+        if (!vendor || !vendor[0])  vendor = "?";
+
+        double dist = rssi_to_meters(p->signal_dbm);
+        char dist_buf[12];
+        if      (dist >= 100.0)  snprintf(dist_buf, sizeof(dist_buf), ">99m");
+        else if (dist >= 10.0)   snprintf(dist_buf, sizeof(dist_buf), "%.0fm", dist);
+        else                     snprintf(dist_buf, sizeof(dist_buf), "%.1fm", dist);
+
+        /* paint full row first */
         attrset(COLOR_PAIR(CP_NORMAL));
         clipline(y0 + 2 + i, x, w, "");
-        move(y0 + 2 + i, x);
+        int xc = x;
+        move(y0 + 2 + i, xc);
         attrset(COLOR_PAIR(CP_NORMAL));
         printw("  %-17s ", mac);
+        xc += 2 + 17 + 1;
+
+        /* vendor: dim for "?" / "(random)", bright for known */
+        move(y0 + 2 + i, xc);
+        if (is_random || vendor[0] == '?') attrset(COLOR_PAIR(CP_DIM));
+        else                                attrset(COLOR_PAIR(CP_BRIGHT));
+        printw("%-14.14s ", vendor);
+        xc += 14 + 1;
+
+        /* SSID column - coloured via hash palette */
         const char *ssid = p->ssid[0] ? p->ssid : "(any)";
-        char buf[40];
-        snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
-        tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
-        attrset(COLOR_PAIR(CP_NORMAL));
-        printw(" %4d", p->signal_dbm);
+        char ssid_buf[40];
+        snprintf(ssid_buf, sizeof(ssid_buf), "%-*.*s", ssid_w, ssid_w, ssid);
+        move(y0 + 2 + i, xc);
+        tui_ssid_addstr(ssid_buf, (int)PKT_CAT_OTHER);
+        xc += ssid_w + 1;
+
+        /* sig: heat-colour by signal strength.
+         *   >= -50 dBm  = bright (very close / strong)
+         *   -50..-65    = normal phosphor
+         *   -65..-80    = heat-mid
+         *   < -80       = heat-hi (almost out of range) */
+        move(y0 + 2 + i, xc);
+        if      (p->signal_dbm >= -50) attrset(COLOR_PAIR(CP_BRIGHT));
+        else if (p->signal_dbm >= -65) attrset(COLOR_PAIR(CP_NORMAL));
+        else if (p->signal_dbm >= -80) attrset(COLOR_PAIR(CP_HEAT_MID));
+        else                            attrset(COLOR_PAIR(CP_HEAT_HI));
+        printw("%4d ", p->signal_dbm);
+        xc += 4 + 1;
+
+        /* dist: dim, since it's a rough estimate */
+        move(y0 + 2 + i, xc);
+        attrset(COLOR_PAIR(CP_DIM));
+        printw("%-5s", dist_buf);
     }
-    for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
+    for (int i = n; i < rows; i++) {
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x, w, "");
+    }
 }
 
 static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
@@ -962,17 +1034,21 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int pw1 = cols / 3;
     int pw2 = cols / 3;
     int pw3 = cols - pw1 - pw2;
+    /* Top panel row: WiFi APs | Summary | Beacons.
+     * Summary moves up here from its old bot3-right slot so high-level
+     * counters sit near the iface band; the freed bot3-right slot
+     * carries the new Roaming clients panel (enhanced Probe). */
     draw_wifi_panel  (s, bot1_y, bot1_h, 0,         pw1);
-    draw_probe_panel (s, bot1_y, bot1_h, pw1,       pw2);
+    draw_stats_panel (s, bot1_y, bot1_h, pw1,       pw2);
     draw_beacon_panel(s, bot1_y, bot1_h, pw1 + pw2, pw3);
 
     draw_mdns_panel(s, bot2_y, bot2_h, 0,         pw1);
     draw_dhcp_panel(s, bot2_y, bot2_h, pw1,       pw2);
     draw_ssdp_panel(s, bot2_y, bot2_h, pw1 + pw2, pw3);
 
-    draw_arp_panel   (s, bot3_y, bot3_h, 0,         pw1);
-    draw_deauth_panel(s, bot3_y, bot3_h, pw1,       pw2);
-    draw_stats_panel (s, bot3_y, bot3_h, pw1 + pw2, pw3);
+    draw_arp_panel          (s, bot3_y, bot3_h, 0,         pw1);
+    draw_deauth_panel       (s, bot3_y, bot3_h, pw1,       pw2);
+    draw_radio_clients_panel(s, bot3_y, bot3_h, pw1 + pw2, pw3);
 
     /* DNS log + ICMP log: two equal half-width panels. */
     int half1 = cols / 2;
