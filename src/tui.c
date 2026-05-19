@@ -232,6 +232,18 @@ void tui_filter_status(const sloth_state_t *s) {
     }
 }
 
+/* Earth-tone colour for a packet info string. Same string -> same slot
+ * so repeating values keep visual identity across the packets band. */
+void tui_info_color(const char *info) {
+    extern int ip_color_index(const char *);   /* reuse djb2 hash */
+    if (!info || !info[0]) {
+        attrset(COLOR_PAIR(CP_NORMAL));
+        return;
+    }
+    int idx = ip_color_index(info);
+    attrset(COLOR_PAIR(CP_INFO_BASE + (idx & 7)));
+}
+
 /* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;
@@ -390,6 +402,14 @@ void tui_init(void) {
                 for (int i = 0; i < 8; i++)
                     init_pair(base + i, brand_fg_8[i], COLOR_BLACK);
             }
+            /* 8-colour fallback for info palette + border */
+            static const short info_fg_8[8] = {
+                COLOR_RED,    COLOR_YELLOW, COLOR_YELLOW, COLOR_GREEN,
+                COLOR_RED,    COLOR_YELLOW, COLOR_MAGENTA, COLOR_WHITE,
+            };
+            for (int i = 0; i < 8; i++)
+                init_pair(CP_INFO_BASE + i, info_fg_8[i], COLOR_BLACK);
+            init_pair(CP_BORDER, COLOR_GREEN, COLOR_BLACK);
         }
     }
 }

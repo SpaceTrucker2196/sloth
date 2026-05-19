@@ -280,20 +280,20 @@ static void clipline(int y, int x, int w, const char *fmt, ...) {
 
 static void panel_title(int y, int x, int w, const char *name, int panel_id) {
     int focused = (panel_id == g_dash_focus);
-    attrset(COLOR_PAIR(CP_DIM));
+    /* Borders use the dimmer CP_BORDER pair (pushes the frame back). */
+    attrset(COLOR_PAIR(CP_BORDER));
     move(y, x);
     int filled = 0;
     int len = (int)strlen(name);
-    /* 2 leading horizontals + space */
     if (filled + 2 <= w) { addstr(G_HORIZ); addstr(G_HORIZ); filled += 2; }
     if (filled     <  w) { addch(' '); filled++; }
-    /* name — bright; inverted if this is the focused panel */
-    attr_t name_attr = COLOR_PAIR(CP_BRIGHT);
+    /* Title text — bright + bold for extra pop; inverted if focused. */
+    attr_t name_attr = COLOR_PAIR(CP_BRIGHT) | A_BOLD;
     if (focused) name_attr |= A_REVERSE;
     attrset(name_attr);
     for (int i = 0; i < len && filled < w; i++, filled++)
         addch((chtype)(unsigned char)name[i]);
-    attrset(COLOR_PAIR(CP_DIM));
+    attrset(COLOR_PAIR(CP_BORDER));
     if (filled < w) { addch(' '); filled++; }
     while (filled < w) { addstr(G_HORIZ); filled++; }
 }
@@ -686,7 +686,9 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     }
     if (info_w < 1) info_w = 1;
     move(y, x);
-    tui_pkt_bg_cat(cat);
+    /* Earth-tone hashed palette: same info string -> same colour so
+     * repeating values are visually grouped. */
+    tui_info_color(p->info);
     /* %-*.*s pads + truncates to exactly info_w columns so hex starts
      * at a predictable x. */
     printw("%-*.*s", info_w, info_w, p->info);
@@ -707,6 +709,80 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     (void)src_full; (void)dst_full;
 }
 
+/* Non-scrolling row at the bottom of the packets band: live bargraphs
+ * of the top-N most-frequent info strings across the packet ring. */
+static void draw_info_bargraph_row(const sloth_state_t *s,
+                                    int y, int x0, int w) {
+    /* Fixed-size frequency table — packet ring is 256 entries so this
+     * upper bound is comfortable. */
+    enum { TBL_CAP = 24, TOP_N = 5 };
+    struct slot { char info[40]; int count; } tbl[TBL_CAP];
+    int n = 0;
+    int pkt_n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
+    for (int i = 0; i < pkt_n; i++) {
+        const packet_info_t *p = &s->packets[i];
+        if (!p->info[0]) continue;
+        int found = -1;
+        for (int j = 0; j < n; j++)
+            if (strcmp(tbl[j].info, p->info) == 0) { found = j; break; }
+        if (found >= 0)        tbl[found].count++;
+        else if (n < TBL_CAP)  { snprintf(tbl[n].info, sizeof(tbl[n].info),
+                                          "%s", p->info);
+                                 tbl[n].count = 1; n++; }
+    }
+    /* Selection-sort top TOP_N entries to the front. */
+    int top = TOP_N < n ? TOP_N : n;
+    for (int i = 0; i < top; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (tbl[j].count > tbl[best].count) best = j;
+        if (best != i) {
+            struct slot tmp = tbl[i]; tbl[i] = tbl[best]; tbl[best] = tmp;
+        }
+    }
+    int max = top > 0 ? tbl[0].count : 1;
+    if (max < 1) max = 1;
+
+    /* Paint the row default first. */
+    attrset(COLOR_PAIR(CP_NORMAL));
+    move(y, x0);
+    for (int j = 0; j < w; j++) addch(' ');
+
+    if (top <= 0) {
+        attrset(COLOR_PAIR(CP_BORDER));
+        mvprintw(y, x0 + 2, "(no packets yet — bargraph builds as traffic arrives)");
+        return;
+    }
+
+    int cell_w = w / top;
+    if (cell_w < 16) cell_w = 16;
+    for (int i = 0; i < top; i++) {
+        int cx = x0 + i * cell_w;
+        if (cx + cell_w > x0 + w) break;
+        const char *label = tbl[i].info;
+        int count = tbl[i].count;
+
+        /* label column ~ 40% of cell, info-coloured */
+        int label_w = cell_w * 4 / 10;
+        if (label_w < 8) label_w = 8;
+        if (label_w > cell_w - 9) label_w = cell_w - 9;
+
+        tui_info_color(label);
+        mvprintw(y, cx, " %-*.*s ", label_w, label_w, label);
+
+        int bar_room = cell_w - label_w - 8;
+        if (bar_room < 1) bar_room = 1;
+        int filled = (int)((double)count / max * bar_room);
+        if (filled > bar_room) filled = bar_room;
+        attrset(COLOR_PAIR(CP_NORMAL));
+        for (int b = 0; b < filled;  b++) addstr("\xe2\x96\x88");
+        attrset(COLOR_PAIR(CP_BORDER));
+        for (int b = filled; b < bar_room; b++) addstr("\xe2\x96\x91");
+        attrset(COLOR_PAIR(CP_BRIGHT));
+        printw(" %5d", count);
+    }
+}
+
 static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     draw_packets_title(s, y0, x0, w);
     attrset(COLOR_PAIR(CP_DIM));
@@ -714,8 +790,10 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int
              "  %-8s  %-21s " G_ARROW " %-21s  %-5s  %s",
              "time", "src", "dst", "proto", "info");
 
-    int rows = h - 2;
-    if (rows < 1) return;
+    /* Reserve the last row of the band for the non-scrolling info
+     * bargraph. Title + header + N data rows + bargraph = h. */
+    int rows = h - 3;
+    if (rows < 1) rows = 1;
 
     int show = s->pkt_count < rows ? s->pkt_count : rows;
     for (int i = 0; i < rows; i++) {
@@ -728,6 +806,9 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int
         int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
         draw_packet_row(y0 + 2 + i, x0, w, &s->packets[slot]);
     }
+    /* Bottom-of-band bargraph (live frequency of info values). */
+    if (h >= 4)
+        draw_info_bargraph_row(s, y0 + h - 1, x0, w);
 }
 
 /* ── Bottom panels ───────────────────────────────────────── */
@@ -887,9 +968,12 @@ static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int 
 static void draw_mdns_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     panel_title(y0, x, w, "mDNS services", DASH_PANEL_MDNS);
     attrset(COLOR_PAIR(CP_DIM));
-    /* Layout: 2 (margin) + instance_w + 1 (sep) + 6 (port) = w */
+    /* Layout: 2 (margin) + instance_w + 1 (sep) + 6 (port) = w. Instance
+     * column is capped at 32 chars so even on a wide terminal the column
+     * stays tight and doesn't dominate the panel. */
     int instance_w = w - 9;
-    if (instance_w < 8) instance_w = 8;
+    if (instance_w < 8)  instance_w = 8;
+    if (instance_w > 32) instance_w = 32;
     clipline(y0 + 1, x, w, "  %-*s %-6s", instance_w, "instance", "port");
     int rows = h - 2;
     int n = s->mdns_count < rows ? s->mdns_count : rows;
@@ -1215,12 +1299,17 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int summary_w = usable - iface_w;
     draw_iface_band (s, iface_y, iface_h, x0,          iface_w);
     draw_stats_panel(s, iface_y, iface_h, x0 + iface_w, summary_w);
+    /* Vertical divider after each panel column (skip the title row). */
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < iface_h; dy++) mvaddstr(iface_y + dy, x0 + iface_w, G_VERT);
 
     /* Connections row: 60% conn table + 40% top hosts. */
     int conn_w  = (usable * 6) / 10;
     int hosts_w = usable - conn_w;
     draw_conn_band      (s, conn_y, conn_h, x0,          conn_w);
     draw_top_hosts_panel(s, conn_y, conn_h, x0 + conn_w, hosts_w);
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < conn_h; dy++) mvaddstr(conn_y + dy, x0 + conn_w, G_VERT);
 
     int pw1 = usable / 3;
     int pw2 = usable / 3;
@@ -1229,22 +1318,36 @@ void view_dashboard_draw(const sloth_state_t *s) {
     draw_wifi_panel         (s, bot1_y, bot1_h, x0,             pw1);
     draw_radio_clients_panel(s, bot1_y, bot1_h, x0 + pw1,       pw2);
     draw_beacon_panel       (s, bot1_y, bot1_h, x0 + pw1 + pw2, pw3);
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < bot1_h; dy++) {
+        mvaddstr(bot1_y + dy, x0 + pw1,       G_VERT);
+        mvaddstr(bot1_y + dy, x0 + pw1 + pw2, G_VERT);
+    }
 
     draw_mdns_panel(s, bot2_y, bot2_h, x0,             pw1);
     draw_dhcp_panel(s, bot2_y, bot2_h, x0 + pw1,       pw2);
     draw_ssdp_panel(s, bot2_y, bot2_h, x0 + pw1 + pw2, pw3);
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < bot2_h; dy++) {
+        mvaddstr(bot2_y + dy, x0 + pw1,       G_VERT);
+        mvaddstr(bot2_y + dy, x0 + pw1 + pw2, G_VERT);
+    }
 
     /* bot3: 50/50 split for ARP + Deauth. */
     int arp_w    = usable / 2;
     int deauth_w = usable - arp_w;
     draw_arp_panel   (s, bot3_y, bot3_h, x0,         arp_w);
     draw_deauth_panel(s, bot3_y, bot3_h, x0 + arp_w, deauth_w);
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < bot3_h; dy++) mvaddstr(bot3_y + dy, x0 + arp_w, G_VERT);
 
     /* DNS log + ICMP log: two equal half-width panels. */
     int half1 = usable / 2;
     int half2 = usable - half1;
     draw_dns_log_panel (s, bot4_y, bot4_h, x0,         half1);
     draw_icmp_log_panel(s, bot4_y, bot4_h, x0 + half1, half2);
+    attrset(COLOR_PAIR(CP_BORDER));
+    for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
     /* Packets live at the very bottom. */
     draw_packets_band(s, packets_y, packets_h, x0, usable);

@@ -21,6 +21,7 @@ void tui_pkt_bg(int proto, uint16_t sport, uint16_t dport) {
 void tui_ip_addstr(const char *ip, int cat) { (void)ip; (void)cat; }
 void tui_ssid_addstr(const char *ssid, int cat) { (void)ssid; (void)cat; }
 void tui_brand_addstr(const char *text, int cat) { (void)text; (void)cat; }
+void tui_info_color(const char *info)            { (void)info; }
 
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;

@@ -61,6 +61,14 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 #define CP_BR_BASE_HTTP  144   /* on HTTP grey  (144..151) */
 #define CP_BR_BASE_TLS   152   /* on TLS grey   (152..159) */
 
+/* ── Earth-tone palette for the packets-row info column ──── *
+ * Low-key colours: mauve / olive / tan / sage / terracotta / wheat /
+ * dusty-rose / stone. Same string -> same colour (djb2 hash). */
+#define CP_INFO_BASE     96    /* (96..103) earth tones on default bg */
+
+/* ── Panel border colour (very dim phosphor — see tui.c) ── */
+#define CP_BORDER       104
+
 /* Brand-colour slot indices (match the layout above). */
 #define BR_GOOGLE_BLUE    0
 #define BR_GOOGLE_RED     1
@@ -109,5 +117,10 @@ void tui_ssid_addstr(const char *ssid, int cat);
  * Non-matching characters render in the row's default white-on-cat pair.
  * Matches are case-insensitive. */
 void tui_brand_addstr(const char *text, int cat);
+
+/* Set the current attrset to the earth-tone pair for `info`. Used by
+ * the packets band's info column so repeating values keep their colour.
+ * NULL or empty info falls back to CP_NORMAL. */
+void tui_info_color(const char *info);
 
 #endif /* TUI_H */
