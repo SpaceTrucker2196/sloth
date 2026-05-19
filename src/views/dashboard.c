@@ -282,8 +282,8 @@ static void clipline(int y, int x, int w, const char *fmt, ...) {
 
 static void panel_title(int y, int x, int w, const char *name, int panel_id) {
     int focused = (panel_id == g_dash_focus);
-    /* Borders use the dimmer CP_BORDER pair (pushes the frame back). */
-    attrset(COLOR_PAIR(CP_BORDER));
+    /* Borders use the dimmer CP_DIM pair (pushes the frame back). */
+    attrset(COLOR_PAIR(CP_DIM));
     move(y, x);
     int filled = 0;
     int len = (int)strlen(name);
@@ -295,7 +295,7 @@ static void panel_title(int y, int x, int w, const char *name, int panel_id) {
     attrset(name_attr);
     for (int i = 0; i < len && filled < w; i++, filled++)
         addch((chtype)(unsigned char)name[i]);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     if (filled < w) { addch(' '); filled++; }
     while (filled < w) { addstr(G_HORIZ); filled++; }
 }
@@ -751,7 +751,7 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
     for (int j = 0; j < w; j++) addch(' ');
 
     if (top <= 0) {
-        attrset(COLOR_PAIR(CP_BORDER));
+        attrset(COLOR_PAIR(CP_DIM));
         mvprintw(y, x0 + 2, "(no packets yet — bargraph builds as traffic arrives)");
         return;
     }
@@ -778,7 +778,7 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
         if (filled > bar_room) filled = bar_room;
         attrset(COLOR_PAIR(CP_NORMAL));
         for (int b = 0; b < filled;  b++) addstr("\xe2\x96\x88");
-        attrset(COLOR_PAIR(CP_BORDER));
+        attrset(COLOR_PAIR(CP_DIM));
         for (int b = filled; b < bar_room; b++) addstr("\xe2\x96\x91");
         attrset(COLOR_PAIR(CP_BRIGHT));
         printw(" %5d", count);
@@ -818,7 +818,7 @@ static void draw_crit_alerts_band(const sloth_state_t *s,
      * no CRIT entries. */
     attrset(COLOR_PAIR(CP_NORMAL));
     if (painted == 0) {
-        attrset(COLOR_PAIR(CP_BORDER));
+        attrset(COLOR_PAIR(CP_DIM));
         mvprintw(y0 + 1, x0 + 2, "(no critical alerts — system is quiet)");
         painted = 1;
     }
@@ -1271,6 +1271,18 @@ void view_dashboard_draw(const sloth_state_t *s) {
     /* Per-frame index: which IPs appear across multiple panels. Used by
      * tui_ip_addstr() inside every panel below for the bold flag. */
     ip_index_build(s);
+
+    /* Cross-panel highlight: when the conn panel has focus and a row is
+     * selected, light up that row's local+remote IPs everywhere else.
+     * Clear when focus moves off so other panels go back to normal. */
+    if (s->dash_focus == DASH_PANEL_CONN &&
+        s->conn_count > 0 &&
+        s->conn_sel >= 0 && s->conn_sel < s->conn_count) {
+        const conn_t *cc = &s->conns[s->conn_sel];
+        tui_set_highlight_ips(cc->local_addr, cc->remote_addr);
+    } else {
+        tui_set_highlight_ips(NULL, NULL);
+    }
 #ifdef WITH_NCURSES
     int lines = LINES;
     int cols  = COLS;
@@ -1345,7 +1357,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     draw_iface_band (s, iface_y, iface_h, x0,          iface_w);
     draw_stats_panel(s, iface_y, iface_h, x0 + iface_w, summary_w);
     /* Vertical divider after each panel column (skip the title row). */
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < iface_h; dy++) mvaddstr(iface_y + dy, x0 + iface_w, G_VERT);
 
     /* Connections row: 60% conn table + 40% top hosts. */
@@ -1353,7 +1365,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int hosts_w = usable - conn_w;
     draw_conn_band      (s, conn_y, conn_h, x0,          conn_w);
     draw_top_hosts_panel(s, conn_y, conn_h, x0 + conn_w, hosts_w);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < conn_h; dy++) mvaddstr(conn_y + dy, x0 + conn_w, G_VERT);
 
     int pw1 = usable / 3;
@@ -1363,7 +1375,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     draw_wifi_panel         (s, bot1_y, bot1_h, x0,             pw1);
     draw_radio_clients_panel(s, bot1_y, bot1_h, x0 + pw1,       pw2);
     draw_beacon_panel       (s, bot1_y, bot1_h, x0 + pw1 + pw2, pw3);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot1_h; dy++) {
         mvaddstr(bot1_y + dy, x0 + pw1,       G_VERT);
         mvaddstr(bot1_y + dy, x0 + pw1 + pw2, G_VERT);
@@ -1372,7 +1384,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     draw_mdns_panel(s, bot2_y, bot2_h, x0,             pw1);
     draw_dhcp_panel(s, bot2_y, bot2_h, x0 + pw1,       pw2);
     draw_ssdp_panel(s, bot2_y, bot2_h, x0 + pw1 + pw2, pw3);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot2_h; dy++) {
         mvaddstr(bot2_y + dy, x0 + pw1,       G_VERT);
         mvaddstr(bot2_y + dy, x0 + pw1 + pw2, G_VERT);
@@ -1383,7 +1395,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int deauth_w = usable - arp_w;
     draw_arp_panel   (s, bot3_y, bot3_h, x0,         arp_w);
     draw_deauth_panel(s, bot3_y, bot3_h, x0 + arp_w, deauth_w);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot3_h; dy++) mvaddstr(bot3_y + dy, x0 + arp_w, G_VERT);
 
     /* DNS log + ICMP log: two equal half-width panels. */
@@ -1391,7 +1403,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int half2 = usable - half1;
     draw_dns_log_panel (s, bot4_y, bot4_h, x0,         half1);
     draw_icmp_log_panel(s, bot4_y, bot4_h, x0 + half1, half2);
-    attrset(COLOR_PAIR(CP_BORDER));
+    attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
     draw_packets_band(s, packets_y, packets_h, x0, usable);

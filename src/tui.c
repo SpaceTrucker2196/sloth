@@ -94,11 +94,38 @@ void tui_ip_addstr(const char *ip, int cat) {
     extern int ip_color_index(const char *);              /* ip_color.h */
     extern int ip_index_is_cross_panel(const char *);
     if (!ip || !ip[0]) return;
+    /* Cross-panel highlight: when the dashboard's conn panel has focus
+     * its selected row's IPs go through tui_set_highlight_ips() — every
+     * other panel that renders one of them swaps to CP_HIGHLIGHT so the
+     * same flow lights up across the dashboard. */
+    extern int tui_ip_is_highlighted_(const char *);
+    if (tui_ip_is_highlighted_(ip)) {
+        attrset(COLOR_PAIR(CP_HIGHLIGHT));
+        addstr(ip);
+        return;
+    }
     int idx = ip_color_index(ip);
     attr_t a  = COLOR_PAIR(cp_for_ip_on_cat(cat, idx));
     if (ip_index_is_cross_panel(ip)) a |= A_BOLD;
     attrset(a);
     addstr(ip);
+}
+
+/* Static state + matcher — exposed via tui_set_highlight_ips(). The
+ * underscore-suffixed checker is referenced by tui_ip_addstr above. */
+static char g_hl_a[46];
+static char g_hl_b[46];
+
+void tui_set_highlight_ips(const char *a, const char *b) {
+    if (a && a[0]) snprintf(g_hl_a, sizeof(g_hl_a), "%s", a); else g_hl_a[0] = '\0';
+    if (b && b[0]) snprintf(g_hl_b, sizeof(g_hl_b), "%s", b); else g_hl_b[0] = '\0';
+}
+
+int tui_ip_is_highlighted_(const char *ip) {
+    if (!ip || !ip[0]) return 0;
+    if (g_hl_a[0] && strcmp(g_hl_a, ip) == 0) return 1;
+    if (g_hl_b[0] && strcmp(g_hl_b, ip) == 0) return 1;
+    return 0;
 }
 
 void tui_ssid_addstr(const char *ssid, int cat) {
@@ -142,10 +169,12 @@ static int ci_strncmp(const char *a, const char *b, int n) {
  * matched substring's length. */
 static int find_brand(const char *s, int *brand_out, int *len_out) {
     static const struct { int brand; const char *sub; } tbl[] = {
-        { BR_GOOGLE_BLUE, "google"      },
-        { BR_FIREFOX,     "firefox"     },
-        { BR_CLOUDFLARE,  "cloudflare"  },
-        { BR_EXAMPLE,     "example.org" },
+        { BR_GOOGLE_BLUE, "google"       },
+        { BR_FIREFOX,     "firefox"      },
+        { BR_FIREFOX,     "anthropic.com"},   /* orange like firefox */
+        { BR_CLOUDFLARE,  "cloudflare"   },
+        { BR_CLOUDFLARE,  "datadoghq"    },   /* red like cloudflare */
+        { BR_EXAMPLE,     "example.org"  },
     };
     int best = -1, best_brand = 0, best_len = 0;
     for (int i = 0; i < (int)(sizeof(tbl) / sizeof(tbl[0])); i++) {
@@ -363,6 +392,26 @@ void tui_init(void) {
                 init_pair(CP_BR_BASE_HTTP  + i, brand_fg[i], grey_bg[5]);
                 init_pair(CP_BR_BASE_TLS   + i, brand_fg[i], grey_bg[6]);
             }
+            /* Earth-tone palette for the packets info column. */
+            static const short info_fg[8] = {
+                95,    /* mauve         #875f5f */
+                101,   /* olive         #87875f */
+                137,   /* tan           #af875f */
+                144,   /* sage          #afaf87 */
+                173,   /* terracotta    #d7875f */
+                179,   /* wheat         #d7af87 */
+                138,   /* dusty rose    #af8787 */
+                102,   /* stone grey    #878787 */
+            };
+            for (int i = 0; i < 8; i++)
+                init_pair(CP_INFO_BASE + i, info_fg[i], 0);
+            /* Border pair: same hue family as CP_DIM (user wanted the
+             * original dim phosphor — not the darker variant). */
+            init_pair(CP_BORDER, 29, 0);
+            /* Cross-panel highlight: white-on-dim-phosphor.
+             *   xterm 22 = #005f00 ~ 22% green = roughly 10-15% of cursor
+             *   brightness (cursor is CP_BRIGHT = #00ffaf). */
+            init_pair(CP_HIGHLIGHT, 255, 22);
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -410,6 +459,7 @@ void tui_init(void) {
             for (int i = 0; i < 8; i++)
                 init_pair(CP_INFO_BASE + i, info_fg_8[i], COLOR_BLACK);
             init_pair(CP_BORDER, COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_HIGHLIGHT, COLOR_WHITE, COLOR_GREEN);
         }
     }
 }

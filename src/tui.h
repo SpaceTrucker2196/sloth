@@ -69,6 +69,11 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 /* ── Panel border colour (very dim phosphor — see tui.c) ── */
 #define CP_BORDER       104
 
+/* ── Cross-panel highlight: 10% of cursor brightness ────── *
+ * Applied to IPs that match the currently-selected connection
+ * row's local/remote when the dashboard's conn panel has focus. */
+#define CP_HIGHLIGHT    105
+
 /* Brand-colour slot indices (match the layout above). */
 #define BR_GOOGLE_BLUE    0
 #define BR_GOOGLE_RED     1
@@ -122,5 +127,13 @@ void tui_brand_addstr(const char *text, int cat);
  * the packets band's info column so repeating values keep their colour.
  * NULL or empty info falls back to CP_NORMAL. */
 void tui_info_color(const char *info);
+
+/* Cross-panel highlight setter. The dashboard calls this each frame:
+ * when the connections panel has focus and a row is selected, the
+ * row's local + remote IPs are passed here; otherwise NULL/NULL is
+ * passed and the highlight clears. tui_ip_addstr() picks these up
+ * and renders matching IPs in CP_HIGHLIGHT instead of their hash
+ * colour so the same flow lights up across every panel. */
+void tui_set_highlight_ips(const char *a, const char *b);
 
 #endif /* TUI_H */
