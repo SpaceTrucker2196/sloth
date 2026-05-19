@@ -1500,12 +1500,13 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
 
-    /* 5-col left margin so the dashboard isn't flush against the
-     * terminal edge. Every layout width derives from `usable` and
-     * every x offset includes DASH_PAD_X. */
+    /* 5-col right margin so the dashboard isn't flush against the
+     * right edge of the terminal. Origin stays at x=0; `usable` is
+     * the cols width minus the right pad so panels never extend
+     * into it. */
     const int DASH_PAD_X = 5;
     int usable = cols - DASH_PAD_X;
-    int x0     = DASH_PAD_X;
+    int x0     = 0;
 
     /* Top row: Interfaces (70%) + Summary (30%). */
     int iface_w   = (usable * 7) / 10;
