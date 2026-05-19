@@ -317,23 +317,23 @@ static int iface_spark_w(int w) {
 
 #define IFACE_END_X(w)  (IFACE_FIXED_W + 2 + iface_spark_w(w) + 2 + iface_spark_w(w))
 
-static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
+static void draw_iface_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     int spark_w = iface_spark_w(w);
-    int rx_x = IFACE_FIXED_W + 2;
+    int rx_x = x0 + IFACE_FIXED_W + 2;
     int tx_x = rx_x + spark_w + 2;
     int end_x = tx_x + spark_w;
 
-    panel_title(y0, 0, w, "Interfaces", DASH_PANEL_IFACE);
+    panel_title(y0, x0, w, "Interfaces", DASH_PANEL_IFACE);
 
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, 0, IFACE_FIXED_W,
+    clipline(y0 + 1, x0, IFACE_FIXED_W,
              "  %-8s  %10s  %10s  %10s  %10s",
              "iface", "rx/s", "tx/s", "rx total", "tx total");
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, rx_x, spark_w, "rx graph");
     clipline(y0 + 1, tx_x, spark_w, "tx graph");
-    if (end_x < w)
-        clipline(y0 + 1, end_x, w - end_x, "");
+    if (end_x < x0 + w)
+        clipline(y0 + 1, end_x, x0 + w - end_x, "");
 
     int rows = h - 2;
     int n    = s->iface_count < rows ? s->iface_count : rows;
@@ -347,7 +347,7 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
 
         int y = y0 + 2 + i;
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y, 0, IFACE_FIXED_W,
+        clipline(y, x0, IFACE_FIXED_W,
                  "  %-8.8s  %10s  %10s  %10s  %10s",
                  I->name, rxr, txr, rxt, txt);
 
@@ -364,15 +364,15 @@ static void draw_iface_band(const sloth_state_t *s, int y0, int h, int w) {
             for (int j = 0; j < spark_w; j++) addch('_');
         }
         /* erase trailing cols so the full-width band stays clean */
-        if (end_x < w) {
+        if (end_x < x0 + w) {
             attrset(COLOR_PAIR(CP_NORMAL));
-            clipline(y, end_x, w - end_x, "");
+            clipline(y, end_x, x0 + w - end_x, "");
         }
     }
     /* erase any unused iface rows so prior frames don't leak through */
     for (int i = n; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, 0, w, "");
+        clipline(y0 + 2 + i, x0, w, "");
     }
 }
 
@@ -603,7 +603,7 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
 
 /* Build the packets band title with capture iface + WiFi network so the
  * operator can tell at a glance where the packets are coming from. */
-static void draw_packets_title(const sloth_state_t *s, int y, int w) {
+static void draw_packets_title(const sloth_state_t *s, int y, int x0, int w) {
     char title[160];
     int n = snprintf(title, sizeof(title), "Packets (live)");
     if (s->pkt_iface[0])
@@ -618,12 +618,12 @@ static void draw_packets_title(const sloth_state_t *s, int y, int w) {
         }
     }
 #endif
-    panel_title(y, 0, w, title, DASH_PANEL_PACKETS);
+    panel_title(y, x0, w, title, DASH_PANEL_PACKETS);
 }
 
 /* Print one row of the packets band: time | src(IP-color) : port -> dst(IP-color) : port | proto | info.
  * The full row uses the per-category grey bg; the IP substrings carry their own colour pairs. */
-static void draw_packet_row(int y, int w, const packet_info_t *p) {
+static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     int cat = (int)pkt_categorize(p->proto, p->src_port, p->dst_port);
 
     char ts_buf[12];
@@ -639,10 +639,11 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
 
     /* Paint the full-row grey bg first. */
     tui_pkt_bg_cat(cat);
-    clipline(y, 0, w, "");
+    clipline(y, x0, w, "");
 
     /* Now overprint structured content with column positions. */
-    int x = 0;
+    int row_end = x0 + w;
+    int x = x0;
     move(y, x); x += 2;
     tui_pkt_bg_cat(cat); printw("  %-8s  ", ts_buf); x += 10;  /* "  HH:MM:SS  " is 12 cols */
 
@@ -678,10 +679,10 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
     int info_max = 28;
     int info_w;
     if (p->raw_len > 0) {
-        info_w = w - x;
+        info_w = row_end - x;
         if (info_w > info_max) info_w = info_max;
     } else {
-        info_w = w - x;
+        info_w = row_end - x;
     }
     if (info_w < 1) info_w = 1;
     move(y, x);
@@ -694,7 +695,7 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
     /* Hex dump fills the remaining width — up to raw_len bytes, 3 cols
      * each ("XX "). Rendered in CP_DIM so it reads as secondary info
      * next to the colourful columns above. */
-    int hex_room = w - x;
+    int hex_room = row_end - x;
     if (hex_room > 0 && p->raw_len > 0) {
         int hex_bytes = hex_room / 3;
         if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
@@ -706,10 +707,10 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
     (void)src_full; (void)dst_full;
 }
 
-static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
-    draw_packets_title(s, y0, w);
+static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
+    draw_packets_title(s, y0, x0, w);
     attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, 0, w,
+    clipline(y0 + 1, x0, w,
              "  %-8s  %-21s " G_ARROW " %-21s  %-5s  %s",
              "time", "src", "dst", "proto", "info");
 
@@ -720,12 +721,12 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int w) {
     for (int i = 0; i < rows; i++) {
         if (i >= show) {
             attrset(COLOR_PAIR(CP_NORMAL));
-            clipline(y0 + 2 + i, 0, w, "");
+            clipline(y0 + 2 + i, x0, w, "");
             continue;
         }
         /* newest first */
         int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
-        draw_packet_row(y0 + 2 + i, w, &s->packets[slot]);
+        draw_packet_row(y0 + 2 + i, x0, w, &s->packets[slot]);
     }
 }
 
@@ -1157,8 +1158,10 @@ void view_dashboard_draw(const sloth_state_t *s) {
      *   packets         = 2H         (now at the very bottom)
      *   total           = 7H + iface */
     int min_lines = 2 + 3 + 4 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
-    /* iface band minimum: text 50 cols + 2*8 sparkline + 4 separators = 70 */
-    int min_cols  = IFACE_FIXED_W + 2 + 8 + 2 + 8;
+    /* iface band minimum: text 50 + 2*8 spark + 4 sep = 70 cols. It gets
+     * 70% of (cols - 5 left pad), so we need cols >= 70 / 0.7 + 5 = 105. */
+    int iface_band_min = IFACE_FIXED_W + 2 + 8 + 2 + 8;
+    int min_cols       = (iface_band_min * 10 + 6) / 7 + 5;
     if (lines < min_lines || cols < min_cols) {
         tui_dim();
         TPRINT(" Dashboard: terminal too small "
@@ -1200,46 +1203,51 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
 
-    /* Top row: Interfaces (70%) + Summary (30%). The iface band's
-     * sparkline widths re-derive from this narrower width. */
-    int iface_w   = (cols * 7) / 10;
-    int summary_w = cols - iface_w;
-    draw_iface_band (s, iface_y, iface_h, iface_w);
-    draw_stats_panel(s, iface_y, iface_h, iface_w, summary_w);
+    /* 5-col left margin so the dashboard isn't flush against the
+     * terminal edge. Every layout width derives from `usable` and
+     * every x offset includes DASH_PAD_X. */
+    const int DASH_PAD_X = 5;
+    int usable = cols - DASH_PAD_X;
+    int x0     = DASH_PAD_X;
+
+    /* Top row: Interfaces (70%) + Summary (30%). */
+    int iface_w   = (usable * 7) / 10;
+    int summary_w = usable - iface_w;
+    draw_iface_band (s, iface_y, iface_h, x0,          iface_w);
+    draw_stats_panel(s, iface_y, iface_h, x0 + iface_w, summary_w);
 
     /* Connections row: 60% conn table + 40% top hosts. */
-    int conn_w  = (cols * 6) / 10;
-    int hosts_w = cols - conn_w;
-    draw_conn_band      (s, conn_y, conn_h, 0,      conn_w);
-    draw_top_hosts_panel(s, conn_y, conn_h, conn_w, hosts_w);
+    int conn_w  = (usable * 6) / 10;
+    int hosts_w = usable - conn_w;
+    draw_conn_band      (s, conn_y, conn_h, x0,          conn_w);
+    draw_top_hosts_panel(s, conn_y, conn_h, x0 + conn_w, hosts_w);
 
-    int pw1 = cols / 3;
-    int pw2 = cols / 3;
-    int pw3 = cols - pw1 - pw2;
-    /* bot1: WiFi | Roaming clients | Beacons (Roaming clients moves up
-     * from bot3 to take Summary's freed slot). */
-    draw_wifi_panel         (s, bot1_y, bot1_h, 0,         pw1);
-    draw_radio_clients_panel(s, bot1_y, bot1_h, pw1,       pw2);
-    draw_beacon_panel       (s, bot1_y, bot1_h, pw1 + pw2, pw3);
+    int pw1 = usable / 3;
+    int pw2 = usable / 3;
+    int pw3 = usable - pw1 - pw2;
+    /* bot1: WiFi | Roaming clients | Beacons. */
+    draw_wifi_panel         (s, bot1_y, bot1_h, x0,             pw1);
+    draw_radio_clients_panel(s, bot1_y, bot1_h, x0 + pw1,       pw2);
+    draw_beacon_panel       (s, bot1_y, bot1_h, x0 + pw1 + pw2, pw3);
 
-    draw_mdns_panel(s, bot2_y, bot2_h, 0,         pw1);
-    draw_dhcp_panel(s, bot2_y, bot2_h, pw1,       pw2);
-    draw_ssdp_panel(s, bot2_y, bot2_h, pw1 + pw2, pw3);
+    draw_mdns_panel(s, bot2_y, bot2_h, x0,             pw1);
+    draw_dhcp_panel(s, bot2_y, bot2_h, x0 + pw1,       pw2);
+    draw_ssdp_panel(s, bot2_y, bot2_h, x0 + pw1 + pw2, pw3);
 
-    /* bot3 now has only two panels — 50/50 split. */
-    int arp_w    = cols / 2;
-    int deauth_w = cols - arp_w;
-    draw_arp_panel   (s, bot3_y, bot3_h, 0,      arp_w);
-    draw_deauth_panel(s, bot3_y, bot3_h, arp_w,  deauth_w);
+    /* bot3: 50/50 split for ARP + Deauth. */
+    int arp_w    = usable / 2;
+    int deauth_w = usable - arp_w;
+    draw_arp_panel   (s, bot3_y, bot3_h, x0,         arp_w);
+    draw_deauth_panel(s, bot3_y, bot3_h, x0 + arp_w, deauth_w);
 
     /* DNS log + ICMP log: two equal half-width panels. */
-    int half1 = cols / 2;
-    int half2 = cols - half1;
-    draw_dns_log_panel (s, bot4_y, bot4_h, 0,     half1);
-    draw_icmp_log_panel(s, bot4_y, bot4_h, half1, half2);
+    int half1 = usable / 2;
+    int half2 = usable - half1;
+    draw_dns_log_panel (s, bot4_y, bot4_h, x0,         half1);
+    draw_icmp_log_panel(s, bot4_y, bot4_h, x0 + half1, half2);
 
     /* Packets live at the very bottom. */
-    draw_packets_band(s, packets_y, packets_h, cols);
+    draw_packets_band(s, packets_y, packets_h, x0, usable);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else
