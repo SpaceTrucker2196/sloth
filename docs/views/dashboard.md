@@ -1,0 +1,97 @@
+# Dashboard  `[o]`
+
+Tiled at-a-glance composite of seven bands stacked vertically. The
+dashboard fills the whole terminal — bands grow proportionally with
+available rows. Minimum recommended terminal is 100×33.
+
+## Layout
+
+```
+ ┌─ header (2 rows) ──────────────────────────────────────────┐
+ │ ── Interfaces ──   eth0  1.0MB/s  rx ▂▃▄▅▆▇█  tx _▁▂▃▄▅   │  ← iface band, expands to fit iface_count
+ ├────────────────────────────────────────────────────────────┤
+ │ Connections (= 2H, scrollable)   │  Top hosts (= 2H)       │  ← split 60/40
+ │ local → remote  proto …          │  ip  host  owner  age   │
+ ├──────────────────┬─────────────────┬───────────────────────┤
+ │  WiFi APs        │ Probe clients   │ Beacons (H)           │
+ ├──────────────────┼─────────────────┼───────────────────────┤
+ │  mDNS services   │ DHCP events     │ SSDP / UPnP (H)       │
+ ├──────────────────┼─────────────────┼───────────────────────┤
+ │  ARP table       │ Deauth          │ Summary (H)           │
+ ├──────────────────┴────┬────────────────────────────────────┤
+ │ DNS log               │ ICMP log (H, split 50/50)          │
+ ├───────────────────────┴────────────────────────────────────┤
+ │ Packets (live, = 2H, newest at top)                        │
+ └────────────────────────────────────────────────────────────┘
+```
+
+Bands sum to LINES exactly — spare rows from the integer divide go
+to conn / packets so the bottom band always reaches the last line.
+
+## Color and typography
+
+- **IPs** are hashed to one of 8 Fallout-phosphor colours. The same
+  IP shows up in the same colour across every panel.
+- **IPs in ≥ 2 panels** render bold — instant cross-reference cue.
+- **Hostnames** with known brand names get brand colouring:
+  - `google` → G-o-o-g-l-e in the Google logo's blue/red/yellow/blue/green/red.
+  - `firefox` → orange.
+  - `cloudflare` → red.
+  - `example.org` → grey.
+- **SSIDs** use the same hash palette as IPs (separate hash, so a
+  hostname and an SSID won't accidentally share a colour).
+- **Sparklines** are heat-graded — level 1–2 cool phosphor, 3–4
+  amber, 5–6 orange, 7–8 peak red. `_` = zero.
+
+## Top hosts panel
+
+A live "who am I really talking to" rank. Built by
+[`src/top_hosts.c`](../../src/top_hosts.c):
+
+1. Aggregate `s->conns` + `s->conn_bw` by **remote IP** each poll.
+2. Skip RFC1918 / loopback / link-local / multicast / IPv6
+   link-local (this panel is about external traffic).
+3. Hostname comes from the async DNS resolver (
+   [`src/dns.c`](../../src/dns.c)); owner from the embedded CDN /
+   cloud prefix table in [`src/ip_owner.c`](../../src/ip_owner.c).
+4. `first_seen` is sticky across polls — the **age** column shows
+   how long this destination has been around.
+5. Sort by `rx_rate + tx_rate + conn_count`, snapshot top 32.
+
+```
+ ip               host                  owner          age      conn
+ 8.8.8.8          dns.google            Google DNS     1h23m       5
+ 104.16.132.229   *.cloudflare.com      Cloudflare      4m12s     12
+ 142.250.80.46    *.google.com          Google         12m         3
+ 17.253.144.10    *.apple.com           Apple          45m         2
+```
+
+## Keybindings
+
+`↑` / `↓` scroll the connections panel (shares `conn_sel` with
+the standalone `[2]` view).
+
+## What's normal at a glance
+
+- Sparklines mostly idle with occasional peaks.
+- Top hosts dominated by CDN / cloud (Cloudflare, Google, AWS).
+- Quiet alert summary in the bottom-right.
+
+## What screams "look harder"
+
+- A bold IP in the packet stream that's also bold in conns and ARP —
+  cross-panel attention, probably interesting.
+- A solid amber/red sparkline that came out of nowhere.
+- An entry in Top hosts with a name in the brand colour list you
+  weren't visiting.
+- Any visible CRIT in the alerts panel.
+
+## See also
+
+- Each band is explained in its own doc:
+  [`interfaces.md`](interfaces.md), [`connections.md`](connections.md),
+  [`wifi.md`](wifi.md), [`probe.md`](probe.md),
+  [`beacons.md`](beacons.md), [`mdns.md`](mdns.md),
+  [`dhcp.md`](dhcp.md), [`ssdp.md`](ssdp.md), [`arp.md`](arp.md),
+  [`deauth.md`](deauth.md), [`stats.md`](stats.md),
+  [`dns.md`](dns.md), [`icmp.md`](icmp.md), [`packets.md`](packets.md).

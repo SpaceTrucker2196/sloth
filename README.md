@@ -6,15 +6,19 @@
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
 injects packets, never scans, and never modifies kernel state — it observes what
-your host already sees and turns it into 23 views, six alert rules, and an
+your host already sees and turns it into 24 views, six alert rules, and an
 optional JSONL forensic log.
+
+📖 **Per-view deep dives live under [`docs/views/`](docs/views/)** — each
+file explains the protocol, shows a text mockup, and lists what to watch
+for in normal vs anomalous traffic.
 
 ```
 [1] Interfaces  [2] Connections  [3] WiFi      [4] Packets   [5] Processes
 [6] Stats       [7] Probe        [8] ARP       [9] mDNS      [0] NBNS
 [d] DHCP        [s] SSDP         [b] Beacons   [a] Deauth    [h] HTTP
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
-[v] Alerts      [g] Devices      [?] Help
+[v] Alerts      [g] Devices      [o] Dashboard [?] Help
 ```
 
 ## What you get
@@ -23,33 +27,34 @@ optional JSONL forensic log.
 
 | View | What it shows |
 |------|---------------|
-| **Interfaces** | Per-interface RX/TX rates, errors/drops, MTU, link speed; sparkline history |
-| **Connections** | Active TCP/UDP sockets with PID, RTT, retransmits, per-conn bandwidth |
-| **WiFi**       | Nearby APs from `nl80211` scan: signal, channel, encryption |
-| **Packets**    | Live pcap capture with BPF filter, hex detail panel, pcap export |
-| **Processes**  | Process tree with fold/unfold |
-| **Stats**      | Session totals — bytes, packets, rates per interface since reset |
-| **Probe**      | 802.11 probe-request sniffer — unassociated clients and the SSIDs they're looking for |
-| **ARP**        | Layer-2 neighbour table with OUI vendor lookup |
-| **mDNS**       | Bonjour/Zeroconf service table from passive UDP/5353 |
-| **NBNS**       | NetBIOS Name Service table from UDP/137 |
-| **DHCP**       | Live DHCP event log: DISCOVER/REQUEST/ACK |
-| **SSDP**       | UPnP device table from UDP/1900 NOTIFY / M-SEARCH |
-| **Beacons**    | Passive 802.11 beacon sniffer — APs visible to a monitor-mode iface |
-| **Deauth**     | 802.11 deauth/disassoc frames; flood detection per target MAC |
-| **HTTP**       | Plaintext HTTP requests: method, host, path |
-| **TLS**        | TLS ClientHello log: SNI host, version, and **JA3 fingerprint** |
-| **QUIC**       | QUIC Initial packets: version + DNS-resolved host |
-| **DNS**        | DNS query/response log: qname, qtype, answer, NXDOMAIN |
-| **NTP**        | NTP traffic: mode, stratum, reference ID |
-| **ICMP**       | ICMPv4 + ICMPv6 with named types (Echo, Unreachable, Neigh Sol, …) |
+| [**Interfaces**](docs/views/interfaces.md) | Per-interface RX/TX rates, errors/drops, MTU, link speed; sparkline history |
+| [**Connections**](docs/views/connections.md) | Active TCP/UDP sockets with PID, RTT, retransmits, per-conn bandwidth |
+| [**WiFi**](docs/views/wifi.md)             | Nearby APs from `nl80211` scan: signal, channel, encryption |
+| [**Packets**](docs/views/packets.md)       | Live pcap capture with BPF filter, hex detail panel, pcap export |
+| [**Processes**](docs/views/processes.md)   | Process tree with fold/unfold |
+| [**Stats**](docs/views/stats.md)           | Session totals — bytes, packets, rates per interface since reset |
+| [**Probe**](docs/views/probe.md)           | 802.11 probe-request sniffer — unassociated clients and the SSIDs they're looking for |
+| [**ARP**](docs/views/arp.md)               | Layer-2 neighbour table with OUI vendor lookup |
+| [**mDNS**](docs/views/mdns.md)             | Bonjour/Zeroconf service table from passive UDP/5353 |
+| [**NBNS**](docs/views/nbns.md)             | NetBIOS Name Service table from UDP/137 |
+| [**DHCP**](docs/views/dhcp.md)             | Live DHCP event log: DISCOVER/REQUEST/ACK |
+| [**SSDP**](docs/views/ssdp.md)             | UPnP device table from UDP/1900 NOTIFY / M-SEARCH |
+| [**Beacons**](docs/views/beacons.md)       | Passive 802.11 beacon sniffer — APs visible to a monitor-mode iface |
+| [**Deauth**](docs/views/deauth.md)         | 802.11 deauth/disassoc frames; flood detection per target MAC |
+| [**HTTP**](docs/views/http.md)             | Plaintext HTTP requests: method, host, path |
+| [**TLS**](docs/views/tls.md)               | TLS ClientHello log: SNI host, version, and **JA3 fingerprint** |
+| [**QUIC**](docs/views/quic.md)             | QUIC Initial packets: version + DNS-resolved host |
+| [**DNS**](docs/views/dns.md)               | DNS query/response log: qname, qtype, answer, NXDOMAIN |
+| [**NTP**](docs/views/ntp.md)               | NTP traffic: mode, stratum, reference ID |
+| [**ICMP**](docs/views/icmp.md)             | ICMPv4 + ICMPv6 with named types (Echo, Unreachable, Neigh Sol, …) |
 
 ### Synthesis
 
 | View | What it shows |
 |------|---------------|
-| **Alerts**  | Rule-derived events: port scans, deauth floods, NXDOMAIN bursts, threat-intel domain hits, threat-intel IP hits, periodic beaconing |
-| **Devices** | One record per MAC, joined from ARP/DHCP/Beacons/Probe/Stations with OUI vendor |
+| [**Alerts**](docs/views/alerts.md)       | Rule-derived events: port scans, deauth floods, NXDOMAIN bursts, threat-intel domain hits, threat-intel IP hits, periodic beaconing |
+| [**Devices**](docs/views/devices.md)     | One record per MAC, joined from ARP/DHCP/Beacons/Probe/Stations with OUI vendor |
+| [**Dashboard**](docs/views/dashboard.md) | Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories all tiled to fill the terminal |
 
 ### Output
 
@@ -63,7 +68,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1559 unit tests (no root, no terminal, no network)
+make test                     # 1664 unit tests (no root, no terminal, no network)
 ```
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
