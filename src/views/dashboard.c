@@ -224,6 +224,45 @@ static void draw_sparkline_at(int y, int x, int width,
     }
 }
 
+/* Solid-colour sparkline for per-connection bw history. Single colour for
+ * every non-zero glyph; zero / missing samples render as a dim '_'.
+ * Operates on float arrays (the conn_bw_t hist) instead of doubles. */
+static void draw_sparkline_solid_at(int y, int x, int width,
+                                     const float *vals, int head, int n,
+                                     int color_pair) {
+    double max = 0.0;
+    for (int i = 0; i < n && i < CONN_BW_HIST; i++)
+        if ((double)vals[i] > max) max = (double)vals[i];
+
+    static const char *glyph[9] = {
+        "_",
+        "\xe2\x96\x81", "\xe2\x96\x82", "\xe2\x96\x83",
+        "\xe2\x96\x84", "\xe2\x96\x85", "\xe2\x96\x86",
+        "\xe2\x96\x87", "\xe2\x96\x88",
+    };
+    move(y, x);
+    for (int i = 0; i < width; i++) {
+        int lvl = 0;
+        if (n > 0) {
+            int age;
+            if (width <= 1) age = 0;
+            else            age = ((width - 1 - i) * (n - 1)) / (width - 1);
+            if (age < 0)   age = 0;
+            if (age >= n)  age = n - 1;
+            int slot = (head - 1 - age + CONN_BW_HIST) % CONN_BW_HIST;
+            double v = (double)vals[slot];
+            if (v > 0.0 && max > 0.0) {
+                lvl = (int)((v / max) * 8.0 + 0.5);
+                if (lvl < 1) lvl = 1;
+                if (lvl > 8) lvl = 8;
+            }
+        }
+        if (lvl == 0) attrset(COLOR_PAIR(CP_DIM));
+        else          attrset(COLOR_PAIR(color_pair));
+        addstr(glyph[lvl]);
+    }
+}
+
 /* Position then print one line, padded to `w` chars. ASCII / single-byte. */
 static void clipline(int y, int x, int w, const char *fmt, ...) {
     char buf[512];
@@ -346,6 +385,21 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
     clipline(y0 + 1, x0, w,
              "  %-21s " G_ARROW " %-25s %-5s %5s %5s  %s",
              "Local", "Remote", "Proto", "St", "PID", "Process");
+    /* Overprint the sparkline-column header at the right edge. */
+    {
+        int spark_w     = 6;
+        int sparks_room = 2 * spark_w + 1;
+        int gap         = 2;
+        if ((w - 72) >= (8 + gap + sparks_room)) {
+            int rx_x = x0 + w - sparks_room;
+            int tx_x = rx_x + spark_w + 1;
+            attrset(COLOR_PAIR(CP_HEAT_PEAK));
+            mvprintw(y0 + 1, rx_x, "%-*s", spark_w, "  rx");
+            attrset(COLOR_PAIR(CP_NORMAL));
+            mvprintw(y0 + 1, tx_x, "%-*s", spark_w, "  tx");
+            attrset(COLOR_PAIR(CP_DIM));
+        }
+    }
 
     int rows = h - 2;
     if (rows < 1) return;
@@ -357,10 +411,17 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
     int end = top + rows;
     if (end > n)        end = n;
 
-    /* Column geometry: fixed prefix = 2 + 21 + 4 + 25 + 1 + 5 + 1 + 5 + 1 + 5 + 2 = 72
-       Process gets the remainder. */
-    int proc_w = w - 72;
-    if (proc_w < 12) proc_w = 12;
+    /* Column geometry: fixed prefix = 2 + 21 + 4 + 25 + 1 + 5 + 1 + 5 + 1 + 5 + 2 = 72.
+     * Process column gets the remainder, minus a reserved budget at the
+     * right edge for two activity sparklines (rx red + tx green). If the
+     * panel is too narrow for the sparklines and a usable proc column we
+     * skip the sparklines and let proc fill the rest. */
+    int spark_w     = 6;
+    int sparks_room = 2 * spark_w + 1;   /* 13 cols: 6 + 1 sep + 6 */
+    int gap         = 2;                  /* gap between proc and sparks */
+    int show_sparks = ((w - 72) >= (8 + gap + sparks_room));
+    int proc_w      = show_sparks ? (w - 72 - gap - sparks_room) : (w - 72);
+    if (proc_w < 8) proc_w = 8;
 
     for (int i = top; i < end; i++) {
         const conn_t *c = &s->conns[i];
@@ -407,6 +468,42 @@ static void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w)
         printw(" %-5s %5d %5d  %-*.*s",
                proto_short(c->proto),
                c->state, c->pid, proc_w, proc_w, c->proc);
+
+        if (show_sparks) {
+            int rx_x = x0 + w - sparks_room;
+            int tx_x = rx_x + spark_w + 1;
+            int yrow = y0 + 2 + (i - top);
+
+            /* Find the matching per-conn bw history (linear scan; n is
+             * typically small). */
+            const conn_bw_t *bw = NULL;
+            for (int b = 0; b < s->conn_bw_count; b++) {
+                const conn_bw_t *e = &s->conn_bw[b];
+                if (e->proto       == c->proto       &&
+                    e->local_port  == c->local_port  &&
+                    e->remote_port == c->remote_port &&
+                    strcmp(e->local_addr,  c->local_addr)  == 0 &&
+                    strcmp(e->remote_addr, c->remote_addr) == 0) {
+                    bw = e; break;
+                }
+            }
+
+            if (bw) {
+                /* rx (download) — red bars; tx (upload) — green phosphor */
+                draw_sparkline_solid_at(yrow, rx_x, spark_w,
+                                        bw->rx_hist, bw->hist_head,
+                                        bw->hist_count, CP_HEAT_PEAK);
+                draw_sparkline_solid_at(yrow, tx_x, spark_w,
+                                        bw->tx_hist, bw->hist_head,
+                                        bw->hist_count, CP_NORMAL);
+            } else {
+                attrset(COLOR_PAIR(CP_DIM));
+                move(yrow, rx_x);
+                for (int j = 0; j < spark_w; j++) addch('_');
+                move(yrow, tx_x);
+                for (int j = 0; j < spark_w; j++) addch('_');
+            }
+        }
     }
     /* Erase any trailing rows so the conn band can shrink without
        leaving stale entries behind. */
