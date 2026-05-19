@@ -7,6 +7,7 @@
 #include "sloth.h"
 #include "dns_log.h"
 #include "jsonl.h"
+#include "host_cache.h"
 
 static dns_log_entry_t g_log[MAX_DNS_LOG];
 static int             g_head  = 0;
@@ -146,6 +147,10 @@ void dns_log_record(const dns_log_entry_t *e)
     if (g_count < MAX_DNS_LOG) g_count++;
     pthread_mutex_unlock(&g_mu);
     jsonl_emit_dns(e);
+    /* Feed the IP->host cache so downstream views can show qnames
+     * next to bare IPs (e.g. the packets dst column). host_cache_add
+     * silently drops NXDOMAIN / empty answers. */
+    host_cache_add(e->answer, e->qname);
 }
 
 void dns_log_snapshot(sloth_state_t *s)

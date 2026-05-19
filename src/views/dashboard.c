@@ -10,6 +10,7 @@
 #include "ip_color.h"
 #include "ip_owner.h"
 #include "oui.h"
+#include "host_cache.h"
 
 /* Box-drawing / arrow glyphs used by the dashboard. UTF-8 byte sequences;
  * each occupies exactly one terminal column when the font supports them
@@ -668,11 +669,6 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
     else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 
-    /* Pre-format src/dst with port for length budgeting. */
-    char src_full[28], dst_full[28];
-    snprintf(src_full, sizeof(src_full), "%s:%u", p->src, (unsigned)p->src_port);
-    snprintf(dst_full, sizeof(dst_full), "%s:%u", p->dst, (unsigned)p->dst_port);
-
     /* Paint the full-row grey bg first. */
     tui_pkt_bg_cat(cat);
     clipline(y, x0, w, "");
@@ -696,14 +692,34 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
 
     move(y, x); tui_pkt_bg_cat(cat); printw(" " G_ARROW " "); x += 3;
 
-    /* dst column: 21 cols */
+    /* dst column: 21 cols. If we've observed a DNS A/AAAA answer that
+     * names this IP, show the qname (brand-coloured) instead of the
+     * raw IP so the operator can read flows at a glance. The IP is
+     * still discoverable in the connections panel + drill-downs. */
     int dst_w = 21;
     move(y, x);
-    tui_ip_addstr(p->dst, cat);
-    tui_pkt_bg_cat(cat);
-    printw(":%-5u", (unsigned)p->dst_port);
-    used = (int)strlen(p->dst) + 1 + 5;
-    while (used++ < dst_w) addch(' ');
+    char dst_host[HOST_CACHE_HOSTLEN];
+    if (host_cache_lookup(p->dst, dst_host, sizeof(dst_host))) {
+        /* hostname:port, truncated to dst_w. Hostname gets brand colour;
+         * the ":port" suffix uses the row's category bg colour. */
+        char port_buf[8];
+        snprintf(port_buf, sizeof(port_buf), ":%u", (unsigned)p->dst_port);
+        int port_len = (int)strlen(port_buf);
+        int host_room = dst_w - port_len;
+        if (host_room < 1) host_room = 1;
+        char host_trunc[HOST_CACHE_HOSTLEN];
+        snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
+                 host_room, host_room, dst_host);
+        tui_brand_addstr(host_trunc, cat);
+        tui_pkt_bg_cat(cat);
+        addstr(port_buf);
+    } else {
+        tui_ip_addstr(p->dst, cat);
+        tui_pkt_bg_cat(cat);
+        printw(":%-5u", (unsigned)p->dst_port);
+        used = (int)strlen(p->dst) + 1 + 5;
+        while (used++ < dst_w) addch(' ');
+    }
     x += dst_w;
 
     /* proto column */
@@ -746,7 +762,6 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
             printw("%02x ", byte);
         }
     }
-    (void)src_full; (void)dst_full;
 }
 
 /* Cumulative info-frequency table — populated incrementally from the
