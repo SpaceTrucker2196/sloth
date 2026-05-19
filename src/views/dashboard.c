@@ -142,6 +142,7 @@ typedef enum {
     DASH_PANEL_DEAUTH,
     DASH_PANEL_DNS,
     DASH_PANEL_ICMP,
+    DASH_PANEL_CRIT_ALERTS,
     DASH_PANEL_COUNT
 } dash_panel_t;
 
@@ -168,6 +169,7 @@ static view_t panel_to_view(int p) {
     case DASH_PANEL_DEAUTH:    return VIEW_DEAUTH;
     case DASH_PANEL_DNS:       return VIEW_DNS;
     case DASH_PANEL_ICMP:      return VIEW_ICMP;
+    case DASH_PANEL_CRIT_ALERTS: return VIEW_ALERTS;
     default:                   return VIEW_DASH;
     }
 }
@@ -783,6 +785,47 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
     }
 }
 
+/* Compact CRIT-only alerts band — sits below the packets band so the
+ * worst stuff lives at eye level. WARN / INFO alerts stay in
+ * VIEW_ALERTS only. */
+static void draw_crit_alerts_band(const sloth_state_t *s,
+                                   int y0, int h, int x0, int w) {
+    panel_title(y0, x0, w, "Critical alerts", DASH_PANEL_CRIT_ALERTS);
+    int rows = h - 1;
+    if (rows < 1) return;
+
+    int painted = 0;
+    int now = (int)time(NULL);
+    for (int i = 0; i < s->alert_count && painted < rows; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (a->sev != ALERT_SEV_CRIT) continue;
+
+        int age_s = now - (int)a->last_seen;
+        if (age_s < 0)        age_s = 0;
+        if (age_s > 99999)    age_s = 99999;
+        char age_buf[16];
+        if      (age_s < 60)   snprintf(age_buf, sizeof(age_buf), "%ds",  age_s);
+        else if (age_s < 3600) snprintf(age_buf, sizeof(age_buf), "%dm",  age_s/60);
+        else                   snprintf(age_buf, sizeof(age_buf), "%dh",  age_s/3600);
+
+        attrset(COLOR_PAIR(CP_HEAT_PEAK) | A_BOLD);
+        clipline(y0 + 1 + painted, x0, w,
+                 "  [%-3s ago] %-15.15s  n=%-4d  %s",
+                 age_buf, a->title, a->count, a->detail);
+        painted++;
+    }
+    /* Fill remaining rows so the band stays clean even when there are
+     * no CRIT entries. */
+    attrset(COLOR_PAIR(CP_NORMAL));
+    if (painted == 0) {
+        attrset(COLOR_PAIR(CP_BORDER));
+        mvprintw(y0 + 1, x0 + 2, "(no critical alerts — system is quiet)");
+        painted = 1;
+    }
+    for (int i = painted; i < rows; i++)
+        clipline(y0 + 1 + i, x0, w, "");
+}
+
 static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     draw_packets_title(s, y0, x0, w);
     attrset(COLOR_PAIR(CP_DIM));
@@ -1241,7 +1284,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
      *   bot4: dns log / icmp log    = H   (added 2026-05-18)
      *   packets         = 2H         (now at the very bottom)
      *   total           = 7H + iface */
-    int min_lines = 2 + 3 + 4 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
+    int min_lines = 2 + 3 + 5 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
     /* iface band minimum: text 50 + 2*8 spark + 4 sep = 70 cols. It gets
      * 70% of (cols - 5 left pad), so we need cols >= 70 / 0.7 + 5 = 105. */
     int iface_band_min = IFACE_FIXED_W + 2 + 8 + 2 + 8;
@@ -1261,17 +1304,18 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
     int avail = lines - iface_y - iface_h;
-    /* 2H + H + H + H + H + 2H = 8H */
-    int H = avail / 8;
+    /* 2H + H + H + H + H + 2H + H = 9H (conn, bot1..bot4, packets, crit). */
+    int H = avail / 9;
     if (H < MIN_PANEL_H) H = MIN_PANEL_H;
 
     int bot1_h    = H;
     int bot2_h    = H;
     int bot3_h    = H;
     int bot4_h    = H;
+    int crit_h    = H;
     int conn_h    = 2 * H;
     int packets_h = 2 * H;
-    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h + bot4_h;
+    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h + bot4_h + crit_h;
     int extra     = avail - used;
     /* Spare rows: prefer to grow conn first, then packets so the bottom
      * band always reaches the last line of the terminal. */
@@ -1286,6 +1330,7 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot3_y    = bot2_y  + bot2_h;
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
+    int crit_y    = packets_y + packets_h;
 
     /* 5-col left margin so the dashboard isn't flush against the
      * terminal edge. Every layout width derives from `usable` and
@@ -1349,8 +1394,10 @@ void view_dashboard_draw(const sloth_state_t *s) {
     attrset(COLOR_PAIR(CP_BORDER));
     for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
-    /* Packets live at the very bottom. */
     draw_packets_band(s, packets_y, packets_h, x0, usable);
+
+    /* New very-bottom band: CRIT alerts only, in heat-1.0 red. */
+    draw_crit_alerts_band(s, crit_y, crit_h, x0, usable);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else

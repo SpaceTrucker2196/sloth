@@ -534,6 +534,7 @@ typedef struct {
     alert_t alerts[MAX_ALERTS];
     int     alert_count;
     int     alert_sel;
+    int     alert_detail;   /* 1 = drill-down detail panel shown */
 
     /* ── Devices ────────────────────────────────────────────── */
     device_t devices[MAX_DEVICES];

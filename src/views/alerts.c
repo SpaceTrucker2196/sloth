@@ -64,7 +64,73 @@ static void draw_enrichment(const alert_t *a) {
     TPRINT("\n");
 }
 
+/* Full-screen detail panel for the selected alert. Triggered by Enter
+ * in the alerts list, dismissed with Enter / Esc. Shows everything the
+ * dedup engine knows about this alert key plus the same enrichment
+ * footer the table already has. */
+static void draw_alert_detail(const sloth_state_t *s) {
+    if (s->alert_sel < 0 || s->alert_sel >= s->alert_count) {
+        tui_dim();
+        TPRINT(" (no alert selected — press Enter to return)\n");
+        return;
+    }
+    const alert_t *a = &s->alerts[s->alert_sel];
+    const char *sev = (a->sev == ALERT_SEV_CRIT) ? "CRIT"
+                    : (a->sev == ALERT_SEV_WARN) ? "WARN" : "INFO";
+
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 ALERT DETAIL \xe2\x94\x80\xe2\x94\x80\n");
+
+    /* Title bar in heat-colour matching severity */
+    if      (a->sev == ALERT_SEV_CRIT) tui_heat(1.0);
+    else if (a->sev == ALERT_SEV_WARN) tui_heat(0.7);
+    else                                tui_bright();
+    TPRINT("  %s  %s\n", sev, a->title);
+
+    tui_dim();   TPRINT("  Key:        "); tui_normal(); TPRINT("%s\n", a->key);
+    tui_dim();   TPRINT("  Hits:       "); tui_bright(); TPRINT("%d\n", a->count);
+
+    char ts1[32], ts2[32];
+    struct tm *tm1 = localtime(&a->first_seen);
+    struct tm *tm2 = localtime(&a->last_seen);
+    if (tm1) strftime(ts1, sizeof(ts1), "%Y-%m-%d %H:%M:%S", tm1);
+    else     snprintf(ts1, sizeof(ts1), "?");
+    if (tm2) strftime(ts2, sizeof(ts2), "%Y-%m-%d %H:%M:%S", tm2);
+    else     snprintf(ts2, sizeof(ts2), "?");
+    tui_dim();   TPRINT("  First seen: "); tui_normal(); TPRINT("%s\n", ts1);
+    tui_dim();   TPRINT("  Last seen:  "); tui_normal(); TPRINT("%s\n", ts2);
+
+    time_t now  = time(NULL);
+    long age_s  = (long)(now - a->first_seen);
+    long span_s = (long)(a->last_seen - a->first_seen);
+    tui_dim();   TPRINT("  Age:        "); tui_normal();
+    TPRINT("%lds (sustained over %lds)\n", age_s, span_s);
+
+    tui_dim();   TPRINT("  Detail:     "); tui_normal();
+    TPRINT("%s\n", a->detail);
+
+    tui_dim();   TPRINT("\n \xe2\x94\x80\xe2\x94\x80 FLOW IDENTIFIER \xe2\x94\x80\xe2\x94\x80\n");
+    if (a->match_ip[0]) {
+        tui_dim();   TPRINT("  Match IP:   ");
+        tui_bright(); TPRINT("%s", a->match_ip);
+        if (a->match_port != 0) {
+            tui_dim();   TPRINT(":");
+            tui_bright(); TPRINT("%u", (unsigned)a->match_port);
+        }
+        TPRINT("\n");
+        /* Reuse the small footer enrichment so the operator sees
+         * region + owner inline. */
+        draw_enrichment(a);
+    } else {
+        tui_dim();
+        TPRINT("  (no concrete IP for this alert — rule is layer-2 / engine state only)\n");
+    }
+
+    tui_normal();
+    tui_dim(); TPRINT("\n [Enter / Esc] back to alerts list   [c] clear all alerts\n");
+}
+
 void view_alerts_draw(const sloth_state_t *s) {
+    if (s->alert_detail) { draw_alert_detail(s); return; }
 #ifdef WITH_NCURSES
     int page = LINES - 5;
     if (page < 1) page = 1;
@@ -154,6 +220,19 @@ void view_alerts_draw(const sloth_state_t *s) {
 }
 
 void view_alerts_key(sloth_state_t *s, int key) {
+    /* Detail mode swallows nav/scroll keys; Enter or Esc returns. */
+    if (s->alert_detail) {
+        if (key == '\r' || key == '\n' || key == 27)
+            s->alert_detail = 0;
+        else if (key == 'c' || key == 'C') {
+            alerts_clear();
+            s->alert_count  = 0;
+            s->alert_sel    = 0;
+            s->alert_detail = 0;
+        }
+        return;
+    }
+
     switch (key) {
     case SLOTH_KEY_UP:
         if (s->alert_sel > 0) s->alert_sel--;
@@ -161,6 +240,9 @@ void view_alerts_key(sloth_state_t *s, int key) {
     case SLOTH_KEY_DOWN:
         if (s->alert_count > 0 && s->alert_sel < s->alert_count - 1)
             s->alert_sel++;
+        break;
+    case '\r': case '\n':
+        if (s->alert_count > 0) s->alert_detail = 1;
         break;
     case 'c': case 'C':
         alerts_clear();
