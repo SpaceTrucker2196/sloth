@@ -183,7 +183,8 @@ static view_t panel_to_view(int p) {
 
 #ifdef WITH_NCURSES
 
-#define DASH_TOP_Y     0        /* dashboard owns the screen — no tabbar above */
+#define DASH_TOP_Y     1        /* 1-row top margin around the dashboard */
+#define DASH_BOT_PAD   1        /* matching 1-row bottom margin */
 #define MIN_PANEL_H    4        /* title + header + 2 data rows */
 
 /* Render a sparkline directly to (y,x) with heat-graded colors per glyph.
@@ -1447,10 +1448,11 @@ void view_dashboard_draw(const sloth_state_t *s) {
      *   packets         = 2H         (now at the very bottom)
      *   total           = 7H + iface */
     int min_lines = 2 + 3 + 5 * MIN_PANEL_H + 2 * (2 * MIN_PANEL_H);
-    /* iface band minimum: text 50 + 2*8 spark + 4 sep = 70 cols. It gets
-     * 70% of (cols - 5 left pad), so we need cols >= 70 / 0.7 + 5 = 105. */
+    /* iface band minimum: text 50 + 2*8 spark + 4 sep = 70 cols. It
+     * gets 70% of (cols - 2 side pad), so we need cols >= 70 / 0.7 + 2
+     * = 102. */
     int iface_band_min = IFACE_FIXED_W + 2 + 8 + 2 + 8;
-    int min_cols       = (iface_band_min * 10 + 6) / 7 + 5;
+    int min_cols       = (iface_band_min * 10 + 6) / 7 + 2;
     if (lines < min_lines || cols < min_cols) {
         tui_dim();
         TPRINT(" Dashboard: terminal too small "
@@ -1465,7 +1467,9 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int desired_iface = 2 + (s->iface_count > 0 ? s->iface_count : 1);
     int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
-    int avail = lines - iface_y - iface_h;
+    /* Reserve DASH_BOT_PAD rows at the bottom so the last band doesn't
+     * touch the terminal edge. */
+    int avail = lines - iface_y - iface_h - DASH_BOT_PAD;
     /* 2H + H + H + H + H + 2H + H = 9H (conn, bot1..bot4, packets, crit). */
     int H = avail / 9;
     if (H < MIN_PANEL_H) H = MIN_PANEL_H;
@@ -1500,13 +1504,12 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot4_y    = bot3_y  + bot3_h;
     int packets_y = bot4_y  + bot4_h;
 
-    /* 5-col right margin so the dashboard isn't flush against the
-     * right edge of the terminal. Origin stays at x=0; `usable` is
-     * the cols width minus the right pad so panels never extend
-     * into it. */
-    const int DASH_PAD_X = 5;
-    int usable = cols - DASH_PAD_X;
-    int x0     = 0;
+    /* 1-col margin on left + right (matches the 1-row top/bottom
+     * margins). The dashboard sits inside a clean 1-char frame on
+     * every side. */
+    const int DASH_PAD_X = 1;
+    int usable = cols - 2 * DASH_PAD_X;
+    int x0     = DASH_PAD_X;
 
     /* Top row: Interfaces (70%) + Summary (30%). */
     int iface_w   = (usable * 7) / 10;
