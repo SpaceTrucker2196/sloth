@@ -13,11 +13,11 @@ available rows. Minimum recommended terminal is 100×33.
  │ Connections (= 2H, scrollable)   │  Top hosts (= 2H)       │  ← split 60/40
  │ local → remote  proto …          │  ip  host  owner  age   │
  ├──────────────────┬─────────────────┬───────────────────────┤
- │  WiFi APs        │ Probe clients   │ Beacons (H)           │
+ │  WiFi APs        │ Summary         │ Beacons (H)           │
  ├──────────────────┼─────────────────┼───────────────────────┤
  │  mDNS services   │ DHCP events     │ SSDP / UPnP (H)       │
  ├──────────────────┼─────────────────┼───────────────────────┤
- │  ARP table       │ Deauth          │ Summary (H)           │
+ │  ARP table       │ Deauth          │ Roaming clients (H)   │
  ├──────────────────┴────┬────────────────────────────────────┤
  │ DNS log               │ ICMP log (H, split 50/50)          │
  ├───────────────────────┴────────────────────────────────────┤
@@ -86,12 +86,25 @@ the standalone `[2]` view).
   weren't visiting.
 - Any visible CRIT in the alerts panel.
 
+## Roaming clients panel
+
+The bottom-right panel ("Roaming clients") is an enhanced version of
+`[7] Probe` — same data source (`s->probe_clients[]`), more columns:
+
+| col    | source |
+|--------|--------|
+| MAC    | the 802.11 probe-request source addr |
+| Vendor | [`oui_lookup()`](../../src/oui.c) on the MAC, or `(random)` if the locally-administered bit (0x02 in the first octet) is set |
+| ssid   | last SSID this device probed for (`(any)` for broadcast probes); colour-hashed via the SSID palette |
+| sig    | RSSI in dBm; coloured by strength (bright ≥ -50, normal -50…-65, amber -65…-80, hot < -80) |
+| dist   | Rough metres estimate via the log-distance path-loss model `P(d)=P(d₀)-10·n·log₁₀(d/d₀)`, defaults P(d₀)=-30 dBm at d₀=1m, n=3.0 (typical indoor with walls). Treat as an order-of-magnitude hint, not a metric measurement. |
+
 ## See also
 
 - Each band is explained in its own doc:
   [`interfaces.md`](interfaces.md), [`connections.md`](connections.md),
-  [`wifi.md`](wifi.md), [`probe.md`](probe.md),
-  [`beacons.md`](beacons.md), [`mdns.md`](mdns.md),
-  [`dhcp.md`](dhcp.md), [`ssdp.md`](ssdp.md), [`arp.md`](arp.md),
-  [`deauth.md`](deauth.md), [`stats.md`](stats.md),
+  [`wifi.md`](wifi.md), [`probe.md`](probe.md) (Roaming clients is the
+  enhanced version of this), [`beacons.md`](beacons.md),
+  [`mdns.md`](mdns.md), [`dhcp.md`](dhcp.md), [`ssdp.md`](ssdp.md),
+  [`arp.md`](arp.md), [`deauth.md`](deauth.md), [`stats.md`](stats.md),
   [`dns.md`](dns.md), [`icmp.md`](icmp.md), [`packets.md`](packets.md).
