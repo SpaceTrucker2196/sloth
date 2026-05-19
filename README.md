@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="slothwifi.png" alt="sloth" width="640">
+</p>
+
 # sloth
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
