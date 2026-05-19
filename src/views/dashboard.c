@@ -899,44 +899,105 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
     }
 }
 
-/* Compact CRIT-only alerts band — sits below the packets band so the
- * worst stuff lives at eye level. WARN / INFO alerts stay in
- * VIEW_ALERTS only. */
+/* Count CRIT-only alerts. Hoisted so the layout code in
+ * view_dashboard_draw can size the band before rendering. */
+static int crit_alerts_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].sev == ALERT_SEV_CRIT) n++;
+    return n;
+}
+
+/* Compact CRIT-only alerts band. Sized to between 1 and CRIT_MAX_ROWS
+ * visible alerts. Sorted newest-first by last_seen. If more CRITs exist
+ * than rows, the visible window rotates by one slot every ~2 seconds so
+ * everything cycles into view without eating screen real estate.
+ * Each row shows HH:MM:SS [age] title  n=N  detail. */
+#define CRIT_MAX_ROWS 5
+
 static void draw_crit_alerts_band(const sloth_state_t *s,
                                    int y0, int h, int x0, int w) {
-    panel_title(y0, x0, w, "Critical alerts", DASH_PANEL_CRIT_ALERTS);
+    enum { MAX_CRIT_LIST = 64 };
+    int crit_idx[MAX_CRIT_LIST];
+    int crit_n = 0;
+    for (int i = 0; i < s->alert_count && crit_n < MAX_CRIT_LIST; i++)
+        if (s->alerts[i].sev == ALERT_SEV_CRIT)
+            crit_idx[crit_n++] = i;
+
+    /* Newest first. Selection sort — crit_n is small (<=64). */
+    for (int i = 0; i < crit_n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < crit_n; j++)
+            if (s->alerts[crit_idx[j]].last_seen >
+                s->alerts[crit_idx[best]].last_seen) best = j;
+        if (best != i) {
+            int t = crit_idx[i]; crit_idx[i] = crit_idx[best]; crit_idx[best] = t;
+        }
+    }
+
+    /* Title shows the total so the operator knows when alerts are
+     * scrolling off-screen. */
+    char title[48];
+    if (crit_n > 0) snprintf(title, sizeof(title),
+                             "Critical alerts (%d)", crit_n);
+    else            snprintf(title, sizeof(title), "Critical alerts");
+    panel_title(y0, x0, w, title, DASH_PANEL_CRIT_ALERTS);
+
     int rows = h - 1;
     if (rows < 1) return;
 
-    int painted = 0;
-    int now = (int)time(NULL);
-    for (int i = 0; i < s->alert_count && painted < rows; i++) {
-        const alert_t *a = &s->alerts[i];
-        if (a->sev != ALERT_SEV_CRIT) continue;
+    if (crit_n == 0) {
+        attrset(COLOR_PAIR(CP_DIM));
+        mvprintw(y0 + 1, x0 + 2,
+                 "(no critical alerts \xe2\x80\x94 system is quiet)");
+        attrset(COLOR_PAIR(CP_NORMAL));
+        for (int i = 1; i < rows; i++) clipline(y0 + 1 + i, x0, w, "");
+        return;
+    }
+
+    /* Rotate the visible window when there are more alerts than rows.
+     * Static state survives across frames; reset when the list shrinks
+     * back to fitting. */
+    static int    s_off    = 0;
+    static time_t s_advance = 0;
+    time_t now_t = time(NULL);
+    if (crit_n > rows) {
+        if (now_t - s_advance >= 2) {
+            s_off     = (s_off + 1) % crit_n;
+            s_advance = now_t;
+        }
+        if (s_off >= crit_n) s_off = 0;
+    } else {
+        s_off     = 0;
+        s_advance = now_t;
+    }
+
+    int paint = rows < crit_n ? rows : crit_n;
+    int now   = (int)now_t;
+    for (int p = 0; p < paint; p++) {
+        const alert_t *a = &s->alerts[crit_idx[(s_off + p) % crit_n]];
+
+        char ts_buf[12];
+        time_t ts = a->last_seen;
+        struct tm *tm = localtime(&ts);
+        if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
+        else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 
         int age_s = now - (int)a->last_seen;
-        if (age_s < 0)        age_s = 0;
-        if (age_s > 99999)    age_s = 99999;
+        if (age_s < 0)     age_s = 0;
+        if (age_s > 99999) age_s = 99999;
         char age_buf[16];
-        if      (age_s < 60)   snprintf(age_buf, sizeof(age_buf), "%ds",  age_s);
-        else if (age_s < 3600) snprintf(age_buf, sizeof(age_buf), "%dm",  age_s/60);
-        else                   snprintf(age_buf, sizeof(age_buf), "%dh",  age_s/3600);
+        if      (age_s < 60)   snprintf(age_buf, sizeof(age_buf), "%ds", age_s);
+        else if (age_s < 3600) snprintf(age_buf, sizeof(age_buf), "%dm", age_s/60);
+        else                   snprintf(age_buf, sizeof(age_buf), "%dh", age_s/3600);
 
         attrset(COLOR_PAIR(CP_HEAT_PEAK) | A_BOLD);
-        clipline(y0 + 1 + painted, x0, w,
-                 "  [%-3s ago] %-15.15s  n=%-4d  %s",
-                 age_buf, a->title, a->count, a->detail);
-        painted++;
+        clipline(y0 + 1 + p, x0, w,
+                 "  %s  [%-4s ago] %-15.15s  n=%-4d  %s",
+                 ts_buf, age_buf, a->title, a->count, a->detail);
     }
-    /* Fill remaining rows so the band stays clean even when there are
-     * no CRIT entries. */
     attrset(COLOR_PAIR(CP_NORMAL));
-    if (painted == 0) {
-        attrset(COLOR_PAIR(CP_DIM));
-        mvprintw(y0 + 1, x0 + 2, "(no critical alerts — system is quiet)");
-        painted = 1;
-    }
-    for (int i = painted; i < rows; i++)
+    for (int i = paint; i < rows; i++)
         clipline(y0 + 1 + i, x0, w, "");
 }
 
@@ -1500,11 +1561,22 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int desired_iface = 2 + (s->iface_count > 0 ? s->iface_count : 1);
     int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
+    /* CRIT band gets a fixed height sized to the actual CRIT count,
+     * clamped to [1, CRIT_MAX_ROWS]. When the count exceeds the cap
+     * the band scrolls (see draw_crit_alerts_band). Always shows at
+     * least the title + one row so the operator can tell "quiet" from
+     * "off-screen". */
+    int crit_n    = crit_alerts_count(s);
+    int crit_rows = crit_n < 1 ? 1
+                  : (crit_n > CRIT_MAX_ROWS ? CRIT_MAX_ROWS : crit_n);
+    int crit_h    = 1 + crit_rows;
+
     /* Reserve DASH_BOT_PAD rows at the bottom so the last band doesn't
-     * touch the terminal edge. */
-    int avail = lines - iface_y - iface_h - DASH_BOT_PAD;
-    /* 2H + H + H + H + H + 2H + H = 9H (conn, bot1..bot4, packets, crit). */
-    int H = avail / 9;
+     * touch the terminal edge; subtract the fixed CRIT band too. */
+    int avail = lines - iface_y - iface_h - DASH_BOT_PAD - crit_h;
+    /* 2H + H + H + H/2 + H + 2H = 7.5H (conn, bot1..bot4, packets).
+     * Divide by 8 — the bot3 H/2 slack lands in `extra` below. */
+    int H = avail / 8;
     if (H < MIN_PANEL_H) H = MIN_PANEL_H;
 
     int bot1_h    = H;
@@ -1514,10 +1586,9 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int bot3_h    = H / 2;
     if (bot3_h < 3) bot3_h = 3;   /* title + header + 1 data row */
     int bot4_h    = H;
-    int crit_h    = H;
     int conn_h    = 2 * H;
     int packets_h = 2 * H;
-    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h + bot4_h + crit_h;
+    int used      = conn_h + packets_h + bot1_h + bot2_h + bot3_h + bot4_h;
     int extra     = avail - used;
     /* Spare rows: prefer to grow conn first, then packets so the bottom
      * band always reaches the last line of the terminal. */
