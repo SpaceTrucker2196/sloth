@@ -74,14 +74,30 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
  * row's local/remote when the dashboard's conn panel has focus. */
 #define CP_HIGHLIGHT    105
 
-/* Brand-colour slot indices (match the layout above). */
-#define BR_GOOGLE_BLUE    0
-#define BR_GOOGLE_RED     1
-#define BR_GOOGLE_YELLOW  2
-#define BR_GOOGLE_GREEN   3
-#define BR_FIREFOX        4
-#define BR_CLOUDFLARE     5
-#define BR_EXAMPLE        6
+/* Extended brand-colour palette — pairs 160..167 for the new slots 8..15.
+ * These render only on the default bg (per-cat variants would have
+ * collided with the existing BR_BASE_<cat> ranges). */
+#define CP_BR_EXTRA_BASE 160
+
+/* Brand-colour slot indices.
+ * 0..6 keep their original mapping for binary compat. 7 (was reserved)
+ * + 8..15 are the new corporate-identity slots. */
+#define BR_GOOGLE_BLUE    0    /* #0087ff blue   — Google logo letter 1+4   */
+#define BR_GOOGLE_RED     1    /* #d75f5f red    — Google logo letter 2+6   */
+#define BR_GOOGLE_YELLOW  2    /* #ffd700 yellow — Google logo letter 3     */
+#define BR_GOOGLE_GREEN   3    /* #00af5f green  — Google logo letter 5     */
+#define BR_FIREFOX        4    /* #ff8700 orange — Firefox / Mozilla         */
+#define BR_CLOUDFLARE     5    /* #ff0000 red    — Cloudflare / YouTube      */
+#define BR_EXAMPLE        6    /* #808080 grey   — example.com / GitHub      */
+#define BR_DISCORD        7    /* #875fff blurple                            */
+#define BR_FACEBOOK       8    /* #005fff blue   — Facebook / Twitter / Zoom */
+#define BR_SPOTIFY        9    /* #00d75f green  — Spotify / WhatsApp        */
+#define BR_TWITCH        10    /* #af5fff purple — Twitch / Yahoo            */
+#define BR_AMAZON        11    /* #ffaf00 orange — Amazon / AWS              */
+#define BR_LINKEDIN      12    /* #0087af blue   — LinkedIn / Microsoft      */
+#define BR_NETFLIX       13    /* #af0000 deep red — Netflix                 */
+#define BR_REDDIT        14    /* #ff5f00 orange — Reddit                    */
+#define BR_INSTAGRAM     15    /* #d75faf pink   — Instagram / TikTok        */
 
 void tui_bright(void); /* intense glow: title, active values, key fields */
 void tui_normal(void); /* standard phosphor: data rows                   */

@@ -139,6 +139,13 @@ void tui_ssid_addstr(const char *ssid, int cat) {
 /* ── Brand colourisation ─────────────────────────────────── */
 
 static int cp_for_brand_on_cat(int cat, int brand_idx) {
+    brand_idx &= 15;
+    /* Slots 8..15 (corporate-identity additions) live in the
+     * default-bg-only CP_BR_EXTRA_BASE bank. */
+    if (brand_idx >= 8) {
+        (void)cat;
+        return CP_BR_EXTRA_BASE + (brand_idx - 8);
+    }
     int base;
     switch (cat) {
     case 1: base = CP_BR_BASE_TCP;   break;
@@ -149,7 +156,7 @@ static int cp_for_brand_on_cat(int cat, int brand_idx) {
     case 6: base = CP_BR_BASE_TLS;   break;
     default: base = CP_BR_BASE_OTHER; break;
     }
-    return base + (brand_idx & 7);
+    return base + brand_idx;
 }
 
 static int ci_strncmp(const char *a, const char *b, int n) {
@@ -168,13 +175,85 @@ static int ci_strncmp(const char *a, const char *b, int n) {
  * or -1 if none. *brand and *match_len receive the brand id and the
  * matched substring's length. */
 static int find_brand(const char *s, int *brand_out, int *len_out) {
+    /* Curated host -> brand colour table. Substring match, case-insensitive.
+     * BR_GOOGLE_BLUE renders the matched substring in the Google logo's
+     * letter cycle; everything else uses the single colour for its slot.
+     * Add freely — order doesn't matter (the earliest match position in
+     * the input wins, ties go to the first table entry). */
     static const struct { int brand; const char *sub; } tbl[] = {
-        { BR_GOOGLE_BLUE, "google"       },
-        { BR_FIREFOX,     "firefox"      },
-        { BR_FIREFOX,     "anthropic.com"},   /* orange like firefox */
-        { BR_CLOUDFLARE,  "cloudflare"   },
-        { BR_CLOUDFLARE,  "datadoghq"    },   /* red like cloudflare */
-        { BR_EXAMPLE,     "example.org"  },
+        /* Google + its many surfaces */
+        { BR_GOOGLE_BLUE, "google"            },
+        { BR_GOOGLE_BLUE, "youtu"             },   /* youtube / youtu.be */
+        { BR_GOOGLE_BLUE, "gmail"             },
+        { BR_GOOGLE_BLUE, "ytimg"             },
+        { BR_GOOGLE_BLUE, "gstatic"           },
+        { BR_GOOGLE_BLUE, "googleusercontent" },
+        /* Mozilla family */
+        { BR_FIREFOX,     "firefox"           },
+        { BR_FIREFOX,     "mozilla"           },
+        { BR_FIREFOX,     "duckduckgo"        },
+        { BR_FIREFOX,     "anthropic"         },
+        { BR_FIREFOX,     "claude"            },
+        /* Generic reds (CLOUDFLARE slot) */
+        { BR_CLOUDFLARE,  "cloudflare"        },
+        { BR_CLOUDFLARE,  "datadoghq"         },
+        { BR_CLOUDFLARE,  "pinterest"         },
+        { BR_CLOUDFLARE,  "adobe"             },
+        { BR_CLOUDFLARE,  "ebay"              },
+        { BR_CLOUDFLARE,  "debian"            },
+        { BR_CLOUDFLARE,  "npmjs"             },
+        /* example.com placeholders + grey/black brands */
+        { BR_EXAMPLE,     "example.org"       },
+        { BR_EXAMPLE,     "example.com"       },
+        { BR_EXAMPLE,     "example.net"       },
+        { BR_EXAMPLE,     "github"            },
+        { BR_EXAMPLE,     "apple"             },
+        { BR_EXAMPLE,     "icloud"            },
+        { BR_EXAMPLE,     "wikipedia"         },
+        /* Discord */
+        { BR_DISCORD,     "discord"           },
+        /* Facebook / Meta + similar-blue brands */
+        { BR_FACEBOOK,    "facebook"          },
+        { BR_FACEBOOK,    "fbcdn"             },
+        { BR_FACEBOOK,    "fb.com"            },
+        { BR_FACEBOOK,    "twitter"           },
+        { BR_FACEBOOK,    "twimg"             },
+        { BR_FACEBOOK,    "dropbox"           },
+        { BR_FACEBOOK,    "paypal"            },
+        { BR_FACEBOOK,    "zoom.us"           },
+        /* Spotify + greens */
+        { BR_SPOTIFY,     "spotify"           },
+        { BR_SPOTIFY,     "whatsapp"          },
+        { BR_SPOTIFY,     "openai"            },
+        { BR_SPOTIFY,     "chatgpt"           },
+        { BR_SPOTIFY,     "shopify"           },
+        { BR_SPOTIFY,     "xbox"              },
+        /* Twitch + purple brands */
+        { BR_TWITCH,      "twitch"            },
+        { BR_TWITCH,      "yahoo"             },
+        /* Amazon + amber brands */
+        { BR_AMAZON,      "amazon"            },
+        { BR_AMAZON,      "amazonaws"         },
+        { BR_AMAZON,      "aws.amazon"        },
+        { BR_AMAZON,      "a2z.com"           },
+        { BR_AMAZON,      "stackoverflow"     },
+        { BR_AMAZON,      "ubuntu"            },
+        /* LinkedIn / Microsoft */
+        { BR_LINKEDIN,    "linkedin"          },
+        { BR_LINKEDIN,    "microsoft"         },
+        { BR_LINKEDIN,    "msftncsi"          },
+        { BR_LINKEDIN,    "windowsupdate"     },
+        /* Netflix */
+        { BR_NETFLIX,     "netflix"           },
+        { BR_NETFLIX,     "nflx"              },
+        /* Reddit */
+        { BR_REDDIT,      "reddit"            },
+        { BR_REDDIT,      "redd.it"           },
+        /* Instagram / TikTok / Snapchat — pink/magenta cluster */
+        { BR_INSTAGRAM,   "instagram"         },
+        { BR_INSTAGRAM,   "cdninstagram"      },
+        { BR_INSTAGRAM,   "tiktok"            },
+        { BR_INSTAGRAM,   "snapchat"          },
     };
     int best = -1, best_brand = 0, best_len = 0;
     for (int i = 0; i < (int)(sizeof(tbl) / sizeof(tbl[0])); i++) {
@@ -372,16 +451,27 @@ void tui_init(void) {
                 init_pair(CP_IP_BASE_HTTP  + i, ip_fg[i], grey_bg[5]);
                 init_pair(CP_IP_BASE_TLS   + i, ip_fg[i], grey_bg[6]);
             }
-            /* Brand colour palette: slot indices match BR_* in tui.h */
-            static const short brand_fg[8] = {
-                33,    /* Google blue     #0087ff */
+            /* Brand colour palette — 16 slots; indices map to BR_* in tui.h.
+             * Slots 0..7 mirror the original layout (per-cat pairs); slots
+             * 8..15 are the corporate-identity additions and live only on
+             * the default-bg pair range CP_BR_EXTRA_BASE..+7. */
+            static const short brand_fg[16] = {
+                 33,   /* Google blue     #0087ff */
                 167,   /* Google red      #d75f5f */
                 220,   /* Google yellow   #ffd700 */
-                35,    /* Google green    #00af5f */
+                 35,   /* Google green    #00af5f */
                 208,   /* Firefox orange  #ff8700 */
                 196,   /* Cloudflare red  #ff0000 */
                 244,   /* example grey    #808080 */
-                253,   /* reserved        #dadada */
+                 99,   /* Discord blurple #875fff */
+                 27,   /* Facebook blue   #005fff */
+                 41,   /* Spotify green   #00d75f */
+                135,   /* Twitch purple   #af5fff */
+                214,   /* Amazon orange   #ffaf00 */
+                 31,   /* LinkedIn blue   #0087af */
+                124,   /* Netflix red     #af0000 */
+                202,   /* Reddit orange   #ff5f00 */
+                169,   /* Instagram pink  #d75faf */
             };
             for (int i = 0; i < 8; i++) {
                 init_pair(CP_BR_BASE_OTHER + i, brand_fg[i], grey_bg[0]);
@@ -392,6 +482,9 @@ void tui_init(void) {
                 init_pair(CP_BR_BASE_HTTP  + i, brand_fg[i], grey_bg[5]);
                 init_pair(CP_BR_BASE_TLS   + i, brand_fg[i], grey_bg[6]);
             }
+            /* Slots 8..15 — default bg only, at CP_BR_EXTRA_BASE. */
+            for (int i = 0; i < 8; i++)
+                init_pair(CP_BR_EXTRA_BASE + i, brand_fg[8 + i], 0);
             /* Earth-tone palette for the packets info column. */
             static const short info_fg[8] = {
                 95,    /* mauve         #875f5f */
