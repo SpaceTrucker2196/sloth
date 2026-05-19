@@ -672,13 +672,37 @@ static void draw_packet_row(int y, int w, const packet_info_t *p) {
     /* proto column */
     move(y, x); tui_pkt_bg_cat(cat); printw("  %-5s  ", proto_short(p->proto)); x += 9;
 
-    /* info column: fills remaining width */
-    int info_w = w - x;
+    /* info column: capped at info_max so the hex dump has room. If we
+     * captured no raw bytes for this packet, info gets the full
+     * remainder like before. */
+    int info_max = 28;
+    int info_w;
+    if (p->raw_len > 0) {
+        info_w = w - x;
+        if (info_w > info_max) info_w = info_max;
+    } else {
+        info_w = w - x;
+    }
     if (info_w < 1) info_w = 1;
     move(y, x);
     tui_pkt_bg_cat(cat);
-    printw("%.*s", info_w, p->info);
-    /* trailing pad already handled by the initial clipline() */
+    /* %-*.*s pads + truncates to exactly info_w columns so hex starts
+     * at a predictable x. */
+    printw("%-*.*s", info_w, info_w, p->info);
+    x += info_w;
+
+    /* Hex dump fills the remaining width — up to raw_len bytes, 3 cols
+     * each ("XX "). Rendered in CP_DIM so it reads as secondary info
+     * next to the colourful columns above. */
+    int hex_room = w - x;
+    if (hex_room > 0 && p->raw_len > 0) {
+        int hex_bytes = hex_room / 3;
+        if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
+        move(y, x);
+        attrset(COLOR_PAIR(CP_DIM));
+        for (int b = 0; b < hex_bytes; b++)
+            printw("%02x ", (unsigned)p->raw[b]);
+    }
     (void)src_full; (void)dst_full;
 }
 
