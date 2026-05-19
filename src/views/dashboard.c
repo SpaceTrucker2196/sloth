@@ -680,14 +680,32 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     tui_pkt_bg_cat(cat); printw("  %-8s  ", ts_buf); x += 10;  /* "  HH:MM:SS  " is 12 cols */
 
     /* src column: 21 cols wide */
+    /* src column: 21 cols. Same hostname-resolution logic as the dst
+     * column — peers that initiate inbound flows (e.g. mDNS responders,
+     * NTP servers replying with payload) show up by qname when the
+     * cache has one. */
     int src_w = 21;
     move(y, x);
-    tui_ip_addstr(p->src, cat);
-    tui_pkt_bg_cat(cat);
-    printw(":%-5u", (unsigned)p->src_port);
-    /* pad to src_w */
-    int used = (int)strlen(p->src) + 1 + 5;
-    while (used++ < src_w) addch(' ');
+    char src_host[HOST_CACHE_HOSTLEN];
+    if (host_cache_lookup(p->src, src_host, sizeof(src_host))) {
+        char port_buf[8];
+        snprintf(port_buf, sizeof(port_buf), ":%u", (unsigned)p->src_port);
+        int port_len = (int)strlen(port_buf);
+        int host_room = src_w - port_len;
+        if (host_room < 1) host_room = 1;
+        char host_trunc[HOST_CACHE_HOSTLEN];
+        snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
+                 host_room, host_room, src_host);
+        tui_brand_addstr(host_trunc, cat);
+        tui_pkt_bg_cat(cat);
+        addstr(port_buf);
+    } else {
+        tui_ip_addstr(p->src, cat);
+        tui_pkt_bg_cat(cat);
+        printw(":%-5u", (unsigned)p->src_port);
+        int used = (int)strlen(p->src) + 1 + 5;
+        while (used++ < src_w) addch(' ');
+    }
     x += src_w;
 
     move(y, x); tui_pkt_bg_cat(cat); printw(" " G_ARROW " "); x += 3;
@@ -717,7 +735,7 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         tui_ip_addstr(p->dst, cat);
         tui_pkt_bg_cat(cat);
         printw(":%-5u", (unsigned)p->dst_port);
-        used = (int)strlen(p->dst) + 1 + 5;
+        int used = (int)strlen(p->dst) + 1 + 5;
         while (used++ < dst_w) addch(' ');
     }
     x += dst_w;
