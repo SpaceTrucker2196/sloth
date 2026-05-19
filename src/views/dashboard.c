@@ -287,9 +287,15 @@ static void clipline(int y, int x, int w, const char *fmt, ...) {
     for (int i = n; i < w; i++) addch(' ');
 }
 
-static void panel_title(int y, int x, int w, const char *name, int panel_id) {
+/* Internal: panel title with optional right-edge "P" marker for panels
+ * whose data is gathered by passive RF sniffing (monitor-mode probes,
+ * beacons, deauth). The marker is a small dim "P" before the trailing
+ * horizontals so the eye reads it as a chip on the frame. */
+static void panel_title_ex(int y, int x, int w, const char *name,
+                            int panel_id, int passive) {
     int focused = (panel_id == g_dash_focus);
-    /* Borders use the dimmer CP_DIM pair (pushes the frame back). */
+    /* Reserve "─ P ─" (5 cols) at the right edge when passive. */
+    int reserve = passive ? 5 : 0;
     attrset(COLOR_PAIR(CP_DIM));
     move(y, x);
     int filled = 0;
@@ -300,11 +306,27 @@ static void panel_title(int y, int x, int w, const char *name, int panel_id) {
     attr_t name_attr = COLOR_PAIR(CP_BRIGHT) | A_BOLD;
     if (focused) name_attr |= A_REVERSE;
     attrset(name_attr);
-    for (int i = 0; i < len && filled < w; i++, filled++)
+    for (int i = 0; i < len && filled < w - reserve; i++, filled++)
         addch((chtype)(unsigned char)name[i]);
     attrset(COLOR_PAIR(CP_DIM));
-    if (filled < w) { addch(' '); filled++; }
-    while (filled < w) { addstr(G_HORIZ); filled++; }
+    if (filled < w - reserve) { addch(' '); filled++; }
+    while (filled < w - reserve) { addstr(G_HORIZ); filled++; }
+    if (passive && filled + reserve <= w) {
+        /* "─ P ─" at the right edge, P in dim. */
+        addstr(G_HORIZ); filled++;
+        addch(' ');      filled++;
+        addch('P');      filled++;
+        addch(' ');      filled++;
+        addstr(G_HORIZ); filled++;
+    }
+}
+
+static void panel_title(int y, int x, int w, const char *name, int panel_id) {
+    panel_title_ex(y, x, w, name, panel_id, 0);
+}
+
+static void panel_title_passive(int y, int x, int w, const char *name, int panel_id) {
+    panel_title_ex(y, x, w, name, panel_id, 1);
 }
 
 /* ── Interfaces row with sparklines ──────────────────────── */
@@ -708,91 +730,138 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     x += info_w;
 
     /* Hex dump fills the remaining width — up to raw_len bytes, 3 cols
-     * each ("XX "). Rendered in CP_DIM so it reads as secondary info
-     * next to the colourful columns above. */
+     * each ("XX "). Each byte is coloured by its value via the
+     * Fallout-flavoured earth-tone palette (CP_INFO_BASE + byte%8) so
+     * repeated bytes (0x00 runs, ASCII text, padding) form visible
+     * stripes without dominating the row. */
     int hex_room = row_end - x;
     if (hex_room > 0 && p->raw_len > 0) {
         int hex_bytes = hex_room / 3;
         if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
         move(y, x);
-        attrset(COLOR_PAIR(CP_DIM));
-        for (int b = 0; b < hex_bytes; b++)
-            printw("%02x ", (unsigned)p->raw[b]);
+        for (int b = 0; b < hex_bytes; b++) {
+            unsigned byte = (unsigned)p->raw[b];
+            attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
+            printw("%02x ", byte);
+        }
     }
     (void)src_full; (void)dst_full;
 }
 
-/* Non-scrolling row at the bottom of the packets band: live bargraphs
- * of the top-N most-frequent info strings across the packet ring. */
-static void draw_info_bargraph_row(const sloth_state_t *s,
-                                    int y, int x0, int w) {
-    /* Fixed-size frequency table — packet ring is 256 entries so this
-     * upper bound is comfortable. */
-    enum { TBL_CAP = 24, TOP_N = 5 };
-    struct slot { char info[40]; int count; } tbl[TBL_CAP];
-    int n = 0;
+/* Cumulative info-frequency table — populated incrementally from the
+ * packet ring across the entire session, NOT just the last ring window.
+ * Each new packet (identified by a timestamp greater than the highest
+ * we've seen) increments its info slot. Stays at module scope so it
+ * survives frame-to-frame. */
+enum { INFO_TBL_CAP = 96 };
+static struct info_slot { char info[40]; int count; } g_info_tbl[INFO_TBL_CAP];
+static int      g_info_n = 0;
+static uint64_t g_last_pkt_us = 0;
+
+static void update_cumulative_info_counts(const sloth_state_t *s) {
     int pkt_n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
+    uint64_t newest = g_last_pkt_us;
     for (int i = 0; i < pkt_n; i++) {
         const packet_info_t *p = &s->packets[i];
+        uint64_t ts = (uint64_t)p->ts_sec * 1000000ULL + (uint64_t)p->ts_usec;
+        if (ts <= g_last_pkt_us) continue;
+        if (ts > newest) newest = ts;
         if (!p->info[0]) continue;
         int found = -1;
-        for (int j = 0; j < n; j++)
-            if (strcmp(tbl[j].info, p->info) == 0) { found = j; break; }
-        if (found >= 0)        tbl[found].count++;
-        else if (n < TBL_CAP)  { snprintf(tbl[n].info, sizeof(tbl[n].info),
-                                          "%s", p->info);
-                                 tbl[n].count = 1; n++; }
+        for (int j = 0; j < g_info_n; j++)
+            if (strcmp(g_info_tbl[j].info, p->info) == 0) { found = j; break; }
+        if (found >= 0) {
+            g_info_tbl[found].count++;
+        } else if (g_info_n < INFO_TBL_CAP) {
+            snprintf(g_info_tbl[g_info_n].info,
+                     sizeof(g_info_tbl[g_info_n].info), "%s", p->info);
+            g_info_tbl[g_info_n].count = 1;
+            g_info_n++;
+        }
+        /* Table full — silently drop new info strings, keep counting
+         * the ones we already track. */
     }
-    /* Selection-sort top TOP_N entries to the front. */
-    int top = TOP_N < n ? TOP_N : n;
+    g_last_pkt_us = newest;
+}
+
+/* Non-scrolling row at the bottom of the packets band: cumulative
+ * bargraphs of the top-N most-frequent info strings since launch.
+ *
+ * Each cell layout:
+ *
+ *   ┌─ cell_w cols ──────────────────┐
+ *   │ ████████████░░░░░░░░░░░░░░░    │   <-- bar (dim filled + dim empty)
+ *   │ TLS google.com           42    │   <-- bright text + count overprinted
+ *   └────────────────────────────────┘
+ *
+ * The bar is painted first across the full cell width, then the bright
+ * label + count is written on top of it. ncurses takes the later writes,
+ * so the eye reads the text as foreground with the bar as backdrop. */
+static void draw_info_bargraph_row(const sloth_state_t *s,
+                                    int y, int x0, int w) {
+    enum { TOP_N = 5 };
+    update_cumulative_info_counts(s);
+
+    /* Find the top-N by count without touching the storage order — we
+     * use a small ordering array of indices into g_info_tbl. */
+    int order[INFO_TBL_CAP];
+    for (int i = 0; i < g_info_n; i++) order[i] = i;
+    int top = TOP_N < g_info_n ? TOP_N : g_info_n;
     for (int i = 0; i < top; i++) {
         int best = i;
-        for (int j = i + 1; j < n; j++)
-            if (tbl[j].count > tbl[best].count) best = j;
-        if (best != i) {
-            struct slot tmp = tbl[i]; tbl[i] = tbl[best]; tbl[best] = tmp;
-        }
+        for (int j = i + 1; j < g_info_n; j++)
+            if (g_info_tbl[order[j]].count > g_info_tbl[order[best]].count)
+                best = j;
+        if (best != i) { int t = order[i]; order[i] = order[best]; order[best] = t; }
     }
-    int max = top > 0 ? tbl[0].count : 1;
+    int max = top > 0 ? g_info_tbl[order[0]].count : 1;
     if (max < 1) max = 1;
 
-    /* Paint the row default first. */
+    /* Wipe the row. */
     attrset(COLOR_PAIR(CP_NORMAL));
     move(y, x0);
     for (int j = 0; j < w; j++) addch(' ');
 
     if (top <= 0) {
         attrset(COLOR_PAIR(CP_DIM));
-        mvprintw(y, x0 + 2, "(no packets yet — bargraph builds as traffic arrives)");
+        mvprintw(y, x0 + 2, "(no packets yet \xe2\x80\x94 bargraph builds as traffic arrives)");
         return;
     }
 
     int cell_w = w / top;
-    if (cell_w < 16) cell_w = 16;
+    if (cell_w < 18) cell_w = 18;
     for (int i = 0; i < top; i++) {
         int cx = x0 + i * cell_w;
         if (cx + cell_w > x0 + w) break;
-        const char *label = tbl[i].info;
-        int count = tbl[i].count;
+        const char *label = g_info_tbl[order[i]].info;
+        int count        = g_info_tbl[order[i]].count;
 
-        /* label column ~ 40% of cell, info-coloured */
-        int label_w = cell_w * 4 / 10;
-        if (label_w < 8) label_w = 8;
-        if (label_w > cell_w - 9) label_w = cell_w - 9;
+        int bar_w = cell_w - 1;   /* 1 col gutter between cells */
+        int filled = (int)((double)count / (double)max * bar_w + 0.5);
+        if (filled > bar_w) filled = bar_w;
+        if (filled < 0)     filled = 0;
 
-        tui_info_color(label);
-        mvprintw(y, cx, " %-*.*s ", label_w, label_w, label);
-
-        int bar_room = cell_w - label_w - 8;
-        if (bar_room < 1) bar_room = 1;
-        int filled = (int)((double)count / max * bar_room);
-        if (filled > bar_room) filled = bar_room;
-        attrset(COLOR_PAIR(CP_NORMAL));
-        for (int b = 0; b < filled;  b++) addstr("\xe2\x96\x88");
+        /* Step 1: paint the bar across the full cell in dim — filled
+         * portion as solid █, empty portion as light ░. The whole bar
+         * is dim so it reads as backdrop. */
         attrset(COLOR_PAIR(CP_DIM));
-        for (int b = filled; b < bar_room; b++) addstr("\xe2\x96\x91");
-        attrset(COLOR_PAIR(CP_BRIGHT));
-        printw(" %5d", count);
+        move(y, cx);
+        for (int b = 0; b < filled;       b++) addstr("\xe2\x96\x88");  /* █ */
+        for (int b = filled; b < bar_w;   b++) addstr("\xe2\x96\x91");  /* ░ */
+        addch(' ');
+
+        /* Step 2: overlay bright label + count on top of the bar.
+         * Same starting column; ncurses overwrites the bar cells the
+         * text covers, leaving the rest of the bar visible to the right. */
+        char overlay[80];
+        snprintf(overlay, sizeof(overlay), " %s  %d ", label, count);
+        int overlay_w = (int)strlen(overlay);
+        if (overlay_w > bar_w) overlay_w = bar_w;
+        tui_info_color(label);
+        attron(A_BOLD);
+        move(y, cx);
+        addnstr(overlay, overlay_w);
+        attroff(A_BOLD);
     }
 }
 
@@ -868,7 +937,25 @@ static void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int
 /* ── Bottom panels ───────────────────────────────────────── */
 
 static void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "WiFi APs", DASH_PANEL_WIFI);
+    /* Title includes the scanning adapter and (if associated) the SSID
+     * the adapter is currently on, so the operator knows whose
+     * neighbourhood this scan is from. */
+    char title[80];
+    const char *iface = s->pkt_iface[0] ? s->pkt_iface : "?";
+    const char *assoc_ssid = NULL;
+#ifdef WITH_WIFI
+    for (int i = 0; i < s->ap_count; i++) {
+        if (s->aps[i].status == WIFI_STATUS_ASSOC && s->aps[i].ssid[0]) {
+            assoc_ssid = s->aps[i].ssid; break;
+        }
+    }
+#endif
+    if (assoc_ssid)
+        snprintf(title, sizeof(title), "WiFi APs (%s \xc2\xb7 %.24s)",
+                 iface, assoc_ssid);
+    else
+        snprintf(title, sizeof(title), "WiFi APs (%s)", iface);
+    panel_title_passive(y0, x, w, title, DASH_PANEL_WIFI);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-*s %4s %3s",
              w - 12 > 8 ? w - 12 : 8, "SSID", "sig", "ch");
@@ -914,7 +1001,13 @@ static double rssi_to_meters(int8_t rssi) {
  * just exposes more of the radio metadata. */
 static void draw_radio_clients_panel(const sloth_state_t *s,
                                       int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Roaming clients", DASH_PANEL_ROAMING);
+    /* Roaming clients comes from monitor-mode probe capture — show the
+     * monitor adapter so it's clear what radio is listening. */
+    char rtitle[64];
+    const char *miface = s->probe_iface[0] ? s->probe_iface
+                       : s->pkt_iface[0]   ? s->pkt_iface : "?";
+    snprintf(rtitle, sizeof(rtitle), "Roaming clients (%s)", miface);
+    panel_title_passive(y0, x, w, rtitle, DASH_PANEL_ROAMING);
     attrset(COLOR_PAIR(CP_DIM));
     /* Geometry: 2 (margin) + 17 (MAC) + 1 + 14 (vendor) + 1 + ssid +
      *           1 + 4 (sig) + 1 + 5 (dist) = 46 + ssid_w. */
@@ -995,7 +1088,11 @@ static void draw_radio_clients_panel(const sloth_state_t *s,
 }
 
 static void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Beacons", DASH_PANEL_BEACONS);
+    char btitle[64];
+    const char *biface = s->probe_iface[0] ? s->probe_iface
+                       : s->pkt_iface[0]   ? s->pkt_iface : "?";
+    snprintf(btitle, sizeof(btitle), "Beacons (%s)", biface);
+    panel_title_passive(y0, x, w, btitle, DASH_PANEL_BEACONS);
     attrset(COLOR_PAIR(CP_DIM));
     int ssid_w = w - 12;
     if (ssid_w < 8) ssid_w = 8;
@@ -1081,7 +1178,11 @@ static void draw_arp_panel(const sloth_state_t *s, int y0, int h, int x, int w) 
 }
 
 static void draw_deauth_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
-    panel_title(y0, x, w, "Deauth", DASH_PANEL_DEAUTH);
+    char dtitle[64];
+    const char *diface = s->probe_iface[0] ? s->probe_iface
+                       : s->pkt_iface[0]   ? s->pkt_iface : "?";
+    snprintf(dtitle, sizeof(dtitle), "Deauth (%s)", diface);
+    panel_title_passive(y0, x, w, dtitle, DASH_PANEL_DEAUTH);
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x, w, "  %-17s %5s %s",
              "target", "rsn", "flood");
