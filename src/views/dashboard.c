@@ -610,13 +610,20 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
         }
         xc += 16;
 
-        /* hostname — brand-coloured */
+        /* hostname — brand-coloured, OR deep-red if the underlying IP
+         * has been flagged in a recent CRIT alert (matches the override
+         * tui_ip_addstr applied to the ip column on this same row). */
         move(y0 + 2 + i, xc);
         {
             char buf[64];
             snprintf(buf, sizeof(buf), "%-*.*s",
                      host_w, host_w, e->hostname[0] ? e->hostname : "-");
-            tui_brand_addstr(buf, (int)PKT_CAT_OTHER);
+            if (tui_alert_hot_check(e->ip)) {
+                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+                addstr(buf);
+            } else {
+                tui_brand_addstr(buf, (int)PKT_CAT_OTHER);
+            }
         }
         xc += host_w;
         attrset(COLOR_PAIR(CP_NORMAL));
@@ -696,7 +703,14 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         char host_trunc[HOST_CACHE_HOSTLEN];
         snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                  host_room, host_room, src_host);
-        tui_brand_addstr(host_trunc, cat);
+        /* Alert-hot override wins over brand colour: the underlying IP
+         * is flagged so the hostname renders in deep red too. */
+        if (tui_alert_hot_check(p->src)) {
+            attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+            addstr(host_trunc);
+        } else {
+            tui_brand_addstr(host_trunc, cat);
+        }
         tui_pkt_bg_cat(cat);
         addstr(port_buf);
     } else {
@@ -719,7 +733,8 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     char dst_host[HOST_CACHE_HOSTLEN];
     if (host_cache_lookup(p->dst, dst_host, sizeof(dst_host))) {
         /* hostname:port, truncated to dst_w. Hostname gets brand colour;
-         * the ":port" suffix uses the row's category bg colour. */
+         * the ":port" suffix uses the row's category bg colour.
+         * Alert-hot override wins over brand colour. */
         char port_buf[8];
         snprintf(port_buf, sizeof(port_buf), ":%u", (unsigned)p->dst_port);
         int port_len = (int)strlen(port_buf);
@@ -728,7 +743,12 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         char host_trunc[HOST_CACHE_HOSTLEN];
         snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                  host_room, host_room, dst_host);
-        tui_brand_addstr(host_trunc, cat);
+        if (tui_alert_hot_check(p->dst)) {
+            attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+            addstr(host_trunc);
+        } else {
+            tui_brand_addstr(host_trunc, cat);
+        }
         tui_pkt_bg_cat(cat);
         addstr(port_buf);
     } else {

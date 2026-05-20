@@ -99,6 +99,16 @@ static void poll_data(sloth_state_t *s) {
     scan_update(s);
     bd_update(s, time(NULL));
     alerts_update(s);
+    /* Feed the tui's alert-hot list: any CRIT with a concrete match_ip
+     * gets the deep-red override for ALERT_HOT_TTL_S (1h). Re-calls
+     * refresh the timestamp so a recurring CRIT keeps the override
+     * alive while it's active. */
+    for (int i = 0; i < s->alert_count; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (a->sev != ALERT_SEV_CRIT) continue;
+        if (!a->match_ip[0]) continue;
+        tui_alert_hot_set(a->match_ip, (long)a->last_seen);
+    }
     devices_update(s);
     top_hosts_update(s);
 }

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <locale.h>
+#include <time.h>
 
 #ifdef WITH_NCURSES
 #  include <curses.h>
@@ -94,6 +95,15 @@ void tui_ip_addstr(const char *ip, int cat) {
     extern int ip_color_index(const char *);              /* ip_color.h */
     extern int ip_index_is_cross_panel(const char *);
     if (!ip || !ip[0]) return;
+    /* Alert-hot override: any IP that has appeared in a CRIT alert
+     * within the last ALERT_HOT_TTL_S seconds renders in deep red,
+     * regardless of hash colour, brand colour, or cross-panel
+     * highlight. Checked before everything else so it always wins. */
+    if (tui_alert_hot_check(ip)) {
+        attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+        addstr(ip);
+        return;
+    }
     /* Cross-panel highlight: when the dashboard's conn panel has focus
      * its selected row's IPs go through tui_set_highlight_ips() — every
      * other panel that renders one of them swaps to CP_HIGHLIGHT so the
@@ -126,6 +136,60 @@ int tui_ip_is_highlighted_(const char *ip) {
     if (g_hl_a[0] && strcmp(g_hl_a, ip) == 0) return 1;
     if (g_hl_b[0] && strcmp(g_hl_b, ip) == 0) return 1;
     return 0;
+}
+
+/* ── Alert-hot IP override ───────────────────────────────── *
+ * Small flat table. ALERT_HOT_CAP is generous (256) — even a
+ * very alerty session won't fill it within a TTL window, and
+ * lookup is linear which is fine at draw rates. */
+#define ALERT_HOT_CAP 256
+
+struct alert_hot_slot {
+    char ip[46];   /* INET6_ADDRSTRLEN */
+    long t;        /* epoch seconds — when this CRIT was last seen */
+};
+
+static struct alert_hot_slot g_alert_hot[ALERT_HOT_CAP];
+static int                   g_alert_hot_n = 0;
+
+void tui_alert_hot_set(const char *ip, long t) {
+    if (!ip || !ip[0]) return;
+    for (int i = 0; i < g_alert_hot_n; i++) {
+        if (strcmp(g_alert_hot[i].ip, ip) == 0) {
+            if (t > g_alert_hot[i].t) g_alert_hot[i].t = t;
+            return;
+        }
+    }
+    if (g_alert_hot_n < ALERT_HOT_CAP) {
+        snprintf(g_alert_hot[g_alert_hot_n].ip,
+                 sizeof(g_alert_hot[g_alert_hot_n].ip), "%s", ip);
+        g_alert_hot[g_alert_hot_n].t = t;
+        g_alert_hot_n++;
+        return;
+    }
+    /* Table full — replace the oldest entry (lowest t). Bounded scan
+     * since the table is small. */
+    int oldest = 0;
+    for (int i = 1; i < g_alert_hot_n; i++)
+        if (g_alert_hot[i].t < g_alert_hot[oldest].t) oldest = i;
+    snprintf(g_alert_hot[oldest].ip,
+             sizeof(g_alert_hot[oldest].ip), "%s", ip);
+    g_alert_hot[oldest].t = t;
+}
+
+int tui_alert_hot_check(const char *ip) {
+    if (!ip || !ip[0] || g_alert_hot_n == 0) return 0;
+    long now = (long)time(NULL);
+    for (int i = 0; i < g_alert_hot_n; i++) {
+        if (strcmp(g_alert_hot[i].ip, ip) != 0) continue;
+        if (now - g_alert_hot[i].t > ALERT_HOT_TTL_S) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+void tui_alert_hot_clear(void) {
+    g_alert_hot_n = 0;
 }
 
 void tui_ssid_addstr(const char *ssid, int cat) {
@@ -505,6 +569,10 @@ void tui_init(void) {
              *   xterm 22 = #005f00 ~ 22% green = roughly 10-15% of cursor
              *   brightness (cursor is CP_BRIGHT = #00ffaf). */
             init_pair(CP_HIGHLIGHT, 255, 22);
+            /* Alert-hot IP: deep red foreground on the default bg.
+             *   xterm 196 = #ff0000; combined with A_BOLD at the
+             *   render site this reads as "danger". */
+            init_pair(CP_ALERT_HOT, 196, 0);
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -553,6 +621,8 @@ void tui_init(void) {
                 init_pair(CP_INFO_BASE + i, info_fg_8[i], COLOR_BLACK);
             init_pair(CP_BORDER, COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_HIGHLIGHT, COLOR_WHITE, COLOR_GREEN);
+            /* 8-colour fallback — bright red on black. */
+            init_pair(CP_ALERT_HOT, COLOR_RED, COLOR_BLACK);
         }
     }
 }

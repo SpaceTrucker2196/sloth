@@ -74,6 +74,27 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
  * row's local/remote when the dashboard's conn panel has focus. */
 #define CP_HIGHLIGHT    105
 
+/* ── Alert-hot IP ────────────────────────────────────────── *
+ * Deep-red colour pair stamped on any IP that has appeared in
+ * a CRIT alert within the last hour. Overrides every other IP
+ * colouring (hash, brand, highlight) so flagged flows pop on
+ * sight across every panel. */
+#define CP_ALERT_HOT    106
+#define ALERT_HOT_TTL_S 3600
+
+/* Mark `ip` as alert-hot, with absolute timestamp `t` (epoch s).
+ * Idempotent — re-calls refresh the timestamp so a recurring CRIT
+ * keeps the override alive. Empty / NULL ip is a no-op. */
+void tui_alert_hot_set(const char *ip, long t);
+
+/* 1 if `ip` is alert-hot and its timestamp is within ALERT_HOT_TTL_S
+ * of the current wall-clock time. Called by tui_ip_addstr and by
+ * dashboard.c paths that render hostnames instead of IPs. */
+int  tui_alert_hot_check(const char *ip);
+
+/* Drop all alert-hot entries — tests only. */
+void tui_alert_hot_clear(void);
+
 /* Extended brand-colour palette — pairs 160..167 for the new slots 8..15.
  * These render only on the default bg (per-cat variants would have
  * collided with the existing BR_BASE_<cat> ranges). */

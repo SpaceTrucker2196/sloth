@@ -24,6 +24,9 @@ void tui_brand_addstr(const char *text, int cat) { (void)text; (void)cat; }
 void tui_info_color(const char *info)            { (void)info; }
 void tui_set_highlight_ips(const char *a, const char *b) { (void)a; (void)b; }
 int  tui_ip_is_highlighted_(const char *ip)      { (void)ip; return 0; }
+void tui_alert_hot_set(const char *ip, long t)   { (void)ip; (void)t; }
+int  tui_alert_hot_check(const char *ip)         { (void)ip; return 0; }
+void tui_alert_hot_clear(void)                   { }
 
 void tui_bar(double val, double max, int width, char *out) {
     int filled = (max > 0.0) ? (int)((val / max) * width) : 0;
