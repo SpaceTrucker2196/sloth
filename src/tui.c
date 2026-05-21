@@ -37,6 +37,7 @@
 #include "views/devices.h"
 #include "views/help.h"
 #include "views/dashboard.h"
+#include "views/pnl.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -63,6 +64,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[g] Devices",
     "[?] Help",
     "[o] Dash",
+    "[k] PNL",
 };
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
@@ -454,6 +456,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_DEVICES: view_devices_draw(s);       break;
     case VIEW_HELP:    view_help_draw(s);          break;
     case VIEW_DASH:    view_dashboard_draw(s);     break;
+    case VIEW_PNL:     view_pnl_draw(s);           break;
     default: break;
     }
 }

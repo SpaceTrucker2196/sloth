@@ -32,6 +32,7 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_DEVICES);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_HELP);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_DASH);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_PNL);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
@@ -46,7 +47,7 @@ void test_view_direct_key_select(void) {
 
 void test_view_count_matches_labels(void) {
     /* VIEW_COUNT must stay in sync with actual views */
-    ASSERT_EQ(VIEW_COUNT, 24);
+    ASSERT_EQ(VIEW_COUNT, 25);
 }
 
 /* ── packet ring buffer ──────────────────────────────────── */

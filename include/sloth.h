@@ -44,6 +44,7 @@ typedef enum {
     VIEW_DEVICES = 21,
     VIEW_HELP    = 22,
     VIEW_DASH    = 23,
+    VIEW_PNL     = 24,   /* per-MAC Preferred Network List */
     VIEW_COUNT
 } view_t;
 
@@ -431,6 +432,25 @@ typedef struct {
     int     frame_count;
 } probe_client_t;
 
+/* ── PNL: per-MAC Preferred Network List ─────────────────── *
+ * Aggregated probe-request targets. Each unique MAC carries the
+ * unique set of directed SSIDs it has probed for since launch —
+ * a device's PNL leaks where it has connected before, and across
+ * MAC-randomization boundaries the set itself often fingerprints
+ * the owner. */
+#define MAX_PNL_CLIENTS         128
+#define MAX_PNL_SSIDS_PER_CLI   16
+
+typedef struct {
+    uint8_t mac[6];
+    int     mac_random;                       /* 1 if MAC[0] & 0x02 */
+    int     ssid_count;
+    char    ssids[MAX_PNL_SSIDS_PER_CLI][33];
+    int     probe_count;                       /* total directed probes */
+    time_t  first_seen;
+    time_t  last_seen;
+} pnl_client_t;
+
 /* ── Packets ────────────────────────────────────────────── */
 typedef struct {
     uint32_t ts_sec;
@@ -587,6 +607,11 @@ typedef struct {
     int            probe_sel;
     char           probe_iface[16]; /* monitor iface name, "" = none found */
     char           probe_err[80];   /* last probe open/set error, "" = ok */
+
+    /* ── PNL snapshot (Preferred Network Lists per client) ── */
+    pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];
+    int            pnl_count;
+    int            pnl_sel;
 
     /* ── mDNS services ────────────────────────────────────── */
     mdns_service_t mdns_services[MAX_MDNS_SERVICES];

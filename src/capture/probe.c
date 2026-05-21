@@ -11,6 +11,7 @@
 #include "capture/probe.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
+#include "probe_pnl.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -211,6 +212,11 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     pthread_mutex_lock(&g_mu);
     record_probe(sa, ssid, signal, channel);
     pthread_mutex_unlock(&g_mu);
+
+    /* Feed the PNL aggregator — outside the probe-list mutex since
+     * probe_pnl_observe takes its own lock. Wildcard probes are dropped
+     * inside observe() since they leak no preferred-network info. */
+    probe_pnl_observe(sa, ssid);
 }
 
 /* ── Capture thread ──────────────────────────────────────── */

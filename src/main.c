@@ -30,6 +30,8 @@
 #include "views/devices.h"
 #include "views/help.h"
 #include "views/dashboard.h"
+#include "views/pnl.h"
+#include "probe_pnl.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -74,6 +76,7 @@ static void poll_data(sloth_state_t *s) {
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);
+    probe_pnl_snapshot(s);
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
@@ -183,6 +186,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
     case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
     case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
+    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -226,6 +230,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_DEVICES: view_devices_key(s, key);       break;
     case VIEW_HELP:    view_help_key(s, key);          break;
     case VIEW_DASH:    view_dashboard_key(s, key);     break;
+    case VIEW_PNL:     view_pnl_key(s, key);           break;
     default: break;
     }
 }

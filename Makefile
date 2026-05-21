@@ -66,6 +66,8 @@ SRCS = src/main.c          \
        src/ip_color.c        \
        src/top_hosts.c       \
        src/host_cache.c      \
+       src/probe_pnl.c       \
+       src/views/pnl.c       \
        src/views/dashboard.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
@@ -257,6 +259,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_top_hosts.c         \
             src/host_cache.c               \
             tests/test_host_cache.c        \
+            src/probe_pnl.c                \
+            src/views/pnl.c                \
+            tests/test_probe_pnl.c         \
             src/views/dashboard.c          \
             tests/test_dashboard.c
 
