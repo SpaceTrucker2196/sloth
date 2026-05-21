@@ -51,7 +51,7 @@ static void test_parse_rejects_non_beacon(void) {
     f[0] = 0x40;   /* probe request, not beacon */
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms), 0);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL), 0);
 }
 
 static void test_parse_rejects_too_short(void) {
@@ -60,7 +60,7 @@ static void test_parse_rejects_too_short(void) {
     f[0] = 0x80;
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms), 0);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL), 0);
 }
 
 static void test_parse_ssid(void) {
@@ -71,7 +71,7 @@ static void test_parse_ssid(void) {
     memcpy(f + BEACON_HDR_LEN + 2, "HomeAP", 6);
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    int r = beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms);
+    int r = beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms, NULL);
     ASSERT_EQ(r, 1);
     ASSERT_STR(ssid, "HomeAP");
     ASSERT_EQ(memcmp(bssid, BSSID_A, 6), 0);
@@ -84,7 +84,7 @@ static void test_parse_hidden_ssid(void) {
     f[BEACON_HDR_LEN + 1] = 0;           /* length 0 = hidden */
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -70, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -70, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(ssid, "");
 }
 
@@ -98,7 +98,7 @@ static void test_parse_channel_ds_param(void) {
     f[BEACON_HDR_LEN + 6] = 11;   /* channel 11 */
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_EQ(ch, 11);
 }
 
@@ -109,7 +109,7 @@ static void test_parse_beacon_interval(void) {
     f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0; /* SSID "" */
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_EQ(bms, (uint16_t)(100 * 1024 / 1000));
 }
 
@@ -119,7 +119,7 @@ static void test_parse_enc_open(void) {
     f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(enc, "OPEN");
 }
 
@@ -130,7 +130,7 @@ static void test_parse_enc_wep(void) {
     f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(enc, "WEP");
 }
 
@@ -157,7 +157,7 @@ static void test_parse_enc_wpa2(void) {
     memcpy(f + BEACON_HDR_LEN + 2, rsn_ie, sizeof(rsn_ie));
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -45, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -45, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(enc, "WPA2");
 }
 
@@ -179,7 +179,7 @@ static void test_parse_enc_wpa3(void) {
     memcpy(f + BEACON_HDR_LEN + 2, rsn_ie, sizeof(rsn_ie));
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -45, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -45, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(enc, "WPA3");
 }
 
@@ -201,8 +201,59 @@ static void test_parse_enc_wpa(void) {
     memcpy(f + BEACON_HDR_LEN + 2, wpa_ie, sizeof(wpa_ie));
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms, NULL), 1);
     ASSERT_STR(enc, "WPA");
+}
+
+static void test_parse_rsn_inventory_wpa2_psk_ccmp(void) {
+    /* WPA2-PSK with CCMP, MFP not advertised. */
+    static const uint8_t rsn_ie[] = {
+        0x30, 0x14,
+        0x01, 0x00,                              /* version */
+        0x00, 0x0f, 0xac, 0x04,                  /* group: CCMP (4) */
+        0x01, 0x00,                              /* pairwise count = 1 */
+        0x00, 0x0f, 0xac, 0x04,                  /* pairwise: CCMP */
+        0x01, 0x00,                              /* AKM count = 1 */
+        0x00, 0x0f, 0xac, 0x02,                  /* AKM: PSK (2) */
+        0x00, 0x00                               /* RSN caps = 0 */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(rsn_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, rsn_ie, sizeof(rsn_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.group,    "CCMP");
+    ASSERT_STR(rsn.pairwise, "CCMP");
+    ASSERT_STR(rsn.akm,      "PSK");
+    ASSERT_EQ(rsn.mfp, 0);
+}
+
+static void test_parse_rsn_inventory_wpa3_sae_mfp_required(void) {
+    /* WPA3-SAE with MFP REQUIRED (caps bit 6 = 0x40). */
+    static const uint8_t rsn_ie[] = {
+        0x30, 0x14,
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,                  /* group: CCMP */
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,                  /* pairwise: CCMP */
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x08,                  /* AKM: SAE (8) */
+        0xc0, 0x00                               /* RSN caps: MFPR+MFPC */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(rsn_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, rsn_ie, sizeof(rsn_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.pairwise, "CCMP");
+    ASSERT_STR(rsn.akm,      "SAE");
+    ASSERT_EQ(rsn.mfp, 2);
 }
 
 static void test_parse_truncated_ie(void) {
@@ -215,7 +266,7 @@ static void test_parse_truncated_ie(void) {
     f[BEACON_HDR_LEN + 3] = 'P';
 
     char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
-    int r = beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms);
+    int r = beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, NULL);
     ASSERT_EQ(r, 1);   /* still a valid beacon, just truncated IE walk */
     ASSERT_STR(ssid, "");  /* SSID not populated — IE was truncated */
 }
@@ -224,7 +275,7 @@ static void test_parse_truncated_ie(void) {
 
 static void test_record_new_entry(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "TestNet", -55, 6, "WPA2", 102);
+    beacon_record(BSSID_A, "TestNet", -55, 6, "WPA2", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -240,8 +291,8 @@ static void test_record_new_entry(void) {
 
 static void test_record_update_existing(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "Net", -70, 1, "WPA2", 102);
-    beacon_record(BSSID_A, "Net", -65, 1, "WPA2", 102);  /* update */
+    beacon_record(BSSID_A, "Net", -70, 1, "WPA2", 102, NULL);
+    beacon_record(BSSID_A, "Net", -65, 1, "WPA2", 102, NULL);  /* update */
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -253,8 +304,8 @@ static void test_record_update_existing(void) {
 
 static void test_record_distinct_bssids(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "NetA", -50, 6,  "WPA2", 102);
-    beacon_record(BSSID_B, "NetB", -80, 11, "OPEN", 102);
+    beacon_record(BSSID_A, "NetA", -50, 6,  "WPA2", 102, NULL);
+    beacon_record(BSSID_B, "NetB", -80, 11, "OPEN", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -264,8 +315,8 @@ static void test_record_distinct_bssids(void) {
 
 static void test_snapshot_sorts_by_signal(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "Weak",   -80, 6,  "WPA2", 102);
-    beacon_record(BSSID_B, "Strong", -40, 11, "WPA2", 102);
+    beacon_record(BSSID_A, "Weak",   -80, 6,  "WPA2", 102, NULL);
+    beacon_record(BSSID_B, "Strong", -40, 11, "WPA2", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -277,7 +328,7 @@ static void test_snapshot_sorts_by_signal(void) {
 }
 
 static void test_clear_empties_table(void) {
-    beacon_record(BSSID_A, "X", -50, 6, "WPA2", 102);
+    beacon_record(BSSID_A, "X", -50, 6, "WPA2", 102, NULL);
     beacon_clear();
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
@@ -288,7 +339,7 @@ static void test_clear_empties_table(void) {
 
 static void test_snapshot_clamps_sel(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "X", -50, 6, "WPA2", 102);
+    beacon_record(BSSID_A, "X", -50, 6, "WPA2", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     s.beacon_sel = 99;  /* out of range */
@@ -308,8 +359,8 @@ static void test_view_draw_empty(void) {
 
 static void test_view_draw_populated(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "HomeNet", -55, 6,  "WPA2", 102);
-    beacon_record(BSSID_B, "Hidden",  -70, 11, "WPA3", 100);
+    beacon_record(BSSID_A, "HomeNet", -55, 6,  "WPA2", 102, NULL);
+    beacon_record(BSSID_B, "Hidden",  -70, 11, "WPA3", 100, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -319,7 +370,7 @@ static void test_view_draw_populated(void) {
 
 static void test_view_draw_hidden_ssid(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "", -80, 1, "WPA2", 102);  /* hidden SSID */
+    beacon_record(BSSID_A, "", -80, 1, "WPA2", 102, NULL);  /* hidden SSID */
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -331,8 +382,8 @@ static void test_view_draw_hidden_ssid(void) {
 
 static void test_view_key_nav(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "A", -50, 6,  "WPA2", 102);
-    beacon_record(BSSID_B, "B", -60, 11, "WPA2", 102);
+    beacon_record(BSSID_A, "A", -50, 6,  "WPA2", 102, NULL);
+    beacon_record(BSSID_B, "B", -60, 11, "WPA2", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -353,7 +404,7 @@ static void test_view_key_nav(void) {
 
 static void test_view_key_clear(void) {
     beacon_clear();
-    beacon_record(BSSID_A, "X", -55, 6, "WPA2", 102);
+    beacon_record(BSSID_A, "X", -55, 6, "WPA2", 102, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
@@ -378,6 +429,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_enc_wep);
     RUN_TEST(test_parse_enc_wpa2);
     RUN_TEST(test_parse_enc_wpa3);
+    RUN_TEST(test_parse_rsn_inventory_wpa2_psk_ccmp);
+    RUN_TEST(test_parse_rsn_inventory_wpa3_sae_mfp_required);
     RUN_TEST(test_parse_enc_wpa);
     RUN_TEST(test_parse_truncated_ie);
     RUN_TEST(test_record_new_entry);

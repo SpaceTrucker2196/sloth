@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
@@ -11,10 +12,52 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── 802.11 beacon parser ────────────────────────────────── */
 
+/* Cipher OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.2). */
+static const char *cipher_name(uint8_t t) {
+    switch (t) {
+    case 0:  return "GROUP";
+    case 1:  return "WEP-40";
+    case 2:  return "TKIP";
+    case 4:  return "CCMP";
+    case 5:  return "WEP-104";
+    case 6:  return "BIP";
+    case 8:  return "GCMP";
+    case 9:  return "GCMP-256";
+    case 10: return "CCMP-256";
+    default: return "?";
+    }
+}
+
+/* AKM OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.3). */
+static const char *akm_name(uint8_t t) {
+    switch (t) {
+    case 1:  return "802.1X";
+    case 2:  return "PSK";
+    case 3:  return "FT-802.1X";
+    case 4:  return "FT-PSK";
+    case 5:  return "802.1X-SHA256";
+    case 6:  return "PSK-SHA256";
+    case 8:  return "SAE";
+    case 9:  return "FT-SAE";
+    case 11: return "Suite-B";
+    case 12: return "Suite-B-192";
+    case 18: return "OWE";
+    case 19: return "FT-PSK-SHA384";
+    default: return "?";
+    }
+}
+
 int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                  char ssid_out[33], uint8_t bssid_out[6],
-                 int *channel_out, char enc_out[10], uint16_t *beacon_ms_out)
+                 int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
+                 beacon_rsn_t *rsn_out)
 {
+    if (rsn_out) {
+        rsn_out->pairwise[0] = '\0';
+        rsn_out->group[0]    = '\0';
+        rsn_out->akm[0]      = '\0';
+        rsn_out->mfp         = 0;
+    }
     /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
     if (len < 36) return 0;
 
@@ -59,22 +102,64 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             *channel_out = ie[2];
 
         } else if (tag == 48 && tln >= 8) {
-            /* RSN (WPA2/WPA3) — walk AKM suite list to detect SAE */
+            /* RSN (WPA2/WPA3). Layout (after tag+len):
+             *   2 ver | 4 group cipher | 2 N pw | 4N pairwise |
+             *   2 M akm | 4M akm | 2 RSN capabilities */
             rsn_found = 1;
-            int off = 0;
-            off += 2;                              /* version */
-            off += 4;                              /* group cipher */
+            int off = 2;                                /* skip version */
+            /* Group cipher: 4 bytes OUI(3) + type(1) */
+            if (rsn_out && off + 4 <= (int)tln) {
+                if (ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac) {
+                    snprintf(rsn_out->group, sizeof(rsn_out->group),
+                             "%s", cipher_name(ie[2+off+3]));
+                }
+            }
+            off += 4;
             if (off + 2 <= (int)tln) {
                 uint16_t pw = (uint16_t)(ie[2+off] | ((uint16_t)ie[2+off+1] << 8));
-                off += 2 + pw * 4;                 /* pairwise list */
+                off += 2;
+                /* Pairwise list — record the first suite (most beacons
+                 * just advertise one; if more, we still capture the
+                 * primary cipher). */
+                if (rsn_out && pw > 0 && off + 4 <= (int)tln) {
+                    if (ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac) {
+                        snprintf(rsn_out->pairwise, sizeof(rsn_out->pairwise),
+                                 "%s", cipher_name(ie[2+off+3]));
+                    }
+                }
+                off += pw * 4;
                 if (off + 2 <= (int)tln) {
                     uint16_t akm = (uint16_t)(ie[2+off] | ((uint16_t)ie[2+off+1] << 8));
                     off += 2;
+                    /* AKM list — join up to 3 names. SAE detection
+                     * keeps the legacy "WPA3" enc tag working. */
+                    int akm_taken = 0;
                     for (int k = 0; k < (int)akm && off + 4 <= (int)tln; k++, off += 4) {
-                        /* OUI 00-0F-AC type 8 = SAE (WPA3) */
-                        if (ie[2+off]==0x00 && ie[2+off+1]==0x0f &&
-                            ie[2+off+2]==0xac && ie[2+off+3]==0x08)
-                            sae_found = 1;
+                        if (!(ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac))
+                            continue;
+                        uint8_t t = ie[2+off+3];
+                        if (t == 8 || t == 9) sae_found = 1;
+                        if (rsn_out && akm_taken < 3) {
+                            const char *nm = akm_name(t);
+                            int cur = (int)strlen(rsn_out->akm);
+                            int sz  = (int)sizeof(rsn_out->akm);
+                            int rem = sz - cur - 1;
+                            if (rem > 0) {
+                                snprintf(rsn_out->akm + cur, rem + 1,
+                                         "%s%s", akm_taken ? "," : "", nm);
+                                akm_taken++;
+                            }
+                        }
+                    }
+                    /* RSN Capabilities: 2 bytes after the AKM list.
+                     *   bit 6 = MFPR (required)
+                     *   bit 7 = MFPC (capable) */
+                    if (rsn_out && off + 2 <= (int)tln) {
+                        uint16_t caps = (uint16_t)(ie[2+off] |
+                                                   ((uint16_t)ie[2+off+1] << 8));
+                        int mfpr = (caps >> 6) & 1;
+                        int mfpc = (caps >> 7) & 1;
+                        rsn_out->mfp = mfpr ? 2 : (mfpc ? 1 : 0);
                     }
                 }
             }
@@ -109,7 +194,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
 
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
-                   const char *enc, uint16_t beacon_ms)
+                   const char *enc, uint16_t beacon_ms,
+                   const beacon_rsn_t *rsn)
 {
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
@@ -123,6 +209,15 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
             g_aps[i].last_seen  = now;
             g_aps[i].frame_count++;
             if (ssid[0]) strncpy(g_aps[i].ssid, ssid, 32);
+            if (rsn) {
+                snprintf(g_aps[i].pairwise, sizeof(g_aps[i].pairwise),
+                         "%s", rsn->pairwise);
+                snprintf(g_aps[i].group, sizeof(g_aps[i].group),
+                         "%s", rsn->group);
+                snprintf(g_aps[i].akm, sizeof(g_aps[i].akm),
+                         "%s", rsn->akm);
+                g_aps[i].mfp = rsn->mfp;
+            }
             pthread_mutex_unlock(&g_mu);
             return;
         }
@@ -149,6 +244,15 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].beacon_ms  = beacon_ms;
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
+    if (rsn) {
+        snprintf(g_aps[slot].pairwise, sizeof(g_aps[slot].pairwise),
+                 "%s", rsn->pairwise);
+        snprintf(g_aps[slot].group, sizeof(g_aps[slot].group),
+                 "%s", rsn->group);
+        snprintf(g_aps[slot].akm, sizeof(g_aps[slot].akm),
+                 "%s", rsn->akm);
+        g_aps[slot].mfp = rsn->mfp;
+    }
 
     pthread_mutex_unlock(&g_mu);
 }

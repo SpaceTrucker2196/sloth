@@ -172,8 +172,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     if (sub == 8) {
         /* Beacon frame — passive AP discovery */
         char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;
-        if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel, enc, &bms))
-            beacon_record(bssid, ssid, signal, channel, enc, bms);
+        beacon_rsn_t rsn;
+        if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel,
+                         enc, &bms, &rsn))
+            beacon_record(bssid, ssid, signal, channel, enc, bms, &rsn);
         return;
     }
 

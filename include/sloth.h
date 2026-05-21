@@ -409,12 +409,21 @@ typedef struct {
 #define BEACON_AGE_SECS 300
 
 typedef struct {
-    char     ssid[33];      /* "" = hidden/broadcast network */
+    char     ssid[33];        /* "" = hidden/broadcast network */
     uint8_t  bssid[6];
     int8_t   signal_dbm;
     int      channel;
-    char     enc[10];       /* OPEN WEP WPA WPA2 WPA3 */
-    uint16_t beacon_ms;     /* beacon interval in ms */
+    char     enc[10];         /* OPEN WEP WPA WPA2 WPA3 */
+    uint16_t beacon_ms;       /* beacon interval in ms */
+    /* RSN inventory — parsed from beacon's RSN IE (tag 48). The
+     * cipher / AKM fields show empty strings for OPEN/WEP/WPA(v1).
+     * mfp 0=off (no RSN capabilities or both bits clear),
+     *      1=capable but not required,
+     *      2=required. */
+    char     pairwise[12];    /* "CCMP" / "TKIP" / "GCMP" / "GCMP-256" */
+    char     group[12];
+    char     akm[24];          /* "PSK" / "SAE" / "PSK,FT-PSK" / "802.1X" */
+    int      mfp;
     time_t   last_seen;
     int      frame_count;
 } beacon_ap_t;

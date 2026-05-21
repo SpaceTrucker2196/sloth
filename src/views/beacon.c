@@ -33,11 +33,13 @@ void view_beacon_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-32s  %-17s  %4s  %3s  %-6s  %5s  %s\n",
-           "SSID", "BSSID", "Sig", "Ch", "Enc", "Intv", "Last");
-    TPRINT(" %-32s  %-17s  %4s  %3s  %-6s  %5s  %s\n",
-           "--------------------------------", "-----------------",
-           "----", "---", "------", "-----", "----");
+    TPRINT(" %-28s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-14s  %4s  %s\n",
+           "SSID", "BSSID", "Sig", "Ch", "Enc",
+           "Pairwise", "MFP", "AKM", "Intv", "Last");
+    TPRINT(" %-28s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-14s  %4s  %s\n",
+           "----------------------------", "-----------------",
+           "----", "---", "-----", "---------", "---",
+           "--------------", "----", "----");
     tui_normal();
 
     if (s->beacon_count == 0) {
@@ -71,16 +73,21 @@ void view_beacon_draw(const sloth_state_t *s) {
         else if (age < 3600) snprintf(age_buf, sizeof(age_buf), "%dm",  age / 60);
         else                 snprintf(age_buf, sizeof(age_buf), "%dh",  age / 3600);
 
+        const char *mfp_s = (ap->mfp == 2) ? "REQ"
+                          : (ap->mfp == 1) ? "cap" : "-";
+        const char *pw    = ap->pairwise[0] ? ap->pairwise : "-";
+        const char *akm   = ap->akm[0]      ? ap->akm      : "-";
+
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-32.32s  %-17.17s  %4s  %3d  %-6.6s  %5s  %s\n",
+            TPRINT(" %-28.28s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-3s  %-14.14s  %4s  %s\n",
                    ssid, bssid_str(ap->bssid), sig_buf, ap->channel,
-                   ap->enc, intv_buf, age_buf);
+                   ap->enc, pw, mfp_s, akm, intv_buf, age_buf);
             tui_reset();
         } else {
             /* dim hidden SSIDs */
             if (!ap->ssid[0]) tui_dim(); else tui_normal();
-            TPRINT(" %-32.32s", ssid);
+            TPRINT(" %-28.28s", ssid);
 
             tui_dim();
             TPRINT("  %-17.17s", bssid_str(ap->bssid));
@@ -100,10 +107,24 @@ void view_beacon_draw(const sloth_state_t *s) {
                 tui_bright();
             else
                 tui_normal();
-            TPRINT("  %-6.6s", ap->enc);
+            TPRINT("  %-5.5s", ap->enc);
+
+            /* pairwise cipher — TKIP is a smell on a WPA2 net */
+            if (strcmp(pw, "TKIP") == 0) tui_heat(0.7);
+            else                          tui_normal();
+            TPRINT("  %-9.9s", pw);
+
+            /* MFP — REQ bright, cap normal, off (-) dim */
+            if (ap->mfp == 2)       tui_bright();
+            else if (ap->mfp == 1)  tui_normal();
+            else                    tui_dim();
+            TPRINT("  %-3s", mfp_s);
+
+            tui_normal();
+            TPRINT("  %-14.14s", akm);
 
             tui_dim();
-            TPRINT("  %5s  %s\n", intv_buf, age_buf);
+            TPRINT("  %4s  %s\n", intv_buf, age_buf);
             tui_normal();
         }
     }
