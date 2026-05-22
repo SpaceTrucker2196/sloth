@@ -61,10 +61,15 @@ void view_pnl_draw(const sloth_state_t *s) {
 
     if (s->pnl_count == 0) {
         tui_dim();
-        TPRINT("  (no directed probes observed yet — "
-               "wildcard probes don't count)\n");
-        TPRINT("  Run on a monitor-mode iface near WiFi clients and "
-               "watch their PNLs build.\n");
+        TPRINT("  (no directed probes observed yet — wildcard probes "
+               "don't count toward the PNL)\n");
+        if (s->probe_iface[0]) {
+            TPRINT("  Monitoring on ");
+            tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
+            TPRINT(" — PNLs build as clients re-scan for known networks.\n");
+        } else {
+            TPRINT("  No monitor-mode iface available. Set one up first.\n");
+        }
         tui_normal();
         return;
     }

@@ -52,11 +52,19 @@ void view_eapol_draw(const sloth_state_t *s) {
 
     if (s->eapol_count == 0) {
         tui_dim();
-        TPRINT("  (no EAPOL frames seen yet)\n");
-        TPRINT("  Run on a monitor-mode iface near a WPA2/WPA3 network "
-               "during a client (re)association.\n");
-        TPRINT("  Pass --eapol-dir DIR on the CLI to also dump captures "
-               "in hashcat 22000 format.\n");
+        if (s->probe_iface[0]) {
+            TPRINT("  Monitoring on ");
+            tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
+            TPRINT(" — waiting for a WPA2/WPA3 (re)association.\n");
+            TPRINT("  Pass --eapol-dir DIR on the CLI to stream captures "
+                   "to hashcat 22000 format.\n");
+        } else {
+            TPRINT("  (no monitor-mode iface available)\n");
+            if (s->probe_err[0])
+                TPRINT("  Detail: %s\n", s->probe_err);
+            TPRINT("  Set one up first:  sudo iw dev <iface> set type monitor "
+                   "&& sudo ip link set <iface> up\n");
+        }
         tui_normal();
         return;
     }

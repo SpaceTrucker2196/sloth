@@ -50,6 +50,11 @@ void view_seqnum_draw(const sloth_state_t *s) {
     if (s->seqnum_correlation_count == 0) {
         tui_dim();
         TPRINT("  (no correlations yet — needs >=2 MACs with overlapping seqnum trails)\n");
+        if (s->probe_iface[0]) {
+            TPRINT("  Monitoring on ");
+            tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
+            TPRINT(" — wait for randomised devices to probe across MAC rotations.\n");
+        }
         tui_normal();
     } else {
         for (int i = 0; i < s->seqnum_correlation_count; i++) {
