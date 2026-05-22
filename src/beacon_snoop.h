@@ -34,6 +34,13 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
    Sorts by signal strength descending. */
 void beacon_snapshot(sloth_state_t *s);
 
+/* If a beacon entry for `bssid` exists and its SSID is empty (hidden),
+ * fill it in with `ssid` and mark the entry as revealed. Fed by
+ * probe-response / (re)association-response frames captured in
+ * monitor mode. NOP if bssid isn't tracked yet or SSID was already
+ * known. */
+void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid);
+
 /* Clear the internal AP table. */
 void beacon_clear(void);
 

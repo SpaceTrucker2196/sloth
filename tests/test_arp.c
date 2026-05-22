@@ -106,7 +106,7 @@ static void test_arp_zero_init(void) {
 }
 
 static void test_view_count_is_12(void) {
-    ASSERT_EQ(VIEW_COUNT, 26);
+    ASSERT_EQ(VIEW_COUNT, 27);
 }
 
 /* ── Entry point ─────────────────────────────────────────── */

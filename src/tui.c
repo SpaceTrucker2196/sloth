@@ -39,6 +39,7 @@
 #include "views/dashboard.h"
 #include "views/pnl.h"
 #include "views/eapol.h"
+#include "views/seqnum.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -67,6 +68,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[o] Dash",
     "[k] PNL",
     "[e] EAPOL",
+    "[j] Seqnum",
 };
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
@@ -460,6 +462,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_DASH:    view_dashboard_draw(s);     break;
     case VIEW_PNL:     view_pnl_draw(s);           break;
     case VIEW_EAPOL:   view_eapol_draw(s);         break;
+    case VIEW_SEQNUM:  view_seqnum_draw(s);        break;
     default: break;
     }
 }

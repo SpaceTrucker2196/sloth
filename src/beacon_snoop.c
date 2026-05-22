@@ -257,6 +257,20 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     pthread_mutex_unlock(&g_mu);
 }
 
+void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid)
+{
+    if (!ssid || !ssid[0]) return;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_count; i++) {
+        if (memcmp(g_aps[i].bssid, bssid, 6) != 0) continue;
+        if (g_aps[i].ssid[0]) break;     /* already known — leave alone */
+        snprintf(g_aps[i].ssid, sizeof(g_aps[i].ssid), "%s", ssid);
+        g_aps[i].revealed = 1;
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+}
+
 static int cmp_signal_desc(const void *a, const void *b) {
     const beacon_ap_t *x = (const beacon_ap_t *)a;
     const beacon_ap_t *y = (const beacon_ap_t *)b;

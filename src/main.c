@@ -32,8 +32,10 @@
 #include "views/dashboard.h"
 #include "views/pnl.h"
 #include "views/eapol.h"
+#include "views/seqnum.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "seqnum_track.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -80,6 +82,7 @@ static void poll_data(sloth_state_t *s) {
     probe_snapshot(s);
     probe_pnl_snapshot(s);
     eapol_snapshot(s);
+    seqnum_snapshot(s);
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
@@ -191,6 +194,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
     case 'k': case 'K': s->active_view = VIEW_PNL;     return;
     case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
+    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -236,6 +240,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_DASH:    view_dashboard_key(s, key);     break;
     case VIEW_PNL:     view_pnl_key(s, key);           break;
     case VIEW_EAPOL:   view_eapol_key(s, key);         break;
+    case VIEW_SEQNUM:  view_seqnum_key(s, key);        break;
     default: break;
     }
 }

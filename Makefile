@@ -70,6 +70,8 @@ SRCS = src/main.c          \
        src/views/pnl.c       \
        src/eapol_log.c       \
        src/views/eapol.c     \
+       src/seqnum_track.c    \
+       src/views/seqnum.c    \
        src/views/dashboard.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
@@ -267,6 +269,9 @@ TEST_SRCS = tests/main_test.c          \
             src/eapol_log.c                \
             src/views/eapol.c              \
             tests/test_eapol_log.c         \
+            src/seqnum_track.c             \
+            src/views/seqnum.c             \
+            tests/test_seqnum_track.c      \
             src/views/dashboard.c          \
             tests/test_dashboard.c
 

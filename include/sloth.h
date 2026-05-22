@@ -46,6 +46,7 @@ typedef enum {
     VIEW_DASH    = 23,
     VIEW_PNL     = 24,   /* per-MAC Preferred Network List */
     VIEW_EAPOL   = 25,   /* PMKID / 4-way handshake capture */
+    VIEW_SEQNUM  = 26,   /* per-MAC seqnum + cross-MAC correlation */
     VIEW_COUNT
 } view_t;
 
@@ -425,6 +426,10 @@ typedef struct {
     char     group[12];
     char     akm[24];          /* "PSK" / "SAE" / "PSK,FT-PSK" / "802.1X" */
     int      mfp;
+    /* 1 if this beacon was originally hidden (empty SSID in the beacon
+     * frame) and we revealed it via an out-of-band probe-response /
+     * (re)association-response carrying the real SSID. */
+    int      revealed;
     time_t   last_seen;
     int      frame_count;
 } beacon_ap_t;
@@ -460,6 +465,35 @@ typedef struct {
     time_t  first_seen;
     time_t  last_seen;
 } pnl_client_t;
+
+/* ── Sequence-number tracking ──────────────────────────────── *
+ * 12-bit per-station seqnum is the deanonymisation primitive —
+ * randomised MACs that share a monotonic seqnum trail are the same
+ * physical radio. */
+#define MAX_SEQNUM_CLIENTS        256
+#define SEQNUM_HISTORY_LEN        8
+#define MAX_SEQNUM_CORRELATIONS   32
+
+typedef struct {
+    uint8_t  mac[6];
+    int      mac_random;
+    time_t   last_seen;
+    int      frame_count;
+    uint16_t hist[SEQNUM_HISTORY_LEN];
+    time_t   hist_ts[SEQNUM_HISTORY_LEN];
+    int      hist_n;
+} seqnum_client_t;
+
+typedef struct {
+    uint8_t  mac_a[6];
+    uint8_t  mac_b[6];
+    int      mac_a_random;
+    int      mac_b_random;
+    int      gap;
+    long     dt_ms;
+    int      a_count;
+    int      b_count;
+} seqnum_correlation_t;
 
 /* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
  * One per observed EAPOL-Key frame. M2 events carry the M1+M2
@@ -648,6 +682,13 @@ typedef struct {
     eapol_event_t  eapol_events[MAX_EAPOL_EVENTS];
     int            eapol_count;
     int            eapol_sel;
+
+    /* ── Sequence-number tracking snapshot ────────────────── */
+    seqnum_client_t      seqnum_clients[MAX_SEQNUM_CLIENTS];
+    int                  seqnum_count;
+    seqnum_correlation_t seqnum_correlations[MAX_SEQNUM_CORRELATIONS];
+    int                  seqnum_correlation_count;
+    int                  seqnum_corr_sel;
 
     /* ── mDNS services ────────────────────────────────────── */
     mdns_service_t mdns_services[MAX_MDNS_SERVICES];

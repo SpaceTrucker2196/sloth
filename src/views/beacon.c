@@ -59,7 +59,16 @@ void view_beacon_draw(const sloth_state_t *s) {
     for (int row = page_top; row < page_end; row++) {
         const beacon_ap_t *ap = &s->beacon_aps[row];
 
-        const char *ssid = ap->ssid[0] ? ap->ssid : "(hidden)";
+        char ssid_display[40];
+        if (ap->ssid[0]) {
+            if (ap->revealed)
+                snprintf(ssid_display, sizeof(ssid_display), "%s *", ap->ssid);
+            else
+                snprintf(ssid_display, sizeof(ssid_display), "%s", ap->ssid);
+        } else {
+            snprintf(ssid_display, sizeof(ssid_display), "(hidden)");
+        }
+        const char *ssid = ssid_display;
 
         char sig_buf[8];
         snprintf(sig_buf, sizeof(sig_buf), "%d", ap->signal_dbm);

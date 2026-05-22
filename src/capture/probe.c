@@ -13,6 +13,7 @@
 #include "deauth_snoop.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "seqnum_track.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -188,6 +189,35 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         return;
     }
 
+    /* Probe-response (5), Association-response (1), Reassoc-response (3)
+     * — all carry the real SSID even when the AP's beacon hides it. */
+    if (sub == 1 || sub == 3 || sub == 5) {
+        if (dot11_len < 36) return;
+        const uint8_t *bssid_p = dot11 + 16;
+        /* Fixed params length differs by subtype but the IE walk needs
+         * the right starting offset. Probe-resp: 12 (timestamp+intv+cap),
+         * Assoc-resp: 6 (caps+status+aid), Reassoc-resp: 6 (same). */
+        int fixed = (sub == 5) ? 12 : 6;
+        const uint8_t *ie = dot11 + 24 + fixed;
+        int rem = dot11_len - 24 - fixed;
+        char ssid[33] = "";
+        while (rem >= 2) {
+            uint8_t tag = ie[0];
+            uint8_t tln = ie[1];
+            if (2 + (int)tln > rem) break;
+            if (tag == 0) {
+                int slen = tln < 32 ? tln : 32;
+                memcpy(ssid, ie + 2, (size_t)slen);
+                ssid[slen] = '\0';
+                break;
+            }
+            ie += 2 + tln;
+            rem -= 2 + tln;
+        }
+        if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
+        return;
+    }
+
     if (sub == 10 || sub == 12) {
         /* Disassoc (10) or Deauth (12) */
         uint8_t src[6], dst[6], bssid[6]; uint16_t reason; uint8_t st;
@@ -200,6 +230,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
 
     /* Source Address: bytes 10-15 */
     const uint8_t *sa = dot11 + 10;
+    /* Sequence Control field at bytes 22-23 (little-endian).
+     * Upper 12 bits = sequence number. Feed the seqnum tracker so we
+     * can correlate randomised probe MACs back to the same physical
+     * radio across MAC changes. */
+    if (dot11_len >= 24) {
+        uint16_t sc = (uint16_t)(dot11[22] | (dot11[23] << 8));
+        uint16_t seqnum = (uint16_t)(sc >> 4);
+        seqnum_track_observe(sa, seqnum);
+    }
 
     /* Parse SSID information element (tag 0) */
     const uint8_t *ie     = dot11 + 24;
