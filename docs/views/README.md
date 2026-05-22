@@ -43,6 +43,14 @@ One file per sloth view. Each covers:
 | `g` | Devices   | [devices.md](devices.md) |
 | `o` | Dashboard | [dashboard.md](dashboard.md) |
 
+## WiFi SIGINT (v1.1)
+
+| Key | View | Doc |
+|-----|------|-----|
+| `k` | PNL    | [pnl.md](pnl.md) |
+| `e` | EAPOL  | [eapol.md](eapol.md) |
+| `j` | Seqnum | [seqnum.md](seqnum.md) |
+
 ## Quick map of protocols to attacks
 
 Useful entry points if you're hunting for a specific threat class:
@@ -54,8 +62,11 @@ Useful entry points if you're hunting for a specific threat class:
 | Implant / C2 fingerprint        | [tls.md](tls.md), [alerts.md](alerts.md) (BEACONING) |
 | ARP spoofing / MITM             | [arp.md](arp.md) |
 | Rogue DHCP                      | [dhcp.md](dhcp.md) |
-| Evil-twin / WPA capture         | [beacons.md](beacons.md), [deauth.md](deauth.md) |
-| Probe-request PNL leakage       | [probe.md](probe.md) |
+| Evil-twin / WPA capture         | [beacons.md](beacons.md), [deauth.md](deauth.md), [eapol.md](eapol.md) |
+| PMKID / 4-way handshake harvest | [eapol.md](eapol.md) |
+| Hidden-SSID disclosure          | [beacons.md](beacons.md) (revealed `*` rows) |
+| Probe-request PNL leakage       | [probe.md](probe.md), [pnl.md](pnl.md) |
+| MAC-randomisation deanonymisation | [seqnum.md](seqnum.md), [pnl.md](pnl.md) |
 | Responder / LLMNR poisoning     | [nbns.md](nbns.md) |
 | UPnP-IGD abuse / CallStranger   | [ssdp.md](ssdp.md) |
 | NTP amplification               | [ntp.md](ntp.md) |

@@ -6,12 +6,25 @@
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
 injects packets, never scans, and never modifies kernel state — it observes what
-your host already sees and turns it into 24 views, six alert rules, and an
-optional JSONL forensic log.
+your host already sees and turns it into 27 views, six alert rules, an embedded
+WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
+capture, hidden-SSID reveal, seqnum-based MAC-randomisation deanonymisation),
+and an optional JSONL forensic log.
 
 📖 **Per-view deep dives live under [`docs/views/`](docs/views/)** — each
 file explains the protocol, shows a text mockup, and lists what to watch
 for in normal vs anomalous traffic.
+
+> **v1.1 — WiFi SIGINT** — sloth gained six new wireless capabilities
+> on top of the v1.0 monitor: [PNL aggregation](docs/views/pnl.md) per
+> client MAC, RSN / cipher / AKM / MFP inventory from beacons,
+> [EAPOL / PMKID / 4-way handshake capture](docs/views/eapol.md) with
+> hashcat-22000 export, hidden-SSID reveal, MAC-randomisation
+> [sequence-number deanonymisation](docs/views/seqnum.md), and a
+> dashboard alert-hot IP override that paints any IP appearing in a
+> CRIT alert deep-red across every panel for 1 h. See the v1.1
+> [release notes](https://github.com/SpaceTrucker2196/sloth/releases/tag/v1.1.0)
+> for the full diff.
 
 ```
 [1] Interfaces  [2] Connections  [3] WiFi      [4] Packets   [5] Processes
@@ -19,6 +32,7 @@ for in normal vs anomalous traffic.
 [d] DHCP        [s] SSDP         [b] Beacons   [a] Deauth    [h] HTTP
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
 [v] Alerts      [g] Devices      [o] Dashboard [?] Help
+[k] PNL         [e] EAPOL        [j] Seqnum    ← v1.1 WiFi SIGINT
 ```
 
 ## What you get
@@ -39,7 +53,7 @@ for in normal vs anomalous traffic.
 | [**NBNS**](docs/views/nbns.md)             | NetBIOS Name Service table from UDP/137 |
 | [**DHCP**](docs/views/dhcp.md)             | Live DHCP event log: DISCOVER/REQUEST/ACK |
 | [**SSDP**](docs/views/ssdp.md)             | UPnP device table from UDP/1900 NOTIFY / M-SEARCH |
-| [**Beacons**](docs/views/beacons.md)       | Passive 802.11 beacon sniffer — APs visible to a monitor-mode iface |
+| [**Beacons**](docs/views/beacons.md)       | Passive 802.11 beacon sniffer — APs visible to a monitor-mode iface, with pairwise cipher / AKM / MFP status from the RSN IE, and hidden-SSID reveal from probe-responses |
 | [**Deauth**](docs/views/deauth.md)         | 802.11 deauth/disassoc frames; flood detection per target MAC |
 | [**HTTP**](docs/views/http.md)             | Plaintext HTTP requests: method, host, path |
 | [**TLS**](docs/views/tls.md)               | TLS ClientHello log: SNI host, version, and **JA3 fingerprint** |
@@ -56,10 +70,47 @@ for in normal vs anomalous traffic.
 | [**Devices**](docs/views/devices.md)     | One record per MAC, joined from ARP/DHCP/Beacons/Probe/Stations with OUI vendor |
 | [**Dashboard**](docs/views/dashboard.md) | Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories all tiled to fill the terminal |
 
+### WiFi SIGINT (v1.1)
+
+| View | What it shows |
+|------|---------------|
+| [**PNL**](docs/views/pnl.md)         | Per-MAC Preferred Network List — every directed probe-request's source MAC aggregated with the unique set of SSIDs it has probed for. Randomised MACs are flagged so randomised vs burned-in is one glance. A device's PNL fingerprints its owner. |
+| [**EAPOL**](docs/views/eapol.md)     | Captured EAPOL-Key frames + 4-way handshake state machine. M1 with a PMKID KDE = one-frame offline-crack vector. M1+M2 together = full handshake. `--eapol-dir DIR` writes captures in hashcat 22000 format. |
+| [**Seqnum**](docs/views/seqnum.md)   | Sequence-number-based MAC-randomisation deanonymisation. Pairs of MACs whose seqnum trails overlap within 64 seqnums / 30 s are the same physical radio across a MAC rotation. |
+
 ### Output
 
 - **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record and every newly-fired alert. See [JSONL schema](#jsonl-schema) below.
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
+- **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`.
+
+## WiFi SIGINT usage
+
+Sloth is fully passive — it never injects probe requests, never sends
+deauth frames, never associates with anything. All wireless data is
+sniffed by a monitor-mode interface that's been put into monitor mode
+by an external tool (`iw`, `airmon-ng`, etc.) before sloth starts.
+
+```sh
+# 1. Set an adapter to monitor mode (external — sloth never touches link state).
+sudo ip link set wlan1 down
+sudo iw dev wlan1 set type monitor
+sudo ip link set wlan1 up
+
+# 2. Run sloth. It auto-discovers the monitor iface; --eapol-dir
+#    streams captured PMKIDs + 4-way handshakes to hashcat format.
+sudo ./sloth --eapol-dir /tmp/sloth-eapol -o /tmp/sloth.jsonl
+
+# 3. While sloth runs:
+#    [k] PNL    — devices and the SSIDs they're probing for
+#    [b] Beacons — APs + cipher / AKM / MFP inventory + hidden-SSID reveal
+#    [e] EAPOL  — captured handshakes (PMKID = single-frame crack)
+#    [j] Seqnum — randomised MACs correlated to the same physical radio
+#    [7] Probe  — raw probe-request feed (Roaming clients)
+
+# 4. Offline crack against the streamed handshake / PMKID file.
+hashcat -m 22000 /tmp/sloth-eapol/eapol.22000 rockyou.txt
+```
 
 ## Build
 
@@ -68,7 +119,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1664 unit tests (no root, no terminal, no network)
+make test                     # 1763 unit tests (no root, no terminal, no network)
 ```
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
@@ -87,9 +138,9 @@ Use `[?]` inside sloth for an up-to-date reference card.
 | `4` | Packets     | `a` | Deauth  | `i` | ICMP    |
 | `5` | Processes   | `h` | HTTP    | `v` | Alerts  |
 | `6` | Stats       | `t` | TLS     | `g` | Devices |
-| `7` | Probe       | `?` | Help    |     |         |
-| `8` | ARP         |     |         |     |         |
-| `9` | mDNS        |     |         |     |         |
+| `7` | Probe       | `?` | Help    | `o` | Dash    |
+| `8` | ARP         | `k` | PNL     | `e` | EAPOL   |
+| `9` | mDNS        | `j` | Seqnum  |     |         |
 | `0` | NBNS        |     |         |     |         |
 
 ### Global
@@ -206,7 +257,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 1559 assertions, no root, no terminal, no network
+make test    # 1763 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -227,6 +278,6 @@ The MD5 implementation used for JA3 is independently validated against all RFC 1
 
 ## Status
 
-Code: 14k+ lines across ~80 files. Tests: 1559 assertions. License: see project root.
+Code: 14k+ lines across ~80 files. Tests: 1763 assertions. License: see project root.
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
