@@ -4,6 +4,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include "eapol_log.h"
+#include "beacon_snoop.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -244,6 +245,12 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     ev.msg_num     = msg;
     ev.signal_dbm  = signal;
     ev.channel     = channel;
+    /* Best-effort SSID lookup against the beacon table. The two
+     * modules use independent mutexes, so this is safe — but if the
+     * beacon hasn't been seen yet (silent AP, association before
+     * beacon observed), ev.ssid stays empty and hashcat tolerates an
+     * empty ESSID field. */
+    beacon_find_ssid(bssid, ev.ssid);
 
     if (msg == 1) {
         memcpy(p->anonce, nonce, 32);

@@ -43,11 +43,11 @@ void view_eapol_draw(const sloth_state_t *s) {
     tui_dim();    TPRINT(")  [up/dn] navigate  [c] clear\n");
 
     tui_dim();
-    TPRINT(" %-8s  %-3s  %-17s  %-17s  %3s  %4s  %s\n",
-           "age", "msg", "BSSID", "STA", "ch", "sig", "notes");
-    TPRINT(" %-8s  %-3s  %-17s  %-17s  %3s  %4s  %s\n",
-           "--------", "---", "-----------------", "-----------------",
-           "---", "----", "-----------------------------");
+    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %s\n",
+           "age", "msg", "BSSID", "SSID", "STA", "ch", "sig", "notes");
+    TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %s\n",
+           "--------", "---", "-----------------", "--------------------",
+           "-----------------", "---", "----", "----------------------");
     tui_normal();
 
     if (s->eapol_count == 0) {
@@ -87,7 +87,25 @@ void view_eapol_draw(const sloth_state_t *s) {
         if (i == s->eapol_sel) tui_sel();
         else if (prize)        tui_heat(1.0);
         else                   tui_normal();
-        TPRINT(" %-17s  %-17s", bssid_buf, sta_buf);
+        TPRINT(" %-17s  ", bssid_buf);
+#ifdef WITH_NCURSES
+        /* SSID coloured by hash like elsewhere; dim "(?)" when we
+         * haven't seen its beacon yet. */
+        if (e->ssid[0]) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%-20.20s", e->ssid);
+            tui_ssid_addstr(buf, 0 /* PKT_CAT_OTHER */);
+        } else {
+            tui_dim(); TPRINT("%-20s", "(?)");
+        }
+#else
+        if (e->ssid[0]) TPRINT("%-20.20s", e->ssid);
+        else            TPRINT("%-20s",    "(?)");
+#endif
+        if (i == s->eapol_sel) tui_sel();
+        else if (prize)        tui_heat(1.0);
+        else                   tui_normal();
+        TPRINT("  %-17s", sta_buf);
         tui_dim();    TPRINT("  %3d  %4d  ", e->channel, e->signal_dbm);
 
         if (e->has_pmkid && e->handshake_complete) {

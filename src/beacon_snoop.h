@@ -41,6 +41,12 @@ void beacon_snapshot(sloth_state_t *s);
  * known. */
 void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid);
 
+/* Look up the SSID we've observed for `bssid`. Copies into `ssid_out`
+ * (NUL-terminated, up to 33 chars) and returns 1 on hit, 0 on miss.
+ * Used by the EAPOL module to label captured handshakes with the
+ * network name. */
+int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
+
 /* Clear the internal AP table. */
 void beacon_clear(void);
 

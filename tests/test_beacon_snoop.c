@@ -402,6 +402,25 @@ static void test_view_key_nav(void) {
     ASSERT_EQ(s.beacon_sel, 0);
 }
 
+static void test_find_ssid_hit_and_miss(void) {
+    beacon_clear();
+    beacon_record(BSSID_A, "HomeWiFi", -50, 6, "WPA2", 102, NULL);
+    beacon_record(BSSID_B, "",         -70, 11, "WPA2", 102, NULL); /* hidden */
+
+    char ssid[33];
+    /* Hit on known BSSID. */
+    ASSERT_EQ(beacon_find_ssid(BSSID_A, ssid), 1);
+    ASSERT_STR(ssid, "HomeWiFi");
+    /* Miss when SSID is hidden — function reports 0 since there's
+     * nothing useful to return. */
+    ASSERT_EQ(beacon_find_ssid(BSSID_B, ssid), 0);
+    ASSERT_STR(ssid, "");
+    /* Miss on unknown BSSID. */
+    static const uint8_t unknown[6] = { 0xde, 0xad, 0xbe, 0xef, 0x00, 0x00 };
+    ASSERT_EQ(beacon_find_ssid(unknown, ssid), 0);
+    ASSERT_STR(ssid, "");
+}
+
 static void test_view_key_clear(void) {
     beacon_clear();
     beacon_record(BSSID_A, "X", -55, 6, "WPA2", 102, NULL);
@@ -435,6 +454,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_truncated_ie);
     RUN_TEST(test_record_new_entry);
     RUN_TEST(test_record_update_existing);
+    RUN_TEST(test_find_ssid_hit_and_miss);
     RUN_TEST(test_record_distinct_bssids);
     RUN_TEST(test_snapshot_sorts_by_signal);
     RUN_TEST(test_clear_empties_table);
