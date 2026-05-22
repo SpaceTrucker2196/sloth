@@ -12,6 +12,7 @@
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "probe_pnl.h"
+#include "eapol_log.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -167,7 +168,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     uint8_t type = (fc0 >> 2) & 0x03;
     uint8_t sub  = (fc0 >> 4) & 0x0f;
 
-    if (type != 0) return;  /* management frames only */
+    /* Data frames (type 2): only of interest for EAPOL-Key extraction.
+     * eapol_observe_dot11 internally rejects anything that's not an
+     * EAPOL-Key frame, so the cost of unconditional dispatch is just
+     * the LLC SNAP check inside. */
+    if (type == 2) {
+        eapol_observe_dot11(dot11, dot11_len, signal, channel);
+        return;
+    }
+    if (type != 0) return;  /* management frames only beyond this point */
 
     if (sub == 8) {
         /* Beacon frame — passive AP discovery */

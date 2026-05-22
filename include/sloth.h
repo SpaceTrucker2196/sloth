@@ -45,6 +45,7 @@ typedef enum {
     VIEW_HELP    = 22,
     VIEW_DASH    = 23,
     VIEW_PNL     = 24,   /* per-MAC Preferred Network List */
+    VIEW_EAPOL   = 25,   /* PMKID / 4-way handshake capture */
     VIEW_COUNT
 } view_t;
 
@@ -460,6 +461,27 @@ typedef struct {
     time_t  last_seen;
 } pnl_client_t;
 
+/* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
+ * One per observed EAPOL-Key frame. M2 events carry the M1+M2
+ * combined info (handshake_complete=1) when their M1 was seen. */
+#define MAX_EAPOL_EVENTS  256
+
+typedef struct {
+    uint8_t  bssid[6];
+    uint8_t  sta_mac[6];
+    char     ssid[33];
+    time_t   ts;
+    int      msg_num;
+    int      has_pmkid;
+    uint8_t  pmkid[16];
+    uint8_t  anonce[32];
+    uint8_t  snonce[32];
+    uint8_t  mic[16];
+    int      handshake_complete;
+    int8_t   signal_dbm;
+    int      channel;
+} eapol_event_t;
+
 /* ── Packets ────────────────────────────────────────────── */
 typedef struct {
     uint32_t ts_sec;
@@ -621,6 +643,11 @@ typedef struct {
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];
     int            pnl_count;
     int            pnl_sel;
+
+    /* ── EAPOL / PMKID / 4-way handshake snapshot ─────────── */
+    eapol_event_t  eapol_events[MAX_EAPOL_EVENTS];
+    int            eapol_count;
+    int            eapol_sel;
 
     /* ── mDNS services ────────────────────────────────────── */
     mdns_service_t mdns_services[MAX_MDNS_SERVICES];

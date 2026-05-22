@@ -31,7 +31,9 @@
 #include "views/help.h"
 #include "views/dashboard.h"
 #include "views/pnl.h"
+#include "views/eapol.h"
 #include "probe_pnl.h"
+#include "eapol_log.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -77,6 +79,7 @@ static void poll_data(sloth_state_t *s) {
 #ifdef WITH_PCAP
     probe_snapshot(s);
     probe_pnl_snapshot(s);
+    eapol_snapshot(s);
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
@@ -187,6 +190,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
     case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
     case 'k': case 'K': s->active_view = VIEW_PNL;     return;
+    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -231,18 +235,22 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_HELP:    view_help_key(s, key);          break;
     case VIEW_DASH:    view_dashboard_key(s, key);     break;
     case VIEW_PNL:     view_pnl_key(s, key);           break;
+    case VIEW_EAPOL:   view_eapol_key(s, key);         break;
     default: break;
     }
 }
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s [-o FILE] [--pcap-dir DIR]\n"
+            "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
             "                     flow, write the matching packets to a fresh\n"
-            "                     pcap file under DIR\n",
+            "                     pcap file under DIR\n"
+            "  --eapol-dir DIR    append captured EAPOL PMKIDs / 4-way\n"
+            "                     handshakes to DIR/eapol.22000 in hashcat\n"
+            "                     mixed format (22000)\n",
             argv0);
 }
 
@@ -252,11 +260,14 @@ int main(int argc, char **argv) {
 
     const char *jsonl_path = NULL;
     const char *pcap_dir   = NULL;
+    const char *eapol_dir  = NULL;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
         } else if (!strcmp(argv[i], "--pcap-dir") && i + 1 < argc) {
             pcap_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--eapol-dir") && i + 1 < argc) {
+            eapol_dir = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage(argv[0]);
             return 0;
@@ -275,6 +286,9 @@ int main(int argc, char **argv) {
     }
     if (pcap_dir) {
         alert_pcap_set_dir(pcap_dir);
+    }
+    if (eapol_dir) {
+        eapol_set_output_dir(eapol_dir);
     }
 
     memset(&g_state, 0, sizeof(g_state));
