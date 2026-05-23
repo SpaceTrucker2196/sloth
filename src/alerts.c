@@ -6,6 +6,7 @@
 #include "beacon_detect.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
+#include "dga.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -161,6 +162,28 @@ static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* DGA: any qname whose leftmost label trips the dga_is_suspicious
+ * heuristic — high Shannon entropy + consonant clusters + digit
+ * density. Dedup key is the qname so repeated lookups against the
+ * same domain only ever produce one alert. */
+static void rule_dga_domain(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->dns_log_count; i++) {
+        const dns_log_entry_t *e = &s->dns_log[i];
+        if (!e->qname[0]) continue;
+        if (!dga_is_suspicious(e->qname)) continue;
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "dga:%s", e->qname);
+        snprintf(detail, sizeof(detail),
+                 "%.30s queried %.30s (entropy %.2f bits/char)",
+                 e->src[0] ? e->src : "?", e->qname,
+                 dga_label_entropy(e->qname));
+        fire(ALERT_TYPE_DGA_DOMAIN, ALERT_SEV_WARN,
+             "DGA_DOMAIN", detail, key, e->src, 53, now);
+    }
+}
+
 static void rule_threat_domain(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->dns_log_count; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
@@ -274,6 +297,7 @@ void alerts_update(sloth_state_t *s) {
     rule_deauth_flood(s, now);
     rule_nxdomain_burst(s, now);
     rule_threat_domain(s, now);
+    rule_dga_domain(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

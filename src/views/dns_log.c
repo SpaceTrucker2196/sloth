@@ -6,6 +6,7 @@
 #include "views/dns_log.h"
 #include "../dns_log.h"
 #include "filter.h"
+#include "dga.h"
 
 #define DNS_PAGE 30
 
@@ -79,11 +80,17 @@ void view_dns_draw(const sloth_state_t *s) {
             /* type */
             tui_dim(); TPRINT("  %-5.5s", e->qtype);
 
-            /* name: bright for responses with answers, dim for queries */
-            if (has_answer)       tui_bright();
+            /* name: bright for responses with answers, dim for queries.
+             * DGA-flagged qnames always render heat-red so suspicious
+             * randoms stand out regardless of answer status. */
+            int dga = dga_is_suspicious(e->qname);
+            if      (dga)         tui_heat(1.0);
+            else if (has_answer)  tui_bright();
             else if (is_nxdomain) tui_heat(0.7);
             else                  tui_dim();
             TPRINT("  %-28.28s", e->qname);
+            if (dga) { tui_heat(1.0); TPRINT(" *"); } /* DGA flag */
+            else     TPRINT("  ");
 
             /* answer */
             if (is_nxdomain) {

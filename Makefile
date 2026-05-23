@@ -52,6 +52,7 @@ SRCS = src/main.c          \
        src/icmp_log.c        \
        src/views/icmp.c      \
        src/threat_intel.c    \
+       src/dga.c             \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
@@ -241,6 +242,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_icmp_log.c          \
             src/threat_intel.c             \
             tests/test_threat_intel.c      \
+            src/dga.c                      \
+            tests/test_dga.c               \
             src/alerts.c                   \
             src/views/alerts.c             \
             tests/test_alerts.c            \
