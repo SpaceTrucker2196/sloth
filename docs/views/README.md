@@ -50,6 +50,7 @@ One file per sloth view. Each covers:
 | `k` | PNL    | [pnl.md](pnl.md) |
 | `e` | EAPOL  | [eapol.md](eapol.md) |
 | `j` | Seqnum | [seqnum.md](seqnum.md) |
+| `w` | Assoc  | [assoc.md](assoc.md) |
 
 ## Quick map of protocols to attacks
 

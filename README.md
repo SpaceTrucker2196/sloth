@@ -32,7 +32,7 @@ for in normal vs anomalous traffic.
 [d] DHCP        [s] SSDP         [b] Beacons   [a] Deauth    [h] HTTP
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
 [v] Alerts      [g] Devices      [o] Dashboard [?] Help
-[k] PNL         [e] EAPOL        [j] Seqnum    ← v1.1 WiFi SIGINT
+[k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
 ```
 
 ## What you get
@@ -77,6 +77,7 @@ for in normal vs anomalous traffic.
 | [**PNL**](docs/views/pnl.md)         | Per-MAC Preferred Network List — every directed probe-request's source MAC aggregated with the unique set of SSIDs it has probed for. Randomised MACs are flagged so randomised vs burned-in is one glance. A device's PNL fingerprints its owner. |
 | [**EAPOL**](docs/views/eapol.md)     | Captured EAPOL-Key frames + 4-way handshake state machine. M1 with a PMKID KDE = one-frame offline-crack vector. M1+M2 together = full handshake. `--eapol-dir DIR` writes captures in hashcat 22000 format. |
 | [**Seqnum**](docs/views/seqnum.md)   | Sequence-number-based MAC-randomisation deanonymisation. Pairs of MACs whose seqnum trails overlap within 64 seqnums / 30 s are the same physical radio across a MAC rotation. |
+| [**Assoc**](docs/views/assoc.md)     | Client ↔ AP association inventory. Each row is a (BSSID, STA) pair we've observed confirmation for: EAPOL handshake completed, assoc-response status=0, or reassoc-response status=0. Disassoc / deauth removes the entry. |
 
 ### Output
 
@@ -119,7 +120,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1763 unit tests (no root, no terminal, no network)
+make test                     # 1785 unit tests (no root, no terminal, no network)
 ```
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
@@ -140,7 +141,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 | `6` | Stats       | `t` | TLS     | `g` | Devices |
 | `7` | Probe       | `?` | Help    | `o` | Dash    |
 | `8` | ARP         | `k` | PNL     | `e` | EAPOL   |
-| `9` | mDNS        | `j` | Seqnum  |     |         |
+| `9` | mDNS        | `j` | Seqnum  | `w` | Assoc   |
 | `0` | NBNS        |     |         |     |         |
 
 ### Global
@@ -257,7 +258,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 1763 assertions, no root, no terminal, no network
+make test    # 1785 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -278,6 +279,6 @@ The MD5 implementation used for JA3 is independently validated against all RFC 1
 
 ## Status
 
-Code: 14k+ lines across ~80 files. Tests: 1763 assertions. License: see project root.
+Code: 14k+ lines across ~80 files. Tests: 1785 assertions. License: see project root.
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.

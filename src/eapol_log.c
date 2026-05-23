@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include "eapol_log.h"
 #include "beacon_snoop.h"
+#include "assoc_track.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -297,6 +298,11 @@ int eapol_observe_dot11(const uint8_t *d, int len,
                 ev.has_pmkid = 1;
                 memcpy(ev.pmkid, p->pmkid, 16);
             }
+            /* Completed 4-way == STA is associated to this BSSID.
+             * Strongest evidence we have. */
+            assoc_observe(ev.bssid, ev.sta_mac,
+                          ev.ssid[0] ? ev.ssid : NULL,
+                          ASSOC_SRC_EAPOL, signal, channel);
         }
         push_event(&ev);
 

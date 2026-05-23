@@ -14,6 +14,7 @@
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "seqnum_track.h"
+#include "assoc_track.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -41,6 +42,11 @@ static int find_monitor_iface(char *buf, int sz) {
     struct dirent *e;
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
+        /* Linux iface names are IFNAMSIZ-1 = 15 chars max. Anything
+         * longer can't be a real interface and would also bust the
+         * snprintf buffers below. */
+        size_t nlen = strlen(e->d_name);
+        if (nlen >= 16) continue;
         char path[128];
         snprintf(path, sizeof(path), "/sys/class/net/%s/type", e->d_name);
         FILE *f = fopen(path, "r");
@@ -118,7 +124,8 @@ static void record_probe(const uint8_t *mac, const char *ssid,
             g_clients[i].last_seen   = now;
             g_clients[i].frame_count++;
             if (ssid[0])   /* prefer named probe over wildcard */
-                strncpy(g_clients[i].ssid, ssid, sizeof(g_clients[i].ssid) - 1);
+                snprintf(g_clients[i].ssid, sizeof(g_clients[i].ssid),
+                         "%s", ssid);
             return;
         }
     }
@@ -136,8 +143,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
     }
 
     memcpy(g_clients[slot].mac, mac, 6);
-    strncpy(g_clients[slot].ssid, ssid, sizeof(g_clients[slot].ssid) - 1);
-    g_clients[slot].ssid[sizeof(g_clients[slot].ssid) - 1] = '\0';
+    snprintf(g_clients[slot].ssid, sizeof(g_clients[slot].ssid), "%s", ssid);
     g_clients[slot].signal_dbm  = signal;
     g_clients[slot].channel     = channel;
     g_clients[slot].last_seen   = now;
@@ -190,14 +196,24 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     }
 
     /* Probe-response (5), Association-response (1), Reassoc-response (3)
-     * — all carry the real SSID even when the AP's beacon hides it. */
+     * — all carry the real SSID even when the AP's beacon hides it.
+     * Assoc/reassoc responses additionally carry a status code that
+     * tells us whether the STA actually joined; if so, feed the
+     * association tracker. */
     if (sub == 1 || sub == 3 || sub == 5) {
         if (dot11_len < 36) return;
+        /* AP → STA: DA(=STA) at addr1, BSSID at addr2/addr3 (same). */
+        const uint8_t *sta_p   = dot11 + 4;
         const uint8_t *bssid_p = dot11 + 16;
-        /* Fixed params length differs by subtype but the IE walk needs
-         * the right starting offset. Probe-resp: 12 (timestamp+intv+cap),
-         * Assoc-resp: 6 (caps+status+aid), Reassoc-resp: 6 (same). */
+        /* Status code lives in the assoc/reassoc-resp fixed body:
+         *   caps(2) + status(2) + aid(2). probe-resp doesn't have one. */
+        int status_ok = 1;
         int fixed = (sub == 5) ? 12 : 6;
+        if (sub == 1 || sub == 3) {
+            uint16_t status = (uint16_t)(dot11[24 + 2] |
+                                          ((uint16_t)dot11[24 + 3] << 8));
+            status_ok = (status == 0);
+        }
         const uint8_t *ie = dot11 + 24 + fixed;
         int rem = dot11_len - 24 - fixed;
         char ssid[33] = "";
@@ -215,6 +231,11 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             rem -= 2 + tln;
         }
         if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
+        if (status_ok && (sub == 1 || sub == 3)) {
+            int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
+            assoc_observe(bssid_p, sta_p, ssid[0] ? ssid : NULL,
+                          src, signal, channel);
+        }
         return;
     }
 
@@ -223,6 +244,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         uint8_t src[6], dst[6], bssid[6]; uint16_t reason; uint8_t st;
         if (deauth_parse(dot11, dot11_len, signal, src, dst, bssid, &reason, &st))
             deauth_record(src, dst, bssid, reason, st);
+        /* Drop the association for this (BSSID, STA) — either side
+         * could be initiating, so try both directions. */
+        if (dot11_len >= 22) {
+            const uint8_t *a1 = dot11 + 4;
+            const uint8_t *a2 = dot11 + 10;
+            assoc_forget(a1, a2);
+            assoc_forget(a2, a1);
+        }
         return;
     }
 

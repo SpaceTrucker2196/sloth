@@ -47,6 +47,7 @@ typedef enum {
     VIEW_PNL     = 24,   /* per-MAC Preferred Network List */
     VIEW_EAPOL   = 25,   /* PMKID / 4-way handshake capture */
     VIEW_SEQNUM  = 26,   /* per-MAC seqnum + cross-MAC correlation */
+    VIEW_ASSOC   = 27,   /* STA <-> AP association tracker */
     VIEW_COUNT
 } view_t;
 
@@ -495,6 +496,30 @@ typedef struct {
     int      b_count;
 } seqnum_correlation_t;
 
+/* ── Client ↔ AP association tracker ─────────────────────── */
+#define MAX_ASSOC_ENTRIES   128
+
+/* Evidence source — strongest (definitive) first. */
+enum {
+    ASSOC_SRC_UNKNOWN = 0,
+    ASSOC_SRC_EAPOL   = 1,   /* completed 4-way handshake */
+    ASSOC_SRC_ASSOC   = 2,   /* assoc-response status=0    */
+    ASSOC_SRC_REASSOC = 3,   /* reassoc-response status=0  */
+};
+
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sta_mac[6];
+    char    ssid[33];
+    int     sta_random;
+    int     source;
+    int     channel;
+    int8_t  signal_dbm;
+    time_t  first_seen;
+    time_t  last_seen;
+    int     frame_count;
+} assoc_t;
+
 /* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
  * One per observed EAPOL-Key frame. M2 events carry the M1+M2
  * combined info (handshake_complete=1) when their M1 was seen. */
@@ -689,6 +714,11 @@ typedef struct {
     seqnum_correlation_t seqnum_correlations[MAX_SEQNUM_CORRELATIONS];
     int                  seqnum_correlation_count;
     int                  seqnum_corr_sel;
+
+    /* ── Association tracker snapshot ─────────────────────── */
+    assoc_t              assocs[MAX_ASSOC_ENTRIES];
+    int                  assoc_count;
+    int                  assoc_sel;
 
     /* ── mDNS services ────────────────────────────────────── */
     mdns_service_t mdns_services[MAX_MDNS_SERVICES];
