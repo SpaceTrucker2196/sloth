@@ -165,6 +165,64 @@ static void test_threat_ip_fires(void) {
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
 }
 
+static void seed_arp(sloth_state_t *s, const char *ip,
+                      uint8_t a, uint8_t b, uint8_t c,
+                      uint8_t d, uint8_t e, uint8_t f) {
+    if (s->arp_count >= MAX_ARP_ENTRIES) return;
+    arp_entry_t *ar = &s->arp_entries[s->arp_count++];
+    memset(ar, 0, sizeof(*ar));
+    snprintf(ar->ip, sizeof(ar->ip), "%s", ip);
+    ar->mac[0] = a; ar->mac[1] = b; ar->mac[2] = c;
+    ar->mac[3] = d; ar->mac[4] = e; ar->mac[5] = f;
+}
+
+static void test_arp_spoof_no_alert_on_first_obs(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_arp(&s, "192.168.1.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+}
+
+static void test_arp_spoof_fires_on_mac_change(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_arp(&s, "192.168.1.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&s);
+
+    /* Second poll — same IP, different MAC. */
+    s.arp_count = 0;
+    seed_arp(&s, "192.168.1.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x99);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ARP_SPOOF);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_arp_spoof_silent_on_same_mac(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_arp(&s, "192.168.1.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&s);
+    s.arp_count = 0;
+    seed_arp(&s, "192.168.1.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+}
+
+static void test_arp_spoof_skips_multicast_mac(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Multicast bit set (0x01) — ARP shouldn't normally see this,
+     * but the rule should defensively skip. */
+    seed_arp(&s, "224.0.0.1", 0x01, 0x00, 0x5e, 0x00, 0x00, 0x01);
+    alerts_update(&s);
+    s.arp_count = 0;
+    seed_arp(&s, "224.0.0.1", 0x01, 0x00, 0x5e, 0x00, 0x00, 0xff);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+}
+
 /* ── Dedup ───────────────────────────────────────────────── */
 
 static void test_dedup_increments_count(void) {
@@ -287,6 +345,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_threat_domain_fires_on_ioc);
     RUN_TEST(test_threat_domain_clean_no_fire);
     RUN_TEST(test_threat_ip_fires);
+    RUN_TEST(test_arp_spoof_no_alert_on_first_obs);
+    RUN_TEST(test_arp_spoof_fires_on_mac_change);
+    RUN_TEST(test_arp_spoof_silent_on_same_mac);
+    RUN_TEST(test_arp_spoof_skips_multicast_mac);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

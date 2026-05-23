@@ -162,6 +162,69 @@ static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ARP spoof / poisoning: detect when the MAC bound to an IP in the
+ * ARP table changes from what we previously observed. Same-MAC
+ * re-observations are silent. Once we fire we update the recorded MAC
+ * so the alert only repeats on subsequent (further) changes.
+ *
+ * History is a static module-local table sized to the largest ARP
+ * table we can ever see. */
+/* ARP-spoof rule history — file-scope so alerts_clear() can reset it. */
+static struct {
+    char    ip[46];
+    uint8_t mac[6];
+    time_t  last_seen;
+} g_arp_hist[MAX_ARP_ENTRIES];
+static int g_arp_hist_n = 0;
+
+static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
+
+    for (int i = 0; i < s->arp_count; i++) {
+        const arp_entry_t *a = &s->arp_entries[i];
+        if (!a->ip[0]) continue;
+        /* Skip multicast / broadcast / null MACs — kernel ARP cache
+         * occasionally lists those. */
+        if ((a->mac[0] & 0x01) != 0) continue;
+        int all_zero = 1;
+        for (int j = 0; j < 6; j++) if (a->mac[j]) { all_zero = 0; break; }
+        if (all_zero) continue;
+
+        int found = -1;
+        for (int j = 0; j < g_arp_hist_n; j++)
+            if (strcmp(g_arp_hist[j].ip, a->ip) == 0) { found = j; break; }
+
+        if (found < 0) {
+            if (g_arp_hist_n >= MAX_ARP_ENTRIES) continue;
+            snprintf(g_arp_hist[g_arp_hist_n].ip, sizeof(g_arp_hist[g_arp_hist_n].ip), "%s", a->ip);
+            memcpy(g_arp_hist[g_arp_hist_n].mac, a->mac, 6);
+            g_arp_hist[g_arp_hist_n].last_seen = now;
+            g_arp_hist_n++;
+            continue;
+        }
+        if (memcmp(g_arp_hist[found].mac, a->mac, 6) != 0) {
+            char old_mac[18], new_mac[18];
+            snprintf(old_mac, sizeof(old_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     g_arp_hist[found].mac[0], g_arp_hist[found].mac[1], g_arp_hist[found].mac[2],
+                     g_arp_hist[found].mac[3], g_arp_hist[found].mac[4], g_arp_hist[found].mac[5]);
+            snprintf(new_mac, sizeof(new_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     a->mac[0], a->mac[1], a->mac[2],
+                     a->mac[3], a->mac[4], a->mac[5]);
+            char key[ALERT_KEY_LEN];
+            char detail[ALERT_DETAIL_LEN];
+            snprintf(key,    sizeof(key),    "arp:%s", a->ip);
+            snprintf(detail, sizeof(detail),
+                     "%s now claims MAC %s (was %s)",
+                     a->ip, new_mac, old_mac);
+            fire(ALERT_TYPE_ARP_SPOOF, ALERT_SEV_CRIT,
+                 "ARP_SPOOF", detail, key, a->ip, 0, now);
+            /* Update record to the new MAC so we don't keep re-firing
+             * on the same observation. Subsequent flips will re-fire. */
+            memcpy(g_arp_hist[found].mac, a->mac, 6);
+        }
+        g_arp_hist[found].last_seen = now;
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -298,6 +361,7 @@ void alerts_update(sloth_state_t *s) {
     rule_nxdomain_burst(s, now);
     rule_threat_domain(s, now);
     rule_dga_domain(s, now);
+    rule_arp_spoof(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);
@@ -307,4 +371,8 @@ void alerts_update(sloth_state_t *s) {
 void alerts_clear(void) {
     engine_count = 0;
     memset(engine, 0, sizeof(engine));
+    /* Reset per-rule history too so tests (and the user pressing 'c')
+     * get a fully clean slate. */
+    g_arp_hist_n = 0;
+    memset(g_arp_hist, 0, sizeof(g_arp_hist));
 }
