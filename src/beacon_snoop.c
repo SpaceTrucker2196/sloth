@@ -57,6 +57,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->group[0]    = '\0';
         rsn_out->akm[0]      = '\0';
         rsn_out->mfp         = 0;
+        rsn_out->vendor[0]   = '\0';
+        rsn_out->has_wps     = 0;
     }
     /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
     if (len < 36) return 0;
@@ -165,9 +167,38 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             }
 
         } else if (tag == 221 && tln >= 4) {
-            /* Vendor-specific: OUI 00:50:F2 type 0x01 = WPA Information Element */
-            if (ie[2]==0x00 && ie[3]==0x50 && ie[4]==0xf2 && ie[5]==0x01)
-                wpa_found = 1;
+            uint8_t o0 = ie[2], o1 = ie[3], o2 = ie[4];
+            uint8_t ty = ie[5];
+            /* Microsoft Vendor-Specific OUI 00:50:F2.
+             *   type 1 = WPA IE
+             *   type 4 = Wi-Fi Protected Setup IE                     */
+            if (o0==0x00 && o1==0x50 && o2==0xf2) {
+                if (ty == 0x01) wpa_found = 1;
+                if (rsn_out && ty == 0x04) rsn_out->has_wps = 1;
+            }
+            /* AP vendor fingerprint — first non-Microsoft OUI we
+             * recognise wins. Lookup table is small (SOHO + enterprise
+             * + IoT mostly). */
+            if (rsn_out && !rsn_out->vendor[0]) {
+                const char *v = NULL;
+                if      (o0==0x00 && o1==0x17 && o2==0xf2) v = "Apple";
+                else if (o0==0x00 && o1==0x40 && o2==0x96) v = "Cisco";
+                else if (o0==0x00 && o1==0x03 && o2==0x7f) v = "Atheros";
+                else if (o0==0x00 && o1==0x10 && o2==0x18) v = "Broadcom";
+                else if (o0==0x4c && o1==0x5e && o2==0x0c) v = "Mikrotik";
+                else if (o0==0x00 && o1==0x15 && o2==0x6d) v = "Ubiquiti";
+                else if (o0==0xdc && o1==0x9f && o2==0xdb) v = "Ubiquiti";
+                else if (o0==0x24 && o1==0x0a && o2==0xc4) v = "Espressif";
+                else if (o0==0x00 && o1==0x0d && o2==0x97) v = "Ruckus";
+                else if (o0==0x00 && o1==0x24 && o2==0x6c) v = "Aruba";
+                else if (o0==0xc0 && o1==0xc9 && o2==0xe3) v = "TP-Link";
+                else if (o0==0x00 && o1==0x09 && o2==0x5b) v = "Netgear";
+                else if (o0==0x00 && o1==0x18 && o2==0xe7) v = "D-Link";
+                else if (o0==0x00 && o1==0x14 && o2==0x6c) v = "Netgear";
+                else if (o0==0x50 && o1==0x6f && o2==0x9a) v = "Wi-Fi Alliance";
+                if (v) snprintf(rsn_out->vendor, sizeof(rsn_out->vendor),
+                                "%s", v);
+            }
         }
 
         ie     += 2 + tln;
@@ -217,6 +248,13 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 snprintf(g_aps[i].akm, sizeof(g_aps[i].akm),
                          "%s", rsn->akm);
                 g_aps[i].mfp = rsn->mfp;
+                /* Vendor IE / WPS — only overwrite if we found new
+                 * info; preserve a previously-set vendor on bare
+                 * re-records. */
+                if (rsn->vendor[0])
+                    snprintf(g_aps[i].vendor, sizeof(g_aps[i].vendor),
+                             "%s", rsn->vendor);
+                if (rsn->has_wps) g_aps[i].has_wps = 1;
             }
             pthread_mutex_unlock(&g_mu);
             return;
@@ -252,6 +290,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         snprintf(g_aps[slot].akm, sizeof(g_aps[slot].akm),
                  "%s", rsn->akm);
         g_aps[slot].mfp = rsn->mfp;
+        snprintf(g_aps[slot].vendor, sizeof(g_aps[slot].vendor),
+                 "%s", rsn->vendor);
+        g_aps[slot].has_wps = rsn->has_wps;
     }
 
     pthread_mutex_unlock(&g_mu);

@@ -4,13 +4,22 @@
 #include <stdint.h>
 #include "sloth.h"
 
-/* Cipher / AKM / MFP info extracted from the RSN IE of a beacon. Names
- * are short strings ("CCMP", "PSK", "SAE", etc.); empty means absent. */
+/* Cipher / AKM / MFP info extracted from the RSN IE of a beacon, plus
+ * AP fingerprint info extracted from tag-221 vendor-specific IEs. The
+ * name is kept as beacon_rsn_t for API stability; new fields land at
+ * the bottom and are zero-initialised by beacon_parse on entry.
+ *
+ * Names are short strings ("CCMP", "PSK", "SAE", "Apple", "Cisco");
+ * empty means absent. */
 typedef struct {
+    /* ── RSN inventory ──────────────────────────────────── */
     char pairwise[12];
     char group[12];
     char akm[24];       /* up to 3 AKMs joined by commas */
     int  mfp;           /* 0=off  1=capable  2=required */
+    /* ── Vendor IE fingerprint ──────────────────────────── */
+    char vendor[24];    /* "Apple", "Cisco", "Mikrotik", … or "" */
+    int  has_wps;       /* Wi-Fi Protected Setup IE present */
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).

@@ -427,6 +427,12 @@ typedef struct {
     char     group[12];
     char     akm[24];          /* "PSK" / "SAE" / "PSK,FT-PSK" / "802.1X" */
     int      mfp;
+    /* Vendor-IE fingerprint — best-guess AP vendor from tag-221 OUIs
+     * (Apple AirPort, Cisco, Mikrotik, Ubiquiti, etc.) and a WPS flag.
+     * WPS-enabled APs are operationally interesting because PixieDust
+     * and online PIN attacks are still a thing on many SOHO routers. */
+    char     vendor[24];
+    int      has_wps;
     /* 1 if this beacon was originally hidden (empty SSID in the beacon
      * frame) and we revealed it via an out-of-band probe-response /
      * (re)association-response carrying the real SSID. */

@@ -402,6 +402,107 @@ static void test_view_key_nav(void) {
     ASSERT_EQ(s.beacon_sel, 0);
 }
 
+static void test_parse_vendor_ie_apple(void) {
+    /* Apple AirPort vendor IE: tag 221, OUI 00:17:F2 */
+    static const uint8_t apple_ie[] = {
+        0xdd, 0x04,
+        0x00, 0x17, 0xf2, 0x01,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(apple_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, apple_ie, sizeof(apple_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.vendor, "Apple");
+    ASSERT_EQ(rsn.has_wps, 0);
+}
+
+static void test_parse_vendor_ie_wps(void) {
+    /* Microsoft WPS IE: tag 221, OUI 00:50:F2, type 0x04 */
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x06,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x4a,         /* WPS attribute Type (version) */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+}
+
+static void test_parse_vendor_ie_mikrotik(void) {
+    static const uint8_t mt_ie[] = {
+        0xdd, 0x04,
+        0x4c, 0x5e, 0x0c, 0x01,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(mt_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, mt_ie, sizeof(mt_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.vendor, "Mikrotik");
+}
+
+static void test_parse_vendor_ie_unknown_oui_leaves_empty(void) {
+    static const uint8_t unk_ie[] = {
+        0xdd, 0x04,
+        0xab, 0xcd, 0xef, 0x01,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(unk_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, unk_ie, sizeof(unk_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.vendor, "");
+    ASSERT_EQ(rsn.has_wps, 0);
+}
+
+static void test_parse_vendor_first_match_wins(void) {
+    /* Microsoft (skipped as a vendor hit) then Apple — Apple should win. */
+    static const uint8_t ms_then_apple[] = {
+        0xdd, 0x04, 0x00, 0x50, 0xf2, 0x02,   /* MS WMM */
+        0xdd, 0x04, 0x00, 0x17, 0xf2, 0x01,   /* Apple */
+        0xdd, 0x04, 0x00, 0x40, 0x96, 0x01,   /* Cisco — later, should NOT win */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ms_then_apple)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ms_then_apple, sizeof(ms_then_apple));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.vendor, "Apple");
+}
+
+static void test_record_persists_vendor_and_wps(void) {
+    beacon_clear();
+    beacon_rsn_t rsn = {0};
+    snprintf(rsn.vendor, sizeof(rsn.vendor), "Mikrotik");
+    rsn.has_wps = 1;
+    beacon_record(BSSID_A, "MtNet", -55, 6, "WPA2", 102, &rsn);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].vendor, "Mikrotik");
+    ASSERT_EQ(s.beacon_aps[0].has_wps, 1);
+}
+
 static void test_find_ssid_hit_and_miss(void) {
     beacon_clear();
     beacon_record(BSSID_A, "HomeWiFi", -50, 6, "WPA2", 102, NULL);
@@ -450,6 +551,12 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_enc_wpa3);
     RUN_TEST(test_parse_rsn_inventory_wpa2_psk_ccmp);
     RUN_TEST(test_parse_rsn_inventory_wpa3_sae_mfp_required);
+    RUN_TEST(test_parse_vendor_ie_apple);
+    RUN_TEST(test_parse_vendor_ie_wps);
+    RUN_TEST(test_parse_vendor_ie_mikrotik);
+    RUN_TEST(test_parse_vendor_ie_unknown_oui_leaves_empty);
+    RUN_TEST(test_parse_vendor_first_match_wins);
+    RUN_TEST(test_record_persists_vendor_and_wps);
     RUN_TEST(test_parse_enc_wpa);
     RUN_TEST(test_parse_truncated_ie);
     RUN_TEST(test_record_new_entry);
