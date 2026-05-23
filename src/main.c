@@ -34,6 +34,7 @@
 #include "views/eapol.h"
 #include "views/seqnum.h"
 #include "views/assoc.h"
+#include "views/channel.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "seqnum_track.h"
@@ -86,6 +87,7 @@ static void poll_data(sloth_state_t *s) {
     eapol_snapshot(s);
     seqnum_snapshot(s);
     assoc_snapshot(s);
+    channel_summary_update(s);
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
@@ -199,6 +201,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
     case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
     case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
+    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -246,6 +249,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_EAPOL:   view_eapol_key(s, key);         break;
     case VIEW_SEQNUM:  view_seqnum_key(s, key);        break;
     case VIEW_ASSOC:   view_assoc_key(s, key);         break;
+    case VIEW_CHANNEL: view_channel_key(s, key);       break;
     default: break;
     }
 }

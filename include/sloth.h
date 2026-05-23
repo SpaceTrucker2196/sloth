@@ -48,6 +48,7 @@ typedef enum {
     VIEW_EAPOL   = 25,   /* PMKID / 4-way handshake capture */
     VIEW_SEQNUM  = 26,   /* per-MAC seqnum + cross-MAC correlation */
     VIEW_ASSOC   = 27,   /* STA <-> AP association tracker */
+    VIEW_CHANNEL = 28,   /* per-channel activity histogram */
     VIEW_COUNT
 } view_t;
 
@@ -522,6 +523,18 @@ typedef struct {
     int      b_count;
 } seqnum_correlation_t;
 
+/* ── Channel activity summary (derived from beacons + assoc) ─ */
+#define MAX_CHAN_ENTRIES   64
+
+typedef struct {
+    int     channel;        /* 1..177 across 2.4/5/6 GHz */
+    int     ap_count;       /* APs with a beacon on this channel */
+    int     assoc_count;    /* associated STAs on this channel  */
+    int8_t  best_signal;    /* strongest signal among APs here  */
+    char    top_ssid[33];   /* SSID of the strongest AP         */
+    time_t  last_seen;
+} channel_summary_t;
+
 /* ── Client ↔ AP association tracker ─────────────────────── */
 #define MAX_ASSOC_ENTRIES   128
 
@@ -745,6 +758,11 @@ typedef struct {
     assoc_t              assocs[MAX_ASSOC_ENTRIES];
     int                  assoc_count;
     int                  assoc_sel;
+
+    /* ── Channel activity summary ─────────────────────────── */
+    channel_summary_t    channels[MAX_CHAN_ENTRIES];
+    int                  channel_count;
+    int                  channel_sel;
 
     /* ── mDNS services ────────────────────────────────────── */
     mdns_service_t mdns_services[MAX_MDNS_SERVICES];

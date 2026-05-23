@@ -41,6 +41,7 @@
 #include "views/eapol.h"
 #include "views/seqnum.h"
 #include "views/assoc.h"
+#include "views/channel.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -71,6 +72,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[e] EAPOL",
     "[j] Seqnum",
     "[w] Assoc",
+    "[m] Channel",
 };
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
@@ -466,6 +468,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_EAPOL:   view_eapol_draw(s);         break;
     case VIEW_SEQNUM:  view_seqnum_draw(s);        break;
     case VIEW_ASSOC:   view_assoc_draw(s);         break;
+    case VIEW_CHANNEL: view_channel_draw(s);       break;
     default: break;
     }
 }

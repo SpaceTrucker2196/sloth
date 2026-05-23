@@ -74,6 +74,7 @@ SRCS = src/main.c          \
        src/views/seqnum.c    \
        src/assoc_track.c     \
        src/views/assoc.c     \
+       src/views/channel.c   \
        src/views/dashboard.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
@@ -277,6 +278,8 @@ TEST_SRCS = tests/main_test.c          \
             src/assoc_track.c              \
             src/views/assoc.c              \
             tests/test_assoc_track.c       \
+            src/views/channel.c            \
+            tests/test_channel.c           \
             src/views/dashboard.c          \
             tests/test_dashboard.c
 
