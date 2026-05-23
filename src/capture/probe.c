@@ -295,12 +295,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     pthread_mutex_unlock(&g_mu);
 
     /* OS fingerprint from vendor-specific IEs (strong-signal only). */
-    const char *fp = probe_pnl_fingerprint_ies(ie_start, ie_total);
+    const char *fp  = probe_pnl_fingerprint_ies(ie_start, ie_total);
+    /* PHY tier from HT / VHT / HE / EHT IEs. */
+    const char *phy = probe_pnl_phy_ies(ie_start, ie_total);
 
     /* Feed the PNL aggregator — outside the probe-list mutex since
      * probe_pnl_observe takes its own lock. Wildcard probes are dropped
      * inside observe() since they leak no preferred-network info. */
-    probe_pnl_observe(sa, ssid, fp);
+    probe_pnl_observe(sa, ssid, fp, phy);
 }
 
 /* ── Capture thread ──────────────────────────────────────── */

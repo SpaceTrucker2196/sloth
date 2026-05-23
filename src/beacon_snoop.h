@@ -20,6 +20,8 @@ typedef struct {
     /* ── Vendor IE fingerprint ──────────────────────────── */
     char vendor[24];    /* "Apple", "Cisco", "Mikrotik", … or "" */
     int  has_wps;       /* Wi-Fi Protected Setup IE present */
+    /* Max PHY tier — "Wi-Fi 7" / "6" / "5" / "4" / "legacy" / "" */
+    char phy[10];
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).

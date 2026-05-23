@@ -60,8 +60,50 @@ const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
     return guess;
 }
 
+/* Max PHY tier from HT (45) / VHT (191) / HE+EHT (255 ext id 35 / 108).
+ * We classify "Wi-Fi 7" via the EHT Capabilities extension and via the
+ * Multi-Link IE (ext 81) which is required for EHT operation; the
+ * latter alone is enough since pre-EHT chips don't emit it. */
+const char *probe_pnl_phy_ies(const uint8_t *ies, int ielen)
+{
+    if (!ies || ielen < 2) return NULL;
+    int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
+    const uint8_t *p = ies;
+    int rem = ielen;
+    while (rem >= 2) {
+        uint8_t tag = p[0];
+        uint8_t len = p[1];
+        if (2 + (int)len > rem) break;
+        if (tag == 45)  has_ht  = 1;
+        if (tag == 191) has_vht = 1;
+        if (tag == 255 && len >= 1) {
+            uint8_t ext = p[2];
+            if (ext == 35)               has_he  = 1;   /* HE Capabilities */
+            if (ext == 81 || ext == 108) has_eht = 1;   /* Multi-Link / EHT */
+        }
+        p   += 2 + len;
+        rem -= 2 + len;
+    }
+    if (has_eht) return "Wi-Fi 7";
+    if (has_he)  return "Wi-Fi 6";
+    if (has_vht) return "Wi-Fi 5";
+    if (has_ht)  return "Wi-Fi 4";
+    return "legacy";
+}
+
+/* Rank PHY tiers so we can upgrade-only on observe(). */
+static int phy_rank(const char *p) {
+    if (!p || !p[0])              return 0;
+    if (strcmp(p, "legacy") == 0) return 1;
+    if (strcmp(p, "Wi-Fi 4") == 0) return 2;
+    if (strcmp(p, "Wi-Fi 5") == 0) return 3;
+    if (strcmp(p, "Wi-Fi 6") == 0) return 4;
+    if (strcmp(p, "Wi-Fi 7") == 0) return 5;
+    return 0;
+}
+
 void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
-                        const char *os_fp)
+                        const char *os_fp, const char *phy)
 {
     if (!ssid || !ssid[0]) return;   /* wildcard probes carry no PNL info */
     time_t now = time(NULL);
@@ -95,6 +137,11 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
      * probes don't overwrite. */
     if (os_fp && os_fp[0] && !g_tbl[idx].os_fp[0])
         snprintf(g_tbl[idx].os_fp, sizeof(g_tbl[idx].os_fp), "%s", os_fp);
+    /* PHY tier: upgrade-only. A device might send a stripped-down
+     * probe variant later that omits VHT/HE — keep the strongest
+     * tier we've ever seen for it. */
+    if (phy && phy[0] && phy_rank(phy) > phy_rank(g_tbl[idx].phy))
+        snprintf(g_tbl[idx].phy, sizeof(g_tbl[idx].phy), "%s", phy);
 
     /* Dedupe — skip if this SSID is already in this client's list. */
     for (int j = 0; j < g_tbl[idx].ssid_count; j++) {

@@ -52,11 +52,12 @@ void view_pnl_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-17s  %-14s  %-8s  %-3s  %-4s  %-4s  %s\n",
-           "MAC", "vendor", "OS", "#", "age", "hits", "preferred networks");
-    TPRINT(" %-17s  %-14s  %-8s  %-3s  %-4s  %-4s  %s\n",
+    TPRINT(" %-17s  %-14s  %-8s  %-8s  %-3s  %-4s  %-4s  %s\n",
+           "MAC", "vendor", "OS", "PHY", "#", "age", "hits",
+           "preferred networks");
+    TPRINT(" %-17s  %-14s  %-8s  %-8s  %-3s  %-4s  %-4s  %s\n",
            "-----------------", "--------------", "--------",
-           "---", "----", "----",
+           "--------", "---", "----", "----",
            "----------------------------------------");
     tui_normal();
 
@@ -108,6 +109,17 @@ void view_pnl_draw(const sloth_state_t *s) {
         /* OS fingerprint — bright if we have one, dim "?" if not. */
         if (c->os_fp[0]) { tui_bright(); TPRINT("  %-8.8s", c->os_fp); }
         else             { tui_dim();    TPRINT("  %-8s",  "?"); }
+
+        /* PHY tier — Wi-Fi 6+ bright, Wi-Fi 5 normal, older dim. */
+        if (c->phy[0]) {
+            if (strncmp(c->phy, "Wi-Fi 6", 7) == 0 ||
+                strncmp(c->phy, "Wi-Fi 7", 7) == 0) tui_bright();
+            else if (strncmp(c->phy, "Wi-Fi 5", 7) == 0) tui_normal();
+            else                                          tui_dim();
+            TPRINT("  %-8.8s", c->phy);
+        } else {
+            tui_dim(); TPRINT("  %-8s", "?");
+        }
 
         if (i == s->pnl_sel) tui_sel(); else tui_normal();
         TPRINT("  %-3d", c->ssid_count);

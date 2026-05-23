@@ -433,6 +433,8 @@ typedef struct {
      * and online PIN attacks are still a thing on many SOHO routers. */
     char     vendor[24];
     int      has_wps;
+    /* Max PHY tier advertised by the AP — same scheme as pnl_client_t.phy. */
+    char     phy[10];
     /* 1 if this beacon was originally hidden (empty SSID in the beacon
      * frame) and we revealed it via an out-of-band probe-response /
      * (re)association-response carrying the real SSID. */
@@ -474,6 +476,10 @@ typedef struct {
      * label. Sticky: once a strong vendor IE pins the OS, weaker
      * later probes don't overwrite. */
     char    os_fp[16];
+    /* Max PHY tier — "Wi-Fi 7" / "Wi-Fi 6" / "Wi-Fi 5" / "Wi-Fi 4" /
+     * "legacy" — derived from HT (45), VHT (191), HE / EHT (255 ext).
+     * Pins the device generation across MAC rotations. */
+    char    phy[10];
     time_t  first_seen;
     time_t  last_seen;
 } pnl_client_t;

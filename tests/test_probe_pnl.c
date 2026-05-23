@@ -16,15 +16,15 @@ static void test_empty(void) {
 static void test_wildcard_probe_is_dropped(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "", NULL);
-    probe_pnl_observe(mac, NULL, NULL);
+    probe_pnl_observe(mac, "", NULL, NULL);
+    probe_pnl_observe(mac, NULL, NULL, NULL);
     ASSERT_EQ(probe_pnl_count(), 0);
 }
 
 static void test_first_directed_probe_creates_client(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "myssid", NULL);
+    probe_pnl_observe(mac, "myssid", NULL, NULL);
     ASSERT_EQ(probe_pnl_count(),       1);
     ASSERT_EQ(probe_pnl_ssid_count(mac), 1);
 }
@@ -32,12 +32,12 @@ static void test_first_directed_probe_creates_client(void) {
 static void test_ssid_dedup_per_client(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "wifi-a", NULL);
-    probe_pnl_observe(mac, "wifi-a", NULL);
-    probe_pnl_observe(mac, "wifi-a", NULL);
+    probe_pnl_observe(mac, "wifi-a", NULL, NULL);
+    probe_pnl_observe(mac, "wifi-a", NULL, NULL);
+    probe_pnl_observe(mac, "wifi-a", NULL, NULL);
     ASSERT_EQ(probe_pnl_ssid_count(mac), 1);
 
-    probe_pnl_observe(mac, "wifi-b", NULL);
+    probe_pnl_observe(mac, "wifi-b", NULL, NULL);
     ASSERT_EQ(probe_pnl_ssid_count(mac), 2);
 }
 
@@ -46,9 +46,9 @@ static void test_multiple_clients_independent(void) {
     uint8_t m1[6], m2[6];
     with_mac(m1, 0x00,0x11,0x22,0x33,0x44,0x55);
     with_mac(m2, 0xaa,0xbb,0xcc,0xdd,0xee,0xff);
-    probe_pnl_observe(m1, "alpha", NULL);
-    probe_pnl_observe(m1, "beta", NULL);
-    probe_pnl_observe(m2, "gamma", NULL);
+    probe_pnl_observe(m1, "alpha", NULL, NULL);
+    probe_pnl_observe(m1, "beta", NULL, NULL);
+    probe_pnl_observe(m2, "gamma", NULL, NULL);
     ASSERT_EQ(probe_pnl_count(),         2);
     ASSERT_EQ(probe_pnl_ssid_count(m1),  2);
     ASSERT_EQ(probe_pnl_ssid_count(m2),  1);
@@ -58,8 +58,8 @@ static void test_random_flag_set_when_la_bit(void) {
     probe_pnl_clear();
     uint8_t real[6];   with_mac(real,   0x00,0x11,0x22,0x33,0x44,0x55);
     uint8_t random[6]; with_mac(random, 0x02,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(real,   "home", NULL);
-    probe_pnl_observe(random, "home", NULL);
+    probe_pnl_observe(real,   "home", NULL, NULL);
+    probe_pnl_observe(random, "home", NULL, NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     probe_pnl_snapshot(&s);
@@ -84,11 +84,11 @@ static void test_per_client_ssid_cap_evicts_oldest(void) {
     /* Fill exactly to the cap. */
     for (int i = 0; i < MAX_PNL_SSIDS_PER_CLI; i++) {
         snprintf(name, sizeof(name), "ssid%d", i);
-        probe_pnl_observe(mac, name, NULL);
+        probe_pnl_observe(mac, name, NULL, NULL);
     }
     ASSERT_EQ(probe_pnl_ssid_count(mac), MAX_PNL_SSIDS_PER_CLI);
     /* One more — count stays at cap. */
-    probe_pnl_observe(mac, "overflow", NULL);
+    probe_pnl_observe(mac, "overflow", NULL, NULL);
     ASSERT_EQ(probe_pnl_ssid_count(mac), MAX_PNL_SSIDS_PER_CLI);
 }
 
@@ -98,12 +98,12 @@ static void test_snapshot_sorted_by_last_seen_desc(void) {
     with_mac(m1, 0x00,0x11,0x22,0x33,0x44,0x55);
     with_mac(m2, 0x00,0x11,0x22,0x33,0x44,0x66);
     with_mac(m3, 0x00,0x11,0x22,0x33,0x44,0x77);
-    probe_pnl_observe(m1, "a", NULL);
+    probe_pnl_observe(m1, "a", NULL, NULL);
     /* tiny sleep would be flaky in tests — instead rely on the fact
      * that subsequent observe() calls bump last_seen monotonically. */
-    probe_pnl_observe(m2, "b", NULL);
-    probe_pnl_observe(m3, "c", NULL);
-    probe_pnl_observe(m1, "a2", NULL);  /* m1's last_seen now latest */
+    probe_pnl_observe(m2, "b", NULL, NULL);
+    probe_pnl_observe(m3, "c", NULL, NULL);
+    probe_pnl_observe(m1, "a2", NULL, NULL);  /* m1's last_seen now latest */
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     probe_pnl_snapshot(&s);
@@ -118,9 +118,9 @@ static void test_snapshot_sorted_by_last_seen_desc(void) {
 static void test_probe_count_increments_per_observation(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "x", NULL);
-    probe_pnl_observe(mac, "x", NULL);   /* dup ssid, still counts as probe */
-    probe_pnl_observe(mac, "y", NULL);
+    probe_pnl_observe(mac, "x", NULL, NULL);
+    probe_pnl_observe(mac, "x", NULL, NULL);   /* dup ssid, still counts as probe */
+    probe_pnl_observe(mac, "y", NULL, NULL);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     probe_pnl_snapshot(&s);
     ASSERT_EQ(s.pnl_count, 1);
@@ -197,12 +197,65 @@ static void test_fingerprint_null_or_empty(void) {
     ASSERT(probe_pnl_fingerprint_ies(one, 1)   == NULL);
 }
 
+/* ── PHY tier classifier ──────────────────────────────────── */
+
+static void test_phy_legacy(void) {
+    static const uint8_t ies[] = { 0x00, 0x00 };  /* just SSID */
+    const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
+    ASSERT_STR(p, "legacy");
+}
+
+static void test_phy_wifi4_ht(void) {
+    static const uint8_t ies[] = { 0x2d, 0x01, 0x00 };  /* tag 45 HT */
+    const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
+    ASSERT_STR(p, "Wi-Fi 4");
+}
+
+static void test_phy_wifi5_vht(void) {
+    static const uint8_t ies[] = {
+        0x2d, 0x01, 0x00,                /* HT */
+        0xbf, 0x01, 0x00,                /* tag 191 VHT */
+    };
+    const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
+    ASSERT_STR(p, "Wi-Fi 5");
+}
+
+static void test_phy_wifi6_he(void) {
+    static const uint8_t ies[] = {
+        0xff, 0x02, 0x23, 0x00,          /* tag 255 ext id 35 = HE */
+    };
+    const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
+    ASSERT_STR(p, "Wi-Fi 6");
+}
+
+static void test_phy_wifi7_eht_via_extid_108(void) {
+    static const uint8_t ies[] = {
+        0xff, 0x02, 0x6c, 0x00,          /* tag 255 ext id 108 = EHT */
+    };
+    const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
+    ASSERT_STR(p, "Wi-Fi 7");
+}
+
+static void test_phy_upgrades_only_on_observe(void) {
+    probe_pnl_clear();
+    uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
+    probe_pnl_observe(mac, "x", NULL, "Wi-Fi 6");
+    probe_pnl_observe(mac, "y", NULL, "Wi-Fi 4");     /* downgrade — ignored */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    probe_pnl_snapshot(&s);
+    ASSERT_STR(s.pnl_clients[0].phy, "Wi-Fi 6");
+    /* Upgrade applies. */
+    probe_pnl_observe(mac, "z", NULL, "Wi-Fi 7");
+    probe_pnl_snapshot(&s);
+    ASSERT_STR(s.pnl_clients[0].phy, "Wi-Fi 7");
+}
+
 /* ── Sticky os_fp storage on the per-client entry ─────────── */
 
 static void test_os_fp_stored_on_first_observation(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "myssid", "Apple");
+    probe_pnl_observe(mac, "myssid", "Apple", NULL);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     probe_pnl_snapshot(&s);
@@ -212,9 +265,9 @@ static void test_os_fp_stored_on_first_observation(void) {
 static void test_os_fp_sticky_does_not_overwrite(void) {
     probe_pnl_clear();
     uint8_t mac[6]; with_mac(mac, 0x00,0x11,0x22,0x33,0x44,0x55);
-    probe_pnl_observe(mac, "a", "Apple");
-    probe_pnl_observe(mac, "b", NULL);    /* later, no fingerprint */
-    probe_pnl_observe(mac, "c", "Windows"); /* later, different fingerprint */
+    probe_pnl_observe(mac, "a", "Apple", NULL);
+    probe_pnl_observe(mac, "b", NULL, NULL);    /* later, no fingerprint */
+    probe_pnl_observe(mac, "c", "Windows", NULL); /* later, different fingerprint */
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     probe_pnl_snapshot(&s);
@@ -241,4 +294,10 @@ void run_probe_pnl_tests(void) {
     RUN_TEST(test_fingerprint_null_or_empty);
     RUN_TEST(test_os_fp_stored_on_first_observation);
     RUN_TEST(test_os_fp_sticky_does_not_overwrite);
+    RUN_TEST(test_phy_legacy);
+    RUN_TEST(test_phy_wifi4_ht);
+    RUN_TEST(test_phy_wifi5_vht);
+    RUN_TEST(test_phy_wifi6_he);
+    RUN_TEST(test_phy_wifi7_eht_via_extid_108);
+    RUN_TEST(test_phy_upgrades_only_on_observe);
 }

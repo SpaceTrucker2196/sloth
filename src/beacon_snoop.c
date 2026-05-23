@@ -59,7 +59,9 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->mfp         = 0;
         rsn_out->vendor[0]   = '\0';
         rsn_out->has_wps     = 0;
+        rsn_out->phy[0]      = '\0';
     }
+    int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
     /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
     if (len < 36) return 0;
 
@@ -98,6 +100,13 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             int slen = tln < 32 ? tln : 32;
             memcpy(ssid_out, ie + 2, (size_t)slen);
             ssid_out[slen] = '\0';
+
+        } else if (tag == 45)  { has_ht  = 1;
+        } else if (tag == 191) { has_vht = 1;
+        } else if (tag == 255 && tln >= 1) {
+            uint8_t ext = ie[2];
+            if (ext == 35)               has_he  = 1;
+            if (ext == 81 || ext == 108) has_eht = 1;
 
         } else if (tag == 3 && tln == 1) {
             /* DS Parameter Set — channel number */
@@ -205,6 +214,14 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         ie_rem -= 2 + tln;
     }
 
+    if (rsn_out) {
+        const char *p = has_eht ? "Wi-Fi 7"
+                      : has_he  ? "Wi-Fi 6"
+                      : has_vht ? "Wi-Fi 5"
+                      : has_ht  ? "Wi-Fi 4" : "legacy";
+        snprintf(rsn_out->phy, sizeof(rsn_out->phy), "%s", p);
+    }
+
     /* Determine encryption, strongest first */
     if (sae_found)
         strncpy(enc_out, "WPA3",  10);
@@ -255,6 +272,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     snprintf(g_aps[i].vendor, sizeof(g_aps[i].vendor),
                              "%s", rsn->vendor);
                 if (rsn->has_wps) g_aps[i].has_wps = 1;
+                if (rsn->phy[0])
+                    snprintf(g_aps[i].phy, sizeof(g_aps[i].phy),
+                             "%s", rsn->phy);
             }
             pthread_mutex_unlock(&g_mu);
             return;
@@ -293,6 +313,8 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         snprintf(g_aps[slot].vendor, sizeof(g_aps[slot].vendor),
                  "%s", rsn->vendor);
         g_aps[slot].has_wps = rsn->has_wps;
+        snprintf(g_aps[slot].phy, sizeof(g_aps[slot].phy),
+                 "%s", rsn->phy);
     }
 
     pthread_mutex_unlock(&g_mu);

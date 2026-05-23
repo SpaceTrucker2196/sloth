@@ -33,13 +33,13 @@ void view_beacon_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-24s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-10s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-9s  %-8s  %4s\n",
            "SSID", "BSSID", "Sig", "Ch", "Enc",
-           "Pairwise", "MFP", "AKM", "WPS", "Vendor", "Last");
-    TPRINT(" %-24s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-10s  %4s\n",
-           "------------------------", "-----------------",
+           "Pairwise", "MFP", "AKM", "WPS", "Vendor", "PHY", "Last");
+    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+           "----------------------", "-----------------",
            "----", "---", "-----", "---------", "---",
-           "----------", "---", "----------", "----");
+           "----------", "---", "---------", "--------", "----");
     tui_normal();
 
     if (s->beacon_count == 0) {
@@ -85,17 +85,18 @@ void view_beacon_draw(const sloth_state_t *s) {
         const char *akm   = ap->akm[0]      ? ap->akm      : "-";
         const char *wps_s = ap->has_wps ? "ON" : "-";
         const char *vend  = ap->vendor[0] ? ap->vendor : "-";
+        const char *phy_s = ap->phy[0]    ? ap->phy    : "-";
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-24.24s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-3s  %-10.10s  %-3s  %-10.10s  %s\n",
+            TPRINT(" %-22.22s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-3s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
                    ssid, bssid_str(ap->bssid), sig_buf, ap->channel,
-                   ap->enc, pw, mfp_s, akm, wps_s, vend, age_buf);
+                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s, age_buf);
             tui_reset();
         } else {
             /* dim hidden SSIDs */
             if (!ap->ssid[0]) tui_dim(); else tui_normal();
-            TPRINT(" %-24.24s", ssid);
+            TPRINT(" %-22.22s", ssid);
 
             tui_dim();
             TPRINT("  %-17.17s", bssid_str(ap->bssid));
@@ -140,7 +141,16 @@ void view_beacon_draw(const sloth_state_t *s) {
             /* Vendor — bright for known, dim "-" for unknown. */
             if (ap->vendor[0]) tui_bright();
             else                tui_dim();
-            TPRINT("  %-10.10s", vend);
+            TPRINT("  %-9.9s", vend);
+
+            /* PHY — Wi-Fi 6/7 bright, Wi-Fi 5 normal, older dim. */
+            if (ap->phy[0]) {
+                if (strncmp(ap->phy, "Wi-Fi 6", 7) == 0 ||
+                    strncmp(ap->phy, "Wi-Fi 7", 7) == 0) tui_bright();
+                else if (strncmp(ap->phy, "Wi-Fi 5", 7) == 0) tui_normal();
+                else                                          tui_dim();
+            } else { tui_dim(); }
+            TPRINT("  %-8.8s", phy_s);
 
             tui_dim();
             TPRINT("  %s\n", age_buf);
