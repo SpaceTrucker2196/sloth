@@ -110,9 +110,12 @@ void top_hosts_clear(void) {
     memset(g_tbl, 0, sizeof(g_tbl));
 }
 
+static time_t g_last_poll = 0;
+
 void top_hosts_update(sloth_state_t *s) {
     if (!s) return;
     time_t now = time(NULL);
+    double dt  = g_last_poll ? (double)(now - g_last_poll) : 0.0;
 
     reset_counters();
 
@@ -132,6 +135,16 @@ void top_hosts_update(sloth_state_t *s) {
         h->rx_rate += b->rx_rate;
         h->tx_rate += b->tx_rate;
     }
+
+    /* Integrate rate * dt into cumulative byte totals. dt is the poll
+     * interval (~1s); first poll is skipped (dt = 0). */
+    if (dt > 0.0) {
+        for (int i = 0; i < g_count; i++) {
+            g_tbl[i].rx_bytes += (uint64_t)(g_tbl[i].rx_rate * dt + 0.5);
+            g_tbl[i].tx_bytes += (uint64_t)(g_tbl[i].tx_rate * dt + 0.5);
+        }
+    }
+    g_last_poll = now;
 
     /* (3) Drop stale entries — not seen for TOP_HOST_STALE_S seconds. */
     for (int i = 0; i < g_count; ) {

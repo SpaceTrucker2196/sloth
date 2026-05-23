@@ -149,6 +149,8 @@ void bw_update(sloth_state_t *s) {
         bw->proto       = e->proto;
         bw->rx_rate     = rx_rate;
         bw->tx_rate     = tx_rate;
+        bw->rx_bytes    = e->rx_accum;
+        bw->tx_bytes    = e->tx_accum;
         memcpy(bw->rx_hist, e->rx_hist, sizeof(bw->rx_hist));
         memcpy(bw->tx_hist, e->tx_hist, sizeof(bw->tx_hist));
         bw->hist_head   = e->hist_head;

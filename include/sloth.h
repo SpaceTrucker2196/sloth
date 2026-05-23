@@ -106,6 +106,10 @@ typedef struct {
     int      proto;
     double   rx_rate;              /* bytes/sec */
     double   tx_rate;
+    /* Cumulative bytes since the bw entry was created (since the flow
+     * was first observed by the pcap thread). 0 if WITH_PCAP=0. */
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
     float    rx_hist[CONN_BW_HIST];
     float    tx_hist[CONN_BW_HIST];
     int      hist_head;
@@ -275,6 +279,11 @@ typedef struct {
     int      conn_count;     /* distinct flows to this IP this poll */
     double   rx_rate;        /* B/s summed across all flows */
     double   tx_rate;
+    /* Cumulative bytes since first_seen, integrated from rx_rate /
+     * tx_rate * poll-interval each tick. Approximate (1 Hz integration)
+     * but monotonic and accurate to within the poll period. */
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
 } top_host_t;
 
 /* ── Devices (synthesized device profiles, keyed by MAC) ─ */

@@ -13,6 +13,13 @@ typedef struct {
     int      udp_count;
     uint16_t ports[MAX_PROC_PORTS];
     int      port_count;
+    /* Bytes sent / received across all of this process' tracked conns,
+     * summed from the per-conn bw entries. Instantaneous total of all
+     * live flows; entries for ended conns drop off. */
+    uint64_t tx_bytes;
+    uint64_t rx_bytes;
+    double   tx_rate;     /* B/s aggregated */
+    double   rx_rate;
 } proc_stat_t;
 int  procs_aggregate(const sloth_state_t *s, proc_stat_t *out, int max);
 void view_procs_draw(const sloth_state_t *s);

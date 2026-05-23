@@ -5,6 +5,8 @@
 #include "capture/capture.h"
 #include "dns.h"
 #include "services.h"
+#include "host_cache.h"
+#include "ip_color.h"
 #include "views/packets.h"
 #include "pcap_write.h"
 
@@ -147,13 +149,16 @@ void view_packets_draw(const sloth_state_t *s) {
         tui_bright(); TPRINT(" Filter> %s_\n", buf); tui_normal();
     }
 
-    /* column headers */
+    /* column headers — same column widths as the dashboard packet
+     * band so the two views feel like one continuous data surface. */
     tui_dim();
-    TPRINT(" %-11s  %-21s  %-21s  %5s  %5s  %s\n",
-           "Time", "Source", "Destination", "Proto", "Len", "Info");
-    TPRINT(" %-11s  %-21s  %-21s  %5s  %5s  %s\n",
+    TPRINT(" %-11s  %-21s     %-21s  %-5s  %-5s  %-28s  %s\n",
+           "Time", "Source", "Destination", "Proto", "Len", "Info", "Hex dump");
+    TPRINT(" %-11s  %-21s     %-21s  %-5s  %-5s  %-28s  %s\n",
            "-----------", "---------------------",
-           "---------------------", "-----", "-----", "----");
+           "---------------------", "-----", "-----",
+           "----------------------------",
+           "-------------------------------");
     tui_normal();
 
     if (count == 0) {
@@ -173,37 +178,117 @@ void view_packets_draw(const sloth_state_t *s) {
         int                  idx = (start + row) % MAX_PACKETS;
         const packet_info_t *p   = &s->packets[idx];
 
-        char src[64], dst[64];
-        if (p->src_port) {
-            if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
-            else svc_fmt_addr(src, sizeof(src), p->src, p->src_port);
-        } else {
-            snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
-        }
-        if (p->dst_port) {
-            if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
-            else svc_fmt_addr(dst, sizeof(dst), p->dst, p->dst_port);
-        } else {
-            snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
-        }
-
 #ifdef WITH_NCURSES
-        if (row == sel) {
-            tui_sel();
+        int cat = (int)pkt_categorize(p->proto, p->src_port, p->dst_port);
+        int yrow, xstart;
+        getyx(stdscr, yrow, xstart);
+        (void)xstart;
+
+        /* Highlight the whole row if selected, before per-column colour. */
+        if (row == sel) tui_sel();
+        else            tui_normal();
+
+        /* Time + leading whitespace. */
+        printw(" %04u.%06u  ",
+               (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec);
+
+        /* Src column: hostname (from host_cache) or IP, then :port. */
+        char src_host[HOST_CACHE_HOSTLEN];
+        int  src_used = 0;
+        if (host_cache_lookup(p->src, src_host, sizeof(src_host))) {
+            char buf[32];
+            int  port_n = snprintf(buf, sizeof(buf), ":%u", (unsigned)p->src_port);
+            int  host_room = 21 - port_n;
+            if (host_room < 1) host_room = 1;
+            char host_trunc[64];
+            snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
+                     host_room, host_room, src_host);
+            if (tui_alert_hot_check(p->src)) {
+                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+                addstr(host_trunc);
+            } else {
+                tui_brand_addstr(host_trunc, cat);
+            }
+            if (row == sel) tui_sel(); else tui_normal();
+            addstr(buf);
+            src_used = host_room + port_n;
         } else {
-            tui_pkt_bg(p->proto, p->src_port, p->dst_port);
+            tui_ip_addstr(p->src, cat);
+            if (row == sel) tui_sel(); else tui_normal();
+            printw(":%-5u", (unsigned)p->src_port);
+            src_used = (int)strlen(p->src) + 1 + 5;
         }
-        printw(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
-               (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
-               src, dst, p->proto, (unsigned)p->len, p->info);
+        while (src_used++ < 21) addch(' ');
+
+        printw("  " "\xe2\x86\x92" "  "); /* → */
+
+        /* Dst — same logic. */
+        char dst_host[HOST_CACHE_HOSTLEN];
+        int  dst_used = 0;
+        if (host_cache_lookup(p->dst, dst_host, sizeof(dst_host))) {
+            char buf[32];
+            int  port_n = snprintf(buf, sizeof(buf), ":%u", (unsigned)p->dst_port);
+            int  host_room = 21 - port_n;
+            if (host_room < 1) host_room = 1;
+            char host_trunc[64];
+            snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
+                     host_room, host_room, dst_host);
+            if (tui_alert_hot_check(p->dst)) {
+                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+                addstr(host_trunc);
+            } else {
+                tui_brand_addstr(host_trunc, cat);
+            }
+            if (row == sel) tui_sel(); else tui_normal();
+            addstr(buf);
+            dst_used = host_room + port_n;
+        } else {
+            tui_ip_addstr(p->dst, cat);
+            if (row == sel) tui_sel(); else tui_normal();
+            printw(":%-5u", (unsigned)p->dst_port);
+            dst_used = (int)strlen(p->dst) + 1 + 5;
+        }
+        while (dst_used++ < 21) addch(' ');
+
+        printw("  %5d  %5u  ", p->proto, (unsigned)p->len);
+
+        /* Info — earth-tone palette (same as dashboard). */
+        if (row != sel) tui_info_color(p->info);
+        printw("%-28.28s", p->info);
+
+        /* Hex dump — Fallout palette per byte, fills the rest of
+         * the line up to the right margin. */
+        int yrow2, xnow;
+        getyx(stdscr, yrow2, xnow);
+        int hex_room = COLS - xnow - 1;
+        if (hex_room > 0 && p->raw_len > 0) {
+            int hex_bytes = hex_room / 3;
+            if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
+            for (int b = 0; b < hex_bytes; b++) {
+                unsigned byte = (unsigned)p->raw[b];
+                if (row != sel)
+                    attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
+                printw("%02x ", byte);
+            }
+        }
         if (row == sel) tui_reset();
         else            tui_normal();
+        printw("\n");
+        (void)yrow; (void)yrow2;
 #else
         if (row == sel) tui_sel();
         else            tui_normal();
-        printf(" %04u.%06u  %-21.21s  %-21.21s  %5d  %5u  %.40s\n",
+        printf(" %04u.%06u  %-21.21s:%-5u  ->  %-21.21s:%-5u  %5d  %5u  %.40s",
                (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
-               src, dst, p->proto, (unsigned)p->len, p->info);
+               p->src, (unsigned)p->src_port,
+               p->dst, (unsigned)p->dst_port,
+               p->proto, (unsigned)p->len, p->info);
+        if (p->raw_len > 0) {
+            printf("  ");
+            for (int b = 0; b < p->raw_len && b < 16; b++)
+                printf("%02x ", (unsigned)p->raw[b]);
+        }
+        printf("\n");
         if (row == sel) tui_reset();
 #endif
     }

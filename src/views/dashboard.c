@@ -570,16 +570,17 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
                                   int x0, int w) {
     panel_title(y0, x0, w, "Top hosts", DASH_PANEL_TOP_HOSTS);
     attrset(COLOR_PAIR(CP_DIM));
-    /* Reserve: ip(15) + host(var) + owner(var) + age(7) + cnt(4) + 5 sep */
-    int spare = w - (15 + 7 + 4 + 6);   /* 6 = paddings/margins */
+    /* Reserve: ip(15) + host(var) + owner(var) + age(7) + cnt(4) +
+     * tx(7) + rx(7) + 7 sep */
+    int spare = w - (15 + 7 + 4 + 7 + 7 + 7);
     int host_w  = spare * 6 / 10;
     int owner_w = spare - host_w;
     if (host_w  < 8) host_w  = 8;
     if (owner_w < 6) owner_w = 6;
 
-    clipline(y0 + 1, x0, w, "  %-15s %-*s %-*s %-7s %4s",
+    clipline(y0 + 1, x0, w, "  %-15s %-*s %-*s %-7s %4s %7s %7s",
              "ip", host_w, "host", owner_w, "owner",
-             "age", "conn");
+             "age", "conn", "tx", "rx");
 
     int rows = h - 2;
     int n = s->top_host_count < rows ? s->top_host_count : rows;
@@ -639,6 +640,18 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
 
         attrset(COLOR_PAIR(CP_NORMAL));
         printw(" %-7s %4d", age, e->conn_count);
+
+        /* Cumulative bytes — tx then rx. Bright when there's traffic,
+         * dim "0B" when the conn is idle. */
+        char tx_buf[12], rx_buf[12];
+        fmt_bytes(e->tx_bytes, tx_buf, sizeof(tx_buf));
+        fmt_bytes(e->rx_bytes, rx_buf, sizeof(rx_buf));
+        if (e->tx_bytes > 0) attrset(COLOR_PAIR(CP_BRIGHT));
+        else                 attrset(COLOR_PAIR(CP_DIM));
+        printw(" %7s", tx_buf);
+        if (e->rx_bytes > 0) attrset(COLOR_PAIR(CP_BRIGHT));
+        else                 attrset(COLOR_PAIR(CP_DIM));
+        printw(" %7s", rx_buf);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x0, w, "");
 }

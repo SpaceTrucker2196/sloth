@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "dns.h"
 #include "services.h"
+#include "bandwidth.h"
 #include "views/procs.h"
 
 #define PROCS_PAGE 30
@@ -12,6 +13,18 @@
 /* Module-static proc table — shared between draw and key handler. */
 static proc_stat_t g_procs[MAX_PROCS];
 static int         g_proc_count = 0;
+
+/* Compact byte-count formatter — local to the procs view. */
+static void fmt_bytes_short(uint64_t b, char *buf, int sz) {
+    if      (b >= (uint64_t)1 << 30)
+        snprintf(buf, sz, "%.1fGB", (double)b / (double)((uint64_t)1 << 30));
+    else if (b >= (uint64_t)1 << 20)
+        snprintf(buf, sz, "%.1fMB", (double)b / (double)((uint64_t)1 << 20));
+    else if (b >= (uint64_t)1 << 10)
+        snprintf(buf, sz, "%.1fKB", (double)b / (double)((uint64_t)1 << 10));
+    else
+        snprintf(buf, sz, "%lluB",  (unsigned long long)b);
+}
 
 /* Visible row index: g_vis_idx[i] is the g_procs[] index of visible row i. */
 static int g_vis_idx[MAX_PROCS];
@@ -42,10 +55,18 @@ int procs_aggregate(const sloth_state_t *s, proc_stat_t *out, int max) {
     for (int i = 0; i < s->conn_count; i++) {
         const conn_t *c = &s->conns[i];
 
+        const conn_bw_t *bw = bw_lookup(s, c);
+
         if (c->pid <= 0) {
             unresolved.conn_count++;
             if (c->proto == PROTO_TCP) unresolved.tcp_count++;
             if (c->proto == PROTO_UDP) unresolved.udp_count++;
+            if (bw) {
+                unresolved.tx_bytes += bw->tx_bytes;
+                unresolved.rx_bytes += bw->rx_bytes;
+                unresolved.tx_rate  += bw->tx_rate;
+                unresolved.rx_rate  += bw->rx_rate;
+            }
             has_unresolved = 1;
             continue;
         }
@@ -65,6 +86,12 @@ int procs_aggregate(const sloth_state_t *s, proc_stat_t *out, int max) {
         out[found].conn_count++;
         if (c->proto == PROTO_TCP) out[found].tcp_count++;
         if (c->proto == PROTO_UDP) out[found].udp_count++;
+        if (bw) {
+            out[found].tx_bytes += bw->tx_bytes;
+            out[found].rx_bytes += bw->rx_bytes;
+            out[found].tx_rate  += bw->tx_rate;
+            out[found].rx_rate  += bw->rx_rate;
+        }
 
         if (c->remote_port > 0) {
             int dup = 0;
@@ -368,11 +395,12 @@ void view_procs_draw(const sloth_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-15s %-3s  %6s  %5s  %4s  %4s  %s\n",
-           "Process", "   ", "PID", "Conns", "TCP", "UDP", "Remote Ports");
-    TPRINT(" %-15s %-3s  %6s  %5s  %4s  %4s  %s\n",
+    TPRINT(" %-15s %-3s  %6s  %5s  %4s  %4s  %7s  %7s  %s\n",
+           "Process", "   ", "PID", "Conns", "TCP", "UDP",
+           "TX", "RX", "Remote Ports");
+    TPRINT(" %-15s %-3s  %6s  %5s  %4s  %4s  %7s  %7s  %s\n",
            "---------------", "---", "------", "-----",
-           "----", "----", "------------");
+           "----", "----", "-------", "-------", "------------");
     tui_normal();
 
     if (g_vis_count == 0) {
@@ -415,18 +443,24 @@ void view_procs_draw(const sloth_state_t *s) {
             if (written > 0) pos += written;
         }
 
+        char tx_buf[12], rx_buf[12];
+        fmt_bytes_short(p->tx_bytes, tx_buf, sizeof(tx_buf));
+        fmt_bytes_short(p->rx_bytes, rx_buf, sizeof(rx_buf));
+
 #ifdef WITH_NCURSES
         if (row == vis_sel) {
             tui_sel();
-            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %s\n",
+            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
-                   p->conn_count, p->tcp_count, p->udp_count, port_buf);
+                   p->conn_count, p->tcp_count, p->udp_count,
+                   tx_buf, rx_buf, port_buf);
             tui_reset();
         } else if (p->pid == -1) {
             tui_dim();
-            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %s\n",
+            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
-                   p->conn_count, p->tcp_count, p->udp_count, port_buf);
+                   p->conn_count, p->tcp_count, p->udp_count,
+                   tx_buf, rx_buf, port_buf);
             tui_normal();
         } else {
             if (p->depth > 0) tui_dim(); else tui_bright();
@@ -435,21 +469,28 @@ void view_procs_draw(const sloth_state_t *s) {
             tui_dim();    printw("  %6s", pid_str);
             tui_bright(); printw("  %5d", p->conn_count);
             tui_normal(); printw("  %4d  %4d", p->tcp_count, p->udp_count);
+            /* TX / RX — bright on traffic, dim on idle. */
+            if (p->tx_bytes > 0) tui_bright(); else tui_dim();
+            printw("  %7s", tx_buf);
+            if (p->rx_bytes > 0) tui_bright(); else tui_dim();
+            printw("  %7s", rx_buf);
             tui_dim();    printw("  %s\n", port_buf);
             tui_normal();
         }
 #else
         if (row == vis_sel) {
             tui_sel();
-            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %s",
+            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s",
                    ind_name, fold_ind, pid_str,
-                   p->conn_count, p->tcp_count, p->udp_count, port_buf);
+                   p->conn_count, p->tcp_count, p->udp_count,
+                   tx_buf, rx_buf, port_buf);
             tui_reset(); printf("\n");
         } else if (p->pid == -1) {
             tui_dim();
-            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %s\n",
+            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
-                   p->conn_count, p->tcp_count, p->udp_count, port_buf);
+                   p->conn_count, p->tcp_count, p->udp_count,
+                   tx_buf, rx_buf, port_buf);
             tui_normal();
         } else {
             if (p->depth > 0) tui_dim(); else tui_bright();
@@ -458,6 +499,10 @@ void view_procs_draw(const sloth_state_t *s) {
             tui_dim();    printf("  %6s", pid_str);
             tui_bright(); printf("  %5d", p->conn_count);
             tui_normal(); printf("  %4d  %4d", p->tcp_count, p->udp_count);
+            if (p->tx_bytes > 0) tui_bright(); else tui_dim();
+            printf("  %7s", tx_buf);
+            if (p->rx_bytes > 0) tui_bright(); else tui_dim();
+            printf("  %7s", rx_buf);
             tui_dim();    printf("  %s\n", port_buf);
             tui_normal();
         }
