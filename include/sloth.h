@@ -421,6 +421,17 @@ typedef struct {
 #define MAX_BEACON_APS  256
 #define BEACON_AGE_SECS 300
 
+/* 802.11k Neighbor Report entry — one neighbor AP advertised by the
+ * subject AP's beacon (tag 52). Used to map enterprise WiFi topology
+ * and to discover BSSIDs on other channels we haven't tuned to. */
+#define MAX_AP_NEIGHBORS 8
+
+typedef struct {
+    uint8_t bssid[6];
+    int     channel;
+    int     phy_type;     /* IEEE 802.11 PHY type code */
+} ap_neighbor_t;
+
 typedef struct {
     char     ssid[33];        /* "" = hidden/broadcast network */
     uint8_t  bssid[6];
@@ -449,6 +460,9 @@ typedef struct {
      * frame) and we revealed it via an out-of-band probe-response /
      * (re)association-response carrying the real SSID. */
     int      revealed;
+    /* 802.11k Neighbor Reports — APs this AP advertises as neighbors. */
+    ap_neighbor_t neighbors[MAX_AP_NEIGHBORS];
+    int      neighbor_count;
     time_t   last_seen;
     int      frame_count;
 } beacon_ap_t;

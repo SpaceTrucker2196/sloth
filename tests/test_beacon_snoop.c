@@ -535,6 +535,74 @@ static void test_view_key_clear(void) {
     ASSERT_EQ(s.beacon_sel,   0);
 }
 
+static void test_parse_neighbor_report_single(void) {
+    /* Tag 52 Neighbor Report Element. Layout (per 802.11k):
+     *   6 BSSID + 4 BSSID-Info + 1 OperClass + 1 Channel + 1 PHY type. */
+    static const uint8_t nr_ie[] = {
+        0x34, 0x0d,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01,  /* neighbor BSSID */
+        0x00, 0x00, 0x00, 0x00,              /* BSSID Info */
+        0x51,                                /* OperClass (2GHz) */
+        0x0b,                                /* channel 11 */
+        0x07,                                /* PHY type */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(nr_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, nr_ie, sizeof(nr_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.neighbor_count, 1);
+    ASSERT_EQ((int)rsn.neighbors[0].bssid[5], 0x01);
+    ASSERT_EQ(rsn.neighbors[0].channel,       11);
+    ASSERT_EQ(rsn.neighbors[0].phy_type,      7);
+}
+
+static void test_parse_neighbor_report_multiple_dedup(void) {
+    /* Two Neighbor Report IEs, both for the same neighbor BSSID
+     * (sometimes APs send duplicates) — dedup keeps one. */
+    static const uint8_t nr_ies[] = {
+        0x34, 0x0d,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x51, 0x0b, 0x07,
+        0x34, 0x0d,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02,
+        0x00, 0x00, 0x00, 0x00, 0x73, 0x24, 0x09,
+        0x34, 0x0d,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01,   /* dup */
+        0x00, 0x00, 0x00, 0x00, 0x51, 0x0b, 0x07,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(nr_ies)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, nr_ies, sizeof(nr_ies));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.neighbor_count, 2);
+}
+
+static void test_record_persists_neighbors(void) {
+    beacon_clear();
+    beacon_rsn_t rsn = {0};
+    rsn.neighbor_count = 2;
+    rsn.neighbors[0].bssid[5] = 0x01;
+    rsn.neighbors[0].channel  = 6;
+    rsn.neighbors[1].bssid[5] = 0x02;
+    rsn.neighbors[1].channel  = 11;
+    beacon_record(BSSID_A, "Net", -55, 6, "WPA2", 102, &rsn);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].neighbor_count, 2);
+    ASSERT_EQ(s.beacon_aps[0].neighbors[0].channel, 6);
+    ASSERT_EQ(s.beacon_aps[0].neighbors[1].channel, 11);
+}
+
 static void test_view_key_detail_toggle(void) {
     beacon_clear();
     beacon_record(BSSID_A, "X", -55, 6, "WPA2", 102, NULL);
@@ -597,4 +665,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
     RUN_TEST(test_view_key_detail_toggle);
+    RUN_TEST(test_parse_neighbor_report_single);
+    RUN_TEST(test_parse_neighbor_report_multiple_dedup);
+    RUN_TEST(test_record_persists_neighbors);
 }

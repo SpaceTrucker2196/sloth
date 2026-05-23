@@ -22,6 +22,10 @@ typedef struct {
     int  has_wps;       /* Wi-Fi Protected Setup IE present */
     /* Max PHY tier — "Wi-Fi 7" / "6" / "5" / "4" / "legacy" / "" */
     char phy[10];
+    /* 802.11k Neighbor Report list (tag 52). Up to MAX_AP_NEIGHBORS;
+     * later entries silently dropped on overflow. */
+    ap_neighbor_t neighbors[MAX_AP_NEIGHBORS];
+    int  neighbor_count;
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).

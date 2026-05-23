@@ -158,6 +158,39 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         }
     }
 
+    /* 802.11k Neighbor Reports — APs this AP advertises as neighbors.
+     * Useful for ESS topology mapping and for discovering BSSIDs we
+     * haven't tuned to yet (off-channel). */
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 NEIGHBORS (802.11k, %d) \xe2\x94\x80\xe2\x94\x80\n",
+           ap->neighbor_count);
+    if (ap->neighbor_count == 0) {
+        tui_dim();
+        TPRINT("  (none advertised — AP doesn't emit Neighbor Report IEs)\n");
+    } else {
+        for (int j = 0; j < ap->neighbor_count; j++) {
+            const ap_neighbor_t *n = &ap->neighbors[j];
+            char m[20];
+            snprintf(m, sizeof(m), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     n->bssid[0], n->bssid[1], n->bssid[2],
+                     n->bssid[3], n->bssid[4], n->bssid[5]);
+            /* Is this neighbor a BSSID we've also seen directly? */
+            int direct = 0;
+            for (int k = 0; k < s->beacon_count; k++) {
+                if (memcmp(s->beacon_aps[k].bssid, n->bssid, 6) == 0) {
+                    direct = 1;
+                    break;
+                }
+            }
+            tui_normal(); TPRINT("  %s", m);
+            tui_dim();    TPRINT("  ch ");
+            tui_bright(); TPRINT("%d", n->channel);
+            tui_dim();    TPRINT("  %s\n",
+                                  direct ? "(observed directly)"
+                                         : "(NOT directly seen \xe2\x80\x94 hop here)");
+        }
+    }
+
     /* Captured handshakes against this BSSID. */
     int crit = 0, pmkid = 0;
     for (int i = 0; i < s->eapol_count; i++) {

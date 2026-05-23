@@ -60,6 +60,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->vendor[0]   = '\0';
         rsn_out->has_wps     = 0;
         rsn_out->phy[0]      = '\0';
+        rsn_out->neighbor_count = 0;
+        memset(rsn_out->neighbors, 0, sizeof(rsn_out->neighbors));
     }
     int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
     /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
@@ -107,6 +109,31 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             uint8_t ext = ie[2];
             if (ext == 35)               has_he  = 1;
             if (ext == 81 || ext == 108) has_eht = 1;
+
+        } else if (tag == 52 && tln >= 13 && rsn_out) {
+            /* 802.11k Neighbor Report Element.
+             *   6 BSSID + 4 BSSID Info + 1 OperClass + 1 Channel +
+             *   1 PHY Type [+ subelements].
+             * Each tag-52 IE is ONE neighbor. APs that advertise
+             * multiple neighbors emit multiple tag-52 IEs. */
+            if (rsn_out->neighbor_count < MAX_AP_NEIGHBORS) {
+                ap_neighbor_t *n =
+                    &rsn_out->neighbors[rsn_out->neighbor_count];
+                memcpy(n->bssid, ie + 2, 6);
+                n->channel  = ie[2 + 11];   /* offset 11 = channel    */
+                n->phy_type = ie[2 + 12];   /* offset 12 = PHY type   */
+                /* De-dupe against existing entries — APs sometimes
+                 * advertise the same neighbor across re-beacons we'd
+                 * accumulate; we want a unique set. */
+                int dup = 0;
+                for (int k = 0; k < rsn_out->neighbor_count; k++) {
+                    if (memcmp(rsn_out->neighbors[k].bssid, n->bssid, 6) == 0) {
+                        dup = 1;
+                        break;
+                    }
+                }
+                if (!dup) rsn_out->neighbor_count++;
+            }
 
         } else if (tag == 3 && tln == 1) {
             /* DS Parameter Set — channel number */
@@ -275,6 +302,20 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 if (rsn->phy[0])
                     snprintf(g_aps[i].phy, sizeof(g_aps[i].phy),
                              "%s", rsn->phy);
+                /* Neighbors — merge new entries by BSSID; cap at the
+                 * stored array size. */
+                for (int k = 0; k < rsn->neighbor_count; k++) {
+                    const ap_neighbor_t *nk = &rsn->neighbors[k];
+                    int found = 0;
+                    for (int m = 0; m < g_aps[i].neighbor_count; m++)
+                        if (memcmp(g_aps[i].neighbors[m].bssid, nk->bssid, 6) == 0) {
+                            g_aps[i].neighbors[m] = *nk;
+                            found = 1;
+                            break;
+                        }
+                    if (!found && g_aps[i].neighbor_count < MAX_AP_NEIGHBORS)
+                        g_aps[i].neighbors[g_aps[i].neighbor_count++] = *nk;
+                }
             }
             pthread_mutex_unlock(&g_mu);
             return;
@@ -315,6 +356,11 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].has_wps = rsn->has_wps;
         snprintf(g_aps[slot].phy, sizeof(g_aps[slot].phy),
                  "%s", rsn->phy);
+        int nc = rsn->neighbor_count;
+        if (nc > MAX_AP_NEIGHBORS) nc = MAX_AP_NEIGHBORS;
+        memcpy(g_aps[slot].neighbors, rsn->neighbors,
+               (size_t)nc * sizeof(ap_neighbor_t));
+        g_aps[slot].neighbor_count = nc;
     }
 
     pthread_mutex_unlock(&g_mu);
