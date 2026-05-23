@@ -56,8 +56,10 @@ void view_eapol_draw(const sloth_state_t *s) {
             TPRINT("  Monitoring on ");
             tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
             TPRINT(" — waiting for a WPA2/WPA3 (re)association.\n");
-            TPRINT("  Pass --eapol-dir DIR on the CLI to stream captures "
-                   "to hashcat 22000 format.\n");
+            TPRINT("  --eapol-dir DIR streams captures to "
+                   "DIR/eapol.22000 (hashcat -m 22000)\n");
+            TPRINT("    plus a per-handshake DIR/<bssid>_<sta>.pcap "
+                   "for aircrack-ng / Wireshark.\n");
         } else {
             TPRINT("  (no monitor-mode iface available)\n");
             if (s->probe_err[0])

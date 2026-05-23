@@ -264,7 +264,9 @@ static void print_usage(const char *argv0) {
             "                     pcap file under DIR\n"
             "  --eapol-dir DIR    append captured EAPOL PMKIDs / 4-way\n"
             "                     handshakes to DIR/eapol.22000 in hashcat\n"
-            "                     mixed format (22000)\n",
+            "                     mixed format (22000), AND write a\n"
+            "                     per-handshake DIR/<bssid>_<sta>.pcap for\n"
+            "                     replay with aircrack-ng / Wireshark\n",
             argv0);
 }
 

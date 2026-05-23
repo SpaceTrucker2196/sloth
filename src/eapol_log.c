@@ -16,8 +16,13 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* Per-(BSSID, STA) pending handshake state. M1 lands first with ANonce
  * (and optionally PMKID); M2 lands with SNonce + MIC. When both are
- * present we emit a combined complete-handshake event. */
+ * present we emit a combined complete-handshake event.
+ *
+ * m_frames[0..3] = M1..M4 raw 802.11 bytes (frame body, no radiotap).
+ * Stored as captured so the pcap export reproduces them byte-for-byte
+ * for use with aircrack-ng / hcxpcapngtool / Wireshark. */
 #define MAX_PENDING 64
+#define EAPOL_FRAME_MAX 512
 typedef struct {
     uint8_t  bssid[6];
     uint8_t  sta[6];
@@ -32,6 +37,9 @@ typedef struct {
     time_t   m2_ts;
     int8_t   signal_dbm;
     int      channel;
+    uint8_t  m_frames[4][EAPOL_FRAME_MAX];
+    int      m_frame_lens[4];
+    time_t   m_frame_ts[4];
 } pending_t;
 static pending_t g_pending[MAX_PENDING];
 static int       g_pending_n = 0;
@@ -101,6 +109,61 @@ static void append_22000_line(const char *line) {
     if (!f) return;
     fputs(line,  f);
     fputc('\n', f);
+    fclose(f);
+}
+
+/* ── Per-handshake pcap writer ───────────────────────────── */
+
+#define PCAP_MAGIC          0xa1b2c3d4u
+#define DLT_IEEE802_11      105   /* raw 802.11 without radiotap */
+
+static void w_u32le(FILE *f, uint32_t v) {
+    uint8_t b[4] = { v & 0xff, (v>>8)&0xff, (v>>16)&0xff, (v>>24)&0xff };
+    fwrite(b, 1, 4, f);
+}
+static void w_u16le(FILE *f, uint16_t v) {
+    uint8_t b[2] = { v & 0xff, (v>>8)&0xff };
+    fwrite(b, 1, 2, f);
+}
+
+/* Write a per-handshake .pcap to <eapol_dir>/<bssid>_<sta>.pcap.
+ * Frames are stored as raw IEEE 802.11 (DLT 105). Aircrack-ng + tshark
+ * read this fine; pass -e <SSID> to aircrack if no beacon was bundled.
+ *
+ * Re-writes overwrite — a fresher capture supersedes the older one. */
+static void write_handshake_pcap(const pending_t *p) {
+    if (!g_out_dir[0]) return;
+    char path[640];
+    snprintf(path, sizeof(path),
+             "%s/%02x%02x%02x%02x%02x%02x_%02x%02x%02x%02x%02x%02x.pcap",
+             g_out_dir,
+             p->bssid[0], p->bssid[1], p->bssid[2],
+             p->bssid[3], p->bssid[4], p->bssid[5],
+             p->sta[0],   p->sta[1],   p->sta[2],
+             p->sta[3],   p->sta[4],   p->sta[5]);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+
+    /* Global header */
+    w_u32le(f, PCAP_MAGIC);
+    w_u16le(f, 2);            /* major */
+    w_u16le(f, 4);            /* minor */
+    w_u32le(f, 0);            /* thiszone */
+    w_u32le(f, 0);            /* sigfigs */
+    w_u32le(f, 65535);        /* snaplen */
+    w_u32le(f, DLT_IEEE802_11);
+
+    /* Walk M1..M4 in order. Skip empty slots. */
+    for (int i = 0; i < 4; i++) {
+        if (p->m_frame_lens[i] == 0) continue;
+        time_t   ts  = p->m_frame_ts[i];
+        uint16_t cap = (uint16_t)p->m_frame_lens[i];
+        w_u32le(f, (uint32_t)ts);
+        w_u32le(f, 0);                /* usec — second-level resolution */
+        w_u32le(f, cap);
+        w_u32le(f, cap);
+        fwrite(p->m_frames[i], 1, cap, f);
+    }
     fclose(f);
 }
 
@@ -238,6 +301,17 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     time_t now = time(NULL);
     pending_t *p = pending_find_or_alloc(bssid, sta);
 
+    /* Buffer the raw 802.11 frame body into the M-slot, capped at the
+     * frame size limit. The per-handshake pcap writer replays these
+     * frames verbatim — keeping them exact is what lets aircrack-ng /
+     * Wireshark read the file. */
+    if (msg >= 1 && msg <= 4) {
+        int copy = len < EAPOL_FRAME_MAX ? len : EAPOL_FRAME_MAX;
+        memcpy(p->m_frames[msg - 1], d, (size_t)copy);
+        p->m_frame_lens[msg - 1] = copy;
+        p->m_frame_ts[msg - 1]   = now;
+    }
+
     eapol_event_t ev;
     memset(&ev, 0, sizeof(ev));
     memcpy(ev.bssid,   bssid, 6);
@@ -283,6 +357,8 @@ int eapol_observe_dot11(const uint8_t *d, int len,
                      "WPA*01*%s*%s*%s*%s***",
                      pmkid_hex, bssid_hex, sta_hex, essid_hex);
             append_22000_line(line);
+            /* Also dump per-(BSSID, STA) pcap with the buffered M1. */
+            write_handshake_pcap(p);
         }
     } else if (msg == 2) {
         memcpy(p->snonce, nonce, 32);
@@ -332,6 +408,8 @@ int eapol_observe_dot11(const uint8_t *d, int len,
                      mic_hex, bssid_hex, sta_hex, essid_hex,
                      anonce_hex, eapol_hex);
             append_22000_line(line);
+            /* Per-handshake pcap with M1+M2 (and any later M3/M4). */
+            write_handshake_pcap(p);
         }
     } else if (msg == 3) {
         memcpy(ev.anonce, nonce, 32);

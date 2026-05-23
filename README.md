@@ -83,7 +83,7 @@ for in normal vs anomalous traffic.
 
 - **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record and every newly-fired alert. See [JSONL schema](#jsonl-schema) below.
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
-- **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`.
+- **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark.
 
 ## WiFi SIGINT usage
 
@@ -109,8 +109,12 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol -o /tmp/sloth.jsonl
 #    [j] Seqnum — randomised MACs correlated to the same physical radio
 #    [7] Probe  — raw probe-request feed (Roaming clients)
 
-# 4. Offline crack against the streamed handshake / PMKID file.
+# 4a. Offline crack against the streamed handshake / PMKID file.
 hashcat -m 22000 /tmp/sloth-eapol/eapol.22000 rockyou.txt
+
+# 4b. OR replay an individual handshake through aircrack-ng.
+aircrack-ng -w rockyou.txt -e "SSID" \
+    /tmp/sloth-eapol/<bssid>_<sta>.pcap
 ```
 
 ## Build
@@ -120,7 +124,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1814 unit tests (no root, no terminal, no network)
+make test                     # 1845 unit tests (no root, no terminal, no network)
 ```
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
@@ -258,7 +262,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 1814 assertions, no root, no terminal, no network
+make test    # 1845 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -279,6 +283,6 @@ The MD5 implementation used for JA3 is independently validated against all RFC 1
 
 ## Status
 
-Code: 14k+ lines across ~80 files. Tests: 1814 assertions. License: see project root.
+Code: 14k+ lines across ~80 files. Tests: 1845 assertions. License: see project root.
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.

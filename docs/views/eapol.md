@@ -46,6 +46,13 @@ when both arrive, the M2 event is flagged `handshake_complete=1`.
 (`WPA*01*...` for PMKIDs, `WPA*02*...` for 4-way handshakes with MIC
 field zeroed per spec).
 
+Sloth additionally writes a per-handshake **`DIR/<bssid>_<sta>.pcap`**
+containing the raw 802.11 EAPOL-Key frames (M1..M4 as captured, no
+radiotap, DLT 105). The file is replayable through `aircrack-ng -w
+wordlist.txt -e <SSID> <file>.pcap` or openable in Wireshark / tshark
+for inspection. Re-completions overwrite the prior file with the
+freshest capture for that (BSSID, STA) pair.
+
 ## View
 
 ```

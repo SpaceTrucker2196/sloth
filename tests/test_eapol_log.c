@@ -1,4 +1,8 @@
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "runner.h"
 #include "sloth.h"
 #include "eapol_log.h"
@@ -229,6 +233,54 @@ static void test_clear_resets_state(void) {
     ASSERT_EQ(eapol_event_count(), 0);
 }
 
+/* Captured PMKID with --eapol-dir set should produce both the
+ * eapol.22000 line AND a per-handshake pcap file under the dir. */
+static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
+    eapol_clear();
+    /* Pick a deterministic temp dir, recreate it. */
+    char dir[64];
+    snprintf(dir, sizeof(dir), "/tmp/sloth_test_eapol_%d", (int)getpid());
+    /* best-effort cleanup of prior file */
+    char pcap_path[160];
+    snprintf(pcap_path, sizeof(pcap_path),
+             "%s/00aabbccddee_102030405060.pcap", dir);
+    unlink(pcap_path);
+    rmdir(dir);
+    mkdir(dir, 0755);
+    eapol_set_output_dir(dir);
+
+    /* Feed M1 with PMKID (same as test_m1_with_pmkid_extracted). */
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    eapol_observe_dot11(frame, fn, -50, 6);
+
+    /* pcap file exists and has the magic header. */
+    FILE *f = fopen(pcap_path, "rb");
+    ASSERT(f != NULL);
+    if (f) {
+        uint8_t hdr[4];
+        size_t r = fread(hdr, 1, 4, f);
+        ASSERT_EQ(r, (size_t)4);
+        /* Little-endian magic 0xa1b2c3d4 = bytes d4 c3 b2 a1. */
+        ASSERT_EQ((int)hdr[0], 0xd4);
+        ASSERT_EQ((int)hdr[1], 0xc3);
+        ASSERT_EQ((int)hdr[2], 0xb2);
+        ASSERT_EQ((int)hdr[3], 0xa1);
+        fclose(f);
+    }
+
+    /* Cleanup. */
+    eapol_set_output_dir(NULL);
+    unlink(pcap_path);
+    char eapol22[128];
+    snprintf(eapol22, sizeof(eapol22), "%s/eapol.22000", dir);
+    unlink(eapol22);
+    rmdir(dir);
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -237,4 +289,5 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_full_handshake_m1_then_m2);
     RUN_TEST(test_m2_without_m1_is_not_complete);
     RUN_TEST(test_clear_resets_state);
+    RUN_TEST(test_pmkid_emits_pcap_when_eapol_dir_set);
 }
