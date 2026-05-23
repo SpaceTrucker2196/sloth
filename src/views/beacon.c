@@ -3,6 +3,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "oui.h"
 #include "views/beacon.h"
 #include "beacon_snoop.h"
 
@@ -17,7 +18,173 @@ static const char *bssid_str(const uint8_t *b) {
     return fmt_bssid;
 }
 
+static const char *band_for(int ch) {
+    if (ch >= 1   && ch <= 14)  return "2.4 GHz";
+    if (ch >= 32  && ch <= 177) return "5 GHz";
+    if (ch >= 181 && ch <= 233) return "6 GHz";
+    return "?";
+}
+
+/* Full-screen detail panel for the selected AP. Triggered by Enter
+ * in the beacons list; Enter/Esc returns. Renders every field we've
+ * already collected for this BSSID, plus cross-references against
+ * the assoc tracker and EAPOL log. Each section is annotated with
+ * attacker / defender notes so the operator gets the SIGINT context
+ * inline instead of cross-referencing four other views. */
+static void draw_beacon_detail(const sloth_state_t *s) {
+    if (s->beacon_sel < 0 || s->beacon_sel >= s->beacon_count) {
+        tui_dim();
+        TPRINT(" (no AP selected — press Enter to return)\n");
+        return;
+    }
+    const beacon_ap_t *ap = &s->beacon_aps[s->beacon_sel];
+
+    tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 AP DETAIL \xe2\x94\x80\xe2\x94\x80\n");
+
+    /* Header: SSID + BSSID */
+    if (ap->ssid[0]) tui_bright();
+    else             tui_dim();
+    TPRINT("  %-12s", ap->ssid[0] ? ap->ssid : "(hidden)");
+    if (ap->revealed) { tui_dim(); TPRINT(" * (revealed via probe response)"); }
+    TPRINT("\n");
+
+    tui_dim();    TPRINT("  BSSID:       ");
+    tui_bright(); TPRINT("%s", bssid_str(ap->bssid));
+    {
+        const char *oui_v = oui_lookup(ap->bssid);
+        if (oui_v && oui_v[0]) {
+            tui_dim();    TPRINT("   (OUI: ");
+            tui_normal(); TPRINT("%s", oui_v);
+            tui_dim();    TPRINT(")");
+        }
+    }
+    TPRINT("\n");
+
+    /* Radio */
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 RADIO \xe2\x94\x80\xe2\x94\x80\n");
+    TPRINT("  Channel:     "); tui_bright();
+    TPRINT("%d", ap->channel);
+    tui_dim(); TPRINT("  (%s)\n", band_for(ap->channel));
+    TPRINT("  Signal:      "); {
+        double frac = (ap->signal_dbm + 90.0) / 60.0;
+        if (frac < 0) frac = 0;
+        if (frac > 1) frac = 1;
+        tui_heat(frac);
+    }
+    TPRINT("%d dBm\n", ap->signal_dbm);
+    tui_dim(); TPRINT("  Beacon intv: "); tui_normal();
+    TPRINT("%u ms\n", (unsigned)ap->beacon_ms);
+    tui_dim(); TPRINT("  PHY tier:    ");
+    if (ap->phy[0]) tui_bright(); else tui_dim();
+    TPRINT("%s\n", ap->phy[0] ? ap->phy : "?");
+    tui_dim(); TPRINT("  Vendor:      ");
+    if (ap->vendor[0]) tui_bright(); else tui_dim();
+    TPRINT("%s\n", ap->vendor[0] ? ap->vendor : "?");
+
+    /* Security */
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 SECURITY \xe2\x94\x80\xe2\x94\x80\n");
+    TPRINT("  Encryption:  ");
+    if (strcmp(ap->enc, "OPEN") == 0 || strcmp(ap->enc, "WEP") == 0)
+        tui_heat(0.9);
+    else if (strcmp(ap->enc, "WPA3") == 0)
+        tui_bright();
+    else
+        tui_normal();
+    TPRINT("%s\n", ap->enc);
+    tui_dim(); TPRINT("  Pairwise:    "); tui_normal();
+    TPRINT("%s", ap->pairwise[0] ? ap->pairwise : "-");
+    if (strcmp(ap->pairwise, "TKIP") == 0) {
+        tui_heat(0.7); TPRINT("   (TKIP on WPA2 — downgrade smell)");
+    }
+    TPRINT("\n");
+    tui_dim(); TPRINT("  Group:       "); tui_normal();
+    TPRINT("%s\n", ap->group[0]    ? ap->group    : "-");
+    tui_dim(); TPRINT("  AKM:         "); tui_normal();
+    TPRINT("%s\n", ap->akm[0]      ? ap->akm      : "-");
+    tui_dim(); TPRINT("  MFP:         ");
+    if (ap->mfp == 2)       { tui_bright(); TPRINT("REQUIRED"); }
+    else if (ap->mfp == 1)  { tui_normal(); TPRINT("capable"); }
+    else                    { tui_heat(0.7); TPRINT("off (deauth-attackable)"); }
+    TPRINT("\n");
+    tui_dim(); TPRINT("  WPS:         ");
+    if (ap->has_wps) { tui_heat(0.7);
+        TPRINT("ON  (PixieDust / WPS-PIN candidate)");
+    } else {
+        tui_normal(); TPRINT("-");
+    }
+    TPRINT("\n");
+
+    /* Associated clients we've observed. */
+    int my_assocs[MAX_ASSOC_ENTRIES];
+    int my_assoc_n = 0;
+    for (int i = 0; i < s->assoc_count; i++) {
+        if (memcmp(s->assocs[i].bssid, ap->bssid, 6) == 0)
+            my_assocs[my_assoc_n++] = i;
+    }
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 ASSOCIATED CLIENTS (%d) \xe2\x94\x80\xe2\x94\x80\n",
+           my_assoc_n);
+    if (my_assoc_n == 0) {
+        tui_dim();
+        TPRINT("  (none observed)\n");
+    } else {
+        for (int j = 0; j < my_assoc_n && j < 10; j++) {
+            const assoc_t *as = &s->assocs[my_assocs[j]];
+            char m[20];
+            snprintf(m, sizeof(m), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     as->sta_mac[0], as->sta_mac[1], as->sta_mac[2],
+                     as->sta_mac[3], as->sta_mac[4], as->sta_mac[5]);
+            tui_normal(); TPRINT("  %s", m);
+            tui_dim();
+            if (as->sta_random)         TPRINT("  (random)");
+            else {
+                const char *v = oui_lookup(as->sta_mac);
+                if (v && v[0]) TPRINT("  %.14s", v);
+            }
+            tui_dim();    TPRINT("  via ");
+            if (as->source == ASSOC_SRC_EAPOL) tui_bright(); else tui_normal();
+            TPRINT("%s",
+                   as->source == ASSOC_SRC_EAPOL   ? "EAPOL" :
+                   as->source == ASSOC_SRC_ASSOC   ? "AssocResp" :
+                   as->source == ASSOC_SRC_REASSOC ? "ReassocResp" : "?");
+            TPRINT("\n");
+        }
+        if (my_assoc_n > 10) {
+            tui_dim();
+            TPRINT("  ... and %d more (see [w] Assoc view)\n",
+                   my_assoc_n - 10);
+        }
+    }
+
+    /* Captured handshakes against this BSSID. */
+    int crit = 0, pmkid = 0;
+    for (int i = 0; i < s->eapol_count; i++) {
+        if (memcmp(s->eapol_events[i].bssid, ap->bssid, 6) != 0) continue;
+        if (s->eapol_events[i].handshake_complete) crit++;
+        if (s->eapol_events[i].has_pmkid)          pmkid++;
+    }
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 CAPTURED HANDSHAKES \xe2\x94\x80\xe2\x94\x80\n");
+    if (crit > 0 || pmkid > 0) {
+        if (pmkid > 0) { tui_heat(1.0); TPRINT("  %d PMKID capture(s)", pmkid); TPRINT("\n"); }
+        if (crit > 0)  { tui_heat(1.0); TPRINT("  %d full 4-way handshake(s)", crit); TPRINT("\n"); }
+        tui_dim();
+        TPRINT("  See [e] EAPOL for details. --eapol-dir DIR writes "
+               "hashcat 22000.\n");
+    } else {
+        tui_dim();
+        TPRINT("  (none yet — wait for a client (re)association)\n");
+    }
+
+    tui_dim(); TPRINT("\n [Enter / Esc] back to beacons list\n");
+    tui_normal();
+}
+
 void view_beacon_draw(const sloth_state_t *s) {
+    if (s->beacon_detail) { draw_beacon_detail(s); return; }
+
 #ifdef WITH_NCURSES
     int page = LINES - 5;
     if (page < 1) page = 1;
@@ -161,6 +328,19 @@ void view_beacon_draw(const sloth_state_t *s) {
 }
 
 void view_beacon_key(sloth_state_t *s, int key) {
+    /* Detail mode swallows nav keys; Enter or Esc returns. */
+    if (s->beacon_detail) {
+        if (key == '\r' || key == '\n' || key == 27)
+            s->beacon_detail = 0;
+        else if (key == 'c' || key == 'C') {
+            beacon_clear();
+            s->beacon_count   = 0;
+            s->beacon_sel     = 0;
+            s->beacon_detail  = 0;
+        }
+        return;
+    }
+
     switch (key) {
     case SLOTH_KEY_UP:
         if (s->beacon_sel > 0) s->beacon_sel--;
@@ -168,6 +348,9 @@ void view_beacon_key(sloth_state_t *s, int key) {
     case SLOTH_KEY_DOWN:
         if (s->beacon_count > 0 && s->beacon_sel < s->beacon_count - 1)
             s->beacon_sel++;
+        break;
+    case '\r': case '\n':
+        if (s->beacon_count > 0) s->beacon_detail = 1;
         break;
     case 'c': case 'C':
         beacon_clear();

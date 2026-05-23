@@ -535,6 +535,31 @@ static void test_view_key_clear(void) {
     ASSERT_EQ(s.beacon_sel,   0);
 }
 
+static void test_view_key_detail_toggle(void) {
+    beacon_clear();
+    beacon_record(BSSID_A, "X", -55, 6, "WPA2", 102, NULL);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+
+    /* Enter opens detail. */
+    view_beacon_key(&s, '\n');
+    ASSERT_EQ(s.beacon_detail, 1);
+    /* Nav keys are swallowed in detail mode. */
+    int sel_before = s.beacon_sel;
+    view_beacon_key(&s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s.beacon_sel, sel_before);
+    /* Enter or Esc returns. */
+    view_beacon_key(&s, 27);
+    ASSERT_EQ(s.beacon_detail, 0);
+
+    /* No row -> Enter does nothing. */
+    beacon_clear();
+    s.beacon_count  = 0;
+    s.beacon_detail = 0;
+    view_beacon_key(&s, '\n');
+    ASSERT_EQ(s.beacon_detail, 0);
+}
+
 /* ── Suite entry point ───────────────────────────────────── */
 
 void run_beacon_snoop_tests(void) {
@@ -571,4 +596,5 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_view_draw_hidden_ssid);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+    RUN_TEST(test_view_key_detail_toggle);
 }

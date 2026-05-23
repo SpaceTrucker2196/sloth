@@ -729,6 +729,7 @@ typedef struct {
     beacon_ap_t beacon_aps[MAX_BEACON_APS];
     int         beacon_count;
     int         beacon_sel;
+    int         beacon_detail;  /* 1 = AP drill-down detail panel shown */
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
