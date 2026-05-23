@@ -52,10 +52,11 @@ void view_pnl_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-17s  %-14s  %-3s  %-4s  %-4s  %s\n",
-           "MAC", "vendor", "#",   "age",  "hits", "preferred networks");
-    TPRINT(" %-17s  %-14s  %-3s  %-4s  %-4s  %s\n",
-           "-----------------", "--------------", "---", "----", "----",
+    TPRINT(" %-17s  %-14s  %-8s  %-3s  %-4s  %-4s  %s\n",
+           "MAC", "vendor", "OS", "#", "age", "hits", "preferred networks");
+    TPRINT(" %-17s  %-14s  %-8s  %-3s  %-4s  %-4s  %s\n",
+           "-----------------", "--------------", "--------",
+           "---", "----", "----",
            "----------------------------------------");
     tui_normal();
 
@@ -103,6 +104,10 @@ void view_pnl_draw(const sloth_state_t *s) {
             else             { tui_bright(); }
             TPRINT("%-14.14s", v);
         }
+
+        /* OS fingerprint — bright if we have one, dim "?" if not. */
+        if (c->os_fp[0]) { tui_bright(); TPRINT("  %-8.8s", c->os_fp); }
+        else             { tui_dim();    TPRINT("  %-8s",  "?"); }
 
         if (i == s->pnl_sel) tui_sel(); else tui_normal();
         TPRINT("  %-3d", c->ssid_count);

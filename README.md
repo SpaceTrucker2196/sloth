@@ -120,7 +120,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1785 unit tests (no root, no terminal, no network)
+make test                     # 1814 unit tests (no root, no terminal, no network)
 ```
 
 Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
@@ -258,7 +258,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 1785 assertions, no root, no terminal, no network
+make test    # 1814 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -279,6 +279,6 @@ The MD5 implementation used for JA3 is independently validated against all RFC 1
 
 ## Status
 
-Code: 14k+ lines across ~80 files. Tests: 1785 assertions. License: see project root.
+Code: 14k+ lines across ~80 files. Tests: 1814 assertions. License: see project root.
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.

@@ -12,7 +12,56 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
 }
 
-void probe_pnl_observe(const uint8_t mac[6], const char *ssid)
+/* Strong-signal OS fingerprint from probe-request vendor IEs. Returns
+ * a stable string (caller does not own it) or NULL. The matches are
+ * conservative — only return a label when a single vendor IE points
+ * at a specific OS / platform. Anything else stays empty so the view
+ * doesn't lie. */
+const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
+{
+    if (!ies || ielen < 2) return NULL;
+    const uint8_t *p = ies;
+    int rem = ielen;
+    const char *guess = NULL;
+    while (rem >= 2) {
+        uint8_t tag = p[0];
+        uint8_t len = p[1];
+        if (2 + (int)len > rem) break;
+        if (tag == 221 && len >= 4) {
+            uint8_t o0 = p[2], o1 = p[3], o2 = p[4];
+            uint8_t ty = (len >= 4) ? p[5] : 0;
+            /* Apple — OUI 00:17:F2. Strongest signal we have. */
+            if (o0 == 0x00 && o1 == 0x17 && o2 == 0xf2) {
+                guess = "Apple";
+                break;
+            }
+            /* Microsoft Provisioning IE (OUI 00:50:F2 type 8). The
+             * other MS sub-types (1=WPA, 2=WMM, 4=WPS) are emitted by
+             * everyone — only type 8 indicates Windows. */
+            if (o0 == 0x00 && o1 == 0x50 && o2 == 0xf2 && ty == 0x08) {
+                guess = "Windows";
+                break;
+            }
+            /* Espressif (ESP32 / ESP8266) — OUI 24:0A:C4. */
+            if (o0 == 0x24 && o1 == 0x0a && o2 == 0xc4) {
+                guess = "ESP32";
+                break;
+            }
+            /* Wi-Fi Alliance OUI 50:6F:9A — used by P2P / Wi-Fi Direct
+             * IEs. Mostly Android devices include this. */
+            if (o0 == 0x50 && o1 == 0x6f && o2 == 0x9a && !guess) {
+                guess = "Android";
+                /* don't break — a later Apple/MS IE would override */
+            }
+        }
+        p   += 2 + len;
+        rem -= 2 + len;
+    }
+    return guess;
+}
+
+void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
+                        const char *os_fp)
 {
     if (!ssid || !ssid[0]) return;   /* wildcard probes carry no PNL info */
     time_t now = time(NULL);
@@ -42,6 +91,10 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid)
     }
     g_tbl[idx].last_seen = now;
     g_tbl[idx].probe_count++;
+    /* Sticky OS fingerprint: first strong signal wins. Weaker later
+     * probes don't overwrite. */
+    if (os_fp && os_fp[0] && !g_tbl[idx].os_fp[0])
+        snprintf(g_tbl[idx].os_fp, sizeof(g_tbl[idx].os_fp), "%s", os_fp);
 
     /* Dedupe — skip if this SSID is already in this client's list. */
     for (int j = 0; j < g_tbl[idx].ssid_count; j++) {

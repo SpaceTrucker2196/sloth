@@ -270,8 +270,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     }
 
     /* Parse SSID information element (tag 0) */
-    const uint8_t *ie     = dot11 + 24;
-    int            ie_rem = dot11_len - 24;
+    const uint8_t *ie_start = dot11 + 24;
+    int            ie_total = dot11_len - 24;
+    const uint8_t *ie       = ie_start;
+    int            ie_rem   = ie_total;
     char           ssid[33] = "";
 
     while (ie_rem >= 2) {
@@ -292,10 +294,13 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     record_probe(sa, ssid, signal, channel);
     pthread_mutex_unlock(&g_mu);
 
+    /* OS fingerprint from vendor-specific IEs (strong-signal only). */
+    const char *fp = probe_pnl_fingerprint_ies(ie_start, ie_total);
+
     /* Feed the PNL aggregator — outside the probe-list mutex since
      * probe_pnl_observe takes its own lock. Wildcard probes are dropped
      * inside observe() since they leak no preferred-network info. */
-    probe_pnl_observe(sa, ssid);
+    probe_pnl_observe(sa, ssid, fp);
 }
 
 /* ── Capture thread ──────────────────────────────────────── */

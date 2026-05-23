@@ -469,6 +469,11 @@ typedef struct {
     int     ssid_count;
     char    ssids[MAX_PNL_SSIDS_PER_CLI][33];
     int     probe_count;                       /* total directed probes */
+    /* OS fingerprint derived from the vendor-specific IEs the client
+     * leaks in probe requests. Empty when we don't have a confident
+     * label. Sticky: once a strong vendor IE pins the OS, weaker
+     * later probes don't overwrite. */
+    char    os_fp[16];
     time_t  first_seen;
     time_t  last_seen;
 } pnl_client_t;

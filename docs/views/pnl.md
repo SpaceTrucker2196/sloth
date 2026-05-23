@@ -20,25 +20,53 @@ the same set of SSIDs.
 ## What sloth captures
 
 Per client (keyed on MAC): the unique set of SSIDs probed for, total
-probe count, first-seen / last-seen timestamps, randomised-MAC flag.
-Wildcard probes (broadcast / empty SSID) are dropped — they leak no
-PNL info.
+probe count, first-seen / last-seen timestamps, randomised-MAC flag,
+and an OS fingerprint derived from vendor-specific IEs in the probe
+requests (see "OS fingerprint" below). Wildcard probes (broadcast /
+empty SSID) are dropped — they leak no PNL info.
 
 Storage is capped at `MAX_PNL_CLIENTS = 128` clients × 16 SSIDs each;
 LRU eviction by `last_seen`.
+
+## OS fingerprint
+
+Each probe request can include vendor-specific Information Elements
+(tag 221) whose OUI deterministically identifies the OS / firmware:
+
+| Vendor IE OUI         | Surfaced as |
+|-----------------------|-------------|
+| 00:17:F2  (Apple)      | `Apple`     |
+| 00:50:F2 type 8 (MS Provisioning) | `Windows` |
+| 24:0A:C4  (Espressif)  | `ESP32`     |
+| 50:6F:9A  (Wi-Fi Alliance P2P)    | `Android` (weak — overridden by Apple/Windows) |
+
+Common Microsoft sub-types (WPA / WMM / WPS) are everywhere and
+deliberately not used as an OS signal. Devices without any of these
+IEs leave the column empty rather than guess.
+
+The first strong signal sticks — later probes without the IE don't
+clear an established fingerprint, and a contradictory IE doesn't
+overwrite (avoids flapping when a device emits different probe
+variants over time).
 
 ## View
 
 ```
  PNL clients: 6 (3 real / 3 randomized)  [up/dn] navigate  [c] clear
 
- MAC                vendor          #    age   hits  preferred networks
- -----------------  --------------  ---  ----  ----  ----------------------
- a0:b1:c2:d3:e4:f5  Apple           4    7s    47    HomeWiFi, Starbucks, Acme-Corp, eduroam
- 02:11:22:33:44:55  (random)        2    12s   8     HomeWiFi, ACME-Guest
- 02:aa:bb:cc:dd:ee  (random)        3    34s   12    Starbucks, eduroam, BA-Lounge
- b8:27:eb:00:11:22  Raspberry Pi    1    1m    3     LabNetwork
+ MAC                vendor          OS        #    age   hits  preferred networks
+ -----------------  --------------  --------  ---  ----  ----  ----------------------
+ a0:b1:c2:d3:e4:f5  Apple           Apple     4    7s    47    HomeWiFi, Starbucks, Acme-Corp, eduroam
+ 02:11:22:33:44:55  (random)        Apple     2    12s   8     HomeWiFi, ACME-Guest
+ 02:aa:bb:cc:dd:ee  (random)        Android   3    34s   12    Starbucks, eduroam, BA-Lounge
+ b8:27:eb:00:11:22  Raspberry Pi    ?         1    1m    3     LabNetwork
 ```
+
+The `vendor` column comes from the OUI of the burned-in MAC (real
+devices only). The `OS` column comes from vendor-IE fingerprinting
+and works across MAC randomisation — randomised iOS clients still
+emit the Apple vendor IE, which is how you correlate randomised
+probes to their owner OS.
 
 ## What's normal
 
