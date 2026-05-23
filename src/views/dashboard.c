@@ -11,6 +11,7 @@
 #include "ip_owner.h"
 #include "oui.h"
 #include "host_cache.h"
+#include "geo.h"
 
 /* Box-drawing / arrow glyphs used by the dashboard. UTF-8 byte sequences;
  * each occupies exactly one terminal column when the font supports them
@@ -570,16 +571,16 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
                                   int x0, int w) {
     panel_title(y0, x0, w, "Top hosts", DASH_PANEL_TOP_HOSTS);
     attrset(COLOR_PAIR(CP_DIM));
-    /* Reserve: ip(15) + host(var) + owner(var) + age(7) + cnt(4) +
-     * tx(7) + rx(7) + 7 sep */
-    int spare = w - (15 + 7 + 4 + 7 + 7 + 7);
+    /* Reserve: ip(15) + geo(3) + host(var) + owner(var) + age(7) +
+     * cnt(4) + tx(7) + rx(7) + 8 sep */
+    int spare = w - (15 + 3 + 7 + 4 + 7 + 7 + 8);
     int host_w  = spare * 6 / 10;
     int owner_w = spare - host_w;
     if (host_w  < 8) host_w  = 8;
     if (owner_w < 6) owner_w = 6;
 
-    clipline(y0 + 1, x0, w, "  %-15s %-*s %-*s %-7s %4s %7s %7s",
-             "ip", host_w, "host", owner_w, "owner",
+    clipline(y0 + 1, x0, w, "  %-15s %-3s %-*s %-*s %-7s %4s %7s %7s",
+             "ip", "geo", host_w, "host", owner_w, "owner",
              "age", "conn", "tx", "rx");
 
     int rows = h - 2;
@@ -610,6 +611,19 @@ static void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
             addch(' ');
         }
         xc += 16;
+
+        /* Geo — RIR region from per-/8 table. Bright for foreign,
+         * dim for private / loopback / multicast. */
+        {
+            const char *region = geo_lookup_str(e->ip);
+            const char *r_show = region ? region : "??";
+            move(y0 + 2 + i, xc);
+            if (region && region[0] != '-' && region[0] != 'L' &&
+                region[0] != 'M') attrset(COLOR_PAIR(CP_BRIGHT));
+            else                  attrset(COLOR_PAIR(CP_DIM));
+            printw("%-3s ", r_show);
+        }
+        xc += 4;
 
         /* hostname — brand-coloured, OR deep-red if the underlying IP
          * has been flagged in a recent CRIT alert (matches the override

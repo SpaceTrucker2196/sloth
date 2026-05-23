@@ -7,6 +7,7 @@
 #include "services.h"
 #include "host_cache.h"
 #include "ip_color.h"
+#include "geo.h"
 #include "views/packets.h"
 #include "pcap_write.h"
 
@@ -150,13 +151,17 @@ void view_packets_draw(const sloth_state_t *s) {
     }
 
     /* column headers — same column widths as the dashboard packet
-     * band so the two views feel like one continuous data surface. */
+     * band so the two views feel like one continuous data surface.
+     * Geo column comes from the per-/8 RIR table (US/EU/AP/SA/AF/LO/MC)
+     * — non-private IPv4 only; IPv6 + RFC1918 render dim "--". */
     tui_dim();
-    TPRINT(" %-11s  %-21s     %-21s  %-5s  %-5s  %-28s  %s\n",
-           "Time", "Source", "Destination", "Proto", "Len", "Info", "Hex dump");
-    TPRINT(" %-11s  %-21s     %-21s  %-5s  %-5s  %-28s  %s\n",
+    TPRINT(" %-11s  %-21s     %-21s  %-3s  %-5s  %-5s  %-28s  %s\n",
+           "Time", "Source", "Destination", "Geo",
+           "Proto", "Len", "Info", "Hex dump");
+    TPRINT(" %-11s  %-21s     %-21s  %-3s  %-5s  %-5s  %-28s  %s\n",
            "-----------", "---------------------",
-           "---------------------", "-----", "-----",
+           "---------------------", "---",
+           "-----", "-----",
            "----------------------------",
            "-------------------------------");
     tui_normal();
@@ -250,6 +255,18 @@ void view_packets_draw(const sloth_state_t *s) {
         }
         while (dst_used++ < 21) addch(' ');
 
+        /* Region tag — RIR-level geo of the dst IP. Dim for "--"
+         * (private / reserved), bright for known. */
+        const char *region = geo_lookup_str(p->dst);
+        const char *r_show = region ? region : "??";
+        if (row != sel) {
+            if (region && region[0] != '-' && region[0] != 'L' &&
+                region[0] != 'M')                tui_bright();
+            else                                  tui_dim();
+        }
+        printw("  %-3s", r_show);
+
+        if (row == sel) tui_sel(); else tui_normal();
         printw("  %5d  %5u  ", p->proto, (unsigned)p->len);
 
         /* Info — earth-tone palette (same as dashboard). */
@@ -278,10 +295,12 @@ void view_packets_draw(const sloth_state_t *s) {
 #else
         if (row == sel) tui_sel();
         else            tui_normal();
-        printf(" %04u.%06u  %-21.21s:%-5u  ->  %-21.21s:%-5u  %5d  %5u  %.40s",
+        const char *region_str = geo_lookup_str(p->dst);
+        printf(" %04u.%06u  %-21.21s:%-5u  ->  %-21.21s:%-5u  %-3s  %5d  %5u  %.40s",
                (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
                p->src, (unsigned)p->src_port,
                p->dst, (unsigned)p->dst_port,
+               region_str ? region_str : "??",
                p->proto, (unsigned)p->len, p->info);
         if (p->raw_len > 0) {
             printf("  ");
