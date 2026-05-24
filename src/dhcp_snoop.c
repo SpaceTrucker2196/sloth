@@ -19,8 +19,9 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 #define DHCP_MAGIC  0x63825363u  /* options magic cookie */
 
 /* DHCP options we care about */
-#define OPT_MSGTYPE  53
-#define OPT_HOSTNAME 12
+#define OPT_MSGTYPE   53
+#define OPT_HOSTNAME  12
+#define OPT_SERVER_ID 54
 
 static const char *msg_type_str(uint8_t t) {
     switch (t) {
@@ -92,7 +93,8 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
 
     /* Walk TLV options starting at offset 240 */
     uint8_t  msg_type = 0;
-    char     hostname[64] = "";
+    char     hostname[64]  = "";
+    char     server_ip[46] = "";
 
     const uint8_t *p   = data + 240;
     const uint8_t *end = data + len;
@@ -109,6 +111,9 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
         else if (tag == OPT_HOSTNAME && olen > 0 && olen < 64) {
             memcpy(hostname, p, olen);
             hostname[olen] = '\0';
+        }
+        else if (tag == OPT_SERVER_ID && olen == 4) {
+            inet_ntop(AF_INET, p, server_ip, sizeof(server_ip));
         }
         p += olen;
     }
@@ -127,6 +132,11 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
         snprintf(e->hostname, sizeof(e->hostname), "%s", hostname);
     if (assigned[0] && strcmp(assigned, "0.0.0.0") != 0)
         snprintf(e->ip, sizeof(e->ip), "%s", assigned);
+    /* Server identifier — only present on server replies. Replace any
+     * prior value; rogue-DHCP detection later cross-references across
+     * events so a flapping server identity surfaces. */
+    if (server_ip[0])
+        snprintf(e->server_ip, sizeof(e->server_ip), "%s", server_ip);
     /* Feed DNS cache on ACK when we have both hostname and IP */
     if (msg_type == 5 && e->ip[0] && e->hostname[0])
         dns_set_resolved(e->ip, e->hostname);

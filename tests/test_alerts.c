@@ -223,6 +223,50 @@ static void test_arp_spoof_skips_multicast_mac(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
 }
 
+/* ── Rogue DHCP ──────────────────────────────────────────── */
+
+static void add_dhcp_event(sloth_state_t *s, const char *mac,
+                            const char *server_ip, uint8_t msg_type) {
+    if (s->dhcp_event_count >= MAX_DHCP_EVENTS) return;
+    dhcp_event_t *e = &s->dhcp_events[s->dhcp_event_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->mac,       sizeof(e->mac),       "%s", mac);
+    snprintf(e->server_ip, sizeof(e->server_ip), "%s", server_ip);
+    e->msg_type  = msg_type;
+    e->last_seen = time(NULL);
+}
+
+static void test_rogue_dhcp_single_server_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "192.168.1.1", 5 /* ACK */);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "192.168.1.1", 5);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_DHCP), -1);
+}
+
+static void test_rogue_dhcp_two_servers_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "192.168.1.1",   5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "192.168.1.234", 5);   /* rogue */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_DHCP);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_rogue_dhcp_client_requests_dont_count(void) {
+    /* Client-side messages (DISCOVER / REQUEST) carry no server_ip;
+     * those alone must not trigger the rule. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "", 1 /* DISCOVER */);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "", 3 /* REQUEST  */);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_DHCP), -1);
+}
+
 /* ── Dedup ───────────────────────────────────────────────── */
 
 static void test_dedup_increments_count(void) {
@@ -349,6 +393,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_arp_spoof_fires_on_mac_change);
     RUN_TEST(test_arp_spoof_silent_on_same_mac);
     RUN_TEST(test_arp_spoof_skips_multicast_mac);
+    RUN_TEST(test_rogue_dhcp_single_server_no_fire);
+    RUN_TEST(test_rogue_dhcp_two_servers_fires);
+    RUN_TEST(test_rogue_dhcp_client_requests_dont_count);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

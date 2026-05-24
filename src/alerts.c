@@ -225,6 +225,62 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Rogue DHCP: more than one distinct DHCP server identifier observed
+ * in recent OFFER / ACK / NAK traffic. The legitimate network has one
+ * authoritative DHCP server; a second is almost always either an
+ * attacker MITM or a misconfigured device handing out gateway-IPs
+ * that bypass the legitimate gateway.
+ *
+ * Dedup key is the comma-joined sorted list of server IPs so two
+ * different competing servers produce one persistent alert; a third
+ * later joining triggers a new key. */
+static void rule_rogue_dhcp(const sloth_state_t *s, time_t now) {
+    /* Collect distinct server IPs from dhcp events. Bounded — DHCP
+     * snoop holds at most MAX_DHCP_EVENTS entries. */
+    char servers[16][46];
+    int  n = 0;
+    for (int i = 0; i < s->dhcp_event_count && n < 16; i++) {
+        const dhcp_event_t *e = &s->dhcp_events[i];
+        if (!e->server_ip[0]) continue;
+        int dup = 0;
+        for (int j = 0; j < n; j++)
+            if (strcmp(servers[j], e->server_ip) == 0) { dup = 1; break; }
+        if (!dup) snprintf(servers[n++], 46, "%s", e->server_ip);
+    }
+    if (n < 2) return;     /* one or zero servers — nothing to flag */
+
+    /* Sort for a stable dedup key. */
+    for (int i = 0; i < n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (strcmp(servers[j], servers[best]) < 0) best = j;
+        if (best != i) {
+            char t[46];
+            memcpy(t,            servers[i],    sizeof(t));
+            memcpy(servers[i],   servers[best], sizeof(t));
+            memcpy(servers[best], t,            sizeof(t));
+        }
+    }
+
+    char key[ALERT_KEY_LEN];
+    int  kpos = snprintf(key, sizeof(key), "rogue_dhcp:");
+    for (int i = 0; i < n && kpos < (int)sizeof(key) - 1; i++)
+        kpos += snprintf(key + kpos, sizeof(key) - (size_t)kpos,
+                          "%s%s", i ? "," : "", servers[i]);
+
+    char detail[ALERT_DETAIL_LEN];
+    int  dpos = snprintf(detail, sizeof(detail),
+                         "%d distinct DHCP servers on segment: ", n);
+    for (int i = 0; i < n && dpos < (int)sizeof(detail) - 1; i++)
+        dpos += snprintf(detail + dpos, sizeof(detail) - (size_t)dpos,
+                          "%s%s", i ? ", " : "", servers[i]);
+
+    /* match_ip = first server alphabetically — operator gets a concrete
+     * pivot. */
+    fire(ALERT_TYPE_ROGUE_DHCP, ALERT_SEV_CRIT,
+         "ROGUE_DHCP", detail, key, servers[0], 67, now);
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -362,6 +418,7 @@ void alerts_update(sloth_state_t *s) {
     rule_threat_domain(s, now);
     rule_dga_domain(s, now);
     rule_arp_spoof(s, now);
+    rule_rogue_dhcp(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

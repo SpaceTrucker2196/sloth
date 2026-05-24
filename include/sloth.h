@@ -192,6 +192,11 @@ typedef struct {
     char    ip[46];        /* assigned IP, "" = not yet known  */
     char    hostname[64];  /* option 12, "" = unknown          */
     uint8_t msg_type;      /* 1=DISCOVER 3=REQUEST 5=ACK …     */
+    /* DHCP option 54 (Server Identifier) — set on server replies
+     * (OFFER / ACK / NAK). Multiple distinct values across events
+     * signal a rogue DHCP server on the segment. "" on client
+     * requests (DISCOVER / REQUEST / DECLINE / RELEASE / INFORM). */
+    char    server_ip[46];
     time_t  last_seen;
 } dhcp_event_t;
 
@@ -333,6 +338,7 @@ typedef enum {
     ALERT_TYPE_BEACONING,
     ALERT_TYPE_DGA_DOMAIN,
     ALERT_TYPE_ARP_SPOOF,
+    ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
