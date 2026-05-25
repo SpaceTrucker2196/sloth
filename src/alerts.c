@@ -225,6 +225,60 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Evil-twin AP: same SSID broadcast under more than one BSSID, where
+ * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
+ * strong security (WPA / WPA2 / WPA3). This is the classic credential
+ * harvesting setup — a rogue AP impersonating the real network on an
+ * open channel so victims joining the "right name" get MITM'd.
+ *
+ * Legitimate mesh / enterprise deployments where all BSSIDs share the
+ * same security level produce no alert. */
+static int enc_is_weak(const char *enc) {
+    return strcmp(enc, "OPEN") == 0 || strcmp(enc, "WEP") == 0;
+}
+static int enc_is_strong(const char *enc) {
+    return strcmp(enc, "WPA")  == 0 || strcmp(enc, "WPA2") == 0 ||
+           strcmp(enc, "WPA3") == 0;
+}
+
+static void rule_evil_twin(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        if (!a->ssid[0]) continue;      /* hidden -> can't correlate */
+        if (!enc_is_weak(a->enc)) continue;
+        /* Find a sibling BSSID with same SSID + strong security. */
+        for (int j = 0; j < s->beacon_count; j++) {
+            if (i == j) continue;
+            const beacon_ap_t *b = &s->beacon_aps[j];
+            if (strcmp(a->ssid, b->ssid) != 0) continue;
+            if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
+            if (!enc_is_strong(b->enc)) continue;
+
+            char a_bssid[20], b_bssid[20];
+            snprintf(a_bssid, sizeof(a_bssid),
+                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                     a->bssid[0], a->bssid[1], a->bssid[2],
+                     a->bssid[3], a->bssid[4], a->bssid[5]);
+            snprintf(b_bssid, sizeof(b_bssid),
+                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                     b->bssid[0], b->bssid[1], b->bssid[2],
+                     b->bssid[3], b->bssid[4], b->bssid[5]);
+            char key[ALERT_KEY_LEN];
+            char detail[ALERT_DETAIL_LEN];
+            snprintf(key,    sizeof(key),    "twin:%.40s", a->ssid);
+            /* Detail buffer is ALERT_DETAIL_LEN; SSID truncated to keep
+             * the suffix readable. enc strings are bounded at 9 chars
+             * by the beacon_ap_t struct. */
+            snprintf(detail, sizeof(detail),
+                     "'%.16s' on %s[%.6s] AND %s[%.6s] - twin",
+                     a->ssid, a_bssid, a->enc, b_bssid, b->enc);
+            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
+                 "EVIL_TWIN", detail, key, NULL, 0, now);
+            break;   /* one alert per weak BSSID is enough */
+        }
+    }
+}
+
 /* Rogue DHCP: more than one distinct DHCP server identifier observed
  * in recent OFFER / ACK / NAK traffic. The legitimate network has one
  * authoritative DHCP server; a second is almost always either an
@@ -419,6 +473,7 @@ void alerts_update(sloth_state_t *s) {
     rule_dga_domain(s, now);
     rule_arp_spoof(s, now);
     rule_rogue_dhcp(s, now);
+    rule_evil_twin(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

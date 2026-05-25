@@ -339,6 +339,7 @@ typedef enum {
     ALERT_TYPE_DGA_DOMAIN,
     ALERT_TYPE_ARP_SPOOF,
     ALERT_TYPE_ROGUE_DHCP,
+    ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

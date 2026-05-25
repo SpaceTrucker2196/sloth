@@ -223,6 +223,73 @@ static void test_arp_spoof_skips_multicast_mac(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
 }
 
+/* ── Evil-twin AP ────────────────────────────────────────── */
+
+static void add_beacon(sloth_state_t *s, const char *ssid,
+                        const uint8_t bssid[6], const char *enc) {
+    if (s->beacon_count >= MAX_BEACON_APS) return;
+    beacon_ap_t *b = &s->beacon_aps[s->beacon_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->ssid, sizeof(b->ssid), "%s", ssid);
+    memcpy(b->bssid, bssid, 6);
+    snprintf(b->enc, sizeof(b->enc), "%s", enc);
+    b->channel    = 6;
+    b->signal_dbm = -55;
+    b->last_seen  = time(NULL);
+}
+
+static void test_evil_twin_open_plus_wpa2_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    add_beacon(&s, "Cafe-Free", a, "OPEN");
+    add_beacon(&s, "Cafe-Free", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_evil_twin_two_wpa2_no_fire(void) {
+    /* Legit mesh / multi-AP enterprise — same SSID + same strong
+     * security across BSSIDs. No alert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    add_beacon(&s, "Office", a, "WPA2");
+    add_beacon(&s, "Office", b, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+static void test_evil_twin_two_open_no_fire(void) {
+    /* Both BSSIDs OPEN — common at airports, no strong sibling to
+     * mismatch against. No alert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    add_beacon(&s, "Airport-Free", a, "OPEN");
+    add_beacon(&s, "Airport-Free", b, "OPEN");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+static void test_evil_twin_different_ssids_no_fire(void) {
+    /* OPEN AP and WPA2 AP with DIFFERENT SSIDs — coincidence, not
+     * twin. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0x02};
+    add_beacon(&s, "Open-Net", a, "OPEN");
+    add_beacon(&s, "Locked",   b, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
 /* ── Rogue DHCP ──────────────────────────────────────────── */
 
 static void add_dhcp_event(sloth_state_t *s, const char *mac,
@@ -396,6 +463,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rogue_dhcp_single_server_no_fire);
     RUN_TEST(test_rogue_dhcp_two_servers_fires);
     RUN_TEST(test_rogue_dhcp_client_requests_dont_count);
+    RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
+    RUN_TEST(test_evil_twin_two_wpa2_no_fire);
+    RUN_TEST(test_evil_twin_two_open_no_fire);
+    RUN_TEST(test_evil_twin_different_ssids_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);
