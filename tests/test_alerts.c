@@ -344,6 +344,54 @@ static void test_dns_tunnel_few_long_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
 }
 
+/* ── Weak TLS ────────────────────────────────────────────── */
+
+static void add_tls(sloth_state_t *s, const char *src, const char *dst,
+                     const char *host, const char *ver) {
+    if (s->tls_log_count >= MAX_TLS_LOG) return;
+    tls_log_entry_t *e = &s->tls_log[s->tls_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src,     sizeof(e->src),     "%s", src);
+    snprintf(e->dst,     sizeof(e->dst),     "%s", dst);
+    snprintf(e->host,    sizeof(e->host),    "%s", host);
+    snprintf(e->tls_ver, sizeof(e->tls_ver), "%s", ver);
+    e->ts = time(NULL);
+}
+
+static void test_weak_tls_tls10_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "1.2.3.4", "legacy.example", "TLS 1.0");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WEAK_TLS);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_weak_tls_sslv3_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "1.2.3.4", "legacy.example", "SSL 3.0");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WEAK_TLS) >= 0);
+}
+
+static void test_weak_tls_tls13_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "1.2.3.4", "modern.example", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WEAK_TLS), -1);
+}
+
+static void test_weak_tls_tls12_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "1.2.3.4", "modern.example", "TLS 1.2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WEAK_TLS), -1);
+}
+
 /* ── Attack-tool User-Agent ──────────────────────────────── */
 
 static void add_http(sloth_state_t *s, const char *src,
@@ -744,6 +792,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_attack_path_log4shell_fires);
     RUN_TEST(test_attack_path_xss_fires);
     RUN_TEST(test_attack_path_normal_no_fire);
+    RUN_TEST(test_weak_tls_tls10_fires);
+    RUN_TEST(test_weak_tls_sslv3_fires);
+    RUN_TEST(test_weak_tls_tls13_no_fire);
+    RUN_TEST(test_weak_tls_tls12_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

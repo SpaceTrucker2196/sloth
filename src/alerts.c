@@ -225,6 +225,39 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Weak TLS: client negotiated a deprecated TLS version (SSLv2, SSLv3,
+ * TLS 1.0, TLS 1.1) as seen in the ClientHello. All three are formally
+ * deprecated (RFC 8996); ClientHellos still offering them indicate
+ * legacy embedded gear, an unsupported library version, or — less
+ * commonly — a downgrade attempt. Dedup key includes both src and
+ * version so the same client offering multiple weak versions surfaces
+ * separately. */
+static int tls_ver_is_weak(const char *v) {
+    if (!v) return 0;
+    return strcmp(v, "SSL 2.0") == 0 ||
+           strcmp(v, "SSL 3.0") == 0 ||
+           strcmp(v, "TLS 1.0") == 0 ||
+           strcmp(v, "TLS 1.1") == 0;
+}
+
+static void rule_weak_tls(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->tls_log_count; i++) {
+        const tls_log_entry_t *e = &s->tls_log[i];
+        if (!tls_ver_is_weak(e->tls_ver)) continue;
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "weak_tls:%s:%s",
+                 e->src, e->tls_ver);
+        snprintf(detail, sizeof(detail),
+                 "%.20s -> %.24s offered %s (deprecated)",
+                 e->src[0]  ? e->src  : "?",
+                 e->host[0] ? e->host : (e->dst[0] ? e->dst : "?"),
+                 e->tls_ver);
+        fire(ALERT_TYPE_WEAK_TLS, ALERT_SEV_WARN,
+             "WEAK_TLS", detail, key, e->src, 443, now);
+    }
+}
+
 /* HTTP attack-path: well-known injection / traversal / RCE / SQLi /
  * XSS signatures in the URI of an observed request. Substring match
  * against a small static table. Like the UA rule, this is high
@@ -774,6 +807,7 @@ void alerts_update(sloth_state_t *s) {
     rule_probe_flood(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
+    rule_weak_tls(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);
