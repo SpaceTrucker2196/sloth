@@ -88,7 +88,7 @@ static void test_parse_rejects_too_short(void) {
 
 static void test_parse_no_reason_code(void) {
     /* frame exactly 24 bytes — no reason code present, should still succeed */
-    uint8_t f[24]; fill_frame(f, 0xC0, DST_STA, SRC_A, BSSID_A, 0);
+    uint8_t f[26]; fill_frame(f, 0xC0, DST_STA, SRC_A, BSSID_A, 0);
     uint8_t src[6], dst[6], bssid[6]; uint16_t reason; uint8_t sub;
     ASSERT_EQ(deauth_parse(f, 24, -60, src, dst, bssid, &reason, &sub), 1);
     ASSERT_EQ(reason, 0);  /* defaults to 0 when body absent */
