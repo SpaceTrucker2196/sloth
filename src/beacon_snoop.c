@@ -59,6 +59,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->mfp         = 0;
         rsn_out->vendor[0]   = '\0';
         rsn_out->has_wps     = 0;
+        rsn_out->wps_state   = 0;
+        rsn_out->wps_locked  = 0;
         rsn_out->phy[0]      = '\0';
         rsn_out->neighbor_count = 0;
         memset(rsn_out->neighbors, 0, sizeof(rsn_out->neighbors));
@@ -264,7 +266,32 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
              *   type 4 = Wi-Fi Protected Setup IE                     */
             if (o0==0x00 && o1==0x50 && o2==0xf2) {
                 if (ty == 0x01) wpa_found = 1;
-                if (rsn_out && ty == 0x04) rsn_out->has_wps = 1;
+                if (rsn_out && ty == 0x04) {
+                    rsn_out->has_wps = 1;
+                    /* Walk WPS attributes (TLV body after OUI+type).
+                     * Each attribute: 2 bytes ID + 2 bytes length +
+                     * data, big-endian. */
+                    const uint8_t *wp = ie + 6;        /* after OUI+type */
+                    int            wrem = (int)tln - 4;
+                    while (wrem >= 4) {
+                        uint16_t aid = (uint16_t)((wp[0] << 8) | wp[1]);
+                        uint16_t alen = (uint16_t)((wp[2] << 8) | wp[3]);
+                        if (4 + (int)alen > wrem) break;
+                        const uint8_t *adata = wp + 4;
+                        if (aid == 0x1044 && alen >= 1) {
+                            /* Wi-Fi Protected Setup State */
+                            rsn_out->wps_state =
+                                (adata[0] == 0x02) ? 2 :
+                                (adata[0] == 0x01) ? 1 : 0;
+                        } else if (aid == 0x1057 && alen >= 1) {
+                            /* AP Setup Locked */
+                            rsn_out->wps_locked =
+                                (adata[0] == 0x01) ? 2 : 1;
+                        }
+                        wp   += 4 + alen;
+                        wrem -= 4 + alen;
+                    }
+                }
             }
             /* AP vendor fingerprint — first non-Microsoft OUI we
              * recognise wins. Lookup table is small (SOHO + enterprise
@@ -368,6 +395,8 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     snprintf(g_aps[i].vendor, sizeof(g_aps[i].vendor),
                              "%s", rsn->vendor);
                 if (rsn->has_wps) g_aps[i].has_wps = 1;
+                if (rsn->wps_state)  g_aps[i].wps_state  = rsn->wps_state;
+                if (rsn->wps_locked) g_aps[i].wps_locked = rsn->wps_locked;
                 if (rsn->phy[0])
                     snprintf(g_aps[i].phy, sizeof(g_aps[i].phy),
                              "%s", rsn->phy);
@@ -426,7 +455,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].mfp = rsn->mfp;
         snprintf(g_aps[slot].vendor, sizeof(g_aps[slot].vendor),
                  "%s", rsn->vendor);
-        g_aps[slot].has_wps = rsn->has_wps;
+        g_aps[slot].has_wps    = rsn->has_wps;
+        g_aps[slot].wps_state  = rsn->wps_state;
+        g_aps[slot].wps_locked = rsn->wps_locked;
         snprintf(g_aps[slot].phy, sizeof(g_aps[slot].phy),
                  "%s", rsn->phy);
         int nc = rsn->neighbor_count;

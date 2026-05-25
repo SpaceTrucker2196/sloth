@@ -673,6 +673,49 @@ static void test_parse_rnr_and_tag52_merge(void) {
     ASSERT_EQ((int)rsn.neighbors[1].bssid[5], 0x02);
 }
 
+static void test_parse_wps_state_configured_locked(void) {
+    /* WPS IE with State=Configured (0x02) + AP-Locked=1.
+     * IE body: OUI(3) + type(1) + attr(5) + attr(5) = 14 bytes. */
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x0e,
+        0x00, 0x50, 0xf2, 0x04,             /* MS OUI + WPS type */
+        0x10, 0x44, 0x00, 0x01, 0x02,       /* attr 0x1044 len 1 = Configured */
+        0x10, 0x57, 0x00, 0x01, 0x01,       /* attr 0x1057 len 1 = Locked */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps,    1);
+    ASSERT_EQ(rsn.wps_state,  2);   /* Configured */
+    ASSERT_EQ(rsn.wps_locked, 2);   /* locked */
+}
+
+static void test_parse_wps_state_notconfigured_unlocked(void) {
+    /* The "PixieDust candidate" combo. */
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x0e,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x44, 0x00, 0x01, 0x01,       /* NotConfigured */
+        0x10, 0x57, 0x00, 0x01, 0x00,       /* Unlocked */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps,    1);
+    ASSERT_EQ(rsn.wps_state,  1);   /* NotConfigured */
+    ASSERT_EQ(rsn.wps_locked, 1);   /* Unlocked */
+}
+
 static void test_record_tracks_ssid_history(void) {
     beacon_clear();
     /* Same BSSID, four different SSIDs over time. */
@@ -774,6 +817,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_reduced_neighbor_report_single_tbtt);
     RUN_TEST(test_parse_reduced_neighbor_report_two_tbtt);
     RUN_TEST(test_parse_rnr_and_tag52_merge);
+    RUN_TEST(test_parse_wps_state_configured_locked);
+    RUN_TEST(test_parse_wps_state_notconfigured_unlocked);
     RUN_TEST(test_record_tracks_ssid_history);
     RUN_TEST(test_record_persists_neighbors);
 }

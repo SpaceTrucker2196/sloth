@@ -465,6 +465,13 @@ typedef struct {
      * and online PIN attacks are still a thing on many SOHO routers. */
     char     vendor[24];
     int      has_wps;
+    /* WPS state from the WPS IE attributes (when has_wps).
+     *   wps_state:  0=unknown 1=NotConfigured 2=Configured
+     *   wps_locked: 0=unknown 1=unlocked       2=locked
+     * Unlocked + NotConfigured -> classic PixieDust / PIN-attack
+     * candidate; locked -> attempts will be refused. */
+    int      wps_state;
+    int      wps_locked;
     /* Max PHY tier advertised by the AP — same scheme as pnl_client_t.phy. */
     char     phy[10];
     /* 1 if this beacon was originally hidden (empty SSID in the beacon

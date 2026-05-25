@@ -109,8 +109,23 @@ static void draw_beacon_detail(const sloth_state_t *s) {
     else                    { tui_heat(0.7); TPRINT("off (deauth-attackable)"); }
     TPRINT("\n");
     tui_dim(); TPRINT("  WPS:         ");
-    if (ap->has_wps) { tui_heat(0.7);
-        TPRINT("ON  (PixieDust / WPS-PIN candidate)");
+    if (ap->has_wps) {
+        /* AP Setup Locked overrides — locked means PIN attacks won't
+         * work, so render the "interesting" coloring only when both
+         * unlocked AND not configured. */
+        int unlocked_unconfigured =
+            (ap->wps_locked == 1 && ap->wps_state == 1);
+        if (unlocked_unconfigured) tui_heat(1.0);
+        else                       tui_heat(0.7);
+        TPRINT("ON");
+        tui_dim();
+        if (ap->wps_state == 1)      TPRINT("  (NotConfigured)");
+        else if (ap->wps_state == 2) TPRINT("  (Configured)");
+        if (ap->wps_locked == 2)     TPRINT("  [LOCKED]");
+        else if (ap->wps_locked == 1) {
+            tui_heat(1.0);
+            TPRINT("  [UNLOCKED — PixieDust / WPS-PIN candidate]");
+        }
     } else {
         tui_normal(); TPRINT("-");
     }

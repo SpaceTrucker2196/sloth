@@ -20,6 +20,8 @@ typedef struct {
     /* ── Vendor IE fingerprint ──────────────────────────── */
     char vendor[24];    /* "Apple", "Cisco", "Mikrotik", … or "" */
     int  has_wps;       /* Wi-Fi Protected Setup IE present */
+    int  wps_state;     /* 0=unknown 1=NotConfigured 2=Configured */
+    int  wps_locked;    /* 0=unknown 1=unlocked       2=locked    */
     /* Max PHY tier — "Wi-Fi 7" / "6" / "5" / "4" / "legacy" / "" */
     char phy[10];
     /* 802.11k Neighbor Report list (tag 52). Up to MAX_AP_NEIGHBORS;
