@@ -673,6 +673,22 @@ static void test_parse_rnr_and_tag52_merge(void) {
     ASSERT_EQ((int)rsn.neighbors[1].bssid[5], 0x02);
 }
 
+static void test_record_tracks_ssid_history(void) {
+    beacon_clear();
+    /* Same BSSID, four different SSIDs over time. */
+    beacon_record(BSSID_A, "homewifi",  -50, 6, "WPA2", 102, NULL);
+    beacon_record(BSSID_A, "Starbucks", -50, 6, "OPEN", 102, NULL);
+    beacon_record(BSSID_A, "Starbucks", -50, 6, "OPEN", 102, NULL); /* dup */
+    beacon_record(BSSID_A, "ACME-Corp", -50, 6, "WPA2", 102, NULL);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].ssid_history_n, 3);
+    ASSERT_STR(s.beacon_aps[0].ssid_history[0], "homewifi");
+    ASSERT_STR(s.beacon_aps[0].ssid_history[1], "Starbucks");
+    ASSERT_STR(s.beacon_aps[0].ssid_history[2], "ACME-Corp");
+}
+
 static void test_record_persists_neighbors(void) {
     beacon_clear();
     beacon_rsn_t rsn = {0};
@@ -758,5 +774,6 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_reduced_neighbor_report_single_tbtt);
     RUN_TEST(test_parse_reduced_neighbor_report_two_tbtt);
     RUN_TEST(test_parse_rnr_and_tag52_merge);
+    RUN_TEST(test_record_tracks_ssid_history);
     RUN_TEST(test_record_persists_neighbors);
 }

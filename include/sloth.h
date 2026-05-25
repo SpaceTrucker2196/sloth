@@ -340,6 +340,7 @@ typedef enum {
     ALERT_TYPE_ARP_SPOOF,
     ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_EVIL_TWIN,
+    ALERT_TYPE_KARMA_AP,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -472,6 +473,12 @@ typedef struct {
     /* 802.11k Neighbor Reports — APs this AP advertises as neighbors. */
     ap_neighbor_t neighbors[MAX_AP_NEIGHBORS];
     int      neighbor_count;
+    /* Distinct SSIDs ever emitted by this BSSID. Legitimate APs
+     * pick one and stick to it; pineapple-style rogue APs spoof
+     * many SSIDs from a single radio (>=3 = strong KARMA signal). */
+#define MAX_AP_SSID_HISTORY 8
+    char     ssid_history[MAX_AP_SSID_HISTORY][33];
+    int      ssid_history_n;
     time_t   last_seen;
     int      frame_count;
 } beacon_ap_t;

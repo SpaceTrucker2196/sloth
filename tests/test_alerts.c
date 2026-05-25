@@ -290,6 +290,58 @@ static void test_evil_twin_different_ssids_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
 }
 
+/* ── KARMA / Pineapple ───────────────────────────────────── */
+
+static void seed_karma_ap(sloth_state_t *s, const uint8_t bssid[6],
+                           const char *const *ssids, int n_ssids) {
+    if (s->beacon_count >= MAX_BEACON_APS) return;
+    beacon_ap_t *b = &s->beacon_aps[s->beacon_count++];
+    memset(b, 0, sizeof(*b));
+    memcpy(b->bssid, bssid, 6);
+    snprintf(b->enc, sizeof(b->enc), "OPEN");
+    int cap = n_ssids < MAX_AP_SSID_HISTORY ? n_ssids : MAX_AP_SSID_HISTORY;
+    for (int i = 0; i < cap; i++)
+        snprintf(b->ssid_history[i], 33, "%s", ssids[i]);
+    b->ssid_history_n = cap;
+    if (cap > 0) snprintf(b->ssid, sizeof(b->ssid), "%s", ssids[cap - 1]);
+    b->channel    = 6;
+    b->signal_dbm = -55;
+    b->last_seen  = time(NULL);
+}
+
+static void test_karma_three_ssids_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_karma_two_ssids_no_fire(void) {
+    /* Threshold is 3 — two SSIDs is benign (some APs do migrate). */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "homewifi-guest" };
+    seed_karma_ap(&s, bssid, ssids, 2);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_KARMA_AP), -1);
+}
+
+static void test_karma_one_ssid_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi" };
+    seed_karma_ap(&s, bssid, ssids, 1);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_KARMA_AP), -1);
+}
+
 /* ── Rogue DHCP ──────────────────────────────────────────── */
 
 static void add_dhcp_event(sloth_state_t *s, const char *mac,
@@ -467,6 +519,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);
     RUN_TEST(test_evil_twin_two_open_no_fire);
     RUN_TEST(test_evil_twin_different_ssids_no_fire);
+    RUN_TEST(test_karma_three_ssids_fires);
+    RUN_TEST(test_karma_two_ssids_no_fire);
+    RUN_TEST(test_karma_one_ssid_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

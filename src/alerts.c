@@ -225,6 +225,38 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* KARMA / Pineapple-style rogue AP: a single BSSID emitting beacons
+ * (or probe responses) for many distinct SSIDs. Legitimate APs pick
+ * one ESSID and stick to it. Rogue tools (Wifi Pineapple's PineAP,
+ * mana, hostapd-wpe) impersonate every SSID a victim probes for, so
+ * one MAC ends up advertising 3, 5, 20 different network names.
+ *
+ * Threshold: >= 3 distinct SSIDs from one BSSID. False positives are
+ * possible (some captive-portal gear cycles SSIDs) but the operator
+ * almost always wants to look. */
+#define KARMA_SSID_THRESH 3
+
+static void rule_karma_ap(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        if (a->ssid_history_n < KARMA_SSID_THRESH) continue;
+
+        char bssid_str[20];
+        snprintf(bssid_str, sizeof(bssid_str),
+                 "%02x:%02x:%02x:%02x:%02x:%02x",
+                 a->bssid[0], a->bssid[1], a->bssid[2],
+                 a->bssid[3], a->bssid[4], a->bssid[5]);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
+        snprintf(detail, sizeof(detail),
+                 "BSSID %s emitted %d distinct SSIDs - Pineapple/KARMA candidate",
+                 bssid_str, a->ssid_history_n);
+        fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
+             "KARMA_AP", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -474,6 +506,7 @@ void alerts_update(sloth_state_t *s) {
     rule_arp_spoof(s, now);
     rule_rogue_dhcp(s, now);
     rule_evil_twin(s, now);
+    rule_karma_ap(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

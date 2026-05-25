@@ -337,7 +337,22 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
             g_aps[i].beacon_ms  = beacon_ms;
             g_aps[i].last_seen  = now;
             g_aps[i].frame_count++;
-            if (ssid[0]) strncpy(g_aps[i].ssid, ssid, 32);
+            if (ssid[0]) {
+                strncpy(g_aps[i].ssid, ssid, 32);
+                /* Track distinct SSIDs per BSSID for KARMA/Pineapple
+                 * detection. Append if not already present, cap at
+                 * MAX_AP_SSID_HISTORY (drops past that). */
+                int dup = 0;
+                for (int k = 0; k < g_aps[i].ssid_history_n; k++)
+                    if (strncmp(g_aps[i].ssid_history[k], ssid, 32) == 0) {
+                        dup = 1; break;
+                    }
+                if (!dup && g_aps[i].ssid_history_n < MAX_AP_SSID_HISTORY) {
+                    snprintf(g_aps[i].ssid_history[g_aps[i].ssid_history_n],
+                             33, "%s", ssid);
+                    g_aps[i].ssid_history_n++;
+                }
+            }
             if (rsn) {
                 snprintf(g_aps[i].pairwise, sizeof(g_aps[i].pairwise),
                          "%s", rsn->pairwise);
@@ -397,6 +412,10 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].beacon_ms  = beacon_ms;
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
+    if (ssid[0]) {
+        snprintf(g_aps[slot].ssid_history[0], 33, "%s", ssid);
+        g_aps[slot].ssid_history_n = 1;
+    }
     if (rsn) {
         snprintf(g_aps[slot].pairwise, sizeof(g_aps[slot].pairwise),
                  "%s", rsn->pairwise);
