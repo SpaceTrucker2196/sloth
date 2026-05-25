@@ -110,6 +110,60 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             if (ext == 35)               has_he  = 1;
             if (ext == 81 || ext == 108) has_eht = 1;
 
+        } else if (tag == 201 && tln >= 4 && rsn_out) {
+            /* 802.11ax/be Reduced Neighbor Report (RNR).
+             * Body is one or more Neighbor AP Info Fields, each:
+             *   bytes 0-1  TBTT Information Header (little-endian):
+             *     bits  0-1 Type
+             *     bit   2   Filtered Neighbor AP
+             *     bits  4-7 TBTT Info Count (zero-based: count = N+1)
+             *     bits  8-15 TBTT Info Length (per entry, bytes)
+             *   byte  2    Operating Class
+             *   byte  3    Channel Number
+             *   bytes 4+   TBTT Info entries (count * len bytes total)
+             *
+             * Each TBTT entry (when len >= 7) contains:
+             *   byte 0       TBTT Offset
+             *   bytes 1-6    BSSID
+             *   (more fields when len >= 11)
+             *
+             * We extract (BSSID, channel) per neighbor — same shape as
+             * the 802.11k path so they merge into one neighbor list. */
+            const uint8_t *p = ie + 2;
+            int rem = tln;
+            while (rem >= 4 &&
+                   rsn_out->neighbor_count < MAX_AP_NEIGHBORS) {
+                uint16_t h     = (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+                int tbtt_count = ((h >> 4) & 0xF) + 1;
+                int tbtt_len   = (h >> 8) & 0xFF;
+                uint8_t channel = p[3];
+                if (tbtt_len <= 0) break;
+                int field_len = 4 + tbtt_count * tbtt_len;
+                if (field_len > rem) break;
+                const uint8_t *tp = p + 4;
+                for (int t = 0;
+                     t < tbtt_count &&
+                     rsn_out->neighbor_count < MAX_AP_NEIGHBORS;
+                     t++, tp += tbtt_len) {
+                    if (tbtt_len < 7) continue;
+                    ap_neighbor_t *n =
+                        &rsn_out->neighbors[rsn_out->neighbor_count];
+                    memcpy(n->bssid, tp + 1, 6);
+                    n->channel  = channel;
+                    n->phy_type = 0;       /* RNR doesn't carry PHY type */
+                    int dup = 0;
+                    for (int k = 0; k < rsn_out->neighbor_count; k++)
+                        if (memcmp(rsn_out->neighbors[k].bssid,
+                                   n->bssid, 6) == 0) {
+                            dup = 1;
+                            break;
+                        }
+                    if (!dup) rsn_out->neighbor_count++;
+                }
+                p   += field_len;
+                rem -= field_len;
+            }
+
         } else if (tag == 52 && tln >= 13 && rsn_out) {
             /* 802.11k Neighbor Report Element.
              *   6 BSSID + 4 BSSID Info + 1 OperClass + 1 Channel +

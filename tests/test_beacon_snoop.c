@@ -585,6 +585,94 @@ static void test_parse_neighbor_report_multiple_dedup(void) {
     ASSERT_EQ(rsn.neighbor_count, 2);
 }
 
+static void test_parse_reduced_neighbor_report_single_tbtt(void) {
+    /* Tag 201 RNR — one Neighbor AP Info Field with one TBTT entry.
+     *   TBTT Info Header: count = 1 (zero-based 0), len = 11 (0x0B)
+     *     bytes:  0x00, 0x0B  (count nibble in low byte; len in high byte)
+     *   Operating Class: 0x83 (131 = 6 GHz UNII-5)
+     *   Channel: 0x05 (channel 5 in 6 GHz)
+     *   TBTT entry (11 bytes):
+     *     offset(1) + BSSID(6) + short-SSID(4) */
+    static const uint8_t rnr_ie[] = {
+        0xc9, 0x0f,                                /* tag 201, len 15 */
+        0x00, 0x0b,                                /* hdr: count=1, len=11 */
+        0x83, 0x05,                                /* oper class, channel 5 */
+        0x00,                                      /* TBTT offset */
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x42,        /* BSSID */
+        0xde, 0xad, 0xbe, 0xef                     /* short-SSID */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(rnr_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, rnr_ie, sizeof(rnr_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.neighbor_count, 1);
+    ASSERT_EQ((int)rsn.neighbors[0].bssid[5], 0x42);
+    ASSERT_EQ(rsn.neighbors[0].channel,       5);
+}
+
+static void test_parse_reduced_neighbor_report_two_tbtt(void) {
+    /* RNR with one Neighbor AP Info Field carrying TWO TBTT entries
+     * (count nibble = 1 = 0-based for 2 entries). */
+    static const uint8_t rnr_ie[] = {
+        0xc9, 0x1a,                                /* tag, len 26 */
+        0x10, 0x0b,                                /* count=2 (nibble=1), len=11 */
+        0x83, 0x09,                                /* oper class, channel 9 */
+        /* entry 1 */
+        0x00,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01,
+        0xde, 0xad, 0xbe, 0xef,
+        /* entry 2 */
+        0x00,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02,
+        0xde, 0xad, 0xbe, 0xef,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(rnr_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, rnr_ie, sizeof(rnr_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.neighbor_count, 2);
+    ASSERT_EQ((int)rsn.neighbors[0].bssid[5], 0x01);
+    ASSERT_EQ((int)rsn.neighbors[1].bssid[5], 0x02);
+    ASSERT_EQ(rsn.neighbors[0].channel, 9);
+    ASSERT_EQ(rsn.neighbors[1].channel, 9);
+}
+
+static void test_parse_rnr_and_tag52_merge(void) {
+    /* Tag 52 entry first, then tag 201. Both feed the same
+     * neighbors[] list; de-dup keeps the union. */
+    static const uint8_t ies[] = {
+        0x34, 0x0d,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x51, 0x06, 0x07,
+        0xc9, 0x0f,
+        0x00, 0x0b,
+        0x83, 0x21,
+        0x00,
+        0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02,
+        0xde, 0xad, 0xbe, 0xef,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ies)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ies, sizeof(ies));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.neighbor_count, 2);
+    /* Tag 52 was first, so its BSSID lands at index 0. */
+    ASSERT_EQ((int)rsn.neighbors[0].bssid[5], 0x01);
+    ASSERT_EQ((int)rsn.neighbors[1].bssid[5], 0x02);
+}
+
 static void test_record_persists_neighbors(void) {
     beacon_clear();
     beacon_rsn_t rsn = {0};
@@ -667,5 +755,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_view_key_detail_toggle);
     RUN_TEST(test_parse_neighbor_report_single);
     RUN_TEST(test_parse_neighbor_report_multiple_dedup);
+    RUN_TEST(test_parse_reduced_neighbor_report_single_tbtt);
+    RUN_TEST(test_parse_reduced_neighbor_report_two_tbtt);
+    RUN_TEST(test_parse_rnr_and_tag52_merge);
     RUN_TEST(test_record_persists_neighbors);
 }
