@@ -61,30 +61,40 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
     const char *sp2 = (const char *)memchr(path_start, ' ', (size_t)path_rem);
     int plen = sp2 ? (int)(sp2 - path_start) : path_rem;
 
-    /* ── walk headers for Host ── */
+    /* ── walk headers for Host + User-Agent ── */
     rem -= (int)(eol - p) + 1;
     p    = eol + 1;
     char host[64] = "";
+    char ua[64]   = "";
 
-    while (rem > 0 && host[0] == '\0') {
+    while (rem > 0 && (host[0] == '\0' || ua[0] == '\0')) {
         if (*p == '\r' || *p == '\n') break;
         const char *heol = (const char *)memchr(p, '\n', (size_t)rem);
         int hlen = heol ? (int)(heol - p) : rem;
         int vlen = hlen;
         if (vlen > 0 && p[vlen - 1] == '\r') vlen--;
 
-        if (vlen > 5 && ci_eq(p, 5, "host:", 5)) {
+        if (vlen > 5 && ci_eq(p, 5, "host:", 5) && !host[0]) {
             const char *val = p + 5;
             int vrem = vlen - 5;
             while (vrem > 0 && (*val == ' ' || *val == '\t')) { val++; vrem--; }
             while (vrem > 0 && (val[vrem-1]==' '||val[vrem-1]=='\t')) vrem--;
-            /* strip :port */
             const char *colon = (const char *)memchr(val, ':', (size_t)vrem);
             if (colon) vrem = (int)(colon - val);
             if (vrem > 0) {
                 int hsz = vrem < 63 ? vrem : 63;
                 memcpy(host, val, (size_t)hsz);
                 host[hsz] = '\0';
+            }
+        } else if (vlen > 11 && ci_eq(p, 11, "user-agent:", 11) && !ua[0]) {
+            const char *val = p + 11;
+            int vrem = vlen - 11;
+            while (vrem > 0 && (*val == ' ' || *val == '\t')) { val++; vrem--; }
+            while (vrem > 0 && (val[vrem-1]==' '||val[vrem-1]=='\t')) vrem--;
+            if (vrem > 0) {
+                int usz = vrem < 63 ? vrem : 63;
+                memcpy(ua, val, (size_t)usz);
+                ua[usz] = '\0';
             }
         }
         if (!heol) break;
@@ -101,6 +111,7 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
     out->method[msz] = '\0';
 
     snprintf(out->host, sizeof(out->host), "%s", host);
+    snprintf(out->user_agent, sizeof(out->user_agent), "%s", ua);
 
     int psz = plen < 127 ? plen : 127;
     memcpy(out->path, path_start, (size_t)psz);

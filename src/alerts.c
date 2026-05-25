@@ -225,6 +225,75 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Attack-tool User-Agent: substring match against a small table of
+ * well-known offensive-tooling UAs in observed HTTP requests. The
+ * tools often advertise themselves verbatim because operators don't
+ * typically tune their UA; when they do, this rule misses, which is
+ * fine — it's a high-confidence signal, not a complete coverage. */
+static const struct {
+    const char *needle;
+    const char *label;
+} g_attack_ua_table[] = {
+    { "sqlmap",    "sqlmap"    },
+    { "nmap",      "nmap"      },
+    { "masscan",   "masscan"   },
+    { "nuclei",    "nuclei"    },
+    { "nikto",     "nikto"     },
+    { "gobuster",  "gobuster"  },
+    { "ffuf",      "ffuf"      },
+    { "hydra",     "hydra"     },
+    { "wpscan",    "wpscan"    },
+    { "dirb",      "dirb"      },
+    { "metasploit","metasploit"},
+    { "ZAP",       "OWASP ZAP" },
+    { "Burp",      "Burp Suite"},
+    { "acunetix",  "Acunetix"  },
+    { "nessus",    "Nessus"    },
+    { "openvas",   "OpenVAS"   },
+    { "skipfish",  "skipfish"  },
+    { "wfuzz",     "wfuzz"     },
+};
+
+static const char *attack_tool_ua_match(const char *ua) {
+    if (!ua || !ua[0]) return NULL;
+    int n = (int)(sizeof(g_attack_ua_table) / sizeof(g_attack_ua_table[0]));
+    for (int i = 0; i < n; i++) {
+        const char *needle = g_attack_ua_table[i].needle;
+        size_t nlen = strlen(needle);
+        for (const char *p = ua; *p; p++) {
+            /* case-insensitive substring */
+            size_t k = 0;
+            while (k < nlen && p[k]) {
+                char a = p[k], b = needle[k];
+                if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                if (a != b) break;
+                k++;
+            }
+            if (k == nlen) return g_attack_ua_table[i].label;
+        }
+    }
+    return NULL;
+}
+
+static void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->http_log_count; i++) {
+        const http_log_entry_t *e = &s->http_log[i];
+        const char *label = attack_tool_ua_match(e->user_agent);
+        if (!label) continue;
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "ua:%s:%s", e->src, label);
+        snprintf(detail, sizeof(detail),
+                 "%.24s -> %.24s [%.16s]",
+                 e->src[0]  ? e->src  : "?",
+                 e->host[0] ? e->host : "?",
+                 label);
+        fire(ALERT_TYPE_ATTACK_TOOL_UA, ALERT_SEV_CRIT,
+             "ATTACK_TOOL_UA", detail, key, e->src, 80, now);
+    }
+}
+
 /* Probe-request flood: single client MAC emitting probe requests at
  * an abnormally high rate. Operationally interesting because:
  *   - active recon tools (kismet, hcxdumptool, wifite) burst probes
@@ -632,6 +701,7 @@ void alerts_update(sloth_state_t *s) {
     rule_karma_ap(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
+    rule_attack_tool_ua(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

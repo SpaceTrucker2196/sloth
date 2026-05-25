@@ -344,6 +344,51 @@ static void test_dns_tunnel_few_long_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
 }
 
+/* ── Attack-tool User-Agent ──────────────────────────────── */
+
+static void add_http(sloth_state_t *s, const char *src,
+                      const char *host, const char *ua) {
+    if (s->http_log_count >= MAX_HTTP_LOG) return;
+    http_log_entry_t *e = &s->http_log[s->http_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src,        sizeof(e->src),        "%s", src);
+    snprintf(e->host,       sizeof(e->host),       "%s", host);
+    snprintf(e->method,     sizeof(e->method),     "GET");
+    snprintf(e->path,       sizeof(e->path),       "/");
+    snprintf(e->user_agent, sizeof(e->user_agent), "%s", ua);
+    e->ts = time(NULL);
+}
+
+static void test_attack_tool_ua_sqlmap_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http(&s, "10.0.0.5", "target.example",
+             "sqlmap/1.7.5#stable (http://sqlmap.org)");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_attack_tool_ua_nmap_case_insensitive(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http(&s, "10.0.0.5", "target.example", "Mozilla/5.0 (NMAP scripting)");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA) >= 0);
+}
+
+static void test_attack_tool_ua_normal_browser_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http(&s, "10.0.0.5", "google.com",
+             "Mozilla/5.0 (X11; Linux x86_64; rv:115.0) Gecko/20100101 Firefox/115.0");
+    add_http(&s, "10.0.0.5", "example.com",
+             "curl/8.4.0");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_TOOL_UA), -1);
+}
+
 /* ── Probe flood ─────────────────────────────────────────── */
 
 static void seed_probe_client(sloth_state_t *s, const uint8_t mac[6],
@@ -630,6 +675,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_probe_flood_fires_on_high_rate);
     RUN_TEST(test_probe_flood_low_total_no_fire);
     RUN_TEST(test_probe_flood_too_brief_no_fire);
+    RUN_TEST(test_attack_tool_ua_sqlmap_fires);
+    RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
+    RUN_TEST(test_attack_tool_ua_normal_browser_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

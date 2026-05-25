@@ -343,6 +343,7 @@ typedef enum {
     ALERT_TYPE_KARMA_AP,
     ALERT_TYPE_DNS_TUNNEL,
     ALERT_TYPE_PROBE_FLOOD,
+    ALERT_TYPE_ATTACK_TOOL_UA,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -404,10 +405,11 @@ typedef struct {
 #define MAX_HTTP_LOG 256
 
 typedef struct {
-    char   src[46];       /* source IP */
-    char   method[10];    /* GET POST PUT etc */
-    char   host[64];      /* Host header value */
-    char   path[128];     /* request URI */
+    char   src[46];        /* source IP */
+    char   method[10];     /* GET POST PUT etc */
+    char   host[64];       /* Host header value */
+    char   path[128];      /* request URI */
+    char   user_agent[64]; /* User-Agent header, truncated */
     time_t ts;
 } http_log_entry_t;
 
