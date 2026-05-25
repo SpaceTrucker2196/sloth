@@ -105,7 +105,12 @@ endif
 
 ifeq ($(WITH_NCURSES),1)
     CFLAGS  += -DWITH_NCURSES
-    LDFLAGS += -lncursesw
+    # macOS ships a unified wide-char-capable libncurses (no separate ncursesw).
+    ifeq ($(UNAME),Darwin)
+        LDFLAGS += -lncurses
+    else
+        LDFLAGS += -lncursesw
+    endif
 endif
 
 LDFLAGS += -lpthread -lm
@@ -144,8 +149,12 @@ embedded:
 
 # ── Test build ───────────────────────────────────────────────────────────────
 # Compiled without ncurses/pcap — TPRINT falls back to printf, no terminal needed.
-TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE \
-              -DPLATFORM_LINUX -DWITH_WIFI
+# PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only platform
+# sources become empty translation units (their tests use the fake platform).
+TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI
+ifeq ($(UNAME),Linux)
+    TEST_CFLAGS += -DPLATFORM_LINUX
+endif
 # No WITH_NCURSES: TPRINT expands to printf in view files
 # No WITH_PCAP:    packets view shows disabled message
 
