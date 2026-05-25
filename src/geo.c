@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <arpa/inet.h>
 #include "geo.h"
 
 /*
@@ -75,8 +76,46 @@ const char *geo_region_name(const char *code) {
     return NULL;
 }
 
+/* IPv6 RIR allocations by /12 (or higher specificity for 2001::/16).
+ * Global-unicast space (2000::/3) is carved up at /12 across the RIRs
+ * with two exceptions: 2001::/16 was administered globally by RIPE and
+ * 2002::/16 is 6to4 (now historic). The remaining ranges are stable. */
+const char *geo_lookup_v6(const uint8_t a[16]) {
+    if (!a) return NULL;
+    /* Multicast / link-local / ULA / loopback. */
+    if (a[0] == 0xff)                          return "MC";
+    if (a[0] == 0xfe && (a[1] & 0xc0) == 0x80) return "--";  /* link-local */
+    if (a[0] == 0xfc || a[0] == 0xfd)          return "--";  /* ULA */
+    /* ::1 loopback */
+    int all_zero = 1;
+    for (int i = 0; i < 15; i++) if (a[i]) { all_zero = 0; break; }
+    if (all_zero && a[15] == 0x01)             return "LO";
+    /* ::ffff:0:0/96 — IPv4-mapped, defer to v4 lookup at the caller */
+    /* Global unicast 2000::/3 */
+    if (a[0] == 0x24) return "AP";
+    if (a[0] == 0x26) return "US";
+    if (a[0] == 0x28) return "SA";
+    if (a[0] == 0x2a) return "EU";
+    if (a[0] == 0x2c) return "AF";
+    /* 2001:: is RIPE-administered; specific sub-blocks delegate to other
+     * RIRs, but the bulk of 2001::/16 sits with RIPE. 2003::/16 is
+     * RIPE (Germany). 2002:: is 6to4 — call it "--" since the embedded
+     * v4 is what would actually answer. */
+    if (a[0] == 0x20 && a[1] == 0x02) return "--";
+    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0d && a[3] == 0xb8)
+        return "--";                       /* 2001:db8::/32 documentation */
+    if (a[0] == 0x20 && a[1] == 0x01) return "EU";
+    if (a[0] == 0x20 && a[1] == 0x03) return "EU";
+    return NULL;
+}
+
 const char *geo_lookup_str(const char *ip) {
-    if (!ip || !*ip || strchr(ip, ':')) return NULL;  /* null or IPv6 */
+    if (!ip || !*ip) return NULL;
+    if (strchr(ip, ':')) {
+        uint8_t v6[16];
+        if (inet_pton(AF_INET6, ip, v6) != 1) return NULL;
+        return geo_lookup_v6(v6);
+    }
     unsigned a, b, c, d;
     if (sscanf(ip, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return NULL;
     if (a > 255 || b > 255 || c > 255 || d > 255)     return NULL;

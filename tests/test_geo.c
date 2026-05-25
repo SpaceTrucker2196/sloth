@@ -163,9 +163,45 @@ static void test_str_apnic(void) {
     ASSERT_STR(geo_lookup_str("1.1.1.1"), "AP");
 }
 
-static void test_str_ipv6_null(void) {
-    /* IPv6 → NULL */
-    ASSERT(geo_lookup_str("2001:db8::1") == NULL);
+static void test_str_ipv6_doc_prefix_private(void) {
+    /* 2001:db8::/32 documentation prefix — treated as private. */
+    ASSERT_STR(geo_lookup_str("2001:db8::1"), "--");
+}
+
+static void test_str_ipv6_apnic(void) {
+    ASSERT_STR(geo_lookup_str("2400:cb00::1"), "AP");
+}
+
+static void test_str_ipv6_arin(void) {
+    ASSERT_STR(geo_lookup_str("2606:4700:4700::1111"), "US");
+}
+
+static void test_str_ipv6_ripe(void) {
+    ASSERT_STR(geo_lookup_str("2a02::1"), "EU");
+}
+
+static void test_str_ipv6_lacnic(void) {
+    ASSERT_STR(geo_lookup_str("2800:abcd::1"), "SA");
+}
+
+static void test_str_ipv6_afrinic(void) {
+    ASSERT_STR(geo_lookup_str("2c00::1"), "AF");
+}
+
+static void test_str_ipv6_link_local(void) {
+    ASSERT_STR(geo_lookup_str("fe80::1"), "--");
+}
+
+static void test_str_ipv6_multicast(void) {
+    ASSERT_STR(geo_lookup_str("ff02::1"), "MC");
+}
+
+static void test_str_ipv6_loopback(void) {
+    ASSERT_STR(geo_lookup_str("::1"), "LO");
+}
+
+static void test_str_ipv6_ula(void) {
+    ASSERT_STR(geo_lookup_str("fc00::1"), "--");
 }
 
 static void test_str_invalid_null(void) {
@@ -219,7 +255,16 @@ void run_geo_tests(void) {
     RUN_TEST(test_str_loopback);
     RUN_TEST(test_str_multicast);
     RUN_TEST(test_str_apnic);
-    RUN_TEST(test_str_ipv6_null);
+    RUN_TEST(test_str_ipv6_doc_prefix_private);
+    RUN_TEST(test_str_ipv6_apnic);
+    RUN_TEST(test_str_ipv6_arin);
+    RUN_TEST(test_str_ipv6_ripe);
+    RUN_TEST(test_str_ipv6_lacnic);
+    RUN_TEST(test_str_ipv6_afrinic);
+    RUN_TEST(test_str_ipv6_link_local);
+    RUN_TEST(test_str_ipv6_multicast);
+    RUN_TEST(test_str_ipv6_loopback);
+    RUN_TEST(test_str_ipv6_ula);
     RUN_TEST(test_str_invalid_null);
     RUN_TEST(test_str_null_ptr);
     RUN_TEST(test_str_empty_null);
