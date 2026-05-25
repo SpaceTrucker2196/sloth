@@ -342,6 +342,7 @@ typedef enum {
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_KARMA_AP,
     ALERT_TYPE_DNS_TUNNEL,
+    ALERT_TYPE_PROBE_FLOOD,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -500,6 +501,7 @@ typedef struct {
     char    ssid[33];     /* last-probed SSID, "" = wildcard */
     int8_t  signal_dbm;
     int     channel;
+    time_t  first_seen;   /* set when the MAC is first observed */
     time_t  last_seen;
     int     frame_count;
 } probe_client_t;

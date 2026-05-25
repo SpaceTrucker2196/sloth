@@ -146,6 +146,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
     snprintf(g_clients[slot].ssid, sizeof(g_clients[slot].ssid), "%s", ssid);
     g_clients[slot].signal_dbm  = signal;
     g_clients[slot].channel     = channel;
+    g_clients[slot].first_seen  = now;
     g_clients[slot].last_seen   = now;
     g_clients[slot].frame_count = 1;
 }

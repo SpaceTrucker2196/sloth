@@ -225,6 +225,44 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Probe-request flood: single client MAC emitting probe requests at
+ * an abnormally high rate. Operationally interesting because:
+ *   - active recon tools (kismet, hcxdumptool, wifite) burst probes
+ *   - misbehaving / stuck devices DoS themselves with probe loops
+ *   - KARMA-baiting attackers may walk a PNL by probing each entry
+ *
+ * Threshold: >= 30 frames sustained over >= 5 seconds = >= 6 probes/s.
+ * Normal clients emit 1-2 probes per scan cycle and pause between
+ * scans, so 6+/s sustained is solidly anomalous. */
+#define PROBE_FLOOD_FRAMES    30
+#define PROBE_FLOOD_WINDOW_S  5
+
+static void rule_probe_flood(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->probe_count; i++) {
+        const probe_client_t *p = &s->probe_clients[i];
+        if (p->frame_count < PROBE_FLOOD_FRAMES)        continue;
+        long elapsed = (long)(p->last_seen - p->first_seen);
+        if (elapsed < PROBE_FLOOD_WINDOW_S)             continue;
+        /* rate >= PROBE_FLOOD_FRAMES / elapsed; we passed both gates
+         * so by construction the rate is acceptable. Render the rate
+         * for the operator. */
+        double rate = (double)p->frame_count / (double)elapsed;
+        char mac_buf[20];
+        snprintf(mac_buf, sizeof(mac_buf),
+                 "%02x:%02x:%02x:%02x:%02x:%02x",
+                 p->mac[0], p->mac[1], p->mac[2],
+                 p->mac[3], p->mac[4], p->mac[5]);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "probe_flood:%s", mac_buf);
+        snprintf(detail, sizeof(detail),
+                 "%s sent %d probes in %lds (%.1f/s) - active recon / stuck client",
+                 mac_buf, p->frame_count, elapsed, rate);
+        fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_WARN,
+             "PROBE_FLOOD", detail, key, NULL, 0, now);
+    }
+}
+
 /* DNS tunnel detection.
  *
  * dnscat2 / iodine / DNSExfiltrator-style tunnels encode payload data
@@ -593,6 +631,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin(s, now);
     rule_karma_ap(s, now);
     rule_dns_tunnel(s, now);
+    rule_probe_flood(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

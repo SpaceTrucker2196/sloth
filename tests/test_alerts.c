@@ -344,6 +344,54 @@ static void test_dns_tunnel_few_long_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
 }
 
+/* ── Probe flood ─────────────────────────────────────────── */
+
+static void seed_probe_client(sloth_state_t *s, const uint8_t mac[6],
+                                int frames, long elapsed_s) {
+    if (s->probe_count >= MAX_PROBE_CLIENTS) return;
+    probe_client_t *p = &s->probe_clients[s->probe_count++];
+    memset(p, 0, sizeof(*p));
+    memcpy(p->mac, mac, 6);
+    p->frame_count = frames;
+    p->last_seen   = time(NULL);
+    p->first_seen  = p->last_seen - elapsed_s;
+    p->signal_dbm  = -55;
+    p->channel     = 6;
+}
+
+static void test_probe_flood_fires_on_high_rate(void) {
+    /* 40 probes in 5 s = 8/s — above threshold. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    seed_probe_client(&s, mac, 40, 5);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PROBE_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_probe_flood_low_total_no_fire(void) {
+    /* 10 probes — below frame threshold (30). */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    seed_probe_client(&s, mac, 10, 10);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+}
+
+static void test_probe_flood_too_brief_no_fire(void) {
+    /* 40 probes in 1s — elapsed below 5s window, suspect single
+     * burst rather than sustained scan. Stay silent. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    seed_probe_client(&s, mac, 40, 1);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+}
+
 /* ── KARMA / Pineapple ───────────────────────────────────── */
 
 static void seed_karma_ap(sloth_state_t *s, const uint8_t bssid[6],
@@ -579,6 +627,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
     RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
     RUN_TEST(test_dns_tunnel_few_long_no_fire);
+    RUN_TEST(test_probe_flood_fires_on_high_rate);
+    RUN_TEST(test_probe_flood_low_total_no_fire);
+    RUN_TEST(test_probe_flood_too_brief_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);
