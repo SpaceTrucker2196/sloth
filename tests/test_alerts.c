@@ -290,6 +290,60 @@ static void test_evil_twin_different_ssids_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
 }
 
+/* ── DNS tunnel ───────────────────────────────────────────── */
+
+static void test_dns_tunnel_fires_on_long_subdomain_burst(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* 20 queries to evil.example, half with a long encoded subdomain. */
+    for (int i = 0; i < 20; i++) {
+        char qname[80];
+        if (i % 2 == 0) {
+            /* 32-char hex-encoded label = "tunnel payload". */
+            snprintf(qname, sizeof(qname),
+                     "abcdef0123456789abcdef0123456789.evil.example");
+        } else {
+            snprintf(qname, sizeof(qname), "short%d.evil.example", i);
+        }
+        add_dns_query(&s, "192.168.1.5", qname);
+    }
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DNS_TUNNEL);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_dns_tunnel_normal_traffic_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* 30 normal queries to one popular parent — no long subdomains. */
+    for (int i = 0; i < 30; i++) {
+        char qname[64];
+        snprintf(qname, sizeof(qname), "a%d.google.com", i);
+        add_dns_query(&s, "192.168.1.5", qname);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
+}
+
+static void test_dns_tunnel_few_long_no_fire(void) {
+    /* Long subdomain count below threshold (8) — silent. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 20; i++) {
+        char qname[80];
+        if (i < 3) {
+            snprintf(qname, sizeof(qname),
+                     "abcdef0123456789abcdef0123456789.example.com");
+        } else {
+            snprintf(qname, sizeof(qname), "x%d.example.com", i);
+        }
+        add_dns_query(&s, "192.168.1.5", qname);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
+}
+
 /* ── KARMA / Pineapple ───────────────────────────────────── */
 
 static void seed_karma_ap(sloth_state_t *s, const uint8_t bssid[6],
@@ -522,6 +576,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
+    RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
+    RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
+    RUN_TEST(test_dns_tunnel_few_long_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

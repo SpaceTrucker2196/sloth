@@ -341,6 +341,7 @@ typedef enum {
     ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_KARMA_AP,
+    ALERT_TYPE_DNS_TUNNEL,
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

@@ -225,6 +225,91 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* DNS tunnel detection.
+ *
+ * dnscat2 / iodine / DNSExfiltrator-style tunnels encode payload data
+ * in the leftmost labels of DNS queries to an attacker-controlled
+ * parent domain, then receive responses via TXT/NULL records. The
+ * resulting signal: a burst of unusually long subdomains pointed at
+ * the same parent zone in a short window.
+ *
+ * Heuristic: group recent dns_log queries by 2-label parent. For each
+ * parent count the total queries and how many of them carried a
+ * leftmost label >= 30 chars. >= 8 long-subdomain hits over >= 15
+ * total queries inside the alert window -> CRIT. */
+#define DNS_TUNNEL_LABEL_THRESH 30
+#define DNS_TUNNEL_LONG_HITS    8
+#define DNS_TUNNEL_TOTAL_THRESH 15
+
+static const char *parent_domain(const char *qname) {
+    int last_dot = -1, second_last_dot = -1;
+    for (int i = 0; qname[i]; i++) {
+        if (qname[i] == '.') {
+            second_last_dot = last_dot;
+            last_dot = i;
+        }
+    }
+    if (second_last_dot >= 0) return qname + second_last_dot + 1;
+    return qname;
+}
+
+static int leftmost_label_len(const char *qname) {
+    int n = 0;
+    while (qname[n] && qname[n] != '.') n++;
+    return n;
+}
+
+static void rule_dns_tunnel(const sloth_state_t *s, time_t now) {
+    typedef struct {
+        char parent[64];
+        int  qcount;
+        int  long_hits;
+        char src[46];
+    } bucket_t;
+    bucket_t buckets[16];
+    int      nb = 0;
+
+    for (int i = 0; i < s->dns_log_count; i++) {
+        const dns_log_entry_t *e = &s->dns_log[i];
+        if (!e->qname[0]) continue;
+        /* Queries only — responses don't reveal tunnel intent. */
+        if (e->is_resp) continue;
+        if (now - e->ts > ALERT_NXDOMAIN_WINDOW_S) continue;
+
+        const char *par = parent_domain(e->qname);
+        int found = -1;
+        for (int j = 0; j < nb; j++)
+            if (strcmp(buckets[j].parent, par) == 0) { found = j; break; }
+        if (found < 0) {
+            if (nb >= (int)(sizeof(buckets) / sizeof(buckets[0]))) continue;
+            snprintf(buckets[nb].parent, sizeof(buckets[nb].parent),
+                     "%s", par);
+            snprintf(buckets[nb].src, sizeof(buckets[nb].src),
+                     "%s", e->src);
+            buckets[nb].qcount    = 0;
+            buckets[nb].long_hits = 0;
+            found = nb++;
+        }
+        buckets[found].qcount++;
+        if (leftmost_label_len(e->qname) >= DNS_TUNNEL_LABEL_THRESH)
+            buckets[found].long_hits++;
+    }
+
+    for (int i = 0; i < nb; i++) {
+        if (buckets[i].qcount    < DNS_TUNNEL_TOTAL_THRESH) continue;
+        if (buckets[i].long_hits < DNS_TUNNEL_LONG_HITS)    continue;
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "dns_tunnel:%.40s", buckets[i].parent);
+        snprintf(detail, sizeof(detail),
+                 "%d queries to %.20s, %d with subdomain >= %d chars",
+                 buckets[i].qcount, buckets[i].parent,
+                 buckets[i].long_hits, DNS_TUNNEL_LABEL_THRESH);
+        fire(ALERT_TYPE_DNS_TUNNEL, ALERT_SEV_CRIT,
+             "DNS_TUNNEL", detail, key, buckets[i].src, 53, now);
+    }
+}
+
 /* KARMA / Pineapple-style rogue AP: a single BSSID emitting beacons
  * (or probe responses) for many distinct SSIDs. Legitimate APs pick
  * one ESSID and stick to it. Rogue tools (Wifi Pineapple's PineAP,
@@ -507,6 +592,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rogue_dhcp(s, now);
     rule_evil_twin(s, now);
     rule_karma_ap(s, now);
+    rule_dns_tunnel(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);
