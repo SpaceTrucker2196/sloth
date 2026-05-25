@@ -225,6 +225,77 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* HTTP attack-path: well-known injection / traversal / RCE / SQLi /
+ * XSS signatures in the URI of an observed request. Substring match
+ * against a small static table. Like the UA rule, this is high
+ * confidence but not exhaustive — encoded variants or novel payloads
+ * miss. */
+static const struct {
+    const char *needle;
+    const char *label;
+} g_attack_path_table[] = {
+    { "../",           "path traversal"  },
+    { "..%2f",         "path traversal"  },
+    { "..%5c",         "path traversal"  },
+    { "/etc/passwd",   "etc/passwd"      },
+    { "/etc/shadow",   "etc/shadow"      },
+    { "c:\\windows",   "windows path"    },
+    { "<script",       "XSS"             },
+    { "javascript:",   "XSS"             },
+    { "%00",           "null byte"       },
+    { "union+select",  "SQL injection"   },
+    { "union%20select","SQL injection"   },
+    { "'+or+'1",       "SQL injection"   },
+    { "'+or+1=1",      "SQL injection"   },
+    { "${jndi:",       "log4shell"       },
+    { "cmd.exe",       "RCE"             },
+    { "/bin/sh",       "RCE"             },
+    { "/bin/bash",     "RCE"             },
+    { "wget+http",     "RCE download"    },
+    { "curl+http",     "RCE download"    },
+    { ";nc+-",         "RCE listener"    },
+};
+
+static const char *attack_path_match(const char *path) {
+    if (!path || !path[0]) return NULL;
+    int n = (int)(sizeof(g_attack_path_table) / sizeof(g_attack_path_table[0]));
+    for (int i = 0; i < n; i++) {
+        const char *needle = g_attack_path_table[i].needle;
+        size_t nlen = strlen(needle);
+        for (const char *p = path; *p; p++) {
+            size_t k = 0;
+            while (k < nlen && p[k]) {
+                char a = p[k], b = needle[k];
+                if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                if (a != b) break;
+                k++;
+            }
+            if (k == nlen) return g_attack_path_table[i].label;
+        }
+    }
+    return NULL;
+}
+
+static void rule_attack_path(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->http_log_count; i++) {
+        const http_log_entry_t *e = &s->http_log[i];
+        const char *label = attack_path_match(e->path);
+        if (!label) continue;
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "path:%s:%s", e->src, label);
+        snprintf(detail, sizeof(detail),
+                 "%.20s -> %.20s %.30s [%.14s]",
+                 e->src[0]  ? e->src  : "?",
+                 e->host[0] ? e->host : "?",
+                 e->path[0] ? e->path : "/",
+                 label);
+        fire(ALERT_TYPE_ATTACK_PATH, ALERT_SEV_CRIT,
+             "ATTACK_PATH", detail, key, e->src, 80, now);
+    }
+}
+
 /* Attack-tool User-Agent: substring match against a small table of
  * well-known offensive-tooling UAs in observed HTTP requests. The
  * tools often advertise themselves verbatim because operators don't
@@ -702,6 +773,7 @@ void alerts_update(sloth_state_t *s) {
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_attack_tool_ua(s, now);
+    rule_attack_path(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);
