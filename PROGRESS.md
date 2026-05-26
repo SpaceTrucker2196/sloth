@@ -45,32 +45,75 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups
+### Mutation-testing follow-ups (round 2)
 **Owner**: next agent
 **Started**: 2026-05-26
-**Goal**: Drive the `src/alerts.c` mutation kill-rate up from the
-21.6% baseline by triaging each survivor — write the assertion that
-would have caught it, or document as equivalent.
-**Status**: harness landed; baseline recorded. The 258 survivors
-break down qualitatively (sampled, not exhaustively):
-- Bulk of survivors cluster on alert-rule threshold lines and on
-  `snprintf` byte-index literals; the latter are mostly equivalent
-  mutants (function-parameter array sizes, e.g. `mac[6]`), the
-  former are real test gaps where the suite seeds traffic well above
-  threshold and never tests the boundary.
-- Threshold gaps in `rule_nxdomain`, `rule_arp_spoof`,
-  `rule_evil_twin`, `rule_rogue_dhcp`, `rule_deauth_flood`,
-  `rule_probe_flood`, and the eviction-by-last-seen helper.
+**Goal**: Pick up where round 1 stopped — the remaining 185
+survivors on `src/alerts.c` cluster in the documented equivalence
+classes (buffer sizes, loop bounds reading zero-init tail, truthy
+init values). Decide per-cluster whether to add tests, refactor the
+code to eliminate the equivalence, or accept the noise floor.
+**Status**: round 1 closed (see "Recently landed" below) — kill rate
+21.6% → 43.8% in a single pass against `src/alerts.c`.
 **Blockers**: none.
-**Next concrete step**: `make mutate MUTATE_FLAGS="--files src/alerts.c"`,
-then for each survivor with `op=const` or `op=rel` on a threshold,
-add a boundary test in `tests/test_alerts.c` that seeds the rule
-right at the threshold (asserting it fires) and one below
-(asserting it does not). Re-run `make mutate` to confirm the kill.
+**Next concrete step** (in priority order):
+1. Mutate the high-value files we haven't touched: `src/threat_intel.c`,
+   `src/dga.c`, `src/dns_snoop.c`, `src/beacon_detect.c`. These are
+   security-critical and have well-defined input shapes.
+2. Consider an `--ignore-file` flag on `mutate.py` so known equivalence
+   classes (function-parameter array sizes, loop-bound `<→<=`) can be
+   filtered from the survivor list, making the kill rate trend more
+   informative as the suite improves.
+3. Cosmetic: the "killed (build broke)" sub-counter mis-categorises
+   test-binary segfaults as build failures (stderr contains both
+   "error" and "make"). Tighten the heuristic to look for the actual
+   "make: *** [...] Error 1" pattern.
 
 ---
 
 ## Recently landed
+
+### 2026-05-26 — Close mutation-testing gaps round 1 (`src/alerts.c`)
+**Commits**: *(this commit)*
+**Touched**: `tests/test_alerts.c`, `docs/wiki/mutation-testing.md`,
+`PROGRESS.md`
+**Why**: First triage round on the 258 surviving mutants from the
+`make mutate` baseline on `src/alerts.c`. Targeted the four
+highest-survivor rules — `rule_rogue_dhcp` (41), `rule_arp_spoof`
+(37), `rule_evil_twin` (27), `rule_probe_flood` (23) — plus the
+`mac_to_str` byte-index cluster (12, reached indirectly via
+`rule_deauth_flood`). Added nine new boundary / detail-content
+tests, fixed `add_deauth_flood`'s missing `memset` (latent bug —
+`bssid` was uninitialised), and added a "known equivalence classes"
+section to `docs/wiki/mutation-testing.md` that names the patterns
+that will always survive (function-parameter array sizes, stack
+buffer sizing, loop bounds reading zero-init tail, truthy
+initialisers).
+
+**Kill-rate trajectory** for `src/alerts.c`:
+| pass        | mutants | killed | survived | kill-rate |
+|-------------|---------|--------|----------|-----------|
+| baseline    | 329     | 71     | 258      | 21.6%     |
+| after r1    | 329     | 144    | 185      | **43.8%** |
+
+Per-rule survivor counts (baseline → after r1): arp_spoof 37 → 14,
+rogue_dhcp 41 → 32, evil_twin 27 → 7, probe_flood 23 → 12,
+mac_to_str 12 → 2, deauth_flood 5 → 5 (all 5 remaining are
+documented equivalence-class patterns). Build warning-clean.
+`make test` green: 2008 assertions, 0 failed.
+
+**Decisions flagged**:
+- Did not write tests for mutants in the equivalence classes —
+  documented them instead. Adding fake assertions to "kill" them
+  would have made the suite lie. The wiki page §"Known equivalence
+  classes" is now the operator's reference for skipping them.
+- Did not chase deep snprintf-loop arithmetic mutations (lines 655,
+  656, 662, 663 in rule_rogue_dhcp). Real gaps, but at the level of
+  "off-by-one in string formatting on >2-server case" with low
+  practical impact. Left for round 2.
+- Sample test bug caught during development: `mac[6] = {0x11, ...}`
+  triggered the rule's multicast-skip (LSB set). Now corrected and
+  the lesson noted inline.
 
 ### 2026-05-26 — Mutation-testing harness (`make mutate`, closes #4)
 **Commits**: *(this commit)*

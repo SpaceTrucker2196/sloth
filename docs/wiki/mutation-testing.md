@@ -173,6 +173,53 @@ the CLAUDE.md "no dead code" rule.
 
 ---
 
+## Known equivalence classes
+
+These patterns recur across `src/*.c` and produce mutants that *will*
+survive any reasonable test suite. Recognise them in the survivor
+list so you don't chase phantom gaps. The harness has no automatic
+filter; this list is the manual one.
+
+**Function-parameter array sizes.** C ignores the size declared in a
+function-parameter array (`void f(uint8_t mac[6])` is identical to
+`void f(uint8_t *mac)`). `const 6 → 7` on such a parameter is a
+no-op. Examples in `src/alerts.c`:
+`mac_to_str` line 23, `rule_arp_spoof` line 193.
+
+**Stack-buffer sizing literals.** Mutations like `char buf[20]` →
+`char buf[19]` or `char buf[21]` rarely change behaviour: snprintf
+truncates to fit either size, and the formatted output uses far
+fewer bytes than the buffer holds. Example: the `20` on
+`char a_bssid[20]` and similar (`rule_evil_twin`, `rule_probe_flood`).
+
+**`memcmp`/`memcpy` length mutations on fixed-size struct fields.**
+Reading one byte past a 6-byte MAC reads into the next field of the
+struct, whose value is usually a stable byte that doesn't cause a
+visible difference. `const 6 → 7` on `memcmp(a->bssid, b->bssid, 6)`
+typically survives unless the adjacent field varies between callers.
+
+**Loop bounds reading zero-initialised tail.** `for (i = 0; i < n; i++)`
+mutated to `<= n` reads `arr[n]`, which is zero-initialised for
+sloth's bounded state arrays. The rules' first check is usually
+`if (!arr[i].ip[0]) continue;` (or analogous), so the extra
+iteration is silently skipped. Survives every reasonable test.
+
+**Truthy-initialiser perturbation.** `int found = -1; ... if (found <
+0)` mutated to `found = -2` is equivalent — the sentinel test still
+sees a negative value. Similarly `int all_zero = 1` → `2` (both
+truthy). These survive unless a test seeds the exact rare path where
+the initial value escapes through unmodified.
+
+**Sub-snprintf field-width mutations on `%xx:` pattern strings.**
+The format-string literals like `"%02x:..."` are mutated indirectly
+when an integer in surrounding code shifts, but a mutation on the
+field width itself is rare to spot and almost never tested.
+
+For everything outside these classes, treat the survivor as a real
+gap and write the test.
+
+---
+
 ## Implementation notes
 
 A few things to know before extending the harness:

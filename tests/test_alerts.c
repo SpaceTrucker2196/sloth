@@ -22,9 +22,25 @@ static void add_scan(sloth_state_t *s, const char *ip, int ports, int flagged) {
 
 static void add_deauth_flood(sloth_state_t *s, const uint8_t dst_mac[6]) {
     deauth_event_t *e = &s->deauth_events[s->deauth_count++];
+    memset(e, 0, sizeof(*e));
     memcpy(e->dst, dst_mac, 6);
     e->reason = 7;
     e->count  = 20;
+    e->flood  = 1;
+}
+
+/* Variant for tests that need to assert detail/key content — caller
+ * supplies both dst and bssid so the formatted MACs are predictable. */
+static void add_deauth_flood_full(sloth_state_t *s,
+                                   const uint8_t dst_mac[6],
+                                   const uint8_t bssid[6],
+                                   uint16_t reason, int count) {
+    deauth_event_t *e = &s->deauth_events[s->deauth_count++];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->dst,   dst_mac, 6);
+    memcpy(e->bssid, bssid,   6);
+    e->reason = reason;
+    e->count  = count;
     e->flood  = 1;
 }
 
@@ -97,6 +113,28 @@ static void test_deauth_flood_fires(void) {
     int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+/* Kills the mac_to_str byte-index mutations (line 25) AND the
+ * rule_deauth_flood detail-format mutations (lines 119-121): both
+ * formatted MACs must appear in canonical lowercase-hex byte order,
+ * and the reason/count must surface verbatim. */
+static void test_deauth_flood_detail_content(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+    uint8_t bssid[6] = {0xde,0xad,0xbe,0xef,0x00,0x42};
+    add_deauth_flood_full(&s, dst, bssid, /*reason*/ 7, /*count*/ 25);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    const char *d = s.alerts[idx].detail;
+    ASSERT(strstr(d, "12:34:56:78:9a:bc") != NULL);
+    ASSERT(strstr(d, "de:ad:be:ef:00:42") != NULL);
+    ASSERT(strstr(d, "reason=7")  != NULL);
+    ASSERT(strstr(d, "count=25")  != NULL);
+    /* Dedup key is "deauth:<dst>" — keep the same client at one alert. */
+    ASSERT(strstr(s.alerts[idx].key, "deauth:12:34:56:78:9a:bc") != NULL);
 }
 
 static void test_nxdomain_burst_fires_at_threshold(void) {
@@ -224,6 +262,89 @@ static void test_arp_spoof_skips_multicast_mac(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
 }
 
+/* Kills the `all_zero = 1` init mutation AND the `j < 6` byte-loop bound
+ * mutations: if the rule ever stops skipping an all-zero MAC, it will
+ * subsequently treat the all-zero MAC as a legitimate observation and
+ * fire ARP_SPOOF the next time a real MAC appears for that IP. */
+static void test_arp_spoof_skips_all_zero_mac(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_arp(&s, "10.0.0.42", 0, 0, 0, 0, 0, 0);
+    alerts_update(&s);
+    s.arp_count = 0;
+    /* If the all-zero MAC was recorded, a real MAC for the same IP
+     * will now look like a spoof. The rule must have skipped, so this
+     * is treated as a first observation and no alert fires. */
+    seed_arp(&s, "10.0.0.42", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+}
+
+/* Kills const-mutations on the snprintf byte indices (lines 209-215):
+ * if mac[k] indices drift, the formatted MAC strings in the alert
+ * detail will no longer match the canonical form. */
+static void test_arp_spoof_detail_contains_both_macs(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Both MACs use even first-byte (multicast bit clear) so the rule
+     * doesn't skip them — 0x11 would have looked random but its LSB
+     * marks it as multicast. */
+    seed_arp(&s, "192.168.1.7", 0x10, 0x22, 0x33, 0x44, 0x55, 0x66);
+    alerts_update(&s);
+    s.arp_count = 0;
+    seed_arp(&s, "192.168.1.7", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ARP_SPOOF);
+    ASSERT(idx >= 0);
+    /* New MAC must appear, formatted byte-by-byte in canonical order. */
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:ff") != NULL);
+    /* Old MAC must appear too — detail is "X now claims MAC Y (was Z)". */
+    ASSERT(strstr(s.alerts[idx].detail, "10:22:33:44:55:66") != NULL);
+    /* IP must appear as the subject of the alert. */
+    ASSERT(strstr(s.alerts[idx].detail, "192.168.1.7") != NULL);
+}
+
+/* Kills the `g_arp_hist_n >= MAX_ARP_ENTRIES` overflow guard mutation
+ * (`>= -> >`): if the guard loosens by one, the rule writes past the
+ * end of g_arp_hist. After saturating the history with first-observations,
+ * one more new IP must not crash and must not record. The follow-up
+ * spoof check for that overflowing IP must still treat it as a first
+ * observation (no alert), proving the entry was rejected by the guard. */
+static void test_arp_spoof_history_overflow_safe(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Saturate history with MAX_ARP_ENTRIES distinct IPs, each a fresh
+     * observation. We can't fit them all in one poll (arp_entries is
+     * also MAX_ARP_ENTRIES wide), so chunk in batches. */
+    char ip[32];
+    int total = 0;
+    while (total < MAX_ARP_ENTRIES) {
+        s.arp_count = 0;
+        int batch = MAX_ARP_ENTRIES - total;
+        if (batch > 64) batch = 64;
+        for (int i = 0; i < batch; i++) {
+            snprintf(ip, sizeof(ip), "10.%d.%d.1",
+                     (total + i) / 256, (total + i) % 256);
+            seed_arp(&s, ip, 0xaa, 0xbb, 0xcc, 0xdd,
+                     (uint8_t)((total + i) >> 8),
+                     (uint8_t)(total + i));
+        }
+        alerts_update(&s);
+        total += batch;
+    }
+    /* History is now full. A brand-new IP must not be recorded; if the
+     * guard mutated to `>` we'd write past g_arp_hist. */
+    s.arp_count = 0;
+    seed_arp(&s, "172.16.0.99", 0x01, 0x02, 0x03, 0x04, 0x05, 0x06);
+    alerts_update(&s);
+    /* The overflow IP wasn't recorded — a different MAC on the next
+     * poll must still look like a first observation, not a spoof. */
+    s.arp_count = 0;
+    seed_arp(&s, "172.16.0.99", 0x99, 0x88, 0x77, 0x66, 0x55, 0x44);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+}
+
 /* ── Evil-twin AP ────────────────────────────────────────── */
 
 static void add_beacon(sloth_state_t *s, const char *ssid,
@@ -289,6 +410,30 @@ static void test_evil_twin_different_ssids_no_fire(void) {
     add_beacon(&s, "Locked",   b, "WPA2");
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* Kills the per-byte snprintf mutations on both BSSIDs (lines 594-599):
+ * the detail string must contain the SSID and both BSSIDs in canonical
+ * lowercase-hex byte order. */
+static void test_evil_twin_detail_contains_bssids_and_ssid(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Distinctive byte patterns so a wrong index would render a
+     * visibly-different string. */
+    uint8_t a[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0xff};
+    add_beacon(&s, "TwinNet", a, "OPEN");
+    add_beacon(&s, "TwinNet", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    const char *d = s.alerts[idx].detail;
+    ASSERT(strstr(d, "TwinNet")           != NULL);
+    ASSERT(strstr(d, "11:22:33:44:55:66") != NULL);
+    ASSERT(strstr(d, "aa:bb:cc:dd:ee:ff") != NULL);
+    /* Dedup key is "twin:<ssid>" — stable across the (a,b) /
+     * (b,a) iteration ordering. */
+    ASSERT(strstr(s.alerts[idx].key, "twin:TwinNet") != NULL);
 }
 
 /* ── DNS tunnel ───────────────────────────────────────────── */
@@ -548,6 +693,44 @@ static void test_probe_flood_too_brief_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
 }
 
+/* Kills the `frame_count < PROBE_FLOOD_FRAMES` threshold mutation
+ * (`<` → `<=`): the rule fires *at* the threshold, not one above. */
+static void test_probe_flood_exactly_at_frame_threshold_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    /* PROBE_FLOOD_FRAMES = 30, PROBE_FLOOD_WINDOW_S = 5. */
+    seed_probe_client(&s, mac, 30, 5);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_PROBE_FLOOD) >= 0);
+}
+
+/* Sibling boundary test: one frame below threshold stays silent. */
+static void test_probe_flood_one_below_frame_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    seed_probe_client(&s, mac, 29, 5);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+}
+
+/* Kills the per-byte MAC-index mutations (lines 430-431): the detail
+ * string must contain the offending client's MAC in canonical order. */
+static void test_probe_flood_detail_contains_mac(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Distinctive bytes so a wrong index would render visibly. */
+    uint8_t mac[6] = {0x02,0x12,0x34,0x56,0x78,0x9a};
+    seed_probe_client(&s, mac, 60, 10);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PROBE_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "02:12:34:56:78:9a") != NULL);
+    /* Key is "probe_flood:<mac>" — same dedup story. */
+    ASSERT(strstr(s.alerts[idx].key, "probe_flood:02:12:34:56:78:9a") != NULL);
+}
+
 /* ── KARMA / Pineapple ───────────────────────────────────── */
 
 static void seed_karma_ap(sloth_state_t *s, const uint8_t bssid[6],
@@ -641,6 +824,62 @@ static void test_rogue_dhcp_client_requests_dont_count(void) {
     add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "", 1 /* DISCOVER */);
     add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "", 3 /* REQUEST  */);
     alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_DHCP), -1);
+}
+
+/* Kills the sort-loop boundary mutations and the key/detail snprintf
+ * mutations: detail and key must list servers in stable alphabetical
+ * order regardless of observation order. */
+static void test_rogue_dhcp_detail_lists_servers_sorted(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Seed in non-alphabetical order to prove the sort runs. */
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "192.168.1.234", 5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "10.0.0.1",      5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:03", "172.16.0.1",    5);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_DHCP);
+    ASSERT(idx >= 0);
+    const char *d = s.alerts[idx].detail;
+    /* Count is announced first. */
+    ASSERT(strstr(d, "3 distinct DHCP servers") != NULL);
+    /* All three IPs present. */
+    const char *p1 = strstr(d, "10.0.0.1");
+    const char *p2 = strstr(d, "172.16.0.1");
+    const char *p3 = strstr(d, "192.168.1.234");
+    ASSERT(p1 != NULL); ASSERT(p2 != NULL); ASSERT(p3 != NULL);
+    /* Sorted: 10.0.0.1 < 172.16.0.1 < 192.168.1.234 by strcmp. */
+    ASSERT(p1 < p2);
+    ASSERT(p2 < p3);
+    /* Dedup key includes the sorted list (drives stable identity). */
+    ASSERT(strstr(s.alerts[idx].key, "10.0.0.1,172.16.0.1,192.168.1.234") != NULL);
+}
+
+/* Kills the `67` port-literal mutation: the alert must carry the DHCP
+ * server port so per-flow pcap export filters the right service. */
+static void test_rogue_dhcp_match_port_is_server_port(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "10.0.0.1",      5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "192.168.1.234", 5);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_DHCP);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].match_port, 67);
+    /* match_ip is the alphabetically-first server — the operator's pivot. */
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.1");
+}
+
+/* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
+ * the dup-strcmp comparison: the same server seen many times must
+ * count as one server, not many. */
+static void test_rogue_dhcp_dedup_same_server(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 5; i++)
+        add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "192.168.1.1", 5);
+    alerts_update(&s);
+    /* Five observations, one server — no rogue. */
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_DHCP), -1);
 }
 
@@ -760,6 +999,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_port_scan_fires);
     RUN_TEST(test_port_scan_not_flagged_no_fire);
     RUN_TEST(test_deauth_flood_fires);
+    RUN_TEST(test_deauth_flood_detail_content);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);
@@ -770,13 +1010,20 @@ void run_alerts_tests(void) {
     RUN_TEST(test_arp_spoof_fires_on_mac_change);
     RUN_TEST(test_arp_spoof_silent_on_same_mac);
     RUN_TEST(test_arp_spoof_skips_multicast_mac);
+    RUN_TEST(test_arp_spoof_skips_all_zero_mac);
+    RUN_TEST(test_arp_spoof_detail_contains_both_macs);
+    RUN_TEST(test_arp_spoof_history_overflow_safe);
     RUN_TEST(test_rogue_dhcp_single_server_no_fire);
     RUN_TEST(test_rogue_dhcp_two_servers_fires);
     RUN_TEST(test_rogue_dhcp_client_requests_dont_count);
+    RUN_TEST(test_rogue_dhcp_detail_lists_servers_sorted);
+    RUN_TEST(test_rogue_dhcp_match_port_is_server_port);
+    RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);
     RUN_TEST(test_evil_twin_two_open_no_fire);
     RUN_TEST(test_evil_twin_different_ssids_no_fire);
+    RUN_TEST(test_evil_twin_detail_contains_bssids_and_ssid);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
@@ -785,6 +1032,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_dns_tunnel_few_long_no_fire);
     RUN_TEST(test_probe_flood_fires_on_high_rate);
     RUN_TEST(test_probe_flood_low_total_no_fire);
+    RUN_TEST(test_probe_flood_exactly_at_frame_threshold_fires);
+    RUN_TEST(test_probe_flood_one_below_frame_threshold_no_fire);
+    RUN_TEST(test_probe_flood_detail_contains_mac);
     RUN_TEST(test_probe_flood_too_brief_no_fire);
     RUN_TEST(test_attack_tool_ua_sqlmap_fires);
     RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
