@@ -2,6 +2,12 @@
   <img src="slothwifi.png" alt="sloth" width="640">
 </p>
 
+<p align="center">
+  <a href="https://github.com/SpaceTrucker2196/sloth/actions/workflows/ci.yml"><img src="https://github.com/SpaceTrucker2196/sloth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/SpaceTrucker2196/sloth/actions/workflows/code-review.yml"><img src="https://github.com/SpaceTrucker2196/sloth/actions/workflows/code-review.yml/badge.svg" alt="Code Review"></a>
+  <img src="https://img.shields.io/badge/code%20review-GPT--5.2%20Codex-blueviolet?logo=openai" alt="Reviewed by GPT-5.2 Codex">
+</p>
+
 # sloth
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
