@@ -2,3 +2,4 @@ ntop
 ntop_test
 sloth_test
 *.o
+__pycache__/
