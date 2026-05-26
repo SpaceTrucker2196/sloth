@@ -52,7 +52,7 @@ work exposed as a new In-progress entry.
 ## Recently landed
 
 ### 2026-05-26 — Read-only data socket (`--data-socket SPEC`)
-**Commits**: *(this commit)*
+**Commits**: `1199563`
 **Touched**: `src/data_socket.{c,h}` (new), `src/jsonl.c`, `src/main.c`,
 `tests/test_data_socket.c` (new), `tests/main_test.c`, `Makefile`,
 `docs/wiki/jsonl-schema.md` (new), `docs/wiki/index.md`, `FACTORY.md`
