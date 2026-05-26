@@ -60,10 +60,23 @@ DNS, TLS SNI, and Top hosts all run hostnames through this.
 
 ## Severity heat
 
-- `CRIT` alerts → heat-1.0 red.
-- `WARN` alerts → heat-0.7 orange.
-- TLS 1.0 / 1.1 (deprecated 2020) → heat-orange.
-- NXDOMAIN → heat-orange.
+Three-tier alert palette (yellow → orange → red), driven by
+`alert_sev_t`. Cross-panel: any IP that has appeared in an alert
+within the last hour renders in its severity colour everywhere it
+shows up (`tui_alert_hot_attr(sev)`). Promotion only — a later LOW
+does not downgrade an earlier CRIT.
+
+| Tier | Hue    | xterm | Bold | Used for                       |
+|------|--------|-------|------|--------------------------------|
+| LOW  | yellow | 220   | no   | recon: port scan, NXDOMAIN burst, probe flood |
+| WARN | orange | 208   | yes  | suspicious: deauth flood, beaconing, weak TLS |
+| CRIT | red    | 196   | yes  | IOC hit, active attack                 |
+
+Other heat usages keep the original gradient:
+
+- TLS 1.0 / 1.1 (deprecated 2020) → heat-orange row.
+- Standalone heat sparklines use the full CP_HEAT_LO/MID/HI/PEAK ramp
+  independent of alert tiers.
 
 ## Minimum geometry
 

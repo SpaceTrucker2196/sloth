@@ -311,8 +311,9 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
             char buf[64];
             snprintf(buf, sizeof(buf), "%-*.*s",
                      host_w, host_w, e->hostname[0] ? e->hostname : "-");
-            if (tui_alert_hot_check(e->ip)) {
-                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+            int hot_sev = tui_alert_hot_check(e->ip);
+            if (hot_sev >= 0) {
+                tui_alert_hot_attr(hot_sev);
                 addstr(buf);
             } else {
                 tui_brand_addstr(buf, (int)PKT_CAT_OTHER);
@@ -409,9 +410,10 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                  host_room, host_room, src_host);
         /* Alert-hot override wins over brand colour: the underlying IP
-         * is flagged so the hostname renders in deep red too. */
-        if (tui_alert_hot_check(p->src)) {
-            attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+         * is flagged so the hostname renders in the severity's hue too. */
+        int hot_sev = tui_alert_hot_check(p->src);
+        if (hot_sev >= 0) {
+            tui_alert_hot_attr(hot_sev);
             addstr(host_trunc);
         } else {
             tui_brand_addstr(host_trunc, cat);
@@ -448,8 +450,9 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         char host_trunc[HOST_CACHE_HOSTLEN];
         snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                  host_room, host_room, dst_host);
-        if (tui_alert_hot_check(p->dst)) {
-            attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+        int hot_sev = tui_alert_hot_check(p->dst);
+        if (hot_sev >= 0) {
+            tui_alert_hot_attr(hot_sev);
             addstr(host_trunc);
         } else {
             tui_brand_addstr(host_trunc, cat);

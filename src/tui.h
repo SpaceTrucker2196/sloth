@@ -74,23 +74,32 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
  * row's local/remote when the dashboard's conn panel has focus. */
 #define CP_HIGHLIGHT    105
 
-/* ── Alert-hot IP ────────────────────────────────────────── *
- * Deep-red colour pair stamped on any IP that has appeared in
- * a CRIT alert within the last hour. Overrides every other IP
- * colouring (hash, brand, highlight) so flagged flows pop on
- * sight across every panel. */
-#define CP_ALERT_HOT    106
+/* ── Alert-hot IP (three-tier severity) ──────────────────── *
+ * Colour pairs stamped on any IP that has appeared in an alert
+ * within the last hour. Override every other IP colouring (hash,
+ * brand, highlight) so flagged flows pop on sight across every
+ * panel. Tier matches alert_sev_t — yellow / orange / red. */
+#define CP_ALERT_HOT_LOW  106    /* yellow — recon, port scan, NXDOMAIN burst */
+#define CP_ALERT_HOT_WARN 107    /* orange — suspicious, deauth flood, beaconing */
+#define CP_ALERT_HOT_CRIT 108    /* red    — IOC hit, active attack */
 #define ALERT_HOT_TTL_S 3600
 
-/* Mark `ip` as alert-hot, with absolute timestamp `t` (epoch s).
- * Idempotent — re-calls refresh the timestamp so a recurring CRIT
- * keeps the override alive. Empty / NULL ip is a no-op. */
-void tui_alert_hot_set(const char *ip, long t);
+/* Mark `ip` as alert-hot at severity `sev` (alert_sev_t), with absolute
+ * timestamp `t` (epoch s). Idempotent — re-calls refresh the timestamp
+ * so a recurring alert keeps the override alive. A higher sev call on an
+ * existing entry promotes it; a lower-sev call does not demote. Empty /
+ * NULL ip is a no-op. */
+void tui_alert_hot_set(const char *ip, long t, int sev);
 
-/* 1 if `ip` is alert-hot and its timestamp is within ALERT_HOT_TTL_S
- * of the current wall-clock time. Called by tui_ip_addstr and by
- * dashboard.c paths that render hostnames instead of IPs. */
+/* Returns the alert severity tier (0=LOW, 1=WARN, 2=CRIT) for `ip` if it
+ * is alert-hot and within ALERT_HOT_TTL_S of now, or -1 if cold. Callers
+ * pick the matching CP_ALERT_HOT_* colour pair from the return value. */
 int  tui_alert_hot_check(const char *ip);
+
+/* Sets the current attrset to the right CP_ALERT_HOT_* pair for `sev`
+ * (with A_BOLD on WARN+CRIT). Caller is responsible for already having
+ * checked tui_alert_hot_check(ip) >= 0 and passing the returned sev. */
+void tui_alert_hot_attr(int sev);
 
 /* Drop all alert-hot entries — tests only. */
 void tui_alert_hot_clear(void);

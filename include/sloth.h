@@ -323,8 +323,15 @@ typedef struct {
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
 #define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
 
+/* Three-tier alert severity. Numeric values are stable and consumed by
+ * the JSONL `sev` field — never change them. Render colour:
+ *   LOW  → yellow  — reconnaissance / suspicious-but-passive
+ *   WARN → orange  — clearly malicious, not yet an active exploit
+ *   CRIT → red     — active attack or IOC hit
+ * Cross-panel IP coloring follows the highest severity an IP has
+ * been associated with within ALERT_HOT_TTL_S. */
 typedef enum {
-    ALERT_SEV_INFO = 0,
+    ALERT_SEV_LOW  = 0,
     ALERT_SEV_WARN = 1,
     ALERT_SEV_CRIT = 2,
 } alert_sev_t;

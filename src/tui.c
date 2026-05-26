@@ -109,8 +109,9 @@ void tui_ip_addstr(const char *ip, int cat) {
      * within the last ALERT_HOT_TTL_S seconds renders in deep red,
      * regardless of hash colour, brand colour, or cross-panel
      * highlight. Checked before everything else so it always wins. */
-    if (tui_alert_hot_check(ip)) {
-        attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+    int hot_sev = tui_alert_hot_check(ip);
+    if (hot_sev >= 0) {
+        tui_alert_hot_attr(hot_sev);
         addstr(ip);
         return;
     }
@@ -156,24 +157,31 @@ int tui_ip_is_highlighted_(const char *ip) {
 
 struct alert_hot_slot {
     char ip[46];   /* INET6_ADDRSTRLEN */
-    long t;        /* epoch seconds — when this CRIT was last seen */
+    long t;        /* epoch seconds — when this alert was last seen */
+    int  sev;      /* alert_sev_t: 0=LOW, 1=WARN, 2=CRIT */
 };
 
 static struct alert_hot_slot g_alert_hot[ALERT_HOT_CAP];
 static int                   g_alert_hot_n = 0;
 
-void tui_alert_hot_set(const char *ip, long t) {
+void tui_alert_hot_set(const char *ip, long t, int sev) {
     if (!ip || !ip[0]) return;
+    if (sev < ALERT_SEV_LOW)  sev = ALERT_SEV_LOW;
+    if (sev > ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
     for (int i = 0; i < g_alert_hot_n; i++) {
         if (strcmp(g_alert_hot[i].ip, ip) == 0) {
-            if (t > g_alert_hot[i].t) g_alert_hot[i].t = t;
+            if (t   > g_alert_hot[i].t)   g_alert_hot[i].t   = t;
+            /* Promotion only — a later LOW alert must not override an
+             * earlier CRIT on the same IP within the TTL window. */
+            if (sev > g_alert_hot[i].sev) g_alert_hot[i].sev = sev;
             return;
         }
     }
     if (g_alert_hot_n < ALERT_HOT_CAP) {
         snprintf(g_alert_hot[g_alert_hot_n].ip,
                  sizeof(g_alert_hot[g_alert_hot_n].ip), "%s", ip);
-        g_alert_hot[g_alert_hot_n].t = t;
+        g_alert_hot[g_alert_hot_n].t   = t;
+        g_alert_hot[g_alert_hot_n].sev = sev;
         g_alert_hot_n++;
         return;
     }
@@ -184,22 +192,33 @@ void tui_alert_hot_set(const char *ip, long t) {
         if (g_alert_hot[i].t < g_alert_hot[oldest].t) oldest = i;
     snprintf(g_alert_hot[oldest].ip,
              sizeof(g_alert_hot[oldest].ip), "%s", ip);
-    g_alert_hot[oldest].t = t;
+    g_alert_hot[oldest].t   = t;
+    g_alert_hot[oldest].sev = sev;
 }
 
 int tui_alert_hot_check(const char *ip) {
-    if (!ip || !ip[0] || g_alert_hot_n == 0) return 0;
+    if (!ip || !ip[0] || g_alert_hot_n == 0) return -1;
     long now = (long)time(NULL);
     for (int i = 0; i < g_alert_hot_n; i++) {
         if (strcmp(g_alert_hot[i].ip, ip) != 0) continue;
-        if (now - g_alert_hot[i].t > ALERT_HOT_TTL_S) return 0;
-        return 1;
+        if (now - g_alert_hot[i].t > ALERT_HOT_TTL_S) return -1;
+        return g_alert_hot[i].sev;
     }
-    return 0;
+    return -1;
 }
 
 void tui_alert_hot_clear(void) {
     g_alert_hot_n = 0;
+}
+
+void tui_alert_hot_attr(int sev) {
+    int pair = (sev >= ALERT_SEV_CRIT) ? CP_ALERT_HOT_CRIT
+             : (sev >= ALERT_SEV_WARN) ? CP_ALERT_HOT_WARN
+             :                            CP_ALERT_HOT_LOW;
+    attr_t a = COLOR_PAIR(pair);
+    /* Bold on WARN+CRIT so they pop above LOW (yellow) noise. */
+    if (sev >= ALERT_SEV_WARN) a |= A_BOLD;
+    attrset(a);
 }
 
 void tui_ssid_addstr(const char *ssid, int cat) {
@@ -584,10 +603,16 @@ void tui_init(void) {
              *   xterm 22 = #005f00 ~ 22% green = roughly 10-15% of cursor
              *   brightness (cursor is CP_BRIGHT = #00ffaf). */
             init_pair(CP_HIGHLIGHT, 255, 22);
-            /* Alert-hot IP: deep red foreground on the default bg.
-             *   xterm 196 = #ff0000; combined with A_BOLD at the
-             *   render site this reads as "danger". */
-            init_pair(CP_ALERT_HOT, 196, 0);
+            /* Alert-hot IP — three-tier palette. Same hue family as the
+             * heat gradient so the eye reads them as escalating danger:
+             *   LOW  = xterm 220 (#ffd700) bright amber-yellow
+             *   WARN = xterm 208 (#ff8700) orange (matches CP_HEAT_HI)
+             *   CRIT = xterm 196 (#ff0000) red    (matches CP_HEAT_PEAK)
+             * Render sites OR A_BOLD on WARN and CRIT so the eye picks
+             * them out from yellow noise. */
+            init_pair(CP_ALERT_HOT_LOW,  220, 0);
+            init_pair(CP_ALERT_HOT_WARN, 208, 0);
+            init_pair(CP_ALERT_HOT_CRIT, 196, 0);
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -636,8 +661,10 @@ void tui_init(void) {
                 init_pair(CP_INFO_BASE + i, info_fg_8[i], COLOR_BLACK);
             init_pair(CP_BORDER, COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_HIGHLIGHT, COLOR_WHITE, COLOR_GREEN);
-            /* 8-colour fallback — bright red on black. */
-            init_pair(CP_ALERT_HOT, COLOR_RED, COLOR_BLACK);
+            /* 8-colour fallback — three-tier alert-hot palette. */
+            init_pair(CP_ALERT_HOT_LOW,  COLOR_YELLOW, COLOR_BLACK);
+            init_pair(CP_ALERT_HOT_WARN, COLOR_YELLOW, COLOR_BLACK);
+            init_pair(CP_ALERT_HOT_CRIT, COLOR_RED,    COLOR_BLACK);
         }
     }
 }

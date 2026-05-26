@@ -22,19 +22,36 @@ type: reference
   packets via `src/alert_pcap.c`. See [[pcap-export]].
 - `c` clears all alerts and resets dedup state; future hits re-arm.
 
-## Rules
+## Severity tiers
 
-| Rule | Sev | Trigger | match_ip / port |
-|------|-----|---------|-----------------|
-| `PORT_SCAN`      | CRIT | one source touched ≥ 8 distinct local ports | scanner / 0 |
-| `DEAUTH_FLOOD`   | WARN | ≥ 5 deauth/disassoc frames in 5 s to one target | — (L2 only) |
-| `NXDOMAIN_BURST` | WARN | ≥ 10 NXDOMAIN replies to one source in 60 s | src / 53 |
-| `THREAT_DOMAIN`  | CRIT | DNS qname matches embedded IOC list | src / 53 |
-| `THREAT_IP`      | CRIT | conn remote IP matches embedded IOC list | remote / port |
-| `BEACONING`      | WARN | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
+Three tiers, yellow → orange → red, with cross-panel coloring (see
+[[ip-palette]]):
 
-CRIT renders heat-1.0 red, WARN heat-0.7 orange. Count column lights up
-on ≥ 2 hits (sustained condition).
+| Tier | Hue    | Meaning                                          |
+|------|--------|--------------------------------------------------|
+| LOW  | yellow | Recon / suspicious-but-passive (port scan, etc.) |
+| WARN | orange | Clearly malicious, not yet active exploitation   |
+| CRIT | red    | Active attack or IOC hit                         |
+
+## Rules (current)
+
+The full table lives in [`docs/views/alerts.md`](../views/alerts.md);
+the headline rules per tier:
+
+- **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`
+- **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`
+- **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
+  `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
+  `ATTACK_PATH`
+
+## Cross-panel coloring
+
+Any alert with a concrete `match_ip` adds that IP to the TUI
+alert-hot list at the rule's severity for `ALERT_HOT_TTL_S` (1h).
+Every panel that renders the IP (connections, top-hosts, packets,
+hostname rows) paints it in the matching tier colour. Promotion only
+— a later LOW does not demote an earlier CRIT on the same IP within
+the TTL window.
 
 ## How rules find each other
 

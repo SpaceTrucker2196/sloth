@@ -208,8 +208,9 @@ void view_packets_draw(const sloth_state_t *s) {
             char host_trunc[64];
             snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                      host_room, host_room, src_host);
-            if (tui_alert_hot_check(p->src)) {
-                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+            int hot_sev = tui_alert_hot_check(p->src);
+            if (hot_sev >= 0) {
+                tui_alert_hot_attr(hot_sev);
                 addstr(host_trunc);
             } else {
                 tui_brand_addstr(host_trunc, cat);
@@ -238,8 +239,9 @@ void view_packets_draw(const sloth_state_t *s) {
             char host_trunc[64];
             snprintf(host_trunc, sizeof(host_trunc), "%-*.*s",
                      host_room, host_room, dst_host);
-            if (tui_alert_hot_check(p->dst)) {
-                attrset(COLOR_PAIR(CP_ALERT_HOT) | A_BOLD);
+            int hot_sev = tui_alert_hot_check(p->dst);
+            if (hot_sev >= 0) {
+                tui_alert_hot_attr(hot_sev);
                 addstr(host_trunc);
             } else {
                 tui_brand_addstr(host_trunc, cat);

@@ -15,12 +15,23 @@ static const char *sev_label(alert_sev_t sev) {
     switch (sev) {
         case ALERT_SEV_CRIT: return "CRIT";
         case ALERT_SEV_WARN: return "WARN";
-        default:             return "INFO";
+        case ALERT_SEV_LOW:  return "LOW";
+        default:             return "?";
     }
 }
 
-static int sev_is_crit(alert_sev_t sev) { return sev == ALERT_SEV_CRIT; }
-static int sev_is_warn(alert_sev_t sev) { return sev == ALERT_SEV_WARN; }
+/* Heat fraction matching the cross-panel CP_ALERT_HOT_* tiers:
+ *   LOW  → 0.3 (yellow / CP_HEAT_MID)
+ *   WARN → 0.5 (orange / CP_HEAT_HI)
+ *   CRIT → 1.0 (red    / CP_HEAT_PEAK) */
+static double sev_heat(alert_sev_t sev) {
+    switch (sev) {
+        case ALERT_SEV_CRIT: return 1.0;
+        case ALERT_SEV_WARN: return 0.5;
+        case ALERT_SEV_LOW:  return 0.3;
+        default:             return 0.0;
+    }
+}
 
 /* Render a one-line enrichment panel for the selected alert when it has a
  * concrete match_ip. Shows region (RIR-level geo) and owner (well-known
@@ -75,16 +86,13 @@ static void draw_alert_detail(const sloth_state_t *s) {
         return;
     }
     const alert_t *a = &s->alerts[s->alert_sel];
-    const char *sev = (a->sev == ALERT_SEV_CRIT) ? "CRIT"
-                    : (a->sev == ALERT_SEV_WARN) ? "WARN" : "INFO";
 
     tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 ALERT DETAIL \xe2\x94\x80\xe2\x94\x80\n");
 
-    /* Title bar in heat-colour matching severity */
-    if      (a->sev == ALERT_SEV_CRIT) tui_heat(1.0);
-    else if (a->sev == ALERT_SEV_WARN) tui_heat(0.7);
-    else                                tui_bright();
-    TPRINT("  %s  %s\n", sev, a->title);
+    /* Title bar coloured to match the cross-panel CP_ALERT_HOT_* tier
+     * so the operator sees the same hue here as on the flagged IP. */
+    tui_heat(sev_heat(a->sev));
+    TPRINT("  %s  %s\n", sev_label(a->sev), a->title);
 
     tui_dim();   TPRINT("  Key:        "); tui_normal(); TPRINT("%s\n", a->key);
     tui_dim();   TPRINT("  Hits:       "); tui_bright(); TPRINT("%d\n", a->count);
@@ -138,16 +146,20 @@ void view_alerts_draw(const sloth_state_t *s) {
     int page = ALERTS_PAGE;
 #endif
 
-    /* count crits for the banner */
-    int crits = 0, warns = 0;
+    /* count by tier for the banner */
+    int crits = 0, warns = 0, lows = 0;
     for (int i = 0; i < s->alert_count; i++) {
-        if (s->alerts[i].sev == ALERT_SEV_CRIT) crits++;
-        else if (s->alerts[i].sev == ALERT_SEV_WARN) warns++;
+        switch (s->alerts[i].sev) {
+        case ALERT_SEV_CRIT: crits++; break;
+        case ALERT_SEV_WARN: warns++; break;
+        case ALERT_SEV_LOW:  lows++;  break;
+        }
     }
 
     tui_normal(); TPRINT(" Alerts: ");
-    if (crits > 0) { tui_heat(1.0);  TPRINT("%d crit ", crits); }
-    if (warns > 0) { tui_heat(0.7);  TPRINT("%d warn ", warns); }
+    if (crits > 0) { tui_heat(1.0); TPRINT("%d crit ", crits); }
+    if (warns > 0) { tui_heat(0.5); TPRINT("%d warn ", warns); }
+    if (lows  > 0) { tui_heat(0.3); TPRINT("%d low ",  lows);  }
     tui_bright();  TPRINT("%d total", s->alert_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
@@ -197,9 +209,7 @@ void view_alerts_draw(const sloth_state_t *s) {
         } else {
             tui_dim();   TPRINT(" %-8s", ts_buf);
 
-            if      (sev_is_crit(a->sev)) tui_heat(1.0);
-            else if (sev_is_warn(a->sev)) tui_heat(0.7);
-            else                          tui_normal();
+            tui_heat(sev_heat(a->sev));
             TPRINT("  %-4s", sev_label(a->sev));
 
             tui_bright(); TPRINT("  %-15.15s", a->title);

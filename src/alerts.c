@@ -98,7 +98,9 @@ static void rule_port_scan(const sloth_state_t *s, time_t now) {
         snprintf(key,    sizeof(key),    "scan:%s", e->ip);
         snprintf(detail, sizeof(detail), "%s scanned %d distinct ports",
                  e->ip, e->port_count);
-        fire(ALERT_TYPE_PORT_SCAN, ALERT_SEV_CRIT,
+        /* LOW: reconnaissance, not an active attack. The scanner is
+         * looking; the operator should know but not be paged. */
+        fire(ALERT_TYPE_PORT_SCAN, ALERT_SEV_LOW,
              "PORT_SCAN", detail, key, e->ip, 0, now);
     }
 }
@@ -157,7 +159,9 @@ static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
                  "%.45s saw %d NXDOMAIN responses in %ds",
                  buckets[i].src, buckets[i].count,
                  ALERT_NXDOMAIN_WINDOW_S);
-        fire(ALERT_TYPE_NXDOMAIN_BURST, ALERT_SEV_WARN,
+        /* LOW: bursts are often typos / autofill misses. DGA / DNS tunnel
+         * gets its own dedicated WARN/CRIT detector below. */
+        fire(ALERT_TYPE_NXDOMAIN_BURST, ALERT_SEV_LOW,
              "NXDOMAIN_BURST", detail, key, buckets[i].src, 53, now);
     }
 }
@@ -431,7 +435,9 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail),
                  "%s sent %d probes in %lds (%.1f/s) - active recon / stuck client",
                  mac_buf, p->frame_count, elapsed, rate);
-        fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_WARN,
+        /* LOW: a probe-happy client is recon noise — same tier as
+         * port-scan. Real harm is in PNL leakage, not the probing. */
+        fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_LOW,
              "PROBE_FLOOD", detail, key, NULL, 0, now);
     }
 }

@@ -75,7 +75,8 @@ static void test_port_scan_fires(void) {
     ASSERT_GT(s.alert_count, 0);
     int idx = find_alert(&s, ALERT_TYPE_PORT_SCAN);
     ASSERT(idx >= 0);
-    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    /* PORT_SCAN is LOW — reconnaissance, not an active attack. */
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
     ASSERT_STR(s.alerts[idx].title, "PORT_SCAN");
 }
 
@@ -522,7 +523,8 @@ static void test_probe_flood_fires_on_high_rate(void) {
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_PROBE_FLOOD);
     ASSERT(idx >= 0);
-    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    /* PROBE_FLOOD is LOW — recon noise; real harm is PNL leakage. */
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
 }
 
 static void test_probe_flood_low_total_no_fire(void) {
