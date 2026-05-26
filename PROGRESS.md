@@ -51,6 +51,28 @@ work exposed as a new In-progress entry.
 
 ## Recently landed
 
+### 2026-05-26 — Read-only data socket (`--data-socket SPEC`)
+**Commits**: *(this commit)*
+**Touched**: `src/data_socket.{c,h}` (new), `src/jsonl.c`, `src/main.c`,
+`tests/test_data_socket.c` (new), `tests/main_test.c`, `Makefile`,
+`docs/wiki/jsonl-schema.md` (new), `docs/wiki/index.md`, `FACTORY.md`
+**Why**: Implements the data socket the 2026-05-25 MISSION §4
+amendment opened the door for. Supports `unix:/path` (local SIEM
+agents) and `tcp:HOST:PORT` (e.g. binding to a Tailscale IP so the
+upcoming iOS Swift UI dashboard can consume the JSONL stream over
+the tailnet). Read-only — nothing is ever read from the socket.
+Multi-client (up to 16), non-blocking writes, drop slow lines on
+EAGAIN, harvest on EPIPE. Hooked into `src/jsonl.c` so every
+`jsonl_emit_*` line broadcasts to both sinks; the new `any_sink()`
+helper short-circuits format work when nobody is listening. 5 new
+unit tests via a hermetic UNIX-domain fixture; 1974 assertions
+total. Build warning-clean. Bonus: `docs/wiki/jsonl-schema.md`
+finally pins down the stream format and resolves the long-standing
+`docs/wiki/log.md` naming-collision follow-up.
+**Follow-ups**: TCP path is exercised by the production binary but
+not by a unit test (ephemeral-port collisions in CI). An iOS
+SwiftUI client consumer is upcoming work.
+
 ### 2026-05-26 — Three-tier alert palette + cross-panel severity coloring
 **Commits**: `21814ec`
 **Touched**: `include/sloth.h`, `src/tui.h`, `src/tui.c`, `src/main.c`,
@@ -113,13 +135,12 @@ ops log — naming collision to resolve).
 
 ## Open follow-ups (not yet owned)
 
-- **Data socket** — implement the `--data-socket PATH` flag and
-  writer loop opened by the MISSION §4 amendment in commit
-  `0ddda50`. New module `src/data_socket.c` or extension of
-  `src/jsonl.c`. Needs a connection test in `tests/`.
-- **JSONL schema wiki page** — MISSION §4(3) names
-  `docs/wiki/log.md` as the schema home; today that path holds the
-  wiki ops log. Rename or relocate one of them.
+- **Tailscale integration** — install + configure on the deployment
+  host so `--data-socket tcp:100.x.x.x:8765` actually reaches the
+  iOS client. Out of repo (configuration, not code), but blocks the
+  iOS client from being useful.
+- **iOS SwiftUI client** — consume the data socket and render the
+  same panels sloth shows in the TUI. Out of this repo.
 - **Beacon detection v2** — current `BEACONING` detector
   blind-spots aggressive (>25%) jitter. An autocorrelation-based
   variant would catch modern C2 frameworks (Sliver, Cobalt) that

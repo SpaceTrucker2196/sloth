@@ -60,6 +60,7 @@ SRCS = src/main.c          \
        src/views/devices.c   \
        src/beacon_detect.c   \
        src/jsonl.c           \
+       src/data_socket.c     \
        src/views/help.c      \
        src/filter.c          \
        src/alert_pcap.c      \
@@ -268,6 +269,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_beacon_detect.c     \
             src/jsonl.c                    \
             tests/test_jsonl.c             \
+            src/data_socket.c              \
+            tests/test_data_socket.c       \
             src/views/help.c               \
             src/filter.c                   \
             tests/test_filter.c            \

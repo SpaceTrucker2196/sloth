@@ -2,9 +2,18 @@
 #include <string.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "data_socket.h"
 
 static FILE           *g_fp;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* True if either the file sink or the data-socket sink has a consumer.
+ * Used by every jsonl_emit_* to skip the format work when nobody is
+ * listening — running sloth without -o and without --data-socket should
+ * not pay for JSON encoding it'll never deliver. */
+static int any_sink(void) {
+    return g_fp != NULL || data_socket_has_clients();
+}
 
 int jsonl_open(const char *path) {
     if (!path || !path[0]) return 0;
@@ -53,7 +62,9 @@ static void json_escape(const char *s, char *out, int sz, int *off) {
     out[*off] = '\0';
 }
 
-/* Helper: write a complete JSON line to the file. */
+/* Helper: write a complete JSON line to every active sink — the
+ * configured file (if any) and every connected data-socket client.
+ * Broadcast happens outside the file mutex; data_socket has its own. */
 static void emit_line(const char *line) {
     pthread_mutex_lock(&g_mu);
     if (g_fp) {
@@ -62,6 +73,7 @@ static void emit_line(const char *line) {
         fflush(g_fp);
     }
     pthread_mutex_unlock(&g_mu);
+    data_socket_emit(line);
 }
 
 /* ── builder helpers ─────────────────────────────────────── */
@@ -92,7 +104,7 @@ static void end_obj(char *buf, int sz, int *off) {
 /* ── emitters ────────────────────────────────────────────── */
 
 void jsonl_emit_dns(const dns_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "dns", e->ts);
     kv_str(buf, LINEBUF, &off, "src",    e->src);
@@ -105,7 +117,7 @@ void jsonl_emit_dns(const dns_log_entry_t *e) {
 }
 
 void jsonl_emit_tls(const tls_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "tls", e->ts);
     kv_str(buf, LINEBUF, &off, "src",  e->src);
@@ -118,7 +130,7 @@ void jsonl_emit_tls(const tls_log_entry_t *e) {
 }
 
 void jsonl_emit_quic(const quic_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "quic", e->ts);
     kv_str(buf, LINEBUF, &off, "src",  e->src);
@@ -130,7 +142,7 @@ void jsonl_emit_quic(const quic_log_entry_t *e) {
 }
 
 void jsonl_emit_http(const http_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "http", e->ts);
     kv_str(buf, LINEBUF, &off, "src",    e->src);
@@ -142,7 +154,7 @@ void jsonl_emit_http(const http_log_entry_t *e) {
 }
 
 void jsonl_emit_ntp(const ntp_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "ntp", e->ts);
     kv_str(buf, LINEBUF, &off, "src",  e->src);
@@ -156,7 +168,7 @@ void jsonl_emit_ntp(const ntp_log_entry_t *e) {
 }
 
 void jsonl_emit_icmp(const icmp_log_entry_t *e) {
-    if (!g_fp || !e) return;
+    if (!any_sink() || !e) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "icmp", e->ts);
     kv_str(buf, LINEBUF, &off, "src", e->src);
@@ -171,7 +183,7 @@ void jsonl_emit_icmp(const icmp_log_entry_t *e) {
 }
 
 void jsonl_emit_alert(const alert_t *a) {
-    if (!g_fp || !a) return;
+    if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "alert", a->last_seen);
     kv_str(buf, LINEBUF, &off, "title",  a->title);

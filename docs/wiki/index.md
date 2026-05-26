@@ -28,6 +28,7 @@ source material.
 - [[ip-palette]] — colour conventions and TUI rules.
 - [[platform-vtable]] — the kernel seam (`platform_ops_t`).
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
+- [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 
 ## Reference
 

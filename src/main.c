@@ -58,6 +58,7 @@
 #include "beacon_detect.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
+#include "data_socket.h"
 #include "dns.h"
 #include "scan.h"
 #ifdef WITH_PCAP
@@ -256,7 +257,8 @@ static void handle_key(sloth_state_t *s, int key) {
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR]\n"
+            "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
+            "[--data-socket SPEC]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -266,7 +268,13 @@ static void print_usage(const char *argv0) {
             "                     handshakes to DIR/eapol.22000 in hashcat\n"
             "                     mixed format (22000), AND write a\n"
             "                     per-handshake DIR/<bssid>_<sta>.pcap for\n"
-            "                     replay with aircrack-ng / Wireshark\n",
+            "                     replay with aircrack-ng / Wireshark\n"
+            "  --data-socket SPEC stream the same JSONL records over a\n"
+            "                     read-only socket. SPEC is one of:\n"
+            "                       unix:/path/to/socket\n"
+            "                       tcp:HOST:PORT  (HOST is a literal IPv4)\n"
+            "                     Read-only: nothing is ever read from the\n"
+            "                     socket. Caller picks the bind address.\n",
             argv0);
 }
 
@@ -274,9 +282,10 @@ int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
-    const char *jsonl_path = NULL;
-    const char *pcap_dir   = NULL;
-    const char *eapol_dir  = NULL;
+    const char *jsonl_path  = NULL;
+    const char *pcap_dir    = NULL;
+    const char *eapol_dir   = NULL;
+    const char *data_socket = NULL;
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -284,6 +293,8 @@ int main(int argc, char **argv) {
             pcap_dir = argv[++i];
         } else if (!strcmp(argv[i], "--eapol-dir") && i + 1 < argc) {
             eapol_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--data-socket") && i + 1 < argc) {
+            data_socket = argv[++i];
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage(argv[0]);
             return 0;
@@ -306,6 +317,12 @@ int main(int argc, char **argv) {
     if (eapol_dir) {
         eapol_set_output_dir(eapol_dir);
     }
+    if (data_socket) {
+        if (data_socket_init(data_socket) != 0) {
+            /* error already printed by data_socket_init */
+            return 1;
+        }
+    }
 
     memset(&g_state, 0, sizeof(g_state));
     g_state.poll_ms     = POLL_MS;
@@ -321,6 +338,7 @@ int main(int argc, char **argv) {
 
     while (!g_quit) {
         poll_data(&g_state);
+        data_socket_tick();
         tui_draw(&g_state);
         handle_key(&g_state, tui_poll_key(g_state.poll_ms));
     }
@@ -333,5 +351,6 @@ int main(int argc, char **argv) {
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
+    data_socket_cleanup();
     return 0;
 }
