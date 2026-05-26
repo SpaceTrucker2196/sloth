@@ -313,6 +313,16 @@ test: $(TEST_BIN)
 $(TEST_BIN): $(TEST_SRCS)
 	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm -lpthread
 
+# ── Mutation testing ────────────────────────────────────────────────────────
+# Verifies the test suite itself: introduces small faults into src/ files,
+# rebuilds, runs `make test`, and reports surviving mutants. See
+# docs/wiki/mutation-testing.md for what to do with the report.
+# Pass extra flags via MUTATE_FLAGS, e.g.:
+#   make mutate MUTATE_FLAGS="--files src/threat_intel.c --limit 50"
+.PHONY: mutate
+mutate:
+	python3 .github/scripts/mutate.py $(MUTATE_FLAGS)
+
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_BIN)

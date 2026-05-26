@@ -30,6 +30,10 @@ source material.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 
+## Factory infrastructure
+
+- [[mutation-testing]] — verifying the test suite itself; `make mutate` harness.
+
 ## Reference
 
 - [[attack-map]] — threat class → entry-point view.

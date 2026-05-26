@@ -45,11 +45,66 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-*(nothing right now)*
+### Mutation-testing follow-ups
+**Owner**: next agent
+**Started**: 2026-05-26
+**Goal**: Drive the `src/alerts.c` mutation kill-rate up from the
+21.6% baseline by triaging each survivor — write the assertion that
+would have caught it, or document as equivalent.
+**Status**: harness landed; baseline recorded. The 258 survivors
+break down qualitatively (sampled, not exhaustively):
+- Bulk of survivors cluster on alert-rule threshold lines and on
+  `snprintf` byte-index literals; the latter are mostly equivalent
+  mutants (function-parameter array sizes, e.g. `mac[6]`), the
+  former are real test gaps where the suite seeds traffic well above
+  threshold and never tests the boundary.
+- Threshold gaps in `rule_nxdomain`, `rule_arp_spoof`,
+  `rule_evil_twin`, `rule_rogue_dhcp`, `rule_deauth_flood`,
+  `rule_probe_flood`, and the eviction-by-last-seen helper.
+**Blockers**: none.
+**Next concrete step**: `make mutate MUTATE_FLAGS="--files src/alerts.c"`,
+then for each survivor with `op=const` or `op=rel` on a threshold,
+add a boundary test in `tests/test_alerts.c` that seeds the rule
+right at the threshold (asserting it fires) and one below
+(asserting it does not). Re-run `make mutate` to confirm the kill.
 
 ---
 
 ## Recently landed
+
+### 2026-05-26 — Mutation-testing harness (`make mutate`, closes #4)
+**Commits**: *(this commit)*
+**Touched**: `.github/scripts/mutate.py` (new, ~370 LoC),
+`Makefile` (added `mutate` target), `docs/wiki/mutation-testing.md`
+(new), `docs/wiki/index.md`, `docs/wiki/log.md`, `PROGRESS.md`
+**Why**: Closes the loop the dark-factory pattern doc
+([`docs/dark-factory.md`](docs/dark-factory.md) §3.3) opens: the
+Level-5 claim in `MISSION.md` rests on `make test` being a
+trustworthy oracle, but the suite had ~1974 hand-crafted assertions
+with no evidence they'd actually fail on real regressions.
+`make mutate` introduces small faults (relational swaps, ±1 on
+integer literals, `&&`↔`||`, `+`↔`-`, `return N` → `return 0`) into
+src files one at a time, runs `make -B test`, and reports surviving
+mutants as concrete test-suite gaps. Sandboxed: src is never
+modified in place — the harness copies the repo to a tmpdir and
+mutates there. No third-party framework, no product behaviour
+changes, `make` + `make test` still clean.
+**Baseline kill-rates** (record as new targets are added):
+| target          | mutants | killed | survived | kill-rate |
+|-----------------|---------|--------|----------|-----------|
+| `src/alerts.c`  | 329     | 71     | 258      | 21.6%     |
+The low rate confirms issue #4's premise: assertions were broadly
+counted but rarely targeted at thresholds and boundary conditions.
+A sampled review of survivors shows ~30–40% are likely equivalent
+mutants (function-parameter array sizes, no-effect post-condition
+writes); the rest are real gaps.
+**Follow-ups**: see In-progress entry above (close the gaps on
+`src/alerts.c` first, then mutate `src/threat_intel.c`, `src/dga.c`,
+`src/dns_snoop.c`, `src/beacon_detect.c` in that order). A minor
+cosmetic issue: the "killed (build broke)" sub-counter sometimes
+catches test-binary segfaults instead of compile failures (stderr
+contains both "error" and "make"). Real kill-count is correct; only
+the breakdown is noisy.
 
 ### 2026-05-26 — Read-only data socket (`--data-socket SPEC`)
 **Commits**: `1199563`

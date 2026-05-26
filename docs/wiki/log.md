@@ -61,3 +61,27 @@ on the socket; you can only read.
 itself is future work — needs a `--data-socket PATH` flag, a writer
 loop in `src/jsonl.c` (or a new `src/data_socket.c`), and a connection
 test in the test suite.
+
+---
+
+## 2026-05-26 — Mutation-testing wiki page
+
+**Source**: GitHub issue #4 ("Add a mutation-testing harness to
+validate the test oracle"), `.github/scripts/mutate.py`,
+`docs/dark-factory.md` §3.3.
+
+**Created pages**:
+
+- [mutation-testing.md](mutation-testing.md) — operator reference,
+  how to read the report, what to do with each surviving mutant
+  (real gap / equivalent mutant / dead code), implementation notes
+  (force-rebuild, sandbox isolation), target priorities.
+
+**Index updates**: added a "Factory infrastructure" section under
+[[index]] holding the new page.
+
+**Why**: closes the loop the dark-factory pattern doc opens — §3.3
+states "if the test suite is 'yeah it mostly catches things,' you
+are still at Level 3 — the human is the actual oracle." `make mutate`
+is the mechanical check that the suite is stronger than that.
+Baseline kill-rate for `src/alerts.c` lives in `PROGRESS.md`.
