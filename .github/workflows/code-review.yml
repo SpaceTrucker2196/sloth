@@ -40,14 +40,15 @@ jobs:
         if: steps.diff.outputs.diff_size == '0'
         run: |
           echo "Diff is empty — nothing to review."
-          exit 0
 
       - name: Set up Python
+        if: steps.diff.outputs.diff_size != '0'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Run GPT-5.2 Codex code review
+        if: steps.diff.outputs.diff_size != '0'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}

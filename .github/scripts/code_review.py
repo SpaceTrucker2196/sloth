@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import textwrap
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -31,8 +32,8 @@ import urllib.error
 
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 MODEL           = os.environ.get("MODEL", "gpt-5.2-codex")
-OPENAI_API_KEY  = os.environ["OPENAI_API_KEY"]
-GITHUB_TOKEN    = os.environ["GITHUB_TOKEN"]
+OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY", "")
+GITHUB_TOKEN    = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO     = os.environ["GITHUB_REPO"]          # owner/repo
 DIFF_FILE       = os.environ.get("DIFF_FILE", "")
 COMMIT_SHA      = os.environ.get("COMMIT_SHA", "unknown")
@@ -103,8 +104,6 @@ def ensure_label(name: str, color: str, description: str) -> None:
     _http("POST", f"https://api.github.com/repos/{GITHUB_REPO}/labels", headers, data)
 
 
-import urllib.parse  # noqa: E402  (imported here so ensure_label can use it above)
-
 # ---------------------------------------------------------------------------
 # Prompt
 # ---------------------------------------------------------------------------
@@ -142,6 +141,15 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # Bail out cleanly if the OpenAI API key is not configured.
+    if not OPENAI_API_KEY:
+        print("OPENAI_API_KEY is not set — skipping code review.")
+        return 0
+
+    if not GITHUB_TOKEN:
+        print("GITHUB_TOKEN is not set — skipping code review.")
+        return 0
+
     # Read diff
     if DIFF_FILE:
         with open(DIFF_FILE, "r", errors="replace") as fh:
