@@ -1,0 +1,59 @@
+name: Code Review (GPT-5.2 Codex)
+
+on:
+  push:
+    branches:
+      - main
+      - "**"
+
+permissions:
+  contents: read
+  issues:   write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    # Skip merge commits and commits that already have "[skip-review]" in the message.
+    if: |
+      !startsWith(github.event.head_commit.message, 'Merge ') &&
+      !contains(github.event.head_commit.message, '[skip-review]')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need HEAD and HEAD^ to compute the diff
+
+      - name: Compute diff
+        id: diff
+        run: |
+          # If this is the very first commit there is no parent; handle gracefully.
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff HEAD^ HEAD -- '*.c' '*.h' '*.py' '*.yml' '*.yaml' \
+              'Makefile' 'CMakeLists.txt' '*.md' > /tmp/review.diff
+          else
+            git show --format="" HEAD -- '*.c' '*.h' '*.py' '*.yml' '*.yaml' \
+              'Makefile' 'CMakeLists.txt' '*.md' > /tmp/review.diff
+          fi
+          echo "diff_size=$(wc -c < /tmp/review.diff)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if diff is empty
+        if: steps.diff.outputs.diff_size == '0'
+        run: |
+          echo "Diff is empty — nothing to review."
+          exit 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run GPT-5.2 Codex code review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:    ${{ github.repository }}
+          DIFF_FILE:      /tmp/review.diff
+          COMMIT_SHA:     ${{ github.sha }}
+          COMMIT_URL:     ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          MODEL:          gpt-5.2-codex
+        run: python .github/scripts/code_review.py
