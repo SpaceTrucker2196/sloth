@@ -158,8 +158,19 @@ What is **out of scope**, regardless of how interesting:
   validation.
 - Network configuration (DHCP server, DNS resolver, firewall rules).
 - Any "honeypot" mode that responds to inbound traffic.
-- A REST API or remote-control surface. Sloth is local-only by design;
-  if a SOC needs to aggregate, it ships the JSONL upstream.
+- **Remote-control** surfaces of any kind. No command channel, no
+  "do X" RPC, no inbound-configuration endpoint, no plugin loader, no
+  shell-out. Sloth refuses to act on instructions it receives over the
+  network — the operator drives sloth from the local TTY or not at all.
+
+A **read-only local data socket** (UNIX domain or `127.0.0.1`) that
+streams the same content as the JSONL log is in scope. It is a
+`tail -f` for in-process consumers, not an API: no verbs, no auth
+surface that could be brute-forced, no remote bind by default. If a
+SOC needs to aggregate across hosts, a local consumer reads the socket
+(or the JSONL file) and ships upstream — that consumer is not part of
+sloth. Any feature that adds a *control* surface, even if dressed up as
+"configuration", lands as a rejected change.
 
 ---
 

@@ -36,3 +36,28 @@ Append-only record of wiki operations. Newest entries at the bottom.
 - No per-view 1:1 mirror page — `views-catalog.md` plus the concept
   pages cover the synthesis-level material; the per-view docs remain
   the source of truth for protocol-level detail.
+
+---
+
+## 2026-05-25 — Mission §4 amendment: read-only local data socket
+
+**Source**: `MISSION.md` §4 ("out of scope" list).
+
+**Change**: replaced the blanket "no REST API or remote-control
+surface" bullet with a stricter two-paragraph rule. The hard ban now
+targets **control** surfaces specifically (no command channel, no RPC,
+no remote configuration, no plugin loader, no shell-out). A
+**read-only local data socket** (UNIX domain or `127.0.0.1`) that
+mirrors the JSONL stream is now explicitly **in scope** as a
+`tail -f`-style consumer hook for local SIEM forwarders.
+
+**Why**: JSONL files are clunky for in-process tooling and force
+filesystem polling. A read-only socket gives downstream tools a clean
+hookup without ever giving sloth the ability to be told what to do.
+The mission's passive-only spirit is preserved — there are no verbs
+on the socket; you can only read.
+
+**Not implemented yet**: this amendment opens the door. The socket
+itself is future work — needs a `--data-socket PATH` flag, a writer
+loop in `src/jsonl.c` (or a new `src/data_socket.c`), and a connection
+test in the test suite.
