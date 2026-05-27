@@ -126,6 +126,87 @@ static void test_disconnected_client_is_harvested(void) {
     data_socket_cleanup();
 }
 
+/* Empty payload must be a no-op (line 175 `if (len == 0) return;`).
+ * Mutating the `0` constant or the comparison would either short-
+ * circuit a real send, or send a bare newline that downstream
+ * consumers would treat as a corrupt frame. We verify by emitting
+ * "" then a real line and checking only the real line arrives. */
+static void test_emit_empty_payload_is_skipped(void) {
+    const char *path = sock_path();
+    char spec[80];
+    snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+
+    data_socket_emit("");      /* must NOT send anything */
+    data_socket_emit("hello"); /* must send "hello\n" */
+
+    char buf[16] = {0};
+    ssize_t n = read(c, buf, sizeof(buf) - 1);
+    ASSERT(n > 0);
+    buf[n] = '\0';
+    /* If the empty emit had leaked a "\n", buf would start with "\n";
+     * the explicit string compare catches that. */
+    ASSERT_STR(buf, "hello\n");
+
+    close(c);
+    data_socket_cleanup();
+}
+
+/* When a client in the MIDDLE of the array disconnects, the emit
+ * loop must compact via swap-with-last (line 200:
+ * `g_clients[i] = g_clients[--g_client_n]`) so the surviving
+ * client at the end keeps receiving. Without compaction, either
+ * (a) the disconnected fd stays in the array and breaks all
+ * subsequent sends, or (b) the array shifts and we double-skip
+ * the swapped-in fd. Either way a subsequent emit fails to reach
+ * the still-connected client. */
+static void test_middle_client_disconnect_compacts(void) {
+    const char *path = sock_path();
+    char spec[80];
+    snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int a = connect_client(path);
+    int b = connect_client(path);
+    int c = connect_client(path);
+    ASSERT(a >= 0 && b >= 0 && c >= 0);
+    data_socket_tick();
+
+    /* B disconnects; A and C remain. */
+    close(b);
+
+    /* First emit triggers EPIPE on B's slot and compacts. */
+    data_socket_emit("post-drop");
+
+    /* Drain A and C — both must have received "post-drop\n".
+     * (The order of accept is arbitrary; we just need both alive
+     * fds to see the bytes.) */
+    char buf_a[32] = {0}, buf_c[32] = {0};
+    ssize_t na = read(a, buf_a, sizeof(buf_a) - 1);
+    ssize_t nc = read(c, buf_c, sizeof(buf_c) - 1);
+    ASSERT(na > 0);
+    ASSERT(nc > 0);
+    buf_a[na] = '\0'; buf_c[nc] = '\0';
+    ASSERT(strcmp(buf_a, "post-drop\n") == 0);
+    ASSERT(strcmp(buf_c, "post-drop\n") == 0);
+
+    /* A second emit confirms both fds are still healthy after the
+     * compaction step (i.e. neither was accidentally closed). */
+    data_socket_emit("alive");
+    char buf2_a[16] = {0}, buf2_c[16] = {0};
+    ASSERT(read(a, buf2_a, sizeof(buf2_a) - 1) == 6);
+    ASSERT(read(c, buf2_c, sizeof(buf2_c) - 1) == 6);
+    ASSERT_STR(buf2_a, "alive\n");
+    ASSERT_STR(buf2_c, "alive\n");
+
+    close(a); close(c);
+    data_socket_cleanup();
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -133,4 +214,6 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_unix_roundtrip_single_client);
     RUN_TEST(test_unix_broadcast_to_multiple_clients);
     RUN_TEST(test_disconnected_client_is_harvested);
+    RUN_TEST(test_emit_empty_payload_is_skipped);
+    RUN_TEST(test_middle_client_disconnect_compacts);
 }

@@ -430,6 +430,79 @@ static void test_snoop_a_record_with_wrong_rdlen_not_injected(void) {
     ASSERT(strstr(info, "1.2.3.4") == NULL);
 }
 
+/* Kills the line-37 compression-pointer hop-count guards:
+ *   rel `>` -> `>=`     (boundary off-by-one)
+ *   const `20 -> 21`    (threshold one higher)
+ *   const `20 -> 19`    (threshold one lower)
+ *   const `1 -> 2`      (`++hops` becomes hops += 2)
+ *
+ * The existing test_snoop_compression_loop_guard catches "guard
+ * fires eventually" but not the exact threshold — it self-cycles
+ * indefinitely until any of the four mutations also stops it. To
+ * pin the boundary we build *two* chains: one of exactly 20
+ * pointers (must succeed — hops reaches 20, the guard's `> 20`
+ * stays false) and one of exactly 21 pointers (must fail — hops
+ * reaches 21, the guard fires).
+ *
+ * Layout for both: 12-byte DNS header + N compression pointers,
+ * each at offset 12+2k pointing to offset 12+2(k+1). The last
+ * pointer in the 20-chain points to offset 52, where we place a
+ * real terminating label "x" so read_name resolves and returns
+ * resume=14. */
+
+static void test_snoop_compression_chain_20_hops_succeeds(void) {
+    dns_reset();
+    char info[64];
+    uint8_t pkt[60] = {
+        /* header (12 bytes), qdcount=1, ancount=0 */
+        0x00,0x01, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+        /* 20 compression pointers: 12->14->16->...->50->52 */
+        0xC0,0x0E,  0xC0,0x10,  0xC0,0x12,  0xC0,0x14,
+        0xC0,0x16,  0xC0,0x18,  0xC0,0x1A,  0xC0,0x1C,
+        0xC0,0x1E,  0xC0,0x20,  0xC0,0x22,  0xC0,0x24,
+        0xC0,0x26,  0xC0,0x28,  0xC0,0x2A,  0xC0,0x2C,
+        0xC0,0x2E,  0xC0,0x30,  0xC0,0x32,  0xC0,0x34,
+        /* offset 52: terminating label "x" then null */
+        0x01,'x',0x00,
+        /* QTYPE / QCLASS (unread — resume=14, dns_snoop reads
+         * msg[14..17] which are pointer bytes; it doesn't validate
+         * the QTYPE/QCLASS content) */
+        0x00,0x01, 0x00,0x01,
+        /* one byte of padding so the array length is 60 */
+        0x00,
+    };
+    int r = dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info));
+    /* 20 hops <= the `> 20` guard: must resolve. */
+    ASSERT_EQ(r, 1);
+    /* The label that finally resolved should appear in info. */
+    ASSERT(strstr(info, "x") != NULL);
+}
+
+static void test_snoop_compression_chain_21_hops_rejected(void) {
+    dns_reset();
+    char info[64] = "untouched";
+    uint8_t pkt[60] = {
+        0x00,0x01, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+        /* 21 compression pointers: 12->14->16->...->50->52->54 */
+        0xC0,0x0E,  0xC0,0x10,  0xC0,0x12,  0xC0,0x14,
+        0xC0,0x16,  0xC0,0x18,  0xC0,0x1A,  0xC0,0x1C,
+        0xC0,0x1E,  0xC0,0x20,  0xC0,0x22,  0xC0,0x24,
+        0xC0,0x26,  0xC0,0x28,  0xC0,0x2A,  0xC0,0x2C,
+        0xC0,0x2E,  0xC0,0x30,  0xC0,0x32,  0xC0,0x34,
+        0xC0,0x36,
+        /* offset 54: doesn't matter — guard fires before we get
+         * here; pad with non-pointer bytes so any over-read by
+         * test infrastructure doesn't accidentally extend the chain */
+        0x01,'x',0x00,
+        0x00,0x01,
+    };
+    int r = dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info));
+    /* 21 hops > 20: guard fires, read_name returns -1, dns_snoop
+     * returns 0 and leaves info untouched. */
+    ASSERT_EQ(r, 0);
+    ASSERT_STR(info, "untouched");
+}
+
 /* Kills the line-125 `type == 28 && rdlen == 16` AND mutation:
  * a record with rdlen==16 but type != 28 must not be injected
  * as AAAA. */
@@ -490,4 +563,6 @@ void run_dns_snoop_tests(void) {
     RUN_TEST(test_snoop_non_a_record_with_rdlen_4_not_injected);
     RUN_TEST(test_snoop_a_record_with_wrong_rdlen_not_injected);
     RUN_TEST(test_snoop_non_aaaa_record_with_rdlen_16_not_injected);
+    RUN_TEST(test_snoop_compression_chain_20_hops_succeeds);
+    RUN_TEST(test_snoop_compression_chain_21_hops_rejected);
 }

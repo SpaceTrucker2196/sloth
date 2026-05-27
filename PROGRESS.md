@@ -45,38 +45,94 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 6+)
+### Mutation-testing follow-ups (rounds 7+)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: Triage `data_socket.c`'s 81 remaining real survivors (the
-biggest open pile, 22.9% kill rate). Most are in the socket I/O
-error paths (`send` EPIPE / EAGAIN handling, accept loop, client
-compaction). The existing hermetic UNIX-domain fixture covers the
-happy path; error injection would need a fault-injection seam or a
-mock send/close.
-**Status**: rounds 1-5 closed. Round 5 mutated the export paths
-(`jsonl.c`, `data_socket.c`, `pcap_write.c`) and added the OPT
-equivalence class for early-return optimisation guards.
-**Blockers**: none.
+**Goal**: `data_socket.c` still has 77 real survivors after round 6
+(26.7% kill rate). The cheap wins (real-socket-manipulation tests
+for compaction + empty-payload) are now landed; the remaining
+survivors are in the harder error paths that need a fault-injection
+seam.
+**Status**: rounds 1-6 closed. Aggregate kill rate is 52.2% of
+considered (526 killed / 1007 considered / 1106 mutants total).
+**Blockers**: none (but progress slows here — diminishing returns
+without infrastructure investment).
 **Next concrete step** (in priority order):
-1. **data_socket.c real survivors**: pick 3-5 high-value cases.
-   Specifically the `g_client_n` overflow guard (`< MAX_CLIENTS`)
-   and the EPIPE/swap-with-last compaction. These need a way to
-   force a send to fail in the test harness — consider a build-time
-   `data_socket_inject_fault()` hook compiled only when
-   `WITH_TESTS_FAULTS` is set.
-2. **Compression-pointer hop-chain test** for `dns_snoop` — a chain
-   of >20 distinct pointers triggers the `if (++hops > 20)` guard.
+1. **Fault-injection seam** for `data_socket.c`. Design: a static
+   function pointer `static ssize_t (*g_send_fn)(...) = send;`
+   plus a test-only setter `data_socket_test_set_send_fn(...)`.
+   ~10 lines of code; unlocks tests for the EAGAIN / EWOULDBLOCK
+   slow-client drop branch (lines 190-195) and partial-send
+   detection (line 184 `n1 != len`).
+2. Apply the same pattern to `accept()` for the `g_client_n >=
+   MAX_CLIENTS` overflow test (line 158 `while` bound).
 3. As new equivalents emerge from future runs, append to
-   `.github/scripts/mutate-equivalents.txt` with the class
-   shorthand cited (per the wiki's "When to add an entry"
-   criteria — conservatively).
-4. Cosmetic: tighten the "killed (build broke)" sub-counter to
-   recognise actual compile failures vs. test-binary segfaults.
+   `.github/scripts/mutate-equivalents.txt` (conservatively).
+4. Cosmetic: tighten the "killed (build broke)" sub-counter.
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Round 6: dns_snoop hop-chain + data_socket real-socket triage
+**Commits**: *(this commit)*
+**Touched**: `tests/test_dns_snoop.c`, `tests/test_data_socket.c`,
+`README.md`, `PROGRESS.md`
+**Why**: Two of the round-5 follow-ups closed without needing
+infrastructure changes — the dns_snoop hop-chain test and the
+data_socket compaction/empty-payload tests can be done with
+real-socket manipulation alone, no fault-injection seam required.
+
+**Per-file delta**:
+
+| target            | before        | after          | delta   |
+|-------------------|---------------|----------------|---------|
+| `src/dns_snoop.c` | 51.1% (92/180) | **52.8%** (95/180) | +3 mutants |
+| `src/data_socket.c` | 22.9% (24/105) | **26.7%** (28/105) | +4 mutants |
+
+**Four new tests**:
+
+`tests/test_dns_snoop.c` (2):
+- `compression_chain_20_hops_succeeds`  — exactly 20 chained
+  compression pointers must resolve to the trailing label "x".
+- `compression_chain_21_hops_rejected`  — 21 chained pointers
+  must trigger the `if (++hops > 20)` guard.
+
+Together these pin the threshold and kill all four line-37
+survivors: `rel >→>=`, `const 20→21`, `const 20→19`, and
+`const 1→2` (the `++hops` increment becoming `hops += 2`).
+
+`tests/test_data_socket.c` (2):
+- `emit_empty_payload_is_skipped`     — `data_socket_emit("")`
+  must not send anything (not even a bare `\n` that would corrupt
+  the JSONL frame). Verifies by emitting "" then "hello" and
+  asserting the consumer reads exactly "hello\n".
+- `middle_client_disconnect_compacts` — three clients A/B/C; B
+  disconnects; emit must compact via swap-with-last (line 200:
+  `g_clients[i] = g_clients[--g_client_n]`) so A *and* C both
+  still receive subsequent messages. A second emit confirms both
+  remaining fds are still healthy.
+
+**Aggregate after round 6**:
+
+| total | ignored | considered | killed | of considered |
+|-------|---------|------------|--------|---------------|
+| 1106  | 99      | 1007       | 526    | **52.2%**     |
+
+**README badges** bumped: tests 2053 → 2071; mutation kill rate
+51.5% → 52.2%.
+
+**Decisions worth flagging**:
+- Skipped the fault-injection seam this round. The cheap real-
+  socket wins delivered 7 more kills; the remaining
+  `data_socket.c` survivors need infrastructure (a swappable
+  `send` / `accept` pointer) which is more than this commit
+  should carry. Surfaced as round-7 priority with a concrete
+  ~10-line design sketch.
+- The dns_snoop hop-chain test packets are hand-crafted following
+  RFC 1035 §4.1.4 layout; inline comment explains the offset math
+  so the next agent can extend (e.g. test the 22-hop case) without
+  re-deriving.
 
 ### 2026-05-27 — Round 5: mutate the export-path files
 **Commits**: *(this commit)*
