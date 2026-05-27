@@ -45,33 +45,111 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (round 2)
+### Mutation-testing follow-ups (round 3)
 **Owner**: next agent
-**Started**: 2026-05-26
-**Goal**: Pick up where round 1 stopped — the remaining 185
-survivors on `src/alerts.c` cluster in the documented equivalence
-classes (buffer sizes, loop bounds reading zero-init tail, truthy
-init values). Decide per-cluster whether to add tests, refactor the
-code to eliminate the equivalence, or accept the noise floor.
-**Status**: round 1 closed (see "Recently landed" below) — kill rate
-21.6% → 43.8% in a single pass against `src/alerts.c`.
+**Started**: 2026-05-27
+**Goal**: Continue widening the mutation coverage. The four
+highest-value alert/security files now have a recorded baseline +
+one round of triage (see "Recently landed"). Next-tier files have
+not been mutated.
+**Status**: rounds 1-2 closed. Cumulative kill-rate picture across
+the files mutated so far:
+| file                 | baseline | after triage | net mutants killed |
+|----------------------|----------|--------------|--------------------|
+| `src/alerts.c`       | 21.6%    | **43.8%**    | +73                |
+| `src/threat_intel.c` | 81.8%    | 81.8% (all 4 survivors equivalent) | 0 |
+| `src/dga.c`          | 36.4%    | **50.0%**    | +12                |
+| `src/beacon_detect.c`| 55.6%    | **72.2%**    | +9                 |
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Mutate the high-value files we haven't touched: `src/threat_intel.c`,
-   `src/dga.c`, `src/dns_snoop.c`, `src/beacon_detect.c`. These are
-   security-critical and have well-defined input shapes.
-2. Consider an `--ignore-file` flag on `mutate.py` so known equivalence
-   classes (function-parameter array sizes, loop-bound `<→<=`) can be
-   filtered from the survivor list, making the kill rate trend more
-   informative as the suite improves.
-3. Cosmetic: the "killed (build broke)" sub-counter mis-categorises
-   test-binary segfaults as build failures (stderr contains both
-   "error" and "make"). Tighten the heuristic to look for the actual
-   "make: *** [...] Error 1" pattern.
+1. Mutate `src/dns_snoop.c`, `src/sni_snoop.c`, `src/http_snoop.c` —
+   protocol parsers built from RFC bytes; existing test discipline
+   should produce a high baseline.
+2. Mutate `src/jsonl.c`, `src/data_socket.c`, `src/pcap_write.c` —
+   export-path correctness has direct downstream-tool impact.
+3. Add an `--ignore-file` flag to `mutate.py` so known
+   equivalence-class mutants (function-parameter array sizes, loop
+   bounds reading zero-init tail) drop out of the survivor list. The
+   kill-rate trend becomes informative when the noise floor is
+   suppressed.
+4. Cosmetic: tighten the "killed (build broke)" sub-counter to
+   recognise actual compile failures vs. test-binary segfaults (both
+   currently produce stderr containing "error" + "make").
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Mutation round 2: threat_intel + dga + beacon_detect
+**Commits**: *(this commit)*
+**Touched**: `tests/test_dga.c`, `tests/test_beacon_detect.c`,
+`PROGRESS.md`
+**Why**: Round 2 of the verify-the-verifier campaign (issue #4).
+Baselined and (where worthwhile) triaged the three security-critical
+files named in the issue as next-priority after `src/alerts.c`.
+
+**Per-file results**:
+
+- `src/threat_intel.c` (IOC matcher): **81.8% baseline (18/22)**.
+  All 4 survivors fall in the documented equivalence classes —
+  three are `return 1; → return 2;` (function-as-boolean), one is
+  the empty-IOC guard which is unreachable given the fixed embedded
+  list. **No new tests** — by the wiki page's own "don't write fake
+  assertions to kill equivalent mutants" rule. Effective real-test
+  kill rate: 100%.
+
+- `src/dga.c` (DGA/DNS-tunnel heuristic): **36.4% → 50.0%** (+12).
+  Added five boundary tests in `tests/test_dga.c`:
+    - `label_exactly_ten_chars_flagged` (kills `len < 10` boundary)
+    - `consonant_cluster_exactly_four` (kills `cons >= 4` boundary;
+      constructed label `aakjxqe1212.com` keeps entropy ≈ 2.91 so
+      the cluster signal is necessary, not redundant)
+    - `digit_density_exactly_thirty_percent` (kills `>= 30` in the
+      `30 → 31` direction)
+    - `uppercase_label_normalized` (kills the `+ 32` ASCII
+      case-conversion arith and `32 ± 1` const mutations on line 17,
+      AND — via the AKJXBQZPQVZ.com follow-up — the `>= 'A'`
+      char-range mutation that wasn't exercised by the lowercase
+      tests)
+
+- `src/beacon_detect.c` (periodicity detector for C2): **55.6% →
+  72.2%** (+9). Added eight tests in `tests/test_beacon_detect.c`:
+    - `find_distinguishes_port_from_ip` (kills the `&& → ||` in
+      `find()` — would have aliased two tracks sharing only one
+      coordinate)
+    - `observe_empty_ip_is_noop` (kills `bd_observe`'s `|| → &&`
+      NULL/empty guard mutation — empty string would otherwise
+      create a track keyed on `""`)
+    - `update_skips_zero_port_conn` (same shape for `bd_update`'s
+      `||` guard on conn filtering)
+    - `update_at_exact_gap_records_new_sample` (kills the
+      `>= BD_GAP_S → > BD_GAP_S` boundary in `bd_update`)
+    - `stats_two_samples_computes_mean` (kills `n < 2` early-return
+      and the `2 ± 1` mutations on the minimum-samples guard)
+    - `is_strong_at_exact_min_interval` (kills `mean <
+      BD_MIN_INTERVAL_S` boundary)
+    - `is_strong_at_exact_max_jitter_ratio` (kills the `jitter/mean
+      > BD_MAX_JITTER_RATIO` boundary; constructed gaps
+      [25,15,25,15] for mean=20, stddev=5, ratio=0.25 exact)
+  Also moved `seed_conn` helper above the tests that need it
+  (forward-declaration would have worked too).
+
+**Suite totals**: 2008 → 2027 assertions (+19); 0 failed. Build
+warning-clean.
+
+**Decisions flagged** (per `docs/dark-factory.md` §4.2):
+- Skipped writing tests for `threat_intel.c` survivors — documented
+  equivalence-class only. The wiki page's rule is explicit; adding
+  fake assertions would degrade the suite's honesty.
+- Kept boundary-construction comments inline in the new tests
+  (entropy/jitter math). The tests would otherwise look magic-number-y;
+  the comment is the proof of correctness that lets the next agent
+  modify the seed values without breaking the boundary semantics.
+- Did not chase the remaining 44 dga.c / 15 beacon_detect.c / 4
+  threat_intel.c survivors. The remaining gaps are dominated by the
+  equivalence classes plus a few constructed-input cases (e.g.
+  `bd_stats` mean==0 guard requires synthetically seeding a
+  zero-cadence track).
 
 ### 2026-05-26 — Close mutation-testing gaps round 1 (`src/alerts.c`)
 **Commits**: *(this commit)*
