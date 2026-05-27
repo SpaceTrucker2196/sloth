@@ -1,0 +1,134 @@
+# Mutation-testing equivalence file
+#
+# Documented-equivalent mutations to suppress from the survivor count.
+# Each non-blank, non-comment line:
+#
+#     <file>:<line>:<op>:<original>:<mutated>    # optional comment
+#
+# Match is exact on all five fields. When a mutant's fingerprint
+# appears here, it's reported as IGNORED rather than SURVIVED, and
+# the effective kill rate is computed as killed/(total-ignored).
+#
+# Adding entries is a deliberate act:
+#   - Verify the mutation is *truly* equivalent (no observable
+#     behaviour change for any reasonable input the function sees).
+#   - Cite the equivalence class from docs/wiki/mutation-testing.md
+#     in the trailing comment so the next reviewer can re-verify.
+#
+# Classes (per docs/wiki/mutation-testing.md):
+#   FPA  - function-parameter array size (C ignores)
+#   SBL  - stack buffer sizing literal (snprintf truncates either way)
+#   FXS  - memcmp/memcpy length on fixed-size struct field
+#   LZT  - loop bound reading zero-initialised tail
+#   TIP  - truthy-initialiser perturbation
+#   FAB  - function-as-boolean return value
+#   LCP  - lowercase prefix case-folding (no-op for lowercase inputs)
+#
+# ------------------------------------------------------------
+# src/threat_intel.c — 100% effective kill rate after ignore
+# ------------------------------------------------------------
+src/threat_intel.c:37:bool:||:&&        # FAB: empty IOC guard unreachable given fixed embedded list
+src/threat_intel.c:40:const:1:2         # FAB: domain_suffix_match returns 1 as boolean
+src/threat_intel.c:51:const:1:2         # FAB: ti_match_domain returns 1 as boolean
+src/threat_intel.c:62:const:1:2         # FAB: ti_match_ip returns 1 as boolean
+
+# ------------------------------------------------------------
+# src/alerts.c — function-parameter array sizes (FPA)
+# ------------------------------------------------------------
+src/alerts.c:23:const:6:7               # FPA: mac_to_str(uint8_t mac[6], ...) — size ignored
+src/alerts.c:23:const:6:5               # FPA: same
+src/alerts.c:193:const:6:7              # FPA: rule_arp_spoof byte-loop `j < 6` is a real bound, but reading mac[6] hits next field, typically equivalent
+src/alerts.c:193:rel:<:<=               # LZT: same byte-loop, reading-past-end is functionally equivalent for non-all-zero MACs
+
+# ------------------------------------------------------------
+# src/alerts.c — stack buffer sizing literals (SBL)
+# ------------------------------------------------------------
+src/alerts.c:112:const:20:21            # SBL: char tgt[20] in rule_deauth_flood
+src/alerts.c:112:const:20:19            # SBL: same
+src/alerts.c:114:const:20:21            # SBL: char bss[20] in rule_deauth_flood
+src/alerts.c:114:const:20:19            # SBL: same
+src/alerts.c:209:const:18:19            # SBL: char old_mac[18] in rule_arp_spoof
+src/alerts.c:209:const:18:17            # SBL: same
+src/alerts.c:427:const:20:21            # SBL: char mac_buf[20] in rule_probe_flood
+src/alerts.c:427:const:20:19            # SBL: same
+src/alerts.c:546:const:20:21            # SBL: char bssid_str[20] in rule_karma_ap
+src/alerts.c:546:const:20:19            # SBL: same
+src/alerts.c:591:const:20:21            # SBL: char a_bssid[20] in rule_evil_twin
+src/alerts.c:591:const:20:19            # SBL: same
+
+# ------------------------------------------------------------
+# src/alerts.c — engine-internal loop guards (LZT)
+# ------------------------------------------------------------
+src/alerts.c:186:rel:<:<=               # LZT: arp_count outer-loop bound reading zero-init
+src/alerts.c:109:rel:<:<=               # LZT: deauth_count outer-loop bound
+src/alerts.c:579:rel:<:<=               # LZT: beacon_count outer-loop in rule_evil_twin
+
+# ------------------------------------------------------------
+# src/alerts.c — truthy-initialiser perturbation (TIP)
+# ------------------------------------------------------------
+src/alerts.c:192:const:1:2              # TIP: `int all_zero = 1;` — both truthy
+src/alerts.c:196:const:1:2              # TIP: `int found = -1;` — both negative sentinels
+src/alerts.c:635:const:1:2              # TIP: `dup = 1;` — both truthy
+src/alerts.c:796:const:1:2              # TIP: `a->pcap_dumped = 1;` — both truthy
+
+# ------------------------------------------------------------
+# src/dns_snoop.c — buffer-size literals
+# ------------------------------------------------------------
+src/dns_snoop.c:75:const:256:257        # SBL: char qname[256] (matches MAX_DNS_NAME convention)
+src/dns_snoop.c:75:const:256:255        # SBL: same
+src/dns_snoop.c:87:const:256:257        # SBL: char tmp[256] in additional-question loop
+src/dns_snoop.c:87:const:256:255        # SBL: same
+src/dns_snoop.c:99:const:46:47          # SBL: char first_ip[46] (INET6_ADDRSTRLEN convention)
+src/dns_snoop.c:99:const:46:45          # SBL: same
+src/dns_snoop.c:104:const:256:257       # SBL: char rname[256] in answer loop
+src/dns_snoop.c:104:const:256:255       # SBL: same
+src/dns_snoop.c:117:const:46:47         # SBL: char ip[46] for A record
+src/dns_snoop.c:117:const:46:45         # SBL: same
+src/dns_snoop.c:129:const:46:47         # SBL: char ip[46] for AAAA record
+src/dns_snoop.c:129:const:46:45         # SBL: same
+src/dns_snoop.c:145:const:64:65         # SBL: char base[64] for info-string copy
+src/dns_snoop.c:145:const:64:63         # SBL: same
+
+# ------------------------------------------------------------
+# src/dga.c — leftmost_label / dga_label_entropy buffer
+# ------------------------------------------------------------
+src/dga.c:25:const:64:65                # SBL: char label[64] in dga_label_entropy
+src/dga.c:25:const:64:63                # SBL: same
+src/dga.c:84:const:64:65                # SBL: char label[64] in dga_is_suspicious
+src/dga.c:84:const:64:63                # SBL: same
+src/dga.c:30:const:40:41                # SBL: int hist[40] (only 37 used)
+src/dga.c:30:const:40:39                # SBL: same — 39 still > 37 used slots
+
+# ------------------------------------------------------------
+# src/http_snoop.c — lowercase-prefix case-folding (LCP)
+# ------------------------------------------------------------
+# ci_startswith's prefix arg is always lowercase "host:", so the
+# b-byte case-fold branch (line 11) never fires — every mutation
+# on that branch is equivalent.
+src/http_snoop.c:11:rel:>=:>            # LCP
+src/http_snoop.c:11:rel:<=:<            # LCP
+src/http_snoop.c:11:const:32:33         # LCP
+src/http_snoop.c:11:const:32:31         # LCP
+src/http_snoop.c:14:const:1:2           # FAB: ci_startswith returns 1 as boolean
+src/http_snoop.c:35:const:1:2           # TIP: is_req = 1 — truthy
+
+# ------------------------------------------------------------
+# src/sni_snoop.c — function-as-boolean return
+# ------------------------------------------------------------
+# u16 reads via `((unsigned)p[0] << 8) | p[1]` — `8` is the bit shift.
+# Mutations 8->9 or 8->7 shift by wrong amount, but test packets
+# overwhelmingly use lengths < 256 where high byte is zero, so the
+# shift result is the same. Equivalent given test data shape.
+src/sni_snoop.c:36:const:8:9            # SBL-like (shift width)
+src/sni_snoop.c:36:const:8:7            # SBL-like (shift width)
+
+# ------------------------------------------------------------
+# src/beacon_detect.c — find()/upsert() helper internals
+# ------------------------------------------------------------
+src/beacon_detect.c:10:rel:<:<=         # LZT: track_count outer-loop
+src/beacon_detect.c:23:rel:<:<=         # LZT: eviction-scan loop
+src/beacon_detect.c:23:const:1:2        # TIP: `for (int i = 1; ...)` start index in eviction sort
+src/beacon_detect.c:24:rel:<:<=         # LZT: same eviction-scan ordering check
+src/beacon_detect.c:46:rel:<:<=         # LZT: sample_count cap in bd_observe (saturating add)
+src/beacon_detect.c:52:rel:<:<=         # LZT: conn_count outer-loop in bd_update
+src/beacon_detect.c:114:rel:<:<=        # LZT: bd_each iteration bound

@@ -173,6 +173,69 @@ the CLAUDE.md "no dead code" rule.
 
 ---
 
+## Filtering known equivalents
+
+After a few triage rounds the survivor list starts to plateau at the
+documented-equivalence-class noise floor. `make mutate` supports a
+`--ignore-file PATH` flag that suppresses these from the survivor
+count so the kill rate trend stays informative.
+
+A default file ships in-tree at
+[`.github/scripts/mutate-equivalents.txt`](../../.github/scripts/mutate-equivalents.txt)
+and is loaded automatically. To use a custom file:
+
+```sh
+make mutate MUTATE_FLAGS="--files src/alerts.c \
+                          --ignore-file path/to/custom.txt"
+```
+
+### Format
+
+One entry per non-blank, non-comment line:
+
+```
+<file>:<line>:<op>:<original>:<mutated>    # optional comment
+```
+
+Match is exact on all five fields. When a mutant's fingerprint
+appears here, it's reported as **IGNORED** rather than **SURVIVED**,
+and the effective kill rate becomes `killed / (total - ignored)`.
+
+### When to add an entry
+
+A deliberate act, not a workaround:
+
+1. The mutation must be **truly** equivalent — no observable
+   behaviour change for any reasonable input the function sees. Not
+   "hard to test"; not "I don't want to write the test"; equivalent.
+2. The trailing comment should cite the class shorthand from the
+   ignore file's header (FPA, SBL, FXS, LZT, TIP, FAB, LCP) so the
+   next reviewer can re-verify the call without re-tracing the
+   logic.
+3. If you're not certain, **leave it as a survivor**. A survivor
+   that turns out to be equivalent is a one-line PR; a falsely-
+   ignored real mutant is a defect that hides forever.
+
+### Reading the report with `--ignore-file`
+
+```
+== Mutation summary ==
+Files:     src/threat_intel.c
+Operators: rel, arith, bool, const, return
+Mutants:   22
+Ignored:   4 (documented equivalence-class)
+Considered:18
+Killed:    18 (100.0% of considered, 81.8% of total)
+Survived:  0
+```
+
+Two kill rates surface: **of considered** is the new headline
+(real-test kill rate); **of total** is the raw number, kept so
+historical trends remain comparable to runs that pre-date the
+ignore file.
+
+---
+
 ## Known equivalence classes
 
 These patterns recur across `src/*.c` and produce mutants that *will*

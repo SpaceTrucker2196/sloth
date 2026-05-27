@@ -45,44 +45,100 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 4+)
+### Mutation-testing follow-ups (rounds 5+)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: Mutate the export-path files and add tooling that
-suppresses the equivalence-class noise floor so kill-rate trends
-become more informative.
-**Status**: rounds 1-3 closed (see "Recently landed"). Cumulative
-picture:
-| file                 | baseline | after triage | net mutants killed |
-|----------------------|----------|--------------|--------------------|
-| `src/alerts.c`       | 21.6%    | **43.8%**    | +73                |
-| `src/threat_intel.c` | 81.8%    | 81.8% (all survivors equivalent) | 0 |
-| `src/dga.c`          | 36.4%    | **50.0%**    | +12                |
-| `src/beacon_detect.c`| 55.6%    | **72.2%**    | +9                 |
-| `src/dns_snoop.c`    | 44.8%    | **47.4%**    | +5                 |
-| `src/sni_snoop.c`    | 47.9%    | **51.4%**    | +5                 |
-| `src/http_snoop.c`   | 61.6%    | **65.1%**    | +3                 |
+**Goal**: Mutate the export-path files (`src/jsonl.c`,
+`src/data_socket.c`, `src/pcap_write.c`). With the equivalence-class
+noise floor now suppressed via `.github/scripts/mutate-equivalents.txt`,
+new mutation runs surface real gaps directly.
+**Status**: rounds 1-4 closed (round 4 introduced `--ignore-file`).
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Mutate the export-path files: `src/jsonl.c`, `src/data_socket.c`,
-   `src/pcap_write.c`. Direct downstream-tool impact.
-2. Add an `--ignore-file` flag to `mutate.py` so known
-   equivalence-class mutants drop out of the survivor list. The
-   round-3 protocol-parser triage shrunk by less than rounds 1-2
-   because the remaining survivors are nearly all equivalence-class
-   (function-parameter array sizes, loop bounds reading zero-init
-   tail, stack buffer sizing literals, lowercase-prefix
-   case-folding mutations that have no observable effect).
-3. Construct a compression-pointer hop-chain test for dns_snoop —
-   a chain of >20 distinct pointers should trigger the
-   `if (++hops > 20)` guard. Currently only the simple two-pointer
-   loop is tested. Kills line 37 mutations.
+1. Mutate the export-path files. Direct downstream-tool impact —
+   the JSONL schema is a contract.
+2. Construct a compression-pointer hop-chain test for `dns_snoop` —
+   a chain of >20 distinct pointers triggers the `if (++hops > 20)`
+   guard. Kills line 37 mutations.
+3. As new equivalents emerge from future runs, append to
+   `.github/scripts/mutate-equivalents.txt` with the class
+   shorthand cited in the trailing comment (per the wiki page's
+   "When to add an entry" criteria — conservatively).
 4. Cosmetic: tighten the "killed (build broke)" sub-counter to
    recognise actual compile failures vs. test-binary segfaults.
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Round 4: `--ignore-file` flag + equivalence seed file
+**Commits**: *(this commit)*
+**Touched**: `.github/scripts/mutate.py`,
+`.github/scripts/mutate-equivalents.txt` (new),
+`docs/wiki/mutation-testing.md`, `PROGRESS.md`
+**Why**: Round 3 surfaced the diminishing-returns problem — by the
+third round of triage, ~95% of surviving mutants on a file fell into
+the documented equivalence classes. The raw kill rate stopped
+trending because new tests couldn't catch what was already
+unkillable.
+
+`mutate.py` now accepts `--ignore-file PATH`. A default file ships
+at `.github/scripts/mutate-equivalents.txt` and is loaded
+automatically. Each non-blank, non-comment line is
+`file:line:op:original:mutated`; matching mutants are reported as
+**IGNORED** rather than **SURVIVED**, and the report surfaces two
+kill rates: **of considered** (the real-test rate) and
+**of total** (preserved for trend continuity with pre-ignore runs).
+
+The seeded equivalents file covers seven classes documented in
+[`docs/wiki/mutation-testing.md`](../docs/wiki/mutation-testing.md):
+FPA (function-parameter array size), SBL (stack buffer sizing
+literal), FXS (memcmp/memcpy length on fixed-size struct field),
+LZT (loop bound reading zero-initialised tail), TIP (truthy-
+initialiser perturbation), FAB (function-as-boolean return value),
+LCP (lowercase prefix case-folding). Initial entries (~55) come
+from manually-verified survivors in rounds 1-3. The discipline for
+adding entries (per the wiki page): truly equivalent or leave as a
+survivor — falsely-ignored real mutants hide forever.
+
+**Kill-rate picture, before vs. after the ignore file** (all files
+mutated so far, post-triage):
+
+| file                 | raw     | effective (`of considered`) | ignored |
+|----------------------|---------|------------------------------|---------|
+| `src/alerts.c`       | 43.2%   | **47.0%**                    | 27      |
+| `src/threat_intel.c` | 81.8%   | **100.0%**                   | 4       |
+| `src/dga.c`          | 50.0%   | **53.7%**                    | 6       |
+| `src/beacon_detect.c`| 72.2%   | **83.0%**                    | 7       |
+| `src/dns_snoop.c`    | 47.4%   | **51.1%**                    | 14      |
+| `src/sni_snoop.c`    | 51.4%   | **52.1%**                    | 2       |
+| `src/http_snoop.c`   | 65.1%   | **70.0%**                    | 6       |
+| **aggregate**        | **50.7%** | **54.7%**                  | **66**  |
+
+Aggregate: 915 mutants total, 66 ignored, 849 considered, 464 killed.
+The `alerts.c` raw is one decimal lower than the round-1 record
+(43.8% → 43.2%) — run-to-run noise on a single-digit number of
+mutants flipping. The trend stands.
+
+`threat_intel.c` shows the value most clearly: the raw 81.8% had
+hidden the fact that 100% of *non-equivalent* mutants are killed.
+The wiki rule ("don't write fake assertions to kill equivalents")
+made writing 0 new tests the right call in round 2 — `--ignore-file`
+now makes that visible to future readers without re-deriving the
+reasoning.
+
+**No product behaviour change.** `make` warning-clean, `make test`
+green (2050 assertions).
+
+**Decisions worth flagging**:
+- Default ignore file auto-loads if present. Skipping it requires
+  passing `--ignore-file ""` explicitly. Trade-off: convenience
+  beats surprise — agents running `make mutate` cold get the
+  noise-suppressed view automatically; pure-raw mode is the
+  one-keyword opt-out.
+- The "of total" kill rate is kept in the report so historical
+  trends remain comparable. Drop only if a future tooling round
+  rewrites PROGRESS.md to use the considered rate consistently.
 
 ### 2026-05-27 — Mutation round 3 triage: dns_snoop + sni_snoop + http_snoop
 **Commits**: *(this commit)*

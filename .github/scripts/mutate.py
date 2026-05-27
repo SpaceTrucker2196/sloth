@@ -360,6 +360,52 @@ def apply_mutation(file_path: Path, mutant: Mutant) -> None:
 
 # ── Test runner ─────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class IgnoreKey:
+    file: str       # repo-relative path, e.g. "src/alerts.c"
+    line: int
+    op: str
+    original: str
+    mutated: str
+
+
+def load_ignore_file(path: Path) -> set:
+    """Parse a mutate-equivalents file. Returns a set of IgnoreKey.
+
+    Format: one entry per non-blank, non-comment line:
+
+        src/alerts.c:23:const:6:7    # mac_to_str function-parameter array size
+
+    Fields are split on `:` so `original` and `mutated` must not
+    contain a literal colon. Trailing `# comment` is stripped.
+    """
+    out = set()
+    text = path.read_text()
+    for raw_lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) != 5:
+            print(f"WARN: {path}:{raw_lineno}: expected "
+                  f"file:line:op:original:mutated, got {raw!r}",
+                  file=sys.stderr)
+            continue
+        try:
+            ln = int(parts[1])
+        except ValueError:
+            print(f"WARN: {path}:{raw_lineno}: line field not integer",
+                  file=sys.stderr)
+            continue
+        out.add(IgnoreKey(parts[0], ln, parts[2], parts[3], parts[4]))
+    return out
+
+
+def fingerprint(m) -> IgnoreKey:
+    return IgnoreKey(m.file, m.line_no, m.site.op,
+                     m.site.original, m.site.mutated)
+
+
 def run_make_test(workdir: Path, timeout_s: float) -> tuple[bool, str]:
     """Returns (passed, short_stderr_tail).
 
@@ -433,7 +479,21 @@ def main() -> int:
         "--report", type=str, default="",
         help="also write report to this path",
     )
+    parser.add_argument(
+        "--ignore-file", type=str, default="",
+        help="path to a mutate-equivalents file (one "
+             "file:line:op:original:mutated entry per line). When set, "
+             "matching mutations are skipped and reported as 'ignored' "
+             "rather than 'survived'. Defaults to "
+             ".github/scripts/mutate-equivalents.txt if that file exists.",
+    )
     args = parser.parse_args()
+
+    # Default ignore file if one ships in-tree.
+    if not args.ignore_file:
+        default_ignore = REPO_ROOT / ".github" / "scripts" / "mutate-equivalents.txt"
+        if default_ignore.is_file():
+            args.ignore_file = str(default_ignore)
 
     repo = REPO_ROOT
     files = [(repo / f).resolve() for f in args.files]
@@ -445,10 +505,21 @@ def main() -> int:
             print(f"ERROR: {f} is not under src/ — refusing", file=sys.stderr)
             return 2
 
+    # Load ignore set (may be empty).
+    ignore = set()
+    if args.ignore_file:
+        ipath = Path(args.ignore_file)
+        if not ipath.is_file():
+            print(f"ERROR: ignore file {ipath} does not exist", file=sys.stderr)
+            return 2
+        ignore = load_ignore_file(ipath)
+
     print(f"== sloth mutation testing ==")
     print(f"repo:      {repo}")
     print(f"files:     {', '.join(args.files)}")
     print(f"operators: {', '.join(args.operators)}")
+    if ignore:
+        print(f"ignore:    {len(ignore)} entries from {args.ignore_file}")
     sys.stdout.flush()
 
     # 1. Sandbox.
@@ -486,6 +557,7 @@ def main() -> int:
         # 4. Apply each mutant, run tests, restore.
         timeout = max(15.0, baseline_s * args.timeout_mult)
         survivors: list[tuple[Mutant, str]] = []
+        ignored: list = []
         killed = 0
         timed_out = 0
         build_broke = 0
@@ -495,6 +567,14 @@ def main() -> int:
 
         t_start = time.monotonic()
         for i, m in enumerate(all_mutants, 1):
+            if fingerprint(m) in ignore:
+                ignored.append(m)
+                elapsed = time.monotonic() - t_start
+                print(f"  [{i:4d}/{len(all_mutants)}] {m.file}:{m.line_no} "
+                      f"{m.site.op}:{m.site.note}  -> IGNORED  "
+                      f"({elapsed:.0f}s elapsed)")
+                sys.stdout.flush()
+                continue
             target = sandbox / m.file
             apply_mutation(target, m)
             ok, err = run_make_test(sandbox, timeout_s=timeout)
@@ -523,14 +603,24 @@ def main() -> int:
 
         # 5. Report.
         total = len(all_mutants)
-        kill_rate = (killed / total * 100.0) if total else 0.0
+        considered = total - len(ignored)
+        raw_rate  = (killed / total * 100.0) if total else 0.0
+        eff_rate  = (killed / considered * 100.0) if considered else 0.0
         lines_out: list[str] = []
         lines_out.append("")
         lines_out.append("== Mutation summary ==")
         lines_out.append(f"Files:     {', '.join(args.files)}")
         lines_out.append(f"Operators: {', '.join(args.operators)}")
         lines_out.append(f"Mutants:   {total}")
-        lines_out.append(f"Killed:    {killed} ({kill_rate:.1f}%)")
+        if ignored:
+            lines_out.append(f"Ignored:   {len(ignored)} "
+                             f"(documented equivalence-class)")
+            lines_out.append(f"Considered:{considered}")
+            lines_out.append(f"Killed:    {killed} "
+                             f"({eff_rate:.1f}% of considered, "
+                             f"{raw_rate:.1f}% of total)")
+        else:
+            lines_out.append(f"Killed:    {killed} ({raw_rate:.1f}%)")
         lines_out.append(f"           ├─ by build break: {build_broke}")
         lines_out.append(f"           └─ by timeout:     {timed_out}")
         lines_out.append(f"Survived:  {len(survivors)}")
