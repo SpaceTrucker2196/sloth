@@ -201,6 +201,18 @@ Match is exact on all five fields. When a mutant's fingerprint
 appears here, it's reported as **IGNORED** rather than **SURVIVED**,
 and the effective kill rate becomes `killed / (total - ignored)`.
 
+### Line numbers are fragile
+
+The fingerprint includes the line number, so inserting code above an
+ignored mutation site invalidates the entry — the mutation
+resurfaces as a survivor at its new line. When you add or remove
+significant lines in a file, run `make mutate` against that file
+and re-anchor the affected ignore entries.
+
+(A future improvement, queued in `PROGRESS.md`, is fingerprinting by
+content + nearby context instead of line number. For now, the
+trade-off is fingerprint precision vs. churn — line numbers won.)
+
 ### When to add an entry
 
 A deliberate act, not a workaround:

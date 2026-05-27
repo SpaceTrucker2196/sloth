@@ -39,4 +39,17 @@ int  data_socket_has_clients(void);
  * the path. Safe to call when no socket was configured. */
 void data_socket_cleanup(void);
 
+/* ── Test-only syscall hooks ────────────────────────────────
+ *
+ * Internal indirection lets unit tests force send/accept failures
+ * (EAGAIN, partial send, EMFILE) that real-socket fixtures can't
+ * reliably trigger. Pass NULL to either setter to restore the real
+ * libc function. Production code must not call these. */
+#include <sys/types.h>           /* ssize_t, socklen_t */
+#include <sys/socket.h>          /* struct sockaddr    */
+typedef ssize_t (*data_socket_send_fn)(int, const void *, size_t, int);
+typedef int     (*data_socket_accept_fn)(int, struct sockaddr *, socklen_t *);
+void data_socket_test_set_send_fn  (data_socket_send_fn   fn);
+void data_socket_test_set_accept_fn(data_socket_accept_fn fn);
+
 #endif /* SLOTH_DATA_SOCKET_H */

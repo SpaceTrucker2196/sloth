@@ -158,20 +158,21 @@ src/jsonl.c:19:bool:||:&&               # FAB: jsonl_open NULL/empty path; both 
 src/data_socket.c:24:const:1:2          # TIP: `static int g_listen_fd = -1;` — both negative sentinels
 src/data_socket.c:27:const:256:257      # SBL: g_unix_path buffer size
 src/data_socket.c:27:const:256:255      # SBL: same
-src/data_socket.c:32:const:1:2          # TIP: `if (flags < 0) return -1;` set_nonblock return — caller ignores
-src/data_socket.c:32:const:1:0          # TIP: same — set_nonblock return ignored by callers
-src/data_socket.c:52:const:1:2          # TIP: init_unix early-return -1 — caller's check is `< 0`
-src/data_socket.c:52:const:1:0          # TIP: same
-src/data_socket.c:57:const:1:2          # TIP: init_unix path-too-long -1
-src/data_socket.c:57:const:1:0          # TIP: same
-src/data_socket.c:60:const:1:2          # TIP: init_unix socket-failure -1
-src/data_socket.c:60:const:1:0          # TIP: same
-src/data_socket.c:72:const:1:2          # TIP: init_unix bind-failure -1
-src/data_socket.c:72:const:1:0          # TIP: same
-src/data_socket.c:74:const:4:5          # SBL-like: listen(fd, 4) backlog — both saturate way before clients show
-src/data_socket.c:74:const:4:3          # SBL-like: same
-src/data_socket.c:78:const:1:2          # TIP: listen-failure -1
+src/data_socket.c:50:const:1:2          # TIP: `if (flags < 0) return -1;` set_nonblock return — caller ignores
+src/data_socket.c:50:const:1:0          # TIP: same — set_nonblock return ignored by callers
+src/data_socket.c:70:const:1:2          # TIP: init_unix early-return -1 — caller's check is `< 0`
+src/data_socket.c:70:const:1:0          # TIP: same
+src/data_socket.c:75:const:1:2          # TIP: init_unix path-too-long -1
+src/data_socket.c:75:const:1:0          # TIP: same
+src/data_socket.c:78:const:1:2          # TIP: init_unix socket-failure -1
 src/data_socket.c:78:const:1:0          # TIP: same
+src/data_socket.c:90:const:1:2          # TIP: init_unix bind-failure -1
+src/data_socket.c:90:const:1:0          # TIP: same
+src/data_socket.c:92:const:4:5          # SBL-like: listen(fd, 4) backlog — both saturate way before clients show
+src/data_socket.c:92:const:4:3          # SBL-like: same
+src/data_socket.c:96:const:1:2          # TIP: listen-failure -1
+src/data_socket.c:96:const:1:0          # TIP: same
+src/data_socket.c:208:bool:||:&&        # OPT: EAGAIN == EWOULDBLOCK on Linux/Darwin — `||` and `&&` collapse
 
 # ------------------------------------------------------------
 # src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)

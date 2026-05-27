@@ -27,6 +27,24 @@ static int             g_client_n  = 0;
 static char            g_unix_path[256];     /* for cleanup unlink */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* Syscall indirection. Default to the real libc functions; tests can
+ * swap in fakes via data_socket_test_set_*_fn. One predictable branch
+ * per call in production. */
+static data_socket_send_fn   g_send_fn   = send;
+static data_socket_accept_fn g_accept_fn = accept;
+
+void data_socket_test_set_send_fn(data_socket_send_fn fn) {
+    pthread_mutex_lock(&g_mu);
+    g_send_fn = fn ? fn : send;
+    pthread_mutex_unlock(&g_mu);
+}
+
+void data_socket_test_set_accept_fn(data_socket_accept_fn fn) {
+    pthread_mutex_lock(&g_mu);
+    g_accept_fn = fn ? fn : accept;
+    pthread_mutex_unlock(&g_mu);
+}
+
 static int set_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
@@ -156,7 +174,7 @@ void data_socket_tick(void) {
     if (g_listen_fd < 0) return;
     pthread_mutex_lock(&g_mu);
     while (g_client_n < MAX_CLIENTS) {
-        int c = accept(g_listen_fd, NULL, NULL);
+        int c = g_accept_fn(g_listen_fd, NULL, NULL);
         if (c < 0) break;       /* EAGAIN or real error — stop draining */
         set_nonblock(c);
         /* Keepalive helps the kernel reap iOS clients that vanish when
@@ -180,10 +198,10 @@ void data_socket_emit(const char *line) {
         /* Write the line + a trailing '\n'. MSG_NOSIGNAL prevents
          * SIGPIPE if the peer has closed; we detect that as EPIPE
          * from send() instead. */
-        ssize_t n1 = send(g_clients[i], line, len, MSG_NOSIGNAL);
+        ssize_t n1 = g_send_fn(g_clients[i], line, len, MSG_NOSIGNAL);
         int ok = (n1 == (ssize_t)len);
         if (ok) {
-            ssize_t n2 = send(g_clients[i], "\n", 1, MSG_NOSIGNAL);
+            ssize_t n2 = g_send_fn(g_clients[i], "\n", 1, MSG_NOSIGNAL);
             ok = (n2 == 1);
         }
         if (!ok) {

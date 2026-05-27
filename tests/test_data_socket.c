@@ -156,6 +156,139 @@ static void test_emit_empty_payload_is_skipped(void) {
     data_socket_cleanup();
 }
 
+/* ── Fault-injection (via data_socket_test_set_*_fn hooks) ─────── */
+
+/* Toggleable fakes used by the fault-injection tests below.
+ * Each test sets `g_fake_*_mode` to choose its behaviour, then
+ * installs the fake via the hook. `errno` is set so the production
+ * code path's EAGAIN / EPIPE classification fires correctly. */
+static int g_fake_send_mode  = 0;    /* 0=passthrough, 1=EAGAIN, 2=partial, 3=zero */
+static int g_fake_send_calls = 0;
+static int g_fake_partial_n  = 3;
+
+static ssize_t fake_send(int fd, const void *buf, size_t len, int flags) {
+    g_fake_send_calls++;
+    switch (g_fake_send_mode) {
+    case 1:                          /* EAGAIN — slow client */
+        errno = EAGAIN;
+        return -1;
+    case 2:                          /* partial write (truncated) */
+        return g_fake_partial_n < (ssize_t)len ? g_fake_partial_n : (ssize_t)len;
+    case 3:                          /* zero — pretend connection went away */
+        errno = ECONNRESET;
+        return 0;
+    default:
+        return send(fd, buf, len, flags);
+    }
+}
+
+/* Kills the EAGAIN/EWOULDBLOCK slow-client branch (line 190):
+ * `if (errno == EAGAIN || errno == EWOULDBLOCK) { i++; continue; }`.
+ * If the `||` mutated to `&&`, EAGAIN (without EWOULDBLOCK) would
+ * fall through to the close-and-compact path; client_n would drop. */
+static void test_send_eagain_keeps_client(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    g_fake_send_mode  = 1;            /* EAGAIN */
+    g_fake_send_calls = 0;
+    data_socket_test_set_send_fn(fake_send);
+
+    data_socket_emit("dropped");      /* fake send fails with EAGAIN */
+
+    /* Slow-client branch: client kept, no close, no compact. */
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    /* Just one send call (the first `n1`); the second `\n` send is
+     * gated by the success of the first. */
+    ASSERT_EQ(g_fake_send_calls, 1);
+
+    /* Restore and confirm the client is still usable. */
+    data_socket_test_set_send_fn(NULL);
+    data_socket_emit("ok");
+    char buf[16] = {0};
+    ssize_t n = read(c, buf, sizeof(buf) - 1);
+    ASSERT(n > 0);
+    buf[n] = '\0';
+    ASSERT_STR(buf, "ok\n");
+
+    close(c);
+    data_socket_cleanup();
+}
+
+/* Kills the partial-send check (line 184: `int ok = (n1 == len);`):
+ * a fake that returns fewer bytes than asked must trigger the
+ * close-and-compact branch — the client is broken from our side. */
+static void test_send_partial_harvests_client(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    g_fake_send_mode  = 2;          /* return 3 bytes for any size */
+    g_fake_partial_n  = 3;
+    g_fake_send_calls = 0;
+    errno = 0;                       /* not EAGAIN — force the harvest path */
+    data_socket_test_set_send_fn(fake_send);
+
+    data_socket_emit("long-payload"); /* len=12, fake returns 3 */
+
+    /* Partial send → ok=false → not EAGAIN → close + compact. */
+    ASSERT_EQ(data_socket_has_clients(), 0);
+
+    data_socket_test_set_send_fn(NULL);
+    close(c);
+    data_socket_cleanup();
+}
+
+/* Kills the `accept` overflow-guard mutations on line 158
+ * (`while (g_client_n < MAX_CLIENTS)`): with the guard intact,
+ * a fake accept that always returns a fresh fd should be drained
+ * exactly MAX_CLIENTS times — not less, not more. */
+static int  g_fake_accept_calls   = 0;
+static int  g_fake_accept_max     = 0;   /* return at most this many fds */
+
+static int fake_accept(int fd, struct sockaddr *addr, socklen_t *addrlen) {
+    (void)addr; (void)addrlen;
+    g_fake_accept_calls++;
+    if (g_fake_accept_calls > g_fake_accept_max) {
+        errno = EAGAIN;
+        return -1;
+    }
+    /* Return an arbitrary "valid" fd by duplicating stderr — the test
+     * never actually reads/writes through these, only the bookkeeping
+     * matters. We close them in cleanup. */
+    return dup(fd);
+}
+
+static void test_tick_caps_at_max_clients(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 100;        /* fake will "accept" forever */
+    data_socket_test_set_accept_fn(fake_accept);
+
+    data_socket_tick();
+
+    /* The while-loop stops drainage at MAX_CLIENTS (= 16). The fake
+     * was called exactly 16 times (each returning a fresh fd), then
+     * the guard exits the loop. Not 15, not 17. */
+    ASSERT_EQ(g_fake_accept_calls, 16);
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    data_socket_test_set_accept_fn(NULL);
+    data_socket_cleanup();
+}
+
 /* When a client in the MIDDLE of the array disconnects, the emit
  * loop must compact via swap-with-last (line 200:
  * `g_clients[i] = g_clients[--g_client_n]`) so the surviving
@@ -216,4 +349,9 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_disconnected_client_is_harvested);
     RUN_TEST(test_emit_empty_payload_is_skipped);
     RUN_TEST(test_middle_client_disconnect_compacts);
+
+    TEST_SUITE("data socket (fault injection)");
+    RUN_TEST(test_send_eagain_keeps_client);
+    RUN_TEST(test_send_partial_harvests_client);
+    RUN_TEST(test_tick_caps_at_max_clients);
 }

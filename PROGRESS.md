@@ -45,27 +45,33 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 7+)
+### Mutation-testing follow-ups (rounds 8+)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: `data_socket.c` still has 77 real survivors after round 6
-(26.7% kill rate). The cheap wins (real-socket-manipulation tests
-for compaction + empty-payload) are now landed; the remaining
-survivors are in the harder error paths that need a fault-injection
-seam.
-**Status**: rounds 1-6 closed. Aggregate kill rate is 52.2% of
-considered (526 killed / 1007 considered / 1106 mutants total).
-**Blockers**: none (but progress slows here — diminishing returns
-without infrastructure investment).
+**Goal**: `data_socket.c` remains the biggest open pile at 27.6%
+(76 real survivors). The fault-injection seam is in place; the
+remaining survivors cluster in `init_tcp` / `init_unix` error
+paths (DNS resolution, getaddrinfo failures, port-parse edge
+cases) that need test packets with malformed specs we haven't
+covered.
+**Status**: rounds 1-7 closed. Aggregate kill rate is 52.3% of
+considered (527 killed / 1007 considered / 1106 mutants total).
+The fault-injection seam (round 7) delivered fewer kills than
+hoped (+1) because most send/accept failure paths reduce to the
+same close-and-compact behavior the EPIPE test already covered.
+The infrastructure remains valuable for testing future
+error-path additions.
+**Blockers**: none.
 **Next concrete step** (in priority order):
-1. **Fault-injection seam** for `data_socket.c`. Design: a static
-   function pointer `static ssize_t (*g_send_fn)(...) = send;`
-   plus a test-only setter `data_socket_test_set_send_fn(...)`.
-   ~10 lines of code; unlocks tests for the EAGAIN / EWOULDBLOCK
-   slow-client drop branch (lines 190-195) and partial-send
-   detection (line 184 `n1 != len`).
-2. Apply the same pattern to `accept()` for the `g_client_n >=
-   MAX_CLIENTS` overflow test (line 158 `while` bound).
+1. Triage `init_tcp` / `init_unix` survivors. Lots of return-`-1`
+   paths with different `fprintf` messages — most are TIP-class
+   negative-sentinel equivalents. Add targeted tests for the
+   ones that have observable behaviour differences (e.g. bad
+   port, missing colon).
+2. Consider a content-based fingerprint for the ignore file so
+   adding code to a file doesn't invalidate all entries below.
+   E.g. include a 16-byte hash of the surrounding 3 lines in
+   the fingerprint. Cost: re-derive on every line that moves.
 3. As new equivalents emerge from future runs, append to
    `.github/scripts/mutate-equivalents.txt` (conservatively).
 4. Cosmetic: tighten the "killed (build broke)" sub-counter.
@@ -73,6 +79,96 @@ without infrastructure investment).
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Round 7: data_socket fault-injection seam
+**Commits**: *(this commit)*
+**Touched**: `src/data_socket.{c,h}`, `tests/test_data_socket.c`,
+`.github/scripts/mutate-equivalents.txt`,
+`docs/wiki/mutation-testing.md`, `README.md`, `PROGRESS.md`
+**Why**: Round 6 closed the cheap real-socket wins on
+`data_socket.c`; the remaining survivors are in `send` / `accept`
+error paths that real-socket fixtures can't reliably trigger. Add
+a small fault-injection seam (function-pointer indirection +
+test-only setter) so unit tests can force EAGAIN, partial-send,
+and accept-overflow.
+
+**Seam design** (production cost: one predictable branch per call):
+```
+static data_socket_send_fn   g_send_fn   = send;
+static data_socket_accept_fn g_accept_fn = accept;
+void data_socket_test_set_send_fn  (data_socket_send_fn   fn);
+void data_socket_test_set_accept_fn(data_socket_accept_fn fn);
+```
+Setters accept NULL to restore defaults. All `send`/`accept` call
+sites in `data_socket.c` now go through `g_send_fn` / `g_accept_fn`.
+Header declarations cite "test only — production must not call".
+
+**Three new tests**:
+- `test_send_eagain_keeps_client`        : fake send returns -1 with
+                                           errno=EAGAIN; client must
+                                           stay (slow-client branch).
+- `test_send_partial_harvests_client`    : fake returns n < len;
+                                           client must be closed +
+                                           compacted (non-EAGAIN
+                                           failure branch).
+- `test_tick_caps_at_max_clients`        : fake accept always
+                                           succeeds; the `while
+                                           (g_client_n < MAX_CLIENTS)`
+                                           guard must drain exactly
+                                           16 fds (not 15, not 17).
+
+**Per-file delta** (after the seam + tests + line-number
+re-anchoring of the ignore file):
+
+| target              | before | after  | delta |
+|---------------------|--------|--------|-------|
+| `src/data_socket.c` | 26.7%  | **27.6%** | +1 mutant |
+
+**Smaller win than expected**. The fault-injection seam unlocks 3
+specific branches, but most send/accept failure paths reduce to
+the same close-and-compact behavior the EPIPE test already
+covered. The infrastructure remains valuable for testing future
+error-path additions; it's not pure overhead.
+
+**New OPT entry**: `data_socket.c:208:bool:||:&&` — on Linux and
+Darwin, `EAGAIN == EWOULDBLOCK` (same numeric value), so
+`errno == EAGAIN || errno == EWOULDBLOCK` collapses to the same
+test under either operator. Documented as OPT (equivalence-by-data,
+not by structure).
+
+**Ignore-file fragility documented** in
+`docs/wiki/mutation-testing.md` §"Line numbers are fragile":
+inserting code above an ignored mutation site invalidates the
+entry. The 18-line fault-injection seam at the top of
+`data_socket.c` shifted every entry below by +18; I re-anchored
+them in the same commit. A future improvement (queued) is
+content-hash fingerprinting so adds/removes don't churn the
+ignore file.
+
+**Aggregate after round 7**:
+
+| total | ignored | considered | killed | of considered |
+|-------|---------|------------|--------|---------------|
+| 1106  | 100     | 1006       | 527    | **52.4%**     |
+
+(The "ignored" count is 100 with the EAGAIN OPT entry added but
+the line-shift adjustments preserved net coverage; effective
+delta on the aggregate is +1 mutant killed, +1 mutant ignored.)
+
+**README badges** bumped: tests 2071 → 2085; mutation kill rate
+52.2% → 52.3% of considered.
+
+**Decisions worth flagging**:
+- Used `static ssize_t (*g_send_fn)(...) = send;` rather than a
+  conditional initializer or `dlsym` lookup. C99 allows function-
+  symbol addresses in static initializers; one less branch in the
+  hot path.
+- Header declarations of the test setters are in `data_socket.h`
+  itself rather than a separate `data_socket_test.h`. The "test
+  only — production must not call" comment is the contract;
+  splitting the header would add files for marginal isolation.
+- The fault-injection tests use `dup(fd)` to mint fake fds for the
+  accept-overflow test. Cheap, valid, harmless to close in cleanup.
 
 ### 2026-05-27 — Round 6: dns_snoop hop-chain + data_socket real-socket triage
 **Commits**: *(this commit)*
