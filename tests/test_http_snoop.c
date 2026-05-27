@@ -191,6 +191,49 @@ static void test_lf_only_line_endings(void) {
     ASSERT_STR("lf.example.com", host);
 }
 
+/* Kills the line-20 `hostsz < 2` boundary mutation (`<` → `<=` and
+ * `2 → 3`): hostsz=2 must be a legal call -- the buffer holds 1 char
+ * plus NUL. Existing test_hostsz_too_small uses 1 (rejected),
+ * leaving the 2-byte boundary untested. */
+static void test_host_with_hostsz_two(void) {
+    char host[2] = {0};
+    const char *req = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    ASSERT_EQ(1, http_snoop((const uint8_t *)req, (int)strlen(req),
+                             host, 2));
+    /* 1 byte of data + NUL */
+    ASSERT_EQ(1, (int)strlen(host));
+    ASSERT_EQ('e', host[0]);
+}
+
+/* Kills the line-58 prefix-length const mutation (`5 → 4`): with the
+ * length passed to ci_startswith reduced to 4, "Host*" prefixes match
+ * regardless of what byte 5 is. A `Hostname:` header would then be
+ * misread as Host:. The real Host: header following it is what should
+ * win; the Hostname: line is decoy. */
+static void test_hostname_prefix_does_not_alias_host(void) {
+    char host[64] = "";
+    const char *req =
+        "GET / HTTP/1.1\r\n"
+        "Hostname: decoy.example.com\r\n"
+        "Host: real.example.com\r\n"
+        "\r\n";
+    ASSERT_EQ(1, snoop(req, host, sizeof(host)));
+    ASSERT_STR("real.example.com", host);
+}
+
+/* Kills the line-7 `slen < plen` boundary mutation (`<` → `<=`):
+ * when the header line is exactly the prefix length ("Host:" -> 5
+ * chars exactly, then immediate value), ci_startswith must accept
+ * slen == plen rather than reject it. The existing test_get_simple
+ * etc. all carry whitespace after the colon, padding slen well above
+ * plen. */
+static void test_host_no_space_after_colon(void) {
+    char host[64];
+    const char *req = "GET / HTTP/1.1\r\nHost:nospace.example.com\r\n\r\n";
+    ASSERT_EQ(1, snoop(req, host, sizeof(host)));
+    ASSERT_STR("nospace.example.com", host);
+}
+
 /* ── Entry point ────────────────────────────────────────────── */
 
 void run_http_snoop_tests(void) {
@@ -222,4 +265,7 @@ void run_http_snoop_tests(void) {
     RUN_TEST(test_blank_line_stops_search);
     RUN_TEST(test_buf_truncation);
     RUN_TEST(test_lf_only_line_endings);
+    RUN_TEST(test_host_with_hostsz_two);
+    RUN_TEST(test_hostname_prefix_does_not_alias_host);
+    RUN_TEST(test_host_no_space_after_colon);
 }

@@ -357,6 +357,102 @@ static void test_snoop_does_not_overwrite_on_failure(void) {
     ASSERT_STR(info, "original");
 }
 
+/* Kills the line-65 `len < 12` header-size boundary (`<` -> `<=` and
+ * `12 -> 13`): a 12-byte buffer is the minimum valid DNS message
+ * (header only, all counts = 0). Must parse to a no-op success. */
+static void test_snoop_header_only_no_questions(void) {
+    dns_reset();
+    char info[64];
+    uint8_t hdr[12] = {
+        0x00,0x01, 0x81,0x80,
+        0x00,0x00,    /* QDCOUNT=0 */
+        0x00,0x00,    /* ANCOUNT=0 */
+        0x00,0x00,
+        0x00,0x00,
+    };
+    int r = dns_snoop(hdr, 12, info, sizeof(info));
+    /* Returns 1 with no qname; just confirm the length guard accepts
+     * exactly-12-byte input. */
+    ASSERT_EQ(r, 1);
+}
+
+/* Kills the line-113 `type == 1 && rdlen == 4` AND mutation:
+ * a record of type != 1 (e.g. NS) with rdlen == 4 must NOT be
+ * injected as an A record. Under the `&& -> ||` mutation, any record
+ * with rdlen==4 would be misclassified as A. */
+static void test_snoop_non_a_record_with_rdlen_4_not_injected(void) {
+    dns_reset();
+    char info[64];
+    /* Forged response: TYPE=2 (NS) but RDLEN=4 (impossible per spec,
+     * but the parser must filter by type, not rdlen). */
+    uint8_t pkt[] = {
+        0x00,0x01, 0x81,0x80, 0x00,0x01, 0x00,0x01, 0x00,0x00, 0x00,0x00,
+        0x07,'e','x','a','m','p','l','e', 0x03,'c','o','m', 0x00,
+        0x00,0x01, 0x00,0x01,
+        0xC0, 0x0C,
+        0x00,0x02,            /* TYPE = NS */
+        0x00,0x01,            /* CLASS = IN */
+        0x00,0x00,0x01,0x2C,  /* TTL */
+        0x00,0x04,            /* RDLEN = 4 */
+        0x01,0x02,0x03,0x04,  /* fake "data" */
+    };
+    int r = dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info));
+    ASSERT_EQ(r, 1);
+    /* No "→ 1.2.3.4" suffix — info should contain just the qname. */
+    ASSERT(strstr(info, "1.2.3.4") == NULL);
+    /* And the DNS cache must not have learnt example.com → 1.2.3.4.
+     * (dns_lookup returns the resolved host when RESOLVED, or the
+     * IP string itself when PENDING/FAILED, or NULL when no entry.) */
+    const char *got = dns_lookup("1.2.3.4");
+    /* Either NULL (no entry) or the IP itself (pending state from
+     * elsewhere); the resolved hostname "example.com" must not appear. */
+    ASSERT(got == NULL || strcmp(got, "example.com") != 0);
+}
+
+/* Kills the line-113 AND from the rdlen side: a record of type==1
+ * but rdlen != 4 (malformed A record) must not be injected. */
+static void test_snoop_a_record_with_wrong_rdlen_not_injected(void) {
+    dns_reset();
+    char info[64];
+    uint8_t pkt[] = {
+        0x00,0x01, 0x81,0x80, 0x00,0x01, 0x00,0x01, 0x00,0x00, 0x00,0x00,
+        0x07,'e','x','a','m','p','l','e', 0x03,'c','o','m', 0x00,
+        0x00,0x01, 0x00,0x01,
+        0xC0, 0x0C,
+        0x00,0x01,            /* TYPE = A */
+        0x00,0x01,
+        0x00,0x00,0x01,0x2C,
+        0x00,0x05,            /* RDLEN = 5 (wrong for A) */
+        0x01,0x02,0x03,0x04,0x05,
+    };
+    int r = dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info));
+    ASSERT_EQ(r, 1);
+    ASSERT(strstr(info, "1.2.3.4") == NULL);
+}
+
+/* Kills the line-125 `type == 28 && rdlen == 16` AND mutation:
+ * a record with rdlen==16 but type != 28 must not be injected
+ * as AAAA. */
+static void test_snoop_non_aaaa_record_with_rdlen_16_not_injected(void) {
+    dns_reset();
+    char info[64];
+    uint8_t pkt[] = {
+        0x00,0x01, 0x81,0x80, 0x00,0x01, 0x00,0x01, 0x00,0x00, 0x00,0x00,
+        0x07,'e','x','a','m','p','l','e', 0x03,'c','o','m', 0x00,
+        0x00,0x1C, 0x00,0x01,
+        0xC0, 0x0C,
+        0x00,0x29,            /* TYPE = OPT (41) -- not AAAA */
+        0x00,0x01,
+        0x00,0x00,0x01,0x2C,
+        0x00,0x10,            /* RDLEN = 16 */
+        0x20,0x01,0x0d,0xb8, 0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x01,
+    };
+    int r = dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info));
+    ASSERT_EQ(r, 1);
+    ASSERT(strstr(info, "2001:db8") == NULL);
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_dns_snoop_tests(void) {
@@ -388,4 +484,10 @@ void run_dns_snoop_tests(void) {
     RUN_TEST(test_snoop_truncated_mid_answer);
     RUN_TEST(test_snoop_compression_loop_guard);
     RUN_TEST(test_snoop_does_not_overwrite_on_failure);
+
+    TEST_SUITE("dns snoop boundary");
+    RUN_TEST(test_snoop_header_only_no_questions);
+    RUN_TEST(test_snoop_non_a_record_with_rdlen_4_not_injected);
+    RUN_TEST(test_snoop_a_record_with_wrong_rdlen_not_injected);
+    RUN_TEST(test_snoop_non_aaaa_record_with_rdlen_16_not_injected);
 }

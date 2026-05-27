@@ -45,48 +45,116 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (round 3 — triage)
+### Mutation-testing follow-ups (rounds 4+)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: Triage the round-3 baselines (`dns_snoop.c` 44.8%,
-`sni_snoop.c` 47.9%, `http_snoop.c` 61.6%) — recorded in "Recently
-landed" but not yet acted on; the user redirected the session to
-the new OSI view mid-round.
-**Status**: baselines captured, no test additions yet. Cumulative
-picture across all files mutated so far:
+**Goal**: Mutate the export-path files and add tooling that
+suppresses the equivalence-class noise floor so kill-rate trends
+become more informative.
+**Status**: rounds 1-3 closed (see "Recently landed"). Cumulative
+picture:
 | file                 | baseline | after triage | net mutants killed |
 |----------------------|----------|--------------|--------------------|
 | `src/alerts.c`       | 21.6%    | **43.8%**    | +73                |
 | `src/threat_intel.c` | 81.8%    | 81.8% (all survivors equivalent) | 0 |
 | `src/dga.c`          | 36.4%    | **50.0%**    | +12                |
 | `src/beacon_detect.c`| 55.6%    | **72.2%**    | +9                 |
-| `src/dns_snoop.c`    | 44.8%    | (untouched)  | —                  |
-| `src/sni_snoop.c`    | 47.9%    | (untouched)  | —                  |
-| `src/http_snoop.c`   | 61.6%    | (untouched)  | —                  |
+| `src/dns_snoop.c`    | 44.8%    | **47.4%**    | +5                 |
+| `src/sni_snoop.c`    | 47.9%    | **51.4%**    | +5                 |
+| `src/http_snoop.c`   | 61.6%    | **65.1%**    | +3                 |
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Run `make mutate MUTATE_FLAGS="--files src/dns_snoop.c --keep-sandbox"`
-   and triage survivors. Expect strong signal on:
-   compression-pointer hop count (the `> 20` in `read_name`),
-   `qdcount`/`ancount` boundary checks (`> 32`, `> 64`),
-   the `noff + 10 > len` / `noff + 4 > len` length guards.
-2. Same for `sni_snoop.c` — extension-walk loop bound (`off + 4 <= ext_end`),
-   `name_len <= 0` guard, `ext_data_len < 5` boundary.
-3. Same for `http_snoop.c` — `len < 16` guard, the method-prefix
-   loop, the `Host:` colon-strip path.
-4. Mutate the export-path files: `src/jsonl.c`, `src/data_socket.c`,
-   `src/pcap_write.c`.
-5. Add an `--ignore-file` flag to `mutate.py` so known
-   equivalence-class mutants (function-parameter array sizes, loop
-   bounds reading zero-init tail, stack buffer sizing literals)
-   drop out of the survivor list. The kill-rate trend becomes
-   informative when the noise floor is suppressed.
-6. Cosmetic: tighten the "killed (build broke)" sub-counter to
+1. Mutate the export-path files: `src/jsonl.c`, `src/data_socket.c`,
+   `src/pcap_write.c`. Direct downstream-tool impact.
+2. Add an `--ignore-file` flag to `mutate.py` so known
+   equivalence-class mutants drop out of the survivor list. The
+   round-3 protocol-parser triage shrunk by less than rounds 1-2
+   because the remaining survivors are nearly all equivalence-class
+   (function-parameter array sizes, loop bounds reading zero-init
+   tail, stack buffer sizing literals, lowercase-prefix
+   case-folding mutations that have no observable effect).
+3. Construct a compression-pointer hop-chain test for dns_snoop —
+   a chain of >20 distinct pointers should trigger the
+   `if (++hops > 20)` guard. Currently only the simple two-pointer
+   loop is tested. Kills line 37 mutations.
+4. Cosmetic: tighten the "killed (build broke)" sub-counter to
    recognise actual compile failures vs. test-binary segfaults.
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Mutation round 3 triage: dns_snoop + sni_snoop + http_snoop
+**Commits**: *(this commit)*
+**Touched**: `tests/test_http_snoop.c`, `tests/test_sni_snoop.c`,
+`tests/test_dns_snoop.c`, `PROGRESS.md`
+**Why**: Closed real gaps in the round-3 protocol-parser
+baselines. Ten new tests across three files. Gains are smaller
+than rounds 1-2 because the existing RFC-byte test discipline
+already covered the happy paths; remaining survivors are
+overwhelmingly equivalence-class.
+
+**Per-file delta**:
+
+| target            | before | after  | new tests | mutants killed |
+|-------------------|--------|--------|-----------|----------------|
+| `src/http_snoop.c`| 61.6%  | **65.1%** | 3         | +3             |
+| `src/sni_snoop.c` | 47.9%  | **51.4%** | 3         | +5             |
+| `src/dns_snoop.c` | 44.8%  | **47.4%** | 4         | +5             |
+
+**New tests (10 total)**:
+
+- `test_http_snoop`:
+  - `host_with_hostsz_two`              : `hostsz < 2` boundary
+  - `hostname_prefix_does_not_alias_host`: prefix-length 5 vs 4 —
+                                          `Hostname:` decoy header
+                                          must not match `Host:`
+  - `host_no_space_after_colon`         : `ci_startswith`
+                                          `slen < plen` boundary
+
+- `test_sni_snoop`:
+  - `sni_hostsz_zero_rejected`          : `hostsz <= 0` boundary
+  - `sni_non_host_name_type_rejected`   : SNI extension with
+                                          name_type ≠ 0x00 (rare,
+                                          but reserved by the spec)
+  - `sni_empty_name_rejected`           : SNI `name_len == 0`
+                                          guard. Both come with
+                                          new hand-crafted packets
+                                          following the RFC 5246
+                                          layout.
+
+- `test_dns_snoop`:
+  - `header_only_no_questions`          : `len < 12` boundary —
+                                          12-byte header-only
+                                          message must parse
+  - `non_a_record_with_rdlen_4_not_injected`:
+                                          NS record (TYPE=2) with
+                                          RDLEN=4 must not be
+                                          misread as A. Kills the
+                                          `&& -> ||` mutation on
+                                          line 113.
+  - `a_record_with_wrong_rdlen_not_injected`:
+                                          TYPE=A but RDLEN=5
+                                          (malformed) must not
+                                          inject.
+  - `non_aaaa_record_with_rdlen_16_not_injected`:
+                                          symmetric for line 125
+                                          AAAA branch.
+
+**Suite totals**: 2031 → 2050 assertions (+19); 0 failed. Build
+warning-clean.
+
+**Decisions worth flagging**:
+- Did not chase the compression-pointer hop-count mutations
+  (line 37 `if (++hops > 20)`). Killing them requires a hand-
+  crafted DNS message with >20 distinct compression pointer
+  hops — doable but verbose; queued in the In-progress entry.
+- For `dns_lookup`, the original assertion `== NULL` was too
+  strict. dns_lookup returns the IP itself when the entry is
+  in PENDING state (queued by the background resolver), not
+  NULL — so my assertion would fire on prior tests' residue.
+  Loosened to "must not return the resolved hostname"; still
+  kills the intended mutations.
 
 ### 2026-05-27 — OSI / TCP-IP stack view (`[l]`)
 **Commits**: *(this commit)*

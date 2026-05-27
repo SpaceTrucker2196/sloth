@@ -320,6 +320,85 @@ static void test_sni_tls13_record_version(void) {
     ASSERT_EQ(r, 1);
 }
 
+/* Kills the line-40 `hostsz <= 0` boundary mutation (`<=` → `<`):
+ * hostsz=0 must be rejected -- there's nowhere to write even a NUL. */
+static void test_sni_hostsz_zero_rejected(void) {
+    char host[64] = "X";
+    int r = sni_snoop(pkt_sni_example, (int)sizeof(pkt_sni_example),
+                      host, 0);
+    ASSERT_EQ(r, 0);
+}
+
+/* SNI extension where the name_type byte is not 0x00 (host_name) must
+ * be rejected at line 108 (`ch[off + 2] != 0x00`). The IANA-registered
+ * value is 0; any other value indicates a different name type sloth
+ * doesn't extract from. Kills the `!=` -> `==` and surrounding
+ * mutations on the name_type guard. */
+static const uint8_t pkt_sni_wrong_name_type[] = {
+    /* Mirror of pkt_sni_example but name_type = 0x01 (not host_name). */
+    0x16, 0x03, 0x01, 0x00, 0x43,
+    0x01, 0x00, 0x00, 0x3F,
+    0x03, 0x03,
+    0x01,0x02,0x03,0x04, 0x05,0x06,0x07,0x08,
+    0x09,0x0a,0x0b,0x0c, 0x0d,0x0e,0x0f,0x10,
+    0x11,0x12,0x13,0x14, 0x15,0x16,0x17,0x18,
+    0x19,0x1a,0x1b,0x1c, 0x1d,0x1e,0x1f,0x20,
+    0x00,
+    0x00, 0x02, 0x00, 0x2f,
+    0x01, 0x00,
+    0x00, 0x14,
+    0x00, 0x00,             /* type: server_name */
+    0x00, 0x10,
+    0x00, 0x0e,
+    0x01,                   /* name type: NOT host_name (= 0x01) */
+    0x00, 0x0b,
+    'e','x','a','m','p','l','e','.','c','o','m',
+};
+
+static void test_sni_non_host_name_type_rejected(void) {
+    char host[64] = "";
+    int r = sni_snoop(pkt_sni_wrong_name_type,
+                      (int)sizeof(pkt_sni_wrong_name_type),
+                      host, sizeof(host));
+    ASSERT_EQ(r, 0);
+    /* host buffer must not be written with stale extension data */
+    ASSERT_EQ((int)strlen(host), 0);
+}
+
+/* SNI extension with name_len == 0 must be rejected (line 110:
+ * `name_len <= 0`). An empty SNI name is meaningless and could be
+ * abused by a fingerprint-evading client. Kills the `<= 0` -> `< 0`
+ * and the `5 -> 4` boundary mutations on the SNI header guard. */
+static const uint8_t pkt_sni_empty_name[] = {
+    /* SNI ext has list of just (type, name_len=0) — 5 bytes ext data. */
+    /* ext_total = 4 + 5 = 9
+     * CH = 41 + 2 + 9 = 52, HS = 52 = 0x34, rec = 4 + 52 = 56 = 0x38 */
+    0x16, 0x03, 0x01, 0x00, 0x38,
+    0x01, 0x00, 0x00, 0x34,
+    0x03, 0x03,
+    0x01,0x02,0x03,0x04, 0x05,0x06,0x07,0x08,
+    0x09,0x0a,0x0b,0x0c, 0x0d,0x0e,0x0f,0x10,
+    0x11,0x12,0x13,0x14, 0x15,0x16,0x17,0x18,
+    0x19,0x1a,0x1b,0x1c, 0x1d,0x1e,0x1f,0x20,
+    0x00,
+    0x00, 0x02, 0x00, 0x2f,
+    0x01, 0x00,
+    0x00, 0x09,             /* extensions len = 9 */
+    0x00, 0x00,             /* SNI type */
+    0x00, 0x05,             /* SNI data len = 5 */
+    0x00, 0x03,             /* server_name list len = 3 */
+    0x00,                   /* name type: host_name */
+    0x00, 0x00,             /* name_len = 0 */
+};
+
+static void test_sni_empty_name_rejected(void) {
+    char host[64] = "";
+    int r = sni_snoop(pkt_sni_empty_name,
+                      (int)sizeof(pkt_sni_empty_name),
+                      host, sizeof(host));
+    ASSERT_EQ(r, 0);
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_sni_snoop_tests(void) {
@@ -346,4 +425,9 @@ void run_sni_snoop_tests(void) {
     TEST_SUITE("sni snoop integration");
     RUN_TEST(test_sni_injects_into_dns_cache);
     RUN_TEST(test_sni_tls13_record_version);
+
+    TEST_SUITE("sni snoop boundary");
+    RUN_TEST(test_sni_hostsz_zero_rejected);
+    RUN_TEST(test_sni_non_host_name_type_rejected);
+    RUN_TEST(test_sni_empty_name_rejected);
 }
