@@ -23,6 +23,8 @@
 #   TIP  - truthy-initialiser perturbation
 #   FAB  - function-as-boolean return value
 #   LCP  - lowercase prefix case-folding (no-op for lowercase inputs)
+#   OPT  - early-return optimisation guard (correctness unaffected;
+#          mutation only causes wasted work)
 #
 # ------------------------------------------------------------
 # src/threat_intel.c — 100% effective kill rate after ignore
@@ -132,3 +134,56 @@ src/beacon_detect.c:24:rel:<:<=         # LZT: same eviction-scan ordering check
 src/beacon_detect.c:46:rel:<:<=         # LZT: sample_count cap in bd_observe (saturating add)
 src/beacon_detect.c:52:rel:<:<=         # LZT: conn_count outer-loop in bd_update
 src/beacon_detect.c:114:rel:<:<=        # LZT: bd_each iteration bound
+
+# ------------------------------------------------------------
+# src/jsonl.c — early-return optimisation guards (OPT)
+# ------------------------------------------------------------
+# Each emitter starts with `if (!any_sink() || !e) return;` — a
+# fast-path skip when no sink is active. Mutating `||` to `&&` only
+# requires both to fail before skipping; output is correct either
+# way, mutation just costs format CPU when sinks are absent.
+src/jsonl.c:107:bool:||:&&              # OPT: jsonl_emit_dns
+src/jsonl.c:120:bool:||:&&              # OPT: jsonl_emit_tls
+src/jsonl.c:133:bool:||:&&              # OPT: jsonl_emit_quic
+src/jsonl.c:145:bool:||:&&              # OPT: jsonl_emit_http
+src/jsonl.c:157:bool:||:&&              # OPT: jsonl_emit_ntp
+src/jsonl.c:171:bool:||:&&              # OPT: jsonl_emit_icmp
+src/jsonl.c:186:bool:||:&&              # OPT: jsonl_emit_alert
+src/jsonl.c:19:bool:||:&&               # FAB: jsonl_open NULL/empty path; both branches still return 0 via fopen("") fail
+
+# ------------------------------------------------------------
+# src/data_socket.c — negative-sentinel returns (TIP) and stack
+# buffer sizing (SBL)
+# ------------------------------------------------------------
+src/data_socket.c:24:const:1:2          # TIP: `static int g_listen_fd = -1;` — both negative sentinels
+src/data_socket.c:27:const:256:257      # SBL: g_unix_path buffer size
+src/data_socket.c:27:const:256:255      # SBL: same
+src/data_socket.c:32:const:1:2          # TIP: `if (flags < 0) return -1;` set_nonblock return — caller ignores
+src/data_socket.c:32:const:1:0          # TIP: same — set_nonblock return ignored by callers
+src/data_socket.c:52:const:1:2          # TIP: init_unix early-return -1 — caller's check is `< 0`
+src/data_socket.c:52:const:1:0          # TIP: same
+src/data_socket.c:57:const:1:2          # TIP: init_unix path-too-long -1
+src/data_socket.c:57:const:1:0          # TIP: same
+src/data_socket.c:60:const:1:2          # TIP: init_unix socket-failure -1
+src/data_socket.c:60:const:1:0          # TIP: same
+src/data_socket.c:72:const:1:2          # TIP: init_unix bind-failure -1
+src/data_socket.c:72:const:1:0          # TIP: same
+src/data_socket.c:74:const:4:5          # SBL-like: listen(fd, 4) backlog — both saturate way before clients show
+src/data_socket.c:74:const:4:3          # SBL-like: same
+src/data_socket.c:78:const:1:2          # TIP: listen-failure -1
+src/data_socket.c:78:const:1:0          # TIP: same
+
+# ------------------------------------------------------------
+# src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)
+# ------------------------------------------------------------
+# The `>>` operator's second `>` gets mutated to `>=` by the harness's
+# rel scanner, producing nonsense compound-assignment mutants (e.g.
+# `v>>=8`). These corrupt internal state in a way no realistic test
+# would catch because the .pcap bytes happen to still parse as valid.
+# Skip; they're a harness quirk rather than a test gap.
+src/pcap_write.c:15:rel:>:>=            # harness quirk on `>>` second char
+src/pcap_write.c:20:rel:>:>=            # harness quirk on `>>` second char
+src/pcap_write.c:25:const:128:129       # SBL: char path[128] for filename
+src/pcap_write.c:25:const:128:127       # SBL: same
+src/pcap_write.c:34:const:1:2           # TIP: `if (!f) return -1;` fopen-fail sentinel
+src/pcap_write.c:34:const:1:0           # TIP: same

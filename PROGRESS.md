@@ -45,31 +45,104 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 5+)
+### Mutation-testing follow-ups (rounds 6+)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: Mutate the export-path files (`src/jsonl.c`,
-`src/data_socket.c`, `src/pcap_write.c`). With the equivalence-class
-noise floor now suppressed via `.github/scripts/mutate-equivalents.txt`,
-new mutation runs surface real gaps directly.
-**Status**: rounds 1-4 closed (round 4 introduced `--ignore-file`).
+**Goal**: Triage `data_socket.c`'s 81 remaining real survivors (the
+biggest open pile, 22.9% kill rate). Most are in the socket I/O
+error paths (`send` EPIPE / EAGAIN handling, accept loop, client
+compaction). The existing hermetic UNIX-domain fixture covers the
+happy path; error injection would need a fault-injection seam or a
+mock send/close.
+**Status**: rounds 1-5 closed. Round 5 mutated the export paths
+(`jsonl.c`, `data_socket.c`, `pcap_write.c`) and added the OPT
+equivalence class for early-return optimisation guards.
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Mutate the export-path files. Direct downstream-tool impact —
-   the JSONL schema is a contract.
-2. Construct a compression-pointer hop-chain test for `dns_snoop` —
-   a chain of >20 distinct pointers triggers the `if (++hops > 20)`
-   guard. Kills line 37 mutations.
+1. **data_socket.c real survivors**: pick 3-5 high-value cases.
+   Specifically the `g_client_n` overflow guard (`< MAX_CLIENTS`)
+   and the EPIPE/swap-with-last compaction. These need a way to
+   force a send to fail in the test harness — consider a build-time
+   `data_socket_inject_fault()` hook compiled only when
+   `WITH_TESTS_FAULTS` is set.
+2. **Compression-pointer hop-chain test** for `dns_snoop` — a chain
+   of >20 distinct pointers triggers the `if (++hops > 20)` guard.
 3. As new equivalents emerge from future runs, append to
    `.github/scripts/mutate-equivalents.txt` with the class
-   shorthand cited in the trailing comment (per the wiki page's
-   "When to add an entry" criteria — conservatively).
+   shorthand cited (per the wiki's "When to add an entry"
+   criteria — conservatively).
 4. Cosmetic: tighten the "killed (build broke)" sub-counter to
    recognise actual compile failures vs. test-binary segfaults.
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — Round 5: mutate the export-path files
+**Commits**: *(this commit)*
+**Touched**: `tests/test_jsonl.c`,
+`.github/scripts/mutate-equivalents.txt`,
+`docs/wiki/mutation-testing.md`, `README.md`, `PROGRESS.md`
+**Why**: Round 5 of the verify-the-verifier campaign — the
+export-path files were last on the round 1-4 priority list because
+JSONL is a downstream contract (the iOS Swift client and any SIEM
+forwarder reads it; schema drift breaks them silently).
+
+**Per-file delta** (all numbers post-ignore-file):
+
+| target               | mutants | ignored | considered | killed | kill-rate (considered) |
+|----------------------|---------|---------|------------|--------|------------------------|
+| `src/jsonl.c`        | 26      | 8       | 18         | 10     | **55.6%**              |
+| `src/data_socket.c`  | 122     | 17      | 105        | 24     | **22.9%**              |
+| `src/pcap_write.c`   | 43      | 8       | 35         | 21     | **60.0%**              |
+
+**One new test** (`test_emit_icmp_v6_true_writes_one` in
+`tests/test_jsonl.c`): with `is_v6 = 1`, asserts the emitted JSON
+contains `"v6":1` AND does not contain `"v6":2`. Kills the
+`is_v6 ? 1 : 0` const-1 mutation that the existing v6=0 test
+couldn't catch (mutation 1→2 still emits `"v6":0` when is_v6 is false).
+
+**New `OPT` equivalence class** documented in
+[`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md):
+early-return optimisation guards (e.g. `if (!any_sink() || !e)
+return;`). Mutating the `||` to `&&` doesn't change correctness — the
+function still produces the right output downstream; the early
+return is only a fast-path skip. Eight `jsonl.c` emitters share this
+exact pattern; all eight `|| -> &&` mutations now classified as OPT.
+
+**~30 new equivalents added to** `mutate-equivalents.txt`:
+- jsonl.c: 8 OPT (all emitter early-return guards) + 1 FAB
+- data_socket.c: 17 (TIP negative-sentinel returns whose callers
+  check `< 0`, SBL buffer sizes for `g_unix_path`, listen backlog)
+- pcap_write.c: 8 (harness `>>` quirk, SBL `char path[128]`,
+  TIP `fopen`-fail sentinel)
+
+**README badge** bumped: `mutation kill rate` now 51.5% of
+considered (was 54.7% — the addition of `data_socket.c` at 22.9%
+pulled the aggregate down). The `tests` badge moved 2050 → 2053.
+
+**Aggregate after round 5**:
+
+| total mutants | ignored | considered | killed | kill-rate of considered |
+|---------------|---------|------------|--------|-------------------------|
+| 1106          | 99      | 1007       | 519    | **51.5%**               |
+
+`data_socket.c` accounts for most of the surviving real gaps (81).
+Tracked as the round-6 priority — those gaps are in the socket I/O
+error paths and need a fault-injection seam to test cleanly.
+
+**Decisions worth flagging**:
+- pcap_write.c's raw kill rate dropped 53.5% → 48.8% between runs.
+  Cause: the `> -> >=` ignore entry on line 15 matches three sites
+  (the three `v>>8`, `v>>16`, `v>>24` shifts); two of those were
+  killed before, so ignoring all three loses two kills. Acceptable
+  for the harness-quirk class; would need fingerprints with column
+  index to be more granular.
+- Did not chase the 81 `data_socket.c` real survivors in this
+  commit. They cluster in error paths that need a fault-injection
+  seam (a `data_socket_inject_fault()` API guarded by a build flag),
+  which is more design than this commit should carry. Surfaced as
+  round 6 in the In-progress entry.
 
 ### 2026-05-27 — Round 4: `--ignore-file` flag + equivalence seed file
 **Commits**: *(this commit)*

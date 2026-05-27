@@ -141,6 +141,25 @@ static void test_emit_icmp_writes_seq(void) {
     ASSERT(contains(body, "\"v6\":0"));
 }
 
+/* Kills the `is_v6 ? 1 : 0` const-1 mutation in jsonl_emit_icmp:
+ * with is_v6=1 set, the JSON must emit `"v6":1`, not `"v6":2`. */
+static void test_emit_icmp_v6_true_writes_one(void) {
+    open_fresh();
+    icmp_log_entry_t e; memset(&e, 0, sizeof(e));
+    e.ts = 1700000003;
+    e.type = 129; e.code = 0; e.seq = 7; e.is_v6 = 1;
+    snprintf(e.src, sizeof(e.src), "2001:db8::1");
+    snprintf(e.dst, sizeof(e.dst), "2001:db8::2");
+    snprintf(e.desc, sizeof(e.desc), "Echo Reply v6");
+    jsonl_emit_icmp(&e);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(contains(body, "\"v6\":1"));
+    /* Mutation 1->2 would render "v6":2; explicitly assert that
+     * pattern does NOT appear, so the test fails on the mutation. */
+    ASSERT(!contains(body, "\"v6\":2"));
+}
+
 static void test_emit_alert_writes_count(void) {
     open_fresh();
     alert_t a; memset(&a, 0, sizeof(a));
@@ -216,6 +235,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_tls_writes_ja3);
     RUN_TEST(test_emit_ntp_writes_numeric_fields);
     RUN_TEST(test_emit_icmp_writes_seq);
+    RUN_TEST(test_emit_icmp_v6_true_writes_one);
     RUN_TEST(test_emit_alert_writes_count);
 
     TEST_SUITE("jsonl escaping");

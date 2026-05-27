@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="Makefile"><img src="https://img.shields.io/badge/tests-2050%20passing-brightgreen" alt="2050 test assertions passing"></a>
-  <a href="docs/wiki/mutation-testing.md"><img src="https://img.shields.io/badge/mutation%20kill%20rate-54.7%25%20of%20considered-yellow" alt="Mutation testing: 54.7% of considered mutants killed across 7 files"></a>
+  <a href="Makefile"><img src="https://img.shields.io/badge/tests-2053%20passing-brightgreen" alt="2053 test assertions passing"></a>
+  <a href="docs/wiki/mutation-testing.md"><img src="https://img.shields.io/badge/mutation%20kill%20rate-51.5%25%20of%20considered-yellow" alt="Mutation testing: 51.5% of considered mutants killed across 10 files"></a>
   <a href=".github/scripts/mutate.py"><img src="https://img.shields.io/badge/make%20mutate-active-blue" alt="make mutate harness available in-tree"></a>
 </p>
 

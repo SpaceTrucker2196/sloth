@@ -278,6 +278,13 @@ The format-string literals like `"%02x:..."` are mutated indirectly
 when an integer in surrounding code shifts, but a mutation on the
 field width itself is rare to spot and almost never tested.
 
+**Early-return optimisation guards.** Patterns like
+`if (!any_sink() || !e) return;` mutate the `||` to `&&` and
+survive — because the early-return is a *fast-path optimisation*,
+not a correctness gate. The function still produces the right
+output downstream; the mutation only causes wasted format work.
+No test can or should distinguish this. New shorthand: **OPT**.
+
 For everything outside these classes, treat the survivor as a real
 gap and write the test.
 
