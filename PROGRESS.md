@@ -45,40 +45,98 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (round 3)
+### Mutation-testing follow-ups (round 3 — triage)
 **Owner**: next agent
 **Started**: 2026-05-27
-**Goal**: Continue widening the mutation coverage. The four
-highest-value alert/security files now have a recorded baseline +
-one round of triage (see "Recently landed"). Next-tier files have
-not been mutated.
-**Status**: rounds 1-2 closed. Cumulative kill-rate picture across
-the files mutated so far:
+**Goal**: Triage the round-3 baselines (`dns_snoop.c` 44.8%,
+`sni_snoop.c` 47.9%, `http_snoop.c` 61.6%) — recorded in "Recently
+landed" but not yet acted on; the user redirected the session to
+the new OSI view mid-round.
+**Status**: baselines captured, no test additions yet. Cumulative
+picture across all files mutated so far:
 | file                 | baseline | after triage | net mutants killed |
 |----------------------|----------|--------------|--------------------|
 | `src/alerts.c`       | 21.6%    | **43.8%**    | +73                |
-| `src/threat_intel.c` | 81.8%    | 81.8% (all 4 survivors equivalent) | 0 |
+| `src/threat_intel.c` | 81.8%    | 81.8% (all survivors equivalent) | 0 |
 | `src/dga.c`          | 36.4%    | **50.0%**    | +12                |
 | `src/beacon_detect.c`| 55.6%    | **72.2%**    | +9                 |
+| `src/dns_snoop.c`    | 44.8%    | (untouched)  | —                  |
+| `src/sni_snoop.c`    | 47.9%    | (untouched)  | —                  |
+| `src/http_snoop.c`   | 61.6%    | (untouched)  | —                  |
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Mutate `src/dns_snoop.c`, `src/sni_snoop.c`, `src/http_snoop.c` —
-   protocol parsers built from RFC bytes; existing test discipline
-   should produce a high baseline.
-2. Mutate `src/jsonl.c`, `src/data_socket.c`, `src/pcap_write.c` —
-   export-path correctness has direct downstream-tool impact.
-3. Add an `--ignore-file` flag to `mutate.py` so known
+1. Run `make mutate MUTATE_FLAGS="--files src/dns_snoop.c --keep-sandbox"`
+   and triage survivors. Expect strong signal on:
+   compression-pointer hop count (the `> 20` in `read_name`),
+   `qdcount`/`ancount` boundary checks (`> 32`, `> 64`),
+   the `noff + 10 > len` / `noff + 4 > len` length guards.
+2. Same for `sni_snoop.c` — extension-walk loop bound (`off + 4 <= ext_end`),
+   `name_len <= 0` guard, `ext_data_len < 5` boundary.
+3. Same for `http_snoop.c` — `len < 16` guard, the method-prefix
+   loop, the `Host:` colon-strip path.
+4. Mutate the export-path files: `src/jsonl.c`, `src/data_socket.c`,
+   `src/pcap_write.c`.
+5. Add an `--ignore-file` flag to `mutate.py` so known
    equivalence-class mutants (function-parameter array sizes, loop
-   bounds reading zero-init tail) drop out of the survivor list. The
-   kill-rate trend becomes informative when the noise floor is
-   suppressed.
-4. Cosmetic: tighten the "killed (build broke)" sub-counter to
-   recognise actual compile failures vs. test-binary segfaults (both
-   currently produce stderr containing "error" + "make").
+   bounds reading zero-init tail, stack buffer sizing literals)
+   drop out of the survivor list. The kill-rate trend becomes
+   informative when the noise floor is suppressed.
+6. Cosmetic: tighten the "killed (build broke)" sub-counter to
+   recognise actual compile failures vs. test-binary segfaults.
 
 ---
 
 ## Recently landed
+
+### 2026-05-27 — OSI / TCP-IP stack view (`[l]`)
+**Commits**: *(this commit)*
+**Touched**: `src/views/osi.{c,h}` (new), `include/sloth.h` (VIEW_OSI
++ VIEW_COUNT bump 29→30), `src/tui.c`, `src/main.c`,
+`src/views/help.c`, `Makefile`, `tests/test_osi.c` (new),
+`tests/test_state.c`, `tests/test_arp.c`, `tests/main_test.c`,
+`docs/views/osi.md` (new), `docs/views/README.md`
+**Why**: User request — a synthesis view that maps everything sloth
+sees onto the seven OSI layers, one row per layer, drawn as a grid
+with ANSI box-drawing chars. Pure derivation from `sloth_state_t`:
+- L7  DNS / HTTP / TLS / QUIC / mDNS / NBNS / NTP log counts
+- L6  TLS-version histogram + distinct JA3 fingerprints (the legacy
+      bucket lights up red on >0 to echo the WEAK_TLS alert)
+- L5  TLS sessions / QUIC / EAPOL counts
+- L4  TCP split by state (E/L/?), UDP, ICMP
+- L3  distinct remote hosts (IPv4 / IPv6) + ARP mappings
+- L2  ifaces, APs, STAs, devices, beacons
+- L1  probe iface name (if monitor mode) or primary iface
+Layout uses horizontal bracket rules (top/bottom) and an internal
+`│` separator between the label and data columns. Side borders
+intentionally dropped — content width varies per layer, and closing
+them cleanly would require per-cell column tracking that added
+nothing to readability. Three tests in `tests/test_osi.c`: empty
+state, key noop, populated-state render.
+**Follow-ups**: TLS-version histogram in the test exercises a
+TLS 1.0 entry (legacy>0 path) but not the alert-palette colour
+specifically. Out of scope for unit tests (null TUI swallows
+attrs); covered when running the binary.
+
+### 2026-05-27 — Mutation round 3 baselines (protocol parsers)
+**Commits**: *(this commit, alongside OSI view)*
+**Touched**: `PROGRESS.md`
+**Why**: Recorded baseline kill-rates for the three protocol
+parsers named as round-3 priority. No test additions in this
+round — the user redirected mid-triage to the OSI feature, so
+round-3 closure is deferred. Numbers stand as the starting
+waterline for whoever picks this up.
+
+| target            | mutants | killed | survived | kill-rate |
+|-------------------|---------|--------|----------|-----------|
+| `src/dns_snoop.c` | 194     | 87     | 107      | 44.8%     |
+| `src/sni_snoop.c` | 142     | 68     | 74       | 47.9%     |
+| `src/http_snoop.c`| 86      | 53     | 33       | **61.6%** |
+
+`http_snoop.c` already at 61.6% — RFC-byte test discipline pays off.
+The DNS/SNI parsers will likely have a chunky equivalence-class tail
+(loop bounds reading zero-init, buffer-size literals on stack
+buffers); real test gaps probably concentrate on extension-walk and
+compression-pointer edge cases.
 
 ### 2026-05-27 — Mutation round 2: threat_intel + dga + beacon_detect
 **Commits**: *(this commit)*

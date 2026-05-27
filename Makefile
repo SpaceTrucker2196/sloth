@@ -80,7 +80,8 @@ SRCS = src/main.c          \
        src/views/dashboard.c            \
        src/views/dashboard_primitives.c \
        src/views/dashboard_bands.c      \
-       src/views/dashboard_grid.c
+       src/views/dashboard_grid.c       \
+       src/views/osi.c
 
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
@@ -302,7 +303,9 @@ TEST_SRCS = tests/main_test.c          \
             src/views/dashboard_primitives.c  \
             src/views/dashboard_bands.c       \
             src/views/dashboard_grid.c        \
-            tests/test_dashboard.c
+            tests/test_dashboard.c            \
+            src/views/osi.c                   \
+            tests/test_osi.c
 
 TEST_BIN = sloth_test
 

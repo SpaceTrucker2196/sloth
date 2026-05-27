@@ -64,6 +64,7 @@ void run_assoc_track_tests(void);
 void run_channel_tests(void);
 void run_dga_tests(void);
 void run_data_socket_tests(void);
+void run_osi_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -127,6 +128,7 @@ int main(void) {
     run_channel_tests();
     run_dga_tests();
     run_data_socket_tests();
+    run_osi_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

@@ -35,6 +35,7 @@
 #include "views/seqnum.h"
 #include "views/assoc.h"
 #include "views/channel.h"
+#include "views/osi.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "seqnum_track.h"
@@ -203,6 +204,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
     case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
     case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
+    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -251,6 +253,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_SEQNUM:  view_seqnum_key(s, key);        break;
     case VIEW_ASSOC:   view_assoc_key(s, key);         break;
     case VIEW_CHANNEL: view_channel_key(s, key);       break;
+    case VIEW_OSI:     view_osi_key(s, key);           break;
     default: break;
     }
 }

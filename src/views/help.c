@@ -46,7 +46,7 @@ void view_help_draw(const sloth_state_t *s) {
     key_row("4", "Packets",      "a", "Deauth",   "i", "ICMP");
     key_row("5", "Processes",    "h", "HTTP",     "v", "Alerts");
     key_row("6", "Stats",        "t", "TLS",      "g", "Devices");
-    key_row("7", "Probe",        "o", "Dashboard", "",  "");
+    key_row("7", "Probe",        "o", "Dashboard", "l", "OSI stack");
     key_row("8", "ARP",          "",  "",         "",  "");
     key_row("9", "mDNS",         "",  "",         "",  "");
     key_row("0", "NBNS",         "",  "",         "",  "");

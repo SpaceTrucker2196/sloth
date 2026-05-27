@@ -49,6 +49,7 @@ typedef enum {
     VIEW_SEQNUM  = 26,   /* per-MAC seqnum + cross-MAC correlation */
     VIEW_ASSOC   = 27,   /* STA <-> AP association tracker */
     VIEW_CHANNEL = 28,   /* per-channel activity histogram */
+    VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
     VIEW_COUNT
 } view_t;
 
