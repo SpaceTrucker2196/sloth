@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sloth — the calm, observant network monitor</title>
+<meta name="description" content="A passive network SIGINT console for Linux. 27 views, six alert rules, embedded WiFi SIGINT toolkit. Never injects, never scans, never modifies kernel state. White-hat only.">
+<meta property="og:title" content="sloth — the calm, observant network monitor">
+<meta property="og:description" content="Passive network SIGINT for Linux. Eyes, not hands.">
+<meta property="og:image" content="assets/sloth.png">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/sloth.png">
+</head>
+<body>
+
+<!-- ── Canopy SVG (decorative, behind hero) ───────────────────────── -->
+<svg class="canopy-overlay" viewBox="0 0 1200 400" preserveAspectRatio="none" aria-hidden="true">
+  <defs>
+    <radialGradient id="sunbeam" cx="70%" cy="0%" r="60%">
+      <stop offset="0%" stop-color="rgba(233,180,76,0.32)" />
+      <stop offset="40%" stop-color="rgba(233,180,76,0.08)" />
+      <stop offset="100%" stop-color="rgba(233,180,76,0)" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="400" fill="url(#sunbeam)" />
+  <!-- Stylised hanging vines -->
+  <g opacity="0.18" stroke="#1A3B2A" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M 80 0 Q 90 60 75 120 Q 60 180 90 240" />
+    <path d="M 220 0 Q 215 70 230 140 Q 245 210 215 280" />
+    <path d="M 990 0 Q 1000 80 985 160 Q 970 240 1000 320" />
+    <path d="M 1130 0 Q 1125 90 1140 170 Q 1155 250 1130 330" />
+  </g>
+  <!-- Leaf clusters along vines -->
+  <g fill="#2D6A4F" opacity="0.55">
+    <ellipse cx="75"   cy="100" rx="14" ry="6" transform="rotate(-30 75 100)" />
+    <ellipse cx="92"   cy="230" rx="12" ry="5" transform="rotate(40 92 230)" />
+    <ellipse cx="230"  cy="135" rx="13" ry="6" transform="rotate(25 230 135)" />
+    <ellipse cx="985"  cy="155" rx="13" ry="6" transform="rotate(-25 985 155)" />
+    <ellipse cx="1140" cy="170" rx="12" ry="5" transform="rotate(45 1140 170)" />
+  </g>
+</svg>
+
+<!-- ── Header / Nav ───────────────────────────────────────────────── -->
+<header class="site-header">
+  <nav class="nav">
+    <a href="#top" class="brand">
+      <span class="brand-mark">🦥</span>
+      <span class="brand-name">sloth</span>
+    </a>
+    <div class="nav-links">
+      <a href="#what">What it sees</a>
+      <a href="#views">27 views</a>
+      <a href="#philosophy">Philosophy</a>
+      <a href="#streaming">Stream</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="https://github.com/SpaceTrucker2196/sloth" class="github-link" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </nav>
+</header>
+
+<!-- ── Hero ───────────────────────────────────────────────────────── -->
+<section id="top" class="hero">
+  <div class="hero-inner">
+    <div class="hero-text">
+      <p class="eyebrow">A passive SIGINT console</p>
+      <h1>The calm, observant<br/>network monitor.</h1>
+      <p class="lede">
+        27 live views. Six alert rules. An embedded WiFi-SIGINT toolkit.
+        A JSONL stream you can plug into Splunk, Elastic, or syslog in
+        five minutes. <strong>Never injects. Never scans. Never modifies kernel state.</strong>
+        Sloth is the eyes, not the hands.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta-primary" href="https://github.com/SpaceTrucker2196/sloth" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="cta cta-secondary" href="#quickstart">Get started</a>
+      </div>
+      <p class="hero-meta">
+        <span class="badge badge-green">C99 · Linux · libpcap</span>
+        <span class="badge badge-gold">2,122 test assertions</span>
+        <span class="badge badge-clay">White-hat only</span>
+      </p>
+    </div>
+    <div class="hero-image">
+      <img src="assets/sloth.png" alt="sloth — a watching sloth in the wifi canopy" />
+    </div>
+  </div>
+</section>
+
+<!-- ── What sloth sees ────────────────────────────────────────────── -->
+<section id="what" class="section section-cream">
+  <div class="section-inner">
+    <h2>Eyes on every layer of the canopy.</h2>
+    <p class="section-lede">
+      Sloth reads what your host already sees — <code>/proc</code>, <code>/sys</code>,
+      rtnetlink, nl80211, INET_DIAG, and an optional libpcap stream — and
+      synthesises it into views, alerts, and a forensic log. Nothing is
+      injected. Nothing is solicited. The bytes you observe are bytes that
+      were already there.
+    </p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🌿</div>
+        <h3>Eyes, not hands</h3>
+        <p>
+          Sloth never sends a packet, never decrypts a frame, never runs
+          a passphrase against a captured handshake. It detects WEP,
+          WPA-TKIP, weak TLS, evil twins, rogue DHCP, DGA-style DNS,
+          KARMA/Pineapple — and flags them. <em>Operating</em> on them is
+          the operator's job, under their own legal cover.
+        </p>
+        <a class="card-link" href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md" target="_blank" rel="noopener">Read the mission →</a>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🪶</div>
+        <h3>WiFi-SIGINT depth</h3>
+        <p>
+          Per-MAC Preferred Network List aggregation. RSN / cipher / AKM /
+          MFP inventory from beacon IEs. EAPOL / PMKID / 4-way handshake
+          capture with hashcat-22000 export. Sequence-number based
+          MAC-randomisation deanonymisation. Hidden-SSID reveal from
+          probe-responses.
+        </p>
+        <a class="card-link" href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/wifi-sigint.md" target="_blank" rel="noopener">WiFi SIGINT overview →</a>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🦋</div>
+        <h3>Stream it anywhere</h3>
+        <p>
+          The same JSONL records that sloth writes to <code>-o FILE</code> are
+          served over a read-only stream socket
+          (<code>--data-socket unix:</code> or <code>tcp:</code>). A reference
+          Python consumer plus a three-sink SIEM forwarder ship in
+          <code>examples/</code> — Splunk HEC, RFC 5424 syslog,
+          Elasticsearch Bulk API.
+        </p>
+        <a class="card-link" href="#streaming">See the streaming section →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Wave divider ──────────────────────────────────────────────── -->
+<div class="wave-divider" aria-hidden="true">
+  <svg viewBox="0 0 1200 60" preserveAspectRatio="none">
+    <path d="M0,30 C200,60 400,0 600,30 C800,60 1000,0 1200,30 L1200,60 L0,60 Z" fill="#1A3B2A"></path>
+  </svg>
+</div>
+
+<!-- ── 27 views ───────────────────────────────────────────────────── -->
+<section id="views" class="section section-canopy">
+  <div class="section-inner">
+    <h2>Twenty-seven live views,<br/>tiled into the terminal.</h2>
+    <p class="section-lede pale">
+      Each view is a complete protocol or synthesis — its own keybinding,
+      its own ring buffer, its own per-view documentation. Tab to cycle.
+      Press <kbd>o</kbd> for the composite dashboard. Press <kbd>l</kbd>
+      for the OSI synthesis grid.
+    </p>
+
+    <div class="ascii-frame">
+<pre class="ascii-screen"><span class="ansi-dim"> OSI / TCP-IP stack — passive observation per layer   conns:24 ifaces:2</span>
+
+ ────────────────────────────────────────────────────────────────────
+<span class="ansi-bright">  L7 Application</span>    │ DNS:142  HTTP:7  TLS:88  QUIC:12  mDNS:31  NBNS:0  NTP:3
+<span class="ansi-bright">  L6 Presentation</span>   │ TLS 1.3:74  TLS 1.2:14  legacy:0   JA3:9 distinct
+<span class="ansi-bright">  L5 Session</span>        │ TLS sessions:88  QUIC:12  EAPOL:1
+<span class="ansi-bright">  L4 Transport</span>      │ TCP:22 (E:14 L:6 ?:2)  UDP:2  ICMP:3
+<span class="ansi-bright">  L3 Network</span>        │ IPv4 hosts:18  IPv6 hosts:3  ARP mappings:14
+<span class="ansi-bright">  L2 Data Link</span>      │ ifaces:2  APs:7  STAs:11  devices:21  beacons:43
+<span class="ansi-bright">  L1 Physical</span>       │ probe iface: wlan0mon (monitor mode)
+ ────────────────────────────────────────────────────────────────────
+</pre>
+    </div>
+
+    <div class="view-categories">
+      <div class="view-category">
+        <h4>Observation</h4>
+        <p>
+          Interfaces · Connections · WiFi · Packets · Processes · Stats ·
+          Probe · ARP · mDNS · NBNS · DHCP · SSDP · Beacons · Deauth ·
+          HTTP · TLS · QUIC · DNS · NTP · ICMP
+        </p>
+      </div>
+      <div class="view-category">
+        <h4>Synthesis</h4>
+        <p>
+          Alerts · Devices · Dashboard · OSI stack
+        </p>
+      </div>
+      <div class="view-category">
+        <h4>WiFi SIGINT (v1.1)</h4>
+        <p>
+          PNL · EAPOL · Seqnum · Assoc · Channel
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Philosophy ─────────────────────────────────────────────────── -->
+<section id="philosophy" class="section section-cream">
+  <div class="section-inner">
+    <h2>Built for the long watch.</h2>
+    <p class="section-lede">
+      In manufacturing, a "dark factory" is one that runs without lights
+      because no humans need to be on the floor. Sloth is built that way,
+      both in its code repository and in its operational stance: the
+      machine just watches, all night long, and tells you what it saw.
+    </p>
+
+    <div class="value-grid">
+      <div class="value">
+        <span class="value-num">1.</span>
+        <h4>Passive only.</h4>
+        <p>
+          Never injects packets. Never sends probes. Never deauths. Never
+          beacons. Never ARP-poisons. Never modifies kernel state. It
+          reads. It never writes to the wire.
+        </p>
+      </div>
+      <div class="value">
+        <span class="value-num">2.</span>
+        <h4>No active key recovery.</h4>
+        <p>
+          Captures EAPOL / PMKID material and exports it in hashcat 22000
+          format. Doesn't run a passphrase against it. That step is the
+          operator's responsibility, on the operator's clock, on hardware
+          they own, against a target they're authorised to test.
+        </p>
+      </div>
+      <div class="value">
+        <span class="value-num">3.</span>
+        <h4>Vulnerabilities flagged, not exploited.</h4>
+        <p>
+          WEP, WPA-TKIP, MFP-off, weak TLS, attack-tool user-agents, evil
+          twins, rogue DHCP, DGA-style DNS, deauth floods, KARMA / Pineapple
+          behaviour, dnscat / iodine tunnels, ARP spoofing. Detection emits
+          an alert. It never follows up with an active step.
+        </p>
+      </div>
+      <div class="value">
+        <span class="value-num">4.</span>
+        <h4>White hat only.</h4>
+        <p>
+          Built for defenders, blue teams in a SOC, incident responders,
+          researchers, CTF and training environments, and security-aware
+          travellers who want to know what the café Wi-Fi is doing. Not
+          for surveillance, harassment, or operating against any network
+          you don't have written authority to observe.
+        </p>
+      </div>
+    </div>
+
+    <p class="philosophy-pullquote">
+      &ldquo;Sloth is a passive, white-hat SIGINT console: it watches, it
+      flags, it never attacks.&rdquo;
+    </p>
+  </div>
+</section>
+
+<!-- ── Streaming ──────────────────────────────────────────────────── -->
+<section id="streaming" class="section section-canopy">
+  <div class="section-inner">
+    <h2>Plug into the rest of your stack.</h2>
+    <p class="section-lede pale">
+      One JSON object per line, terminated by <code>\n</code>. File sink
+      (<code>-o FILE</code>) for log forwarders. Stream sink
+      (<code>--data-socket SPEC</code>) for live consumers, with
+      per-client backpressure isolation. Both deliver the same records.
+    </p>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Splunk HEC</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink hec \
+    --hec-url       https://splunk.example.com:8088/services/collector \
+    --hec-token-env SLOTH_HEC_TOKEN</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Elasticsearch (rolled daily)</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink elastic \
+    --es-url       https://elastic.example.com:9200 \
+    --es-index     'sloth-events-%Y.%m.%d' \
+    --es-api-key-env SLOTH_ES_API_KEY</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">RFC 5424 syslog (UDP)</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink syslog \
+    --syslog-host siem.example.com \
+    --syslog-port 514</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">One record per line</span>
+        </div>
+<pre class="code-block">{"type":"alert","ts":1700000006,
+ "title":"THREAT_DOMAIN",
+ "detail":"192.168.1.5 queried malware.testing.com",
+ "key":"threat-d:malware.testing.com",
+ "sev":2,"ty":3,"count":1}</pre>
+      </div>
+    </div>
+
+    <p class="footnote pale">
+      The sink interface is two members (<code>.name</code>,
+      <code>.send(batch)</code>). Adding Loki, Datadog, OpenSearch, or a
+      generic webhook is ~30 lines. See
+      <a href="https://github.com/SpaceTrucker2196/sloth/tree/main/examples/forwarder" target="_blank" rel="noopener">examples/forwarder/</a>.
+    </p>
+  </div>
+</section>
+
+<!-- ── Quickstart ─────────────────────────────────────────────────── -->
+<section id="quickstart" class="section section-cream">
+  <div class="section-inner">
+    <h2>Quickstart.</h2>
+    <p class="section-lede">
+      One binary. No daemon. No config file. Build it, point it at an
+      interface, watch what your host sees.
+    </p>
+
+    <div class="quickstart-grid">
+      <div class="qs-card">
+        <h4>1. Install dependencies (Debian / Ubuntu)</h4>
+<pre class="code-block">sudo apt-get install -y \
+    build-essential \
+    libpcap-dev \
+    libncursesw5-dev</pre>
+      </div>
+
+      <div class="qs-card">
+        <h4>2. Build</h4>
+<pre class="code-block">git clone https://github.com/SpaceTrucker2196/sloth.git
+cd sloth
+make test    # 2,122 assertions, no root needed
+make         # builds ./sloth</pre>
+      </div>
+
+      <div class="qs-card">
+        <h4>3. Run (needs <code>CAP_NET_RAW</code>)</h4>
+<pre class="code-block">sudo ./sloth                              # TUI on default iface
+sudo ./sloth -i eth0                      # pin capture iface
+sudo ./sloth -o /var/log/sloth.jsonl      # forensic stream
+sudo ./sloth --data-socket unix:/tmp/sloth.sock
+sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
+      </div>
+
+      <div class="qs-card">
+        <h4>4. Inside sloth</h4>
+        <p>
+          <kbd>1</kbd>–<kbd>0</kbd> direct view jumps. <kbd>Tab</kbd>
+          cycles. <kbd>o</kbd> dashboard. <kbd>l</kbd> OSI stack.
+          <kbd>?</kbd> help. <kbd>q</kbd> quit. Filter any list view
+          with <kbd>/</kbd>.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-col">
+      <p class="brand brand-footer">
+        <span class="brand-mark">🦥</span>
+        <span class="brand-name">sloth</span>
+      </p>
+      <p class="footer-tag">Eyes, not hands.</p>
+    </div>
+
+    <div class="footer-col">
+      <h5>Repository</h5>
+      <ul>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth" target="_blank" rel="noopener">github.com/SpaceTrucker2196/sloth</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/releases" target="_blank" rel="noopener">Releases</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/issues" target="_blank" rel="noopener">Issues</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h5>Documentation</h5>
+      <ul>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md" target="_blank" rel="noopener">MISSION.md</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/FACTORY.md" target="_blank" rel="noopener">FACTORY.md (build &amp; run)</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/tree/main/docs/views" target="_blank" rel="noopener">Per-view deep dives</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/jsonl-schema.md" target="_blank" rel="noopener">JSONL schema</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/mutation-testing.md" target="_blank" rel="noopener">Mutation testing</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h5>Built on a dark factory floor</h5>
+      <ul>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/dark-factory.md" target="_blank" rel="noopener">The dark-factory repo pattern</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/CLAUDE.md" target="_blank" rel="noopener">CLAUDE.md (agent conventions)</a></li>
+        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/PROGRESS.md" target="_blank" rel="noopener">PROGRESS.md (activity log)</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-meta">
+    <p>
+      sloth is a passive, white-hat SIGINT console for IP and 802.11
+      networks. Run it only on networks you have explicit authority to
+      observe.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
