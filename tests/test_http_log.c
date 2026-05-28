@@ -174,6 +174,23 @@ static void test_snapshot_clamps_sel(void) {
     ASSERT_EQ(s.http_log_sel, 0);
 }
 
+/* Boundary at sel == n + empty-log clamp tests. */
+static void test_snapshot_clamps_sel_at_boundary_and_empty(void) {
+    http_log_clear();
+    http_log_entry_t e = make_entry("1.1.1.1", "GET", "x.com", "/");
+    http_log_record(&e);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.http_log_sel = 1;
+    http_log_snapshot(&s);
+    ASSERT_EQ(s.http_log_sel, 0);
+
+    http_log_clear();
+    memset(&s, 0, sizeof(s));
+    s.http_log_sel = 5;
+    http_log_snapshot(&s);
+    ASSERT_EQ(s.http_log_sel, 0);
+}
+
 /* ── view_http_draw smoke tests ──────────────────────────── */
 
 static void test_view_draw_empty(void) {
@@ -253,6 +270,7 @@ void run_http_log_tests(void) {
     RUN_TEST(test_snapshot_newest_first);
     RUN_TEST(test_clear_empties_log);
     RUN_TEST(test_snapshot_clamps_sel);
+    RUN_TEST(test_snapshot_clamps_sel_at_boundary_and_empty);
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_key_nav);

@@ -255,6 +255,31 @@ static void test_snapshot_clamps_sel(void) {
     ASSERT_EQ(s.dns_log_sel, 0);
 }
 
+/* Kills the `sel >= n` boundary mutation (`>=` → `>`): if sel
+ * equals n exactly (one past the last valid index), the clamp
+ * must still trigger. The existing _clamps_sel test seeds
+ * sel=99 with n=1 — too far above for the boundary to be
+ * exercised. */
+static void test_snapshot_clamps_sel_at_exact_boundary(void) {
+    dns_log_clear();
+    dns_log_entry_t e = make_entry("1.1.1.1", "a.com", "A", "1.2.3.4", 1);
+    dns_log_record(&e);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.dns_log_sel = 1;            /* n will be 1; sel==n must clamp */
+    dns_log_snapshot(&s);
+    ASSERT_EQ(s.dns_log_sel, 0);
+}
+
+/* Kills the `n > 0` mutation (`>` → `>=`): when the log is empty
+ * (n=0), sel must be reset to 0, not to -1. */
+static void test_snapshot_empty_resets_sel_to_zero(void) {
+    dns_log_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.dns_log_sel = 5;
+    dns_log_snapshot(&s);
+    ASSERT_EQ(s.dns_log_sel, 0);
+}
+
 /* ── view_dns_draw smoke tests ───────────────────────────── */
 
 static void test_view_draw_empty(void) {
@@ -335,6 +360,8 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_snapshot_newest_first);
     RUN_TEST(test_clear_empties_log);
     RUN_TEST(test_snapshot_clamps_sel);
+    RUN_TEST(test_snapshot_clamps_sel_at_exact_boundary);
+    RUN_TEST(test_snapshot_empty_resets_sel_to_zero);
 
     TEST_SUITE("view_dns draw");
     RUN_TEST(test_view_draw_empty);
