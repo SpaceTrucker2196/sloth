@@ -173,6 +173,23 @@ Node's `readline`, etc. See
 [`examples/consumer/README.md`](../../examples/consumer/README.md)
 for the full feature set.
 
+## Reference SIEM forwarder
+
+For shipping the stream to a SIEM, a sibling reference at
+[`examples/forwarder/sloth-forward.py`](../../examples/forwarder/sloth-forward.py)
+implements batched, retrying forwarders to:
+
+- **Splunk HEC** — JSON envelopes over HTTPS POST.
+- **RFC 5424 syslog** — UDP or TCP.
+
+The sink interface is a two-method class (`name`, `send(batch)`), so
+adding Loki / Elasticsearch / Datadog / an in-house collector is ~30
+lines. Delivery semantics are deliberately non-durable to match the
+data socket's design: failed batches are dropped after retries, with
+a stats line to stderr. If you need durability, pair the socket sink
+with `-o FILE` and ship the file separately. Full notes in
+[`examples/forwarder/README.md`](../../examples/forwarder/README.md).
+
 ## iOS Swift consumer sketch
 
 The TCP transport is plain newline-delimited JSON — `Network.framework`
