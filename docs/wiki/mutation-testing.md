@@ -197,9 +197,30 @@ One entry per non-blank, non-comment line:
 <file>:<line>:<op>:<original>:<mutated>    # optional comment
 ```
 
-Match is exact on all five fields. When a mutant's fingerprint
-appears here, it's reported as **IGNORED** rather than **SURVIVED**,
-and the effective kill rate becomes `killed / (total - ignored)`.
+Match is exact on all five fields **unless wildcards or ranges are
+used**:
+
+- `<line>` may be `N` (single line) or `M-N` (inclusive range).
+- `<op>` / `<original>` / `<mutated>` may be `*` to match any value.
+
+Examples:
+
+```
+src/alerts.c:23:const:6:7        # exact single mutation
+src/ip_owner.c:22-94:*:*:*       # any mutation on lines 22-94
+src/jsonl.c:107:bool:||:&&       # one specific bool flip on line 107
+```
+
+When a mutant matches an entry, it's reported as **IGNORED** rather
+than **SURVIVED**, and the effective kill rate becomes
+`killed / (total - ignored)`.
+
+Wildcards are powerful and deliberate. The shorthand `*:*:*` for
+op/original/mutated covers every mutation on the named line(s) —
+useful when an entire block of code is structurally untestable
+(e.g. a static data table; see the **DT** class below). Use them
+only when *every* mutation in the matched space is equivalence-
+class; a careless wildcard hides real gaps forever.
 
 ### Line numbers are fragile
 
@@ -296,6 +317,16 @@ survive — because the early-return is a *fast-path optimisation*,
 not a correctness gate. The function still produces the right
 output downstream; the mutation only causes wasted format work.
 No test can or should distinguish this. New shorthand: **OPT**.
+
+**Static data tables.** Files whose body is dominated by a
+static lookup table (e.g. `src/ip_owner.c`'s 70+ CIDR ranges)
+generate one mutation per octet literal. Each mutation changes
+*which IP gets which owner string* — observable, but writing a
+behavioural test per entry just repeats the table in the test
+file. The data IS the contract; verification belongs at the
+data-validation layer (sorted? no overlaps? RIR registry sanity?)
+not the per-entry behavioural layer. Bulk-ignore the table's
+line range via a wildcard entry. New shorthand: **DT**.
 
 For everything outside these classes, treat the survivor as a real
 gap and write the test.

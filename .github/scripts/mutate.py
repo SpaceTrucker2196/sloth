@@ -361,25 +361,49 @@ def apply_mutation(file_path: Path, mutant: Mutant) -> None:
 # ── Test runner ─────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
-class IgnoreKey:
-    file: str       # repo-relative path, e.g. "src/alerts.c"
-    line: int
+class IgnoreRule:
+    """One parsed entry — supports line ranges and wildcards.
+
+    line_lo / line_hi (inclusive). For a single-line entry both equal
+    the line number. For a range entry, lo <= hi.
+
+    op / original / mutated may be "*" to match any value. Wildcards
+    are deliberate (the entry covers a class of mutations on a block
+    of code, like a CIDR data table); the trailing comment should
+    cite the equivalence class so a reviewer can re-verify.
+    """
+    file: str
+    line_lo: int
+    line_hi: int
     op: str
     original: str
     mutated: str
 
+    def matches(self, m) -> bool:
+        if m.file != self.file: return False
+        if not (self.line_lo <= m.line_no <= self.line_hi): return False
+        if self.op       != "*" and self.op       != m.site.op:       return False
+        if self.original != "*" and self.original != m.site.original: return False
+        if self.mutated  != "*" and self.mutated  != m.site.mutated:  return False
+        return True
 
-def load_ignore_file(path: Path) -> set:
-    """Parse a mutate-equivalents file. Returns a set of IgnoreKey.
+
+def load_ignore_file(path: Path) -> list:
+    """Parse a mutate-equivalents file. Returns a list of IgnoreRule.
 
     Format: one entry per non-blank, non-comment line:
 
-        src/alerts.c:23:const:6:7    # mac_to_str function-parameter array size
+        src/alerts.c:23:const:6:7        # exact single mutation
+        src/ip_owner.c:22-94:*:*:*       # any mutation on lines 22-94
 
-    Fields are split on `:` so `original` and `mutated` must not
-    contain a literal colon. Trailing `# comment` is stripped.
+    The line field is either a single integer `N` or a range `M-N`
+    (inclusive). The op / original / mutated fields can be `*` to
+    match any value. Wildcards are useful for bulk-ignoring a block
+    of code (e.g. a static data table) where every mutation is
+    structurally equivalent. Use them deliberately — a careless
+    wildcard hides real gaps.
     """
-    out = set()
+    rules: list = []
     text = path.read_text()
     for raw_lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
@@ -391,19 +415,23 @@ def load_ignore_file(path: Path) -> set:
                   f"file:line:op:original:mutated, got {raw!r}",
                   file=sys.stderr)
             continue
+        line_spec = parts[1]
         try:
-            ln = int(parts[1])
+            if "-" in line_spec:
+                lo_s, hi_s = line_spec.split("-", 1)
+                lo, hi = int(lo_s), int(hi_s)
+                if lo > hi:
+                    raise ValueError("range lo > hi")
+            else:
+                lo = hi = int(line_spec)
         except ValueError:
-            print(f"WARN: {path}:{raw_lineno}: line field not integer",
+            print(f"WARN: {path}:{raw_lineno}: line field "
+                  f"{line_spec!r} is not an int or M-N range",
                   file=sys.stderr)
             continue
-        out.add(IgnoreKey(parts[0], ln, parts[2], parts[3], parts[4]))
-    return out
-
-
-def fingerprint(m) -> IgnoreKey:
-    return IgnoreKey(m.file, m.line_no, m.site.op,
-                     m.site.original, m.site.mutated)
+        rules.append(IgnoreRule(parts[0], lo, hi,
+                                parts[2], parts[3], parts[4]))
+    return rules
 
 
 def run_make_test(workdir: Path, timeout_s: float) -> tuple[bool, str]:
@@ -505,21 +533,21 @@ def main() -> int:
             print(f"ERROR: {f} is not under src/ — refusing", file=sys.stderr)
             return 2
 
-    # Load ignore set (may be empty).
-    ignore = set()
+    # Load ignore rules (may be empty).
+    ignore_rules: list = []
     if args.ignore_file:
         ipath = Path(args.ignore_file)
         if not ipath.is_file():
             print(f"ERROR: ignore file {ipath} does not exist", file=sys.stderr)
             return 2
-        ignore = load_ignore_file(ipath)
+        ignore_rules = load_ignore_file(ipath)
 
     print(f"== sloth mutation testing ==")
     print(f"repo:      {repo}")
     print(f"files:     {', '.join(args.files)}")
     print(f"operators: {', '.join(args.operators)}")
-    if ignore:
-        print(f"ignore:    {len(ignore)} entries from {args.ignore_file}")
+    if ignore_rules:
+        print(f"ignore:    {len(ignore_rules)} entries from {args.ignore_file}")
     sys.stdout.flush()
 
     # 1. Sandbox.
@@ -567,7 +595,7 @@ def main() -> int:
 
         t_start = time.monotonic()
         for i, m in enumerate(all_mutants, 1):
-            if fingerprint(m) in ignore:
+            if any(r.matches(m) for r in ignore_rules):
                 ignored.append(m)
                 elapsed = time.monotonic() - t_start
                 print(f"  [{i:4d}/{len(all_mutants)}] {m.file}:{m.line_no} "

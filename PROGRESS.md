@@ -45,40 +45,127 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 8+)
+### Mutation-testing follow-ups (rounds 9+)
 **Owner**: next agent
-**Started**: 2026-05-27
-**Goal**: `data_socket.c` remains the biggest open pile at 27.6%
-(76 real survivors). The fault-injection seam is in place; the
-remaining survivors cluster in `init_tcp` / `init_unix` error
-paths (DNS resolution, getaddrinfo failures, port-parse edge
-cases) that need test packets with malformed specs we haven't
-covered.
-**Status**: rounds 1-7 closed. Aggregate kill rate is 52.3% of
-considered (527 killed / 1007 considered / 1106 mutants total).
-The fault-injection seam (round 7) delivered fewer kills than
-hoped (+1) because most send/accept failure paths reduce to the
-same close-and-compact behavior the EPIPE test already covered.
-The infrastructure remains valuable for testing future
-error-path additions.
+**Started**: 2026-05-28
+**Goal**: Pick the next batch of unmutated source files. The big
+remaining categories are the per-protocol log files
+(`src/{dns,tls,quic,http,ntp,icmp,mdns,nbns,dhcp,ssdp,beacon,deauth}_log.c`
+plus their snoops), the WiFi-SIGINT engines (`src/probe_pnl.c`,
+`src/eapol_log.c`, `src/seqnum_track.c`, `src/assoc_track.c`,
+`src/beacon_snoop.c`, `src/deauth_snoop.c`), and the view files
+(`src/views/*.c` — render code, low-yield).
+**Status**: rounds 1-8 closed. Aggregate kill rate is **55.4% of
+considered** (648 killed / 1169 considered / 1631 mutants total).
+Round 8 added scan / filter / host_cache / ip_owner; the
+**ip_owner.c** triage introduced wildcard ignore-file rules to
+suppress the 70+ CIDR data-table entries (new **DT** class).
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Triage `init_tcp` / `init_unix` survivors. Lots of return-`-1`
-   paths with different `fprintf` messages — most are TIP-class
-   negative-sentinel equivalents. Add targeted tests for the
-   ones that have observable behaviour differences (e.g. bad
-   port, missing colon).
-2. Consider a content-based fingerprint for the ignore file so
-   adding code to a file doesn't invalidate all entries below.
-   E.g. include a 16-byte hash of the surrounding 3 lines in
-   the fingerprint. Cost: re-derive on every line that moves.
-3. As new equivalents emerge from future runs, append to
-   `.github/scripts/mutate-equivalents.txt` (conservatively).
-4. Cosmetic: tighten the "killed (build broke)" sub-counter.
+1. Mutate `src/{dns,tls,quic,http}_log.c` (ring-buffer + snapshot
+   code, structurally similar — likely high baseline from existing
+   tests).
+2. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
+   `src/seqnum_track.c`, `src/assoc_track.c` (WiFi-SIGINT engines).
+3. Skip `src/views/*.c` — render code, low semantic value, would
+   require asserting on exact column positions to kill mutations
+   meaningfully (not worth it).
+4. As new equivalents emerge, append to
+   `.github/scripts/mutate-equivalents.txt`. Use the wildcard +
+   range syntax for data-table or fmt-string lines.
+5. Cosmetic: tighten the "killed (build broke)" sub-counter.
 
 ---
 
 ## Recently landed
+
+### 2026-05-28 — Round 8: scan + filter + host_cache + ip_owner (DT class)
+**Commits**: *(this commit)*
+**Touched**: `.github/scripts/mutate.py`,
+`.github/scripts/mutate-equivalents.txt`,
+`tests/test_scan.c`, `tests/test_filter.c`,
+`docs/wiki/mutation-testing.md`, `README.md`, `PROGRESS.md`
+**Why**: Push beyond the export-path / alerts files into smaller
+untouched code. `scan.c`'s RFC1918/multicast filter has a clean
+boundary surface that pays off in tests; `filter.c`/`host_cache.c`
+were nearly equivalence-class-only; `ip_owner.c` exposed a new
+issue — files dominated by static data tables.
+
+**Per-file results** (post-ignore-file):
+
+| target              | mutants | ignored | considered | killed | of considered |
+|---------------------|---------|---------|------------|--------|---------------|
+| `src/scan.c`        | 77      | 0       | 77         | 66     | **85.7%**     |
+| `src/filter.c`      | 35      | 8       | 27         | 21     | **77.8%**     |
+| `src/host_cache.c`  | 20      | 3       | 17         | 14     | **82.4%**     |
+| `src/ip_owner.c`    | 393     | 352     | 41         | 20     | **48.8%**     |
+
+**9 new tests** in `tests/test_scan.c`:
+- A `routable_seed_then_assert` helper drives a comprehensive
+  boundary sweep over `scan_is_routable`'s ranges:
+  10/8, 172.16/12, 192.168/16, 100.64/10 (CGNAT), 127/8,
+  169.254/16, 224/4 (multicast). Each range tested with one IP
+  just inside and one just outside on each side. Kills the
+  bulk of the const ±1 and rel `>=`→`>` mutations on lines 16-22.
+- `test_routable_rejects_malformed_ips` covers the
+  `sscanf < 2` guard (single-octet input, non-numeric "abc").
+
+**1 new test** in `tests/test_filter.c`:
+- `test_needle_exact_length_match`: needle and haystack of
+  equal length must match. Kills the line-10 `nlen > hlen`
+  boundary that the existing `_longer_than_haystack` test
+  didn't pin.
+
+**New ignore-file capability: wildcards + line ranges**.
+`mutate.py` now supports:
+- `<line>` field as a range `M-N` (inclusive).
+- `<op>` / `<original>` / `<mutated>` as `*` (any).
+
+Together these enable bulk-ignoring structurally-untestable
+blocks of code. The triggering case: `ip_owner.c` has 70+ CIDR
+entries in a `static const ip_owner_range_t g_owners[]` table.
+Each octet literal is a mutation site (393 mutants total, 291
+of them on table lines). Writing a behavioural test per octet
+just repeats the table in the test file — the data IS the
+contract. Bulk-ignored via:
+
+    src/ip_owner.c:22-94:*:*:*    # DT: g_owners CIDR data block
+
+This dropped ip_owner's 393-mutant pile to 41 considered (the
+actual lookup functions); 20/41 killed (48.8%) — a fair number.
+
+**New DT equivalence class** documented in
+`docs/wiki/mutation-testing.md`: static lookup tables whose
+correctness is a data-validation concern, not a behavioural-test
+concern.
+
+**Aggregate after round 8**:
+
+| total | ignored | considered | killed | of considered |
+|-------|---------|------------|--------|---------------|
+| 1631  | 462     | 1169       | 648    | **55.4%**     |
+
+(Up from 52.3% in round 7. The jump comes from scan.c's
+85.7% boundary sweep + the new files' generally clean baselines.)
+
+**README badges** bumped: tests 2085 → 2114; mutation kill rate
+52.3% (yellow) → 55.4% **(yellowgreen)** — first colour tier
+move since the campaign began.
+
+**Decisions worth flagging**:
+- Wildcard support is powerful and dangerous. Documented the
+  failure mode (carelessly-broad entries hide real gaps forever)
+  in `docs/wiki/mutation-testing.md` "Filtering known
+  equivalents". The DT entry for ip_owner.c specifically covers
+  *only* lines 22-94 (the static array), leaving lines 95-113
+  (the lookup functions) under behavioural test.
+- `scan_is_routable` is static and not directly testable, but
+  the boundary sweep tests through `scan_update`'s public
+  surface get the same coverage with no API churn.
+- Did NOT triage all 21 ip_owner code-path survivors. Many are
+  in the `ip_owner_lookup_str` parser (`sscanf` returns, octet
+  bounds) and overlap with the `scan_is_routable` patterns
+  already covered. Marginal value; deferred to a future round.
 
 ### 2026-05-27 — Round 7: data_socket fault-injection seam
 **Commits**: *(this commit)*

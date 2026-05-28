@@ -30,6 +30,16 @@ static void test_needle_longer_than_haystack(void) {
     ASSERT(!filter_match("foobar", "foo"));
 }
 
+/* Kills the line-10 `nlen > hlen` boundary mutation (`>` → `>=`):
+ * when needle and haystack are the exact same length and contents,
+ * the match must succeed. Under the mutation, equal lengths would
+ * return 0 (false) without ever entering the search loop. */
+static void test_needle_exact_length_match(void) {
+    ASSERT(filter_match("foo", "foo"));
+    ASSERT(filter_match("hello",   "hello"));
+    ASSERT(filter_match("Mixed",   "MIXED"));  /* + case-insensitive */
+}
+
 static void test_match_any_with_nulls(void) {
     /* needle matches second field; first is NULL */
     ASSERT(filter_match_any("foo", NULL, "foobar", NULL, NULL, NULL));
@@ -52,6 +62,7 @@ void run_filter_tests(void) {
     RUN_TEST(test_case_insensitive);
     RUN_TEST(test_no_match);
     RUN_TEST(test_needle_longer_than_haystack);
+    RUN_TEST(test_needle_exact_length_match);
     RUN_TEST(test_match_any_with_nulls);
     RUN_TEST(test_match_any_empty_needle);
 }

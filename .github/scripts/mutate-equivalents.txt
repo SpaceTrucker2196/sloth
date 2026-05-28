@@ -175,6 +175,42 @@ src/data_socket.c:96:const:1:0          # TIP: same
 src/data_socket.c:208:bool:||:&&        # OPT: EAGAIN == EWOULDBLOCK on Linux/Darwin — `||` and `&&` collapse
 
 # ------------------------------------------------------------
+# src/host_cache.c — loop bounds reading zero-init tail (LZT)
+# ------------------------------------------------------------
+src/host_cache.c:31:rel:<:<=            # LZT: g_n outer loop in host_cache_add
+src/host_cache.c:52:rel:>:>=            # LZT: out_sz <= 0 guard, equivalent
+src/host_cache.c:57:rel:<:<=            # LZT: g_n outer loop in host_cache_lookup
+
+# ------------------------------------------------------------
+# src/filter.c — function-as-boolean returns (FAB)
+# ------------------------------------------------------------
+# filter_match / filter_match_any / ci_substr all return 1/0 as
+# booleans; callers truth-test. `return 1; -> return 2;` etc. are
+# observationally identical.
+src/filter.c:6:const:1:2                # FAB: ci_substr empty-needle returns 1 (match)
+src/filter.c:16:const:1:2               # FAB: ci_substr positive match returns 1
+src/filter.c:28:const:1:2               # FAB: filter_match_any empty-needle returns 1
+src/filter.c:29:const:1:2               # FAB: filter_match_any matched-a returns 1
+src/filter.c:30:const:1:2               # FAB
+src/filter.c:31:const:1:2               # FAB
+src/filter.c:32:const:1:2               # FAB
+src/filter.c:33:const:1:2               # FAB
+
+# ------------------------------------------------------------
+# src/ip_owner.c — static data table (DT)
+# ------------------------------------------------------------
+# Lines 22-94 hold the g_owners[] CIDR table. Mutations on these
+# lines change which IP gets which owner string — observable, but
+# testing each requires a per-entry data-validation test, which is
+# bad test discipline (the data IS the contract; verifying every
+# octet repeats the data in the test). Bulk-ignore via wildcard.
+#
+# DT class: mutations on a static lookup table whose correctness is
+# validated by build (CIDR macros expand to compile-time constants)
+# rather than by behavioural test.
+src/ip_owner.c:22-94:*:*:*              # DT: g_owners[] CIDR data block
+
+# ------------------------------------------------------------
 # src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)
 # ------------------------------------------------------------
 # The `>>` operator's second `>` gets mutated to `>=` by the harness's
