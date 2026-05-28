@@ -45,35 +45,96 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Mutation-testing follow-ups (rounds 10+)
+*(nothing actively in flight — pick from "Open follow-ups" or the
+paused work below)*
+
+### Paused: Mutation-testing follow-ups (rounds 10+)
 **Owner**: next agent
-**Started**: 2026-05-28
-**Goal**: Triage the new survivors in `dns_log.c`, `tls_log.c`,
-`http_log.c` (round 9 added boundary tests + ignore entries for
-`quic_log.c` only). Most remaining survivors are LZT/SBL/return-
-sentinel equivalents — bulk ignore-file additions plus 1-2 real
-gap tests per file should bring each above 55%.
+**Started**: 2026-05-28 — paused 2026-05-28 by operator request
 **Status**: rounds 1-9 closed. Aggregate kill rate is **51.0% of
 considered** (estimated 938 killed / 1844 considered / 2311
-mutants total). The aggregate dropped from 55.4% because adding
-the four log files introduced ~700 mutants at 37-48% baselines
-— pulling the average down. Round 10's bulk-ignore work will
-push the aggregate back up without changing any actual code.
-**Blockers**: none.
-**Next concrete step** (in priority order):
+mutants total). The campaign delivered ~600 net mutants killed and
+the `--ignore-file` machinery; remaining work is small per-round
+gains against the noise floor (see "diminishing returns" pattern in
+the "Recently landed" entries). Resume at will; everything is
+non-blocking and stateless.
+**Next concrete step** (in priority order, if resuming):
 1. Bulk-add LZT / SBL / TIP entries for `dns_log.c`, `tls_log.c`,
    `http_log.c` — same patterns already documented for
    `quic_log.c` in `mutate-equivalents.txt`. Should push each
-   file's "of considered" kill rate above 55%.
+   file's "of considered" kill rate above 55% (and the aggregate
+   back from ~51% to ~55%) without changing any actual code.
 2. Mutate `src/{ntp,icmp}_log.c` (similar structure, small).
 3. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
    `src/seqnum_track.c`, `src/assoc_track.c` (WiFi-SIGINT engines).
 4. Skip `src/views/*.c` — render code, low semantic value.
-5. Cosmetic: tighten the "killed (build broke)" sub-counter.
+5. Cosmetic: tighten the "killed (build broke)" sub-counter so
+   compile failures and test-binary segfaults are categorised
+   distinctly (both currently produce stderr containing "error"
+   + "make"; the heuristic conflates them).
 
 ---
 
 ## Recently landed
+
+### 2026-05-28 — `examples/forwarder/` SIEM forwarder (HEC + syslog + Elastic)
+**Commits**: `742257c`, `a093e23`
+**Touched**: `examples/forwarder/sloth-forward.py` (new, ~525 lines
+across two commits), `examples/forwarder/README.md` (new),
+`examples/README.md`, `docs/wiki/jsonl-schema.md`
+**Why**: After the consumer landed, the next step was a SIEM
+forwarder showing how to take the same JSONL stream to a real
+downstream. Three sinks ship — covering ~95% of operator
+deployments (Splunk, syslog-anything, Elastic / OpenSearch / cloud
+clusters). Sink interface is two members (`.name`,
+`.send(batch)`), so adding Loki / Datadog / in-house collectors
+is ~30 lines per sink.
+**What's in it**:
+- `hec` — Splunk HEC envelopes over HTTPS POST. Token via
+  `--hec-token-env` to keep credentials out of `ps`.
+- `syslog` — RFC 5424 over UDP (default) or TCP. MSGID is the
+  record's `type`, MSG is the raw JSON, PRI defaults to 134
+  (local0.info).
+- `elastic` — Bulk API (`POST /_bulk`). Time-rolled indices via
+  strftime tokens (`sloth-events-%Y.%m.%d`). `@timestamp` derived
+  from `ts`. Basic auth or API key. Partial failures
+  (`errors:true` in the 200 response) surface as batch failures
+  so the retry loop sees them.
+- Batching (`--batch-size 100 --batch-ms 1000` default), retries
+  with exponential backoff, drop-on-failure to match sloth's
+  non-durable contract (MISSION.md §4). Stats line to stderr
+  every `--stats-interval` (default 30s): `received=N
+  forwarded=N dropped=N retries=N`.
+- `--type` / `--src` filters mirror the consumer.
+- `--no-reconnect` for one-shot / test use; default is loop forever.
+- Smoke-tested end-to-end against in-process fake servers for
+  HEC, syslog-UDP, and Elastic (including the partial-failure
+  path with mapper_parsing_exception).
+- Production patterns documented in the README: systemd unit
+  template with `EnvironmentFile`, "one forwarder per sink"
+  rationale, when to combine with `-o FILE` for durability.
+
+### 2026-05-28 — `examples/consumer/` Python reference consumer
+**Commits**: `4526f8a`
+**Touched**: `examples/consumer/sloth-stream.py` (new, ~270 lines),
+`examples/consumer/README.md` (new), `examples/README.md` (new),
+`FACTORY.md`, `docs/wiki/jsonl-schema.md`
+**Why**: The JSONL data socket spec was documented but had no
+runnable companion. A reference consumer validates the schema by
+exercising it, gives external integrators a working starting point
+in the simplest possible language, and serves as the textbook shape
+for porting to Go / Node / Swift / etc.
+**What's in it**:
+- `parse_spec` → `connect` → `stream_lines` → `json.loads` →
+  filter → format → print, with disconnect → backoff → reconnect.
+- `unix:` and `tcp:` specs (matches sloth's `--data-socket SPEC`).
+- `--type` and `--src` filters; `--raw` pass-through (for `| jq .`);
+  `--count` 5s-interval tally; `--no-reconnect` for one-shot.
+- Per-type ANSI-colour pretty formatters. Forward-compat for
+  unknown `type` values (raw fields rendered instead of dropped).
+- Stdlib only. Python 3.7+. ~270 lines, single file.
+- Smoke-tested end-to-end against a fake sloth producer; every
+  record type from the schema renders with its distinctive marker.
 
 ### 2026-05-28 — Round 9: per-protocol log files + selection-clamp tests
 **Commits**: *(this commit)*
@@ -871,12 +932,42 @@ ops log — naming collision to resolve).
 
 ## Open follow-ups (not yet owned)
 
+### Forwarder / consumer extensions
+
+- **Additional forwarder sinks** — `examples/forwarder/` ships
+  HEC, syslog, and Elastic. Natural next additions, in rough
+  popularity order: Loki (`/loki/api/v1/push`), Datadog Logs
+  intake, OpenSearch (works against the Elastic sink already with
+  `--es-url` repointed; document or add a thin alias), generic
+  webhook (POST raw JSON to any URL — useful for Discord/Slack
+  alerting integrations). Sink interface is two members per the
+  README's "Adding a sink" recipe; ~30 lines each.
+- **Sink fan-out** — currently one forwarder process per sink.
+  A multi-sink mode would let one process push to both Splunk and
+  Elastic from the same source connection. Worth it only if
+  backpressure isolation isn't important to the operator.
+- **Docker Compose demo stack** — `examples/compose/` with sloth +
+  forwarder + a SIEM (Elastic + Kibana, or Grafana + Loki) so the
+  whole pipeline can be brought up with one `docker compose up`.
+  Good for evaluators and as a CI integration test.
+- **Smoke-test the consumer/forwarder in CI** — currently
+  hand-run; could be a `.github/workflows/examples.yml` that spins
+  up a fake sloth producer, runs each script for ~5s, asserts the
+  expected records arrive at a fake sink. Catches regression on
+  schema additions.
+
+### iOS / Tailscale (out of this repo)
+
 - **Tailscale integration** — install + configure on the deployment
   host so `--data-socket tcp:100.x.x.x:8765` actually reaches the
   iOS client. Out of repo (configuration, not code), but blocks the
   iOS client from being useful.
 - **iOS SwiftUI client** — consume the data socket and render the
-  same panels sloth shows in the TUI. Out of this repo.
+  same panels sloth shows in the TUI. Lives in a separate repo
+  (confirmed by the operator 2026-05-28).
+
+### Product depth (sloth itself)
+
 - **Beacon detection v2** — current `BEACONING` detector
   blind-spots aggressive (>25%) jitter. An autocorrelation-based
   variant would catch modern C2 frameworks (Sliver, Cobalt) that
@@ -885,4 +976,6 @@ ops log — naming collision to resolve).
   SMB/CIFS metadata, Kerberos pre-auth, LDAP referral leakage,
   BGP route monitor for peering segments, IPv6 RA/NDP surface in alerts.
 - **Sibling forensic-export formats** — CEF, RFC 5424 syslog, Splunk
-  HEC-over-local-socket as emitters alongside JSONL.
+  HEC-over-local-socket as **emitters** alongside JSONL. (Note:
+  forwarders can already deliver these formats *downstream*; this
+  follow-up is about sloth speaking them natively as a sink.)
