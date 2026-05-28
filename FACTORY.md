@@ -175,7 +175,10 @@ sudo setcap cap_net_raw,cap_net_admin=eip ./sloth
 ./sloth --data-socket tcp:100.64.0.5:8765        # JSONL over TCP (bind to a Tailscale IP, etc.)
 ```
 
-Flags compose. The JSONL schema is documented in [`README.md`](README.md#jsonl-schema).
+Flags compose. The JSONL schema is documented in [`README.md`](README.md#jsonl-schema)
+and [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md); a Python
+reference consumer that exercises every record type lives at
+[`examples/consumer/`](examples/consumer/).
 
 ### 6.3 WiFi SIGINT prep (out-of-band)
 

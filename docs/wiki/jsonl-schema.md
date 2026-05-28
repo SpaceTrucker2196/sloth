@@ -152,6 +152,27 @@ first observation.
   in commit `21814ec` is the last one; numeric values reused the
   `INFO=0` slot intentionally).
 
+## Reference consumer (Python)
+
+A complete reference consumer ships in
+[`examples/consumer/sloth-stream.py`](../../examples/consumer/sloth-stream.py)
+(stdlib only, ~270 lines). It exercises every record type listed
+above, demonstrates the connect / read / parse / filter / reconnect
+loop, and is the first thing to run when validating a deployment:
+
+```sh
+python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock
+python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
+python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --raw | jq .
+```
+
+The script is the worked example for porting a consumer to any other
+language — the structure (small read loop, per-type formatter table,
+disconnect → backoff → reconnect) maps directly to Go's `bufio`,
+Node's `readline`, etc. See
+[`examples/consumer/README.md`](../../examples/consumer/README.md)
+for the full feature set.
+
 ## iOS Swift consumer sketch
 
 The TCP transport is plain newline-delimited JSON — `Network.framework`

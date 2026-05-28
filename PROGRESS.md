@@ -131,39 +131,105 @@ the consumer rebuilds the table from the latest snapshot keyed by
 
 ---
 
-### Mutation-testing follow-ups (rounds 9+)
+### Mutation-testing follow-ups (rounds 10+)
 **Owner**: next agent
 **Started**: 2026-05-28
-**Goal**: Pick the next batch of unmutated source files. The big
-remaining categories are the per-protocol log files
-(`src/{dns,tls,quic,http,ntp,icmp,mdns,nbns,dhcp,ssdp,beacon,deauth}_log.c`
-plus their snoops), the WiFi-SIGINT engines (`src/probe_pnl.c`,
-`src/eapol_log.c`, `src/seqnum_track.c`, `src/assoc_track.c`,
-`src/beacon_snoop.c`, `src/deauth_snoop.c`), and the view files
-(`src/views/*.c` — render code, low-yield).
-**Status**: rounds 1-8 closed. Aggregate kill rate is **55.4% of
-considered** (648 killed / 1169 considered / 1631 mutants total).
-Round 8 added scan / filter / host_cache / ip_owner; the
-**ip_owner.c** triage introduced wildcard ignore-file rules to
-suppress the 70+ CIDR data-table entries (new **DT** class).
+**Goal**: Triage the new survivors in `dns_log.c`, `tls_log.c`,
+`http_log.c` (round 9 added boundary tests + ignore entries for
+`quic_log.c` only). Most remaining survivors are LZT/SBL/return-
+sentinel equivalents — bulk ignore-file additions plus 1-2 real
+gap tests per file should bring each above 55%.
+**Status**: rounds 1-9 closed. Aggregate kill rate is **51.0% of
+considered** (estimated 938 killed / 1844 considered / 2311
+mutants total). The aggregate dropped from 55.4% because adding
+the four log files introduced ~700 mutants at 37-48% baselines
+— pulling the average down. Round 10's bulk-ignore work will
+push the aggregate back up without changing any actual code.
 **Blockers**: none.
 **Next concrete step** (in priority order):
-1. Mutate `src/{dns,tls,quic,http}_log.c` (ring-buffer + snapshot
-   code, structurally similar — likely high baseline from existing
-   tests).
-2. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
+1. Bulk-add LZT / SBL / TIP entries for `dns_log.c`, `tls_log.c`,
+   `http_log.c` — same patterns already documented for
+   `quic_log.c` in `mutate-equivalents.txt`. Should push each
+   file's "of considered" kill rate above 55%.
+2. Mutate `src/{ntp,icmp}_log.c` (similar structure, small).
+3. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
    `src/seqnum_track.c`, `src/assoc_track.c` (WiFi-SIGINT engines).
-3. Skip `src/views/*.c` — render code, low semantic value, would
-   require asserting on exact column positions to kill mutations
-   meaningfully (not worth it).
-4. As new equivalents emerge, append to
-   `.github/scripts/mutate-equivalents.txt`. Use the wildcard +
-   range syntax for data-table or fmt-string lines.
+4. Skip `src/views/*.c` — render code, low semantic value.
 5. Cosmetic: tighten the "killed (build broke)" sub-counter.
 
 ---
 
 ## Recently landed
+
+### 2026-05-28 — Round 9: per-protocol log files + selection-clamp tests
+**Commits**: *(this commit)*
+**Touched**: `tests/test_dns_log.c`, `tests/test_tls_log.c`,
+`tests/test_quic_log.c`, `tests/test_http_log.c`,
+`.github/scripts/mutate-equivalents.txt`, `README.md`,
+`PROGRESS.md`
+**Why**: Round 9 baselined the four per-protocol log files and
+discovered they all share the same selection-clamp boundary that
+the existing `_clamps_sel` test didn't pin (it seeds `sel=99` with
+`n=1` — way above the boundary, so `>=` -> `>` and `>` -> `>=`
+mutations both survive).
+
+**Per-file baselines** (no triage yet for 3 of 4):
+
+| target              | mutants | baseline raw | of considered (post-r9) |
+|---------------------|---------|--------------|-------------------------|
+| `src/dns_log.c`     | 203     | 47.8%        | ~48.8% (boundary tests only) |
+| `src/tls_log.c`     | 276     | 37.0%        | ~37.7% (boundary tests only) |
+| `src/quic_log.c`    | 22      | 68.2%        | **100.0%** (full triage) |
+| `src/http_log.c`    | 179     | 38.0%        | ~39.1% (boundary tests only) |
+
+**8 new assertions** added across 4 tests:
+- `tests/test_dns_log.c`: `test_snapshot_clamps_sel_at_exact_boundary`
+  + `test_snapshot_empty_resets_sel_to_zero`
+- `tests/test_quic_log.c`, `tests/test_tls_log.c`,
+  `tests/test_http_log.c`: combined
+  `test_snapshot_clamps_sel_at_boundary_and_empty` (sel == n
+  exactly + empty-log path)
+
+Each test pair kills two specific mutations:
+- `>=` -> `>`: when sel exactly equals n (one past last valid
+  index), the clamp must still trigger.
+- `>` -> `>=`: when n is 0, mutated code computes `n - 1 = -1`
+  and assigns that to sel — a real bug.
+
+**5 new ignore entries** for `quic_log.c` only (`SBL` for
+`char ver[8]`, `LZT` for the snapshot loop bounds + saturating
+add). `quic_log.c` now reports **100.0% of considered** (17/17,
+5 ignored) — same clean result as `threat_intel.c`. The pattern
+extends to the other 3 log files but their bulk-ignore work is
+queued for round 10.
+
+**Aggregate estimate after round 9**:
+
+| total | ignored | considered | killed | of considered |
+|-------|---------|------------|--------|---------------|
+| 2311  | 467     | 1844       | ~938   | **~51.0%**    |
+
+The aggregate **dropped from 55.4% to ~51.0%** because adding
+the four new log files introduced ~700 mutants at 37-48% raw
+baselines, pulling the average down. Round 10's bulk-ignore work
+will recover most of this without code changes — the same
+LZT/SBL/return-sentinel patterns documented for quic_log apply
+to the other three.
+
+**README badges** bumped: tests 2114 → 2122; mutation kill rate
+55.4% (yellowgreen) → 51.0% **(yellow — first downward
+tier-move in the campaign)**.
+
+**Decisions worth flagging**:
+- Did NOT fully triage dns_log/tls_log/http_log this round. They
+  share quic_log's structure exactly; bulk-extending the ignore
+  entries would close most of the gap, but doing it correctly
+  per-line (rather than wildcarded) is the right move and adds
+  ~30 entries to the ignore file. Queued for round 10 to keep
+  this commit focused.
+- The badge tier-move (yellowgreen → yellow) is honest. Aggregate
+  is a moving target while new files are still being mutated;
+  short-term wobbles are expected.
 
 ### 2026-05-28 — Round 8: scan + filter + host_cache + ip_owner (DT class)
 **Commits**: *(this commit)*

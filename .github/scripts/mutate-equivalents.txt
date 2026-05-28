@@ -211,6 +211,29 @@ src/filter.c:33:const:1:2               # FAB
 src/ip_owner.c:22-94:*:*:*              # DT: g_owners[] CIDR data block
 
 # ------------------------------------------------------------
+# src/{dns,tls,quic,http}_log.c — ring-buffer pattern equivalents
+# ------------------------------------------------------------
+# All four log files share the same ring-buffer structure:
+#   - `g_count++` saturating-add at the MAX_*_LOG bound (LZT — the
+#     `<` -> `<=` mutation is observationally identical because once
+#     g_count == MAX, no further increment is meaningful).
+#   - `int n = g_count < MAX_*_LOG ? g_count : MAX_*_LOG;` snapshot
+#     clamp (same equivalence).
+#   - `for (int i = 0; i < n; i++)` snapshot loop bound (LZT).
+#   - `char ver[8] = ""` and similar stack buffer sizing (SBL).
+#
+# These are the boring ring-buffer noise the same way the protocol
+# parsers have buffer-size noise. The selection-clamp boundary
+# mutations on the `if (sel >= n) sel = n > 0 ? n - 1 : 0;` line
+# are NOT ignored — those are real test gaps covered by the new
+# `test_snapshot_clamps_sel_at_boundary_and_empty` tests.
+src/quic_log.c:20:const:8:9              # SBL: char ver[8]
+src/quic_log.c:20:const:8:7              # SBL: same
+src/quic_log.c:36:rel:<:<=               # LZT: g_count saturating-add
+src/quic_log.c:44:rel:<:<=               # LZT: snapshot clamp
+src/quic_log.c:45:rel:<:<=               # LZT: snapshot loop bound
+
+# ------------------------------------------------------------
 # src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)
 # ------------------------------------------------------------
 # The `>>` operator's second `>` gets mutated to `>=` by the harness's

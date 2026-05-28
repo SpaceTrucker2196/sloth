@@ -332,6 +332,23 @@ static void test_snapshot_clamps_sel(void) {
     ASSERT_EQ(s.tls_log_sel, 0);
 }
 
+/* Boundary at sel == n + empty-log clamp tests. */
+static void test_snapshot_clamps_sel_at_boundary_and_empty(void) {
+    tls_log_clear();
+    tls_log_entry_t e = make_tls_entry("1.1.1.1", "2.2.2.2", "a.com", "TLS 1.2");
+    tls_log_record(&e);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.tls_log_sel = 1;
+    tls_log_snapshot(&s);
+    ASSERT_EQ(s.tls_log_sel, 0);
+
+    tls_log_clear();
+    memset(&s, 0, sizeof(s));
+    s.tls_log_sel = 5;
+    tls_log_snapshot(&s);
+    ASSERT_EQ(s.tls_log_sel, 0);
+}
+
 /* ── view_tls_draw smoke tests ───────────────────────────── */
 
 static void test_view_draw_empty(void) {
@@ -417,6 +434,7 @@ void run_tls_log_tests(void) {
     RUN_TEST(test_snapshot_newest_first);
     RUN_TEST(test_clear_empties_log);
     RUN_TEST(test_snapshot_clamps_sel);
+    RUN_TEST(test_snapshot_clamps_sel_at_boundary_and_empty);
 
     TEST_SUITE("view_tls draw");
     RUN_TEST(test_view_draw_empty);
