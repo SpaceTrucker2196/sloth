@@ -3,10 +3,11 @@
 sloth-forward — reference SIEM forwarder for the sloth JSONL data socket.
 
 Reads records from a running sloth's `--data-socket SPEC`, batches them,
-and pushes them to a downstream SIEM. Two sinks ship in this reference:
+and pushes them to a downstream SIEM. Three sinks ship in this reference:
 
   hec     — Splunk HTTP Event Collector (POST batched JSON to /services/collector)
   syslog  — RFC 5424 syslog, UDP or TCP
+  elastic — Elasticsearch Bulk API (POST NDJSON to /_bulk)
 
 Stdlib only — Python 3.7+. The sink abstraction is deliberately small
 so you can read the source as a template and add Loki, Elasticsearch,
@@ -33,6 +34,13 @@ USAGE
   # Syslog (UDP, RFC 5424)
   sloth-forward unix:/tmp/sloth.sock \\
       --sink syslog --syslog-host siem.example.com --syslog-port 514
+
+  # Elasticsearch Bulk API, time-rolled index
+  sloth-forward unix:/tmp/sloth.sock \\
+      --sink elastic \\
+      --es-url   https://elastic.example.com:9200 \\
+      --es-index 'sloth-events-%Y.%m.%d' \\
+      --es-api-key-env SLOTH_ES_API_KEY
 
   # Filter to alerts only, batch every 200 events or 2 seconds
   sloth-forward tcp:127.0.0.1:8765 \\
@@ -253,6 +261,112 @@ class SyslogSink:
             raise
 
 
+class ESSink:
+    """Elasticsearch Bulk API. NDJSON body of (action, doc) pairs POSTed
+    to `<es-url>/_bulk`. Adds `@timestamp` to every doc derived from the
+    record's `ts` field (Elastic's idiomatic time field). Index name
+    supports strftime tokens for time-rolled indices (e.g.
+    `sloth-events-%Y.%m.%d`).
+
+    Reference: https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-bulk.html
+    """
+
+    name = "elastic"
+
+    def __init__(self, url: str,
+                 index_pattern: str = "sloth-events",
+                 username: Optional[str] = None,
+                 password: Optional[str] = None,
+                 api_key: Optional[str] = None,
+                 verify_tls: bool = True,
+                 timeout: float = 10.0):
+        self.url = url.rstrip("/") + "/_bulk"
+        self.index_pattern = index_pattern
+        self.timeout = timeout
+        self.auth_header = self._auth_header(username, password, api_key)
+        if verify_tls:
+            self.ssl_ctx = ssl.create_default_context()
+        else:
+            self.ssl_ctx = ssl._create_unverified_context()
+
+    @staticmethod
+    def _auth_header(username, password, api_key) -> Optional[str]:
+        # API key wins when both are set — it's the stronger credential.
+        if api_key:
+            return f"ApiKey {api_key}"
+        if username and password:
+            import base64
+            tok = base64.b64encode(f"{username}:{password}".encode()).decode()
+            return f"Basic {tok}"
+        return None
+
+    def _index_for(self, r: dict) -> str:
+        ts = float(r.get("ts", time.time()))
+        return time.strftime(self.index_pattern, time.gmtime(ts))
+
+    @staticmethod
+    def _doc(r: dict) -> dict:
+        # Elastic indexes on `@timestamp` by default. Add it without
+        # mutating the input record (the same dict may be in another
+        # sink's batch).
+        doc = dict(r)
+        ts = float(r.get("ts", time.time()))
+        doc["@timestamp"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ts),
+        )
+        return doc
+
+    def send(self, batch: list) -> None:
+        # NDJSON body: alternating action / doc lines. Trailing newline
+        # required by ES.
+        lines = []
+        for r in batch:
+            action = {"index": {"_index": self._index_for(r)}}
+            lines.append(json.dumps(action))
+            lines.append(json.dumps(self._doc(r)))
+        body = ("\n".join(lines) + "\n").encode("utf-8")
+
+        headers = {
+            "Content-Type": "application/x-ndjson",
+            "User-Agent":   "sloth-forward/1",
+        }
+        if self.auth_header:
+            headers["Authorization"] = self.auth_header
+
+        req = urllib.request.Request(
+            self.url, data=body, method="POST", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                     context=self.ssl_ctx) as resp:
+            if resp.status >= 400:
+                raise urllib.error.HTTPError(
+                    self.url, resp.status, resp.reason, resp.headers, None,
+                )
+            # ES Bulk returns 200 even when *individual* docs were
+            # rejected (mapping conflicts, illegal field names). Check
+            # the `errors` flag and raise so the retry loop can see it.
+            payload = resp.read()
+            try:
+                result = json.loads(payload.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                return  # ES should always be JSON; tolerate if not
+            if not result.get("errors"):
+                return
+            items = result.get("items", [])
+            failed = []
+            for item in items:
+                # Each item is {"<op>": {...}} where op is index/create.
+                for op, info in item.items():
+                    if "error" in info:
+                        failed.append(info.get("error"))
+                        break
+            raise OSError(
+                f"elastic _bulk partial failure: "
+                f"{len(failed)}/{len(items)} docs rejected; "
+                f"first error: {failed[0] if failed else '?'}"
+            )
+
+
 # ── Batch + retry ────────────────────────────────────────────────────
 
 class Stats:
@@ -335,6 +449,28 @@ def build_sink(args) -> object:
             hostname=args.syslog_hostname,
             pri=args.syslog_pri,
         )
+    if args.sink == "elastic":
+        if not args.es_url:
+            raise SystemExit("--sink elastic needs --es-url")
+        password = args.es_password
+        if not password and args.es_password_env:
+            password = os.environ.get(args.es_password_env)
+        api_key = args.es_api_key
+        if not api_key and args.es_api_key_env:
+            api_key = os.environ.get(args.es_api_key_env)
+        if not (api_key or (args.es_username and password)):
+            raise SystemExit(
+                "--sink elastic needs either --es-api-key(-env) or "
+                "--es-username + --es-password(-env)"
+            )
+        return ESSink(
+            url=args.es_url,
+            index_pattern=args.es_index,
+            username=args.es_username,
+            password=password,
+            api_key=api_key,
+            verify_tls=not args.es_insecure,
+        )
     raise SystemExit(f"unknown sink {args.sink!r}")
 
 
@@ -375,8 +511,8 @@ def main() -> int:
     p.add_argument("--no-reconnect", action="store_true",
                    help="exit on first source disconnect (one-shot / test mode)")
 
-    p.add_argument("--sink", choices=["hec", "syslog"], required=True,
-                   help="downstream sink to use")
+    p.add_argument("--sink", choices=["hec", "syslog", "elastic"],
+                   required=True, help="downstream sink to use")
 
     # HEC options
     p.add_argument("--hec-url", default=None,
@@ -403,6 +539,26 @@ def main() -> int:
                    help="override hostname field; defaults to local hostname")
     p.add_argument("--syslog-pri", type=int, default=134,
                    help="RFC 5424 PRI (default 134 = local0.info)")
+
+    # Elasticsearch options
+    p.add_argument("--es-url", default=None,
+                   help="Elastic base URL (e.g. https://elastic.example.com:9200)")
+    p.add_argument("--es-index", default="sloth-events",
+                   help="index name; supports strftime tokens for time-rolled "
+                        "indices (e.g. sloth-events-%%Y.%%m.%%d). "
+                        "Default: sloth-events")
+    p.add_argument("--es-username", default=None,
+                   help="ES basic-auth username")
+    p.add_argument("--es-password", default=None,
+                   help="ES basic-auth password (consider --es-password-env)")
+    p.add_argument("--es-password-env", default=None,
+                   help="env var name holding the ES password")
+    p.add_argument("--es-api-key", default=None,
+                   help="ES API key (consider --es-api-key-env)")
+    p.add_argument("--es-api-key-env", default=None,
+                   help="env var name holding the ES API key")
+    p.add_argument("--es-insecure", action="store_true",
+                   help="disable TLS cert verification (test only)")
 
     args = p.parse_args()
 

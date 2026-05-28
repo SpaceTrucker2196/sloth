@@ -7,7 +7,7 @@ shared dependencies.
 | Path                                               | What it shows |
 |----------------------------------------------------|---------------|
 | [`consumer/`](consumer/) (Python 3, stdlib only)   | Reading sloth's read-only JSONL data socket (`--data-socket SPEC`). Connect, parse, filter, reconnect. The textbook consumer loop. |
-| [`forwarder/`](forwarder/) (Python 3, stdlib only) | Reference SIEM forwarder. Two sinks ship: Splunk HEC (HTTPS JSON envelopes) and RFC 5424 syslog (UDP or TCP). Batching, retries with exponential backoff, drop-on-failure to match sloth's non-durable contract. Pluggable sink interface — ~30 lines per additional sink. |
+| [`forwarder/`](forwarder/) (Python 3, stdlib only) | Reference SIEM forwarder. Three sinks ship: Splunk HEC (HTTPS JSON envelopes), RFC 5424 syslog (UDP or TCP), and Elasticsearch Bulk API (NDJSON, time-rolled indices, basic auth or API key). Batching, retries with exponential backoff, drop-on-failure to match sloth's non-durable contract. Pluggable sink interface — ~30 lines per additional sink. |
 
 These are *out-of-product*: they don't link to or modify sloth itself,
 and they don't ship with the binary. They live here so the schema and

@@ -1,13 +1,14 @@
 # sloth-forward — reference SIEM forwarder
 
 A Python 3 program that reads the live JSONL stream from a running
-sloth's `--data-socket SPEC` and pushes the records to a SIEM. Two
+sloth's `--data-socket SPEC` and pushes the records to a SIEM. Three
 sinks ship in this reference:
 
-| Sink     | Use                                                          |
-|----------|--------------------------------------------------------------|
-| `hec`    | Splunk HTTP Event Collector — JSON envelopes over HTTPS POST |
-| `syslog` | RFC 5424 syslog over UDP or TCP                              |
+| Sink      | Use                                                          |
+|-----------|--------------------------------------------------------------|
+| `hec`     | Splunk HTTP Event Collector — JSON envelopes over HTTPS POST |
+| `syslog`  | RFC 5424 syslog over UDP or TCP                              |
+| `elastic` | Elasticsearch Bulk API (`POST /_bulk`) — NDJSON, time-rolled indices, basic auth or API key |
 
 Stdlib only. Python 3.7+. The sink interface is two lines of code
 (`name`, `send(batch)`); use it as a template for Loki, Elasticsearch,
@@ -107,6 +108,65 @@ forwarders feeding the same SIEM, override the hostname per-instance
 via `--syslog-hostname` so the collector can distinguish them.
 
 ---
+
+## Elasticsearch
+
+```sh
+# Time-rolled index (one per UTC day), API key auth
+python3 sloth-forward.py unix:/tmp/sloth.sock \
+    --sink elastic \
+    --es-url       https://elastic.example.com:9200 \
+    --es-index     'sloth-events-%Y.%m.%d' \
+    --es-api-key-env SLOTH_ES_API_KEY
+
+# Basic auth, single fixed index
+python3 sloth-forward.py unix:/tmp/sloth.sock \
+    --sink elastic \
+    --es-url      https://elastic.example.com:9200 \
+    --es-index    sloth-events \
+    --es-username elastic \
+    --es-password-env SLOTH_ES_PASSWORD
+```
+
+Each batch is sent as one POST to `<es-url>/_bulk` with
+`Content-Type: application/x-ndjson`. Body shape:
+
+```
+{"index":{"_index":"sloth-events-2024.05.27"}}
+{"@timestamp":"2024-05-27T12:34:56.000Z","type":"dns","src":"...","qname":"..."}
+{"index":{"_index":"sloth-events-2024.05.27"}}
+{"@timestamp":"...","type":"alert","sev":2,...}
+```
+
+Highlights:
+
+- **`@timestamp` is derived from each record's `ts` field** (ISO-8601
+  UTC, millisecond precision). Elastic's default index template uses
+  this for time-based search. The original `ts` (Unix seconds) is left
+  on the document untouched.
+- **Index name supports strftime tokens.** `sloth-events-%Y.%m.%d`
+  resolves per-record from `ts`, so records emitted near midnight
+  land in the correct daily index even if the forwarder is batching
+  across the boundary.
+- **Auth.** Pass either `--es-api-key(-env)` *or* `--es-username` +
+  `--es-password(-env)`. API key wins if both are set (stronger
+  credential). Use the `-env` variants on shared hosts to keep secrets
+  out of `ps`.
+- **Partial failures are batch-fatal.** Elastic's `_bulk` returns 200
+  even when individual docs are rejected (mapping conflicts, illegal
+  field names) — the body's `errors: true` flag distinguishes. This
+  forwarder treats *any* per-item failure as a batch failure so the
+  retry loop sees it. The first per-doc error is included in the
+  stderr drop message so you know what to fix.
+- **TLS.** `--es-insecure` disables cert verification. Test only.
+- **Cloud / managed Elastic.** Point `--es-url` at the cloud cluster
+  endpoint and pass the API key issued by Kibana → Stack Management
+  → API keys. The Bulk API is the same.
+
+A common production pattern is to define an index template on the
+ES side that maps the sloth fields (`type`, `src`, `dst`, `ja3`, etc.)
+to keyword/IP/text as appropriate, with a dynamic mapping fallback
+for unknown fields. The forwarder itself stays schema-agnostic.
 
 ## Filters and batching
 

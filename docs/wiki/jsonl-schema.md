@@ -181,6 +181,12 @@ implements batched, retrying forwarders to:
 
 - **Splunk HEC** — JSON envelopes over HTTPS POST.
 - **RFC 5424 syslog** — UDP or TCP.
+- **Elasticsearch Bulk API** — NDJSON to `/_bulk`, time-rolled
+  indices via strftime patterns (`sloth-events-%Y.%m.%d`),
+  `@timestamp` derived from each record's `ts`, basic auth or API
+  key. Partial failures (Elastic returns 200 with `errors:true`
+  even when individual docs are rejected) surface as batch
+  failures so the retry loop sees them.
 
 The sink interface is a two-method class (`name`, `send(batch)`), so
 adding Loki / Elasticsearch / Datadog / an in-house collector is ~30
