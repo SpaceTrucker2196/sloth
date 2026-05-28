@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stream — sloth</title>
+<meta name="description" content="The JSONL contract: one record per line, two transports (UNIX-domain or TCP), seven record types. Plus a reference Python consumer and a three-sink SIEM forwarder.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/sloth.png">
+</head>
+<body>
+
+<!-- ── Header / Nav ───────────────────────────────────────────────── -->
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="brand">
+      <span class="brand-mark">🦥</span>
+      <span class="brand-name">sloth</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html#what">What it sees</a>
+      <a href="views.html">27 views</a>
+      <a href="philosophy.html">Philosophy</a>
+      <a href="streaming.html">Stream</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="https://github.com/SpaceTrucker2196/sloth" class="github-link" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </nav>
+</header>
+
+<!-- ── Page header ────────────────────────────────────────────────── -->
+<section class="page-header">
+  <div class="page-header-inner">
+    <a class="back-link" href="index.html">← Home</a>
+    <p class="page-eyebrow">The JSONL contract</p>
+    <h1 class="page-title">Stream.</h1>
+    <p class="page-lede">
+      One JSON object per line, terminated by <code>\n</code>. Same
+      records on every sink &mdash; file
+      (<code>-o FILE</code>), UNIX-domain socket, or TCP
+      (<code>--data-socket SPEC</code>). <strong>Read-only by design</strong>:
+      sloth never reads from a connected client. Access control is
+      the operator's job (bind address, UNIX perms, Tailscale ACLs).
+    </p>
+  </div>
+</section>
+
+<!-- ── Transports ─────────────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <h2>Three transports, same payload.</h2>
+    <p class="section-lede">
+      Each line is identical regardless of sink. <code>-o FILE</code>
+      and <code>--data-socket SPEC</code> can both run at once and
+      broadcast every record to every active sink.
+    </p>
+
+    <table class="kit-table">
+      <thead>
+        <tr><th>Transport</th><th>Configured by</th><th>Use</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="col-name">File (append)</td>
+          <td><code>-o /var/log/sloth.jsonl</code></td>
+          <td class="col-desc">log forwarder pulls / <code>tail -f</code> pipelines</td>
+        </tr>
+        <tr>
+          <td class="col-name">UNIX-domain</td>
+          <td><code>--data-socket unix:/var/run/sloth.sock</code></td>
+          <td class="col-desc">local consumer on the same host</td>
+        </tr>
+        <tr>
+          <td class="col-name">TCP</td>
+          <td><code>--data-socket tcp:HOST:PORT</code></td>
+          <td class="col-desc">remote consumer over a trusted transport (Tailscale, private VPN, localhost only)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="footnote">
+      <strong>Backpressure.</strong> The socket writer is non-blocking.
+      A slow client that fills its kernel send buffer <em>loses lines</em>
+      for the duration of the stall (it does not get queued). A broken
+      pipe closes the client fd; reconnect to resume.
+    </p>
+  </div>
+</section>
+
+<!-- ── Record types ───────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <h2>Seven record types.</h2>
+    <p class="section-lede">
+      Every line is a JSON object with at least <code>type</code> and
+      <code>ts</code> (Unix seconds). Fields are append-only;
+      consumers ignore unknown <code>type</code> values and unknown
+      keys gracefully.
+    </p>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">dns</span>
+        </div>
+<pre class="code-block">{"type":"dns","ts":1700000000,
+ "src":"192.168.1.5",
+ "qname":"example.com",
+ "qtype":"A",
+ "answer":"93.184.216.34",
+ "is_resp":1}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">tls</span>
+        </div>
+<pre class="code-block">{"type":"tls","ts":1700000001,
+ "src":"10.0.0.5","dst":"93.184.216.34",
+ "host":"example.com",
+ "ver":"TLS 1.3",
+ "ja3":"deadbeefcafef00d…"}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">quic</span>
+        </div>
+<pre class="code-block">{"type":"quic","ts":1700000002,
+ "src":"10.0.0.5","dst":"1.1.1.1",
+ "host":"cloudflare.com",
+ "ver":"v1"}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">http</span>
+        </div>
+<pre class="code-block">{"type":"http","ts":1700000003,
+ "src":"10.0.0.5",
+ "host":"example.com",
+ "method":"GET",
+ "path":"/index.html"}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">ntp</span>
+        </div>
+<pre class="code-block">{"type":"ntp","ts":1700000004,
+ "src":"10.0.0.1","dst":"192.168.1.5",
+ "mode":"server",
+ "version":4,"stratum":1,"ref":"GPS"}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">icmp</span>
+        </div>
+<pre class="code-block">{"type":"icmp","ts":1700000005,
+ "src":"192.168.1.5","dst":"8.8.8.8",
+ "desc":"Echo Req",
+ "ty":8,"code":0,"seq":42,"v6":0}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">alert</span>
+        </div>
+<pre class="code-block">{"type":"alert","ts":1700000006,
+ "title":"THREAT_DOMAIN",
+ "detail":"192.168.1.5 queried …",
+ "key":"threat-d:malware.testing.com",
+ "sev":2,"ty":3,"count":1}</pre>
+      </div>
+    </div>
+
+    <p class="footnote pale">
+      <strong>sev</strong> is the severity tier: 0 = LOW (yellow), 1 = WARN
+      (orange), 2 = CRIT (red). The enum is stable. <strong>ts</strong> on alerts
+      is the <em>last_seen</em> time of the dedup key, not the first
+      observation.
+    </p>
+  </div>
+</section>
+
+<!-- ── Consumer ───────────────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <h2>Reference consumer.</h2>
+    <p class="section-lede">
+      <code>examples/consumer/sloth-stream.py</code> is the textbook
+      consumer loop &mdash; connect, stream, parse, filter, reconnect.
+      Stdlib only. Read it as a template for porting to Go, Node, or
+      Swift's <code>Network.framework</code>; the structure ports
+      directly.
+    </p>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Tail every record, ANSI colour</span>
+        </div>
+<pre class="code-block">python3 examples/consumer/sloth-stream.py \
+    unix:/tmp/sloth.sock</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Only alerts, over Tailscale</span>
+        </div>
+<pre class="code-block">python3 examples/consumer/sloth-stream.py \
+    tcp:100.64.0.5:8765 --type alert</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Raw JSON into jq</span>
+        </div>
+<pre class="code-block">python3 examples/consumer/sloth-stream.py \
+    unix:/tmp/sloth.sock --raw | jq .</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Type tally every 5s</span>
+        </div>
+<pre class="code-block">python3 examples/consumer/sloth-stream.py \
+    unix:/tmp/sloth.sock --count</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Forwarder ──────────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <h2>Reference SIEM forwarder.</h2>
+    <p class="section-lede">
+      <code>examples/forwarder/sloth-forward.py</code> reads from the
+      data socket, batches, and pushes to a downstream SIEM. Three
+      sinks ship; the sink interface is two members
+      (<code>.name</code>, <code>.send(batch)</code>) so adding Loki,
+      Datadog, or your in-house collector is ~30 lines.
+    </p>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Splunk HEC</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink hec \
+    --hec-url       https://splunk.example.com:8088/services/collector \
+    --hec-token-env SLOTH_HEC_TOKEN</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Elasticsearch (daily rolled)</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink elastic \
+    --es-url       https://elastic.example.com:9200 \
+    --es-index     'sloth-events-%Y.%m.%d' \
+    --es-api-key-env SLOTH_ES_API_KEY</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">RFC 5424 syslog (UDP)</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --sink syslog \
+    --syslog-host siem.example.com \
+    --syslog-port 514</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">sh</span>
+          <span class="code-title">Alerts-only feed, big batches</span>
+        </div>
+<pre class="code-block">python3 examples/forwarder/sloth-forward.py \
+    unix:/tmp/sloth.sock \
+    --type alert \
+    --batch-size 500 --batch-ms 500 \
+    --sink hec --hec-url … --hec-token-env …</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Delivery semantics ─────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">DELIVERY</span>
+        <h3>Non-durable by design.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          The data socket is non-durable, and the forwarder doesn't
+          pretend otherwise. When the downstream sink fails after
+          <code>--max-retries</code>, the batch is <strong>dropped</strong> and
+          a count is logged to stderr.
+        </p>
+        <p>
+          If your deployment needs durability, also pass
+          <code>-o /var/log/sloth.jsonl</code> to sloth and ship the
+          file with a log-shipping agent (filebeat, vector, fluent-bit)
+          on a separate path. <em>That pipeline gives you durability;
+          this one gives you low-latency triage.</em>
+        </p>
+        <p>
+          The stats line (every <code>--stats-interval</code> seconds,
+          default 30s) is the operator's ground truth:
+          <code>received &ge; forwarded + dropped</code>. A non-zero
+          <code>dropped</code> over a long window means the sink can't
+          keep up.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <div class="footer-inner footer-3col">
+    <div class="footer-col">
+      <p class="brand brand-footer">
+        <span class="brand-mark">🦥</span>
+        <span class="brand-name">sloth</span>
+      </p>
+      <p class="footer-tag">Eyes, not hands.</p>
+    </div>
+
+    <div class="footer-col">
+      <h5>Navigate</h5>
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="views.html">27 views</a></li>
+        <li><a href="philosophy.html">Philosophy</a></li>
+        <li><a href="streaming.html">Stream</a></li>
+        <li><a href="quickstart.html">Quickstart</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col footer-about">
+      <h5>About</h5>
+      <p>
+        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
+        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        JSONL stream you can pipe into any SIEM. Built in C99 for
+        Linux, with a small reference consumer + forwarder in
+        Python.
+      </p>
+    </div>
+  </div>
+  <div class="footer-meta">
+    <p>
+      Run sloth only on networks you have explicit authority to
+      observe.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

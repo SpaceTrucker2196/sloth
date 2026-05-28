@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Philosophy — sloth</title>
+<meta name="description" content="The five non-negotiable rules behind sloth: passive only, no active key recovery, vulnerabilities flagged not exploited, white hat only, operator owns the consequences.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/sloth.png">
+</head>
+<body>
+
+<!-- ── Header / Nav ───────────────────────────────────────────────── -->
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="brand">
+      <span class="brand-mark">🦥</span>
+      <span class="brand-name">sloth</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html#what">What it sees</a>
+      <a href="views.html">27 views</a>
+      <a href="philosophy.html">Philosophy</a>
+      <a href="streaming.html">Stream</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="https://github.com/SpaceTrucker2196/sloth" class="github-link" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </nav>
+</header>
+
+<!-- ── Page header ────────────────────────────────────────────────── -->
+<section class="page-header">
+  <div class="page-header-inner">
+    <a class="back-link" href="index.html">← Home</a>
+    <p class="page-eyebrow">The non-negotiables</p>
+    <h1 class="page-title">Philosophy.</h1>
+    <p class="page-lede">
+      Five rules define what sloth is allowed to do. They are not
+      preferences and they are not negotiable per feature. They are
+      what makes sloth trustworthy to run on a sensitive segment:
+      <strong>the bytes it observes are bytes that were already there.</strong>
+      Lose that and the tool is just another offensive fork.
+    </p>
+  </div>
+</section>
+
+<!-- ── Rule 1: Passive only ───────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 01</span>
+        <h3>Passive only.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth never injects packets, never sends probes, never
+          deauthenticates, never beacons, never ARP-poisons, never
+          port-scans, never resolves hosts it didn't already see, and
+          never modifies kernel state &mdash; no <code>iw set</code>, no
+          <code>ip link set</code>, no <code>iptables</code>, no monitor-mode
+          toggling. <strong>It reads. It never writes to the wire.</strong>
+        </p>
+        <p>
+          Monitor-mode interfaces must be set up <em>externally</em> by
+          the operator before sloth starts (using <code>iw</code>,
+          <code>airmon-ng</code>, or the tool of your choice). Sloth
+          attaches to whatever interface is already in monitor mode and
+          starts watching. It never asks the kernel to change link state
+          on its behalf.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Rule 2: No active key recovery ─────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 02</span>
+        <h3>No active key recovery.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth never runs a passphrase against a captured handshake.
+          It never calls <code>hashcat</code>, <code>aircrack-ng</code>,
+          John, or any cracking library. <strong>It never decrypts a
+          frame it captured.</strong>
+        </p>
+        <p>
+          It <em>does</em> capture EAPOL / PMKID material and export it
+          in hashcat-22000 format &mdash; so the operator can run a
+          crack themselves, offline, on hardware they own, against a
+          target they're authorised to test. That step is the
+          operator's responsibility, on the operator's clock, with the
+          operator's legal cover &mdash; not sloth's.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Rule 3: Vulnerabilities flagged, not exploited ─────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 03</span>
+        <h3>Vulnerabilities flagged, not exploited.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth detects a wide vocabulary of weak / hostile patterns,
+          emits an alert, and (optionally) writes a per-flow pcap
+          snippet. <strong>It never follows up with an active step
+          &mdash; no MITM, no session hijack, no replay, no credential
+          harvesting.</strong>
+        </p>
+        <ul>
+          <li>WEP, WPA-TKIP, MFP-off</li>
+          <li>Weak TLS (SSLv3, TLS 1.0/1.1)</li>
+          <li>Attack-tool User-Agents</li>
+          <li>Evil twins (same SSID, OPEN sibling)</li>
+          <li>Rogue DHCP servers</li>
+          <li>DGA-style DNS qnames</li>
+          <li>Deauth floods</li>
+          <li>KARMA / Pineapple-style behaviour</li>
+          <li>dnscat / iodine DNS tunnels</li>
+          <li>ARP spoofing</li>
+          <li>Probe-request floods</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Rule 4: White hat only ─────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 04</span>
+        <h3>White hat only.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth is built for:
+        </p>
+        <ul>
+          <li>Defenders monitoring their own networks</li>
+          <li>Blue teams running authorised SIGINT in a SOC</li>
+          <li>Incident responders triaging a compromised host</li>
+          <li>Researchers in a lab they own</li>
+          <li>CTF and training environments</li>
+          <li>Security-aware travellers who want to know what the
+              caf&eacute; Wi-Fi is doing</li>
+        </ul>
+        <p>
+          It is <strong>not built</strong> for surveillance of third
+          parties, harassment, stalking, or any operation against a
+          network the operator does not have explicit written authority
+          to observe.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Rule 5: Operator owns the consequences ─────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">RULE 05</span>
+        <h3>Operator owns the consequences.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth surfaces information. What the operator does with that
+          information &mdash; file an incident, reconfigure an AP,
+          brief a client, walk away &mdash; is outside sloth's scope.
+        </p>
+        <p>
+          <em>The tool is honest about what it sees and silent about
+          what to do.</em>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Out of scope ───────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">OUT OF SCOPE</span>
+        <h3>What sloth deliberately won't do.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          If you're tempted to add a feature because it would be
+          useful &mdash; port scanning the LAN, sending a deauth to
+          test detection, auto-cracking the captured handshake &mdash;
+          stop. <strong>That feature belongs in a different tool.</strong>
+          Sloth's value is being trusted to be passive: an operator can
+          run sloth on a sensitive segment without changing the segment.
+        </p>
+        <ul>
+          <li>Active reconnaissance (port scan, host sweep, OS
+              fingerprint via probes).</li>
+          <li>Frame injection of any kind.</li>
+          <li>Online cracking, dictionary attacks, password-spray,
+              credential validation.</li>
+          <li>Network configuration (DHCP server, DNS resolver,
+              firewall rules).</li>
+          <li>Any "honeypot" mode that responds to inbound traffic.</li>
+          <li>Remote-control surfaces of any kind. No command channel,
+              no "do X" RPC, no inbound-configuration endpoint, no
+              plugin loader, no shell-out. Sloth refuses to act on
+              instructions it receives over the wire.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Pullquote ──────────────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <p class="page-pullquote">
+      &ldquo;Sloth is a passive, white-hat SIGINT console: it watches,
+      it flags, it never attacks.&rdquo;
+    </p>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <div class="footer-inner footer-3col">
+    <div class="footer-col">
+      <p class="brand brand-footer">
+        <span class="brand-mark">🦥</span>
+        <span class="brand-name">sloth</span>
+      </p>
+      <p class="footer-tag">Eyes, not hands.</p>
+    </div>
+
+    <div class="footer-col">
+      <h5>Navigate</h5>
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="views.html">27 views</a></li>
+        <li><a href="philosophy.html">Philosophy</a></li>
+        <li><a href="streaming.html">Stream</a></li>
+        <li><a href="quickstart.html">Quickstart</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col footer-about">
+      <h5>About</h5>
+      <p>
+        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
+        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        JSONL stream you can pipe into any SIEM. Built in C99 for
+        Linux, with a small reference consumer + forwarder in
+        Python.
+      </p>
+    </div>
+  </div>
+  <div class="footer-meta">
+    <p>
+      Run sloth only on networks you have explicit authority to
+      observe.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

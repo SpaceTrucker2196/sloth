@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quickstart — sloth</title>
+<meta name="description" content="Install dependencies, build, run, configure WiFi monitor mode, and troubleshoot — the operator's guide to getting sloth on a network.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/sloth.png">
+</head>
+<body>
+
+<!-- ── Header / Nav ───────────────────────────────────────────────── -->
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="brand">
+      <span class="brand-mark">🦥</span>
+      <span class="brand-name">sloth</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html#what">What it sees</a>
+      <a href="views.html">27 views</a>
+      <a href="philosophy.html">Philosophy</a>
+      <a href="streaming.html">Stream</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="https://github.com/SpaceTrucker2196/sloth" class="github-link" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </nav>
+</header>
+
+<!-- ── Page header ────────────────────────────────────────────────── -->
+<section class="page-header">
+  <div class="page-header-inner">
+    <a class="back-link" href="index.html">← Home</a>
+    <p class="page-eyebrow">Build, run, watch</p>
+    <h1 class="page-title">Quickstart.</h1>
+    <p class="page-lede">
+      One binary. No daemon manager. No config file. The fast path
+      gets you a TUI in about five minutes; the WiFi-SIGINT path adds
+      a monitor-mode interface set up out of band. Sloth never
+      touches link state &mdash; that part is yours.
+    </p>
+  </div>
+</section>
+
+<!-- ── Step 1: Platforms ──────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 01</span>
+        <h3>Supported platforms.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth is built for Linux. macOS works for development and
+          tests but not for the full feature set; *BSD and Windows are
+          stub builds only.
+        </p>
+        <table class="kit-table">
+          <thead>
+            <tr><th>Platform</th><th>Build</th><th>Run</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="col-name">Linux</td><td>yes (primary)</td><td>full</td></tr>
+            <tr><td class="col-name">macOS / Darwin</td><td>yes</td><td>partial (fake platform drives tests)</td></tr>
+            <tr><td class="col-name">*BSD</td><td>stub</td><td>stub</td></tr>
+            <tr><td class="col-name">Windows</td><td>stub</td><td>not maintained</td></tr>
+          </tbody>
+        </table>
+        <p>
+          The production target is Linux. Other platforms exist so
+          the test binary can build anywhere; they are not
+          feature-complete.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Step 2: Dependencies ───────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 02</span>
+        <h3>Dependencies.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          For the full build (default): <code>libpcap</code> +
+          <code>libncursesw</code>. The test build needs neither.
+        </p>
+
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Debian / Ubuntu</span>
+            </div>
+<pre class="code-block">sudo apt-get install -y \
+    build-essential \
+    libpcap-dev \
+    libncursesw5-dev</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Fedora / RHEL</span>
+            </div>
+<pre class="code-block">sudo dnf install -y \
+    gcc make \
+    libpcap-devel \
+    ncurses-devel</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Arch</span>
+            </div>
+<pre class="code-block">sudo pacman -S --needed \
+    base-devel \
+    libpcap \
+    ncurses</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Alpine</span>
+            </div>
+<pre class="code-block">apk add \
+    build-base \
+    libpcap-dev \
+    ncurses-dev</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Step 3: Build ──────────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 03</span>
+        <h3>Build.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Pure <code>Makefile</code>, no autotools, no meson, no
+          bazel. Both <code>make</code> and <code>make test</code> must
+          be green at every commit &mdash; that's the factory's quality
+          gate.
+        </p>
+
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Default (full build)</span>
+            </div>
+<pre class="code-block">cd sloth
+make test    # 2,122 assertions, no root needed
+make         # builds ./sloth</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Build variants</span>
+            </div>
+<pre class="code-block">make WITH_PCAP=0      # no capture, no packets view
+make WITH_NCURSES=0   # headless / embedded
+make embedded         # = both above
+make mutate           # verify-the-verifier campaign</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Step 4: Run ────────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 04</span>
+        <h3>Run.</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth needs <code>CAP_NET_RAW</code> for libpcap capture and
+          <code>CAP_NET_ADMIN</code> for nl80211 (WiFi scan / stations).
+          Easiest during development: <code>sudo ./sloth</code>. For
+          unattended deployment, prefer file-grant caps:
+        </p>
+
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Common invocations</span>
+            </div>
+<pre class="code-block">sudo ./sloth                                       # default iface
+sudo ./sloth -i eth0                               # pin capture iface
+sudo ./sloth -o /var/log/sloth.jsonl               # forensic stream
+sudo ./sloth --data-socket unix:/tmp/sloth.sock    # live stream
+sudo ./sloth --data-socket tcp:100.64.0.5:8765     # over Tailscale
+sudo ./sloth --pcap-dir   /var/sloth/pcap          # per-alert pcap
+sudo ./sloth --eapol-dir  /tmp/sloth-eapol         # hashcat export</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Cap-grant (no sudo at runtime)</span>
+            </div>
+<pre class="code-block">sudo setcap cap_net_raw,cap_net_admin=eip ./sloth
+./sloth   # runs unprivileged</pre>
+          </div>
+        </div>
+
+        <p>
+          Inside sloth: <kbd>1</kbd>&ndash;<kbd>0</kbd> direct view
+          jumps. <kbd>Tab</kbd> cycles. <kbd>o</kbd> dashboard.
+          <kbd>l</kbd> OSI stack. <kbd>?</kbd> help. <kbd>q</kbd>
+          quit. Filter any list view with <kbd>/</kbd>.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Step 5: WiFi SIGINT prep ───────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 05</span>
+        <h3>WiFi-SIGINT prep (out of band).</h3>
+      </div>
+      <div class="split-body">
+        <p>
+          Sloth <strong>never</strong> touches link state. Monitor mode
+          must be set up externally before sloth starts. Tested
+          chipset: <code>rtl88XXau</code>. Any card whose driver
+          supports <code>ARPHRD_IEEE80211_RADIOTAP</code> should work.
+        </p>
+
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Set monitor mode + run</span>
+            </div>
+<pre class="code-block">sudo ip link set wlan1 down
+sudo iw  dev wlan1 set type monitor
+sudo ip link set wlan1 up
+
+sudo ./sloth --eapol-dir /tmp/sloth-eapol \
+             -o /tmp/sloth.jsonl</pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-header">
+              <span class="code-lang">sh</span>
+              <span class="code-title">Offline crack via hashcat</span>
+            </div>
+<pre class="code-block">hashcat -m 22000 \
+    /tmp/sloth-eapol/eapol.22000 \
+    rockyou.txt</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Step 6: Troubleshooting ────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <div class="split">
+      <div class="split-head">
+        <span class="rule-num">STEP 06</span>
+        <h3>Common failures &amp; fixes.</h3>
+      </div>
+      <div class="split-body">
+        <table class="kit-table">
+          <thead>
+            <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>pcap.h: No such file</code></td>
+              <td class="col-desc">missing libpcap headers</td>
+              <td class="col-desc"><code>apt-get install libpcap-dev</code> (or build <code>WITH_PCAP=0</code>)</td>
+            </tr>
+            <tr>
+              <td><code>cannot find -lncursesw</code></td>
+              <td class="col-desc">missing wide-char ncurses</td>
+              <td class="col-desc"><code>apt-get install libncursesw5-dev</code></td>
+            </tr>
+            <tr>
+              <td class="col-desc">Empty Connections view</td>
+              <td class="col-desc">no <code>CAP_NET_RAW</code> or wrong uid</td>
+              <td class="col-desc">sudo or <code>setcap</code></td>
+            </tr>
+            <tr>
+              <td class="col-desc">No process names on sockets</td>
+              <td class="col-desc">sockets owned by other uids</td>
+              <td class="col-desc">run as root</td>
+            </tr>
+            <tr>
+              <td class="col-desc">Empty WiFi view</td>
+              <td class="col-desc">missing <code>CAP_NET_ADMIN</code> or no WiFi iface</td>
+              <td class="col-desc">check <code>iw dev</code>; run with caps</td>
+            </tr>
+            <tr>
+              <td class="col-desc">No probes / beacons / EAPOL</td>
+              <td class="col-desc">iface not in monitor mode</td>
+              <td class="col-desc">see Step 05</td>
+            </tr>
+            <tr>
+              <td class="col-desc">Build warnings</td>
+              <td class="col-desc">regression in the factory's quality gate</td>
+              <td class="col-desc">fix before commit &mdash; warnings are not negotiable</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <div class="footer-inner footer-3col">
+    <div class="footer-col">
+      <p class="brand brand-footer">
+        <span class="brand-mark">🦥</span>
+        <span class="brand-name">sloth</span>
+      </p>
+      <p class="footer-tag">Eyes, not hands.</p>
+    </div>
+
+    <div class="footer-col">
+      <h5>Navigate</h5>
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="views.html">27 views</a></li>
+        <li><a href="philosophy.html">Philosophy</a></li>
+        <li><a href="streaming.html">Stream</a></li>
+        <li><a href="quickstart.html">Quickstart</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col footer-about">
+      <h5>About</h5>
+      <p>
+        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
+        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        JSONL stream you can pipe into any SIEM. Built in C99 for
+        Linux, with a small reference consumer + forwarder in
+        Python.
+      </p>
+    </div>
+  </div>
+  <div class="footer-meta">
+    <p>
+      Run sloth only on networks you have explicit authority to
+      observe.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

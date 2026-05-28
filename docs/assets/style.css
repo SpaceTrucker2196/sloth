@@ -397,6 +397,256 @@ kbd {
     drop-shadow(0 0 60px rgba(159, 0, 255, 0.45));
 }
 
+/* ── Sub-page header (philosophy / views / streaming / quickstart) */
+.page-header {
+  position: relative;
+  padding: clamp(3rem, 7vh, 5rem) var(--gutter) clamp(2.5rem, 5vh, 4rem);
+  background:
+    radial-gradient(ellipse at top right, rgba(159, 0, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse at bottom left, rgba(0, 255, 229, 0.10), transparent 50%),
+    var(--space);
+  border-bottom: 1px solid rgba(0, 255, 229, 0.20);
+  overflow: hidden;
+}
+.page-header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 79px,
+    rgba(255, 0, 110, 0.05) 79px,
+    rgba(255, 0, 110, 0.05) 80px
+  );
+  pointer-events: none;
+}
+.page-header-inner {
+  max-width: var(--section-max);
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-tech);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--hot-pink);
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-bottom: 1.6rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid rgba(255, 42, 149, 0.4);
+  border-radius: 2px;
+  text-shadow: 0 0 6px rgba(255, 42, 149, 0.5);
+  transition: all 0.18s ease;
+}
+.back-link:hover {
+  color: var(--night);
+  background: var(--hot-pink);
+  text-shadow: none;
+  text-decoration: none;
+  box-shadow: 0 0 14px rgba(255, 42, 149, 0.7);
+}
+.page-eyebrow {
+  margin: 0 0 0.7rem;
+  font-family: var(--font-tech);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--jungle);
+  text-shadow: 0 0 1px var(--jungle), 0 0 8px rgba(57, 255, 20, 0.55);
+}
+.page-title {
+  font-family: var(--font-display);
+  font-size: clamp(2.4rem, 5vw, 3.6rem);
+  font-weight: 400;
+  color: var(--chrome);
+  margin: 0 0 1.2rem;
+  text-shadow:
+    0 0 2px var(--chrome),
+    0 0 14px var(--magenta),
+    0 0 32px rgba(255, 0, 110, 0.55);
+  letter-spacing: 0.02em;
+}
+.page-lede {
+  font-size: 1.15rem;
+  color: var(--chrome);
+  opacity: 0.92;
+  margin: 0;
+  max-width: 60ch;
+  line-height: 1.6;
+}
+
+/* Sub-page content sections */
+.page-section {
+  padding: clamp(3rem, 7vh, 5rem) var(--gutter);
+}
+.page-section + .page-section { border-top: 1px solid rgba(0, 255, 229, 0.10); }
+.page-section.dark { background: var(--night); }
+
+.page-section-inner {
+  max-width: var(--section-max);
+  margin: 0 auto;
+}
+
+/* Reusable two-column intro: heading | prose */
+.split {
+  display: grid;
+  grid-template-columns: 0.7fr 1.3fr;
+  gap: clamp(1.5rem, 4vw, 3rem);
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .split { grid-template-columns: 1fr; }
+}
+.split-head h3 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--cyan);
+}
+.split-head .rule-num {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--magenta);
+  margin-bottom: 0.4rem;
+  text-shadow: 0 0 6px rgba(255, 0, 110, 0.55);
+  letter-spacing: 0.08em;
+}
+.split-body p {
+  margin: 0 0 1rem;
+  color: var(--chrome);
+  opacity: 0.9;
+  font-size: 1rem;
+  line-height: 1.7;
+}
+.split-body p:last-child { margin-bottom: 0; }
+.split-body em {
+  color: var(--jungle);
+  font-style: italic;
+  text-shadow: 0 0 6px rgba(57, 255, 20, 0.5);
+}
+.split-body strong {
+  color: var(--cyan);
+  font-weight: 700;
+  text-shadow: 0 0 6px rgba(0, 255, 229, 0.45);
+}
+.split-body ul {
+  margin: 0.6rem 0 1rem 1.2rem;
+  padding: 0;
+  color: var(--chrome);
+  opacity: 0.88;
+}
+.split-body li {
+  margin-bottom: 0.3rem;
+  line-height: 1.55;
+}
+
+/* Tables for views catalog / schema */
+.kit-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.94rem;
+}
+.kit-table thead th {
+  font-family: var(--font-tech);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  font-size: 0.78rem;
+  color: var(--jungle);
+  text-align: left;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid rgba(57, 255, 20, 0.4);
+  background: rgba(57, 255, 20, 0.04);
+}
+.kit-table tbody td {
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--chrome);
+  opacity: 0.9;
+  vertical-align: top;
+}
+.kit-table tbody tr:hover td {
+  background: rgba(255, 0, 110, 0.05);
+}
+.kit-table .col-key {
+  font-family: var(--font-tech);
+  width: 4rem;
+}
+.kit-table .col-key kbd { margin: 0; }
+.kit-table .col-name {
+  font-weight: 700;
+  color: var(--hot-pink);
+  text-shadow: 0 0 6px rgba(255, 42, 149, 0.35);
+}
+.kit-table .col-desc { color: var(--chrome); opacity: 0.88; }
+
+/* Compact category headers between rows */
+.cat-heading {
+  margin: 2.6rem 0 0.6rem;
+  font-size: 1.1rem;
+  color: var(--cyan);
+  text-shadow: 0 0 8px rgba(0, 255, 229, 0.55);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.cat-heading::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, rgba(0, 255, 229, 0.5), transparent);
+  margin-left: 0.4rem;
+}
+
+/* Inline pill/labels */
+.pill {
+  display: inline-block;
+  font-family: var(--font-tech);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.5rem;
+  border-radius: 2px;
+  margin-right: 0.4rem;
+  border: 1px solid currentColor;
+}
+.pill-cyan    { color: var(--cyan);     text-shadow: 0 0 5px rgba(0, 255, 229, 0.5); }
+.pill-pink    { color: var(--hot-pink); text-shadow: 0 0 5px rgba(255, 42, 149, 0.5); }
+.pill-green   { color: var(--jungle);   text-shadow: 0 0 5px rgba(57, 255, 20, 0.5); }
+.pill-magenta { color: var(--magenta);  text-shadow: 0 0 5px rgba(255, 0, 110, 0.5); }
+
+/* Big pullquote on sub-pages */
+.page-pullquote {
+  font-family: var(--font-display);
+  font-size: clamp(1.4rem, 3vw, 1.8rem);
+  text-align: center;
+  color: var(--cyan);
+  max-width: 26em;
+  margin: 0 auto;
+  padding: 1.6rem 1rem;
+  border-top: 1px solid rgba(0, 255, 229, 0.4);
+  border-bottom: 1px solid rgba(0, 255, 229, 0.4);
+  line-height: 1.45;
+  text-shadow: 0 0 2px var(--cyan), 0 0 16px rgba(0, 255, 229, 0.55);
+  letter-spacing: 0.02em;
+}
+
+/* Reusable code blocks on sub-pages */
+.code-stack {
+  display: grid;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
 /* ── Sections ────────────────────────────────────────────────── */
 .section {
   position: relative;

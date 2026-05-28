@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>27 views — sloth</title>
+<meta name="description" content="Every sloth view: what it shows, what to watch for. 20 observation views, 4 synthesis views, 5 WiFi SIGINT views, tab-cycle or jump by keybind.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" type="image/png" href="assets/sloth.png">
+</head>
+<body>
+
+<!-- ── Header / Nav ───────────────────────────────────────────────── -->
+<header class="site-header">
+  <nav class="nav">
+    <a href="index.html" class="brand">
+      <span class="brand-mark">🦥</span>
+      <span class="brand-name">sloth</span>
+    </a>
+    <div class="nav-links">
+      <a href="index.html#what">What it sees</a>
+      <a href="views.html">27 views</a>
+      <a href="philosophy.html">Philosophy</a>
+      <a href="streaming.html">Stream</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="https://github.com/SpaceTrucker2196/sloth" class="github-link" target="_blank" rel="noopener">GitHub →</a>
+    </div>
+  </nav>
+</header>
+
+<!-- ── Page header ────────────────────────────────────────────────── -->
+<section class="page-header">
+  <div class="page-header-inner">
+    <a class="back-link" href="index.html">← Home</a>
+    <p class="page-eyebrow">The catalog</p>
+    <h1 class="page-title">Twenty-seven views.</h1>
+    <p class="page-lede">
+      Each view is its own keybinding, its own ring buffer, its own
+      protocol or synthesis. Press <kbd>Tab</kbd> to cycle. Press
+      <kbd>o</kbd> for the composite dashboard, <kbd>l</kbd> for the
+      OSI grid. Press <kbd>/</kbd> in any list view to filter.
+    </p>
+  </div>
+</section>
+
+<!-- ── Observation views ──────────────────────────────────────────── -->
+<section class="page-section">
+  <div class="page-section-inner">
+    <p class="page-eyebrow">
+      <span class="pill pill-cyan">Observation</span> data straight from the wire / kernel
+    </p>
+    <h2>Twenty raw views.</h2>
+    <p class="section-lede">
+      What your host already sees, surfaced as live panels. No
+      inference, no aggregation &mdash; just the data with a useful
+      column layout and protocol-aware colouring.
+    </p>
+
+    <table class="kit-table">
+      <thead>
+        <tr><th class="col-key">Key</th><th>View</th><th>What it shows</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="col-key"><kbd>1</kbd></td><td class="col-name">Interfaces</td><td class="col-desc">Per-interface RX/TX rates, errors/drops, MTU, link speed, sparkline history.</td></tr>
+        <tr><td class="col-key"><kbd>2</kbd></td><td class="col-name">Connections</td><td class="col-desc">Active TCP/UDP sockets with PID, RTT, retransmits, per-conn bandwidth.</td></tr>
+        <tr><td class="col-key"><kbd>3</kbd></td><td class="col-name">WiFi</td><td class="col-desc">Nearby APs from <code>nl80211</code> scan: signal, channel, encryption.</td></tr>
+        <tr><td class="col-key"><kbd>4</kbd></td><td class="col-name">Packets</td><td class="col-desc">Live pcap capture with BPF filter, hex detail panel, pcap export.</td></tr>
+        <tr><td class="col-key"><kbd>5</kbd></td><td class="col-name">Processes</td><td class="col-desc">Process tree with fold / unfold.</td></tr>
+        <tr><td class="col-key"><kbd>6</kbd></td><td class="col-name">Stats</td><td class="col-desc">Session totals &mdash; bytes, packets, rates per interface since reset.</td></tr>
+        <tr><td class="col-key"><kbd>7</kbd></td><td class="col-name">Probe</td><td class="col-desc">802.11 probe-request sniffer &mdash; unassociated clients and the SSIDs they're looking for.</td></tr>
+        <tr><td class="col-key"><kbd>8</kbd></td><td class="col-name">ARP</td><td class="col-desc">Layer-2 neighbour table with OUI vendor lookup.</td></tr>
+        <tr><td class="col-key"><kbd>9</kbd></td><td class="col-name">mDNS</td><td class="col-desc">Bonjour / Zeroconf service table from passive UDP/5353.</td></tr>
+        <tr><td class="col-key"><kbd>0</kbd></td><td class="col-name">NBNS</td><td class="col-desc">NetBIOS Name Service table from UDP/137.</td></tr>
+        <tr><td class="col-key"><kbd>d</kbd></td><td class="col-name">DHCP</td><td class="col-desc">Live DHCP event log: DISCOVER / REQUEST / ACK.</td></tr>
+        <tr><td class="col-key"><kbd>s</kbd></td><td class="col-name">SSDP</td><td class="col-desc">UPnP device table from UDP/1900 NOTIFY / M-SEARCH.</td></tr>
+        <tr><td class="col-key"><kbd>b</kbd></td><td class="col-name">Beacons</td><td class="col-desc">Passive 802.11 beacon sniffer &mdash; pairwise cipher / AKM / MFP from the RSN IE, hidden-SSID reveal from probe-responses.</td></tr>
+        <tr><td class="col-key"><kbd>a</kbd></td><td class="col-name">Deauth</td><td class="col-desc">802.11 deauth / disassoc frames; flood detection per target MAC.</td></tr>
+        <tr><td class="col-key"><kbd>h</kbd></td><td class="col-name">HTTP</td><td class="col-desc">Plaintext HTTP requests: method, host, path.</td></tr>
+        <tr><td class="col-key"><kbd>t</kbd></td><td class="col-name">TLS</td><td class="col-desc">TLS ClientHello log: SNI host, version, and JA3 fingerprint.</td></tr>
+        <tr><td class="col-key"><kbd>u</kbd></td><td class="col-name">QUIC</td><td class="col-desc">QUIC Initial packets: version + DNS-resolved host.</td></tr>
+        <tr><td class="col-key"><kbd>r</kbd></td><td class="col-name">DNS</td><td class="col-desc">DNS query / response log: qname, qtype, answer, NXDOMAIN.</td></tr>
+        <tr><td class="col-key"><kbd>p</kbd></td><td class="col-name">NTP</td><td class="col-desc">NTP traffic: mode, stratum, reference ID.</td></tr>
+        <tr><td class="col-key"><kbd>i</kbd></td><td class="col-name">ICMP</td><td class="col-desc">ICMPv4 + ICMPv6 with named types (Echo, Unreachable, Neigh Sol, &hellip;).</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Synthesis views ────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <p class="page-eyebrow">
+      <span class="pill pill-magenta">Synthesis</span> derived from observation
+    </p>
+    <h2>Four derived views.</h2>
+    <p class="section-lede">
+      Rule outputs, joined records, and at-a-glance composites.
+      Synthesis views read snapshot state and produce a different
+      lens on what the observation views already captured.
+    </p>
+
+    <table class="kit-table">
+      <thead>
+        <tr><th class="col-key">Key</th><th>View</th><th>What it shows</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="col-key"><kbd>v</kbd></td><td class="col-name">Alerts</td><td class="col-desc">Rule-derived events: port scans, deauth floods, NXDOMAIN bursts, threat-intel domain hits, threat-intel IP hits, periodic beaconing.</td></tr>
+        <tr><td class="col-key"><kbd>g</kbd></td><td class="col-name">Devices</td><td class="col-desc">One record per MAC, joined from ARP / DHCP / Beacons / Probe / Stations with OUI vendor.</td></tr>
+        <tr><td class="col-key"><kbd>o</kbd></td><td class="col-name">Dashboard</td><td class="col-desc">Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories tiled to fill the terminal.</td></tr>
+        <tr><td class="col-key"><kbd>l</kbd></td><td class="col-name">OSI stack</td><td class="col-desc">Seven-layer grid: every count sloth observes mapped onto its OSI layer &mdash; L7 application protocols, L6 TLS-version histogram, L5 sessions, L4 transport split, L3 host count, L2 ifaces / APs / STAs, L1 probe iface.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── WiFi SIGINT views ──────────────────────────────────────────── -->
+<section class="page-section" id="wifi-sigint">
+  <div class="page-section-inner">
+    <p class="page-eyebrow">
+      <span class="pill pill-green">WiFi SIGINT (v1.1)</span> passive 802.11 SIGINT
+    </p>
+    <h2>Five wireless views.</h2>
+    <p class="section-lede">
+      Sloth's deep 802.11 capabilities &mdash; per-MAC PNL
+      aggregation, RSN inventory, EAPOL capture for offline crack,
+      MAC-randomisation deanonymisation, and association tracking.
+      Built on top of the standard observation views.
+    </p>
+
+    <table class="kit-table">
+      <thead>
+        <tr><th class="col-key">Key</th><th>View</th><th>What it shows</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="col-key"><kbd>k</kbd></td><td class="col-name">PNL</td><td class="col-desc">Per-MAC Preferred Network List &mdash; every directed probe-request's source MAC aggregated with the unique set of SSIDs it has probed for. Randomised MACs are flagged. A device's PNL fingerprints its owner.</td></tr>
+        <tr><td class="col-key"><kbd>e</kbd></td><td class="col-name">EAPOL</td><td class="col-desc">Captured EAPOL-Key frames + 4-way handshake state machine. M1 with a PMKID KDE = one-frame offline-crack vector. M1+M2 = full handshake. <code>--eapol-dir DIR</code> writes captures in hashcat 22000 format.</td></tr>
+        <tr><td class="col-key"><kbd>j</kbd></td><td class="col-name">Seqnum</td><td class="col-desc">Sequence-number-based MAC-randomisation deanonymisation. Pairs of MACs whose seqnum trails overlap within 64 seqnums / 30 s are the same physical radio across a MAC rotation.</td></tr>
+        <tr><td class="col-key"><kbd>w</kbd></td><td class="col-name">Assoc</td><td class="col-desc">Client &harr; AP association inventory. Each row is a (BSSID, STA) pair sloth has observed confirmation for: EAPOL handshake completed, assoc-response status=0, or reassoc-response status=0. Disassoc / deauth removes the entry.</td></tr>
+        <tr><td class="col-key"><kbd>m</kbd></td><td class="col-name">Channel</td><td class="col-desc">Per-channel activity histogram &mdash; APs with a beacon and associated STAs on each channel.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Global keys ────────────────────────────────────────────────── -->
+<section class="page-section dark">
+  <div class="page-section-inner">
+    <h2>Global keys.</h2>
+    <p class="section-lede">
+      Work everywhere, regardless of which view is active.
+    </p>
+
+    <table class="kit-table">
+      <thead>
+        <tr><th class="col-key">Key</th><th>Action</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="col-key"><kbd>Tab</kbd></td><td class="col-name">Cycle</td><td class="col-desc">Next view, in keybind order.</td></tr>
+        <tr><td class="col-key"><kbd>n</kbd></td><td class="col-name">DNS resolve</td><td class="col-desc">Toggle DNS hostname resolution (in conn / proc / stats views).</td></tr>
+        <tr><td class="col-key"><kbd>/</kbd></td><td class="col-name">Filter</td><td class="col-desc">Filter the current log view. Type to refine, <kbd>Enter</kbd> to commit, <kbd>Esc</kbd> to cancel.</td></tr>
+        <tr><td class="col-key"><kbd>\</kbd></td><td class="col-name">Clear filter</td><td class="col-desc">Drop the current filter.</td></tr>
+        <tr><td class="col-key"><kbd>q</kbd></td><td class="col-name">Quit</td><td class="col-desc">Exit sloth (clean shutdown of capture thread, jsonl flush, pcap close).</td></tr>
+        <tr><td class="col-key"><kbd>?</kbd></td><td class="col-name">Help</td><td class="col-desc">Up-to-date reference card.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────────── -->
+<footer class="site-footer">
+  <div class="footer-inner footer-3col">
+    <div class="footer-col">
+      <p class="brand brand-footer">
+        <span class="brand-mark">🦥</span>
+        <span class="brand-name">sloth</span>
+      </p>
+      <p class="footer-tag">Eyes, not hands.</p>
+    </div>
+
+    <div class="footer-col">
+      <h5>Navigate</h5>
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="views.html">27 views</a></li>
+        <li><a href="philosophy.html">Philosophy</a></li>
+        <li><a href="streaming.html">Stream</a></li>
+        <li><a href="quickstart.html">Quickstart</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col footer-about">
+      <h5>About</h5>
+      <p>
+        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
+        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        JSONL stream you can pipe into any SIEM. Built in C99 for
+        Linux, with a small reference consumer + forwarder in
+        Python.
+      </p>
+    </div>
+  </div>
+  <div class="footer-meta">
+    <p>
+      Run sloth only on networks you have explicit authority to
+      observe.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
