@@ -11,36 +11,129 @@
 <meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Orbitron:wght@500;700;900&family=Space+Grotesk:wght@400;500;600;700&family=VT323&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/style.css">
 <link rel="icon" type="image/png" href="assets/sloth.png">
 </head>
 <body>
 
-<!-- ── Canopy SVG (decorative, behind hero) ───────────────────────── -->
-<svg class="canopy-overlay" viewBox="0 0 1200 400" preserveAspectRatio="none" aria-hidden="true">
+<!-- ── Vaporwave sun + grid + palm silhouettes (hero backdrop) ─────── -->
+<svg class="canopy-overlay" viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
   <defs>
-    <radialGradient id="sunbeam" cx="70%" cy="0%" r="60%">
-      <stop offset="0%" stop-color="rgba(233,180,76,0.32)" />
-      <stop offset="40%" stop-color="rgba(233,180,76,0.08)" />
-      <stop offset="100%" stop-color="rgba(233,180,76,0)" />
-    </radialGradient>
+    <!-- The classic vaporwave sun gradient -->
+    <linearGradient id="vw-sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#ffec3d"/>
+      <stop offset="0.45" stop-color="#ff6b35"/>
+      <stop offset="0.85" stop-color="#ff006e"/>
+      <stop offset="1"    stop-color="#9f00ff"/>
+    </linearGradient>
+    <!-- Sky → space gradient -->
+    <linearGradient id="vw-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#0a0014"/>
+      <stop offset="0.55" stop-color="#1a0033"/>
+      <stop offset="0.85" stop-color="#2d1b69"/>
+      <stop offset="1"    stop-color="#3a1054"/>
+    </linearGradient>
+    <!-- Grid floor fade -->
+    <linearGradient id="grid-fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff006e" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ff006e" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="grid-fade-cyan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00ffe5" stop-opacity="0"/>
+      <stop offset="1" stop-color="#00ffe5" stop-opacity="0.65"/>
+    </linearGradient>
+    <!-- Neon glow for the sun -->
+    <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <rect width="1200" height="400" fill="url(#sunbeam)" />
-  <!-- Stylised hanging vines -->
-  <g opacity="0.18" stroke="#1A3B2A" stroke-width="2" fill="none" stroke-linecap="round">
-    <path d="M 80 0 Q 90 60 75 120 Q 60 180 90 240" />
-    <path d="M 220 0 Q 215 70 230 140 Q 245 210 215 280" />
-    <path d="M 990 0 Q 1000 80 985 160 Q 970 240 1000 320" />
-    <path d="M 1130 0 Q 1125 90 1140 170 Q 1155 250 1130 330" />
+
+  <!-- Background sky -->
+  <rect width="1200" height="600" fill="url(#vw-sky)"/>
+
+  <!-- Stars / sparkle -->
+  <g fill="#fff8f8" opacity="0.65">
+    <circle cx="120"  cy="60"  r="1.2"/>
+    <circle cx="280"  cy="35"  r="0.9"/>
+    <circle cx="460"  cy="90"  r="1.5"/>
+    <circle cx="690"  cy="50"  r="0.8"/>
+    <circle cx="880"  cy="80"  r="1.1"/>
+    <circle cx="1050" cy="42"  r="1.3"/>
+    <circle cx="1140" cy="105" r="0.9"/>
+    <circle cx="180"  cy="130" r="0.7"/>
+    <circle cx="780"  cy="120" r="1.0"/>
   </g>
-  <!-- Leaf clusters along vines -->
-  <g fill="#2D6A4F" opacity="0.55">
-    <ellipse cx="75"   cy="100" rx="14" ry="6" transform="rotate(-30 75 100)" />
-    <ellipse cx="92"   cy="230" rx="12" ry="5" transform="rotate(40 92 230)" />
-    <ellipse cx="230"  cy="135" rx="13" ry="6" transform="rotate(25 230 135)" />
-    <ellipse cx="985"  cy="155" rx="13" ry="6" transform="rotate(-25 985 155)" />
-    <ellipse cx="1140" cy="170" rx="12" ry="5" transform="rotate(45 1140 170)" />
+
+  <!-- Vaporwave sun: disc with horizontal cuts at the bottom half -->
+  <g filter="url(#neon-glow)">
+    <circle cx="600" cy="290" r="170" fill="url(#vw-sun)"/>
+    <!-- Cuts through the lower half of the sun: black (sky-colour) slats -->
+    <g fill="#0a0014">
+      <rect x="430" y="300" width="340" height="6"/>
+      <rect x="430" y="318" width="340" height="7"/>
+      <rect x="430" y="338" width="340" height="8"/>
+      <rect x="430" y="362" width="340" height="9"/>
+      <rect x="430" y="390" width="340" height="11"/>
+      <rect x="430" y="424" width="340" height="14"/>
+      <rect x="430" y="464" width="340" height="18"/>
+    </g>
+  </g>
+
+  <!-- Perspective grid floor -->
+  <g stroke="url(#grid-fade)" stroke-width="1.5" fill="none">
+    <line x1="0"    y1="475" x2="1200" y2="475"/>
+    <line x1="0"    y1="498" x2="1200" y2="498"/>
+    <line x1="0"    y1="525" x2="1200" y2="525"/>
+    <line x1="0"    y1="556" x2="1200" y2="556"/>
+    <line x1="0"    y1="592" x2="1200" y2="592"/>
+  </g>
+  <!-- Perspective verticals converging on a horizon at 600x475 -->
+  <g stroke="url(#grid-fade-cyan)" stroke-width="1.5" fill="none">
+    <line x1="600" y1="475" x2="-200" y2="610"/>
+    <line x1="600" y1="475" x2="0"    y2="610"/>
+    <line x1="600" y1="475" x2="200"  y2="610"/>
+    <line x1="600" y1="475" x2="400"  y2="610"/>
+    <line x1="600" y1="475" x2="600"  y2="610"/>
+    <line x1="600" y1="475" x2="800"  y2="610"/>
+    <line x1="600" y1="475" x2="1000" y2="610"/>
+    <line x1="600" y1="475" x2="1200" y2="610"/>
+    <line x1="600" y1="475" x2="1400" y2="610"/>
+  </g>
+
+  <!-- Palm silhouettes — left -->
+  <g fill="#0a0014" stroke="#39ff14" stroke-width="1" opacity="0.9">
+    <!-- trunk -->
+    <path d="M 60 600 Q 70 480 78 360 Q 84 280 92 220" stroke-width="3" fill="none"/>
+    <!-- coconuts -->
+    <circle cx="88"  cy="225" r="5" fill="#39ff14" stroke="none" opacity="0.7"/>
+    <circle cx="98"  cy="232" r="4" fill="#39ff14" stroke="none" opacity="0.7"/>
+  </g>
+  <!-- Palm fronds — left -->
+  <g stroke="#39ff14" stroke-width="2.5" fill="none" opacity="0.95">
+    <path d="M 92 220 Q 20 195 -10 230"/>
+    <path d="M 92 220 Q 30 180 5 170"/>
+    <path d="M 92 220 Q 130 175 175 175"/>
+    <path d="M 92 220 Q 155 195 195 235"/>
+    <path d="M 92 220 Q 95 175 75 130"/>
+  </g>
+
+  <!-- Palm silhouettes — right -->
+  <g fill="#0a0014" stroke="#39ff14" stroke-width="1" opacity="0.9">
+    <path d="M 1140 600 Q 1130 480 1122 360 Q 1116 280 1108 220" stroke-width="3" fill="none"/>
+    <circle cx="1112" cy="225" r="5" fill="#39ff14" stroke="none" opacity="0.7"/>
+    <circle cx="1102" cy="232" r="4" fill="#39ff14" stroke="none" opacity="0.7"/>
+  </g>
+  <g stroke="#39ff14" stroke-width="2.5" fill="none" opacity="0.95">
+    <path d="M 1108 220 Q 1180 195 1210 230"/>
+    <path d="M 1108 220 Q 1170 180 1195 170"/>
+    <path d="M 1108 220 Q 1070 175 1025 175"/>
+    <path d="M 1108 220 Q 1045 195 1005 235"/>
+    <path d="M 1108 220 Q 1105 175 1125 130"/>
   </g>
 </svg>
 
@@ -146,10 +239,21 @@
   </div>
 </section>
 
-<!-- ── Wave divider ──────────────────────────────────────────────── -->
+<!-- ── Neon horizon divider ─────────────────────────────────────── -->
 <div class="wave-divider" aria-hidden="true">
   <svg viewBox="0 0 1200 60" preserveAspectRatio="none">
-    <path d="M0,30 C200,60 400,0 600,30 C800,60 1000,0 1200,30 L1200,60 L0,60 Z" fill="#1A3B2A"></path>
+    <defs>
+      <linearGradient id="horizon" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0"   stop-color="#ff006e" stop-opacity="0"/>
+        <stop offset="0.3" stop-color="#ff006e"/>
+        <stop offset="0.5" stop-color="#00ffe5"/>
+        <stop offset="0.7" stop-color="#ff006e"/>
+        <stop offset="1"   stop-color="#ff006e" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <rect width="1200" height="60" fill="#0a0014"/>
+    <line x1="0" y1="30" x2="1200" y2="30" stroke="url(#horizon)" stroke-width="2"/>
+    <line x1="0" y1="34" x2="1200" y2="34" stroke="url(#horizon)" stroke-width="1" opacity="0.4"/>
   </svg>
 </div>
 
