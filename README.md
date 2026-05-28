@@ -43,8 +43,9 @@ for in normal vs anomalous traffic.
 [6] Stats       [7] Probe        [8] ARP       [9] mDNS      [0] NBNS
 [d] DHCP        [s] SSDP         [b] Beacons   [a] Deauth    [h] HTTP
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
-[v] Alerts      [g] Devices      [o] Dashboard [?] Help
+[v] Alerts      [g] Devices      [o] Dashboard [l] OSI stack [?] Help
 [k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
+[m] Channel                                                  ← per-channel histogram
 ```
 
 ## What you get
@@ -81,6 +82,7 @@ for in normal vs anomalous traffic.
 | [**Alerts**](docs/views/alerts.md)       | Rule-derived events: port scans, deauth floods, NXDOMAIN bursts, threat-intel domain hits, threat-intel IP hits, periodic beaconing |
 | [**Devices**](docs/views/devices.md)     | One record per MAC, joined from ARP/DHCP/Beacons/Probe/Stations with OUI vendor |
 | [**Dashboard**](docs/views/dashboard.md) | Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories all tiled to fill the terminal |
+| [**OSI stack**](docs/views/osi.md)       | Seven-layer synthesis grid: every count sloth observes mapped onto its OSI layer (L7 application protocols, L6 TLS-version histogram, L5 sessions, L4 transport split, L3 host count, L2 ifaces/APs/STAs, L1 probe iface) — the "where is my traffic happening" cheat sheet |
 
 ### WiFi SIGINT (v1.1)
 
@@ -94,6 +96,7 @@ for in normal vs anomalous traffic.
 ### Output
 
 - **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record and every newly-fired alert. See [JSONL schema](#jsonl-schema) below.
+- **`sloth --data-socket SPEC`** — same JSONL records, served over a **read-only stream socket** (`unix:/path` or `tcp:HOST:PORT`) for live consumers. `tail -f`-style with no filesystem polling. Read-only by design — nothing flows back from the wire (see [MISSION.md §4](MISSION.md)). Multi-client (up to 16). Backpressure is per-client: a slow consumer loses lines, healthy ones keep up. Full schema and consumer notes in [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md).
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark.
 
@@ -136,10 +139,11 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 1856 unit tests (no root, no terminal, no network)
+make test                     # 2122 assertions (no root, no terminal, no network)
+make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
-Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither.
+Requires `libpcap-dev` and `libncursesw-dev` for the full build. The test build needs neither. The mutate target is opt-in and offline — see [`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md).
 
 ## Keybindings
 
@@ -158,7 +162,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 | `7` | Probe       | `?` | Help    | `o` | Dash    |
 | `8` | ARP         | `k` | PNL     | `e` | EAPOL   |
 | `9` | mDNS        | `j` | Seqnum  | `w` | Assoc   |
-| `0` | NBNS        |     |         |     |         |
+| `0` | NBNS        | `m` | Channel | `l` | OSI stack |
 
 ### Global
 
@@ -209,6 +213,87 @@ Each line is one JSON object. `ts` is a Unix timestamp; strings are RFC 8259 esc
 {"type":"icmp","ts":1700000005,"src":"192.168.1.5","dst":"8.8.8.8","desc":"Echo Req","ty":8,"code":0,"seq":42,"v6":0}
 {"type":"alert","ts":1700000006,"title":"THREAT_DOMAIN","detail":"192.168.1.5 queried malware.testing.com (IOC malware.testing.com)","key":"threat-d:malware.testing.com","sev":2,"ty":3,"count":1}
 ```
+
+## Streaming and SIEM forwarding
+
+Sloth's JSONL stream is the contract for any downstream consumer. Two
+runnable reference programs ship in [`examples/`](examples/) — stdlib-
+only Python 3, no `pip install` step — so the schema has a
+companion you can hand to a SIEM team in five minutes.
+
+### Reference consumer
+
+[`examples/consumer/sloth-stream.py`](examples/consumer/sloth-stream.py)
+— connects to the data socket, parses every record type from the
+schema, supports filtering and pretty-print. Read it as the
+textbook consumer loop (`connect → stream → json.loads → filter →
+format → reconnect`); the same shape ports directly to Go
+(`bufio.Scanner`), Node (`readline`), or Swift's
+`Network.framework`.
+
+```sh
+# Tail every record sloth emits, with ANSI colour
+python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock
+
+# Only alerts, from any source
+python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
+
+# Raw JSON pass-through into jq
+python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --raw | jq .
+
+# 5-second rolling tally by record type
+python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --count
+```
+
+### Reference SIEM forwarder
+
+[`examples/forwarder/sloth-forward.py`](examples/forwarder/sloth-forward.py)
+— reads from the data socket, batches, and pushes to a downstream
+SIEM. Three sinks ship:
+
+| Sink      | Wire format                                                  |
+|-----------|--------------------------------------------------------------|
+| `hec`     | Splunk HTTP Event Collector (JSON envelopes over HTTPS POST) |
+| `syslog`  | RFC 5424 over UDP or TCP                                     |
+| `elastic` | Elasticsearch / OpenSearch Bulk API (NDJSON to `/_bulk`, time-rolled indices via strftime patterns, basic auth or API key) |
+
+```sh
+# Splunk HEC
+python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+    --sink hec \
+    --hec-url       https://splunk.example.com:8088/services/collector \
+    --hec-token-env SLOTH_HEC_TOKEN
+
+# RFC 5424 syslog (UDP)
+python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+    --sink syslog --syslog-host siem.example.com --syslog-port 514
+
+# Elasticsearch with daily-rolled indices
+python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+    --sink elastic \
+    --es-url       https://elastic.example.com:9200 \
+    --es-index     'sloth-events-%Y.%m.%d' \
+    --es-api-key-env SLOTH_ES_API_KEY
+```
+
+Batching (`--batch-size` and `--batch-ms`), exponential-backoff
+retries (`--max-retries`, `--retry-backoff`), and 30-second stderr
+stats (`received=N forwarded=N dropped=N retries=N`) are built in.
+
+Adding a sink is **~30 lines** — the sink interface is two members
+(`.name`, `.send(batch)`); the retry loop, batching, filtering, and
+reconnect logic all stay in `main()`. See
+[`examples/forwarder/README.md`](examples/forwarder/README.md) for the
+"how to add a sink" recipe and production patterns (systemd unit
+with `EnvironmentFile`, "one forwarder per sink", when to combine
+with `-o FILE` for durability).
+
+**Delivery semantics**: the forwarder mirrors sloth's
+non-durable contract ([MISSION.md §4](MISSION.md)). After
+`--max-retries`, batches drop. If you need durability, also pass
+`-o FILE` to sloth and ship the file via a separate log-shipping
+agent (filebeat, vector, fluent-bit) — that gives you durability,
+this gives you low-latency triage.
 
 ## Architecture
 
@@ -274,7 +359,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 1856 assertions, no root, no terminal, no network
+make test    # 2122 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -293,8 +378,25 @@ Protocol parsers (DNS, TLS, JA3, QUIC, HTTP, NTP, ICMP, mDNS, NBNS, DHCP, SSDP) 
 
 The MD5 implementation used for JA3 is independently validated against all RFC 1321 test vectors (`tests/test_md5.c`).
 
+### Mutation testing (verify the verifier)
+
+`make test` is the oracle this project trusts. To trust it, sloth runs
+**mutation testing** — small faults are introduced into `src/*.c`,
+the suite reruns, every mutant should be killed. Surviving mutants
+are concrete test-suite gaps. The harness lives at
+[`.github/scripts/mutate.py`](.github/scripts/mutate.py), runs via
+`make mutate`, and is documented in
+[`docs/wiki/mutation-testing.md`](docs/wiki/mutation-testing.md)
+along with the equivalence-class taxonomy
+([`.github/scripts/mutate-equivalents.txt`](.github/scripts/mutate-equivalents.txt))
+that suppresses structurally-untestable noise (function-parameter
+array sizes, stack buffer sizing literals, loop bounds reading
+zero-init tail, lookup-table data blocks). Current aggregate across
+18 files: **51.0% of considered mutants killed** — see the badge at
+the top.
+
 ## Status
 
-Code: 14k+ lines across ~80 files. Tests: 1856 assertions. License: see project root.
+Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: see project root.
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
