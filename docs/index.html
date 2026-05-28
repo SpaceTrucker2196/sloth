@@ -168,8 +168,8 @@
         Sloth is the eyes, not the hands.
       </p>
       <div class="cta-row">
-        <a class="cta cta-primary" href="https://github.com/SpaceTrucker2196/sloth" target="_blank" rel="noopener">View on GitHub</a>
-        <a class="cta cta-secondary" href="#quickstart">Get started</a>
+        <a class="cta cta-primary" href="#quickstart">Get started</a>
+        <a class="cta cta-secondary" href="#views">See the views</a>
       </div>
       <p class="hero-meta">
         <span class="badge badge-green">C99 · Linux · libpcap</span>
@@ -206,7 +206,7 @@
           KARMA/Pineapple — and flags them. <em>Operating</em> on them is
           the operator's job, under their own legal cover.
         </p>
-        <a class="card-link" href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md" target="_blank" rel="noopener">Read the mission →</a>
+        <a class="card-link" href="#philosophy">Read the mission →</a>
       </div>
 
       <div class="feature-card">
@@ -219,7 +219,7 @@
           MAC-randomisation deanonymisation. Hidden-SSID reveal from
           probe-responses.
         </p>
-        <a class="card-link" href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/wifi-sigint.md" target="_blank" rel="noopener">WiFi SIGINT overview →</a>
+        <a class="card-link" href="#views">See the WiFi SIGINT views →</a>
       </div>
 
       <div class="feature-card">
@@ -434,8 +434,7 @@
     <p class="footnote pale">
       The sink interface is two members (<code>.name</code>,
       <code>.send(batch)</code>). Adding Loki, Datadog, OpenSearch, or a
-      generic webhook is ~30 lines. See
-      <a href="https://github.com/SpaceTrucker2196/sloth/tree/main/examples/forwarder" target="_blank" rel="noopener">examples/forwarder/</a>.
+      generic webhook is ~30 lines.
     </p>
   </div>
 </section>
@@ -460,8 +459,7 @@
 
       <div class="qs-card">
         <h4>2. Build</h4>
-<pre class="code-block">git clone https://github.com/SpaceTrucker2196/sloth.git
-cd sloth
+<pre class="code-block">cd sloth
 make test    # 2,122 assertions, no root needed
 make         # builds ./sloth</pre>
       </div>
@@ -490,7 +488,7 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
 
 <!-- ── Footer ────────────────────────────────────────────────────── -->
 <footer class="site-footer">
-  <div class="footer-inner">
+  <div class="footer-inner footer-3col">
     <div class="footer-col">
       <p class="brand brand-footer">
         <span class="brand-mark">🦥</span>
@@ -500,38 +498,31 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
     </div>
 
     <div class="footer-col">
-      <h5>Repository</h5>
+      <h5>Navigate</h5>
       <ul>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth" target="_blank" rel="noopener">github.com/SpaceTrucker2196/sloth</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/releases" target="_blank" rel="noopener">Releases</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/issues" target="_blank" rel="noopener">Issues</a></li>
+        <li><a href="#top">Top</a></li>
+        <li><a href="#what">What it sees</a></li>
+        <li><a href="#views">27 views</a></li>
+        <li><a href="#philosophy">Philosophy</a></li>
+        <li><a href="#streaming">Stream</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
       </ul>
     </div>
 
-    <div class="footer-col">
-      <h5>Documentation</h5>
-      <ul>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md" target="_blank" rel="noopener">MISSION.md</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/FACTORY.md" target="_blank" rel="noopener">FACTORY.md (build &amp; run)</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/tree/main/docs/views" target="_blank" rel="noopener">Per-view deep dives</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/jsonl-schema.md" target="_blank" rel="noopener">JSONL schema</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/wiki/mutation-testing.md" target="_blank" rel="noopener">Mutation testing</a></li>
-      </ul>
-    </div>
-
-    <div class="footer-col">
-      <h5>Built on a dark factory floor</h5>
-      <ul>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/docs/dark-factory.md" target="_blank" rel="noopener">The dark-factory repo pattern</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/CLAUDE.md" target="_blank" rel="noopener">CLAUDE.md (agent conventions)</a></li>
-        <li><a href="https://github.com/SpaceTrucker2196/sloth/blob/main/PROGRESS.md" target="_blank" rel="noopener">PROGRESS.md (activity log)</a></li>
-      </ul>
+    <div class="footer-col footer-about">
+      <h5>About</h5>
+      <p>
+        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
+        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        JSONL stream you can pipe into any SIEM. Built in C99 for
+        Linux, with a small reference consumer + forwarder in
+        Python.
+      </p>
     </div>
   </div>
   <div class="footer-meta">
     <p>
-      sloth is a passive, white-hat SIGINT console for IP and 802.11
-      networks. Run it only on networks you have explicit authority to
+      Run sloth only on networks you have explicit authority to
       observe.
     </p>
   </div>
