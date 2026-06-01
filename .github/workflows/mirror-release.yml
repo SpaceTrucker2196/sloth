@@ -3,6 +3,12 @@ name: Mirror Release to river-io
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to mirror (e.g. v1.3.0)"
+        required: true
+        type: string
 
 jobs:
   mirror:
@@ -14,20 +20,37 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Resolve tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Push branch and tag to river-io/sloth
         env:
           RIVER_IO_PAT: ${{ secrets.RIVER_IO_PAT }}
+          TAG: ${{ steps.vars.outputs.tag }}
         run: |
           git remote add river-io https://x-access-token:${RIVER_IO_PAT}@github.com/river-io/sloth.git
           git push river-io refs/remotes/origin/main:refs/heads/main --force
-          git push river-io ${{ github.ref }} --force
+          git push river-io "refs/tags/${TAG}" --force
 
       - name: Create matching release on river-io/sloth
         env:
           GH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+          SOURCE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.vars.outputs.tag }}
         run: |
-          gh release create "${{ github.event.release.tag_name }}" \
-            --repo river-io/sloth \
-            --title "${{ github.event.release.name }}" \
-            --notes "${{ github.event.release.body }}" \
-            ${{ github.event.release.prerelease && '--prerelease' || '' }}
+          META=$(GH_TOKEN="$SOURCE_TOKEN" gh release view "$TAG" --json name,body,isPrerelease)
+          TITLE=$(echo "$META" | jq -r .name)
+          PRERELEASE=$(echo "$META" | jq -r .isPrerelease)
+          echo "$META" | jq -r .body > /tmp/notes.md
+
+          ARGS=(--repo river-io/sloth --title "$TITLE" --notes-file /tmp/notes.md)
+          if [ "$PRERELEASE" = "true" ]; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "$TAG" "${ARGS[@]}"
