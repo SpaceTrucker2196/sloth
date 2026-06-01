@@ -19,7 +19,7 @@ jobs:
           RIVER_IO_PAT: ${{ secrets.RIVER_IO_PAT }}
         run: |
           git remote add river-io https://x-access-token:${RIVER_IO_PAT}@github.com/river-io/sloth.git
-          git push river-io main --force
+          git push river-io refs/remotes/origin/main:refs/heads/main --force
           git push river-io ${{ github.ref }} --force
 
       - name: Create matching release on river-io/sloth
