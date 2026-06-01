@@ -1,0 +1,33 @@
+name: Mirror Release to river-io
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Push branch and tag to river-io/sloth
+        env:
+          RIVER_IO_PAT: ${{ secrets.RIVER_IO_PAT }}
+        run: |
+          git remote add river-io https://x-access-token:${RIVER_IO_PAT}@github.com/river-io/sloth.git
+          git push river-io main --force
+          git push river-io ${{ github.ref }} --force
+
+      - name: Create matching release on river-io/sloth
+        env:
+          GH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+        run: |
+          gh release create "${{ github.event.release.tag_name }}" \
+            --repo river-io/sloth \
+            --title "${{ github.event.release.name }}" \
+            --notes "${{ github.event.release.body }}" \
+            ${{ github.event.release.prerelease && '--prerelease' || '' }}
