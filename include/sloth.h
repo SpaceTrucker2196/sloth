@@ -348,6 +348,7 @@ typedef enum {
     ALERT_TYPE_ARP_SPOOF,
     ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_EVIL_TWIN,
+    ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
     ALERT_TYPE_DNS_TUNNEL,
     ALERT_TYPE_PROBE_FLOOD,
@@ -445,6 +446,26 @@ typedef struct {
 #define MAX_BEACON_APS  256
 #define BEACON_AGE_SECS 300
 
+/* AP fingerprint — auxiliary fields harvested from beacon frames that
+ * help distinguish a legit AP from a same-SSID twin. Carried inside
+ * beacon_ap_t (below). Phase 1 only defines the carrier and the OUI
+ * bytes (which equal bssid[0..2]); Phase 2 populates vendor_ies_hash
+ * and the capability flags from beacon parsing. */
+#define AP_FP_FLAG_WPS_UUID_ZERO        0x01u
+#define AP_FP_FLAG_HT_PRESENT           0x02u
+#define AP_FP_FLAG_VHT_PRESENT          0x04u
+#define AP_FP_FLAG_HE_PRESENT           0x08u
+#define AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS 0x10u
+#define AP_FP_FLAG_HAK5_OUI             0x20u
+#define AP_FP_FLAG_ESPRESSIF_OUI        0x40u
+
+typedef struct {
+    uint8_t  oui[3];               /* equals bssid[0..2]; cached for readability */
+    uint16_t beacon_interval_ms;   /* parsed once at first observation */
+    uint32_t vendor_ies_hash;      /* hash of concatenated tag-221 IEs (Phase 2) */
+    uint8_t  flags;                /* AP_FP_FLAG_* bitset (Phase 2) */
+} ap_fingerprint_t;
+
 /* 802.11k Neighbor Report entry — one neighbor AP advertised by the
  * subject AP's beacon (tag 52). Used to map enterprise WiFi topology
  * and to discover BSSIDs on other channels we haven't tuned to. */
@@ -502,6 +523,13 @@ typedef struct {
     int      ssid_history_n;
     time_t   last_seen;
     int      frame_count;
+    /* Evil-twin fingerprint surface. Populated incrementally:
+     *   Phase 1 — fp.oui (mirrors bssid[0..2]) used by rule_evil_twin.
+     *   Phase 2 — fp.flags + fp.vendor_ies_hash from beacon parsing.
+     *   Phase 3 — rssi_{min,max}_60s feed the proximity detector. */
+    ap_fingerprint_t fp;
+    int8_t   rssi_min_60s;     /* lowest signal seen in last 60s (dBm, 0 = unseen) */
+    int8_t   rssi_max_60s;     /* highest signal seen in last 60s (dBm, 0 = unseen) */
 } beacon_ap_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */

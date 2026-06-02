@@ -575,40 +575,76 @@ static int enc_is_strong(const char *enc) {
            strcmp(enc, "WPA3") == 0;
 }
 
+static void fmt_bssid(char out[20], const uint8_t b[6]) {
+    snprintf(out, 20, "%02x:%02x:%02x:%02x:%02x:%02x",
+             b[0], b[1], b[2], b[3], b[4], b[5]);
+}
+
 static void rule_evil_twin(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;      /* hidden -> can't correlate */
-        if (!enc_is_weak(a->enc)) continue;
-        /* Find a sibling BSSID with same SSID + strong security. */
-        for (int j = 0; j < s->beacon_count; j++) {
-            if (i == j) continue;
+
+        /* CRIT branch — classic weak-vs-strong twin (OPEN/WEP next to
+         * WPA/WPA2/WPA3 under the same SSID). Asymmetric: only walks
+         * from the weak side, one fire per weak BSSID. */
+        if (enc_is_weak(a->enc)) {
+            for (int j = 0; j < s->beacon_count; j++) {
+                if (i == j) continue;
+                const beacon_ap_t *b = &s->beacon_aps[j];
+                if (strcmp(a->ssid, b->ssid) != 0) continue;
+                if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
+                if (!enc_is_strong(b->enc)) continue;
+
+                char a_bssid[20], b_bssid[20];
+                fmt_bssid(a_bssid, a->bssid);
+                fmt_bssid(b_bssid, b->bssid);
+                char key[ALERT_KEY_LEN];
+                char detail[ALERT_DETAIL_LEN];
+                snprintf(key, sizeof(key), "twin:%.40s", a->ssid);
+                snprintf(detail, sizeof(detail),
+                         "'%.16s' on %s[%.6s] AND %s[%.6s] - twin",
+                         a->ssid, a_bssid, a->enc, b_bssid, b->enc);
+                fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
+                     "EVIL_TWIN", detail, key, NULL, 0, now);
+                break;
+            }
+        }
+
+        /* WARN branch — same SSID, same cipher, different vendor OUI
+         * (first 3 bytes of BSSID). Catches the modern Pineapple /
+         * ESP32 evil-twin pattern where the attacker mirrors the
+         * legit AP's security to defeat the weak/strong mismatch
+         * check above. Walks both halves of the pair, with a stable
+         * dedup key so iteration order doesn't change the alert.
+         *
+         * Skip OPEN — legit OPEN networks at airports / cafes routinely
+         * present same-SSID-different-OUI siblings (multi-vendor hotspot
+         * deployments), and there's no shared secret to defend, so the
+         * twin signal is meaningless. */
+        if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) continue;
+        for (int j = i + 1; j < s->beacon_count; j++) {
             const beacon_ap_t *b = &s->beacon_aps[j];
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
-            if (!enc_is_strong(b->enc)) continue;
+            if (strcmp(a->enc, b->enc) != 0) continue;
+            if (memcmp(a->bssid, b->bssid, 3) == 0) continue; /* same OUI = same vendor */
 
             char a_bssid[20], b_bssid[20];
-            snprintf(a_bssid, sizeof(a_bssid),
-                     "%02x:%02x:%02x:%02x:%02x:%02x",
-                     a->bssid[0], a->bssid[1], a->bssid[2],
-                     a->bssid[3], a->bssid[4], a->bssid[5]);
-            snprintf(b_bssid, sizeof(b_bssid),
-                     "%02x:%02x:%02x:%02x:%02x:%02x",
-                     b->bssid[0], b->bssid[1], b->bssid[2],
-                     b->bssid[3], b->bssid[4], b->bssid[5]);
+            fmt_bssid(a_bssid, a->bssid);
+            fmt_bssid(b_bssid, b->bssid);
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            snprintf(key,    sizeof(key),    "twin:%.40s", a->ssid);
-            /* Detail buffer is ALERT_DETAIL_LEN; SSID truncated to keep
-             * the suffix readable. enc strings are bounded at 9 chars
-             * by the beacon_ap_t struct. */
+            /* Distinct dedup key — coexists with the CRIT "twin:" key
+             * if the weak/strong rule also fires for some other pair
+             * under the same SSID. */
+            snprintf(key, sizeof(key), "twin-fp:%.40s", a->ssid);
             snprintf(detail, sizeof(detail),
-                     "'%.16s' on %s[%.6s] AND %s[%.6s] - twin",
-                     a->ssid, a_bssid, a->enc, b_bssid, b->enc);
-            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
+                     "'%.16s' on %s AND %s [%.6s] - vendor OUI differs",
+                     a->ssid, a_bssid, b_bssid, a->enc);
+            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_WARN,
                  "EVIL_TWIN", detail, key, NULL, 0, now);
-            break;   /* one alert per weak BSSID is enough */
+            break;
         }
     }
 }

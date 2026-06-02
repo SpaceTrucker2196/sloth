@@ -436,6 +436,114 @@ static void test_evil_twin_detail_contains_bssids_and_ssid(void) {
     ASSERT(strstr(s.alerts[idx].key, "twin:TwinNet") != NULL);
 }
 
+/* Same SSID + same cipher + DIFFERENT vendor OUI — fires the new
+ * fingerprint-based WARN branch (Pineapple / ESP32 mimicking a legit
+ * AP's security). Dedup key is "twin-fp:<ssid>" so it coexists with
+ * the CRIT "twin:" key. */
+static void test_evil_twin_same_cipher_diff_oui_fires_warn(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* OUI = aa:bb:cc */
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* OUI = 11:22:33 */
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].key, "twin-fp:Cafe-Net") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "Cafe-Net") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "11:22:33:44:55:66") != NULL);
+}
+
+/* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
+ * deployment from one vendor. Must not fire. */
+static void test_evil_twin_same_cipher_same_oui_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    add_beacon(&s, "Office", a, "WPA2");
+    add_beacon(&s, "Office", b, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* Same SSID + DIFFERENT ciphers (WPA2 vs WPA3) + different OUI — does
+ * NOT fire either branch. Cipher mismatch alone isn't enough (neither
+ * side is OPEN/WEP), and the WARN branch requires same cipher.
+ * Documents a known-quiet edge case. */
+static void test_evil_twin_diff_cipher_same_ssid_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
+    add_beacon(&s, "Mixed", a, "WPA2");
+    add_beacon(&s, "Mixed", b, "WPA3");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* OPEN networks routinely show same-SSID-different-OUI siblings
+ * (airports, multi-vendor hotspots). The WARN branch deliberately
+ * skips OPEN to avoid false positives — there's no shared secret to
+ * defend. */
+static void test_evil_twin_same_open_diff_oui_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
+    add_beacon(&s, "Airport-Wifi", a, "OPEN");
+    add_beacon(&s, "Airport-Wifi", b, "OPEN");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* Existing CRIT path must still win when an OPEN AP sits next to a
+ * WPA2 sibling with a different OUI — single alert fires, severity is
+ * CRIT (not WARN). The two dedup keys ("twin:" vs "twin-fp:") differ,
+ * but the cipher-mismatch precludes the WARN branch (same-enc check
+ * fails), so only the CRIT key is present. */
+static void test_evil_twin_open_plus_wpa2_diff_oui_still_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
+    add_beacon(&s, "Cafe-Free", a, "OPEN");
+    add_beacon(&s, "Cafe-Free", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    /* Search whole engine to confirm no WARN twin-fp alert sneaked in. */
+    int seen_warn = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN &&
+            s.alerts[k].sev == ALERT_SEV_WARN) seen_warn = 1;
+    }
+    ASSERT_EQ(seen_warn, 0);
+}
+
+/* WARN alert is symmetric — the same dedup key fires whether the
+ * lower-indexed AP is BSSID A or BSSID B. (The inner loop starts at
+ * i+1 specifically so we only emit one alert per pair.) */
+static void test_evil_twin_same_cipher_diff_oui_pair_dedups(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Insert B before A this time; key must still be "twin-fp:<ssid>". */
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN) count++;
+    }
+    ASSERT_EQ(count, 1);
+}
+
 /* ── DNS tunnel ───────────────────────────────────────────── */
 
 static void test_dns_tunnel_fires_on_long_subdomain_burst(void) {
@@ -1024,6 +1132,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_two_open_no_fire);
     RUN_TEST(test_evil_twin_different_ssids_no_fire);
     RUN_TEST(test_evil_twin_detail_contains_bssids_and_ssid);
+    RUN_TEST(test_evil_twin_same_cipher_diff_oui_fires_warn);
+    RUN_TEST(test_evil_twin_same_cipher_same_oui_no_fire);
+    RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
+    RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
+    RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);
+    RUN_TEST(test_evil_twin_same_cipher_diff_oui_pair_dedups);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
