@@ -45,92 +45,6 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Add `connections` record type to JSONL stream
-**Owner**: next agent
-**Started**: 2026-05-28
-**Goal**: Emit per-flow connection records on the JSONL stream so
-`sloth-ios` (and any other consumer) can build a Connections view with
-RTT sparklines.
-**Status**: not started — all data structures already exist in-tree.
-**Blockers**: none.
-**Next concrete step**:
-
-Implement a `jsonl_emit_connections(const sloth_state_t *s)` function
-that iterates `s->conns[0..conn_count)`, joins each entry with its
-`conn_bw_t` via `bw_lookup()`, and emits one JSONL line per flow.
-
-**Required record shape** (one JSON object per line, per flow):
-
-```jsonc
-{
-  "type":     "connections",
-  "ts":       <unix seconds — use time(NULL)>,
-  "src":      "<local_addr>:<local_port>",   // host:port or [v6]:port
-  "dst":      "<remote_addr>:<remote_port>",
-  "proto":    "tcp",             // "tcp" | "udp"
-  "state":    "ESTABLISHED",     // tcp_state_name(); omit for UDP
-  "rtt_ms":   12.4,              // conn_t.rtt_us / 1000.0; omit if 0 or UDP
-  "retx":     0,                 // conn_t.retrans; omit for UDP
-  "rx_bytes": 12345,             // conn_bw_t.rx_bytes (0 if no bw entry)
-  "tx_bytes": 6789,              // conn_bw_t.tx_bytes (0 if no bw entry)
-  "age_s":    47                 // seconds since first observation — requires tracking first_seen per flow
-}
-```
-
-**Implementation plan** (files to touch):
-
-1. **`src/jsonl.h`** — declare `void jsonl_emit_connections(const sloth_state_t *s);`
-2. **`src/jsonl.c`** — implement the emitter:
-   - Loop `s->conns[0..conn_count)`.
-   - Format `src` as `addr:port` (use `[%s]:%u` for IPv6).
-   - For TCP: include `state`, `rtt_ms` (if non-zero), `retx`.
-   - For UDP: omit those three fields.
-   - Join with `bw_lookup(s, &s->conns[i])` for `rx_bytes`/`tx_bytes`.
-   - `age_s` requires a per-flow first-seen timestamp. Options:
-     (a) add a `time_t first_seen` field to `conn_t` in `include/sloth.h`
-         and populate it in `src/platform/linux_conns.c` (use current time
-         on first appearance, carry forward on subsequent polls); or
-     (b) omit `age_s` in the first pass — `sloth-ios` can compute it
-         client-side from the first record it receives for a tuple.
-     Prefer (a) if feasible without breaking the platform vtable contract.
-3. **`src/main.c`** — call `jsonl_emit_connections(&g_state)` from
-   `poll_data()` (or from the redraw tick), after `conn_rebuild_idx`
-   and `bw_update` have run.
-4. **`docs/wiki/jsonl-schema.md`** — add a `### connections` section
-   documenting the new record type, following the existing format.
-5. **`tests/test_jsonl.c`** — add a test that:
-   - Seeds `sloth_state_t` with 2–3 fake connections (TCP + UDP).
-   - Calls `jsonl_emit_connections`.
-   - Captures output and asserts correct JSON field presence and types.
-6. **`include/sloth.h`** — if adding `first_seen`, add it to `conn_t`.
-
-**Existing code to follow as a pattern**:
-- `jsonl_emit_dns()` in `src/jsonl.c` — shows the `start_obj` /
-  `kv_str` / `kv_int` / `end_obj` / `emit_line` pattern.
-- `bw_lookup()` in `src/bandwidth.c` — joins `conn_t` → `conn_bw_t`.
-- `tcp_state_name()` in `src/views/conns.c` — maps int state → string.
-- `tests/test_jsonl.c` — existing emit tests show how to capture output.
-
-**Cadence**: emit once per `poll_data()` tick (≈1 Hz). Every active
-flow gets a record each tick. No dedup / state-change filtering needed;
-the consumer rebuilds the table from the latest snapshot keyed by
-`(src, dst, proto)`.
-
-**What NOT to do**:
-- Don't add a separate flow-id field.
-- Don't emit individual RTT samples or congestion-window data.
-- Don't retro-fill `rtt_ms` for closed flows.
-- Don't break the existing 7 record types.
-
-**Acceptance criteria**:
-- `make test` passes (including the new test).
-- `make` is warning-clean.
-- Running `sloth -o /tmp/test.jsonl` on a machine with active TCP/UDP
-  connections produces `{"type":"connections",...}` lines in the file.
-- The record shape matches the spec above (verified by the test).
-
----
-
 ### Evil-twin AP — same-cipher, vendor-IE, and Pineapple/ESP32 fingerprint detection
 **Owner**: next agent
 **Started**: 2026-06-01
@@ -211,6 +125,45 @@ non-blocking and stateless.
 ---
 
 ## Recently landed
+
+### 2026-06-02 — `connections` JSONL record type
+**Commits**: `23777db`
+**Touched**: `src/jsonl.{c,h}`, `src/main.c`, `tests/test_jsonl.c`,
+`docs/wiki/jsonl-schema.md`
+**Why**: Eighth JSONL record type — per-flow connection snapshots so
+`sloth-ios` (and any other JSONL consumer) can build a Connections
+view with RTT, retx, and bw join, without having to re-derive flow
+identity from packet-level records. Lands the older of the two
+copilot plans (`copilot/add-connection-records`, planned 2026-05-28).
+**What's in it**:
+- New emitter `jsonl_emit_connections(s)` writes one line per active
+  flow in `s->conns[0..conn_count)`. Driven from `poll_data()` at the
+  ≈1 Hz poll cadence; consumers rebuild their table from the latest
+  snapshot keyed by `(src, dst, proto)`.
+- TCP records carry `state` (kernel `TCP_*` table — duplicated in
+  `jsonl.c` to avoid a layering dep on view code), `rtt_ms`
+  (omitted when `rtt_us == 0`), and `retx`.
+- UDP records omit `state` / `rtt_ms` / `retx`.
+- Endpoints render as `host:port`; IPv6 addresses get bracketed
+  (`[fe80::1]:54321`).
+- `rx_bytes` / `tx_bytes` join from `bw_lookup()` — both 0 when no
+  bw entry (also when `WITH_PCAP=0`).
+- `age_s` was deferred — option (b) of the plan. `linux_get_conns`
+  rebuilds the conn array from `/proc/net/{tcp,udp}{,6}` every poll
+  with no state retention, so `first_seen` can't be carried forward
+  without breaking the platform vtable contract. Consumers can
+  compute age client-side from the first record they observe.
+- Schema doc updated; iOS Swift consumer sketch already expects this
+  record shape so no client-side change required.
+- Three new tests in `tests/test_jsonl.c`: mixed TCP+UDP fields,
+  IPv6 bracketing, `rtt_ms` omission on zero RTT.
+**Follow-ups**:
+- `age_s` revisit — would need a tuple-keyed parallel table in
+  `main.c` (carry `first_seen` across polls) or a vtable change.
+  Not urgent: consumers can compute it.
+- `retx` is currently always emitted for TCP, including when 0.
+  The spec said `omit for UDP` (which we do) but didn't specify
+  zero-skip for TCP — leaving as-is, consumer treats 0 as "none".
 
 ### 2026-05-28 — `examples/forwarder/` SIEM forwarder (HEC + syslog + Elastic)
 **Commits**: `742257c`, `a093e23`
