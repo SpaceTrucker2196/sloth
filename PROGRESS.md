@@ -131,6 +131,58 @@ the consumer rebuilds the table from the latest snapshot keyed by
 
 ---
 
+### Evil-twin AP — same-cipher, vendor-IE, and Pineapple/ESP32 fingerprint detection
+**Owner**: next agent
+**Started**: 2026-06-01
+**Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
+**Status**: planned — design documented, implementation not started.
+**Blockers**: none (pcap fixtures needed for test suite — can be synthesised with scapy)
+**Next concrete step**: implement phase 1 (data model + same-cipher detection)
+
+#### Plan (phases)
+
+**Phase 1 — Data model & same-cipher twin detection (~3 days)**
+1. Add `ap_fingerprint_t` struct to `include/sloth.h`:
+   - `uint8_t oui[3]; uint16_t beacon_interval_ms; uint32_t vendor_ies_hash; uint8_t flags;`
+   - Flags: `WPS_UUID_ZERO | HT_PRESENT | VHT_PRESENT | HE_PRESENT | DEFAULT_HOSTAPD_CAPS | HAK5_OUI | ESPRESSIF_OUI`
+2. Extend `beacon_ap_t` with `ap_fingerprint_t fp` and `int8_t rssi_max_60s, rssi_min_60s`.
+3. Add `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value.
+4. Modify `rule_evil_twin()` in `src/alerts.c`: fire WARN when same SSID + different BSSID + **same** `enc` string + different OUI vendor (instead of requiring weak-vs-strong mismatch).
+5. Add test cases to `tests/test_alerts.c` for same-cipher twin detection.
+
+**Phase 2 — Vendor-IE mismatch & attacker OUI tables (~2 days)**
+1. Create `src/wifi_oui_attacker.c` with embedded OUI tables (Hak5, Espressif).
+2. Hash tagged vendor IEs (tag 221) per BSSID in beacon_snoop; store in `ap_fingerprint_t.vendor_ies_hash`.
+3. On same-SSID/same-cipher pair, if vendor-IE hashes differ → escalate to CRIT.
+4. Populate `ap_fingerprint_t.flags` from beacon parsing (HT/VHT/HE caps, WPS UUID, hostapd defaults).
+5. Match against attacker OUI list to raise severity one tier.
+
+**Phase 3 — RSSI-step proximity detection (~1 day)**
+1. Track per-BSSID RSSI min/max in a 60 s sliding window.
+2. If RSSI delta ≥ 15 dBm within window (no roam) → fire `EVIL_TWIN_PROXIMITY`.
+
+**Phase 4 — Attack-chain correlation (~2 days)**
+1. If `DEAUTH_FLOOD` target BSSID matches the "real" half of a same-cipher twin pair within 5 s → fire `EVIL_TWIN` at CRIT with detail `attack-in-progress`.
+2. Tag any subsequent EAPOL capture against the twin BSSID with `provenance=tainted-evil-twin` in .22000 export.
+
+**Phase 5 — UI surface (~2 days)**
+1. Beacon view `[b]`: twin-cluster pairs share a color, suspicious vendor IEs marked `⚑`, RSSI step inline.
+2. New `[x] Twins` view: one row per twin cluster (real BSSID, twin BSSID, cipher, OUI diff, rssi delta, attack-chain indicator).
+3. JSONL output: add "Evil-twin episodes" section.
+
+**Phase 6 — Test fixtures & integration tests (~2 days)**
+1. Create `tests/fixtures/evil-twin-*.pcap` with scapy (same-cipher twin, vendor-IE delta, RSSI step, deauth-then-twin).
+2. Assertions per test plan in issue (5 acceptance criteria).
+3. Mark tests `needs-pcap-fixture`.
+
+#### References
+- MITRE ATT&CK T1557.004 — Evil Twin
+- CISA — Securing Enterprise Wireless Networks (2024)
+- CERT/CC VU#871675 — hostapd/wpa_supplicant WPA3/SAE
+- CVE-2022-23303 / CVE-2022-23304
+
+---
+
 ### Paused: Mutation-testing follow-ups (rounds 10+)
 **Owner**: next agent
 **Started**: 2026-05-28 — paused 2026-05-28 by operator request
