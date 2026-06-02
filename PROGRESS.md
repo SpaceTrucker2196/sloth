@@ -49,20 +49,19 @@ work exposed as a new In-progress entry.
 **Owner**: next agent
 **Started**: 2026-06-01
 **Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: planned — design documented, implementation not started.
-**Blockers**: none (pcap fixtures needed for test suite — can be synthesised with scapy)
-**Next concrete step**: implement phase 1 (data model + same-cipher detection)
+**Status**: Phase 1 landed (commit `24b2aa7`, 2026-06-02). Phases 2-6 outstanding.
+**Blockers**: none (pcap fixtures needed for Phase 6 test suite — can be synthesised with scapy)
+**Next concrete step**: Phase 2 — populate `ap_fingerprint_t.flags` + `vendor_ies_hash` from beacon parsing, add Hak5/Espressif OUI tables, escalate same-cipher twin to CRIT when vendor-IE hashes differ.
 
 #### Plan (phases)
 
-**Phase 1 — Data model & same-cipher twin detection (~3 days)**
-1. Add `ap_fingerprint_t` struct to `include/sloth.h`:
-   - `uint8_t oui[3]; uint16_t beacon_interval_ms; uint32_t vendor_ies_hash; uint8_t flags;`
-   - Flags: `WPS_UUID_ZERO | HT_PRESENT | VHT_PRESENT | HE_PRESENT | DEFAULT_HOSTAPD_CAPS | HAK5_OUI | ESPRESSIF_OUI`
-2. Extend `beacon_ap_t` with `ap_fingerprint_t fp` and `int8_t rssi_max_60s, rssi_min_60s`.
-3. Add `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value.
-4. Modify `rule_evil_twin()` in `src/alerts.c`: fire WARN when same SSID + different BSSID + **same** `enc` string + different OUI vendor (instead of requiring weak-vs-strong mismatch).
-5. Add test cases to `tests/test_alerts.c` for same-cipher twin detection.
+**~~Phase 1 — Data model & same-cipher twin detection~~** ✅ landed 2026-06-02 (`24b2aa7`)
+- `ap_fingerprint_t` defined in `include/sloth.h` with `AP_FP_FLAG_*` bitmask.
+- `beacon_ap_t` carries `fp`, `rssi_min_60s`, `rssi_max_60s` (populated incrementally by later phases).
+- `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value reserved (used by Phase 3).
+- `rule_evil_twin()` fires WARN on same-SSID + same-cipher + different-OUI (skips OPEN). CRIT path unchanged.
+- 6 new tests in `tests/test_alerts.c`; 2156 assertions total (+13).
+- Distinct dedup keys: `twin:<ssid>` (CRIT) vs `twin-fp:<ssid>` (WARN).
 
 **Phase 2 — Vendor-IE mismatch & attacker OUI tables (~2 days)**
 1. Create `src/wifi_oui_attacker.c` with embedded OUI tables (Hak5, Espressif).
