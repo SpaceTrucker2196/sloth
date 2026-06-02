@@ -82,6 +82,7 @@ static void poll_data(sloth_state_t *s) {
     history_update(s);
     conn_rebuild_idx(s);
     bw_update(s);
+    jsonl_emit_connections(s);
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);

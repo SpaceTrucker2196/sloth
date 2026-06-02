@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "bandwidth.h"
 #include "data_socket.h"
 
 static FILE           *g_fp;
@@ -194,4 +196,56 @@ void jsonl_emit_alert(const alert_t *a) {
     kv_int(buf, LINEBUF, &off, "count", a->count);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
+}
+
+/* TCP states map to the Linux kernel's TCP_* enum (1=ESTABLISHED..11=CLOSING).
+ * Same table the conns view uses; duplicated here to keep jsonl independent
+ * of view code (one-way layering: views read state, emitters serialize it). */
+static const char *jsonl_tcp_state_name(int st) {
+    static const char *names[] = {
+        "UNKNOWN", "ESTABLISHED", "SYN_SENT", "SYN_RECV",
+        "FIN_WAIT1", "FIN_WAIT2", "TIME_WAIT", "CLOSE",
+        "CLOSE_WAIT", "LAST_ACK", "LISTEN", "CLOSING"
+    };
+    if (st < 0 || st > 11) return "UNKNOWN";
+    return names[st];
+}
+
+/* IPv6 literal addresses contain ':' (IPv4 dotted-quads never do). */
+static int addr_is_v6(const char *a) { return strchr(a, ':') != NULL; }
+
+static void fmt_endpoint(char *out, int sz, const char *addr, uint16_t port) {
+    if (addr_is_v6(addr)) snprintf(out, (size_t)sz, "[%s]:%u", addr, port);
+    else                  snprintf(out, (size_t)sz, "%s:%u",   addr, port);
+}
+
+void jsonl_emit_connections(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->conn_count; i++) {
+        const conn_t *c = &s->conns[i];
+        char  buf[LINEBUF]; int off = 0;
+        char  src[64], dst[64];
+        fmt_endpoint(src, sizeof(src), c->local_addr,  c->local_port);
+        fmt_endpoint(dst, sizeof(dst), c->remote_addr, c->remote_port);
+
+        start_obj(buf, LINEBUF, &off, "connections", now);
+        kv_str(buf, LINEBUF, &off, "src",   src);
+        kv_str(buf, LINEBUF, &off, "dst",   dst);
+        kv_str(buf, LINEBUF, &off, "proto", c->proto == PROTO_TCP ? "tcp" : "udp");
+        if (c->proto == PROTO_TCP) {
+            kv_str(buf, LINEBUF, &off, "state", jsonl_tcp_state_name(c->state));
+            if (c->rtt_us) {
+                /* RTT formatted with one decimal — emit as raw number, not via kv_int. */
+                off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                                ",\"rtt_ms\":%.1f", c->rtt_us / 1000.0);
+            }
+            kv_int(buf, LINEBUF, &off, "retx", (long long)c->retrans);
+        }
+        const conn_bw_t *bw = bw_lookup(s, c);
+        kv_int(buf, LINEBUF, &off, "rx_bytes", bw ? (long long)bw->rx_bytes : 0);
+        kv_int(buf, LINEBUF, &off, "tx_bytes", bw ? (long long)bw->tx_bytes : 0);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
 }

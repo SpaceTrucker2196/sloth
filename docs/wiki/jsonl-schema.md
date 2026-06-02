@@ -140,6 +140,32 @@ through as UTF-8.
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
 
+### `connections`
+
+```json
+{"type":"connections","ts":1700000007,"src":"10.0.0.5:49152","dst":"93.184.216.34:443","proto":"tcp","state":"ESTABLISHED","rtt_ms":12.4,"retx":0,"rx_bytes":12345,"tx_bytes":6789}
+```
+
+| Field      | Type   | Meaning |
+|------------|--------|---------|
+| `src`      | string | local endpoint `host:port`; IPv6 is bracketed (`[fe80::1]:54321`) |
+| `dst`      | string | remote endpoint `host:port`; IPv6 is bracketed |
+| `proto`    | string | `tcp` or `udp` |
+| `state`    | string | TCP state name (`ESTABLISHED`, `SYN_SENT`, …). **TCP only** — omitted for UDP |
+| `rtt_ms`   | float  | smoothed RTT in milliseconds. **TCP only** — omitted when `rtt_us==0` (unknown) or proto is UDP |
+| `retx`     | int    | total retransmissions on the flow. **TCP only** — omitted for UDP |
+| `rx_bytes` | int    | cumulative bytes received since first observation (0 when pcap is off) |
+| `tx_bytes` | int    | cumulative bytes transmitted since first observation (0 when pcap is off) |
+
+**Cadence**: snapshot — one record per active flow per poll tick (≈1 Hz).
+The consumer rebuilds its table from the latest snapshot keyed by
+`(src, dst, proto)`. No event ring; no dedup; closed flows simply stop
+appearing.
+
+`ts` is the wall-clock time of the snapshot, not first observation. Age
+of a flow is derivable client-side from the first record a consumer
+sees for a given `(src, dst, proto)` tuple.
+
 ## Versioning
 
 - **No version field.** Fields are append-only; existing names and

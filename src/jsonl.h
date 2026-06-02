@@ -21,4 +21,9 @@ void jsonl_emit_ntp  (const ntp_log_entry_t  *e);
 void jsonl_emit_icmp (const icmp_log_entry_t *e);
 void jsonl_emit_alert(const alert_t          *a);
 
+/* Snapshot emitter — one line per active flow in s->conns. Driven by the
+ * poll loop (≈1 Hz), not by an event ring. Consumers rebuild their table
+ * from the latest snapshot keyed by (src, dst, proto). */
+void jsonl_emit_connections(const sloth_state_t *s);
+
 #endif /* JSONL_H */

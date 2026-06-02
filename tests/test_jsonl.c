@@ -160,6 +160,97 @@ static void test_emit_icmp_v6_true_writes_one(void) {
     ASSERT(!contains(body, "\"v6\":2"));
 }
 
+/* Connections snapshot: mixes TCP (with state/rtt/retx) and UDP (without)
+ * in one state, asserts both record shapes appear.
+ *
+ * Touches conn_rebuild_idx so bw_lookup can find a bw entry — we don't
+ * pre-populate s->conn_bw here, so rx_bytes/tx_bytes fall back to 0,
+ * which is the documented behaviour when WITH_PCAP=0. */
+static void test_emit_connections_tcp_and_udp(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+
+    snprintf(s.conns[0].local_addr,  sizeof(s.conns[0].local_addr),  "10.0.0.5");
+    snprintf(s.conns[0].remote_addr, sizeof(s.conns[0].remote_addr), "93.184.216.34");
+    s.conns[0].local_port  = 49152;
+    s.conns[0].remote_port = 443;
+    s.conns[0].proto       = PROTO_TCP;
+    s.conns[0].state       = 1;       /* ESTABLISHED */
+    s.conns[0].rtt_us      = 12400;   /* → 12.4 ms */
+    s.conns[0].retrans     = 3;
+
+    snprintf(s.conns[1].local_addr,  sizeof(s.conns[1].local_addr),  "10.0.0.5");
+    snprintf(s.conns[1].remote_addr, sizeof(s.conns[1].remote_addr), "1.1.1.1");
+    s.conns[1].local_port  = 53000;
+    s.conns[1].remote_port = 53;
+    s.conns[1].proto       = PROTO_UDP;
+
+    s.conn_count = 2;
+
+    jsonl_emit_connections(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* TCP record: has state/rtt_ms/retx */
+    ASSERT(contains(body, "\"type\":\"connections\""));
+    ASSERT(contains(body, "\"src\":\"10.0.0.5:49152\""));
+    ASSERT(contains(body, "\"dst\":\"93.184.216.34:443\""));
+    ASSERT(contains(body, "\"proto\":\"tcp\""));
+    ASSERT(contains(body, "\"state\":\"ESTABLISHED\""));
+    ASSERT(contains(body, "\"rtt_ms\":12.4"));
+    ASSERT(contains(body, "\"retx\":3"));
+    /* UDP record: no state/rtt_ms/retx */
+    ASSERT(contains(body, "\"src\":\"10.0.0.5:53000\""));
+    ASSERT(contains(body, "\"dst\":\"1.1.1.1:53\""));
+    ASSERT(contains(body, "\"proto\":\"udp\""));
+    /* rx_bytes/tx_bytes always present, zero when no bw entry */
+    ASSERT(contains(body, "\"rx_bytes\":0"));
+    ASSERT(contains(body, "\"tx_bytes\":0"));
+}
+
+/* IPv6 endpoints render bracketed: [addr]:port. */
+static void test_emit_connections_v6_brackets_address(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.conns[0].local_addr,  sizeof(s.conns[0].local_addr),  "fe80::1");
+    snprintf(s.conns[0].remote_addr, sizeof(s.conns[0].remote_addr), "2606:4700:4700::1111");
+    s.conns[0].local_port  = 54321;
+    s.conns[0].remote_port = 443;
+    s.conns[0].proto       = PROTO_TCP;
+    s.conns[0].state       = 1;
+    s.conn_count = 1;
+
+    jsonl_emit_connections(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"src\":\"[fe80::1]:54321\""));
+    ASSERT(contains(body, "\"dst\":\"[2606:4700:4700::1111]:443\""));
+}
+
+/* TCP entry with rtt_us == 0 should omit rtt_ms entirely (not emit "0.0"). */
+static void test_emit_connections_omits_zero_rtt(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.conns[0].local_addr,  sizeof(s.conns[0].local_addr),  "10.0.0.5");
+    snprintf(s.conns[0].remote_addr, sizeof(s.conns[0].remote_addr), "10.0.0.1");
+    s.conns[0].local_port  = 22;
+    s.conns[0].remote_port = 33333;
+    s.conns[0].proto       = PROTO_TCP;
+    s.conns[0].state       = 1;
+    s.conns[0].rtt_us      = 0;
+    s.conn_count = 1;
+
+    jsonl_emit_connections(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(!contains(body, "rtt_ms"));
+}
+
 static void test_emit_alert_writes_count(void) {
     open_fresh();
     alert_t a; memset(&a, 0, sizeof(a));
@@ -237,6 +328,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_icmp_writes_seq);
     RUN_TEST(test_emit_icmp_v6_true_writes_one);
     RUN_TEST(test_emit_alert_writes_count);
+    RUN_TEST(test_emit_connections_tcp_and_udp);
+    RUN_TEST(test_emit_connections_v6_brackets_address);
+    RUN_TEST(test_emit_connections_omits_zero_rtt);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);
