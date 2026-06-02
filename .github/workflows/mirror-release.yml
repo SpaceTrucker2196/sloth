@@ -55,3 +55,25 @@ jobs:
             ARGS+=(--prerelease)
           fi
           gh release create "$TAG" "${ARGS[@]}"
+
+      - name: Reconcile Pages config on river-io mirror
+        if: hashFiles('docs/index.html') != ''
+        env:
+          GH_TOKEN: ${{ secrets.RIVER_IO_PAT }}
+        run: |
+          MIRROR="river-io/sloth"
+          EXPECTED='{"build_type":"legacy","source":{"branch":"main","path":"/docs"}}'
+
+          if gh api "repos/${MIRROR}/pages" >/dev/null 2>&1; then
+            CURRENT=$(gh api "repos/${MIRROR}/pages" --jq '{build_type,source}')
+            if [ "$CURRENT" != "$(echo "$EXPECTED" | jq -c .)" ]; then
+              echo "Pages drift on ${MIRROR} — reconciling to legacy main/docs"
+              echo "$EXPECTED" | gh api -X PUT "repos/${MIRROR}/pages" --input -
+              gh api -X POST "repos/${MIRROR}/pages/builds" || true
+            else
+              echo "Pages on ${MIRROR} already legacy main/docs — no change"
+            fi
+          else
+            echo "Pages not enabled on ${MIRROR} — enabling with legacy main/docs"
+            echo "$EXPECTED" | gh api -X POST "repos/${MIRROR}/pages" --input -
+          fi
