@@ -228,6 +228,7 @@ indicated below. Late-joining clients pick up state on the next tick.
 | `ssdp_device`        | `usn`             | `ip`, `kind` (the SSDP `NT`/`ST` value; renamed from `type` to avoid colliding with the envelope's `type` field), `usn`, `location`, `nts`, `last_seen` |
 | `scan_entry`         | `ip`              | `ip`, `port_count`, `first_seen`, `last_seen`, `flagged`, `ports[]` |
 | `packet`             | `(ts_sec, ts_usec, src, dst)` | `ts_sec`, `ts_usec`, `src`, `dst`, `src_port`, `dst_port`, `proto`, `len`, `info`. Raw frame bytes are intentionally not emitted. |
+| `process`            | `pid`             | `pid` (-1 = unresolved bucket), `proc`, `ppid`, `depth`, `conn_count`, `tcp_count`, `udp_count`, `tx_bytes`, `rx_bytes`, `tx_rate`, `rx_rate`, `ports[]`. Synthesis record — aggregated from `connections` by PID; lets consumers reproduce the Processes view without re-implementing the aggregation. |
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are

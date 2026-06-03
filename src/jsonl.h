@@ -59,6 +59,7 @@ void jsonl_emit_nbns_names    (const sloth_state_t *s);
 void jsonl_emit_ssdp_devices  (const sloth_state_t *s);
 void jsonl_emit_scan_entries  (const sloth_state_t *s);
 void jsonl_emit_packets       (const sloth_state_t *s);
+void jsonl_emit_processes     (const sloth_state_t *s);
 
 /* Umbrella — calls every per-view snapshot emitter. Driven once per
  * poll from main.c after the underlying tables have been refreshed.

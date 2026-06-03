@@ -463,6 +463,17 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     snprintf(s.packets[0].dst, sizeof(s.packets[0].dst), "8.8.8.8");
     s.pkt_count = 1;
 
+    /* process — driven by procs_aggregate over s->conns. Seed one
+     * conn with a non-zero pid so the aggregator produces a row. */
+    snprintf(s.conns[0].local_addr,  sizeof(s.conns[0].local_addr),  "10.0.0.5");
+    snprintf(s.conns[0].remote_addr, sizeof(s.conns[0].remote_addr), "1.1.1.1");
+    s.conns[0].local_port  = 50000;
+    s.conns[0].remote_port = 443;
+    s.conns[0].proto       = PROTO_TCP;
+    s.conns[0].pid         = 1234;
+    snprintf(s.conns[0].proc, sizeof(s.conns[0].proc), "firefox");
+    s.conn_count = 1;
+
     jsonl_emit_state_snapshots(&s);
     jsonl_close();
 
@@ -509,6 +520,9 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     ASSERT(contains(body, "\"ports\":[22"));
     ASSERT(contains(body, "\"type\":\"packet\""));
     ASSERT(contains(body, "\"src\":\"10.0.0.5\""));
+    ASSERT(contains(body, "\"type\":\"process\""));
+    ASSERT(contains(body, "\"proc\":\"firefox\""));
+    ASSERT(contains(body, "\"pid\":1234"));
 }
 
 /* Empty state → no snapshot records emitted (every table count = 0). */

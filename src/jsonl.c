@@ -5,6 +5,7 @@
 #include "jsonl.h"
 #include "bandwidth.h"
 #include "data_socket.h"
+#include "views/procs.h"
 
 static FILE           *g_fp;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -775,6 +776,41 @@ void jsonl_emit_packets(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_processes(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    /* Procs view aggregates over s->conns; reuse the same aggregator
+     * the view itself calls so the wire shape exactly matches what an
+     * operator sees in [5]. Stack-allocated buffer (~6 KB at the
+     * default MAX_PROCS). */
+    proc_stat_t procs[MAX_PROCS];
+    int n = procs_aggregate(s, procs, MAX_PROCS);
+    for (int i = 0; i < n; i++) {
+        const proc_stat_t *e = &procs[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "process", now);
+        kv_int(buf, LINEBUF, &off, "pid",        e->pid);
+        kv_str(buf, LINEBUF, &off, "proc",       e->proc);
+        kv_int(buf, LINEBUF, &off, "ppid",       e->ppid);
+        kv_int(buf, LINEBUF, &off, "depth",      e->depth);
+        kv_int(buf, LINEBUF, &off, "conn_count", e->conn_count);
+        kv_int(buf, LINEBUF, &off, "tcp_count",  e->tcp_count);
+        kv_int(buf, LINEBUF, &off, "udp_count",  e->udp_count);
+        kv_int(buf, LINEBUF, &off, "tx_bytes",   (long long)e->tx_bytes);
+        kv_int(buf, LINEBUF, &off, "rx_bytes",   (long long)e->rx_bytes);
+        kv_double(buf, LINEBUF, &off, "tx_rate", e->tx_rate);
+        kv_double(buf, LINEBUF, &off, "rx_rate", e->rx_rate);
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ports\":[");
+        for (int k = 0; k < e->port_count; k++) {
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s%u", k ? "," : "", e->ports[k]);
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -800,4 +836,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_ssdp_devices      (s);
     jsonl_emit_scan_entries      (s);
     jsonl_emit_packets           (s);
+    jsonl_emit_processes         (s);
 }
