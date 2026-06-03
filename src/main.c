@@ -279,10 +279,13 @@ static void print_usage(const char *argv0) {
             "                     mixed format (22000), AND write a\n"
             "                     per-handshake DIR/<bssid>_<sta>.pcap for\n"
             "                     replay with aircrack-ng / Wireshark\n"
-            "  --data-socket SPEC stream the same JSONL records over a\n"
+            "  --data-socket [SPEC]\n"
+            "                     stream the same JSONL records over a\n"
             "                     read-only socket. SPEC is one of:\n"
             "                       unix:/path/to/socket\n"
             "                       tcp:HOST:PORT  (HOST is a literal IPv4)\n"
+            "                     If SPEC is omitted, defaults to\n"
+            "                     tcp:127.0.0.1:8765 (loopback only).\n"
             "                     Read-only: nothing is ever read from the\n"
             "                     socket. Caller picks the bind address.\n",
             argv0);
@@ -303,8 +306,16 @@ int main(int argc, char **argv) {
             pcap_dir = argv[++i];
         } else if (!strcmp(argv[i], "--eapol-dir") && i + 1 < argc) {
             eapol_dir = argv[++i];
-        } else if (!strcmp(argv[i], "--data-socket") && i + 1 < argc) {
-            data_socket = argv[++i];
+        } else if (!strcmp(argv[i], "--data-socket")) {
+            /* Optional value — bare `--data-socket` defaults to the
+             * loopback TCP listener so the common case of "stream to a
+             * local consumer" needs zero typing. An explicit spec wins
+             * if the next token doesn't look like another flag. */
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                data_socket = argv[++i];
+            } else {
+                data_socket = "tcp:127.0.0.1:8765";
+            }
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage(argv[0]);
             return 0;
@@ -332,6 +343,7 @@ int main(int argc, char **argv) {
             /* error already printed by data_socket_init */
             return 1;
         }
+        fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
     }
 
     memset(&g_state, 0, sizeof(g_state));
