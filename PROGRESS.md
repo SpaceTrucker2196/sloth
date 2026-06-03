@@ -49,9 +49,9 @@ work exposed as a new In-progress entry.
 **Owner**: next agent
 **Started**: 2026-06-01
 **Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: Phases 1-4 landed. Phases 5-6 outstanding.
-**Blockers**: none (pcap fixtures needed for Phase 6 test suite — can be synthesised with scapy)
-**Next concrete step**: Phase 5 — UI surface. Beacon view colors twin-cluster pairs together, marks suspicious vendor IEs, shows RSSI step inline; new `[x] Twins` view; JSONL "Evil-twin episodes" record type.
+**Status**: Phases 1-5 landed. Phase 6 (test fixtures) outstanding.
+**Blockers**: none (pcap fixtures for Phase 6 can be synthesised with scapy)
+**Next concrete step**: Phase 6 — fixture pcaps in `tests/fixtures/evil-twin-*.pcap` (same-cipher twin, vendor-IE delta, RSSI step, deauth-then-twin), end-to-end integration tests asserting the 5 acceptance criteria from the original issue.
 
 #### Plan (phases)
 
@@ -83,10 +83,13 @@ work exposed as a new In-progress entry.
 - `src/eapol_log.c` `append_22000_line_for_bssid` consults the tracker; when the BSSID is tainted, prepends `# provenance=tainted-evil-twin bssid=<MAC>` (hashcat ignores `#` comments).
 - 6 new tests (chain fires + taint correct; stale deauth no-fire; no-twin no-fire; flood=0 no-fire; reverse direction; taint-clear). 2211 assertions total (+17).
 
-**Phase 5 — UI surface (~2 days)**
-1. Beacon view `[b]`: twin-cluster pairs share a color, suspicious vendor IEs marked `⚑`, RSSI step inline.
-2. New `[x] Twins` view: one row per twin cluster (real BSSID, twin BSSID, cipher, OUI diff, rssi delta, attack-chain indicator).
-3. JSONL output: add "Evil-twin episodes" section.
+**~~Phase 5 — UI surface~~** ✅ landed 2026-06-02 (`50a768b`)
+- `twin_episode_t` + `twins_snapshot()` materialise pairs into `s->twin_episodes[]` (cap 64). RSSI-default real/twin assignment, taint override.
+- New `[x] Twins` view (`VIEW_TWINS = 30`, `VIEW_COUNT = 31`): one row per pair with flag glyphs `!@#*~` and j/k navigation. Empty state explains the prerequisite.
+- Beacon view gets SSID-column glyph suffixes for twin/real membership; status line surfaces twin episode count with `[x]` hint.
+- JSONL `twin_episode` record type — schema doc in `docs/wiki/jsonl-schema.md`. Snapshot cadence; consumer keys by `(ssid, real_bssid, twin_bssid)`.
+- 15 new tests (13 in `tests/test_twins.c`, 2 in `tests/test_jsonl.c`). 2258 assertions total (+47).
+- `docs/views/twins.md` written; linked from `README.md` and `docs/views/README.md`.
 
 **Phase 6 — Test fixtures & integration tests (~2 days)**
 1. Create `tests/fixtures/evil-twin-*.pcap` with scapy (same-cipher twin, vendor-IE delta, RSSI step, deauth-then-twin).
