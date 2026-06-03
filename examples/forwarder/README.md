@@ -250,6 +250,37 @@ collectors, IFTTT, Zapier.
   you need it (or use `--type alert` to keep volume sane and
   format in a Slack app rather than via the raw webhook).
 
+## Fan-out (multiple sinks at once)
+
+`--sink` accepts a comma-separated list. Each record is pushed to
+every named sink in the same batch; per-sink failures are isolated
+so one outage doesn't drop the batch on the others.
+
+```sh
+# Loki for the iOS dashboard, Datadog for the security team —
+# both fed from the same source connection.
+sloth-forward.py unix:/run/sloth.sock \
+    --sink loki,datadog \
+    --loki-url    http://loki.internal:3100 \
+    --loki-job    sloth \
+    --dd-api-key-env DD_API_KEY \
+    --dd-tags     env:prod
+```
+
+Stats output adapts to fan-out mode — each sink's `forwarded` /
+`dropped` / `retries` counter is reported separately so you can see
+which leg is healthy:
+
+```
+# sloth-forward: received=1234 loki=(fwd=1234 drp=0 rty=0) datadog=(fwd=1200 drp=34 rty=12)
+```
+
+When to use it: same-source / multi-destination deployments without
+running two forwarder processes. Caveat: one slow sink slows the
+whole pipeline (sends are sequential per batch); use separate
+processes if backpressure isolation matters more than process
+count.
+
 ## Filters and batching
 
 ```sh

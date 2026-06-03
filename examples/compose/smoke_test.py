@@ -215,6 +215,73 @@ def run_one_sink(sink_name: str, expected: set) -> bool:
     return True
 
 
+def run_fanout(expected: set) -> bool:
+    """Fan-out test: one forwarder pushes to TWO sinks simultaneously
+    via `--sink loki,datadog`. Asserts both downstreams receive every
+    record type. Covers regression on the SinkStats per-sink counters
+    and the fanout_send isolation contract."""
+    producer_port = free_port()
+    loki_port = free_port()
+    dd_port = free_port()
+
+    loki_h = make_sink_handler("loki")
+    dd_h   = make_sink_handler("datadog")
+    loki_srv = HTTPServer(("127.0.0.1", loki_port), loki_h)
+    dd_srv   = HTTPServer(("127.0.0.1", dd_port),   dd_h)
+    Thread(target=loki_srv.serve_forever, daemon=True).start()
+    Thread(target=dd_srv.serve_forever,   daemon=True).start()
+
+    producer = subprocess.Popen(
+        [sys.executable, str(MOCK_SLOTH),
+         "--bind", f"127.0.0.1:{producer_port}",
+         "--interval", "0.05"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if not wait_for_port("127.0.0.1", producer_port, timeout=5.0):
+        producer.kill(); loki_srv.shutdown(); dd_srv.shutdown()
+        print("FAIL[fanout]: producer did not bind", file=sys.stderr)
+        return False
+
+    forwarder = subprocess.Popen(
+        [sys.executable, str(FORWARDER),
+         f"tcp:127.0.0.1:{producer_port}",
+         "--sink", "loki,datadog",
+         "--loki-url", f"http://127.0.0.1:{loki_port}",
+         "--loki-job", "fan",
+         "--dd-url",   f"http://127.0.0.1:{dd_port}",
+         "--dd-api-key", "smoke",
+         "--batch-size", "5", "--batch-ms", "100",
+         "--stats-interval", "60"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if (expected.issubset(loki_h.seen_types) and
+                expected.issubset(dd_h.seen_types)):
+            break
+        time.sleep(0.1)
+
+    forwarder.terminate(); producer.terminate()
+    try: forwarder.wait(timeout=2.0)
+    except subprocess.TimeoutExpired: forwarder.kill()
+    try: producer.wait(timeout=2.0)
+    except subprocess.TimeoutExpired: producer.kill()
+    loki_srv.shutdown(); dd_srv.shutdown()
+
+    ok_loki = expected.issubset(loki_h.seen_types)
+    ok_dd   = expected.issubset(dd_h.seen_types)
+    print(f"# [fanout] loki:{len(loki_h.seen_types)}/{len(expected)} "
+          f"datadog:{len(dd_h.seen_types)}/{len(expected)}", flush=True)
+    if not ok_loki:
+        print(f"FAIL[fanout/loki]: missing "
+              f"{sorted(expected - loki_h.seen_types)}", file=sys.stderr)
+    if not ok_dd:
+        print(f"FAIL[fanout/datadog]: missing "
+              f"{sorted(expected - dd_h.seen_types)}", file=sys.stderr)
+    return ok_loki and ok_dd
+
+
 def main() -> int:
     expected = expected_record_types()
     print(f"# expecting {len(expected)} record types from mock-sloth",
@@ -223,6 +290,8 @@ def main() -> int:
     for sink_name in ("loki", "datadog", "webhook"):
         if not run_one_sink(sink_name, expected):
             all_ok = False
+    if not run_fanout(expected):
+        all_ok = False
     if not all_ok:
         return 1
     print("OK", flush=True)

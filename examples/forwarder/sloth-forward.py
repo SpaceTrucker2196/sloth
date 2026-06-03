@@ -570,32 +570,60 @@ class WebhookSink:
 
 # ── Batch + retry ────────────────────────────────────────────────────
 
-class Stats:
-    """Periodic counters. Printed to stderr every `interval_s`."""
+class SinkStats:
+    """Per-sink counters. `received` is shared across all sinks (it
+    counts source-side records before fan-out); `forwarded`,
+    `dropped`, `retries` are tracked per sink so an operator can see
+    which downstream is flaking."""
 
-    def __init__(self, interval_s: float = 30.0):
-        self.interval = interval_s
-        self.received = 0
+    def __init__(self, sink_name: str):
+        self.name = sink_name
         self.forwarded = 0
         self.dropped = 0
         self.retries = 0
+
+
+class Stats:
+    """Periodic counters. Printed to stderr every `interval_s`.
+    Single `received` counter for the whole forwarder; per-sink
+    sub-stats track downstream delivery separately so fan-out
+    deployments can see which leg is healthy."""
+
+    def __init__(self, sink_names: list, interval_s: float = 30.0):
+        self.interval = interval_s
+        self.received = 0
+        self.per_sink = {n: SinkStats(n) for n in sink_names}
         self.last_print = time.monotonic()
 
     def maybe_print(self, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now - self.last_print < self.interval:
             return
-        print(f"# sloth-forward: received={self.received} "
-              f"forwarded={self.forwarded} "
-              f"dropped={self.dropped} retries={self.retries}",
-              file=sys.stderr, flush=True)
+        if len(self.per_sink) == 1:
+            # Single-sink path keeps the original one-line summary
+            # for backward compatibility with existing operators'
+            # log scrapers.
+            ss = next(iter(self.per_sink.values()))
+            print(f"# sloth-forward: received={self.received} "
+                  f"forwarded={ss.forwarded} "
+                  f"dropped={ss.dropped} retries={ss.retries}",
+                  file=sys.stderr, flush=True)
+        else:
+            parts = [f"received={self.received}"]
+            for name, ss in self.per_sink.items():
+                parts.append(f"{name}=(fwd={ss.forwarded} "
+                             f"drp={ss.dropped} rty={ss.retries})")
+            print("# sloth-forward: " + " ".join(parts),
+                  file=sys.stderr, flush=True)
         self.last_print = now
 
 
 def send_with_retry(sink, batch: list, max_retries: int,
                      backoff_s: float, stats: Stats) -> bool:
-    """Send `batch`, retrying on transient errors. Returns True on
-    success, False if the batch was dropped after max_retries."""
+    """Send `batch` to one sink, retrying on transient errors.
+    Returns True on success, False if dropped after max_retries.
+    Per-sink retry/drop counters update via stats.per_sink[sink.name]."""
+    ss = stats.per_sink[sink.name]
     attempt = 0
     delay = backoff_s
     while True:
@@ -605,7 +633,7 @@ def send_with_retry(sink, batch: list, max_retries: int,
         except (urllib.error.HTTPError, urllib.error.URLError,
                 OSError) as e:
             attempt += 1
-            stats.retries += 1
+            ss.retries += 1
             if attempt > max_retries:
                 print(f"# sink {sink.name} failed after {max_retries} "
                       f"retries; dropping {len(batch)} record(s): {e}",
@@ -618,10 +646,54 @@ def send_with_retry(sink, batch: list, max_retries: int,
             delay *= 2.0
 
 
+def fanout_send(sinks: list, batch: list, max_retries: int,
+                backoff_s: float, stats: Stats) -> None:
+    """Push `batch` to every sink. Failures are isolated — one
+    sink's outage does not drop the batch on the others. Caller
+    tracks per-sink success via stats.per_sink, populated by
+    send_with_retry. The batch dict objects are passed by reference
+    to each sink, so sinks that mutate records (e.g. ESSink adding
+    @timestamp) must copy first — all bundled sinks already do this."""
+    for sink in sinks:
+        ss = stats.per_sink[sink.name]
+        if send_with_retry(sink, batch, max_retries, backoff_s, stats):
+            ss.forwarded += len(batch)
+        else:
+            ss.dropped += len(batch)
+
+
 # ── CLI / sink construction ──────────────────────────────────────────
 
-def build_sink(args) -> object:
-    if args.sink == "hec":
+_VALID_SINKS = {"hec", "syslog", "elastic", "loki", "datadog", "webhook"}
+
+
+def build_sinks(args) -> list:
+    """Build one or more sinks from --sink. Comma-separated values
+    fan out to every named sink ('--sink loki,datadog'). Single-
+    value form behaves exactly as before."""
+    names = [n.strip() for n in args.sink.split(",") if n.strip()]
+    if not names:
+        raise SystemExit("--sink: at least one sink name required")
+    for n in names:
+        if n not in _VALID_SINKS:
+            raise SystemExit(
+                f"--sink: {n!r} is not one of "
+                f"{sorted(_VALID_SINKS)}"
+            )
+    if len(set(names)) != len(names):
+        raise SystemExit("--sink: duplicate sink names are not allowed")
+    sinks = []
+    for n in names:
+        # Reuse the single-sink builder per name; it inspects args
+        # for the per-sink flags. Each sink's flags must be present
+        # when that sink is requested — argparse can't enforce
+        # this conditionally so the error surfaces at build time.
+        sinks.append(build_one_sink(n, args))
+    return sinks
+
+
+def build_one_sink(name: str, args) -> object:
+    if name == "hec":
         if not args.hec_url:
             raise SystemExit("--sink hec needs --hec-url")
         token = args.hec_token
@@ -641,7 +713,7 @@ def build_sink(args) -> object:
             index=args.hec_index,
             verify_tls=not args.hec_insecure,
         )
-    if args.sink == "syslog":
+    if name == "syslog":
         return SyslogSink(
             host=args.syslog_host,
             port=args.syslog_port,
@@ -650,7 +722,7 @@ def build_sink(args) -> object:
             hostname=args.syslog_hostname,
             pri=args.syslog_pri,
         )
-    if args.sink == "elastic":
+    if name == "elastic":
         if not args.es_url:
             raise SystemExit("--sink elastic needs --es-url")
         password = args.es_password
@@ -672,7 +744,7 @@ def build_sink(args) -> object:
             api_key=api_key,
             verify_tls=not args.es_insecure,
         )
-    if args.sink == "loki":
+    if name == "loki":
         if not args.loki_url:
             raise SystemExit("--sink loki needs --loki-url")
         password = args.loki_password
@@ -687,7 +759,7 @@ def build_sink(args) -> object:
             password=password,
             verify_tls=not args.loki_insecure,
         )
-    if args.sink == "datadog":
+    if name == "datadog":
         api_key = args.dd_api_key
         if not api_key and args.dd_api_key_env:
             api_key = os.environ.get(args.dd_api_key_env)
@@ -704,7 +776,7 @@ def build_sink(args) -> object:
             tags=args.dd_tags,
             verify_tls=not args.dd_insecure,
         )
-    if args.sink == "webhook":
+    if name == "webhook":
         if not args.webhook_url:
             raise SystemExit("--sink webhook needs --webhook-url")
         return WebhookSink(
@@ -712,7 +784,7 @@ def build_sink(args) -> object:
             headers=args.webhook_header,
             verify_tls=not args.webhook_insecure,
         )
-    raise SystemExit(f"unknown sink {args.sink!r}")
+    raise SystemExit(f"unknown sink {name!r}")
 
 
 def passes_filter(r: dict, types: Optional[set], src_sub: Optional[str]) -> bool:
@@ -752,10 +824,11 @@ def main() -> int:
     p.add_argument("--no-reconnect", action="store_true",
                    help="exit on first source disconnect (one-shot / test mode)")
 
-    p.add_argument("--sink",
-                   choices=["hec", "syslog", "elastic", "loki",
-                            "datadog", "webhook"],
-                   required=True, help="downstream sink to use")
+    p.add_argument("--sink", required=True,
+                   help="downstream sink(s). One of: hec, syslog, elastic, "
+                        "loki, datadog, webhook. Comma-separated for fan-out "
+                        "(e.g. 'loki,datadog' — every record is pushed to "
+                        "both, failures isolated per sink).")
 
     # HEC options
     p.add_argument("--hec-url", default=None,
@@ -860,15 +933,17 @@ def main() -> int:
         print(f"sloth-forward: {e}", file=sys.stderr)
         return 2
 
-    sink = build_sink(args)
-    print(f"# sloth-forward: source={args.source} sink={sink.name}",
+    sinks = build_sinks(args)
+    sink_label = ",".join(s.name for s in sinks)
+    print(f"# sloth-forward: source={args.source} sink={sink_label}",
           file=sys.stderr, flush=True)
 
     type_filter = None
     if args.type:
         type_filter = {t.strip() for t in args.type.split(",") if t.strip()}
 
-    stats = Stats(interval_s=args.stats_interval)
+    stats = Stats([s.name for s in sinks],
+                  interval_s=args.stats_interval)
     batch: list = []
     last_flush = time.monotonic()
 
@@ -876,16 +951,12 @@ def main() -> int:
         nonlocal batch, last_flush
         if not batch:
             return
-        ok = send_with_retry(
-            sink, batch,
+        fanout_send(
+            sinks, batch,
             max_retries=args.max_retries,
             backoff_s=args.retry_backoff,
             stats=stats,
         )
-        if ok:
-            stats.forwarded += len(batch)
-        else:
-            stats.dropped += len(batch)
         batch = []
         last_flush = time.monotonic()
 

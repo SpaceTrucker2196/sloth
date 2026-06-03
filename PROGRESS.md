@@ -1088,10 +1088,15 @@ ops log — naming collision to resolve).
   intentionally not supported as a built-in sink (their message
   envelope is outside the schema-agnostic remit); operators write
   a transform proxy or use a Slack app.
-- **Sink fan-out** — currently one forwarder process per sink.
-  A multi-sink mode would let one process push to both Splunk and
-  Loki from the same source connection. Worth it only if
-  backpressure isolation isn't important to the operator.
+- ~~**Sink fan-out**~~ — landed 2026-06-03. `--sink loki,datadog`
+  (comma-separated) pushes every record to every named sink in the
+  same batch. Per-sink failures are isolated; stats output adapts
+  to show each sink's forwarded/dropped/retries separately. Sends
+  are sequential per batch — one slow sink slows the whole
+  pipeline, so use separate forwarder processes when backpressure
+  isolation matters. Smoke test now covers fan-out alongside the
+  individual sinks (one producer → forwarder → two fake-sink HTTP
+  servers).
 - ~~**Smoke-test the consumer/forwarder in CI**~~ — landed
   2026-06-03 in `examples/compose/smoke_test.py` +
   `.github/workflows/examples-smoke.yml`. Runs end-to-end
