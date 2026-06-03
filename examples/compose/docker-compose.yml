@@ -1,0 +1,98 @@
+# Compose stack — sloth → forwarder → Loki → Grafana
+#
+#   docker compose up
+#   open http://localhost:3000 (admin / admin), pick the Loki datasource,
+#   query: {job="sloth"}
+#
+# Designed to be the smallest demonstrable instance of the full
+# pipeline so evaluators can see records land in a SIEM-like surface
+# within seconds of `up`. Sloth-proper needs monitor mode + root and
+# isn't realistic in a container, so the `producer` service ships a
+# synthetic JSONL emitter over TCP. The real sloth uses --data-socket
+# tcp:HOST:PORT with the same wire format, so swapping the producer
+# for a real sloth instance is a one-line change.
+
+services:
+  producer:
+    # Synthetic sloth: emits JSONL records on TCP :8765 so the
+    # forwarder doesn't depend on a live wireless capture.
+    image: python:3.12-slim
+    container_name: sloth-producer
+    working_dir: /app
+    volumes:
+      - ./mock-sloth.py:/app/mock-sloth.py:ro
+    command: ["python", "mock-sloth.py", "--bind", "0.0.0.0:8765"]
+    expose:
+      - "8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost', 8765), 1); s.close()"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  forwarder:
+    # Consumes from `producer` and pushes to Loki. Reuses the unmodified
+    # examples/forwarder/sloth-forward.py from the parent repo.
+    image: python:3.12-slim
+    container_name: sloth-forwarder
+    working_dir: /app
+    volumes:
+      - ../forwarder/sloth-forward.py:/app/sloth-forward.py:ro
+    command:
+      - "python"
+      - "sloth-forward.py"
+      - "tcp:producer:8765"
+      - "--sink"
+      - "loki"
+      - "--loki-url"
+      - "http://loki:3100"
+      - "--loki-job"
+      - "sloth"
+      - "--loki-source"
+      - "compose-demo"
+      - "--batch-size"
+      - "20"
+      - "--batch-ms"
+      - "500"
+      - "--stats-interval"
+      - "10"
+    depends_on:
+      producer:
+        condition: service_healthy
+      loki:
+        condition: service_started
+
+  loki:
+    # Single-binary all-in-one Loki — fine for dev. Filesystem storage,
+    # no auth, no multi-tenant. Config mounted from this directory.
+    image: grafana/loki:3.1.0
+    container_name: sloth-loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./loki-config.yml:/etc/loki/loki-config.yml:ro
+    expose:
+      - "3100"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    # Grafana with Loki provisioned as the default datasource. Default
+    # creds admin/admin (you'll be asked to change on first login —
+    # press "skip" for the demo).
+    image: grafana/grafana:11.2.0
+    container_name: sloth-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/loki.yml:ro
+    depends_on:
+      loki:
+        condition: service_healthy

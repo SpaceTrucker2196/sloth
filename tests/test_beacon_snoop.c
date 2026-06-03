@@ -975,6 +975,49 @@ static void test_parse_fp_vendor_hash_distinguishes(void) {
     ASSERT(ra.fp.vendor_ies_hash != rb.fp.vendor_ies_hash);
 }
 
+/* AP_FP_FLAG_HAK5_OUI / AP_FP_FLAG_ESPRESSIF_OUI are set by
+ * beacon_record (which knows the BSSID), not by beacon_parse. Drive
+ * a record through end-to-end and snapshot to verify the bits land
+ * in the public state. */
+static void test_record_sets_hak5_flag_for_pineapple_oui(void) {
+    beacon_clear();
+    static const uint8_t hak5_bssid[6] = {0x00, 0x13, 0x37, 0x44, 0x55, 0x66};
+    beacon_record(hak5_bssid, "RogueNet", -45, 6, "WPA2", 100, NULL);
+
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_HAK5_OUI)      != 0);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_ESPRESSIF_OUI) == 0);
+}
+
+static void test_record_sets_espressif_flag_for_esp32_oui(void) {
+    beacon_clear();
+    static const uint8_t esp_bssid[6] = {0x24, 0x0a, 0xc4, 0x44, 0x55, 0x66};
+    beacon_record(esp_bssid, "RogueNet", -45, 6, "WPA2", 100, NULL);
+
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_ESPRESSIF_OUI) != 0);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_HAK5_OUI)      == 0);
+}
+
+static void test_record_no_attacker_flag_for_clean_oui(void) {
+    beacon_clear();
+    static const uint8_t apple_bssid[6] = {0x00, 0x17, 0xf2, 0x11, 0x22, 0x33};
+    beacon_record(apple_bssid, "Home", -55, 6, "WPA2", 100, NULL);
+
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_HAK5_OUI)      == 0);
+    ASSERT((s.beacon_aps[0].fp.flags & AP_FP_FLAG_ESPRESSIF_OUI) == 0);
+}
+
 /* ── Suite entry point ───────────────────────────────────── */
 
 void run_beacon_snoop_tests(void) {
@@ -1030,4 +1073,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_fp_vendor_hash_includes_non_ms);
     RUN_TEST(test_parse_fp_vendor_hash_stable);
     RUN_TEST(test_parse_fp_vendor_hash_distinguishes);
+    RUN_TEST(test_record_sets_hak5_flag_for_pineapple_oui);
+    RUN_TEST(test_record_sets_espressif_flag_for_esp32_oui);
+    RUN_TEST(test_record_no_attacker_flag_for_clean_oui);
 }

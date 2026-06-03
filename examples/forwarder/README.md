@@ -168,6 +168,30 @@ ES side that maps the sloth fields (`type`, `src`, `dst`, `ja3`, etc.)
 to keyword/IP/text as appropriate, with a dynamic mapping fallback
 for unknown fields. The forwarder itself stays schema-agnostic.
 
+## Grafana Loki
+
+```sh
+sloth-forward.py unix:/run/sloth.sock \
+    --sink loki \
+    --loki-url http://loki.example.com:3100 \
+    --loki-job sloth \
+    --loki-source edge-1
+```
+
+Records are POSTed to `/loki/api/v1/push` grouped by the `type` field
+— each record-type becomes its own Loki stream so the label set stays
+low-cardinality. Per-record fields (src, qname, ja3, …) ride in the
+log line as raw JSON; query with `{job="sloth", type="alert"} | json
+sev=~"2"` etc. to filter inside Grafana.
+
+- **Multi-tenant Loki.** `--loki-tenant <id>` sets the
+  `X-Scope-OrgID` header that Loki's gateway uses to scope tenants.
+- **Basic auth.** `--loki-username` + `--loki-password(-env)`.
+- **TLS.** `--loki-insecure` skips cert verification (test only).
+
+See `examples/compose/` for a one-command stack that brings up a
+local Loki + Grafana with this sink pre-wired.
+
 ## Filters and batching
 
 ```sh

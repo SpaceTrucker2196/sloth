@@ -1,0 +1,39 @@
+# Minimal single-binary Loki config for the demo compose stack.
+# Filesystem storage, no auth, no multi-tenant. NOT for production.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /tmp/loki
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Loose enough for the demo's bursty synthetic traffic. Tighten in
+  # production to match your retention / SLO posture.
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_query_series: 5000

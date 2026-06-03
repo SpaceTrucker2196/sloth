@@ -367,6 +367,89 @@ class ESSink:
             )
 
 
+class LokiSink:
+    """Grafana Loki push API. POSTs `application/json` to
+    `<loki-url>/loki/api/v1/push` with the documented "streams" envelope:
+    one stream per `type` field so Loki indexes the labels separately.
+
+    Loki labels are intentionally low-cardinality — we expose `type`
+    and the configured `job`/`source` only. Per-record fields (src,
+    qname, ja3, …) ride in the log line as the raw JSON.
+
+    Reference: https://grafana.com/docs/loki/latest/reference/api/#push-log-entries-to-loki
+    """
+
+    name = "loki"
+
+    def __init__(self, url: str, job: str = "sloth", source: str = "sloth",
+                 tenant_id: Optional[str] = None,
+                 username: Optional[str] = None,
+                 password: Optional[str] = None,
+                 verify_tls: bool = True,
+                 timeout: float = 10.0):
+        self.url = url.rstrip("/") + "/loki/api/v1/push"
+        self.job = job
+        self.source = source
+        self.tenant_id = tenant_id
+        self.timeout = timeout
+        if username and password:
+            import base64
+            tok = base64.b64encode(f"{username}:{password}".encode()).decode()
+            self.auth_header = f"Basic {tok}"
+        else:
+            self.auth_header = None
+        if verify_tls:
+            self.ssl_ctx = ssl.create_default_context()
+        else:
+            self.ssl_ctx = ssl._create_unverified_context()
+
+    def send(self, batch: list) -> None:
+        # Group records by `type` so each record-type gets its own stream
+        # (= label set). Loki rejects pushes where timestamps in a stream
+        # aren't monotonic; we sort each stream by ts to be safe.
+        streams: dict = {}
+        for r in batch:
+            t = r.get("type", "unknown")
+            streams.setdefault(t, []).append(r)
+
+        stream_arr = []
+        for t, recs in streams.items():
+            recs.sort(key=lambda x: float(x.get("ts", 0)))
+            values = []
+            for r in recs:
+                # Loki ts is nanoseconds since epoch, as a string.
+                ts_ns = int(float(r.get("ts", time.time())) * 1e9)
+                values.append([str(ts_ns), json.dumps(r)])
+            stream_arr.append({
+                "stream": {
+                    "job":    self.job,
+                    "source": self.source,
+                    "type":   t,
+                },
+                "values": values,
+            })
+
+        body = json.dumps({"streams": stream_arr}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent":   "sloth-forward/1",
+        }
+        if self.tenant_id:
+            headers["X-Scope-OrgID"] = self.tenant_id
+        if self.auth_header:
+            headers["Authorization"] = self.auth_header
+
+        req = urllib.request.Request(
+            self.url, data=body, method="POST", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                     context=self.ssl_ctx) as resp:
+            if resp.status >= 400:
+                raise urllib.error.HTTPError(
+                    self.url, resp.status, resp.reason, resp.headers, None,
+                )
+
+
 # ── Batch + retry ────────────────────────────────────────────────────
 
 class Stats:
@@ -471,6 +554,21 @@ def build_sink(args) -> object:
             api_key=api_key,
             verify_tls=not args.es_insecure,
         )
+    if args.sink == "loki":
+        if not args.loki_url:
+            raise SystemExit("--sink loki needs --loki-url")
+        password = args.loki_password
+        if not password and args.loki_password_env:
+            password = os.environ.get(args.loki_password_env)
+        return LokiSink(
+            url=args.loki_url,
+            job=args.loki_job,
+            source=args.loki_source,
+            tenant_id=args.loki_tenant,
+            username=args.loki_username,
+            password=password,
+            verify_tls=not args.loki_insecure,
+        )
     raise SystemExit(f"unknown sink {args.sink!r}")
 
 
@@ -511,7 +609,7 @@ def main() -> int:
     p.add_argument("--no-reconnect", action="store_true",
                    help="exit on first source disconnect (one-shot / test mode)")
 
-    p.add_argument("--sink", choices=["hec", "syslog", "elastic"],
+    p.add_argument("--sink", choices=["hec", "syslog", "elastic", "loki"],
                    required=True, help="downstream sink to use")
 
     # HEC options
@@ -558,6 +656,24 @@ def main() -> int:
     p.add_argument("--es-api-key-env", default=None,
                    help="env var name holding the ES API key")
     p.add_argument("--es-insecure", action="store_true",
+                   help="disable TLS cert verification (test only)")
+
+    # Loki options
+    p.add_argument("--loki-url", default=None,
+                   help="Loki base URL (e.g. http://loki:3100)")
+    p.add_argument("--loki-job", default="sloth",
+                   help="value of the `job` label (default: sloth)")
+    p.add_argument("--loki-source", default="sloth",
+                   help="value of the `source` label (default: sloth)")
+    p.add_argument("--loki-tenant", default=None,
+                   help="multi-tenant header X-Scope-OrgID (optional)")
+    p.add_argument("--loki-username", default=None,
+                   help="Basic-auth username (optional)")
+    p.add_argument("--loki-password", default=None,
+                   help="Basic-auth password (consider --loki-password-env)")
+    p.add_argument("--loki-password-env", default=None,
+                   help="env var name holding the Loki password")
+    p.add_argument("--loki-insecure", action="store_true",
                    help="disable TLS cert verification (test only)")
 
     args = p.parse_args()

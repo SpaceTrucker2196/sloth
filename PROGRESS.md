@@ -139,12 +139,51 @@ reference). The same coverage now lives in hand-crafted byte arrays
 (Phase 6 parser tests) plus the e2e scenario, with scapy reproducer
 snippets documented for live testing.
 
-**Follow-ups**: Two `ap_fingerprint_t` flag bits remain reserved but
-unpopulated — `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` (signature needs
-pcap calibration) and the `HAK5_OUI` / `ESPRESSIF_OUI` bits (alerts
-use the table lookup directly today; populating the flag bits would
-let consumers display the marker without re-running the lookup).
-Not on a critical path.
+**Follow-ups**: `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` remains reserved
+but unpopulated — signature needs pcap calibration before it can be
+defined reliably. (The `HAK5_OUI` / `ESPRESSIF_OUI` follow-ups closed
+2026-06-02 in the entry below.)
+
+### 2026-06-02 — Evil-twin AP/OUI flag-bit population + Loki sink + Compose demo
+**Touched**: `src/beacon_snoop.c`, `tests/test_beacon_snoop.c`,
+`examples/forwarder/sloth-forward.py`, `examples/forwarder/README.md`,
+`examples/compose/` (new dir: `docker-compose.yml`, `mock-sloth.py`,
+`loki-config.yml`, `grafana-datasource.yml`, `README.md`)
+**Why**: Closes two open follow-ups and lights up a third end-to-end
+demo path so evaluators can see the JSONL stream land in a SIEM-like
+surface within seconds of `docker compose up`.
+
+**What's in it**:
+- **`AP_FP_FLAG_HAK5_OUI` / `AP_FP_FLAG_ESPRESSIF_OUI` population**
+  — `beacon_record` now sets the flag bits inline from the BSSID OUI
+  via `oui_is_hak5()` / `oui_is_espressif()`. Bits never clear; they
+  live for the entry's lifetime. Downstream consumers (JSONL,
+  iOS, Twins view) can surface the marker without re-doing the
+  table lookup. 3 new tests in `test_beacon_snoop.c` (Hak5 OUI sets
+  the flag, Espressif OUI sets the flag, clean OUI sets neither).
+- **Loki sink in the forwarder** — fourth sink type alongside
+  `hec` / `syslog` / `elastic`. Groups by `type` field so each
+  record type becomes its own Loki stream (keeps label
+  cardinality bounded). Supports multi-tenant (`X-Scope-OrgID`),
+  basic auth, and `--loki-insecure` for test clusters. ~95 LoC for
+  the sink class + ~25 LoC for CLI flags + a documentation block in
+  the forwarder README.
+- **`examples/compose/`** — four-container demo stack
+  (mock-sloth producer + forwarder + Loki + Grafana). One
+  `docker compose up`, then open Grafana on `:3000` and run
+  `{job="sloth"}` to see records arriving. The producer is a
+  synthetic Python script (`mock-sloth.py`) emitting one record per
+  record-type per second; the wire format matches sloth's
+  `--data-socket tcp:HOST:PORT` so swapping in real sloth is one
+  line. README documents the substitution. Grafana datasource is
+  auto-provisioned; Loki runs single-binary with filesystem storage.
+
+**Counts**: 2311 assertions total (+9 from Phase 6 close). make is
+warning-clean.
+
+**Follow-ups**: None directly. The Compose stack documents how to
+swap in real sloth; that requires a published Docker image which
+isn't built here.
 
 ### 2026-06-02 — `connections` JSONL record type
 **Commits**: `23777db`
@@ -1043,26 +1082,22 @@ ops log — naming collision to resolve).
 ### Forwarder / consumer extensions
 
 - **Additional forwarder sinks** — `examples/forwarder/` ships
-  HEC, syslog, and Elastic. Natural next additions, in rough
-  popularity order: Loki (`/loki/api/v1/push`), Datadog Logs
-  intake, OpenSearch (works against the Elastic sink already with
-  `--es-url` repointed; document or add a thin alias), generic
-  webhook (POST raw JSON to any URL — useful for Discord/Slack
-  alerting integrations). Sink interface is two members per the
-  README's "Adding a sink" recipe; ~30 lines each.
+  HEC, syslog, Elastic, and Loki. Natural next additions, in rough
+  popularity order: Datadog Logs intake, OpenSearch (works against
+  the Elastic sink already with `--es-url` repointed; document or
+  add a thin alias), generic webhook (POST raw JSON to any URL —
+  useful for Discord/Slack alerting integrations). Sink interface
+  is two members per the README's "Adding a sink" recipe; ~30 lines
+  each.
 - **Sink fan-out** — currently one forwarder process per sink.
   A multi-sink mode would let one process push to both Splunk and
-  Elastic from the same source connection. Worth it only if
+  Loki from the same source connection. Worth it only if
   backpressure isolation isn't important to the operator.
-- **Docker Compose demo stack** — `examples/compose/` with sloth +
-  forwarder + a SIEM (Elastic + Kibana, or Grafana + Loki) so the
-  whole pipeline can be brought up with one `docker compose up`.
-  Good for evaluators and as a CI integration test.
 - **Smoke-test the consumer/forwarder in CI** — currently
   hand-run; could be a `.github/workflows/examples.yml` that spins
-  up a fake sloth producer, runs each script for ~5s, asserts the
-  expected records arrive at a fake sink. Catches regression on
-  schema additions.
+  up `examples/compose/` (or a fake sloth producer), runs each
+  script for ~5s, asserts the expected records arrive at a fake
+  sink. Catches regression on schema additions.
 
 ### iOS / Tailscale (out of this repo)
 

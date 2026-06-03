@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include "sloth.h"
 #include "beacon_snoop.h"
+#include "wifi_oui_attacker.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
@@ -551,6 +552,14 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].fp.oui[0] = bssid[0];
     g_aps[slot].fp.oui[1] = bssid[1];
     g_aps[slot].fp.oui[2] = bssid[2];
+    /* Set the attacker-OUI flag bits inline so downstream consumers
+     * (JSONL, iOS client, Twins view) see the marker without having
+     * to re-run the lookup. The bits never clear — an OUI on the
+     * Hak5/Espressif list stays there for the life of the entry. */
+    if (oui_is_hak5(g_aps[slot].fp.oui))
+        g_aps[slot].fp.flags |= AP_FP_FLAG_HAK5_OUI;
+    if (oui_is_espressif(g_aps[slot].fp.oui))
+        g_aps[slot].fp.flags |= AP_FP_FLAG_ESPRESSIF_OUI;
     rssi_ring_push(&g_aps[slot], signal, now);
 
     pthread_mutex_unlock(&g_mu);
