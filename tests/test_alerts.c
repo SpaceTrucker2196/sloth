@@ -883,6 +883,110 @@ static void test_evil_twin_taint_clear_drops_entries(void) {
     ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
 }
 
+/* ── Phase 6 end-to-end attack chain ────────────────────── */
+
+/* The 5 acceptance criteria from the original copilot issue, exercised
+ * in one scenario:
+ *   1. Same-cipher diff-OUI twin pair        → twin-fp WARN
+ *   2. Vendor-IE fingerprint hashes differ    → escalates to CRIT
+ *   3. RSSI swing on the twin side ≥ 15 dBm  → EVIL_TWIN_PROXIMITY
+ *   4. Deauth flood on real BSSID            → twin-chain CRIT + taint
+ *   5. Clean baseline (single AP, no twin)   → no false fires
+ *
+ * We need scope a twins_snapshot here too — the alerts engine only
+ * exercises Phases 1-4, but the materialised episode (Phase 5) is part
+ * of the contract operators see. */
+
+#include "twins.h"
+
+static void test_e2e_full_attack_chain(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+
+    /* Phase 1/2: twin pair, diff OUI, distinct vendor-IE hashes. */
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI bonus */
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    s.beacon_aps[0].signal_dbm        = -75;
+    s.beacon_aps[1].signal_dbm        = -40;
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xfeedfaceu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xdeadbeefu;
+    /* Phase 3: twin side has a 25 dBm RSSI swing. */
+    s.beacon_aps[1].rssi_min_60s = -70;
+    s.beacon_aps[1].rssi_max_60s = -45;
+    /* Phase 4: deauth flood on the real BSSID inside the 5s window. */
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL);
+
+    alerts_update(&s);
+    twins_snapshot(&s);
+
+    /* Acceptance 1+2: a CRIT EVIL_TWIN under twin-fp (hash mismatch
+     * already escalated this branch). */
+    int found_fp = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s.alerts[k].key, "twin-fp:Cafe-Net") == NULL) continue;
+        ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+        found_fp = 1;
+        break;
+    }
+    ASSERT_EQ(found_fp, 1);
+
+    /* Acceptance 3: proximity alert on the twin BSSID. */
+    int found_prox = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN_PROXIMITY) continue;
+        if (strstr(s.alerts[k].key, "twin-prox:00:13:37") == NULL) continue;
+        found_prox = 1;
+        break;
+    }
+    ASSERT_EQ(found_prox, 1);
+
+    /* Acceptance 4: chain CRIT + taint on twin BSSID. */
+    int found_chain = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s.alerts[k].key, "twin-chain:Cafe-Net") == NULL) continue;
+        ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[k].detail, "attack-in-progress") != NULL);
+        found_chain = 1;
+        break;
+    }
+    ASSERT_EQ(found_chain, 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+
+    /* Phase 5: materialised episode with all flags set. The real AP
+     * here is the deauthed one (taint-override pins assignment). */
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT(memcmp(s.twin_episodes[0].real_bssid, real, 6) == 0);
+    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, twin, 6) == 0);
+    ASSERT_EQ(s.twin_episodes[0].attack_in_progress, 1);
+    ASSERT_EQ(s.twin_episodes[0].attacker_oui,        1);
+    ASSERT_EQ(s.twin_episodes[0].hash_mismatch,       1);
+}
+
+/* Acceptance 5: a clean baseline (one AP, no peers, no deauth) yields
+ * no evil-twin alerts and no twin episodes. Defends against the chain
+ * accidentally firing under realistic conditions. */
+static void test_e2e_clean_baseline_no_alerts(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t solo[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Home-Wifi", solo, "WPA2");
+    s.beacon_aps[0].signal_dbm = -55;
+    alerts_update(&s);
+    twins_snapshot(&s);
+
+    for (int k = 0; k < s.alert_count; k++) {
+        ASSERT(s.alerts[k].type != ALERT_TYPE_EVIL_TWIN);
+        ASSERT(s.alerts[k].type != ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    }
+    ASSERT_EQ(s.twin_episode_count, 0);
+}
+
 /* ── DNS tunnel ───────────────────────────────────────────── */
 
 static void test_dns_tunnel_fires_on_long_subdomain_burst(void) {
@@ -1495,6 +1599,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_attack_chain_no_flood_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_reverse_direction);
     RUN_TEST(test_evil_twin_taint_clear_drops_entries);
+    RUN_TEST(test_e2e_full_attack_chain);
+    RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);

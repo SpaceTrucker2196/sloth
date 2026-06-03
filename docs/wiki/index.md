@@ -22,6 +22,8 @@ source material.
 
 - [[wifi-sigint]] — overview of the v1.1 SIGINT view set.
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
+- [[evil-twin-reproducer]] — scapy snippets for live-testing each
+  evil-twin detection layer (Phases 1-4).
 
 ## UI and infrastructure
 

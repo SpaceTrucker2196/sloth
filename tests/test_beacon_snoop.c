@@ -775,6 +775,206 @@ static void test_view_key_detail_toggle(void) {
     ASSERT_EQ(s.beacon_detail, 0);
 }
 
+/* ── Evil-twin fingerprint (Phase 2) parser tests ───────── */
+
+/* HT Capabilities = tag 45. Minimum length is 26 bytes per 802.11-2016
+ * 9.4.2.56, but the parser only needs the tag to be present to set
+ * AP_FP_FLAG_HT_PRESENT; we ship a stub-sized payload here so the IE
+ * walker advances cleanly. */
+static void test_parse_fp_ht_flag(void) {
+    static const uint8_t ie[] = {
+        0x2d, 0x1a,                                        /* tag 45, len 26 */
+        0x00, 0x00,                                        /* HT cap info */
+        0x00,                                              /* A-MPDU params */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    /* MCS set [0..7] */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,    /* MCS set [8..15] */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00           /* ext + remaining */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;   /* empty SSID */
+    memcpy(f + BEACON_HDR_LEN + 2, ie, sizeof(ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_HT_PRESENT) != 0);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_VHT_PRESENT) == 0);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_HE_PRESENT) == 0);
+}
+
+/* VHT Capabilities = tag 191. Body shape is 12 bytes (4 caps + 8 MCS
+ * set) per 802.11-2016 9.4.2.158. Same intent as HT — presence is what
+ * we test. */
+static void test_parse_fp_vht_flag(void) {
+    static const uint8_t ie[] = {
+        0xbf, 0x0c,                                        /* tag 191, len 12 */
+        0x00, 0x00, 0x00, 0x00,                            /* VHT caps */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00     /* VHT MCS set */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ie, sizeof(ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_VHT_PRESENT) != 0);
+}
+
+/* HE Capabilities = tag 255 with element-ID extension 35 (802.11ax
+ * D5.0 9.4.2.248). Minimum payload (after ext-ID byte) is the 5-byte
+ * HE MAC capabilities header; we ship a small filler past it. */
+static void test_parse_fp_he_flag(void) {
+    static const uint8_t ie[] = {
+        0xff, 0x08,         /* tag 255, len 8 */
+        0x23,               /* ext ID 35 = HE Capabilities */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   /* 7 filler bytes */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ie, sizeof(ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_HE_PRESENT) != 0);
+}
+
+/* WPS UUID-E attribute (ID 0x1047, len 16) with all-zero data — a known
+ * Pineapple firmware tell. Carrier IE is the Microsoft WPS vendor-spec
+ * (OUI 00:50:F2, type 4). */
+static void test_parse_fp_wps_uuid_zero(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x18,                              /* tag 221, len 24 */
+        0x00, 0x50, 0xf2, 0x04,                  /* MS OUI + WPS type */
+        0x10, 0x47, 0x00, 0x10,                  /* attr 0x1047, len 16 */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   /* UUID-E = zero */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_WPS_UUID_ZERO) != 0);
+}
+
+/* WPS UUID-E with non-zero data → flag NOT set. Boundary check. */
+static void test_parse_fp_wps_uuid_nonzero_clears(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x18,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x47, 0x00, 0x10,
+        0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00   /* one non-zero byte */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT((rsn.fp.flags & AP_FP_FLAG_WPS_UUID_ZERO) == 0);
+}
+
+/* Vendor-IE hash: an IE-free beacon yields hash 0 (the "no signal"
+ * sentinel); the Microsoft WPS IE (00:50:F2 OUI) does NOT contribute
+ * to the hash; a non-Microsoft vendor IE DOES. */
+static void test_parse_fp_vendor_hash_excludes_microsoft(void) {
+    static const uint8_t ms_only[] = {
+        0xdd, 0x06,                        /* tag 221, len 6 */
+        0x00, 0x50, 0xf2, 0x04,            /* MS OUI + WPS type */
+        0x00, 0x00                         /* (extra bytes, not WPS attrs) */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ms_only)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ms_only, sizeof(ms_only));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.fp.vendor_ies_hash, 0u);
+}
+
+static void test_parse_fp_vendor_hash_includes_non_ms(void) {
+    /* Apple vendor IE (00:17:F2) — should contribute to the hash. */
+    static const uint8_t apple_ie[] = {
+        0xdd, 0x08,                        /* tag 221, len 8 */
+        0x00, 0x17, 0xf2, 0x05,            /* Apple OUI + arbitrary type */
+        0x00, 0x00, 0x00, 0x00             /* 4 filler bytes */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(apple_ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, apple_ie, sizeof(apple_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT(rsn.fp.vendor_ies_hash != 0u);
+}
+
+/* Two beacons with identical non-MS vendor IEs produce equal hashes
+ * (the FNV-1a is order-deterministic). */
+static void test_parse_fp_vendor_hash_stable(void) {
+    static const uint8_t ie[] = {
+        0xdd, 0x08,
+        0x00, 0x17, 0xf2, 0x05,
+        0xaa, 0xbb, 0xcc, 0xdd
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(ie)];
+    fill_hdr(f, BSSID_A, 100, 0);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, ie, sizeof(ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t r1, r2;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &r1), 1);
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -55, ssid, bssid, &ch, enc, &bms, &r2), 1);
+    ASSERT_EQ(r1.fp.vendor_ies_hash, r2.fp.vendor_ies_hash);
+}
+
+/* Two beacons with DIFFERENT non-MS vendor IEs produce different hashes
+ * — the central premise of Phase 2's same-cipher-twin escalation. */
+static void test_parse_fp_vendor_hash_distinguishes(void) {
+    static const uint8_t ie_a[] = {
+        0xdd, 0x08,
+        0x00, 0x17, 0xf2, 0x05,
+        0xaa, 0xbb, 0xcc, 0xdd
+    };
+    static const uint8_t ie_b[] = {
+        0xdd, 0x08,
+        0x00, 0x40, 0x96, 0x05,         /* Cisco OUI instead of Apple */
+        0xaa, 0xbb, 0xcc, 0xdd
+    };
+
+    uint8_t fa[BEACON_HDR_LEN + 2 + sizeof(ie_a)];
+    fill_hdr(fa, BSSID_A, 100, 0);
+    fa[BEACON_HDR_LEN + 0] = 0x00; fa[BEACON_HDR_LEN + 1] = 0;
+    memcpy(fa + BEACON_HDR_LEN + 2, ie_a, sizeof(ie_a));
+
+    uint8_t fb[BEACON_HDR_LEN + 2 + sizeof(ie_b)];
+    fill_hdr(fb, BSSID_B, 100, 0);
+    fb[BEACON_HDR_LEN + 0] = 0x00; fb[BEACON_HDR_LEN + 1] = 0;
+    memcpy(fb + BEACON_HDR_LEN + 2, ie_b, sizeof(ie_b));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t ra, rb;
+    ASSERT_EQ(beacon_parse(fa, (int)sizeof(fa), -55, ssid, bssid, &ch, enc, &bms, &ra), 1);
+    ASSERT_EQ(beacon_parse(fb, (int)sizeof(fb), -55, ssid, bssid, &ch, enc, &bms, &rb), 1);
+    ASSERT(ra.fp.vendor_ies_hash != rb.fp.vendor_ies_hash);
+}
+
 /* ── Suite entry point ───────────────────────────────────── */
 
 void run_beacon_snoop_tests(void) {
@@ -821,4 +1021,13 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_wps_state_notconfigured_unlocked);
     RUN_TEST(test_record_tracks_ssid_history);
     RUN_TEST(test_record_persists_neighbors);
+    RUN_TEST(test_parse_fp_ht_flag);
+    RUN_TEST(test_parse_fp_vht_flag);
+    RUN_TEST(test_parse_fp_he_flag);
+    RUN_TEST(test_parse_fp_wps_uuid_zero);
+    RUN_TEST(test_parse_fp_wps_uuid_nonzero_clears);
+    RUN_TEST(test_parse_fp_vendor_hash_excludes_microsoft);
+    RUN_TEST(test_parse_fp_vendor_hash_includes_non_ms);
+    RUN_TEST(test_parse_fp_vendor_hash_stable);
+    RUN_TEST(test_parse_fp_vendor_hash_distinguishes);
 }

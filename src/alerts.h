@@ -27,5 +27,9 @@ void alerts_clear(void);
 int  evil_twin_bssid_is_tainted(const uint8_t bssid[6]);
 /* Test-only: drop all tainted entries. */
 void evil_twin_taint_clear(void);
+/* Test-only: mark a BSSID tainted with the current wall clock — gives
+ * tests a way to exercise downstream code paths (eapol provenance,
+ * Twins view glyphs) without driving the full chain rule. */
+void evil_twin_taint_mark_for_test(const uint8_t bssid[6]);
 
 #endif /* ALERTS_H */

@@ -71,6 +71,10 @@ void evil_twin_taint_clear(void) {
     memset(g_taint, 0, sizeof(g_taint));
 }
 
+void evil_twin_taint_mark_for_test(const uint8_t bssid[6]) {
+    taint_mark(bssid, time(NULL));
+}
+
 /* ── Helpers ─────────────────────────────────────────────── */
 
 static void mac_to_str(const uint8_t mac[6], char *out, int sz) {

@@ -6,6 +6,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "eapol_log.h"
+#include "alerts.h"
 
 /* Build a synthetic 802.11 data frame (FromDS=1) carrying an EAPOL-Key
  * frame. We construct the lot from byte arrays — no parser feeding its
@@ -281,6 +282,99 @@ static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
     rmdir(dir);
 }
 
+/* Helper for the provenance tests: drive a PMKID-bearing M1 against
+ * the test fixture's BSSID into a fresh temp dir, then return the
+ * full contents of eapol.22000. Caller frees nothing — the buffer is
+ * a static fixed-size slurp. The temp dir is rebuilt every call. */
+static const uint8_t TAINT_BSSID[6] = BSSID;   /* 00:AA:BB:CC:DD:EE */
+
+static int slurp_file(const char *path, char *buf, int sz) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    int n = (int)fread(buf, 1, (size_t)(sz - 1), f);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    fclose(f);
+    return n;
+}
+
+/* Drive a PMKID-carrying M1 against the fixture BSSID with eapol.22000
+ * output enabled in a fresh per-test temp dir. Returns the eapol.22000
+ * body via *out_buf. dir_out is filled with the temp dir path so the
+ * caller can clean up. */
+static void drive_pmkid_m1(char *out_buf, int out_sz,
+                           char *dir_out, int dir_sz) {
+    snprintf(dir_out, dir_sz, "/tmp/sloth_test_taint_%d", (int)getpid());
+    /* rebuild the dir so prior runs don't bleed in */
+    char pcap_path[160], txt_path[160];
+    snprintf(pcap_path, sizeof(pcap_path),
+             "%s/00aabbccddee_102030405060.pcap", dir_out);
+    snprintf(txt_path, sizeof(txt_path), "%s/eapol.22000", dir_out);
+    unlink(pcap_path);
+    unlink(txt_path);
+    rmdir(dir_out);
+    mkdir(dir_out, 0755);
+    eapol_set_output_dir(dir_out);
+
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    eapol_observe_dot11(frame, fn, -50, 6);
+
+    slurp_file(txt_path, out_buf, out_sz);
+    eapol_set_output_dir(NULL);
+    /* leave files in place — caller asserts then cleans */
+}
+
+static void cleanup_taint_dir(const char *dir) {
+    char p[160];
+    snprintf(p, sizeof(p), "%s/00aabbccddee_102030405060.pcap", dir);
+    unlink(p);
+    snprintf(p, sizeof(p), "%s/eapol.22000", dir);
+    unlink(p);
+    rmdir(dir);
+}
+
+/* When the EAPOL handshake's BSSID is currently tainted, the .22000
+ * line gets a "# provenance=tainted-evil-twin bssid=…" comment line
+ * prepended — Phase 4 provenance marker. */
+static void test_eapol_tainted_bssid_emits_provenance_comment(void) {
+    eapol_clear();
+    evil_twin_taint_clear();
+    evil_twin_taint_mark_for_test(TAINT_BSSID);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(TAINT_BSSID), 1);
+
+    char body[4096], dir[80];
+    drive_pmkid_m1(body, sizeof(body), dir, sizeof(dir));
+
+    ASSERT(strstr(body, "# provenance=tainted-evil-twin") != NULL);
+    /* The comment carries the BSSID in lowercase hex, colon-separated. */
+    ASSERT(strstr(body, "bssid=00:aa:bb:cc:dd:ee")        != NULL);
+    /* The hash line still lands — the comment is additive, not a substitute. */
+    ASSERT(strstr(body, "WPA*01*")                        != NULL);
+
+    cleanup_taint_dir(dir);
+    evil_twin_taint_clear();
+}
+
+/* Symmetric: a clean BSSID writes the WPA*01* line WITHOUT a comment
+ * line. Defends against accidentally tagging every handshake. */
+static void test_eapol_clean_bssid_no_provenance_comment(void) {
+    eapol_clear();
+    evil_twin_taint_clear();
+    ASSERT_EQ(evil_twin_bssid_is_tainted(TAINT_BSSID), 0);
+
+    char body[4096], dir[80];
+    drive_pmkid_m1(body, sizeof(body), dir, sizeof(dir));
+
+    ASSERT(strstr(body, "WPA*01*")                  != NULL);
+    ASSERT(strstr(body, "provenance=tainted-evil-twin") == NULL);
+
+    cleanup_taint_dir(dir);
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -290,4 +384,6 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_m2_without_m1_is_not_complete);
     RUN_TEST(test_clear_resets_state);
     RUN_TEST(test_pmkid_emits_pcap_when_eapol_dir_set);
+    RUN_TEST(test_eapol_tainted_bssid_emits_provenance_comment);
+    RUN_TEST(test_eapol_clean_bssid_no_provenance_comment);
 }
