@@ -28,6 +28,10 @@ typedef struct {
      * later entries silently dropped on overflow. */
     ap_neighbor_t neighbors[MAX_AP_NEIGHBORS];
     int  neighbor_count;
+    /* Evil-twin fingerprint — populated per beacon. The OUI is
+     * filled from the BSSID by beacon_record (parser doesn't see the
+     * BSSID assembled), so beacon_parse leaves fp.oui == {0,0,0}. */
+    ap_fingerprint_t fp;
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).

@@ -64,7 +64,15 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->phy[0]      = '\0';
         rsn_out->neighbor_count = 0;
         memset(rsn_out->neighbors, 0, sizeof(rsn_out->neighbors));
+        memset(&rsn_out->fp, 0, sizeof(rsn_out->fp));
     }
+    /* FNV-1a 32-bit, seeded with the offset basis. Used below to
+     * accumulate a stable hash of every non-Microsoft tag-221 IE
+     * body so two same-vendor APs (same firmware, same caps) produce
+     * an identical hash, while a rogue mimicking the SSID/cipher but
+     * built on different silicon produces a different one. */
+    uint32_t vendor_hash = 2166136261u;
+    int      vendor_hash_seen = 0;
     int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
     /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
     if (len < 36) return 0;
@@ -106,10 +114,14 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             ssid_out[slen] = '\0';
 
         } else if (tag == 45)  { has_ht  = 1;
+            if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HT_PRESENT;
         } else if (tag == 191) { has_vht = 1;
+            if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_VHT_PRESENT;
         } else if (tag == 255 && tln >= 1) {
             uint8_t ext = ie[2];
-            if (ext == 35)               has_he  = 1;
+            if (ext == 35)               { has_he  = 1;
+                if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HE_PRESENT;
+            }
             if (ext == 81 || ext == 108) has_eht = 1;
 
         } else if (tag == 201 && tln >= 4 && rsn_out) {
@@ -261,13 +273,15 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         } else if (tag == 221 && tln >= 4) {
             uint8_t o0 = ie[2], o1 = ie[3], o2 = ie[4];
             uint8_t ty = ie[5];
+            int     is_microsoft = (o0==0x00 && o1==0x50 && o2==0xf2);
             /* Microsoft Vendor-Specific OUI 00:50:F2.
              *   type 1 = WPA IE
              *   type 4 = Wi-Fi Protected Setup IE                     */
-            if (o0==0x00 && o1==0x50 && o2==0xf2) {
+            if (is_microsoft) {
                 if (ty == 0x01) wpa_found = 1;
                 if (rsn_out && ty == 0x04) {
                     rsn_out->has_wps = 1;
+                    int uuid_e_zero_seen = 0;
                     /* Walk WPS attributes (TLV body after OUI+type).
                      * Each attribute: 2 bytes ID + 2 bytes length +
                      * data, big-endian. */
@@ -287,11 +301,34 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                             /* AP Setup Locked */
                             rsn_out->wps_locked =
                                 (adata[0] == 0x01) ? 2 : 1;
+                        } else if (aid == 0x1047 && alen == 16) {
+                            /* WPS UUID-E. An all-zero UUID is a known
+                             * tell for some Pineapple firmware revisions
+                             * — legit APs ship a random / per-device UUID. */
+                            int all_zero = 1;
+                            for (int z = 0; z < 16; z++)
+                                if (adata[z] != 0) { all_zero = 0; break; }
+                            if (all_zero) uuid_e_zero_seen = 1;
                         }
                         wp   += 4 + alen;
                         wrem -= 4 + alen;
                     }
+                    if (uuid_e_zero_seen)
+                        rsn_out->fp.flags |= AP_FP_FLAG_WPS_UUID_ZERO;
                 }
+            }
+            /* Vendor-IE hash — FNV-1a over OUI+type+body of every
+             * non-Microsoft tag-221 IE. Order matters and is preserved
+             * (same firmware emits IEs in the same order beacon after
+             * beacon); a rogue mimicking the same SSID/cipher on
+             * different silicon will land a different hash. */
+            if (rsn_out && !is_microsoft) {
+                int hlen = 2 + (int)tln;   /* tag, len, body */
+                for (int b = 0; b < hlen; b++) {
+                    vendor_hash ^= (uint32_t)ie[b];
+                    vendor_hash *= 16777619u;
+                }
+                vendor_hash_seen = 1;
             }
             /* AP vendor fingerprint — first non-Microsoft OUI we
              * recognise wins. Lookup table is small (SOHO + enterprise
@@ -328,6 +365,11 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                       : has_vht ? "Wi-Fi 5"
                       : has_ht  ? "Wi-Fi 4" : "legacy";
         snprintf(rsn_out->phy, sizeof(rsn_out->phy), "%s", p);
+        rsn_out->fp.beacon_interval_ms = *beacon_ms_out;
+        /* Leave fp.vendor_ies_hash at 0 when the beacon had no
+         * non-Microsoft tag-221 IE — the alerts code treats 0 on
+         * either side as "no signal" and falls through to WARN. */
+        rsn_out->fp.vendor_ies_hash = vendor_hash_seen ? vendor_hash : 0u;
     }
 
     /* Determine encryption, strongest first */
@@ -414,6 +456,16 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     if (!found && g_aps[i].neighbor_count < MAX_AP_NEIGHBORS)
                         g_aps[i].neighbors[g_aps[i].neighbor_count++] = *nk;
                 }
+                /* Fingerprint — OR-merge the flag bits (any beacon
+                 * that ever showed a capability counts), but overwrite
+                 * vendor_ies_hash with the latest non-zero observation.
+                 * OUI is stable from BSSID; beacon_interval is stable
+                 * from the AP. */
+                g_aps[i].fp.flags |= rsn->fp.flags;
+                if (rsn->fp.vendor_ies_hash)
+                    g_aps[i].fp.vendor_ies_hash = rsn->fp.vendor_ies_hash;
+                if (rsn->fp.beacon_interval_ms)
+                    g_aps[i].fp.beacon_interval_ms = rsn->fp.beacon_interval_ms;
             }
             pthread_mutex_unlock(&g_mu);
             return;
@@ -465,7 +517,13 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         memcpy(g_aps[slot].neighbors, rsn->neighbors,
                (size_t)nc * sizeof(ap_neighbor_t));
         g_aps[slot].neighbor_count = nc;
+        g_aps[slot].fp = rsn->fp;
     }
+    /* fp.oui mirrors bssid[0..2] — set unconditionally (independent
+     * of whether the parser populated rsn). */
+    g_aps[slot].fp.oui[0] = bssid[0];
+    g_aps[slot].fp.oui[1] = bssid[1];
+    g_aps[slot].fp.oui[2] = bssid[2];
 
     pthread_mutex_unlock(&g_mu);
 }

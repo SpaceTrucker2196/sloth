@@ -358,6 +358,10 @@ static void add_beacon(sloth_state_t *s, const char *ssid,
     b->channel    = 6;
     b->signal_dbm = -55;
     b->last_seen  = time(NULL);
+    /* Mirror what beacon_record does on insert — fp.oui = bssid[0..2]. */
+    b->fp.oui[0] = bssid[0];
+    b->fp.oui[1] = bssid[1];
+    b->fp.oui[2] = bssid[2];
 }
 
 static void test_evil_twin_open_plus_wpa2_fires(void) {
@@ -542,6 +546,112 @@ static void test_evil_twin_same_cipher_diff_oui_pair_dedups(void) {
         if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN) count++;
     }
     ASSERT_EQ(count, 1);
+}
+
+/* ── Evil-twin Phase 2: vendor-IE hash + attacker OUI escalation ─ */
+
+/* Same-cipher diff-OUI WITH differing vendor-IE hashes → CRIT
+ * (firmware mismatch — strong signal of an attacker mirroring SSID
+ * but built on different silicon). */
+static void test_evil_twin_vendor_hash_mismatch_escalates_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xdeadbeefu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xcafef00du;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "vendor-IE") != NULL);
+}
+
+/* Same-cipher diff-OUI with MATCHING vendor-IE hashes → stays WARN
+ * (an unusual but not damning pairing — same firmware running on
+ * two different vendor OUIs, e.g. white-label silicon). */
+static void test_evil_twin_vendor_hash_match_stays_warn(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xfeedfaceu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xfeedfaceu;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+/* One side hash zero (no vendor IE observed yet) → don't escalate.
+ * Defends against false CRITs when one beacon is data-poor. */
+static void test_evil_twin_vendor_hash_zero_no_escalate(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xdeadbeefu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0u;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+/* Hak5 OUI on one side bumps WARN → CRIT even when vendor hashes
+ * agree (or are absent). The Pineapple OUI alone is strong enough. */
+static void test_evil_twin_hak5_oui_escalates_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t hak5[6]  = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
+    add_beacon(&s, "Cafe-Net", legit, "WPA2");
+    add_beacon(&s, "Cafe-Net", hak5,  "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "attacker-tool OUI") != NULL);
+}
+
+/* Espressif OUI on one side bumps WARN → CRIT — same logic as Hak5
+ * but covers ESP32-Marauder / Wi-Fi-Nugget style rogue APs. */
+static void test_evil_twin_espressif_oui_escalates_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t esp[6]   = {0x24,0x0a,0xc4,0x44,0x55,0x66};  /* Espressif OUI */
+    add_beacon(&s, "Cafe-Net", legit, "WPA2");
+    add_beacon(&s, "Cafe-Net", esp,   "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* Vendor hashes match AND no attacker OUI present → still WARN,
+ * even though OUIs differ. Confirms the WARN tier still exists; the
+ * escalation paths are additive, not the default. */
+static void test_evil_twin_diff_oui_no_signals_stays_warn(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Neither OUI is in any attacker table; both hashes match. */
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Mesh", a, "WPA2");
+    add_beacon(&s, "Mesh", b, "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0x12345678u;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0x12345678u;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
 /* ── DNS tunnel ───────────────────────────────────────────── */
@@ -1138,6 +1248,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);
     RUN_TEST(test_evil_twin_same_cipher_diff_oui_pair_dedups);
+    RUN_TEST(test_evil_twin_vendor_hash_mismatch_escalates_crit);
+    RUN_TEST(test_evil_twin_vendor_hash_match_stays_warn);
+    RUN_TEST(test_evil_twin_vendor_hash_zero_no_escalate);
+    RUN_TEST(test_evil_twin_hak5_oui_escalates_crit);
+    RUN_TEST(test_evil_twin_espressif_oui_escalates_crit);
+    RUN_TEST(test_evil_twin_diff_oui_no_signals_stays_warn);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);

@@ -63,6 +63,7 @@ void run_seqnum_track_tests(void);
 void run_assoc_track_tests(void);
 void run_channel_tests(void);
 void run_dga_tests(void);
+void run_wifi_oui_attacker_tests(void);
 void run_data_socket_tests(void);
 void run_osi_tests(void);
 
@@ -127,6 +128,7 @@ int main(void) {
     run_assoc_track_tests();
     run_channel_tests();
     run_dga_tests();
+    run_wifi_oui_attacker_tests();
     run_data_socket_tests();
     run_osi_tests();
 

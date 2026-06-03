@@ -7,6 +7,7 @@
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
+#include "wifi_oui_attacker.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -618,6 +619,11 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
          * check above. Walks both halves of the pair, with a stable
          * dedup key so iteration order doesn't change the alert.
          *
+         * Phase 2 escalation: WARN climbs to CRIT when the two APs'
+         * vendor-IE fingerprint hashes differ (firmware-level mismatch
+         * is a hard signal — legit dual-vendor mesh is rare), or when
+         * one half's OUI matches the Hak5 / Espressif attacker tables.
+         *
          * Skip OPEN — legit OPEN networks at airports / cafes routinely
          * present same-SSID-different-OUI siblings (multi-vendor hotspot
          * deployments), and there's no shared secret to defend, so the
@@ -633,6 +639,30 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
             char a_bssid[20], b_bssid[20];
             fmt_bssid(a_bssid, a->bssid);
             fmt_bssid(b_bssid, b->bssid);
+
+            alert_sev_t sev = ALERT_SEV_WARN;
+            const char *reason = "vendor OUI differs";
+            /* Both sides emitted a usable vendor hash and they disagree
+             * → firmware mismatch. Legit dual-vendor co-located mesh is
+             * vanishingly rare; raise to CRIT. */
+            int hashes_differ =
+                a->fp.vendor_ies_hash &&
+                b->fp.vendor_ies_hash &&
+                a->fp.vendor_ies_hash != b->fp.vendor_ies_hash;
+            if (hashes_differ) {
+                sev    = ALERT_SEV_CRIT;
+                reason = "vendor-IE fingerprint differs";
+            }
+            /* Attacker-OUI bump — one tier higher. WARN→CRIT; CRIT
+             * stays at CRIT. */
+            int attacker_oui =
+                oui_is_hak5     (a->fp.oui) || oui_is_hak5     (b->fp.oui) ||
+                oui_is_espressif(a->fp.oui) || oui_is_espressif(b->fp.oui);
+            if (attacker_oui) {
+                if (sev < ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
+                reason = "attacker-tool OUI present";
+            }
+
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
             /* Distinct dedup key — coexists with the CRIT "twin:" key
@@ -640,9 +670,9 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * under the same SSID. */
             snprintf(key, sizeof(key), "twin-fp:%.40s", a->ssid);
             snprintf(detail, sizeof(detail),
-                     "'%.16s' on %s AND %s [%.6s] - vendor OUI differs",
-                     a->ssid, a_bssid, b_bssid, a->enc);
-            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_WARN,
+                     "'%.16s' on %s AND %s [%.6s] - %s",
+                     a->ssid, a_bssid, b_bssid, a->enc, reason);
+            fire(ALERT_TYPE_EVIL_TWIN, sev,
                  "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
