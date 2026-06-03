@@ -44,6 +44,56 @@ one complete JSON object terminated by exactly one `\n`. There is no
 record separator beyond the newline; consumers split on `\n` and
 parse each line.
 
+## Output format
+
+`--out-format FORMAT` selects the line encoding for both `-o` and
+`--data-socket`. The internal record builder always produces JSONL;
+non-JSONL formats are a transform applied at the single emit point.
+
+| Format   | Use when |
+|----------|----------|
+| `jsonl`  | default. Native; consumers parse with any JSON lib |
+| `cef`    | ArcSight / Micro Focus SIEMs that natively ingest CEF — single-line per record, severity mapped 0-10 |
+| `syslog` | RFC 5424 syslog (forward via local syslogd / rsyslog / journald to most SIEMs). Original JSON is preserved as the MSG field for fidelity |
+
+**`cef`** layout:
+
+```
+CEF:0|sloth-net|sloth|1|<type>|<type>|<sev>|key=val key=val …
+```
+
+- Fixed vendor/product/version cells.
+- `SignatureID` and `Name` both carry the record `type` (`dns`,
+  `alert`, `beacon`, …) — most ingest pipelines key on either.
+- Severity 0-10 derived from the alert `sev` field for alert records
+  (0=LOW→3, 1=WARN→6, 2=CRIT→9); other record types use the default
+  severity 3.
+- Extensions follow CEF escaping (`=` → `\=`, `\` → `\\`,
+  newlines/tabs replaced with space).
+- Nested arrays/objects (e.g. beacon's `neighbors`) are stringified
+  as their raw JSON syntax in the extension value — preserves the
+  structure for downstream parsing without inventing a CEF list
+  encoding.
+
+**`syslog`** layout (RFC 5424):
+
+```
+<134>1 <RFC3339 ts> <hostname> sloth <pid> <type> [sloth@32473 k="v" …] <original JSON line>
+```
+
+- PRI = 134 (local0.info).
+- Hostname comes from `gethostname()`; spaces replaced with `-` to
+  keep the header well-formed.
+- MSGID = record type.
+- Structured-data uses the private enterprise number `32473` (the
+  IANA-allocated example PEN) under SD-ID `sloth@32473`. Replace
+  with your own allocation if you need cross-organisation
+  parseability.
+- The MSG part is the original JSONL line so a parser that knows
+  about sloth can recover full fidelity (nested arrays and all).
+  SD-PARAM values intentionally exclude nested arrays/objects —
+  RFC 5424 forbids them inside SD-PARAM, and the MSG preserves them.
+
 ## Common envelope
 
 Every record has:

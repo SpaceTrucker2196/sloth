@@ -67,6 +67,7 @@ void run_wifi_oui_attacker_tests(void);
 void run_data_socket_tests(void);
 void run_osi_tests(void);
 void run_twins_tests(void);
+void run_formatter_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -133,6 +134,7 @@ int main(void) {
     run_data_socket_tests();
     run_osi_tests();
     run_twins_tests();
+    run_formatter_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

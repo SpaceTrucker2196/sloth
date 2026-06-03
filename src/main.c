@@ -60,6 +60,7 @@
 #include "top_hosts.h"
 #include "beacon_detect.h"
 #include "jsonl.h"
+#include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
 #include "dns.h"
@@ -269,7 +270,7 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC]\n"
+            "[--data-socket SPEC] [--out-format FORMAT]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -281,14 +282,23 @@ static void print_usage(const char *argv0) {
             "                     per-handshake DIR/<bssid>_<sta>.pcap for\n"
             "                     replay with aircrack-ng / Wireshark\n"
             "  --data-socket [SPEC]\n"
-            "                     stream the same JSONL records over a\n"
-            "                     read-only socket. SPEC is one of:\n"
+            "                     stream the same records over a read-only\n"
+            "                     socket. SPEC is one of:\n"
             "                       unix:/path/to/socket\n"
             "                       tcp:HOST:PORT  (HOST is a literal IPv4)\n"
             "                     If SPEC is omitted, defaults to\n"
             "                     tcp:127.0.0.1:8765 (loopback only).\n"
             "                     Read-only: nothing is ever read from the\n"
-            "                     socket. Caller picks the bind address.\n",
+            "                     socket. Caller picks the bind address.\n"
+            "  --out-format FORMAT\n"
+            "                     output format for -o FILE and --data-socket.\n"
+            "                     One of: jsonl (default), cef, syslog.\n"
+            "                     cef    = ArcSight Common Event Format\n"
+            "                              (single-line per record, RFC-free\n"
+            "                              vendor=sloth-net product=sloth).\n"
+            "                     syslog = RFC 5424 (PRI 134 local0.info,\n"
+            "                              SD-ID sloth@32473; MSG carries\n"
+            "                              the original JSON for fidelity).\n",
             argv0);
 }
 
@@ -317,6 +327,15 @@ int main(int argc, char **argv) {
             } else {
                 data_socket = "tcp:127.0.0.1:8765";
             }
+        } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
+            out_format_t fmt;
+            if (!formatter_parse_name(argv[++i], &fmt)) {
+                fprintf(stderr,
+                        "unknown --out-format %s (use jsonl|cef|syslog)\n",
+                        argv[i]);
+                return 2;
+            }
+            formatter_set(fmt);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             print_usage(argv[0]);
             return 0;

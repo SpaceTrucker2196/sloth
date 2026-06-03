@@ -1126,7 +1126,12 @@ ops log — naming collision to resolve).
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
   SMB/CIFS metadata, Kerberos pre-auth, LDAP referral leakage,
   BGP route monitor for peering segments, IPv6 RA/NDP surface in alerts.
-- **Sibling forensic-export formats** — CEF, RFC 5424 syslog, Splunk
-  HEC-over-local-socket as **emitters** alongside JSONL. (Note:
-  forwarders can already deliver these formats *downstream*; this
-  follow-up is about sloth speaking them natively as a sink.)
+- ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
+  landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
+  available as direct output formats for both `-o FILE` and
+  `--data-socket`, with no forwarder process required. Implemented
+  as a transform at the single emit point (`src/formatter.{c,h}`)
+  so every record type picks up the new formats automatically.
+  Splunk HEC-over-local-socket intentionally not added — HEC's
+  envelope is fundamentally an HTTP POST, not a line format, and
+  the forwarder's `hec` sink covers the use case.

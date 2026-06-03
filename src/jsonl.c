@@ -5,6 +5,7 @@
 #include "jsonl.h"
 #include "bandwidth.h"
 #include "data_socket.h"
+#include "formatter.h"
 #include "views/procs.h"
 
 static FILE           *g_fp;
@@ -65,18 +66,35 @@ static void json_escape(const char *s, char *out, int sz, int *off) {
     out[*off] = '\0';
 }
 
-/* Helper: write a complete JSON line to every active sink — the
+/* Output buffer for the CEF/syslog transform. Sized for the richest
+ * record (beacon with full neighbor arrays) + the framing overhead
+ * a syslog header + SD-element can add (~200 bytes). */
+#define EMIT_XFORM_MAX 2560
+
+/* Helper: write a complete record to every active sink — the
  * configured file (if any) and every connected data-socket client.
- * Broadcast happens outside the file mutex; data_socket has its own. */
+ * `line` is always JSONL (that's what the builders produce); we
+ * translate to CEF / syslog at this single chokepoint when the
+ * operator picked one of those formats via --out-format.
+ *
+ * Broadcast to the data socket happens outside the file mutex;
+ * data_socket has its own lock. */
 static void emit_line(const char *line) {
+    char xform[EMIT_XFORM_MAX];
+    const char *to_emit = line;
+    if (formatter_get() != OUT_FMT_JSONL) {
+        int n = formatter_transform(line, xform, (int)sizeof(xform));
+        if (n < 0) return;   /* malformed input — silently drop */
+        to_emit = xform;
+    }
     pthread_mutex_lock(&g_mu);
     if (g_fp) {
-        fputs(line, g_fp);
+        fputs(to_emit, g_fp);
         fputc('\n', g_fp);
         fflush(g_fp);
     }
     pthread_mutex_unlock(&g_mu);
-    data_socket_emit(line);
+    data_socket_emit(to_emit);
 }
 
 /* ── builder helpers ─────────────────────────────────────── */
