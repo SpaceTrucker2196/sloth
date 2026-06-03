@@ -946,18 +946,34 @@ struct beacon_cb {
 };
 
 static int beacon_cb_fire(const bd_track_t *t, void *ud) {
-    if (!bd_is_strong(t->remote_ip, t->remote_port)) return 0;
+    int kind = bd_is_strong(t->remote_ip, t->remote_port);
+    if (!kind) return 0;
     struct beacon_cb *bc = (struct beacon_cb *)ud;
-    double mean = 0, jitter = 0;
-    int n = bd_stats(t->remote_ip, t->remote_port, &mean, &jitter);
 
     char key[ALERT_KEY_LEN];
     char detail[ALERT_DETAIL_LEN];
-    snprintf(key,    sizeof(key),    "beacon:%.39s:%u",
+    snprintf(key, sizeof(key), "beacon:%.39s:%u",
              t->remote_ip, (unsigned)t->remote_port);
-    snprintf(detail, sizeof(detail),
-             "%.39s:%u every %.0fs (jitter=%.1fs, n=%d)",
-             t->remote_ip, (unsigned)t->remote_port, mean, jitter, n);
+
+    if (kind == 1) {
+        /* v1 — classic low-jitter detector. */
+        double mean = 0, jitter = 0;
+        int n = bd_stats(t->remote_ip, t->remote_port, &mean, &jitter);
+        snprintf(detail, sizeof(detail),
+                 "%.39s:%u every %.0fs (jitter=%.1fs, n=%d)",
+                 t->remote_ip, (unsigned)t->remote_port, mean, jitter, n);
+    } else {
+        /* v2 — gap concentration. Reports the median period and
+         * the fraction of gaps within ±30% of it so an operator can
+         * tell at a glance how confident the match is. */
+        double period = 0, concentration = 0;
+        int n = bd_autocorr_stats(t->remote_ip, t->remote_port,
+                                  &period, &concentration);
+        snprintf(detail, sizeof(detail),
+                 "%.39s:%u every ~%.0fs jittered (concentration=%.2f, n=%d)",
+                 t->remote_ip, (unsigned)t->remote_port,
+                 period, concentration, n);
+    }
     fire(ALERT_TYPE_BEACONING, ALERT_SEV_WARN,
          "BEACONING", detail, key,
          t->remote_ip, t->remote_port, bc->now);

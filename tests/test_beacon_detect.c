@@ -269,6 +269,112 @@ static void test_alert_does_not_fire_for_weak(void) {
         ASSERT(s.alerts[i].type != ALERT_TYPE_BEACONING);
 }
 
+/* ── v2 autocorrelation tests ────────────────────────────── */
+
+/* Deterministic pseudo-random for jitter: small LCG keeps the test
+ * reproducible without depending on srand state. */
+static unsigned long bd_test_rng_state = 1u;
+static unsigned long bd_test_rand(void) {
+    bd_test_rng_state = bd_test_rng_state * 1103515245u + 12345u;
+    return bd_test_rng_state;
+}
+static double bd_test_jitter_pct(double pct) {
+    /* Returns uniform in [-pct, +pct]. */
+    double u = (double)(bd_test_rand() & 0x7fffu) / (double)0x7fff;
+    return (u * 2.0 - 1.0) * pct;
+}
+
+/* 30% jitter beacon (period=60s, samples spread ±18s around schedule)
+ * is past v1's 0.25 stddev/mean limit but well inside v2's
+ * gap-concentration sweet spot. 16 samples — fully populates the
+ * ring so the v2 statistic has the most data to work with. */
+static void test_v2_catches_30pct_jitter_beacon(void) {
+    bd_clear();
+    bd_test_rng_state = 1u;
+    time_t base = 1700000000;
+    double period = 60.0;
+    for (int i = 0; i < 16; i++) {
+        double offset = period * bd_test_jitter_pct(0.30);
+        bd_observe("203.0.113.42", 443,
+                   base + (time_t)(i * period + offset));
+    }
+    int kind = bd_is_strong("203.0.113.42", 443);
+    ASSERT(kind != 0);
+    double period_s = 0, concentration = 0;
+    int n = bd_autocorr_stats("203.0.113.42", 443,
+                              &period_s, &concentration);
+    ASSERT(n >= BD_MIN_SAMPLES_V2);
+    /* Recovered period (= median gap) is within ±25% of truth. */
+    ASSERT(period_s >= 45.0 && period_s <= 75.0);
+    /* For 30% jitter the concentration is comfortably above
+     * BD_MIN_CONCENTRATION (= 0.60). */
+    ASSERT(concentration >= BD_MIN_CONCENTRATION);
+}
+
+/* Uniform-random arrivals (no underlying period) must not trigger
+ * v2. We generate 16 monotonically-increasing timestamps where
+ * each gap is uniform in [BD_MIN_INTERVAL_S, 2 * median] — past
+ * v1's mean check but with no underlying period for v2 to lock to. */
+static void test_v2_does_not_fire_on_uniform_random(void) {
+    bd_clear();
+    bd_test_rng_state = 7u;
+    time_t base = 1700000000;
+    time_t t = base;
+    /* gaps uniform in [10, 110] (median ~60). */
+    for (int i = 0; i < 16; i++) {
+        bd_observe("203.0.113.99", 443, t);
+        long gap = 10 + (long)(bd_test_rand() % 100);
+        t += gap;
+    }
+    double period_s = 0, concentration = 0;
+    int n = bd_autocorr_stats("203.0.113.99", 443,
+                              &period_s, &concentration);
+    ASSERT(n >= BD_MIN_SAMPLES_V2);
+    ASSERT(concentration < BD_MIN_CONCENTRATION);
+}
+
+/* v1 hit should still return 1 (not 2) — preserves the existing
+ * contract that callers can distinguish high-confidence (v1) from
+ * jitter-tolerant (v2) detections. */
+static void test_v1_low_jitter_returns_kind_1(void) {
+    bd_clear();
+    time_t base = 1700000000;
+    for (int i = 0; i < 10; i++)
+        bd_observe("203.0.113.1", 443, base + i * 30);
+    ASSERT_EQ(bd_is_strong("203.0.113.1", 443), 1);
+}
+
+/* When v2 fires, the alert detail string must label the detector so
+ * the operator can tell at a glance which path matched. We force the
+ * v2 path with a 30%-jitter beacon (past v1's 0.25 stddev/mean limit)
+ * and assert the v2-specific "concentration=" marker is present
+ * while the v1 "jitter=" marker is not. */
+static void test_alert_detail_labels_v2(void) {
+    bd_clear();
+    alerts_clear();
+    bd_test_rng_state = 1u;
+    time_t base = 1700000000;
+    double period = 60.0;
+    for (int i = 0; i < 16; i++) {
+        double offset = period * bd_test_jitter_pct(0.30);
+        bd_observe("203.0.113.50", 443,
+                   base + (time_t)(i * period + offset));
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int idx = -1;
+    for (int i = 0; i < s.alert_count; i++) {
+        if (s.alerts[i].type == ALERT_TYPE_BEACONING) { idx = i; break; }
+    }
+    ASSERT(idx >= 0);
+    const char *d = s.alerts[idx].detail;
+    int has_v2 = strstr(d, "concentration=") != NULL;
+    int has_v1 = strstr(d, "jitter=")        != NULL;
+    ASSERT(has_v2 || has_v1);
+    if (has_v2) ASSERT(!has_v1);
+    if (has_v1) ASSERT(!has_v2);
+}
+
 void run_beacon_detect_tests(void) {
     TEST_SUITE("beacon_detect stats");
     RUN_TEST(test_no_track_returns_zero);
@@ -291,4 +397,8 @@ void run_beacon_detect_tests(void) {
     TEST_SUITE("beacon_detect alerts hook");
     RUN_TEST(test_alert_fires_for_strong_beacon);
     RUN_TEST(test_alert_does_not_fire_for_weak);
+    RUN_TEST(test_v2_catches_30pct_jitter_beacon);
+    RUN_TEST(test_v2_does_not_fire_on_uniform_random);
+    RUN_TEST(test_v1_low_jitter_returns_kind_1);
+    RUN_TEST(test_alert_detail_labels_v2);
 }

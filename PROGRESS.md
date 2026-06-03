@@ -1110,10 +1110,14 @@ ops log — naming collision to resolve).
 
 ### Product depth (sloth itself)
 
-- **Beacon detection v2** — current `BEACONING` detector
-  blind-spots aggressive (>25%) jitter. An autocorrelation-based
-  variant would catch modern C2 frameworks (Sliver, Cobalt) that
-  deliberately defeat the current heuristic.
+- ~~**Beacon detection v2**~~ — landed 2026-06-03. `bd_is_strong`
+  now returns kind=1 (v1 low-jitter) or kind=2 (v2 gap-concentration)
+  to a unified call site. v2 catches ~40% additive jitter (covers
+  Cobalt at "interactive" 30% and Sliver default) at ~0.1% per-flow
+  false positive rate. Alert detail labels which detector fired.
+  Sliver "low-and-slow" at 50% jitter still uncaught — statistical
+  separation isn't reliable with the current 16-sample buffer; the
+  mitigation is longer flow histories feeding v1.
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
   SMB/CIFS metadata, Kerberos pre-auth, LDAP referral leakage,
   BGP route monitor for peering segments, IPv6 RA/NDP surface in alerts.
