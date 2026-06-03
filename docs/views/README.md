@@ -43,6 +43,7 @@ One file per sloth view. Each covers:
 | `g` | Devices   | [devices.md](devices.md) |
 | `o` | Dashboard | [dashboard.md](dashboard.md) |
 | `l` | OSI stack | [osi.md](osi.md) |
+| `x` | Twins     | [twins.md](twins.md) |
 
 ## WiFi SIGINT (v1.1)
 

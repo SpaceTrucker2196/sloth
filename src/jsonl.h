@@ -26,4 +26,9 @@ void jsonl_emit_alert(const alert_t          *a);
  * from the latest snapshot keyed by (src, dst, proto). */
 void jsonl_emit_connections(const sloth_state_t *s);
 
+/* Snapshot emitter — one line per detected twin episode. Same cadence
+ * and pattern as jsonl_emit_connections; consumers key by
+ * (ssid, real_bssid, twin_bssid). */
+void jsonl_emit_twin_episodes(const sloth_state_t *s);
+
 #endif /* JSONL_H */

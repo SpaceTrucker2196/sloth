@@ -44,6 +44,7 @@ for in normal vs anomalous traffic.
 [d] DHCP        [s] SSDP         [b] Beacons   [a] Deauth    [h] HTTP
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
 [v] Alerts      [g] Devices      [o] Dashboard [l] OSI stack [?] Help
+[x] Twins                                                    ← evil-twin episodes
 [k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
 [m] Channel                                                  ← per-channel histogram
 ```
@@ -163,6 +164,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 | `8` | ARP         | `k` | PNL     | `e` | EAPOL   |
 | `9` | mDNS        | `j` | Seqnum  | `w` | Assoc   |
 | `0` | NBNS        | `m` | Channel | `l` | OSI stack |
+|     |             |     |         | `x` | Twins     |
 
 ### Global
 

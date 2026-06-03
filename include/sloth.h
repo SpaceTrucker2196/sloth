@@ -50,6 +50,7 @@ typedef enum {
     VIEW_ASSOC   = 27,   /* STA <-> AP association tracker */
     VIEW_CHANNEL = 28,   /* per-channel activity histogram */
     VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
+    VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
     VIEW_COUNT
 } view_t;
 
@@ -547,6 +548,28 @@ typedef struct {
     rssi_ring_t rssi_ring;     /* raw samples feeding rssi_min/max_60s */
 } beacon_ap_t;
 
+/* ── Evil-twin episodes (Phase 5 — materialised view) ──── */
+#define MAX_TWIN_EPISODES 64
+
+/* One detected same-SSID + same-cipher + diff-OUI twin pair. The
+ * "real" / "twin" assignment defaults to the lower-RSSI BSSID being
+ * the real one (background, far) and the higher being the twin
+ * (closer, often the attacker). When rule_evil_twin_attack_chain
+ * has tainted a BSSID, that override pins the assignment. */
+typedef struct {
+    char     ssid[33];
+    uint8_t  real_bssid[6];
+    uint8_t  twin_bssid[6];
+    char     enc[10];                /* shared encryption mode */
+    int8_t   real_rssi;              /* last observed signal (0 = unseen) */
+    int8_t   twin_rssi;
+    uint8_t  rssi_swing_dbm;         /* max swing of twin in 60s (0 = unseen) */
+    uint8_t  attack_in_progress;     /* set when chain rule tainted twin BSSID */
+    uint8_t  attacker_oui;           /* twin OUI in Hak5 / Espressif tables */
+    uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
+    time_t   last_seen;
+} twin_episode_t;
+
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
 #define PROBE_AGE_SECS    120
@@ -825,6 +848,16 @@ typedef struct {
     int         beacon_count;
     int         beacon_sel;
     int         beacon_detail;  /* 1 = AP drill-down detail panel shown */
+
+    /* ── Evil-twin episodes (Phase 5 — materialised view) ───
+     *
+     * One entry per detected same-cipher diff-OUI twin pair, with
+     * the Phase 2/3/4 signal sources merged in. Refreshed once per
+     * poll by twins_snapshot(). Consumed by VIEW_TWINS and the
+     * jsonl twin-episode emitter. */
+    twin_episode_t twin_episodes[MAX_TWIN_EPISODES];
+    int            twin_episode_count;
+    int            twin_episode_sel;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];

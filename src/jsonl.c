@@ -219,6 +219,36 @@ static void fmt_endpoint(char *out, int sz, const char *addr, uint16_t port) {
     else                  snprintf(out, (size_t)sz, "%s:%u",   addr, port);
 }
 
+static void fmt_bssid_lower(char out[20], const uint8_t b[6]) {
+    snprintf(out, 20, "%02x:%02x:%02x:%02x:%02x:%02x",
+             b[0], b[1], b[2], b[3], b[4], b[5]);
+}
+
+void jsonl_emit_twin_episodes(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->twin_episode_count; i++) {
+        const twin_episode_t *e = &s->twin_episodes[i];
+        char buf[LINEBUF]; int off = 0;
+        char real_bssid[20], twin_bssid[20];
+        fmt_bssid_lower(real_bssid, e->real_bssid);
+        fmt_bssid_lower(twin_bssid, e->twin_bssid);
+        start_obj(buf, LINEBUF, &off, "twin_episode", now);
+        kv_str(buf, LINEBUF, &off, "ssid",                e->ssid);
+        kv_str(buf, LINEBUF, &off, "real_bssid",          real_bssid);
+        kv_str(buf, LINEBUF, &off, "twin_bssid",          twin_bssid);
+        kv_str(buf, LINEBUF, &off, "enc",                 e->enc);
+        kv_int(buf, LINEBUF, &off, "real_rssi",           (long long)e->real_rssi);
+        kv_int(buf, LINEBUF, &off, "twin_rssi",           (long long)e->twin_rssi);
+        kv_int(buf, LINEBUF, &off, "rssi_swing_dbm",      (long long)e->rssi_swing_dbm);
+        kv_int(buf, LINEBUF, &off, "attack_in_progress",  e->attack_in_progress ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "attacker_oui",        e->attacker_oui       ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "hash_mismatch",       e->hash_mismatch      ? 1 : 0);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_connections(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);

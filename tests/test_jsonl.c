@@ -230,6 +230,56 @@ static void test_emit_connections_v6_brackets_address(void) {
     ASSERT(contains(body, "\"dst\":\"[2606:4700:4700::1111]:443\""));
 }
 
+/* Twin episode emitter — exercise all flag fields and the BSSID
+ * lowercasing/colon formatting. */
+static void test_emit_twin_episode_full_fields(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    twin_episode_t *e = &s.twin_episodes[s.twin_episode_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->ssid, sizeof(e->ssid), "Cafe-Net");
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    memcpy(e->real_bssid, real, 6);
+    memcpy(e->twin_bssid, twin, 6);
+    snprintf(e->enc, sizeof(e->enc), "WPA2");
+    e->real_rssi          = -70;
+    e->twin_rssi          = -45;
+    e->rssi_swing_dbm     = 25;
+    e->attack_in_progress = 1;
+    e->attacker_oui       = 1;
+    e->hash_mismatch      = 1;
+    e->last_seen          = 1700000000;
+
+    jsonl_emit_twin_episodes(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"twin_episode\""));
+    ASSERT(contains(body, "\"ssid\":\"Cafe-Net\""));
+    ASSERT(contains(body, "\"real_bssid\":\"aa:bb:cc:01:02:03\""));
+    ASSERT(contains(body, "\"twin_bssid\":\"11:22:33:44:55:66\""));
+    ASSERT(contains(body, "\"enc\":\"WPA2\""));
+    ASSERT(contains(body, "\"real_rssi\":-70"));
+    ASSERT(contains(body, "\"twin_rssi\":-45"));
+    ASSERT(contains(body, "\"rssi_swing_dbm\":25"));
+    ASSERT(contains(body, "\"attack_in_progress\":1"));
+    ASSERT(contains(body, "\"attacker_oui\":1"));
+    ASSERT(contains(body, "\"hash_mismatch\":1"));
+}
+
+/* No episodes → no output. */
+static void test_emit_twin_episode_empty_no_output(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_twin_episodes(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(!contains(body, "twin_episode"));
+}
+
 /* TCP entry with rtt_us == 0 should omit rtt_ms entirely (not emit "0.0"). */
 static void test_emit_connections_omits_zero_rtt(void) {
     open_fresh();
@@ -331,6 +381,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_connections_tcp_and_udp);
     RUN_TEST(test_emit_connections_v6_brackets_address);
     RUN_TEST(test_emit_connections_omits_zero_rtt);
+    RUN_TEST(test_emit_twin_episode_full_fields);
+    RUN_TEST(test_emit_twin_episode_empty_no_output);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);

@@ -166,6 +166,36 @@ appearing.
 of a flow is derivable client-side from the first record a consumer
 sees for a given `(src, dst, proto)` tuple.
 
+### `twin_episode`
+
+```json
+{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1}
+```
+
+| Field                | Type   | Meaning |
+|----------------------|--------|---------|
+| `ssid`               | string | shared SSID |
+| `real_bssid`         | string | legit AP's BSSID (lowercase hex) |
+| `twin_bssid`         | string | rogue / suspected-rogue AP's BSSID |
+| `enc`                | string | shared encryption mode (`WPA2`, `WPA3`, …) |
+| `real_rssi`          | int    | last observed signal of the real AP (dBm; 0 = unseen) |
+| `twin_rssi`          | int    | last observed signal of the twin AP |
+| `rssi_swing_dbm`     | int    | max RSSI swing on the twin in last 60 s (0 = unseen) |
+| `attack_in_progress` | int    | 1 if the chain rule tainted `twin_bssid` (DEAUTH_FLOOD seen within 5 s) |
+| `attacker_oui`       | int    | 1 if `twin_bssid`'s OUI is Hak5 or Espressif |
+| `hash_mismatch`      | int    | 1 if the vendor-IE fingerprint hashes disagree |
+
+**Cadence**: snapshot — one record per detected pair per poll (≈1 Hz).
+The consumer rebuilds its table from the latest snapshot keyed by
+`(ssid, real_bssid, twin_bssid)`. When a pair stops appearing on the
+RF, its records simply stop arriving — there's no explicit "closed"
+record.
+
+**"Real" vs "twin" assignment** defaults to the lower-RSSI side being
+real (typical for a distant legit AP overshadowed by a close rogue).
+When `rule_evil_twin_attack_chain` has tainted a BSSID, that override
+pins the assignment regardless of signal strength.
+
 ## Versioning
 
 - **No version field.** Fields are append-only; existing names and

@@ -36,6 +36,8 @@
 #include "views/assoc.h"
 #include "views/channel.h"
 #include "views/osi.h"
+#include "views/twins.h"
+#include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "seqnum_track.h"
@@ -83,6 +85,8 @@ static void poll_data(sloth_state_t *s) {
     conn_rebuild_idx(s);
     bw_update(s);
     jsonl_emit_connections(s);
+    twins_snapshot(s);
+    jsonl_emit_twin_episodes(s);
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);
@@ -206,6 +210,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
     case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
     case 'l': case 'L': s->active_view = VIEW_OSI;     return;
+    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
     case '?':           s->active_view = (s->active_view == VIEW_HELP)
                                           ? VIEW_IFACE : VIEW_HELP;
                         return;
@@ -255,6 +260,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_ASSOC:   view_assoc_key(s, key);         break;
     case VIEW_CHANNEL: view_channel_key(s, key);       break;
     case VIEW_OSI:     view_osi_key(s, key);           break;
+    case VIEW_TWINS:   view_twins_key(s, key);         break;
     default: break;
     }
 }

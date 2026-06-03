@@ -243,8 +243,14 @@ void view_beacon_draw(const sloth_state_t *s) {
     tui_normal(); TPRINT(" Passive beacons: ");
     tui_bright();  TPRINT("%d", s->beacon_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
-    if (s->probe_iface[0])
-        TPRINT("  iface: %s", s->probe_iface);
+    if (s->twin_episode_count > 0) {
+        tui_dim();    TPRINT("  twin episodes: ");
+        tui_bright(); TPRINT("%d", s->twin_episode_count);
+        tui_dim();    TPRINT(" [x]");
+    }
+    if (s->probe_iface[0]) {
+        tui_dim(); TPRINT("  iface: %s", s->probe_iface);
+    }
     TPRINT("\n");
 
     tui_dim();
@@ -275,13 +281,38 @@ void view_beacon_draw(const sloth_state_t *s) {
         const beacon_ap_t *ap = &s->beacon_aps[row];
 
         char ssid_display[40];
+        /* Look up twin-cluster membership: '!' = chain-tainted twin
+         * (attack-in-progress), '#' = vendor-IE hash mismatch detected,
+         * '@' = OUI on the Hak5/Espressif attacker list, '~' = appears
+         * in a twin pair as the legit "real" side. Glyphs are ASCII
+         * to match the Twins view legend. */
+        char twin_glyph[4] = "";
+        for (int t = 0; t < s->twin_episode_count; t++) {
+            const twin_episode_t *e = &s->twin_episodes[t];
+            if (memcmp(e->twin_bssid, ap->bssid, 6) == 0) {
+                if      (e->attack_in_progress) twin_glyph[0] = '!';
+                else if (e->attacker_oui)       twin_glyph[0] = '@';
+                else if (e->hash_mismatch)      twin_glyph[0] = '#';
+                else                            twin_glyph[0] = '*';
+                break;
+            }
+            if (memcmp(e->real_bssid, ap->bssid, 6) == 0) {
+                twin_glyph[0] = '~';
+                break;
+            }
+        }
+        const char *gsuffix = twin_glyph[0] ? twin_glyph : "";
+
         if (ap->ssid[0]) {
             if (ap->revealed)
-                snprintf(ssid_display, sizeof(ssid_display), "%s *", ap->ssid);
+                snprintf(ssid_display, sizeof(ssid_display), "%s *%s",
+                         ap->ssid, gsuffix);
             else
-                snprintf(ssid_display, sizeof(ssid_display), "%s", ap->ssid);
+                snprintf(ssid_display, sizeof(ssid_display), "%s%s",
+                         ap->ssid, gsuffix);
         } else {
-            snprintf(ssid_display, sizeof(ssid_display), "(hidden)");
+            snprintf(ssid_display, sizeof(ssid_display), "(hidden)%s",
+                     gsuffix);
         }
         const char *ssid = ssid_display;
 

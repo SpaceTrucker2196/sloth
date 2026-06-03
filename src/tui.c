@@ -43,6 +43,7 @@
 #include "views/assoc.h"
 #include "views/channel.h"
 #include "views/osi.h"
+#include "views/twins.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -75,6 +76,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[w] Assoc",
     "[m] Channel",
     "[l] OSI",
+    "[x] Twins",
 };
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
@@ -491,6 +493,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_ASSOC:   view_assoc_draw(s);         break;
     case VIEW_CHANNEL: view_channel_draw(s);       break;
     case VIEW_OSI:     view_osi_draw(s);           break;
+    case VIEW_TWINS:   view_twins_draw(s);         break;
     default: break;
     }
 }
