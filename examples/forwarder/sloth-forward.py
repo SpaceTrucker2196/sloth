@@ -450,6 +450,124 @@ class LokiSink:
                 )
 
 
+class DatadogSink:
+    """Datadog Logs intake. POSTs `application/json` to the configured
+    site URL (default US-1) carrying a batch of log entries. Each
+    entry uses the documented Datadog envelope:
+      { ddsource, ddtags, hostname, service, message }
+    `message` is the raw sloth JSON record so Datadog's automatic
+    JSON parsing pulls the per-record fields into facets.
+
+    Reference: https://docs.datadoghq.com/api/latest/logs/#send-logs
+    """
+
+    name = "datadog"
+
+    def __init__(self, api_key: str,
+                 url: str = "https://http-intake.logs.datadoghq.com/api/v2/logs",
+                 source: str = "sloth",
+                 service: str = "sloth",
+                 hostname: Optional[str] = None,
+                 tags: Optional[str] = None,
+                 verify_tls: bool = True,
+                 timeout: float = 10.0):
+        self.api_key = api_key
+        self.url = url
+        self.source = source
+        self.service = service
+        self.hostname = hostname or socket.gethostname()
+        self.tags = tags
+        self.timeout = timeout
+        if verify_tls:
+            self.ssl_ctx = ssl.create_default_context()
+        else:
+            self.ssl_ctx = ssl._create_unverified_context()
+
+    def send(self, batch: list) -> None:
+        # Datadog accepts an array of envelope objects per request,
+        # up to 1000 entries / 5 MB. The forwarder's batch sizes (≤100
+        # by default) stay well inside that window.
+        envelopes = []
+        for r in batch:
+            env = {
+                "ddsource": self.source,
+                "service":  self.service,
+                "hostname": self.hostname,
+                "message":  json.dumps(r),
+            }
+            if self.tags:
+                env["ddtags"] = self.tags
+            envelopes.append(env)
+        body = json.dumps(envelopes).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent":   "sloth-forward/1",
+            "DD-API-KEY":   self.api_key,
+        }
+        req = urllib.request.Request(
+            self.url, data=body, method="POST", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                     context=self.ssl_ctx) as resp:
+            if resp.status >= 400:
+                raise urllib.error.HTTPError(
+                    self.url, resp.status, resp.reason, resp.headers, None,
+                )
+
+
+class WebhookSink:
+    """Generic webhook — POSTs `application/json` to an arbitrary URL
+    with the batch wrapped as `{"records": [...]}`. Useful as a primitive
+    for any downstream that takes JSON over HTTP (in-house collectors,
+    serverless functions, IFTTT, Zapier).
+
+    For Slack / Discord incoming webhooks, write a tiny transform proxy:
+    those expect a `{"text": "..."}` shape that's outside this sink's
+    schema-agnostic remit.
+
+    Custom headers via --webhook-header KEY:VAL (repeatable) cover the
+    common auth patterns (Bearer tokens, X-API-Key, basic auth, etc.).
+    """
+
+    name = "webhook"
+
+    def __init__(self, url: str,
+                 headers: Optional[list] = None,
+                 verify_tls: bool = True,
+                 timeout: float = 10.0):
+        self.url = url
+        self.timeout = timeout
+        self.headers = {}
+        for kv in (headers or []):
+            if ":" not in kv:
+                raise SystemExit(
+                    f"--webhook-header value {kv!r} must be KEY:VAL"
+                )
+            k, v = kv.split(":", 1)
+            self.headers[k.strip()] = v.strip()
+        if verify_tls:
+            self.ssl_ctx = ssl.create_default_context()
+        else:
+            self.ssl_ctx = ssl._create_unverified_context()
+
+    def send(self, batch: list) -> None:
+        body = json.dumps({"records": batch}).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent":   "sloth-forward/1",
+        }
+        headers.update(self.headers)
+        req = urllib.request.Request(
+            self.url, data=body, method="POST", headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                     context=self.ssl_ctx) as resp:
+            if resp.status >= 400:
+                raise urllib.error.HTTPError(
+                    self.url, resp.status, resp.reason, resp.headers, None,
+                )
+
+
 # ── Batch + retry ────────────────────────────────────────────────────
 
 class Stats:
@@ -569,6 +687,31 @@ def build_sink(args) -> object:
             password=password,
             verify_tls=not args.loki_insecure,
         )
+    if args.sink == "datadog":
+        api_key = args.dd_api_key
+        if not api_key and args.dd_api_key_env:
+            api_key = os.environ.get(args.dd_api_key_env)
+        if not api_key:
+            raise SystemExit(
+                "--sink datadog needs --dd-api-key or --dd-api-key-env"
+            )
+        return DatadogSink(
+            api_key=api_key,
+            url=args.dd_url,
+            source=args.dd_source,
+            service=args.dd_service,
+            hostname=args.dd_hostname,
+            tags=args.dd_tags,
+            verify_tls=not args.dd_insecure,
+        )
+    if args.sink == "webhook":
+        if not args.webhook_url:
+            raise SystemExit("--sink webhook needs --webhook-url")
+        return WebhookSink(
+            url=args.webhook_url,
+            headers=args.webhook_header,
+            verify_tls=not args.webhook_insecure,
+        )
     raise SystemExit(f"unknown sink {args.sink!r}")
 
 
@@ -609,7 +752,9 @@ def main() -> int:
     p.add_argument("--no-reconnect", action="store_true",
                    help="exit on first source disconnect (one-shot / test mode)")
 
-    p.add_argument("--sink", choices=["hec", "syslog", "elastic", "loki"],
+    p.add_argument("--sink",
+                   choices=["hec", "syslog", "elastic", "loki",
+                            "datadog", "webhook"],
                    required=True, help="downstream sink to use")
 
     # HEC options
@@ -674,6 +819,37 @@ def main() -> int:
     p.add_argument("--loki-password-env", default=None,
                    help="env var name holding the Loki password")
     p.add_argument("--loki-insecure", action="store_true",
+                   help="disable TLS cert verification (test only)")
+
+    # Datadog options
+    p.add_argument("--dd-url",
+                   default="https://http-intake.logs.datadoghq.com/api/v2/logs",
+                   help="Datadog Logs intake URL "
+                        "(default: US-1 site; change for EU / US3 / US5 / etc.)")
+    p.add_argument("--dd-api-key", default=None,
+                   help="Datadog API key (consider --dd-api-key-env)")
+    p.add_argument("--dd-api-key-env", default=None,
+                   help="env var name holding the DD API key")
+    p.add_argument("--dd-source",   default="sloth",
+                   help="value of the `ddsource` field (default: sloth)")
+    p.add_argument("--dd-service",  default="sloth",
+                   help="value of the `service` field (default: sloth)")
+    p.add_argument("--dd-hostname", default=None,
+                   help="value of the `hostname` field; defaults to local hostname")
+    p.add_argument("--dd-tags",     default=None,
+                   help="CSV of `ddtags` (e.g. env:prod,region:us-east)")
+    p.add_argument("--dd-insecure", action="store_true",
+                   help="disable TLS cert verification (test only)")
+
+    # Webhook options
+    p.add_argument("--webhook-url", default=None,
+                   help="POST application/json with body "
+                        "{\"records\": [...]} to this URL")
+    p.add_argument("--webhook-header", action="append", default=None,
+                   help="extra header KEY:VAL (repeatable). "
+                        "Auth examples: 'Authorization: Bearer XXX', "
+                        "'X-API-Key: XXX'.")
+    p.add_argument("--webhook-insecure", action="store_true",
                    help="disable TLS cert verification (test only)")
 
     args = p.parse_args()

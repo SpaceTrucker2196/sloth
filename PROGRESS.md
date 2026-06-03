@@ -1082,13 +1082,12 @@ ops log — naming collision to resolve).
 ### Forwarder / consumer extensions
 
 - **Additional forwarder sinks** — `examples/forwarder/` ships
-  HEC, syslog, Elastic, and Loki. Natural next additions, in rough
-  popularity order: Datadog Logs intake, OpenSearch (works against
-  the Elastic sink already with `--es-url` repointed; document or
-  add a thin alias), generic webhook (POST raw JSON to any URL —
-  useful for Discord/Slack alerting integrations). Sink interface
-  is two members per the README's "Adding a sink" recipe; ~30 lines
-  each.
+  HEC, syslog, Elastic, Loki, Datadog, and webhook. OpenSearch
+  compatibility documented under the Elastic section (wire-
+  compatible `_bulk`). Slack/Discord-style incoming webhooks
+  intentionally not supported as a built-in sink (their message
+  envelope is outside the schema-agnostic remit); operators write
+  a transform proxy or use a Slack app.
 - **Sink fan-out** — currently one forwarder process per sink.
   A multi-sink mode would let one process push to both Splunk and
   Loki from the same source connection. Worth it only if

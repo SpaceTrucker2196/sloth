@@ -41,39 +41,60 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-class FakeLokiHandler(BaseHTTPRequestHandler):
-    """Accepts /loki/api/v1/push, records every received record's
-    `type` label so the test can assert coverage. Other paths return
-    200 (so /ready-style probes succeed)."""
+def make_sink_handler(sink_name: str):
+    """Build a BaseHTTPRequestHandler subclass that parses the body
+    shape for the given sink and records each record's `type` field
+    into a per-handler class attribute. One handler class per sink so
+    the test can run them in sequence with isolated state."""
 
-    seen_types: set = set()
-    received_lines: list = []
+    class Handler(BaseHTTPRequestHandler):
+        seen_types: set = set()
 
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length).decode("utf-8", "replace")
-        try:
-            doc = json.loads(body)
-        except json.JSONDecodeError:
-            self.send_response(400)
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length).decode("utf-8", "replace")
+            try:
+                doc = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.end_headers()
+                return
+            self._absorb(doc)
+            self.send_response(204)
             self.end_headers()
-            return
-        for stream in doc.get("streams", []):
-            t = stream.get("stream", {}).get("type")
-            if t:
-                FakeLokiHandler.seen_types.add(t)
-            for ts_ns, line in stream.get("values", []):
-                FakeLokiHandler.received_lines.append(line)
-        self.send_response(204)
-        self.end_headers()
 
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
 
-    def log_message(self, *_args):
-        # Silence default access logging — keep test output focused.
-        pass
+        def log_message(self, *_args):
+            pass
+
+        def _absorb(self, doc):
+            if sink_name == "loki":
+                for stream in doc.get("streams", []):
+                    t = stream.get("stream", {}).get("type")
+                    if t:
+                        Handler.seen_types.add(t)
+            elif sink_name == "datadog":
+                # Datadog body is a JSON array of envelopes whose
+                # `message` is the raw sloth record string.
+                for env in (doc if isinstance(doc, list) else []):
+                    try:
+                        rec = json.loads(env.get("message", ""))
+                    except json.JSONDecodeError:
+                        continue
+                    t = rec.get("type")
+                    if t:
+                        Handler.seen_types.add(t)
+            elif sink_name == "webhook":
+                # Webhook body is {"records": [...]}.
+                for rec in doc.get("records", []):
+                    t = rec.get("type")
+                    if t:
+                        Handler.seen_types.add(t)
+
+    return Handler
 
 
 def expected_record_types() -> set:
@@ -98,19 +119,47 @@ def wait_for_port(host: str, port: int, timeout: float = 10.0) -> bool:
     return False
 
 
-def main() -> int:
-    producer_port = free_port()
-    fake_loki_port = free_port()
-    expected = expected_record_types()
-    print(f"# expecting {len(expected)} record types from mock-sloth",
-          flush=True)
+SINK_CONFIGS = {
+    "loki": {
+        "url_path": "",
+        "forwarder_args": lambda port: [
+            "--sink", "loki",
+            "--loki-url", f"http://127.0.0.1:{port}",
+            "--loki-job", "smoke",
+            "--loki-source", "smoke-test",
+        ],
+    },
+    "datadog": {
+        "url_path": "",
+        "forwarder_args": lambda port: [
+            "--sink", "datadog",
+            "--dd-url", f"http://127.0.0.1:{port}",
+            "--dd-api-key", "smoke-test-key",
+            "--dd-source", "smoke",
+        ],
+    },
+    "webhook": {
+        "url_path": "",
+        "forwarder_args": lambda port: [
+            "--sink", "webhook",
+            "--webhook-url", f"http://127.0.0.1:{port}/hook",
+            "--webhook-header", "X-Smoke: yes",
+        ],
+    },
+}
 
-    # Fake Loki on a background thread.
-    server = HTTPServer(("127.0.0.1", fake_loki_port), FakeLokiHandler)
+
+def run_one_sink(sink_name: str, expected: set) -> bool:
+    """Run the producer → forwarder → fake-sink pipeline for one sink
+    and return True iff every expected type was seen."""
+    producer_port = free_port()
+    sink_port = free_port()
+
+    handler_cls = make_sink_handler(sink_name)
+    server = HTTPServer(("127.0.0.1", sink_port), handler_cls)
     server_t = Thread(target=server.serve_forever, daemon=True)
     server_t.start()
 
-    # Producer.
     producer = subprocess.Popen(
         [sys.executable, str(MOCK_SLOTH),
          "--bind", f"127.0.0.1:{producer_port}",
@@ -122,18 +171,14 @@ def main() -> int:
     if not wait_for_port("127.0.0.1", producer_port, timeout=5.0):
         producer.kill()
         server.shutdown()
-        print("FAIL: mock-sloth never bound the producer port",
+        print(f"FAIL[{sink_name}]: mock-sloth never bound",
               file=sys.stderr)
-        return 2
+        return False
 
-    # Forwarder.
     forwarder = subprocess.Popen(
         [sys.executable, str(FORWARDER),
          f"tcp:127.0.0.1:{producer_port}",
-         "--sink", "loki",
-         "--loki-url", f"http://127.0.0.1:{fake_loki_port}",
-         "--loki-job", "smoke",
-         "--loki-source", "smoke-test",
+         *SINK_CONFIGS[sink_name]["forwarder_args"](sink_port),
          "--batch-size", "5",
          "--batch-ms", "100",
          "--stats-interval", "60"],
@@ -141,12 +186,9 @@ def main() -> int:
         stderr=subprocess.DEVNULL,
     )
 
-    # mock-sloth at interval=0.05 cycles through N templates in ~N*0.05s.
-    # We poll for the full set with a generous ceiling so a slow CI
-    # runner doesn't false-alarm.
     deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
-        if expected.issubset(FakeLokiHandler.seen_types):
+        if expected.issubset(handler_cls.seen_types):
             break
         time.sleep(0.1)
 
@@ -162,18 +204,27 @@ def main() -> int:
         producer.kill()
     server.shutdown()
 
-    missing = expected - FakeLokiHandler.seen_types
-    extras  = FakeLokiHandler.seen_types - expected
-    print(f"# saw {len(FakeLokiHandler.seen_types)}/{len(expected)} "
-          f"types; {len(FakeLokiHandler.received_lines)} lines total",
+    seen = handler_cls.seen_types
+    missing = expected - seen
+    print(f"# [{sink_name}] saw {len(seen)}/{len(expected)} types",
           flush=True)
     if missing:
-        print(f"FAIL: missing {sorted(missing)}", file=sys.stderr)
+        print(f"FAIL[{sink_name}]: missing {sorted(missing)}",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def main() -> int:
+    expected = expected_record_types()
+    print(f"# expecting {len(expected)} record types from mock-sloth",
+          flush=True)
+    all_ok = True
+    for sink_name in ("loki", "datadog", "webhook"):
+        if not run_one_sink(sink_name, expected):
+            all_ok = False
+    if not all_ok:
         return 1
-    if extras:
-        # Not fatal — just noise. Print so it's visible in CI logs.
-        print(f"# note: also saw {sorted(extras)} (not in mock-sloth)",
-              flush=True)
     print("OK", flush=True)
     return 0
 

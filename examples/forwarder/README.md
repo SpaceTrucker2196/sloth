@@ -168,6 +168,12 @@ ES side that maps the sloth fields (`type`, `src`, `dst`, `ja3`, etc.)
 to keyword/IP/text as appropriate, with a dynamic mapping fallback
 for unknown fields. The forwarder itself stays schema-agnostic.
 
+**OpenSearch compatibility.** OpenSearch's `_bulk` endpoint is
+wire-compatible with Elasticsearch's; the same sink works against
+an OpenSearch cluster with `--es-url` pointed at the OpenSearch
+endpoint. Auth options (`--es-username` / `--es-password(-env)` /
+`--es-api-key(-env)`) carry over.
+
 ## Grafana Loki
 
 ```sh
@@ -191,6 +197,58 @@ sev=~"2"` etc. to filter inside Grafana.
 
 See `examples/compose/` for a one-command stack that brings up a
 local Loki + Grafana with this sink pre-wired.
+
+## Datadog Logs
+
+```sh
+sloth-forward.py unix:/run/sloth.sock \
+    --sink datadog \
+    --dd-api-key-env DD_API_KEY \
+    --dd-tags env:prod,region:us-east
+```
+
+POSTs `application/json` to Datadog's Logs intake (`/api/v2/logs`)
+with each record wrapped in the documented envelope:
+
+```json
+{"ddsource": "sloth", "service": "sloth", "hostname": "...",
+ "ddtags": "env:prod", "message": "<raw sloth JSON record>"}
+```
+
+`message` carries the raw sloth record so Datadog's automatic JSON
+parsing pulls per-record fields (`type`, `src`, `qname`, `ja3`, …)
+into Logs facets you can filter on.
+
+- **Region / site.** `--dd-url` defaults to the US-1 site
+  (`https://http-intake.logs.datadoghq.com/api/v2/logs`); override
+  for EU, US3, US5, etc.
+- **Source / service / hostname.** Override the default
+  identifiers with `--dd-source` / `--dd-service` / `--dd-hostname`
+  to integrate with your existing service catalog.
+- **TLS.** `--dd-insecure` for self-signed test endpoints.
+
+## Generic webhook
+
+```sh
+sloth-forward.py unix:/run/sloth.sock \
+    --sink webhook \
+    --webhook-url https://collector.example.com/ingest \
+    --webhook-header "Authorization: Bearer $TOKEN" \
+    --webhook-header "X-Service: sloth"
+```
+
+POSTs `application/json` with the batch wrapped as
+`{"records": [...]}`. Useful as a primitive for any downstream
+that takes JSON over HTTP — serverless functions, in-house
+collectors, IFTTT, Zapier.
+
+- **Auth.** `--webhook-header KEY:VAL` is repeatable; covers
+  Bearer tokens, `X-API-Key`, basic auth, etc.
+- **Slack / Discord.** The incoming-webhook formats for those
+  services expect a `{"text": "..."}` body that's outside this
+  sink's schema-agnostic remit. Write a tiny transform proxy if
+  you need it (or use `--type alert` to keep volume sane and
+  format in a Slack app rather than via the raw webhook).
 
 ## Filters and batching
 
