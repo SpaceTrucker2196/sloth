@@ -49,9 +49,9 @@ work exposed as a new In-progress entry.
 **Owner**: next agent
 **Started**: 2026-06-01
 **Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: Phases 1-2 landed. Phases 3-6 outstanding.
+**Status**: Phases 1-3 landed. Phases 4-6 outstanding.
 **Blockers**: none (pcap fixtures needed for Phase 6 test suite — can be synthesised with scapy)
-**Next concrete step**: Phase 3 — RSSI sliding window in beacon_snoop + new `rule_evil_twin_proximity` firing `ALERT_TYPE_EVIL_TWIN_PROXIMITY` on ≥15 dBm step inside 60 s.
+**Next concrete step**: Phase 4 — attack-chain correlation. Cross-reference `DEAUTH_FLOOD` targets with same-cipher twin pair "real" halves inside a 5 s window → fire `EVIL_TWIN` CRIT with detail `attack-in-progress`; tag subsequent EAPOL captures against the twin BSSID.
 
 #### Plan (phases)
 
@@ -71,9 +71,11 @@ work exposed as a new In-progress entry.
   - `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` bit is reserved but unpopulated — signature isn't a single byte pattern; benefits from pcap calibration.
   - `AP_FP_FLAG_HAK5_OUI` / `AP_FP_FLAG_ESPRESSIF_OUI` are likewise reserved. Alerts use the table lookups directly today; populating the flag bits would let consumers (iOS client, JSONL) surface the marker without re-running the lookup.
 
-**Phase 3 — RSSI-step proximity detection (~1 day)**
-1. Track per-BSSID RSSI min/max in a 60 s sliding window.
-2. If RSSI delta ≥ 15 dBm within window (no roam) → fire `EVIL_TWIN_PROXIMITY`.
+**~~Phase 3 — RSSI-step proximity detection~~** ✅ landed 2026-06-02 (`32f53a8`)
+- `rssi_ring_t` (16-slot ring of dBm + time_t) embedded in `beacon_ap_t`; updated by `rssi_ring_push()` on every `beacon_record`.
+- `rule_evil_twin_proximity` fires WARN when `(rssi_max_60s - rssi_min_60s) >= 15`. Dedup key `twin-prox:<bssid>` (per-AP).
+- 6 new tests (threshold boundary, large swing, two unseen-sentinel guards, per-BSSID dedup). 2194 assertions total (+11).
+- `0` sentinel in either bound = "no signal yet" — safe against false alerts on first observation.
 
 **Phase 4 — Attack-chain correlation (~2 days)**
 1. If `DEAUTH_FLOOD` target BSSID matches the "real" half of a same-cipher twin pair within 5 s → fire `EVIL_TWIN` at CRIT with detail `attack-in-progress`.
