@@ -390,6 +390,32 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
 
 /* ── AP table ────────────────────────────────────────────── */
 
+/* Append `signal` to the AP's RSSI ring, evict samples older than
+ * RSSI_WIN_SECS, and re-derive rssi_min/max_60s. The ring is the
+ * carrier; the int8_t min/max fields are the projection consumed
+ * by the alerts code and views. 0 dBm is impossible for real Wi-Fi
+ * (always negative) so 0 doubles as "unseen" in the projection. */
+static void rssi_ring_push(beacon_ap_t *ap, int8_t signal, time_t now) {
+    rssi_ring_t *r = &ap->rssi_ring;
+    r->dbm[r->head] = signal;
+    r->ts [r->head] = now;
+    r->head = (r->head + 1) % RSSI_WIN_SAMPLES;
+    if (r->count < RSSI_WIN_SAMPLES) r->count++;
+    int8_t lo = 0, hi = 0;
+    int    init = 0;
+    for (int k = 0; k < r->count; k++) {
+        if (now - r->ts[k] > RSSI_WIN_SECS) continue;
+        int8_t v = r->dbm[k];
+        if (!init) { lo = v; hi = v; init = 1; }
+        else {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+    }
+    ap->rssi_min_60s = init ? lo : 0;
+    ap->rssi_max_60s = init ? hi : 0;
+}
+
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,
@@ -405,6 +431,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
             g_aps[i].channel    = channel;
             g_aps[i].beacon_ms  = beacon_ms;
             g_aps[i].last_seen  = now;
+            rssi_ring_push(&g_aps[i], signal, now);
             g_aps[i].frame_count++;
             if (ssid[0]) {
                 strncpy(g_aps[i].ssid, ssid, 32);
@@ -524,6 +551,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].fp.oui[0] = bssid[0];
     g_aps[slot].fp.oui[1] = bssid[1];
     g_aps[slot].fp.oui[2] = bssid[2];
+    rssi_ring_push(&g_aps[slot], signal, now);
 
     pthread_mutex_unlock(&g_mu);
 }

@@ -466,6 +466,20 @@ typedef struct {
     uint8_t  flags;                /* AP_FP_FLAG_* bitset (Phase 2) */
 } ap_fingerprint_t;
 
+/* RSSI sliding-window ring — Phase 3. 16 slots ≈ 1.6 s of typical
+ * (100 ms TBTT) beacon traffic per AP, but the window is bounded by
+ * timestamps, not count. Powers the proximity detector that fires
+ * when an AP's signal jumps ≥15 dBm inside 60 s (no roam). */
+#define RSSI_WIN_SAMPLES 16
+#define RSSI_WIN_SECS    60
+
+typedef struct {
+    int8_t  dbm[RSSI_WIN_SAMPLES];
+    time_t  ts [RSSI_WIN_SAMPLES];
+    int     head;                  /* next write slot */
+    int     count;                 /* entries populated (≤ SAMPLES) */
+} rssi_ring_t;
+
 /* 802.11k Neighbor Report entry — one neighbor AP advertised by the
  * subject AP's beacon (tag 52). Used to map enterprise WiFi topology
  * and to discover BSSIDs on other channels we haven't tuned to. */
@@ -530,6 +544,7 @@ typedef struct {
     ap_fingerprint_t fp;
     int8_t   rssi_min_60s;     /* lowest signal seen in last 60s (dBm, 0 = unseen) */
     int8_t   rssi_max_60s;     /* highest signal seen in last 60s (dBm, 0 = unseen) */
+    rssi_ring_t rssi_ring;     /* raw samples feeding rssi_min/max_60s */
 } beacon_ap_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */

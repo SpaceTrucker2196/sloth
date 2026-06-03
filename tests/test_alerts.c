@@ -654,6 +654,96 @@ static void test_evil_twin_diff_oui_no_signals_stays_warn(void) {
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
+/* ── Evil-twin Phase 3: RSSI-step proximity ─────────────────── */
+
+/* 15 dBm delta fires WARN — boundary of the threshold. */
+static void test_evil_twin_proximity_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Roving", bssid, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -80;
+    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 15 */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:01:02:03") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "15 dBm") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "twin-prox:aa:bb:cc:01:02:03") != NULL);
+}
+
+/* 14 dBm delta — one below threshold — no fire. */
+static void test_evil_twin_proximity_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Stable", bssid, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -79;
+    s.beacon_aps[0].rssi_max_60s = -65;   /* swing = 14 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* Big swing visible (-50 → -85, 35 dBm) — still WARN, just a larger
+ * delta echoed in the detail. */
+static void test_evil_twin_proximity_large_swing_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Pineapple-Mimic", bssid, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -85;
+    s.beacon_aps[0].rssi_max_60s = -50;   /* swing = 35 */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "35 dBm") != NULL);
+}
+
+/* rssi_min_60s == 0 means "ring not yet populated" — no fire even if
+ * rssi_max_60s would imply a huge delta. Defends against false alerts
+ * on initial observation. */
+static void test_evil_twin_proximity_unseen_min_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Bootstrap", bssid, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = 0;      /* sentinel: unseen */
+    s.beacon_aps[0].rssi_max_60s = -50;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* Same as above but max is the sentinel — symmetric guard. */
+static void test_evil_twin_proximity_unseen_max_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Bootstrap", bssid, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -90;
+    s.beacon_aps[0].rssi_max_60s = 0;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN_PROXIMITY), -1);
+}
+
+/* Per-BSSID dedup — two distinct APs both swinging produce two alerts. */
+static void test_evil_twin_proximity_per_bssid(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0x11,0x22,0x33,0x00,0x00,0x02};
+    add_beacon(&s, "A", a, "WPA2");
+    add_beacon(&s, "B", b, "WPA2");
+    s.beacon_aps[0].rssi_min_60s = -80; s.beacon_aps[0].rssi_max_60s = -60;
+    s.beacon_aps[1].rssi_min_60s = -85; s.beacon_aps[1].rssi_max_60s = -60;
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN_PROXIMITY) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* ── DNS tunnel ───────────────────────────────────────────── */
 
 static void test_dns_tunnel_fires_on_long_subdomain_burst(void) {
@@ -1254,6 +1344,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_hak5_oui_escalates_crit);
     RUN_TEST(test_evil_twin_espressif_oui_escalates_crit);
     RUN_TEST(test_evil_twin_diff_oui_no_signals_stays_warn);
+    RUN_TEST(test_evil_twin_proximity_fires_at_threshold);
+    RUN_TEST(test_evil_twin_proximity_below_threshold_no_fire);
+    RUN_TEST(test_evil_twin_proximity_large_swing_fires);
+    RUN_TEST(test_evil_twin_proximity_unseen_min_no_fire);
+    RUN_TEST(test_evil_twin_proximity_unseen_max_no_fire);
+    RUN_TEST(test_evil_twin_proximity_per_bssid);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);

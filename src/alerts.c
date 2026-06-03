@@ -679,6 +679,39 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
+ * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
+ * channel) is a strong tell for either (a) an attacker AP moving
+ * closer/being switched on nearby, or (b) signal-level deception. We
+ * fire at WARN: it's noisy on its own (mobile devices roaming past
+ * the sniffer also cause big swings), but combined with a twin-fp
+ * alert it's a strong attack-in-progress signal that Phase 4 will
+ * correlate. */
+#define EVIL_TWIN_PROXIMITY_DBM 15
+
+static void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        /* 0 in either bound means "no signal yet" — the ring hasn't
+         * accumulated samples or all samples aged out. Don't fire. */
+        if (a->rssi_min_60s == 0 || a->rssi_max_60s == 0) continue;
+        int delta = a->rssi_max_60s - a->rssi_min_60s;
+        if (delta < EVIL_TWIN_PROXIMITY_DBM) continue;
+
+        char bssid[20];
+        fmt_bssid(bssid, a->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "twin-prox:%s", bssid);
+        snprintf(detail, sizeof(detail),
+                 "%s '%.16s' RSSI swing %d dBm (%d → %d) in 60s",
+                 bssid, a->ssid, delta,
+                 (int)a->rssi_min_60s, (int)a->rssi_max_60s);
+        fire(ALERT_TYPE_EVIL_TWIN_PROXIMITY, ALERT_SEV_WARN,
+             "EVIL_TWIN_PROXIMITY", detail, key, NULL, 0, now);
+    }
+}
+
 /* Rogue DHCP: more than one distinct DHCP server identifier observed
  * in recent OFFER / ACK / NAK traffic. The legitimate network has one
  * authoritative DHCP server; a second is almost always either an
@@ -874,6 +907,7 @@ void alerts_update(sloth_state_t *s) {
     rule_arp_spoof(s, now);
     rule_rogue_dhcp(s, now);
     rule_evil_twin(s, now);
+    rule_evil_twin_proximity(s, now);
     rule_karma_ap(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
