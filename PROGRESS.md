@@ -45,64 +45,8 @@ work exposed as a new In-progress entry.
 
 ## In progress
 
-### Evil-twin AP — same-cipher, vendor-IE, and Pineapple/ESP32 fingerprint detection
-**Owner**: next agent
-**Started**: 2026-06-01
-**Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: Phases 1-5 landed. Phase 6 (test fixtures) outstanding.
-**Blockers**: none (pcap fixtures for Phase 6 can be synthesised with scapy)
-**Next concrete step**: Phase 6 — fixture pcaps in `tests/fixtures/evil-twin-*.pcap` (same-cipher twin, vendor-IE delta, RSSI step, deauth-then-twin), end-to-end integration tests asserting the 5 acceptance criteria from the original issue.
-
-#### Plan (phases)
-
-**~~Phase 1 — Data model & same-cipher twin detection~~** ✅ landed 2026-06-02 (`24b2aa7`)
-- `ap_fingerprint_t` in `include/sloth.h` + `AP_FP_FLAG_*` bitmask.
-- `beacon_ap_t` carries `fp`, `rssi_min_60s`, `rssi_max_60s`.
-- `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value reserved (Phase 3).
-- `rule_evil_twin()` fires WARN on same-SSID + same-cipher + different-OUI (skips OPEN). CRIT path unchanged.
-- Distinct dedup keys: `twin:<ssid>` (CRIT) vs `twin-fp:<ssid>` (WARN).
-
-**~~Phase 2 — Vendor-IE mismatch & attacker OUI tables~~** ✅ landed 2026-06-02 (`f81aab0`)
-- `src/wifi_oui_attacker.{c,h}` — Hak5 (Pineapple, Alfa) + Espressif (ESP32, ESP8266, ESP-WROOM) tables.
-- Beacon parser fills `ap_fingerprint_t.flags` (HT/VHT/HE present, WPS UUID-E zero) and `vendor_ies_hash` (FNV-1a over non-Microsoft tag-221 IEs in beacon order).
-- WARN branch escalates: hash mismatch → CRIT; attacker OUI → bump tier; matching hashes stay WARN.
-- 12 new tests (6 OUI table + 6 escalation). 2183 assertions total (+27 from Phase 1).
-- **Phase 2 follow-ups** (do not block Phase 3):
-  - `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` bit is reserved but unpopulated — signature isn't a single byte pattern; benefits from pcap calibration.
-  - `AP_FP_FLAG_HAK5_OUI` / `AP_FP_FLAG_ESPRESSIF_OUI` are likewise reserved. Alerts use the table lookups directly today; populating the flag bits would let consumers (iOS client, JSONL) surface the marker without re-running the lookup.
-
-**~~Phase 3 — RSSI-step proximity detection~~** ✅ landed 2026-06-02 (`32f53a8`)
-- `rssi_ring_t` (16-slot ring of dBm + time_t) embedded in `beacon_ap_t`; updated by `rssi_ring_push()` on every `beacon_record`.
-- `rule_evil_twin_proximity` fires WARN when `(rssi_max_60s - rssi_min_60s) >= 15`. Dedup key `twin-prox:<bssid>` (per-AP).
-- 6 new tests (threshold boundary, large swing, two unseen-sentinel guards, per-BSSID dedup). 2194 assertions total (+11).
-- `0` sentinel in either bound = "no signal yet" — safe against false alerts on first observation.
-
-**~~Phase 4 — Attack-chain correlation~~** ✅ landed 2026-06-02 (`059f502`)
-- `rule_evil_twin_attack_chain` correlates same-cipher twin pair + recent (≤5s) `DEAUTH_FLOOD` → CRIT `EVIL_TWIN` with key `twin-chain:<ssid>`, detail `attack-in-progress: real=<a> twin=<b>`.
-- Taint tracker (`alerts.h` API): `evil_twin_bssid_is_tainted()`, `evil_twin_taint_clear()`. 32-slot bounded table, 300s TTL, oldest-evicted on overflow. `alerts_clear()` wipes taint state.
-- `src/eapol_log.c` `append_22000_line_for_bssid` consults the tracker; when the BSSID is tainted, prepends `# provenance=tainted-evil-twin bssid=<MAC>` (hashcat ignores `#` comments).
-- 6 new tests (chain fires + taint correct; stale deauth no-fire; no-twin no-fire; flood=0 no-fire; reverse direction; taint-clear). 2211 assertions total (+17).
-
-**~~Phase 5 — UI surface~~** ✅ landed 2026-06-02 (`50a768b`)
-- `twin_episode_t` + `twins_snapshot()` materialise pairs into `s->twin_episodes[]` (cap 64). RSSI-default real/twin assignment, taint override.
-- New `[x] Twins` view (`VIEW_TWINS = 30`, `VIEW_COUNT = 31`): one row per pair with flag glyphs `!@#*~` and j/k navigation. Empty state explains the prerequisite.
-- Beacon view gets SSID-column glyph suffixes for twin/real membership; status line surfaces twin episode count with `[x]` hint.
-- JSONL `twin_episode` record type — schema doc in `docs/wiki/jsonl-schema.md`. Snapshot cadence; consumer keys by `(ssid, real_bssid, twin_bssid)`.
-- 15 new tests (13 in `tests/test_twins.c`, 2 in `tests/test_jsonl.c`). 2258 assertions total (+47).
-- `docs/views/twins.md` written; linked from `README.md` and `docs/views/README.md`.
-
-**Phase 6 — Test fixtures & integration tests (~2 days)**
-1. Create `tests/fixtures/evil-twin-*.pcap` with scapy (same-cipher twin, vendor-IE delta, RSSI step, deauth-then-twin).
-2. Assertions per test plan in issue (5 acceptance criteria).
-3. Mark tests `needs-pcap-fixture`.
-
-#### References
-- MITRE ATT&CK T1557.004 — Evil Twin
-- CISA — Securing Enterprise Wireless Networks (2024)
-- CERT/CC VU#871675 — hostapd/wpa_supplicant WPA3/SAE
-- CVE-2022-23303 / CVE-2022-23304
-
----
+*(nothing actively in flight — pick from "Open follow-ups" or the
+paused work below)*
 
 ### Paused: Mutation-testing follow-ups (rounds 10+)
 **Owner**: next agent
@@ -132,6 +76,75 @@ non-blocking and stateless.
 ---
 
 ## Recently landed
+
+### 2026-06-02 — Evil-twin AP detection (6 phases)
+**Commits**: `24b2aa7`, `f81aab0`, `32f53a8`, `059f502`, `50a768b`, `16cfd0a`
+**Touched**: `include/sloth.h`, `src/alerts.{c,h}`, `src/beacon_snoop.c`,
+`src/eapol_log.c`, `src/jsonl.{c,h}`, `src/main.c`, `src/tui.c`,
+`src/twins.{c,h}`, `src/views/{beacon,twins}.{c,h}`,
+`src/wifi_oui_attacker.{c,h}`, `tests/test_alerts.c`,
+`tests/test_beacon_snoop.c`, `tests/test_eapol_log.c`,
+`tests/test_jsonl.c`, `tests/test_twins.c`,
+`tests/test_wifi_oui_attacker.c`, `tests/test_{state,arp}.c`
+(VIEW_COUNT bumps), `tests/main_test.c`, `Makefile`, `README.md`,
+`docs/views/{README,twins}.md`, `docs/wiki/{jsonl-schema,index,
+evil-twin-reproducer}.md`
+**Why**: Modern evil-twin attacks (Pineapple, ESP32-Marauder) mirror
+the legit AP's SSID + cipher to defeat the existing weak/strong twin
+check. Extends `rule_evil_twin` with same-cipher diff-OUI detection,
+vendor-IE fingerprint hashing, RSSI-step proximity, deauth-correlated
+attack-chain CRIT, and full UI / JSONL surface. Lands the newer of
+the two copilot plans (`copilot/evil-twin-ap-detection-update`,
+planned 2026-06-01).
+**What's in it** (phase-by-phase):
+- **Phase 1** (`24b2aa7`) — `ap_fingerprint_t` carrier + same-cipher
+  WARN branch with dedup key `twin-fp:<ssid>`. Skips OPEN. New enum
+  `ALERT_TYPE_EVIL_TWIN_PROXIMITY` reserved for Phase 3.
+- **Phase 2** (`f81aab0`) — beacon parser fills `fp.flags`
+  (HT/VHT/HE/WPS-UUID-zero) and `vendor_ies_hash` (FNV-1a over non-MS
+  tag-221 IEs in beacon order). New `src/wifi_oui_attacker.{c,h}`
+  with Hak5 + Espressif tables. WARN→CRIT escalation on hash
+  mismatch or attacker OUI.
+- **Phase 3** (`32f53a8`) — `rssi_ring_t` (16-slot ring) in
+  `beacon_ap_t`; `rssi_ring_push()` recomputes the 60s min/max on
+  each beacon. `rule_evil_twin_proximity` fires WARN on ≥15 dBm
+  swing, key `twin-prox:<bssid>`. `0` sentinel guards first-observation
+  false fires.
+- **Phase 4** (`059f502`) — `rule_evil_twin_attack_chain` correlates
+  twin pair + recent DEAUTH_FLOOD → CRIT `EVIL_TWIN` (key
+  `twin-chain:<ssid>`, "attack-in-progress" detail). 32-slot taint
+  tracker (300s TTL, alerts.h API). EAPOL `.22000` export prepends
+  `# provenance=tainted-evil-twin bssid=<MAC>` for handshakes against
+  tainted BSSIDs (hashcat ignores `#`).
+- **Phase 5** (`50a768b`) — `twin_episode_t` materialised view +
+  `twins_snapshot()` (RSSI-default real/twin, taint override). New
+  `[x] Twins` view (`VIEW_TWINS = 30`, `VIEW_COUNT = 31`) with flag
+  glyphs `!@#*~`. Beacon view SSID column gets glyph suffix; status
+  line surfaces episode count. New JSONL `twin_episode` record type.
+- **Phase 6** (`16cfd0a`) — validation. Hand-crafted parser tests for
+  HT/VHT/HE/WPS-UUID-zero/vendor-hash. EAPOL provenance-marker test.
+  End-to-end attack-chain scenario asserting all 5 acceptance
+  criteria (chain fires, all flags set; clean baseline doesn't fire).
+  scapy reproducer doc at `docs/wiki/evil-twin-reproducer.md` for
+  live testing.
+
+**Counts**: 2302 assertions total, was 2143 before Phase 1 (+159).
+All 6 phases warning-clean.
+
+**Deliberate non-fixtures**: skipped literal pcap fixtures in
+`tests/fixtures/` despite the original plan. Per CLAUDE.md "Hand-
+crafted protocol tests" discipline, a scapy-roundtripped pcap would
+be circular (sloth parsing scapy output without a third-party
+reference). The same coverage now lives in hand-crafted byte arrays
+(Phase 6 parser tests) plus the e2e scenario, with scapy reproducer
+snippets documented for live testing.
+
+**Follow-ups**: Two `ap_fingerprint_t` flag bits remain reserved but
+unpopulated — `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` (signature needs
+pcap calibration) and the `HAK5_OUI` / `ESPRESSIF_OUI` bits (alerts
+use the table lookup directly today; populating the flag bits would
+let consumers display the marker without re-running the lookup).
+Not on a critical path.
 
 ### 2026-06-02 — `connections` JSONL record type
 **Commits**: `23777db`
