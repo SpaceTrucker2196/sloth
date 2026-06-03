@@ -80,6 +80,23 @@ docker compose down -v
 `/tmp/loki` inside its container so omitting `-v` is fine if you want
 to inspect past traffic.
 
+## Smoke test
+
+The `smoke_test.py` script in this directory runs the full pipeline
+end-to-end without Docker — useful for CI and for verifying that a
+new record type added to `mock-sloth.py` actually flows through the
+forwarder:
+
+```sh
+python3 examples/compose/smoke_test.py
+```
+
+It spawns mock-sloth on a random port, sloth-forward against an
+in-process fake Loki, then asserts that every record type the
+producer emits arrives at the sink within 30 s. Wired into
+`.github/workflows/examples-smoke.yml` so any PR that touches
+`examples/` runs it.
+
 ## Why Loki specifically?
 
 Smallest moving parts for a "show me data" demo:

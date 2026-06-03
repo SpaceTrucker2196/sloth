@@ -1093,11 +1093,11 @@ ops log — naming collision to resolve).
   A multi-sink mode would let one process push to both Splunk and
   Loki from the same source connection. Worth it only if
   backpressure isolation isn't important to the operator.
-- **Smoke-test the consumer/forwarder in CI** — currently
-  hand-run; could be a `.github/workflows/examples.yml` that spins
-  up `examples/compose/` (or a fake sloth producer), runs each
-  script for ~5s, asserts the expected records arrive at a fake
-  sink. Catches regression on schema additions.
+- ~~**Smoke-test the consumer/forwarder in CI**~~ — landed
+  2026-06-03 in `examples/compose/smoke_test.py` +
+  `.github/workflows/examples-smoke.yml`. Runs end-to-end
+  (mock-sloth → forwarder → fake Loki) in &lt;10 s and asserts every
+  record type in mock-sloth's template list arrives at the sink.
 
 ### iOS / Tailscale (out of this repo)
 
