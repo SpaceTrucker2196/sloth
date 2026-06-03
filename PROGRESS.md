@@ -49,9 +49,9 @@ work exposed as a new In-progress entry.
 **Owner**: next agent
 **Started**: 2026-06-01
 **Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: Phases 1-3 landed. Phases 4-6 outstanding.
+**Status**: Phases 1-4 landed. Phases 5-6 outstanding.
 **Blockers**: none (pcap fixtures needed for Phase 6 test suite — can be synthesised with scapy)
-**Next concrete step**: Phase 4 — attack-chain correlation. Cross-reference `DEAUTH_FLOOD` targets with same-cipher twin pair "real" halves inside a 5 s window → fire `EVIL_TWIN` CRIT with detail `attack-in-progress`; tag subsequent EAPOL captures against the twin BSSID.
+**Next concrete step**: Phase 5 — UI surface. Beacon view colors twin-cluster pairs together, marks suspicious vendor IEs, shows RSSI step inline; new `[x] Twins` view; JSONL "Evil-twin episodes" record type.
 
 #### Plan (phases)
 
@@ -77,9 +77,11 @@ work exposed as a new In-progress entry.
 - 6 new tests (threshold boundary, large swing, two unseen-sentinel guards, per-BSSID dedup). 2194 assertions total (+11).
 - `0` sentinel in either bound = "no signal yet" — safe against false alerts on first observation.
 
-**Phase 4 — Attack-chain correlation (~2 days)**
-1. If `DEAUTH_FLOOD` target BSSID matches the "real" half of a same-cipher twin pair within 5 s → fire `EVIL_TWIN` at CRIT with detail `attack-in-progress`.
-2. Tag any subsequent EAPOL capture against the twin BSSID with `provenance=tainted-evil-twin` in .22000 export.
+**~~Phase 4 — Attack-chain correlation~~** ✅ landed 2026-06-02 (`059f502`)
+- `rule_evil_twin_attack_chain` correlates same-cipher twin pair + recent (≤5s) `DEAUTH_FLOOD` → CRIT `EVIL_TWIN` with key `twin-chain:<ssid>`, detail `attack-in-progress: real=<a> twin=<b>`.
+- Taint tracker (`alerts.h` API): `evil_twin_bssid_is_tainted()`, `evil_twin_taint_clear()`. 32-slot bounded table, 300s TTL, oldest-evicted on overflow. `alerts_clear()` wipes taint state.
+- `src/eapol_log.c` `append_22000_line_for_bssid` consults the tracker; when the BSSID is tainted, prepends `# provenance=tainted-evil-twin bssid=<MAC>` (hashcat ignores `#` comments).
+- 6 new tests (chain fires + taint correct; stale deauth no-fire; no-twin no-fire; flood=0 no-fire; reverse direction; taint-clear). 2211 assertions total (+17).
 
 **Phase 5 — UI surface (~2 days)**
 1. Beacon view `[b]`: twin-cluster pairs share a color, suspicious vendor IEs marked `⚑`, RSSI step inline.
