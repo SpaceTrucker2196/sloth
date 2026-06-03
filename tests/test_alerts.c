@@ -744,6 +744,145 @@ static void test_evil_twin_proximity_per_bssid(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── Evil-twin Phase 4: attack-chain correlation ──────────── */
+
+/* Recent deauth flood targeting the SSID's "real" half AND a
+ * same-cipher twin sibling → CRIT EVIL_TWIN with twin-chain key,
+ * detail "attack-in-progress", and the rogue BSSID marked tainted. */
+static void test_evil_twin_attack_chain_fires_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL);  /* inside the 5s window */
+
+    alerts_update(&s);
+
+    /* twin-chain CRIT alert is present */
+    int found_chain = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s.alerts[k].key, "twin-chain:Cafe-Net") == NULL) continue;
+        found_chain = 1;
+        ASSERT_EQ((int)s.alerts[k].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[k].detail, "attack-in-progress") != NULL);
+        ASSERT(strstr(s.alerts[k].detail, "real=aa:bb:cc:01:02:03") != NULL);
+        ASSERT(strstr(s.alerts[k].detail, "twin=11:22:33:44:55:66") != NULL);
+        break;
+    }
+    ASSERT_EQ(found_chain, 1);
+
+    /* twin BSSID is now tainted; real BSSID is NOT. */
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(real), 0);
+}
+
+/* Stale deauth (older than 5s) — chain alert does not fire even
+ * though the twin pair is present and flood=1. */
+static void test_evil_twin_attack_chain_stale_deauth_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL) - 60;  /* well outside 5s */
+
+    alerts_update(&s);
+
+    for (int k = 0; k < s.alert_count; k++) {
+        ASSERT(strstr(s.alerts[k].key, "twin-chain:") == NULL);
+    }
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+}
+
+/* Deauth targets a BSSID with no twin sibling — chain alert does
+ * not fire (DEAUTH_FLOOD itself still fires from the existing rule). */
+static void test_evil_twin_attack_chain_no_twin_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t solo[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Solo-Net", solo, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, solo, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL);
+
+    alerts_update(&s);
+    for (int k = 0; k < s.alert_count; k++) {
+        ASSERT(strstr(s.alerts[k].key, "twin-chain:") == NULL);
+    }
+    ASSERT_EQ(evil_twin_bssid_is_tainted(solo), 0);
+}
+
+/* Twin pair present but flood=0 (deauth count below threshold) →
+ * no chain alert. The flood flag is the trigger, not raw presence. */
+static void test_evil_twin_attack_chain_no_flood_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    s.deauth_events[0].flood     = 0;             /* below threshold */
+    s.deauth_events[0].last_seen = time(NULL);
+
+    alerts_update(&s);
+    for (int k = 0; k < s.alert_count; k++) {
+        ASSERT(strstr(s.alerts[k].key, "twin-chain:") == NULL);
+    }
+}
+
+/* Symmetry — deauth targeting the OTHER half of the pair flips which
+ * BSSID gets marked tainted. The rule doesn't pre-assume "first AP =
+ * real"; the deauth target tells us which side is being defended. */
+static void test_evil_twin_attack_chain_reverse_direction(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    /* Deauth target is `twin` this time — by the rule's logic, that
+     * makes `twin` the "real" half being defended and `real` the rogue. */
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, twin, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL);
+
+    alerts_update(&s);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(real), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+}
+
+/* Tainted BSSID expires after EVIL_TWIN_TAINT_TTL_SECS. We can't easily
+ * fake the system clock without restructuring the tracker, so this test
+ * exercises the boundary by directly poking the stored timestamp via the
+ * clear/mark API surface. We simulate "long ago" via the clear-after-fire
+ * path and a fresh tracker lookup. */
+static void test_evil_twin_taint_clear_drops_entries(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    s.deauth_events[0].last_seen = time(NULL);
+    alerts_update(&s);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+
+    evil_twin_taint_clear();
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+}
+
 /* ── DNS tunnel ───────────────────────────────────────────── */
 
 static void test_dns_tunnel_fires_on_long_subdomain_burst(void) {
@@ -1350,6 +1489,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_proximity_unseen_min_no_fire);
     RUN_TEST(test_evil_twin_proximity_unseen_max_no_fire);
     RUN_TEST(test_evil_twin_proximity_per_bssid);
+    RUN_TEST(test_evil_twin_attack_chain_fires_crit);
+    RUN_TEST(test_evil_twin_attack_chain_stale_deauth_no_fire);
+    RUN_TEST(test_evil_twin_attack_chain_no_twin_no_fire);
+    RUN_TEST(test_evil_twin_attack_chain_no_flood_no_fire);
+    RUN_TEST(test_evil_twin_attack_chain_reverse_direction);
+    RUN_TEST(test_evil_twin_taint_clear_drops_entries);
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);

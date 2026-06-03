@@ -6,6 +6,7 @@
 #include "eapol_log.h"
 #include "beacon_snoop.h"
 #include "assoc_track.h"
+#include "alerts.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -101,13 +102,24 @@ static void hex_str(const char *s, char *out) {
     out[i*2] = '\0';
 }
 
-static void append_22000_line(const char *line) {
+/* Append a hashcat-22000 line. If the BSSID was marked tainted by
+ * rule_evil_twin_attack_chain, prepend a comment line ('#' is ignored
+ * by hashcat's parser) carrying the provenance + BSSID so a forensic
+ * reviewer can trace the capture back to the chain alert. */
+static void append_22000_line_for_bssid(const char *line,
+                                        const uint8_t bssid[6]) {
     if (!g_out_dir[0]) return;
     char path[512];
     snprintf(path, sizeof(path), "%s/eapol.22000", g_out_dir);
     FILE *f = fopen(path, "a");
     if (!f) return;
-    fputs(line,  f);
+    if (evil_twin_bssid_is_tainted(bssid)) {
+        fprintf(f, "# provenance=tainted-evil-twin "
+                   "bssid=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                bssid[0], bssid[1], bssid[2],
+                bssid[3], bssid[4], bssid[5]);
+    }
+    fputs(line, f);
     fputc('\n', f);
     fclose(f);
 }
@@ -356,7 +368,7 @@ int eapol_observe_dot11(const uint8_t *d, int len,
             snprintf(line, sizeof(line),
                      "WPA*01*%s*%s*%s*%s***",
                      pmkid_hex, bssid_hex, sta_hex, essid_hex);
-            append_22000_line(line);
+            append_22000_line_for_bssid(line, ev.bssid);
             /* Also dump per-(BSSID, STA) pcap with the buffered M1. */
             write_handshake_pcap(p);
         }
@@ -407,7 +419,7 @@ int eapol_observe_dot11(const uint8_t *d, int len,
                      "WPA*02*%s*%s*%s*%s*%s*%s*02",
                      mic_hex, bssid_hex, sta_hex, essid_hex,
                      anonce_hex, eapol_hex);
-            append_22000_line(line);
+            append_22000_line_for_bssid(line, ev.bssid);
             /* Per-handshake pcap with M1+M2 (and any later M3/M4). */
             write_handshake_pcap(p);
         }

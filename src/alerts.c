@@ -19,6 +19,58 @@
 static alert_t engine[MAX_ALERTS];
 static int     engine_count;
 
+/* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
+
+#define EVIL_TWIN_TAINT_MAX 32
+
+typedef struct {
+    uint8_t bssid[6];
+    time_t  marked_at;
+} taint_entry_t;
+
+static taint_entry_t g_taint[EVIL_TWIN_TAINT_MAX];
+static int           g_taint_count;
+
+static int taint_find_slot(const uint8_t bssid[6]) {
+    for (int i = 0; i < g_taint_count; i++) {
+        if (memcmp(g_taint[i].bssid, bssid, 6) == 0) return i;
+    }
+    return -1;
+}
+
+static void taint_mark(const uint8_t bssid[6], time_t now) {
+    int slot = taint_find_slot(bssid);
+    if (slot >= 0) { g_taint[slot].marked_at = now; return; }
+    if (g_taint_count < EVIL_TWIN_TAINT_MAX) {
+        slot = g_taint_count++;
+    } else {
+        /* Evict the oldest entry. */
+        slot = 0;
+        time_t oldest = g_taint[0].marked_at;
+        for (int i = 1; i < EVIL_TWIN_TAINT_MAX; i++) {
+            if (g_taint[i].marked_at < oldest) {
+                oldest = g_taint[i].marked_at;
+                slot   = i;
+            }
+        }
+    }
+    memcpy(g_taint[slot].bssid, bssid, 6);
+    g_taint[slot].marked_at = now;
+}
+
+int evil_twin_bssid_is_tainted(const uint8_t bssid[6]) {
+    int slot = taint_find_slot(bssid);
+    if (slot < 0) return 0;
+    time_t now = time(NULL);
+    if (now - g_taint[slot].marked_at > EVIL_TWIN_TAINT_TTL_SECS) return 0;
+    return 1;
+}
+
+void evil_twin_taint_clear(void) {
+    g_taint_count = 0;
+    memset(g_taint, 0, sizeof(g_taint));
+}
+
 /* ── Helpers ─────────────────────────────────────────────── */
 
 static void mac_to_str(const uint8_t mac[6], char *out, int sz) {
@@ -712,6 +764,65 @@ static void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Evil-twin attack-chain correlation — Phase 4. When a same-cipher
+ * twin-fp pair is present AND a recent DEAUTH_FLOOD targets one half
+ * within DEAUTH_TWIN_WIN_SECS, conclude the deauthed AP is the legit
+ * one (the attacker is driving clients away from it) and the OTHER
+ * half is the rogue. Fire EVIL_TWIN at CRIT with "attack-in-progress"
+ * and mark the rogue's BSSID as tainted so subsequent EAPOL captures
+ * against it get a provenance marker in the .22000 export.
+ *
+ * Same-cipher pair criteria mirror the WARN branch in rule_evil_twin.
+ * We deliberately re-derive them rather than tracking pairs separately
+ * — the cost is one extra O(n²) walk per poll over MAX_BEACON_APS=256,
+ * which is fine at ≈1 Hz. */
+#define DEAUTH_TWIN_WIN_SECS 5
+
+static void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        if (!a->ssid[0]) continue;
+        if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) continue;
+        /* Is BSSID `a` currently being deauth-flooded? */
+        int deauthed = 0;
+        for (int k = 0; k < s->deauth_count; k++) {
+            const deauth_event_t *e = &s->deauth_events[k];
+            if (!e->flood) continue;
+            if (memcmp(e->bssid, a->bssid, 6) != 0) continue;
+            if (now - e->last_seen > DEAUTH_TWIN_WIN_SECS) continue;
+            deauthed = 1;
+            break;
+        }
+        if (!deauthed) continue;
+        /* Find a same-SSID + same-cipher + diff-OUI sibling — that's
+         * the rogue half. Loop covers both i<j and j<i so a deauth
+         * targeting either AP picks up its twin partner. */
+        for (int j = 0; j < s->beacon_count; j++) {
+            if (i == j) continue;
+            const beacon_ap_t *b = &s->beacon_aps[j];
+            if (strcmp(a->ssid, b->ssid) != 0) continue;
+            if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
+            if (strcmp(a->enc, b->enc) != 0) continue;
+            if (memcmp(a->bssid, b->bssid, 3) == 0) continue;
+
+            taint_mark(b->bssid, now);
+
+            char a_bssid[20], b_bssid[20];
+            fmt_bssid(a_bssid, a->bssid);
+            fmt_bssid(b_bssid, b->bssid);
+            char key[ALERT_KEY_LEN];
+            char detail[ALERT_DETAIL_LEN];
+            snprintf(key, sizeof(key), "twin-chain:%.36s", a->ssid);
+            snprintf(detail, sizeof(detail),
+                     "'%.16s' attack-in-progress: real=%s twin=%s [%.6s]",
+                     a->ssid, a_bssid, b_bssid, a->enc);
+            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
+                 "EVIL_TWIN", detail, key, NULL, 0, now);
+            break;
+        }
+    }
+}
+
 /* Rogue DHCP: more than one distinct DHCP server identifier observed
  * in recent OFFER / ACK / NAK traffic. The legitimate network has one
  * authoritative DHCP server; a second is almost always either an
@@ -908,6 +1019,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rogue_dhcp(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
+    rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
@@ -927,4 +1039,5 @@ void alerts_clear(void) {
      * get a fully clean slate. */
     g_arp_hist_n = 0;
     memset(g_arp_hist, 0, sizeof(g_arp_hist));
+    evil_twin_taint_clear();
 }
