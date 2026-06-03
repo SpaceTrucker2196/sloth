@@ -80,7 +80,10 @@ static void emit_line(const char *line) {
 
 /* ── builder helpers ─────────────────────────────────────── */
 
-#define LINEBUF 1024
+/* 2048 is enough for the richest snapshot record (beacon with full
+ * neighbor + ssid-history arrays); the event emitters all comfortably
+ * fit in their original 1 KiB envelope. */
+#define LINEBUF 2048
 
 static void kv_str(char *buf, int sz, int *off, const char *key, const char *val) {
     *off += snprintf(buf + *off, (size_t)(sz - *off), ",\"%s\":\"", key);
@@ -91,6 +94,19 @@ static void kv_str(char *buf, int sz, int *off, const char *key, const char *val
 static void kv_int(char *buf, int sz, int *off, const char *key, long long val) {
     *off += snprintf(buf + *off, (size_t)(sz - *off),
                      ",\"%s\":%lld", key, val);
+}
+
+static void kv_double(char *buf, int sz, int *off, const char *key, double val) {
+    *off += snprintf(buf + *off, (size_t)(sz - *off),
+                     ",\"%s\":%.2f", key, val);
+}
+
+static void kv_mac(char *buf, int sz, int *off, const char *key,
+                   const uint8_t mac[6]) {
+    char m[20];
+    snprintf(m, sizeof(m), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    kv_str(buf, sz, off, key, m);
 }
 
 static void start_obj(char *buf, int sz, int *off, const char *type, time_t ts) {
@@ -278,4 +294,510 @@ void jsonl_emit_connections(const sloth_state_t *s) {
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
+}
+
+/* ── Per-view snapshot emitters ──────────────────────────────
+ *
+ * One JSONL line per entry in each table. Cadence is the poll
+ * loop (≈1 Hz); consumers rebuild the view from the latest
+ * snapshot, keyed by an obvious natural identity field documented
+ * in each emitter. Any-sink gating up front means the format work
+ * is skipped entirely when nobody is listening. */
+
+void jsonl_emit_ifaces(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->iface_count; i++) {
+        const iface_stat_t *e = &s->ifaces[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "iface", now);
+        kv_str(buf, LINEBUF, &off, "name",       e->name);
+        kv_int(buf, LINEBUF, &off, "rx_bytes",   (long long)e->rx_bytes);
+        kv_int(buf, LINEBUF, &off, "tx_bytes",   (long long)e->tx_bytes);
+        kv_int(buf, LINEBUF, &off, "rx_packets", (long long)e->rx_packets);
+        kv_int(buf, LINEBUF, &off, "tx_packets", (long long)e->tx_packets);
+        kv_int(buf, LINEBUF, &off, "rx_errors",  (long long)e->rx_errors);
+        kv_int(buf, LINEBUF, &off, "rx_drops",   (long long)e->rx_drops);
+        kv_int(buf, LINEBUF, &off, "tx_errors",  (long long)e->tx_errors);
+        kv_int(buf, LINEBUF, &off, "tx_drops",   (long long)e->tx_drops);
+        kv_double(buf, LINEBUF, &off, "rx_rate", e->rx_rate);
+        kv_double(buf, LINEBUF, &off, "tx_rate", e->tx_rate);
+        kv_int(buf, LINEBUF, &off, "mtu",        (long long)e->mtu);
+        kv_int(buf, LINEBUF, &off, "speed_mbps", (long long)e->speed_mbps);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_arp(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->arp_count; i++) {
+        const arp_entry_t *e = &s->arp_entries[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "arp", now);
+        kv_str(buf, LINEBUF, &off, "ip",    e->ip);
+        kv_mac(buf, LINEBUF, &off, "mac",   e->mac);
+        kv_str(buf, LINEBUF, &off, "iface", e->iface);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_dhcp_leases(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->dhcp_count; i++) {
+        const dhcp_lease_t *e = &s->dhcp_leases[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "dhcp_lease", now);
+        kv_str(buf, LINEBUF, &off, "ip",       e->ip);
+        kv_str(buf, LINEBUF, &off, "hostname", e->hostname);
+        kv_int(buf, LINEBUF, &off, "expire",   (long long)e->expire);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_wifi_aps(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->ap_count; i++) {
+        const wifi_ap_t *e = &s->aps[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_ap", now);
+        kv_str(buf, LINEBUF, &off, "ssid",       e->ssid);
+        kv_str(buf, LINEBUF, &off, "bssid",      e->bssid);
+        kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "channel",    e->channel);
+        kv_str(buf, LINEBUF, &off, "enc",        e->enc);
+        kv_int(buf, LINEBUF, &off, "status",     e->status);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_wifi_stas(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->wifi_sta_count; i++) {
+        const wifi_sta_t *e = &s->wifi_stas[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_sta", now);
+        kv_str(buf, LINEBUF, &off, "mac",            e->mac);
+        kv_int(buf, LINEBUF, &off, "signal_dbm",     e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "tx_rate_kbps",   (long long)e->tx_rate_kbps);
+        kv_int(buf, LINEBUF, &off, "rx_rate_kbps",   (long long)e->rx_rate_kbps);
+        kv_int(buf, LINEBUF, &off, "connected_secs", (long long)e->connected_secs);
+        kv_int(buf, LINEBUF, &off, "inactive_ms",    (long long)e->inactive_ms);
+        kv_int(buf, LINEBUF, &off, "tx_bytes",       (long long)e->tx_bytes);
+        kv_int(buf, LINEBUF, &off, "rx_bytes",       (long long)e->rx_bytes);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_top_hosts(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->top_host_count; i++) {
+        const top_host_t *e = &s->top_hosts[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "top_host", now);
+        kv_str(buf, LINEBUF, &off, "ip",         e->ip);
+        kv_str(buf, LINEBUF, &off, "hostname",   e->hostname);
+        kv_str(buf, LINEBUF, &off, "owner",      e->owner);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "conn_count", (long long)e->conn_count);
+        kv_double(buf, LINEBUF, &off, "rx_rate", e->rx_rate);
+        kv_double(buf, LINEBUF, &off, "tx_rate", e->tx_rate);
+        kv_int(buf, LINEBUF, &off, "rx_bytes",   (long long)e->rx_bytes);
+        kv_int(buf, LINEBUF, &off, "tx_bytes",   (long long)e->tx_bytes);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_devices(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->device_count; i++) {
+        const device_t *e = &s->devices[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "device", now);
+        kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
+        kv_str(buf, LINEBUF, &off, "ip",          e->ip);
+        kv_str(buf, LINEBUF, &off, "hostname",    e->hostname);
+        kv_str(buf, LINEBUF, &off, "vendor",      e->vendor);
+        kv_str(buf, LINEBUF, &off, "last_ssid",   e->last_ssid);
+        kv_int(buf, LINEBUF, &off, "is_ap",       e->is_ap ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "signal_dbm",  e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "probe_count", (long long)e->probe_count);
+        kv_int(buf, LINEBUF, &off, "sources",     (long long)e->sources);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_beacons(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *e = &s->beacon_aps[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "beacon", now);
+        kv_str(buf, LINEBUF, &off, "ssid",       e->ssid);
+        kv_mac(buf, LINEBUF, &off, "bssid",      e->bssid);
+        kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "channel",    e->channel);
+        kv_str(buf, LINEBUF, &off, "enc",        e->enc);
+        kv_int(buf, LINEBUF, &off, "beacon_ms",  (long long)e->beacon_ms);
+        kv_str(buf, LINEBUF, &off, "pairwise",   e->pairwise);
+        kv_str(buf, LINEBUF, &off, "group",      e->group);
+        kv_str(buf, LINEBUF, &off, "akm",        e->akm);
+        kv_int(buf, LINEBUF, &off, "mfp",        e->mfp);
+        kv_str(buf, LINEBUF, &off, "vendor",     e->vendor);
+        kv_int(buf, LINEBUF, &off, "has_wps",    e->has_wps ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "wps_state",  e->wps_state);
+        kv_int(buf, LINEBUF, &off, "wps_locked", e->wps_locked);
+        kv_str(buf, LINEBUF, &off, "phy",        e->phy);
+        kv_int(buf, LINEBUF, &off, "revealed",   e->revealed ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "frame_count",(long long)e->frame_count);
+        /* fp — flags + vendor-IE hash; OUI is the BSSID prefix, omit. */
+        kv_int(buf, LINEBUF, &off, "fp_flags",       e->fp.flags);
+        kv_int(buf, LINEBUF, &off, "vendor_ies_hash",(long long)e->fp.vendor_ies_hash);
+        kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
+        kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
+        /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
+        off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                        ",\"ssid_history\":[");
+        for (int k = 0; k < e->ssid_history_n; k++) {
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s\"", k ? "," : "");
+            json_escape(e->ssid_history[k], buf, LINEBUF, &off);
+            off += snprintf(buf + off, (size_t)(LINEBUF - off), "\"");
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        /* neighbors[] — array of {bssid, channel, phy_type}. */
+        off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                        ",\"neighbors\":[");
+        for (int k = 0; k < e->neighbor_count; k++) {
+            const ap_neighbor_t *n = &e->neighbors[k];
+            char nb[20];
+            snprintf(nb, sizeof(nb),
+                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                     n->bssid[0], n->bssid[1], n->bssid[2],
+                     n->bssid[3], n->bssid[4], n->bssid[5]);
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s{\"bssid\":\"%s\",\"channel\":%d,\"phy_type\":%d}",
+                            k ? "," : "", nb, n->channel, n->phy_type);
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_deauths(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->deauth_count; i++) {
+        const deauth_event_t *e = &s->deauth_events[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "deauth", now);
+        kv_mac(buf, LINEBUF, &off, "src",        e->src);
+        kv_mac(buf, LINEBUF, &off, "dst",        e->dst);
+        kv_mac(buf, LINEBUF, &off, "bssid",      e->bssid);
+        kv_int(buf, LINEBUF, &off, "reason",     e->reason);
+        kv_int(buf, LINEBUF, &off, "subtype",    e->subtype);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "count",      (long long)e->count);
+        kv_int(buf, LINEBUF, &off, "flood",      e->flood ? 1 : 0);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_probe_clients(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->probe_count; i++) {
+        const probe_client_t *e = &s->probe_clients[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "probe_client", now);
+        kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
+        kv_str(buf, LINEBUF, &off, "ssid",        e->ssid);
+        kv_int(buf, LINEBUF, &off, "signal_dbm",  e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "channel",     e->channel);
+        kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_pnl_clients(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->pnl_count; i++) {
+        const pnl_client_t *e = &s->pnl_clients[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "pnl_client", now);
+        kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
+        kv_int(buf, LINEBUF, &off, "mac_random",  e->mac_random ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "probe_count", (long long)e->probe_count);
+        kv_str(buf, LINEBUF, &off, "os_fp",       e->os_fp);
+        kv_str(buf, LINEBUF, &off, "phy",         e->phy);
+        kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ssids\":[");
+        for (int k = 0; k < e->ssid_count; k++) {
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s\"", k ? "," : "");
+            json_escape(e->ssids[k], buf, LINEBUF, &off);
+            off += snprintf(buf + off, (size_t)(LINEBUF - off), "\"");
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_seqnum_clients(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->seqnum_count; i++) {
+        const seqnum_client_t *e = &s->seqnum_clients[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "seqnum_client", now);
+        kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
+        kv_int(buf, LINEBUF, &off, "mac_random",  e->mac_random ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"hist\":[");
+        for (int k = 0; k < e->hist_n; k++) {
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s%u", k ? "," : "", e->hist[k]);
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_seqnum_correlations(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->seqnum_correlation_count; i++) {
+        const seqnum_correlation_t *e = &s->seqnum_correlations[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "seqnum_correlation", now);
+        kv_mac(buf, LINEBUF, &off, "mac_a",        e->mac_a);
+        kv_mac(buf, LINEBUF, &off, "mac_b",        e->mac_b);
+        kv_int(buf, LINEBUF, &off, "mac_a_random", e->mac_a_random ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "mac_b_random", e->mac_b_random ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "gap",          e->gap);
+        kv_int(buf, LINEBUF, &off, "dt_ms",        (long long)e->dt_ms);
+        kv_int(buf, LINEBUF, &off, "a_count",      (long long)e->a_count);
+        kv_int(buf, LINEBUF, &off, "b_count",      (long long)e->b_count);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_channels(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->channel_count; i++) {
+        const channel_summary_t *e = &s->channels[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "channel_summary", now);
+        kv_int(buf, LINEBUF, &off, "channel",     e->channel);
+        kv_int(buf, LINEBUF, &off, "ap_count",    e->ap_count);
+        kv_int(buf, LINEBUF, &off, "assoc_count", e->assoc_count);
+        kv_int(buf, LINEBUF, &off, "best_signal", e->best_signal);
+        kv_str(buf, LINEBUF, &off, "top_ssid",    e->top_ssid);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_assocs(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->assoc_count; i++) {
+        const assoc_t *e = &s->assocs[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "assoc", now);
+        kv_mac(buf, LINEBUF, &off, "bssid",       e->bssid);
+        kv_mac(buf, LINEBUF, &off, "sta_mac",     e->sta_mac);
+        kv_str(buf, LINEBUF, &off, "ssid",        e->ssid);
+        kv_int(buf, LINEBUF, &off, "sta_random",  e->sta_random ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "source",      e->source);
+        kv_int(buf, LINEBUF, &off, "channel",     e->channel);
+        kv_int(buf, LINEBUF, &off, "signal_dbm",  e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_eapol_events(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->eapol_count; i++) {
+        const eapol_event_t *e = &s->eapol_events[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "eapol", now);
+        kv_mac(buf, LINEBUF, &off, "bssid",      e->bssid);
+        kv_mac(buf, LINEBUF, &off, "sta_mac",    e->sta_mac);
+        kv_str(buf, LINEBUF, &off, "ssid",       e->ssid);
+        kv_int(buf, LINEBUF, &off, "event_ts",   (long long)e->ts);
+        kv_int(buf, LINEBUF, &off, "msg_num",    e->msg_num);
+        kv_int(buf, LINEBUF, &off, "has_pmkid",  e->has_pmkid ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "handshake_complete",
+                                                 e->handshake_complete ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
+        kv_int(buf, LINEBUF, &off, "channel",    e->channel);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_mdns_services(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->mdns_count; i++) {
+        const mdns_service_t *e = &s->mdns_services[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "mdns_service", now);
+        kv_str(buf, LINEBUF, &off, "instance",  e->instance);
+        kv_str(buf, LINEBUF, &off, "service",   e->service);
+        kv_str(buf, LINEBUF, &off, "host",      e->host);
+        kv_str(buf, LINEBUF, &off, "ip",        e->ip);
+        kv_int(buf, LINEBUF, &off, "port",      e->port);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_nbns_names(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->nbns_count; i++) {
+        const nbns_name_t *e = &s->nbns_names[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "nbns_name", now);
+        kv_str(buf, LINEBUF, &off, "name",      e->name);
+        kv_str(buf, LINEBUF, &off, "ip",        e->ip);
+        kv_int(buf, LINEBUF, &off, "suffix",    e->suffix);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_ssdp_devices(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->ssdp_count; i++) {
+        const ssdp_device_t *e = &s->ssdp_devices[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "ssdp_device", now);
+        kv_str(buf, LINEBUF, &off, "ip",        e->ip);
+        kv_str(buf, LINEBUF, &off, "kind",      e->type);  /* "type" is JSON-reserved-ish; rename */
+        kv_str(buf, LINEBUF, &off, "usn",       e->usn);
+        kv_str(buf, LINEBUF, &off, "location",  e->location);
+        kv_str(buf, LINEBUF, &off, "nts",       e->nts);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_scan_entries(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->scan_count; i++) {
+        const scan_entry_t *e = &s->scan_entries[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "scan_entry", now);
+        kv_str(buf, LINEBUF, &off, "ip",         e->ip);
+        kv_int(buf, LINEBUF, &off, "port_count", e->port_count);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "flagged",    e->flagged ? 1 : 0);
+        /* Distinct ports as a small array — bounded by MAX_SCAN_PORTS. */
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ports\":[");
+        for (int k = 0; k < e->port_count && k < MAX_SCAN_PORTS; k++) {
+            off += snprintf(buf + off, (size_t)(LINEBUF - off),
+                            "%s%u", k ? "," : "", e->ports[k]);
+        }
+        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_packets(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    /* Packet ring is sized at MAX_PACKETS; pkt_count is the number
+     * of *written* slots, capped at MAX_PACKETS. We emit ALL currently
+     * valid entries each tick — the ring's ordering doesn't matter for
+     * the snapshot model. raw bytes are deliberately omitted (would
+     * leak frame contents into log files); only the metadata ships. */
+    int n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
+    for (int i = 0; i < n; i++) {
+        const packet_info_t *e = &s->packets[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "packet", now);
+        kv_int(buf, LINEBUF, &off, "ts_sec",   (long long)e->ts_sec);
+        kv_int(buf, LINEBUF, &off, "ts_usec",  (long long)e->ts_usec);
+        kv_str(buf, LINEBUF, &off, "src",      e->src);
+        kv_str(buf, LINEBUF, &off, "dst",      e->dst);
+        kv_int(buf, LINEBUF, &off, "src_port", e->src_port);
+        kv_int(buf, LINEBUF, &off, "dst_port", e->dst_port);
+        kv_int(buf, LINEBUF, &off, "proto",    e->proto);
+        kv_int(buf, LINEBUF, &off, "len",      (long long)e->len);
+        kv_str(buf, LINEBUF, &off, "info",     e->info);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_state_snapshots(const sloth_state_t *s) {
+    /* Cheap gating — every emitter checks any_sink() too, but the
+     * batch-level skip avoids the per-call setup when nobody's there. */
+    if (!any_sink() || !s) return;
+    jsonl_emit_ifaces            (s);
+    jsonl_emit_arp               (s);
+    jsonl_emit_dhcp_leases       (s);
+    jsonl_emit_wifi_aps          (s);
+    jsonl_emit_wifi_stas         (s);
+    jsonl_emit_top_hosts         (s);
+    jsonl_emit_devices           (s);
+    jsonl_emit_beacons           (s);
+    jsonl_emit_deauths           (s);
+    jsonl_emit_probe_clients     (s);
+    jsonl_emit_pnl_clients       (s);
+    jsonl_emit_seqnum_clients    (s);
+    jsonl_emit_seqnum_correlations(s);
+    jsonl_emit_channels          (s);
+    jsonl_emit_assocs            (s);
+    jsonl_emit_eapol_events      (s);
+    jsonl_emit_mdns_services     (s);
+    jsonl_emit_nbns_names        (s);
+    jsonl_emit_ssdp_devices      (s);
+    jsonl_emit_scan_entries      (s);
+    jsonl_emit_packets           (s);
 }

@@ -196,6 +196,53 @@ real (typical for a distant legit AP overshadowed by a close rogue).
 When `rule_evil_twin_attack_chain` has tainted a BSSID, that override
 pins the assignment regardless of signal strength.
 
+## State snapshot record types
+
+These records carry the current contents of each view-backing table.
+**Snapshot semantics — one record per entry per poll**, emitted by
+`jsonl_emit_state_snapshots()` after `poll_data()` finishes. Consumers
+(the iOS client; any other view-rebuilding consumer) reconstruct the
+table from the latest snapshot keyed by the natural-identity field
+indicated below. Late-joining clients pick up state on the next tick.
+
+| Record               | Identity key      | Fields |
+|----------------------|-------------------|--------|
+| `iface`              | `name`            | `rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_errors`, `rx_drops`, `tx_errors`, `tx_drops`, `rx_rate`, `tx_rate`, `mtu`, `speed_mbps` |
+| `arp`                | `mac`+`ip`        | `mac`, `ip`, `iface` |
+| `dhcp_lease`         | `ip`              | `ip`, `hostname`, `expire` (epoch; 0 = unknown) |
+| `wifi_ap`            | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel`, `enc`, `status` |
+| `wifi_sta`           | `mac`             | `mac`, `signal_dbm`, `tx_rate_kbps`, `rx_rate_kbps`, `connected_secs`, `inactive_ms`, `tx_bytes`, `rx_bytes` |
+| `top_host`           | `ip`              | `ip`, `hostname`, `owner`, `first_seen`, `last_seen`, `conn_count`, `rx_rate`, `tx_rate`, `rx_bytes`, `tx_bytes` |
+| `device`             | `mac`             | `mac`, `ip`, `hostname`, `vendor`, `last_ssid`, `is_ap`, `signal_dbm`, `probe_count`, `sources` (bitmask of `DEV_SRC_*`), `last_seen` |
+| `beacon`             | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel`, `enc`, `beacon_ms`, `pairwise`, `group`, `akm`, `mfp` (0/1/2), `vendor`, `has_wps`, `wps_state`, `wps_locked`, `phy`, `revealed`, `last_seen`, `frame_count`, `fp_flags` (`AP_FP_FLAG_*` bitset), `vendor_ies_hash`, `rssi_min_60s`, `rssi_max_60s`, `ssid_history[]`, `neighbors[{bssid, channel, phy_type}]` |
+| `deauth`             | `bssid`+`dst`     | `src`, `dst`, `bssid`, `reason`, `subtype`, `first_seen`, `last_seen`, `count`, `flood` |
+| `probe_client`       | `mac`             | `mac`, `ssid`, `signal_dbm`, `channel`, `first_seen`, `last_seen`, `frame_count` |
+| `pnl_client`         | `mac`             | `mac`, `mac_random`, `probe_count`, `os_fp`, `phy`, `first_seen`, `last_seen`, `ssids[]` |
+| `seqnum_client`      | `mac`             | `mac`, `mac_random`, `last_seen`, `frame_count`, `hist[]` (12-bit seqnums in observation order) |
+| `seqnum_correlation` | `mac_a`+`mac_b`   | `mac_a`, `mac_b`, `mac_a_random`, `mac_b_random`, `gap`, `dt_ms`, `a_count`, `b_count` |
+| `channel_summary`    | `channel`         | `channel`, `ap_count`, `assoc_count`, `best_signal`, `top_ssid`, `last_seen` |
+| `assoc`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `sta_random`, `source` (`ASSOC_SRC_*`), `channel`, `signal_dbm`, `first_seen`, `last_seen`, `frame_count` |
+| `eapol`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `event_ts`, `msg_num`, `has_pmkid`, `handshake_complete`, `signal_dbm`, `channel` |
+| `mdns_service`       | `instance`        | `instance`, `service`, `host`, `ip`, `port`, `last_seen` |
+| `nbns_name`          | `name`+`ip`       | `name`, `ip`, `suffix`, `last_seen` |
+| `ssdp_device`        | `usn`             | `ip`, `kind` (the SSDP `NT`/`ST` value; renamed from `type` to avoid colliding with the envelope's `type` field), `usn`, `location`, `nts`, `last_seen` |
+| `scan_entry`         | `ip`              | `ip`, `port_count`, `first_seen`, `last_seen`, `flagged`, `ports[]` |
+| `packet`             | `(ts_sec, ts_usec, src, dst)` | `ts_sec`, `ts_usec`, `src`, `dst`, `src_port`, `dst_port`, `proto`, `len`, `info`. Raw frame bytes are intentionally not emitted. |
+
+All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
+All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are
+bytes/second as float with 2 decimal places.
+
+**Cadence**: one tick per `poll_data()` call (≈1 Hz). Every active
+entry in every table emits a record each tick. When an entry is aged
+out of the source table its records simply stop appearing — there is
+no explicit "closed" record.
+
+**Volume**: a typical home network with ~100 ARP entries, ~30 beacons,
+~50 connections, ~20 devices, etc., emits on the order of 1 KB/s. The
+forwarder's `--type` filter lets consumers subscribe to only the
+record types they need.
+
 ## Versioning
 
 - **No version field.** Fields are append-only; existing names and

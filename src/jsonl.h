@@ -31,4 +31,39 @@ void jsonl_emit_connections(const sloth_state_t *s);
  * (ssid, real_bssid, twin_bssid). */
 void jsonl_emit_twin_episodes(const sloth_state_t *s);
 
+/* ── Per-view snapshot emitters ──────────────────────────────
+ *
+ * Each emits one JSONL line per entry in the named table, once per
+ * poll. Designed for live consumers (e.g. the iOS client) that
+ * reconstruct each view from the latest snapshot — late-joining
+ * clients pick up state on the next tick. Aggregate driver below
+ * walks them all in one call. */
+void jsonl_emit_ifaces        (const sloth_state_t *s);
+void jsonl_emit_arp           (const sloth_state_t *s);
+void jsonl_emit_dhcp_leases   (const sloth_state_t *s);
+void jsonl_emit_wifi_aps      (const sloth_state_t *s);
+void jsonl_emit_wifi_stas     (const sloth_state_t *s);
+void jsonl_emit_top_hosts     (const sloth_state_t *s);
+void jsonl_emit_devices       (const sloth_state_t *s);
+void jsonl_emit_beacons       (const sloth_state_t *s);
+void jsonl_emit_deauths       (const sloth_state_t *s);
+void jsonl_emit_probe_clients (const sloth_state_t *s);
+void jsonl_emit_pnl_clients   (const sloth_state_t *s);
+void jsonl_emit_seqnum_clients(const sloth_state_t *s);
+void jsonl_emit_seqnum_correlations(const sloth_state_t *s);
+void jsonl_emit_channels      (const sloth_state_t *s);
+void jsonl_emit_assocs        (const sloth_state_t *s);
+void jsonl_emit_eapol_events  (const sloth_state_t *s);
+void jsonl_emit_mdns_services (const sloth_state_t *s);
+void jsonl_emit_nbns_names    (const sloth_state_t *s);
+void jsonl_emit_ssdp_devices  (const sloth_state_t *s);
+void jsonl_emit_scan_entries  (const sloth_state_t *s);
+void jsonl_emit_packets       (const sloth_state_t *s);
+
+/* Umbrella — calls every per-view snapshot emitter. Driven once per
+ * poll from main.c after the underlying tables have been refreshed.
+ * Connections and twin_episode are emitted separately because they
+ * predate this set; this function is purely additive. */
+void jsonl_emit_state_snapshots(const sloth_state_t *s);
+
 #endif /* JSONL_H */

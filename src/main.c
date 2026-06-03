@@ -87,6 +87,7 @@ static void poll_data(sloth_state_t *s) {
     jsonl_emit_connections(s);
     twins_snapshot(s);
     jsonl_emit_twin_episodes(s);
+    jsonl_emit_state_snapshots(s);
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);

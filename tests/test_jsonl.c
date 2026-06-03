@@ -346,6 +346,185 @@ static void test_json_escapes_newline_in_field(void) {
     ASSERT(contains(body, "\\n"));
 }
 
+/* Aggregate state-snapshot emitter — drives one entry into every
+ * table the iOS client needs and asserts every record type lands.
+ * Single test rather than 21 individual ones because the emitter
+ * bodies are mechanical; this gives broad coverage with a single
+ * point of failure when the umbrella is wired up. */
+static void test_emit_state_snapshots_covers_all_view_types(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+
+    /* iface */
+    snprintf(s.ifaces[0].name, sizeof(s.ifaces[0].name), "eth0");
+    s.ifaces[0].rx_bytes = 12345; s.ifaces[0].mtu = 1500;
+    s.iface_count = 1;
+
+    /* arp */
+    snprintf(s.arp_entries[0].ip, sizeof(s.arp_entries[0].ip), "10.0.0.1");
+    snprintf(s.arp_entries[0].iface, sizeof(s.arp_entries[0].iface), "eth0");
+    s.arp_entries[0].mac[0] = 0xaa;
+    s.arp_count = 1;
+
+    /* dhcp_lease */
+    snprintf(s.dhcp_leases[0].ip, sizeof(s.dhcp_leases[0].ip), "10.0.0.50");
+    snprintf(s.dhcp_leases[0].hostname, sizeof(s.dhcp_leases[0].hostname), "laptop");
+    s.dhcp_count = 1;
+
+    /* wifi_ap (simple) */
+    snprintf(s.aps[0].ssid,  sizeof(s.aps[0].ssid),  "Home");
+    snprintf(s.aps[0].bssid, sizeof(s.aps[0].bssid), "aa:bb:cc:dd:ee:ff");
+    s.ap_count = 1;
+
+    /* wifi_sta */
+    snprintf(s.wifi_stas[0].mac, sizeof(s.wifi_stas[0].mac), "11:22:33:44:55:66");
+    s.wifi_sta_count = 1;
+
+    /* top_host */
+    snprintf(s.top_hosts[0].ip,       sizeof(s.top_hosts[0].ip),       "1.1.1.1");
+    snprintf(s.top_hosts[0].hostname, sizeof(s.top_hosts[0].hostname), "one.one.one.one");
+    s.top_host_count = 1;
+
+    /* device */
+    s.devices[0].mac[0] = 0xde;
+    snprintf(s.devices[0].vendor, sizeof(s.devices[0].vendor), "Apple");
+    s.device_count = 1;
+
+    /* beacon */
+    snprintf(s.beacon_aps[0].ssid, sizeof(s.beacon_aps[0].ssid), "Cafe");
+    snprintf(s.beacon_aps[0].enc,  sizeof(s.beacon_aps[0].enc),  "WPA2");
+    s.beacon_aps[0].bssid[0] = 0xab;
+    s.beacon_count = 1;
+
+    /* deauth */
+    s.deauth_events[0].bssid[0] = 0xcc;
+    s.deauth_events[0].flood = 1;
+    s.deauth_count = 1;
+
+    /* probe_client */
+    snprintf(s.probe_clients[0].ssid, sizeof(s.probe_clients[0].ssid), "MyNet");
+    s.probe_count = 1;
+
+    /* pnl_client */
+    snprintf(s.pnl_clients[0].ssids[0], sizeof(s.pnl_clients[0].ssids[0]), "MyNet");
+    s.pnl_clients[0].ssid_count = 1;
+    s.pnl_count = 1;
+
+    /* seqnum_client */
+    s.seqnum_clients[0].mac[0] = 0xde;
+    s.seqnum_clients[0].hist[0] = 0x123;
+    s.seqnum_clients[0].hist_n = 1;
+    s.seqnum_count = 1;
+
+    /* seqnum_correlation */
+    s.seqnum_correlations[0].mac_a[0] = 0xaa;
+    s.seqnum_correlations[0].mac_b[0] = 0xbb;
+    s.seqnum_correlations[0].gap      = 3;
+    s.seqnum_correlation_count = 1;
+
+    /* channel_summary */
+    s.channels[0].channel  = 36;
+    s.channels[0].ap_count = 4;
+    s.channel_count = 1;
+
+    /* assoc */
+    s.assocs[0].bssid[0] = 0xa1;
+    snprintf(s.assocs[0].ssid, sizeof(s.assocs[0].ssid), "Office");
+    s.assoc_count = 1;
+
+    /* eapol */
+    s.eapol_events[0].bssid[0] = 0xe1;
+    s.eapol_events[0].has_pmkid = 1;
+    s.eapol_count = 1;
+
+    /* mdns_service */
+    snprintf(s.mdns_services[0].service,  sizeof(s.mdns_services[0].service),  "_ipp._tcp");
+    snprintf(s.mdns_services[0].instance, sizeof(s.mdns_services[0].instance), "Printer");
+    s.mdns_count = 1;
+
+    /* nbns_name */
+    snprintf(s.nbns_names[0].name, sizeof(s.nbns_names[0].name), "DESKTOP");
+    s.nbns_count = 1;
+
+    /* ssdp_device */
+    snprintf(s.ssdp_devices[0].usn,  sizeof(s.ssdp_devices[0].usn),  "uuid:xyz");
+    snprintf(s.ssdp_devices[0].type, sizeof(s.ssdp_devices[0].type), "urn:roku");
+    s.ssdp_count = 1;
+
+    /* scan_entry */
+    snprintf(s.scan_entries[0].ip, sizeof(s.scan_entries[0].ip), "10.0.0.99");
+    s.scan_entries[0].port_count = 3;
+    s.scan_entries[0].ports[0]   = 22;
+    s.scan_count = 1;
+
+    /* packet */
+    s.packets[0].ts_sec = 1700000000;
+    snprintf(s.packets[0].src, sizeof(s.packets[0].src), "10.0.0.5");
+    snprintf(s.packets[0].dst, sizeof(s.packets[0].dst), "8.8.8.8");
+    s.pkt_count = 1;
+
+    jsonl_emit_state_snapshots(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* Every record type must appear at least once. */
+    ASSERT(contains(body, "\"type\":\"iface\""));
+    ASSERT(contains(body, "\"name\":\"eth0\""));
+    ASSERT(contains(body, "\"type\":\"arp\""));
+    ASSERT(contains(body, "\"iface\":\"eth0\""));
+    ASSERT(contains(body, "\"type\":\"dhcp_lease\""));
+    ASSERT(contains(body, "\"hostname\":\"laptop\""));
+    ASSERT(contains(body, "\"type\":\"wifi_ap\""));
+    ASSERT(contains(body, "\"ssid\":\"Home\""));
+    ASSERT(contains(body, "\"type\":\"wifi_sta\""));
+    ASSERT(contains(body, "\"type\":\"top_host\""));
+    ASSERT(contains(body, "\"hostname\":\"one.one.one.one\""));
+    ASSERT(contains(body, "\"type\":\"device\""));
+    ASSERT(contains(body, "\"vendor\":\"Apple\""));
+    ASSERT(contains(body, "\"type\":\"beacon\""));
+    ASSERT(contains(body, "\"ssid\":\"Cafe\""));
+    ASSERT(contains(body, "\"type\":\"deauth\""));
+    ASSERT(contains(body, "\"flood\":1"));
+    ASSERT(contains(body, "\"type\":\"probe_client\""));
+    ASSERT(contains(body, "\"type\":\"pnl_client\""));
+    ASSERT(contains(body, "\"ssids\":[\"MyNet\"]"));
+    ASSERT(contains(body, "\"type\":\"seqnum_client\""));
+    ASSERT(contains(body, "\"hist\":[291]"));   /* 0x123 == 291 */
+    ASSERT(contains(body, "\"type\":\"seqnum_correlation\""));
+    ASSERT(contains(body, "\"gap\":3"));
+    ASSERT(contains(body, "\"type\":\"channel_summary\""));
+    ASSERT(contains(body, "\"channel\":36"));
+    ASSERT(contains(body, "\"type\":\"assoc\""));
+    ASSERT(contains(body, "\"ssid\":\"Office\""));
+    ASSERT(contains(body, "\"type\":\"eapol\""));
+    ASSERT(contains(body, "\"has_pmkid\":1"));
+    ASSERT(contains(body, "\"type\":\"mdns_service\""));
+    ASSERT(contains(body, "\"service\":\"_ipp._tcp\""));
+    ASSERT(contains(body, "\"type\":\"nbns_name\""));
+    ASSERT(contains(body, "\"name\":\"DESKTOP\""));
+    ASSERT(contains(body, "\"type\":\"ssdp_device\""));
+    ASSERT(contains(body, "\"usn\":\"uuid:xyz\""));
+    ASSERT(contains(body, "\"type\":\"scan_entry\""));
+    ASSERT(contains(body, "\"ports\":[22"));
+    ASSERT(contains(body, "\"type\":\"packet\""));
+    ASSERT(contains(body, "\"src\":\"10.0.0.5\""));
+}
+
+/* Empty state → no snapshot records emitted (every table count = 0). */
+static void test_emit_state_snapshots_empty_writes_nothing(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_state_snapshots(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* Sanity: no record types from the umbrella appear. */
+    ASSERT(!contains(body, "\"type\":\"iface\""));
+    ASSERT(!contains(body, "\"type\":\"beacon\""));
+    ASSERT(!contains(body, "\"type\":\"device\""));
+}
+
 /* ── per-record() integration (a parallel write through the log API) ── */
 
 static void test_dns_log_record_writes_jsonl(void) {
@@ -383,6 +562,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_connections_omits_zero_rtt);
     RUN_TEST(test_emit_twin_episode_full_fields);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
+    RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
+    RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);
