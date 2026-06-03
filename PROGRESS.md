@@ -77,6 +77,71 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-03 — docs-drift LLM judge (GitHub Action)
+**Touched**: `.github/workflows/docs-drift.yml` (new),
+`.github/scripts/docs_drift.py` (new),
+`.github/scripts/docs_drift_prompt.md` (new),
+`docs/wiki/docs-drift-judge.md` (new), `docs/wiki/index.md`
+**Why**: `CLAUDE.md` mandates per-view docs (`docs/views/X.md`)
+stay in sync with the implementation (`src/views/X.c`), but
+sync was enforced only by human discipline at review time.
+With the recent burst of new views (Twins) + rich field
+additions (every `ap_fingerprint_t` flag bit, every
+`twin_episode_t` field), the per-view docs are exactly the
+artefact most prone to silent rot. The Toloka "Agent-as-a-Judge"
+article (https://toloka.ai/blog/ai-agent-as-a-judge-...) made
+the case for using LLMs as evaluators for fuzzy quality
+dimensions; docs-code drift is the highest-leverage slice of
+that pattern for sloth specifically.
+**What's in it**:
+- Mirror of the existing `code-review.yml` /
+  `code_review.py` pattern (same `_http` helper, same OpenAI
+  `chat/completions` call, same `response_format: json_object`,
+  same `ensure_label` / `create_issue` shape) so an operator
+  familiar with one understands the other.
+- 42 `(src, doc)` pairs covered: every `src/views/*.c` paired
+  with its same-stem `docs/views/*.md`, plus an explicit
+  `EXTRA_PAIRS` map for synthesis docs (`alerts.c` →
+  `alerts.md`, `beacon_snoop.c` → `beacons.md`, etc.) and the
+  handful of views whose doc basename historically differs
+  from the source file (`iface.c` → `interfaces.md`,
+  `conns.c` → `connections.md`, `procs.c` → `processes.md`,
+  `dns_log.c` → `dns.md`).
+- Two triggers: weekly cron (Mondays 09:00 UTC) opens one
+  issue per stale pair, deduped by title against existing
+  open `docs-drift` issues. Pull-request trigger audits only
+  the changed pairs and posts a single PR comment.
+- Workflow is **advisory only** — never fails the build.
+  Fails open when `OPENAI_API_KEY` is missing (forks /
+  external contributors); CI stays hermetic for offline
+  development.
+- Judge prompt versioned as
+  `.github/scripts/docs_drift_prompt.md` — markdown so
+  prompt-only changes show up cleanly in PR diffs.
+- Output schema is structured JSON
+  (`verdict`/`confidence`/`findings[]` with `severity`,
+  `category`, `evidence_code`, `evidence_doc`,
+  `explanation`); the judge is explicitly allowed to return
+  `"uncertain"` rather than guess.
+- Operator-facing wiki page at
+  `docs/wiki/docs-drift-judge.md` documents the dismissal
+  workflow (close the issue with a comment; the stateless
+  judge won't reopen until the next sweep actually still
+  sees drift) and the deliberate non-gating posture.
+**Toloka mapping**: the article's full trajectory-based judge
+is for evaluating AI agents on multi-step code-generation
+tasks — not directly applicable to a static C99 program.
+The narrower "LLM-as-judge for fuzzy quality dimensions"
+idea is what we landed; trajectory-based eval of sloth on
+synthetic pcaps is documented as a possible follow-up.
+**Cost**: ~42 API calls/week + PR-bounded runs; well under
+$1/month at GPT-5.2-Codex pricing.
+**Verification**: dry-run against every pair via
+`python .github/scripts/docs_drift.py --mode schedule
+--no-llm --dry-run` exits 0 and shows the discovery loop
+finds 42 pairs. Real API call deferred to first scheduled
+run once the `OPENAI_API_KEY` secret is set in the repo.
+
 ### 2026-06-02 — Evil-twin AP detection (6 phases)
 **Commits**: `24b2aa7`, `f81aab0`, `32f53a8`, `059f502`, `50a768b`, `16cfd0a`
 **Touched**: `include/sloth.h`, `src/alerts.{c,h}`, `src/beacon_snoop.c`,

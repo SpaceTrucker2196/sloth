@@ -1,0 +1,99 @@
+name: Docs-drift judge
+
+# Two triggers:
+#
+#   schedule: weekly cron sweep. Re-audits every (src, doc) pair and
+#             opens one GitHub issue per pair the judge flags as
+#             stale. Dedup by title — open issues from prior weeks
+#             are not duplicated.
+#
+#   pull_request: only the pairs touched by the PR's diff. Findings
+#                 land as a single PR comment so the reviewer sees
+#                 them inline with the change.
+#
+# The workflow never fails the build — findings are advisory. Forks
+# without the OPENAI_API_KEY secret get a clean skip.
+
+on:
+  schedule:
+    # Mondays 09:00 UTC. Adjust if your team's review window moves.
+    - cron: "0 9 * * 1"
+  pull_request:
+    paths:
+      - "src/views/**"
+      - "docs/views/**"
+      - "src/alerts.c"
+      - "src/beacon_snoop.c"
+      - "src/deauth_snoop.c"
+      - "src/dns.c"
+      - "src/dhcp_snoop.c"
+      - "src/mdns_snoop.c"
+      - "src/nbns_snoop.c"
+      - "src/ssdp_snoop.c"
+      - "src/eapol_log.c"
+      - "src/probe_pnl.c"
+      - "src/seqnum_track.c"
+      - "src/assoc_track.c"
+      - "src/twins.c"
+      - ".github/scripts/docs_drift.py"
+      - ".github/scripts/docs_drift_prompt.md"
+  workflow_dispatch:
+
+permissions:
+  contents:      read
+  issues:        write    # cron mode opens issues
+  pull-requests: write    # pr mode posts a single review comment
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PR mode needs HEAD and the merge base to compute the
+          # changed-file list; depth 2 covers per-commit PRs and we
+          # let GitHub's `pull_request.base.sha` handle bigger ones.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute changed files (PR mode)
+        if: github.event_name == 'pull_request'
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only "$base" "$head" > /tmp/changed.txt
+          echo "Changed files:"
+          cat /tmp/changed.txt
+
+      - name: Skip if no API key
+        if: env.OPENAI_API_KEY == ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          echo "OPENAI_API_KEY secret not configured — skipping docs-drift judge."
+
+      - name: Run judge (schedule)
+        if: |
+          (github.event_name == 'schedule' ||
+           github.event_name == 'workflow_dispatch') &&
+          env.OPENAI_API_KEY != ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:    ${{ github.repository }}
+          MODEL:          gpt-5.2-codex
+        run: python .github/scripts/docs_drift.py --mode schedule
+
+      - name: Run judge (PR)
+        if: github.event_name == 'pull_request' && env.OPENAI_API_KEY != ''
+        env:
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:       ${{ github.repository }}
+          GITHUB_PR_NUMBER:  ${{ github.event.pull_request.number }}
+          MODEL:             gpt-5.2-codex
+        run: python .github/scripts/docs_drift.py --mode pr --changed-files /tmp/changed.txt

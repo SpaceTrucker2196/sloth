@@ -35,6 +35,8 @@ source material.
 ## Factory infrastructure
 
 - [[mutation-testing]] — verifying the test suite itself; `make mutate` harness.
+- [[docs-drift-judge]] — LLM-as-judge GitHub Action that audits
+  per-view docs against their source files.
 
 ## Reference
 
