@@ -49,26 +49,27 @@ work exposed as a new In-progress entry.
 **Owner**: next agent
 **Started**: 2026-06-01
 **Goal**: Extend `rule_evil_twin` to detect modern same-cipher evil-twin attacks with attack-chain correlation.
-**Status**: Phase 1 landed (commit `24b2aa7`, 2026-06-02). Phases 2-6 outstanding.
+**Status**: Phases 1-2 landed. Phases 3-6 outstanding.
 **Blockers**: none (pcap fixtures needed for Phase 6 test suite — can be synthesised with scapy)
-**Next concrete step**: Phase 2 — populate `ap_fingerprint_t.flags` + `vendor_ies_hash` from beacon parsing, add Hak5/Espressif OUI tables, escalate same-cipher twin to CRIT when vendor-IE hashes differ.
+**Next concrete step**: Phase 3 — RSSI sliding window in beacon_snoop + new `rule_evil_twin_proximity` firing `ALERT_TYPE_EVIL_TWIN_PROXIMITY` on ≥15 dBm step inside 60 s.
 
 #### Plan (phases)
 
 **~~Phase 1 — Data model & same-cipher twin detection~~** ✅ landed 2026-06-02 (`24b2aa7`)
-- `ap_fingerprint_t` defined in `include/sloth.h` with `AP_FP_FLAG_*` bitmask.
-- `beacon_ap_t` carries `fp`, `rssi_min_60s`, `rssi_max_60s` (populated incrementally by later phases).
-- `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value reserved (used by Phase 3).
+- `ap_fingerprint_t` in `include/sloth.h` + `AP_FP_FLAG_*` bitmask.
+- `beacon_ap_t` carries `fp`, `rssi_min_60s`, `rssi_max_60s`.
+- `ALERT_TYPE_EVIL_TWIN_PROXIMITY` enum value reserved (Phase 3).
 - `rule_evil_twin()` fires WARN on same-SSID + same-cipher + different-OUI (skips OPEN). CRIT path unchanged.
-- 6 new tests in `tests/test_alerts.c`; 2156 assertions total (+13).
 - Distinct dedup keys: `twin:<ssid>` (CRIT) vs `twin-fp:<ssid>` (WARN).
 
-**Phase 2 — Vendor-IE mismatch & attacker OUI tables (~2 days)**
-1. Create `src/wifi_oui_attacker.c` with embedded OUI tables (Hak5, Espressif).
-2. Hash tagged vendor IEs (tag 221) per BSSID in beacon_snoop; store in `ap_fingerprint_t.vendor_ies_hash`.
-3. On same-SSID/same-cipher pair, if vendor-IE hashes differ → escalate to CRIT.
-4. Populate `ap_fingerprint_t.flags` from beacon parsing (HT/VHT/HE caps, WPS UUID, hostapd defaults).
-5. Match against attacker OUI list to raise severity one tier.
+**~~Phase 2 — Vendor-IE mismatch & attacker OUI tables~~** ✅ landed 2026-06-02 (`f81aab0`)
+- `src/wifi_oui_attacker.{c,h}` — Hak5 (Pineapple, Alfa) + Espressif (ESP32, ESP8266, ESP-WROOM) tables.
+- Beacon parser fills `ap_fingerprint_t.flags` (HT/VHT/HE present, WPS UUID-E zero) and `vendor_ies_hash` (FNV-1a over non-Microsoft tag-221 IEs in beacon order).
+- WARN branch escalates: hash mismatch → CRIT; attacker OUI → bump tier; matching hashes stay WARN.
+- 12 new tests (6 OUI table + 6 escalation). 2183 assertions total (+27 from Phase 1).
+- **Phase 2 follow-ups** (do not block Phase 3):
+  - `AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS` bit is reserved but unpopulated — signature isn't a single byte pattern; benefits from pcap calibration.
+  - `AP_FP_FLAG_HAK5_OUI` / `AP_FP_FLAG_ESPRESSIF_OUI` are likewise reserved. Alerts use the table lookups directly today; populating the flag bits would let consumers (iOS client, JSONL) surface the marker without re-running the lookup.
 
 **Phase 3 — RSSI-step proximity detection (~1 day)**
 1. Track per-BSSID RSSI min/max in a 60 s sliding window.
