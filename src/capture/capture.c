@@ -17,6 +17,7 @@
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
+#include "ndp_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -237,6 +238,13 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         icmp_log_entry_t ie;
         if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 1, &ie))
             icmp_log_record(&ie);
+        /* NDP Router Advertisement (type 134) — feeds the rogue-RA
+         * tracker. Other NDP types (RS, NS, NA, Redirect) are not yet
+         * snooped; see docs/wiki/ipv6-ndp.md for the scope decision. */
+        if (tp[0] == 134) {
+            ndp_snoop_ra(pkt->src, tp, tlen);
+            snprintf(pkt->info, sizeof(pkt->info), "NDP RA");
+        }
     } else {
         snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%u", pkt->proto);
     }

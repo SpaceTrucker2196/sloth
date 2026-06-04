@@ -883,6 +883,58 @@ static void rule_rogue_dhcp(const sloth_state_t *s, time_t now) {
          "ROGUE_DHCP", detail, key, servers[0], 67, now);
 }
 
+/* Rogue RA: more than one distinct IPv6 source advertising a non-zero
+ * router lifetime. The IPv6 analogue of rogue DHCP — frameworks like
+ * mitm6, Slaacers, and the Topera toolkit get default-router status
+ * this way, then NAT/translate v4 traffic via the rogue path.
+ *
+ * Dedup key is the comma-joined sorted list of router source IPs so
+ * the same competing pair stays as one persistent alert; a third
+ * router joining mints a new key. */
+static void rule_rogue_ra(const sloth_state_t *s, time_t now) {
+    char routers[8][46];
+    int  n = 0;
+    for (int i = 0; i < s->ndp_ra_count && n < 8; i++) {
+        const ndp_ra_event_t *e = &s->ndp_ras[i];
+        if (e->router_lifetime == 0) continue;  /* explicit non-router */
+        if (!e->src_ip[0])           continue;
+        int dup = 0;
+        for (int j = 0; j < n; j++)
+            if (strcmp(routers[j], e->src_ip) == 0) { dup = 1; break; }
+        if (!dup) snprintf(routers[n++], 46, "%s", e->src_ip);
+    }
+    if (n < 2) return;
+
+    /* Stable dedup key — alphabetical by IP. */
+    for (int i = 0; i < n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (strcmp(routers[j], routers[best]) < 0) best = j;
+        if (best != i) {
+            char t[46];
+            memcpy(t,             routers[i],    sizeof(t));
+            memcpy(routers[i],    routers[best], sizeof(t));
+            memcpy(routers[best], t,             sizeof(t));
+        }
+    }
+
+    char key[ALERT_KEY_LEN];
+    int  kpos = snprintf(key, sizeof(key), "rogue_ra:");
+    for (int i = 0; i < n && kpos < (int)sizeof(key) - 1; i++)
+        kpos += snprintf(key + kpos, sizeof(key) - (size_t)kpos,
+                          "%s%s", i ? "," : "", routers[i]);
+
+    char detail[ALERT_DETAIL_LEN];
+    int  dpos = snprintf(detail, sizeof(detail),
+                         "%d distinct IPv6 routers on segment: ", n);
+    for (int i = 0; i < n && dpos < (int)sizeof(detail) - 1; i++)
+        dpos += snprintf(detail + dpos, sizeof(detail) - (size_t)dpos,
+                          "%s%s", i ? ", " : "", routers[i]);
+
+    fire(ALERT_TYPE_ROGUE_RA, ALERT_SEV_CRIT,
+         "ROGUE_RA", detail, key, routers[0], 0, now);
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1037,6 +1089,7 @@ void alerts_update(sloth_state_t *s) {
     rule_dga_domain(s, now);
     rule_arp_spoof(s, now);
     rule_rogue_dhcp(s, now);
+    rule_rogue_ra(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

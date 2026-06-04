@@ -24,6 +24,8 @@ source material.
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each
   evil-twin detection layer (Phases 1-4).
+- [[ipv6-ndp]] — Router Advertisement tracker + `ROGUE_RA` alert
+  (mitm6 / Slaacers detection).
 
 ## UI and infrastructure
 

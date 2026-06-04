@@ -1421,6 +1421,87 @@ static void test_rogue_dhcp_match_port_is_server_port(void) {
     ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.1");
 }
 
+/* ── Rogue RA (IPv6) — mirrors the rogue-DHCP rule set ──── */
+
+static void seed_ndp_ra(sloth_state_t *s, const char *src_ip,
+                         uint16_t router_lifetime) {
+    if (s->ndp_ra_count >= MAX_NDP_RAS) return;
+    ndp_ra_event_t *e = &s->ndp_ras[s->ndp_ra_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    e->router_lifetime = router_lifetime;
+    e->last_seen       = time(NULL);
+    e->count           = 1;
+}
+
+static void test_rogue_ra_single_router_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ndp_ra(&s, "fe80::1", 1800);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_RA), -1);
+}
+
+static void test_rogue_ra_two_routers_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ndp_ra(&s, "fe80::1",   1800);
+    seed_ndp_ra(&s, "fe80::dead", 1800);   /* rogue */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_RA);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* router_lifetime == 0 means "I'm not a default router" — those
+ * advertisers must not count toward the rogue threshold even if
+ * multiple of them are present (a "router" with lifetime 0 is just
+ * a host saying "ignore me for routing"). */
+static void test_rogue_ra_zero_lifetime_dont_count(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ndp_ra(&s, "fe80::1",   1800);
+    seed_ndp_ra(&s, "fe80::a",   0);
+    seed_ndp_ra(&s, "fe80::b",   0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_RA), -1);
+}
+
+static void test_rogue_ra_detail_lists_routers_sorted(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Seed in non-alphabetical order to prove the sort runs. */
+    seed_ndp_ra(&s, "fe80::ffff", 1800);
+    seed_ndp_ra(&s, "fe80::1",    1800);
+    seed_ndp_ra(&s, "fe80::aaaa", 1800);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_RA);
+    ASSERT(idx >= 0);
+    const char *d = s.alerts[idx].detail;
+    ASSERT(strstr(d, "3 distinct IPv6 routers") != NULL);
+    const char *p1 = strstr(d, "fe80::1");
+    const char *p2 = strstr(d, "fe80::aaaa");
+    const char *p3 = strstr(d, "fe80::ffff");
+    ASSERT(p1 != NULL); ASSERT(p2 != NULL); ASSERT(p3 != NULL);
+    ASSERT(p1 < p2);
+    ASSERT(p2 < p3);
+    ASSERT(strstr(s.alerts[idx].key,
+                  "fe80::1,fe80::aaaa,fe80::ffff") != NULL);
+    /* match_ip is the alphabetically-first router. */
+    ASSERT_STR(s.alerts[idx].match_ip, "fe80::1");
+}
+
+/* Kills the dup-detection on the router-IP collection loop: same
+ * router observed twice (e.g. as two RA frames in the same poll)
+ * must count as one router. */
+static void test_rogue_ra_dedup_same_router(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 5; i++) seed_ndp_ra(&s, "fe80::1", 1800);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_RA), -1);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1569,6 +1650,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rogue_dhcp_client_requests_dont_count);
     RUN_TEST(test_rogue_dhcp_detail_lists_servers_sorted);
     RUN_TEST(test_rogue_dhcp_match_port_is_server_port);
+    RUN_TEST(test_rogue_ra_single_router_no_fire);
+    RUN_TEST(test_rogue_ra_two_routers_fires);
+    RUN_TEST(test_rogue_ra_zero_lifetime_dont_count);
+    RUN_TEST(test_rogue_ra_detail_lists_routers_sorted);
+    RUN_TEST(test_rogue_ra_dedup_same_router);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

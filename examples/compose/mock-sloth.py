@@ -138,6 +138,11 @@ TEMPLATES = [
      "tx_bytes": 12345, "rx_bytes": 67890,
      "tx_rate": 100.0, "rx_rate": 500.0,
      "ports": [443, 853]},
+    {"type": "ndp_ra", "src_ip": "fe80::1",
+     "src_mac": "aa:bb:cc:dd:ee:01",
+     "cur_hop_limit": 64, "flags": 0, "router_lifetime": 1800,
+     "first_seen": 1700000000, "last_seen": 1700000060, "count": 30,
+     "prefixes": ["2001:db8::/64"]},
 ]
 
 

@@ -218,6 +218,31 @@ typedef struct {
     time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
 } dhcp_lease_t;
 
+/* ── IPv6 NDP Router Advertisement tracking ─────────────── */
+/* RFC 4861 §4.2 Router Advertisement (ICMPv6 type 134).
+ *
+ * For SOC visibility we only need to know *who* is acting as a
+ * default router on the segment — multiple distinct router IPs
+ * with non-zero lifetime is the rogue-RA condition (the IPv6
+ * analogue of rogue DHCP). NS/NA neighbor cache tracking is a
+ * future addition; today this struct is RA-only. */
+#define MAX_NDP_RAS         16   /* distinct RA-emitting routers */
+#define NDP_RA_MAX_PREFIXES  4   /* prefixes captured per router */
+
+typedef struct {
+    char     src_ip[46];                         /* router's IPv6 source addr */
+    uint8_t  src_mac[6];                         /* SLLA option (option type 1) */
+    uint8_t  has_src_mac;                        /* 1 if SLLA was present */
+    uint8_t  cur_hop_limit;
+    uint8_t  flags;                              /* M/O/H bits + reserved */
+    uint16_t router_lifetime;                    /* seconds; 0 = NOT a router */
+    char     prefixes[NDP_RA_MAX_PREFIXES][50];  /* "2001:db8::/64" */
+    int      prefix_count;
+    time_t   first_seen;
+    time_t   last_seen;
+    int      count;
+} ndp_ra_event_t;
+
 /* ── WiFi APs ───────────────────────────────────────────── */
 /* BSS status values (mirror of NL80211_BSS_STATUS_* enum) */
 #define WIFI_STATUS_NONE        (-1)
@@ -348,6 +373,7 @@ typedef enum {
     ALERT_TYPE_DGA_DOMAIN,
     ALERT_TYPE_ARP_SPOOF,
     ALERT_TYPE_ROGUE_DHCP,
+    ALERT_TYPE_ROGUE_RA,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -907,6 +933,10 @@ typedef struct {
     dhcp_event_t   dhcp_events[MAX_DHCP_EVENTS];
     int            dhcp_event_count;
     int            dhcp_event_sel;
+
+    /* ── IPv6 NDP — Router Advertisement events ──────────── */
+    ndp_ra_event_t ndp_ras[MAX_NDP_RAS];
+    int            ndp_ra_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

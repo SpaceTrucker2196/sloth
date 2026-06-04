@@ -77,6 +77,64 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-04 — IPv6 NDP — Router Advertisement snoop + ROGUE_RA alert
+**Touched**: `include/sloth.h`, `src/ndp_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_ndp_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/ipv6-ndp.md` (new),
+`docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: First entry from the "more passive observables" follow-up
+list. NDP (RFC 4861) is unauthenticated by default; modern IPv6
+endpoints SLAAC themselves the moment a Router Advertisement
+arrives. mitm6 / Slaacers and friends use rogue RAs to steal
+default-router status — Windows in particular prefers IPv6 over
+IPv4 when both are present, so a single injected RA can silently
+divert all traffic. The IPv4 analogue (rogue DHCP) has been
+detected for a while; the IPv6 detector closes the parallel gap.
+**What's in it**:
+- New `src/ndp_snoop.{c,h}` module: RA parser per RFC 4861 §4.2 + §4.6,
+  per-router state table (16 distinct router sources, evict-oldest
+  on overflow). Tracks `cur_hop_limit`, M/O/H flags byte,
+  `router_lifetime`, plus up to 4 prefixes from PIO options and
+  the optional `src_mac` from a Source Link-Layer Address option.
+- New `ALERT_TYPE_ROGUE_RA` enum value + `rule_rogue_ra` in
+  `alerts.c`, structurally identical to `rule_rogue_dhcp`: collects
+  distinct `src_ip` values with `router_lifetime > 0`, sorts for a
+  stable dedup key, fires CRIT once ≥2 distinct routers are
+  observed. Dedup key is `rogue_ra:<comma-joined sorted IPs>`.
+- `decode_ipv6` in `src/capture/capture.c` dispatches type-134
+  ICMPv6 frames to `ndp_snoop_ra` (the existing ICMPv6 log emit
+  continues to run too).
+- New `ndp_ra` JSONL record type emitted via state-snapshot
+  umbrella (`jsonl_emit_ndp_ras`). Schema documented in
+  `jsonl-schema.md`.
+- `examples/compose/mock-sloth.py` cycles a synthetic `ndp_ra`
+  template so the Compose demo and CI smoke test cover the new
+  record type automatically — 32/32 record types now pass through
+  on all three sinks (Loki / Datadog / webhook) + fan-out.
+- Hand-crafted byte-array tests per RFC 4861 in
+  `tests/test_ndp_snoop.c` cover minimal RA, RA + SLLA option,
+  RA + PIO option (prefix formatting via `inet_ntop`), two-router
+  separation, repeat-RA increments-count, zero-lifetime recording,
+  rejection of non-RA ICMPv6 (type 135 NS), rejection of truncated
+  payloads, and the zero-length-option termination case (RFC 4861
+  §4.6 — implementations SHOULD ignore len=0; we treat as
+  end-of-options so the walk can't loop forever).
+- 5 rogue-RA tests in `tests/test_alerts.c` mirror the rogue-DHCP
+  suite: single-router no-fire, two-router CRIT, zero-lifetime
+  filter, detail-string sorting + key stability, same-router
+  dedup.
+- New wiki page `docs/wiki/ipv6-ndp.md`: threat model + RFC
+  citations + what's-normal / what's-suspicious sections + the
+  scope decision (RA-only for v1; NS/NA neighbor cache deferred).
+**Counts**: 2449 assertions total (+45 from the previous round).
+make is warning-clean.
+**Out of scope for this change**: NS/NA neighbor cache, DAD
+exhaustion, Redirect frames, dedicated TUI view (alerts view
+already surfaces ROGUE_RA). Documented in the wiki page so the
+next agent knows what's intentionally left.
+
 ### 2026-06-04 — Mutation round 11: WiFi-SIGINT engine equivalences
 **Touched**: `.github/scripts/mutate-equivalents.txt`
 **Why**: Continues the paused mutation-testing campaign. Round 11
@@ -1283,7 +1341,9 @@ ops log — naming collision to resolve).
   mitigation is longer flow histories feeding v1.
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
   SMB/CIFS metadata, Kerberos pre-auth, LDAP referral leakage,
-  BGP route monitor for peering segments, IPv6 RA/NDP surface in alerts.
+  BGP route monitor for peering segments. (IPv6 RA/NDP landed
+  2026-06-04 — `ROGUE_RA` alert + `ndp_ra` JSONL record. NS/NA
+  neighbor cache remains as a follow-up if anyone wants to extend.)
 - ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
   landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
   available as direct output formats for both `-o FILE` and

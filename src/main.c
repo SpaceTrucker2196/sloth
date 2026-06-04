@@ -46,6 +46,7 @@
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
+#include "ndp_snoop.h"
 #include "ssdp_snoop.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
@@ -100,6 +101,7 @@ static void poll_data(sloth_state_t *s) {
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
+    ndp_snoop_snapshot(s);
     ssdp_snapshot(s);
     beacon_snapshot(s);
     deauth_snapshot(s);

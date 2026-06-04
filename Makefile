@@ -29,6 +29,7 @@ SRCS = src/main.c          \
        src/mdns_snoop.c    \
        src/nbns_snoop.c    \
        src/dhcp_snoop.c    \
+       src/ndp_snoop.c     \
        src/quic_snoop.c    \
        src/views/mdns.c    \
        src/views/nbns.c    \
@@ -222,6 +223,8 @@ TEST_SRCS = tests/main_test.c          \
             src/mdns_snoop.c               \
             src/nbns_snoop.c               \
             src/dhcp_snoop.c               \
+            src/ndp_snoop.c                \
+            tests/test_ndp_snoop.c         \
             src/quic_snoop.c               \
             src/views/mdns.c               \
             src/views/nbns.c               \
