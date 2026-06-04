@@ -287,6 +287,69 @@ src/icmp_log.c:102:rel:<:<=              # LZT: icmp_count saturating-add (icmp_
 src/icmp_log.c:111:rel:<:<=              # LZT: snapshot loop bound (icmp_log_snapshot)
 
 # ------------------------------------------------------------
+# src/assoc_track.c — STA<->AP association tracker (LZT)
+# ------------------------------------------------------------
+# Search-loop bound (find existing pair) and forget-loop bound (linear
+# scan for an entry to remove) read g_tbl[g_n] when mutated to <=. The
+# entry function explicitly rejects multicast/broadcast and all-zero
+# MACs (line 34 + 40), so pair_eq against the zero-initialised g_tbl
+# tail always returns false. Equivalent.
+#
+# The snapshot clamp is the standard LZT pattern — g_n is bounded by
+# the table size at insertion (line 50 >= MAX guard); both `<` and
+# `<=` pick the same value at the boundary.
+src/assoc_track.c:46:rel:<:<=            # LZT: search-loop in assoc_observe
+src/assoc_track.c:87:rel:<:<=            # LZT: forget-loop scan
+src/assoc_track.c:102:rel:<:<=           # LZT: snapshot clamp
+
+# ------------------------------------------------------------
+# src/seqnum_track.c — per-MAC seqnum history (LZT)
+# ------------------------------------------------------------
+# Only the snapshot clamp qualifies here. The search loop at line 25
+# does NOT — seqnum_track does not reject all-zero source MACs (no
+# bssid/sta-style filter at the entry), so reading the zero-init tail
+# could accidentally match an all-zero input. Eviction-scan and
+# history-shift mutations are NOT equivalent for the same reason
+# (writing through a wrong slot would corrupt the per-client ring).
+src/seqnum_track.c:101:rel:<:<=          # LZT: snapshot clamp
+
+# ------------------------------------------------------------
+# src/probe_pnl.c — Preferred Network List tracker (LZT)
+# ------------------------------------------------------------
+# Same posture as seqnum_track — no zero-MAC filter at the entry, so
+# the search loop's <= mutation could corrupt state. Only the snapshot
+# clamp is documented-equivalent. Per-client SSID-list mutations
+# (lines 147-161) are NOT equivalent — `j < MAX_PNL_SSIDS_PER_CLI`
+# bounds are tight against the embedded array.
+src/probe_pnl.c:169:rel:<:<=             # LZT: snapshot clamp
+
+# ------------------------------------------------------------
+# src/eapol_log.c — EAPOL/PMKID handshake capture
+# ------------------------------------------------------------
+# This is the WiFi-SIGINT engine that ships the largest mix of
+# LZT (ring buffer + snapshot, same shape as the protocol logs) and
+# SBL (hashcat-22000 hex builder scratch buffers).
+#
+# The pending-handshake search/eviction loops (lines 58, 69) are
+# excluded: their inputs are real 802.11 frame BSSID/STA bytes and the
+# zero-MAC fallthrough risk is the same as seqnum_track.
+src/eapol_log.c:48:const:256:257         # SBL: g_out_dir[256] output-directory path
+src/eapol_log.c:48:const:256:255         # SBL: same
+src/eapol_log.c:82:rel:<:<=              # LZT: g_count saturating-add (push_event)
+src/eapol_log.c:112:const:512:513        # SBL: char path[512] in append_22000_line_for_bssid
+src/eapol_log.c:112:const:512:511        # SBL: same
+src/eapol_log.c:148:const:640:641        # SBL: char path[640] in write_handshake_pcap
+src/eapol_log.c:148:const:640:639        # SBL: same
+src/eapol_log.c:367:const:256:257        # SBL: char line[256] for hashcat-22000 PMKID line
+src/eapol_log.c:367:const:256:255        # SBL: same
+src/eapol_log.c:400:const:1024:1025      # SBL: char eapol_hex[1024] for full-handshake encoding
+src/eapol_log.c:400:const:1024:1023      # SBL: same
+src/eapol_log.c:417:const:2048:2049      # SBL: char line[2048] for full-handshake 22000 line
+src/eapol_log.c:417:const:2048:2047      # SBL: same
+src/eapol_log.c:443:rel:<:<=             # LZT: snapshot clamp
+src/eapol_log.c:444:rel:<:<=             # LZT: snapshot loop bound
+
+# ------------------------------------------------------------
 # src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)
 # ------------------------------------------------------------
 # The `>>` operator's second `>` gets mutated to `>=` by the harness's

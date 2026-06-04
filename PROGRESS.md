@@ -60,12 +60,13 @@ the "Recently landed" entries). Resume at will; everything is
 non-blocking and stateless.
 **Next concrete step** (in priority order, if resuming):
 1. ~~Bulk-add LZT / SBL / TIP entries for `dns_log.c`, `tls_log.c`,
-   `http_log.c`~~ — landed 2026-06-03 (see Recently landed below).
-   Steps 1+2 from the original plan closed simultaneously: 27 new
-   equivalence lines cover `dns_log`, `tls_log`, `http_log`,
-   `ntp_log`, `icmp_log`.
-2. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
-   `src/seqnum_track.c`, `src/assoc_track.c` (WiFi-SIGINT engines).
+   `http_log.c`~~ — landed 2026-06-03 (round 10).
+2. ~~Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
+   `src/seqnum_track.c`, `src/assoc_track.c`~~ — landed 2026-06-04
+   (round 11). 20 entries; modest because the WiFi-SIGINT engines
+   reject fewer inputs than the protocol logs and the search-loop
+   LZTs are not safely equivalent when zero-MAC inputs aren't
+   filtered.
 3. Skip `src/views/*.c` — render code, low semantic value.
 4. Cosmetic: tighten the "killed (build broke)" sub-counter so
    compile failures and test-binary segfaults are categorised
@@ -75,6 +76,46 @@ non-blocking and stateless.
 ---
 
 ## Recently landed
+
+### 2026-06-04 — Mutation round 11: WiFi-SIGINT engine equivalences
+**Touched**: `.github/scripts/mutate-equivalents.txt`
+**Why**: Continues the paused mutation-testing campaign. Round 11
+covers the four WiFi-SIGINT engines flagged as step 3 of the
+original wind-down TODO: `probe_pnl`, `eapol_log`, `seqnum_track`,
+`assoc_track`.
+**What's in it**:
+- **`assoc_track.c`** (3 LZT entries): search-loop, forget-loop,
+  and snapshot clamp. The search/forget loops qualify because the
+  observe entry explicitly rejects multicast/broadcast AND all-zero
+  MACs (lines 34 + 40), so pair_eq against the zero-init tail is
+  always false.
+- **`seqnum_track.c`** (1 LZT entry): snapshot clamp only. The
+  search loop does NOT qualify — the observe entry filters
+  multicast but not all-zero MACs, so the zero-init tail could
+  accidentally match an all-zero input and corrupt state.
+- **`probe_pnl.c`** (1 LZT entry): snapshot clamp only. Same
+  posture as seqnum_track; per-client SSID-list mutations are
+  also excluded because the bounds are tight against the embedded
+  array.
+- **`eapol_log.c`** (15 entries): the WiFi-SIGINT engine with the
+  largest mix — 6× SBL doublets (g_out_dir + two path[]s + three
+  hashcat-22000 line builders + eapol_hex[1024]) + LZT for the
+  ring-buffer triplet (saturating-add at push_event, snapshot
+  clamp, snapshot loop bound). Pending-handshake search/eviction
+  loops are excluded for the same zero-MAC risk as seqnum/PNL.
+
+20 new equivalence lines; 158 in the file overall (was 138).
+Modest gain compared to round 10 (27 entries) because the
+WiFi-SIGINT engines reject fewer inputs than the protocol logs.
+
+Steps 1+2+3 from the original paused-mutation TODO are now closed.
+Step 4 (the build-broke / segfault sub-counter categorisation)
+remains; it's cosmetic and can be picked up by anyone resuming.
+
+**Verification**: `make test` → 2404 assertions still pass.
+Equivalence file is consumed by `make mutate`, not by the unit
+suite, so no test count change — kill-rate impact surfaces on the
+next campaign.
 
 ### 2026-06-03 — Mutation round 10 + ring-buffer architecture wiki page
 **Touched**: `.github/scripts/mutate-equivalents.txt`,
