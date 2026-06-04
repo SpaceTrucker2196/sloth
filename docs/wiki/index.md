@@ -28,6 +28,8 @@ source material.
   (mitm6 / Slaacers detection).
 - [[smb-snoop]] — SMB1 detection + `SMB1_USE` alert (EternalBlue /
   lateral-movement substrate).
+- [[kerberos-snoop]] — Kerberos msg-type tracking + `KERB_PREAUTH_BURST`
+  alert (AD password-spray detection).
 
 ## UI and infrastructure
 

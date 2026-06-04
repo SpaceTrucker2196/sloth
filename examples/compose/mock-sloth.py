@@ -146,6 +146,12 @@ TEMPLATES = [
     {"type": "smb_session", "client_ip": "10.0.0.5",
      "server_ip": "10.0.0.10", "server_port": 445, "dialect": "SMB2",
      "first_seen": 1700000000, "last_seen": 1700000060, "count": 42},
+    {"type": "kerb_event", "src_ip": "10.0.0.5",
+     "as_req_count": 4, "as_rep_count": 2,
+     "tgs_req_count": 6, "tgs_rep_count": 6,
+     "preauth_required_count": 4, "preauth_failed_count": 1,
+     "principal_unknown_count": 0, "error_other_count": 0,
+     "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 

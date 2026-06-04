@@ -218,6 +218,34 @@ typedef struct {
     time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
 } dhcp_lease_t;
 
+/* ── Kerberos observation tracking ────────────────────── */
+/* Kerberos lives on TCP / UDP port 88. v1 of sloth's Kerberos
+ * snooper does message-type detection (via the outer ASN.1
+ * [APPLICATION] tag byte) and KRB-ERROR error-code extraction
+ * (via a minimal ASN.1 walk for the [6] error-code field). Per-
+ * source aggregate counts feed the KERB_PREAUTH_BURST alert
+ * (password spray detection).
+ *
+ * Deeper Kerberos visibility — username/principal extraction,
+ * AS-REP roasting detection, kerberoasting service-ticket
+ * tracking — is documented out of scope; see
+ * docs/wiki/kerberos-snoop.md. */
+#define MAX_KERB_EVENTS  64
+
+typedef struct {
+    char   src_ip[46];
+    int    as_req_count;             /* AS-REQ messages seen      */
+    int    as_rep_count;             /* AS-REP messages seen      */
+    int    tgs_req_count;            /* TGS-REQ messages seen     */
+    int    tgs_rep_count;            /* TGS-REP messages seen     */
+    int    preauth_required_count;   /* KRB-ERROR 25              */
+    int    preauth_failed_count;     /* KRB-ERROR 24 (spray)      */
+    int    principal_unknown_count;  /* KRB-ERROR 6 (enumeration) */
+    int    error_other_count;        /* any other error code      */
+    time_t first_seen;
+    time_t last_seen;
+} kerb_event_t;
+
 /* ── SMB observation tracking ──────────────────────────── */
 /* SMB lives on TCP/445 (direct) and TCP/139 (NetBIOS Session
  * Service framing). v1 has been deprecated since 2017 (EternalBlue
@@ -398,6 +426,7 @@ typedef enum {
     ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_ROGUE_RA,
     ALERT_TYPE_SMB1_USE,
+    ALERT_TYPE_KERB_PREAUTH_BURST,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -965,6 +994,10 @@ typedef struct {
     /* ── SMB observation table ───────────────────────────── */
     smb_session_t  smb_sessions[MAX_SMB_SESSIONS];
     int            smb_session_count;
+
+    /* ── Kerberos observation table ──────────────────────── */
+    kerb_event_t   kerb_events[MAX_KERB_EVENTS];
+    int            kerb_event_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

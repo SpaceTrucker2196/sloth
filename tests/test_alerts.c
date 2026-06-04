@@ -1557,6 +1557,54 @@ static void test_smb1_use_separate_alert_per_session(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── Kerberos preauth burst ─────────────────────────────── */
+
+static void seed_kerb_event(sloth_state_t *s, const char *src_ip,
+                             int preauth_failed_count) {
+    if (s->kerb_event_count >= MAX_KERB_EVENTS) return;
+    kerb_event_t *e = &s->kerb_events[s->kerb_event_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    e->preauth_failed_count = preauth_failed_count;
+    e->last_seen = time(NULL);
+}
+
+/* The rule's threshold is 5 — fire at exactly 5. */
+static void test_kerb_preauth_burst_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_kerb_event(&s, "10.0.0.5", 5);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KERB_PREAUTH_BURST);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.5");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 88);
+    ASSERT(strstr(s.alerts[idx].detail, "5 Kerberos pre-auth") != NULL);
+}
+
+static void test_kerb_preauth_burst_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_kerb_event(&s, "10.0.0.5", 4);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_KERB_PREAUTH_BURST), -1);
+}
+
+/* Each spraying source gets its own alert — pivots cleanly. */
+static void test_kerb_preauth_burst_per_source(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_kerb_event(&s, "10.0.0.5", 8);
+    seed_kerb_event(&s, "10.0.0.6", 12);
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_KERB_PREAUTH_BURST) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1713,6 +1761,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_smb1_use_fires_on_smb1_session);
     RUN_TEST(test_smb1_use_no_fire_on_smb2);
     RUN_TEST(test_smb1_use_separate_alert_per_session);
+    RUN_TEST(test_kerb_preauth_burst_fires_at_threshold);
+    RUN_TEST(test_kerb_preauth_burst_below_threshold_no_fire);
+    RUN_TEST(test_kerb_preauth_burst_per_source);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

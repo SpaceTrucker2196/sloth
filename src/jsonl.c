@@ -876,6 +876,29 @@ void jsonl_emit_smb_sessions(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_kerb_events(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->kerb_event_count; i++) {
+        const kerb_event_t *e = &s->kerb_events[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "kerb_event", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",                  e->src_ip);
+        kv_int(buf, LINEBUF, &off, "as_req_count",            e->as_req_count);
+        kv_int(buf, LINEBUF, &off, "as_rep_count",            e->as_rep_count);
+        kv_int(buf, LINEBUF, &off, "tgs_req_count",           e->tgs_req_count);
+        kv_int(buf, LINEBUF, &off, "tgs_rep_count",           e->tgs_rep_count);
+        kv_int(buf, LINEBUF, &off, "preauth_required_count",  e->preauth_required_count);
+        kv_int(buf, LINEBUF, &off, "preauth_failed_count",    e->preauth_failed_count);
+        kv_int(buf, LINEBUF, &off, "principal_unknown_count", e->principal_unknown_count);
+        kv_int(buf, LINEBUF, &off, "error_other_count",       e->error_other_count);
+        kv_int(buf, LINEBUF, &off, "first_seen",              (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",               (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -904,4 +927,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_processes         (s);
     jsonl_emit_ndp_ras           (s);
     jsonl_emit_smb_sessions      (s);
+    jsonl_emit_kerb_events       (s);
 }

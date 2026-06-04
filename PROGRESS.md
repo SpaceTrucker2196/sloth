@@ -77,6 +77,62 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-04 — Kerberos observability: KERB_PREAUTH_BURST alert
+**Touched**: `include/sloth.h`, `src/kerb_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_kerb_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/kerberos-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Third entry from "more passive observables" — Kerberos
+is the substrate of every AD environment, and password spray
+campaigns produce a clean burst of `KDC_ERR_PREAUTH_FAILED`
+responses that's straightforward to detect passively. MITRE
+ATT&CK T1110.003.
+**What's in it**:
+- New `src/kerb_snoop.{c,h}` module: message-type detection via
+  the outer ASN.1 `[APPLICATION n]` tag (AS-REQ=0x6A, AS-REP=0x6B,
+  TGS-REQ=0x6C, TGS-REP=0x6D, KRB-ERROR=0x7E). TCP/88 prepends a
+  4-byte length; the parser checks for the magic at offset 0 or 4.
+- Minimal ASN.1 walk in `parse_krb_error_code` scans the first
+  ~96 bytes of a KRB-ERROR for the `[6]` context-specific tag
+  (DER: `A6 LEN 02 ilen <bytes>`) — enough to bucket
+  `KDC_ERR_PREAUTH_REQUIRED` (25), `KDC_ERR_PREAUTH_FAILED` (24),
+  `KDC_ERR_C_PRINCIPAL_UNKNOWN` (6) without invoking a real
+  ASN.1 parser.
+- Per-(client_ip) aggregation table, 64 sources, oldest-evicted
+  on overflow. Records counts of each message type + each error
+  bucket.
+- New `ALERT_TYPE_KERB_PREAUTH_BURST` + `rule_kerb_preauth_burst`:
+  fires CRIT when `preauth_failed_count ≥ 5` per source. Dedup
+  key `kerb-burst:<src_ip>` so each spraying source is its own
+  alert. match_port=88 so per-alert pcap pivots to the KDC flow.
+- `decode_ipv4` / `decode_ipv6` routes TCP/88 to `try_kerb_tcp`
+  and UDP/88 directly to `kerb_snoop_observe` (in the existing
+  UDP service-port switch).
+- New `kerb_event` JSONL record type via state-snapshot umbrella.
+  Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 34 record types
+  end-to-end across Loki + Datadog + webhook + fan-out.
+- 12 tests in `tests/test_kerb_snoop.c`: message-type detection
+  per tag, error-code extraction for all four buckets, TCP
+  length-prefix skip, repeated-failures accumulate, two sources
+  tracked separately, non-Kerberos / no-KDC-port rejection.
+- 3 alert tests in `tests/test_alerts.c`: fires at threshold,
+  no-fire below, separate alerts per spraying source.
+- New wiki page `docs/wiki/kerberos-snoop.md`: message-type table
+  with RFC § references, error-code bucket explanation, the "what
+  is normal" / "what is suspicious" sections, and Tier 2 follow-up
+  list (principal extraction, AS-REP roasting, kerberoasting).
+**Counts**: 2513 assertions (+27 over SMB round). make is
+warning-clean. Smoke test 34/34 record types end-to-end.
+**Deliberately out of scope**: username/principal extraction
+(AS-REQ `cname` parsing needs deeper ASN.1 walk), AS-REP roasting
+(needs request/response pairing), kerberoasting (high TGS-REQ
+volumes from one client), pre-auth bypass via NTLM fallback
+(belongs in the SMB NTLMSSP follow-up). Documented in the wiki
+so the next agent knows what's left.
+
 ### 2026-06-04 — SMB observability: SMB1 detection + SMB1_USE alert
 **Touched**: `include/sloth.h`, `src/smb_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
@@ -1394,13 +1450,13 @@ ops log — naming collision to resolve).
   separation isn't reliable with the current 16-sample buffer; the
   mitigation is longer flow histories feeding v1.
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
-  Kerberos pre-auth, LDAP referral leakage, BGP route monitor for
-  peering segments. (IPv6 RA/NDP landed 2026-06-04 — `ROGUE_RA`
-  alert + `ndp_ra` JSONL record. SMB landed 2026-06-04 — `SMB1_USE`
-  alert + `smb_session` JSONL record. Both have explicit follow-up
-  paths documented in their wiki pages: NS/NA neighbor cache for
-  NDP; NTLMSSP parsing + admin-share tree-connect detection for
-  SMB.)
+  LDAP referral leakage, BGP route monitor for peering segments.
+  (IPv6 RA/NDP landed 2026-06-04 — `ROGUE_RA`. SMB landed
+  2026-06-04 — `SMB1_USE`. Kerberos landed 2026-06-04 —
+  `KERB_PREAUTH_BURST`. Each has Tier 2 follow-ups documented in
+  its wiki page: NS/NA cache for NDP; NTLMSSP / admin-share
+  tracking for SMB; username extraction + AS-REP roasting +
+  kerberoasting for Kerberos.)
 - ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
   landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
   available as direct output formats for both `-o FILE` and

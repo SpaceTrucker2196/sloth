@@ -961,6 +961,34 @@ static void rule_smb1_use(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Kerberos pre-auth burst: ≥ KERB_PREAUTH_BURST_THRESHOLD failed
+ * pre-auth attempts from a single source. Password-spray campaigns
+ * iterate one password across many usernames and produce a clean
+ * burst of KDC_ERR_PREAUTH_FAILED (24) responses. The threshold is
+ * conservative — five failures from one workstation in any active
+ * window is well outside normal user-mistypes-password territory. */
+#define KERB_PREAUTH_BURST_THRESHOLD 5
+
+static void rule_kerb_preauth_burst(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->kerb_event_count; i++) {
+        const kerb_event_t *e = &s->kerb_events[i];
+        if (e->preauth_failed_count < KERB_PREAUTH_BURST_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "kerb-burst:%.39s", e->src_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s: %d Kerberos pre-auth failures "
+                 "(spray indicator; unknown-principal=%d, "
+                 "preauth-required=%d)",
+                 e->src_ip, e->preauth_failed_count,
+                 e->principal_unknown_count,
+                 e->preauth_required_count);
+        fire(ALERT_TYPE_KERB_PREAUTH_BURST, ALERT_SEV_CRIT,
+             "KERB_PREAUTH_BURST", detail, key, e->src_ip, 88, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1117,6 +1145,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rogue_dhcp(s, now);
     rule_rogue_ra(s, now);
     rule_smb1_use(s, now);
+    rule_kerb_preauth_burst(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
