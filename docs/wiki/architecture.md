@@ -22,7 +22,7 @@ src/main.c                 -- CLI, signal handlers, poll loop
 src/tui.c / tui.h          -- ncurses rendering, colour init, key polling (ANSI fallback)
 src/platform/linux*.c      -- rtnetlink, nl80211, /proc readers, INET_DIAG
 src/capture/capture.c      -- libpcap thread; dispatches to per-protocol parsers
-src/{dns,tls,quic,http,ntp,icmp}_log.c  -- ring buffers + snapshot
+src/{dns,tls,quic,http,ntp,icmp}_log.c  -- ring buffers + snapshot ([[ring-buffers]])
 src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
      top_hosts,ip_color,ip_owner}.c     -- synthesis + export
 src/views/*.c              -- one file per VIEW_*

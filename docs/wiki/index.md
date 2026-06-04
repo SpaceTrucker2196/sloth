@@ -31,6 +31,7 @@ source material.
 - [[platform-vtable]] — the kernel seam (`platform_ops_t`).
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
+- [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.
 
 ## Factory infrastructure
 

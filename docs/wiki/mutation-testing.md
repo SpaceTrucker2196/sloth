@@ -244,7 +244,9 @@ A deliberate act, not a workaround:
 2. The trailing comment should cite the class shorthand from the
    ignore file's header (FPA, SBL, FXS, LZT, TIP, FAB, LCP) so the
    next reviewer can re-verify the call without re-tracing the
-   logic.
+   logic. The LZT and SBL classes are documented in detail under
+   [[ring-buffers]], which the per-protocol log files all
+   instantiate.
 3. If you're not certain, **leave it as a survivor**. A survivor
    that turns out to be equivalent is a one-line PR; a falsely-
    ignored real mutant is a defect that hides forever.

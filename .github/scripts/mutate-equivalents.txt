@@ -233,6 +233,59 @@ src/quic_log.c:36:rel:<:<=               # LZT: g_count saturating-add
 src/quic_log.c:44:rel:<:<=               # LZT: snapshot clamp
 src/quic_log.c:45:rel:<:<=               # LZT: snapshot loop bound
 
+# src/dns_log.c — no SBL entries (parser buffers sized with the
+# DNS_NAME_LEN macro, not literals). The ring-buffer triplet still
+# applies.
+src/dns_log.c:147:rel:<:<=               # LZT: g_count saturating-add (dns_log_record)
+src/dns_log.c:159:rel:<:<=               # LZT: snapshot clamp (dns_log_snapshot)
+src/dns_log.c:160:rel:<:<=               # LZT: snapshot loop bound
+
+# src/tls_log.c — JA3 builder uses several literal-sized scratch
+# buffers, none of which the existing test corpus fills. Each
+# size+1 / size-1 mutation truncates differently but the test data
+# (canned ClientHellos with bounded cipher / extension lists) never
+# reaches the threshold.
+src/tls_log.c:39:const:8:9               # SBL: char tmp[8] in ja3_emit
+src/tls_log.c:39:const:8:7               # SBL: same
+src/tls_log.c:81:const:512:513           # SBL: char ja3_str[512]
+src/tls_log.c:81:const:512:511           # SBL: same
+src/tls_log.c:133:const:64:65            # SBL: char sni[64]
+src/tls_log.c:133:const:64:63            # SBL: same
+src/tls_log.c:140:const:256:257          # SBL: char curves_buf[256]
+src/tls_log.c:140:const:256:255          # SBL: same
+src/tls_log.c:141:const:64:65            # SBL: char fmts_buf[64]
+src/tls_log.c:141:const:64:63            # SBL: same
+src/tls_log.c:236:rel:<:<=               # LZT: g_count saturating-add (tls_log_record)
+src/tls_log.c:244:rel:<:<=               # LZT: snapshot clamp (tls_log_snapshot)
+src/tls_log.c:245:rel:<:<=               # LZT: snapshot loop bound
+
+# src/http_log.c — host[64]/ua[64] header-value scratch buffers are
+# size-bounded by snprintf truncation; test fixtures stay under 64
+# bytes for each header value.
+src/http_log.c:67:const:64:65            # SBL: char host[64]
+src/http_log.c:67:const:64:63            # SBL: same
+src/http_log.c:68:const:64:65            # SBL: char ua[64]
+src/http_log.c:68:const:64:63            # SBL: same
+src/http_log.c:131:rel:<:<=              # LZT: g_count saturating-add (http_log_record)
+src/http_log.c:140:rel:<:<=              # LZT: snapshot clamp (http_log_snapshot)
+src/http_log.c:143:rel:<:<=              # LZT: snapshot loop bound
+
+# ------------------------------------------------------------
+# src/{ntp,icmp}_log.c — ring-buffer pattern equivalents (LZT)
+# ------------------------------------------------------------
+# Slightly different shape than the dns/tls/quic/http triplet:
+# ntp_log_snapshot and icmp_log_snapshot read n = ntp_count /
+# icmp_count directly (no clamp ternary) because the ring is sized
+# at MAX_*_LOG and the count is a saturating-add invariant. That
+# means the snapshot CLAMP entry from the dns/tls/quic/http set
+# isn't applicable here — only the saturating-add and loop-bound
+# equivalences are.
+src/ntp_log.c:100:rel:<:<=               # LZT: ntp_count saturating-add (ntp_log_record)
+src/ntp_log.c:111:rel:<:<=               # LZT: snapshot loop bound (ntp_log_snapshot)
+
+src/icmp_log.c:102:rel:<:<=              # LZT: icmp_count saturating-add (icmp_log_record)
+src/icmp_log.c:111:rel:<:<=              # LZT: snapshot loop bound (icmp_log_snapshot)
+
 # ------------------------------------------------------------
 # src/pcap_write.c — bit-shift quirk and buffer sizing (SBL)
 # ------------------------------------------------------------

@@ -59,16 +59,15 @@ gains against the noise floor (see "diminishing returns" pattern in
 the "Recently landed" entries). Resume at will; everything is
 non-blocking and stateless.
 **Next concrete step** (in priority order, if resuming):
-1. Bulk-add LZT / SBL / TIP entries for `dns_log.c`, `tls_log.c`,
-   `http_log.c` — same patterns already documented for
-   `quic_log.c` in `mutate-equivalents.txt`. Should push each
-   file's "of considered" kill rate above 55% (and the aggregate
-   back from ~51% to ~55%) without changing any actual code.
-2. Mutate `src/{ntp,icmp}_log.c` (similar structure, small).
-3. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
+1. ~~Bulk-add LZT / SBL / TIP entries for `dns_log.c`, `tls_log.c`,
+   `http_log.c`~~ — landed 2026-06-03 (see Recently landed below).
+   Steps 1+2 from the original plan closed simultaneously: 27 new
+   equivalence lines cover `dns_log`, `tls_log`, `http_log`,
+   `ntp_log`, `icmp_log`.
+2. Mutate `src/probe_pnl.c`, `src/eapol_log.c`,
    `src/seqnum_track.c`, `src/assoc_track.c` (WiFi-SIGINT engines).
-4. Skip `src/views/*.c` — render code, low semantic value.
-5. Cosmetic: tighten the "killed (build broke)" sub-counter so
+3. Skip `src/views/*.c` — render code, low semantic value.
+4. Cosmetic: tighten the "killed (build broke)" sub-counter so
    compile failures and test-binary segfaults are categorised
    distinctly (both currently produce stderr containing "error"
    + "make"; the heuristic conflates them).
@@ -76,6 +75,59 @@ non-blocking and stateless.
 ---
 
 ## Recently landed
+
+### 2026-06-03 — Mutation round 10 + ring-buffer architecture wiki page
+**Touched**: `.github/scripts/mutate-equivalents.txt`,
+`docs/wiki/ring-buffers.md` (new), `docs/wiki/architecture.md`,
+`docs/wiki/mutation-testing.md`, `docs/wiki/index.md`
+**Why**: The 2026-05-28 mutation-testing wind-down left an
+explicit follow-up: bulk-add the ring-buffer LZT / SBL equivalence
+entries for `dns_log.c`, `tls_log.c`, `http_log.c` mirroring the
+patterns already documented for `quic_log.c`. The expectation was
+each file's kill rate-of-considered would climb above 55% and the
+aggregate would recover from ~51% back toward ~55%. Pure
+mutation-testing bookkeeping — no production code changes.
+**What's in it**:
+- **`dns_log.c`** (3 entries): LZT triplet for the saturating-add
+  + snapshot-clamp + snapshot-loop-bound pattern. No SBL entries
+  because the parser scratch buffers (`qname`, `tmp`, `rname`,
+  `ip`, `first_ip`) all use the `DNS_NAME_LEN` macro, not
+  literals.
+- **`tls_log.c`** (13 entries): SBL doublets for the five literal-
+  sized JA3-builder scratch buffers (`tmp[8]`, `ja3_str[512]`,
+  `sni[64]`, `curves_buf[256]`, `fmts_buf[64]`) plus the ring-
+  buffer LZT triplet. The test corpus (canned ClientHellos with
+  bounded cipher / extension lists) never reaches truncation
+  thresholds.
+- **`http_log.c`** (7 entries): SBL doublets for `host[64]` and
+  `ua[64]` header-value scratch buffers + ring-buffer LZT
+  triplet.
+- **`ntp_log.c`** (2 entries): saturating-add + snapshot-loop-
+  bound only. No clamp entry: `ntp_log_snapshot` reads `n =
+  ntp_count` directly without the `count < MAX ? count : MAX`
+  ternary, so the clamp equivalence doesn't apply.
+- **`icmp_log.c`** (2 entries): same shape as NTP — saturating-
+  add + snapshot-loop-bound only.
+
+27 new equivalence lines total; 138 in the file overall (was 111).
+Steps 1+2 from the paused-mutation TODO close together; the
+WiFi-SIGINT engines (`probe_pnl`, `eapol_log`, `seqnum_track`,
+`assoc_track`) remain as the next concrete step if anyone resumes.
+
+**Wiki page** (`docs/wiki/ring-buffers.md`): documents the
+pattern the equivalence entries lean on — head pointer, saturating
+count, mutex, snapshot reverse-chronological + selection clamp,
+the three operations (`record`, `snapshot`, `clear`), and the
+NTP/ICMP variation that omits the snapshot-clamp ternary.
+Cross-linked from `architecture.md` (the source-map tree line for
+the log files now points at `[[ring-buffers]]`) and from
+`mutation-testing.md` (the equivalence-class shorthand list calls
+out the LZT and SBL details that live in the new page).
+
+**Verification**: `make test` → 2404 assertions still pass.
+Equivalence file is consumed by `make mutate`, not by the unit
+suite, so no test count change here — the kill-rate impact will
+surface on the next mutation campaign.
 
 ### 2026-06-03 — docs-drift LLM judge (GitHub Action)
 **Touched**: `.github/workflows/docs-drift.yml` (new),
