@@ -218,6 +218,26 @@ typedef struct {
     time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
 } dhcp_lease_t;
 
+/* ── BGP observation tracking ─────────────────────────── */
+/* BGP lives on TCP/179. The 19-byte common header (RFC 4271 §4.1)
+ * is unmistakable: 16 bytes of all-0xFF marker + 2-byte length +
+ * 1-byte type code. Tier 1 counts the four message types per
+ * peer-pair; that's enough for the NOTIFICATION-burst alert which
+ * catches session-instability / route-hijack-precursor patterns
+ * without needing to parse AS numbers or prefix announcements. */
+#define MAX_BGP_SESSIONS 32
+
+typedef struct {
+    char     peer_a[46];           /* lexically smaller endpoint */
+    char     peer_b[46];           /* lexically greater endpoint */
+    int      open_count;           /* type 1 — session start  */
+    int      update_count;         /* type 2 — routes         */
+    int      notification_count;   /* type 3 — session teardown */
+    int      keepalive_count;      /* type 4 — heartbeat      */
+    time_t   first_seen;
+    time_t   last_seen;
+} bgp_session_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -451,6 +471,7 @@ typedef enum {
     ALERT_TYPE_SMB1_USE,
     ALERT_TYPE_KERB_PREAUTH_BURST,
     ALERT_TYPE_LDAP_SEARCH_FLOOD,
+    ALERT_TYPE_BGP_NOTIFICATION_BURST,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -1026,6 +1047,10 @@ typedef struct {
     /* ── LDAP observation table ──────────────────────────── */
     ldap_event_t   ldap_events[MAX_LDAP_EVENTS];
     int            ldap_event_count;
+
+    /* ── BGP observation table ───────────────────────────── */
+    bgp_session_t  bgp_sessions[MAX_BGP_SESSIONS];
+    int            bgp_session_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

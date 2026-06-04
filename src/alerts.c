@@ -1020,6 +1020,40 @@ static void rule_ldap_search_flood(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* BGP NOTIFICATION burst: three or more NOTIFICATION messages on
+ * one peer-pair across the active aggregation window. In normal
+ * operation NOTIFICATIONs are rare — they're sent only on session
+ * teardown. A cluster of them on a peering segment means either
+ * a flapping peer (operationally interesting) or a route-hijack
+ * precursor (an attacker tearing down a legitimate session before
+ * announcing competing prefixes). Either way it's worth surfacing.
+ *
+ * Dedup key includes both peers so each flapping pair gets its own
+ * alert — operators pivot to the exact peer-pair that needs
+ * investigation. */
+#define BGP_NOTIFICATION_BURST_THRESHOLD 3
+
+static void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->bgp_session_count; i++) {
+        const bgp_session_t *e = &s->bgp_sessions[i];
+        if (e->notification_count < BGP_NOTIFICATION_BURST_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "bgp-notif:%.39s<>%.39s",
+                 e->peer_a, e->peer_b);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s <-> %s: %d BGP NOTIFICATION messages "
+                 "(session-instability or hijack-precursor; "
+                 "opens=%d updates=%d keepalives=%d)",
+                 e->peer_a, e->peer_b, e->notification_count,
+                 e->open_count, e->update_count, e->keepalive_count);
+        fire(ALERT_TYPE_BGP_NOTIFICATION_BURST, ALERT_SEV_CRIT,
+             "BGP_NOTIFICATION_BURST", detail, key,
+             e->peer_a, 179, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1178,6 +1212,7 @@ void alerts_update(sloth_state_t *s) {
     rule_smb1_use(s, now);
     rule_kerb_preauth_burst(s, now);
     rule_ldap_search_flood(s, now);
+    rule_bgp_notification_burst(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

@@ -77,6 +77,68 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-01 — BGP observability: BGP_NOTIFICATION_BURST alert
+**Touched**: `include/sloth.h`, `src/bgp_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_bgp_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/bgp-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Fifth passive-observable landing. BGP-4 (RFC 4271)
+wires the internet together — and increasingly the data-centre
+fabric — over TCP/179. NOTIFICATION messages are the
+session-teardown signal: rare in healthy peering, dense when
+a peer is flapping or an on-path attacker is tearing the
+session down before injecting competing routes. MITRE ATT&CK
+T1565.002 (Transmitted Data Manipulation, BGP-hijack subset).
+**What's in it**:
+- New `src/bgp_snoop.{c,h}` module: walks the RFC 4271 §4.1
+  19-byte header (16-byte 0xFF marker + 2-byte length + 1-byte
+  type) per message, iterating across back-to-back records in
+  one TCP segment. Stops on malformed framing or unknown type
+  but commits everything observed so far — partial parses still
+  count.
+- Recognises OPEN (1), UPDATE (2), NOTIFICATION (3), KEEPALIVE
+  (4); aggregates per peer-pair with peer IPs sorted lexically
+  so messages in either direction collapse to one session.
+- Per-(peer_a, peer_b) aggregation; 32 sessions, oldest-by-
+  last-seen-evicted.
+- New `ALERT_TYPE_BGP_NOTIFICATION_BURST` +
+  `rule_bgp_notification_burst`: fires CRIT when
+  `notification_count >= 3` for one peer-pair. Dedup key
+  `bgp-notif:<peer_a><>peer_b>` so each flapping peering
+  relationship gets its own alert. match_ip = peer_a (smaller
+  IP), match_port=179 so per-alert pcap pivots to BGP traffic.
+- `decode_ipv4` / `decode_ipv6` route TCP/179 in either
+  direction to `try_bgp`. TCP/MD5-authenticated BGP (RFC 2385)
+  is silently skipped because its non-0xFF marker won't match —
+  virtually no one uses MD5 anymore.
+- New `bgp_session` JSONL record type via the state-snapshot
+  umbrella. Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 36 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 14 tests in `tests/test_bgp_snoop.c`: per-type detection
+  (OPEN / UPDATE / NOTIFICATION / KEEPALIVE), back-to-back
+  message walking, notification-burst accumulation,
+  peer-pair canonicalisation (either direction folds to one
+  session), two-pair separation, port gating (non-179
+  rejected; either endpoint on 179 works), bad-marker
+  rejection, undersize rejection, oversize-length rejection,
+  unknown-type stops walk but commits prior records.
+- 3 alert tests in `tests/test_alerts.c`: fires at threshold
+  (3), no-fire below (2), separate alerts per peer-pair.
+- New wiki page `docs/wiki/bgp-snoop.md`: ASCII header
+  diagram, type table with RFC § references, what's-normal /
+  what's-suspicious sections, Tier 2 follow-ups (AS-number
+  extraction, prefix-hijack detection, route-flap dampening).
+**Counts**: 2571 assertions (+31 from LDAP round). make is
+warning-clean. Smoke test 36/36 record types end-to-end.
+**Deliberately out of scope**: AS-number extraction from OPEN
++ UPDATE (needed for prefix-hijack detection — requires RPKI/IRR
+ground truth, which a passive observer can't get), route-flap
+dampening (needs UPDATE NLRI parsing), BMP (RFC 7854 — would
+be a richer signal but requires active router-config opt-in).
+
 ### 2026-06-04 — LDAP observability: LDAP_SEARCH_FLOOD alert
 **Touched**: `include/sloth.h`, `src/ldap_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,

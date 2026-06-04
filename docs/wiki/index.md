@@ -32,6 +32,8 @@ source material.
   alert (AD password-spray detection).
 - [[ldap-snoop]] — LDAP bind / search tracking + `LDAP_SEARCH_FLOOD`
   alert (BloodHound / ldapdomaindump detection).
+- [[bgp-snoop]] — BGP session tracking + `BGP_NOTIFICATION_BURST`
+  alert (peering instability / hijack-precursor detection).
 
 ## UI and infrastructure
 

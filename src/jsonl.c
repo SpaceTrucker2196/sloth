@@ -918,6 +918,26 @@ void jsonl_emit_ldap_events(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_bgp_sessions(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->bgp_session_count; i++) {
+        const bgp_session_t *e = &s->bgp_sessions[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "bgp_session", now);
+        kv_str(buf, LINEBUF, &off, "peer_a",             e->peer_a);
+        kv_str(buf, LINEBUF, &off, "peer_b",             e->peer_b);
+        kv_int(buf, LINEBUF, &off, "open_count",         e->open_count);
+        kv_int(buf, LINEBUF, &off, "update_count",       e->update_count);
+        kv_int(buf, LINEBUF, &off, "notification_count", e->notification_count);
+        kv_int(buf, LINEBUF, &off, "keepalive_count",    e->keepalive_count);
+        kv_int(buf, LINEBUF, &off, "first_seen",         (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",          (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -948,4 +968,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_smb_sessions      (s);
     jsonl_emit_kerb_events       (s);
     jsonl_emit_ldap_events       (s);
+    jsonl_emit_bgp_sessions      (s);
 }

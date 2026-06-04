@@ -156,6 +156,10 @@ TEMPLATES = [
      "bind_count": 1, "bind_anon_count": 0,
      "search_count": 14, "search_ref_count": 0,
      "first_seen": 1700000000, "last_seen": 1700000060},
+    {"type": "bgp_session", "peer_a": "10.0.0.1", "peer_b": "10.0.0.2",
+     "open_count": 1, "update_count": 3,
+     "notification_count": 0, "keepalive_count": 42,
+     "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 

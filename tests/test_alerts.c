@@ -1651,6 +1651,53 @@ static void test_ldap_search_flood_per_source(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── BGP NOTIFICATION burst ─────────────────────────────── */
+
+static void seed_bgp_session(sloth_state_t *s, const char *peer_a,
+                              const char *peer_b, int notif_count) {
+    if (s->bgp_session_count >= MAX_BGP_SESSIONS) return;
+    bgp_session_t *e = &s->bgp_sessions[s->bgp_session_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->peer_a, sizeof(e->peer_a), "%s", peer_a);
+    snprintf(e->peer_b, sizeof(e->peer_b), "%s", peer_b);
+    e->notification_count = notif_count;
+    e->last_seen          = time(NULL);
+}
+
+static void test_bgp_notification_burst_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_bgp_session(&s, "10.0.0.1", "10.0.0.2", 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BGP_NOTIFICATION_BURST);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.1");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 179);
+    ASSERT(strstr(s.alerts[idx].detail, "3 BGP NOTIFICATION") != NULL);
+}
+
+static void test_bgp_notification_burst_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_bgp_session(&s, "10.0.0.1", "10.0.0.2", 2);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BGP_NOTIFICATION_BURST), -1);
+}
+
+static void test_bgp_notification_burst_per_peer_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_bgp_session(&s, "10.0.0.1", "10.0.0.2", 5);
+    seed_bgp_session(&s, "10.0.0.3", "10.0.0.4", 4);
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_BGP_NOTIFICATION_BURST) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1813,6 +1860,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_ldap_search_flood_fires_at_threshold);
     RUN_TEST(test_ldap_search_flood_below_threshold_no_fire);
     RUN_TEST(test_ldap_search_flood_per_source);
+    RUN_TEST(test_bgp_notification_burst_fires_at_threshold);
+    RUN_TEST(test_bgp_notification_burst_below_threshold_no_fire);
+    RUN_TEST(test_bgp_notification_burst_per_peer_pair);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

@@ -21,6 +21,7 @@
 #include "smb_snoop.h"
 #include "kerb_snoop.h"
 #include "ldap_snoop.h"
+#include "bgp_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -117,6 +118,20 @@ static void try_ldap(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     }
 }
 
+/* BGP over TCP/179. The 19-byte marker + length + type header is
+ * distinctive enough that we can match on it directly. */
+static void try_bgp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 19) return;
+    if (bgp_snoop_observe(pkt->src, pkt->src_port,
+                          pkt->dst, pkt->dst_port,
+                          tp + tcp_hdr, pay_len)) {
+        snprintf(pkt->info, sizeof(pkt->info), "BGP");
+    }
+}
+
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
     snprintf(buf, sz, "TCP%s%s%s%s%s%s",
              (flags & 0x02) ? " SYN" : "",
@@ -166,6 +181,8 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         if (pkt->dst_port == 389  || pkt->src_port == 389 ||
             pkt->dst_port == 3268 || pkt->src_port == 3268)
             try_ldap(tp, tlen, pkt);
+        if (pkt->dst_port == 179 || pkt->src_port == 179)
+            try_bgp(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
@@ -256,6 +273,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         if (pkt->dst_port == 389  || pkt->src_port == 389 ||
             pkt->dst_port == 3268 || pkt->src_port == 3268)
             try_ldap(tp, tlen, pkt);
+        if (pkt->dst_port == 179 || pkt->src_port == 179)
+            try_bgp(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
