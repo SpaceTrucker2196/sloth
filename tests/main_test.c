@@ -69,6 +69,7 @@ void run_osi_tests(void);
 void run_twins_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
+void run_smb_snoop_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -137,6 +138,7 @@ int main(void) {
     run_twins_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();
+    run_smb_snoop_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

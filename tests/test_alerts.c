@@ -1502,6 +1502,61 @@ static void test_rogue_ra_dedup_same_router(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_RA), -1);
 }
 
+/* ── SMB1 use ───────────────────────────────────────────── */
+
+static void seed_smb_session(sloth_state_t *s, const char *client_ip,
+                              const char *server_ip, uint16_t server_port,
+                              const char *dialect) {
+    if (s->smb_session_count >= MAX_SMB_SESSIONS) return;
+    smb_session_t *e = &s->smb_sessions[s->smb_session_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->client_ip, sizeof(e->client_ip), "%s", client_ip);
+    snprintf(e->server_ip, sizeof(e->server_ip), "%s", server_ip);
+    e->server_port = server_port;
+    snprintf(e->dialect, sizeof(e->dialect), "%s", dialect);
+    e->last_seen = time(NULL);
+    e->count     = 3;
+}
+
+static void test_smb1_use_fires_on_smb1_session(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_smb_session(&s, "10.0.0.5", "10.0.0.10", 445, "SMB1");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SMB1_USE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.10");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 445);
+    ASSERT(strstr(s.alerts[idx].detail, "SMBv1") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "10.0.0.5")  != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "10.0.0.10") != NULL);
+}
+
+static void test_smb1_use_no_fire_on_smb2(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_smb_session(&s, "10.0.0.5", "10.0.0.10", 445, "SMB2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SMB1_USE), -1);
+}
+
+/* Each distinct (client, server, port) gets its own alert so an
+ * operator can pivot to the specific endpoint pair that needs the
+ * SMBv1 disable / patch. */
+static void test_smb1_use_separate_alert_per_session(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_smb_session(&s, "10.0.0.5", "10.0.0.10", 445, "SMB1");
+    seed_smb_session(&s, "10.0.0.6", "10.0.0.11", 139, "SMB1");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_SMB1_USE) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1655,6 +1710,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rogue_ra_zero_lifetime_dont_count);
     RUN_TEST(test_rogue_ra_detail_lists_routers_sorted);
     RUN_TEST(test_rogue_ra_dedup_same_router);
+    RUN_TEST(test_smb1_use_fires_on_smb1_session);
+    RUN_TEST(test_smb1_use_no_fire_on_smb2);
+    RUN_TEST(test_smb1_use_separate_alert_per_session);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

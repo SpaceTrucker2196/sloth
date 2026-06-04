@@ -143,6 +143,9 @@ TEMPLATES = [
      "cur_hop_limit": 64, "flags": 0, "router_lifetime": 1800,
      "first_seen": 1700000000, "last_seen": 1700000060, "count": 30,
      "prefixes": ["2001:db8::/64"]},
+    {"type": "smb_session", "client_ip": "10.0.0.5",
+     "server_ip": "10.0.0.10", "server_port": 445, "dialect": "SMB2",
+     "first_seen": 1700000000, "last_seen": 1700000060, "count": 42},
 ]
 
 

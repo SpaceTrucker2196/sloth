@@ -935,6 +935,32 @@ static void rule_rogue_ra(const sloth_state_t *s, time_t now) {
          "ROGUE_RA", detail, key, routers[0], 0, now);
 }
 
+/* SMB1 use: any flow observed speaking SMBv1 fires this alert.
+ * SMBv1 has been deprecated by Microsoft since 2017 and disabled by
+ * default on every modern Windows. EternalBlue (MS17-010) and the
+ * WannaCry / NotPetya campaigns hit specifically the SMBv1 protocol.
+ * One alert per (client, server, port) tuple so an operator can
+ * pivot to the exact endpoint pair that needs remediation. */
+static void rule_smb1_use(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->smb_session_count; i++) {
+        const smb_session_t *e = &s->smb_sessions[i];
+        if (strcmp(e->dialect, "SMB1") != 0) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "smb1:%.39s>%.39s:%u",
+                 e->client_ip, e->server_ip, (unsigned)e->server_port);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "SMBv1 traffic %s -> %s:%u (count=%d). SMBv1 has been "
+                 "deprecated since 2017 (EternalBlue / WannaCry); the "
+                 "endpoint serving v1 should be patched or v1 disabled.",
+                 e->client_ip, e->server_ip, (unsigned)e->server_port,
+                 e->count);
+        fire(ALERT_TYPE_SMB1_USE, ALERT_SEV_CRIT,
+             "SMB1_USE", detail, key, e->server_ip, e->server_port, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1090,6 +1116,7 @@ void alerts_update(sloth_state_t *s) {
     rule_arp_spoof(s, now);
     rule_rogue_dhcp(s, now);
     rule_rogue_ra(s, now);
+    rule_smb1_use(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

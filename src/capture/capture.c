@@ -18,6 +18,7 @@
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
 #include "ndp_snoop.h"
+#include "smb_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -72,6 +73,18 @@ static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     tls_log_record(&entry);
 }
 
+static void try_smb(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 4) return;
+    if (smb_snoop_observe(pkt->src, pkt->src_port,
+                          pkt->dst, pkt->dst_port,
+                          tp + tcp_hdr, pay_len)) {
+        snprintf(pkt->info, sizeof(pkt->info), "SMB");
+    }
+}
+
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
     snprintf(buf, sz, "TCP%s%s%s%s%s%s",
              (flags & 0x02) ? " SYN" : "",
@@ -113,6 +126,9 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 445 || pkt->src_port == 445 ||
+            pkt->dst_port == 139 || pkt->src_port == 139)
+            try_smb(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
@@ -187,6 +203,9 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 445 || pkt->src_port == 445 ||
+            pkt->dst_port == 139 || pkt->src_port == 139)
+            try_smb(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);

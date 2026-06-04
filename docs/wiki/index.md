@@ -26,6 +26,8 @@ source material.
   evil-twin detection layer (Phases 1-4).
 - [[ipv6-ndp]] — Router Advertisement tracker + `ROGUE_RA` alert
   (mitm6 / Slaacers detection).
+- [[smb-snoop]] — SMB1 detection + `SMB1_USE` alert (EternalBlue /
+  lateral-movement substrate).
 
 ## UI and infrastructure
 

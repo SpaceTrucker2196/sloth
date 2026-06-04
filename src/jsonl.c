@@ -857,6 +857,25 @@ void jsonl_emit_ndp_ras(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_smb_sessions(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->smb_session_count; i++) {
+        const smb_session_t *e = &s->smb_sessions[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "smb_session", now);
+        kv_str(buf, LINEBUF, &off, "client_ip",   e->client_ip);
+        kv_str(buf, LINEBUF, &off, "server_ip",   e->server_ip);
+        kv_int(buf, LINEBUF, &off, "server_port", e->server_port);
+        kv_str(buf, LINEBUF, &off, "dialect",     e->dialect);
+        kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_int(buf, LINEBUF, &off, "count",       (long long)e->count);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -884,4 +903,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_packets           (s);
     jsonl_emit_processes         (s);
     jsonl_emit_ndp_ras           (s);
+    jsonl_emit_smb_sessions      (s);
 }

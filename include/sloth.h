@@ -218,6 +218,29 @@ typedef struct {
     time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
 } dhcp_lease_t;
 
+/* ── SMB observation tracking ──────────────────────────── */
+/* SMB lives on TCP/445 (direct) and TCP/139 (NetBIOS Session
+ * Service framing). v1 has been deprecated since 2017 (EternalBlue
+ * / WannaCry) — any observed SMB1 use is itself a finding. We
+ * track flows by (client, server, server_port) and record the
+ * highest-risk dialect ever seen on the flow.
+ *
+ * dialect values are short strings ("SMB1", "SMB2") — SMB2 / SMB3
+ * are merged into "SMB2" because distinguishing them requires
+ * parsing past the negotiate response, and the rogue-SMB1 trigger
+ * doesn't need the distinction. */
+#define MAX_SMB_SESSIONS 64
+
+typedef struct {
+    char     client_ip[46];
+    char     server_ip[46];
+    uint16_t server_port;        /* 445 or 139 */
+    char     dialect[8];         /* "SMB1" or "SMB2" — sticky to SMB1 */
+    time_t   first_seen;
+    time_t   last_seen;
+    int      count;
+} smb_session_t;
+
 /* ── IPv6 NDP Router Advertisement tracking ─────────────── */
 /* RFC 4861 §4.2 Router Advertisement (ICMPv6 type 134).
  *
@@ -374,6 +397,7 @@ typedef enum {
     ALERT_TYPE_ARP_SPOOF,
     ALERT_TYPE_ROGUE_DHCP,
     ALERT_TYPE_ROGUE_RA,
+    ALERT_TYPE_SMB1_USE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -937,6 +961,10 @@ typedef struct {
     /* ── IPv6 NDP — Router Advertisement events ──────────── */
     ndp_ra_event_t ndp_ras[MAX_NDP_RAS];
     int            ndp_ra_count;
+
+    /* ── SMB observation table ───────────────────────────── */
+    smb_session_t  smb_sessions[MAX_SMB_SESSIONS];
+    int            smb_session_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

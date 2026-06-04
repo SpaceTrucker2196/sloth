@@ -77,6 +77,60 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-04 — SMB observability: SMB1 detection + SMB1_USE alert
+**Touched**: `include/sloth.h`, `src/smb_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_smb_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/smb-snoop.md` (new),
+`docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Second entry from the "more passive observables"
+follow-up. SMBv1 has been deprecated by Microsoft since 2017;
+EternalBlue (CVE-2017-0144) and the WannaCry / NotPetya campaigns
+specifically targeted it. Observing SMBv1 on the wire post-2024 is
+by itself a finding — the dialect detection is enough to deliver
+that finding without parsing further into the protocol.
+**What's in it**:
+- New `src/smb_snoop.{c,h}` module: 4-byte SMB magic detection
+  (`\xFF SMB` = SMB1, `\xFE SMB` = SMB2/3), handles both direct
+  (port 445) and NetBIOS-framed (port 139) payload layouts.
+  Per-(client_ip, server_ip, server_port) session table, 64
+  entries, evict-oldest on overflow. Dialect is **sticky to SMB1**
+  — once observed it does NOT downgrade, since mid-flow v1
+  negotiation is precisely the attacker-forced pattern.
+- New `ALERT_TYPE_SMB1_USE` + `rule_smb1_use` fires CRIT per
+  (client, server, port) tuple whose dialect is SMB1. Dedup key
+  `smb1:<client>><server>:<port>` so each endpoint pair is its
+  own alert — operators get a concrete pivot.
+- `decode_ipv4` / `decode_ipv6` in `src/capture/capture.c` route
+  TCP/445 and TCP/139 traffic to `try_smb` alongside the existing
+  SNI / HTTP sniffers.
+- New `smb_session` JSONL record type via state-snapshot umbrella.
+  Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — Compose demo + CI
+  smoke test now cover 33 record types end-to-end on all sinks.
+- Hand-crafted byte-array tests per [MS-SMB] / [MS-SMB2] in
+  `tests/test_smb_snoop.c`: direct SMB1 + SMB2, NBSS-framed SMB1
+  + SMB2, server-side src_port inference, SMB1 stickiness, two
+  distinct sessions, non-SMB payload rejection, short payload
+  rejection, no-SMB-port rejection.
+- 3 alert tests in `tests/test_alerts.c`: SMB1 fires CRIT with
+  correct match_ip/port + detail format, SMB2 does NOT fire, two
+  distinct SMB1 sessions produce two separate alerts.
+- New wiki page `docs/wiki/smb-snoop.md`: threat model, EternalBlue
+  history, CISA reference, what's-normal / what's-suspicious, the
+  "why not split SMB2/3" decision, and an explicit list of
+  out-of-scope follow-ups (NTLMSSP parsing, tree-connect to admin
+  shares, signing posture, DCE/RPC subprotocols).
+**Counts**: 2486 assertions total (+37 from the NDP round).
+make is warning-clean. Smoke test passes 33/33 record types
+across Loki / Datadog / webhook + fan-out.
+**Deliberately out of scope**: NTLMSSP auth extraction (username
++ domain leak in plaintext through Type 1/2/3), tree-connect
+path tracking for `ADMIN$` / `C$` / `IPC$`, SMB signing /
+encryption posture, DCE/RPC subprotocols. Each is a tractable
+follow-up documented in the wiki page.
+
 ### 2026-06-04 — IPv6 NDP — Router Advertisement snoop + ROGUE_RA alert
 **Touched**: `include/sloth.h`, `src/ndp_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
@@ -1340,10 +1394,13 @@ ops log — naming collision to resolve).
   separation isn't reliable with the current 16-sample buffer; the
   mitigation is longer flow histories feeding v1.
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
-  SMB/CIFS metadata, Kerberos pre-auth, LDAP referral leakage,
-  BGP route monitor for peering segments. (IPv6 RA/NDP landed
-  2026-06-04 — `ROGUE_RA` alert + `ndp_ra` JSONL record. NS/NA
-  neighbor cache remains as a follow-up if anyone wants to extend.)
+  Kerberos pre-auth, LDAP referral leakage, BGP route monitor for
+  peering segments. (IPv6 RA/NDP landed 2026-06-04 — `ROGUE_RA`
+  alert + `ndp_ra` JSONL record. SMB landed 2026-06-04 — `SMB1_USE`
+  alert + `smb_session` JSONL record. Both have explicit follow-up
+  paths documented in their wiki pages: NS/NA neighbor cache for
+  NDP; NTLMSSP parsing + admin-share tree-connect detection for
+  SMB.)
 - ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
   landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
   available as direct output formats for both `-o FILE` and
