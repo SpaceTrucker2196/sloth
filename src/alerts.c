@@ -989,6 +989,37 @@ static void rule_kerb_preauth_burst(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* LDAP search flood: one source emitting ≥
+ * LDAP_SEARCH_FLOOD_THRESHOLD LDAP SearchRequest messages across
+ * the active aggregation window. Normal AD workstation logon
+ * produces ~10–20 searches; BloodHound, ldapdomaindump, and the
+ * impacket tooling routinely produce 100+ in seconds. The
+ * threshold is conservative so misclassified bulk-membership
+ * queries (a small AD admin tool sweeping the directory) won't
+ * mass-fire — it catches the unmistakeable enumeration shape. */
+#define LDAP_SEARCH_FLOOD_THRESHOLD 50
+
+static void rule_ldap_search_flood(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->ldap_event_count; i++) {
+        const ldap_event_t *e = &s->ldap_events[i];
+        if (e->search_count < LDAP_SEARCH_FLOOD_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "ldap-flood:%.39s", e->src_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s: %d LDAP SearchRequest messages (AD enumeration "
+                 "indicator; bind=%d, anon_bind=%d, referrals=%d)",
+                 e->src_ip, e->search_count,
+                 e->bind_count, e->bind_anon_count, e->search_ref_count);
+        /* match_port = 389 — operators pivot to the cleartext LDAP
+         * flow. (3268-flood deployments are rare; the alert still
+         * fires, just with the standard port in the pivot.) */
+        fire(ALERT_TYPE_LDAP_SEARCH_FLOOD, ALERT_SEV_CRIT,
+             "LDAP_SEARCH_FLOOD", detail, key, e->src_ip, 389, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1146,6 +1177,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rogue_ra(s, now);
     rule_smb1_use(s, now);
     rule_kerb_preauth_burst(s, now);
+    rule_ldap_search_flood(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

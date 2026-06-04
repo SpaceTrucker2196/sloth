@@ -77,6 +77,67 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-04 — LDAP observability: LDAP_SEARCH_FLOOD alert
+**Touched**: `include/sloth.h`, `src/ldap_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_ldap_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/ldap-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Fourth (and last in this round) passive-observable
+landing. LDAP is the directory-substrate AD enumeration tools
+hit hardest — BloodHound's SharpHound, ldapdomaindump, and the
+impacket family produce 100+ SearchRequest messages in seconds
+from a single workstation. A normal workstation logon produces
+~10–20. The flood shape is unmistakable. MITRE ATT&CK
+T1087.002 (Domain Account Discovery) + T1069.002 (Group
+Discovery).
+**What's in it**:
+- New `src/ldap_snoop.{c,h}` module: ASN.1 BER framing parser per
+  RFC 4511. Walks the outer SEQUENCE + messageID INTEGER to
+  expose the protocolOp tag, recognises BindRequest (0x60),
+  SearchRequest (0x63), and SearchResultReference (0x73). One
+  more level of BER walk inside BindRequest checks whether the
+  LDAPDN `name` field is empty — anonymous-bind detection.
+- `BindResponse`, `SearchResultEntry`, `SearchResultDone`, and
+  `UnbindRequest` are deliberately NOT counted. Including
+  SearchResultEntry would inflate the search-flood counter by
+  every result row and defeat the threshold.
+- Per-(client_ip) aggregation; 64 sources, oldest-evicted.
+- New `ALERT_TYPE_LDAP_SEARCH_FLOOD` + `rule_ldap_search_flood`:
+  fires CRIT when `search_count >= 50` from a single source.
+  Dedup key `ldap-flood:<src_ip>` so each enumerator is its own
+  alert. match_port=389 so per-alert pcap pivots to cleartext
+  LDAP.
+- `decode_ipv4` / `decode_ipv6` routes TCP/389 and TCP/3268
+  (Global Catalog) to `try_ldap`. LDAPS (636 / 3269) is opaque
+  past the handshake and not observed.
+- New `ldap_event` JSONL record type via state-snapshot umbrella.
+  Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 35 record types
+  end-to-end across Loki + Datadog + webhook + fan-out.
+- 12 tests in `tests/test_ldap_snoop.c`: authenticated bind,
+  anonymous bind, search request, search result reference,
+  unrecognised op (SearchResultEntry) ignored, server-side
+  src_port inference, Global Catalog port works, non-LDAP port
+  rejected, repeated searches accumulate, two sources tracked
+  separately, non-LDAP payload rejected, truncated/indefinite-
+  length envelope rejected.
+- 3 alert tests in `tests/test_alerts.c`: fires at threshold (50),
+  no-fire below (49), separate alerts per enumerating source.
+- New wiki page `docs/wiki/ldap-snoop.md`: protocol-op table with
+  RFC § references, what's-normal / what's-suspicious sections,
+  Tier 2 follow-ups (per-attribute query inspection,
+  result-size analysis, referral URL extraction).
+**Counts**: 2540 assertions (+27 from Kerberos round). make is
+warning-clean. Smoke test 35/35 record types end-to-end.
+**Deliberately out of scope**: per-attribute query inspection
+(catches `servicePrincipalName` / `userPassword` /
+`msDS-AllowedToActOnBehalfOfOtherIdentity` lookups specifically),
+result-size analysis (catches throttled enumeration), referral
+URL extraction (topology leakage), LDAPS (opaque). Each is a
+tractable Tier 2 follow-up documented in the wiki page.
+
 ### 2026-06-04 — Kerberos observability: KERB_PREAUTH_BURST alert
 **Touched**: `include/sloth.h`, `src/kerb_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
@@ -1450,13 +1511,15 @@ ops log — naming collision to resolve).
   separation isn't reliable with the current 16-sample buffer; the
   mitigation is longer flow histories feeding v1.
 - **More passive observables** — per MISSION §4(1) "coverage > precision":
-  LDAP referral leakage, BGP route monitor for peering segments.
-  (IPv6 RA/NDP landed 2026-06-04 — `ROGUE_RA`. SMB landed
-  2026-06-04 — `SMB1_USE`. Kerberos landed 2026-06-04 —
-  `KERB_PREAUTH_BURST`. Each has Tier 2 follow-ups documented in
-  its wiki page: NS/NA cache for NDP; NTLMSSP / admin-share
-  tracking for SMB; username extraction + AS-REP roasting +
-  kerberoasting for Kerberos.)
+  BGP route monitor for peering segments. (IPv6 RA/NDP, SMB,
+  Kerberos, and LDAP all landed 2026-06-04, each fronted by a
+  CRIT alert: `ROGUE_RA`, `SMB1_USE`, `KERB_PREAUTH_BURST`,
+  `LDAP_SEARCH_FLOOD`. Each has Tier 2 follow-ups documented in
+  its wiki page — NS/NA neighbor cache for NDP; NTLMSSP /
+  admin-share tracking for SMB; username extraction + AS-REP
+  roasting + kerberoasting for Kerberos; per-attribute query
+  inspection + result-size analysis + referral URL extraction
+  for LDAP.)
 - ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
   landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
   available as direct output formats for both `-o FILE` and

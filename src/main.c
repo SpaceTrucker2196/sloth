@@ -49,6 +49,7 @@
 #include "ndp_snoop.h"
 #include "smb_snoop.h"
 #include "kerb_snoop.h"
+#include "ldap_snoop.h"
 #include "ssdp_snoop.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
@@ -106,6 +107,7 @@ static void poll_data(sloth_state_t *s) {
     ndp_snoop_snapshot(s);
     smb_snoop_snapshot(s);
     kerb_snoop_snapshot(s);
+    ldap_snoop_snapshot(s);
     ssdp_snapshot(s);
     beacon_snapshot(s);
     deauth_snapshot(s);

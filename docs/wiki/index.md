@@ -30,6 +30,8 @@ source material.
   lateral-movement substrate).
 - [[kerberos-snoop]] — Kerberos msg-type tracking + `KERB_PREAUTH_BURST`
   alert (AD password-spray detection).
+- [[ldap-snoop]] — LDAP bind / search tracking + `LDAP_SEARCH_FLOOD`
+  alert (BloodHound / ldapdomaindump detection).
 
 ## UI and infrastructure
 

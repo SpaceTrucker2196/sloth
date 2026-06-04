@@ -218,6 +218,29 @@ typedef struct {
     time_t expire;   /* 0 = unknown; >0 = absolute expiry epoch */
 } dhcp_lease_t;
 
+/* ── LDAP observation tracking ───────────────────────── */
+/* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
+ * cleartext). TLS variants (636 / 3269) are opaque past the
+ * handshake and not observed here.
+ *
+ * Tier 1 detects BindRequest, SearchRequest, and SearchResult
+ * Reference messages via the outer ASN.1 [APPLICATION n] tag and
+ * counts them per-source. The aggregate feeds the
+ * LDAP_SEARCH_FLOOD alert — BloodHound, ldapdomaindump, and the
+ * impacket family produce 100+ search requests in seconds from a
+ * single workstation, which a normal AD client never does. */
+#define MAX_LDAP_EVENTS 64
+
+typedef struct {
+    char   src_ip[46];
+    int    bind_count;          /* LDAP BindRequest                  */
+    int    bind_anon_count;     /* BindRequest with empty DN         */
+    int    search_count;        /* LDAP SearchRequest                */
+    int    search_ref_count;    /* SearchResultReference (referral)  */
+    time_t first_seen;
+    time_t last_seen;
+} ldap_event_t;
+
 /* ── Kerberos observation tracking ────────────────────── */
 /* Kerberos lives on TCP / UDP port 88. v1 of sloth's Kerberos
  * snooper does message-type detection (via the outer ASN.1
@@ -427,6 +450,7 @@ typedef enum {
     ALERT_TYPE_ROGUE_RA,
     ALERT_TYPE_SMB1_USE,
     ALERT_TYPE_KERB_PREAUTH_BURST,
+    ALERT_TYPE_LDAP_SEARCH_FLOOD,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -998,6 +1022,10 @@ typedef struct {
     /* ── Kerberos observation table ──────────────────────── */
     kerb_event_t   kerb_events[MAX_KERB_EVENTS];
     int            kerb_event_count;
+
+    /* ── LDAP observation table ──────────────────────────── */
+    ldap_event_t   ldap_events[MAX_LDAP_EVENTS];
+    int            ldap_event_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

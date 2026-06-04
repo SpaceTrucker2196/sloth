@@ -1605,6 +1605,52 @@ static void test_kerb_preauth_burst_per_source(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── LDAP search flood ──────────────────────────────────── */
+
+static void seed_ldap_event(sloth_state_t *s, const char *src_ip,
+                             int search_count) {
+    if (s->ldap_event_count >= MAX_LDAP_EVENTS) return;
+    ldap_event_t *e = &s->ldap_events[s->ldap_event_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    e->search_count = search_count;
+    e->last_seen    = time(NULL);
+}
+
+static void test_ldap_search_flood_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ldap_event(&s, "10.0.0.5", 50);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_LDAP_SEARCH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.5");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 389);
+    ASSERT(strstr(s.alerts[idx].detail, "50 LDAP") != NULL);
+}
+
+static void test_ldap_search_flood_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ldap_event(&s, "10.0.0.5", 49);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_LDAP_SEARCH_FLOOD), -1);
+}
+
+static void test_ldap_search_flood_per_source(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_ldap_event(&s, "10.0.0.5", 100);
+    seed_ldap_event(&s, "10.0.0.6", 75);
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_LDAP_SEARCH_FLOOD) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1764,6 +1810,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_kerb_preauth_burst_fires_at_threshold);
     RUN_TEST(test_kerb_preauth_burst_below_threshold_no_fire);
     RUN_TEST(test_kerb_preauth_burst_per_source);
+    RUN_TEST(test_ldap_search_flood_fires_at_threshold);
+    RUN_TEST(test_ldap_search_flood_below_threshold_no_fire);
+    RUN_TEST(test_ldap_search_flood_per_source);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

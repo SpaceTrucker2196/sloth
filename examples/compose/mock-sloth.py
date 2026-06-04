@@ -152,6 +152,10 @@ TEMPLATES = [
      "preauth_required_count": 4, "preauth_failed_count": 1,
      "principal_unknown_count": 0, "error_other_count": 0,
      "first_seen": 1700000000, "last_seen": 1700000060},
+    {"type": "ldap_event", "src_ip": "10.0.0.5",
+     "bind_count": 1, "bind_anon_count": 0,
+     "search_count": 14, "search_ref_count": 0,
+     "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 
