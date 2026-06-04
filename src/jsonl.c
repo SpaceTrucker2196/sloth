@@ -938,6 +938,24 @@ void jsonl_emit_bgp_sessions(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_ssh_flows(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->ssh_flow_count; i++) {
+        const ssh_flow_t *e = &s->ssh_flows[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "ssh_flow", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",         e->src_ip);
+        kv_str(buf, LINEBUF, &off, "dst_ip",         e->dst_ip);
+        kv_int(buf, LINEBUF, &off, "banner_count",   e->banner_count);
+        kv_str(buf, LINEBUF, &off, "server_banner",  e->server_banner);
+        kv_int(buf, LINEBUF, &off, "first_seen",     (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",      (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -969,4 +987,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_kerb_events       (s);
     jsonl_emit_ldap_events       (s);
     jsonl_emit_bgp_sessions      (s);
+    jsonl_emit_ssh_flows         (s);
 }

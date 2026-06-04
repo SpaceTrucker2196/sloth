@@ -238,6 +238,32 @@ typedef struct {
     time_t   last_seen;
 } bgp_session_t;
 
+/* ── SSH observation tracking ────────────────────────── */
+/* SSH lives on TCP/22. The protocol begins with a cleartext
+ * banner exchange ("SSH-protoversion-softwareversion\r\n") before
+ * any key exchange happens — that's the only field we can read
+ * passively. Per RFC 4253 §4.2 the banner starts with the literal
+ * bytes "SSH-" followed by "1.99" or "2.0", a hyphen, then
+ * implementation text and CR/LF.
+ *
+ * Each completed banner exchange = one TCP connection that reached
+ * the SSH handshake. SSH brute-force tools (hydra, medusa, ncrack)
+ * open many connections per second; legitimate users open one and
+ * stay connected. Tier 1 counts banners observed per (src_ip,
+ * dst_ip) and fires SSH_BRUTE_FORCE when the count crosses the
+ * threshold — without ever decrypting anything, because brute-force
+ * is a TCP-shape signal, not a payload signal. */
+#define MAX_SSH_FLOWS 64
+
+typedef struct {
+    char     src_ip[46];           /* client (initiator of TCP) */
+    char     dst_ip[46];           /* server (the SSHd target)  */
+    int      banner_count;         /* TCP flows that reached banner */
+    char     server_banner[80];    /* last banner string seen   */
+    time_t   first_seen;
+    time_t   last_seen;
+} ssh_flow_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -472,6 +498,7 @@ typedef enum {
     ALERT_TYPE_KERB_PREAUTH_BURST,
     ALERT_TYPE_LDAP_SEARCH_FLOOD,
     ALERT_TYPE_BGP_NOTIFICATION_BURST,
+    ALERT_TYPE_SSH_BRUTE_FORCE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -1051,6 +1078,10 @@ typedef struct {
     /* ── BGP observation table ───────────────────────────── */
     bgp_session_t  bgp_sessions[MAX_BGP_SESSIONS];
     int            bgp_session_count;
+
+    /* ── SSH observation table ───────────────────────────── */
+    ssh_flow_t     ssh_flows[MAX_SSH_FLOWS];
+    int            ssh_flow_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

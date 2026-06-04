@@ -77,6 +77,68 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-01 — SSH observability: SSH_BRUTE_FORCE alert
+**Touched**: `include/sloth.h`, `src/ssh_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_ssh_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/ssh-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Sixth passive-observable landing — first one drawn
+from the internet-substrate (vs AD-substrate) bucket. SSH is
+the universal remote-shell protocol and brute-force is the
+universal internet attack. The signal is connection cadence
+(many TCP flows per second from one source), not auth-payload
+content — which is encrypted and that's fine, because we
+never need it. MITRE ATT&CK T1110.001 (Password Guessing)
+and T1110.003 (Password Spraying).
+**What's in it**:
+- New `src/ssh_snoop.{c,h}` module: matches the cleartext
+  banner exchange per RFC 4253 §4.2. Requires the literal
+  `SSH-` prefix plus a second `-` within the first 12 bytes
+  so arbitrary cleartext starting with `SSH-` doesn't trigger.
+- Only *server* banners (src_port=22) are counted — exactly
+  one per TCP connection. Counting client banners too would
+  double every connection.
+- Server banner string is kept (truncated at CR/LF or first
+  non-printable byte) so the alert detail carries the
+  software fingerprint — `OpenSSH_8.9`, `dropbear_2022.83`,
+  legacy `SSH-1.99-...`.
+- Per-(client_ip, server_ip) aggregation; 64 flows,
+  oldest-by-last-seen-evicted.
+- New `ALERT_TYPE_SSH_BRUTE_FORCE` + `rule_ssh_brute_force`:
+  fires CRIT when `banner_count >= 10` per (client, server).
+  Dedup key `ssh-brute:<client>-><server>` so each attacker /
+  target pair is its own alert. match_ip=client_ip,
+  match_port=22 so per-alert pcap pivots to the SSH traffic.
+- `decode_ipv4` / `decode_ipv6` route TCP/22 in either
+  direction to `try_ssh`.
+- New `ssh_flow` JSONL record type via state-snapshot umbrella.
+  Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 37 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 12 tests in `tests/test_ssh_snoop.c`: OpenSSH banner,
+  Dropbear banner, legacy SSH-1.99 banner, client banner NOT
+  counted, repeated banners accumulate, two clients tracked
+  separately, two servers tracked separately, non-SSH port
+  rejected, non-SSH payload rejected (HTTP-on-22),
+  `SSH-`-without-dash rejected (anti-false-positive),
+  truncated banner rejected, banner storage truncates at CR/LF.
+- 3 alert tests in `tests/test_alerts.c`: fires at threshold
+  (10), no-fire below (9), separate alerts per attacker-target.
+- New wiki page `docs/wiki/ssh-snoop.md`: RFC banner format,
+  server-vs-client counting decision, what's-normal /
+  what's-suspicious sections, Tier 2 follow-ups (KEX-init
+  parsing, HASSH client fingerprinting).
+**Counts**: 2599 assertions (+28 from BGP round). make is
+warning-clean. Smoke test 37/37 record types end-to-end.
+**Deliberately out of scope**: KEX-method / cipher list
+extraction from `SSH_MSG_KEXINIT` (needed for HASSH client
+fingerprinting — Tier 2), failed-auth detection (encrypted —
+sloth's connection-count heuristic substitutes), tunnelled
+protocol detection (the beacon detector covers that pattern at
+the higher layer).
+
 ### 2026-06-01 — BGP observability: BGP_NOTIFICATION_BURST alert
 **Touched**: `include/sloth.h`, `src/bgp_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
@@ -1572,16 +1634,22 @@ ops log — naming collision to resolve).
   Sliver "low-and-slow" at 50% jitter still uncaught — statistical
   separation isn't reliable with the current 16-sample buffer; the
   mitigation is longer flow histories feeding v1.
-- **More passive observables** — per MISSION §4(1) "coverage > precision":
-  BGP route monitor for peering segments. (IPv6 RA/NDP, SMB,
-  Kerberos, and LDAP all landed 2026-06-04, each fronted by a
-  CRIT alert: `ROGUE_RA`, `SMB1_USE`, `KERB_PREAUTH_BURST`,
-  `LDAP_SEARCH_FLOOD`. Each has Tier 2 follow-ups documented in
-  its wiki page — NS/NA neighbor cache for NDP; NTLMSSP /
+- **More passive observables** — per MISSION §4(1) "coverage > precision".
+  The original AD/infrastructure-substrate set is now landed:
+  IPv6 RA/NDP, SMB, Kerberos, and LDAP (all 2026-06-04) plus BGP
+  (2026-06-01), each fronted by a CRIT alert: `ROGUE_RA`,
+  `SMB1_USE`, `KERB_PREAUTH_BURST`, `LDAP_SEARCH_FLOOD`,
+  `BGP_NOTIFICATION_BURST`. Each has Tier 2 follow-ups documented
+  in its wiki page — NS/NA neighbor cache for NDP; NTLMSSP /
   admin-share tracking for SMB; username extraction + AS-REP
   roasting + kerberoasting for Kerberos; per-attribute query
   inspection + result-size analysis + referral URL extraction
-  for LDAP.)
+  for LDAP; AS-number extraction + prefix-hijack detection +
+  route-flap dampening for BGP. Next candidates from the
+  internet-substrate side: SSH (brute-force detection on
+  TCP/22), RDP (TCP/3389 NLA / lateral-movement substrate),
+  SNMP (UDP/161 snmpwalk enumeration), and MQTT/IoT control
+  planes.
 - ~~**Sibling forensic-export formats**~~ — `--out-format jsonl|cef|syslog`
   landed 2026-06-03. CEF (ArcSight) and RFC 5424 syslog are
   available as direct output formats for both `-o FILE` and

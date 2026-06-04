@@ -1054,6 +1054,39 @@ static void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* SSH brute force: ten or more SSH banner exchanges between one
+ * client and one server. SSH brute-force tools (hydra, medusa,
+ * ncrack) open many TCP connections per second and complete the
+ * banner exchange each time before testing creds; a legitimate
+ * user opens one and stays. The signal is the *connection*
+ * cadence, not the encrypted auth payload — which we never see.
+ *
+ * Why 10: a normal user might re-connect a handful of times in a
+ * session after network blips. Ten distinct banner exchanges to
+ * the same server inside the active window is unambiguous
+ * brute-force shape. fail2ban's default ban threshold is 5 with a
+ * wider window; we're a bit higher to stay surprise-free. */
+#define SSH_BRUTE_FORCE_THRESHOLD 10
+
+static void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->ssh_flow_count; i++) {
+        const ssh_flow_t *e = &s->ssh_flows[i];
+        if (e->banner_count < SSH_BRUTE_FORCE_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "ssh-brute:%.39s->%.39s",
+                 e->src_ip, e->dst_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d SSH banners (brute-force; %.30s)",
+                 e->src_ip, e->dst_ip, e->banner_count,
+                 e->server_banner[0] ? e->server_banner : "(none)");
+        fire(ALERT_TYPE_SSH_BRUTE_FORCE, ALERT_SEV_CRIT,
+             "SSH_BRUTE_FORCE", detail, key,
+             e->src_ip, 22, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1213,6 +1246,7 @@ void alerts_update(sloth_state_t *s) {
     rule_kerb_preauth_burst(s, now);
     rule_ldap_search_flood(s, now);
     rule_bgp_notification_burst(s, now);
+    rule_ssh_brute_force(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

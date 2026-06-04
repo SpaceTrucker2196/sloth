@@ -22,6 +22,7 @@
 #include "kerb_snoop.h"
 #include "ldap_snoop.h"
 #include "bgp_snoop.h"
+#include "ssh_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -132,6 +133,20 @@ static void try_bgp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     }
 }
 
+/* SSH banner on TCP/22. Matches the cleartext "SSH-protoversion-..."
+ * exchange that precedes the encrypted key exchange. */
+static void try_ssh(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 6) return;
+    if (ssh_snoop_observe(pkt->src, pkt->src_port,
+                          pkt->dst, pkt->dst_port,
+                          tp + tcp_hdr, pay_len)) {
+        snprintf(pkt->info, sizeof(pkt->info), "SSH");
+    }
+}
+
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
     snprintf(buf, sz, "TCP%s%s%s%s%s%s",
              (flags & 0x02) ? " SYN" : "",
@@ -183,6 +198,8 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             try_ldap(tp, tlen, pkt);
         if (pkt->dst_port == 179 || pkt->src_port == 179)
             try_bgp(tp, tlen, pkt);
+        if (pkt->dst_port == 22 || pkt->src_port == 22)
+            try_ssh(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
@@ -275,6 +292,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             try_ldap(tp, tlen, pkt);
         if (pkt->dst_port == 179 || pkt->src_port == 179)
             try_bgp(tp, tlen, pkt);
+        if (pkt->dst_port == 22 || pkt->src_port == 22)
+            try_ssh(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);

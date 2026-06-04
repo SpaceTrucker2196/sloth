@@ -34,6 +34,8 @@ source material.
   alert (BloodHound / ldapdomaindump detection).
 - [[bgp-snoop]] — BGP session tracking + `BGP_NOTIFICATION_BURST`
   alert (peering instability / hijack-precursor detection).
+- [[ssh-snoop]] — SSH banner-exchange counting + `SSH_BRUTE_FORCE`
+  alert (hydra / medusa / ncrack detection).
 
 ## UI and infrastructure
 
