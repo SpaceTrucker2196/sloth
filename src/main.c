@@ -56,6 +56,7 @@
 #include "snmp_snoop.h"
 #include "mqtt_snoop.h"
 #include "ssdp_snoop.h"
+#include "event_wake.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "http_log.h"
@@ -288,7 +289,7 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--out-format FORMAT]\n"
+            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -316,7 +317,13 @@ static void print_usage(const char *argv0) {
             "                              vendor=sloth-net product=sloth).\n"
             "                     syslog = RFC 5424 (PRI 134 local0.info,\n"
             "                              SD-ID sloth@32473; MSG carries\n"
-            "                              the original JSON for fidelity).\n",
+            "                              the original JSON for fidelity).\n"
+            "  --refresh-ms N     dashboard refresh interval, milliseconds.\n"
+            "                     Default 250 (~4 Hz). Floor 50ms — sub-50ms\n"
+            "                     burns CPU without visible gain on a terminal.\n"
+            "                     The loop also wakes early on alert fires,\n"
+            "                     so the value is an upper bound, not a fixed\n"
+            "                     cadence.\n",
             argv0);
 }
 
@@ -328,6 +335,7 @@ int main(int argc, char **argv) {
     const char *pcap_dir    = NULL;
     const char *eapol_dir   = NULL;
     const char *data_socket = NULL;
+    int         refresh_ms  = 0;        /* 0 = use POLL_MS default */
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -345,6 +353,17 @@ int main(int argc, char **argv) {
             } else {
                 data_socket = "tcp:127.0.0.1:8765";
             }
+        } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {
+            char *endp = NULL;
+            long v = strtol(argv[++i], &endp, 10);
+            if (endp == argv[i] || *endp != '\0' || v < 1 || v > 60000) {
+                fprintf(stderr,
+                        "bad --refresh-ms %s (expected integer ms, 1..60000)\n",
+                        argv[i]);
+                return 2;
+            }
+            if (v < 50) v = 50;            /* floor — see usage */
+            refresh_ms = (int)v;
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -385,7 +404,7 @@ int main(int argc, char **argv) {
     }
 
     memset(&g_state, 0, sizeof(g_state));
-    g_state.poll_ms     = POLL_MS;
+    g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
     g_state.active_view = VIEW_DASH;
 
     g_platform.init();
@@ -394,13 +413,16 @@ int main(int argc, char **argv) {
     capture_start(&g_state);
     probe_start(&g_state);
 #endif
+    event_wake_init();
     tui_init();
 
     while (!g_quit) {
         poll_data(&g_state);
         data_socket_tick();
         tui_draw(&g_state);
-        handle_key(&g_state, tui_poll_key(g_state.poll_ms));
+        int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
+        event_wake_drain();
+        handle_key(&g_state, ch);
     }
 
     tui_cleanup();

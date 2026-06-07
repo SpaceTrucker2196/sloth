@@ -10,7 +10,7 @@
 #define MAX_CONNS    1024
 #define MAX_WIFI_APS 64
 #define MAX_PACKETS  256
-#define POLL_MS      1000
+#define POLL_MS      250   /* dashboard refresh interval default. Overridable via --refresh-ms. The TUI loop also wakes early on alert fires (see src/event_wake.h), so this is an upper bound on stale-render time, not a fixed cadence. */
 #define HIST_LEN     30    /* rate history samples per interface (sparkline) */
 
 /* Cross-platform key codes — outside ASCII range, returned by tui_poll_key() */

@@ -13,7 +13,7 @@
 void tui_init(void);
 void tui_cleanup(void);
 void tui_draw(const sloth_state_t *s);
-int  tui_poll_key(int timeout_ms); /* blocks up to timeout_ms, returns key or 0 */
+int  tui_poll_key(int timeout_ms, int wake_fd); /* blocks up to timeout_ms; wake_fd >= 0 breaks the wait early so a redraw happens in response to a non-key event. Returns key on input, 0 on timeout / wake. */
 void tui_bar(double val, double max, int width, char *out); /* block bar; out needs width*3+1 bytes */
 
 /* ── Nuclear phosphor theme — 256-color pairs ───────────── */

@@ -8,6 +8,7 @@
 #include "alert_pcap.h"
 #include "dga.h"
 #include "wifi_oui_attacker.h"
+#include "event_wake.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -140,8 +141,12 @@ static void fire(alert_type_t type, alert_sev_t sev,
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
-    /* New alert keys are interesting enough to log. */
+    /* New alert keys are interesting enough to log AND to break the
+     * TUI's blocking wait so the dashboard updates immediately
+     * instead of on the next tick. event_wake_signal is a no-op
+     * when the wake pipe wasn't initialised (e.g. unit tests). */
     jsonl_emit_alert(a);
+    event_wake_signal();
 }
 
 /* ── Rules ───────────────────────────────────────────────── */

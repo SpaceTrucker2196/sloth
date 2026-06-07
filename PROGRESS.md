@@ -77,6 +77,48 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-07 — Faster refresh + event-driven dashboard wakes
+**Touched**: `include/sloth.h`, `src/main.c`, `src/tui.{c,h}`,
+`src/alerts.c`, `src/event_wake.{c,h}` (new),
+`tests/null_tui.c`, `Makefile`
+**Why**: Operator ask — the dashboard should feel realtime and
+react to events as they happen, not on a fixed 1 Hz cadence.
+Two problems with the previous loop: the default refresh was
+1000 ms (visibly laggy on a wall-clock scale) and the loop
+blocked in tui_poll_key for the whole interval even when an
+alert fired in the meantime, so new alerts could sit invisible
+for up to a full tick before the next redraw.
+**What's in it**:
+- **Default refresh dropped from 1000 ms → 250 ms** (~4 Hz).
+  Per-loop work is a few ms; 250 ms feels realtime to a
+  human and keeps CPU modest.
+- **New `--refresh-ms N` CLI flag** with a 50 ms floor (sub-50
+  burns CPU without visible gain on a terminal). Validation
+  rejects non-integer / out-of-range values cleanly.
+- **New `src/event_wake.{c,h}` module**: tiny self-pipe
+  wrapper — `event_wake_init / _fd / _signal / _drain`.
+  Non-blocking writes, non-blocking drains, FD_CLOEXEC on
+  both ends. Safe to call from any thread.
+- **`tui_poll_key` gained a `wake_fd` parameter**: select()
+  watches stdin AND the wake fd. If only the wake fd is
+  ready, returns 0 (no key, but breaks the wait). Both the
+  ncurses and ANSI-fallback paths take the new parameter so
+  the embedded build keeps working.
+- **`alerts.c fire()` calls `event_wake_signal()` after each
+  new alert key**: so the very next loop iteration redraws
+  with the new alert visible. End-to-end latency: a new alert
+  goes from "engine row appended" to "pixels on screen" in
+  milliseconds, not up to one full refresh interval.
+- Main loop drains the wake pipe after each poll_key so a
+  single wake doesn't fire forever.
+- The wake module is a no-op when uninitialised
+  (e.g. unit-test binaries that don't run a TUI) so
+  `alerts.c` stays linkable in both contexts. The test
+  null_tui.c stub was updated to the new `tui_poll_key`
+  signature.
+**Counts**: 2688 assertions still passing. make is warning-clean.
+Smoke test 40/40 record types end-to-end.
+
 ### 2026-06-07 — MQTT observability: MQTT_BROKER_BRUTE alert
 **Touched**: `include/sloth.h`, `src/mqtt_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
