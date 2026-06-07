@@ -1861,6 +1861,68 @@ static void test_snmp_community_brute_per_pair(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── MQTT broker brute force ────────────────────────────── */
+
+static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
+                            const char *dst_ip, int connect_count,
+                            int fail_count, const char *user) {
+    if (s->mqtt_flow_count >= MAX_MQTT_FLOWS) return;
+    mqtt_flow_t *e = &s->mqtt_flows[s->mqtt_flow_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
+    e->connect_count      = connect_count;
+    e->connack_fail_count = fail_count;
+    e->proto_level        = 4;
+    if (user) snprintf(e->last_username, sizeof(e->last_username),
+                        "%s", user);
+    e->last_seen = time(NULL);
+}
+
+static void test_mqtt_brute_fires_at_connect_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 10, 0, "admin");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ((int)s.alerts[idx].match_port, 1883);
+    ASSERT(strstr(s.alerts[idx].detail, "10 CONNECTs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "admin") != NULL);
+}
+
+static void test_mqtt_brute_fires_at_fail_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 5, 5, "iot-user");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "5 fails") != NULL);
+}
+
+static void test_mqtt_brute_below_both_thresholds_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 9, 4, "user");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE), -1);
+}
+
+static void test_mqtt_brute_per_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 25, 0, "a");
+    seed_mqtt_flow(&s, "10.0.0.6", "10.0.0.11", 12, 0, "b");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_MQTT_BROKER_BRUTE) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -2036,6 +2098,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_snmp_community_brute_fires_at_threshold);
     RUN_TEST(test_snmp_community_brute_below_threshold_no_fire);
     RUN_TEST(test_snmp_community_brute_per_pair);
+    RUN_TEST(test_mqtt_brute_fires_at_connect_threshold);
+    RUN_TEST(test_mqtt_brute_fires_at_fail_threshold);
+    RUN_TEST(test_mqtt_brute_below_both_thresholds_no_fire);
+    RUN_TEST(test_mqtt_brute_per_pair);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

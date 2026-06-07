@@ -332,6 +332,40 @@ typedef struct {
     time_t   last_seen;
 } snmp_flow_t;
 
+/* ── MQTT observation tracking ───────────────────────── */
+/* MQTT (v3.1.1 RFC-equivalent OASIS spec / v5 OASIS spec) is the
+ * dominant IoT pub/sub protocol. Brokers default to TCP/1883
+ * cleartext; TLS variant is TCP/8883 and is opaque past the
+ * handshake. Sloth tracks the cleartext path.
+ *
+ * Tier 1 detects:
+ *   - CONNECT packets per (client_ip, broker_ip) — high count
+ *     means credential brute-force or a malformed-client
+ *     reconnect storm.
+ *   - The username field from the CONNECT payload (when the
+ *     User Name Flag is set) — same role as the SNMP community
+ *     or the mstshash cookie: tells operators which account the
+ *     attacker is guessing.
+ *   - CONNACK reason codes — code 4 in v3 / 0x86 in v5 = bad
+ *     credentials. A high failure count is the explicit signal,
+ *     even quieter than the connect-count threshold.
+ *   - Protocol-level (3 / 4 / 5) for asset inventory. */
+#define MAX_MQTT_FLOWS   32
+#define MQTT_USERNAME_LEN 32
+
+typedef struct {
+    char     src_ip[46];           /* MQTT client                    */
+    char     dst_ip[46];           /* MQTT broker                    */
+    int      connect_count;        /* CONNECT packets observed       */
+    int      connack_fail_count;   /* bad-auth CONNACK responses     */
+    int      subscribe_count;      /* SUBSCRIBE packets              */
+    int      publish_count;        /* PUBLISH packets                */
+    int      proto_level;          /* last seen: 3 / 4 / 5           */
+    char     last_username[MQTT_USERNAME_LEN];
+    time_t   first_seen;
+    time_t   last_seen;
+} mqtt_flow_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -569,6 +603,7 @@ typedef enum {
     ALERT_TYPE_SSH_BRUTE_FORCE,
     ALERT_TYPE_RDP_BRUTE_FORCE,
     ALERT_TYPE_SNMP_COMMUNITY_BRUTE,
+    ALERT_TYPE_MQTT_BROKER_BRUTE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -1160,6 +1195,10 @@ typedef struct {
     /* ── SNMP observation table ──────────────────────────── */
     snmp_flow_t    snmp_flows[MAX_SNMP_FLOWS];
     int            snmp_flow_count;
+
+    /* ── MQTT observation table ──────────────────────────── */
+    mqtt_flow_t    mqtt_flows[MAX_MQTT_FLOWS];
+    int            mqtt_flow_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

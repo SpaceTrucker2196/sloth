@@ -42,6 +42,9 @@ source material.
 - [[snmp-snoop]] — SNMP v1/v2c BER parsing + community-string
   tracking + `SNMP_COMMUNITY_BRUTE` alert (snmpwalk wordlist /
   metasploit snmp_login detection).
+- [[mqtt-snoop]] — MQTT v3/v4/v5 CONNECT + CONNACK-fail counting
+  with username extraction + `MQTT_BROKER_BRUTE` alert
+  (IoT-broker brute / Mirai-class scanner detection).
 
 ## UI and infrastructure
 

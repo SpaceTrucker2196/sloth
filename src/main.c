@@ -54,6 +54,7 @@
 #include "ssh_snoop.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
+#include "mqtt_snoop.h"
 #include "ssdp_snoop.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
@@ -116,6 +117,7 @@ static void poll_data(sloth_state_t *s) {
     ssh_snoop_snapshot(s);
     rdp_snoop_snapshot(s);
     snmp_snoop_snapshot(s);
+    mqtt_snoop_snapshot(s);
     ssdp_snapshot(s);
     beacon_snapshot(s);
     deauth_snapshot(s);

@@ -37,6 +37,7 @@ SRCS = src/main.c          \
        src/ssh_snoop.c     \
        src/rdp_snoop.c     \
        src/snmp_snoop.c    \
+       src/mqtt_snoop.c    \
        src/quic_snoop.c    \
        src/views/mdns.c    \
        src/views/nbns.c    \
@@ -246,6 +247,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_rdp_snoop.c         \
             src/snmp_snoop.c               \
             tests/test_snmp_snoop.c        \
+            src/mqtt_snoop.c               \
+            tests/test_mqtt_snoop.c        \
             src/quic_snoop.c               \
             src/views/mdns.c               \
             src/views/nbns.c               \

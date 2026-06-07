@@ -1000,6 +1000,28 @@ void jsonl_emit_snmp_flows(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->mqtt_flow_count; i++) {
+        const mqtt_flow_t *e = &s->mqtt_flows[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "mqtt_flow", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",             e->src_ip);
+        kv_str(buf, LINEBUF, &off, "dst_ip",             e->dst_ip);
+        kv_int(buf, LINEBUF, &off, "connect_count",      e->connect_count);
+        kv_int(buf, LINEBUF, &off, "connack_fail_count", e->connack_fail_count);
+        kv_int(buf, LINEBUF, &off, "subscribe_count",    e->subscribe_count);
+        kv_int(buf, LINEBUF, &off, "publish_count",      e->publish_count);
+        kv_int(buf, LINEBUF, &off, "proto_level",        e->proto_level);
+        kv_str(buf, LINEBUF, &off, "last_username",      e->last_username);
+        kv_int(buf, LINEBUF, &off, "first_seen",         (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",          (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -1034,4 +1056,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_ssh_flows         (s);
     jsonl_emit_rdp_flows         (s);
     jsonl_emit_snmp_flows        (s);
+    jsonl_emit_mqtt_flows        (s);
 }

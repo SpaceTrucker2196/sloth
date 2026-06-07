@@ -77,6 +77,75 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-07 — MQTT observability: MQTT_BROKER_BRUTE alert
+**Touched**: `include/sloth.h`, `src/mqtt_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_mqtt_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/mqtt-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Ninth passive-observable landing. Closes the IoT
+slice of the internet-substrate bucket. MQTT brokers on
+TCP/1883 are routinely swept by Mirai-class scanners with
+the same wordlists they hammer SSH with; many brokers ship
+`allow_anonymous true` and most clients ship with vendor
+defaults. The cleartext fixed header (1 type byte + 1-4
+byte Remaining Length varint) is tag-recognisable and
+CONNECT payloads expose the username being guessed.
+MITRE ATT&CK T1110.001 (Password Guessing — MQTT variant).
+**What's in it**:
+- New `src/mqtt_snoop.{c,h}` module: parses the MQTT Control
+  Packet fixed header per OASIS v3.1.1 / v5 specs (1-4 byte
+  Remaining Length varint, type-nibble dispatch on
+  CONNECT/CONNACK/SUBSCRIBE/PUBLISH).
+- CONNECT payload walk: protocol name + level + flags + keep
+  alive + (v5) properties + ClientID + (will fields if Will
+  Flag) + username (if Username Flag). Username extracted into
+  `last_username`; non-printable bytes drop the value entirely
+  to keep JSONL lines safe.
+- CONNACK reason-code reading: v3.1.1 codes 1-5 count as
+  failures, v5 codes ≥ 0x80 count as failures.
+- Tracks CONNECTs, CONNACK failures, SUBSCRIBEs, PUBLISHes,
+  and the latest protocol level on a per-(client, broker)
+  basis. Flow attribution flips for CONNACK so the client
+  stays as `src_ip` across both directions.
+- Per-flow aggregation; 32 flows, oldest-by-last-seen
+  evicted.
+- New `ALERT_TYPE_MQTT_BROKER_BRUTE` +
+  `rule_mqtt_broker_brute`: dual-threshold rule fires CRIT
+  when `connect_count >= 10` (the SSH/RDP brute shape) OR
+  `connack_fail_count >= 5` (the broker's explicit "wrong"
+  signal — quieter but more specific). Dedup key
+  `mqtt-brute:<client>-><broker>`; match_ip=client,
+  match_port=1883.
+- TCP/1883 dispatch via `try_mqtt` in both `decode_ipv4` and
+  `decode_ipv6` branches of capture.c.
+- New `mqtt_flow` JSONL record type via state-snapshot
+  umbrella. Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 40 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 13 tests in `tests/test_mqtt_snoop.c`: CONNECT / SUBSCRIBE
+  / PUBLISH detection, username extraction, CONNACK bad-creds
+  counts as failure (with client-side attribution flip),
+  CONNACK success not counted, repeated CONNECTs accumulate,
+  two clients tracked separately, non-1883 port rejected,
+  non-MQTT payload rejected, unknown type rejected, truncated
+  rejected, non-printable username dropped without crashing.
+- 4 alert tests in `tests/test_alerts.c`: fires at connect
+  threshold (10), fires at fail threshold (5), no-fire below
+  both, separate alerts per attacker-broker.
+- New wiki page `docs/wiki/mqtt-snoop.md`: fixed-header
+  diagram, packet-type table, dual-threshold rationale,
+  what's-normal / what's-suspicious sections, Tier 2
+  follow-ups (topic-content / MQTT-SN / MQTT-over-WS / v5
+  USER PROPERTIES / cross-broker rate-shape).
+**Counts**: 2688 assertions (+29 from SNMP round). make is
+warning-clean. Smoke test 40/40 record types end-to-end.
+**Closes the original observable queue**: NDP + SMB +
+Kerberos + LDAP + BGP + SSH + RDP + SNMP + MQTT all landed,
+each fronted by a CRIT alert. The Tier 2 expansions per
+protocol remain queued for follow-up rounds.
+
 ### 2026-06-07 — SNMP observability: SNMP_COMMUNITY_BRUTE alert
 **Touched**: `include/sloth.h`, `src/snmp_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,

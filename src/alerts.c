@@ -1154,6 +1154,43 @@ static void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* MQTT broker brute force: ten or more CONNECT packets from one
+ * client to one broker, OR five or more CONNACK failures on the
+ * flow. CONNECTs are the brute-force shape; CONNACK failures are
+ * the explicit "wrong creds" signal — quieter but more specific.
+ * Either path trips the alert because the IoT broker side of the
+ * problem is real: Mirai-class scanners hammer MQTT brokers with
+ * the same wordlists they hammer SSH with.
+ *
+ * Why 10 / 5: matches the SSH brute threshold for CONNECT count
+ * (same connection-cadence reasoning) and a tighter 5 for explicit
+ * CONNACK failures — the broker telling us "wrong" five times is
+ * stronger evidence than just connection volume. */
+#define MQTT_BROKER_BRUTE_CONNECTS  10
+#define MQTT_BROKER_BRUTE_FAILS      5
+
+static void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mqtt_flow_count; i++) {
+        const mqtt_flow_t *e = &s->mqtt_flows[i];
+        int trip = (e->connect_count      >= MQTT_BROKER_BRUTE_CONNECTS)
+                || (e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS);
+        if (!trip) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "mqtt-brute:%.39s->%.39s",
+                 e->src_ip, e->dst_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d CONNECTs / %d fails (user=%.16s)",
+                 e->src_ip, e->dst_ip,
+                 e->connect_count, e->connack_fail_count,
+                 e->last_username[0] ? e->last_username : "?");
+        fire(ALERT_TYPE_MQTT_BROKER_BRUTE, ALERT_SEV_CRIT,
+             "MQTT_BROKER_BRUTE", detail, key,
+             e->src_ip, 1883, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1316,6 +1353,7 @@ void alerts_update(sloth_state_t *s) {
     rule_ssh_brute_force(s, now);
     rule_rdp_brute_force(s, now);
     rule_snmp_community_brute(s, now);
+    rule_mqtt_broker_brute(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
