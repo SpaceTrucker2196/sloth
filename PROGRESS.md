@@ -77,6 +77,78 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-07 — SNMP observability: SNMP_COMMUNITY_BRUTE alert
+**Touched**: `include/sloth.h`, `src/snmp_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_snmp_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/snmp-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Eighth passive-observable landing. SNMP v1/v2c
+carries the community string — the SNMP analogue of a
+password — in cleartext ASN.1 BER on UDP/161/162. Almost
+every embedded device, printer, and switch on a LAN still
+runs v2c by default. snmpwalk with a community wordlist and
+metasploit's snmp_login module both rotate community strings
+one packet at a time; the unique-community count is the
+unmistakable signature. MITRE ATT&CK T1110.001 (Password
+Guessing — SNMP variant) and T1046 (Network Service
+Scanning).
+**What's in it**:
+- New `src/snmp_snoop.{c,h}` module: parses the outer
+  SEQUENCE + version INTEGER + community OCTET STRING +
+  PDU tag of an SNMP message per RFC 1157 §4.1 / RFC 1901 §3.
+  Handles short-form and multi-byte BER length encodings.
+- Recognises all nine PDU tags 0xA0..0xA8 (Get / GetNext /
+  Response / Set / Trap-v1 / GetBulk / Inform / Trap-v2 /
+  Report). Set requests get their own counter — they're rare
+  in monitoring traffic and a Set with a guessed community
+  is the post-exploitation config-rewrite step.
+- Tracks up to 8 distinct community strings per flow plus the
+  most recent. Community strings with embedded non-printable
+  bytes are dropped entirely (sanitisation) so they can't
+  poison a JSONL line.
+- v3 messages are recorded (version field set) but no
+  community extraction — the v3 envelope is different and
+  v3 brute-force has a different signature anyway.
+- Flow attribution flips for GetResponse packets so the
+  querier (not the agent) stays as `src_ip` across the whole
+  conversation.
+- Per-(src_ip, dst_ip) aggregation; 48 flows, oldest-by-
+  last-seen-evicted.
+- New `ALERT_TYPE_SNMP_COMMUNITY_BRUTE` +
+  `rule_snmp_community_brute`: fires CRIT when
+  `community_count >= 5` per (src, dst). Dedup key
+  `snmp-brute:<src>-><dst>`; match_ip=src, match_port=161.
+- UDP dispatch in both `decode_ipv4` and `decode_ipv6`
+  branches of `capture.c` covers ports 161 and 162.
+- New `snmp_flow` JSONL record type via state-snapshot
+  umbrella. Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 39 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 14 tests in `tests/test_snmp_snoop.c`: Get / GetNext /
+  GetBulk / Set / Response (with querier-attribution flip) /
+  v2-Trap detection, repeated-community deduplication,
+  distinct-community accumulation, community-list cap,
+  non-SNMP port rejected, non-SNMP payload rejected,
+  truncated rejected, unknown PDU tag rejected, embedded
+  NUL byte in community dropped without crashing.
+- 3 alert tests in `tests/test_alerts.c`: fires at threshold
+  (5), no-fire below (4), separate alerts per attacker-target.
+- New wiki page `docs/wiki/snmp-snoop.md`: PDU-tag table,
+  community-tracking rationale, what's-normal /
+  what's-suspicious sections, Tier 2 follow-ups (OID
+  inspection, SNMPv3 USM parsing, walk-rate analysis,
+  reflective-amplification cross-link).
+**Counts**: 2659 assertions (+33 from RDP round). make is
+warning-clean. Smoke test 39/39 record types end-to-end.
+**Deliberately out of scope**: OID-content inspection
+(needed for known-sensitive OID flagging), v3 USM parsing
+(security name extraction for v3 user enumeration),
+per-second walk-rate analysis, reflective-amplification
+detection (different module entirely — connection-cadence
+side, not protocol-shape side).
+
 ### 2026-06-07 — RDP observability: RDP_BRUTE_FORCE alert
 **Touched**: `include/sloth.h`, `src/rdp_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,

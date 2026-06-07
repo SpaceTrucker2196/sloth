@@ -295,6 +295,43 @@ typedef struct {
     time_t   last_seen;
 } rdp_flow_t;
 
+/* ── SNMP observation tracking ───────────────────────── */
+/* SNMP lives on UDP/161 (agent) and UDP/162 (traps). v1 (RFC 1157)
+ * and v2c (RFC 1901-1908) carry the community string in cleartext
+ * ASN.1 BER. v3 (RFC 3411+) authenticates but still exposes the
+ * security name. We track v1/v2c here — v3 is rare on the LAN and
+ * the brute-force shape would be different.
+ *
+ * Tier 1 counts PDU types per (src_ip, dst_ip) and tracks up to 8
+ * distinct community strings seen — community-guessing is the
+ * unmistakable signature of snmpwalk -v2c -c <wordlist> sweeps and
+ * the metasploit `auxiliary/scanner/snmp/snmp_login` module.
+ *
+ * Set requests are tracked separately because they're rare in
+ * monitoring traffic — almost every legitimate SNMP query is a
+ * Get/GetNext/GetBulk. A Set with a guessed community is the
+ * post-exploitation config-rewrite step. */
+#define MAX_SNMP_FLOWS         48
+#define MAX_SNMP_COMMUNITIES    8
+#define SNMP_COMMUNITY_LEN     32
+
+typedef struct {
+    char     src_ip[46];
+    char     dst_ip[46];
+    int      get_count;            /* GetRequest               */
+    int      getnext_count;        /* GetNextRequest           */
+    int      getbulk_count;        /* GetBulkRequest (v2+)     */
+    int      set_count;            /* SetRequest               */
+    int      response_count;       /* GetResponse              */
+    int      trap_count;           /* Trap (v1) / SNMPv2-Trap  */
+    int      version;              /* 0=v1, 1=v2c, 3=v3        */
+    int      community_count;      /* unique communities seen  */
+    char     communities[MAX_SNMP_COMMUNITIES][SNMP_COMMUNITY_LEN];
+    char     last_community[SNMP_COMMUNITY_LEN];
+    time_t   first_seen;
+    time_t   last_seen;
+} snmp_flow_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -531,6 +568,7 @@ typedef enum {
     ALERT_TYPE_BGP_NOTIFICATION_BURST,
     ALERT_TYPE_SSH_BRUTE_FORCE,
     ALERT_TYPE_RDP_BRUTE_FORCE,
+    ALERT_TYPE_SNMP_COMMUNITY_BRUTE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -1118,6 +1156,10 @@ typedef struct {
     /* ── RDP observation table ───────────────────────────── */
     rdp_flow_t     rdp_flows[MAX_RDP_FLOWS];
     int            rdp_flow_count;
+
+    /* ── SNMP observation table ──────────────────────────── */
+    snmp_flow_t    snmp_flows[MAX_SNMP_FLOWS];
+    int            snmp_flow_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

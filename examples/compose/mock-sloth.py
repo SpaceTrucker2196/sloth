@@ -166,6 +166,11 @@ TEMPLATES = [
     {"type": "rdp_flow", "src_ip": "203.0.113.7", "dst_ip": "10.0.0.20",
      "connect_req_count": 18, "last_cookie": "administrator",
      "proto_mask": 11, "first_seen": 1700000000, "last_seen": 1700000060},
+    {"type": "snmp_flow", "src_ip": "10.0.0.5", "dst_ip": "10.0.0.10",
+     "version": 1, "get_count": 12, "getnext_count": 4,
+     "getbulk_count": 0, "set_count": 0, "response_count": 12,
+     "trap_count": 0, "community_count": 6, "last_community": "private",
+     "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 

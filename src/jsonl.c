@@ -975,6 +975,31 @@ void jsonl_emit_rdp_flows(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_snmp_flows(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->snmp_flow_count; i++) {
+        const snmp_flow_t *e = &s->snmp_flows[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "snmp_flow", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",          e->src_ip);
+        kv_str(buf, LINEBUF, &off, "dst_ip",          e->dst_ip);
+        kv_int(buf, LINEBUF, &off, "version",         e->version);
+        kv_int(buf, LINEBUF, &off, "get_count",       e->get_count);
+        kv_int(buf, LINEBUF, &off, "getnext_count",   e->getnext_count);
+        kv_int(buf, LINEBUF, &off, "getbulk_count",   e->getbulk_count);
+        kv_int(buf, LINEBUF, &off, "set_count",       e->set_count);
+        kv_int(buf, LINEBUF, &off, "response_count",  e->response_count);
+        kv_int(buf, LINEBUF, &off, "trap_count",      e->trap_count);
+        kv_int(buf, LINEBUF, &off, "community_count", e->community_count);
+        kv_str(buf, LINEBUF, &off, "last_community",  e->last_community);
+        kv_int(buf, LINEBUF, &off, "first_seen",      (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",       (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -1008,4 +1033,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_bgp_sessions      (s);
     jsonl_emit_ssh_flows         (s);
     jsonl_emit_rdp_flows         (s);
+    jsonl_emit_snmp_flows        (s);
 }

@@ -24,6 +24,7 @@
 #include "bgp_snoop.h"
 #include "ssh_snoop.h"
 #include "rdp_snoop.h"
+#include "snmp_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -267,6 +268,17 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "Kerberos");
             } else {
                 snprintf(pkt->info, sizeof(pkt->info), "UDP 88");
+            }
+        } else if ((pkt->src_port == 161 || pkt->dst_port == 161 ||
+                    pkt->src_port == 162 || pkt->dst_port == 162) && tlen > 8) {
+            if (snmp_snoop_observe(pkt->src, pkt->src_port,
+                                    pkt->dst, pkt->dst_port,
+                                    tp + 8, tlen - 8)) {
+                snprintf(pkt->info, sizeof(pkt->info), "SNMP");
+            } else {
+                snprintf(pkt->info, sizeof(pkt->info), "UDP %u",
+                         pkt->dst_port == 161 || pkt->dst_port == 162
+                         ? pkt->dst_port : pkt->src_port);
             }
         } else {
             snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));

@@ -1120,6 +1120,40 @@ static void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* SNMP community brute: five or more distinct community strings
+ * tried from one source against one destination. snmpwalk with a
+ * wordlist (`-c` rotating) and metasploit's snmp_login both
+ * iterate communities one packet at a time. Legitimate monitoring
+ * uses one community string per (collector, agent) pair — usually
+ * "public" for reads or a site-specific token. Seeing five
+ * different communities in one window is the signature.
+ *
+ * Why 5: a normal monitoring host has exactly one community per
+ * agent it queries. Even an operator typing the wrong string a
+ * couple times stays well below 5. metasploit's default list
+ * starts with public/private/cisco/community/admin — five hits
+ * trips immediately. */
+#define SNMP_COMMUNITY_BRUTE_THRESHOLD 5
+
+static void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->snmp_flow_count; i++) {
+        const snmp_flow_t *e = &s->snmp_flows[i];
+        if (e->community_count < SNMP_COMMUNITY_BRUTE_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "snmp-brute:%.39s->%.39s",
+                 e->src_ip, e->dst_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d SNMP communities tried (last=%.16s)",
+                 e->src_ip, e->dst_ip, e->community_count,
+                 e->last_community[0] ? e->last_community : "?");
+        fire(ALERT_TYPE_SNMP_COMMUNITY_BRUTE, ALERT_SEV_CRIT,
+             "SNMP_COMMUNITY_BRUTE", detail, key,
+             e->src_ip, 161, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1281,6 +1315,7 @@ void alerts_update(sloth_state_t *s) {
     rule_bgp_notification_burst(s, now);
     rule_ssh_brute_force(s, now);
     rule_rdp_brute_force(s, now);
+    rule_snmp_community_brute(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

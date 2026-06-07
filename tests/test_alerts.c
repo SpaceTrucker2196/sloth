@@ -1810,6 +1810,57 @@ static void test_rdp_brute_force_no_cookie(void) {
     ASSERT(strstr(s.alerts[idx].detail, "user=?") != NULL);
 }
 
+/* ── SNMP community brute force ─────────────────────────── */
+
+static void seed_snmp_flow(sloth_state_t *s, const char *src_ip,
+                            const char *dst_ip, int community_count,
+                            const char *last_comm) {
+    if (s->snmp_flow_count >= MAX_SNMP_FLOWS) return;
+    snmp_flow_t *e = &s->snmp_flows[s->snmp_flow_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
+    e->community_count = community_count;
+    if (last_comm) snprintf(e->last_community, sizeof(e->last_community),
+                             "%s", last_comm);
+    e->last_seen = time(NULL);
+}
+
+static void test_snmp_community_brute_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_snmp_flow(&s, "10.0.0.5", "10.0.0.10", 5, "private");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "10.0.0.5");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 161);
+    ASSERT(strstr(s.alerts[idx].detail, "5 SNMP communities") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "private") != NULL);
+}
+
+static void test_snmp_community_brute_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_snmp_flow(&s, "10.0.0.5", "10.0.0.10", 4, "public");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SNMP_COMMUNITY_BRUTE), -1);
+}
+
+static void test_snmp_community_brute_per_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_snmp_flow(&s, "10.0.0.5", "10.0.0.10", 8, "cisco");
+    seed_snmp_flow(&s, "10.0.0.6", "10.0.0.11", 6, "admin");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_SNMP_COMMUNITY_BRUTE) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1982,6 +2033,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rdp_brute_force_below_threshold_no_fire);
     RUN_TEST(test_rdp_brute_force_per_pair);
     RUN_TEST(test_rdp_brute_force_no_cookie);
+    RUN_TEST(test_snmp_community_brute_fires_at_threshold);
+    RUN_TEST(test_snmp_community_brute_below_threshold_no_fire);
+    RUN_TEST(test_snmp_community_brute_per_pair);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

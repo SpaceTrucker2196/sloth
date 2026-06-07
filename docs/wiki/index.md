@@ -39,6 +39,9 @@ source material.
 - [[rdp-snoop]] — RDP X.224 CR counting + mstshash cookie
   extraction + `RDP_BRUTE_FORCE` alert (xfreerdp-loop / NLBrute /
   Crowbar detection).
+- [[snmp-snoop]] — SNMP v1/v2c BER parsing + community-string
+  tracking + `SNMP_COMMUNITY_BRUTE` alert (snmpwalk wordlist /
+  metasploit snmp_login detection).
 
 ## UI and infrastructure
 
