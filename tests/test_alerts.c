@@ -1748,6 +1748,68 @@ static void test_ssh_brute_force_per_pair(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── RDP brute force ────────────────────────────────────── */
+
+static void seed_rdp_flow(sloth_state_t *s, const char *src_ip,
+                           const char *dst_ip, int cr_count,
+                           const char *cookie) {
+    if (s->rdp_flow_count >= MAX_RDP_FLOWS) return;
+    rdp_flow_t *e = &s->rdp_flows[s->rdp_flow_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
+    if (cookie) snprintf(e->last_cookie, sizeof(e->last_cookie),
+                          "%s", cookie);
+    e->connect_req_count = cr_count;
+    e->last_seen         = time(NULL);
+}
+
+static void test_rdp_brute_force_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 10, "administrator");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(s.alerts[idx].match_ip, "203.0.113.7");
+    ASSERT_EQ((int)s.alerts[idx].match_port, 3389);
+    ASSERT(strstr(s.alerts[idx].detail, "10 RDP CRs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "administrator") != NULL);
+}
+
+static void test_rdp_brute_force_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 9, "admin");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE), -1);
+}
+
+static void test_rdp_brute_force_per_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 25, "alice");
+    seed_rdp_flow(&s, "203.0.113.8", "10.0.0.21", 15, "bob");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_RDP_BRUTE_FORCE) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
+/* No mstshash cookie observed — detail still renders without crashing. */
+static void test_rdp_brute_force_no_cookie(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_rdp_flow(&s, "203.0.113.7", "10.0.0.20", 11, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RDP_BRUTE_FORCE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "user=?") != NULL);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1916,6 +1978,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_ssh_brute_force_fires_at_threshold);
     RUN_TEST(test_ssh_brute_force_below_threshold_no_fire);
     RUN_TEST(test_ssh_brute_force_per_pair);
+    RUN_TEST(test_rdp_brute_force_fires_at_threshold);
+    RUN_TEST(test_rdp_brute_force_below_threshold_no_fire);
+    RUN_TEST(test_rdp_brute_force_per_pair);
+    RUN_TEST(test_rdp_brute_force_no_cookie);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);

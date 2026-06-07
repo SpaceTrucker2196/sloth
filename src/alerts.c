@@ -1087,6 +1087,39 @@ static void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* RDP brute force: ten or more X.224 Connection Requests from
+ * one client to one server. xfreerdp-loop, NLBrute, and Crowbar
+ * all open a fresh TCP connection per credential attempt and
+ * complete the TPKT/X.224 negotiation each time. A legitimate
+ * user opens one and stays. The signal is the connection
+ * cadence; the encrypted CredSSP/TLS payload underneath stays
+ * opaque and we never need it.
+ *
+ * Why 10: matches the SSH threshold for the same reason —
+ * generous enough for laptops behind NAT that re-connect a few
+ * times after sleep/wake, well below what brute-force tools
+ * produce in their first minute. */
+#define RDP_BRUTE_FORCE_THRESHOLD 10
+
+static void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->rdp_flow_count; i++) {
+        const rdp_flow_t *e = &s->rdp_flows[i];
+        if (e->connect_req_count < RDP_BRUTE_FORCE_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "rdp-brute:%.39s->%.39s",
+                 e->src_ip, e->dst_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d RDP CRs (brute-force; user=%.20s)",
+                 e->src_ip, e->dst_ip, e->connect_req_count,
+                 e->last_cookie[0] ? e->last_cookie : "?");
+        fire(ALERT_TYPE_RDP_BRUTE_FORCE, ALERT_SEV_CRIT,
+             "RDP_BRUTE_FORCE", detail, key,
+             e->src_ip, 3389, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1247,6 +1280,7 @@ void alerts_update(sloth_state_t *s) {
     rule_ldap_search_flood(s, now);
     rule_bgp_notification_burst(s, now);
     rule_ssh_brute_force(s, now);
+    rule_rdp_brute_force(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);

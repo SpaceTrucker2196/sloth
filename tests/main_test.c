@@ -74,6 +74,7 @@ void run_kerb_snoop_tests(void);
 void run_ldap_snoop_tests(void);
 void run_bgp_snoop_tests(void);
 void run_ssh_snoop_tests(void);
+void run_rdp_snoop_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -147,6 +148,7 @@ int main(void) {
     run_ldap_snoop_tests();
     run_bgp_snoop_tests();
     run_ssh_snoop_tests();
+    run_rdp_snoop_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

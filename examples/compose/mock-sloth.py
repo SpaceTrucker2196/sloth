@@ -163,6 +163,9 @@ TEMPLATES = [
     {"type": "ssh_flow", "src_ip": "10.0.0.5", "dst_ip": "10.0.0.10",
      "banner_count": 3, "server_banner": "SSH-2.0-OpenSSH_8.9",
      "first_seen": 1700000000, "last_seen": 1700000060},
+    {"type": "rdp_flow", "src_ip": "203.0.113.7", "dst_ip": "10.0.0.20",
+     "connect_req_count": 18, "last_cookie": "administrator",
+     "proto_mask": 11, "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 

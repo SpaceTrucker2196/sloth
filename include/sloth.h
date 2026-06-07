@@ -264,6 +264,37 @@ typedef struct {
     time_t   last_seen;
 } ssh_flow_t;
 
+/* ── RDP observation tracking ────────────────────────── */
+/* RDP lives on TCP/3389. The connection setup is TPKT (RFC 1006)
+ * carrying an X.224 Class 0 Connection Request TPDU, optionally
+ * followed by a cookie ("Cookie: mstshash=USERNAME\r\n") and an
+ * RDP Negotiation Request (MS-RDPBCGR §2.2.1.1) that announces
+ * which security protocols the client wants — vanilla RDP, SSL,
+ * CredSSP/NLA, or HYBRID_EX. Everything after the negotiation
+ * response is wrapped in TLS (or CredSSP-over-TLS) and opaque.
+ *
+ * Tier 1 counts X.224 CR TPDUs per (client_ip, server_ip), keeps
+ * the latest mstshash cookie value (the username the attacker is
+ * guessing against), and bitmasks the requested protocols. That's
+ * enough for the brute-force alert which catches xfreerdp-loop /
+ * NLBrute / Crowbar without seeing the encrypted auth. */
+#define MAX_RDP_FLOWS 64
+
+#define RDP_PROTO_RDP        0x01u   /* vanilla legacy RDP   */
+#define RDP_PROTO_SSL        0x02u   /* TLS-only             */
+#define RDP_PROTO_HYBRID     0x04u   /* CredSSP / NLA        */
+#define RDP_PROTO_HYBRID_EX  0x08u   /* CredSSP early-user   */
+
+typedef struct {
+    char     src_ip[46];           /* client (TCP initiator) */
+    char     dst_ip[46];           /* server (the RDP target) */
+    int      connect_req_count;    /* X.224 CR TPDUs observed */
+    char     last_cookie[64];      /* last mstshash username seen */
+    uint8_t  proto_mask;           /* OR of RDP_PROTO_* observed  */
+    time_t   first_seen;
+    time_t   last_seen;
+} rdp_flow_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -499,6 +530,7 @@ typedef enum {
     ALERT_TYPE_LDAP_SEARCH_FLOOD,
     ALERT_TYPE_BGP_NOTIFICATION_BURST,
     ALERT_TYPE_SSH_BRUTE_FORCE,
+    ALERT_TYPE_RDP_BRUTE_FORCE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -1082,6 +1114,10 @@ typedef struct {
     /* ── SSH observation table ───────────────────────────── */
     ssh_flow_t     ssh_flows[MAX_SSH_FLOWS];
     int            ssh_flow_count;
+
+    /* ── RDP observation table ───────────────────────────── */
+    rdp_flow_t     rdp_flows[MAX_RDP_FLOWS];
+    int            rdp_flow_count;
 
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];

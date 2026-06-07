@@ -36,6 +36,9 @@ source material.
   alert (peering instability / hijack-precursor detection).
 - [[ssh-snoop]] — SSH banner-exchange counting + `SSH_BRUTE_FORCE`
   alert (hydra / medusa / ncrack detection).
+- [[rdp-snoop]] — RDP X.224 CR counting + mstshash cookie
+  extraction + `RDP_BRUTE_FORCE` alert (xfreerdp-loop / NLBrute /
+  Crowbar detection).
 
 ## UI and infrastructure
 

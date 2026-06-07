@@ -956,6 +956,25 @@ void jsonl_emit_ssh_flows(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_rdp_flows(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->rdp_flow_count; i++) {
+        const rdp_flow_t *e = &s->rdp_flows[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "rdp_flow", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",            e->src_ip);
+        kv_str(buf, LINEBUF, &off, "dst_ip",            e->dst_ip);
+        kv_int(buf, LINEBUF, &off, "connect_req_count", e->connect_req_count);
+        kv_str(buf, LINEBUF, &off, "last_cookie",       e->last_cookie);
+        kv_int(buf, LINEBUF, &off, "proto_mask",        (int)e->proto_mask);
+        kv_int(buf, LINEBUF, &off, "first_seen",        (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",         (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -988,4 +1007,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_ldap_events       (s);
     jsonl_emit_bgp_sessions      (s);
     jsonl_emit_ssh_flows         (s);
+    jsonl_emit_rdp_flows         (s);
 }

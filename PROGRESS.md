@@ -77,6 +77,72 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-06-07 — RDP observability: RDP_BRUTE_FORCE alert
+**Touched**: `include/sloth.h`, `src/rdp_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_rdp_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/rdp-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Seventh passive-observable landing — second from the
+internet-substrate bucket after SSH. RDP is the Windows
+lateral-movement and remote-administration substrate; the
+TPKT + X.224 connection-setup envelope is cleartext even when
+the session is wrapped in CredSSP/NLA. xfreerdp-loop, NLBrute,
+and Crowbar all hammer 3389 the same way SSH brute tools
+hammer 22 — one TCP connection per credential attempt.
+MITRE ATT&CK T1110.001 (Password Guessing — RDP variant) and
+T1021.001 (Remote Services: Remote Desktop Protocol).
+**What's in it**:
+- New `src/rdp_snoop.{c,h}` module: parses the TPKT envelope
+  per RFC 1006 §6 (version 0x03, length BE u16) and the X.224
+  Class 0 Connection Request TPDU (code 0xE0, DST-REF=0x0000).
+- Extracts the mstshash cookie when present
+  (`Cookie: mstshash=USERNAME\r\n`) — the username field the
+  attacker is guessing against. Useful for surfacing the exact
+  account under attack and for SIEM-side spray detection
+  (username rotation against one server).
+- Extracts the MS-RDPBCGR §2.2.1.1 RDP Negotiation Request
+  TLV when present and OR-accumulates the requestedProtocols
+  bitmask (RDP / SSL / HYBRID / HYBRID_EX). Lets operators
+  spot clients that refuse NLA — possibly attack tools that
+  don't bother implementing modern auth.
+- Per-(client_ip, server_ip) aggregation; 64 flows,
+  oldest-by-last-seen evicted.
+- New `ALERT_TYPE_RDP_BRUTE_FORCE` + `rule_rdp_brute_force`:
+  fires CRIT when `connect_req_count >= 10` per (client, server).
+  Dedup key `rdp-brute:<client>-><server>`; match_ip=client,
+  match_port=3389 so per-alert pcap pivots to the RDP traffic.
+- Server→client direction (src_port=3389) is rejected at the
+  parser — X.224 Connection Confirm has code 0xD0, not the CR
+  code 0xE0 we match.
+- New `rdp_flow` JSONL record type via state-snapshot umbrella.
+  Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 38 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 12 tests in `tests/test_rdp_snoop.c`: minimal CR detection,
+  cookie username extraction, RDP_NEG_REQ protocol extraction,
+  protocol mask accumulates across multiple CRs, repeated CRs
+  accumulate per flow, two clients tracked separately,
+  non-3389 port rejected, server-side (src_port=3389)
+  rejected, bad TPKT version rejected, non-CR TPDU (Connection
+  Confirm) rejected, truncated payload rejected, non-RDP HTTP
+  payload rejected.
+- 4 alert tests in `tests/test_alerts.c`: fires at threshold (10),
+  no-fire below (9), separate alerts per attacker-target,
+  no-cookie case renders cleanly.
+- New wiki page `docs/wiki/rdp-snoop.md`: TPKT/X.224 layout
+  diagrams, protocol-mask table, what's-normal /
+  what's-suspicious sections, Tier 2 follow-ups (Negotiation
+  Response parsing, per-second cadence, classic-username
+  watchlist).
+**Counts**: 2626 assertions (+27 from SSH round). make is
+warning-clean. Smoke test 38/38 record types end-to-end.
+**Deliberately out of scope**: Negotiation Response parsing
+(would distinguish accepted vs rejected CRs), CredSSP-leak
+user enumeration, per-second cadence-shape analysis,
+MS-RDPEDC channel inspection (opaque past TLS wrap).
+
 ### 2026-06-01 — SSH observability: SSH_BRUTE_FORCE alert
 **Touched**: `include/sloth.h`, `src/ssh_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
