@@ -157,7 +157,7 @@ void view_packets_draw(const sloth_state_t *s) {
     tui_dim();
     TPRINT(" %-11s  %-21s     %-21s  %-3s  %-5s  %-5s  %-28s  %s\n",
            "Time", "Source", "Destination", "Geo",
-           "Proto", "Len", "Info", "Hex dump");
+           "Proto", "Len", "Info", "Hex / ASCII");
     TPRINT(" %-11s  %-21s     %-21s  %-3s  %-5s  %-5s  %-28s  %s\n",
            "-----------", "---------------------",
            "---------------------", "---",
@@ -275,12 +275,40 @@ void view_packets_draw(const sloth_state_t *s) {
         if (row != sel) tui_info_color(p->info);
         printw("%-28.28s", p->info);
 
-        /* Hex dump — Fallout palette per byte, fills the rest of
-         * the line up to the right margin. */
+        /* Hex dump + ASCII — Fallout palette per byte for hex, then a
+         * 2-col gap, then the ASCII translation. Each byte costs
+         * 3 cols (hex) + 1 col (ASCII) = 4 cols, plus a 2-col separator
+         * once. ASCII shows printable bytes as-is, others as '.'. */
         int yrow2, xnow;
         getyx(stdscr, yrow2, xnow);
         int hex_room = COLS - xnow - 1;
-        if (hex_room > 0 && p->raw_len > 0) {
+        const int ascii_sep = 2;
+        if (hex_room > ascii_sep + 4 && p->raw_len > 0) {
+            int bytes = (hex_room - ascii_sep) / 4;
+            if (bytes > p->raw_len) bytes = p->raw_len;
+            for (int b = 0; b < bytes; b++) {
+                unsigned byte = (unsigned)p->raw[b];
+                if (row != sel)
+                    attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
+                printw("%02x ", byte);
+            }
+            if (row == sel) tui_sel();
+            else            tui_dim();
+            printw("  ");
+            for (int b = 0; b < bytes; b++) {
+                unsigned char c = p->raw[b];
+                int printable = (c >= 32 && c < 127);
+                if (row == sel) {
+                    addch(printable ? c : '.');
+                } else if (printable) {
+                    tui_bright();
+                    addch(c);
+                } else {
+                    tui_dim();
+                    addch('.');
+                }
+            }
+        } else if (hex_room > 0 && p->raw_len > 0) {
             int hex_bytes = hex_room / 3;
             if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
             for (int b = 0; b < hex_bytes; b++) {
@@ -305,9 +333,15 @@ void view_packets_draw(const sloth_state_t *s) {
                region_str ? region_str : "??",
                p->proto, (unsigned)p->len, p->info);
         if (p->raw_len > 0) {
+            int n = p->raw_len < 16 ? (int)p->raw_len : 16;
             printf("  ");
-            for (int b = 0; b < p->raw_len && b < 16; b++)
+            for (int b = 0; b < n; b++)
                 printf("%02x ", (unsigned)p->raw[b]);
+            printf(" ");
+            for (int b = 0; b < n; b++) {
+                unsigned char c = p->raw[b];
+                putchar((c >= 32 && c < 127) ? (int)c : '.');
+            }
         }
         printf("\n");
         if (row == sel) tui_reset();

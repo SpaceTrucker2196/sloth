@@ -82,6 +82,7 @@ static view_t panel_to_view(int p) {
     switch (p) {
     case DASH_PANEL_IFACE:     return VIEW_IFACE;
     case DASH_PANEL_SUMMARY:   return VIEW_STATS;
+    case DASH_PANEL_MONITOR:   return VIEW_PROBE;
     case DASH_PANEL_CONN:      return VIEW_CONNS;
     case DASH_PANEL_TOP_HOSTS: return VIEW_CONNS;   /* no dedicated view */
     case DASH_PANEL_PACKETS:   return VIEW_PACKETS;
@@ -201,6 +202,11 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int desired_iface = 2 + (s->iface_count > 0 ? s->iface_count : 1);
     int iface_h = desired_iface < iface_cap ? desired_iface : iface_cap;
 
+    /* Monitor radio band: only present when a monitor iface is set
+     * (probe_iface non-empty OR probe_err set so the operator can see
+     * why it isn't running). Height 2 = title + 1 row. */
+    int monitor_h = (s->probe_iface[0] || s->probe_err[0]) ? 2 : 0;
+
     /* CRIT band gets a fixed height sized to the actual CRIT count,
      * clamped to [1, CRIT_MAX_ROWS]. When the count exceeds the cap
      * the band scrolls (see draw_crit_alerts_band). Always shows at
@@ -212,8 +218,9 @@ void view_dashboard_draw(const sloth_state_t *s) {
     int crit_h    = 1 + crit_rows;
 
     /* Reserve DASH_BOT_PAD rows at the bottom so the last band doesn't
-     * touch the terminal edge; subtract the fixed CRIT band too. */
-    int avail = lines - iface_y - iface_h - DASH_BOT_PAD - crit_h;
+     * touch the terminal edge; subtract the fixed CRIT band and the
+     * monitor band (zero when no monitor iface) too. */
+    int avail = lines - iface_y - iface_h - monitor_h - DASH_BOT_PAD - crit_h;
     /* 2H + H + H + H/2 + H + 2H = 7.5H (conn, bot1..bot4, packets).
      * Divide by 8 — the bot3 H/2 slack lands in `extra` below. */
     int H = avail / 8;
@@ -239,9 +246,12 @@ void view_dashboard_draw(const sloth_state_t *s) {
 
     /* CRIT alerts moved up to row 2 (right after iface+summary) so the
      * worst stuff lives at eye level. Everything else slides down by
-     * crit_h relative to the previous layout. */
-    int crit_y    = iface_y + iface_h;
-    int conn_y    = crit_y  + crit_h;
+     * crit_h relative to the previous layout. The monitor band, when
+     * present, sits right under the iface band so the operator can see
+     * what the radio is doing without scrolling. */
+    int monitor_y = iface_y   + iface_h;
+    int crit_y    = monitor_y + monitor_h;
+    int conn_y    = crit_y    + crit_h;
     int bot1_y    = conn_y  + conn_h;
     int bot2_y    = bot1_y  + bot1_h;
     int bot3_y    = bot2_y  + bot2_h;
@@ -264,7 +274,12 @@ void view_dashboard_draw(const sloth_state_t *s) {
     attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < iface_h; dy++) mvaddstr(iface_y + dy, x0 + iface_w, G_VERT);
 
-    /* Row 2: CRIT alerts (full width). */
+    /* Monitor radio (full width). Drawn only when allocated; otherwise
+     * monitor_y == crit_y and the next band overwrites this region. */
+    if (monitor_h > 0)
+        draw_monitor_band(s, monitor_y, monitor_h, x0, usable);
+
+    /* Row 2 (or 3 when the monitor band is present): CRIT alerts. */
     draw_crit_alerts_band(s, crit_y, crit_h, x0, usable);
 
     /* Connections row: 60% conn table + 40% top hosts. */

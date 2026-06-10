@@ -10,6 +10,8 @@ available rows. Minimum recommended terminal is 100×33.
  ┌─ header (2 rows) ──────────────────────────────────────────┐
  │ ── Interfaces ──   eth0  1.0MB/s  rx ▂▃▄▅▆▇█  tx _▁▂▃▄▅   │  ← iface band, expands to fit iface_count
  ├────────────────────────────────────────────────────────────┤
+ │ ── Monitor radio ──  wlan1mon  ch 6  rx 1.2KB/s  12 clients│  ← only when a monitor-mode iface is set (Alpha dongle etc.)
+ ├────────────────────────────────────────────────────────────┤
  │ Connections (= 2H, scrollable)   │  Top hosts (= 2H)       │  ← split 60/40
  │ local → remote  proto …          │  ip  host  owner  age   │
  ├──────────────────┬─────────────────┬───────────────────────┤
@@ -85,6 +87,27 @@ the standalone `[2]` view).
 - An entry in Top hosts with a name in the brand colour list you
   weren't visiting.
 - Any visible CRIT in the alerts panel.
+
+## Monitor radio band
+
+A single-row band that only appears when a monitor-mode iface is set
+up (typically an external USB adapter like the Alfa AWUS036ACH parked
+in monitor mode). Shows:
+
+| col      | source |
+|----------|--------|
+| iface    | `s->probe_iface` — the netdev with ARPHRD type 803 (radiotap) |
+| channel  | most-recently observed channel from `s->probe_clients[0].channel` (the list is sorted by last_seen desc) |
+| rx       | rx rate of the monitor netdev from `/proc/net/dev` — every frame the radio captures shows up here |
+| frames   | cumulative rx_packets on the monitor iface |
+| clients  | `s->probe_count` — distinct STAs the harvester has seen |
+| APs      | `s->ap_count` — APs derived from passively captured beacons |
+| deauths  | `s->deauth_count` — cumulative deauth/disassoc frames |
+| sparkline| rx history of the monitor netdev (same series the iface band uses) |
+
+If the probe subsystem can't open a monitor iface (`s->probe_err` set),
+the band shows the error message instead so the operator knows why no
+SIGINT data is appearing in the other panels.
 
 ## Roaming clients panel
 

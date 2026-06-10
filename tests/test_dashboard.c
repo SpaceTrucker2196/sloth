@@ -205,6 +205,28 @@ static void test_draw_populated(void) {
     ASSERT(1);
 }
 
+static void test_draw_with_monitor_iface(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_iface(&s, "eth0");
+    seed_iface(&s, "wlan1mon");
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    uint8_t mac[6] = { 0xde,0xad,0xbe,0xef,0x00,0x01 };
+    seed_probe(&s, mac, "TestSSID", -55);
+    s.probe_clients[0].channel = 6;
+    s.deauth_count = 2;
+    view_dashboard_draw(&s);
+    ASSERT(1);
+}
+
+static void test_draw_with_monitor_error(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_iface(&s, "eth0");
+    snprintf(s.probe_err, sizeof(s.probe_err),
+             "no monitor-mode iface found (need type 803)");
+    view_dashboard_draw(&s);
+    ASSERT(1);
+}
+
 /* ── Navigation ──────────────────────────────────────────── */
 
 static void test_nav_scrolls_conn_sel(void) {
@@ -250,6 +272,8 @@ void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
+    RUN_TEST(test_draw_with_monitor_iface);
+    RUN_TEST(test_draw_with_monitor_error);
 
     TEST_SUITE("dashboard nav");
     RUN_TEST(test_nav_scrolls_conn_sel);

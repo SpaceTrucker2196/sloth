@@ -21,14 +21,18 @@ of raw frame for detail rendering and per-alert pcap export.
 ## View
 
 ```
- ── Packets ────────────────────────────────────────────────────
- Time      Source                Destination           Proto  Len  Info
- 0001.123  192.168.1.5:33445     142.250.80.46:443      6    1500  TLS 1.3 google.com
- 0001.124  142.250.80.46:443     192.168.1.5:33445      6     1500 ACK
- 0001.125  192.168.1.5:53210     1.1.1.1:53            17      78  DNS A reddit.com
- 0001.126  1.1.1.1:53            192.168.1.5:53210     17     128  DNS R reddit.com
- 0001.130  192.168.1.5:5353      224.0.0.251:5353      17     142  mDNS
+ ── Packets ──────────────────────────────────────────────────────────────────
+ Time      Source                Destination           Proto  Len  Info                          Hex / ASCII
+ 0001.123  192.168.1.5:33445     142.250.80.46:443      6    1500  TLS 1.3 google.com            16 03 03 00 ...   ......
+ 0001.124  142.250.80.46:443     192.168.1.5:33445      6    1500  ACK                           45 00 00 28 ...   E..(..
+ 0001.125  192.168.1.5:53210     1.1.1.1:53            17      78  DNS A reddit.com              ab cd 01 00 ...   ..reddit
+ 0001.126  1.1.1.1:53            192.168.1.5:53210     17     128  DNS R reddit.com              ab cd 81 80 ...   ..reddit
+ 0001.130  192.168.1.5:5353      224.0.0.251:5353      17     142  mDNS                          00 00 00 00 ...   ._airpla
 ```
+
+The hex column shows as many bytes as the terminal width allows; ASCII
+to the right is the same byte run, printable chars literal and
+non-printable as `.`.
 
 Press Enter on a paused packet for the hex panel:
 

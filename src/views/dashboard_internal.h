@@ -28,6 +28,7 @@
 typedef enum {
     DASH_PANEL_IFACE = 0,
     DASH_PANEL_SUMMARY,
+    DASH_PANEL_MONITOR,
     DASH_PANEL_CONN,
     DASH_PANEL_TOP_HOSTS,
     DASH_PANEL_PACKETS,
@@ -82,6 +83,7 @@ void panel_title_passive    (int y, int x, int w, const char *name, int panel_id
 int  crit_alerts_count      (const sloth_state_t *s);
 
 void draw_iface_band         (const sloth_state_t *s, int y0, int h, int x0, int w);
+void draw_monitor_band       (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_conn_band          (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_top_hosts_panel    (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_packets_band       (const sloth_state_t *s, int y0, int h, int x0, int w);

@@ -88,6 +88,91 @@ void draw_iface_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     }
 }
 
+/* ── Monitor radio (single row, only when probe_iface is active) ──
+ * Pulls iface rx_rate / rx_packets from /proc/net/dev (radiotap frames
+ * count as rx on the monitor netdev), channel from the most-recently
+ * seen probe client, and aggregate counts from the SIGINT subsystems
+ * (probe_count clients, ap_count beacons, deauth_count). When the
+ * monitor iface isn't set up the band collapses to height 0 — the
+ * dashboard layout only allocates space when s->probe_iface[0]. */
+
+void draw_monitor_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
+    panel_title(y0, x0, w, "Monitor radio", DASH_PANEL_MONITOR);
+
+    int y = y0 + 1;
+    if (h < 2) return;
+
+    /* Lookup iface stats + history for the monitor netdev. */
+    const iface_stat_t *I = NULL;
+    for (int i = 0; i < s->iface_count; i++) {
+        if (strncmp(s->ifaces[i].name, s->probe_iface, 16) == 0) {
+            I = &s->ifaces[i]; break;
+        }
+    }
+    const iface_hist_t *H = hist_lookup(s, s->probe_iface);
+
+    /* Channel: most-recently observed client carries the channel the
+     * radio was tuned to when it last received a frame. probe_clients
+     * is sorted by last_seen desc in probe_snapshot. */
+    int channel = 0;
+    if (s->probe_count > 0) channel = s->probe_clients[0].channel;
+
+    /* Frame rate: prefer rx_rate (pkts/sec are not exposed but bytes/sec
+     * is, divide by approximate avg frame size if needed). The iface
+     * row already shows bytes; here we want frames. /proc/net/dev gives
+     * rx_packets cumulative — we don't have a frames-per-sec from the
+     * existing iface_stat_t directly, but we can derive a rough rate
+     * from the bytes rate (radiotap+mgmt frames average ~200B). For an
+     * honest readout we just show packets cumulative + rx_rate in B/s. */
+    char rxr[16] = "--", rxp[20] = "--";
+    if (I) {
+        bw_fmt_rate(I->rx_rate, rxr, sizeof(rxr));
+        snprintf(rxp, sizeof(rxp), "%llu", (unsigned long long)I->rx_packets);
+    }
+
+    char chbuf[16];
+    if (channel > 0 && channel < 1000)
+        snprintf(chbuf, sizeof(chbuf), "%d", channel);
+    else
+        snprintf(chbuf, sizeof(chbuf), "?");
+
+    /* Text section: iface | ch | rx | total frames | clients | APs |
+     * deauths. Trailing sparkline fills the rest. */
+    attrset(COLOR_PAIR(CP_NORMAL));
+    const char *err = s->probe_err[0] ? s->probe_err : NULL;
+    int text_w = w;
+    int spark_x = x0 + w;  /* default: no sparkline */
+    if (!err) {
+        int sw = w / 3;
+        if (sw > 32) sw = 32;
+        if (sw >= 8) {
+            text_w  = w - sw - 2;
+            spark_x = x0 + text_w + 2;
+        }
+    }
+
+    if (err) {
+        attrset(COLOR_PAIR(CP_DIM));
+        clipline(y, x0, w, "  %-12s  %s", s->probe_iface, err);
+    } else {
+        clipline(y, x0, text_w,
+                 "  %-12s  ch %-3s  %10s rx  %10s frames"
+                 "  %4d clients  %4d APs  %3d deauths",
+                 s->probe_iface, chbuf, rxr, rxp,
+                 s->probe_count, s->ap_count, s->deauth_count);
+
+        if (H) {
+            draw_sparkline_at(y, spark_x, w - (spark_x - x0),
+                              H->rx, H->head, H->count);
+        } else {
+            attrset(COLOR_PAIR(CP_DIM));
+            move(y, spark_x);
+            int sw = w - (spark_x - x0);
+            for (int j = 0; j < sw; j++) addch('_');
+        }
+    }
+}
+
 /* ── Connections (scrollable, follows conn_sel) ──────────── */
 
 void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
@@ -492,13 +577,29 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     printw("%-*.*s", info_w, info_w, p->info);
     x += info_w;
 
-    /* Hex dump fills the remaining width — up to raw_len bytes, 3 cols
-     * each ("XX "). Each byte is coloured by its value via the
-     * Fallout-flavoured earth-tone palette (CP_INFO_BASE + byte%8) so
-     * repeated bytes (0x00 runs, ASCII text, padding) form visible
-     * stripes without dominating the row. */
+    /* Hex dump + ASCII fill the remaining width. Each byte costs
+     * 3 cols (hex) + 1 col (ASCII) = 4 cols, plus a 2-col gap once.
+     * Hex bytes use the Fallout earth-tone palette
+     * (CP_INFO_BASE + byte%8). ASCII shows printable bytes literally
+     * and renders non-printable as '.' in the row's category bg. */
     int hex_room = row_end - x;
-    if (hex_room > 0 && p->raw_len > 0) {
+    const int ascii_sep = 2;
+    if (hex_room > ascii_sep + 4 && p->raw_len > 0) {
+        int bytes = (hex_room - ascii_sep) / 4;
+        if (bytes > p->raw_len) bytes = p->raw_len;
+        move(y, x);
+        for (int b = 0; b < bytes; b++) {
+            unsigned byte = (unsigned)p->raw[b];
+            attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
+            printw("%02x ", byte);
+        }
+        tui_pkt_bg_cat(cat);
+        printw("  ");
+        for (int b = 0; b < bytes; b++) {
+            unsigned char c = p->raw[b];
+            addch((c >= 32 && c < 127) ? c : '.');
+        }
+    } else if (hex_room > 0 && p->raw_len > 0) {
         int hex_bytes = hex_room / 3;
         if (hex_bytes > p->raw_len) hex_bytes = p->raw_len;
         move(y, x);
