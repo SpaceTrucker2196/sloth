@@ -1,5 +1,8 @@
 ntop
 ntop_test
+/sloth
 sloth_test
 *.o
+*.dSYM/
 __pycache__/
+.DS_Store
