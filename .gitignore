@@ -1,5 +1,6 @@
 ntop
 ntop_test
+/sloth
 sloth_test
 *.o
 *.dSYM/
