@@ -34,7 +34,6 @@ static void key_row(const char *k1, const char *l1,
 }
 
 void view_help_draw(const sloth_state_t *s) {
-    (void)s;
     tui_normal(); TPRINT(" sloth help");
     tui_dim();    TPRINT("       press [?] or any view key to return");
     TPRINT("\n");
@@ -72,6 +71,36 @@ void view_help_draw(const sloth_state_t *s) {
     tui_bright(); TPRINT("sloth -o FILE");
     tui_normal(); TPRINT("   append a JSONL forensic log of every observed event\n");
     TPRINT("\n");
+
+    section("Version");
+    tui_normal(); TPRINT("    running: ");
+    tui_bright(); TPRINT("%s\n", s->updater.current[0] ? s->updater.current
+                                                       : "(unknown)");
+    if (s->updater.enabled) {
+        tui_normal(); TPRINT("    latest:  ");
+        if (s->updater.err) {
+            tui_dim(); TPRINT("(%s)\n", s->updater.err_msg);
+        } else if (s->updater.latest[0]) {
+            /* Colour the label per state — bright green-ish phosphor
+             * for "up to date," heat for "update available." Uses
+             * tui_heat instead of hardcoded ANSI so the theme wins. */
+            if (s->updater.has_update) {
+                tui_heat(0.75); TPRINT("%s  -- update available\n",
+                                        s->updater.latest);
+                if (s->updater.url[0]) {
+                    tui_dim(); TPRINT("             %s\n", s->updater.url);
+                }
+            } else {
+                tui_bright(); TPRINT("%s  ", s->updater.latest);
+                tui_dim();    TPRINT("(up to date)\n");
+            }
+        } else {
+            tui_dim(); TPRINT("(pending first check)\n");
+        }
+    } else {
+        tui_dim();
+        TPRINT("    latest:  (no --check-manifest; see docs/wiki/version-checkin.md)\n");
+    }
 
     section("About");
     tui_dim();

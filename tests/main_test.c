@@ -49,6 +49,8 @@ void run_alerts_tests(void);
 void run_cleartext_creds_tests(void);
 void run_device_risk_tests(void);
 void run_posture_tests(void);
+void run_version_tests(void);
+void run_updater_tests(void);
 void run_md5_tests(void);
 void run_sha256_tests(void);
 void run_devices_tests(void);
@@ -129,6 +131,8 @@ int main(void) {
     run_cleartext_creds_tests();
     run_device_risk_tests();
     run_posture_tests();
+    run_version_tests();
+    run_updater_tests();
     run_md5_tests();
     run_sha256_tests();
     run_devices_tests();

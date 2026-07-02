@@ -62,6 +62,7 @@
 #include "http_log.h"
 #include "cleartext_creds.h"
 #include "posture.h"
+#include "updater.h"
 #include "tls_log.h"
 #include "quic_log.h"
 #include "dns_log.h"
@@ -347,7 +348,15 @@ static void print_usage(const char *argv0) {
             "                     exposures, and high-risk devices.\n"
             "  --report-json FILE.json\n"
             "                     same rollup as --report, structured for\n"
-            "                     machine consumption / SIEM diff.\n",
+            "                     machine consumption / SIEM diff.\n"
+            "  --check-manifest FILE\n"
+            "                     read a locally-populated release manifest\n"
+            "                     (JSON) and show \"update available\" in the\n"
+            "                     help view when its \"latest\" > SLOTH_VERSION.\n"
+            "                     sloth never fetches from the network itself;\n"
+            "                     populate FILE via a systemd timer / cron\n"
+            "                     using examples/updater/check-latest.sh.\n"
+            "                     See docs/wiki/manifest-format.md.\n",
             argv0);
 }
 
@@ -361,6 +370,7 @@ int main(int argc, char **argv) {
     const char *data_socket  = NULL;
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
+    const char *check_manifest = NULL; /* --check-manifest FILE   */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
@@ -395,6 +405,8 @@ int main(int argc, char **argv) {
             report_md = argv[++i];
         } else if (!strcmp(argv[i], "--report-json") && i + 1 < argc) {
             report_json = argv[++i];
+        } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
+            check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -445,11 +457,16 @@ int main(int argc, char **argv) {
     probe_start(&g_state);
 #endif
     event_wake_init();
+    updater_init(check_manifest);
     tui_init();
 
     while (!g_quit) {
         poll_data(&g_state);
         data_socket_tick();
+        /* Version check-in — cheap-when-idle; only re-reads the
+         * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
+        updater_tick(time(NULL));
+        updater_snapshot(&g_state);
         tui_draw(&g_state);
         int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
         event_wake_drain();

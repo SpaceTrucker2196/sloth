@@ -1300,6 +1300,20 @@ typedef struct {
     uint64_t stats_base_txp[MAX_IFACES];     /* tx_packets at baseline */
     char     stats_base_name[MAX_IFACES][16];/* iface name for each slot */
     int      stats_base_count;               /* number of baseline slots */
+
+    /* Version check-in (notify-only). Populated by updater_snapshot()
+     * each poll. `enabled` is 0 until --check-manifest is set on the
+     * CLI. See src/updater.c and docs/wiki/version-checkin.md. */
+    struct {
+        int    enabled;
+        int    has_update;                    /* 1 iff latest > current */
+        int    err;                           /* 1 iff manifest missing / malformed */
+        char   current[16];                   /* baked SLOTH_VERSION */
+        char   latest[16];                    /* from the manifest, "" if unknown */
+        char   url[128];                      /* release URL, "" if not published */
+        char   err_msg[64];                   /* short human message when err=1 */
+        time_t last_checked;                  /* 0 iff never read successfully */
+    } updater;
 } sloth_state_t;
 
 /* ── Iface hide election (shared by iface view + dashboard band) ── */

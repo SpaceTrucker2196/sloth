@@ -101,22 +101,31 @@ immediate forced rebuild while the user is monitoring traffic.
 
 ## Recommended implementation phases
 
-1. **Policy + docs**
-   - decide check cadence
-   - decide release source (GitHub latest release API or signed manifest)
-   - document supported-version policy in `SECURITY.md`
-2. **Version model**
-   - add a small module for version parsing/comparison and cached status
-   - unit-test semver comparisons (`1.10.0` > `1.9.0`, etc.)
-3. **Async checker**
-   - add a background check path and wake integration
-   - surface status in help/dashboard/header text only
-4. **Manual apply path**
-   - implement a separate updater helper or exec path that stages a source
-     build outside the render loop
-5. **Optional unattended mode**
-   - only after the manual path is stable
-   - keep it opt-in and policy-controlled
+1. ✅ **Policy + docs** *(landed)*
+   - Supported-version policy in `SECURITY.md`.
+   - Check cadence: `updater_tick` re-reads at most once every 60 s.
+   - Release source: locally-populated manifest file (see [[manifest-format]]),
+     because the safest first landing is one where sloth itself never
+     touches the network — a helper process (systemd timer, cron)
+     produces the file. That satisfies the "background thread OR
+     helper process" wording of the original recommendation.
+2. ✅ **Version model** *(landed)*
+   - `src/version.{c,h}` — semver parse + compare, RFC-ish, with the
+     `1.10.0` > `1.9.0` trap covered by unit tests.
+3. ✅ **Notify-only checker** *(landed, phase 3.1)*
+   - `src/updater.{c,h}` reads the manifest, compares to
+     `SLOTH_VERSION`, exposes status through the existing
+     poll-and-snapshot pattern.
+   - `--check-manifest FILE` CLI flag; omitted → checker disabled.
+   - Status surfaces in the help view — no dashboard clutter until
+     the operator explicitly enables checks.
+   - Reference producer: `examples/updater/check-latest.sh`.
+4. ⏳ **Manual apply path** *(deferred — separate landing)*
+   - Implement a separate updater helper or exec path that stages a
+     source build outside the render loop.
+5. ⏳ **Optional unattended mode** *(deferred — after phase 4)*
+   - Only after the manual path is stable.
+   - Keep it opt-in and policy-controlled.
 
 ## Integrity model
 

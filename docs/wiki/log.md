@@ -108,3 +108,30 @@ product code. The new page records a concrete design that fits sloth's
 existing non-blocking main loop and passive-tool constraints, while still
 laying out how a future source-download/build/install workflow could be
 added with minimal interruption.
+
+---
+
+## 2026-07-02 — Version check-in phases 1-3 landed
+
+**Source**: [[version-checkin]] recommendation; commits landing
+`src/version.{c,h}`, `src/updater.{c,h}`, `examples/updater/`,
+`SECURITY.md` rewrite.
+
+**Created pages**:
+
+- [manifest-format.md](manifest-format.md) — JSON schema for the
+  manifest file that `--check-manifest` consumes.
+
+**Index updates**: added [[manifest-format]] under "UI and infrastructure"
+in [[index]].
+
+**Doc updates**: [[version-checkin]] rewrote its "Recommended
+implementation phases" section to mark phases 1–3 as landed and
+phases 4–5 as deferred. `SECURITY.md` replaced its GitHub template with
+a real supported-version policy, vulnerability reporting instructions,
+and a pointer to `MISSION.md` for the passive-only guarantee.
+
+**Why**: the design was already logged as an architecture proposal; this
+entry records the first-code landing so a future reader can see when the
+policy → module → checker sequence actually shipped and where the
+follow-up phases are still open.
