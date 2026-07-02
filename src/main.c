@@ -60,6 +60,7 @@
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "http_log.h"
+#include "cleartext_creds.h"
 #include "tls_log.h"
 #include "quic_log.h"
 #include "dns_log.h"
@@ -128,6 +129,7 @@ static void poll_data(sloth_state_t *s) {
     dns_log_snapshot(s);
     ntp_log_snapshot(s);
     icmp_log_snapshot(s);
+    cleartext_creds_snapshot(s);
 #endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)

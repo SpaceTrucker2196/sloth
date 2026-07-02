@@ -136,6 +136,7 @@ through as UTF-8.
 | `host` | string | SNI hostname (empty if not present) |
 | `ver`  | string | `TLS 1.3` / `TLS 1.2` / `TLS 1.1` / `TLS 1.0` / unknown |
 | `ja3`  | string | 32-char hex JA3 fingerprint (see [[ja3-fingerprinting]]) |
+| `ja4`  | string | 36-char JA4 client fingerprint (FoxIO spec); survives extension reordering that breaks JA3. Omitted when not computed. |
 
 ### `quic`
 
@@ -186,9 +187,37 @@ through as UTF-8.
 | `sev`   | int    | severity: **0=LOW (yellow), 1=WARN (orange), 2=CRIT (red)**. See [[alerts]] for the tier semantics. |
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
 | `count` | int    | number of observations under this dedup key |
+| `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
+
+### `cleartext_cred`
+
+```json
+{"type":"cleartext_cred","ts":1700000008,"src":"10.0.0.5","dst":"192.0.2.10","dst_port":80,"protocol":"HTTP-Basic","username":"alice","pw_observed":1}
+```
+
+| Field         | Type   | Meaning |
+|---------------|--------|---------|
+| `src`         | string | client IP that emitted the credential |
+| `dst`         | string | server IP that received it |
+| `dst_port`    | int    | server port (80 for HTTP Basic, 21 for FTP, …) |
+| `protocol`    | string | `HTTP-Basic`, `FTP`, `POP3`, `IMAP`, `SMTP`, `Telnet` |
+| `username`    | string | observed username, sanitized to printable ASCII |
+| `pw_observed` | int    | 1 if a password token was seen on the wire, 0 otherwise |
+
+**Guardrail — no password field, ever.** This event class records the
+*fact* of a cleartext credential exposure and the username. The
+password value is never stored, hashed, or truncated: `src/cleartext_creds.c`
+has no code path that touches password bytes, and the JSONL schema
+has no field for it. Adding one would be a scope violation on
+sloth's passive-observation contract — see MISSION.md §2.
+
+**Cadence**: event — one record per unique
+`(src, dst, dst_port, protocol, username)` tuple. Repeat observations
+coalesce on the ring side. Also feeds `CLEARTEXT_CRED` in the alert
+stream (ATT&CK T1040).
 
 ### `connections`
 

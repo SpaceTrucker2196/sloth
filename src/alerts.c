@@ -189,6 +189,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_ATTACK_PATH:            return "T1190";       /* Exploit Public-Facing App */
     case ALERT_TYPE_WEAK_TLS:               return "T1600";       /* Weaken Encryption */
     case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
+    case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -366,6 +367,33 @@ static void rule_no_monitor_mode(const sloth_state_t *s, time_t now) {
          "NO_MONITOR_MODE",
          "no WiFi radio in monitor mode — WiFi SIGINT views will be empty",
          "nomon:global", NULL, 0, now);
+}
+
+/* Every fresh cleartext_cred_t row is an alert — one per unique
+ * (src, dst, protocol, username). Coalescing happens on the ring
+ * side; here we just fan out to the alert engine so the alerts view
+ * and cross-panel colouring pick them up. Severity WARN because a
+ * cred on the wire is a policy failure but not a live intrusion. */
+static void rule_cleartext_cred(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->cleartext_cred_count; i++) {
+        const cleartext_cred_t *r = &s->cleartext_creds[i];
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key),
+                 "cred:%s->%s:%u:%s:%s",
+                 r->src, r->dst, (unsigned)r->dst_port,
+                 r->protocol, r->username);
+        snprintf(detail, sizeof(detail),
+                 "%s user %.24s in the clear on %.20s%s -> %.24s:%u",
+                 r->protocol,
+                 r->username,
+                 r->protocol,
+                 r->password_observed ? " (password observed)" : "",
+                 r->dst,
+                 (unsigned)r->dst_port);
+        fire(ALERT_TYPE_CLEARTEXT_CRED, ALERT_SEV_WARN,
+             "CLEARTEXT_CRED", detail, key, r->src, r->dst_port, now);
+    }
 }
 
 static void rule_weak_tls(const sloth_state_t *s, time_t now) {
@@ -1431,6 +1459,7 @@ void alerts_update(sloth_state_t *s) {
     rule_attack_path(s, now);
     rule_weak_tls(s, now);
     rule_no_monitor_mode(s, now);
+    rule_cleartext_cred(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

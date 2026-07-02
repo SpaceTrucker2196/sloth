@@ -46,6 +46,7 @@ void run_ntp_log_tests(void);
 void run_icmp_log_tests(void);
 void run_threat_intel_tests(void);
 void run_alerts_tests(void);
+void run_cleartext_creds_tests(void);
 void run_md5_tests(void);
 void run_sha256_tests(void);
 void run_devices_tests(void);
@@ -123,6 +124,7 @@ int main(void) {
     run_icmp_log_tests();
     run_threat_intel_tests();
     run_alerts_tests();
+    run_cleartext_creds_tests();
     run_md5_tests();
     run_sha256_tests();
     run_devices_tests();

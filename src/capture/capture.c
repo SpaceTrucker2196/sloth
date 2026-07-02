@@ -33,6 +33,8 @@
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
+#include "ftp_snoop.h"
+#include "cleartext_creds.h"
 #include "http_log.h"
 #include "tls_log.h"
 #include "dns.h"
@@ -66,6 +68,22 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
     snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", entry.host[0] ? entry.host : "?");
     http_log_record(&entry);
+    /* Same payload pass: look for Authorization: Basic and record any
+     * cleartext credential exposure. Username only — see #16 phase 3. */
+    http_snoop_scan_creds(tp + tcp_hdr, pay_len,
+                          pkt->src, pkt->dst, pkt->dst_port);
+}
+
+/* FTP command-channel observer on TCP/21. Records USER<->PASS
+ * exposures via the cleartext_creds ring. #16 phase 3. */
+static void try_ftp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (ftp_snoop(tp + tcp_hdr, pay_len,
+                  pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "FTP");
 }
 
 static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
@@ -220,6 +238,8 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 21 || pkt->src_port == 21)
+            try_ftp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);
@@ -329,6 +349,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 21 || pkt->src_port == 21)
+            try_ftp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);

@@ -20,6 +20,7 @@ void jsonl_emit_http (const http_log_entry_t *e);
 void jsonl_emit_ntp  (const ntp_log_entry_t  *e);
 void jsonl_emit_icmp (const icmp_log_entry_t *e);
 void jsonl_emit_alert(const alert_t          *a);
+void jsonl_emit_cleartext_cred(const cleartext_cred_t *r);
 
 /* Snapshot emitter — one line per active flow in s->conns. Driven by the
  * poll loop (≈1 Hz), not by an event ring. Consumers rebuild their table

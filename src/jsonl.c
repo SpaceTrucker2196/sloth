@@ -240,6 +240,22 @@ void jsonl_emit_alert(const alert_t *a) {
     emit_line(buf);
 }
 
+void jsonl_emit_cleartext_cred(const cleartext_cred_t *r) {
+    /* Never emit a password field, even NULL/empty. That's the whole
+     * point of this event class — the exposure fact, not the secret. */
+    if (!any_sink() || !r) return;
+    char  buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "cleartext_cred", r->ts);
+    kv_str(buf, LINEBUF, &off, "src",       r->src);
+    kv_str(buf, LINEBUF, &off, "dst",       r->dst);
+    kv_int(buf, LINEBUF, &off, "dst_port",  (int)r->dst_port);
+    kv_str(buf, LINEBUF, &off, "protocol",  r->protocol);
+    kv_str(buf, LINEBUF, &off, "username",  r->username);
+    kv_int(buf, LINEBUF, &off, "pw_observed", r->password_observed);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
 /* TCP states map to the Linux kernel's TCP_* enum (1=ESTABLISHED..11=CLOSING).
  * Same table the conns view uses; duplicated here to keep jsonl independent
  * of view code (one-way layering: views read state, emitters serialize it). */

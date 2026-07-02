@@ -625,6 +625,7 @@ typedef enum {
     ALERT_TYPE_ATTACK_PATH,
     ALERT_TYPE_WEAK_TLS,
     ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
+    ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -710,6 +711,23 @@ typedef struct {
     char   user_agent[64]; /* User-Agent header, truncated */
     time_t ts;
 } http_log_entry_t;
+
+/* ── Cleartext credential exposures (roadmap #16 phase 3) ──
+ * Passive observation of authentication material sent in the clear.
+ * Records the *fact* of exposure and the username, never the password
+ * or its hash. Guardrail lives in src/cleartext_creds.c — see
+ * docs/wiki/jsonl-schema.md for the schema policy. */
+#define MAX_CLEARTEXT_CREDS 64
+
+typedef struct {
+    char     src[46];       /* client IP */
+    char     dst[46];       /* server IP */
+    uint16_t dst_port;      /* 80 for HTTP Basic, 21 for FTP, etc. */
+    char     protocol[16];  /* "HTTP-Basic", "FTP", "POP3", ... */
+    char     username[64];  /* observed username, sanitized */
+    int      password_observed;  /* 1 if a password token was seen */
+    time_t   ts;
+} cleartext_cred_t;
 
 /* ── Deauth / Disassoc events ───────────────────────────── */
 #define MAX_DEAUTH_ENTRIES    128
@@ -1125,6 +1143,9 @@ typedef struct {
 
     /* ── HTTP request log ────────────────────────────────────── */
     http_log_entry_t http_log[MAX_HTTP_LOG];  /* ring buffer */
+
+    cleartext_cred_t cleartext_creds[MAX_CLEARTEXT_CREDS];
+    int              cleartext_cred_count;
     int              http_log_head;           /* next write slot */
     int              http_log_count;          /* entries written (capped at MAX_HTTP_LOG) */
     int              http_log_sel;

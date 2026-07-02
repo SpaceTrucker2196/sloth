@@ -17,6 +17,8 @@ SRCS = src/main.c          \
        src/dns_snoop.c     \
        src/sni_snoop.c     \
        src/http_snoop.c    \
+       src/ftp_snoop.c     \
+       src/cleartext_creds.c \
        src/oui.c           \
        src/services.c      \
        src/views/iface.c   \
@@ -194,6 +196,9 @@ TEST_SRCS = tests/main_test.c          \
             src/dns_snoop.c            \
             src/sni_snoop.c            \
             src/http_snoop.c           \
+            src/ftp_snoop.c            \
+            src/cleartext_creds.c      \
+            tests/test_cleartext_creds.c \
             src/oui.c                  \
             src/services.c             \
             src/platform/linux_parse.c \
