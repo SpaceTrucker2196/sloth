@@ -1216,6 +1216,9 @@ typedef struct {
     int      stats_base_count;               /* number of baseline slots */
 } sloth_state_t;
 
+/* ── Iface hide election (shared by iface view + dashboard band) ── */
+int iface_is_hidden(const sloth_state_t *s, const char *name);
+
 /* ── Platform ops vtable ────────────────────────────────── */
 typedef struct {
     int  (*get_ifaces)(iface_stat_t *out, int max);

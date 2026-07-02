@@ -205,6 +205,40 @@ static void test_draw_populated(void) {
     ASSERT(1);
 }
 
+/* ── iface hide election (shared with iface view) ────────── */
+
+static void test_iface_is_hidden_matches(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.iface_hidden[0], sizeof(s.iface_hidden[0]), "docker0");
+    snprintf(s.iface_hidden[1], sizeof(s.iface_hidden[1]), "veth0abc");
+    s.iface_hidden_count = 2;
+    ASSERT_EQ(iface_is_hidden(&s, "docker0"),  1);
+    ASSERT_EQ(iface_is_hidden(&s, "veth0abc"), 1);
+    ASSERT_EQ(iface_is_hidden(&s, "eth0"),     0);
+    ASSERT_EQ(iface_is_hidden(&s, "wlan0"),    0);
+}
+
+static void test_iface_is_hidden_empty(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ASSERT_EQ(iface_is_hidden(&s, "eth0"), 0);
+}
+
+static void test_dashboard_draws_with_hidden_iface(void) {
+    /* Populate two visible + one hidden. Smoke test: the band must not
+     * crash on the filter branch. Behavioural verification of the row
+     * count lives in the iface-view tests; here we're guarding the
+     * draw path. */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_iface(&s, "eth0");
+    seed_iface(&s, "docker0");
+    seed_iface(&s, "wlan0");
+    snprintf(s.iface_hidden[0], sizeof(s.iface_hidden[0]), "docker0");
+    s.iface_hidden_count = 1;
+    view_dashboard_draw(&s);
+    ASSERT_EQ(iface_is_hidden(&s, "docker0"), 1);
+    ASSERT_EQ(iface_is_hidden(&s, "eth0"),    0);
+}
+
 /* ── Navigation ──────────────────────────────────────────── */
 
 static void test_nav_scrolls_conn_sel(void) {
@@ -250,6 +284,9 @@ void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
+    RUN_TEST(test_iface_is_hidden_matches);
+    RUN_TEST(test_iface_is_hidden_empty);
+    RUN_TEST(test_dashboard_draws_with_hidden_iface);
 
     TEST_SUITE("dashboard nav");
     RUN_TEST(test_nav_scrolls_conn_sel);

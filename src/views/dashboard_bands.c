@@ -47,17 +47,21 @@ void draw_iface_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     if (end_x < x0 + w)
         clipline(y0 + 1, end_x, x0 + w - end_x, "");
 
-    int rows = h - 2;
-    int n    = s->iface_count < rows ? s->iface_count : rows;
-    for (int i = 0; i < n; i++) {
+    int rows    = h - 2;
+    int drawn   = 0;
+    for (int i = 0; i < s->iface_count && drawn < rows; i++) {
         const iface_stat_t *I = &s->ifaces[i];
+        /* Honour the hide election so a hidden docker0 / veth* / lo also
+         * disappears from the dashboard band, not just the iface view. */
+        if (iface_is_hidden(s, I->name)) continue;
+
         char rxr[16], txr[16], rxt[16], txt[16];
         bw_fmt_rate(I->rx_rate, rxr, sizeof(rxr));
         bw_fmt_rate(I->tx_rate, txr, sizeof(txr));
         fmt_bytes(I->rx_bytes, rxt, sizeof(rxt));
         fmt_bytes(I->tx_bytes, txt, sizeof(txt));
 
-        int y = y0 + 2 + i;
+        int y = y0 + 2 + drawn;
         attrset(COLOR_PAIR(CP_NORMAL));
         clipline(y, x0, IFACE_FIXED_W,
                  "  %-8.8s  %10s  %10s  %10s  %10s",
@@ -80,9 +84,10 @@ void draw_iface_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
             attrset(COLOR_PAIR(CP_NORMAL));
             clipline(y, end_x, x0 + w - end_x, "");
         }
+        drawn++;
     }
     /* erase any unused iface rows so prior frames don't leak through */
-    for (int i = n; i < rows; i++) {
+    for (int i = drawn; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
         clipline(y0 + 2 + i, x0, w, "");
     }

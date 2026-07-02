@@ -230,7 +230,9 @@ static void draw_iface_graph(const sloth_state_t *s) {
 
 /* ── hidden helper ───────────────────────────────────────── */
 
-static int is_hidden(const sloth_state_t *s, const char *name) {
+/* Declared in sloth.h — shared with the dashboard iface band so the
+ * election is honoured in both places. */
+int iface_is_hidden(const sloth_state_t *s, const char *name) {
     for (int i = 0; i < s->iface_hidden_count; i++) {
         if (strncmp(s->iface_hidden[i], name, 16) == 0)
             return 1;
@@ -262,7 +264,7 @@ void view_iface_draw(const sloth_state_t *s) {
 
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = is_hidden(s, f->name);
+        int hidden  = iface_is_hidden(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
 
@@ -335,7 +337,7 @@ void view_iface_draw(const sloth_state_t *s) {
 
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = is_hidden(s, f->name);
+        int hidden  = iface_is_hidden(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         int sel     = (i == s->iface_sel);
         char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
