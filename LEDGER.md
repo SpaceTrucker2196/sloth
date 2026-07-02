@@ -7,3 +7,4 @@
 | 69acaac | 2026-07-02T15:52:55Z | claude-opus-4-7 | 117 | 62738 | 22440694 | 87880 | 41.0045 | iface: per-iface data-stream control via SLL2 (closes #17) |
 | db7be6c | 2026-07-02T16:01:32Z | claude-opus-4-7 | 45 | 18590 | 10219586 | 30543 | 17.6406 | release: v1.4.0 (tag + GH release + notes) |
 | bf0c588 | 2026-07-02T16:08:33Z | claude-opus-4-7 | 132 | 33122 | 14603612 | 21442 | 25.0348 | bsd: monitor-mode detection via SIOCGIFMEDIA |
+| 22e02cc | 2026-07-02T16:12:51Z | claude-opus-4-7 | 32 | 23346 | 10583652 | 38874 | 18.7931 | alerts: MITRE ATT&CK technique tagging (#16 phase 1) |
