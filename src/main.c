@@ -61,6 +61,7 @@
 #include "deauth_snoop.h"
 #include "http_log.h"
 #include "cleartext_creds.h"
+#include "posture.h"
 #include "tls_log.h"
 #include "quic_log.h"
 #include "dns_log.h"
@@ -339,7 +340,14 @@ static void print_usage(const char *argv0) {
             "                     burns CPU without visible gain on a terminal.\n"
             "                     The loop also wakes early on alert fires,\n"
             "                     so the value is an upper bound, not a fixed\n"
-            "                     cadence.\n",
+            "                     cadence.\n"
+            "  --report FILE.md   on exit, write a Markdown posture report to\n"
+            "                     FILE.md summarising alerts (by severity and\n"
+            "                     MITRE ATT&CK technique), cleartext credential\n"
+            "                     exposures, and high-risk devices.\n"
+            "  --report-json FILE.json\n"
+            "                     same rollup as --report, structured for\n"
+            "                     machine consumption / SIEM diff.\n",
             argv0);
 }
 
@@ -347,11 +355,14 @@ int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
-    const char *jsonl_path  = NULL;
-    const char *pcap_dir    = NULL;
-    const char *eapol_dir   = NULL;
-    const char *data_socket = NULL;
-    int         refresh_ms  = 0;        /* 0 = use POLL_MS default */
+    const char *jsonl_path   = NULL;
+    const char *pcap_dir     = NULL;
+    const char *eapol_dir    = NULL;
+    const char *data_socket  = NULL;
+    const char *report_md    = NULL;   /* --report      FILE.md   */
+    const char *report_json  = NULL;   /* --report-json FILE.json */
+    int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
+    time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -380,6 +391,10 @@ int main(int argc, char **argv) {
             }
             if (v < 50) v = 50;            /* floor — see usage */
             refresh_ms = (int)v;
+        } else if (!strcmp(argv[i], "--report") && i + 1 < argc) {
+            report_md = argv[++i];
+        } else if (!strcmp(argv[i], "--report-json") && i + 1 < argc) {
+            report_json = argv[++i];
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -446,6 +461,36 @@ int main(int argc, char **argv) {
     probe_stop();
     capture_stop();
 #endif
+
+    /* Posture reports (roadmap #16 phase 5): rollup of alerts by
+     * ATT&CK technique, cleartext exposures, and high-risk devices.
+     * Written once at shutdown so the artifact represents a signed-off
+     * session record — not a partial mid-run snapshot. */
+    if (report_md) {
+        FILE *fp = fopen(report_md, "w");
+        if (fp) {
+            posture_render_md(fp, &g_state, session_start);
+            fclose(fp);
+            fprintf(stderr, "sloth: posture report -> %s\n", report_md);
+        } else {
+            fprintf(stderr,
+                    "sloth: could not open --report %s (report skipped)\n",
+                    report_md);
+        }
+    }
+    if (report_json) {
+        FILE *fp = fopen(report_json, "w");
+        if (fp) {
+            posture_render_json(fp, &g_state, session_start);
+            fclose(fp);
+            fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
+        } else {
+            fprintf(stderr,
+                    "sloth: could not open --report-json %s (report skipped)\n",
+                    report_json);
+        }
+    }
+
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();

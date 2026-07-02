@@ -20,6 +20,7 @@ SRCS = src/main.c          \
        src/ftp_snoop.c     \
        src/cleartext_creds.c \
        src/device_risk.c   \
+       src/posture.c       \
        src/oui.c           \
        src/services.c      \
        src/views/iface.c   \
@@ -202,6 +203,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_cleartext_creds.c \
             src/device_risk.c          \
             tests/test_device_risk.c   \
+            src/posture.c              \
+            tests/test_posture.c       \
             src/oui.c                  \
             src/services.c             \
             src/platform/linux_parse.c \
