@@ -3,13 +3,41 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <net/if_dl.h>   /* struct if_data — BSD/macOS */
+#include <net/if_dl.h>     /* struct if_data — BSD/macOS */
+#include <net/if_media.h>  /* SIOCGIFMEDIA / IFM_IEEE80211_MONITOR */
 
 #include "sloth.h"
+
+/* ── Monitor-mode probe (SIOCGIFMEDIA) ─────────────────────
+ * On BSD / macOS, monitor-mode is a mediaopt on the WiFi driver.
+ * Query it via SIOCGIFMEDIA and check ifm_current for the monitor
+ * bit. Returns 1 if monitor-mode is currently set, 0 otherwise
+ * (including the "not a WiFi iface" case). Silent on failure —
+ * we don't have IFM_IEEE80211_MONITOR available on every BSD, so
+ * a compile guard picks the right constant. */
+static int bsd_iface_is_monitor(int sock, const char *ifname) {
+    struct ifmediareq ifmr;
+    memset(&ifmr, 0, sizeof(ifmr));
+    strncpy(ifmr.ifm_name, ifname, sizeof(ifmr.ifm_name) - 1);
+    if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0)
+        return 0;
+    /* IFM_IEEE80211_MONITOR isn't in every BSD's headers; on macOS
+     * it lives as 0x0000000000100000ULL. Feature-test with the ifdef
+     * so the file stays portable. */
+#ifdef IFM_IEEE80211_MONITOR
+    if ((ifmr.ifm_current & IFM_IEEE80211_MONITOR) != 0)
+        return 1;
+#else
+    (void)ifmr;
+#endif
+    return 0;
+}
 
 /* ── Rate tracking ───────────────────────────────────────── */
 
@@ -36,6 +64,12 @@ int bsd_get_ifaces(iface_stat_t *out, int max) {
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
+
+    /* Single AF_INET UDP socket for all SIOCGIFMEDIA lookups this
+     * poll. Cheap to open once, closed at the end. If open fails,
+     * mon_sock stays -1 and monitor-mode detection quietly reports
+     * "not monitor" — behaviour matches pre-detection code path. */
+    int mon_sock = socket(AF_INET, SOCK_DGRAM, 0);
 
     int n = 0;
     for (struct ifaddrs *ifa = ifap; ifa && n < max; ifa = ifa->ifa_next) {
@@ -64,14 +98,19 @@ int bsd_get_ifaces(iface_stat_t *out, int max) {
             const uint8_t *hw = (const uint8_t *)LLADDR(sdl);
             memcpy(s->mac, hw, 6);
         }
-        /* Mode classification via ifi_type (IFT_ETHER, IFT_IEEE80211).
-         * BSD monitor-mode detection needs a media ioctl (SIOCGIFMEDIA
-         * with IFM_IEEE80211_MONITOR) — deferred, so we keep MONITOR
-         * as an unset default here. Follow-up for a dedicated PR. */
-        if (ifd->ifi_type == 6 /* IFT_ETHER */)
+        /* Mode classification via ifi_type (IFT_ETHER, IFT_IEEE80211)
+         * with a SIOCGIFMEDIA probe for the WiFi-in-monitor-mode case
+         * (matches the Linux /sys/class/net/<if>/type == 803 detection
+         * in linux.c so NO_MONITOR_MODE fires identically on both
+         * platforms). */
+        if (ifd->ifi_type == 6 /* IFT_ETHER */) {
             s->mode = IFACE_MODE_ETHER;
-        else if (ifd->ifi_type == 71 /* IFT_IEEE80211 */)
-            s->mode = IFACE_MODE_WIFI;
+        } else if (ifd->ifi_type == 71 /* IFT_IEEE80211 */) {
+            if (mon_sock >= 0 && bsd_iface_is_monitor(mon_sock, s->name))
+                s->mode = IFACE_MODE_MONITOR;
+            else
+                s->mode = IFACE_MODE_WIFI;
+        }
 
         for (int j = 0; j < g_prev_n; j++) {
             if (strncmp(g_prev[j].name, s->name, 16) != 0) continue;
@@ -85,6 +124,7 @@ int bsd_get_ifaces(iface_stat_t *out, int max) {
         n++;
     }
     freeifaddrs(ifap);
+    if (mon_sock >= 0) close(mon_sock);
 
     g_prev_n = n;
     for (int i = 0; i < n; i++) {

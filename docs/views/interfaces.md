@@ -11,8 +11,10 @@ and rolling history sparklines.
 `/sys/class/net/<iface>/address` for the MAC address (fed to
 `src/oui.c` for vendor), and `/sys/class/net/<iface>/type` for the
 ARPHRD_* value that classifies mode (`803`/`804` = monitor mode).
-BSD/macOS reads MAC via `AF_LINK` `sockaddr_dl`; monitor-mode
-detection there is a follow-up.
+BSD/macOS reads MAC via `AF_LINK` `sockaddr_dl` and probes monitor
+mode via `SIOCGIFMEDIA` (`IFM_IEEE80211_MONITOR` mediaopt). The
+Linux and BSD paths produce identical `IFACE_MODE_*` classifications
+so `NO_MONITOR_MODE` fires the same way on both.
 
 Rates are computed by diffing poll-to-poll. The 30-sample (= 30
 seconds at 1 Hz) history feeds the sparkline graphs.
