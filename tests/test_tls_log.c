@@ -144,6 +144,57 @@ static void test_parse_null_ips_ok(void) {
     ASSERT_EQ((int)e.dst[0], 0);
 }
 
+/*
+ * TLS 1.3 ClientHello where the supported_versions list is
+ * [GREASE 0x7a7a, TLS 1.3 0x0304]. Real Chrome/Firefox put a GREASE
+ * value first (RFC 8701); if the parser doesn't skip GREASE, best_ver
+ * becomes 0x7a7a and ver_string() falls through to "TLS".
+ *
+ * Length fields (vs tls13_sni):
+ *   supported_versions body:  1 (list_len) + 2 (GREASE) + 2 (TLS 1.3) = 5
+ *   extension:                2 (type) + 2 (len) + 5 (body) = 9
+ *   extensions_len:           20 (SNI) + 9 = 29 = 0x1d
+ *   ch body:                  2+32+1+2+2+1+1+2+29 = 72 = 0x48
+ *   rec body:                 4 (hs hdr) + 72 = 76 = 0x4c
+ */
+static const uint8_t tls13_sni_grease_versions[] = {
+    /* TLS record */
+    0x16, 0x03, 0x01, 0x00, 0x4c,
+    /* Handshake */
+    0x01, 0x00, 0x00, 0x48,
+    /* legacy_version = TLS 1.2 */
+    0x03, 0x03,
+    /* random */
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+    0x00,
+    0x00, 0x02, 0x00, 0x2f,
+    0x01, 0x00,
+    /* extensions_len = 29 */
+    0x00, 0x1d,
+    /* SNI ext */
+    0x00, 0x00, 0x00, 0x10,
+    0x00, 0x0e,
+    0x00,
+    0x00, 0x0b,
+    'e','x','a','m','p','l','e','.','c','o','m',
+    /* supported_versions ext: len=5, list_len=4, [GREASE 7a7a, TLS 1.3] */
+    0x00, 0x2b, 0x00, 0x05,
+    0x04,
+    0x7a, 0x7a,
+    0x03, 0x04,
+};
+
+static void test_parse_tls13_supported_versions_skips_grease(void) {
+    tls_log_entry_t e;
+    int r = tls_log_parse(tls13_sni_grease_versions,
+                          (int)sizeof(tls13_sni_grease_versions),
+                          "192.168.1.5", "93.184.216.34", &e);
+    ASSERT_EQ(r, 1);
+    ASSERT_STR(e.tls_ver, "TLS 1.3");
+    ASSERT_STR(e.host,    "example.com");
+}
+
 /* ── JA3 fingerprint tests ───────────────────────────────── */
 
 /* A ClientHello with cipher 0x003c, ext SNI + supported_versions, supported
@@ -422,6 +473,7 @@ void run_tls_log_tests(void) {
     RUN_TEST(test_parse_rejects_short);
     RUN_TEST(test_parse_rejects_truncated);
     RUN_TEST(test_parse_null_ips_ok);
+    RUN_TEST(test_parse_tls13_supported_versions_skips_grease);
 
     TEST_SUITE("tls_log JA3 fingerprint");
     RUN_TEST(test_parse_emits_ja3);

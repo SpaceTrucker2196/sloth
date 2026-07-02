@@ -170,7 +170,9 @@ int tls_log_parse(const uint8_t *data, int len,
             best_ver = 0;
             while (vi + 1 <= vlen && vi + 1 <= (int)elen) {
                 uint16_t v = u16be(ch + off + vi);
-                if (v > best_ver) best_ver = v;
+                /* RFC 8701: skip GREASE values so a leading 0x?a?a
+                 * doesn't win over 0x0304. */
+                if (!is_grease(v) && v > best_ver) best_ver = v;
                 vi += 2;
             }
         } else if (etype == 0x000a && elen >= 2) {
