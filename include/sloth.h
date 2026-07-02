@@ -563,6 +563,24 @@ typedef struct {
 #define DEV_SRC_PROBE   (1 << 4)
 #define DEV_SRC_STA     (1 << 5)
 
+/* ── Device risk signals (roadmap #16 phase 4) ─────
+ * A bitmask of signals contributing to a device's risk bucket.
+ * Each signal is either "observed / not observed"; the score is
+ * derived from a weighted sum in device_risk_score(). */
+#define DEV_RISK_RANDOM_MAC      (1 << 0)  /* locally-administered MAC */
+#define DEV_RISK_UNKNOWN_VENDOR  (1 << 1)  /* OUI not in the embedded table */
+#define DEV_RISK_NO_HOSTNAME     (1 << 2)  /* no DHCP/mDNS/NBNS resolution */
+#define DEV_RISK_PROBE_ONLY      (1 << 3)  /* probe frames, no association */
+#define DEV_RISK_CLEARTEXT_CRED  (1 << 4)  /* cred exposure attributed to us */
+#define DEV_RISK_ALERT_TAGGED    (1 << 5)  /* an alert's match_ip == our ip */
+
+typedef enum {
+    DEV_RISK_LOW  = 0,
+    DEV_RISK_MED  = 1,
+    DEV_RISK_HIGH = 2,
+    DEV_RISK_CRIT = 3,
+} device_risk_level_t;
+
 typedef struct {
     uint8_t mac[6];
     char    ip[46];          /* best-known IP, "" if unknown */
@@ -573,8 +591,19 @@ typedef struct {
     int8_t  signal_dbm;      /* most recent WiFi signal, 0 if none */
     int     probe_count;     /* total probe frames */
     int     sources;         /* bitmask of DEV_SRC_* */
+    /* Risk scoring: derived once per poll from the observed signals
+     * below and the alert / cleartext-cred state. See src/device_risk.c
+     * and roadmap #16 phase 4. */
+    int                risk_signals;   /* bitmask of DEV_RISK_* */
+    device_risk_level_t risk_level;
     time_t  last_seen;
 } device_t;
+
+/* Human-readable bucket name for the alerts view / JSONL. */
+const char *device_risk_label(device_risk_level_t l);
+
+/* device_risk_score() is declared alongside iface_is_hidden() below,
+ * after sloth_state_t is defined. */
 
 /* ── Alerts ─────────────────────────────────────────────── */
 #define MAX_ALERTS         128
@@ -1286,6 +1315,13 @@ int iface_is_deselected(const sloth_state_t *s, const char *name);
  * view-switch letters? Kept in main.c as a small, centralized table;
  * exposed for direct unit-test coverage of the routing decision. */
 int view_claims_key(view_t v, int key);
+
+/* ── Device risk scoring — declared here (post-state) so we can name
+ * sloth_state_t without a forward decl dance. See src/device_risk.c
+ * and roadmap #16 phase 4. */
+device_risk_level_t device_risk_score(const device_t *d,
+                                      const sloth_state_t *s,
+                                      int *signals);
 
 /* ── Platform ops vtable ────────────────────────────────── */
 typedef struct {

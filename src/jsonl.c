@@ -478,6 +478,8 @@ void jsonl_emit_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "probe_count", (long long)e->probe_count);
         kv_int(buf, LINEBUF, &off, "sources",     (long long)e->sources);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_str(buf, LINEBUF, &off, "risk",         device_risk_label(e->risk_level));
+        kv_int(buf, LINEBUF, &off, "risk_signals", (long long)e->risk_signals);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

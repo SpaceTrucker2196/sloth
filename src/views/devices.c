@@ -41,11 +41,11 @@ void view_devices_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %s\n",
-           "MAC", "IP", "Vendor", "Hostname / SSID", "Src", "RSI", "Hits");
-    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %s\n",
+    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %-4s  %s\n",
+           "MAC", "IP", "Vendor", "Hostname / SSID", "Src", "RSI", "Risk", "Hits");
+    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %-4s  %s\n",
            "-----------------", "---------------", "----------------",
-           "--------------------", "------", "---", "----");
+           "--------------------", "------", "---", "----", "----");
     tui_normal();
 
     if (s->device_count == 0) {
@@ -88,10 +88,16 @@ void view_devices_draw(const sloth_state_t *s) {
 
         int hits = d->probe_count;
 
+        const char *risk = device_risk_label(d->risk_level);
+        double      risk_heat =
+            d->risk_level == DEV_RISK_CRIT ? 1.0 :
+            d->risk_level == DEV_RISK_HIGH ? 0.7 :
+            d->risk_level == DEV_RISK_MED  ? 0.4 : 0.0;
+
         if (row == s->device_sel) {
             tui_sel();
-            TPRINT(" %-17s  %-15.15s  %-16.16s  %-20.20s  %-6s  %-3s  %d\n",
-                   mac, d->ip, d->vendor, name, src, sig, hits);
+            TPRINT(" %-17s  %-15.15s  %-16.16s  %-20.20s  %-6s  %-3s  %-4s  %d\n",
+                   mac, d->ip, d->vendor, name, src, sig, risk, hits);
             tui_reset();
         } else {
             tui_dim();    TPRINT(" %-17s", mac);
@@ -107,6 +113,11 @@ void view_devices_draw(const sloth_state_t *s) {
 
             tui_dim();    TPRINT("  %-6s", src);
             tui_dim();    TPRINT("  %-3s", sig);
+
+            /* Risk bucket: heat-graded per level so HIGH/CRIT jump out
+             * at operator glance. LOW renders dim to stay quiet. */
+            if (risk_heat > 0.0) tui_heat(risk_heat); else tui_dim();
+            TPRINT("  %-4s", risk);
 
             if (hits > 0) tui_heat(0.5); else tui_dim();
             TPRINT("  %d\n", hits);

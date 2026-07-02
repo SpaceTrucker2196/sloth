@@ -38,6 +38,33 @@ Each source contributes a bit in the `Src` flag column.
                                                                               └────── ARP
 ```
 
+## Risk bucket
+
+The `Risk` column shows a bucket derived from independently observable
+signals — no ML, no black box. Bucket = weighted sum of signals:
+
+| Signal | Weight | Meaning |
+|--------|-------:|---------|
+| `RANDOM_MAC`     | 1 | Locally-administered bit set (Apple/Android privacy MAC, monlib randomization) |
+| `UNKNOWN_VENDOR` | 1 | OUI not in the embedded table |
+| `NO_HOSTNAME`    | 1 | No DHCP/mDNS/NBNS hostname resolution |
+| `PROBE_ONLY`     | 1 | Probe frames observed, no beacon/STA association |
+| `CLEARTEXT_CRED` | 3 | This device leaked a credential in the clear (see `[v]` Alerts, `CLEARTEXT_CRED`) |
+| `ALERT_TAGGED`   | 3 | An active alert names this device's IP as its target |
+
+Score → bucket:
+
+| Score | Bucket | Colour |
+|-------|--------|--------|
+| 0     | LOW    | dim |
+| 1–2   | MED    | phosphor-heat 0.4 |
+| 3–4   | HIGH   | phosphor-heat 0.7 |
+| 5+    | CRIT   | phosphor-heat 1.0 |
+
+The signal bitmask is exported in the JSONL `risk_signals` field so
+external consumers can reproduce the score and show a per-signal
+breakdown.
+
 ## What's normal
 
 - Each known device shows multiple source flags — e.g. `AD----` for
