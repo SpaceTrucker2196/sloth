@@ -50,6 +50,8 @@ source material.
 
 - [[ip-palette]] — colour conventions and TUI rules.
 - [[platform-vtable]] — the kernel seam (`platform_ops_t`).
+- [[version-checkin]] — periodic release checks and the safe boundary
+  between version awareness and self-update.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.

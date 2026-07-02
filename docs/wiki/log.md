@@ -85,3 +85,26 @@ states "if the test suite is 'yeah it mostly catches things,' you
 are still at Level 3 — the human is the actual oracle." `make mutate`
 is the mechanical check that the suite is stronger than that.
 Baseline kill-rate for `src/alerts.c` lives in `PROGRESS.md`.
+
+---
+
+## 2026-07-02 — Version check-in architecture page
+
+**Source**: issue #18 request for an automated version check-in and update
+plan; `include/sloth.h`, `src/main.c`, `src/event_wake.c`,
+`src/data_socket.c`, `README.md`, `RELEASE_v1.4.0.md`, `SECURITY.md`.
+
+**Created pages**:
+
+- [version-checkin.md](version-checkin.md) — architecture recommendation
+  for periodic release checks, a separate staged self-update path, safety
+  boundaries, implementation phases, and open questions.
+
+**Index updates**: added [[version-checkin]] under "UI and infrastructure"
+in [[index]].
+
+**Why**: the issue explicitly asked for plan and architecture rather than
+product code. The new page records a concrete design that fits sloth's
+existing non-blocking main loop and passive-tool constraints, while still
+laying out how a future source-download/build/install workflow could be
+added with minimal interruption.
