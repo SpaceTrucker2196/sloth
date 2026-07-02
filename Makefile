@@ -9,6 +9,7 @@ WITH_PCAP    ?= 1
 WITH_WIFI    ?= 1
 
 SRCS = src/main.c          \
+       src/view_route.c    \
        src/tui.c           \
        src/history.c       \
        src/bandwidth.c     \
@@ -179,6 +180,7 @@ endif
 
 TEST_SRCS = tests/main_test.c          \
             tests/null_tui.c           \
+            src/view_route.c           \
             tests/fake_platform.c      \
             tests/scenarios.c          \
             tests/test_parse.c         \

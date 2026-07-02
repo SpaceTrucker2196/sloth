@@ -179,77 +179,11 @@ static void handle_filter_input(sloth_state_t *s, int key) {
     }
 }
 
-static void handle_key(sloth_state_t *s, int key) {
-    if (key == 0) return;
-
-    /* While editing the filter, capture all input. */
-    if (s->filter_editing) {
-        handle_filter_input(s, key);
-        return;
-    }
-
-    if (key == '/') {
-        s->filter[0]      = '\0';
-        s->filter_editing = 1;
-        return;
-    }
-    if (key == '\\') {
-        s->filter[0]      = '\0';
-        s->filter_editing = 0;
-        return;
-    }
-
-    switch (key) {
-    case 'q': case 'Q':
-        g_quit = 1;
-        return;
-    case '1': s->active_view = VIEW_IFACE;   return;
-    case '2': s->active_view = VIEW_CONNS;   return;
-    case '3': s->active_view = VIEW_WIFI;    return;
-    case '4': s->active_view = VIEW_PACKETS; return;
-    case '5': s->active_view = VIEW_PROCS;   return;
-    case '6': s->active_view = VIEW_STATS;   return;
-    case '7': s->active_view = VIEW_PROBE;   return;
-    case '8': s->active_view = VIEW_ARP;     return;
-    case '9': s->active_view = VIEW_MDNS;    return;
-    case '0': s->active_view = VIEW_NBNS;    return;
-    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
-    case 's': case 'S': s->active_view = VIEW_SSDP;   return;
-    case 'b': case 'B': s->active_view = VIEW_BEACON; return;
-    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
-    case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
-    case 't': case 'T': s->active_view = VIEW_TLS;    return;
-    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
-    case 'r': case 'R': s->active_view = VIEW_DNS;    return;
-    case 'p': case 'P': s->active_view = VIEW_NTP;    return;
-    case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
-    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
-    case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
-    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
-    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
-    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
-    case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
-    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
-    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
-    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
-    case '?':           s->active_view = (s->active_view == VIEW_HELP)
-                                          ? VIEW_IFACE : VIEW_HELP;
-                        return;
-    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
-    case '\t':
-        /* The dashboard uses Tab to cycle its own panels — let its
-         * view-specific handler see this key. */
-        if (s->active_view == VIEW_DASH) break;
-        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
-        return;
-    case 'n': case 'N':
-        s->dns_enabled = !s->dns_enabled;
-        return;
-    default:
-        break;
-    }
-
-    /* delegate remaining keys to the active view */
+/* Dispatch a key to the active view's handler. Extracted so
+ * view_claims_key() paths and the fall-through paths share one
+ * dispatch site. view_claims_key itself lives in src/view_route.c
+ * so unit tests can cover the routing decision without linking main.c. */
+static void dispatch_to_view(sloth_state_t *s, int key) {
     switch (s->active_view) {
     case VIEW_IFACE:   view_iface_key(s, key);   break;
     case VIEW_CONNS:   view_conns_key(s, key);   break;
@@ -284,6 +218,86 @@ static void handle_key(sloth_state_t *s, int key) {
     case VIEW_TWINS:   view_twins_key(s, key);         break;
     default: break;
     }
+}
+
+static void handle_key(sloth_state_t *s, int key) {
+    if (key == 0) return;
+
+    /* While editing the filter, capture all input. */
+    if (s->filter_editing) {
+        handle_filter_input(s, key);
+        return;
+    }
+
+    if (key == '/') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 1;
+        return;
+    }
+    if (key == '\\') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 0;
+        return;
+    }
+
+    /* Quit and help toggle are absolute globals — always take effect. */
+    if (key == 'q' || key == 'Q') { g_quit = 1; return; }
+    if (key == '?') {
+        s->active_view = (s->active_view == VIEW_HELP)
+                          ? VIEW_IFACE : VIEW_HELP;
+        return;
+    }
+
+    /* First refusal: if the active view has a documented claim on
+     * this key, dispatch to the view and skip the global switch. */
+    if (view_claims_key(s->active_view, key)) {
+        dispatch_to_view(s, key);
+        return;
+    }
+
+    switch (key) {
+    case '1': s->active_view = VIEW_IFACE;   return;
+    case '2': s->active_view = VIEW_CONNS;   return;
+    case '3': s->active_view = VIEW_WIFI;    return;
+    case '4': s->active_view = VIEW_PACKETS; return;
+    case '5': s->active_view = VIEW_PROCS;   return;
+    case '6': s->active_view = VIEW_STATS;   return;
+    case '7': s->active_view = VIEW_PROBE;   return;
+    case '8': s->active_view = VIEW_ARP;     return;
+    case '9': s->active_view = VIEW_MDNS;    return;
+    case '0': s->active_view = VIEW_NBNS;    return;
+    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
+    case 's': case 'S': s->active_view = VIEW_SSDP;   return;
+    case 'b': case 'B': s->active_view = VIEW_BEACON; return;
+    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
+    case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
+    case 't': case 'T': s->active_view = VIEW_TLS;    return;
+    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
+    case 'r': case 'R': s->active_view = VIEW_DNS;    return;
+    case 'p': case 'P': s->active_view = VIEW_NTP;    return;
+    case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
+    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
+    case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
+    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
+    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
+    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
+    case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
+    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
+    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
+    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
+    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
+    case '\t':
+        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
+        return;
+    case 'n': case 'N':
+        s->dns_enabled = !s->dns_enabled;
+        return;
+    default:
+        break;
+    }
+
+    /* Non-global keys: delegate to the active view. */
+    dispatch_to_view(s, key);
 }
 
 static void print_usage(const char *argv0) {

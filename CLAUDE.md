@@ -106,6 +106,13 @@ Single binary `sloth`. Test binary `sloth_test`.
 5. Pick a key in `src/main.c`, add to the case statement.
 6. Add to `view_labels[]` and the dispatch switch in `src/tui.c`.
 7. Update the Makefile SRCS and TEST_SRCS.
+   - If the new view has any *view-local* action bound to a letter
+     that the global switch already uses (see `src/main.c`
+     view-switch cases), add a claim entry in
+     `src/view_route.c :: view_claims_key()` — otherwise the global
+     switch silently swallows the key before the view sees it. Cover
+     the new claim in `tests/test_state.c`. See issue #13 for the
+     original shadow bug.
 8. Update `VIEW_COUNT` and the tab-cycle assertions in
    `tests/test_state.c` and `tests/test_arp.c`.
 9. Write a `tests/test_<name>.c` with at least: empty-state,

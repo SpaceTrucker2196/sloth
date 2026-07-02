@@ -274,11 +274,80 @@ void test_toggle_hides_selected(void) {
     ASSERT_STR(s.iface_hidden[0], "wlan0");
 }
 
+/* ── view_claims_key: which views own which shadow keys ──────
+ *
+ * The bug was that the global view-switch handler in main.c consumed
+ * letters like 't', 'm', 's', 'p', 'r', 'w', 'x' before the active
+ * view's handler ever ran. view_claims_key() is the first-refusal
+ * table; these tests pin down the intended shape so a future edit
+ * that drops a key from the table trips a red suite. */
+
+void test_view_claims_iface_local_keys(void) {
+    ASSERT(view_claims_key(VIEW_IFACE, 't'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'T'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'm'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'M'));
+}
+
+void test_view_claims_conns_sort_key(void) {
+    ASSERT(view_claims_key(VIEW_CONNS, 's'));
+    ASSERT(view_claims_key(VIEW_CONNS, 'S'));
+}
+
+void test_view_claims_packets_local_keys(void) {
+    ASSERT(view_claims_key(VIEW_PACKETS, 'p'));
+    ASSERT(view_claims_key(VIEW_PACKETS, 'x'));
+    ASSERT(view_claims_key(VIEW_PACKETS, 'w'));
+}
+
+void test_view_claims_stats_reset_key(void) {
+    ASSERT(view_claims_key(VIEW_STATS, 'r'));
+    ASSERT(view_claims_key(VIEW_STATS, 'R'));
+}
+
+void test_view_claims_dashboard_tab(void) {
+    ASSERT(view_claims_key(VIEW_DASH, '\t'));
+    /* Dashboard doesn't claim ordinary letter keys — those still
+     * cycle to the labelled view. */
+    ASSERT_EQ(view_claims_key(VIEW_DASH, 't'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DASH, 's'), 0);
+}
+
+void test_view_claims_no_claim_defaults(void) {
+    /* A view without an entry in the table doesn't claim anything —
+     * the global switch still owns every letter for it. */
+    ASSERT_EQ(view_claims_key(VIEW_TLS, 't'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DNS, 'r'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_NTP, 'p'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_HTTP, 'h'), 0);
+}
+
+void test_view_claims_non_shadow_keys_unclaimed(void) {
+    /* Keys the report calls out as safe ('c', 'f', 'y', 'z', space,
+     * arrows) shouldn't be claimed by any view — they fall through
+     * to the view handler via the normal (non-first-refusal) path. */
+    ASSERT_EQ(view_claims_key(VIEW_IFACE, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_CONNS, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_PACKETS, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_STATS, 'c'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_IFACE, SLOTH_KEY_DOWN), 0);
+    ASSERT_EQ(view_claims_key(VIEW_PACKETS, ' '), 0);
+}
+
 void run_state_tests(void) {
     TEST_SUITE("view switching");
     RUN_TEST(test_view_tab_cycles_forward);
     RUN_TEST(test_view_direct_key_select);
     RUN_TEST(test_view_count_matches_labels);
+
+    TEST_SUITE("view key first refusal");
+    RUN_TEST(test_view_claims_iface_local_keys);
+    RUN_TEST(test_view_claims_conns_sort_key);
+    RUN_TEST(test_view_claims_packets_local_keys);
+    RUN_TEST(test_view_claims_stats_reset_key);
+    RUN_TEST(test_view_claims_dashboard_tab);
+    RUN_TEST(test_view_claims_no_claim_defaults);
+    RUN_TEST(test_view_claims_non_shadow_keys_unclaimed);
 
     TEST_SUITE("packet ring buffer");
     RUN_TEST(test_ring_buffer_empty);

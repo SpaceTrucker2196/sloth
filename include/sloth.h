@@ -1219,6 +1219,11 @@ typedef struct {
 /* ── Iface hide election (shared by iface view + dashboard band) ── */
 int iface_is_hidden(const sloth_state_t *s, const char *name);
 
+/* ── Key routing: does the active view claim this key over the global
+ * view-switch letters? Kept in main.c as a small, centralized table;
+ * exposed for direct unit-test coverage of the routing decision. */
+int view_claims_key(view_t v, int key);
+
 /* ── Platform ops vtable ────────────────────────────────── */
 typedef struct {
     int  (*get_ifaces)(iface_stat_t *out, int max);
