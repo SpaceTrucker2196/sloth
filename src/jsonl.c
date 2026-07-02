@@ -162,6 +162,8 @@ void jsonl_emit_tls(const tls_log_entry_t *e) {
     kv_str(buf, LINEBUF, &off, "host", e->host);
     kv_str(buf, LINEBUF, &off, "ver",  e->tls_ver);
     kv_str(buf, LINEBUF, &off, "ja3",  e->ja3);
+    if (e->ja4[0])
+        kv_str(buf, LINEBUF, &off, "ja4",  e->ja4);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

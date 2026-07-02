@@ -47,6 +47,7 @@ void run_icmp_log_tests(void);
 void run_threat_intel_tests(void);
 void run_alerts_tests(void);
 void run_md5_tests(void);
+void run_sha256_tests(void);
 void run_devices_tests(void);
 void run_beacon_detect_tests(void);
 void run_jsonl_tests(void);
@@ -123,6 +124,7 @@ int main(void) {
     run_threat_intel_tests();
     run_alerts_tests();
     run_md5_tests();
+    run_sha256_tests();
     run_devices_tests();
     run_beacon_detect_tests();
     run_jsonl_tests();

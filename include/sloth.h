@@ -690,6 +690,12 @@ typedef struct {
     char   host[64];    /* SNI hostname, "" if absent */
     char   tls_ver[8];  /* "TLS 1.3" "TLS 1.2" "TLS 1.1" "TLS 1.0" "TLS" */
     char   ja3[33];     /* MD5 of JA3 string, lowercase hex; "" if not computed */
+    /* JA4 client fingerprint (FoxIO spec): a(10) + '_' + b(12) + '_' + c(12) = 37
+     * chars, + NUL. Section a encodes protocol/version/SNI/counts/ALPN;
+     * sections b + c are sha256-truncated over sorted cipher / ext lists
+     * so extension reordering doesn't change the value (unlike JA3). "" if
+     * not computed. Roadmap #16 phase 2. */
+    char   ja4[38];
     time_t ts;
 } tls_log_entry_t;
 

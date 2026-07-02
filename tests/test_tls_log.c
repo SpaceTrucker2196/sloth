@@ -279,6 +279,97 @@ static void test_ja3_differs_for_different_ciphers(void) {
     ASSERT(strcmp(e1.ja3, e2.ja3) != 0);
 }
 
+/* ── JA4 client fingerprint tests (roadmap #16 phase 2) ──── */
+
+static int is_lower_hex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+}
+
+static void test_ja4_shape_matches_foxio_spec(void) {
+    /* FoxIO JA4 format: a(10) _ b(12) _ c(12) = 36 chars. Section a
+     * starts with 't' for TCP ClientHello + a 2-char version + 1-char
+     * SNI flag + 6 alnum. Sections b and c are lowercase-hex. */
+    tls_log_entry_t e;
+    ASSERT(tls_log_parse(ja3_clienthello, (int)sizeof(ja3_clienthello),
+                         "1.1.1.1", "2.2.2.2", &e));
+    ASSERT_EQ((int)strlen(e.ja4), 36);
+    ASSERT_EQ((int)e.ja4[0],  (int)'t');
+    ASSERT_EQ((int)e.ja4[10], (int)'_');
+    ASSERT_EQ((int)e.ja4[23], (int)'_');
+    for (int i = 11; i < 23; i++) ASSERT(is_lower_hex(e.ja4[i]));
+    for (int i = 24; i < 36; i++) ASSERT(is_lower_hex(e.ja4[i]));
+}
+
+static void test_ja4_is_deterministic(void) {
+    tls_log_entry_t a, b;
+    ASSERT(tls_log_parse(ja3_clienthello, (int)sizeof(ja3_clienthello),
+                         "x", "y", &a));
+    ASSERT(tls_log_parse(ja3_clienthello, (int)sizeof(ja3_clienthello),
+                         "p", "q", &b));
+    ASSERT_STR(a.ja4, b.ja4);
+}
+
+static void test_ja4_stable_across_extension_reorder(void) {
+    /* The whole point of JA4 vs JA3: shuffling extension order in the
+     * ClientHello (which Chrome/Firefox now do) produces the *same*
+     * JA4 because sections b + c hash sorted lists. JA3 would change.
+     *
+     * ja3_clienthello ext order in the buffer:
+     *   SNI (00 00 00 00)         at offset ext_start+0..3
+     *   supported_groups          at offset ext_start+4..13   (10 bytes)
+     *   ec_point_formats          at offset ext_start+14..18  ( 5 bytes)
+     *   supported_versions        at offset ext_start+19..26  ( 8 bytes)
+     *
+     * Swap supported_groups (10) with ec_point_formats (5) + supported_versions (8=1?)
+     * — simpler: swap the last two exts (supported_versions and
+     *  ec_point_formats). Total ext bytes preserved so length fields
+     *  don't need re-fixing. */
+    uint8_t shuffled[sizeof(ja3_clienthello)];
+    memcpy(shuffled, ja3_clienthello, sizeof(shuffled));
+
+    int ext_start = 5 + 4 + 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2;  /* just past extensions_len */
+    int off_sni = ext_start + 0;   /* 4 bytes  (SNI header only, len 0) */
+    int off_grp = ext_start + 4;   /* 10 bytes */
+    int off_fmt = ext_start + 14;  /* 6 bytes  (0x000b 0x0002 0x01 0x00) */
+    int off_ver = ext_start + 20;  /* 7 bytes  (0x002b 0x0003 0x02 0x03 0x04) */
+
+    /* Move supported_versions before ec_point_formats. */
+    uint8_t tmp[64];
+    memcpy(tmp, shuffled + off_fmt, 6);
+    memcpy(shuffled + off_fmt, shuffled + off_ver, 7);
+    memcpy(shuffled + off_fmt + 7, tmp, 6);
+
+    (void)off_sni; (void)off_grp;   /* not touched — silence -Wunused */
+
+    tls_log_entry_t base, shuf;
+    ASSERT(tls_log_parse(ja3_clienthello, (int)sizeof(ja3_clienthello),
+                         "x", "y", &base));
+    ASSERT(tls_log_parse(shuffled, (int)sizeof(shuffled),
+                         "x", "y", &shuf));
+
+    /* JA4 must survive extension reordering. JA3 does *not* — that's
+     * a corollary check confirming we haven't accidentally made JA4
+     * order-independent by removing the JA3 ordering. */
+    ASSERT_STR(base.ja4, shuf.ja4);
+    ASSERT(strcmp(base.ja3, shuf.ja3) != 0);
+}
+
+static void test_ja4_differs_when_ciphers_change(void) {
+    /* Same shape ClientHello, cipher swapped 0x003c → 0x0035. JA4_b
+     * (the cipher-hash section) must change; the sha256 truncation
+     * makes accidental collisions vanishingly unlikely. */
+    uint8_t alt[sizeof(ja3_clienthello)];
+    memcpy(alt, ja3_clienthello, sizeof(alt));
+    alt[46] = 0x00;
+    alt[47] = 0x35;
+
+    tls_log_entry_t base, changed;
+    ASSERT(tls_log_parse(ja3_clienthello, (int)sizeof(ja3_clienthello),
+                         "x", "y", &base));
+    ASSERT(tls_log_parse(alt, (int)sizeof(alt), "x", "y", &changed));
+    ASSERT(strcmp(base.ja4, changed.ja4) != 0);
+}
+
 static void test_ja3_skips_grease(void) {
     /* Insert GREASE cipher 0x0a0a alongside 0x003c. Since GREASE is filtered,
      * JA3 should equal that of the cipher-only ja3_clienthello. */
@@ -474,6 +565,10 @@ void run_tls_log_tests(void) {
     RUN_TEST(test_parse_rejects_truncated);
     RUN_TEST(test_parse_null_ips_ok);
     RUN_TEST(test_parse_tls13_supported_versions_skips_grease);
+    RUN_TEST(test_ja4_shape_matches_foxio_spec);
+    RUN_TEST(test_ja4_is_deterministic);
+    RUN_TEST(test_ja4_stable_across_extension_reorder);
+    RUN_TEST(test_ja4_differs_when_ciphers_change);
 
     TEST_SUITE("tls_log JA3 fingerprint");
     RUN_TEST(test_parse_emits_ja3);

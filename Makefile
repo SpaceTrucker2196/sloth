@@ -70,6 +70,7 @@ SRCS = src/main.c          \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
+       src/sha256.c          \
        src/devices.c         \
        src/views/devices.c   \
        src/beacon_detect.c   \
@@ -303,6 +304,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_alerts.c            \
             src/md5.c                      \
             tests/test_md5.c               \
+            src/sha256.c                   \
+            tests/test_sha256.c            \
             src/devices.c                  \
             src/views/devices.c            \
             tests/test_devices.c           \
