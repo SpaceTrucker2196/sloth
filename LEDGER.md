@@ -5,3 +5,4 @@
 | efbf07a | 2026-07-02T13:55:33Z | claude-opus-4-7 | 61 | 47674 | 8330221 | 74187 | 18.2974 | main: view first refusal on shadowed keys (closes #13) |
 | d6ea32a | 2026-07-02T15:06:48Z | claude-opus-4-7 | 141 | 73892 | 22204705 | 106212 | 42.0374 | iface: vendor + mode columns, NO_MONITOR_MODE alert |
 | 69acaac | 2026-07-02T15:52:55Z | claude-opus-4-7 | 117 | 62738 | 22440694 | 87880 | 41.0045 | iface: per-iface data-stream control via SLL2 (closes #17) |
+| db7be6c | 2026-07-02T16:01:32Z | claude-opus-4-7 | 45 | 18590 | 10219586 | 30543 | 17.6406 | release: v1.4.0 (tag + GH release + notes) |
