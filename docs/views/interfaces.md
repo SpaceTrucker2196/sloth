@@ -46,7 +46,8 @@ eth.
 | `↑`/`↓` | Navigate |
 | `Enter` | Open detail panel (sparkline graph, errors, drops) |
 | `m`     | Mark this iface as the probe-capture iface |
-| `t`     | Toggle iface visibility |
+| `t`     | Toggle iface **visibility** (display-only; data still flows) |
+| `y`     | Toggle iface **data-stream selection** (drops packets pre-decode) |
 
 ## What's normal
 
@@ -70,6 +71,35 @@ eth.
   (Linux type 803). Doesn't mean an attack; means WiFi SIGINT views
   (Probe, Beacons, EAPOL, Deauth) will stay empty this session. See
   [`alerts.md`](alerts.md).
+
+## Data-stream selection (`y`) — issue #17
+
+Independent of the hide election, `y` toggles whether the interface's
+packets contribute to the capture pipeline. A deselected iface's
+frames are dropped in the pcap callback *before* any decode / log /
+alert runs — Connections, Packets, DNS, TLS, HTTP, QUIC, ICMP, NTP,
+the JSONL log, and the alert engine all lose that iface's traffic
+until it's toggled back.
+
+Rows carry a `d` prefix and a trailing `(deselected)` marker so the
+election is visible at a glance.
+
+**How the filter works.** Ingress interface attribution requires
+`DLT_LINUX_SLL2` (cooked capture v2) — its header carries an
+`sll2_if_index` at offset 4. sloth opens `any` with `pcap_create` +
+`pcap_activate`, then calls `pcap_set_datalink(handle,
+DLT_LINUX_SLL2)`. libpcap ≥ 1.10 accepts this; ≥ 1.11 defaults to it
+for `any`. If the call fails (older libpcap, kernel refuses), sloth
+falls back to `DLT_LINUX_SLL` v1 or `DLT_EN10MB` — capture still
+works, but the header doesn't identify an ingress iface, so the
+data-stream toggle becomes a UI-only marker with no filter effect.
+The iface view still shows the marker for consistency across
+platforms.
+
+**Scope.** Applies to the IP/TCP capture path only. The 802.11
+monitor capture is a separate pcap handle bound to a specific
+monitor interface — WiFi SIGINT views are already governed by the
+`m` (monitor-iface) selection.
 
 ## See also
 

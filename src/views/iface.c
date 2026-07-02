@@ -261,6 +261,18 @@ int iface_is_hidden(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
+/* Declared in sloth.h — shared with the capture callback (on_packet)
+ * so a deselected iface's packets are dropped before any decode runs.
+ * Kept independent of iface_is_hidden: hide is display-only, deselect
+ * is data-stream. See issue #17. */
+int iface_is_deselected(const sloth_state_t *s, const char *name) {
+    for (int i = 0; i < s->iface_deselected_count; i++) {
+        if (strncmp(s->iface_deselected[i], name, 16) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* ── draw ────────────────────────────────────────────────── */
 
 void view_iface_draw(const sloth_state_t *s) {
@@ -286,9 +298,11 @@ void view_iface_draw(const sloth_state_t *s) {
 
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = iface_is_hidden(s, f->name);
+        int hidden     = iface_is_hidden(s, f->name);
+        int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
-        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
+        /* prefix priority: hidden > deselected > scanning > default */
+        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
 
@@ -310,9 +324,10 @@ void view_iface_draw(const sloth_state_t *s) {
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan ? "  [scanning]"
-                           : (hidden ? "  (hidden)"
-                                     : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : "")));
+                   is_scan     ? "  [scanning]"
+                   : hidden    ? "  (hidden)"
+                   : deselected? "  (deselected)"
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset();
         } else if (hidden) {
             tui_dim();
@@ -338,6 +353,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printw("  [scanning]"); }
+            else if (deselected) { tui_dim(); printw("  (deselected)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
             printw("\n");
             tui_normal();
@@ -350,7 +366,7 @@ void view_iface_draw(const sloth_state_t *s) {
 
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
-             " ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s",
+             " ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s",
              s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 
@@ -367,10 +383,11 @@ void view_iface_draw(const sloth_state_t *s) {
 
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = iface_is_hidden(s, f->name);
+        int hidden     = iface_is_hidden(s, f->name);
+        int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         int sel     = (i == s->iface_sel);
-        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
+        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
 
@@ -392,9 +409,10 @@ void view_iface_draw(const sloth_state_t *s) {
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan ? "  [scanning]"
-                           : (hidden ? "  (hidden)"
-                                     : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : "")));
+                   is_scan     ? "  [scanning]"
+                   : hidden    ? "  (hidden)"
+                   : deselected? "  (deselected)"
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset(); printf("\n");
         } else if (hidden) {
             tui_dim();
@@ -416,6 +434,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printf("  [scanning]"); }
+            else if (deselected) { tui_dim(); printf("  (deselected)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
             printf("\n");
             tui_normal();
@@ -427,7 +446,7 @@ void view_iface_draw(const sloth_state_t *s) {
     }
 
     tui_dim();
-    printf("\n  ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s\n",
+    printf("\n  ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s\n",
            s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 #endif
@@ -478,6 +497,33 @@ void view_iface_key(sloth_state_t *s, int key) {
         } else if (s->iface_hidden_count < MAX_IFACES) {
             memcpy(s->iface_hidden[s->iface_hidden_count], name, 16);
             s->iface_hidden_count++;
+        }
+        break;
+    }
+
+    case 'y': case 'Y': {
+        /* Toggle data-stream selection for the selected iface. Distinct
+         * from hide ('t'): 'y' also drops the iface's packets from the
+         * capture pipeline (issue #17). SLL2 detection lives in the
+         * capture callback — on non-SLL2 datalinks this is a no-op for
+         * the pipeline but the marker still renders. */
+        if (s->iface_count == 0) break;
+        const char *name = s->ifaces[s->iface_sel].name;
+
+        int found = -1;
+        for (int i = 0; i < s->iface_deselected_count; i++) {
+            if (strncmp(s->iface_deselected[i], name, 16) == 0) {
+                found = i; break;
+            }
+        }
+        if (found >= 0) {
+            memmove(&s->iface_deselected[found],
+                    &s->iface_deselected[found + 1],
+                    (size_t)(s->iface_deselected_count - found - 1) * 16);
+            s->iface_deselected_count--;
+        } else if (s->iface_deselected_count < MAX_IFACES) {
+            memcpy(s->iface_deselected[s->iface_deselected_count], name, 16);
+            s->iface_deselected_count++;
         }
         break;
     }

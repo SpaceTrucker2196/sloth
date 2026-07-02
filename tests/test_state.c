@@ -274,6 +274,54 @@ void test_toggle_hides_selected(void) {
     ASSERT_STR(s.iface_hidden[0], "wlan0");
 }
 
+/* ── data-stream (deselect) election — issue #17 ───────── */
+
+void test_deselect_default_is_selected(void) {
+    /* Fresh state: no deselected ifaces. iface_is_deselected returns 0
+     * for anything asked. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    ASSERT_EQ(s.iface_deselected_count, 0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"),  0);
+    ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 0);
+}
+
+void test_toggle_deselect(void) {
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 'y');
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT_STR(s.iface_deselected[0], "eth0");
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"),  1);
+    ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 0);
+}
+
+void test_toggle_reselect(void) {
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 'y');   /* deselect eth0 */
+    view_iface_key(&s, 'y');   /* reselect eth0 */
+    ASSERT_EQ(s.iface_deselected_count, 0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"), 0);
+}
+
+void test_deselect_independent_of_hide(void) {
+    /* Hide and deselect are distinct elections — toggling one must
+     * not disturb the other. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 't');   /* hide eth0 */
+    view_iface_key(&s, 'y');   /* deselect eth0 */
+    ASSERT_EQ(s.iface_hidden_count,     1);
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT(iface_is_hidden(&s, "eth0"));
+    ASSERT(iface_is_deselected(&s, "eth0"));
+    view_iface_key(&s, 't');   /* unhide eth0 */
+    ASSERT_EQ(s.iface_hidden_count,     0);
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT_EQ(iface_is_hidden(&s, "eth0"),     0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"), 1);
+}
+
 /* ── view_claims_key: which views own which shadow keys ──────
  *
  * The bug was that the global view-switch handler in main.c consumed
@@ -287,6 +335,10 @@ void test_view_claims_iface_local_keys(void) {
     ASSERT(view_claims_key(VIEW_IFACE, 'T'));
     ASSERT(view_claims_key(VIEW_IFACE, 'm'));
     ASSERT(view_claims_key(VIEW_IFACE, 'M'));
+    /* 'y' toggles data-stream selection (#17). Claimed defensively so
+     * a future global key assignment doesn't silently shadow it. */
+    ASSERT(view_claims_key(VIEW_IFACE, 'y'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'Y'));
 }
 
 void test_view_claims_conns_sort_key(void) {
@@ -372,4 +424,10 @@ void run_state_tests(void) {
     RUN_TEST(test_toggle_unhide);
     RUN_TEST(test_toggle_navigation);
     RUN_TEST(test_toggle_hides_selected);
+
+    TEST_SUITE("iface deselect (data-stream) — #17");
+    RUN_TEST(test_deselect_default_is_selected);
+    RUN_TEST(test_toggle_deselect);
+    RUN_TEST(test_toggle_reselect);
+    RUN_TEST(test_deselect_independent_of_hide);
 }

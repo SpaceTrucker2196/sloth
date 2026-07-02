@@ -12,8 +12,13 @@ int view_claims_key(view_t v, int key) {
     switch (v) {
     case VIEW_IFACE:
         /* 't' toggles hidden, 'm' assigns the capture iface. Both
-         * collide with global view-switch letters (TLS, Channel). */
-        return key == 't' || key == 'T' || key == 'm' || key == 'M';
+         * collide with global view-switch letters (TLS, Channel).
+         * 'y' toggles data-stream selection (#17); 'y' is free at
+         * the global level today but we claim it explicitly so a
+         * future global letter doesn't silently shadow it. */
+        return key == 't' || key == 'T'
+            || key == 'm' || key == 'M'
+            || key == 'y' || key == 'Y';
     case VIEW_CONNS:
         /* 's' cycles sort. Collides with global SSDP switch. */
         return key == 's' || key == 'S';

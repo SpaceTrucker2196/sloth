@@ -994,6 +994,12 @@ typedef struct {
     int           iface_graph;             /* non-zero = rx/tx graph panel open */
     char          iface_hidden[MAX_IFACES][16]; /* hidden interface names */
     int           iface_hidden_count;
+    /* Data-stream election: names in this list are excluded from the
+     * capture pipeline (packets/DNS/HTTP/TLS/alerts/JSONL). This is
+     * distinct from iface_hidden, which is display-only. See issue #17
+     * and rule_no_monitor_mode() for how it composes with capture. */
+    char          iface_deselected[MAX_IFACES][16];
+    int           iface_deselected_count;
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;
@@ -1231,6 +1237,12 @@ typedef struct {
 
 /* ── Iface hide election (shared by iface view + dashboard band) ── */
 int iface_is_hidden(const sloth_state_t *s, const char *name);
+
+/* ── Iface data-stream election (shared by iface view + capture) ──
+ * A deselected iface's packets are dropped in the pcap callback before
+ * any decode / log / alert runs. Purely logical — the OS state of the
+ * interface (up/down, monitor, addresses) is never touched. Issue #17. */
+int iface_is_deselected(const sloth_state_t *s, const char *name);
 
 /* ── Key routing: does the active view claim this key over the global
  * view-switch letters? Kept in main.c as a small, centralized table;
