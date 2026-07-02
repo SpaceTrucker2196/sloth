@@ -11,3 +11,4 @@
 | 066f1c5 | 2026-07-02T16:34:10Z | claude-opus-4-7 | 71 | 47354 | 26096993 | 68938 | 44.7662 | tls: JA4 client fingerprint + SHA-256 module (#16 phase 2) |
 | 60f1f88 | 2026-07-02T16:55:56Z | claude-opus-4-7 | 94 | 43674 | 39450118 | 83253 | 64.9497 | cleartext-cred detection: HTTP Basic + FTP (#16 phase 3) |
 | eae1862 | 2026-07-02T17:13:29Z | claude-opus-4-7 | 43 | 23244 | 19866432 | 38584 | 32.7011 | device risk scoring bucket + signals (#16 phase 4) |
+| 0e797ca | 2026-07-02T17:40:15Z | claude-opus-4-7 | 32 | 19275 | 15562966 | 34343 | 25.8208 | posture report export (#16 phase 5) |
