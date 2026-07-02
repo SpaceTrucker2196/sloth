@@ -58,6 +58,21 @@ int bsd_get_ifaces(iface_stat_t *out, int max) {
         s->rx_packets = (uint64_t)ifd->ifi_ipackets;
         s->tx_packets = (uint64_t)ifd->ifi_opackets;
 
+        /* MAC from sockaddr_dl. Only valid when sdl_alen == 6. */
+        struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+        if (sdl->sdl_alen == 6) {
+            const uint8_t *hw = (const uint8_t *)LLADDR(sdl);
+            memcpy(s->mac, hw, 6);
+        }
+        /* Mode classification via ifi_type (IFT_ETHER, IFT_IEEE80211).
+         * BSD monitor-mode detection needs a media ioctl (SIOCGIFMEDIA
+         * with IFM_IEEE80211_MONITOR) — deferred, so we keep MONITOR
+         * as an unset default here. Follow-up for a dedicated PR. */
+        if (ifd->ifi_type == 6 /* IFT_ETHER */)
+            s->mode = IFACE_MODE_ETHER;
+        else if (ifd->ifi_type == 71 /* IFT_IEEE80211 */)
+            s->mode = IFACE_MODE_WIFI;
+
         for (int j = 0; j < g_prev_n; j++) {
             if (strncmp(g_prev[j].name, s->name, 16) != 0) continue;
             double dt = elapsed_sec(&g_prev[j].ts, &now);

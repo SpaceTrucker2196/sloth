@@ -34,6 +34,7 @@ below):
 | `BEACONING`      | WARN | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
 | `DGA_DOMAIN`     | WARN | DNS qname matches DGA entropy heuristic | src / 53 |
 | `WEAK_TLS`       | WARN | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
+| `NO_MONITOR_MODE`| WARN | ≥1 iface seen but none in monitor mode — WiFi SIGINT views will be empty | — (host posture) |
 | `THREAT_DOMAIN`  | CRIT | DNS qname matches embedded IOC list | src / 53 |
 | `THREAT_IP`      | CRIT | conn remote IP matches embedded IOC list | remote / port |
 | `ARP_SPOOF`      | CRIT | one IP maps to two MACs within a short window | — (L2 only) |

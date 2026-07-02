@@ -55,8 +55,20 @@ typedef enum {
 } view_t;
 
 /* ── Interface stats ────────────────────────────────────── */
+
+/* Link-layer / mode label. IFACE_MODE_MONITOR is what the "any WiFi
+ * radio in monitor mode?" check keys on — see rule_no_monitor_mode(). */
+typedef enum {
+    IFACE_MODE_UNKNOWN = 0,
+    IFACE_MODE_ETHER,      /* ARPHRD_ETHER, loopback, virtuals */
+    IFACE_MODE_WIFI,       /* ARPHRD_IEEE80211 (managed / station) */
+    IFACE_MODE_MONITOR,    /* ARPHRD_IEEE80211_RADIOTAP / PRISM */
+} iface_mode_t;
+
 typedef struct {
     char     name[16];
+    uint8_t  mac[6];       /* hardware address; all-zero = unknown */
+    iface_mode_t mode;     /* IFACE_MODE_* — WIFI vs MONITOR matters */
     uint64_t rx_bytes;
     uint64_t tx_bytes;
     uint64_t rx_packets;
@@ -612,6 +624,7 @@ typedef enum {
     ALERT_TYPE_ATTACK_TOOL_UA,
     ALERT_TYPE_ATTACK_PATH,
     ALERT_TYPE_WEAK_TLS,
+    ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

@@ -306,6 +306,23 @@ static int tls_ver_is_weak(const char *v) {
            strcmp(v, "TLS 1.1") == 0;
 }
 
+/* Fires once when we've seen at least one interface but no WiFi radio
+ * is in monitor mode — a WARN that WiFi-SIGINT views (Probe, Beacons,
+ * EAPOL, Deauth) will be blind for this session. The single dedup key
+ * `nomon:global` prevents re-firing every poll; if the operator later
+ * flips a radio into monitor mode, the alert row stays but stops
+ * counting up. Passive: we only *observe* the current iface mode. */
+static void rule_no_monitor_mode(const sloth_state_t *s, time_t now) {
+    if (s->iface_count == 0) return;   /* wait until we have iface data */
+    for (int i = 0; i < s->iface_count; i++) {
+        if (s->ifaces[i].mode == IFACE_MODE_MONITOR) return;
+    }
+    fire(ALERT_TYPE_NO_MONITOR_MODE, ALERT_SEV_WARN,
+         "NO_MONITOR_MODE",
+         "no WiFi radio in monitor mode — WiFi SIGINT views will be empty",
+         "nomon:global", NULL, 0, now);
+}
+
 static void rule_weak_tls(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->tls_log_count; i++) {
         const tls_log_entry_t *e = &s->tls_log[i];
@@ -1368,6 +1385,7 @@ void alerts_update(sloth_state_t *s) {
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);
+    rule_no_monitor_mode(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

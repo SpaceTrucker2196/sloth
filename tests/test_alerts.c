@@ -1089,6 +1089,46 @@ static void test_weak_tls_tls12_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_WEAK_TLS), -1);
 }
 
+/* ── NO_MONITOR_MODE ─────────────────────────────────────── */
+
+static void add_iface(sloth_state_t *s, const char *name, iface_mode_t mode) {
+    iface_stat_t *f = &s->ifaces[s->iface_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    f->mode = mode;
+}
+
+static void test_no_monitor_mode_fires_when_no_monitor_iface(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_iface(&s, "eth0",   IFACE_MODE_ETHER);
+    add_iface(&s, "wlan0",  IFACE_MODE_WIFI);        /* managed, not monitor */
+    add_iface(&s, "docker0", IFACE_MODE_ETHER);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_STR(s.alerts[idx].title, "NO_MONITOR_MODE");
+}
+
+static void test_no_monitor_mode_no_fire_when_monitor_present(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_iface(&s, "eth0",   IFACE_MODE_ETHER);
+    add_iface(&s, "wlan0mon", IFACE_MODE_MONITOR);   /* one monitor-mode radio */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE), -1);
+}
+
+static void test_no_monitor_mode_no_fire_when_no_ifaces_yet(void) {
+    /* Empty iface list — pre-first-poll. We wait for data before deciding
+     * to fire so the alert doesn't scream during the boot window. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE), -1);
+}
+
 /* ── Attack-tool User-Agent ──────────────────────────────── */
 
 static void add_http(sloth_state_t *s, const char *src,
@@ -2158,6 +2198,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_weak_tls_sslv3_fires);
     RUN_TEST(test_weak_tls_tls13_no_fire);
     RUN_TEST(test_weak_tls_tls12_no_fire);
+    RUN_TEST(test_no_monitor_mode_fires_when_no_monitor_iface);
+    RUN_TEST(test_no_monitor_mode_no_fire_when_monitor_present);
+    RUN_TEST(test_no_monitor_mode_no_fire_when_no_ifaces_yet);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);
