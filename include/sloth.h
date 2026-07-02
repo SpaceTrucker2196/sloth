@@ -643,7 +643,18 @@ typedef struct {
     char         match_ip[46];
     uint16_t     match_port;              /* 0 = any port */
     int          pcap_dumped;             /* engine-internal flag */
+    /* MITRE ATT&CK technique ID (e.g. "T1110.001") — populated from a
+     * fixed lookup on alert_type by fire(). Empty for alerts that
+     * describe operator/host posture rather than an adversary
+     * technique (e.g. NO_MONITOR_MODE). */
+    char         technique[16];
 } alert_t;
+
+/* Canonical MITRE ATT&CK technique for a given alert type. Returns
+ * an empty string ("") for alert types that describe host posture
+ * rather than adversary behaviour. Defined in src/alerts.c so tests
+ * can compile against the table directly. */
+const char *alert_technique(alert_type_t type);
 
 /* ── ICMP log ───────────────────────────────────────────── */
 #define MAX_ICMP_LOG 256

@@ -115,6 +115,10 @@ static void draw_alert_detail(const sloth_state_t *s) {
 
     tui_dim();   TPRINT("  Detail:     "); tui_normal();
     TPRINT("%s\n", a->detail);
+    if (a->technique[0]) {
+        tui_dim();   TPRINT("  ATT&CK:     "); tui_bright();
+        TPRINT("%s\n", a->technique);
+    }
 
     tui_dim();   TPRINT("\n \xe2\x94\x80\xe2\x94\x80 FLOW IDENTIFIER \xe2\x94\x80\xe2\x94\x80\n");
     if (a->match_ip[0]) {

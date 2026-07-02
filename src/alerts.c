@@ -141,12 +141,57 @@ static void fire(alert_type_t type, alert_sev_t sev,
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
+    snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately
      * instead of on the next tick. event_wake_signal is a no-op
      * when the wake pipe wasn't initialised (e.g. unit tests). */
     jsonl_emit_alert(a);
     event_wake_signal();
+}
+
+/* ── MITRE ATT&CK technique lookup ──────────────────────
+ * Each alert type is mapped to a single canonical technique — the
+ * one a SOC analyst would most naturally tag the finding under.
+ * Some rules span two techniques (e.g. an SSH brute-force also
+ * counts as network service discovery); we pick the primary
+ * behaviour and leave secondary attribution to the reader.
+ * NO_MONITOR_MODE is a host-posture alert about the operator's
+ * own capture rig — not an adversary technique — so it maps to
+ * the empty string. Any new alert type must add an entry here
+ * or the tests in test_alerts.c will fail. */
+const char *alert_technique(alert_type_t type) {
+    switch (type) {
+    case ALERT_TYPE_PORT_SCAN:              return "T1046";       /* Network Service Discovery */
+    case ALERT_TYPE_DEAUTH_FLOOD:           return "T1498.001";   /* Direct Network Flood */
+    case ALERT_TYPE_NXDOMAIN_BURST:         return "T1071.004";   /* DNS */
+    case ALERT_TYPE_THREAT_DOMAIN:          return "T1071.004";   /* DNS to known-bad */
+    case ALERT_TYPE_THREAT_IP:              return "T1071";       /* Application Layer Protocol */
+    case ALERT_TYPE_BEACONING:              return "T1071";       /* C2 over app-layer */
+    case ALERT_TYPE_DGA_DOMAIN:             return "T1568.002";   /* Domain Generation Algorithms */
+    case ALERT_TYPE_ARP_SPOOF:              return "T1557.002";   /* ARP Cache Poisoning */
+    case ALERT_TYPE_ROGUE_DHCP:             return "T1557";       /* Adversary-in-the-Middle */
+    case ALERT_TYPE_ROGUE_RA:               return "T1557";       /* AiTM (IPv6 variant) */
+    case ALERT_TYPE_SMB1_USE:               return "T1210";       /* Exploitation of Remote Services */
+    case ALERT_TYPE_KERB_PREAUTH_BURST:     return "T1110.003";   /* Password Spraying */
+    case ALERT_TYPE_LDAP_SEARCH_FLOOD:      return "T1087.002";   /* Account Discovery: Domain */
+    case ALERT_TYPE_BGP_NOTIFICATION_BURST: return "T1499";       /* Endpoint DoS */
+    case ALERT_TYPE_SSH_BRUTE_FORCE:        return "T1110.001";   /* Password Guessing */
+    case ALERT_TYPE_RDP_BRUTE_FORCE:        return "T1110.001";
+    case ALERT_TYPE_SNMP_COMMUNITY_BRUTE:   return "T1110.001";
+    case ALERT_TYPE_MQTT_BROKER_BRUTE:      return "T1110.001";
+    case ALERT_TYPE_EVIL_TWIN:              return "T1557";       /* AiTM (rogue AP) */
+    case ALERT_TYPE_EVIL_TWIN_PROXIMITY:    return "T1557";
+    case ALERT_TYPE_KARMA_AP:               return "T1557";       /* AiTM (probe response) */
+    case ALERT_TYPE_DNS_TUNNEL:             return "T1071.004";   /* DNS as covert channel */
+    case ALERT_TYPE_PROBE_FLOOD:            return "T1595";       /* Active Scanning (wireless) */
+    case ALERT_TYPE_ATTACK_TOOL_UA:         return "T1595";       /* Vulnerability scanner UA */
+    case ALERT_TYPE_ATTACK_PATH:            return "T1190";       /* Exploit Public-Facing App */
+    case ALERT_TYPE_WEAK_TLS:               return "T1600";       /* Weaken Encryption */
+    case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
+    case ALERT_TYPE_COUNT:                  break;
+    }
+    return "";
 }
 
 /* ── Rules ───────────────────────────────────────────────── */

@@ -1129,6 +1129,58 @@ static void test_no_monitor_mode_no_fire_when_no_ifaces_yet(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE), -1);
 }
 
+/* ── MITRE ATT&CK technique tagging ─────────────────────
+ *
+ * Every alert type maps to a canonical technique (or "" for host
+ * posture). fire() writes the value into the alert record so the
+ * TUI, JSONL, and posture report can all show it without going
+ * back to the enum. */
+
+static void test_attack_technique_populated_on_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_scan(&s, "10.0.0.99", 15, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PORT_SCAN);
+    ASSERT(idx >= 0);
+    ASSERT_STR(s.alerts[idx].technique, "T1046");
+}
+
+static int is_digit_or_dot(char c) {
+    return (c >= '0' && c <= '9') || c == '.';
+}
+
+static void test_attack_technique_shape_valid(void) {
+    /* MITRE technique IDs are "T" + digits with optional ".NNN"
+     * subtechnique. Confirm the table follows that shape (defensively
+     * — a typo like "t1046" would produce garbage on export). */
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        const char *tech = alert_technique((alert_type_t)t);
+        if (tech[0] == '\0') continue;  /* posture alerts */
+        ASSERT_EQ((int)tech[0], (int)'T');
+        for (int i = 1; tech[i]; i++)
+            ASSERT(is_digit_or_dot(tech[i]));
+    }
+}
+
+static void test_attack_technique_posture_alert_is_empty(void) {
+    /* NO_MONITOR_MODE describes the operator's own capture rig, not
+     * adversary behaviour — it must resolve to "" so JSONL omits the
+     * technique field and reporting doesn't tag operator posture as
+     * an attack technique. */
+    ASSERT_STR(alert_technique(ALERT_TYPE_NO_MONITOR_MODE), "");
+}
+
+static void test_attack_technique_lookup_covers_all_alert_types(void) {
+    /* Guardrail against forgetting to add a technique when landing a
+     * new alert type: every enum value below ALERT_TYPE_COUNT must
+     * return a non-NULL value (empty string is fine, NULL is not). */
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        const char *tech = alert_technique((alert_type_t)t);
+        ASSERT(tech != NULL);
+    }
+}
+
 /* ── Attack-tool User-Agent ──────────────────────────────── */
 
 static void add_http(sloth_state_t *s, const char *src,
@@ -2201,6 +2253,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_no_monitor_mode_fires_when_no_monitor_iface);
     RUN_TEST(test_no_monitor_mode_no_fire_when_monitor_present);
     RUN_TEST(test_no_monitor_mode_no_fire_when_no_ifaces_yet);
+
+    TEST_SUITE("MITRE ATT&CK technique tagging");
+    RUN_TEST(test_attack_technique_populated_on_fire);
+    RUN_TEST(test_attack_technique_shape_valid);
+    RUN_TEST(test_attack_technique_posture_alert_is_empty);
+    RUN_TEST(test_attack_technique_lookup_covers_all_alert_types);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

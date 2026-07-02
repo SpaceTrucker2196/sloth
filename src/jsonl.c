@@ -229,6 +229,11 @@ void jsonl_emit_alert(const alert_t *a) {
     kv_int(buf, LINEBUF, &off, "sev",   (int)a->sev);
     kv_int(buf, LINEBUF, &off, "ty",    (int)a->type);
     kv_int(buf, LINEBUF, &off, "count", a->count);
+    /* MITRE ATT&CK technique — omitted when empty so consumers don't
+     * see a spurious "technique": "" for host-posture alerts like
+     * NO_MONITOR_MODE. Schema is additive per docs/wiki/jsonl-schema.md. */
+    if (a->technique[0])
+        kv_str(buf, LINEBUF, &off, "technique", a->technique);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
