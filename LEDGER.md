@@ -13,3 +13,4 @@
 | eae1862 | 2026-07-02T17:13:29Z | claude-opus-4-7 | 43 | 23244 | 19866432 | 38584 | 32.7011 | device risk scoring bucket + signals (#16 phase 4) |
 | 0e797ca | 2026-07-02T17:40:15Z | claude-opus-4-7 | 32 | 19275 | 15562966 | 34343 | 25.8208 | posture report export (#16 phase 5) |
 | f0a38b6 | 2026-07-02T21:27:35Z | claude-opus-4-7 | 206 | 80753 | 66865442 | 107585 | 109.5853 | version: manifest-file check-in phases 1-3 landed |
+| 93c8dd7 | 2026-07-03T02:09:04Z | claude-opus-4-7 | 41 | 11936 | 10755543 | 1148308 | 51.4784 | release: v1.5.0 (tag + GH release + notes) |
