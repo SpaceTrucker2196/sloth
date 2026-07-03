@@ -18,4 +18,8 @@
 int smtp_snoop(const uint8_t *data, int len,
                const char *src, const char *dst, uint16_t dst_port);
 
+/* Reset internal per-flow state. Used by tests to isolate cases;
+ * production code never calls it. */
+void smtp_snoop_reset(void);
+
 #endif /* SMTP_SNOOP_H */

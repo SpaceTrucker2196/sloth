@@ -1,13 +1,28 @@
-/* Passive SMTP AUTH observer — roadmap #16 phase 3.2.
+/* Passive SMTP AUTH observer — roadmap #16 phase 3.2 + follow-up.
  *
- * AUTH PLAIN payload format (RFC 4616):
+ * Handles two SASL mechanisms:
  *
- *     [authzid] \0 authcid \0 passwd
+ *   AUTH PLAIN <b64>            single-shot; b64 decodes to
+ *                               [authzid]\0authcid\0passwd
  *
- * where authzid is optional. We record `authcid` as the username.
- * The passwd portion is deliberately never touched. */
+ *   AUTH LOGIN                  three-line stateful exchange:
+ *     C: AUTH LOGIN
+ *     S: 334 VXNlcm5hbWU6       (base64 "Username:")
+ *     C: <b64 username>
+ *     S: 334 UGFzc3dvcmQ6       (base64 "Password:")
+ *     C: <b64 password>
+ *     S: 235 ok
+ *
+ * AUTH PLAIN is parsed inline. AUTH LOGIN needs per-flow scratch
+ * state (was the last client verb AUTH LOGIN? did we already see
+ * the username line?) — held in a small ring keyed by
+ * (client, server, dst_port). The password value is never
+ * inspected past "yes, it was on the wire." */
 
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <pthread.h>
 #include "smtp_snoop.h"
 #include "cleartext_creds.h"
 
@@ -65,6 +80,95 @@ static int b64_decode(const char *in, int inlen, char *out, int outsz) {
     return op;
 }
 
+/* ── AUTH LOGIN flow state ─────────────────────────────
+ * Tiny table sized to keep the module self-contained. Keys are
+ * client-side tuples; server-side payloads (dst_port not in the
+ * SMTP set) are labelled but don't touch state. Entries age out on
+ * capacity pressure by oldest last_seen. */
+
+#define SMTP_MAX_FLOWS 16
+
+typedef enum {
+    LOGIN_NONE = 0,
+    LOGIN_AWAIT_USER,
+    LOGIN_AWAIT_PASS,
+} login_state_t;
+
+typedef struct {
+    char           client[46];
+    char           server[46];
+    uint16_t       dst_port;
+    login_state_t  state;
+    time_t         last_seen;
+} smtp_flow_t;
+
+static smtp_flow_t     g_flows[SMTP_MAX_FLOWS];
+static int             g_flow_count = 0;
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* True if `port` is one we treat as the SMTP server side. Used to
+ * decide direction — client payloads have this as their dst_port. */
+static int is_smtp_port(uint16_t port) {
+    return port == 25 || port == 587;
+}
+
+static int flow_find(const char *client, const char *server, uint16_t port) {
+    for (int i = 0; i < g_flow_count; i++) {
+        const smtp_flow_t *f = &g_flows[i];
+        if (f->dst_port != port) continue;
+        if (strcmp(f->client, client) != 0) continue;
+        if (strcmp(f->server, server) != 0) continue;
+        return i;
+    }
+    return -1;
+}
+
+static int flow_evict_oldest(void) {
+    int oldest = 0;
+    for (int i = 1; i < g_flow_count; i++)
+        if (g_flows[i].last_seen < g_flows[oldest].last_seen) oldest = i;
+    return oldest;
+}
+
+static smtp_flow_t *flow_get_or_add(const char *client, const char *server,
+                                    uint16_t port)
+{
+    int idx = flow_find(client, server, port);
+    if (idx >= 0) return &g_flows[idx];
+    int slot = (g_flow_count < SMTP_MAX_FLOWS) ? g_flow_count++
+                                                : flow_evict_oldest();
+    smtp_flow_t *f = &g_flows[slot];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->client, sizeof(f->client), "%s", client);
+    snprintf(f->server, sizeof(f->server), "%s", server);
+    f->dst_port = port;
+    f->state = LOGIN_NONE;
+    return f;
+}
+
+/* Best-effort: if the line looks like a base64 chunk (only base64
+ * chars and possible '=' padding, non-empty) — return 1. Used to
+ * decide whether an AWAIT_USER line is really the client's b64
+ * response or noise (server prompts start with 3-digit status codes,
+ * caught before this). */
+static int looks_like_base64(const char *s, int len) {
+    if (len < 4) return 0;
+    for (int i = 0; i < len; i++) {
+        char c = s[i];
+        int ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+              || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=';
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+void smtp_snoop_reset(void) {
+    pthread_mutex_lock(&g_mu);
+    memset(g_flows, 0, sizeof(g_flows));
+    g_flow_count = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
 int smtp_snoop(const uint8_t *data, int len,
                const char *src, const char *dst, uint16_t dst_port)
 {
@@ -77,6 +181,73 @@ int smtp_snoop(const uint8_t *data, int len,
     if (!eol) return 0;
     int line = (int)(eol - p);
     if (line > 0 && p[line - 1] == '\r') line--;
+
+    /* ── AUTH LOGIN state machine ────────────────────────
+     * We only touch state on client-directed payloads (dst_port is
+     * the SMTP server port). Server payloads (with src_port on the
+     * SMTP set) get labelled but leave state alone. */
+    int is_client = is_smtp_port(dst_port);
+
+    if (is_client) {
+        pthread_mutex_lock(&g_mu);
+
+        if (ci_startswith(p, line, "AUTH LOGIN", 10)) {
+            /* Some clients pipeline the username on the same line:
+             *   AUTH LOGIN <b64_user>
+             * Handle both forms. */
+            int i = 10;
+            while (i < line && (p[i] == ' ' || p[i] == '\t')) i++;
+            smtp_flow_t *f = flow_get_or_add(src, dst, dst_port);
+            if (i < line && looks_like_base64(p + i, line - i)) {
+                char raw[128];
+                int dl = b64_decode(p + i, line - i, raw, (int)sizeof(raw));
+                if (dl > 0) {
+                    if (dl >= (int)sizeof(raw)) dl = (int)sizeof(raw) - 1;
+                    raw[dl] = '\0';
+                    cleartext_creds_record_user(src, dst, dst_port,
+                                                "SMTP", raw);
+                }
+                f->state = LOGIN_AWAIT_PASS;
+            } else {
+                f->state = LOGIN_AWAIT_USER;
+            }
+            f->last_seen = time(NULL);
+            pthread_mutex_unlock(&g_mu);
+            return 1;
+        }
+
+        /* Server status codes never appear on a client line, so if the
+         * flow's state expects the client's next payload, this must be
+         * it. Guard with looks_like_base64 so a client's plaintext
+         * QUIT / RSET etc. doesn't get misread. */
+        int idx = flow_find(src, dst, dst_port);
+        if (idx >= 0 && looks_like_base64(p, line)) {
+            smtp_flow_t *f = &g_flows[idx];
+            if (f->state == LOGIN_AWAIT_USER) {
+                char raw[128];
+                int dl = b64_decode(p, line, raw, (int)sizeof(raw));
+                if (dl > 0) {
+                    if (dl >= (int)sizeof(raw)) dl = (int)sizeof(raw) - 1;
+                    raw[dl] = '\0';
+                    cleartext_creds_record_user(src, dst, dst_port,
+                                                "SMTP", raw);
+                }
+                f->state = LOGIN_AWAIT_PASS;
+                f->last_seen = time(NULL);
+                pthread_mutex_unlock(&g_mu);
+                return 1;
+            }
+            if (f->state == LOGIN_AWAIT_PASS) {
+                /* Never inspect the payload — just mark the flow. */
+                cleartext_creds_mark_password(src, dst, dst_port, "SMTP");
+                f->state = LOGIN_NONE;
+                f->last_seen = time(NULL);
+                pthread_mutex_unlock(&g_mu);
+                return 1;
+            }
+        }
+        pthread_mutex_unlock(&g_mu);
+    }
 
     /* AUTH PLAIN <base64> — recognise both cases + trailing whitespace. */
     if (ci_startswith(p, line, "AUTH PLAIN", 10)) {
@@ -119,8 +290,8 @@ int smtp_snoop(const uint8_t *data, int len,
     static const char *cmds[] = {
         "HELO","EHLO","MAIL FROM","RCPT TO","DATA","QUIT",
         "RSET","NOOP","VRFY","EXPN","STARTTLS","AUTH ",
-        "220","221","250","354","421","450","451","452",
-        "500","501","502","503","504","530","535",
+        "220","221","250","334","354","421","450","451","452",
+        "500","501","502","503","504","530","535","538","550",
         NULL
     };
     for (int i = 0; cmds[i]; i++) {
