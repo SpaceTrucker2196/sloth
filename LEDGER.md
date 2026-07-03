@@ -14,3 +14,4 @@
 | 0e797ca | 2026-07-02T17:40:15Z | claude-opus-4-7 | 32 | 19275 | 15562966 | 34343 | 25.8208 | posture report export (#16 phase 5) |
 | f0a38b6 | 2026-07-02T21:27:35Z | claude-opus-4-7 | 206 | 80753 | 66865442 | 107585 | 109.5853 | version: manifest-file check-in phases 1-3 landed |
 | 93c8dd7 | 2026-07-03T02:09:04Z | claude-opus-4-7 | 41 | 11936 | 10755543 | 1148308 | 51.4784 | release: v1.5.0 (tag + GH release + notes) |
+| b4db8f0 | 2026-07-03T02:47:13Z | claude-opus-4-7 | 88 | 73041 | 34118202 | 61608 | 58.5049 | cleartext-cred: POP3+IMAP+SMTP snoops |
