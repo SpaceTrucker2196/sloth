@@ -188,6 +188,8 @@ void jsonl_emit_http(const http_log_entry_t *e) {
     kv_str(buf, LINEBUF, &off, "host",   e->host);
     kv_str(buf, LINEBUF, &off, "method", e->method);
     kv_str(buf, LINEBUF, &off, "path",   e->path);
+    if (e->ja4h[0])
+        kv_str(buf, LINEBUF, &off, "ja4h", e->ja4h);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

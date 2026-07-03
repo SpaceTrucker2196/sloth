@@ -154,8 +154,16 @@ through as UTF-8.
 ### `http`
 
 ```json
-{"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html"}
+{"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html","ja4h":"ge11nn020000_8daaf6152771_000000000000_000000000000"}
 ```
+
+| Field    | Type   | Meaning |
+|----------|--------|---------|
+| `src`    | string | client IP |
+| `host`   | string | `Host:` header value, port stripped |
+| `method` | string | `GET` / `POST` / … |
+| `path`   | string | request URI |
+| `ja4h`   | string | 49-char JA4H client fingerprint (FoxIO spec). Omitted when not computed. See [[../views/http]] for the section breakdown. |
 
 ### `ntp`
 

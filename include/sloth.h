@@ -738,6 +738,12 @@ typedef struct {
     char   host[64];       /* Host header value */
     char   path[128];      /* request URI */
     char   user_agent[64]; /* User-Agent header, truncated */
+    /* JA4H client fingerprint (FoxIO spec): a(10) _ b(12) _ c(12) _ d(12)
+     * = 49 chars + NUL. Section a encodes method/version/cookie flag/
+     * referer flag/numheaders/lang; b hashes observed header names; c
+     * hashes sorted cookie names; d hashes sorted cookie name=value
+     * pairs. "" if not computed. Roadmap follow-up to #16 phase 2. */
+    char   ja4h[50];
     time_t ts;
 } http_log_entry_t;
 
