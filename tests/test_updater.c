@@ -79,42 +79,51 @@ static void test_malformed_manifest_sets_err(void) {
 
 /* ── Happy paths ──────────────────────────────────── */
 
+/* Decouple these tests from SLOTH_VERSION so a routine version bump
+ * doesn't break them. We compare using the running SLOTH_VERSION
+ * itself as the equality case, plus a synthetic "way newer" and
+ * "way older" version. */
+
 static void test_up_to_date_reports_no_update(void) {
-    /* SLOTH_VERSION is 1.4.0; a manifest saying "1.4.0" must not
-     * trigger the update-available flag. */
-    write_manifest("{\"latest\":\"1.4.0\",\"url\":\"https://example/\"}");
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"latest\":\"%s\",\"url\":\"https://example/\"}", SLOTH_VERSION);
+    write_manifest(body);
     force_recheck();
     updater_tick(1700000000);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     updater_snapshot(&s);
     ASSERT_EQ(s.updater.err, 0);
     ASSERT_EQ(s.updater.has_update, 0);
-    ASSERT_STR(s.updater.latest, "1.4.0");
+    ASSERT_STR(s.updater.latest, SLOTH_VERSION);
     ASSERT_STR(s.updater.url,    "https://example/");
 }
 
 static void test_newer_manifest_flags_update(void) {
-    write_manifest("{\"latest\":\"1.5.0\",\"url\":\"https://x/\"}");
+    /* "99.99.0" is safely greater than any realistic SLOTH_VERSION
+     * for the lifetime of this project. */
+    write_manifest("{\"latest\":\"99.99.0\",\"url\":\"https://x/\"}");
     force_recheck();
     updater_tick(1700000000);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     updater_snapshot(&s);
     ASSERT_EQ(s.updater.err, 0);
     ASSERT_EQ(s.updater.has_update, 1);
-    ASSERT_STR(s.updater.latest, "1.5.0");
+    ASSERT_STR(s.updater.latest, "99.99.0");
 }
 
 static void test_older_manifest_no_update(void) {
     /* Manifest older than the running binary should NOT flag an
      * update — otherwise a stale local file could induce a
-     * confusing "downgrade available" message. */
-    write_manifest("{\"latest\":\"1.3.0\"}");
+     * confusing "downgrade available" message. "0.0.1" is below
+     * every real release. */
+    write_manifest("{\"latest\":\"0.0.1\"}");
     force_recheck();
     updater_tick(1700000000);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     updater_snapshot(&s);
     ASSERT_EQ(s.updater.has_update, 0);
-    ASSERT_STR(s.updater.latest, "1.3.0");
+    ASSERT_STR(s.updater.latest, "0.0.1");
 }
 
 /* ── Cache behaviour ────────────────────────────── */

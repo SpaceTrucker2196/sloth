@@ -18,6 +18,9 @@ SRCS = src/main.c          \
        src/sni_snoop.c     \
        src/http_snoop.c    \
        src/ftp_snoop.c     \
+       src/pop3_snoop.c    \
+       src/imap_snoop.c    \
+       src/smtp_snoop.c    \
        src/cleartext_creds.c \
        src/device_risk.c   \
        src/posture.c       \
@@ -201,8 +204,14 @@ TEST_SRCS = tests/main_test.c          \
             src/sni_snoop.c            \
             src/http_snoop.c           \
             src/ftp_snoop.c            \
+            src/pop3_snoop.c           \
+            src/imap_snoop.c           \
+            src/smtp_snoop.c           \
             src/cleartext_creds.c      \
             tests/test_cleartext_creds.c \
+            tests/test_pop3_snoop.c    \
+            tests/test_imap_snoop.c    \
+            tests/test_smtp_snoop.c    \
             src/device_risk.c          \
             tests/test_device_risk.c   \
             src/posture.c              \

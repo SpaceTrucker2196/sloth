@@ -34,6 +34,9 @@
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
 #include "ftp_snoop.h"
+#include "pop3_snoop.h"
+#include "imap_snoop.h"
+#include "smtp_snoop.h"
 #include "cleartext_creds.h"
 #include "http_log.h"
 #include "tls_log.h"
@@ -84,6 +87,39 @@ static void try_ftp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (ftp_snoop(tp + tcp_hdr, pay_len,
                   pkt->src, pkt->dst, pkt->dst_port))
         snprintf(pkt->info, sizeof(pkt->info), "FTP");
+}
+
+/* POP3 on TCP/110 — same shape as FTP (USER/PASS lines). */
+static void try_pop3(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (pop3_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "POP3");
+}
+
+/* IMAP on TCP/143 — tagged LOGIN with optional quoting. */
+static void try_imap(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 8) return;
+    if (imap_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "IMAP");
+}
+
+/* SMTP on TCP/25/587 — AUTH PLAIN in one shot. */
+static void try_smtp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (smtp_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "SMTP");
 }
 
 static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
@@ -240,6 +276,13 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             try_http(tp, tlen, pkt);
         if (pkt->dst_port == 21 || pkt->src_port == 21)
             try_ftp(tp, tlen, pkt);
+        if (pkt->dst_port == 110 || pkt->src_port == 110)
+            try_pop3(tp, tlen, pkt);
+        if (pkt->dst_port == 143 || pkt->src_port == 143)
+            try_imap(tp, tlen, pkt);
+        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
+            pkt->dst_port == 587 || pkt->src_port == 587)
+            try_smtp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);
@@ -351,6 +394,13 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             try_http(tp, tlen, pkt);
         if (pkt->dst_port == 21 || pkt->src_port == 21)
             try_ftp(tp, tlen, pkt);
+        if (pkt->dst_port == 110 || pkt->src_port == 110)
+            try_pop3(tp, tlen, pkt);
+        if (pkt->dst_port == 143 || pkt->src_port == 143)
+            try_imap(tp, tlen, pkt);
+        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
+            pkt->dst_port == 587 || pkt->src_port == 587)
+            try_smtp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);
