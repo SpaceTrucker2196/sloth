@@ -16,3 +16,4 @@
 | 93c8dd7 | 2026-07-03T02:09:04Z | claude-opus-4-7 | 41 | 11936 | 10755543 | 1148308 | 51.4784 | release: v1.5.0 (tag + GH release + notes) |
 | b4db8f0 | 2026-07-03T02:47:13Z | claude-opus-4-7 | 88 | 73041 | 34118202 | 61608 | 58.5049 | cleartext-cred: POP3+IMAP+SMTP snoops |
 | 53db134 | 2026-07-03T03:50:59Z | claude-opus-4-7 | 60 | 41312 | 24863419 | 41466 | 41.6384 | http: JA4H client fingerprint |
+| 7e02d39 | 2026-07-03T04:21:25Z | claude-opus-4-7 | 49 | 38426 | 18686153 | 25202 | 31.6680 | smtp: AUTH LOGIN stateful SASL exchange |
