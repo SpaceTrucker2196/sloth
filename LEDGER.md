@@ -20,3 +20,4 @@
 | 9c42b15 | 2026-07-03T04:31:19Z | claude-opus-4-7 | 21 | 6993 | 7213845 | 7513 | 11.5709 | release: v1.5.1 (tag + GH release + notes) |
 | 2d249bb | 2026-07-04T22:24:41Z | claude-opus-4-7,claude-opus-4-8 | 74224 | 69781 | 7631508 | 190879 | 11.2276 | ROADMAP.md: consolidate open issues + Wi-Fi SIGINT gap analysis |
 | 83f2897 | 2026-07-04T23:06:36Z | claude-opus-4-8 | 11385 | 247216 | 64376395 | 1450236 | 52.9279 | jsonl: emit each captured packet exactly once (closes #20) |
+| b2b722f | 2026-07-04T23:51:03Z | claude-opus-4-8 | 12790 | 174151 | 89241600 | 225498 | 51.2935 | wifi #22: adaptive passive channel-hop scheduler + §2 carve-out |
