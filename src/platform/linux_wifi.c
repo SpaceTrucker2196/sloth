@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <linux/netlink.h>
 #include <linux/genetlink.h>
 #include <linux/nl80211.h>
@@ -482,6 +483,73 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max) {
 
     close(fd);
     return n;
+}
+
+/* ── Monitor-channel retune (NL80211_CMD_SET_CHANNEL) ────── */
+
+/* Append a u32 nl attribute at `off` in `base`, return the new offset. */
+static size_t nla_put_u32(char *base, size_t off, int type, uint32_t val) {
+    struct nlattr *na = (struct nlattr *)(base + off);
+    na->nla_type = (uint16_t)type;
+    na->nla_len  = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
+    *(uint32_t *)NA_DATA(na) = val;
+    return off + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
+}
+
+int linux_wifi_set_channel(const char *iface, int freq_mhz) {
+    if (!iface || !iface[0] || freq_mhz <= 0) return -1;
+    unsigned ifidx = if_nametoindex(iface);
+    if (ifidx == 0) return -1;
+
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (fd < 0) return -1;
+    int family = get_nl80211_id(fd);
+    if (family < 0) { close(fd); return -1; }
+
+    /* Short recv timeout so a missing ACK never wedges the poll loop. */
+    struct timeval tv = { 0, 200000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t buf[128];
+    memset(buf, 0, sizeof(buf));
+    struct nlmsghdr   *nlh = (struct nlmsghdr *)buf;
+    struct genlmsghdr *gh  = (struct genlmsghdr *)NLMSG_DATA(nlh);
+    char *attrs = (char *)gh + GENL_HDRLEN;
+
+    size_t off = 0;
+    off = nla_put_u32(attrs, off, NL80211_ATTR_IFINDEX,             ifidx);
+    off = nla_put_u32(attrs, off, NL80211_ATTR_WIPHY_FREQ,          (uint32_t)freq_mhz);
+    off = nla_put_u32(attrs, off, NL80211_ATTR_WIPHY_CHANNEL_TYPE,  NL80211_CHAN_NO_HT);
+
+    size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN + off;
+    nlh->nlmsg_len   = (uint32_t)msg_sz;
+    nlh->nlmsg_type  = (uint16_t)family;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+    nlh->nlmsg_seq   = 3;
+    gh->cmd          = NL80211_CMD_SET_CHANNEL;
+
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.nl_family = AF_NETLINK;
+    if (sendto(fd, buf, msg_sz, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* An ACK is an NLMSG_ERROR with error == 0; anything else is a failure
+     * (EPERM without CAP_NET_ADMIN, EBUSY, EINVAL for an unsupported freq). */
+    uint8_t rbuf[256];
+    ssize_t r = recv(fd, rbuf, sizeof(rbuf), 0);
+    int rc = -1;
+    if (r >= (ssize_t)(NLMSG_HDRLEN + sizeof(struct nlmsgerr))) {
+        struct nlmsghdr *rh = (struct nlmsghdr *)rbuf;
+        if (rh->nlmsg_type == NLMSG_ERROR) {
+            struct nlmsgerr *e = (struct nlmsgerr *)NLMSG_DATA(rh);
+            rc = (e->error == 0) ? 0 : -1;
+        }
+    }
+    close(fd);
+    return rc;
 }
 
 #endif /* WITH_WIFI */

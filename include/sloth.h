@@ -1355,6 +1355,11 @@ typedef struct {
     int  (*get_dhcp)(dhcp_lease_t *out, int max);
     void (*init)(void);
     void (*cleanup)(void);
+    /* Retune sloth's own monitor-mode capture interface to freq_mhz
+     * (issue #22, gated behind --hop; see MISSION §2). Returns 0 on
+     * success, -1 if unsupported on this platform / build or the retune
+     * failed. The ONLY kernel-state write in the vtable. */
+    int  (*set_channel)(const char *iface, int freq_mhz);
 } platform_ops_t;
 
 extern platform_ops_t g_platform;

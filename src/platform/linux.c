@@ -135,6 +135,10 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max) {
     (void)out; (void)max;
     return 0;
 }
+int linux_wifi_set_channel(const char *iface, int freq_mhz) {
+    (void)iface; (void)freq_mhz;
+    return -1;   /* no nl80211 without WITH_WIFI */
+}
 #endif
 
 /* ── ARP neighbor table ────────────────────────────────── */
@@ -180,6 +184,7 @@ platform_ops_t g_platform = {
     linux_get_dhcp,
     linux_init,
     linux_cleanup,
+    linux_wifi_set_channel,
 };
 
 #endif /* PLATFORM_LINUX */
