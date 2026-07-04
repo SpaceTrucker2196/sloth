@@ -19,3 +19,4 @@
 | 7e02d39 | 2026-07-03T04:21:25Z | claude-opus-4-7 | 49 | 38426 | 18686153 | 25202 | 31.6680 | smtp: AUTH LOGIN stateful SASL exchange |
 | 9c42b15 | 2026-07-03T04:31:19Z | claude-opus-4-7 | 21 | 6993 | 7213845 | 7513 | 11.5709 | release: v1.5.1 (tag + GH release + notes) |
 | 2d249bb | 2026-07-04T22:24:41Z | claude-opus-4-7,claude-opus-4-8 | 74224 | 69781 | 7631508 | 190879 | 11.2276 | ROADMAP.md: consolidate open issues + Wi-Fi SIGINT gap analysis |
+| 83f2897 | 2026-07-04T23:06:36Z | claude-opus-4-8 | 11385 | 247216 | 64376395 | 1450236 | 52.9279 | jsonl: emit each captured packet exactly once (closes #20) |
