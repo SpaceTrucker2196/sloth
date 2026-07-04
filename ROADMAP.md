@@ -26,7 +26,10 @@ still open).
 
 ### A1. Data-integrity bug (fix before feature work)
 
-- **▲ Packet/telemetry de-duplication** — `#20`. The JSONL emit loop
+- **✅ LANDED (2026-07-04, `83f2897`)** — **Packet/telemetry
+  de-duplication** — `#20`. Fixed via a monotonic once-only high-water
+  mark; each captured frame now emits exactly once. Original analysis
+  follows. The JSONL emit loop
   (`src/jsonl.c` `jsonl_emit_all`, lines ~1057-1076) re-emits the entire
   snapshot state every refresh cycle, not just newly-observed records.
   Measured at ~90.8% duplicate packet records (42,304 emitted /
@@ -46,7 +49,12 @@ still open).
   frames from >1 adapter, tag every observation with a source sensor id
   (interface, channel, freq, RSSI-per-sensor), merge into one world
   model. Prerequisite framing for #22 and #28.
-- **◆ Adaptive passive channel scheduler** — `#22`. sloth today does
+- **✅ LANDED (2026-07-04)** — **Adaptive passive channel scheduler** —
+  `#22`. Shipped as `src/wifi_chanhop.c` + a `set_channel` platform op
+  (nl80211), driven by `--hop` (opt-in, off by default). Required the
+  first amendment to MISSION §2 (narrow carve-out for retuning sloth's
+  own monitor interface). nl80211 path needs on-hardware Linux
+  verification. Original note follows for context: sloth previously did
   **not** control the radio at all — it passively reads whatever channel
   the card is externally tuned to (the Channel view literally instructs
   the operator to "hop the adapter to other channels"). A conservative,

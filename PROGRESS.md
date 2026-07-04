@@ -77,6 +77,27 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-07-04 — Adaptive passive channel-hop scheduler (#22) + packet dedup (#20)
+**Commits**: `83f2897` (#20), plus the §2 amendment, `d2fee24`
+(scheduler core), `ce681ee` (platform seam), and this wiring commit.
+**Touched**: `MISSION.md` §2, `src/wifi_chanhop.{c,h}` (new),
+`tests/test_chanhop.c` (new), `src/platform/*` (set_channel vtable op +
+nl80211 impl), `src/main.c` (`--hop`), `src/views/channel.c`,
+`src/jsonl.c` + `src/capture/capture.c` + `include/sloth.h` (#20),
+`tests/test_jsonl.c`.
+**Why**: #20 — the packet emitter re-serialised the whole ring every
+tick (~90% duplicate records downstream); now each frame ships once via
+a monotonic high-water mark. #22 — a single monitor radio can only hear
+one channel at a time; the new scheduler dwells longer where activity is
+seen while guaranteeing every channel is revisited, retuning the radio
+itself. This required the first-ever amendment to MISSION §2: a narrow,
+opt-in (`--hop`, default off) carve-out to let sloth retune *its own*
+monitor interface — changing what it hears, never what the network does.
+**Follow-ups**: the nl80211 `SET_CHANNEL` path is unbuilt on the Darwin
+CI host — verify on a Linux target with a monitor interface and
+CAP_NET_ADMIN. 6 GHz channels and DFS are deliberately excluded from the
+default hop list for now.
+
 ### 2026-06-07 — Faster refresh + event-driven dashboard wakes
 **Touched**: `include/sloth.h`, `src/main.c`, `src/tui.{c,h}`,
 `src/alerts.c`, `src/event_wake.{c,h}` (new),

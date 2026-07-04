@@ -3,8 +3,10 @@
 #include <string.h>
 #include <signal.h>
 
+#include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "wifi_chanhop.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -86,7 +88,31 @@
 static sloth_state_t g_state;
 static volatile int g_quit = 0;
 
+/* Passive channel-hop scheduler (issue #22). Off unless --hop is passed.
+ * Drives platform set_channel from sloth's own observed activity — the
+ * only kernel-state write sloth performs, and only on its own monitor
+ * interface; see MISSION §2. */
+static chanhop_t g_chanhop;
+static int       g_hop_enabled = 0;
+
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
+
+#ifdef WITH_PCAP
+/* Advance the channel scheduler once per poll: attribute the packets seen
+ * since the last tick to the current channel, then retune the monitor
+ * interface if the dwell has elapsed. */
+static void chanhop_drive(sloth_state_t *s) {
+    static uint64_t last_total = 0;
+    if (!g_hop_enabled || s->probe_iface[0] == '\0') return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    chanhop_observe(&g_chanhop, (uint32_t)(s->pkt_total - last_total));
+    last_total = s->pkt_total;
+    if (chanhop_tick(&g_chanhop, now_ms))
+        g_platform.set_channel(s->probe_iface, chanhop_current_freq(&g_chanhop));
+}
+#endif
 
 static void poll_data(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
@@ -157,6 +183,9 @@ static void poll_data(sloth_state_t *s) {
     }
     devices_update(s);
     top_hosts_update(s);
+#ifdef WITH_PCAP
+    chanhop_drive(s);
+#endif
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {
@@ -307,7 +336,7 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N]\n"
+            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N] [--hop]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -342,6 +371,12 @@ static void print_usage(const char *argv0) {
             "                     The loop also wakes early on alert fires,\n"
             "                     so the value is an upper bound, not a fixed\n"
             "                     cadence.\n"
+            "  --hop              passive channel-hopping: retune sloth's own\n"
+            "                     monitor interface across a 2.4/5 GHz list,\n"
+            "                     dwelling longer where activity is seen. The\n"
+            "                     only kernel-state write sloth performs; off by\n"
+            "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
+            "                     (Linux). No frame is transmitted.\n"
             "  --report FILE.md   on exit, write a Markdown posture report to\n"
             "                     FILE.md summarising alerts (by severity and\n"
             "                     MITRE ATT&CK technique), cleartext credential\n"
@@ -407,6 +442,8 @@ int main(int argc, char **argv) {
             report_json = argv[++i];
         } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
             check_manifest = argv[++i];
+        } else if (!strcmp(argv[i], "--hop")) {
+            g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -425,6 +462,8 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+
+    if (g_hop_enabled) chanhop_init_default(&g_chanhop);
 
     if (jsonl_path) {
         if (!jsonl_open(jsonl_path)) {
