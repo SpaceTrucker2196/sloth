@@ -59,7 +59,7 @@ void jsonl_emit_mdns_services (const sloth_state_t *s);
 void jsonl_emit_nbns_names    (const sloth_state_t *s);
 void jsonl_emit_ssdp_devices  (const sloth_state_t *s);
 void jsonl_emit_scan_entries  (const sloth_state_t *s);
-void jsonl_emit_packets       (const sloth_state_t *s);
+void jsonl_emit_packets       (sloth_state_t *s);
 void jsonl_emit_processes     (const sloth_state_t *s);
 void jsonl_emit_ndp_ras       (const sloth_state_t *s);
 void jsonl_emit_smb_sessions  (const sloth_state_t *s);
@@ -75,6 +75,6 @@ void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
  * poll from main.c after the underlying tables have been refreshed.
  * Connections and twin_episode are emitted separately because they
  * predate this set; this function is purely additive. */
-void jsonl_emit_state_snapshots(const sloth_state_t *s);
+void jsonl_emit_state_snapshots(sloth_state_t *s);
 
 #endif /* JSONL_H */

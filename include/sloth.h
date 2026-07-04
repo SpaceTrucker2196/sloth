@@ -1090,6 +1090,7 @@ typedef struct {
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
     int           pkt_count;            /* total written (capped at MAX_PACKETS) */
+    uint64_t      pkt_total;            /* monotonic total ever written (never wraps) */
     int           pkt_sel;             /* selected row in packets view */
     int           pkt_paused;          /* non-zero = freeze auto-scroll */
 
@@ -1110,6 +1111,7 @@ typedef struct {
     conn_bw_t     conn_bw[MAX_CONNS];
     int           conn_bw_count;
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
+    uint64_t      pkt_jsonl_emitted; /* pkt_total value at last jsonl emit (issue #20) */
 
     /* ── ARP neighbor table ────────────────────────────── */
     arp_entry_t  arp_entries[MAX_ARP_ENTRIES];

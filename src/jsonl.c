@@ -794,17 +794,30 @@ void jsonl_emit_scan_entries(const sloth_state_t *s) {
     }
 }
 
-void jsonl_emit_packets(const sloth_state_t *s) {
-    if (!any_sink() || !s) return;
+void jsonl_emit_packets(sloth_state_t *s) {
+    if (!s) return;
+    /* A packet record is event-like: each captured frame must be emitted
+     * exactly once, not re-serialised every refresh cycle (issue #20). We
+     * track progress with a monotonic counter (pkt_total, bumped by the
+     * capture thread on every write) and a per-consumer high-water mark
+     * (pkt_jsonl_emitted). A monotonic pair — rather than comparing the
+     * wrapping pkt_head — lets us tell "0 new" from "a whole ring turned
+     * over since the last tick" and cap the emit to what's still resident.
+     *
+     * With no sink, advance the mark to the write head so a client that
+     * connects later streams forward (tail -f) instead of getting a
+     * backlog dump. */
+    if (!any_sink()) { s->pkt_jsonl_emitted = s->pkt_total; return; }
     time_t now = time(NULL);
-    /* Packet ring is sized at MAX_PACKETS; pkt_count is the number
-     * of *written* slots, capped at MAX_PACKETS. We emit ALL currently
-     * valid entries each tick — the ring's ordering doesn't matter for
-     * the snapshot model. raw bytes are deliberately omitted (would
-     * leak frame contents into log files); only the metadata ships. */
-    int n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
-    for (int i = 0; i < n; i++) {
-        const packet_info_t *e = &s->packets[i];
+    uint64_t pending = s->pkt_total - s->pkt_jsonl_emitted;
+    /* If more than a ring's worth arrived between ticks, the oldest were
+     * overwritten and are unrecoverable — emit only the survivors. */
+    if (pending > MAX_PACKETS) pending = MAX_PACKETS;
+    uint64_t first = s->pkt_total - pending;   /* absolute index of oldest survivor */
+    for (uint64_t k = first; k < s->pkt_total; k++) {
+        const packet_info_t *e = &s->packets[k % MAX_PACKETS];
+        /* raw bytes are deliberately omitted (would leak frame contents
+         * into log files); only the metadata ships. */
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "packet", now);
         kv_int(buf, LINEBUF, &off, "ts_sec",   (long long)e->ts_sec);
@@ -819,6 +832,7 @@ void jsonl_emit_packets(const sloth_state_t *s) {
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
+    s->pkt_jsonl_emitted = s->pkt_total;
 }
 
 void jsonl_emit_processes(const sloth_state_t *s) {
@@ -1049,7 +1063,7 @@ void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
     }
 }
 
-void jsonl_emit_state_snapshots(const sloth_state_t *s) {
+void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
     if (!any_sink() || !s) return;

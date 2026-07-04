@@ -594,6 +594,7 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     g_state->packets[g_state->pkt_head] = pkt;
     g_state->pkt_head = (g_state->pkt_head + 1) % MAX_PACKETS;
     if (g_state->pkt_count < MAX_PACKETS) g_state->pkt_count++;
+    g_state->pkt_total++;   /* monotonic; drives once-only jsonl emit (issue #20) */
     pthread_mutex_unlock(&g_mu);
 }
 
