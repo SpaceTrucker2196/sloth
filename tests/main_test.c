@@ -75,6 +75,7 @@ void run_dga_tests(void);
 void run_wifi_oui_attacker_tests(void);
 void run_data_socket_tests(void);
 void run_osi_tests(void);
+void run_chanhop_tests(void);
 void run_twins_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
@@ -160,6 +161,7 @@ int main(void) {
     run_wifi_oui_attacker_tests();
     run_data_socket_tests();
     run_osi_tests();
+    run_chanhop_tests();
     run_twins_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();

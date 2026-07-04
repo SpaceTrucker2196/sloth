@@ -74,6 +74,7 @@ SRCS = src/main.c          \
        src/threat_intel.c    \
        src/dga.c             \
        src/wifi_oui_attacker.c \
+       src/wifi_chanhop.c    \
        src/twins.c           \
        src/views/twins.c     \
        src/alerts.c          \
@@ -322,6 +323,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_dga.c               \
             src/wifi_oui_attacker.c        \
             tests/test_wifi_oui_attacker.c \
+            src/wifi_chanhop.c             \
+            tests/test_chanhop.c           \
             src/twins.c                    \
             src/views/twins.c              \
             tests/test_twins.c             \
