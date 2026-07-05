@@ -86,6 +86,7 @@ void run_twins_tests(void);
 void run_karma_tests(void);
 void run_discovery_tests(void);
 void run_eap_parse_tests(void);
+void run_eap_track_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
 void run_smb_snoop_tests(void);
@@ -181,6 +182,7 @@ int main(void) {
     run_karma_tests();
     run_discovery_tests();
     run_eap_parse_tests();
+    run_eap_track_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();
     run_smb_snoop_tests();

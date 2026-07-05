@@ -660,6 +660,7 @@ typedef enum {
     ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
     ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
     ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
+    ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -950,6 +951,23 @@ typedef struct {
     char     top_ssid[33];  /* most recently advertised SSID */
     time_t   last_seen;
 } karma_ap_t;
+
+/* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
+ * One row per BSSID seen running an 802.1X EAP conversation. Records
+ * which inner EAP method types it offered (bitmap; the methods we
+ * classify all have type codes < 32) and how many Response/Identity
+ * frames leaked a real username. Synthesised from the EAP inner-frame
+ * parser via eap_track. */
+#define MAX_ROGUE_RADIUS 32
+typedef struct {
+    uint8_t  bssid[6];
+    uint32_t eap_types_seen;   /* bit T set = EAP method type T observed */
+    int      weak_method;      /* 1 = a weak method (MD5/GTC) was offered */
+    int      identity_leaks;   /* Response/Identity frames with a real username */
+    char     last_identity[64];/* most recent leaked identity (printable) */
+    time_t   first_seen;
+    time_t   last_seen;
+} rogue_radius_ap_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
@@ -1336,6 +1354,9 @@ typedef struct {
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;
     int            karma_sel;
+
+    rogue_radius_ap_t rogue_radius[MAX_ROGUE_RADIUS]; /* 802.1X EAP tracking (#31) */
+    int               rogue_radius_count;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];

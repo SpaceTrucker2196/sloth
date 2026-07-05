@@ -107,6 +107,7 @@ SRCS = src/main.c          \
        src/views/pnl.c       \
        src/eapol_log.c       \
        src/eap_parse.c       \
+       src/eap_track.c       \
        src/views/eapol.c     \
        src/seqnum_track.c    \
        src/views/seqnum.c    \
@@ -391,6 +392,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_probe_pnl.c         \
             src/eapol_log.c                \
             src/eap_parse.c                \
+            src/eap_track.c                \
+            tests/test_eap_track.c         \
             tests/test_eap_parse.c         \
             src/views/eapol.c              \
             tests/test_eapol_log.c         \
