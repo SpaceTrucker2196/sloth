@@ -1483,6 +1483,83 @@ static void test_karma_one_ssid_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_KARMA_AP), -1);
 }
 
+/* ── SSID Confusion / RSN downgrade (CVE-2023-52424, #32) ── */
+
+/* Like add_beacon but sets the RSN posture fields the downgrade
+ * detector keys on. */
+static void add_beacon_rsn(sloth_state_t *s, const char *ssid,
+                           const uint8_t bssid[6], const char *enc,
+                           const char *pairwise, int mfp) {
+    add_beacon(s, ssid, bssid, enc);
+    beacon_ap_t *b = &s->beacon_aps[s->beacon_count - 1];
+    snprintf(b->pairwise, sizeof(b->pairwise), "%s", pairwise);
+    b->mfp = mfp;
+}
+
+static void test_ssid_confusion_wpa3_to_wpa2_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t spoof[6] = {0xde,0xad,0xbe,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP", legit, "WPA3", "GCMP", 2);   /* SAE, MFP required */
+    add_beacon_rsn(&s, "CORP", spoof, "WPA2", "CCMP", 0);   /* PSK, MFP off */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_SSID_CONFUSION);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_ssid_confusion_identical_posture_no_fire(void) {
+    /* Legit multi-VAP: same SSID, same RSN posture across BSSIDs. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP", a, "WPA2", "CCMP", 2);
+    add_beacon_rsn(&s, "CORP", b, "WPA2", "CCMP", 2);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SSID_CONFUSION), -1);
+}
+
+static void test_ssid_confusion_mfp_drop_fires(void) {
+    /* Same generation + cipher, but MFP required -> disabled = +4. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t spoof[6] = {0xde,0xad,0xbe,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP", legit, "WPA2", "CCMP", 2);
+    add_beacon_rsn(&s, "CORP", spoof, "WPA2", "CCMP", 0);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SSID_CONFUSION) >= 0);
+}
+
+static void test_ssid_confusion_different_ssid_no_fire(void) {
+    /* Downgraded posture but different SSID — not a confusion attack. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xde,0xad,0xbe,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP",  a, "WPA3", "GCMP", 2);
+    add_beacon_rsn(&s, "GUEST", b, "WPA2", "CCMP", 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SSID_CONFUSION), -1);
+}
+
+static void test_ssid_confusion_open_weak_side_defers_to_twin(void) {
+    /* OPEN as the weak side is rule_evil_twin's job, not this rule —
+     * the downgrade rule requires the weak side to still be protected. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t spoof[6] = {0xde,0xad,0xbe,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP", legit, "WPA3", "GCMP", 2);
+    add_beacon_rsn(&s, "CORP", spoof, "OPEN", "",     0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SSID_CONFUSION), -1);
+    /* ...but the evil-twin rule still catches the OPEN-vs-strong twin. */
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
+}
+
 /* ── Rogue DHCP ──────────────────────────────────────────── */
 
 static void add_dhcp_event(sloth_state_t *s, const char *mac,
@@ -2290,6 +2367,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
+    RUN_TEST(test_ssid_confusion_wpa3_to_wpa2_fires);
+    RUN_TEST(test_ssid_confusion_identical_posture_no_fire);
+    RUN_TEST(test_ssid_confusion_mfp_drop_fires);
+    RUN_TEST(test_ssid_confusion_different_ssid_no_fire);
+    RUN_TEST(test_ssid_confusion_open_weak_side_defers_to_twin);
     RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
     RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
     RUN_TEST(test_dns_tunnel_few_long_no_fire);

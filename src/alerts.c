@@ -194,6 +194,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
     case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
     case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
+    case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -870,6 +871,101 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* SSID Confusion / RSN-downgrade twin — CVE-2023-52424 (issue #32).
+ *
+ * The SSID is not bound into PMK derivation, so a rogue AP can spoof a
+ * trusted network name while advertising a *weaker* RSN posture and the
+ * client will still associate. The on-air fingerprint is a downgrade
+ * delta: the same SSID appearing on a second BSSID with weaker crypto
+ * than the strongest posture we've seen for that SSID. A legit
+ * multi-VAP controller does NOT downgrade its own security across
+ * BSSIDs for the same SSID, so this is high-signal.
+ *
+ * Complementary to rule_evil_twin: that rule keys on OPEN/WEP-vs-strong
+ * (weak side unprotected) and on same-cipher-different-OUI. This rule
+ * keys on the subtler RSN-posture downgrade between two *protected*
+ * BSSIDs — WPA3->WPA2, MFP required->off, GCMP->CCMP — which the twin
+ * rule's equal-cipher requirement steps over.
+ *
+ * Baseline note: the CVE-2023-52424 research gates on a multi-hour SSID
+ * baseline + BSSID age. Sloth has no persistent cross-session AKM
+ * baseline yet (that is the follow-on to the session baseline in #23),
+ * so this rule scores the downgrade against the strongest posture in
+ * the *current* beacon snapshot. Age/baseline gating is deferred. */
+
+/* WPA generation rank — higher is stronger. OPEN/unknown = 0. */
+static int wpa_gen_rank(const char *enc) {
+    if (strcmp(enc, "WPA3") == 0) return 4;
+    if (strcmp(enc, "WPA2") == 0) return 3;
+    if (strcmp(enc, "WPA")  == 0) return 2;
+    if (strcmp(enc, "WEP")  == 0) return 1;
+    return 0;
+}
+
+/* Downgrade score of `weak` relative to `strong` (same SSID). Positive
+ * means `weak` is a security downgrade of `strong`. Weights follow the
+ * CVE-2023-52424 write-up. */
+static int rsn_downgrade_score(const beacon_ap_t *strong,
+                               const beacon_ap_t *weak) {
+    int score = 0;
+    int gs = wpa_gen_rank(strong->enc);
+    int gw = wpa_gen_rank(weak->enc);
+    /* Weak side must still be a protected WPA network. OPEN/WEP as the
+     * weak side is rule_evil_twin's territory — and an unprotected AP
+     * trivially has mfp=0 / no cipher, which would otherwise inflate the
+     * MFP/cipher deltas below into a false SSID-confusion hit. */
+    if (gw < 2) return 0;
+    /* Generational drop among protected networks (WPA3->WPA2 etc.). */
+    if (gs > gw) score += 3;
+    /* Management-frame-protection downgrade. */
+    if (strong->mfp == 2 && weak->mfp == 1) score += 2;   /* required -> capable */
+    if (strong->mfp == 2 && weak->mfp == 0) score += 4;   /* required -> disabled */
+    if (strong->mfp == 1 && weak->mfp == 0) score += 2;   /* capable  -> disabled */
+    /* Pairwise-cipher downgrade. */
+    if (strncmp(strong->pairwise, "GCMP", 4) == 0 &&
+        (strcmp(weak->pairwise, "CCMP") == 0 ||
+         strcmp(weak->pairwise, "TKIP") == 0)) score += 1;
+    if (strcmp(strong->pairwise, "CCMP") == 0 &&
+        strcmp(weak->pairwise, "TKIP") == 0)     score += 1;
+    return score;
+}
+
+#define SSID_CONFUSION_THRESH 3
+
+static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *weak = &s->beacon_aps[i];
+        if (!weak->ssid[0]) continue;           /* hidden -> can't correlate */
+
+        /* Find the strongest same-SSID sibling and score the downgrade
+         * of `weak` against it. Fire once per (SSID, weak BSSID). */
+        int best_score = 0;
+        const beacon_ap_t *strong_hit = NULL;
+        for (int j = 0; j < s->beacon_count; j++) {
+            if (i == j) continue;
+            const beacon_ap_t *strong = &s->beacon_aps[j];
+            if (strcmp(weak->ssid, strong->ssid) != 0) continue;
+            if (memcmp(weak->bssid, strong->bssid, 6) == 0) continue;
+            int sc = rsn_downgrade_score(strong, weak);
+            if (sc > best_score) { best_score = sc; strong_hit = strong; }
+        }
+        if (best_score < SSID_CONFUSION_THRESH || !strong_hit) continue;
+
+        char w_bssid[20], s_bssid[20];
+        fmt_bssid(w_bssid, weak->bssid);
+        fmt_bssid(s_bssid, strong_hit->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "ssidconf:%.30s:%s", weak->ssid, w_bssid);
+        snprintf(detail, sizeof(detail),
+                 "'%.16s' downgraded on %s [%.6s/mfp%d] vs %s [%.6s/mfp%d] - SSID confusion",
+                 weak->ssid, w_bssid, weak->enc, weak->mfp,
+                 s_bssid, strong_hit->enc, strong_hit->mfp);
+        fire(ALERT_TYPE_SSID_CONFUSION, ALERT_SEV_CRIT,
+             "SSID_CONFUSION", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
  * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
  * channel) is a strong tell for either (a) an attacker AP moving
@@ -1493,6 +1589,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
+    rule_ssid_confusion(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);

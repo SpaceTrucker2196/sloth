@@ -657,6 +657,7 @@ typedef enum {
     ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
     ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
     ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
+    ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
