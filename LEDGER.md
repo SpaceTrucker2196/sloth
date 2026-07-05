@@ -24,3 +24,4 @@
 | 04eb351 | 2026-07-05T00:13:45Z | claude-opus-4-8 | 9434 | 66033 | 46450835 | 86194 | 25.7854 | wifi: QBSS Load IE parse (B2) + 6 GHz monitor channel derivation (B3) |
 | 2efcbbf | 2026-07-05T00:29:28Z | claude-opus-4-8 | 13819 | 63889 | 41325046 | 85779 | 23.1866 | alerts: BEACON_FLOOD detection (roadmap B4) |
 | ba260ad | 2026-07-05T01:03:23Z | claude-opus-4-8 | 5858 | 50184 | 38137891 | 53284 | 20.8857 | alerts: 802.11 auth-frame observation + AUTH_FLOOD (roadmap B1) |
+| 8dca674 | 2026-07-05T01:22:52Z | claude-opus-4-8 | 7384 | 97542 | 54470857 | 138470 | 31.0956 | oui: shared vendor-label helper (dedupe probe panels) |
