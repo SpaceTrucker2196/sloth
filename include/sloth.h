@@ -1120,6 +1120,7 @@ typedef struct {
 
     mon_frame_t   mon_frames[MAX_MON_FRAMES]; /* 802.11 frames, newest first */
     int           mon_frame_count;
+    int           mon_frame_sel;              /* selected row in the frames view */
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */

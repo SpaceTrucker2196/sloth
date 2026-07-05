@@ -88,12 +88,77 @@ static void draw_detail(const sloth_state_t *s) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
+#ifdef WITH_PCAP
+/* Full-screen 802.11 monitor-frame list (shown in place of the IP packet
+ * view when a monitor interface is active). Scrollable, follows
+ * mon_frame_sel; mon_frames is stored newest-first. */
+static void mon_age(time_t ts, char *buf, int sz) {
+    time_t a = time(NULL) - ts;
+    if      (a <   60) snprintf(buf, sz, "%llds", (long long)a);
+    else if (a < 3600) snprintf(buf, sz, "%lldm", (long long)(a / 60));
+    else               snprintf(buf, sz, "%lldh", (long long)(a / 3600));
+}
+
+static void draw_mon_frames_fs(const sloth_state_t *s) {
+#ifdef WITH_NCURSES
+    int page = LINES - 4;
+#else
+    int page = 30;
+#endif
+    if (page < 1) page = 1;
+
+    int count = s->mon_frame_count;
+    tui_normal(); TPRINT(" 802.11 frames: ");
+    tui_bright(); TPRINT("%d", count);
+    tui_dim();    TPRINT("  iface: ");
+    tui_bright(); TPRINT("%s", s->probe_iface[0] ? s->probe_iface : "monitor");
+    tui_normal(); TPRINT("\n");
+
+    tui_dim();
+    TPRINT(" %-6s  %-9s  %-17s  %-17s  %5s  %4s\n",
+           "age", "type", "src", "dst", "len", "sig");
+    tui_normal();
+
+    if (count == 0) {
+        tui_dim(); TPRINT("  (listening \xe2\x80\x94 no frames captured yet)\n");
+        tui_normal(); return;
+    }
+
+    int sel = s->mon_frame_sel;
+    if (sel >= count) sel = count - 1;
+    if (sel < 0)      sel = 0;
+    int top = sel - page / 2;
+    if (top + page > count) top = count - page;
+    if (top < 0)            top = 0;
+    int end = top + page;
+    if (end > count) end = count;
+
+    for (int i = top; i < end; i++) {
+        const mon_frame_t *f = &s->mon_frames[i];
+        char src[20], dst[20], age[8];
+        snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 f->addr2[0], f->addr2[1], f->addr2[2],
+                 f->addr2[3], f->addr2[4], f->addr2[5]);
+        snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 f->addr1[0], f->addr1[1], f->addr1[2],
+                 f->addr1[3], f->addr1[4], f->addr1[5]);
+        mon_age(f->ts, age, sizeof(age));
+        if (i == sel) tui_sel(); else tui_normal();
+        TPRINT(" %-6s  %-9.9s  %-17s  %-17s  %5u  %4d\n",
+               age, f->label, src, dst, (unsigned)f->len, f->signal_dbm);
+        if (i == sel) tui_reset();
+    }
+    tui_normal();
+}
+#endif /* WITH_PCAP */
+
 void view_packets_draw(const sloth_state_t *s) {
 #ifndef WITH_PCAP
     (void)s;
     tui_dim(); TPRINT("  Packet capture disabled (build with WITH_PCAP=1)\n");
     tui_normal(); return;
 #else
+    if (s->probe_iface[0]) { draw_mon_frames_fs(s); return; }
     if (s->pkt_detail) { draw_detail(s); return; }
 
 #ifdef WITH_NCURSES
@@ -320,6 +385,15 @@ void view_packets_draw(const sloth_state_t *s) {
 /* ── Key handler ────────────────────────────────────────── */
 
 void view_packets_key(sloth_state_t *s, int key) {
+    /* Monitor mode: this view is the 802.11 frame list — navigate it. */
+    if (s->probe_iface[0]) {
+        if (key == SLOTH_KEY_UP && s->mon_frame_sel > 0)
+            s->mon_frame_sel--;
+        else if (key == SLOTH_KEY_DOWN && s->mon_frame_count > 0 &&
+                 s->mon_frame_sel < s->mon_frame_count - 1)
+            s->mon_frame_sel++;
+        return;
+    }
     if (s->pkt_detail) {
         if (key == '\r' || key == '\n' || key == '\033')
             s->pkt_detail = 0;

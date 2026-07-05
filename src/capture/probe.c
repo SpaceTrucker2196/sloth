@@ -236,17 +236,25 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* 802.11 frame starts after radiotap */
     const uint8_t *dot11     = data + rt_len;
     int            dot11_len = len  - rt_len;
-    if (dot11_len < 24) return;
+    /* Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
+     * duration(2) + addr1(6) = 10 bytes. Control frames like ACK/CTS are
+     * exactly this size. */
+    if (dot11_len < 10) return;
 
     /* Frame Control byte 0: bits 2-3 = type, bits 4-7 = subtype */
     uint8_t fc0  = dot11[0];
     uint8_t type = (fc0 >> 2) & 0x03;
     uint8_t sub  = (fc0 >> 4) & 0x0f;
 
-    /* Log every frame (>= 24 bytes, so addr1/addr2 are present) for the
-     * monitor packets band, before the per-type dispatch below. */
-    mon_frame_record(type, sub, dot11 + 4, dot11 + 10,
+    /* Log every frame for the monitor packets band, before the per-type
+     * dispatch. addr2 (TA/SA) only exists from 16 bytes on — ACK/CTS carry
+     * addr1 only, so pass NULL there. */
+    mon_frame_record(type, sub, dot11 + 4,
+                     dot11_len >= 16 ? dot11 + 10 : NULL,
                      (uint16_t)dot11_len, signal);
+
+    /* The detailed per-type parsers below assume a full management header. */
+    if (dot11_len < 24) return;
 
     /* Data frames (type 2): only of interest for EAPOL-Key extraction.
      * eapol_observe_dot11 internally rejects anything that's not an
