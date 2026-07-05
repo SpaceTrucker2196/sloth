@@ -44,6 +44,65 @@ static const uint8_t BSSID_B[6] = {0xde,0xad,0xbe,0xef,0x00,0x01};
 
 /* ── beacon_parse tests ──────────────────────────────────── */
 
+/* Malformed-IE instrumentation for the mgmt-frame fuzz detector (#33).
+ * These feed hand-crafted malformed beacons and assert the parse-time
+ * counters — validating the instrumentation without live attack radio. */
+static void test_parse_oversize_ssid_counted(void) {
+    uint8_t f[BEACON_HDR_LEN + 2 + 40];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00;        /* SSID tag */
+    f[BEACON_HDR_LEN + 1] = 40;          /* length 40 > 32 = invalid */
+    memset(f + BEACON_HDR_LEN + 2, 'A', 40);
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.oversize_ssid, 1);
+    ASSERT_EQ(rsn.ie_overruns,   0);
+}
+
+static void test_parse_ie_overrun_counted(void) {
+    /* Empty SSID, then a vendor tag claiming len 200 with no body. */
+    uint8_t f[BEACON_HDR_LEN + 2 + 2];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;   /* SSID */
+    f[BEACON_HDR_LEN + 2] = 0xDD; f[BEACON_HDR_LEN + 3] = 200; /* runs off end */
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.ie_overruns, 1);
+}
+
+static void test_parse_truncated_rsn_counted(void) {
+    /* RSN IE (tag 48) present but only 3 bytes — too short to decode. */
+    uint8_t f[BEACON_HDR_LEN + 2 + 5];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;   /* SSID */
+    f[BEACON_HDR_LEN + 2] = 0x30; f[BEACON_HDR_LEN + 3] = 3;   /* tag 48, len 3 */
+    f[BEACON_HDR_LEN + 4] = 0x01; f[BEACON_HDR_LEN + 5] = 0x00;
+    f[BEACON_HDR_LEN + 6] = 0x00;
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.truncated_rsn, 1);
+}
+
+static void test_parse_wellformed_no_fuzz_counts(void) {
+    uint8_t f[BEACON_HDR_LEN + 2 + 6];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 6;
+    memcpy(f + BEACON_HDR_LEN + 2, "HomeAP", 6);
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.oversize_ssid, 0);
+    ASSERT_EQ(rsn.ie_overruns,   0);
+    ASSERT_EQ(rsn.truncated_rsn, 0);
+}
+
 static void test_parse_rejects_non_beacon(void) {
     uint8_t f[BEACON_HDR_LEN + 4];
     memset(f, 0, sizeof(f));
@@ -1111,4 +1170,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_record_sets_hak5_flag_for_pineapple_oui);
     RUN_TEST(test_record_sets_espressif_flag_for_esp32_oui);
     RUN_TEST(test_record_no_attacker_flag_for_clean_oui);
+    RUN_TEST(test_parse_oversize_ssid_counted);
+    RUN_TEST(test_parse_ie_overrun_counted);
+    RUN_TEST(test_parse_truncated_rsn_counted);
+    RUN_TEST(test_parse_wellformed_no_fuzz_counts);
 }

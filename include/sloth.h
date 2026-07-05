@@ -658,6 +658,7 @@ typedef enum {
     ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
     ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
     ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
+    ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -902,6 +903,12 @@ typedef struct {
     int      has_qbss;
     int      qbss_stations;    /* associated station count */
     int      qbss_chan_util;   /* channel utilisation, 0..255 (fraction of 255) */
+    /* Malformed-IE counters accumulated across this BSSID's frames —
+     * the mgmt-frame fuzz detector (#33). mdk4 mode m / crafted
+     * aireplay frames drive these up; well-formed APs leave them 0. */
+    uint16_t fuzz_ie_overruns;
+    uint16_t fuzz_oversize_ssid;
+    uint16_t fuzz_truncated_rsn;
 } beacon_ap_t;
 
 /* ── Evil-twin episodes (Phase 5 — materialised view) ──── */

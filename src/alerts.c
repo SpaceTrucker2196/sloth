@@ -195,6 +195,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
     case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
     case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
+    case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -998,6 +999,44 @@ static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Management-frame fuzzing / malformed-IE beacons — issue #33.
+ *
+ * mdk4 mode m, crafted aireplay-ng frames, and BroadPwn-class malformed
+ * vendor-IE probes all produce beacons whose IEs don't parse cleanly:
+ * an IE length that runs off the frame end, an SSID longer than the
+ * 32-byte maximum, or a truncated RSN IE. beacon_parse counts these per
+ * frame; beacon_record accumulates them per BSSID. A well-formed AP
+ * leaves all three at zero, so any accumulation is signal.
+ *
+ * Score = ie_overruns + oversize_ssid + truncated_rsn (each capped so a
+ * single pathological BSSID can't dominate). WARN at >=3, CRIT at >=5. */
+#define MGMT_FUZZ_WARN 3
+#define MGMT_FUZZ_CRIT 5
+
+static void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        int score = (int)a->fuzz_ie_overruns +
+                    (int)a->fuzz_oversize_ssid +
+                    (int)a->fuzz_truncated_rsn;
+        if (score < MGMT_FUZZ_WARN) continue;
+
+        char bssid[20];
+        fmt_bssid(bssid, a->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mgmtfuzz:%s", bssid);
+        snprintf(detail, sizeof(detail),
+                 "BSSID %s malformed IEs: %u overrun / %u oversize-SSID / "
+                 "%u truncated-RSN - 802.11 mgmt fuzzing",
+                 bssid, a->fuzz_ie_overruns, a->fuzz_oversize_ssid,
+                 a->fuzz_truncated_rsn);
+        fire(ALERT_TYPE_MGMT_FUZZ,
+             score >= MGMT_FUZZ_CRIT ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+             "MGMT_FUZZ", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
  * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
  * channel) is a strong tell for either (a) an attacker AP moving
@@ -1622,6 +1661,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
     rule_ssid_confusion(s, now);
+    rule_mgmt_fuzz(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);

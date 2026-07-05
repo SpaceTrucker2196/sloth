@@ -524,6 +524,13 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
             kv_int(buf, LINEBUF, &off, "qbss_stations",  e->qbss_stations);
             kv_int(buf, LINEBUF, &off, "qbss_chan_util", e->qbss_chan_util);
         }
+        /* Malformed-IE counters — only when non-zero, so a clean AP's
+         * record stays uncluttered (mgmt-frame fuzz detector, #33). */
+        if (e->fuzz_ie_overruns || e->fuzz_oversize_ssid || e->fuzz_truncated_rsn) {
+            kv_int(buf, LINEBUF, &off, "fuzz_ie_overruns",   e->fuzz_ie_overruns);
+            kv_int(buf, LINEBUF, &off, "fuzz_oversize_ssid", e->fuzz_oversize_ssid);
+            kv_int(buf, LINEBUF, &off, "fuzz_truncated_rsn", e->fuzz_truncated_rsn);
+        }
         /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
         off += snprintf(buf + off, (size_t)(LINEBUF - off),
                         ",\"ssid_history\":[");

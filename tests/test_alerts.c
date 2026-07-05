@@ -1584,6 +1584,59 @@ static void test_ssid_confusion_open_weak_side_defers_to_twin(void) {
     ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
 }
 
+/* ── Management-frame fuzzing (#33) ──────────────────────── */
+
+static beacon_ap_t *add_fuzz_beacon(sloth_state_t *s, const uint8_t bssid[6],
+                                    int overruns, int oversize, int trunc_rsn) {
+    add_beacon(s, "NetGear", bssid, "WPA2");
+    beacon_ap_t *b = &s->beacon_aps[s->beacon_count - 1];
+    b->fuzz_ie_overruns   = (uint16_t)overruns;
+    b->fuzz_oversize_ssid = (uint16_t)oversize;
+    b->fuzz_truncated_rsn = (uint16_t)trunc_rsn;
+    return b;
+}
+
+static void test_mgmt_fuzz_crit_at_five(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xba,0xad,0xf0,0x0d,0x00,0x01};
+    add_fuzz_beacon(&s, bssid, 3, 1, 1);   /* score 5 */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_mgmt_fuzz_warn_at_three(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xba,0xad,0xf0,0x0d,0x00,0x02};
+    add_fuzz_beacon(&s, bssid, 0, 3, 0);   /* score 3 */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_mgmt_fuzz_clean_no_fire(void) {
+    /* Well-formed AP — all counters zero, no alert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xba,0xad,0xf0,0x0d,0x00,0x03};
+    add_fuzz_beacon(&s, bssid, 0, 0, 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MGMT_FUZZ), -1);
+}
+
+static void test_mgmt_fuzz_below_warn_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0xba,0xad,0xf0,0x0d,0x00,0x04};
+    add_fuzz_beacon(&s, bssid, 1, 1, 0);   /* score 2 < WARN */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MGMT_FUZZ), -1);
+}
+
 /* ── Rogue DHCP ──────────────────────────────────────────── */
 
 static void add_dhcp_event(sloth_state_t *s, const char *mac,
@@ -2397,6 +2450,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_ssid_confusion_mfp_drop_fires);
     RUN_TEST(test_ssid_confusion_different_ssid_no_fire);
     RUN_TEST(test_ssid_confusion_open_weak_side_defers_to_twin);
+    RUN_TEST(test_mgmt_fuzz_crit_at_five);
+    RUN_TEST(test_mgmt_fuzz_warn_at_three);
+    RUN_TEST(test_mgmt_fuzz_clean_no_fire);
+    RUN_TEST(test_mgmt_fuzz_below_warn_no_fire);
     RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
     RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
     RUN_TEST(test_dns_tunnel_few_long_no_fire);

@@ -37,6 +37,14 @@ typedef struct {
     int  has_qbss;
     int  qbss_stations;   /* associated station count */
     int  qbss_chan_util;  /* channel utilisation, 0..255 (fraction of 255) */
+    /* Malformed-IE signals for the mgmt-frame fuzz detector (#33). Set
+     * per frame by beacon_parse; accumulated per BSSID by beacon_record.
+     *   ie_overruns   an IE claimed a length that ran off the frame end
+     *   oversize_ssid SSID IE length > 32 (invalid per 802.11)
+     *   truncated_rsn RSN IE (tag 48) present but too short to be valid */
+    int  ie_overruns;
+    int  oversize_ssid;
+    int  truncated_rsn;
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).
