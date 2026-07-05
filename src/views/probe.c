@@ -125,8 +125,7 @@ void view_probe_draw(const sloth_state_t *s) {
         fmt_mac(c->mac, mac, sizeof(mac));
         fmt_age(c->last_seen, age, sizeof(age));
         const char *ssid   = c->ssid[0] ? c->ssid : "(wildcard)";
-        const char *vendor = oui_lookup(c->mac);
-        const char *vstr   = vendor ? vendor : "";
+        const char *vstr   = oui_vendor_label(c->mac, NULL);   /* shared label */
 
         if (row == s->probe_sel) {
             int filled = sigbar_filled(c->signal_dbm);

@@ -25,3 +25,21 @@
 | 04eb351 | 2026-07-05T00:13:45Z | claude-opus-4-8 | 9434 | 66033 | 46450835 | 86194 | 25.7854 | wifi: QBSS Load IE parse (B2) + 6 GHz monitor channel derivation (B3) |
 | 2efcbbf | 2026-07-05T00:29:28Z | claude-opus-4-8 | 13819 | 63889 | 41325046 | 85779 | 23.1866 | alerts: BEACON_FLOOD detection (roadmap B4) |
 | ba260ad | 2026-07-05T01:03:23Z | claude-opus-4-8 | 5858 | 50184 | 38137891 | 53284 | 20.8857 | alerts: 802.11 auth-frame observation + AUTH_FLOOD (roadmap B1) |
+| 8dca674 | 2026-07-05T01:22:52Z | claude-opus-4-8 | 7384 | 97542 | 54470857 | 138470 | 31.0956 | oui: shared vendor-label helper (dedupe probe panels) |
+| 7828290 | 2026-07-05T01:58:48Z | claude-opus-4-8 | 13551 | 104900 | 73807534 | 123588 | 40.8299 | dashboard: connections->associations + packets->802.11 monitor frames when monit |
+| 56c76fe | 2026-07-05T02:05:59Z | claude-opus-4-8 | 4289 | 43054 | 27665797 | 41731 | 15.3480 | capture: short control frames + full-screen 802.11 frame view (close edges) |
+| bed5ca6 | 2026-07-05T02:18:07Z | claude-opus-4-8 | 8018 | 42306 | 41423703 | 57945 | 22.3890 | ux: monitor-first launch default view + hide noise ifaces (#25) |
+| ea405e5 | 2026-07-05T02:28:02Z | claude-opus-4-8 | 5053 | 40883 | 31029767 | 42100 | 16.9832 | iface: live channel scan bar on the monitor radio row |
+| ddc455c | 2026-07-05T02:36:52Z | claude-opus-4-8 | 5793 | 53100 | 36553061 | 51468 | 20.1477 | snapshot: passive site export/import (#27) |
+| 6121625 | 2026-07-05T02:51:43Z | claude-opus-4-8 | 5081 | 47831 | 31766702 | 48917 | 17.5937 | assess: wireless hygiene findings in posture report (#24) |
+| 64151ad | 2026-07-05T03:39:15Z | claude-opus-4-8 | 16977 | 35893 | 24937631 | 33633 | 13.7874 | baseline: RF drift detection since session baseline (#23) |
+| d830c90 | 2026-07-05T03:53:16Z | claude-opus-4-8 | 8750 | 50804 | 41463392 | 47043 | 22.5160 | sensors: passive sensor abstraction layer (#28) |
+| 0f5cd77 | 2026-07-05T04:08:12Z | claude-opus-4-8 | 76950 | 43150 | 5906752 | 202695 | 6.4438 | wifi: multi-radio passive observation merge (#21) |
+| 947222d | 2026-07-05T05:44:14Z | claude-opus-4-8 | 795 | 25421 | 3149443 | 450605 | 6.7203 | release: v1.6.0 version bump |
+| ba5f34f | 2026-07-05T07:05:32Z | claude-opus-4-8 | 6163 | 58175 | 9832400 | 429244 | 10.6938 | alerts: SSID Confusion / RSN-downgrade detector (#32) |
+| 13723c1 | 2026-07-05T07:09:09Z | claude-opus-4-8 | 3387 | 23821 | 3756697 | 27088 | 2.7617 | alerts: KARMA PNL-overlap enrichment (#30) |
+| 47df4fa | 2026-07-05T07:18:25Z | claude-opus-4-8 | 13698 | 52626 | 15448887 | 87060 | 9.9792 | alerts: malformed-IE / mgmt-frame fuzz detector (#33) |
+| 768ebea | 2026-07-05T07:20:54Z | claude-opus-4-8 | 2288 | 17761 | 3092312 | 16950 | 2.1711 | alerts: enterprise-AKM downgrade signal (#31) |
+| 9491236 | 2026-07-05T07:32:39Z | claude-opus-4-8 | 4627 | 56256 | 13309570 | 67512 | 8.7594 | alerts: KARMA deauth-then-lure correlation (#30) |
+| 2a123e5 | 2026-07-05T12:52:06Z | claude-opus-4-8 | 13076 | 56366 | 25530488 | 837852 | 22.6183 | karma: dedicated VIEW_KARMA candidate table (#30) |
+| da5bb45 | 2026-07-05T13:03:40Z | claude-opus-4-8 | 6389 | 46501 | 20694330 | 62977 | 12.1714 | discovery: advertise data socket over mDNS (#29) |

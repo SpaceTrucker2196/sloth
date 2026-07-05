@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "views/dashboard.h"
+#include "views/dashboard_internal.h"
 
 /* The dashboard view's draw path is mostly ncurses-positioned mvprintw
  * calls. In the test build those are stubbed, so we mostly verify:
@@ -302,12 +303,68 @@ static void test_nav_empty_state(void) {
     ASSERT_EQ(s.conn_sel, 0);
 }
 
+/* With a monitor interface active, the connections band renders RF
+ * associations instead of IP connections; must not crash. */
+static void test_draw_assoc_band_when_monitoring(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    uint8_t sta[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    uint8_t bss[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+    memcpy(s.assocs[0].sta_mac, sta, 6);
+    memcpy(s.assocs[0].bssid,   bss, 6);
+    snprintf(s.assocs[0].ssid, sizeof(s.assocs[0].ssid), "HomeNet");
+    s.assocs[0].source     = ASSOC_SRC_EAPOL;
+    s.assocs[0].channel    = 6;
+    s.assocs[0].signal_dbm = -45;
+    s.assoc_count = 1;
+    view_dashboard_draw(&s);
+    ASSERT(1);
+}
+
+/* With a monitor interface active, the packets band lists 802.11 frames
+ * from s->mon_frames instead of IP packets; must not crash. */
+static void test_draw_mon_frames_band_when_monitoring(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    uint8_t a1[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    uint8_t a2[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+    memcpy(s.mon_frames[0].addr1, a1, 6);
+    memcpy(s.mon_frames[0].addr2, a2, 6);
+    snprintf(s.mon_frames[0].label, sizeof(s.mon_frames[0].label), "Beacon");
+    s.mon_frames[0].len        = 128;
+    s.mon_frames[0].signal_dbm = -55;
+    s.mon_frame_count = 1;
+    view_dashboard_draw(&s);
+    ASSERT(1);
+}
+
+static void test_conn_panel_drills_to_assoc_when_monitoring(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    s.dash_focus  = DASH_PANEL_CONN;
+    s.active_view = VIEW_DASH;
+    view_dashboard_key(&s, '\n');
+    ASSERT_EQ((int)s.active_view, (int)VIEW_ASSOC);
+}
+
+static void test_conn_panel_drills_to_conns_without_monitor(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.dash_focus  = DASH_PANEL_CONN;   /* no probe_iface */
+    s.active_view = VIEW_DASH;
+    view_dashboard_key(&s, '\n');
+    ASSERT_EQ((int)s.active_view, (int)VIEW_CONNS);
+}
+
 void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
     RUN_TEST(test_draw_with_monitor_iface);
     RUN_TEST(test_draw_with_monitor_error);
+    RUN_TEST(test_draw_assoc_band_when_monitoring);
+    RUN_TEST(test_draw_mon_frames_band_when_monitoring);
+    RUN_TEST(test_conn_panel_drills_to_assoc_when_monitoring);
+    RUN_TEST(test_conn_panel_drills_to_conns_without_monitor);
     RUN_TEST(test_iface_is_hidden_matches);
     RUN_TEST(test_iface_is_hidden_empty);
     RUN_TEST(test_dashboard_draws_with_hidden_iface);

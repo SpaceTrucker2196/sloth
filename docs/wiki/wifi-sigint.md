@@ -68,10 +68,64 @@ tested chipset. Set the probe-capture interface from `[1] Interfaces`
 - `MAX_PNL_CLIENTS = 128` × 16 SSIDs per client, LRU evicted by `last_seen`.
 - `MAX_ASSOC_ENTRIES = 128`, LRU evicted by `last_seen`.
 
+## Multiple monitor-mode radios (issue #21)
+
+A single monitor adapter hears one channel at a time. Channel hopping
+covers the band over time, but a short management frame — a lone
+deauth, a probe response — slips past while the radio is tuned
+elsewhere. A second adapter parked on another channel closes that gap.
+
+sloth merges observations from every monitor radio into one coherent
+world model. Each adapter is a `SENSOR_WIFI` sensor with its own id
+(see the [[non-ip-sensors]] registry); every 802.11 observation is
+tagged with the radio that heard it and folded into an entity-keyed
+merge table (AP BSSID / STA MAC). The existing Wi-Fi views still
+aggregate **by observed entity, not by adapter** — you see one row per
+AP no matter how many radios saw it — but the merge layer retains
+enough observer metadata to answer *which radio saw this, on what
+channel, at what signal, and when*:
+
+- `seen_by` — how many distinct radios heard the entity.
+- `sensor_mask` — which radios (bit *i* = sensor id *i*).
+- `best_rssi` / `best_sensor` — strongest signal and the radio closest
+  to the entity (useful for coarse direction-finding across a spread of
+  adapters).
+
+This metadata is emitted on the additive `wifi_merged` JSONL record
+(see [[jsonl-schema]]) so downstream consumers can reason about
+coverage and per-radio provenance. With a single adapter the merge is
+an identity map — one row per AP, `seen_by == 1` — so nothing changes
+for the common case.
+
+### Setup expectations
+
+sloth is **passive**. It does **not** put any adapter into monitor
+mode and does **not** change channel assignments except the operator's
+own `--hop` scheduler on sloth's own monitor interface (see
+[[wifi-sigint]] channel hopping). Prepare each radio externally before
+launch, exactly as for a single adapter:
+
+```
+airmon-ng start wlan0        # → wlan0mon
+airmon-ng start wlan1        # → wlan1mon, park on another channel with iw
+```
+
+Each prepared monitor interface registers as its own Wi-Fi sensor and
+contributes to the merged view. sloth never transmits, associates, or
+reconfigures an adapter it did not create.
+
+> **Hardware note.** Concurrent capture across two physical radios is
+> validated only on Linux with two monitor-capable adapters and
+> `CAP_NET_ADMIN`. The merge, dedup, and JSONL layers are exercised in
+> CI against seeded multi-sensor state (`tests/test_wifi_merge.c`); the
+> live N-thread capture path is hardware-gated like the nl80211
+> channel-set path.
+
 ## Related pages
 
 - [[mac-randomisation]] — the seqnum deanonymisation primitive in
   depth.
+- [[non-ip-sensors]] — the passive sensor registry each radio joins.
 - [[attack-map]] — entries for evil-twin, PMKID harvest, PNL leakage,
   hidden-SSID disclosure all live here.
 - [[views-catalog]] — full view index.

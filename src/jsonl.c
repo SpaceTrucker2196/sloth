@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "sensors.h"
 #include "bandwidth.h"
 #include "data_socket.h"
 #include "formatter.h"
@@ -522,6 +523,13 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         if (e->has_qbss) {
             kv_int(buf, LINEBUF, &off, "qbss_stations",  e->qbss_stations);
             kv_int(buf, LINEBUF, &off, "qbss_chan_util", e->qbss_chan_util);
+        }
+        /* Malformed-IE counters — only when non-zero, so a clean AP's
+         * record stays uncluttered (mgmt-frame fuzz detector, #33). */
+        if (e->fuzz_ie_overruns || e->fuzz_oversize_ssid || e->fuzz_truncated_rsn) {
+            kv_int(buf, LINEBUF, &off, "fuzz_ie_overruns",   e->fuzz_ie_overruns);
+            kv_int(buf, LINEBUF, &off, "fuzz_oversize_ssid", e->fuzz_oversize_ssid);
+            kv_int(buf, LINEBUF, &off, "fuzz_truncated_rsn", e->fuzz_truncated_rsn);
         }
         /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
         off += snprintf(buf + off, (size_t)(LINEBUF - off),
@@ -1069,11 +1077,57 @@ void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_sensors(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->sensor_count; i++) {
+        const sensor_t *sn = &s->sensors[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "sensor", now);
+        kv_str(buf, LINEBUF, &off, "kind",       sensor_kind_name(sn->kind));
+        kv_str(buf, LINEBUF, &off, "state",      sensor_state_name(sn->state));
+        kv_str(buf, LINEBUF, &off, "name",       sn->name);
+        kv_str(buf, LINEBUF, &off, "iface",      sn->iface);
+        kv_int(buf, LINEBUF, &off, "observed",   (long long)sn->observed);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)sn->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)sn->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+/* Multi-radio merged 802.11 world model (#21). One line per observed
+ * entity, carrying observer metadata: how many radios saw it, which ones
+ * (bitmask), the strongest signal heard and which radio heard it. */
+void jsonl_emit_wifi_merged(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->wifi_merged.count; i++) {
+        const wifi_merged_t *e = &s->wifi_merged.ents[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_merged", now);
+        kv_mac(buf, LINEBUF, &off, "key",         e->key);
+        kv_int(buf, LINEBUF, &off, "seen_by",     e->seen_by);
+        kv_int(buf, LINEBUF, &off, "sensor_mask", e->sensor_mask);
+        kv_int(buf, LINEBUF, &off, "best_rssi",   e->best_rssi);
+        kv_int(buf, LINEBUF, &off, "best_sensor", e->best_sensor);
+        kv_int(buf, LINEBUF, &off, "channel",     e->channel);
+        kv_int(buf, LINEBUF, &off, "freq_mhz",    e->freq_mhz);
+        kv_int(buf, LINEBUF, &off, "observations",(long long)e->observations);
+        kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
     if (!any_sink() || !s) return;
     jsonl_emit_ifaces            (s);
+    jsonl_emit_sensors           (s);
+    jsonl_emit_wifi_merged       (s);
     jsonl_emit_arp               (s);
     jsonl_emit_dhcp_leases       (s);
     jsonl_emit_wifi_aps          (s);

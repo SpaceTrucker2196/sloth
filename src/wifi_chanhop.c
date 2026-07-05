@@ -87,3 +87,12 @@ int chanhop_current_freq(const chanhop_t *h) {
     if (!h || h->count == 0) return 0;
     return h->slots[h->cur].freq_mhz;
 }
+
+int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx) {
+    if (cur_idx) *cur_idx = -1;
+    if (!h || !out || max <= 0) return 0;
+    int n = h->count < max ? h->count : max;
+    for (int i = 0; i < n; i++) out[i] = h->slots[i].channel;
+    if (cur_idx && h->started && h->cur < n) *cur_idx = h->cur;
+    return n;
+}

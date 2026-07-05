@@ -7,6 +7,10 @@
 #include "sloth.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
+#include "wifi_snapshot.h"
+#include "wifi_baseline.h"
+#include "sensors.h"
+#include "wifi_merge.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -39,6 +43,8 @@
 #include "views/channel.h"
 #include "views/osi.h"
 #include "views/twins.h"
+#include "views/karma.h"
+#include "karma_detect.h"
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
@@ -78,11 +84,12 @@
 #include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
+#include "discovery.h"
 #include "dns.h"
 #include "scan.h"
+#include "capture/probe.h"   /* self-stubbing without WITH_PCAP */
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
-#  include "capture/probe.h"
 #endif
 
 static sloth_state_t g_state;
@@ -111,6 +118,10 @@ static void chanhop_drive(sloth_state_t *s) {
     last_total = s->pkt_total;
     if (chanhop_tick(&g_chanhop, now_ms))
         g_platform.set_channel(s->probe_iface, chanhop_current_freq(&g_chanhop));
+    /* Surface the scan state for the interface view's channel bar. */
+    s->scan_chan_count = chanhop_export(&g_chanhop, s->scan_chans,
+                                        (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),
+                                        &s->scan_cur_idx);
 }
 #endif
 
@@ -131,6 +142,7 @@ static void poll_data(sloth_state_t *s) {
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);
+    mon_frame_snapshot(s);
     probe_pnl_snapshot(s);
     eapol_snapshot(s);
     seqnum_snapshot(s);
@@ -171,6 +183,7 @@ static void poll_data(sloth_state_t *s) {
     scan_update(s);
     bd_update(s, time(NULL));
     alerts_update(s);
+    karma_update(s);   /* KARMA/PineAP candidate table for VIEW_KARMA (#30) */
     /* Feed the tui's alert-hot list: every alert with a concrete match_ip
      * gets the severity-coloured override for ALERT_HOT_TTL_S (1h).
      * LOW → yellow, WARN → orange, CRIT → red. Re-calls refresh the
@@ -183,6 +196,22 @@ static void poll_data(sloth_state_t *s) {
     }
     devices_update(s);
     top_hosts_update(s);
+    /* #28: register the monitor radio as the Wi-Fi sensor and record its
+     * cumulative observation count. Future RF families register the same way. */
+    if (s->probe_iface[0]) {
+        time_t now = time(NULL);
+        sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
+                                       s->probe_iface, now);
+        sensor_observe(sn, mon_frame_total(), now);
+        /* #21: fold this radio's beacon observations into the merged
+         * multi-radio world model. With one adapter this is an identity
+         * map; a second monitor radio would merge under its own sensor id.
+         * Rebuilt each poll so aged-out APs drop from the merged view too. */
+        if (sn) {
+            wifi_merge_reset(&s->wifi_merged);
+            wifi_merge_from_beacons(s, (int)(sn - s->sensors));
+        }
+    }
 #ifdef WITH_PCAP
     chanhop_drive(s);
 #endif
@@ -249,6 +278,7 @@ static void dispatch_to_view(sloth_state_t *s, int key) {
     case VIEW_CHANNEL: view_channel_key(s, key);       break;
     case VIEW_OSI:     view_osi_key(s, key);           break;
     case VIEW_TWINS:   view_twins_key(s, key);         break;
+    case VIEW_KARMA:   view_karma_key(s, key);         break;
     default: break;
     }
 }
@@ -318,6 +348,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
     case 'l': case 'L': s->active_view = VIEW_OSI;     return;
     case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
+    case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
@@ -336,7 +367,9 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N] [--hop]\n"
+            "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
+            "       [--refresh-ms N] [--hop]\n"
+            "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -377,6 +410,20 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --no-discovery     suppress the mDNS advertisement of the data\n"
+            "                     socket. By default, when --data-socket is bound\n"
+            "                     to a routable (non-loopback) TCP address, sloth\n"
+            "                     writes an Avahi service file so the sloth-ios\n"
+            "                     client can find it by name. Loopback/unix sockets\n"
+            "                     never advertise. sloth transmits nothing itself —\n"
+            "                     avahi-daemon does the announcing.\n"
+            "  --snapshot-out FILE\n"
+            "                     on exit, write a passive AP-inventory snapshot\n"
+            "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
+            "                     site assessments. No pcap — normalised text.\n"
+            "  --baseline-in FILE on exit, diff the current AP inventory against a\n"
+            "                     prior --snapshot-out file (new/gone/changed APs).\n"
+            "  --site-label TEXT  operator label stamped into --snapshot-out.\n"
             "  --report FILE.md   on exit, write a Markdown posture report to\n"
             "                     FILE.md summarising alerts (by severity and\n"
             "                     MITRE ATT&CK technique), cleartext credential\n"
@@ -406,7 +453,11 @@ int main(int argc, char **argv) {
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
+    const char *snapshot_out   = NULL; /* --snapshot-out FILE  (#27) */
+    const char *baseline_in    = NULL; /* --baseline-in  FILE  (#27) */
+    const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
+    int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
@@ -444,6 +495,14 @@ int main(int argc, char **argv) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--no-discovery")) {
+            no_discovery = 1;
+        } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
+            snapshot_out = argv[++i];
+        } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {
+            baseline_in = argv[++i];
+        } else if (!strcmp(argv[i], "--site-label") && i + 1 < argc) {
+            site_label = argv[++i];
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -483,6 +542,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
+        /* #29: advertise the socket over mDNS so the sloth-ios client can
+         * discover it by name — but only when it's bound to a routable
+         * address (loopback/unix publish nothing) and the operator hasn't
+         * opted out. sloth writes an Avahi service file; avahi-daemon does
+         * the announcing. This is the one place sloth's presence touches
+         * the network — gated by MISSION §2's discovery carve-out. */
+        if (!no_discovery)
+            discovery_publish(data_socket, NULL);
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -494,13 +561,32 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
     capture_start(&g_state);
     probe_start(&g_state);
+    /* First-launch UX (#25): when a monitor interface is present, open on
+     * the RF-aware dashboard rather than the interface list. */
+    if (g_state.probe_iface[0])
+        g_state.active_view = VIEW_DASH;
 #endif
     event_wake_init();
     updater_init(check_manifest);
     tui_init();
 
+    int first_poll = 1;
     while (!g_quit) {
         poll_data(&g_state);
+        if (first_poll) {
+            first_poll = 0;
+            /* #25: with a monitor radio present, hide the noise interfaces
+             * (loopback, docker, VPN, non-monitor wlan) so the operator's
+             * focus is the RF world. Un-hideable via [1]. Runs once, after
+             * the first poll populates the interface list. */
+            if (g_state.probe_iface[0])
+                iface_hide_non_monitor(&g_state);
+        }
+        /* #23: once the RF picture has had time to settle, freeze it as the
+         * session baseline so drift (new/gone/changed APs) can be reported. */
+        if (g_state.probe_iface[0] && !wifi_baseline_ready() &&
+            time(NULL) - session_start >= 30)
+            wifi_baseline_capture(&g_state);
         data_socket_tick();
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
@@ -547,9 +633,27 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Site snapshot export/import (#27) — passive AP inventory, no pcap. */
+    if (baseline_in) {
+        int d = wifi_snapshot_diff(&g_state, baseline_in, stderr);
+        if (d < 0)
+            fprintf(stderr, "sloth: could not read baseline %s\n", baseline_in);
+        else
+            fprintf(stderr, "sloth: %d change(s) vs baseline %s\n", d, baseline_in);
+    }
+    if (snapshot_out) {
+        if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
+                                (long)time(NULL)) == 0)
+            fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
+                    snapshot_out, g_state.beacon_count);
+        else
+            fprintf(stderr, "sloth: could not write snapshot %s\n", snapshot_out);
+    }
+
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
+    discovery_unpublish();
     data_socket_cleanup();
     return 0;
 }

@@ -45,10 +45,15 @@ still open).
 
 ### A2. Multi-radio & channel coverage
 
-- **◆ Multi-radio Wi-Fi sensor merge** — `#21`. Consume monitor-mode
-  frames from >1 adapter, tag every observation with a source sensor id
-  (interface, channel, freq, RSSI-per-sensor), merge into one world
-  model. Prerequisite framing for #22 and #28.
+- **✅ LANDED (2026-07-04)** — **Multi-radio Wi-Fi sensor merge** —
+  `#21`. Shipped as `src/wifi_merge.c`: an entity-keyed merge table
+  (AP BSSID / STA MAC) that folds observations from >1 monitor adapter
+  into one world model, tagging each with a source sensor id and
+  retaining `seen_by` / `sensor_mask` / `best_rssi` / `best_sensor`
+  observer metadata. Additive `wifi_merged` JSONL record; built on the
+  #28 sensor registry. Merge/dedup/error-handling covered in
+  `tests/test_wifi_merge.c`; live N-radio concurrent capture is
+  hardware-gated (needs two monitor adapters + `CAP_NET_ADMIN`).
 - **✅ LANDED (2026-07-04)** — **Adaptive passive channel scheduler** —
   `#22`. Shipped as `src/wifi_chanhop.c` + a `set_channel` platform op
   (nl80211), driven by `--hop` (opt-in, off by default). Required the
@@ -96,7 +101,12 @@ still open).
   first/last-seen) so non-802.11 sources normalise into `sloth_state_t`
   and JSONL the same way Wi-Fi does — **without** becoming a plugin ABI
   or control surface. Enables #21 and everything in #26.
-- **◇ Non-IP RF coverage roadmap** — `#26`. Parent roadmap for future
+- **✅ LANDED (2026-07-04)** — **Non-IP RF coverage roadmap** — `#26`.
+  Written up as `docs/wiki/non-ip-sensors.md`: the passive filter, the
+  seven questions every family must answer, and per-family sketches for
+  BLE, Zigbee, SDR metadata, GPS, ADS-B, Meshtastic, and CAN — sequenced
+  behind the #28 sensor abstraction. Original note follows. Parent
+  roadmap for future
   passive sensor families: BLE advertisements, Zigbee/802.15.4, SDR
   metadata, GPS context, ADS-B, Meshtastic/LoRa, CAN bus. Each new family
   must answer: what's observable passively, what hardware, what enters

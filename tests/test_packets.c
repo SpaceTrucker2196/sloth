@@ -349,6 +349,26 @@ void test_detail_draw_no_crash(void) {
     ASSERT(1);
 }
 
+/* When a monitor interface is active, the packets view is the 802.11
+ * frame list; up/down navigate mon_frame_sel, clamped at both ends. */
+static void test_mon_frame_nav_when_monitoring(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    s.mon_frame_count = 5;
+    s.mon_frame_sel   = 0;
+
+    view_packets_key(&s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s.mon_frame_sel, 1);
+    view_packets_key(&s, SLOTH_KEY_UP);
+    ASSERT_EQ(s.mon_frame_sel, 0);
+    view_packets_key(&s, SLOTH_KEY_UP);          /* clamp at top */
+    ASSERT_EQ(s.mon_frame_sel, 0);
+
+    s.mon_frame_sel = 4;
+    view_packets_key(&s, SLOTH_KEY_DOWN);        /* clamp at bottom */
+    ASSERT_EQ(s.mon_frame_sel, 4);
+}
+
 void run_packets_tests(void) {
     TEST_SUITE("view_packets_key/pause");
     RUN_TEST(test_pause_toggle);
@@ -391,4 +411,7 @@ void run_packets_tests(void) {
     RUN_TEST(test_detail_close_on_esc);
     RUN_TEST(test_detail_blocks_nav);
     RUN_TEST(test_detail_draw_no_crash);
+
+    TEST_SUITE("view_packets_key/monitor frames");
+    RUN_TEST(test_mon_frame_nav_when_monitoring);
 }

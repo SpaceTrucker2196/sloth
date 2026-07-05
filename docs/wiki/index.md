@@ -21,6 +21,7 @@ source material.
 ## WiFi SIGINT
 
 - [[wifi-sigint]] — overview of the v1.1 SIGINT view set.
+- [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each
   evil-twin detection layer (Phases 1-4).

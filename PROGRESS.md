@@ -77,6 +77,25 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-07-04 — Dashboard reflects the monitor radio when one is active
+**Touched**: `src/views/dashboard.c`, `dashboard_bands.c`,
+`dashboard_internal.h`, `src/capture/probe.{c,h}`, `src/main.c`,
+`include/sloth.h`, `tests/test_dashboard.c`.
+**Why**: on a monitor-adapter deployment the host's own IP stack is
+noise. When a monitor interface is active the dashboard's connections
+band now shows STA↔AP associations, and the packets band lists the raw
+802.11 frames the radio hears (new `mon_frame_t` ring fed by the monitor
+pcap, snapshotted each poll) instead of local IP packets. Both fall back
+to the local view when no monitor interface is present, so wired use is
+unchanged (operator-chosen "auto" behaviour). Also landed this session:
+QBSS-Load IE parse (B2), 6 GHz monitor channel derivation (B3),
+BEACON_FLOOD (B4) and AUTH_FLOOD (B1) alerts, and a shared
+`oui_vendor_label` deduping the two probe panels.
+**Follow-ups**: the monitor packets band captures frames ≥24 bytes
+(mgmt/data + larger control); tiny control frames (ACK/CTS) are not yet
+logged. No dedicated full-screen monitor-frames view yet — the packets
+panel still drills to the IP packets view.
+
 ### 2026-07-04 — Adaptive passive channel-hop scheduler (#22) + packet dedup (#20)
 **Commits**: `83f2897` (#20), plus the §2 amendment, `d2fee24`
 (scheduler core), `ce681ee` (platform seam), and this wiring commit.

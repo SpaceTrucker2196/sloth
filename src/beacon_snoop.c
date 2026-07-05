@@ -92,6 +92,9 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->has_qbss       = 0;
         rsn_out->qbss_stations  = 0;
         rsn_out->qbss_chan_util = 0;
+        rsn_out->ie_overruns    = 0;
+        rsn_out->oversize_ssid  = 0;
+        rsn_out->truncated_rsn  = 0;
     }
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
@@ -132,10 +135,22 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     while (ie_rem >= 2) {
         uint8_t tag = ie[0];
         uint8_t tln = ie[1];
-        if (2 + (int)tln > ie_rem) break;
+        if (2 + (int)tln > ie_rem) {
+            /* IE claims a length that runs off the frame end — a
+             * malformed-frame signal (mdk4 mode m / crafted injection).
+             * Count it and stop; the rest of the frame is untrustworthy. */
+            if (rsn_out) rsn_out->ie_overruns++;
+            break;
+        }
+        /* RSN IE present (tag 48) but too short to hold even the version
+         * + group-cipher selector — truncated / crafted. The full RSN
+         * decoder below requires tln >= 8, so this would otherwise be
+         * silently skipped. Independent count; does not alter parse flow. */
+        if (tag == 48 && tln < 8 && rsn_out) rsn_out->truncated_rsn++;
 
         if (tag == 0) {
-            /* SSID */
+            /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal. */
+            if (tln > 32 && rsn_out) rsn_out->oversize_ssid++;
             int slen = tln < 32 ? tln : 32;
             memcpy(ssid_out, ie + 2, (size_t)slen);
             ssid_out[slen] = '\0';
@@ -510,6 +525,14 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     g_aps[i].qbss_stations  = rsn->qbss_stations;
                     g_aps[i].qbss_chan_util = rsn->qbss_chan_util;
                 }
+                /* Accumulate malformed-IE counts across frames (#33),
+                 * saturating rather than wrapping the uint16 counters. */
+                if (g_aps[i].fuzz_ie_overruns   < 0xffff)
+                    g_aps[i].fuzz_ie_overruns   += (uint16_t)rsn->ie_overruns;
+                if (g_aps[i].fuzz_oversize_ssid < 0xffff)
+                    g_aps[i].fuzz_oversize_ssid += (uint16_t)rsn->oversize_ssid;
+                if (g_aps[i].fuzz_truncated_rsn < 0xffff)
+                    g_aps[i].fuzz_truncated_rsn += (uint16_t)rsn->truncated_rsn;
                 /* Neighbors — merge new entries by BSSID; cap at the
                  * stored array size. */
                 for (int k = 0; k < rsn->neighbor_count; k++) {
@@ -584,6 +607,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].has_qbss       = rsn->has_qbss;
         g_aps[slot].qbss_stations  = rsn->qbss_stations;
         g_aps[slot].qbss_chan_util = rsn->qbss_chan_util;
+        g_aps[slot].fuzz_ie_overruns   = (uint16_t)rsn->ie_overruns;
+        g_aps[slot].fuzz_oversize_ssid = (uint16_t)rsn->oversize_ssid;
+        g_aps[slot].fuzz_truncated_rsn = (uint16_t)rsn->truncated_rsn;
         int nc = rsn->neighbor_count;
         if (nc > MAX_AP_NEIGHBORS) nc = MAX_AP_NEIGHBORS;
         memcpy(g_aps[slot].neighbors, rsn->neighbors,

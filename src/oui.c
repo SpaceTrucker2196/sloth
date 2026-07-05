@@ -143,6 +143,12 @@ const char *oui_lookup(const uint8_t *mac) {
     return NULL;
 }
 
+const char *oui_vendor_label(const uint8_t *mac, int *is_random) {
+    if (is_random) *is_random = (mac[0] & 0x02) != 0;
+    const char *v = oui_lookup(mac);
+    return (v && v[0]) ? v : "?";
+}
+
 const char *oui_lookup_str(const char *bssid_str) {
     unsigned b0, b1, b2, b3, b4, b5;
     if (sscanf(bssid_str, "%x:%x:%x:%x:%x:%x",

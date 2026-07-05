@@ -108,12 +108,9 @@ void draw_radio_clients_panel(const sloth_state_t *s,
                  p->mac[0], p->mac[1], p->mac[2],
                  p->mac[3], p->mac[4], p->mac[5]);
 
-        /* Locally-administered (random) MAC: low bit of the U/L flag */
-        const char *vendor;
-        int is_random = (p->mac[0] & 0x02) != 0;
-        if (is_random)              vendor = "(random)";
-        else                        vendor = oui_lookup(p->mac);
-        if (!vendor || !vendor[0])  vendor = "?";
+        /* Shared vendor label (random-aware) — see oui_vendor_label. */
+        int is_random = 0;
+        const char *vendor = oui_vendor_label(p->mac, &is_random);
 
         double dist = rssi_to_meters(p->signal_dbm);
         char dist_buf[12];

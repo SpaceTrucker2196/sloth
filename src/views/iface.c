@@ -261,6 +261,22 @@ int iface_is_hidden(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
+/* #25: hide every interface except the monitor capture radio (and the IP
+ * capture iface, if any) so a monitor-mode launch foregrounds the RF world.
+ * Display-only; the operator can un-hide from the interface view. */
+void iface_hide_non_monitor(sloth_state_t *s) {
+    for (int i = 0; i < s->iface_count; i++) {
+        const char *nm = s->ifaces[i].name;
+        if (!nm[0]) continue;
+        if (s->probe_iface[0] && strcmp(nm, s->probe_iface) == 0) continue;
+        if (s->pkt_iface[0]   && strcmp(nm, s->pkt_iface)   == 0) continue;
+        if (iface_is_hidden(s, nm)) continue;
+        if (s->iface_hidden_count < MAX_IFACES)
+            snprintf(s->iface_hidden[s->iface_hidden_count++],
+                     sizeof(s->iface_hidden[0]), "%s", nm);
+    }
+}
+
 /* Declared in sloth.h — shared with the capture callback (on_packet)
  * so a deselected iface's packets are dropped before any decode runs.
  * Kept independent of iface_is_hidden: hide is display-only, deselect
@@ -274,6 +290,23 @@ int iface_is_deselected(const sloth_state_t *s, const char *name) {
 }
 
 /* ── draw ────────────────────────────────────────────────── */
+
+/* Format the monitor radio's scan state into `buf`: the channel list with
+ * the currently-scanned channel bracketed, e.g. " ch: 1  6 [11] 36 44".
+ * Falls back to "  [scanning]" when there's no live hop list (radio parked
+ * on one channel). Structural (brackets, not colour) so it reads the same
+ * on selected/inverted rows and in the ANSI build. */
+static void fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
+    if (s->scan_chan_count <= 0) {
+        snprintf(buf, sz, "  [scanning]");
+        return;
+    }
+    int off = snprintf(buf, sz, "  ch:");
+    for (int i = 0; i < s->scan_chan_count && off < sz - 8; i++)
+        off += snprintf(buf + off, sz - off,
+                        i == s->scan_cur_idx ? "[%d]" : " %d ",
+                        s->scan_chans[i]);
+}
 
 void view_iface_draw(const sloth_state_t *s) {
     if (s->iface_graph) { draw_iface_graph(s); return; }
@@ -301,6 +334,8 @@ void view_iface_draw(const sloth_state_t *s) {
         int hidden     = iface_is_hidden(s, f->name);
         int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
+        char scanbuf[128];
+        if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
         /* prefix priority: hidden > deselected > scanning > default */
         char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
         const char *mode   = mode_label(f->mode);
@@ -324,7 +359,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan     ? "  [scanning]"
+                   is_scan     ? scanbuf
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
                    : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
@@ -352,7 +387,7 @@ void view_iface_draw(const sloth_state_t *s) {
             printw("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
-            if (is_scan) { tui_bright(); printw("  [scanning]"); }
+            if (is_scan) { tui_bright(); printw("%s", scanbuf); }
             else if (deselected) { tui_dim(); printw("  (deselected)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
             printw("\n");
@@ -386,6 +421,8 @@ void view_iface_draw(const sloth_state_t *s) {
         int hidden     = iface_is_hidden(s, f->name);
         int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
+        char scanbuf[128];
+        if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
         int sel     = (i == s->iface_sel);
         char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
         const char *mode   = mode_label(f->mode);
@@ -409,7 +446,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan     ? "  [scanning]"
+                   is_scan     ? scanbuf
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
                    : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
@@ -433,7 +470,7 @@ void view_iface_draw(const sloth_state_t *s) {
             printf("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
-            if (is_scan) { tui_bright(); printf("  [scanning]"); }
+            if (is_scan) { tui_bright(); printf("%s", scanbuf); }
             else if (deselected) { tui_dim(); printf("  (deselected)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
             printf("\n");

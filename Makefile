@@ -76,8 +76,15 @@ SRCS = src/main.c          \
        src/wifi_oui_attacker.c \
        src/wifi_chanhop.c    \
        src/auth_track.c      \
+       src/wifi_snapshot.c   \
+       src/wifi_assess.c     \
+       src/wifi_baseline.c   \
+       src/sensors.c         \
+       src/wifi_merge.c      \
        src/twins.c           \
        src/views/twins.c     \
+       src/karma_detect.c    \
+       src/views/karma.c     \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
@@ -88,6 +95,7 @@ SRCS = src/main.c          \
        src/jsonl.c           \
        src/formatter.c       \
        src/data_socket.c     \
+       src/discovery.c       \
        src/views/help.c      \
        src/filter.c          \
        src/alert_pcap.c      \
@@ -328,9 +336,22 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_chanhop.c           \
             src/auth_track.c               \
             tests/test_auth_track.c        \
+            src/wifi_snapshot.c            \
+            tests/test_wifi_snapshot.c     \
+            src/wifi_assess.c              \
+            tests/test_wifi_assess.c       \
+            src/wifi_baseline.c            \
+            tests/test_wifi_baseline.c     \
+            src/sensors.c                  \
+            tests/test_sensors.c           \
+            src/wifi_merge.c               \
+            tests/test_wifi_merge.c        \
             src/twins.c                    \
             src/views/twins.c              \
             tests/test_twins.c             \
+            src/karma_detect.c             \
+            src/views/karma.c              \
+            tests/test_karma.c             \
             src/alerts.c                   \
             src/views/alerts.c             \
             tests/test_alerts.c            \
@@ -349,6 +370,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_formatter.c         \
             src/data_socket.c              \
             tests/test_data_socket.c       \
+            src/discovery.c                \
+            tests/test_discovery.c         \
             src/views/help.c               \
             src/filter.c                   \
             tests/test_filter.c            \

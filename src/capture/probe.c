@@ -27,6 +27,76 @@ static probe_client_t  g_clients[MAX_PROBE_CLIENTS];
 static int             g_count   = 0;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
 
+/* ── Raw 802.11 frame ring (monitor packets band) ────────── */
+
+static mon_frame_t     g_frames[MAX_MON_FRAMES];
+static int             g_frame_head;
+static int             g_frame_count;
+static uint64_t        g_frame_total;   /* cumulative frames ever seen (#28 sensor) */
+static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
+
+uint64_t mon_frame_total(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    uint64_t t = g_frame_total;
+    pthread_mutex_unlock(&g_frame_mu);
+    return t;
+}
+
+/* Human subtype label for a frame's (type, subtype). */
+static const char *frame_label(uint8_t type, uint8_t sub) {
+    if (type == 0) {   /* management */
+        switch (sub) {
+        case 0:  return "AssocReq";  case 1:  return "AssocRsp";
+        case 2:  return "ReassoReq"; case 3:  return "ReassoRsp";
+        case 4:  return "ProbeReq";  case 5:  return "ProbeRsp";
+        case 8:  return "Beacon";    case 10: return "Disassoc";
+        case 11: return "Auth";      case 12: return "Deauth";
+        case 13: return "Action";    default: return "Mgmt";
+        }
+    }
+    if (type == 1) {   /* control */
+        switch (sub) {
+        case 9:  return "BlockAck";  case 11: return "RTS";
+        case 12: return "CTS";       case 13: return "ACK";
+        default: return "Ctrl";
+        }
+    }
+    if (type == 2) return (sub & 0x08) ? "QoSData" : "Data";
+    return "Ext";
+}
+
+/* Record one captured 802.11 frame (called under no lock from the pcap
+ * thread). a1/a2 may be NULL for short frames. */
+static void mon_frame_record(uint8_t type, uint8_t sub,
+                             const uint8_t *a1, const uint8_t *a2,
+                             uint16_t len, int8_t signal) {
+    pthread_mutex_lock(&g_frame_mu);
+    mon_frame_t *f = &g_frames[g_frame_head];
+    f->ts         = time(NULL);
+    f->signal_dbm = signal;
+    f->len        = len;
+    f->type       = type;
+    f->subtype    = sub;
+    if (a1) memcpy(f->addr1, a1, 6); else memset(f->addr1, 0, 6);
+    if (a2) memcpy(f->addr2, a2, 6); else memset(f->addr2, 0, 6);
+    snprintf(f->label, sizeof(f->label), "%s", frame_label(type, sub));
+    g_frame_head = (g_frame_head + 1) % MAX_MON_FRAMES;
+    if (g_frame_count < MAX_MON_FRAMES) g_frame_count++;
+    g_frame_total++;
+    pthread_mutex_unlock(&g_frame_mu);
+}
+
+void mon_frame_snapshot(sloth_state_t *s) {
+    pthread_mutex_lock(&g_frame_mu);
+    int n = g_frame_count;
+    for (int i = 0; i < n; i++) {   /* newest first */
+        int idx = (g_frame_head - 1 - i + MAX_MON_FRAMES) % MAX_MON_FRAMES;
+        s->mon_frames[i] = g_frames[idx];
+    }
+    s->mon_frame_count = n;
+    pthread_mutex_unlock(&g_frame_mu);
+}
+
 /* ── Thread state ────────────────────────────────────────── */
 
 static volatile int  g_running = 0;
@@ -175,12 +245,25 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* 802.11 frame starts after radiotap */
     const uint8_t *dot11     = data + rt_len;
     int            dot11_len = len  - rt_len;
-    if (dot11_len < 24) return;
+    /* Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
+     * duration(2) + addr1(6) = 10 bytes. Control frames like ACK/CTS are
+     * exactly this size. */
+    if (dot11_len < 10) return;
 
     /* Frame Control byte 0: bits 2-3 = type, bits 4-7 = subtype */
     uint8_t fc0  = dot11[0];
     uint8_t type = (fc0 >> 2) & 0x03;
     uint8_t sub  = (fc0 >> 4) & 0x0f;
+
+    /* Log every frame for the monitor packets band, before the per-type
+     * dispatch. addr2 (TA/SA) only exists from 16 bytes on — ACK/CTS carry
+     * addr1 only, so pass NULL there. */
+    mon_frame_record(type, sub, dot11 + 4,
+                     dot11_len >= 16 ? dot11 + 10 : NULL,
+                     (uint16_t)dot11_len, signal);
+
+    /* The detailed per-type parsers below assume a full management header. */
+    if (dot11_len < 24) return;
 
     /* Data frames (type 2): only of interest for EAPOL-Key extraction.
      * eapol_observe_dot11 internally rejects anything that's not an

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#define SLOTH_VERSION "1.5.1"
+#define SLOTH_VERSION "1.6.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -51,6 +51,7 @@ typedef enum {
     VIEW_CHANNEL = 28,   /* per-channel activity histogram */
     VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
     VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
+    VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
     VIEW_COUNT
 } view_t;
 
@@ -657,6 +658,8 @@ typedef enum {
     ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
     ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
     ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
+    ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
+    ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -901,6 +904,12 @@ typedef struct {
     int      has_qbss;
     int      qbss_stations;    /* associated station count */
     int      qbss_chan_util;   /* channel utilisation, 0..255 (fraction of 255) */
+    /* Malformed-IE counters accumulated across this BSSID's frames —
+     * the mgmt-frame fuzz detector (#33). mdk4 mode m / crafted
+     * aireplay frames drive these up; well-formed APs leave them 0. */
+    uint16_t fuzz_ie_overruns;
+    uint16_t fuzz_oversize_ssid;
+    uint16_t fuzz_truncated_rsn;
 } beacon_ap_t;
 
 /* ── Evil-twin episodes (Phase 5 — materialised view) ──── */
@@ -924,6 +933,22 @@ typedef struct {
     uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
     time_t   last_seen;
 } twin_episode_t;
+
+/* ── KARMA / PineAP candidates (#30) ─────────────────────────
+ * One row per BSSID that beacons an abnormal number of distinct SSIDs
+ * — the PineAP / mdk4 / airbase-ng "answer every probed network" lure.
+ * Synthesised each poll by karma_update() from the beacon table, the
+ * client PNLs, and the deauth ring; the view reads only this table. */
+#define MAX_KARMA_APS 64
+typedef struct {
+    uint8_t  bssid[6];
+    int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
+    int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
+    int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
+    int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
+    char     top_ssid[33];  /* most recently advertised SSID */
+    time_t   last_seen;
+} karma_ap_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
@@ -1068,6 +1093,79 @@ typedef struct {
     uint16_t raw_len;
 } packet_info_t;
 
+/* One captured 802.11 frame, for the monitor-mode packets band. Populated
+ * from the probe/monitor pcap (radiotap + dot11) rather than the IP capture.
+ * Addresses are raw MACs; label is a human subtype ("Beacon","Auth",…). */
+#define MAX_MON_FRAMES 256
+typedef struct {
+    time_t   ts;
+    int8_t   signal_dbm;
+    uint16_t len;
+    uint8_t  type;        /* 0=mgmt 1=ctrl 2=data 3=ext */
+    uint8_t  subtype;
+    uint8_t  addr1[6];    /* DA / RA */
+    uint8_t  addr2[6];    /* SA / TA */
+    char     label[12];
+} mon_frame_t;
+
+/* Passive sensor abstraction (issue #28). A sensor is a typed producer of
+ * observations copied into sloth_state_t — the Wi-Fi monitor today, BLE /
+ * Zigbee / SDR / GPS / ADS-B / Meshtastic / CAN tomorrow (see
+ * docs/wiki/non-ip-sensors.md). Deliberately small: it normalises metadata
+ * about passive sources, it is NOT a plugin ABI or a control surface. */
+#define MAX_SENSORS 16
+typedef enum {
+    SENSOR_WIFI = 0, SENSOR_BLE, SENSOR_ZIGBEE, SENSOR_SDR,
+    SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
+    SENSOR_KIND_COUNT
+} sensor_kind_t;
+typedef enum {
+    SENSOR_STATE_PRESENT = 0, /* detected, not yet producing */
+    SENSOR_STATE_ACTIVE,      /* producing observations */
+    SENSOR_STATE_HIDDEN,      /* present but suppressed by the operator */
+    SENSOR_STATE_ERROR        /* failed to read */
+} sensor_state_e;
+typedef struct {
+    int      kind;            /* sensor_kind_t */
+    int      state;          /* sensor_state_e */
+    char     name[32];       /* human-readable ("Wi-Fi monitor") */
+    char     iface[32];      /* interface / source id */
+    uint64_t observed;       /* cumulative observation count */
+    time_t   first_seen;
+    time_t   last_seen;
+} sensor_t;
+
+/* Multi-radio Wi-Fi merge (issue #21). Several monitor-mode adapters can
+ * listen at once — each a SENSOR_WIFI sensor with its own id (0..15). A
+ * single adapter only hears one channel at a time, so short management
+ * frames slip past while it is tuned elsewhere; a second radio parked on
+ * another channel closes that gap. This layer merges per-radio 802.11
+ * observations into ONE world model keyed by the observed entity (AP
+ * BSSID / STA MAC), while retaining enough observer metadata to answer
+ * "which radio saw this, on what channel, at what signal, when?".
+ *
+ * Existing Wi-Fi tables still aggregate by entity, not by adapter; this
+ * runs alongside them and is the seam a future N-thread capture path
+ * feeds. Purely additive — with one radio it is an identity map. */
+#define MAX_WIFI_MERGED 512
+typedef struct {
+    uint8_t  key[6];          /* observed entity: AP BSSID or STA MAC */
+    uint16_t sensor_mask;     /* bit i set = sensor id i observed this entity */
+    int      seen_by;         /* popcount(sensor_mask): distinct radios */
+    int      best_rssi;       /* strongest RSSI across radios (dBm, closest to 0) */
+    int      best_sensor;     /* sensor id that heard it strongest */
+    int      channel;         /* channel of the most recent observation */
+    int      freq_mhz;        /* frequency of the most recent observation */
+    time_t   first_seen;
+    time_t   last_seen;
+    uint64_t observations;    /* total merged observations across all radios */
+} wifi_merged_t;
+typedef struct {
+    wifi_merged_t ents[MAX_WIFI_MERGED];
+    int           count;
+    uint64_t      dropped;    /* observations discarded (table full / bad sensor id) */
+} wifi_merge_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -1102,6 +1200,15 @@ typedef struct {
 
     wifi_sta_t    wifi_stas[MAX_WIFI_STAS];
     int           wifi_sta_count;
+
+    mon_frame_t   mon_frames[MAX_MON_FRAMES]; /* 802.11 frames, newest first */
+    int           mon_frame_count;
+    int           mon_frame_sel;              /* selected row in the frames view */
+
+    sensor_t      sensors[MAX_SENSORS];       /* passive sensor registry (#28) */
+    int           sensor_count;
+
+    wifi_merge_t  wifi_merged;                /* multi-radio merged 802.11 view (#21) */
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
@@ -1225,11 +1332,21 @@ typedef struct {
     int            twin_episode_count;
     int            twin_episode_sel;
 
+    karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
+    int            karma_count;
+    int            karma_sel;
+
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
     int            probe_count;
     int            probe_sel;
     char           probe_iface[16]; /* monitor iface name, "" = none found */
+    /* Channel scan bar (#22 --hop): the channel list the monitor radio is
+     * cycling through and the one it's currently parked on. Populated from
+     * the hop scheduler each poll; scan_chan_count==0 when not hopping. */
+    int            scan_chans[32];
+    int            scan_chan_count;
+    int            scan_cur_idx;    /* index of the current channel, -1 = none */
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
@@ -1342,6 +1459,7 @@ typedef struct {
 
 /* ── Iface hide election (shared by iface view + dashboard band) ── */
 int iface_is_hidden(const sloth_state_t *s, const char *name);
+void iface_hide_non_monitor(sloth_state_t *s);
 
 /* ── Iface data-stream election (shared by iface view + capture) ──
  * A deselected iface's packets are dropped in the pcap callback before

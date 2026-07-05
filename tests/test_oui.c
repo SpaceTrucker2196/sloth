@@ -82,8 +82,27 @@ static void test_oui_espressif_5ccf7f(void) {
     ASSERT_STR(v, "Espressif");
 }
 
+static void test_oui_vendor_label(void) {
+    /* Known OUI → vendor; random flag not set. */
+    uint8_t apple[6] = { 0x00, 0x17, 0xF2, 0x00, 0x00, 0x00 };
+    int rnd = 1;
+    ASSERT_STR(oui_vendor_label(apple, &rnd), "Apple");
+    ASSERT_EQ(rnd, 0);
+
+    /* Randomised (locally-administered) MAC → "Randomized", flag set. */
+    uint8_t random_mac[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    rnd = 0;
+    ASSERT_STR(oui_vendor_label(random_mac, &rnd), "Randomized");
+    ASSERT_EQ(rnd, 1);
+
+    /* Unknown OUI (00:00:01 is not in the table) → "?" (never NULL/empty). */
+    uint8_t unknown[6] = { 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 };
+    ASSERT_STR(oui_vendor_label(unknown, NULL), "?");
+}
+
 void run_oui_tests(void) {
     TEST_SUITE("OUI lookup");
+    RUN_TEST(test_oui_vendor_label);
     RUN_TEST(test_oui_espressif);
     RUN_TEST(test_oui_raspberry_pi3);
     RUN_TEST(test_oui_raspberry_pi4);

@@ -194,6 +194,8 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
     case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
     case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
+    case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
+    case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -730,6 +732,46 @@ static void rule_dns_tunnel(const sloth_state_t *s, time_t now) {
  * almost always wants to look. */
 #define KARMA_SSID_THRESH 3
 
+/* How many of this BSSID's advertised SSIDs appear in the union of
+ * nearby clients' preferred-network lists. KARMA / PineAP Beacon
+ * Response works by answering the exact SSIDs clients probe for, so a
+ * high overlap is the signal that separates an active lure from a
+ * benign SSID-cycling AP — a real multi-VAP AP advertises its own
+ * fixed names, which rarely coincide with what strangers' phones ask
+ * for. */
+static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
+    int hits = 0;
+    for (int h = 0; h < a->ssid_history_n && h < MAX_AP_SSID_HISTORY; h++) {
+        const char *name = a->ssid_history[h];
+        if (!name[0]) continue;
+        for (int c = 0; c < s->pnl_count; c++) {
+            const pnl_client_t *cli = &s->pnl_clients[c];
+            int found = 0;
+            for (int k = 0; k < cli->ssid_count &&
+                            k < MAX_PNL_SSIDS_PER_CLI; k++) {
+                if (strcmp(name, cli->ssids[k]) == 0) { found = 1; break; }
+            }
+            if (found) { hits++; break; }   /* count each SSID once */
+        }
+    }
+    return hits;
+}
+
+/* Is a deauth flood active in the recent window? The classic KARMA
+ * attack chain knocks clients off their real AP with a deauth flood,
+ * then answers their reconnection probes from the lure — so a KARMA
+ * candidate coinciding with a live deauth flood is "deauth-then-lure"
+ * in progress. The issue's ±60s correlation window. */
+#define KARMA_DEAUTH_WIN_SECS 60
+
+static int karma_deauth_active(const sloth_state_t *s, time_t now) {
+    for (int k = 0; k < s->deauth_count; k++) {
+        const deauth_event_t *e = &s->deauth_events[k];
+        if (e->flood && now - e->last_seen <= KARMA_DEAUTH_WIN_SECS) return 1;
+    }
+    return 0;
+}
+
 static void rule_karma_ap(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -740,12 +782,24 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  a->bssid[0], a->bssid[1], a->bssid[2],
                  a->bssid[3], a->bssid[4], a->bssid[5]);
+        int overlap = karma_pnl_overlap(s, a);
+        int deauth  = karma_deauth_active(s, now);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
+        char pnl_note[32]   = "";
+        char chain_note[24] = "";
+        if (overlap > 0)
+            snprintf(pnl_note, sizeof(pnl_note),
+                     ", %d in client PNLs", overlap);
+        if (deauth)
+            snprintf(chain_note, sizeof(chain_note),
+                     " +deauth-then-lure");
         snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
+        /* Compact: ALERT_DETAIL_LEN is 96, so the PNL + attack-chain
+         * notes must stay short or the tail (the deauth marker) is cut. */
         snprintf(detail, sizeof(detail),
-                 "BSSID %s emitted %d distinct SSIDs - Pineapple/KARMA candidate",
-                 bssid_str, a->ssid_history_n);
+                 "KARMA BSSID %s: %d SSIDs%s%s",
+                 bssid_str, a->ssid_history_n, pnl_note, chain_note);
         fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
              "KARMA_AP", detail, key, NULL, 0, now);
     }
@@ -867,6 +921,147 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                  "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
+    }
+}
+
+/* SSID Confusion / RSN-downgrade twin — CVE-2023-52424 (issue #32).
+ *
+ * The SSID is not bound into PMK derivation, so a rogue AP can spoof a
+ * trusted network name while advertising a *weaker* RSN posture and the
+ * client will still associate. The on-air fingerprint is a downgrade
+ * delta: the same SSID appearing on a second BSSID with weaker crypto
+ * than the strongest posture we've seen for that SSID. A legit
+ * multi-VAP controller does NOT downgrade its own security across
+ * BSSIDs for the same SSID, so this is high-signal.
+ *
+ * Complementary to rule_evil_twin: that rule keys on OPEN/WEP-vs-strong
+ * (weak side unprotected) and on same-cipher-different-OUI. This rule
+ * keys on the subtler RSN-posture downgrade between two *protected*
+ * BSSIDs — WPA3->WPA2, MFP required->off, GCMP->CCMP — which the twin
+ * rule's equal-cipher requirement steps over.
+ *
+ * Baseline note: the CVE-2023-52424 research gates on a multi-hour SSID
+ * baseline + BSSID age. Sloth has no persistent cross-session AKM
+ * baseline yet (that is the follow-on to the session baseline in #23),
+ * so this rule scores the downgrade against the strongest posture in
+ * the *current* beacon snapshot. Age/baseline gating is deferred. */
+
+/* WPA generation rank — higher is stronger. OPEN/unknown = 0. */
+static int wpa_gen_rank(const char *enc) {
+    if (strcmp(enc, "WPA3") == 0) return 4;
+    if (strcmp(enc, "WPA2") == 0) return 3;
+    if (strcmp(enc, "WPA")  == 0) return 2;
+    if (strcmp(enc, "WEP")  == 0) return 1;
+    return 0;
+}
+
+/* Downgrade score of `weak` relative to `strong` (same SSID). Positive
+ * means `weak` is a security downgrade of `strong`. Weights follow the
+ * CVE-2023-52424 write-up. */
+static int rsn_downgrade_score(const beacon_ap_t *strong,
+                               const beacon_ap_t *weak) {
+    int score = 0;
+    int gs = wpa_gen_rank(strong->enc);
+    int gw = wpa_gen_rank(weak->enc);
+    /* Weak side must still be a protected WPA network. OPEN/WEP as the
+     * weak side is rule_evil_twin's territory — and an unprotected AP
+     * trivially has mfp=0 / no cipher, which would otherwise inflate the
+     * MFP/cipher deltas below into a false SSID-confusion hit. */
+    if (gw < 2) return 0;
+    /* Generational drop among protected networks (WPA3->WPA2 etc.). */
+    if (gs > gw) score += 3;
+    /* Management-frame-protection downgrade. */
+    if (strong->mfp == 2 && weak->mfp == 1) score += 2;   /* required -> capable */
+    if (strong->mfp == 2 && weak->mfp == 0) score += 4;   /* required -> disabled */
+    if (strong->mfp == 1 && weak->mfp == 0) score += 2;   /* capable  -> disabled */
+    /* Pairwise-cipher downgrade. */
+    if (strncmp(strong->pairwise, "GCMP", 4) == 0 &&
+        (strcmp(weak->pairwise, "CCMP") == 0 ||
+         strcmp(weak->pairwise, "TKIP") == 0)) score += 1;
+    if (strcmp(strong->pairwise, "CCMP") == 0 &&
+        strcmp(weak->pairwise, "TKIP") == 0)     score += 1;
+    /* Enterprise (802.1X) AKM downgraded to a pre-shared-key AKM under
+     * the same SSID — the eaphammer / hostapd-wpe rogue-RADIUS lure
+     * fingerprint (#31's same_ssid_alt_akm sub-signal). Fires even when
+     * the enc generation matches (WPA2-Enterprise cloned as WPA2-PSK),
+     * which the generational check above misses. The deeper EAP
+     * inner-method / server-cert fingerprinting is a follow-on. */
+    if (strstr(strong->akm, "802.1X") && weak->akm[0] &&
+        !strstr(weak->akm, "802.1X")) score += 3;
+    return score;
+}
+
+#define SSID_CONFUSION_THRESH 3
+
+static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *weak = &s->beacon_aps[i];
+        if (!weak->ssid[0]) continue;           /* hidden -> can't correlate */
+
+        /* Find the strongest same-SSID sibling and score the downgrade
+         * of `weak` against it. Fire once per (SSID, weak BSSID). */
+        int best_score = 0;
+        const beacon_ap_t *strong_hit = NULL;
+        for (int j = 0; j < s->beacon_count; j++) {
+            if (i == j) continue;
+            const beacon_ap_t *strong = &s->beacon_aps[j];
+            if (strcmp(weak->ssid, strong->ssid) != 0) continue;
+            if (memcmp(weak->bssid, strong->bssid, 6) == 0) continue;
+            int sc = rsn_downgrade_score(strong, weak);
+            if (sc > best_score) { best_score = sc; strong_hit = strong; }
+        }
+        if (best_score < SSID_CONFUSION_THRESH || !strong_hit) continue;
+
+        char w_bssid[20], s_bssid[20];
+        fmt_bssid(w_bssid, weak->bssid);
+        fmt_bssid(s_bssid, strong_hit->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "ssidconf:%.30s:%s", weak->ssid, w_bssid);
+        snprintf(detail, sizeof(detail),
+                 "'%.16s' downgraded on %s [%.6s/mfp%d] vs %s [%.6s/mfp%d] - SSID confusion",
+                 weak->ssid, w_bssid, weak->enc, weak->mfp,
+                 s_bssid, strong_hit->enc, strong_hit->mfp);
+        fire(ALERT_TYPE_SSID_CONFUSION, ALERT_SEV_CRIT,
+             "SSID_CONFUSION", detail, key, NULL, 0, now);
+    }
+}
+
+/* Management-frame fuzzing / malformed-IE beacons — issue #33.
+ *
+ * mdk4 mode m, crafted aireplay-ng frames, and BroadPwn-class malformed
+ * vendor-IE probes all produce beacons whose IEs don't parse cleanly:
+ * an IE length that runs off the frame end, an SSID longer than the
+ * 32-byte maximum, or a truncated RSN IE. beacon_parse counts these per
+ * frame; beacon_record accumulates them per BSSID. A well-formed AP
+ * leaves all three at zero, so any accumulation is signal.
+ *
+ * Score = ie_overruns + oversize_ssid + truncated_rsn (each capped so a
+ * single pathological BSSID can't dominate). WARN at >=3, CRIT at >=5. */
+#define MGMT_FUZZ_WARN 3
+#define MGMT_FUZZ_CRIT 5
+
+static void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        int score = (int)a->fuzz_ie_overruns +
+                    (int)a->fuzz_oversize_ssid +
+                    (int)a->fuzz_truncated_rsn;
+        if (score < MGMT_FUZZ_WARN) continue;
+
+        char bssid[20];
+        fmt_bssid(bssid, a->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mgmtfuzz:%s", bssid);
+        snprintf(detail, sizeof(detail),
+                 "BSSID %s malformed IEs: %u overrun / %u oversize-SSID / "
+                 "%u truncated-RSN - 802.11 mgmt fuzzing",
+                 bssid, a->fuzz_ie_overruns, a->fuzz_oversize_ssid,
+                 a->fuzz_truncated_rsn);
+        fire(ALERT_TYPE_MGMT_FUZZ,
+             score >= MGMT_FUZZ_CRIT ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+             "MGMT_FUZZ", detail, key, NULL, 0, now);
     }
 }
 
@@ -1493,6 +1688,8 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
+    rule_ssid_confusion(s, now);
+    rule_mgmt_fuzz(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);

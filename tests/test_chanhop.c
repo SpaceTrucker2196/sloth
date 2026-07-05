@@ -101,8 +101,30 @@ static void test_activity_decays(void) {
     ASSERT_EQ((int)a1, 500);
 }
 
+/* Export the channel list + current index for the UI scan bar. */
+static void test_export(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6, 11 };
+    chanhop_init(&h, chans, 3);
+    int out[8], cur;
+
+    int n = chanhop_export(&h, out, 8, &cur);
+    ASSERT_EQ(n, 3);
+    ASSERT_EQ(out[0], 1); ASSERT_EQ(out[1], 6); ASSERT_EQ(out[2], 11);
+    ASSERT_EQ(cur, -1);                 /* not started yet */
+
+    chanhop_tick(&h, 0);                /* park on channel[0] */
+    chanhop_export(&h, out, 8, &cur);
+    ASSERT_EQ(cur, 0);
+
+    chanhop_tick(&h, 1000);            /* dwell elapsed → advance */
+    chanhop_export(&h, out, 8, &cur);
+    ASSERT_EQ(cur, 1);
+}
+
 void run_chanhop_tests(void) {
     TEST_SUITE("wifi channel hopper");
+    RUN_TEST(test_export);
     RUN_TEST(test_freq_mapping);
     RUN_TEST(test_init_default);
     RUN_TEST(test_init_skips_unknown);

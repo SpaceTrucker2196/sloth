@@ -285,7 +285,12 @@ void view_dashboard_draw(const sloth_state_t *s) {
     /* Connections row: 60% conn table + 40% top hosts. */
     int conn_w  = (usable * 6) / 10;
     int hosts_w = usable - conn_w;
-    draw_conn_band      (s, conn_y, conn_h, x0,          conn_w);
+    /* When a monitor interface is active, this band reflects the RF world
+     * (STA<->AP associations) instead of the host's IP connections. */
+    if (s->probe_iface[0])
+        draw_assoc_band (s, conn_y, conn_h, x0,          conn_w);
+    else
+        draw_conn_band  (s, conn_y, conn_h, x0,          conn_w);
     draw_top_hosts_panel(s, conn_y, conn_h, x0 + conn_w, hosts_w);
     attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < conn_h; dy++) mvaddstr(conn_y + dy, x0 + conn_w, G_VERT);
@@ -328,7 +333,11 @@ void view_dashboard_draw(const sloth_state_t *s) {
     attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
-    draw_packets_band(s, packets_y, packets_h, x0, usable);
+    /* Monitor active → show the 802.11 frames the radio hears, not IP packets. */
+    if (s->probe_iface[0])
+        draw_mon_frames_band(s, packets_y, packets_h, x0, usable);
+    else
+        draw_packets_band   (s, packets_y, packets_h, x0, usable);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else
@@ -463,7 +472,12 @@ void view_dashboard_key(sloth_state_t *s, int key) {
         s->dash_focus = (s->dash_focus + 1) % DASH_PANEL_COUNT;
         break;
     case '\r': case '\n':
-        s->active_view = panel_to_view(s->dash_focus);
+        /* The connections panel drills to the Assoc view when it's
+         * showing RF associations (monitor active), else to Connections. */
+        if (s->dash_focus == DASH_PANEL_CONN && s->probe_iface[0])
+            s->active_view = VIEW_ASSOC;
+        else
+            s->active_view = panel_to_view(s->dash_focus);
         break;
     default:
         break;
