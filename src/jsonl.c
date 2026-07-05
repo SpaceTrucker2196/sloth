@@ -517,6 +517,12 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "vendor_ies_hash",(long long)e->fp.vendor_ies_hash);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
+        /* QBSS Load — AP self-reported occupancy (omitted when the IE
+         * was absent so consumers can tell "no data" from "0"). */
+        if (e->has_qbss) {
+            kv_int(buf, LINEBUF, &off, "qbss_stations",  e->qbss_stations);
+            kv_int(buf, LINEBUF, &off, "qbss_chan_util", e->qbss_chan_util);
+        }
         /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
         off += snprintf(buf + off, (size_t)(LINEBUF - off),
                         ",\"ssid_history\":[");

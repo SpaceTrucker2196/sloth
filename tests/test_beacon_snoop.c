@@ -256,6 +256,39 @@ static void test_parse_rsn_inventory_wpa3_sae_mfp_required(void) {
     ASSERT_EQ(rsn.mfp, 2);
 }
 
+static void test_parse_qbss_load(void) {
+    /* SSID IE + QBSS Load IE (tag 11, len 5):
+     *   station count (2 bytes LE) + channel util (1) + admission cap (2) */
+    uint8_t f[BEACON_HDR_LEN + 4 + 7];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    int o = BEACON_HDR_LEN;
+    f[o++] = 0x00; f[o++] = 2; f[o++] = 'A'; f[o++] = 'P';   /* SSID "AP" */
+    f[o++] = 0x0b; f[o++] = 5;                                /* QBSS Load */
+    f[o++] = 0x2a; f[o++] = 0x00;                             /* 42 stations (LE) */
+    f[o++] = 128;                                            /* ~50% utilisation */
+    f[o++] = 0x00; f[o++] = 0x00;                             /* admission cap */
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_qbss, 1);
+    ASSERT_EQ(rsn.qbss_stations, 42);
+    ASSERT_EQ(rsn.qbss_chan_util, 128);
+}
+
+static void test_parse_qbss_absent(void) {
+    /* No QBSS IE → has_qbss stays 0 (distinguishable from a real 0). */
+    uint8_t f[BEACON_HDR_LEN + 4];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 2;
+    f[BEACON_HDR_LEN + 2] = 'A';  f[BEACON_HDR_LEN + 3] = 'P';
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_qbss, 0);
+}
+
 static void test_parse_truncated_ie(void) {
     /* IE length claims more bytes than remain — parser must not crash */
     uint8_t f[BEACON_HDR_LEN + 4];
@@ -1032,6 +1065,8 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_enc_wep);
     RUN_TEST(test_parse_enc_wpa2);
     RUN_TEST(test_parse_enc_wpa3);
+    RUN_TEST(test_parse_qbss_load);
+    RUN_TEST(test_parse_qbss_absent);
     RUN_TEST(test_parse_rsn_inventory_wpa2_psk_ccmp);
     RUN_TEST(test_parse_rsn_inventory_wpa3_sae_mfp_required);
     RUN_TEST(test_parse_vendor_ie_apple);

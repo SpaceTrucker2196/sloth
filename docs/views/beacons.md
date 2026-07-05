@@ -16,6 +16,14 @@ Per AP: SSID, BSSID (6-byte MAC), signal (dBm), channel, encryption
 (`OPEN` / `WEP` / `WPA` / `WPA2` / `WPA3`), beacon interval (ms),
 last-seen, frame count.
 
+When the AP advertises a **QBSS Load** element (802.11e, tag 11), sloth
+also records its self-reported occupancy: associated **station count**
+and **channel utilisation** (0–255, a fraction of 255 — e.g. 128 ≈ 50 %
+busy). This is a free congestion signal — no airtime maths, just what
+the AP itself is broadcasting — and appears as `qbss_stations` /
+`qbss_chan_util` in the `beacon` JSONL record (omitted when the IE is
+absent, so consumers can tell "no data" from a genuine zero).
+
 ## View
 
 ```

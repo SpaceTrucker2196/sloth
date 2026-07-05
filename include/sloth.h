@@ -885,6 +885,12 @@ typedef struct {
     int8_t   rssi_min_60s;     /* lowest signal seen in last 60s (dBm, 0 = unseen) */
     int8_t   rssi_max_60s;     /* highest signal seen in last 60s (dBm, 0 = unseen) */
     rssi_ring_t rssi_ring;     /* raw samples feeding rssi_min/max_60s */
+    /* QBSS Load IE (tag 11) — AP self-reported occupancy. A free
+     * congestion metric: no math, just what the AP advertises.
+     * has_qbss=0 = IE absent. */
+    int      has_qbss;
+    int      qbss_stations;    /* associated station count */
+    int      qbss_chan_util;   /* channel utilisation, 0..255 (fraction of 255) */
 } beacon_ap_t;
 
 /* ── Evil-twin episodes (Phase 5 — materialised view) ──── */
