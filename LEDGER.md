@@ -34,3 +34,4 @@
 | 64151ad | 2026-07-05T03:39:15Z | claude-opus-4-8 | 16977 | 35893 | 24937631 | 33633 | 13.7874 | baseline: RF drift detection since session baseline (#23) |
 | d830c90 | 2026-07-05T03:53:16Z | claude-opus-4-8 | 8750 | 50804 | 41463392 | 47043 | 22.5160 | sensors: passive sensor abstraction layer (#28) |
 | 0f5cd77 | 2026-07-05T04:08:12Z | claude-opus-4-8 | 76950 | 43150 | 5906752 | 202695 | 6.4438 | wifi: multi-radio passive observation merge (#21) |
+| 947222d | 2026-07-05T05:44:14Z | claude-opus-4-8 | 795 | 25421 | 3149443 | 450605 | 6.7203 | release: v1.6.0 version bump |
