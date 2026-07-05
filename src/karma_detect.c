@@ -61,6 +61,20 @@ static int jaccard_ppm(int a_count, int b_count, int inter) {
     return (int)((long)inter * 1000000L / uni);
 }
 
+/* 1 if every SSID this BSSID beaconed carried an identical, known IE
+ * fingerprint — the PineAP tell. Legit multi-VAP APs vary RSN/vendor
+ * IEs per VAP; a single spoofing radio does not. Requires >= 2 SSIDs
+ * and non-zero (actually observed) fingerprints; all-unknown stays 0. */
+static int ie_uniform(const beacon_ap_t *a) {
+    int n = a->ssid_history_n;
+    if (n < 2) return 0;
+    uint32_t first = a->ssid_history_fp[0];
+    if (first == 0) return 0;
+    for (int i = 1; i < n && i < MAX_AP_SSID_HISTORY; i++)
+        if (a->ssid_history_fp[i] != first) return 0;
+    return 1;
+}
+
 /* Is a deauth flood active within the correlation window? */
 static int deauth_active(const sloth_state_t *s, time_t now) {
     for (int k = 0; k < s->deauth_count; k++) {
@@ -87,8 +101,10 @@ void karma_update(sloth_state_t *s) {
         k->ssid_count   = a->ssid_history_n;
         k->pnl_overlap  = pnl_overlap(s, a);
         k->pnl_jaccard_ppm = jaccard_ppm(k->ssid_count, b_count, k->pnl_overlap);
+        k->ie_uniform   = ie_uniform(a);
         k->deauth_chain = chain;
-        k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0) + (chain ? 3 : 0);
+        k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0)
+                            + (k->ie_uniform ? 1 : 0) + (chain ? 3 : 0);
         k->last_seen    = a->last_seen;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  a->ssid[0] ? a->ssid : a->ssid_history[0]);

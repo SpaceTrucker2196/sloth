@@ -33,12 +33,12 @@ void view_karma_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
-    /* Columns — BSSID 17 | SSIDs 5 | PNL 4 | J% 4 | chain 5 | score 5 | SSID */
+    /* Columns — BSSID 17 | SSIDs 5 | PNL 4 | J% 4 | IE 2 | chain 5 | score 5 */
     tui_dim();
-    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-5s  %-5s  %s\n",
-           "BSSID", "SSIDs", "PNL", "J%", "chain", "score", "Top SSID / last");
-    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-5s  %-5s  %s\n",
-           "-----------------", "-----", "----", "----", "-----", "-----",
+    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-5s  %s\n",
+           "BSSID", "SSIDs", "PNL", "J%", "IE", "chain", "score", "Top SSID / last");
+    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-5s  %s\n",
+           "-----------------", "-----", "----", "----", "--", "-----", "-----",
            "---------------");
     tui_normal();
 
@@ -61,6 +61,7 @@ void view_karma_draw(const sloth_state_t *s) {
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
         char bssid[20], chain[6], age[12], last[48], jac[6];
+        const char *ie = k->ie_uniform ? "Y" : "-";
         fmt_mac(k->bssid, bssid, sizeof(bssid));
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
         snprintf(jac, sizeof(jac), "%d%%", (k->pnl_jaccard_ppm + 5000) / 10000);
@@ -71,8 +72,8 @@ void view_karma_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->karma_sel) {
             tui_sel();
-            printw(" %-17s  %5d  %4d  %-4s  %-5s  %5d  %s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, chain, k->score, last);
+            printw(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
             tui_reset();
         } else {
             tui_bright(); printw(" %-17s", bssid);
@@ -81,6 +82,8 @@ void view_karma_draw(const sloth_state_t *s) {
             printw("  %4d", k->pnl_overlap);
             if (k->pnl_jaccard_ppm >= 700000) tui_bright(); else tui_dim();
             printw("  %-4s", jac);
+            if (k->ie_uniform) tui_bright(); else tui_dim();
+            printw("  %-2s", ie);
             if (k->deauth_chain) tui_bright(); else tui_dim();
             printw("  %-5s", chain);
             tui_bright(); printw("  %5d", k->score);
@@ -90,12 +93,12 @@ void view_karma_draw(const sloth_state_t *s) {
 #else
         if (row == s->karma_sel) {
             tui_sel();
-            printf(" %-17s  %5d  %4d  %-4s  %-5s  %5d  %s",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, chain, k->score, last);
+            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
             tui_reset(); printf("\n");
         } else {
-            printf(" %-17s  %5d  %4d  %-4s  %-5s  %5d  %s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, chain, k->score, last);
+            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
         }
 #endif
     }

@@ -29,6 +29,10 @@ Per candidate:
   client-PNL union (`|A∩B| / |A∪B|`), shown as a percentage. Trends
   toward 100% as the AP mirrors the entire union of probed networks —
   the sharpest PineAP tell. Rendered bright at ≥70%.
+- **IE** — `Y` when every SSID this BSSID beacons carries an identical
+  IE fingerprint (encryption / cipher / AKM / MFP + vendor-IE hash). A
+  legit multi-VAP AP varies these per VAP; a single spoofing radio does
+  not, so uniformity is a KARMA signal (adds +1 to the score).
 - **chain** — a deauth flood is active within 60 s (`deauth-then-lure`:
   knock clients off, then answer their reconnection probes).
 - **score** — `1 + (PNL>0 ? 2 : 0) + (chain ? 3 : 0)`, ranked
@@ -42,9 +46,9 @@ view is the ranked, browsable surface for them.
 ```
  ── KARMA ─────────────────────────────────────────────────────────
  KARMA/PineAP candidates: 1 / max 64  deauth-then-lure: 1
- BSSID              SSIDs  PNL   J%    chain  score  Top SSID / last
- -----------------  -----  ----  ----  -----  -----  ---------------
- 00:11:22:33:44:55      7     4  80%   YES        6  Starbucks (2s)
+ BSSID              SSIDs  PNL   J%    IE  chain  score  Top SSID / last
+ -----------------  -----  ----  ----  --  -----  -----  ---------------
+ 00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
  PNL = advertised SSIDs matching nearby client probe lists; chain = concurrent deauth flood
 ```
 

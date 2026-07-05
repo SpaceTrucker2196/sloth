@@ -888,6 +888,11 @@ typedef struct {
      * many SSIDs from a single radio (>=3 = strong KARMA signal). */
 #define MAX_AP_SSID_HISTORY 8
     char     ssid_history[MAX_AP_SSID_HISTORY][33];
+    /* Per-SSID IE fingerprint (enc/cipher/akm/mfp + vendor-IE hash) at the
+     * time each SSID was first seen. A legit multi-VAP AP varies these
+     * across its VAPs; a PineAP/KARMA radio spoofs many SSIDs with one
+     * identical IE tuple — the ie_uniformity signal (#30). 0 = unknown. */
+    uint32_t ssid_history_fp[MAX_AP_SSID_HISTORY];
     int      ssid_history_n;
     time_t   last_seen;
     int      frame_count;
@@ -946,6 +951,7 @@ typedef struct {
     int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
     int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
     int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
+    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
     int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
     int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
     char     top_ssid[33];  /* most recently advertised SSID */
