@@ -7,3 +7,4 @@ never rewrite rows.
 
 | issue | commit | date | converge_iters | tests_at_ship | shipped | notes |
 |------:|--------|------|---------------:|--------------:|:-------:|-------|
+| 34 | 8714467 | 2026-07-05 | 1 | 3572 | yes | factory standup; docs/tooling only, suite green on first converge |

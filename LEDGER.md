@@ -44,3 +44,4 @@
 | da5bb45 | 2026-07-05T13:03:40Z | claude-opus-4-8 | 6389 | 46501 | 20694330 | 62977 | 12.1714 | discovery: advertise data socket over mDNS (#29) |
 | df28500 | 2026-07-05T13:10:57Z | claude-opus-4-8 | 6874 | 33849 | 9391475 | 26540 | 5.8417 | karma: Jaccard-ppm PNL-overlap scoring (#30) |
 | 5ec09ce | 2026-07-05T13:16:14Z | claude-opus-4-8 | 673 | 19874 | 5244795 | 25038 | 3.3730 | eap: inner-frame parser for 802.1X EAP methods (#31) |
+| 8714467 | 2026-07-05T13:17:42Z | claude-opus-4-8 | 401 | 10149 | 2724529 | 29042 | 1.9084 | Factory standup: AGENTS.md, converge loop, metrics |
