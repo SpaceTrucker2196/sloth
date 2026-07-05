@@ -21,3 +21,4 @@
 | 2d249bb | 2026-07-04T22:24:41Z | claude-opus-4-7,claude-opus-4-8 | 74224 | 69781 | 7631508 | 190879 | 11.2276 | ROADMAP.md: consolidate open issues + Wi-Fi SIGINT gap analysis |
 | 83f2897 | 2026-07-04T23:06:36Z | claude-opus-4-8 | 11385 | 247216 | 64376395 | 1450236 | 52.9279 | jsonl: emit each captured packet exactly once (closes #20) |
 | b2b722f | 2026-07-04T23:51:03Z | claude-opus-4-8 | 12790 | 174151 | 89241600 | 225498 | 51.2935 | wifi #22: adaptive passive channel-hop scheduler + §2 carve-out |
+| 04eb351 | 2026-07-05T00:13:45Z | claude-opus-4-8 | 9434 | 66033 | 46450835 | 86194 | 25.7854 | wifi: QBSS Load IE parse (B2) + 6 GHz monitor channel derivation (B3) |
