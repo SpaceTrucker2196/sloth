@@ -42,3 +42,4 @@
 | 9491236 | 2026-07-05T07:32:39Z | claude-opus-4-8 | 4627 | 56256 | 13309570 | 67512 | 8.7594 | alerts: KARMA deauth-then-lure correlation (#30) |
 | 2a123e5 | 2026-07-05T12:52:06Z | claude-opus-4-8 | 13076 | 56366 | 25530488 | 837852 | 22.6183 | karma: dedicated VIEW_KARMA candidate table (#30) |
 | da5bb45 | 2026-07-05T13:03:40Z | claude-opus-4-8 | 6389 | 46501 | 20694330 | 62977 | 12.1714 | discovery: advertise data socket over mDNS (#29) |
+| df28500 | 2026-07-05T13:10:57Z | claude-opus-4-8 | 6874 | 33849 | 9391475 | 26540 | 5.8417 | karma: Jaccard-ppm PNL-overlap scoring (#30) |
