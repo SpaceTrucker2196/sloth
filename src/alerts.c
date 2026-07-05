@@ -757,6 +757,21 @@ static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
     return hits;
 }
 
+/* Is a deauth flood active in the recent window? The classic KARMA
+ * attack chain knocks clients off their real AP with a deauth flood,
+ * then answers their reconnection probes from the lure — so a KARMA
+ * candidate coinciding with a live deauth flood is "deauth-then-lure"
+ * in progress. The issue's ±60s correlation window. */
+#define KARMA_DEAUTH_WIN_SECS 60
+
+static int karma_deauth_active(const sloth_state_t *s, time_t now) {
+    for (int k = 0; k < s->deauth_count; k++) {
+        const deauth_event_t *e = &s->deauth_events[k];
+        if (e->flood && now - e->last_seen <= KARMA_DEAUTH_WIN_SECS) return 1;
+    }
+    return 0;
+}
+
 static void rule_karma_ap(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -768,18 +783,23 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  a->bssid[0], a->bssid[1], a->bssid[2],
                  a->bssid[3], a->bssid[4], a->bssid[5]);
         int overlap = karma_pnl_overlap(s, a);
+        int deauth  = karma_deauth_active(s, now);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
+        char pnl_note[32]   = "";
+        char chain_note[24] = "";
         if (overlap > 0)
-            snprintf(detail, sizeof(detail),
-                     "BSSID %s emitted %d distinct SSIDs, %d matching nearby "
-                     "client PNLs - Pineapple/KARMA beacon-response",
-                     bssid_str, a->ssid_history_n, overlap);
-        else
-            snprintf(detail, sizeof(detail),
-                     "BSSID %s emitted %d distinct SSIDs - Pineapple/KARMA candidate",
-                     bssid_str, a->ssid_history_n);
+            snprintf(pnl_note, sizeof(pnl_note),
+                     ", %d in client PNLs", overlap);
+        if (deauth)
+            snprintf(chain_note, sizeof(chain_note),
+                     " +deauth-then-lure");
+        snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
+        /* Compact: ALERT_DETAIL_LEN is 96, so the PNL + attack-chain
+         * notes must stay short or the tail (the deauth marker) is cut. */
+        snprintf(detail, sizeof(detail),
+                 "KARMA BSSID %s: %d SSIDs%s%s",
+                 bssid_str, a->ssid_history_n, pnl_note, chain_note);
         fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
              "KARMA_AP", detail, key, NULL, 0, now);
     }

@@ -1504,7 +1504,40 @@ static void test_karma_pnl_overlap_in_detail(void) {
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
-    ASSERT(strstr(s.alerts[idx].detail, "2 matching") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "2 in client PNLs") != NULL);
+}
+
+/* Deauth-then-lure: a KARMA candidate coinciding with a live deauth
+ * flood is flagged as an attack chain in progress (#30). */
+static void test_karma_deauth_then_lure_in_detail(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_deauth_flood(&s, victim);
+    s.deauth_events[0].last_seen = time(NULL);   /* live flood */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "deauth-then-lure") != NULL);
+}
+
+static void test_karma_stale_deauth_no_chain_note(void) {
+    /* A deauth flood well outside the 60s window must not be correlated. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_deauth_flood(&s, victim);
+    s.deauth_events[0].last_seen = time(NULL) - 300;   /* stale */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "deauth-then-lure") == NULL);
 }
 
 /* ── SSID Confusion / RSN downgrade (CVE-2023-52424, #32) ── */
@@ -2475,6 +2508,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
     RUN_TEST(test_karma_pnl_overlap_in_detail);
+    RUN_TEST(test_karma_deauth_then_lure_in_detail);
+    RUN_TEST(test_karma_stale_deauth_no_chain_note);
     RUN_TEST(test_ssid_confusion_wpa3_to_wpa2_fires);
     RUN_TEST(test_ssid_confusion_identical_posture_no_fire);
     RUN_TEST(test_ssid_confusion_mfp_drop_fires);
