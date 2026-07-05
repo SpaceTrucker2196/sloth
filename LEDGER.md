@@ -29,3 +29,4 @@
 | 56c76fe | 2026-07-05T02:05:59Z | claude-opus-4-8 | 4289 | 43054 | 27665797 | 41731 | 15.3480 | capture: short control frames + full-screen 802.11 frame view (close edges) |
 | bed5ca6 | 2026-07-05T02:18:07Z | claude-opus-4-8 | 8018 | 42306 | 41423703 | 57945 | 22.3890 | ux: monitor-first launch default view + hide noise ifaces (#25) |
 | ea405e5 | 2026-07-05T02:28:02Z | claude-opus-4-8 | 5053 | 40883 | 31029767 | 42100 | 16.9832 | iface: live channel scan bar on the monitor radio row |
+| ddc455c | 2026-07-05T02:36:52Z | claude-opus-4-8 | 5793 | 53100 | 36553061 | 51468 | 20.1477 | snapshot: passive site export/import (#27) |
