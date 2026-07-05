@@ -10,6 +10,7 @@
 #include <time.h>
 #include "posture.h"
 #include "alerts.h"
+#include "wifi_assess.h"
 
 static void iso_time(char out[32], time_t t) {
     struct tm *tm = gmtime(&t);
@@ -129,6 +130,20 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
                     (unsigned)d->risk_signals);
         }
         fprintf(out, "\n");
+    }
+
+    {
+        wifi_finding_t wf[64];
+        int wn = wifi_assess(s, wf, 64);
+        if (wn > 0) {
+            fprintf(out, "## Wireless hygiene findings\n\n");
+            fprintf(out, "| Severity | Finding | Evidence |\n");
+            fprintf(out, "|----------|---------|----------|\n");
+            for (int i = 0; i < wn; i++)
+                fprintf(out, "| %s | %s | %s |\n",
+                        wf[i].severity, wf[i].title, wf[i].evidence);
+            fprintf(out, "\n");
+        }
     }
 
     fprintf(out, "---\n\n");
