@@ -43,6 +43,8 @@
 #include "views/channel.h"
 #include "views/osi.h"
 #include "views/twins.h"
+#include "views/karma.h"
+#include "karma_detect.h"
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
@@ -180,6 +182,7 @@ static void poll_data(sloth_state_t *s) {
     scan_update(s);
     bd_update(s, time(NULL));
     alerts_update(s);
+    karma_update(s);   /* KARMA/PineAP candidate table for VIEW_KARMA (#30) */
     /* Feed the tui's alert-hot list: every alert with a concrete match_ip
      * gets the severity-coloured override for ALERT_HOT_TTL_S (1h).
      * LOW → yellow, WARN → orange, CRIT → red. Re-calls refresh the
@@ -274,6 +277,7 @@ static void dispatch_to_view(sloth_state_t *s, int key) {
     case VIEW_CHANNEL: view_channel_key(s, key);       break;
     case VIEW_OSI:     view_osi_key(s, key);           break;
     case VIEW_TWINS:   view_twins_key(s, key);         break;
+    case VIEW_KARMA:   view_karma_key(s, key);         break;
     default: break;
     }
 }
@@ -343,6 +347,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
     case 'l': case 'L': s->active_view = VIEW_OSI;     return;
     case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
+    case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);

@@ -44,6 +44,7 @@ One file per sloth view. Each covers:
 | `o` | Dashboard | [dashboard.md](dashboard.md) |
 | `l` | OSI stack | [osi.md](osi.md) |
 | `x` | Twins     | [twins.md](twins.md) |
+| `y` | KARMA     | [karma.md](karma.md) |
 
 ## WiFi SIGINT (v1.1)
 

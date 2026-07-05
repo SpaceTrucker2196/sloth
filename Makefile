@@ -83,6 +83,8 @@ SRCS = src/main.c          \
        src/wifi_merge.c      \
        src/twins.c           \
        src/views/twins.c     \
+       src/karma_detect.c    \
+       src/views/karma.c     \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
@@ -346,6 +348,9 @@ TEST_SRCS = tests/main_test.c          \
             src/twins.c                    \
             src/views/twins.c              \
             tests/test_twins.c             \
+            src/karma_detect.c             \
+            src/views/karma.c              \
+            tests/test_karma.c             \
             src/alerts.c                   \
             src/views/alerts.c             \
             tests/test_alerts.c            \

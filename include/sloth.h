@@ -51,6 +51,7 @@ typedef enum {
     VIEW_CHANNEL = 28,   /* per-channel activity histogram */
     VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
     VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
+    VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
     VIEW_COUNT
 } view_t;
 
@@ -933,6 +934,22 @@ typedef struct {
     time_t   last_seen;
 } twin_episode_t;
 
+/* ── KARMA / PineAP candidates (#30) ─────────────────────────
+ * One row per BSSID that beacons an abnormal number of distinct SSIDs
+ * — the PineAP / mdk4 / airbase-ng "answer every probed network" lure.
+ * Synthesised each poll by karma_update() from the beacon table, the
+ * client PNLs, and the deauth ring; the view reads only this table. */
+#define MAX_KARMA_APS 64
+typedef struct {
+    uint8_t  bssid[6];
+    int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
+    int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
+    int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
+    int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
+    char     top_ssid[33];  /* most recently advertised SSID */
+    time_t   last_seen;
+} karma_ap_t;
+
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
 #define PROBE_AGE_SECS    120
@@ -1314,6 +1331,10 @@ typedef struct {
     twin_episode_t twin_episodes[MAX_TWIN_EPISODES];
     int            twin_episode_count;
     int            twin_episode_sel;
+
+    karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
+    int            karma_count;
+    int            karma_sel;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];
