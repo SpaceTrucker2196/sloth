@@ -96,7 +96,12 @@ still open).
   first/last-seen) so non-802.11 sources normalise into `sloth_state_t`
   and JSONL the same way Wi-Fi does — **without** becoming a plugin ABI
   or control surface. Enables #21 and everything in #26.
-- **◇ Non-IP RF coverage roadmap** — `#26`. Parent roadmap for future
+- **✅ LANDED (2026-07-04)** — **Non-IP RF coverage roadmap** — `#26`.
+  Written up as `docs/wiki/non-ip-sensors.md`: the passive filter, the
+  seven questions every family must answer, and per-family sketches for
+  BLE, Zigbee, SDR metadata, GPS, ADS-B, Meshtastic, and CAN — sequenced
+  behind the #28 sensor abstraction. Original note follows. Parent
+  roadmap for future
   passive sensor families: BLE advertisements, Zigbee/802.15.4, SDR
   metadata, GPS context, ADS-B, Meshtastic/LoRa, CAN bus. Each new family
   must answer: what's observable passively, what hardware, what enters
