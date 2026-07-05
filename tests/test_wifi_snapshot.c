@@ -2,6 +2,7 @@
 #include "sloth.h"
 #include "wifi_snapshot.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
