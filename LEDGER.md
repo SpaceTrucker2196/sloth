@@ -26,3 +26,4 @@
 | ba260ad | 2026-07-05T01:03:23Z | claude-opus-4-8 | 5858 | 50184 | 38137891 | 53284 | 20.8857 | alerts: 802.11 auth-frame observation + AUTH_FLOOD (roadmap B1) |
 | 8dca674 | 2026-07-05T01:22:52Z | claude-opus-4-8 | 7384 | 97542 | 54470857 | 138470 | 31.0956 | oui: shared vendor-label helper (dedupe probe panels) |
 | 7828290 | 2026-07-05T01:58:48Z | claude-opus-4-8 | 13551 | 104900 | 73807534 | 123588 | 40.8299 | dashboard: connections->associations + packets->802.11 monitor frames when monit |
+| 56c76fe | 2026-07-05T02:05:59Z | claude-opus-4-8 | 4289 | 43054 | 27665797 | 41731 | 15.3480 | capture: short control frames + full-screen 802.11 frame view (close edges) |
