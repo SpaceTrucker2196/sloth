@@ -97,8 +97,13 @@ static void parse_radiotap(const uint8_t *buf, int len,
         off = RT_PAD(off, 2);
         if (off + 2 <= (int)rt_len) {
             uint16_t freq = (uint16_t)(buf[off] | (buf[off+1] << 8));
-            if      (freq >= 2412 && freq <= 2484) *channel = (freq - 2407) / 5;
-            else if (freq >= 5160 && freq <= 5885) *channel = (freq - 5000) / 5;
+            /* Mirror the nl80211 freq→channel map (src/platform/linux_wifi.c)
+             * so a monitor capture and a managed-mode scan agree. Without the
+             * 6 GHz arm, 6 GHz frames landed on channel 0. */
+            if      (freq >= 2412 && freq <= 2472) *channel = (freq - 2407) / 5;
+            else if (freq == 2484)                 *channel = 14;
+            else if (freq >= 5160 && freq <= 5895) *channel = (freq - 5000) / 5;
+            else if (freq >= 5955 && freq <= 7115) *channel = (freq - 5950) / 5;
         }
         off += 4;
     }
