@@ -4,6 +4,7 @@
 #include "alerts.h"
 #include "threat_intel.h"
 #include "beacon_detect.h"
+#include "beacon_snoop.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -190,6 +191,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_WEAK_TLS:               return "T1600";       /* Weaken Encryption */
     case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
     case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
+    case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -230,6 +232,22 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
         fire(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN,
              "DEAUTH_FLOOD", detail, key, NULL, 0, now);
     }
+}
+
+static void rule_beacon_flood(const sloth_state_t *s, time_t now) {
+    /* mdk3/mdk4 spray dozens of fake APs per second; a real RF
+     * neighbourhood gains BSSIDs slowly. We key on the *rate* of
+     * first-seen BSSIDs, not the table size, so a merely-dense area (many
+     * stable APs) doesn't trip it. */
+    (void)s;
+    int n = beacon_recent_new_bssids(now, BEACON_FLOOD_WIN_SECS);
+    if (n < BEACON_FLOOD_THRESH) return;
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(detail, sizeof(detail),
+             "%d new BSSIDs in %ds (mdk-style beacon flood)",
+             n, BEACON_FLOOD_WIN_SECS);
+    fire(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN,
+         "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -1453,6 +1471,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
+    rule_beacon_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_attack_tool_ua(s, now);

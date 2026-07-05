@@ -11,6 +11,29 @@ static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
+/* Ring of timestamps of recently first-seen BSSIDs — the beacon-flood
+ * signal (roadmap B4). Written under g_mu from beacon_record's new-entry
+ * path; read (with its own lock) by beacon_recent_new_bssids. Sized so a
+ * flood well above the alert threshold still fits the window. */
+#define BEACON_NEW_TS_RING 256
+static time_t g_new_bssid_ts[BEACON_NEW_TS_RING];
+static int    g_new_bssid_head;
+
+/* Caller must hold g_mu. */
+static void note_new_bssid(time_t now) {
+    g_new_bssid_ts[g_new_bssid_head] = now;
+    g_new_bssid_head = (g_new_bssid_head + 1) % BEACON_NEW_TS_RING;
+}
+
+int beacon_recent_new_bssids(time_t now, int window_s) {
+    int n = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < BEACON_NEW_TS_RING; i++)
+        if (g_new_bssid_ts[i] && now - g_new_bssid_ts[i] <= window_s) n++;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
 /* ── 802.11 beacon parser ────────────────────────────────── */
 
 /* Cipher OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.2). */
@@ -529,6 +552,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         }
     }
 
+    note_new_bssid(now);   /* beacon-flood rate signal (roadmap B4) */
     memset(&g_aps[slot], 0, sizeof(g_aps[slot]));
     memcpy(g_aps[slot].bssid, bssid, 6);
     strncpy(g_aps[slot].ssid,  ssid, 32);
@@ -652,5 +676,7 @@ void beacon_clear(void)
 {
     pthread_mutex_lock(&g_mu);
     g_count = 0;
+    memset(g_new_bssid_ts, 0, sizeof(g_new_bssid_ts));
+    g_new_bssid_head = 0;
     pthread_mutex_unlock(&g_mu);
 }

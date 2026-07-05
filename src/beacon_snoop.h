@@ -76,4 +76,9 @@ int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
 /* Clear the internal AP table. */
 void beacon_clear(void);
 
+/* Number of distinct new BSSIDs first seen within the last `window_s`
+ * seconds — the beacon-flood signal (roadmap B4). A legit RF neighbourhood
+ * gains APs slowly; an mdk-style flood spikes this hard. Thread-safe. */
+int  beacon_recent_new_bssids(time_t now, int window_s);
+
 #endif /* BEACON_SNOOP_H */

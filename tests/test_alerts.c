@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "alerts.h"
 #include "views/alerts.h"
+#include "beacon_snoop.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -102,6 +103,36 @@ static void test_port_scan_not_flagged_no_fire(void) {
     add_scan(&s, "10.0.0.99", 3, 0);   /* below threshold, not flagged */
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_PORT_SCAN), -1);
+}
+
+/* A burst of distinct new BSSIDs (mdk-style flood) trips the rule; a
+ * handful of stable APs does not. Exercises beacon_record → the
+ * new-BSSID rate counter → rule_beacon_flood end-to-end. */
+static void test_beacon_flood_fires(void) {
+    alerts_clear();
+    beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < BEACON_FLOOD_THRESH + 5; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00,
+                         (uint8_t)(i >> 8), (uint8_t)(i & 0xff) };
+        beacon_record(b, "FreeWiFi", -40, 6, "OPEN", 100, NULL);
+    }
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BEACON_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_beacon_flood_few_no_fire(void) {
+    alerts_clear();
+    beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 5; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, (uint8_t)i };
+        beacon_record(b, "Home", -50, 6, "WPA2", 100, NULL);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BEACON_FLOOD), -1);
 }
 
 static void test_deauth_flood_fires(void) {
@@ -2145,6 +2176,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_port_scan_not_flagged_no_fire);
     RUN_TEST(test_deauth_flood_fires);
     RUN_TEST(test_deauth_flood_detail_content);
+    RUN_TEST(test_beacon_flood_fires);
+    RUN_TEST(test_beacon_flood_few_no_fire);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

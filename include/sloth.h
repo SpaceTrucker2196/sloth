@@ -655,6 +655,7 @@ typedef enum {
     ALERT_TYPE_WEAK_TLS,
     ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
     ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
+    ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -769,6 +770,10 @@ typedef struct {
 #define DEAUTH_AGE_SECS        60   /* drop events older than this */
 #define DEAUTH_FLOOD_THRESH     5   /* frames per burst to raise flood flag */
 #define DEAUTH_FLOOD_WIN_SECS   5   /* burst window in seconds */
+/* Beacon-flood (mdk3/mdk4): a legit RF neighbourhood gains new APs slowly;
+ * a flood injects dozens of brand-new BSSIDs in seconds. */
+#define BEACON_FLOOD_THRESH    40   /* distinct new BSSIDs in the window */
+#define BEACON_FLOOD_WIN_SECS  10
 
 typedef struct {
     uint8_t  src[6];
