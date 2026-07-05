@@ -31,3 +31,4 @@
 | ea405e5 | 2026-07-05T02:28:02Z | claude-opus-4-8 | 5053 | 40883 | 31029767 | 42100 | 16.9832 | iface: live channel scan bar on the monitor radio row |
 | ddc455c | 2026-07-05T02:36:52Z | claude-opus-4-8 | 5793 | 53100 | 36553061 | 51468 | 20.1477 | snapshot: passive site export/import (#27) |
 | 6121625 | 2026-07-05T02:51:43Z | claude-opus-4-8 | 5081 | 47831 | 31766702 | 48917 | 17.5937 | assess: wireless hygiene findings in posture report (#24) |
+| 64151ad | 2026-07-05T03:39:15Z | claude-opus-4-8 | 16977 | 35893 | 24937631 | 33633 | 13.7874 | baseline: RF drift detection since session baseline (#23) |
