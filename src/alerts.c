@@ -960,6 +960,14 @@ static int rsn_downgrade_score(const beacon_ap_t *strong,
          strcmp(weak->pairwise, "TKIP") == 0)) score += 1;
     if (strcmp(strong->pairwise, "CCMP") == 0 &&
         strcmp(weak->pairwise, "TKIP") == 0)     score += 1;
+    /* Enterprise (802.1X) AKM downgraded to a pre-shared-key AKM under
+     * the same SSID — the eaphammer / hostapd-wpe rogue-RADIUS lure
+     * fingerprint (#31's same_ssid_alt_akm sub-signal). Fires even when
+     * the enc generation matches (WPA2-Enterprise cloned as WPA2-PSK),
+     * which the generational check above misses. The deeper EAP
+     * inner-method / server-cert fingerprinting is a follow-on. */
+    if (strstr(strong->akm, "802.1X") && weak->akm[0] &&
+        !strstr(weak->akm, "802.1X")) score += 3;
     return score;
 }
 

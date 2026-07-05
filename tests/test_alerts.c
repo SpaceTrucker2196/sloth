@@ -1557,6 +1557,36 @@ static void test_ssid_confusion_mfp_drop_fires(void) {
     ASSERT(find_alert(&s, ALERT_TYPE_SSID_CONFUSION) >= 0);
 }
 
+static void test_ssid_confusion_enterprise_akm_downgrade_fires(void) {
+    /* Same SSID, same enc generation (WPA2), but 802.1X-Enterprise
+     * cloned as PSK — the eaphammer rogue-RADIUS lure (#31 sub-signal).
+     * The generational check scores 0 here; the AKM check catches it. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ent[6]  = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t rogue[6]= {0xde,0xad,0xbe,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP-WIFI", ent,   "WPA2", "CCMP", 1);
+    add_beacon_rsn(&s, "CORP-WIFI", rogue, "WPA2", "CCMP", 1);
+    snprintf(s.beacon_aps[0].akm, sizeof(s.beacon_aps[0].akm), "802.1X");
+    snprintf(s.beacon_aps[1].akm, sizeof(s.beacon_aps[1].akm), "PSK");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SSID_CONFUSION) >= 0);
+}
+
+static void test_ssid_confusion_enterprise_both_8021x_no_fire(void) {
+    /* Legit enterprise multi-VAP: same SSID, both 802.1X. No downgrade. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    add_beacon_rsn(&s, "CORP-WIFI", a, "WPA2", "CCMP", 1);
+    add_beacon_rsn(&s, "CORP-WIFI", b, "WPA2", "CCMP", 1);
+    snprintf(s.beacon_aps[0].akm, sizeof(s.beacon_aps[0].akm), "802.1X");
+    snprintf(s.beacon_aps[1].akm, sizeof(s.beacon_aps[1].akm), "802.1X");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SSID_CONFUSION), -1);
+}
+
 static void test_ssid_confusion_different_ssid_no_fire(void) {
     /* Downgraded posture but different SSID — not a confusion attack. */
     alerts_clear();
@@ -2448,6 +2478,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_ssid_confusion_wpa3_to_wpa2_fires);
     RUN_TEST(test_ssid_confusion_identical_posture_no_fire);
     RUN_TEST(test_ssid_confusion_mfp_drop_fires);
+    RUN_TEST(test_ssid_confusion_enterprise_akm_downgrade_fires);
+    RUN_TEST(test_ssid_confusion_enterprise_both_8021x_no_fire);
     RUN_TEST(test_ssid_confusion_different_ssid_no_fire);
     RUN_TEST(test_ssid_confusion_open_weak_side_defers_to_twin);
     RUN_TEST(test_mgmt_fuzz_crit_at_five);
