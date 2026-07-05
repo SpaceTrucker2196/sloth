@@ -36,3 +36,4 @@
 | 0f5cd77 | 2026-07-05T04:08:12Z | claude-opus-4-8 | 76950 | 43150 | 5906752 | 202695 | 6.4438 | wifi: multi-radio passive observation merge (#21) |
 | 947222d | 2026-07-05T05:44:14Z | claude-opus-4-8 | 795 | 25421 | 3149443 | 450605 | 6.7203 | release: v1.6.0 version bump |
 | ba5f34f | 2026-07-05T07:05:32Z | claude-opus-4-8 | 6163 | 58175 | 9832400 | 429244 | 10.6938 | alerts: SSID Confusion / RSN-downgrade detector (#32) |
+| 13723c1 | 2026-07-05T07:09:09Z | claude-opus-4-8 | 3387 | 23821 | 3756697 | 27088 | 2.7617 | alerts: KARMA PNL-overlap enrichment (#30) |
