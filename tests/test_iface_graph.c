@@ -234,6 +234,29 @@ static void test_scan_indicator_no_probe_iface(void) {
 
 /* ── Entry point ─────────────────────────────────────────── */
 
+/* #25: with a monitor radio present, every other interface is hidden;
+ * the monitor radio and (if set) the IP-capture iface stay visible. */
+static void test_hide_non_monitor(void) {
+    sloth_state_t s = make_state(4);   /* eth0, wlan0, lo, tun0 */
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan0");
+    iface_hide_non_monitor(&s);
+    ASSERT(iface_is_hidden(&s, "eth0"));
+    ASSERT(iface_is_hidden(&s, "lo"));
+    ASSERT(iface_is_hidden(&s, "tun0"));
+    ASSERT(!iface_is_hidden(&s, "wlan0"));
+}
+
+static void test_hide_non_monitor_keeps_capture_iface(void) {
+    sloth_state_t s = make_state(4);
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan0");
+    snprintf(s.pkt_iface,   sizeof(s.pkt_iface),   "eth0");
+    iface_hide_non_monitor(&s);
+    ASSERT(!iface_is_hidden(&s, "wlan0"));
+    ASSERT(!iface_is_hidden(&s, "eth0"));
+    ASSERT(iface_is_hidden(&s, "lo"));
+    ASSERT(iface_is_hidden(&s, "tun0"));
+}
+
 void run_iface_graph_tests(void) {
     TEST_SUITE("iface graph / key");
     RUN_TEST(test_graph_enter_opens);
@@ -265,4 +288,6 @@ void run_iface_graph_tests(void) {
     RUN_TEST(test_scan_indicator_draw_selected);
     RUN_TEST(test_scan_indicator_draw_unselected);
     RUN_TEST(test_scan_indicator_no_probe_iface);
+    RUN_TEST(test_hide_non_monitor);
+    RUN_TEST(test_hide_non_monitor_keeps_capture_iface);
 }

@@ -261,6 +261,22 @@ int iface_is_hidden(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
+/* #25: hide every interface except the monitor capture radio (and the IP
+ * capture iface, if any) so a monitor-mode launch foregrounds the RF world.
+ * Display-only; the operator can un-hide from the interface view. */
+void iface_hide_non_monitor(sloth_state_t *s) {
+    for (int i = 0; i < s->iface_count; i++) {
+        const char *nm = s->ifaces[i].name;
+        if (!nm[0]) continue;
+        if (s->probe_iface[0] && strcmp(nm, s->probe_iface) == 0) continue;
+        if (s->pkt_iface[0]   && strcmp(nm, s->pkt_iface)   == 0) continue;
+        if (iface_is_hidden(s, nm)) continue;
+        if (s->iface_hidden_count < MAX_IFACES)
+            snprintf(s->iface_hidden[s->iface_hidden_count++],
+                     sizeof(s->iface_hidden[0]), "%s", nm);
+    }
+}
+
 /* Declared in sloth.h — shared with the capture callback (on_packet)
  * so a deselected iface's packets are dropped before any decode runs.
  * Kept independent of iface_is_hidden: hide is display-only, deselect

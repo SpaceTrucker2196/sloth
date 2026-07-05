@@ -1361,6 +1361,7 @@ typedef struct {
 
 /* ── Iface hide election (shared by iface view + dashboard band) ── */
 int iface_is_hidden(const sloth_state_t *s, const char *name);
+void iface_hide_non_monitor(sloth_state_t *s);
 
 /* ── Iface data-stream election (shared by iface view + capture) ──
  * A deselected iface's packets are dropped in the pcap callback before

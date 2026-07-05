@@ -495,13 +495,27 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
     capture_start(&g_state);
     probe_start(&g_state);
+    /* First-launch UX (#25): when a monitor interface is present, open on
+     * the RF-aware dashboard rather than the interface list. */
+    if (g_state.probe_iface[0])
+        g_state.active_view = VIEW_DASH;
 #endif
     event_wake_init();
     updater_init(check_manifest);
     tui_init();
 
+    int first_poll = 1;
     while (!g_quit) {
         poll_data(&g_state);
+        if (first_poll) {
+            first_poll = 0;
+            /* #25: with a monitor radio present, hide the noise interfaces
+             * (loopback, docker, VPN, non-monitor wlan) so the operator's
+             * focus is the RF world. Un-hideable via [1]. Runs once, after
+             * the first poll populates the interface list. */
+            if (g_state.probe_iface[0])
+                iface_hide_non_monitor(&g_state);
+        }
         data_socket_tick();
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
