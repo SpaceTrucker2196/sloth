@@ -38,3 +38,4 @@
 | ba5f34f | 2026-07-05T07:05:32Z | claude-opus-4-8 | 6163 | 58175 | 9832400 | 429244 | 10.6938 | alerts: SSID Confusion / RSN-downgrade detector (#32) |
 | 13723c1 | 2026-07-05T07:09:09Z | claude-opus-4-8 | 3387 | 23821 | 3756697 | 27088 | 2.7617 | alerts: KARMA PNL-overlap enrichment (#30) |
 | 47df4fa | 2026-07-05T07:18:25Z | claude-opus-4-8 | 13698 | 52626 | 15448887 | 87060 | 9.9792 | alerts: malformed-IE / mgmt-frame fuzz detector (#33) |
+| 768ebea | 2026-07-05T07:20:54Z | claude-opus-4-8 | 2288 | 17761 | 3092312 | 16950 | 2.1711 | alerts: enterprise-AKM downgrade signal (#31) |
