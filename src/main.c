@@ -8,6 +8,7 @@
 #include "tui.h"
 #include "wifi_chanhop.h"
 #include "wifi_snapshot.h"
+#include "wifi_baseline.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -538,6 +539,11 @@ int main(int argc, char **argv) {
             if (g_state.probe_iface[0])
                 iface_hide_non_monitor(&g_state);
         }
+        /* #23: once the RF picture has had time to settle, freeze it as the
+         * session baseline so drift (new/gone/changed APs) can be reported. */
+        if (g_state.probe_iface[0] && !wifi_baseline_ready() &&
+            time(NULL) - session_start >= 30)
+            wifi_baseline_capture(&g_state);
         data_socket_tick();
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
