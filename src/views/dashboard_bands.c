@@ -12,6 +12,7 @@
 #include "views/dashboard_internal.h"
 #include "bandwidth.h"
 #include "ip_color.h"
+#include "oui.h"
 #include "ip_owner.h"
 #include "host_cache.h"
 #include "geo.h"
@@ -229,6 +230,57 @@ void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     /* Erase any trailing rows so the conn band can shrink without
        leaving stale entries behind. */
     for (int i = end - top; i < rows; i++) {
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x0, w, "");
+    }
+}
+
+/* ── Associations (monitor-radio analog of the connections band) ── */
+
+/* Shown in place of draw_conn_band when a monitor interface is active:
+ * the RF equivalent of "connections" is who is joined to which AP. Data
+ * comes from the same association tracker the [w] Assoc view uses. A
+ * read-only summary (the full view has selection + evidence detail). */
+void draw_assoc_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
+    char title[48];
+    snprintf(title, sizeof(title), "Associations (%s)",
+             s->probe_iface[0] ? s->probe_iface : "monitor");
+    panel_title(y0, x0, w, title, DASH_PANEL_CONN);
+
+    int ssid_w = w - 58;
+    if (ssid_w < 6) ssid_w = 6;
+
+    attrset(COLOR_PAIR(CP_DIM));
+    clipline(y0 + 1, x0, w,
+             "  %-17s %-12s " G_ARROW " %-17s %-*s %3s %4s %s",
+             "STA", "vendor", "BSSID", ssid_w, "ssid", "ch", "sig", "ev");
+
+    int rows = h - 2;
+    if (rows < 1) return;
+    int n = s->assoc_count < rows ? s->assoc_count : rows;
+
+    for (int i = 0; i < n; i++) {
+        const assoc_t *a = &s->assocs[i];
+        char sta[20], bss[20];
+        snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 a->sta_mac[0], a->sta_mac[1], a->sta_mac[2],
+                 a->sta_mac[3], a->sta_mac[4], a->sta_mac[5]);
+        snprintf(bss, sizeof(bss), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 a->bssid[0], a->bssid[1], a->bssid[2],
+                 a->bssid[3], a->bssid[4], a->bssid[5]);
+        const char *vendor = oui_vendor_label(a->sta_mac, NULL);
+        const char *ssid   = a->ssid[0] ? a->ssid : "(hidden)";
+        const char *ev = a->source == ASSOC_SRC_EAPOL   ? "EAPOL"
+                       : a->source == ASSOC_SRC_ASSOC    ? "assoc"
+                       : a->source == ASSOC_SRC_REASSOC  ? "reasc"
+                       :                                   "?";
+        attrset(COLOR_PAIR(CP_NORMAL));
+        clipline(y0 + 2 + i, x0, w,
+                 "  %-17s %-12.12s " G_ARROW " %-17s %-*.*s %3d %4d %s",
+                 sta, vendor, bss, ssid_w, ssid_w, ssid,
+                 a->channel, a->signal_dbm, ev);
+    }
+    for (int i = n; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
         clipline(y0 + 2 + i, x0, w, "");
     }

@@ -83,6 +83,7 @@ int  crit_alerts_count      (const sloth_state_t *s);
 
 void draw_iface_band         (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_conn_band          (const sloth_state_t *s, int y0, int h, int x0, int w);
+void draw_assoc_band         (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_top_hosts_panel    (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_packets_band       (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_crit_alerts_band   (const sloth_state_t *s, int y0, int h, int x0, int w);
