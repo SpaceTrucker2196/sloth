@@ -252,6 +252,119 @@ static void test_view_key_clear(void) {
     ASSERT_EQ(s.http_log_sel,   0);
 }
 
+/* ── JA4H tests ─────────────────────────────────────────────
+ *
+ * FoxIO JA4H format: a(10) _ b(12) _ c(12) _ d(12) = 49 chars.
+ * a = method(2) + version(2) + cookie-flag(1) + referer-flag(1)
+ *   + numheaders(2) + primary-language(2). */
+
+static int is_lower_hex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+}
+
+static void test_ja4h_shape_get_no_cookies(void) {
+    const char *req =
+        "GET / HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "User-Agent: curl/8\r\n"
+        "\r\n";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "1.1.1.1", &e), 1);
+    ASSERT_EQ((int)strlen(e.ja4h), 49);
+    /* method="ge", version="11", no cookie, no referer, 2 headers,
+     * no accept-language. */
+    ASSERT_EQ((int)e.ja4h[0], (int)'g');
+    ASSERT_EQ((int)e.ja4h[1], (int)'e');
+    ASSERT_EQ((int)e.ja4h[2], (int)'1');
+    ASSERT_EQ((int)e.ja4h[3], (int)'1');
+    ASSERT_EQ((int)e.ja4h[4], (int)'n');   /* no cookie */
+    ASSERT_EQ((int)e.ja4h[5], (int)'n');   /* no referer */
+    ASSERT_EQ((int)e.ja4h[6], (int)'0');   /* numheaders 02 */
+    ASSERT_EQ((int)e.ja4h[7], (int)'2');
+    ASSERT_EQ((int)e.ja4h[8], (int)'0');   /* lang "00" */
+    ASSERT_EQ((int)e.ja4h[9], (int)'0');
+    ASSERT_EQ((int)e.ja4h[10], (int)'_');
+    ASSERT_EQ((int)e.ja4h[23], (int)'_');
+    ASSERT_EQ((int)e.ja4h[36], (int)'_');
+    /* Sections c and d are 000000000000 when there are no cookies. */
+    for (int i = 24; i < 36; i++) ASSERT_EQ((int)e.ja4h[i], (int)'0');
+    for (int i = 37; i < 49; i++) ASSERT_EQ((int)e.ja4h[i], (int)'0');
+}
+
+static void test_ja4h_flags_cookie_and_referer(void) {
+    const char *req =
+        "POST /submit HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Cookie: sid=abc\r\n"
+        "Referer: https://example.com/form\r\n"
+        "User-Agent: curl/8\r\n"
+        "\r\n";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "1.1.1.1", &e), 1);
+    /* method "po", cookie flag 'c', referer flag 'r'. Cookie and
+     * Referer excluded from numheaders → Host + UA = 2. */
+    ASSERT_EQ((int)e.ja4h[0], (int)'p');
+    ASSERT_EQ((int)e.ja4h[1], (int)'o');
+    ASSERT_EQ((int)e.ja4h[4], (int)'c');
+    ASSERT_EQ((int)e.ja4h[5], (int)'r');
+    ASSERT_EQ((int)e.ja4h[6], (int)'0');
+    ASSERT_EQ((int)e.ja4h[7], (int)'2');
+    /* Sections c and d are non-zero because we have a cookie. */
+    ASSERT(strncmp(e.ja4h + 24, "000000000000", 12) != 0);
+    ASSERT(strncmp(e.ja4h + 37, "000000000000", 12) != 0);
+    /* And they're lowercase hex. */
+    for (int i = 24; i < 36; i++) ASSERT(is_lower_hex(e.ja4h[i]));
+    for (int i = 37; i < 49; i++) ASSERT(is_lower_hex(e.ja4h[i]));
+}
+
+static void test_ja4h_extracts_accept_language(void) {
+    const char *req =
+        "GET / HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Accept-Language: en-US,en;q=0.9\r\n"
+        "\r\n";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "1.1.1.1", &e), 1);
+    /* Section-a lang chars 8+9 come from first two chars of the
+     * first language tag, lowercased. "en" here. */
+    ASSERT_EQ((int)e.ja4h[8], (int)'e');
+    ASSERT_EQ((int)e.ja4h[9], (int)'n');
+}
+
+static void test_ja4h_cookie_hash_stable_across_reorder(void) {
+    /* Two requests with the same cookie *names* in different insertion
+     * order must produce the same JA4H section c (which sorts by name).
+     * Values here are identical to keep section d equal too. */
+    const char *req1 =
+        "GET / HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Cookie: a=1; b=2; c=3\r\n"
+        "\r\n";
+    const char *req2 =
+        "GET / HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Cookie: c=3; a=1; b=2\r\n"
+        "\r\n";
+    http_log_entry_t e1, e2;
+    ASSERT_EQ(http_log_parse(u8(req1), (int)strlen(req1), "x", &e1), 1);
+    ASSERT_EQ(http_log_parse(u8(req2), (int)strlen(req2), "x", &e2), 1);
+    /* Sections c and d span [24..35] and [37..48]. */
+    ASSERT(strncmp(e1.ja4h + 24, e2.ja4h + 24, 12) == 0);
+    ASSERT(strncmp(e1.ja4h + 37, e2.ja4h + 37, 12) == 0);
+}
+
+static void test_ja4h_deterministic(void) {
+    const char *req =
+        "GET / HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "User-Agent: curl/8\r\n"
+        "\r\n";
+    http_log_entry_t a, b;
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "x", &a), 1);
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "y", &b), 1);
+    ASSERT_STR(a.ja4h, b.ja4h);
+}
+
 /* ── Suite entry point ───────────────────────────────────── */
 
 void run_http_log_tests(void) {
@@ -266,6 +379,11 @@ void run_http_log_tests(void) {
     RUN_TEST(test_parse_path_truncated);
     RUN_TEST(test_parse_no_host_header);
     RUN_TEST(test_parse_head_method);
+    RUN_TEST(test_ja4h_shape_get_no_cookies);
+    RUN_TEST(test_ja4h_flags_cookie_and_referer);
+    RUN_TEST(test_ja4h_extracts_accept_language);
+    RUN_TEST(test_ja4h_cookie_hash_stable_across_reorder);
+    RUN_TEST(test_ja4h_deterministic);
     RUN_TEST(test_record_and_snapshot);
     RUN_TEST(test_snapshot_newest_first);
     RUN_TEST(test_clear_empties_log);

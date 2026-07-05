@@ -4,13 +4,13 @@
 #include <stdint.h>
 #include <time.h>
 
-#define SLOTH_VERSION "0.2.0"
+#define SLOTH_VERSION "1.5.1"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
 #define MAX_WIFI_APS 64
 #define MAX_PACKETS  256
-#define POLL_MS      1000
+#define POLL_MS      250   /* dashboard refresh interval default. Overridable via --refresh-ms. The TUI loop also wakes early on alert fires (see src/event_wake.h), so this is an upper bound on stale-render time, not a fixed cadence. */
 #define HIST_LEN     30    /* rate history samples per interface (sparkline) */
 
 /* Cross-platform key codes — outside ASCII range, returned by tui_poll_key() */
@@ -55,8 +55,20 @@ typedef enum {
 } view_t;
 
 /* ── Interface stats ────────────────────────────────────── */
+
+/* Link-layer / mode label. IFACE_MODE_MONITOR is what the "any WiFi
+ * radio in monitor mode?" check keys on — see rule_no_monitor_mode(). */
+typedef enum {
+    IFACE_MODE_UNKNOWN = 0,
+    IFACE_MODE_ETHER,      /* ARPHRD_ETHER, loopback, virtuals */
+    IFACE_MODE_WIFI,       /* ARPHRD_IEEE80211 (managed / station) */
+    IFACE_MODE_MONITOR,    /* ARPHRD_IEEE80211_RADIOTAP / PRISM */
+} iface_mode_t;
+
 typedef struct {
     char     name[16];
+    uint8_t  mac[6];       /* hardware address; all-zero = unknown */
+    iface_mode_t mode;     /* IFACE_MODE_* — WIFI vs MONITOR matters */
     uint64_t rx_bytes;
     uint64_t tx_bytes;
     uint64_t rx_packets;
@@ -332,6 +344,40 @@ typedef struct {
     time_t   last_seen;
 } snmp_flow_t;
 
+/* ── MQTT observation tracking ───────────────────────── */
+/* MQTT (v3.1.1 RFC-equivalent OASIS spec / v5 OASIS spec) is the
+ * dominant IoT pub/sub protocol. Brokers default to TCP/1883
+ * cleartext; TLS variant is TCP/8883 and is opaque past the
+ * handshake. Sloth tracks the cleartext path.
+ *
+ * Tier 1 detects:
+ *   - CONNECT packets per (client_ip, broker_ip) — high count
+ *     means credential brute-force or a malformed-client
+ *     reconnect storm.
+ *   - The username field from the CONNECT payload (when the
+ *     User Name Flag is set) — same role as the SNMP community
+ *     or the mstshash cookie: tells operators which account the
+ *     attacker is guessing.
+ *   - CONNACK reason codes — code 4 in v3 / 0x86 in v5 = bad
+ *     credentials. A high failure count is the explicit signal,
+ *     even quieter than the connect-count threshold.
+ *   - Protocol-level (3 / 4 / 5) for asset inventory. */
+#define MAX_MQTT_FLOWS   32
+#define MQTT_USERNAME_LEN 32
+
+typedef struct {
+    char     src_ip[46];           /* MQTT client                    */
+    char     dst_ip[46];           /* MQTT broker                    */
+    int      connect_count;        /* CONNECT packets observed       */
+    int      connack_fail_count;   /* bad-auth CONNACK responses     */
+    int      subscribe_count;      /* SUBSCRIBE packets              */
+    int      publish_count;        /* PUBLISH packets                */
+    int      proto_level;          /* last seen: 3 / 4 / 5           */
+    char     last_username[MQTT_USERNAME_LEN];
+    time_t   first_seen;
+    time_t   last_seen;
+} mqtt_flow_t;
+
 /* ── LDAP observation tracking ───────────────────────── */
 /* LDAP lives on TCP/389 (cleartext) and TCP/3268 (Global Catalog
  * cleartext). TLS variants (636 / 3269) are opaque past the
@@ -517,6 +563,24 @@ typedef struct {
 #define DEV_SRC_PROBE   (1 << 4)
 #define DEV_SRC_STA     (1 << 5)
 
+/* ── Device risk signals (roadmap #16 phase 4) ─────
+ * A bitmask of signals contributing to a device's risk bucket.
+ * Each signal is either "observed / not observed"; the score is
+ * derived from a weighted sum in device_risk_score(). */
+#define DEV_RISK_RANDOM_MAC      (1 << 0)  /* locally-administered MAC */
+#define DEV_RISK_UNKNOWN_VENDOR  (1 << 1)  /* OUI not in the embedded table */
+#define DEV_RISK_NO_HOSTNAME     (1 << 2)  /* no DHCP/mDNS/NBNS resolution */
+#define DEV_RISK_PROBE_ONLY      (1 << 3)  /* probe frames, no association */
+#define DEV_RISK_CLEARTEXT_CRED  (1 << 4)  /* cred exposure attributed to us */
+#define DEV_RISK_ALERT_TAGGED    (1 << 5)  /* an alert's match_ip == our ip */
+
+typedef enum {
+    DEV_RISK_LOW  = 0,
+    DEV_RISK_MED  = 1,
+    DEV_RISK_HIGH = 2,
+    DEV_RISK_CRIT = 3,
+} device_risk_level_t;
+
 typedef struct {
     uint8_t mac[6];
     char    ip[46];          /* best-known IP, "" if unknown */
@@ -527,8 +591,19 @@ typedef struct {
     int8_t  signal_dbm;      /* most recent WiFi signal, 0 if none */
     int     probe_count;     /* total probe frames */
     int     sources;         /* bitmask of DEV_SRC_* */
+    /* Risk scoring: derived once per poll from the observed signals
+     * below and the alert / cleartext-cred state. See src/device_risk.c
+     * and roadmap #16 phase 4. */
+    int                risk_signals;   /* bitmask of DEV_RISK_* */
+    device_risk_level_t risk_level;
     time_t  last_seen;
 } device_t;
+
+/* Human-readable bucket name for the alerts view / JSONL. */
+const char *device_risk_label(device_risk_level_t l);
+
+/* device_risk_score() is declared alongside iface_is_hidden() below,
+ * after sloth_state_t is defined. */
 
 /* ── Alerts ─────────────────────────────────────────────── */
 #define MAX_ALERTS         128
@@ -569,6 +644,7 @@ typedef enum {
     ALERT_TYPE_SSH_BRUTE_FORCE,
     ALERT_TYPE_RDP_BRUTE_FORCE,
     ALERT_TYPE_SNMP_COMMUNITY_BRUTE,
+    ALERT_TYPE_MQTT_BROKER_BRUTE,
     ALERT_TYPE_EVIL_TWIN,
     ALERT_TYPE_EVIL_TWIN_PROXIMITY,
     ALERT_TYPE_KARMA_AP,
@@ -577,6 +653,10 @@ typedef enum {
     ALERT_TYPE_ATTACK_TOOL_UA,
     ALERT_TYPE_ATTACK_PATH,
     ALERT_TYPE_WEAK_TLS,
+    ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
+    ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
+    ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
+    ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -595,7 +675,18 @@ typedef struct {
     char         match_ip[46];
     uint16_t     match_port;              /* 0 = any port */
     int          pcap_dumped;             /* engine-internal flag */
+    /* MITRE ATT&CK technique ID (e.g. "T1110.001") — populated from a
+     * fixed lookup on alert_type by fire(). Empty for alerts that
+     * describe operator/host posture rather than an adversary
+     * technique (e.g. NO_MONITOR_MODE). */
+    char         technique[16];
 } alert_t;
+
+/* Canonical MITRE ATT&CK technique for a given alert type. Returns
+ * an empty string ("") for alert types that describe host posture
+ * rather than adversary behaviour. Defined in src/alerts.c so tests
+ * can compile against the table directly. */
+const char *alert_technique(alert_type_t type);
 
 /* ── ICMP log ───────────────────────────────────────────── */
 #define MAX_ICMP_LOG 256
@@ -631,6 +722,12 @@ typedef struct {
     char   host[64];    /* SNI hostname, "" if absent */
     char   tls_ver[8];  /* "TLS 1.3" "TLS 1.2" "TLS 1.1" "TLS 1.0" "TLS" */
     char   ja3[33];     /* MD5 of JA3 string, lowercase hex; "" if not computed */
+    /* JA4 client fingerprint (FoxIO spec): a(10) + '_' + b(12) + '_' + c(12) = 37
+     * chars, + NUL. Section a encodes protocol/version/SNI/counts/ALPN;
+     * sections b + c are sha256-truncated over sorted cipher / ext lists
+     * so extension reordering doesn't change the value (unlike JA3). "" if
+     * not computed. Roadmap #16 phase 2. */
+    char   ja4[38];
     time_t ts;
 } tls_log_entry_t;
 
@@ -643,14 +740,45 @@ typedef struct {
     char   host[64];       /* Host header value */
     char   path[128];      /* request URI */
     char   user_agent[64]; /* User-Agent header, truncated */
+    /* JA4H client fingerprint (FoxIO spec): a(10) _ b(12) _ c(12) _ d(12)
+     * = 49 chars + NUL. Section a encodes method/version/cookie flag/
+     * referer flag/numheaders/lang; b hashes observed header names; c
+     * hashes sorted cookie names; d hashes sorted cookie name=value
+     * pairs. "" if not computed. Roadmap follow-up to #16 phase 2. */
+    char   ja4h[50];
     time_t ts;
 } http_log_entry_t;
+
+/* ── Cleartext credential exposures (roadmap #16 phase 3) ──
+ * Passive observation of authentication material sent in the clear.
+ * Records the *fact* of exposure and the username, never the password
+ * or its hash. Guardrail lives in src/cleartext_creds.c — see
+ * docs/wiki/jsonl-schema.md for the schema policy. */
+#define MAX_CLEARTEXT_CREDS 64
+
+typedef struct {
+    char     src[46];       /* client IP */
+    char     dst[46];       /* server IP */
+    uint16_t dst_port;      /* 80 for HTTP Basic, 21 for FTP, etc. */
+    char     protocol[16];  /* "HTTP-Basic", "FTP", "POP3", ... */
+    char     username[64];  /* observed username, sanitized */
+    int      password_observed;  /* 1 if a password token was seen */
+    time_t   ts;
+} cleartext_cred_t;
 
 /* ── Deauth / Disassoc events ───────────────────────────── */
 #define MAX_DEAUTH_ENTRIES    128
 #define DEAUTH_AGE_SECS        60   /* drop events older than this */
 #define DEAUTH_FLOOD_THRESH     5   /* frames per burst to raise flood flag */
 #define DEAUTH_FLOOD_WIN_SECS   5   /* burst window in seconds */
+/* Beacon-flood (mdk3/mdk4): a legit RF neighbourhood gains new APs slowly;
+ * a flood injects dozens of brand-new BSSIDs in seconds. */
+#define BEACON_FLOOD_THRESH    40   /* distinct new BSSIDs in the window */
+#define BEACON_FLOOD_WIN_SECS  10
+/* Auth-request flood: a legit AP fields the odd auth frame (roam,
+ * reconnect); an mdk-style flood sprays dozens per second at one BSSID. */
+#define AUTH_FLOOD_THRESH      30   /* auth frames to one BSSID in the window */
+#define AUTH_FLOOD_WIN_SECS     5
 
 typedef struct {
     uint8_t  src[6];
@@ -767,6 +895,12 @@ typedef struct {
     int8_t   rssi_min_60s;     /* lowest signal seen in last 60s (dBm, 0 = unseen) */
     int8_t   rssi_max_60s;     /* highest signal seen in last 60s (dBm, 0 = unseen) */
     rssi_ring_t rssi_ring;     /* raw samples feeding rssi_min/max_60s */
+    /* QBSS Load IE (tag 11) — AP self-reported occupancy. A free
+     * congestion metric: no math, just what the AP advertises.
+     * has_qbss=0 = IE absent. */
+    int      has_qbss;
+    int      qbss_stations;    /* associated station count */
+    int      qbss_chan_util;   /* channel utilisation, 0..255 (fraction of 255) */
 } beacon_ap_t;
 
 /* ── Evil-twin episodes (Phase 5 — materialised view) ──── */
@@ -946,6 +1080,12 @@ typedef struct {
     int           iface_graph;             /* non-zero = rx/tx graph panel open */
     char          iface_hidden[MAX_IFACES][16]; /* hidden interface names */
     int           iface_hidden_count;
+    /* Data-stream election: names in this list are excluded from the
+     * capture pipeline (packets/DNS/HTTP/TLS/alerts/JSONL). This is
+     * distinct from iface_hidden, which is display-only. See issue #17
+     * and rule_no_monitor_mode() for how it composes with capture. */
+    char          iface_deselected[MAX_IFACES][16];
+    int           iface_deselected_count;
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;
@@ -966,6 +1106,7 @@ typedef struct {
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */
     int           pkt_count;            /* total written (capped at MAX_PACKETS) */
+    uint64_t      pkt_total;            /* monotonic total ever written (never wraps) */
     int           pkt_sel;             /* selected row in packets view */
     int           pkt_paused;          /* non-zero = freeze auto-scroll */
 
@@ -986,6 +1127,7 @@ typedef struct {
     conn_bw_t     conn_bw[MAX_CONNS];
     int           conn_bw_count;
     int           pkt_bw_cursor;  /* pkt_head at last bandwidth attribution */
+    uint64_t      pkt_jsonl_emitted; /* pkt_total value at last jsonl emit (issue #20) */
 
     /* ── ARP neighbor table ────────────────────────────── */
     arp_entry_t  arp_entries[MAX_ARP_ENTRIES];
@@ -1054,6 +1196,9 @@ typedef struct {
 
     /* ── HTTP request log ────────────────────────────────────── */
     http_log_entry_t http_log[MAX_HTTP_LOG];  /* ring buffer */
+
+    cleartext_cred_t cleartext_creds[MAX_CLEARTEXT_CREDS];
+    int              cleartext_cred_count;
     int              http_log_head;           /* next write slot */
     int              http_log_count;          /* entries written (capped at MAX_HTTP_LOG) */
     int              http_log_sel;
@@ -1161,6 +1306,10 @@ typedef struct {
     snmp_flow_t    snmp_flows[MAX_SNMP_FLOWS];
     int            snmp_flow_count;
 
+    /* ── MQTT observation table ──────────────────────────── */
+    mqtt_flow_t    mqtt_flows[MAX_MQTT_FLOWS];
+    int            mqtt_flow_count;
+
     /* ── SSDP/UPnP devices ─────────────────────────────────── */
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];
     int            ssdp_count;
@@ -1175,7 +1324,42 @@ typedef struct {
     uint64_t stats_base_txp[MAX_IFACES];     /* tx_packets at baseline */
     char     stats_base_name[MAX_IFACES][16];/* iface name for each slot */
     int      stats_base_count;               /* number of baseline slots */
+
+    /* Version check-in (notify-only). Populated by updater_snapshot()
+     * each poll. `enabled` is 0 until --check-manifest is set on the
+     * CLI. See src/updater.c and docs/wiki/version-checkin.md. */
+    struct {
+        int    enabled;
+        int    has_update;                    /* 1 iff latest > current */
+        int    err;                           /* 1 iff manifest missing / malformed */
+        char   current[16];                   /* baked SLOTH_VERSION */
+        char   latest[16];                    /* from the manifest, "" if unknown */
+        char   url[128];                      /* release URL, "" if not published */
+        char   err_msg[64];                   /* short human message when err=1 */
+        time_t last_checked;                  /* 0 iff never read successfully */
+    } updater;
 } sloth_state_t;
+
+/* ── Iface hide election (shared by iface view + dashboard band) ── */
+int iface_is_hidden(const sloth_state_t *s, const char *name);
+
+/* ── Iface data-stream election (shared by iface view + capture) ──
+ * A deselected iface's packets are dropped in the pcap callback before
+ * any decode / log / alert runs. Purely logical — the OS state of the
+ * interface (up/down, monitor, addresses) is never touched. Issue #17. */
+int iface_is_deselected(const sloth_state_t *s, const char *name);
+
+/* ── Key routing: does the active view claim this key over the global
+ * view-switch letters? Kept in main.c as a small, centralized table;
+ * exposed for direct unit-test coverage of the routing decision. */
+int view_claims_key(view_t v, int key);
+
+/* ── Device risk scoring — declared here (post-state) so we can name
+ * sloth_state_t without a forward decl dance. See src/device_risk.c
+ * and roadmap #16 phase 4. */
+device_risk_level_t device_risk_score(const device_t *d,
+                                      const sloth_state_t *s,
+                                      int *signals);
 
 /* ── Platform ops vtable ────────────────────────────────── */
 typedef struct {
@@ -1187,6 +1371,11 @@ typedef struct {
     int  (*get_dhcp)(dhcp_lease_t *out, int max);
     void (*init)(void);
     void (*cleanup)(void);
+    /* Retune sloth's own monitor-mode capture interface to freq_mhz
+     * (issue #22, gated behind --hop; see MISSION §2). Returns 0 on
+     * success, -1 if unsupported on this platform / build or the retune
+     * failed. The ONLY kernel-state write in the vtable. */
+    int  (*set_channel)(const char *iface, int freq_mhz);
 } platform_ops_t;
 
 extern platform_ops_t g_platform;

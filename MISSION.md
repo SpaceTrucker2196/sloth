@@ -44,9 +44,25 @@ issue.
 
 1. **Passive only.** Sloth never injects packets, never sends probes,
    never deauthenticates, never beacons, never ARP-poisons, never
-   port-scans, never resolves hosts it didn't already see, and never
-   modifies kernel state (no `iw set`, no `ip link set`, no `iptables`,
-   no monitor-mode toggling). It reads. It never writes to the wire.
+   port-scans, never resolves hosts it didn't already see. It never
+   writes to the wire, and it never modifies network or host state:
+   no `ip link set`, no `iptables`, no monitor-mode toggling, no
+   configuration of interfaces it did not create.
+
+   **One narrow, opt-in exception:** with passive channel-hopping
+   enabled (`--hop`, off by default), sloth may retune the *channel* of
+   its **own monitor-mode capture interface** — the receiver the
+   operator explicitly dedicated to sloth. This changes only what sloth
+   *hears*, never what the network *does*: no frame is transmitted, no
+   other interface is touched, and the monitored segment is unaffected.
+   Retuning a receiver is not writing to the wire. With `--hop` off
+   (the default) sloth modifies no kernel state at all, preserving the
+   guarantee that it can run on a sensitive segment without changing it.
+   Everything else in this rule stands — no injection, no deauth, no
+   probing, and sloth still never puts an interface *into* monitor mode
+   (the operator does that; sloth only tunes what's already there).
+   *(This carve-out was authorised by the operator on 2026-07-04 to
+   enable issue #22; see PROGRESS.md.)*
 
 2. **No active key recovery.** Sloth never runs a passphrase against a
    captured handshake. It never calls `hashcat`, `aircrack-ng`, John,

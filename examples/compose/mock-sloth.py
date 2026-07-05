@@ -171,6 +171,11 @@ TEMPLATES = [
      "getbulk_count": 0, "set_count": 0, "response_count": 12,
      "trap_count": 0, "community_count": 6, "last_community": "private",
      "first_seen": 1700000000, "last_seen": 1700000060},
+    {"type": "mqtt_flow", "src_ip": "10.0.0.5", "dst_ip": "10.0.0.10",
+     "connect_count": 7, "connack_fail_count": 2,
+     "subscribe_count": 14, "publish_count": 41, "proto_level": 4,
+     "last_username": "iot-device-42",
+     "first_seen": 1700000000, "last_seen": 1700000060},
 ]
 
 

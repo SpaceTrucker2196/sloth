@@ -1,7 +1,8 @@
 # TLS  `[t]`
 
-ClientHello log: SNI hostname, TLS version, and JA3 fingerprint for
-every encrypted-traffic handshake on TCP/443.
+ClientHello log: SNI hostname, TLS version, JA3 fingerprint, and
+JA4 client fingerprint (roadmap #16 phase 2) for every encrypted
+handshake on TCP/443.
 
 ## Protocol
 
@@ -21,9 +22,35 @@ is plaintext. Sloth pulls out:
 ## What sloth captures
 
 Per entry: src, dst, host (SNI), version (`TLS 1.3` / `1.2` / `1.1` /
-`1.0` / unknown), and the 32-char hex JA3. GREASE values (RFC 8701) are
-filtered out of the JA3 inputs so the hash stays stable across browser
-restarts.
+`1.0` / unknown), the 32-char hex JA3, and the 36-char JA4 client
+fingerprint. GREASE values (RFC 8701) are filtered out of every
+fingerprint input so the hash stays stable across browser restarts.
+
+### JA4 vs JA3
+
+Chrome and Firefox now randomize TLS extension order to break
+fingerprinting. **JA3** hashes the extensions in the order they appear
+on the wire, so those two extensions in a different position produce
+different JA3s — same client, different fingerprints across runs.
+
+**JA4** solves this by sorting the cipher and extension lists before
+hashing, so extension shuffling no longer changes the value. The
+format also folds in SNI presence, ALPN edge chars, and signature
+algorithms:
+
+```
+   t 13 d 15 16 h2 _ 8daaf6152771 _ b0da82dd1658
+   │ │  │  │  │  │    └── sha256[:12] of sorted exts (excl SNI/ALPN) + '_' + sig algs
+   │ │  │  │  │  └────── first char of first ALPN + last char of last (or "00")
+   │ │  │  │  └───────── count of extensions (all, including SNI/ALPN)
+   │ │  │  └──────────── count of non-GREASE ciphers
+   │ │  └─────────────── 'd' (domain SNI) / 'i' (IP SNI) / 'n' (no SNI)
+   │ └────────────────── TLS version ("13"/"12"/"11"/"10"/"s3")
+   └──────────────────── protocol ('t' for TCP ClientHello)
+```
+
+Both fingerprints emit alongside each other in the JSONL log
+(`ja3` + `ja4`) so consumers get a graceful upgrade path.
 
 ## View
 

@@ -17,4 +17,11 @@ int linux_wifi_scan(wifi_ap_t *out, int max);
    call fails. */
 int linux_wifi_get_stations(wifi_sta_t *out, int max);
 
+/* Retune `iface` (a monitor-mode interface) to freq_mhz via nl80211
+   (NL80211_CMD_SET_CHANNEL). Requires CAP_NET_ADMIN. Returns 0 on an
+   ACKed retune, -1 on any error (bad iface, EPERM, kernel refusal).
+   The only kernel-state write sloth performs; gated behind --hop.
+   See issue #22 and MISSION §2. */
+int linux_wifi_set_channel(const char *iface, int freq_mhz);
+
 #endif /* LINUX_WIFI_H */

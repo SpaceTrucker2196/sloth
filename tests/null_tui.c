@@ -5,7 +5,7 @@
 void tui_init(void)                  {}
 void tui_cleanup(void)               {}
 void tui_draw(const sloth_state_t *s) { (void)s; }
-int  tui_poll_key(int ms)            { (void)ms; return 0; }
+int  tui_poll_key(int ms, int wake_fd) { (void)ms; (void)wake_fd; return 0; }
 
 void tui_bright(void)        {}
 void tui_normal(void)        {}

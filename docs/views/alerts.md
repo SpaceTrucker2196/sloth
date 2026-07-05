@@ -25,24 +25,44 @@ below):
 
 ## Rules
 
-| Rule | Sev | Trigger | match_ip / port |
-|------|-----|---------|-----------------|
-| `PORT_SCAN`      | LOW  | one source touched ≥ 8 distinct local ports | scanner / 0 |
-| `NXDOMAIN_BURST` | LOW  | ≥ 10 NXDOMAIN replies to one source in 60 s | src / 53 |
-| `PROBE_FLOOD`    | LOW  | 802.11 client flooding probe-requests | — (L2 only) |
-| `DEAUTH_FLOOD`   | WARN | ≥ 5 deauth/disassoc frames in 5 s to one target | — (L2 only) |
-| `BEACONING`      | WARN | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
-| `DGA_DOMAIN`     | WARN | DNS qname matches DGA entropy heuristic | src / 53 |
-| `WEAK_TLS`       | WARN | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
-| `THREAT_DOMAIN`  | CRIT | DNS qname matches embedded IOC list | src / 53 |
-| `THREAT_IP`      | CRIT | conn remote IP matches embedded IOC list | remote / port |
-| `ARP_SPOOF`      | CRIT | one IP maps to two MACs within a short window | — (L2 only) |
-| `ROGUE_DHCP`     | CRIT | unexpected DHCP OFFER from a non-baseline server | dhcp-srv / 67 |
-| `EVIL_TWIN`      | CRIT | duplicate SSID with mismatched BSSID / cipher | — (L2 only) |
-| `KARMA_AP`       | CRIT | AP answers AssocResp to every probed SSID | — (L2 only) |
-| `DNS_TUNNEL`     | CRIT | dnscat2 / iodine signature in DNS traffic | src / 53 |
-| `ATTACK_TOOL_UA` | CRIT | HTTP User-Agent matches known offensive tooling | src / 80 |
-| `ATTACK_PATH`    | CRIT | HTTP path matches known exploit signature | src / 80 |
+Every rule maps to a canonical MITRE ATT&CK technique (populated by
+`alert_technique()` in `src/alerts.c` and emitted as a `"technique"`
+field in the JSONL log). Posture alerts that don't correspond to
+adversary behaviour map to the empty string and the JSONL field is
+omitted.
+
+| Rule | Sev | ATT&CK | Trigger | match_ip / port |
+|------|-----|--------|---------|-----------------|
+| `PORT_SCAN` | LOW  | T1046     | one source touched ≥ 8 distinct local ports | scanner / 0 |
+| `NXDOMAIN_BURST` | LOW  | T1071.004 | ≥ 10 NXDOMAIN replies to one source in 60 s | src / 53 |
+| `PROBE_FLOOD` | LOW  | T1595     | 802.11 client flooding probe-requests | — (L2 only) |
+| `DEAUTH_FLOOD` | WARN | T1498.001 | ≥ 5 deauth/disassoc frames in 5 s to one target | — (L2 only) |
+| `BEACON_FLOOD` | WARN | T1498.001 | ≥ 40 distinct new BSSIDs first-seen in 10 s (mdk3/mdk4-style fake-AP flood) | — (L2 only) |
+| `AUTH_FLOOD` | WARN | T1499     | ≥ 30 802.11 auth frames to one BSSID in 5 s (association-table exhaustion DoS) | — (L2 only) |
+| `BEACONING` | WARN | T1071     | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
+| `DGA_DOMAIN` | WARN | T1568.002 | DNS qname matches DGA entropy heuristic | src / 53 |
+| `WEAK_TLS` | WARN | T1600     | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
+| `NO_MONITOR_MODE` | WARN | —         | ≥1 iface seen but none in monitor mode — WiFi SIGINT views will be empty | — (host posture) |
+| `CLEARTEXT_CRED` | WARN | T1040     | username observed in the clear (HTTP Basic, FTP, POP3, IMAP, SMTP AUTH PLAIN/LOGIN; passwords never stored) | client / server-port |
+| `THREAT_DOMAIN` | CRIT | T1071.004 | DNS qname matches embedded IOC list | src / 53 |
+| `THREAT_IP` | CRIT | T1071     | conn remote IP matches embedded IOC list | remote / port |
+| `ARP_SPOOF` | CRIT | T1557.002 | one IP maps to two MACs within a short window | — (L2 only) |
+| `ROGUE_DHCP` | CRIT | T1557     | unexpected DHCP OFFER from a non-baseline server | dhcp-srv / 67 |
+| `EVIL_TWIN` | CRIT | T1557     | duplicate SSID with mismatched BSSID / cipher | — (L2 only) |
+| `KARMA_AP` | CRIT | T1557     | AP answers AssocResp to every probed SSID | — (L2 only) |
+| `DNS_TUNNEL` | CRIT | T1071.004 | dnscat2 / iodine signature in DNS traffic | src / 53 |
+| `ATTACK_TOOL_UA` | CRIT | T1595     | HTTP User-Agent matches known offensive tooling | src / 80 |
+| `ATTACK_PATH` | CRIT | T1190     | HTTP path matches known exploit signature | src / 80 |
+| `SMB1_USE` | CRIT | T1210     | SMB1 dialect seen on the wire (deprecated 2017) | src / 445 |
+| `KERB_PREAUTH_BURST` | WARN | T1110.003 | Kerberos AS-REQ pre-auth failure spray (password spray) | src / 88 |
+| `LDAP_SEARCH_FLOOD` | WARN | T1087.002 | LDAP search-request flood (AD enumeration) | src / 389 |
+| `BGP_NOTIFICATION_BURST` | WARN | T1499     | burst of BGP NOTIFICATION frames on a session | src / 179 |
+| `SSH_BRUTE_FORCE` | WARN | T1110.001 | SSH connect-then-drop pattern from one source | src / 22 |
+| `RDP_BRUTE_FORCE` | WARN | T1110.001 | RDP X.224 CR bursts (Cobalt Strike / mstsc.exe) | src / 3389 |
+| `SNMP_COMMUNITY_BRUTE` | WARN | T1110.001 | SNMPv1/v2c fan-out with rotating community strings | src / 161 |
+| `MQTT_BROKER_BRUTE` | CRIT | T1110.001 | MQTT CONNECT/CONNACK-fail burst (Mirai-class sweep) | src / 1883 |
+| `ROGUE_RA` | CRIT | T1557     | unexpected IPv6 Router Advertisement | src / 0 |
+| `EVIL_TWIN_PROXIMITY` | WARN | T1557     | evil-twin candidate at similar RSSI to the real AP | — (L2 only) |
 
 ## Cross-panel coloring
 

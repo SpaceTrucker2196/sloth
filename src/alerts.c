@@ -4,10 +4,13 @@
 #include "alerts.h"
 #include "threat_intel.h"
 #include "beacon_detect.h"
+#include "beacon_snoop.h"
+#include "auth_track.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
 #include "wifi_oui_attacker.h"
+#include "event_wake.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -140,8 +143,60 @@ static void fire(alert_type_t type, alert_sev_t sev,
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
-    /* New alert keys are interesting enough to log. */
+    snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
+    /* New alert keys are interesting enough to log AND to break the
+     * TUI's blocking wait so the dashboard updates immediately
+     * instead of on the next tick. event_wake_signal is a no-op
+     * when the wake pipe wasn't initialised (e.g. unit tests). */
     jsonl_emit_alert(a);
+    event_wake_signal();
+}
+
+/* ── MITRE ATT&CK technique lookup ──────────────────────
+ * Each alert type is mapped to a single canonical technique — the
+ * one a SOC analyst would most naturally tag the finding under.
+ * Some rules span two techniques (e.g. an SSH brute-force also
+ * counts as network service discovery); we pick the primary
+ * behaviour and leave secondary attribution to the reader.
+ * NO_MONITOR_MODE is a host-posture alert about the operator's
+ * own capture rig — not an adversary technique — so it maps to
+ * the empty string. Any new alert type must add an entry here
+ * or the tests in test_alerts.c will fail. */
+const char *alert_technique(alert_type_t type) {
+    switch (type) {
+    case ALERT_TYPE_PORT_SCAN:              return "T1046";       /* Network Service Discovery */
+    case ALERT_TYPE_DEAUTH_FLOOD:           return "T1498.001";   /* Direct Network Flood */
+    case ALERT_TYPE_NXDOMAIN_BURST:         return "T1071.004";   /* DNS */
+    case ALERT_TYPE_THREAT_DOMAIN:          return "T1071.004";   /* DNS to known-bad */
+    case ALERT_TYPE_THREAT_IP:              return "T1071";       /* Application Layer Protocol */
+    case ALERT_TYPE_BEACONING:              return "T1071";       /* C2 over app-layer */
+    case ALERT_TYPE_DGA_DOMAIN:             return "T1568.002";   /* Domain Generation Algorithms */
+    case ALERT_TYPE_ARP_SPOOF:              return "T1557.002";   /* ARP Cache Poisoning */
+    case ALERT_TYPE_ROGUE_DHCP:             return "T1557";       /* Adversary-in-the-Middle */
+    case ALERT_TYPE_ROGUE_RA:               return "T1557";       /* AiTM (IPv6 variant) */
+    case ALERT_TYPE_SMB1_USE:               return "T1210";       /* Exploitation of Remote Services */
+    case ALERT_TYPE_KERB_PREAUTH_BURST:     return "T1110.003";   /* Password Spraying */
+    case ALERT_TYPE_LDAP_SEARCH_FLOOD:      return "T1087.002";   /* Account Discovery: Domain */
+    case ALERT_TYPE_BGP_NOTIFICATION_BURST: return "T1499";       /* Endpoint DoS */
+    case ALERT_TYPE_SSH_BRUTE_FORCE:        return "T1110.001";   /* Password Guessing */
+    case ALERT_TYPE_RDP_BRUTE_FORCE:        return "T1110.001";
+    case ALERT_TYPE_SNMP_COMMUNITY_BRUTE:   return "T1110.001";
+    case ALERT_TYPE_MQTT_BROKER_BRUTE:      return "T1110.001";
+    case ALERT_TYPE_EVIL_TWIN:              return "T1557";       /* AiTM (rogue AP) */
+    case ALERT_TYPE_EVIL_TWIN_PROXIMITY:    return "T1557";
+    case ALERT_TYPE_KARMA_AP:               return "T1557";       /* AiTM (probe response) */
+    case ALERT_TYPE_DNS_TUNNEL:             return "T1071.004";   /* DNS as covert channel */
+    case ALERT_TYPE_PROBE_FLOOD:            return "T1595";       /* Active Scanning (wireless) */
+    case ALERT_TYPE_ATTACK_TOOL_UA:         return "T1595";       /* Vulnerability scanner UA */
+    case ALERT_TYPE_ATTACK_PATH:            return "T1190";       /* Exploit Public-Facing App */
+    case ALERT_TYPE_WEAK_TLS:               return "T1600";       /* Weaken Encryption */
+    case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
+    case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
+    case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
+    case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
+    case ALERT_TYPE_COUNT:                  break;
+    }
+    return "";
 }
 
 /* ── Rules ───────────────────────────────────────────────── */
@@ -179,6 +234,42 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
         fire(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN,
              "DEAUTH_FLOOD", detail, key, NULL, 0, now);
     }
+}
+
+static void rule_beacon_flood(const sloth_state_t *s, time_t now) {
+    /* mdk3/mdk4 spray dozens of fake APs per second; a real RF
+     * neighbourhood gains BSSIDs slowly. We key on the *rate* of
+     * first-seen BSSIDs, not the table size, so a merely-dense area (many
+     * stable APs) doesn't trip it. */
+    (void)s;
+    int n = beacon_recent_new_bssids(now, BEACON_FLOOD_WIN_SECS);
+    if (n < BEACON_FLOOD_THRESH) return;
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(detail, sizeof(detail),
+             "%d new BSSIDs in %ds (mdk-style beacon flood)",
+             n, BEACON_FLOOD_WIN_SECS);
+    fire(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN,
+         "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
+}
+
+static void rule_auth_flood(const sloth_state_t *s, time_t now) {
+    /* A burst of auth frames at one BSSID = association-table exhaustion
+     * DoS (mdk3 'a'). Keyed per-AP so a busy roaming environment doesn't
+     * trip it — only a genuine outlier does. */
+    (void)s;
+    uint8_t bssid[6];
+    int n = auth_flood_bssid(now, AUTH_FLOOD_WIN_SECS, AUTH_FLOOD_THRESH, bssid);
+    if (n < AUTH_FLOOD_THRESH) return;
+    char bss[20];
+    mac_to_str(bssid, bss, sizeof(bss));
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key,    sizeof(key),    "authflood:%s", bss);
+    snprintf(detail, sizeof(detail),
+             "%d auth frames to %s in %ds (assoc-table DoS)",
+             n, bss, AUTH_FLOOD_WIN_SECS);
+    fire(ALERT_TYPE_AUTH_FLOOD, ALERT_SEV_WARN,
+         "AUTH_FLOOD", detail, key, NULL, 0, now);
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -299,6 +390,50 @@ static int tls_ver_is_weak(const char *v) {
            strcmp(v, "SSL 3.0") == 0 ||
            strcmp(v, "TLS 1.0") == 0 ||
            strcmp(v, "TLS 1.1") == 0;
+}
+
+/* Fires once when we've seen at least one interface but no WiFi radio
+ * is in monitor mode — a WARN that WiFi-SIGINT views (Probe, Beacons,
+ * EAPOL, Deauth) will be blind for this session. The single dedup key
+ * `nomon:global` prevents re-firing every poll; if the operator later
+ * flips a radio into monitor mode, the alert row stays but stops
+ * counting up. Passive: we only *observe* the current iface mode. */
+static void rule_no_monitor_mode(const sloth_state_t *s, time_t now) {
+    if (s->iface_count == 0) return;   /* wait until we have iface data */
+    for (int i = 0; i < s->iface_count; i++) {
+        if (s->ifaces[i].mode == IFACE_MODE_MONITOR) return;
+    }
+    fire(ALERT_TYPE_NO_MONITOR_MODE, ALERT_SEV_WARN,
+         "NO_MONITOR_MODE",
+         "no WiFi radio in monitor mode — WiFi SIGINT views will be empty",
+         "nomon:global", NULL, 0, now);
+}
+
+/* Every fresh cleartext_cred_t row is an alert — one per unique
+ * (src, dst, protocol, username). Coalescing happens on the ring
+ * side; here we just fan out to the alert engine so the alerts view
+ * and cross-panel colouring pick them up. Severity WARN because a
+ * cred on the wire is a policy failure but not a live intrusion. */
+static void rule_cleartext_cred(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->cleartext_cred_count; i++) {
+        const cleartext_cred_t *r = &s->cleartext_creds[i];
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key),
+                 "cred:%s->%s:%u:%s:%s",
+                 r->src, r->dst, (unsigned)r->dst_port,
+                 r->protocol, r->username);
+        snprintf(detail, sizeof(detail),
+                 "%s user %.24s in the clear on %.20s%s -> %.24s:%u",
+                 r->protocol,
+                 r->username,
+                 r->protocol,
+                 r->password_observed ? " (password observed)" : "",
+                 r->dst,
+                 (unsigned)r->dst_port);
+        fire(ALERT_TYPE_CLEARTEXT_CRED, ALERT_SEV_WARN,
+             "CLEARTEXT_CRED", detail, key, r->src, r->dst_port, now);
+    }
 }
 
 static void rule_weak_tls(const sloth_state_t *s, time_t now) {
@@ -1154,6 +1289,43 @@ static void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* MQTT broker brute force: ten or more CONNECT packets from one
+ * client to one broker, OR five or more CONNACK failures on the
+ * flow. CONNECTs are the brute-force shape; CONNACK failures are
+ * the explicit "wrong creds" signal — quieter but more specific.
+ * Either path trips the alert because the IoT broker side of the
+ * problem is real: Mirai-class scanners hammer MQTT brokers with
+ * the same wordlists they hammer SSH with.
+ *
+ * Why 10 / 5: matches the SSH brute threshold for CONNECT count
+ * (same connection-cadence reasoning) and a tighter 5 for explicit
+ * CONNACK failures — the broker telling us "wrong" five times is
+ * stronger evidence than just connection volume. */
+#define MQTT_BROKER_BRUTE_CONNECTS  10
+#define MQTT_BROKER_BRUTE_FAILS      5
+
+static void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mqtt_flow_count; i++) {
+        const mqtt_flow_t *e = &s->mqtt_flows[i];
+        int trip = (e->connect_count      >= MQTT_BROKER_BRUTE_CONNECTS)
+                || (e->connack_fail_count >= MQTT_BROKER_BRUTE_FAILS);
+        if (!trip) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "mqtt-brute:%.39s->%.39s",
+                 e->src_ip, e->dst_ip);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d CONNECTs / %d fails (user=%.16s)",
+                 e->src_ip, e->dst_ip,
+                 e->connect_count, e->connack_fail_count,
+                 e->last_username[0] ? e->last_username : "?");
+        fire(ALERT_TYPE_MQTT_BROKER_BRUTE, ALERT_SEV_CRIT,
+             "MQTT_BROKER_BRUTE", detail, key,
+             e->src_ip, 1883, now);
+    }
+}
+
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
@@ -1316,15 +1488,20 @@ void alerts_update(sloth_state_t *s) {
     rule_ssh_brute_force(s, now);
     rule_rdp_brute_force(s, now);
     rule_snmp_community_brute(s, now);
+    rule_mqtt_broker_brute(s, now);
     rule_evil_twin(s, now);
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
+    rule_beacon_flood(s, now);
+    rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);
+    rule_no_monitor_mode(s, now);
+    rule_cleartext_cred(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     dump_new_alert_pcaps(s);

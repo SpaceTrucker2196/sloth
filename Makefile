@@ -9,6 +9,7 @@ WITH_PCAP    ?= 1
 WITH_WIFI    ?= 1
 
 SRCS = src/main.c          \
+       src/view_route.c    \
        src/tui.c           \
        src/history.c       \
        src/bandwidth.c     \
@@ -16,6 +17,15 @@ SRCS = src/main.c          \
        src/dns_snoop.c     \
        src/sni_snoop.c     \
        src/http_snoop.c    \
+       src/ftp_snoop.c     \
+       src/pop3_snoop.c    \
+       src/imap_snoop.c    \
+       src/smtp_snoop.c    \
+       src/cleartext_creds.c \
+       src/device_risk.c   \
+       src/posture.c       \
+       src/version.c       \
+       src/updater.c       \
        src/oui.c           \
        src/services.c      \
        src/views/iface.c   \
@@ -37,6 +47,8 @@ SRCS = src/main.c          \
        src/ssh_snoop.c     \
        src/rdp_snoop.c     \
        src/snmp_snoop.c    \
+       src/mqtt_snoop.c    \
+       src/event_wake.c    \
        src/quic_snoop.c    \
        src/views/mdns.c    \
        src/views/nbns.c    \
@@ -62,11 +74,14 @@ SRCS = src/main.c          \
        src/threat_intel.c    \
        src/dga.c             \
        src/wifi_oui_attacker.c \
+       src/wifi_chanhop.c    \
+       src/auth_track.c      \
        src/twins.c           \
        src/views/twins.c     \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
+       src/sha256.c          \
        src/devices.c         \
        src/views/devices.c   \
        src/beacon_detect.c   \
@@ -177,6 +192,7 @@ endif
 
 TEST_SRCS = tests/main_test.c          \
             tests/null_tui.c           \
+            src/view_route.c           \
             tests/fake_platform.c      \
             tests/scenarios.c          \
             tests/test_parse.c         \
@@ -189,6 +205,23 @@ TEST_SRCS = tests/main_test.c          \
             src/dns_snoop.c            \
             src/sni_snoop.c            \
             src/http_snoop.c           \
+            src/ftp_snoop.c            \
+            src/pop3_snoop.c           \
+            src/imap_snoop.c           \
+            src/smtp_snoop.c           \
+            src/cleartext_creds.c      \
+            tests/test_cleartext_creds.c \
+            tests/test_pop3_snoop.c    \
+            tests/test_imap_snoop.c    \
+            tests/test_smtp_snoop.c    \
+            src/device_risk.c          \
+            tests/test_device_risk.c   \
+            src/posture.c              \
+            tests/test_posture.c       \
+            src/version.c              \
+            tests/test_version.c       \
+            src/updater.c              \
+            tests/test_updater.c       \
             src/oui.c                  \
             src/services.c             \
             src/platform/linux_parse.c \
@@ -246,6 +279,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_rdp_snoop.c         \
             src/snmp_snoop.c               \
             tests/test_snmp_snoop.c        \
+            src/mqtt_snoop.c               \
+            tests/test_mqtt_snoop.c        \
+            src/event_wake.c               \
             src/quic_snoop.c               \
             src/views/mdns.c               \
             src/views/nbns.c               \
@@ -288,6 +324,10 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_dga.c               \
             src/wifi_oui_attacker.c        \
             tests/test_wifi_oui_attacker.c \
+            src/wifi_chanhop.c             \
+            tests/test_chanhop.c           \
+            src/auth_track.c               \
+            tests/test_auth_track.c        \
             src/twins.c                    \
             src/views/twins.c              \
             tests/test_twins.c             \
@@ -296,6 +336,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_alerts.c            \
             src/md5.c                      \
             tests/test_md5.c               \
+            src/sha256.c                   \
+            tests/test_sha256.c            \
             src/devices.c                  \
             src/views/devices.c            \
             tests/test_devices.c           \

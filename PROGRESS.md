@@ -77,6 +77,138 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-07-04 — Adaptive passive channel-hop scheduler (#22) + packet dedup (#20)
+**Commits**: `83f2897` (#20), plus the §2 amendment, `d2fee24`
+(scheduler core), `ce681ee` (platform seam), and this wiring commit.
+**Touched**: `MISSION.md` §2, `src/wifi_chanhop.{c,h}` (new),
+`tests/test_chanhop.c` (new), `src/platform/*` (set_channel vtable op +
+nl80211 impl), `src/main.c` (`--hop`), `src/views/channel.c`,
+`src/jsonl.c` + `src/capture/capture.c` + `include/sloth.h` (#20),
+`tests/test_jsonl.c`.
+**Why**: #20 — the packet emitter re-serialised the whole ring every
+tick (~90% duplicate records downstream); now each frame ships once via
+a monotonic high-water mark. #22 — a single monitor radio can only hear
+one channel at a time; the new scheduler dwells longer where activity is
+seen while guaranteeing every channel is revisited, retuning the radio
+itself. This required the first-ever amendment to MISSION §2: a narrow,
+opt-in (`--hop`, default off) carve-out to let sloth retune *its own*
+monitor interface — changing what it hears, never what the network does.
+**Follow-ups**: the nl80211 `SET_CHANNEL` path is unbuilt on the Darwin
+CI host — verify on a Linux target with a monitor interface and
+CAP_NET_ADMIN. 6 GHz channels and DFS are deliberately excluded from the
+default hop list for now.
+
+### 2026-06-07 — Faster refresh + event-driven dashboard wakes
+**Touched**: `include/sloth.h`, `src/main.c`, `src/tui.{c,h}`,
+`src/alerts.c`, `src/event_wake.{c,h}` (new),
+`tests/null_tui.c`, `Makefile`
+**Why**: Operator ask — the dashboard should feel realtime and
+react to events as they happen, not on a fixed 1 Hz cadence.
+Two problems with the previous loop: the default refresh was
+1000 ms (visibly laggy on a wall-clock scale) and the loop
+blocked in tui_poll_key for the whole interval even when an
+alert fired in the meantime, so new alerts could sit invisible
+for up to a full tick before the next redraw.
+**What's in it**:
+- **Default refresh dropped from 1000 ms → 250 ms** (~4 Hz).
+  Per-loop work is a few ms; 250 ms feels realtime to a
+  human and keeps CPU modest.
+- **New `--refresh-ms N` CLI flag** with a 50 ms floor (sub-50
+  burns CPU without visible gain on a terminal). Validation
+  rejects non-integer / out-of-range values cleanly.
+- **New `src/event_wake.{c,h}` module**: tiny self-pipe
+  wrapper — `event_wake_init / _fd / _signal / _drain`.
+  Non-blocking writes, non-blocking drains, FD_CLOEXEC on
+  both ends. Safe to call from any thread.
+- **`tui_poll_key` gained a `wake_fd` parameter**: select()
+  watches stdin AND the wake fd. If only the wake fd is
+  ready, returns 0 (no key, but breaks the wait). Both the
+  ncurses and ANSI-fallback paths take the new parameter so
+  the embedded build keeps working.
+- **`alerts.c fire()` calls `event_wake_signal()` after each
+  new alert key**: so the very next loop iteration redraws
+  with the new alert visible. End-to-end latency: a new alert
+  goes from "engine row appended" to "pixels on screen" in
+  milliseconds, not up to one full refresh interval.
+- Main loop drains the wake pipe after each poll_key so a
+  single wake doesn't fire forever.
+- The wake module is a no-op when uninitialised
+  (e.g. unit-test binaries that don't run a TUI) so
+  `alerts.c` stays linkable in both contexts. The test
+  null_tui.c stub was updated to the new `tui_poll_key`
+  signature.
+**Counts**: 2688 assertions still passing. make is warning-clean.
+Smoke test 40/40 record types end-to-end.
+
+### 2026-06-07 — MQTT observability: MQTT_BROKER_BRUTE alert
+**Touched**: `include/sloth.h`, `src/mqtt_snoop.{c,h}` (new),
+`src/capture/capture.c`, `src/main.c`, `src/alerts.c`,
+`src/jsonl.{c,h}`, `tests/test_mqtt_snoop.c` (new),
+`tests/test_alerts.c`, `tests/main_test.c`, `Makefile`,
+`examples/compose/mock-sloth.py`, `docs/wiki/mqtt-snoop.md`
+(new), `docs/wiki/index.md`, `docs/wiki/jsonl-schema.md`
+**Why**: Ninth passive-observable landing. Closes the IoT
+slice of the internet-substrate bucket. MQTT brokers on
+TCP/1883 are routinely swept by Mirai-class scanners with
+the same wordlists they hammer SSH with; many brokers ship
+`allow_anonymous true` and most clients ship with vendor
+defaults. The cleartext fixed header (1 type byte + 1-4
+byte Remaining Length varint) is tag-recognisable and
+CONNECT payloads expose the username being guessed.
+MITRE ATT&CK T1110.001 (Password Guessing — MQTT variant).
+**What's in it**:
+- New `src/mqtt_snoop.{c,h}` module: parses the MQTT Control
+  Packet fixed header per OASIS v3.1.1 / v5 specs (1-4 byte
+  Remaining Length varint, type-nibble dispatch on
+  CONNECT/CONNACK/SUBSCRIBE/PUBLISH).
+- CONNECT payload walk: protocol name + level + flags + keep
+  alive + (v5) properties + ClientID + (will fields if Will
+  Flag) + username (if Username Flag). Username extracted into
+  `last_username`; non-printable bytes drop the value entirely
+  to keep JSONL lines safe.
+- CONNACK reason-code reading: v3.1.1 codes 1-5 count as
+  failures, v5 codes ≥ 0x80 count as failures.
+- Tracks CONNECTs, CONNACK failures, SUBSCRIBEs, PUBLISHes,
+  and the latest protocol level on a per-(client, broker)
+  basis. Flow attribution flips for CONNACK so the client
+  stays as `src_ip` across both directions.
+- Per-flow aggregation; 32 flows, oldest-by-last-seen
+  evicted.
+- New `ALERT_TYPE_MQTT_BROKER_BRUTE` +
+  `rule_mqtt_broker_brute`: dual-threshold rule fires CRIT
+  when `connect_count >= 10` (the SSH/RDP brute shape) OR
+  `connack_fail_count >= 5` (the broker's explicit "wrong"
+  signal — quieter but more specific). Dedup key
+  `mqtt-brute:<client>-><broker>`; match_ip=client,
+  match_port=1883.
+- TCP/1883 dispatch via `try_mqtt` in both `decode_ipv4` and
+  `decode_ipv6` branches of capture.c.
+- New `mqtt_flow` JSONL record type via state-snapshot
+  umbrella. Schema documented in `jsonl-schema.md`.
+- `mock-sloth.py` cycles a synthetic template — 40 record
+  types end-to-end across Loki + Datadog + webhook + fan-out.
+- 13 tests in `tests/test_mqtt_snoop.c`: CONNECT / SUBSCRIBE
+  / PUBLISH detection, username extraction, CONNACK bad-creds
+  counts as failure (with client-side attribution flip),
+  CONNACK success not counted, repeated CONNECTs accumulate,
+  two clients tracked separately, non-1883 port rejected,
+  non-MQTT payload rejected, unknown type rejected, truncated
+  rejected, non-printable username dropped without crashing.
+- 4 alert tests in `tests/test_alerts.c`: fires at connect
+  threshold (10), fires at fail threshold (5), no-fire below
+  both, separate alerts per attacker-broker.
+- New wiki page `docs/wiki/mqtt-snoop.md`: fixed-header
+  diagram, packet-type table, dual-threshold rationale,
+  what's-normal / what's-suspicious sections, Tier 2
+  follow-ups (topic-content / MQTT-SN / MQTT-over-WS / v5
+  USER PROPERTIES / cross-broker rate-shape).
+**Counts**: 2688 assertions (+29 from SNMP round). make is
+warning-clean. Smoke test 40/40 record types end-to-end.
+**Closes the original observable queue**: NDP + SMB +
+Kerberos + LDAP + BGP + SSH + RDP + SNMP + MQTT all landed,
+each fronted by a CRIT alert. The Tier 2 expansions per
+protocol remain queued for follow-up rounds.
+
 ### 2026-06-07 — SNMP observability: SNMP_COMMUNITY_BRUTE alert
 **Touched**: `include/sloth.h`, `src/snmp_snoop.{c,h}` (new),
 `src/capture/capture.c`, `src/main.c`, `src/alerts.c`,

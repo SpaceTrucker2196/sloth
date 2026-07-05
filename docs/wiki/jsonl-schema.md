@@ -136,6 +136,7 @@ through as UTF-8.
 | `host` | string | SNI hostname (empty if not present) |
 | `ver`  | string | `TLS 1.3` / `TLS 1.2` / `TLS 1.1` / `TLS 1.0` / unknown |
 | `ja3`  | string | 32-char hex JA3 fingerprint (see [[ja3-fingerprinting]]) |
+| `ja4`  | string | 36-char JA4 client fingerprint (FoxIO spec); survives extension reordering that breaks JA3. Omitted when not computed. |
 
 ### `quic`
 
@@ -153,8 +154,16 @@ through as UTF-8.
 ### `http`
 
 ```json
-{"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html"}
+{"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html","ja4h":"ge11nn020000_8daaf6152771_000000000000_000000000000"}
 ```
+
+| Field    | Type   | Meaning |
+|----------|--------|---------|
+| `src`    | string | client IP |
+| `host`   | string | `Host:` header value, port stripped |
+| `method` | string | `GET` / `POST` / … |
+| `path`   | string | request URI |
+| `ja4h`   | string | 49-char JA4H client fingerprint (FoxIO spec). Omitted when not computed. See [[../views/http]] for the section breakdown. |
 
 ### `ntp`
 
@@ -186,9 +195,37 @@ through as UTF-8.
 | `sev`   | int    | severity: **0=LOW (yellow), 1=WARN (orange), 2=CRIT (red)**. See [[alerts]] for the tier semantics. |
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
 | `count` | int    | number of observations under this dedup key |
+| `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
+
+### `cleartext_cred`
+
+```json
+{"type":"cleartext_cred","ts":1700000008,"src":"10.0.0.5","dst":"192.0.2.10","dst_port":80,"protocol":"HTTP-Basic","username":"alice","pw_observed":1}
+```
+
+| Field         | Type   | Meaning |
+|---------------|--------|---------|
+| `src`         | string | client IP that emitted the credential |
+| `dst`         | string | server IP that received it |
+| `dst_port`    | int    | server port (80 for HTTP Basic, 21 for FTP, …) |
+| `protocol`    | string | `HTTP-Basic`, `FTP`, `POP3`, `IMAP`, `SMTP`, `Telnet` |
+| `username`    | string | observed username, sanitized to printable ASCII |
+| `pw_observed` | int    | 1 if a password token was seen on the wire, 0 otherwise |
+
+**Guardrail — no password field, ever.** This event class records the
+*fact* of a cleartext credential exposure and the username. The
+password value is never stored, hashed, or truncated: `src/cleartext_creds.c`
+has no code path that touches password bytes, and the JSONL schema
+has no field for it. Adding one would be a scope violation on
+sloth's passive-observation contract — see MISSION.md §2.
+
+**Cadence**: event — one record per unique
+`(src, dst, dst_port, protocol, username)` tuple. Repeat observations
+coalesce on the ring side. Also feeds `CLEARTEXT_CRED` in the alert
+stream (ATT&CK T1040).
 
 ### `connections`
 
@@ -287,6 +324,7 @@ indicated below. Late-joining clients pick up state on the next tick.
 | `ssh_flow`           | `(src_ip, dst_ip)` | `src_ip` (SSH client), `dst_ip` (SSH server), `banner_count` (server-banner exchanges observed; one per TCP connection that reached the SSH handshake), `server_banner` (last RFC 4253 §4.2 banner string seen — `SSH-2.0-OpenSSH_8.9` etc., truncated at CR/LF or non-printable), `first_seen`, `last_seen`. Feeds the `SSH_BRUTE_FORCE` alert when `banner_count` exceeds the hydra/medusa/ncrack threshold. See `docs/wiki/ssh-snoop.md`. |
 | `rdp_flow`           | `(src_ip, dst_ip)` | `src_ip` (RDP client), `dst_ip` (RDP server), `connect_req_count` (X.224 Class 0 CR TPDUs observed; one per TCP connection that reached the RDP negotiation), `last_cookie` (last `mstshash=` username seen in the Cookie field — the username the attacker is guessing against), `proto_mask` (bitwise-OR of requested protocols across all CRs on the flow; 0x01=RDP, 0x02=SSL, 0x04=HYBRID/NLA, 0x08=HYBRID_EX), `first_seen`, `last_seen`. Feeds the `RDP_BRUTE_FORCE` alert when `connect_req_count` exceeds the xfreerdp-loop/NLBrute threshold. See `docs/wiki/rdp-snoop.md`. |
 | `snmp_flow`          | `(src_ip, dst_ip)` | `src_ip` (querier — flipped from packet direction so responses attribute back to the original requester), `dst_ip` (agent), `version` (0=v1, 1=v2c, 3=v3), `get_count`, `getnext_count`, `getbulk_count`, `set_count` (rare — write attempts are a post-exploit signal), `response_count`, `trap_count`, `community_count` (distinct community strings seen, capped at 8), `last_community` (most recent community string — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `SNMP_COMMUNITY_BRUTE` alert when `community_count` exceeds the snmpwalk-wordlist threshold. See `docs/wiki/snmp-snoop.md`. |
+| `mqtt_flow`          | `(src_ip, dst_ip)` | `src_ip` (MQTT client — flipped on CONNACK so the conversation stays attributed to the client), `dst_ip` (broker), `connect_count` (CONNECT packets observed), `connack_fail_count` (CONNACK reason codes that mean bad-auth / not-authorised), `subscribe_count`, `publish_count`, `proto_level` (3 / 4 / 5 from the most recent CONNECT), `last_username` (Username field from the most recent CONNECT — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `MQTT_BROKER_BRUTE` alert via dual thresholds (`connect_count ≥ 10` OR `connack_fail_count ≥ 5`). See `docs/wiki/mqtt-snoop.md`. |
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are

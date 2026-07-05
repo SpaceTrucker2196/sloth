@@ -18,9 +18,35 @@ Anything important on these ports today is suspect.
 ## What sloth captures
 
 Per entry: src, host (`Host:` header), method (`GET`, `POST`, etc.),
-path. The parser in [`src/http_log.c`](../../src/http_log.c) bails on
-the first non-printable byte, so binary protocols on these ports
-don't pollute the log.
+path, and the 49-char **JA4H** client fingerprint. The parser in
+[`src/http_log.c`](../../src/http_log.c) bails on the first
+non-printable byte, so binary protocols on these ports don't
+pollute the log.
+
+### JA4H
+
+FoxIO's JA4H — the HTTP sibling of JA3/JA4 for TLS — encodes the
+client's HTTP behaviour in 49 chars: `a(10) _ b(12) _ c(12) _ d(12)`.
+
+```
+   ge 11 n n 08 en _ 8daaf6152771 _ 000000000000 _ 000000000000
+   │  │  │ │ │  │    └── sha256[:12] of sorted cookie name=value pairs
+   │  │  │ │ │  │        (all zeros when no cookies)
+   │  │  │ │ │  └────── first 2 chars of first Accept-Language tag
+   │  │  │ │ └───────── count of non-cookie / non-referer headers
+   │  │  │ └────────── 'r' if Referer header present, 'n' if not
+   │  │  └─────────── 'c' if Cookie header present, 'n' if not
+   │  └────────────── HTTP version: "11" / "10" / "20"
+   └───────────────── first 2 chars of method, lowercased ("ge",
+                      "po", "pu", "de", "co")
+```
+
+Section b hashes the header names in **observed order** (unlike
+JA4's sort-then-hash — HTTP clients don't reorder headers between
+runs, so order carries signal). Sections c and d hash the sorted
+cookie names and sorted cookie name=value pairs, so cookie ordering
+doesn't affect the fingerprint. Emitted alongside the other HTTP
+fields in JSONL as `ja4h`.
 
 ## View
 

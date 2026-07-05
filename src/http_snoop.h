@@ -9,4 +9,12 @@
    request or no Host header is present. */
 int http_snoop(const uint8_t *data, int len, char *host, int hostsz);
 
+/* Scan an HTTP/1.x request payload for cleartext credential exposures
+ * (currently: Authorization: Basic <b64>). On a match, calls the
+ * cleartext_creds recorder. Never touches the password portion of the
+ * decoded value — see roadmap #16 phase 3. */
+void http_snoop_scan_creds(const uint8_t *data, int len,
+                           const char *src, const char *dst,
+                           uint16_t dst_port);
+
 #endif /* HTTP_SNOOP_H */

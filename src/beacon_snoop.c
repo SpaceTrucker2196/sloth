@@ -11,6 +11,29 @@ static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
+/* Ring of timestamps of recently first-seen BSSIDs — the beacon-flood
+ * signal (roadmap B4). Written under g_mu from beacon_record's new-entry
+ * path; read (with its own lock) by beacon_recent_new_bssids. Sized so a
+ * flood well above the alert threshold still fits the window. */
+#define BEACON_NEW_TS_RING 256
+static time_t g_new_bssid_ts[BEACON_NEW_TS_RING];
+static int    g_new_bssid_head;
+
+/* Caller must hold g_mu. */
+static void note_new_bssid(time_t now) {
+    g_new_bssid_ts[g_new_bssid_head] = now;
+    g_new_bssid_head = (g_new_bssid_head + 1) % BEACON_NEW_TS_RING;
+}
+
+int beacon_recent_new_bssids(time_t now, int window_s) {
+    int n = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < BEACON_NEW_TS_RING; i++)
+        if (g_new_bssid_ts[i] && now - g_new_bssid_ts[i] <= window_s) n++;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
 /* ── 802.11 beacon parser ────────────────────────────────── */
 
 /* Cipher OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.2). */
@@ -66,6 +89,9 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
         rsn_out->neighbor_count = 0;
         memset(rsn_out->neighbors, 0, sizeof(rsn_out->neighbors));
         memset(&rsn_out->fp, 0, sizeof(rsn_out->fp));
+        rsn_out->has_qbss       = 0;
+        rsn_out->qbss_stations  = 0;
+        rsn_out->qbss_chan_util = 0;
     }
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
@@ -114,6 +140,13 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
             memcpy(ssid_out, ie + 2, (size_t)slen);
             ssid_out[slen] = '\0';
 
+        } else if (tag == 11 && rsn_out && tln >= 3) {
+            /* QBSS Load (802.11e): station count (2 bytes LE) + channel
+             * utilisation (1 byte, 0..255) + admission capacity (2 bytes).
+             * AP-self-reported congestion — no math required. */
+            rsn_out->has_qbss       = 1;
+            rsn_out->qbss_stations  = ie[2] | (ie[3] << 8);
+            rsn_out->qbss_chan_util = ie[4];
         } else if (tag == 45)  { has_ht  = 1;
             if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HT_PRESENT;
         } else if (tag == 191) { has_vht = 1;
@@ -470,6 +503,13 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 if (rsn->phy[0])
                     snprintf(g_aps[i].phy, sizeof(g_aps[i].phy),
                              "%s", rsn->phy);
+                /* QBSS Load — only overwrite when the IE was present so a
+                 * bare re-record doesn't wipe a prior occupancy reading. */
+                if (rsn->has_qbss) {
+                    g_aps[i].has_qbss       = 1;
+                    g_aps[i].qbss_stations  = rsn->qbss_stations;
+                    g_aps[i].qbss_chan_util = rsn->qbss_chan_util;
+                }
                 /* Neighbors — merge new entries by BSSID; cap at the
                  * stored array size. */
                 for (int k = 0; k < rsn->neighbor_count; k++) {
@@ -512,6 +552,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         }
     }
 
+    note_new_bssid(now);   /* beacon-flood rate signal (roadmap B4) */
     memset(&g_aps[slot], 0, sizeof(g_aps[slot]));
     memcpy(g_aps[slot].bssid, bssid, 6);
     strncpy(g_aps[slot].ssid,  ssid, 32);
@@ -540,6 +581,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].wps_locked = rsn->wps_locked;
         snprintf(g_aps[slot].phy, sizeof(g_aps[slot].phy),
                  "%s", rsn->phy);
+        g_aps[slot].has_qbss       = rsn->has_qbss;
+        g_aps[slot].qbss_stations  = rsn->qbss_stations;
+        g_aps[slot].qbss_chan_util = rsn->qbss_chan_util;
         int nc = rsn->neighbor_count;
         if (nc > MAX_AP_NEIGHBORS) nc = MAX_AP_NEIGHBORS;
         memcpy(g_aps[slot].neighbors, rsn->neighbors,
@@ -632,5 +676,7 @@ void beacon_clear(void)
 {
     pthread_mutex_lock(&g_mu);
     g_count = 0;
+    memset(g_new_bssid_ts, 0, sizeof(g_new_bssid_ts));
+    g_new_bssid_head = 0;
     pthread_mutex_unlock(&g_mu);
 }

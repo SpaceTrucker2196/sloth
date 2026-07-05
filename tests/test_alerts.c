@@ -4,6 +4,8 @@
 #include "sloth.h"
 #include "alerts.h"
 #include "views/alerts.h"
+#include "beacon_snoop.h"
+#include "auth_track.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -102,6 +104,61 @@ static void test_port_scan_not_flagged_no_fire(void) {
     add_scan(&s, "10.0.0.99", 3, 0);   /* below threshold, not flagged */
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_PORT_SCAN), -1);
+}
+
+/* A burst of distinct new BSSIDs (mdk-style flood) trips the rule; a
+ * handful of stable APs does not. Exercises beacon_record → the
+ * new-BSSID rate counter → rule_beacon_flood end-to-end. */
+static void test_beacon_flood_fires(void) {
+    alerts_clear();
+    beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < BEACON_FLOOD_THRESH + 5; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00,
+                         (uint8_t)(i >> 8), (uint8_t)(i & 0xff) };
+        beacon_record(b, "FreeWiFi", -40, 6, "OPEN", 100, NULL);
+    }
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BEACON_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_beacon_flood_few_no_fire(void) {
+    alerts_clear();
+    beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 5; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, (uint8_t)i };
+        beacon_record(b, "Home", -50, 6, "WPA2", 100, NULL);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BEACON_FLOOD), -1);
+}
+
+static void test_auth_flood_fires(void) {
+    alerts_clear();
+    auth_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01 };
+    time_t now = time(NULL);
+    for (int i = 0; i < AUTH_FLOOD_THRESH + 5; i++) auth_observe(ap, now);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_AUTH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:01") != NULL);
+}
+
+static void test_auth_flood_quiet_no_fire(void) {
+    alerts_clear();
+    auth_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02 };
+    time_t now = time(NULL);
+    for (int i = 0; i < 5; i++) auth_observe(ap, now);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_AUTH_FLOOD), -1);
 }
 
 static void test_deauth_flood_fires(void) {
@@ -1089,6 +1146,98 @@ static void test_weak_tls_tls12_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_WEAK_TLS), -1);
 }
 
+/* ── NO_MONITOR_MODE ─────────────────────────────────────── */
+
+static void add_iface(sloth_state_t *s, const char *name, iface_mode_t mode) {
+    iface_stat_t *f = &s->ifaces[s->iface_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    f->mode = mode;
+}
+
+static void test_no_monitor_mode_fires_when_no_monitor_iface(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_iface(&s, "eth0",   IFACE_MODE_ETHER);
+    add_iface(&s, "wlan0",  IFACE_MODE_WIFI);        /* managed, not monitor */
+    add_iface(&s, "docker0", IFACE_MODE_ETHER);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_STR(s.alerts[idx].title, "NO_MONITOR_MODE");
+}
+
+static void test_no_monitor_mode_no_fire_when_monitor_present(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_iface(&s, "eth0",   IFACE_MODE_ETHER);
+    add_iface(&s, "wlan0mon", IFACE_MODE_MONITOR);   /* one monitor-mode radio */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE), -1);
+}
+
+static void test_no_monitor_mode_no_fire_when_no_ifaces_yet(void) {
+    /* Empty iface list — pre-first-poll. We wait for data before deciding
+     * to fire so the alert doesn't scream during the boot window. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_NO_MONITOR_MODE), -1);
+}
+
+/* ── MITRE ATT&CK technique tagging ─────────────────────
+ *
+ * Every alert type maps to a canonical technique (or "" for host
+ * posture). fire() writes the value into the alert record so the
+ * TUI, JSONL, and posture report can all show it without going
+ * back to the enum. */
+
+static void test_attack_technique_populated_on_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_scan(&s, "10.0.0.99", 15, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PORT_SCAN);
+    ASSERT(idx >= 0);
+    ASSERT_STR(s.alerts[idx].technique, "T1046");
+}
+
+static int is_digit_or_dot(char c) {
+    return (c >= '0' && c <= '9') || c == '.';
+}
+
+static void test_attack_technique_shape_valid(void) {
+    /* MITRE technique IDs are "T" + digits with optional ".NNN"
+     * subtechnique. Confirm the table follows that shape (defensively
+     * — a typo like "t1046" would produce garbage on export). */
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        const char *tech = alert_technique((alert_type_t)t);
+        if (tech[0] == '\0') continue;  /* posture alerts */
+        ASSERT_EQ((int)tech[0], (int)'T');
+        for (int i = 1; tech[i]; i++)
+            ASSERT(is_digit_or_dot(tech[i]));
+    }
+}
+
+static void test_attack_technique_posture_alert_is_empty(void) {
+    /* NO_MONITOR_MODE describes the operator's own capture rig, not
+     * adversary behaviour — it must resolve to "" so JSONL omits the
+     * technique field and reporting doesn't tag operator posture as
+     * an attack technique. */
+    ASSERT_STR(alert_technique(ALERT_TYPE_NO_MONITOR_MODE), "");
+}
+
+static void test_attack_technique_lookup_covers_all_alert_types(void) {
+    /* Guardrail against forgetting to add a technique when landing a
+     * new alert type: every enum value below ALERT_TYPE_COUNT must
+     * return a non-NULL value (empty string is fine, NULL is not). */
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
+        const char *tech = alert_technique((alert_type_t)t);
+        ASSERT(tech != NULL);
+    }
+}
+
 /* ── Attack-tool User-Agent ──────────────────────────────── */
 
 static void add_http(sloth_state_t *s, const char *src,
@@ -1861,6 +2010,68 @@ static void test_snmp_community_brute_per_pair(void) {
     ASSERT_EQ(count, 2);
 }
 
+/* ── MQTT broker brute force ────────────────────────────── */
+
+static void seed_mqtt_flow(sloth_state_t *s, const char *src_ip,
+                            const char *dst_ip, int connect_count,
+                            int fail_count, const char *user) {
+    if (s->mqtt_flow_count >= MAX_MQTT_FLOWS) return;
+    mqtt_flow_t *e = &s->mqtt_flows[s->mqtt_flow_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", dst_ip);
+    e->connect_count      = connect_count;
+    e->connack_fail_count = fail_count;
+    e->proto_level        = 4;
+    if (user) snprintf(e->last_username, sizeof(e->last_username),
+                        "%s", user);
+    e->last_seen = time(NULL);
+}
+
+static void test_mqtt_brute_fires_at_connect_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 10, 0, "admin");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ((int)s.alerts[idx].match_port, 1883);
+    ASSERT(strstr(s.alerts[idx].detail, "10 CONNECTs") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "admin") != NULL);
+}
+
+static void test_mqtt_brute_fires_at_fail_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 5, 5, "iot-user");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "5 fails") != NULL);
+}
+
+static void test_mqtt_brute_below_both_thresholds_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 9, 4, "user");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MQTT_BROKER_BRUTE), -1);
+}
+
+static void test_mqtt_brute_per_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_mqtt_flow(&s, "10.0.0.5", "10.0.0.10", 25, 0, "a");
+    seed_mqtt_flow(&s, "10.0.0.6", "10.0.0.11", 12, 0, "b");
+    alerts_update(&s);
+    int count = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type == ALERT_TYPE_MQTT_BROKER_BRUTE) count++;
+    }
+    ASSERT_EQ(count, 2);
+}
+
 /* Kills the dup-detection mutations on line 635 (`dup = 1` → 2/0) and
  * the dup-strcmp comparison: the same server seen many times must
  * count as one server, not many. */
@@ -1991,6 +2202,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_port_scan_not_flagged_no_fire);
     RUN_TEST(test_deauth_flood_fires);
     RUN_TEST(test_deauth_flood_detail_content);
+    RUN_TEST(test_beacon_flood_fires);
+    RUN_TEST(test_beacon_flood_few_no_fire);
+    RUN_TEST(test_auth_flood_fires);
+    RUN_TEST(test_auth_flood_quiet_no_fire);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);
@@ -2036,6 +2251,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_snmp_community_brute_fires_at_threshold);
     RUN_TEST(test_snmp_community_brute_below_threshold_no_fire);
     RUN_TEST(test_snmp_community_brute_per_pair);
+    RUN_TEST(test_mqtt_brute_fires_at_connect_threshold);
+    RUN_TEST(test_mqtt_brute_fires_at_fail_threshold);
+    RUN_TEST(test_mqtt_brute_below_both_thresholds_no_fire);
+    RUN_TEST(test_mqtt_brute_per_pair);
     RUN_TEST(test_rogue_dhcp_dedup_same_server);
     RUN_TEST(test_evil_twin_open_plus_wpa2_fires);
     RUN_TEST(test_evil_twin_two_wpa2_no_fire);
@@ -2092,6 +2311,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_weak_tls_sslv3_fires);
     RUN_TEST(test_weak_tls_tls13_no_fire);
     RUN_TEST(test_weak_tls_tls12_no_fire);
+    RUN_TEST(test_no_monitor_mode_fires_when_no_monitor_iface);
+    RUN_TEST(test_no_monitor_mode_no_fire_when_monitor_present);
+    RUN_TEST(test_no_monitor_mode_no_fire_when_no_ifaces_yet);
+
+    TEST_SUITE("MITRE ATT&CK technique tagging");
+    RUN_TEST(test_attack_technique_populated_on_fire);
+    RUN_TEST(test_attack_technique_shape_valid);
+    RUN_TEST(test_attack_technique_posture_alert_is_empty);
+    RUN_TEST(test_attack_technique_lookup_covers_all_alert_types);
 
     TEST_SUITE("alerts dedup");
     RUN_TEST(test_dedup_increments_count);

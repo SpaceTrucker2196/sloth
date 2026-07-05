@@ -40,7 +40,7 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
     int n = parse_proc_ifaces(f, out, max);
     fclose(f);
 
-    /* read MTU and link speed from sysfs */
+    /* read MTU, link speed, MAC, and link type from sysfs */
     for (int i = 0; i < n; i++) {
         char path[72];
         FILE *sf;
@@ -54,6 +54,37 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
             int spd = -1;
             if (fscanf(sf, "%d", &spd) == 1 && spd > 0)
                 out[i].speed_mbps = spd;
+            fclose(sf);
+        }
+        /* MAC address — /sys/class/net/<if>/address is "aa:bb:cc:dd:ee:ff\n". */
+        snprintf(path, sizeof(path), "/sys/class/net/%s/address", out[i].name);
+        if ((sf = fopen(path, "r")) != NULL) {
+            unsigned m0,m1,m2,m3,m4,m5;
+            if (fscanf(sf, "%x:%x:%x:%x:%x:%x",
+                       &m0,&m1,&m2,&m3,&m4,&m5) == 6) {
+                out[i].mac[0]=(uint8_t)m0; out[i].mac[1]=(uint8_t)m1;
+                out[i].mac[2]=(uint8_t)m2; out[i].mac[3]=(uint8_t)m3;
+                out[i].mac[4]=(uint8_t)m4; out[i].mac[5]=(uint8_t)m5;
+            }
+            fclose(sf);
+        }
+        /* Link type — /sys/class/net/<if>/type is the ARPHRD_* value.
+         *   1   = ARPHRD_ETHER          (regular Ethernet / loopback / virt)
+         *   801 = ARPHRD_IEEE80211      (managed / station)
+         *   803 = ARPHRD_IEEE80211_RADIOTAP  (monitor mode)
+         *   804 = ARPHRD_IEEE80211_PRISM     (older monitor mode)
+         * Only 803/804 count as monitor mode for our purposes. */
+        snprintf(path, sizeof(path), "/sys/class/net/%s/type", out[i].name);
+        if ((sf = fopen(path, "r")) != NULL) {
+            int arphrd = 0;
+            if (fscanf(sf, "%d", &arphrd) == 1) {
+                if (arphrd == 803 || arphrd == 804)
+                    out[i].mode = IFACE_MODE_MONITOR;
+                else if (arphrd == 801)
+                    out[i].mode = IFACE_MODE_WIFI;
+                else
+                    out[i].mode = IFACE_MODE_ETHER;
+            }
             fclose(sf);
         }
     }
@@ -104,6 +135,10 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max) {
     (void)out; (void)max;
     return 0;
 }
+int linux_wifi_set_channel(const char *iface, int freq_mhz) {
+    (void)iface; (void)freq_mhz;
+    return -1;   /* no nl80211 without WITH_WIFI */
+}
 #endif
 
 /* ── ARP neighbor table ────────────────────────────────── */
@@ -149,6 +184,7 @@ platform_ops_t g_platform = {
     linux_get_dhcp,
     linux_init,
     linux_cleanup,
+    linux_wifi_set_channel,
 };
 
 #endif /* PLATFORM_LINUX */

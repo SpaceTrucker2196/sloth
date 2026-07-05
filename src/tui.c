@@ -3,12 +3,13 @@
 #include <locale.h>
 #include <time.h>
 
+#include <unistd.h>
+#include <sys/select.h>
+
 #ifdef WITH_NCURSES
 #  include <curses.h>
 #else
 #  include <termios.h>
-#  include <unistd.h>
-#  include <sys/select.h>
 #endif
 
 #include "sloth.h"
@@ -740,8 +741,29 @@ void tui_draw(const sloth_state_t *s) {
     refresh();
 }
 
-int tui_poll_key(int timeout_ms) {
-    timeout(timeout_ms);
+int tui_poll_key(int timeout_ms, int wake_fd) {
+    /* Watch stdin and the optional wake fd in one select() so a
+     * non-key wakeup (alert fire, future event-driven hooks) breaks
+     * the wait early and the next redraw lands within ms. */
+    fd_set fds; FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    int maxfd = STDIN_FILENO;
+    if (wake_fd >= 0) {
+        FD_SET(wake_fd, &fds);
+        if (wake_fd > maxfd) maxfd = wake_fd;
+    }
+    struct timeval tv;
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    if (select(maxfd + 1, &fds, NULL, NULL, &tv) <= 0)
+        return 0;
+    /* If only the wake fd is ready, return 0 — the main loop will
+     * redraw on the next iteration. The wake byte is drained by
+     * the caller via event_wake_drain. */
+    if (!FD_ISSET(STDIN_FILENO, &fds))
+        return 0;
+    /* Drain a single key from ncurses without blocking. */
+    timeout(0);
     int ch = getch();
     if (ch == ERR)            return 0;
     if (ch == KEY_UP)         return SLOTH_KEY_UP;
@@ -824,14 +846,21 @@ static int read_char_timeout(int us) {
     return -1;
 }
 
-int tui_poll_key(int timeout_ms) {
+int tui_poll_key(int timeout_ms, int wake_fd) {
     fd_set fds;
     struct timeval tv;
     tv.tv_sec  = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
-    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
+    int maxfd = STDIN_FILENO;
+    if (wake_fd >= 0) {
+        FD_SET(wake_fd, &fds);
+        if (wake_fd > maxfd) maxfd = wake_fd;
+    }
+    if (select(maxfd + 1, &fds, NULL, NULL, &tv) <= 0)
+        return 0;
+    if (!FD_ISSET(STDIN_FILENO, &fds))
         return 0;
 
     unsigned char c = 0;

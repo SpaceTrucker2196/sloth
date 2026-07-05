@@ -9,6 +9,7 @@
 #include <pcap.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <net/if.h>       /* if_indextoname — issue #17 SLL2 lookup */
 
 #include "sloth.h"
 #include "capture/capture.h"
@@ -25,12 +26,18 @@
 #include "ssh_snoop.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
+#include "mqtt_snoop.h"
 #include "quic_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "http_snoop.h"
+#include "ftp_snoop.h"
+#include "pop3_snoop.h"
+#include "imap_snoop.h"
+#include "smtp_snoop.h"
+#include "cleartext_creds.h"
 #include "http_log.h"
 #include "tls_log.h"
 #include "dns.h"
@@ -64,6 +71,55 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
     snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", entry.host[0] ? entry.host : "?");
     http_log_record(&entry);
+    /* Same payload pass: look for Authorization: Basic and record any
+     * cleartext credential exposure. Username only — see #16 phase 3. */
+    http_snoop_scan_creds(tp + tcp_hdr, pay_len,
+                          pkt->src, pkt->dst, pkt->dst_port);
+}
+
+/* FTP command-channel observer on TCP/21. Records USER<->PASS
+ * exposures via the cleartext_creds ring. #16 phase 3. */
+static void try_ftp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (ftp_snoop(tp + tcp_hdr, pay_len,
+                  pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "FTP");
+}
+
+/* POP3 on TCP/110 — same shape as FTP (USER/PASS lines). */
+static void try_pop3(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (pop3_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "POP3");
+}
+
+/* IMAP on TCP/143 — tagged LOGIN with optional quoting. */
+static void try_imap(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 8) return;
+    if (imap_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "IMAP");
+}
+
+/* SMTP on TCP/25/587 — AUTH PLAIN in one shot. */
+static void try_smtp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 5) return;
+    if (smtp_snoop(tp + tcp_hdr, pay_len,
+                   pkt->src, pkt->dst, pkt->dst_port))
+        snprintf(pkt->info, sizeof(pkt->info), "SMTP");
 }
 
 static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
@@ -149,6 +205,20 @@ static void try_rdp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     }
 }
 
+/* MQTT on TCP/1883. Fixed header is one type byte + 1-4 byte
+ * Remaining Length varint, so the protocol is tag-recognisable. */
+static void try_mqtt(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    int tcp_hdr = (tp[12] >> 4) * 4;
+    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
+    int pay_len = tlen - tcp_hdr;
+    if (pay_len < 2) return;
+    if (mqtt_snoop_observe(pkt->src, pkt->src_port,
+                           pkt->dst, pkt->dst_port,
+                           tp + tcp_hdr, pay_len)) {
+        snprintf(pkt->info, sizeof(pkt->info), "MQTT");
+    }
+}
+
 /* SSH banner on TCP/22. Matches the cleartext "SSH-protoversion-..."
  * exchange that precedes the encrypted key exchange. */
 static void try_ssh(const uint8_t *tp, int tlen, packet_info_t *pkt) {
@@ -204,6 +274,15 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 21 || pkt->src_port == 21)
+            try_ftp(tp, tlen, pkt);
+        if (pkt->dst_port == 110 || pkt->src_port == 110)
+            try_pop3(tp, tlen, pkt);
+        if (pkt->dst_port == 143 || pkt->src_port == 143)
+            try_imap(tp, tlen, pkt);
+        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
+            pkt->dst_port == 587 || pkt->src_port == 587)
+            try_smtp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);
@@ -218,6 +297,8 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             try_ssh(tp, tlen, pkt);
         if (pkt->dst_port == 3389 || pkt->src_port == 3389)
             try_rdp(tp, tlen, pkt);
+        if (pkt->dst_port == 1883 || pkt->src_port == 1883)
+            try_mqtt(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
@@ -311,6 +392,15 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             pkt->dst_port == 8080 || pkt->src_port == 8080 ||
             pkt->dst_port == 8000 || pkt->src_port == 8000)
             try_http(tp, tlen, pkt);
+        if (pkt->dst_port == 21 || pkt->src_port == 21)
+            try_ftp(tp, tlen, pkt);
+        if (pkt->dst_port == 110 || pkt->src_port == 110)
+            try_pop3(tp, tlen, pkt);
+        if (pkt->dst_port == 143 || pkt->src_port == 143)
+            try_imap(tp, tlen, pkt);
+        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
+            pkt->dst_port == 587 || pkt->src_port == 587)
+            try_smtp(tp, tlen, pkt);
         if (pkt->dst_port == 445 || pkt->src_port == 445 ||
             pkt->dst_port == 139 || pkt->src_port == 139)
             try_smb(tp, tlen, pkt);
@@ -325,6 +415,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             try_ssh(tp, tlen, pkt);
         if (pkt->dst_port == 3389 || pkt->src_port == 3389)
             try_rdp(tp, tlen, pkt);
+        if (pkt->dst_port == 1883 || pkt->src_port == 1883)
+            try_mqtt(tp, tlen, pkt);
     } else if (pkt->proto == 17 && tlen >= 8) {
         pkt->src_port = u16be(tp + 0);
         pkt->dst_port = u16be(tp + 2);
@@ -388,14 +480,26 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
     }
 }
 
-/* DLT_LINUX_SLL (113) — Linux cooked capture used by "any" */
-#define MY_DLT_LINUX_SLL 113
+/* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
+ * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
+ * interface index as sll2_if_index (offset 4). Selectable via
+ * pcap_set_datalink() after activate on libpcap ≥ 1.10; default for
+ * "any" on ≥ 1.11. Enables per-iface data-stream filtering (#17). */
+#define MY_DLT_LINUX_SLL  113
+#define MY_DLT_LINUX_SLL2 276
 
-/* Returns 1 if the frame was decoded as IPv4 or IPv6 (worth keeping in the
- * packets view); 0 for ARP, LLC frames (ethertype < 0x0600), unknown DLTs
- * and any other ethertype. Those drop on the floor — VIEW_ARP and the
- * per-protocol logs cover the data we still care about, and they were
- * otherwise polluting the live list with zero-IP rows. */
+/* SLL2 header layout (per pcap-linktype(7)):
+ *   0  protocol   (2)  big-endian ethertype
+ *   2  reserved   (2)
+ *   4  ifindex    (4)  big-endian
+ *   8  hatype     (2)
+ *   10 pkttype    (1)
+ *   11 halen      (1)
+ *   12 addr       (8)
+ *   20 payload
+ * Payload starts at offset 20; ethertype lives at offset 0.       */
+#define SLL2_HDRLEN 20
+
 static int decode_frame(const uint8_t *data, int caplen, int dlt,
                         packet_info_t *pkt) {
     int       offset    = 0;
@@ -409,6 +513,10 @@ static int decode_frame(const uint8_t *data, int caplen, int dlt,
         if (caplen < 16) return 0;
         ethertype = u16be(data + 14);
         offset    = 16;
+    } else if (dlt == MY_DLT_LINUX_SLL2) {
+        if (caplen < SLL2_HDRLEN) return 0;
+        ethertype = u16be(data + 0);
+        offset    = SLL2_HDRLEN;
     } else {
         return 0;
     }
@@ -434,15 +542,48 @@ static int decode_frame(const uint8_t *data, int caplen, int dlt,
 
 /* ── pcap callback ────────────────────────────────────────── */
 
+/* Small ifindex → name cache for the SLL2 data-stream filter (#17).
+ * if_indextoname() is a syscall; caching it keeps the hot path free
+ * of per-packet lookups. Cache is flushed with capture_stop(). */
+#define IFINDEX_CACHE_MAX 16
+typedef struct { uint32_t idx; char name[16]; } ifname_cache_t;
+static ifname_cache_t g_ifname_cache[IFINDEX_CACHE_MAX];
+static int            g_ifname_cache_n;
+
+static const char *ifindex_lookup(uint32_t idx) {
+    for (int i = 0; i < g_ifname_cache_n; i++)
+        if (g_ifname_cache[i].idx == idx) return g_ifname_cache[i].name;
+    if (g_ifname_cache_n >= IFINDEX_CACHE_MAX) g_ifname_cache_n = 0;
+    ifname_cache_t *e = &g_ifname_cache[g_ifname_cache_n++];
+    e->idx = idx;
+    if (!if_indextoname(idx, e->name)) e->name[0] = '\0';
+    return e->name;
+}
+
 static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
                       const u_char *data) {
     (void)user;
+    int dlt = pcap_datalink(g_handle);
+
+    /* Data-stream election (#17): on SLL2 we can attribute the frame to
+     * an ingress interface and drop before decode when that iface is
+     * deselected. On SLL v1 / EN10MB the header carries no ifindex, so
+     * the toggle becomes a UI-only marker in the iface view. */
+    if (dlt == MY_DLT_LINUX_SLL2 && hdr->caplen >= SLL2_HDRLEN) {
+        uint32_t ifi = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16)
+                     | ((uint32_t)data[6] <<  8) |  (uint32_t)data[7];
+        const char *name = ifindex_lookup(ifi);
+        if (name && name[0] && g_state
+            && iface_is_deselected(g_state, name))
+            return;
+    }
+
     packet_info_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.ts_sec  = (uint32_t)hdr->ts.tv_sec;
     pkt.ts_usec = (uint32_t)hdr->ts.tv_usec;
     pkt.len     = hdr->len;
-    if (!decode_frame(data, (int)hdr->caplen, pcap_datalink(g_handle), &pkt))
+    if (!decode_frame(data, (int)hdr->caplen, dlt, &pkt))
         return;  /* drop ARP / LLC / unknown — see decode_frame() comment */
 
     int rl = (int)hdr->caplen < 64 ? (int)hdr->caplen : 64;
@@ -453,6 +594,7 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     g_state->packets[g_state->pkt_head] = pkt;
     g_state->pkt_head = (g_state->pkt_head + 1) % MAX_PACKETS;
     if (g_state->pkt_count < MAX_PACKETS) g_state->pkt_count++;
+    g_state->pkt_total++;   /* monotonic; drives once-only jsonl emit (issue #20) */
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -472,18 +614,46 @@ static void *capture_thread(void *arg) {
 void capture_start(sloth_state_t *s) {
     char errbuf[PCAP_ERRBUF_SIZE];
     g_state  = s;
-    g_handle = pcap_open_live("any", 65535, 1, 100, errbuf);
+    /* Reset the ifindex cache — a re-start on the same handle would
+     * otherwise carry stale ifindex → name mappings. */
+    g_ifname_cache_n = 0;
+
+    /* Prefer pcap_create + activate so we can request DLT_LINUX_SLL2
+     * (276) as the datalink. SLL2 is what gives the pcap callback
+     * access to the ingress interface index, which the data-stream
+     * election needs to filter by iface name (#17). Anything short of
+     * SLL2 — SLL v1, EN10MB — still captures; the per-iface filter
+     * just becomes a no-op on those datalinks. */
+    g_handle = pcap_create("any", errbuf);
+    if (g_handle) {
+        pcap_set_snaplen(g_handle, 65535);
+        pcap_set_promisc(g_handle, 1);
+        pcap_set_timeout(g_handle, 100);
+        if (pcap_activate(g_handle) != 0) {
+            pcap_close(g_handle);
+            g_handle = NULL;
+        } else {
+            /* Try to switch to SLL2; ignore errors (older libpcap
+             * doesn't know the DLT, some kernels reject it). */
+            (void)pcap_set_datalink(g_handle, MY_DLT_LINUX_SLL2);
+            snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
+        }
+    }
 
     if (!g_handle) {
-        /* "any" unavailable — try first enumerated device */
-        pcap_if_t *devs = NULL;
-        if (pcap_findalldevs(&devs, errbuf) == 0 && devs) {
-            snprintf(s->pkt_iface, sizeof(s->pkt_iface), "%s", devs->name);
-            g_handle = pcap_open_live(devs->name, 65535, 1, 100, errbuf);
-            pcap_freealldevs(devs);
+        /* pcap_create("any") failed or activation rejected — try the
+         * simpler open_live path, then fall back to first device. */
+        g_handle = pcap_open_live("any", 65535, 1, 100, errbuf);
+        if (g_handle) {
+            snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
+        } else {
+            pcap_if_t *devs = NULL;
+            if (pcap_findalldevs(&devs, errbuf) == 0 && devs) {
+                snprintf(s->pkt_iface, sizeof(s->pkt_iface), "%s", devs->name);
+                g_handle = pcap_open_live(devs->name, 65535, 1, 100, errbuf);
+                pcap_freealldevs(devs);
+            }
         }
-    } else {
-        snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
     }
     if (!g_handle) return;  /* silently disabled — show live hint in view */
 

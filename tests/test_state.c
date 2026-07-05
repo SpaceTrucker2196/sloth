@@ -274,11 +274,132 @@ void test_toggle_hides_selected(void) {
     ASSERT_STR(s.iface_hidden[0], "wlan0");
 }
 
+/* ── data-stream (deselect) election — issue #17 ───────── */
+
+void test_deselect_default_is_selected(void) {
+    /* Fresh state: no deselected ifaces. iface_is_deselected returns 0
+     * for anything asked. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    ASSERT_EQ(s.iface_deselected_count, 0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"),  0);
+    ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 0);
+}
+
+void test_toggle_deselect(void) {
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 'y');
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT_STR(s.iface_deselected[0], "eth0");
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"),  1);
+    ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 0);
+}
+
+void test_toggle_reselect(void) {
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 'y');   /* deselect eth0 */
+    view_iface_key(&s, 'y');   /* reselect eth0 */
+    ASSERT_EQ(s.iface_deselected_count, 0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"), 0);
+}
+
+void test_deselect_independent_of_hide(void) {
+    /* Hide and deselect are distinct elections — toggling one must
+     * not disturb the other. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 0;
+    view_iface_key(&s, 't');   /* hide eth0 */
+    view_iface_key(&s, 'y');   /* deselect eth0 */
+    ASSERT_EQ(s.iface_hidden_count,     1);
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT(iface_is_hidden(&s, "eth0"));
+    ASSERT(iface_is_deselected(&s, "eth0"));
+    view_iface_key(&s, 't');   /* unhide eth0 */
+    ASSERT_EQ(s.iface_hidden_count,     0);
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    ASSERT_EQ(iface_is_hidden(&s, "eth0"),     0);
+    ASSERT_EQ(iface_is_deselected(&s, "eth0"), 1);
+}
+
+/* ── view_claims_key: which views own which shadow keys ──────
+ *
+ * The bug was that the global view-switch handler in main.c consumed
+ * letters like 't', 'm', 's', 'p', 'r', 'w', 'x' before the active
+ * view's handler ever ran. view_claims_key() is the first-refusal
+ * table; these tests pin down the intended shape so a future edit
+ * that drops a key from the table trips a red suite. */
+
+void test_view_claims_iface_local_keys(void) {
+    ASSERT(view_claims_key(VIEW_IFACE, 't'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'T'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'm'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'M'));
+    /* 'y' toggles data-stream selection (#17). Claimed defensively so
+     * a future global key assignment doesn't silently shadow it. */
+    ASSERT(view_claims_key(VIEW_IFACE, 'y'));
+    ASSERT(view_claims_key(VIEW_IFACE, 'Y'));
+}
+
+void test_view_claims_conns_sort_key(void) {
+    ASSERT(view_claims_key(VIEW_CONNS, 's'));
+    ASSERT(view_claims_key(VIEW_CONNS, 'S'));
+}
+
+void test_view_claims_packets_local_keys(void) {
+    ASSERT(view_claims_key(VIEW_PACKETS, 'p'));
+    ASSERT(view_claims_key(VIEW_PACKETS, 'x'));
+    ASSERT(view_claims_key(VIEW_PACKETS, 'w'));
+}
+
+void test_view_claims_stats_reset_key(void) {
+    ASSERT(view_claims_key(VIEW_STATS, 'r'));
+    ASSERT(view_claims_key(VIEW_STATS, 'R'));
+}
+
+void test_view_claims_dashboard_tab(void) {
+    ASSERT(view_claims_key(VIEW_DASH, '\t'));
+    /* Dashboard doesn't claim ordinary letter keys — those still
+     * cycle to the labelled view. */
+    ASSERT_EQ(view_claims_key(VIEW_DASH, 't'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DASH, 's'), 0);
+}
+
+void test_view_claims_no_claim_defaults(void) {
+    /* A view without an entry in the table doesn't claim anything —
+     * the global switch still owns every letter for it. */
+    ASSERT_EQ(view_claims_key(VIEW_TLS, 't'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_DNS, 'r'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_NTP, 'p'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_HTTP, 'h'), 0);
+}
+
+void test_view_claims_non_shadow_keys_unclaimed(void) {
+    /* Keys the report calls out as safe ('c', 'f', 'y', 'z', space,
+     * arrows) shouldn't be claimed by any view — they fall through
+     * to the view handler via the normal (non-first-refusal) path. */
+    ASSERT_EQ(view_claims_key(VIEW_IFACE, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_CONNS, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_PACKETS, 'f'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_STATS, 'c'), 0);
+    ASSERT_EQ(view_claims_key(VIEW_IFACE, SLOTH_KEY_DOWN), 0);
+    ASSERT_EQ(view_claims_key(VIEW_PACKETS, ' '), 0);
+}
+
 void run_state_tests(void) {
     TEST_SUITE("view switching");
     RUN_TEST(test_view_tab_cycles_forward);
     RUN_TEST(test_view_direct_key_select);
     RUN_TEST(test_view_count_matches_labels);
+
+    TEST_SUITE("view key first refusal");
+    RUN_TEST(test_view_claims_iface_local_keys);
+    RUN_TEST(test_view_claims_conns_sort_key);
+    RUN_TEST(test_view_claims_packets_local_keys);
+    RUN_TEST(test_view_claims_stats_reset_key);
+    RUN_TEST(test_view_claims_dashboard_tab);
+    RUN_TEST(test_view_claims_no_claim_defaults);
+    RUN_TEST(test_view_claims_non_shadow_keys_unclaimed);
 
     TEST_SUITE("packet ring buffer");
     RUN_TEST(test_ring_buffer_empty);
@@ -303,4 +424,10 @@ void run_state_tests(void) {
     RUN_TEST(test_toggle_unhide);
     RUN_TEST(test_toggle_navigation);
     RUN_TEST(test_toggle_hides_selected);
+
+    TEST_SUITE("iface deselect (data-stream) — #17");
+    RUN_TEST(test_deselect_default_is_selected);
+    RUN_TEST(test_toggle_deselect);
+    RUN_TEST(test_toggle_reselect);
+    RUN_TEST(test_deselect_independent_of_hide);
 }

@@ -46,7 +46,16 @@ void run_ntp_log_tests(void);
 void run_icmp_log_tests(void);
 void run_threat_intel_tests(void);
 void run_alerts_tests(void);
+void run_cleartext_creds_tests(void);
+void run_pop3_snoop_tests(void);
+void run_imap_snoop_tests(void);
+void run_smtp_snoop_tests(void);
+void run_device_risk_tests(void);
+void run_posture_tests(void);
+void run_version_tests(void);
+void run_updater_tests(void);
 void run_md5_tests(void);
+void run_sha256_tests(void);
 void run_devices_tests(void);
 void run_beacon_detect_tests(void);
 void run_jsonl_tests(void);
@@ -66,6 +75,8 @@ void run_dga_tests(void);
 void run_wifi_oui_attacker_tests(void);
 void run_data_socket_tests(void);
 void run_osi_tests(void);
+void run_chanhop_tests(void);
+void run_auth_track_tests(void);
 void run_twins_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
@@ -76,6 +87,7 @@ void run_bgp_snoop_tests(void);
 void run_ssh_snoop_tests(void);
 void run_rdp_snoop_tests(void);
 void run_snmp_snoop_tests(void);
+void run_mqtt_snoop_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -121,7 +133,16 @@ int main(void) {
     run_icmp_log_tests();
     run_threat_intel_tests();
     run_alerts_tests();
+    run_cleartext_creds_tests();
+    run_pop3_snoop_tests();
+    run_imap_snoop_tests();
+    run_smtp_snoop_tests();
+    run_device_risk_tests();
+    run_posture_tests();
+    run_version_tests();
+    run_updater_tests();
     run_md5_tests();
+    run_sha256_tests();
     run_devices_tests();
     run_beacon_detect_tests();
     run_jsonl_tests();
@@ -141,6 +162,8 @@ int main(void) {
     run_wifi_oui_attacker_tests();
     run_data_socket_tests();
     run_osi_tests();
+    run_chanhop_tests();
+    run_auth_track_tests();
     run_twins_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();
@@ -151,6 +174,7 @@ int main(void) {
     run_ssh_snoop_tests();
     run_rdp_snoop_tests();
     run_snmp_snoop_tests();
+    run_mqtt_snoop_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

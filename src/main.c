@@ -3,8 +3,10 @@
 #include <string.h>
 #include <signal.h>
 
+#include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "wifi_chanhop.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -54,10 +56,15 @@
 #include "ssh_snoop.h"
 #include "rdp_snoop.h"
 #include "snmp_snoop.h"
+#include "mqtt_snoop.h"
 #include "ssdp_snoop.h"
+#include "event_wake.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "http_log.h"
+#include "cleartext_creds.h"
+#include "posture.h"
+#include "updater.h"
 #include "tls_log.h"
 #include "quic_log.h"
 #include "dns_log.h"
@@ -81,7 +88,31 @@
 static sloth_state_t g_state;
 static volatile int g_quit = 0;
 
+/* Passive channel-hop scheduler (issue #22). Off unless --hop is passed.
+ * Drives platform set_channel from sloth's own observed activity — the
+ * only kernel-state write sloth performs, and only on its own monitor
+ * interface; see MISSION §2. */
+static chanhop_t g_chanhop;
+static int       g_hop_enabled = 0;
+
 static void on_signal(int sig) { (void)sig; g_quit = 1; }
+
+#ifdef WITH_PCAP
+/* Advance the channel scheduler once per poll: attribute the packets seen
+ * since the last tick to the current channel, then retune the monitor
+ * interface if the dwell has elapsed. */
+static void chanhop_drive(sloth_state_t *s) {
+    static uint64_t last_total = 0;
+    if (!g_hop_enabled || s->probe_iface[0] == '\0') return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    chanhop_observe(&g_chanhop, (uint32_t)(s->pkt_total - last_total));
+    last_total = s->pkt_total;
+    if (chanhop_tick(&g_chanhop, now_ms))
+        g_platform.set_channel(s->probe_iface, chanhop_current_freq(&g_chanhop));
+}
+#endif
 
 static void poll_data(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
@@ -116,6 +147,7 @@ static void poll_data(sloth_state_t *s) {
     ssh_snoop_snapshot(s);
     rdp_snoop_snapshot(s);
     snmp_snoop_snapshot(s);
+    mqtt_snoop_snapshot(s);
     ssdp_snapshot(s);
     beacon_snapshot(s);
     deauth_snapshot(s);
@@ -125,6 +157,7 @@ static void poll_data(sloth_state_t *s) {
     dns_log_snapshot(s);
     ntp_log_snapshot(s);
     icmp_log_snapshot(s);
+    cleartext_creds_snapshot(s);
 #endif
     /* clamp selections in case counts shrunk */
     if (s->iface_sel >= s->iface_count && s->iface_count > 0)
@@ -150,6 +183,9 @@ static void poll_data(sloth_state_t *s) {
     }
     devices_update(s);
     top_hosts_update(s);
+#ifdef WITH_PCAP
+    chanhop_drive(s);
+#endif
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {
@@ -176,77 +212,11 @@ static void handle_filter_input(sloth_state_t *s, int key) {
     }
 }
 
-static void handle_key(sloth_state_t *s, int key) {
-    if (key == 0) return;
-
-    /* While editing the filter, capture all input. */
-    if (s->filter_editing) {
-        handle_filter_input(s, key);
-        return;
-    }
-
-    if (key == '/') {
-        s->filter[0]      = '\0';
-        s->filter_editing = 1;
-        return;
-    }
-    if (key == '\\') {
-        s->filter[0]      = '\0';
-        s->filter_editing = 0;
-        return;
-    }
-
-    switch (key) {
-    case 'q': case 'Q':
-        g_quit = 1;
-        return;
-    case '1': s->active_view = VIEW_IFACE;   return;
-    case '2': s->active_view = VIEW_CONNS;   return;
-    case '3': s->active_view = VIEW_WIFI;    return;
-    case '4': s->active_view = VIEW_PACKETS; return;
-    case '5': s->active_view = VIEW_PROCS;   return;
-    case '6': s->active_view = VIEW_STATS;   return;
-    case '7': s->active_view = VIEW_PROBE;   return;
-    case '8': s->active_view = VIEW_ARP;     return;
-    case '9': s->active_view = VIEW_MDNS;    return;
-    case '0': s->active_view = VIEW_NBNS;    return;
-    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
-    case 's': case 'S': s->active_view = VIEW_SSDP;   return;
-    case 'b': case 'B': s->active_view = VIEW_BEACON; return;
-    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
-    case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
-    case 't': case 'T': s->active_view = VIEW_TLS;    return;
-    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
-    case 'r': case 'R': s->active_view = VIEW_DNS;    return;
-    case 'p': case 'P': s->active_view = VIEW_NTP;    return;
-    case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
-    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
-    case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
-    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
-    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
-    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
-    case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
-    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
-    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
-    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
-    case '?':           s->active_view = (s->active_view == VIEW_HELP)
-                                          ? VIEW_IFACE : VIEW_HELP;
-                        return;
-    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
-    case '\t':
-        /* The dashboard uses Tab to cycle its own panels — let its
-         * view-specific handler see this key. */
-        if (s->active_view == VIEW_DASH) break;
-        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
-        return;
-    case 'n': case 'N':
-        s->dns_enabled = !s->dns_enabled;
-        return;
-    default:
-        break;
-    }
-
-    /* delegate remaining keys to the active view */
+/* Dispatch a key to the active view's handler. Extracted so
+ * view_claims_key() paths and the fall-through paths share one
+ * dispatch site. view_claims_key itself lives in src/view_route.c
+ * so unit tests can cover the routing decision without linking main.c. */
+static void dispatch_to_view(sloth_state_t *s, int key) {
     switch (s->active_view) {
     case VIEW_IFACE:   view_iface_key(s, key);   break;
     case VIEW_CONNS:   view_conns_key(s, key);   break;
@@ -283,10 +253,90 @@ static void handle_key(sloth_state_t *s, int key) {
     }
 }
 
+static void handle_key(sloth_state_t *s, int key) {
+    if (key == 0) return;
+
+    /* While editing the filter, capture all input. */
+    if (s->filter_editing) {
+        handle_filter_input(s, key);
+        return;
+    }
+
+    if (key == '/') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 1;
+        return;
+    }
+    if (key == '\\') {
+        s->filter[0]      = '\0';
+        s->filter_editing = 0;
+        return;
+    }
+
+    /* Quit and help toggle are absolute globals — always take effect. */
+    if (key == 'q' || key == 'Q') { g_quit = 1; return; }
+    if (key == '?') {
+        s->active_view = (s->active_view == VIEW_HELP)
+                          ? VIEW_IFACE : VIEW_HELP;
+        return;
+    }
+
+    /* First refusal: if the active view has a documented claim on
+     * this key, dispatch to the view and skip the global switch. */
+    if (view_claims_key(s->active_view, key)) {
+        dispatch_to_view(s, key);
+        return;
+    }
+
+    switch (key) {
+    case '1': s->active_view = VIEW_IFACE;   return;
+    case '2': s->active_view = VIEW_CONNS;   return;
+    case '3': s->active_view = VIEW_WIFI;    return;
+    case '4': s->active_view = VIEW_PACKETS; return;
+    case '5': s->active_view = VIEW_PROCS;   return;
+    case '6': s->active_view = VIEW_STATS;   return;
+    case '7': s->active_view = VIEW_PROBE;   return;
+    case '8': s->active_view = VIEW_ARP;     return;
+    case '9': s->active_view = VIEW_MDNS;    return;
+    case '0': s->active_view = VIEW_NBNS;    return;
+    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
+    case 's': case 'S': s->active_view = VIEW_SSDP;   return;
+    case 'b': case 'B': s->active_view = VIEW_BEACON; return;
+    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
+    case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
+    case 't': case 'T': s->active_view = VIEW_TLS;    return;
+    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
+    case 'r': case 'R': s->active_view = VIEW_DNS;    return;
+    case 'p': case 'P': s->active_view = VIEW_NTP;    return;
+    case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
+    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
+    case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
+    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
+    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
+    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
+    case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
+    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
+    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
+    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
+    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
+    case '\t':
+        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
+        return;
+    case 'n': case 'N':
+        s->dns_enabled = !s->dns_enabled;
+        return;
+    default:
+        break;
+    }
+
+    /* Non-global keys: delegate to the active view. */
+    dispatch_to_view(s, key);
+}
+
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--out-format FORMAT]\n"
+            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N] [--hop]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -314,7 +364,34 @@ static void print_usage(const char *argv0) {
             "                              vendor=sloth-net product=sloth).\n"
             "                     syslog = RFC 5424 (PRI 134 local0.info,\n"
             "                              SD-ID sloth@32473; MSG carries\n"
-            "                              the original JSON for fidelity).\n",
+            "                              the original JSON for fidelity).\n"
+            "  --refresh-ms N     dashboard refresh interval, milliseconds.\n"
+            "                     Default 250 (~4 Hz). Floor 50ms — sub-50ms\n"
+            "                     burns CPU without visible gain on a terminal.\n"
+            "                     The loop also wakes early on alert fires,\n"
+            "                     so the value is an upper bound, not a fixed\n"
+            "                     cadence.\n"
+            "  --hop              passive channel-hopping: retune sloth's own\n"
+            "                     monitor interface across a 2.4/5 GHz list,\n"
+            "                     dwelling longer where activity is seen. The\n"
+            "                     only kernel-state write sloth performs; off by\n"
+            "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
+            "                     (Linux). No frame is transmitted.\n"
+            "  --report FILE.md   on exit, write a Markdown posture report to\n"
+            "                     FILE.md summarising alerts (by severity and\n"
+            "                     MITRE ATT&CK technique), cleartext credential\n"
+            "                     exposures, and high-risk devices.\n"
+            "  --report-json FILE.json\n"
+            "                     same rollup as --report, structured for\n"
+            "                     machine consumption / SIEM diff.\n"
+            "  --check-manifest FILE\n"
+            "                     read a locally-populated release manifest\n"
+            "                     (JSON) and show \"update available\" in the\n"
+            "                     help view when its \"latest\" > SLOTH_VERSION.\n"
+            "                     sloth never fetches from the network itself;\n"
+            "                     populate FILE via a systemd timer / cron\n"
+            "                     using examples/updater/check-latest.sh.\n"
+            "                     See docs/wiki/manifest-format.md.\n",
             argv0);
 }
 
@@ -322,10 +399,15 @@ int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
-    const char *jsonl_path  = NULL;
-    const char *pcap_dir    = NULL;
-    const char *eapol_dir   = NULL;
-    const char *data_socket = NULL;
+    const char *jsonl_path   = NULL;
+    const char *pcap_dir     = NULL;
+    const char *eapol_dir    = NULL;
+    const char *data_socket  = NULL;
+    const char *report_md    = NULL;   /* --report      FILE.md   */
+    const char *report_json  = NULL;   /* --report-json FILE.json */
+    const char *check_manifest = NULL; /* --check-manifest FILE   */
+    int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
+    time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -343,6 +425,25 @@ int main(int argc, char **argv) {
             } else {
                 data_socket = "tcp:127.0.0.1:8765";
             }
+        } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {
+            char *endp = NULL;
+            long v = strtol(argv[++i], &endp, 10);
+            if (endp == argv[i] || *endp != '\0' || v < 1 || v > 60000) {
+                fprintf(stderr,
+                        "bad --refresh-ms %s (expected integer ms, 1..60000)\n",
+                        argv[i]);
+                return 2;
+            }
+            if (v < 50) v = 50;            /* floor — see usage */
+            refresh_ms = (int)v;
+        } else if (!strcmp(argv[i], "--report") && i + 1 < argc) {
+            report_md = argv[++i];
+        } else if (!strcmp(argv[i], "--report-json") && i + 1 < argc) {
+            report_json = argv[++i];
+        } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
+            check_manifest = argv[++i];
+        } else if (!strcmp(argv[i], "--hop")) {
+            g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -361,6 +462,8 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+
+    if (g_hop_enabled) chanhop_init_default(&g_chanhop);
 
     if (jsonl_path) {
         if (!jsonl_open(jsonl_path)) {
@@ -383,7 +486,7 @@ int main(int argc, char **argv) {
     }
 
     memset(&g_state, 0, sizeof(g_state));
-    g_state.poll_ms     = POLL_MS;
+    g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
     g_state.active_view = VIEW_DASH;
 
     g_platform.init();
@@ -392,13 +495,21 @@ int main(int argc, char **argv) {
     capture_start(&g_state);
     probe_start(&g_state);
 #endif
+    event_wake_init();
+    updater_init(check_manifest);
     tui_init();
 
     while (!g_quit) {
         poll_data(&g_state);
         data_socket_tick();
+        /* Version check-in — cheap-when-idle; only re-reads the
+         * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
+        updater_tick(time(NULL));
+        updater_snapshot(&g_state);
         tui_draw(&g_state);
-        handle_key(&g_state, tui_poll_key(g_state.poll_ms));
+        int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
+        event_wake_drain();
+        handle_key(&g_state, ch);
     }
 
     tui_cleanup();
@@ -406,6 +517,36 @@ int main(int argc, char **argv) {
     probe_stop();
     capture_stop();
 #endif
+
+    /* Posture reports (roadmap #16 phase 5): rollup of alerts by
+     * ATT&CK technique, cleartext exposures, and high-risk devices.
+     * Written once at shutdown so the artifact represents a signed-off
+     * session record — not a partial mid-run snapshot. */
+    if (report_md) {
+        FILE *fp = fopen(report_md, "w");
+        if (fp) {
+            posture_render_md(fp, &g_state, session_start);
+            fclose(fp);
+            fprintf(stderr, "sloth: posture report -> %s\n", report_md);
+        } else {
+            fprintf(stderr,
+                    "sloth: could not open --report %s (report skipped)\n",
+                    report_md);
+        }
+    }
+    if (report_json) {
+        FILE *fp = fopen(report_json, "w");
+        if (fp) {
+            posture_render_json(fp, &g_state, session_start);
+            fclose(fp);
+            fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
+        } else {
+            fprintf(stderr,
+                    "sloth: could not open --report-json %s (report skipped)\n",
+                    report_json);
+        }
+    }
+
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();

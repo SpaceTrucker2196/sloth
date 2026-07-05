@@ -162,6 +162,8 @@ void jsonl_emit_tls(const tls_log_entry_t *e) {
     kv_str(buf, LINEBUF, &off, "host", e->host);
     kv_str(buf, LINEBUF, &off, "ver",  e->tls_ver);
     kv_str(buf, LINEBUF, &off, "ja3",  e->ja3);
+    if (e->ja4[0])
+        kv_str(buf, LINEBUF, &off, "ja4",  e->ja4);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -186,6 +188,8 @@ void jsonl_emit_http(const http_log_entry_t *e) {
     kv_str(buf, LINEBUF, &off, "host",   e->host);
     kv_str(buf, LINEBUF, &off, "method", e->method);
     kv_str(buf, LINEBUF, &off, "path",   e->path);
+    if (e->ja4h[0])
+        kv_str(buf, LINEBUF, &off, "ja4h", e->ja4h);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -229,6 +233,27 @@ void jsonl_emit_alert(const alert_t *a) {
     kv_int(buf, LINEBUF, &off, "sev",   (int)a->sev);
     kv_int(buf, LINEBUF, &off, "ty",    (int)a->type);
     kv_int(buf, LINEBUF, &off, "count", a->count);
+    /* MITRE ATT&CK technique — omitted when empty so consumers don't
+     * see a spurious "technique": "" for host-posture alerts like
+     * NO_MONITOR_MODE. Schema is additive per docs/wiki/jsonl-schema.md. */
+    if (a->technique[0])
+        kv_str(buf, LINEBUF, &off, "technique", a->technique);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+void jsonl_emit_cleartext_cred(const cleartext_cred_t *r) {
+    /* Never emit a password field, even NULL/empty. That's the whole
+     * point of this event class — the exposure fact, not the secret. */
+    if (!any_sink() || !r) return;
+    char  buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "cleartext_cred", r->ts);
+    kv_str(buf, LINEBUF, &off, "src",       r->src);
+    kv_str(buf, LINEBUF, &off, "dst",       r->dst);
+    kv_int(buf, LINEBUF, &off, "dst_port",  (int)r->dst_port);
+    kv_str(buf, LINEBUF, &off, "protocol",  r->protocol);
+    kv_str(buf, LINEBUF, &off, "username",  r->username);
+    kv_int(buf, LINEBUF, &off, "pw_observed", r->password_observed);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -455,6 +480,8 @@ void jsonl_emit_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "probe_count", (long long)e->probe_count);
         kv_int(buf, LINEBUF, &off, "sources",     (long long)e->sources);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
+        kv_str(buf, LINEBUF, &off, "risk",         device_risk_label(e->risk_level));
+        kv_int(buf, LINEBUF, &off, "risk_signals", (long long)e->risk_signals);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -490,6 +517,12 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "vendor_ies_hash",(long long)e->fp.vendor_ies_hash);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
+        /* QBSS Load — AP self-reported occupancy (omitted when the IE
+         * was absent so consumers can tell "no data" from "0"). */
+        if (e->has_qbss) {
+            kv_int(buf, LINEBUF, &off, "qbss_stations",  e->qbss_stations);
+            kv_int(buf, LINEBUF, &off, "qbss_chan_util", e->qbss_chan_util);
+        }
         /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
         off += snprintf(buf + off, (size_t)(LINEBUF - off),
                         ",\"ssid_history\":[");
@@ -767,17 +800,30 @@ void jsonl_emit_scan_entries(const sloth_state_t *s) {
     }
 }
 
-void jsonl_emit_packets(const sloth_state_t *s) {
-    if (!any_sink() || !s) return;
+void jsonl_emit_packets(sloth_state_t *s) {
+    if (!s) return;
+    /* A packet record is event-like: each captured frame must be emitted
+     * exactly once, not re-serialised every refresh cycle (issue #20). We
+     * track progress with a monotonic counter (pkt_total, bumped by the
+     * capture thread on every write) and a per-consumer high-water mark
+     * (pkt_jsonl_emitted). A monotonic pair — rather than comparing the
+     * wrapping pkt_head — lets us tell "0 new" from "a whole ring turned
+     * over since the last tick" and cap the emit to what's still resident.
+     *
+     * With no sink, advance the mark to the write head so a client that
+     * connects later streams forward (tail -f) instead of getting a
+     * backlog dump. */
+    if (!any_sink()) { s->pkt_jsonl_emitted = s->pkt_total; return; }
     time_t now = time(NULL);
-    /* Packet ring is sized at MAX_PACKETS; pkt_count is the number
-     * of *written* slots, capped at MAX_PACKETS. We emit ALL currently
-     * valid entries each tick — the ring's ordering doesn't matter for
-     * the snapshot model. raw bytes are deliberately omitted (would
-     * leak frame contents into log files); only the metadata ships. */
-    int n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
-    for (int i = 0; i < n; i++) {
-        const packet_info_t *e = &s->packets[i];
+    uint64_t pending = s->pkt_total - s->pkt_jsonl_emitted;
+    /* If more than a ring's worth arrived between ticks, the oldest were
+     * overwritten and are unrecoverable — emit only the survivors. */
+    if (pending > MAX_PACKETS) pending = MAX_PACKETS;
+    uint64_t first = s->pkt_total - pending;   /* absolute index of oldest survivor */
+    for (uint64_t k = first; k < s->pkt_total; k++) {
+        const packet_info_t *e = &s->packets[k % MAX_PACKETS];
+        /* raw bytes are deliberately omitted (would leak frame contents
+         * into log files); only the metadata ships. */
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "packet", now);
         kv_int(buf, LINEBUF, &off, "ts_sec",   (long long)e->ts_sec);
@@ -792,6 +838,7 @@ void jsonl_emit_packets(const sloth_state_t *s) {
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
+    s->pkt_jsonl_emitted = s->pkt_total;
 }
 
 void jsonl_emit_processes(const sloth_state_t *s) {
@@ -1000,7 +1047,29 @@ void jsonl_emit_snmp_flows(const sloth_state_t *s) {
     }
 }
 
-void jsonl_emit_state_snapshots(const sloth_state_t *s) {
+void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->mqtt_flow_count; i++) {
+        const mqtt_flow_t *e = &s->mqtt_flows[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "mqtt_flow", now);
+        kv_str(buf, LINEBUF, &off, "src_ip",             e->src_ip);
+        kv_str(buf, LINEBUF, &off, "dst_ip",             e->dst_ip);
+        kv_int(buf, LINEBUF, &off, "connect_count",      e->connect_count);
+        kv_int(buf, LINEBUF, &off, "connack_fail_count", e->connack_fail_count);
+        kv_int(buf, LINEBUF, &off, "subscribe_count",    e->subscribe_count);
+        kv_int(buf, LINEBUF, &off, "publish_count",      e->publish_count);
+        kv_int(buf, LINEBUF, &off, "proto_level",        e->proto_level);
+        kv_str(buf, LINEBUF, &off, "last_username",      e->last_username);
+        kv_int(buf, LINEBUF, &off, "first_seen",         (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",          (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
     if (!any_sink() || !s) return;
@@ -1034,4 +1103,5 @@ void jsonl_emit_state_snapshots(const sloth_state_t *s) {
     jsonl_emit_ssh_flows         (s);
     jsonl_emit_rdp_flows         (s);
     jsonl_emit_snmp_flows        (s);
+    jsonl_emit_mqtt_flows        (s);
 }

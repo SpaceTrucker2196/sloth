@@ -10,6 +10,7 @@ int win32_get_ifaces(iface_stat_t *out, int max)        { (void)out; (void)max; 
 int win32_get_conns(conn_t *out, int max)               { (void)out; (void)max; return 0; }
 int win32_wifi_scan(wifi_ap_t *out, int max)            { (void)out; (void)max; return 0; }
 int win32_get_wifi_stations(wifi_sta_t *out, int max)   { (void)out; (void)max; return 0; }
+int win32_set_channel(const char *iface, int freq_mhz)  { (void)iface; (void)freq_mhz; return -1; }
 int win32_get_arp(arp_entry_t *out, int max)            { (void)out; (void)max; return 0; }
 int win32_get_dhcp(dhcp_lease_t *out, int max)          { (void)out; (void)max; return 0; }
 
@@ -25,6 +26,7 @@ platform_ops_t g_platform = {
     win32_get_dhcp,
     win32_init,
     win32_cleanup,
+    win32_set_channel,
 };
 
 #endif /* PLATFORM_WIN32 */

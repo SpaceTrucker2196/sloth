@@ -4,8 +4,29 @@
 #include "tui.h"
 #include "history.h"
 #include "util.h"
+#include "oui.h"
 #include "views/iface.h"
 #include "capture/probe.h"
+
+/* 4-char mode label — MON/WIFI/ETH highlight what a WiFi-SIGINT
+ * operator cares about at a glance. UNKNOWN renders as "?". */
+static const char *mode_label(iface_mode_t m) {
+    switch (m) {
+    case IFACE_MODE_MONITOR: return "MON ";
+    case IFACE_MODE_WIFI:    return "WIFI";
+    case IFACE_MODE_ETHER:   return "ETH ";
+    default:                 return "?   ";
+    }
+}
+
+/* Compact vendor from OUI table. Returns "-" if MAC is unknown /
+ * all-zero, or if the OUI isn't in our embedded table. */
+static const char *iface_vendor(const iface_stat_t *f) {
+    static const uint8_t zero[6] = {0};
+    if (memcmp(f->mac, zero, 6) == 0) return "-";
+    const char *v = oui_lookup(f->mac);
+    return (v && v[0]) ? v : "-";
+}
 
 /* ── sparkline ───────────────────────────────────────────── */
 
@@ -230,9 +251,23 @@ static void draw_iface_graph(const sloth_state_t *s) {
 
 /* ── hidden helper ───────────────────────────────────────── */
 
-static int is_hidden(const sloth_state_t *s, const char *name) {
+/* Declared in sloth.h — shared with the dashboard iface band so the
+ * election is honoured in both places. */
+int iface_is_hidden(const sloth_state_t *s, const char *name) {
     for (int i = 0; i < s->iface_hidden_count; i++) {
         if (strncmp(s->iface_hidden[i], name, 16) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Declared in sloth.h — shared with the capture callback (on_packet)
+ * so a deselected iface's packets are dropped before any decode runs.
+ * Kept independent of iface_is_hidden: hide is display-only, deselect
+ * is data-stream. See issue #17. */
+int iface_is_deselected(const sloth_state_t *s, const char *name) {
+    for (int i = 0; i < s->iface_deselected_count; i++) {
+        if (strncmp(s->iface_deselected[i], name, 16) == 0)
             return 1;
     }
     return 0;
@@ -256,15 +291,20 @@ void view_iface_draw(const sloth_state_t *s) {
     if (vp < 0) vp = 0;
 
     tui_dim();
-    printw("  %-13s  %-11s  %-11s  %-*s  %-10s  %-10s\n",
-           "Interface", "RX", "TX", HIST_LEN + 2, "RX history", "Total RX", "Total TX");
+    printw("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
+           "Interface", "Mode", "Vendor", "RX", "TX",
+           HIST_LEN + 2, "RX history", "Total RX", "Total TX");
     tui_normal();
 
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = is_hidden(s, f->name);
+        int hidden     = iface_is_hidden(s, f->name);
+        int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
-        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
+        /* prefix priority: hidden > deselected > scanning > default */
+        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
+        const char *mode   = mode_label(f->mode);
+        const char *vendor = iface_vendor(f);
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -277,37 +317,44 @@ void view_iface_draw(const sloth_state_t *s) {
             if (h && !hidden) make_sparkline(h, 1, spark, HIST_LEN);
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
-            printw("  %c%-12s  %-11s  %-11s  [%s]  %-10s  %-10s%s\n",
-                   pfx, f->name,
+            printw("  %c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s\n",
+                   pfx, f->name, mode, vendor,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan ? "  [scanning]" : (hidden ? "  (hidden)" : ""));
+                   is_scan     ? "  [scanning]"
+                   : hidden    ? "  (hidden)"
+                   : deselected? "  (deselected)"
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset();
         } else if (hidden) {
             tui_dim();
-            printw("  h%-12s  (hidden)\n", f->name);
+            printw("  h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
             tui_reset();
         } else {
-            if (is_scan) tui_bright(); else tui_normal();
-            printw("  %c%-12s", pfx, f->name);
+            if (is_scan || f->mode == IFACE_MODE_MONITOR) tui_bright();
+            else tui_normal();
+            printw("  %c%-9s %-4s %-12.12s",
+                   pfx, f->name, mode, vendor);
             /* RX rate */
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
-            printw("  %-11s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
+            printw(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             /* TX rate */
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
-            printw("  %-11s  [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
+            printw(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
             /* sparkline: per-char intensity */
             if (h) print_sparkline_heat(h, 1, HIST_LEN);
             else { tui_dim(); printw("%*s", HIST_LEN, ""); }
             /* totals */
             tui_dim();
-            printw("]  %-10s  %-10s",
+            printw("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printw("  [scanning]"); }
+            else if (deselected) { tui_dim(); printw("  (deselected)"); }
+            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
             printw("\n");
             tui_normal();
         }
@@ -319,15 +366,16 @@ void view_iface_draw(const sloth_state_t *s) {
 
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
-             " ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s",
+             " ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s",
              s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 
 #else
     /* ── ANSI fallback ── */
     tui_dim();
-    printf("  %-13s  %-11s  %-11s  %-*s  %-10s  %-10s\n",
-           "Interface", "RX", "TX", HIST_LEN + 2, "RX history", "Total RX", "Total TX");
+    printf("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
+           "Interface", "Mode", "Vendor", "RX", "TX",
+           HIST_LEN + 2, "RX history", "Total RX", "Total TX");
     printf("  %s\n",
            "--------------------------------------------------------------------"
            "-----------------------");
@@ -335,10 +383,13 @@ void view_iface_draw(const sloth_state_t *s) {
 
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *f = &s->ifaces[i];
-        int hidden  = is_hidden(s, f->name);
+        int hidden     = iface_is_hidden(s, f->name);
+        int deselected = iface_is_deselected(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         int sel     = (i == s->iface_sel);
-        char pfx    = hidden ? 'h' : (is_scan ? 's' : ' ');
+        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
+        const char *mode   = mode_label(f->mode);
+        const char *vendor = iface_vendor(f);
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -351,33 +402,40 @@ void view_iface_draw(const sloth_state_t *s) {
             if (h && !hidden) make_sparkline(h, 1, spark, HIST_LEN);
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
-            printf(" >%c%-12s  %-11s  %-11s  [%s]  %-10s  %-10s%s",
-                   pfx, f->name,
+            printf(" >%c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s",
+                   pfx, f->name, mode, vendor,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
                    spark,
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)),
-                   is_scan ? "  [scanning]" : (hidden ? "  (hidden)" : ""));
+                   is_scan     ? "  [scanning]"
+                   : hidden    ? "  (hidden)"
+                   : deselected? "  (deselected)"
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset(); printf("\n");
         } else if (hidden) {
             tui_dim();
-            printf("   h%-12s  (hidden)\n", f->name);
+            printf("   h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
             tui_normal();
         } else {
-            if (is_scan) tui_bright(); else tui_normal();
-            printf("  %c%-12s", pfx, f->name);
+            if (is_scan || f->mode == IFACE_MODE_MONITOR) tui_bright();
+            else tui_normal();
+            printf("  %c%-9s %-4s %-12.12s",
+                   pfx, f->name, mode, vendor);
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
-            printf("  %-11s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
+            printf(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
-            printf("  %-11s  [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
+            printf(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
             if (h) print_sparkline_heat(h, 1, HIST_LEN);
             else { tui_dim(); printf("%*s", HIST_LEN, ""); }
             tui_dim();
-            printf("]  %-10s  %-10s",
+            printf("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printf("  [scanning]"); }
+            else if (deselected) { tui_dim(); printf("  (deselected)"); }
+            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
             printf("\n");
             tui_normal();
         }
@@ -388,7 +446,7 @@ void view_iface_draw(const sloth_state_t *s) {
     }
 
     tui_dim();
-    printf("\n  ↑↓ navigate   t toggle hidden   m scan   Enter detail   %d interface%s\n",
+    printf("\n  ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s\n",
            s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 #endif
@@ -439,6 +497,33 @@ void view_iface_key(sloth_state_t *s, int key) {
         } else if (s->iface_hidden_count < MAX_IFACES) {
             memcpy(s->iface_hidden[s->iface_hidden_count], name, 16);
             s->iface_hidden_count++;
+        }
+        break;
+    }
+
+    case 'y': case 'Y': {
+        /* Toggle data-stream selection for the selected iface. Distinct
+         * from hide ('t'): 'y' also drops the iface's packets from the
+         * capture pipeline (issue #17). SLL2 detection lives in the
+         * capture callback — on non-SLL2 datalinks this is a no-op for
+         * the pipeline but the marker still renders. */
+        if (s->iface_count == 0) break;
+        const char *name = s->ifaces[s->iface_sel].name;
+
+        int found = -1;
+        for (int i = 0; i < s->iface_deselected_count; i++) {
+            if (strncmp(s->iface_deselected[i], name, 16) == 0) {
+                found = i; break;
+            }
+        }
+        if (found >= 0) {
+            memmove(&s->iface_deselected[found],
+                    &s->iface_deselected[found + 1],
+                    (size_t)(s->iface_deselected_count - found - 1) * 16);
+            s->iface_deselected_count--;
+        } else if (s->iface_deselected_count < MAX_IFACES) {
+            memcpy(s->iface_deselected[s->iface_deselected_count], name, 16);
+            s->iface_deselected_count++;
         }
         break;
     }

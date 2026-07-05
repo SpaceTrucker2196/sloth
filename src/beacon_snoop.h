@@ -32,6 +32,11 @@ typedef struct {
      * filled from the BSSID by beacon_record (parser doesn't see the
      * BSSID assembled), so beacon_parse leaves fp.oui == {0,0,0}. */
     ap_fingerprint_t fp;
+    /* QBSS Load IE (tag 11) — AP-reported occupancy. has_qbss=0 = IE absent
+     * (distinguishes it from a genuine "0 stations / 0% utilisation"). */
+    int  has_qbss;
+    int  qbss_stations;   /* associated station count */
+    int  qbss_chan_util;  /* channel utilisation, 0..255 (fraction of 255) */
 } beacon_rsn_t;
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).
@@ -70,5 +75,10 @@ int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
 
 /* Clear the internal AP table. */
 void beacon_clear(void);
+
+/* Number of distinct new BSSIDs first seen within the last `window_s`
+ * seconds — the beacon-flood signal (roadmap B4). A legit RF neighbourhood
+ * gains APs slowly; an mdk-style flood spikes this hard. Thread-safe. */
+int  beacon_recent_new_bssids(time_t now, int window_s);
 
 #endif /* BEACON_SNOOP_H */

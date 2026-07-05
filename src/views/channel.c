@@ -116,9 +116,10 @@ void view_channel_draw(const sloth_state_t *s) {
         tui_dim();
         TPRINT("  (no channel activity observed yet)\n");
         if (s->probe_iface[0])
-            TPRINT("  hop the adapter to other channels with "
-                   "'iw dev %s set channel N' to widen coverage.\n",
-                   s->probe_iface);
+            TPRINT("  widen coverage by hopping channels: restart with "
+                   "'--hop' (sloth retunes %s itself), or set them manually "
+                   "with 'iw dev %s set channel N'.\n",
+                   s->probe_iface, s->probe_iface);
         tui_normal();
         return;
     }

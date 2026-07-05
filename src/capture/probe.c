@@ -15,6 +15,7 @@
 #include "eapol_log.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
+#include "auth_track.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -97,8 +98,13 @@ static void parse_radiotap(const uint8_t *buf, int len,
         off = RT_PAD(off, 2);
         if (off + 2 <= (int)rt_len) {
             uint16_t freq = (uint16_t)(buf[off] | (buf[off+1] << 8));
-            if      (freq >= 2412 && freq <= 2484) *channel = (freq - 2407) / 5;
-            else if (freq >= 5160 && freq <= 5885) *channel = (freq - 5000) / 5;
+            /* Mirror the nl80211 freq→channel map (src/platform/linux_wifi.c)
+             * so a monitor capture and a managed-mode scan agree. Without the
+             * 6 GHz arm, 6 GHz frames landed on channel 0. */
+            if      (freq >= 2412 && freq <= 2472) *channel = (freq - 2407) / 5;
+            else if (freq == 2484)                 *channel = 14;
+            else if (freq >= 5160 && freq <= 5895) *channel = (freq - 5000) / 5;
+            else if (freq >= 5955 && freq <= 7115) *channel = (freq - 5950) / 5;
         }
         off += 4;
     }
@@ -253,6 +259,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             assoc_forget(a1, a2);
             assoc_forget(a2, a1);
         }
+        return;
+    }
+
+    if (sub == 11) {
+        /* Authentication frame (open / shared-key / SAE / OWE / FILS).
+         * We don't decode the algorithm here — the flood signal is the
+         * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
+         * to; a burst there means an association-table exhaustion DoS. */
+        auth_observe(dot11 + 16, time(NULL));
         return;
     }
 

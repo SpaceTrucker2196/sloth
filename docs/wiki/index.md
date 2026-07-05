@@ -42,11 +42,17 @@ source material.
 - [[snmp-snoop]] — SNMP v1/v2c BER parsing + community-string
   tracking + `SNMP_COMMUNITY_BRUTE` alert (snmpwalk wordlist /
   metasploit snmp_login detection).
+- [[mqtt-snoop]] — MQTT v3/v4/v5 CONNECT + CONNACK-fail counting
+  with username extraction + `MQTT_BROKER_BRUTE` alert
+  (IoT-broker brute / Mirai-class scanner detection).
 
 ## UI and infrastructure
 
 - [[ip-palette]] — colour conventions and TUI rules.
 - [[platform-vtable]] — the kernel seam (`platform_ops_t`).
+- [[version-checkin]] — periodic release checks and the safe boundary
+  between version awareness and self-update.
+- [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.

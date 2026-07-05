@@ -461,7 +461,7 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     s.packets[0].ts_sec = 1700000000;
     snprintf(s.packets[0].src, sizeof(s.packets[0].src), "10.0.0.5");
     snprintf(s.packets[0].dst, sizeof(s.packets[0].dst), "8.8.8.8");
-    s.pkt_count = 1;
+    s.pkt_count = 1; s.pkt_head = 1; s.pkt_total = 1;  /* mirror the capture write path */
 
     /* process — driven by procs_aggregate over s->conns. Seed one
      * conn with a non-zero pid so the aggregator produces a row. */
@@ -539,6 +539,53 @@ static void test_emit_state_snapshots_empty_writes_nothing(void) {
     ASSERT(!contains(body, "\"type\":\"device\""));
 }
 
+/* ── packet once-only emission (issue #20 regression) ─────── */
+
+static void push_pkt(sloth_state_t *s, const char *src) {
+    /* Mirror the capture write path so the emitter sees a realistic ring. */
+    packet_info_t p; memset(&p, 0, sizeof(p));
+    p.ts_sec = 1700000000; p.proto = 6; p.len = 64;
+    snprintf(p.src, sizeof(p.src), "%s", src);
+    snprintf(p.dst, sizeof(p.dst), "8.8.8.8");
+    s->packets[s->pkt_head] = p;
+    s->pkt_head = (s->pkt_head + 1) % MAX_PACKETS;
+    if (s->pkt_count < MAX_PACKETS) s->pkt_count++;
+    s->pkt_total++;
+}
+
+static int line_count(const char *b) {
+    int n = 0;
+    for (; b && *b; b++) if (*b == '\n') n++;
+    return n;
+}
+
+static void test_emit_packets_once_only(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    push_pkt(&s, "10.0.0.1");
+    push_pkt(&s, "10.0.0.2");
+    push_pkt(&s, "10.0.0.3");
+
+    /* first emit ships all three new records */
+    open_fresh();
+    jsonl_emit_packets(&s);
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 3);
+
+    /* re-emitting with nothing new must ship zero — the whole point of #20 */
+    open_fresh();
+    jsonl_emit_packets(&s);
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 0);
+
+    /* two more arrive → only the two new records ship, not all five */
+    push_pkt(&s, "10.0.0.4");
+    push_pkt(&s, "10.0.0.5");
+    open_fresh();
+    jsonl_emit_packets(&s);
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
 /* ── per-record() integration (a parallel write through the log API) ── */
 
 static void test_dns_log_record_writes_jsonl(void) {
@@ -578,6 +625,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
+    RUN_TEST(test_emit_packets_once_only);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);

@@ -159,4 +159,13 @@ void devices_update(sloth_state_t *s) {
     s->device_count = n;
     if (s->device_sel >= n) s->device_sel = n > 0 ? n - 1 : 0;
     if (s->device_sel < 0)  s->device_sel = 0;
+
+    /* Second pass: risk-score each device against the current sloth
+     * state. Runs after the write into s->devices because the scoring
+     * function inspects s->alerts / s->cleartext_creds and needs to
+     * see the same view the operator will. See roadmap #16 phase 4. */
+    for (int i = 0; i < s->device_count; i++) {
+        device_t *d = &s->devices[i];
+        d->risk_level = device_risk_score(d, s, &d->risk_signals);
+    }
 }
