@@ -76,6 +76,34 @@ static void test_pnl_overlap_and_score(void) {
     ASSERT_EQ(s.karma_aps[0].score, 1 + 2);   /* base + overlap */
 }
 
+/* Jaccard(advertised, PNL-union) in ppm. AP advertises {a,b,c} (|A|=3),
+ * the PNL union is {a,b} (|B|=2), intersection {a,b} (2). Union = 3, so
+ * Jaccard = 2/3 = 666666 ppm. A full-overlap lure trends toward 1e6. */
+static void test_jaccard_ppm(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, lure, adv, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "a", "b" };
+    add_pnl_client(&s, cli, pnl, 2);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].pnl_jaccard_ppm, 666666);
+}
+
+static void test_jaccard_full_overlap(void) {
+    /* AP advertises exactly the PNL union → Jaccard = 1.0 (1e6). */
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, lure, adv, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "a", "b", "c" };
+    add_pnl_client(&s, cli, pnl, 3);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].pnl_jaccard_ppm, 1000000);
+}
+
 /* A concurrent deauth flood sets the chain flag and adds to the score. */
 static void test_deauth_chain(void) {
     sloth_state_t s; seed(&s);
@@ -135,6 +163,8 @@ void run_karma_tests(void) {
     RUN_TEST(test_empty_state);
     RUN_TEST(test_threshold);
     RUN_TEST(test_pnl_overlap_and_score);
+    RUN_TEST(test_jaccard_ppm);
+    RUN_TEST(test_jaccard_full_overlap);
     RUN_TEST(test_deauth_chain);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);

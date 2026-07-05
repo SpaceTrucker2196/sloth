@@ -25,6 +25,10 @@ Per candidate:
   clients' preferred-network lists. PineAP Beacon Response answers
   exactly what clients probe for, so a high overlap separates an active
   lure from a benign SSID-cycling AP.
+- **J%** — Jaccard similarity between the advertised SSID set and the
+  client-PNL union (`|A∩B| / |A∪B|`), shown as a percentage. Trends
+  toward 100% as the AP mirrors the entire union of probed networks —
+  the sharpest PineAP tell. Rendered bright at ≥70%.
 - **chain** — a deauth flood is active within 60 s (`deauth-then-lure`:
   knock clients off, then answer their reconnection probes).
 - **score** — `1 + (PNL>0 ? 2 : 0) + (chain ? 3 : 0)`, ranked
@@ -38,9 +42,9 @@ view is the ranked, browsable surface for them.
 ```
  ── KARMA ─────────────────────────────────────────────────────────
  KARMA/PineAP candidates: 1 / max 64  deauth-then-lure: 1
- BSSID              SSIDs  PNL   chain  score  Top SSID / last
- -----------------  -----  ----  -----  -----  ---------------
- 00:11:22:33:44:55      7     4  YES        6  Starbucks (2s)
+ BSSID              SSIDs  PNL   J%    chain  score  Top SSID / last
+ -----------------  -----  ----  ----  -----  -----  ---------------
+ 00:11:22:33:44:55      7     4  80%   YES        6  Starbucks (2s)
  PNL = advertised SSIDs matching nearby client probe lists; chain = concurrent deauth flood
 ```
 

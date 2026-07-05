@@ -944,6 +944,7 @@ typedef struct {
     uint8_t  bssid[6];
     int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
     int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
+    int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
     int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
     int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
     char     top_ssid[33];  /* most recently advertised SSID */
