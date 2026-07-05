@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "sensors.h"
 #include "bandwidth.h"
 #include "data_socket.h"
 #include "formatter.h"
@@ -1069,11 +1070,31 @@ void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_sensors(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->sensor_count; i++) {
+        const sensor_t *sn = &s->sensors[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "sensor", now);
+        kv_str(buf, LINEBUF, &off, "kind",       sensor_kind_name(sn->kind));
+        kv_str(buf, LINEBUF, &off, "state",      sensor_state_name(sn->state));
+        kv_str(buf, LINEBUF, &off, "name",       sn->name);
+        kv_str(buf, LINEBUF, &off, "iface",      sn->iface);
+        kv_int(buf, LINEBUF, &off, "observed",   (long long)sn->observed);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)sn->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)sn->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
     if (!any_sink() || !s) return;
     jsonl_emit_ifaces            (s);
+    jsonl_emit_sensors           (s);
     jsonl_emit_arp               (s);
     jsonl_emit_dhcp_leases       (s);
     jsonl_emit_wifi_aps          (s);

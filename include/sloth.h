@@ -1083,6 +1083,33 @@ typedef struct {
     char     label[12];
 } mon_frame_t;
 
+/* Passive sensor abstraction (issue #28). A sensor is a typed producer of
+ * observations copied into sloth_state_t — the Wi-Fi monitor today, BLE /
+ * Zigbee / SDR / GPS / ADS-B / Meshtastic / CAN tomorrow (see
+ * docs/wiki/non-ip-sensors.md). Deliberately small: it normalises metadata
+ * about passive sources, it is NOT a plugin ABI or a control surface. */
+#define MAX_SENSORS 16
+typedef enum {
+    SENSOR_WIFI = 0, SENSOR_BLE, SENSOR_ZIGBEE, SENSOR_SDR,
+    SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
+    SENSOR_KIND_COUNT
+} sensor_kind_t;
+typedef enum {
+    SENSOR_STATE_PRESENT = 0, /* detected, not yet producing */
+    SENSOR_STATE_ACTIVE,      /* producing observations */
+    SENSOR_STATE_HIDDEN,      /* present but suppressed by the operator */
+    SENSOR_STATE_ERROR        /* failed to read */
+} sensor_state_e;
+typedef struct {
+    int      kind;            /* sensor_kind_t */
+    int      state;          /* sensor_state_e */
+    char     name[32];       /* human-readable ("Wi-Fi monitor") */
+    char     iface[32];      /* interface / source id */
+    uint64_t observed;       /* cumulative observation count */
+    time_t   first_seen;
+    time_t   last_seen;
+} sensor_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -1121,6 +1148,9 @@ typedef struct {
     mon_frame_t   mon_frames[MAX_MON_FRAMES]; /* 802.11 frames, newest first */
     int           mon_frame_count;
     int           mon_frame_sel;              /* selected row in the frames view */
+
+    sensor_t      sensors[MAX_SENSORS];       /* passive sensor registry (#28) */
+    int           sensor_count;
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */

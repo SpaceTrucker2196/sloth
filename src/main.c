@@ -9,6 +9,7 @@
 #include "wifi_chanhop.h"
 #include "wifi_snapshot.h"
 #include "wifi_baseline.h"
+#include "sensors.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -82,9 +83,9 @@
 #include "data_socket.h"
 #include "dns.h"
 #include "scan.h"
+#include "capture/probe.h"   /* self-stubbing without WITH_PCAP */
 #ifdef WITH_PCAP
 #  include "capture/capture.h"
-#  include "capture/probe.h"
 #endif
 
 static sloth_state_t g_state;
@@ -190,6 +191,14 @@ static void poll_data(sloth_state_t *s) {
     }
     devices_update(s);
     top_hosts_update(s);
+    /* #28: register the monitor radio as the Wi-Fi sensor and record its
+     * cumulative observation count. Future RF families register the same way. */
+    if (s->probe_iface[0]) {
+        time_t now = time(NULL);
+        sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
+                                       s->probe_iface, now);
+        sensor_observe(sn, mon_frame_total(), now);
+    }
 #ifdef WITH_PCAP
     chanhop_drive(s);
 #endif

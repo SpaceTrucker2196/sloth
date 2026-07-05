@@ -32,7 +32,15 @@ static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
 static mon_frame_t     g_frames[MAX_MON_FRAMES];
 static int             g_frame_head;
 static int             g_frame_count;
+static uint64_t        g_frame_total;   /* cumulative frames ever seen (#28 sensor) */
 static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
+
+uint64_t mon_frame_total(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    uint64_t t = g_frame_total;
+    pthread_mutex_unlock(&g_frame_mu);
+    return t;
+}
 
 /* Human subtype label for a frame's (type, subtype). */
 static const char *frame_label(uint8_t type, uint8_t sub) {
@@ -74,6 +82,7 @@ static void mon_frame_record(uint8_t type, uint8_t sub,
     snprintf(f->label, sizeof(f->label), "%s", frame_label(type, sub));
     g_frame_head = (g_frame_head + 1) % MAX_MON_FRAMES;
     if (g_frame_count < MAX_MON_FRAMES) g_frame_count++;
+    g_frame_total++;
     pthread_mutex_unlock(&g_frame_mu);
 }
 
