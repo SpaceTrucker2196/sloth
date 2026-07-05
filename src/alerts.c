@@ -5,6 +5,7 @@
 #include "threat_intel.h"
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
+#include "auth_track.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -192,6 +193,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
     case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
     case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
+    case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -248,6 +250,26 @@ static void rule_beacon_flood(const sloth_state_t *s, time_t now) {
              n, BEACON_FLOOD_WIN_SECS);
     fire(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN,
          "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
+}
+
+static void rule_auth_flood(const sloth_state_t *s, time_t now) {
+    /* A burst of auth frames at one BSSID = association-table exhaustion
+     * DoS (mdk3 'a'). Keyed per-AP so a busy roaming environment doesn't
+     * trip it — only a genuine outlier does. */
+    (void)s;
+    uint8_t bssid[6];
+    int n = auth_flood_bssid(now, AUTH_FLOOD_WIN_SECS, AUTH_FLOOD_THRESH, bssid);
+    if (n < AUTH_FLOOD_THRESH) return;
+    char bss[20];
+    mac_to_str(bssid, bss, sizeof(bss));
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key,    sizeof(key),    "authflood:%s", bss);
+    snprintf(detail, sizeof(detail),
+             "%d auth frames to %s in %ds (assoc-table DoS)",
+             n, bss, AUTH_FLOOD_WIN_SECS);
+    fire(ALERT_TYPE_AUTH_FLOOD, ALERT_SEV_WARN,
+         "AUTH_FLOOD", detail, key, NULL, 0, now);
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -1472,6 +1494,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
     rule_beacon_flood(s, now);
+    rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_attack_tool_ua(s, now);

@@ -5,6 +5,7 @@
 #include "alerts.h"
 #include "views/alerts.h"
 #include "beacon_snoop.h"
+#include "auth_track.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -133,6 +134,31 @@ static void test_beacon_flood_few_no_fire(void) {
     }
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_BEACON_FLOOD), -1);
+}
+
+static void test_auth_flood_fires(void) {
+    alerts_clear();
+    auth_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01 };
+    time_t now = time(NULL);
+    for (int i = 0; i < AUTH_FLOOD_THRESH + 5; i++) auth_observe(ap, now);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_AUTH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:01") != NULL);
+}
+
+static void test_auth_flood_quiet_no_fire(void) {
+    alerts_clear();
+    auth_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02 };
+    time_t now = time(NULL);
+    for (int i = 0; i < 5; i++) auth_observe(ap, now);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_AUTH_FLOOD), -1);
 }
 
 static void test_deauth_flood_fires(void) {
@@ -2178,6 +2204,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_deauth_flood_detail_content);
     RUN_TEST(test_beacon_flood_fires);
     RUN_TEST(test_beacon_flood_few_no_fire);
+    RUN_TEST(test_auth_flood_fires);
+    RUN_TEST(test_auth_flood_quiet_no_fire);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

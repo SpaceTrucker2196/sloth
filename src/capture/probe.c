@@ -15,6 +15,7 @@
 #include "eapol_log.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
+#include "auth_track.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -258,6 +259,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             assoc_forget(a1, a2);
             assoc_forget(a2, a1);
         }
+        return;
+    }
+
+    if (sub == 11) {
+        /* Authentication frame (open / shared-key / SAE / OWE / FILS).
+         * We don't decode the algorithm here — the flood signal is the
+         * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
+         * to; a burst there means an association-table exhaustion DoS. */
+        auth_observe(dot11 + 16, time(NULL));
         return;
     }
 

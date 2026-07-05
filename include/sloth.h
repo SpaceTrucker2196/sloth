@@ -656,6 +656,7 @@ typedef enum {
     ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
     ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
     ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
+    ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -774,6 +775,10 @@ typedef struct {
  * a flood injects dozens of brand-new BSSIDs in seconds. */
 #define BEACON_FLOOD_THRESH    40   /* distinct new BSSIDs in the window */
 #define BEACON_FLOOD_WIN_SECS  10
+/* Auth-request flood: a legit AP fields the odd auth frame (roam,
+ * reconnect); an mdk-style flood sprays dozens per second at one BSSID. */
+#define AUTH_FLOOD_THRESH      30   /* auth frames to one BSSID in the window */
+#define AUTH_FLOOD_WIN_SECS     5
 
 typedef struct {
     uint8_t  src[6];
