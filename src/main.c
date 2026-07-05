@@ -10,6 +10,7 @@
 #include "wifi_snapshot.h"
 #include "wifi_baseline.h"
 #include "sensors.h"
+#include "wifi_merge.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -198,6 +199,14 @@ static void poll_data(sloth_state_t *s) {
         sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
                                        s->probe_iface, now);
         sensor_observe(sn, mon_frame_total(), now);
+        /* #21: fold this radio's beacon observations into the merged
+         * multi-radio world model. With one adapter this is an identity
+         * map; a second monitor radio would merge under its own sensor id.
+         * Rebuilt each poll so aged-out APs drop from the merged view too. */
+        if (sn) {
+            wifi_merge_reset(&s->wifi_merged);
+            wifi_merge_from_beacons(s, (int)(sn - s->sensors));
+        }
     }
 #ifdef WITH_PCAP
     chanhop_drive(s);

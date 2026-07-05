@@ -81,6 +81,7 @@ void run_wifi_snapshot_tests(void);
 void run_wifi_assess_tests(void);
 void run_wifi_baseline_tests(void);
 void run_sensors_tests(void);
+void run_wifi_merge_tests(void);
 void run_twins_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
@@ -172,6 +173,7 @@ int main(void) {
     run_wifi_assess_tests();
     run_wifi_baseline_tests();
     run_sensors_tests();
+    run_wifi_merge_tests();
     run_twins_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();

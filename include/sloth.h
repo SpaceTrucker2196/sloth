@@ -1110,6 +1110,37 @@ typedef struct {
     time_t   last_seen;
 } sensor_t;
 
+/* Multi-radio Wi-Fi merge (issue #21). Several monitor-mode adapters can
+ * listen at once — each a SENSOR_WIFI sensor with its own id (0..15). A
+ * single adapter only hears one channel at a time, so short management
+ * frames slip past while it is tuned elsewhere; a second radio parked on
+ * another channel closes that gap. This layer merges per-radio 802.11
+ * observations into ONE world model keyed by the observed entity (AP
+ * BSSID / STA MAC), while retaining enough observer metadata to answer
+ * "which radio saw this, on what channel, at what signal, when?".
+ *
+ * Existing Wi-Fi tables still aggregate by entity, not by adapter; this
+ * runs alongside them and is the seam a future N-thread capture path
+ * feeds. Purely additive — with one radio it is an identity map. */
+#define MAX_WIFI_MERGED 512
+typedef struct {
+    uint8_t  key[6];          /* observed entity: AP BSSID or STA MAC */
+    uint16_t sensor_mask;     /* bit i set = sensor id i observed this entity */
+    int      seen_by;         /* popcount(sensor_mask): distinct radios */
+    int      best_rssi;       /* strongest RSSI across radios (dBm, closest to 0) */
+    int      best_sensor;     /* sensor id that heard it strongest */
+    int      channel;         /* channel of the most recent observation */
+    int      freq_mhz;        /* frequency of the most recent observation */
+    time_t   first_seen;
+    time_t   last_seen;
+    uint64_t observations;    /* total merged observations across all radios */
+} wifi_merged_t;
+typedef struct {
+    wifi_merged_t ents[MAX_WIFI_MERGED];
+    int           count;
+    uint64_t      dropped;    /* observations discarded (table full / bad sensor id) */
+} wifi_merge_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -1151,6 +1182,8 @@ typedef struct {
 
     sensor_t      sensors[MAX_SENSORS];       /* passive sensor registry (#28) */
     int           sensor_count;
+
+    wifi_merge_t  wifi_merged;                /* multi-radio merged 802.11 view (#21) */
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */

@@ -41,6 +41,7 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s);
  * walks them all in one call. */
 void jsonl_emit_ifaces        (const sloth_state_t *s);
 void jsonl_emit_sensors       (const sloth_state_t *s);
+void jsonl_emit_wifi_merged   (const sloth_state_t *s);
 void jsonl_emit_arp           (const sloth_state_t *s);
 void jsonl_emit_dhcp_leases   (const sloth_state_t *s);
 void jsonl_emit_wifi_aps      (const sloth_state_t *s);

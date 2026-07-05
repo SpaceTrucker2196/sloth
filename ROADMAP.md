@@ -45,10 +45,15 @@ still open).
 
 ### A2. Multi-radio & channel coverage
 
-- **◆ Multi-radio Wi-Fi sensor merge** — `#21`. Consume monitor-mode
-  frames from >1 adapter, tag every observation with a source sensor id
-  (interface, channel, freq, RSSI-per-sensor), merge into one world
-  model. Prerequisite framing for #22 and #28.
+- **✅ LANDED (2026-07-04)** — **Multi-radio Wi-Fi sensor merge** —
+  `#21`. Shipped as `src/wifi_merge.c`: an entity-keyed merge table
+  (AP BSSID / STA MAC) that folds observations from >1 monitor adapter
+  into one world model, tagging each with a source sensor id and
+  retaining `seen_by` / `sensor_mask` / `best_rssi` / `best_sensor`
+  observer metadata. Additive `wifi_merged` JSONL record; built on the
+  #28 sensor registry. Merge/dedup/error-handling covered in
+  `tests/test_wifi_merge.c`; live N-radio concurrent capture is
+  hardware-gated (needs two monitor adapters + `CAP_NET_ADMIN`).
 - **✅ LANDED (2026-07-04)** — **Adaptive passive channel scheduler** —
   `#22`. Shipped as `src/wifi_chanhop.c` + a `set_channel` platform op
   (nl80211), driven by `--hop` (opt-in, off by default). Required the
