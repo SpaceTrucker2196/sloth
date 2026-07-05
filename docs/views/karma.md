@@ -71,7 +71,10 @@ operator's eye.
 - **chain = YES** — a deauth flood is running alongside the lure: the
   classic deauth-then-lure sequence
   ([T1557.004](https://attack.mitre.org/techniques/T1557/004/)).
-- **score ≥ 5** — multiple signals stacked; treat as an active lure.
+- **score ≥ 5** — multiple signals stacked; treat as an active lure. A
+  BSSID at this score is also badged deep-red with a `!` on the
+  dashboard's Beacons panel, the same way `THREAT_IP` flags a hostile
+  host — so an active lure is visible without leaving the dashboard.
 
 ## See also
 
