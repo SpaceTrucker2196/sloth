@@ -65,4 +65,9 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms);
 int chanhop_current_channel(const chanhop_t *h);
 int chanhop_current_freq(const chanhop_t *h);
 
+/* Copy the channel list (channel numbers) into out[max]; return the count.
+ * *cur_idx receives the index of the channel currently dwelt on (-1 if
+ * none). For the UI scan bar. */
+int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx);
+
 #endif /* WIFI_CHANHOP_H */

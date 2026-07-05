@@ -111,6 +111,10 @@ static void chanhop_drive(sloth_state_t *s) {
     last_total = s->pkt_total;
     if (chanhop_tick(&g_chanhop, now_ms))
         g_platform.set_channel(s->probe_iface, chanhop_current_freq(&g_chanhop));
+    /* Surface the scan state for the interface view's channel bar. */
+    s->scan_chan_count = chanhop_export(&g_chanhop, s->scan_chans,
+                                        (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),
+                                        &s->scan_cur_idx);
 }
 #endif
 

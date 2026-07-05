@@ -234,6 +234,18 @@ static void test_scan_indicator_no_probe_iface(void) {
 
 /* ── Entry point ─────────────────────────────────────────── */
 
+/* The monitor row's scan bar renders with a live hop channel list. */
+static void test_scan_bar_renders(void) {
+    sloth_state_t s = make_state(2);   /* eth0, wlan0 */
+    memcpy(s.probe_iface, "wlan0", 6);
+    s.iface_sel = 1;
+    s.scan_chans[0] = 1; s.scan_chans[1] = 6; s.scan_chans[2] = 11;
+    s.scan_chan_count = 3;
+    s.scan_cur_idx = 1;                /* currently on channel 6 */
+    view_iface_draw(&s);
+    ASSERT(1);
+}
+
 /* #25: with a monitor radio present, every other interface is hidden;
  * the monitor radio and (if set) the IP-capture iface stay visible. */
 static void test_hide_non_monitor(void) {
@@ -288,6 +300,7 @@ void run_iface_graph_tests(void) {
     RUN_TEST(test_scan_indicator_draw_selected);
     RUN_TEST(test_scan_indicator_draw_unselected);
     RUN_TEST(test_scan_indicator_no_probe_iface);
+    RUN_TEST(test_scan_bar_renders);
     RUN_TEST(test_hide_non_monitor);
     RUN_TEST(test_hide_non_monitor_keeps_capture_iface);
 }

@@ -1249,6 +1249,12 @@ typedef struct {
     int            probe_count;
     int            probe_sel;
     char           probe_iface[16]; /* monitor iface name, "" = none found */
+    /* Channel scan bar (#22 --hop): the channel list the monitor radio is
+     * cycling through and the one it's currently parked on. Populated from
+     * the hop scheduler each poll; scan_chan_count==0 when not hopping. */
+    int            scan_chans[32];
+    int            scan_chan_count;
+    int            scan_cur_idx;    /* index of the current channel, -1 = none */
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
