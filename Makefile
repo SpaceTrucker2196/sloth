@@ -95,6 +95,7 @@ SRCS = src/main.c          \
        src/jsonl.c           \
        src/formatter.c       \
        src/data_socket.c     \
+       src/discovery.c       \
        src/views/help.c      \
        src/filter.c          \
        src/alert_pcap.c      \
@@ -369,6 +370,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_formatter.c         \
             src/data_socket.c              \
             tests/test_data_socket.c       \
+            src/discovery.c                \
+            tests/test_discovery.c         \
             src/views/help.c               \
             src/filter.c                   \
             tests/test_filter.c            \

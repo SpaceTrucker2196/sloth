@@ -64,6 +64,21 @@ issue.
    *(This carve-out was authorised by the operator on 2026-07-04 to
    enable issue #22; see PROGRESS.md.)*
 
+   **A second narrow, opt-out exception:** when the operator has bound
+   the read-only data socket (`--data-socket`) to a *routable* address —
+   itself a deliberate choice to expose that socket to the LAN — sloth
+   may drop an Avahi service file so the host's mDNS responder advertises
+   `_sloth._tcp`, letting the sloth-ios client discover the socket by
+   name. sloth itself transmits **nothing**: it writes a config file that
+   a separate daemon (avahi-daemon) uses to announce. Nothing is
+   published for a loopback or UNIX-domain data socket, or when no data
+   socket is bound — so the passive default stays fully silent — and the
+   advertisement is suppressed entirely with `--no-discovery`. This is
+   the one place sloth's *presence* (never its observations) touches the
+   network, and only for a socket the operator already chose to expose.
+   *(This carve-out was authorised by the operator on 2026-07-05 to
+   enable issue #29; see PROGRESS.md.)*
+
 2. **No active key recovery.** Sloth never runs a passphrase against a
    captured handshake. It never calls `hashcat`, `aircrack-ng`, John,
    or any cracking library. It never decrypts a frame it captured. It

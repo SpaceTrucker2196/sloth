@@ -84,6 +84,7 @@
 #include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
+#include "discovery.h"
 #include "dns.h"
 #include "scan.h"
 #include "capture/probe.h"   /* self-stubbing without WITH_PCAP */
@@ -366,7 +367,8 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N] [--hop]\n"
+            "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
+            "       [--refresh-ms N] [--hop]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
@@ -408,6 +410,13 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --no-discovery     suppress the mDNS advertisement of the data\n"
+            "                     socket. By default, when --data-socket is bound\n"
+            "                     to a routable (non-loopback) TCP address, sloth\n"
+            "                     writes an Avahi service file so the sloth-ios\n"
+            "                     client can find it by name. Loopback/unix sockets\n"
+            "                     never advertise. sloth transmits nothing itself —\n"
+            "                     avahi-daemon does the announcing.\n"
             "  --snapshot-out FILE\n"
             "                     on exit, write a passive AP-inventory snapshot\n"
             "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
@@ -448,6 +457,7 @@ int main(int argc, char **argv) {
     const char *baseline_in    = NULL; /* --baseline-in  FILE  (#27) */
     const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
+    int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
@@ -485,6 +495,8 @@ int main(int argc, char **argv) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--no-discovery")) {
+            no_discovery = 1;
         } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
             snapshot_out = argv[++i];
         } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {
@@ -530,6 +542,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
+        /* #29: advertise the socket over mDNS so the sloth-ios client can
+         * discover it by name — but only when it's bound to a routable
+         * address (loopback/unix publish nothing) and the operator hasn't
+         * opted out. sloth writes an Avahi service file; avahi-daemon does
+         * the announcing. This is the one place sloth's presence touches
+         * the network — gated by MISSION §2's discovery carve-out. */
+        if (!no_discovery)
+            discovery_publish(data_socket, NULL);
     }
 
     memset(&g_state, 0, sizeof(g_state));
@@ -633,6 +653,7 @@ int main(int argc, char **argv) {
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
+    discovery_unpublish();
     data_socket_cleanup();
     return 0;
 }
