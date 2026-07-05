@@ -76,6 +76,7 @@ SRCS = src/main.c          \
        src/wifi_oui_attacker.c \
        src/wifi_chanhop.c    \
        src/auth_track.c      \
+       src/wifi_snapshot.c   \
        src/twins.c           \
        src/views/twins.c     \
        src/alerts.c          \
@@ -328,6 +329,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_chanhop.c           \
             src/auth_track.c               \
             tests/test_auth_track.c        \
+            src/wifi_snapshot.c            \
+            tests/test_wifi_snapshot.c     \
             src/twins.c                    \
             src/views/twins.c              \
             tests/test_twins.c             \

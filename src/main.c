@@ -7,6 +7,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
+#include "wifi_snapshot.h"
 #include "history.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -342,6 +343,7 @@ static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
             "[--data-socket SPEC] [--out-format FORMAT] [--refresh-ms N] [--hop]\n"
+            "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -382,6 +384,13 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --snapshot-out FILE\n"
+            "                     on exit, write a passive AP-inventory snapshot\n"
+            "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
+            "                     site assessments. No pcap — normalised text.\n"
+            "  --baseline-in FILE on exit, diff the current AP inventory against a\n"
+            "                     prior --snapshot-out file (new/gone/changed APs).\n"
+            "  --site-label TEXT  operator label stamped into --snapshot-out.\n"
             "  --report FILE.md   on exit, write a Markdown posture report to\n"
             "                     FILE.md summarising alerts (by severity and\n"
             "                     MITRE ATT&CK technique), cleartext credential\n"
@@ -411,6 +420,9 @@ int main(int argc, char **argv) {
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
+    const char *snapshot_out   = NULL; /* --snapshot-out FILE  (#27) */
+    const char *baseline_in    = NULL; /* --baseline-in  FILE  (#27) */
+    const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
@@ -449,6 +461,12 @@ int main(int argc, char **argv) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
+            snapshot_out = argv[++i];
+        } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {
+            baseline_in = argv[++i];
+        } else if (!strcmp(argv[i], "--site-label") && i + 1 < argc) {
+            site_label = argv[++i];
         } else if (!strcmp(argv[i], "--out-format") && i + 1 < argc) {
             out_format_t fmt;
             if (!formatter_parse_name(argv[++i], &fmt)) {
@@ -564,6 +582,23 @@ int main(int argc, char **argv) {
                     "sloth: could not open --report-json %s (report skipped)\n",
                     report_json);
         }
+    }
+
+    /* Site snapshot export/import (#27) — passive AP inventory, no pcap. */
+    if (baseline_in) {
+        int d = wifi_snapshot_diff(&g_state, baseline_in, stderr);
+        if (d < 0)
+            fprintf(stderr, "sloth: could not read baseline %s\n", baseline_in);
+        else
+            fprintf(stderr, "sloth: %d change(s) vs baseline %s\n", d, baseline_in);
+    }
+    if (snapshot_out) {
+        if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
+                                (long)time(NULL)) == 0)
+            fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
+                    snapshot_out, g_state.beacon_count);
+        else
+            fprintf(stderr, "sloth: could not write snapshot %s\n", snapshot_out);
     }
 
     dns_cleanup();
