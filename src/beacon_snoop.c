@@ -465,6 +465,26 @@ static void rssi_ring_push(beacon_ap_t *ap, int8_t signal, time_t now) {
     ap->rssi_max_60s = init ? hi : 0;
 }
 
+/* Compact FNV-1a fingerprint of a beacon's security/IE posture — the
+ * tuple that a legit multi-VAP AP varies per VAP but a PineAP/KARMA
+ * radio keeps identical across every SSID it spoofs (#30 ie_uniformity).
+ * Never returns 0 for a real beacon, so 0 stays "unknown". */
+static uint32_t ap_ie_fingerprint(const char *enc, const beacon_rsn_t *rsn) {
+    uint32_t h = 2166136261u;
+    #define FP_MIX_STR(str) do { const char *_p = (str); \
+        while (_p && *_p) { h ^= (uint8_t)*_p++; h *= 16777619u; } } while (0)
+    FP_MIX_STR(enc);
+    if (rsn) {
+        FP_MIX_STR(rsn->pairwise);
+        FP_MIX_STR(rsn->group);
+        FP_MIX_STR(rsn->akm);
+        h ^= (uint32_t)rsn->mfp;            h *= 16777619u;
+        h ^= rsn->fp.vendor_ies_hash;       h *= 16777619u;
+    }
+    #undef FP_MIX_STR
+    return h ? h : 1u;                        /* avoid the "unknown" sentinel */
+}
+
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,
@@ -493,8 +513,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                         dup = 1; break;
                     }
                 if (!dup && g_aps[i].ssid_history_n < MAX_AP_SSID_HISTORY) {
-                    snprintf(g_aps[i].ssid_history[g_aps[i].ssid_history_n],
-                             33, "%s", ssid);
+                    int hn = g_aps[i].ssid_history_n;
+                    snprintf(g_aps[i].ssid_history[hn], 33, "%s", ssid);
+                    g_aps[i].ssid_history_fp[hn] = ap_ie_fingerprint(enc, rsn);
                     g_aps[i].ssid_history_n++;
                 }
             }
@@ -587,6 +608,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].frame_count = 1;
     if (ssid[0]) {
         snprintf(g_aps[slot].ssid_history[0], 33, "%s", ssid);
+        g_aps[slot].ssid_history_fp[0] = ap_ie_fingerprint(enc, rsn);
         g_aps[slot].ssid_history_n = 1;
     }
     if (rsn) {

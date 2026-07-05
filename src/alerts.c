@@ -196,6 +196,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
     case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
     case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
+    case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -1065,6 +1066,40 @@ static void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Rogue-RADIUS / weak-EAP — issue #31. eaphammer / hostapd-wpe stand up
+ * a rogue 802.1X AP that offers a weak inner method (EAP-MD5 / EAP-GTC)
+ * to harvest offline-crackable challenge/response pairs, and often
+ * surfaces the client's real username when the supplicant lacks an
+ * anonymous outer identity. Both are decoded on the air by the EAP
+ * inner-frame parser and accumulated per BSSID by eap_track.
+ *
+ * CRIT when a weak method was offered; WARN when only an identity leaked
+ * (still notable — a correctly configured enterprise supplicant sends an
+ * anonymous outer identity). */
+static void rule_rogue_radius(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->rogue_radius_count; i++) {
+        const rogue_radius_ap_t *r = &s->rogue_radius[i];
+        if (!r->weak_method && r->identity_leaks == 0) continue;
+
+        char bssid[20];
+        fmt_bssid(bssid, r->bssid);
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "rogueradius:%s", bssid);
+        if (r->weak_method)
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s offered weak EAP (MD5/GTC), %d identity leak(s)"
+                     " - rogue-RADIUS lure", bssid, r->identity_leaks);
+        else
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s leaked %d real EAP identity(ies) - check outer"
+                     " identity", bssid, r->identity_leaks);
+        fire(ALERT_TYPE_ROGUE_RADIUS,
+             r->weak_method ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+             "ROGUE_RADIUS", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin proximity — Phase 3. A single BSSID whose RSSI jumps
  * ≥15 dBm within the 60s sliding window (no roam — same BSSID, same
  * channel) is a strong tell for either (a) an attacker AP moving
@@ -1690,6 +1725,7 @@ void alerts_update(sloth_state_t *s) {
     rule_karma_ap(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
+    rule_rogue_radius(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);

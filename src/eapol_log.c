@@ -4,6 +4,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include "eapol_log.h"
+#include "eap_track.h"
 #include "beacon_snoop.h"
 #include "assoc_track.h"
 #include "alerts.h"
@@ -299,9 +300,16 @@ int eapol_observe_dot11(const uint8_t *d, int len,
         return 0;                       /* WDS or ad-hoc — skip */
     }
 
-    /* Parse the EAPOL-Key payload sitting after the LLC. */
+    /* EAPOL frame: version(1) type(1) length(2) then payload. Type 0 is
+     * an EAP-Packet (the 802.1X inner conversation); type 3 is EAPOL-Key
+     * (the 4-way handshake handled below). Feed EAP-Packets to the EAP
+     * method tracker for the ROGUE_RADIUS detector (#31). */
     const uint8_t *eapol = d + hdr + 8;
     int            elen  = len - hdr - 8;
+    if (elen >= 4 && eapol[1] == 0x00) {
+        eap_track_observe(bssid, eapol + 4, elen - 4, time(NULL));
+        return 1;
+    }
     uint8_t nonce[32], mic[16], pmkid[16];
     int has_pmkid = 0;
     int msg = parse_eapol_key(eapol, elen, nonce, mic,

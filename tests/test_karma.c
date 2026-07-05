@@ -76,6 +76,71 @@ static void test_pnl_overlap_and_score(void) {
     ASSERT_EQ(s.karma_aps[0].score, 1 + 2);   /* base + overlap */
 }
 
+/* Jaccard(advertised, PNL-union) in ppm. AP advertises {a,b,c} (|A|=3),
+ * the PNL union is {a,b} (|B|=2), intersection {a,b} (2). Union = 3, so
+ * Jaccard = 2/3 = 666666 ppm. A full-overlap lure trends toward 1e6. */
+static void test_jaccard_ppm(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, lure, adv, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "a", "b" };
+    add_pnl_client(&s, cli, pnl, 2);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].pnl_jaccard_ppm, 666666);
+}
+
+static void test_jaccard_full_overlap(void) {
+    /* AP advertises exactly the PNL union → Jaccard = 1.0 (1e6). */
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, lure, adv, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "a", "b", "c" };
+    add_pnl_client(&s, cli, pnl, 3);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].pnl_jaccard_ppm, 1000000);
+}
+
+/* IE-uniformity: all SSIDs from one BSSID carry an identical IE
+ * fingerprint (the PineAP tell) -> ie_uniform set, +1 to score. */
+static void test_ie_uniform(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, lure, adv, 3);
+    /* Same non-zero fingerprint across every SSID. */
+    for (int i = 0; i < 3; i++) s.beacon_aps[0].ssid_history_fp[i] = 0xABCD1234u;
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].ie_uniform, 1);
+    ASSERT_EQ(s.karma_aps[0].score, 1 + 1);   /* base + ie_uniform */
+}
+
+static void test_ie_varied_not_uniform(void) {
+    /* A legit multi-VAP AP varies its per-VAP IE tuple -> not uniform. */
+    sloth_state_t s; seed(&s);
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, ap, adv, 3);
+    s.beacon_aps[0].ssid_history_fp[0] = 0x11111111u;
+    s.beacon_aps[0].ssid_history_fp[1] = 0x22222222u;
+    s.beacon_aps[0].ssid_history_fp[2] = 0x33333333u;
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].ie_uniform, 0);
+}
+
+static void test_ie_unknown_fp_not_uniform(void) {
+    /* All-zero (unknown) fingerprints must not read as "uniform". */
+    sloth_state_t s; seed(&s);
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, ap, adv, 3);   /* fp left 0 */
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].ie_uniform, 0);
+}
+
 /* A concurrent deauth flood sets the chain flag and adds to the score. */
 static void test_deauth_chain(void) {
     sloth_state_t s; seed(&s);
@@ -135,6 +200,11 @@ void run_karma_tests(void) {
     RUN_TEST(test_empty_state);
     RUN_TEST(test_threshold);
     RUN_TEST(test_pnl_overlap_and_score);
+    RUN_TEST(test_jaccard_ppm);
+    RUN_TEST(test_jaccard_full_overlap);
+    RUN_TEST(test_ie_uniform);
+    RUN_TEST(test_ie_varied_not_uniform);
+    RUN_TEST(test_ie_unknown_fp_not_uniform);
     RUN_TEST(test_deauth_chain);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);

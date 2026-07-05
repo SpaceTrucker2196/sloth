@@ -45,6 +45,7 @@
 #include "views/twins.h"
 #include "views/karma.h"
 #include "karma_detect.h"
+#include "eap_track.h"
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
@@ -182,6 +183,7 @@ static void poll_data(sloth_state_t *s) {
     s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
     scan_update(s);
     bd_update(s, time(NULL));
+    eap_track_snapshot(s);   /* 802.1X EAP method tracking for ROGUE_RADIUS (#31) */
     alerts_update(s);
     karma_update(s);   /* KARMA/PineAP candidate table for VIEW_KARMA (#30) */
     /* Feed the tui's alert-hot list: every alert with a concrete match_ip

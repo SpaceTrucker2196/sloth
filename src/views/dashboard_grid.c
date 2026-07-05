@@ -166,6 +166,17 @@ void draw_radio_clients_panel(const sloth_state_t *s,
     }
 }
 
+/* KARMA score for a BSSID from the synthesised candidate table, or 0 if
+ * it isn't a candidate. Lets the beacon panel badge active lures (#30). */
+static int karma_score_for(const sloth_state_t *s, const uint8_t bssid[6]) {
+    for (int i = 0; i < s->karma_count; i++)
+        if (memcmp(s->karma_aps[i].bssid, bssid, 6) == 0)
+            return s->karma_aps[i].score;
+    return 0;
+}
+
+#define KARMA_BADGE_SCORE 5   /* deep-red badge at/above this score */
+
 void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     char btitle[64];
     const char *biface = s->probe_iface[0] ? s->probe_iface
@@ -183,12 +194,18 @@ void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         attrset(COLOR_PAIR(CP_NORMAL));
         clipline(y0 + 2 + i, x, w, "");
         move(y0 + 2 + i, x);
-        attrset(COLOR_PAIR(CP_NORMAL));
-        addstr("  ");
+        /* KARMA badge: a candidate scoring >= threshold gets a deep-red
+         * "!" and a red SSID — the dashboard tell for an active lure
+         * (#30), mirroring how THREAT_IP flags a hostile host. */
+        int kscore = karma_score_for(s, b->bssid);
+        int hot = kscore >= KARMA_BADGE_SCORE;
+        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr("! "); }
+        else     { attrset(COLOR_PAIR(CP_NORMAL));    addstr("  "); }
         const char *ssid = b->ssid[0] ? b->ssid : "(hidden)";
         char buf[40];
         snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
-        tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
+        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr(buf); }
+        else     tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
         attrset(COLOR_PAIR(CP_NORMAL));
         printw(" %4d %3d", b->signal_dbm, b->channel);
     }

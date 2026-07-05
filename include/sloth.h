@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#define SLOTH_VERSION "1.6.0"
+#define SLOTH_VERSION "1.7.0"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
@@ -660,6 +660,7 @@ typedef enum {
     ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
     ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
     ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
+    ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -887,6 +888,11 @@ typedef struct {
      * many SSIDs from a single radio (>=3 = strong KARMA signal). */
 #define MAX_AP_SSID_HISTORY 8
     char     ssid_history[MAX_AP_SSID_HISTORY][33];
+    /* Per-SSID IE fingerprint (enc/cipher/akm/mfp + vendor-IE hash) at the
+     * time each SSID was first seen. A legit multi-VAP AP varies these
+     * across its VAPs; a PineAP/KARMA radio spoofs many SSIDs with one
+     * identical IE tuple — the ie_uniformity signal (#30). 0 = unknown. */
+    uint32_t ssid_history_fp[MAX_AP_SSID_HISTORY];
     int      ssid_history_n;
     time_t   last_seen;
     int      frame_count;
@@ -944,11 +950,30 @@ typedef struct {
     uint8_t  bssid[6];
     int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
     int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
+    int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
+    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
     int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
     int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
     char     top_ssid[33];  /* most recently advertised SSID */
     time_t   last_seen;
 } karma_ap_t;
+
+/* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
+ * One row per BSSID seen running an 802.1X EAP conversation. Records
+ * which inner EAP method types it offered (bitmap; the methods we
+ * classify all have type codes < 32) and how many Response/Identity
+ * frames leaked a real username. Synthesised from the EAP inner-frame
+ * parser via eap_track. */
+#define MAX_ROGUE_RADIUS 32
+typedef struct {
+    uint8_t  bssid[6];
+    uint32_t eap_types_seen;   /* bit T set = EAP method type T observed */
+    int      weak_method;      /* 1 = a weak method (MD5/GTC) was offered */
+    int      identity_leaks;   /* Response/Identity frames with a real username */
+    char     last_identity[64];/* most recent leaked identity (printable) */
+    time_t   first_seen;
+    time_t   last_seen;
+} rogue_radius_ap_t;
 
 /* ── Probe clients (802.11 unassociated devices) ────────── */
 #define MAX_PROBE_CLIENTS 128
@@ -1335,6 +1360,9 @@ typedef struct {
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;
     int            karma_sel;
+
+    rogue_radius_ap_t rogue_radius[MAX_ROGUE_RADIUS]; /* 802.1X EAP tracking (#31) */
+    int               rogue_radius_count;
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];

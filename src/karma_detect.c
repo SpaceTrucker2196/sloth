@@ -28,6 +28,53 @@ static int pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
     return hits;
 }
 
+/* Size of the union of all nearby clients' PNL SSID sets — the |B| in
+ * the Jaccard denominator. Deduplicated across clients. */
+static int pnl_union_size(const sloth_state_t *s) {
+    int n = 0;
+    for (int c = 0; c < s->pnl_count; c++) {
+        const pnl_client_t *cli = &s->pnl_clients[c];
+        for (int k = 0; k < cli->ssid_count && k < MAX_PNL_SSIDS_PER_CLI; k++) {
+            const char *name = cli->ssids[k];
+            if (!name[0]) continue;
+            int seen = 0;
+            for (int pc = 0; pc <= c && !seen; pc++) {
+                const pnl_client_t *p = &s->pnl_clients[pc];
+                int klim = (pc == c) ? k : p->ssid_count;
+                for (int j = 0; j < klim && j < MAX_PNL_SSIDS_PER_CLI; j++)
+                    if (strcmp(name, p->ssids[j]) == 0) { seen = 1; break; }
+            }
+            if (!seen) n++;
+        }
+    }
+    return n;
+}
+
+/* Jaccard similarity between the BSSID's advertised SSID set (A) and the
+ * client-PNL union (B), in parts-per-million: 1e6 * |A∩B| / |A∪B|.
+ * PineAP Beacon Response drives this toward 1.0 (1e6) — it advertises
+ * exactly the union of what clients probe for. `inter` is the already-
+ * computed intersection (pnl_overlap). */
+static int jaccard_ppm(int a_count, int b_count, int inter) {
+    int uni = a_count + b_count - inter;
+    if (uni <= 0) return 0;
+    return (int)((long)inter * 1000000L / uni);
+}
+
+/* 1 if every SSID this BSSID beaconed carried an identical, known IE
+ * fingerprint — the PineAP tell. Legit multi-VAP APs vary RSN/vendor
+ * IEs per VAP; a single spoofing radio does not. Requires >= 2 SSIDs
+ * and non-zero (actually observed) fingerprints; all-unknown stays 0. */
+static int ie_uniform(const beacon_ap_t *a) {
+    int n = a->ssid_history_n;
+    if (n < 2) return 0;
+    uint32_t first = a->ssid_history_fp[0];
+    if (first == 0) return 0;
+    for (int i = 1; i < n && i < MAX_AP_SSID_HISTORY; i++)
+        if (a->ssid_history_fp[i] != first) return 0;
+    return 1;
+}
+
 /* Is a deauth flood active within the correlation window? */
 static int deauth_active(const sloth_state_t *s, time_t now) {
     for (int k = 0; k < s->deauth_count; k++) {
@@ -40,6 +87,7 @@ static int deauth_active(const sloth_state_t *s, time_t now) {
 void karma_update(sloth_state_t *s) {
     time_t now = time(NULL);
     int chain = deauth_active(s, now);
+    int b_count = pnl_union_size(s);   /* |PNL union| — same for every BSSID */
     s->karma_count = 0;
 
     for (int i = 0; i < s->beacon_count &&
@@ -52,8 +100,11 @@ void karma_update(sloth_state_t *s) {
         memcpy(k->bssid, a->bssid, 6);
         k->ssid_count   = a->ssid_history_n;
         k->pnl_overlap  = pnl_overlap(s, a);
+        k->pnl_jaccard_ppm = jaccard_ppm(k->ssid_count, b_count, k->pnl_overlap);
+        k->ie_uniform   = ie_uniform(a);
         k->deauth_chain = chain;
-        k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0) + (chain ? 3 : 0);
+        k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0)
+                            + (k->ie_uniform ? 1 : 0) + (chain ? 3 : 0);
         k->last_seen    = a->last_seen;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  a->ssid[0] ? a->ssid : a->ssid_history[0]);

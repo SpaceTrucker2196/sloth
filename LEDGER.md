@@ -43,3 +43,10 @@
 | 9491236 | 2026-07-05T07:32:39Z | claude-opus-4-8 | 4627 | 56256 | 13309570 | 67512 | 8.7594 | alerts: KARMA deauth-then-lure correlation (#30) |
 | 2a123e5 | 2026-07-05T12:52:06Z | claude-opus-4-8 | 13076 | 56366 | 25530488 | 837852 | 22.6183 | karma: dedicated VIEW_KARMA candidate table (#30) |
 | da5bb45 | 2026-07-05T13:03:40Z | claude-opus-4-8 | 6389 | 46501 | 20694330 | 62977 | 12.1714 | discovery: advertise data socket over mDNS (#29) |
+| df28500 | 2026-07-05T13:10:57Z | claude-opus-4-8 | 6874 | 33849 | 9391475 | 26540 | 5.8417 | karma: Jaccard-ppm PNL-overlap scoring (#30) |
+| 5ec09ce | 2026-07-05T13:16:14Z | claude-opus-4-8 | 673 | 19874 | 5244795 | 25038 | 3.3730 | eap: inner-frame parser for 802.1X EAP methods (#31) |
+| 8714467 | 2026-07-05T13:17:42Z | claude-opus-4-8 | 401 | 10149 | 2724529 | 29042 | 1.9084 | Factory standup: AGENTS.md, converge loop, metrics |
+| e678cd9 | 2026-07-05T13:23:41Z | claude-opus-4-8 | 7785 | 19355 | 12476651 | 27921 | 7.0403 | alerts: ROGUE_RADIUS weak-EAP detector (#31) |
+| 81836b2 | 2026-07-05T13:38:59Z | claude-opus-4-8 | 6868 | 34499 | 16893457 | 37937 | 9.7229 | karma: IE-fingerprint-uniformity signal (#30) |
+| fadf0f3 | 2026-07-05T13:41:51Z | claude-opus-4-8 | 548 | 13223 | 8332457 | 23536 | 4.7349 | dashboard: KARMA badge on beacon panel (#30) |
+| f083f19 | 2026-07-05T13:47:14Z | claude-opus-4-8 | 278 | 3780 | 4455418 | 5526 | 2.3789 | release: v1.7.0 version bump |

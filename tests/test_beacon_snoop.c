@@ -824,6 +824,29 @@ static void test_record_tracks_ssid_history(void) {
     ASSERT_STR(s.beacon_aps[0].ssid_history[2], "ACME-Corp");
 }
 
+static void test_record_ssid_history_fingerprints(void) {
+    /* Same security posture across SSIDs -> identical per-SSID IE
+     * fingerprints (the PineAP ie_uniformity signal, #30). */
+    beacon_clear();
+    beacon_record(BSSID_A, "netA", -50, 6, "OPEN", 102, NULL);
+    beacon_record(BSSID_A, "netB", -50, 6, "OPEN", 102, NULL);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_aps[0].ssid_history_n, 2);
+    ASSERT(s.beacon_aps[0].ssid_history_fp[0] != 0);
+    ASSERT_EQ(s.beacon_aps[0].ssid_history_fp[0],
+              s.beacon_aps[0].ssid_history_fp[1]);
+
+    /* Differing enc -> differing fingerprints. */
+    beacon_clear();
+    beacon_record(BSSID_A, "netA", -50, 6, "OPEN", 102, NULL);
+    beacon_record(BSSID_A, "netB", -50, 6, "WPA2", 102, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT(s.beacon_aps[0].ssid_history_fp[0] !=
+           s.beacon_aps[0].ssid_history_fp[1]);
+}
+
 static void test_record_persists_neighbors(void) {
     beacon_clear();
     beacon_rsn_t rsn = {0};
@@ -1157,6 +1180,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_wps_state_configured_locked);
     RUN_TEST(test_parse_wps_state_notconfigured_unlocked);
     RUN_TEST(test_record_tracks_ssid_history);
+    RUN_TEST(test_record_ssid_history_fingerprints);
     RUN_TEST(test_record_persists_neighbors);
     RUN_TEST(test_parse_fp_ht_flag);
     RUN_TEST(test_parse_fp_vht_flag);

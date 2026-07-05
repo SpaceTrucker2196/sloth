@@ -1700,6 +1700,49 @@ static void test_mgmt_fuzz_below_warn_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_MGMT_FUZZ), -1);
 }
 
+/* ── Rogue-RADIUS / weak EAP (#31) ───────────────────────── */
+
+static void test_rogue_radius_weak_method_crit(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    rogue_radius_ap_t *r = &s.rogue_radius[s.rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    uint8_t b[6] = {0xde,0xad,0xbe,0xef,0x00,0x01};
+    memcpy(r->bssid, b, 6);
+    r->weak_method = 1;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_RADIUS);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_rogue_radius_identity_leak_warn(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    rogue_radius_ap_t *r = &s.rogue_radius[s.rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    uint8_t b[6] = {0xde,0xad,0xbe,0xef,0x00,0x02};
+    memcpy(r->bssid, b, 6);
+    r->identity_leaks = 2;    /* leak only, no weak method */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ROGUE_RADIUS);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_rogue_radius_clean_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    rogue_radius_ap_t *r = &s.rogue_radius[s.rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    uint8_t b[6] = {0xde,0xad,0xbe,0xef,0x00,0x03};
+    memcpy(r->bssid, b, 6);
+    /* PEAP only, no weak method, no leak. */
+    r->eap_types_seen = (1u << 25);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ROGUE_RADIUS), -1);
+}
+
 /* ── Rogue DHCP ──────────────────────────────────────────── */
 
 static void add_dhcp_event(sloth_state_t *s, const char *mac,
@@ -2521,6 +2564,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_mgmt_fuzz_warn_at_three);
     RUN_TEST(test_mgmt_fuzz_clean_no_fire);
     RUN_TEST(test_mgmt_fuzz_below_warn_no_fire);
+    RUN_TEST(test_rogue_radius_weak_method_crit);
+    RUN_TEST(test_rogue_radius_identity_leak_warn);
+    RUN_TEST(test_rogue_radius_clean_no_fire);
     RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
     RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
     RUN_TEST(test_dns_tunnel_few_long_no_fire);
