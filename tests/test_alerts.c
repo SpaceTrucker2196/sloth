@@ -1483,6 +1483,30 @@ static void test_karma_one_ssid_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_KARMA_AP), -1);
 }
 
+/* PNL-overlap enrichment (#30): when the KARMA BSSID's advertised SSIDs
+ * match SSIDs nearby clients have probed for, the detail names the
+ * overlap count — the "beacon-response" evidence. */
+static void test_karma_pnl_overlap_in_detail(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    /* A nearby client whose PNL includes two of those SSIDs. */
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    uint8_t cmac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    memcpy(cli->mac, cmac, 6);
+    snprintf(cli->ssids[0], 33, "homewifi");
+    snprintf(cli->ssids[1], 33, "ACME-Corp");
+    cli->ssid_count = 2;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "2 matching") != NULL);
+}
+
 /* ── SSID Confusion / RSN downgrade (CVE-2023-52424, #32) ── */
 
 /* Like add_beacon but sets the RSN posture fields the downgrade
@@ -2367,6 +2391,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_three_ssids_fires);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
+    RUN_TEST(test_karma_pnl_overlap_in_detail);
     RUN_TEST(test_ssid_confusion_wpa3_to_wpa2_fires);
     RUN_TEST(test_ssid_confusion_identical_posture_no_fire);
     RUN_TEST(test_ssid_confusion_mfp_drop_fires);

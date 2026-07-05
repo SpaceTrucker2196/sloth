@@ -731,6 +731,31 @@ static void rule_dns_tunnel(const sloth_state_t *s, time_t now) {
  * almost always wants to look. */
 #define KARMA_SSID_THRESH 3
 
+/* How many of this BSSID's advertised SSIDs appear in the union of
+ * nearby clients' preferred-network lists. KARMA / PineAP Beacon
+ * Response works by answering the exact SSIDs clients probe for, so a
+ * high overlap is the signal that separates an active lure from a
+ * benign SSID-cycling AP — a real multi-VAP AP advertises its own
+ * fixed names, which rarely coincide with what strangers' phones ask
+ * for. */
+static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
+    int hits = 0;
+    for (int h = 0; h < a->ssid_history_n && h < MAX_AP_SSID_HISTORY; h++) {
+        const char *name = a->ssid_history[h];
+        if (!name[0]) continue;
+        for (int c = 0; c < s->pnl_count; c++) {
+            const pnl_client_t *cli = &s->pnl_clients[c];
+            int found = 0;
+            for (int k = 0; k < cli->ssid_count &&
+                            k < MAX_PNL_SSIDS_PER_CLI; k++) {
+                if (strcmp(name, cli->ssids[k]) == 0) { found = 1; break; }
+            }
+            if (found) { hits++; break; }   /* count each SSID once */
+        }
+    }
+    return hits;
+}
+
 static void rule_karma_ap(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -741,12 +766,19 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  a->bssid[0], a->bssid[1], a->bssid[2],
                  a->bssid[3], a->bssid[4], a->bssid[5]);
+        int overlap = karma_pnl_overlap(s, a);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
-        snprintf(detail, sizeof(detail),
-                 "BSSID %s emitted %d distinct SSIDs - Pineapple/KARMA candidate",
-                 bssid_str, a->ssid_history_n);
+        if (overlap > 0)
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s emitted %d distinct SSIDs, %d matching nearby "
+                     "client PNLs - Pineapple/KARMA beacon-response",
+                     bssid_str, a->ssid_history_n, overlap);
+        else
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s emitted %d distinct SSIDs - Pineapple/KARMA candidate",
+                     bssid_str, a->ssid_history_n);
         fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
              "KARMA_AP", detail, key, NULL, 0, now);
     }
