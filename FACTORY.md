@@ -3,7 +3,7 @@
 Operating manual for an agent (or human) bringing sloth up from a cold
 clone. Charter and ethics live in [`MISSION.md`](MISSION.md); pattern
 in [`docs/dark-factory.md`](docs/dark-factory.md); working rules in
-[`CLAUDE.md`](CLAUDE.md); concept depth in [`docs/wiki/`](docs/wiki/);
+[`AGENTS.md`](AGENTS.md); concept depth in [`docs/wiki/`](docs/wiki/);
 per-view detail in [`docs/views/`](docs/views/).
 
 This file answers one question: *what do I need to install, run, and
@@ -116,13 +116,8 @@ All targets driven by the root [`Makefile`](Makefile).
 - `LDFLAGS` — extra linker flags
 - `PREFIX` — install root (default `/usr/local`)
 
-**Hard rules** (from [`CLAUDE.md`](CLAUDE.md)):
-
-- `make` must be **warning-clean**. Treat any new warning as a failed build.
-- `make test` must return 0. **Never commit a red test**.
-- `VIEW_COUNT` in `include/sloth.h` must stay in sync with the assertions
-  in `tests/test_state.c` and `tests/test_arp.c` whenever a view is
-  added or removed.
+**Hard rules**: warning-clean builds, green tests, VIEW_COUNT sync
+(see [`AGENTS.md`](AGENTS.md) — Discipline).
 
 ---
 
@@ -252,13 +247,9 @@ mergeable by the factory's review loop.
 | `docs/views/<name>.md`       | per-view protocol/observation reference |
 | `docs/wiki/<name>.md`        | concept-oriented knowledge base |
 
-**Hard rules**:
-
-- No new files at repo root. Everything has a home.
-- Never `git add -A` / `git add .`. Stage by specific path. A local
-  `wifi-sigint/` may exist and **must never** be staged or pushed.
-- Don't commit the `sloth` or `sloth_test` binaries.
-- Never reintroduce coloured row backgrounds (see [[ip-palette]]).
+**Hard rules**: no new root files, stage by specific path, never stage
+`wifi-sigint/` or the binaries, no coloured row backgrounds (see
+[`AGENTS.md`](AGENTS.md) — Hard "don't"s).
 
 ---
 
@@ -266,13 +257,13 @@ mergeable by the factory's review loop.
 
 ### 10.1 Add a view
 
-See [`CLAUDE.md`](CLAUDE.md) "How to add a new view" — 11-step
+See [`AGENTS.md`](AGENTS.md) "How to add a new view" — 11-step
 checklist that keeps `VIEW_COUNT` synced, lays out the file, wires a
 keybind, and demands a test + a per-view doc.
 
 ### 10.2 Add an alert rule
 
-See [`CLAUDE.md`](CLAUDE.md) "How to add an alert rule" — 6 steps,
+See [`AGENTS.md`](AGENTS.md) "How to add an alert rule" — 6 steps,
 ending in a `find_alert(type) >= 0` assertion. Concept page:
 [`docs/wiki/alerts.md`](docs/wiki/alerts.md).
 
@@ -305,14 +296,8 @@ ending in a `find_alert(type) >= 0` assertion. Concept page:
 
 ## 12. Git & release workflow
 
-From [`CLAUDE.md`](CLAUDE.md):
-
-- Branches: work on `main`. No long-running feature branches.
-- Commits: imperative subject, blank line, body explaining the *why*,
-  `Co-Authored-By` trailer.
-- Push after each green commit. Human reviews on GitHub.
-- Never `git push --force` to `main`. Never `--no-verify`. Never
-  `git reset --hard` without explicit user authorisation.
+Branching, commit format, push cadence, and destructive-op rules:
+(see [`AGENTS.md`](AGENTS.md) — Conventions, Hard "don't"s).
 
 CI gates merge: `make` + `make test`. If either fails, the commit
 doesn't go in.
@@ -347,7 +332,7 @@ can start taking work from [`MISSION.md`](MISSION.md) §6 ("Direction").
 |--------------|------|
 | The non-negotiable charter | [`MISSION.md`](MISSION.md) |
 | The dark-factory pattern itself | [`docs/dark-factory.md`](docs/dark-factory.md) |
-| Working rules for the repo | [`CLAUDE.md`](CLAUDE.md) |
+| Working rules for the repo | [`AGENTS.md`](AGENTS.md) |
 | Concept-level wiki | [`docs/wiki/index.md`](docs/wiki/index.md) |
 | Per-view protocol reference | [`docs/views/README.md`](docs/views/README.md) |
 | User-facing release notes | [`README.md`](README.md) |

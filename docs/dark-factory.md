@@ -117,6 +117,14 @@ as part of the work.
 If the test suite is "yeah it mostly catches things," you are still at
 Level 3 — the human is the actual oracle.
 
+In this repo the merge gate is the **local green suite, enforced
+pre-push**: work lands on `main` only after `make test` returns 0 and
+`make` is warning-clean on the machine doing the work. CI plus the AI
+code-review and docs-drift workflows re-run as post-hoc judges — they
+catch escapes, they are not the gate. The converge loop
+(`.claude/commands/converge.md`) automates exactly this: iterate until
+the local oracle is green, then push.
+
 ### 3.4 Per-feature documentation is in-tree
 
 For every non-trivial feature, there is a doc the agent can read to
