@@ -48,3 +48,4 @@
 | e678cd9 | 2026-07-05T13:23:41Z | claude-opus-4-8 | 7785 | 19355 | 12476651 | 27921 | 7.0403 | alerts: ROGUE_RADIUS weak-EAP detector (#31) |
 | 81836b2 | 2026-07-05T13:38:59Z | claude-opus-4-8 | 6868 | 34499 | 16893457 | 37937 | 9.7229 | karma: IE-fingerprint-uniformity signal (#30) |
 | fadf0f3 | 2026-07-05T13:41:51Z | claude-opus-4-8 | 548 | 13223 | 8332457 | 23536 | 4.7349 | dashboard: KARMA badge on beacon panel (#30) |
+| f083f19 | 2026-07-05T13:47:14Z | claude-opus-4-8 | 278 | 3780 | 4455418 | 5526 | 2.3789 | release: v1.7.0 version bump |
