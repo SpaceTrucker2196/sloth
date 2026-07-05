@@ -318,7 +318,11 @@ void view_dashboard_draw(const sloth_state_t *s) {
     attrset(COLOR_PAIR(CP_DIM));
     for (int dy = 1; dy < bot4_h; dy++) mvaddstr(bot4_y + dy, x0 + half1, G_VERT);
 
-    draw_packets_band(s, packets_y, packets_h, x0, usable);
+    /* Monitor active → show the 802.11 frames the radio hears, not IP packets. */
+    if (s->probe_iface[0])
+        draw_mon_frames_band(s, packets_y, packets_h, x0, usable);
+    else
+        draw_packets_band   (s, packets_y, packets_h, x0, usable);
 
     attrset(COLOR_PAIR(CP_NORMAL));
 #else

@@ -299,6 +299,23 @@ static void test_draw_assoc_band_when_monitoring(void) {
     ASSERT(1);
 }
 
+/* With a monitor interface active, the packets band lists 802.11 frames
+ * from s->mon_frames instead of IP packets; must not crash. */
+static void test_draw_mon_frames_band_when_monitoring(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    uint8_t a1[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    uint8_t a2[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
+    memcpy(s.mon_frames[0].addr1, a1, 6);
+    memcpy(s.mon_frames[0].addr2, a2, 6);
+    snprintf(s.mon_frames[0].label, sizeof(s.mon_frames[0].label), "Beacon");
+    s.mon_frames[0].len        = 128;
+    s.mon_frames[0].signal_dbm = -55;
+    s.mon_frame_count = 1;
+    view_dashboard_draw(&s);
+    ASSERT(1);
+}
+
 static void test_conn_panel_drills_to_assoc_when_monitoring(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
@@ -321,6 +338,7 @@ void run_dashboard_tests(void) {
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
     RUN_TEST(test_draw_assoc_band_when_monitoring);
+    RUN_TEST(test_draw_mon_frames_band_when_monitoring);
     RUN_TEST(test_conn_panel_drills_to_assoc_when_monitoring);
     RUN_TEST(test_conn_panel_drills_to_conns_without_monitor);
     RUN_TEST(test_iface_is_hidden_matches);

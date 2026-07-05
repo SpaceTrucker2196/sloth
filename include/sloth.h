@@ -1068,6 +1068,21 @@ typedef struct {
     uint16_t raw_len;
 } packet_info_t;
 
+/* One captured 802.11 frame, for the monitor-mode packets band. Populated
+ * from the probe/monitor pcap (radiotap + dot11) rather than the IP capture.
+ * Addresses are raw MACs; label is a human subtype ("Beacon","Auth",…). */
+#define MAX_MON_FRAMES 256
+typedef struct {
+    time_t   ts;
+    int8_t   signal_dbm;
+    uint16_t len;
+    uint8_t  type;        /* 0=mgmt 1=ctrl 2=data 3=ext */
+    uint8_t  subtype;
+    uint8_t  addr1[6];    /* DA / RA */
+    uint8_t  addr2[6];    /* SA / TA */
+    char     label[12];
+} mon_frame_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -1102,6 +1117,9 @@ typedef struct {
 
     wifi_sta_t    wifi_stas[MAX_WIFI_STAS];
     int           wifi_sta_count;
+
+    mon_frame_t   mon_frames[MAX_MON_FRAMES]; /* 802.11 frames, newest first */
+    int           mon_frame_count;
 
     packet_info_t packets[MAX_PACKETS]; /* ring buffer */
     int           pkt_head;             /* next write slot */

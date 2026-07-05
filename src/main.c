@@ -131,6 +131,7 @@ static void poll_data(sloth_state_t *s) {
     if (!s->stats_init) stats_take_baseline(s);
 #ifdef WITH_PCAP
     probe_snapshot(s);
+    mon_frame_snapshot(s);
     probe_pnl_snapshot(s);
     eapol_snapshot(s);
     seqnum_snapshot(s);
