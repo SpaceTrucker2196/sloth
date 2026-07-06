@@ -144,6 +144,7 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
         const char *heol = (const char *)memchr(p, '\n', (size_t)rem);
         int hlen = heol ? (int)(heol - p) : rem;
         int vlen = hlen;
+        if (vlen < 0) vlen = 0;   /* prove non-negative for the memchr bound below */
         if (vlen > 0 && p[vlen - 1] == '\r') vlen--;
 
         /* Header name terminates at ':'. */
