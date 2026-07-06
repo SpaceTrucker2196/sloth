@@ -1316,7 +1316,7 @@ static void rule_smb1_use(const sloth_state_t *s, time_t now) {
                  e->client_ip, e->server_ip, (unsigned)e->server_port);
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "SMBv1 traffic %s -> %s:%u (count=%d). SMBv1 has been "
+                 "SMBv1 traffic %.39s -> %.39s:%u (count=%d). SMBv1 has been "
                  "deprecated since 2017 (EternalBlue / WannaCry); the "
                  "endpoint serving v1 should be patched or v1 disabled.",
                  e->client_ip, e->server_ip, (unsigned)e->server_port,

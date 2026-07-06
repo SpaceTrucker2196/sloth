@@ -609,8 +609,8 @@ const char *device_risk_label(device_risk_level_t l);
 /* ── Alerts ─────────────────────────────────────────────── */
 #define MAX_ALERTS         128
 #define ALERT_TITLE_LEN     20
-#define ALERT_DETAIL_LEN    96
-#define ALERT_KEY_LEN       80
+#define ALERT_DETAIL_LEN   256   /* holds the longest rule detail incl. two IPv6 addrs */
+#define ALERT_KEY_LEN       96   /* dedup id: "<rule>:%.39s->%.39s:%u" worst case */
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
 #define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
 
@@ -731,7 +731,7 @@ typedef struct {
      * sections b + c are sha256-truncated over sorted cipher / ext lists
      * so extension reordering doesn't change the value (unlike JA3). "" if
      * not computed. Roadmap #16 phase 2. */
-    char   ja4[38];
+    char   ja4[48];
     time_t ts;
 } tls_log_entry_t;
 

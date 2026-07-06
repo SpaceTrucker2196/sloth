@@ -121,7 +121,7 @@ void view_probe_draw(const sloth_state_t *s) {
     for (int row = page_top; row < page_end; row++) {
         const probe_client_t *c = &s->probe_clients[row];
 
-        char mac[18], age[8];
+        char mac[18], age[24];
         fmt_mac(c->mac, mac, sizeof(mac));
         fmt_age(c->last_seen, age, sizeof(age));
         const char *ssid   = c->ssid[0] ? c->ssid : "(wildcard)";

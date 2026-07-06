@@ -135,7 +135,7 @@ static void draw_mon_frames_fs(const sloth_state_t *s) {
 
     for (int i = top; i < end; i++) {
         const mon_frame_t *f = &s->mon_frames[i];
-        char src[20], dst[20], age[8];
+        char src[20], dst[20], age[24];
         snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
                  f->addr2[0], f->addr2[1], f->addr2[2],
                  f->addr2[3], f->addr2[4], f->addr2[5]);

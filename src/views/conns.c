@@ -252,7 +252,7 @@ void view_conns_draw(const sloth_state_t *s) {
 
         /* RTT and retransmit annotation */
         char rtt_s[12];
-        char retx_s[8];
+        char retx_s[12];
         fmt_rtt(c->rtt_us, rtt_s, sizeof(rtt_s));
         if (c->retrans > 0)
             snprintf(retx_s, sizeof(retx_s), "%u", c->retrans);

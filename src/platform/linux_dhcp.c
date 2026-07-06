@@ -132,9 +132,9 @@ static int parse_systemd_leases(const char *dir, dhcp_lease_t *out, int max, int
             if (cr) *cr = '\0';
 
             if (strncmp(line, "ADDRESS=", 8) == 0)
-                snprintf(ip, sizeof(ip), "%s", line + 8);
+                snprintf(ip, sizeof(ip), "%.45s", line + 8);
             else if (strncmp(line, "HOSTNAME=", 9) == 0)
-                snprintf(hostname, sizeof(hostname), "%s", line + 9);
+                snprintf(hostname, sizeof(hostname), "%.63s", line + 9);
         }
         fclose(f);
 

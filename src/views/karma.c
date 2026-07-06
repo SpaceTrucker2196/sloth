@@ -60,7 +60,7 @@ void view_karma_draw(const sloth_state_t *s) {
     time_t now = time(NULL);
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
-        char bssid[20], chain[6], age[12], last[48], jac[6];
+        char bssid[20], chain[6], age[12], last[48], jac[16];
         const char *ie = k->ie_uniform ? "Y" : "-";
         fmt_mac(k->bssid, bssid, sizeof(bssid));
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
