@@ -51,3 +51,4 @@
 | fadf0f3 | 2026-07-05T13:41:51Z | claude-opus-4-8 | 548 | 13223 | 8332457 | 23536 | 4.7349 | dashboard: KARMA badge on beacon panel (#30) |
 | f083f19 | 2026-07-05T13:47:14Z | claude-opus-4-8 | 278 | 3780 | 4455418 | 5526 | 2.3789 | release: v1.7.0 version bump |
 | d6ebf47 | 2026-07-05T23:39:54Z | claude-opus-4-8 | 9078 | 5649 | 733102 | 34714 | 0.9003 | resolve merge conflict in test_dashboard, fix mkstemp include, integrate origin pull |
+| 4cafdfe | 2026-07-06T00:27:56Z | claude-opus-4-8 | 1042 | 32340 | 3273482 | 43473 | 2.8852 | eliminate -Wformat-truncation warnings across alerts and views |
