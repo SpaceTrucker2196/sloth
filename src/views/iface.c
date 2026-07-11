@@ -289,6 +289,31 @@ int iface_is_deselected(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
+/* Declared in sloth.h — the launch-time allow-list. An empty list imposes
+ * no restriction (all ifaces pass, subject to the deselect election). A
+ * non-empty list is a whitelist: only the named ifaces feed the data
+ * stream. Used headless by --iface / --monitor-only where no operator can
+ * work the `y` toggle. See issue #17's headless follow-up. */
+int iface_is_only_allowed(const sloth_state_t *s, const char *name) {
+    if (s->iface_only_count == 0) return 1;   /* no allow-list → all pass */
+    for (int i = 0; i < s->iface_only_count; i++) {
+        if (strncmp(s->iface_only[i], name, 16) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+void iface_only_add(sloth_state_t *s, const char *name) {
+    if (!name || !name[0]) return;
+    for (int i = 0; i < s->iface_only_count; i++) {     /* dedupe */
+        if (strncmp(s->iface_only[i], name, 16) == 0) return;
+    }
+    if (s->iface_only_count < MAX_IFACES) {
+        snprintf(s->iface_only[s->iface_only_count++],
+                 sizeof(s->iface_only[0]), "%s", name);
+    }
+}
+
 /* ── draw ────────────────────────────────────────────────── */
 
 /* Format the monitor radio's scan state into `buf`: the channel list with
@@ -332,7 +357,11 @@ void view_iface_draw(const sloth_state_t *s) {
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];
         int hidden     = iface_is_hidden(s, f->name);
-        int deselected = iface_is_deselected(s, f->name);
+        /* 'd' marks any iface excluded from the data stream — whether by
+         * the interactive deselect or a launch-time allow-list (--iface /
+         * --monitor-only). Both mean "contributes nothing to capture". */
+        int deselected = iface_is_deselected(s, f->name)
+                       || !iface_is_only_allowed(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
         if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
@@ -419,7 +448,11 @@ void view_iface_draw(const sloth_state_t *s) {
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *f = &s->ifaces[i];
         int hidden     = iface_is_hidden(s, f->name);
-        int deselected = iface_is_deselected(s, f->name);
+        /* 'd' marks any iface excluded from the data stream — whether by
+         * the interactive deselect or a launch-time allow-list (--iface /
+         * --monitor-only). Both mean "contributes nothing to capture". */
+        int deselected = iface_is_deselected(s, f->name)
+                       || !iface_is_only_allowed(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
         if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));

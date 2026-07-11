@@ -573,8 +573,13 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
         uint32_t ifi = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16)
                      | ((uint32_t)data[6] <<  8) |  (uint32_t)data[7];
         const char *name = ifindex_lookup(ifi);
+        /* Two elections gate the frame, both name-based and both dropping
+         * before any decode: the interactive deselect list (#17) and the
+         * launch-time allow-list (--iface / --monitor-only). A non-empty
+         * allow-list is a whitelist — anything not on it is dropped. */
         if (name && name[0] && g_state
-            && iface_is_deselected(g_state, name))
+            && (iface_is_deselected(g_state, name)
+                || !iface_is_only_allowed(g_state, name)))
             return;
     }
 

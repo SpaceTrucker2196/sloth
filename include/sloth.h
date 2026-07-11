@@ -1209,6 +1209,15 @@ typedef struct {
      * and rule_no_monitor_mode() for how it composes with capture. */
     char          iface_deselected[MAX_IFACES][16];
     int           iface_deselected_count;
+    /* Data-stream allow-list — the non-interactive complement to the
+     * deselect election above. When non-empty, ONLY these interfaces feed
+     * the `any` capture; every other iface's packets drop before decode.
+     * Empty (the default) means "no restriction". Seeded once at launch by
+     * --iface / --monitor-only so a headless appliance that can't press the
+     * `y` toggle can still scope the sensor to its wireless monitor radio.
+     * See iface_is_only_allowed() and issue #17's headless follow-up. */
+    char          iface_only[MAX_IFACES][16];
+    int           iface_only_count;
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;
@@ -1494,6 +1503,16 @@ void iface_hide_non_monitor(sloth_state_t *s);
  * any decode / log / alert runs. Purely logical — the OS state of the
  * interface (up/down, monitor, addresses) is never touched. Issue #17. */
 int iface_is_deselected(const sloth_state_t *s, const char *name);
+
+/* ── Iface data-stream allow-list (launch-time monitor-only scoping) ──
+ * Returns 1 if `name` is permitted to feed the data stream: true when the
+ * allow-list is empty (no restriction) or when `name` is on it. The pcap
+ * callback drops any frame whose ingress iface is not allowed, before
+ * decode. iface_only_add() appends a name (deduped, bounded by MAX_IFACES)
+ * and is called from argument parsing (--iface) and monitor-only seeding.
+ * This is the headless complement to the interactive `y` deselect. */
+int  iface_is_only_allowed(const sloth_state_t *s, const char *name);
+void iface_only_add(sloth_state_t *s, const char *name);
 
 /* ── Key routing: does the active view claim this key over the global
  * view-switch letters? Kept in main.c as a small, centralized table;

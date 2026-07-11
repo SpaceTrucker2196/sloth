@@ -370,7 +370,7 @@ static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
             "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
-            "       [--refresh-ms N] [--hop]\n"
+            "       [--refresh-ms N] [--hop] [--monitor-only] [--iface NAME]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
@@ -412,6 +412,21 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --monitor-only     scope the data stream to the wireless monitor\n"
+            "                     radio only. At launch, sloth restricts the\n"
+            "                     `any` IP/TCP capture to the monitor-mode Wi-Fi\n"
+            "                     interface, dropping wired/loopback/docker/VPN\n"
+            "                     noise before decode. The 802.11 SIGINT rides a\n"
+            "                     separate handle and is unaffected. Intended for\n"
+            "                     headless/appliance runs where no operator can\n"
+            "                     work the interactive `y` toggle. If no monitor\n"
+            "                     radio is found, the restriction is skipped with\n"
+            "                     a warning (the stream is not blinded).\n"
+            "  --iface NAME       data-stream allow-list (repeatable): only the\n"
+            "                     named interface(s) feed the `any` capture;\n"
+            "                     everything else is dropped before decode. The\n"
+            "                     explicit form of --monitor-only for when you\n"
+            "                     want to name the interface(s) yourself.\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -460,6 +475,9 @@ int main(int argc, char **argv) {
     const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
+    int         monitor_only = 0;        /* --monitor-only: scope data stream to the wireless monitor radio */
+    const char *only_ifaces[MAX_IFACES]; /* --iface NAME (repeatable): launch-time data-stream allow-list */
+    int         only_iface_count = 0;
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
@@ -499,6 +517,15 @@ int main(int argc, char **argv) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
+        } else if (!strcmp(argv[i], "--monitor-only")) {
+            monitor_only = 1;
+        } else if (!strcmp(argv[i], "--iface") && i + 1 < argc) {
+            /* Collected now, applied to g_state after the memset below —
+             * the allow-list lives in state, which isn't zeroed yet. */
+            if (only_iface_count < MAX_IFACES)
+                only_ifaces[only_iface_count++] = argv[++i];
+            else
+                i++;   /* silently bounded at MAX_IFACES; skip the value */
         } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
             snapshot_out = argv[++i];
         } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {
@@ -558,15 +585,42 @@ int main(int argc, char **argv) {
     g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
     g_state.active_view = VIEW_DASH;
 
+    /* Launch-time data-stream allow-list. Explicit --iface names are seeded
+     * before capture_start so the very first callback already filters. */
+    for (int i = 0; i < only_iface_count; i++)
+        iface_only_add(&g_state, only_ifaces[i]);
+
     g_platform.init();
     dns_init();
 #ifdef WITH_PCAP
     capture_start(&g_state);
     probe_start(&g_state);
+    /* --monitor-only: scope the data stream to the wireless monitor radio.
+     * probe_start() has just resolved it into probe_iface, so add that to
+     * the allow-list. The 802.11 SIGINT rides a separate monitor handle and
+     * is unaffected; this only silences the `any` IP/TCP path (lo, docker,
+     * wired, VPN) that a headless sensor otherwise forwards as noise.
+     * If no monitor radio was found (e.g. it lost the boot race — the unit
+     * restarts until it settles), warn loudly and leave the stream
+     * unrestricted rather than blinding the sensor. */
+    if (monitor_only) {
+        if (g_state.probe_iface[0]) {
+            iface_only_add(&g_state, g_state.probe_iface);
+            fprintf(stderr,
+                    "sloth: --monitor-only: data stream scoped to %s\n",
+                    g_state.probe_iface);
+        } else {
+            fprintf(stderr,
+                    "sloth: --monitor-only: no monitor-mode interface found; "
+                    "data-stream restriction NOT applied\n");
+        }
+    }
     /* First-launch UX (#25): when a monitor interface is present, open on
      * the RF-aware dashboard rather than the interface list. */
     if (g_state.probe_iface[0])
         g_state.active_view = VIEW_DASH;
+#else
+    (void)monitor_only;   /* no capture pipeline to scope without pcap */
 #endif
     event_wake_init();
     updater_init(check_manifest);

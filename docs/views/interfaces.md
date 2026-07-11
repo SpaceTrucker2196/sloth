@@ -103,6 +103,39 @@ monitor capture is a separate pcap handle bound to a specific
 monitor interface — WiFi SIGINT views are already governed by the
 `m` (monitor-iface) selection.
 
+## Headless data-stream scoping (`--monitor-only` / `--iface`)
+
+The `y` toggle is interactive — it needs an operator at the terminal.
+An appliance that runs sloth headless (in a pty, under systemd, with no
+one to press keys) can't use it, so the same data-stream filter is also
+settable at launch:
+
+- `--monitor-only` — at startup, resolve the monitor-mode Wi-Fi
+  interface and restrict the `any` capture to it. Every other iface
+  (loopback, docker, wired, VPN, non-monitor Wi-Fi) is dropped in the
+  pcap callback before decode, exactly as a `y`-deselect would. The
+  802.11 SIGINT rides its own monitor handle and is untouched — the net
+  effect is "watch only the wireless monitor radio." If no monitor
+  interface is found (e.g. it lost the boot race), the restriction is
+  **skipped with a warning** rather than blinding the sensor; the unit's
+  `Restart=always` then re-resolves it once the radio settles.
+- `--iface NAME` — the explicit form: name the interface(s) to keep
+  (repeatable). Anything not named is dropped. `--monitor-only` is
+  sugar for "`--iface <the monitor radio>`".
+
+Both feed a launch-time **allow-list** (`iface_only`). A non-empty
+allow-list is a whitelist; an empty one (the default) imposes no
+restriction. The allow-list composes with the interactive deselect via
+OR in the callback — either election excluding an iface drops its
+frames. Allow-list-excluded rows show the same `d` marker in the view.
+
+Example (the FennecTrace sensor unit):
+
+```
+ExecStart=… /opt/sloth/sloth --monitor-only --hop \
+    --data-socket tcp:127.0.0.1:8765 --pcap-dir /var/lib/fennectrace/pcaps
+```
+
 ## See also
 
 - Backend: [`src/platform/linux_parse.c`](../../src/platform/linux_parse.c).

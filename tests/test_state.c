@@ -323,6 +323,87 @@ void test_deselect_independent_of_hide(void) {
     ASSERT_EQ(iface_is_deselected(&s, "eth0"), 1);
 }
 
+/* ── data-stream allow-list (--iface / --monitor-only) — #17 headless ── */
+
+void test_only_empty_allows_all(void) {
+    /* Empty allow-list = no restriction: every iface passes. */
+    sloth_state_t s = make_state_with_ifaces(4);
+    ASSERT_EQ(s.iface_only_count, 0);
+    ASSERT_EQ(iface_is_only_allowed(&s, "eth0"),  1);
+    ASSERT_EQ(iface_is_only_allowed(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_is_only_allowed(&s, "tun0"),  1);
+}
+
+void test_only_whitelists_named_iface(void) {
+    /* A non-empty allow-list is a whitelist: only the named iface passes,
+     * every other iface is excluded. This is the monitor-only behaviour —
+     * seed with the monitor radio, drop the wired/virtual noise. */
+    sloth_state_t s = make_state_with_ifaces(4);
+    iface_only_add(&s, "wlan0");
+    ASSERT_EQ(s.iface_only_count, 1);
+    ASSERT_STR(s.iface_only[0], "wlan0");
+    ASSERT_EQ(iface_is_only_allowed(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_is_only_allowed(&s, "eth0"),  0);
+    ASSERT_EQ(iface_is_only_allowed(&s, "lo"),    0);
+    ASSERT_EQ(iface_is_only_allowed(&s, "tun0"),  0);
+}
+
+void test_only_add_is_deduped(void) {
+    /* Repeated --iface of the same name (or monitor-only over an explicit
+     * --iface) must not grow the list. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    iface_only_add(&s, "wlan0");
+    iface_only_add(&s, "wlan0");
+    ASSERT_EQ(s.iface_only_count, 1);
+}
+
+void test_only_add_multiple(void) {
+    sloth_state_t s = make_state_with_ifaces(4);
+    iface_only_add(&s, "wlan0");
+    iface_only_add(&s, "wlan1");
+    ASSERT_EQ(s.iface_only_count, 2);
+    ASSERT_EQ(iface_is_only_allowed(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_is_only_allowed(&s, "wlan1"), 1);
+    ASSERT_EQ(iface_is_only_allowed(&s, "eth0"),  0);
+}
+
+void test_only_add_ignores_empty(void) {
+    /* --monitor-only with no monitor iface seeds nothing → empty list →
+     * unrestricted (fail-open), never an accidental all-drop. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    iface_only_add(&s, "");
+    iface_only_add(&s, NULL);
+    ASSERT_EQ(s.iface_only_count, 0);
+    ASSERT_EQ(iface_is_only_allowed(&s, "eth0"), 1);
+}
+
+void test_only_is_bounded(void) {
+    /* Allow-list is capped at MAX_IFACES; overflow adds are ignored, not
+     * written out of bounds. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    char nm[16];
+    for (int i = 0; i < MAX_IFACES + 8; i++) {
+        snprintf(nm, sizeof(nm), "if%d", i);
+        iface_only_add(&s, nm);
+    }
+    ASSERT_EQ(s.iface_only_count, MAX_IFACES);
+}
+
+void test_only_independent_of_deselect(void) {
+    /* Allow-list and the interactive deselect are separate elections; the
+     * capture callback ORs them, so either one excludes an iface. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    iface_only_add(&s, "wlan0");            /* whitelist wlan0 only */
+    s.iface_sel = 1;                        /* wlan0 */
+    view_iface_key(&s, 'y');               /* also deselect wlan0 */
+    ASSERT_EQ(s.iface_only_count,       1);
+    ASSERT_EQ(s.iface_deselected_count, 1);
+    /* wlan0 is whitelisted but deselected → excluded. eth0 is not
+     * whitelisted → excluded. Both drop, by different elections. */
+    ASSERT(iface_is_deselected(&s, "wlan0"));
+    ASSERT_EQ(iface_is_only_allowed(&s, "eth0"), 0);
+}
+
 /* ── view_claims_key: which views own which shadow keys ──────
  *
  * The bug was that the global view-switch handler in main.c consumed
@@ -431,4 +512,13 @@ void run_state_tests(void) {
     RUN_TEST(test_toggle_deselect);
     RUN_TEST(test_toggle_reselect);
     RUN_TEST(test_deselect_independent_of_hide);
+
+    TEST_SUITE("iface data-stream allow-list (--iface/--monitor-only) — #17");
+    RUN_TEST(test_only_empty_allows_all);
+    RUN_TEST(test_only_whitelists_named_iface);
+    RUN_TEST(test_only_add_is_deduped);
+    RUN_TEST(test_only_add_multiple);
+    RUN_TEST(test_only_add_ignores_empty);
+    RUN_TEST(test_only_is_bounded);
+    RUN_TEST(test_only_independent_of_deselect);
 }
