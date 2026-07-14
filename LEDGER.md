@@ -54,3 +54,4 @@
 | 4cafdfe | 2026-07-06T00:27:56Z | claude-opus-4-8 | 1042 | 32340 | 3273482 | 43473 | 2.8852 | eliminate -Wformat-truncation warnings across alerts and views |
 | a9d2557 | 2026-07-06T00:31:10Z | claude-opus-4-8 | 143 | 2482 | 670208 | 3700 | 0.4349 | clamp http_log header vlen to silence -Wstringop-overread |
 | d36d69e | 2026-07-14T23:15:12Z | claude-fable-5,claude-opus-4-8 | 41041 | 140200 | 13684775 | 3386531 | 49.6834 | Encrypt agent instructions with git-crypt (agents/ move + pointers) |
+| 11fc1f5 | 2026-07-14T23:21:26Z | claude-fable-5 | 7300 | 68655 | 7612489 | 452106 | 20.1604 | Issue #35: --iface/--monitor-only headless data-stream scoping |
