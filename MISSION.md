@@ -8,7 +8,7 @@ This repo is run as a **dark factory** — Level 5 agent autonomy: the
 agent writes the code, writes the tests, runs the review. The human is
 the customer and the final acceptance reviewer, not the engineer.
 Everything an agent needs to continue building sloth from a cold start
-is in-tree. See [`docs/dark-factory.md`](docs/dark-factory.md) for the
+is in-tree. See [`agents/dark-factory.md`](agents/dark-factory.md) for the
 pattern and how to apply it elsewhere.
 
 Operating rules live in [`CLAUDE.md`](CLAUDE.md). Architecture and
@@ -214,7 +214,7 @@ needed and not in-tree, that's a defect — fix it as part of your work.
 1. Read [`CLAUDE.md`](CLAUDE.md) — operating manual: build discipline,
    conventions, "how to add a view", "how to add an alert rule", hard
    don'ts.
-2. Read [`docs/dark-factory.md`](docs/dark-factory.md) once, so you
+2. Read [`agents/dark-factory.md`](agents/dark-factory.md) once, so you
    know the autonomy contract you're operating under (when you decide,
    when you stop and ask).
 3. Run `make && make test`. Both must be green before you change a
@@ -234,7 +234,7 @@ something, or do something the operator hasn't asked for?** If yes,
 it's out. If no, it's worth considering on the merits.
 
 When you are unsure whether to decide or escalate, apply the autonomy
-rules in [`docs/dark-factory.md`](docs/dark-factory.md): code-level
+rules in [`agents/dark-factory.md`](agents/dark-factory.md): code-level
 decisions are yours; anything that rewrites §2 of this file, breaks an
 API consumed downstream, or touches the human's machine outside the
 repo is a stop-and-ask.

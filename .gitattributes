@@ -1,0 +1,6 @@
+# Agent-governing instructions are encrypted at rest (git-crypt) to prevent
+# third-party contamination / prompt-injection of the files that steer agent
+# behavior. Holders of the git-crypt key see plaintext in the working tree;
+# everyone else (GitHub, forks, PR authors) sees ciphertext they cannot read
+# or meaningfully alter. See agents/ and the root pointer files.
+agents/** filter=git-crypt diff=git-crypt

@@ -25,7 +25,7 @@ assignees: ''
 
 ## Autonomy level
 
-<!-- Per docs/dark-factory.md §4:
+<!-- Per agents/dark-factory.md §4:
      "decides"          — agent ships without escalation
      "decides-and-flags" — agent ships, flags the judgment calls
      "stops-and-asks"    — agent plans, then waits for the human -->

@@ -14,7 +14,7 @@ assertion or genuinely dead/equivalent code. This is how sloth checks
 that its **test suite itself** is trustworthy enough to back the
 [[sloth|Level-5]] autonomy claim in [`MISSION.md`](../../MISSION.md).
 
-**Sources**: GitHub issue #4, [`docs/dark-factory.md`](../dark-factory.md) §3.3,
+**Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
 
 **Last updated**: 2026-05-26.
@@ -411,5 +411,5 @@ where the suite already had failures.
 - [[alerts]] — the alert engine, the first mutation target.
 - [[architecture]] — code-tree layout for picking the next target.
 - [[platform-vtable]] — why some files won't mutate cleanly on macOS.
-- [`../dark-factory.md`](../dark-factory.md) §3.3 — why "tests are
+- [`../../agents/dark-factory.md`](../../agents/dark-factory.md) §3.3 — why "tests are
   the ground truth" requires this harness.

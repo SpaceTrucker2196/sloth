@@ -68,7 +68,7 @@ test in the test suite.
 
 **Source**: GitHub issue #4 ("Add a mutation-testing harness to
 validate the test oracle"), `.github/scripts/mutate.py`,
-`docs/dark-factory.md` §3.3.
+`agents/dark-factory.md` §3.3.
 
 **Created pages**:
 

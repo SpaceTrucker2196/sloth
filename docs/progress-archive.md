@@ -1630,7 +1630,7 @@ files named in the issue as next-priority after `src/alerts.c`.
 **Suite totals**: 2008 → 2027 assertions (+19); 0 failed. Build
 warning-clean.
 
-**Decisions flagged** (per `docs/dark-factory.md` §4.2):
+**Decisions flagged** (per `agents/dark-factory.md` §4.2):
 - Skipped writing tests for `threat_intel.c` survivors — documented
   equivalence-class only. The wiki page's rule is explicit; adding
   fake assertions would degrade the suite's honesty.
@@ -1692,7 +1692,7 @@ documented equivalence-class patterns). Build warning-clean.
 `Makefile` (added `mutate` target), `docs/wiki/mutation-testing.md`
 (new), `docs/wiki/index.md`, `docs/wiki/log.md`, `PROGRESS.md`
 **Why**: Closes the loop the dark-factory pattern doc
-([`docs/dark-factory.md`](docs/dark-factory.md) §3.3) opens: the
+([`agents/dark-factory.md`](agents/dark-factory.md) §3.3) opens: the
 Level-5 claim in `MISSION.md` rests on `make test` being a
 trustworthy oracle, but the suite had ~1974 hand-crafted assertions
 with no evidence they'd actually fail on real regressions.
@@ -1780,7 +1780,7 @@ warning-clean.
 ### 2026-05-25 — FACTORY.md build & infra runbook
 **Commits**: `c62b8f0`
 **Touched**: `FACTORY.md` (new), staged previously-untracked
-`MISSION.md` and `docs/dark-factory.md`
+`MISSION.md` and `agents/dark-factory.md`
 **Why**: An agent landing on the repo cold needs one file that
 answers "what do I install, build, run, deploy, debug?". Charter
 (MISSION) and pattern (dark-factory) already existed; FACTORY closes
