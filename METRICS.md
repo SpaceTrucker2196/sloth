@@ -8,3 +8,4 @@ never rewrite rows.
 | issue | commit | date | converge_iters | tests_at_ship | shipped | notes |
 |------:|--------|------|---------------:|--------------:|:-------:|-------|
 | 34 | 8714467 | 2026-07-05 | 1 | 3572 | yes | factory standup; docs/tooling only, suite green on first converge |
+| 35 | 7d21d42 | 2026-07-14 | 1 | 3672 | yes | allow-list rode #17 SLL2 machinery; suite green on first converge |
