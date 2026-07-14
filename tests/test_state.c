@@ -323,6 +323,99 @@ void test_deselect_independent_of_hide(void) {
     ASSERT_EQ(iface_is_deselected(&s, "eth0"), 1);
 }
 
+/* ── launch-time allow-list (--iface / --monitor-only) — issue #35 ── */
+
+void test_allow_empty_list_all_pass(void) {
+    /* No --iface flags given: the allow-list is empty and everything
+     * passes — a bare launch is unrestricted. */
+    sloth_state_t s = make_state_with_ifaces(3);
+    ASSERT_EQ(s.iface_allowed_count, 0);
+    ASSERT_EQ(iface_is_allowed(&s, "eth0"),    1);
+    ASSERT_EQ(iface_is_allowed(&s, "wlan0"),   1);
+    ASSERT_EQ(iface_is_allowed(&s, "docker0"), 1);
+}
+
+void test_allow_whitelist(void) {
+    /* Non-empty list = whitelist: only listed names pass. */
+    sloth_state_t s = make_state_with_ifaces(3);
+    ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
+    ASSERT_EQ(s.iface_allowed_count, 1);
+    ASSERT_STR(s.iface_allowed[0], "wlan0");
+    ASSERT_EQ(iface_is_allowed(&s, "wlan0"),   1);
+    ASSERT_EQ(iface_is_allowed(&s, "eth0"),    0);
+    ASSERT_EQ(iface_is_allowed(&s, "lo"),      0);
+    ASSERT_EQ(iface_is_allowed(&s, "docker0"), 0);
+}
+
+void test_allow_multiple_ifaces(void) {
+    sloth_state_t s = make_state_with_ifaces(4);
+    ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_allow_add(&s, "eth0"),  1);
+    ASSERT_EQ(s.iface_allowed_count, 2);
+    ASSERT_EQ(iface_is_allowed(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_is_allowed(&s, "eth0"),  1);
+    ASSERT_EQ(iface_is_allowed(&s, "tun0"),  0);
+}
+
+void test_allow_dedupe(void) {
+    /* Re-adding a present name reports success but grows nothing —
+     * `--iface wlan0 --monitor-only` resolving to wlan0 is one entry. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
+    ASSERT_EQ(iface_allow_add(&s, "wlan0"), 1);
+    ASSERT_EQ(s.iface_allowed_count, 1);
+}
+
+void test_allow_null_empty_ignored(void) {
+    /* A failed --monitor-only resolve passes "" / NULL; the list must
+     * stay empty so the stream stays unrestricted (fail-open). */
+    sloth_state_t s = make_state_with_ifaces(2);
+    ASSERT_EQ(iface_allow_add(&s, NULL), 0);
+    ASSERT_EQ(iface_allow_add(&s, ""),   0);
+    ASSERT_EQ(s.iface_allowed_count, 0);
+    ASSERT_EQ(iface_is_allowed(&s, "eth0"), 1);
+}
+
+void test_allow_bounded_at_max(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    char name[16];
+    for (int i = 0; i < MAX_IFACES; i++) {
+        snprintf(name, sizeof(name), "if%d", i);
+        ASSERT_EQ(iface_allow_add(&s, name), 1);
+    }
+    ASSERT_EQ(s.iface_allowed_count, MAX_IFACES);
+    ASSERT_EQ(iface_allow_add(&s, "overflow"), 0);
+    ASSERT_EQ(s.iface_allowed_count, MAX_IFACES);
+    ASSERT_EQ(iface_is_allowed(&s, "overflow"), 0);
+    ASSERT_EQ(iface_is_allowed(&s, "if0"), 1);
+}
+
+void test_allow_independent_of_deselect(void) {
+    /* The two elections are independent lists; the capture callback
+     * drops when EITHER rejects. An iface can be allowed and
+     * deselected at once — deselect still wins in the callback's
+     * composed predicate. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    s.iface_sel = 1;
+    iface_allow_add(&s, "wlan0");
+    view_iface_key(&s, 'y');   /* deselect wlan0 at runtime */
+    ASSERT_EQ(iface_is_allowed(&s, "wlan0"),    1);
+    ASSERT_EQ(iface_is_deselected(&s, "wlan0"), 1);
+    /* composed predicate, exactly as on_packet() evaluates it */
+    int dropped = iface_is_deselected(&s, "wlan0")
+               || !iface_is_allowed(&s, "wlan0");
+    ASSERT_EQ(dropped, 1);
+    /* eth0: not deselected, but outside the allow-list → dropped */
+    dropped = iface_is_deselected(&s, "eth0")
+           || !iface_is_allowed(&s, "eth0");
+    ASSERT_EQ(dropped, 1);
+    /* reselect wlan0 → passes both elections again */
+    view_iface_key(&s, 'y');
+    dropped = iface_is_deselected(&s, "wlan0")
+           || !iface_is_allowed(&s, "wlan0");
+    ASSERT_EQ(dropped, 0);
+}
+
 /* ── view_claims_key: which views own which shadow keys ──────
  *
  * The bug was that the global view-switch handler in main.c consumed
@@ -431,4 +524,13 @@ void run_state_tests(void) {
     RUN_TEST(test_toggle_deselect);
     RUN_TEST(test_toggle_reselect);
     RUN_TEST(test_deselect_independent_of_hide);
+
+    TEST_SUITE("iface allow-list (launch-time) — #35");
+    RUN_TEST(test_allow_empty_list_all_pass);
+    RUN_TEST(test_allow_whitelist);
+    RUN_TEST(test_allow_multiple_ifaces);
+    RUN_TEST(test_allow_dedupe);
+    RUN_TEST(test_allow_null_empty_ignored);
+    RUN_TEST(test_allow_bounded_at_max);
+    RUN_TEST(test_allow_independent_of_deselect);
 }

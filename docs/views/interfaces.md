@@ -103,6 +103,36 @@ monitor capture is a separate pcap handle bound to a specific
 monitor interface — WiFi SIGINT views are already governed by the
 `m` (monitor-iface) selection.
 
+## Headless scoping (`--iface` / `--monitor-only`) — issue #35
+
+The launch-time complement to `y`, for deployments where no operator
+is present to work the interactive controls (systemd units, `script`
+ptys, appliance sensors):
+
+```sh
+sloth --iface wlan1 --hop --data-socket tcp:100.64.0.5:8765
+sloth --monitor-only --hop --data-socket unix:/var/run/sloth.sock
+```
+
+- `--iface NAME` (repeatable) — allow-list: only the named
+  interfaces feed the capture pipeline; every other iface's frames
+  are dropped in the pcap callback before decode, exactly like a
+  `y`-deselect set at launch.
+- `--monitor-only` — sugar for `--iface <monitor radio>`: resolves
+  the monitor-mode Wi-Fi interface sloth discovers at startup and
+  allow-lists it. **Fail-open**: if no monitor interface is present
+  (e.g. the radio lost the boot race), the stream stays unrestricted
+  and a warning goes to stderr — a headless sensor is never blinded.
+  `Restart=always` re-resolves on the next start.
+
+The allow-list and the runtime deselect list are independent
+elections; the callback drops a frame when *either* rejects its
+ingress iface. Both are purely logical — OS interface state
+(up/down, monitor mode, addresses) is never touched — and both
+require SLL2 ingress attribution (see above); without it they are
+markers with no filter effect. The 802.11 monitor handle is
+unaffected.
+
 ## See also
 
 - Backend: [`src/platform/linux_parse.c`](../../src/platform/linux_parse.c).

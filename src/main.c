@@ -412,6 +412,18 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --iface NAME       restrict the data stream to NAME (repeatable).\n"
+            "                     Launch-time form of the interface view's [y]\n"
+            "                     deselect, for headless deployments: frames\n"
+            "                     from every other interface are dropped in the\n"
+            "                     capture callback before decode. Purely\n"
+            "                     logical — OS interface state is untouched.\n"
+            "  --monitor-only     shorthand: restrict the data stream to the\n"
+            "                     monitor-mode Wi-Fi interface sloth discovers\n"
+            "                     at startup. Fail-open: if no monitor\n"
+            "                     interface is found the stream stays\n"
+            "                     unrestricted and a warning is printed, so a\n"
+            "                     headless sensor is never blinded.\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -460,6 +472,9 @@ int main(int argc, char **argv) {
     const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
+    const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
+    int         allow_iface_count = 0;
+    int         monitor_only = 0;        /* --monitor-only (#35) */
     time_t      session_start = time(NULL);
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
@@ -495,6 +510,16 @@ int main(int argc, char **argv) {
             report_json = argv[++i];
         } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
             check_manifest = argv[++i];
+        } else if (!strcmp(argv[i], "--iface") && i + 1 < argc) {
+            if (allow_iface_count < MAX_IFACES)
+                allow_ifaces[allow_iface_count++] = argv[++i];
+            else {
+                fprintf(stderr, "too many --iface entries (max %d)\n",
+                        MAX_IFACES);
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--monitor-only")) {
+            monitor_only = 1;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
@@ -558,6 +583,12 @@ int main(int argc, char **argv) {
     g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
     g_state.active_view = VIEW_DASH;
 
+    /* Headless data-stream scoping (#35): seed the launch-time
+     * allow-list before the capture thread starts so no packet is ever
+     * seen outside it. */
+    for (int i = 0; i < allow_iface_count; i++)
+        iface_allow_add(&g_state, allow_ifaces[i]);
+
     g_platform.init();
     dns_init();
 #ifdef WITH_PCAP
@@ -568,6 +599,19 @@ int main(int argc, char **argv) {
     if (g_state.probe_iface[0])
         g_state.active_view = VIEW_DASH;
 #endif
+    /* #35: resolve --monitor-only after probe_start() has discovered
+     * the monitor radio (probe_iface is set synchronously). Fail-open:
+     * a sensor that lost the boot race keeps an unrestricted stream
+     * rather than going blind; Restart=always re-resolves next start.
+     * The entry lands after capture starts — same benign main-thread
+     * write the [y] deselect already performs (#17). */
+    if (monitor_only) {
+        if (g_state.probe_iface[0])
+            iface_allow_add(&g_state, g_state.probe_iface);
+        else
+            fprintf(stderr, "sloth: --monitor-only: no monitor-mode "
+                    "interface found; data stream left unrestricted\n");
+    }
     event_wake_init();
     updater_init(check_manifest);
     tui_init();

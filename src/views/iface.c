@@ -289,6 +289,32 @@ int iface_is_deselected(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
+/* Launch-time allow-list (#35) — the headless complement to the [y]
+ * deselect above. Kept independent of the deselect election: the
+ * capture callback drops when either one rejects. An empty list means
+ * unrestricted, so a bare launch (or a failed --monitor-only resolve)
+ * changes nothing. */
+int iface_is_allowed(const sloth_state_t *s, const char *name) {
+    if (s->iface_allowed_count == 0) return 1;
+    for (int i = 0; i < s->iface_allowed_count; i++) {
+        if (strncmp(s->iface_allowed[i], name, 16) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+int iface_allow_add(sloth_state_t *s, const char *name) {
+    if (!name || !name[0]) return 0;
+    for (int i = 0; i < s->iface_allowed_count; i++) {
+        if (strncmp(s->iface_allowed[i], name, 16) == 0)
+            return 1;   /* dedupe: already present */
+    }
+    if (s->iface_allowed_count >= MAX_IFACES) return 0;
+    snprintf(s->iface_allowed[s->iface_allowed_count++],
+             sizeof(s->iface_allowed[0]), "%s", name);
+    return 1;
+}
+
 /* ── draw ────────────────────────────────────────────────── */
 
 /* Format the monitor radio's scan state into `buf`: the channel list with

@@ -1209,6 +1209,13 @@ typedef struct {
      * and rule_no_monitor_mode() for how it composes with capture. */
     char          iface_deselected[MAX_IFACES][16];
     int           iface_deselected_count;
+    /* Launch-time data-stream allow-list (#35): when non-empty, only
+     * these interfaces feed the capture pipeline — the headless
+     * complement to the interactive deselect election above. Filled
+     * once at startup (--iface / --monitor-only), never mutated at
+     * runtime. Empty list = unrestricted. */
+    char          iface_allowed[MAX_IFACES][16];
+    int           iface_allowed_count;
 
     conn_t        conns[MAX_CONNS];
     int           conn_count;
@@ -1494,6 +1501,16 @@ void iface_hide_non_monitor(sloth_state_t *s);
  * any decode / log / alert runs. Purely logical — the OS state of the
  * interface (up/down, monitor, addresses) is never touched. Issue #17. */
 int iface_is_deselected(const sloth_state_t *s, const char *name);
+
+/* ── Launch-time allow-list (--iface / --monitor-only, issue #35) ──
+ * Empty list = unrestricted (everything passes). Non-empty = whitelist.
+ * The capture callback drops a frame when EITHER election rejects its
+ * ingress iface: deselected, or absent from a non-empty allow-list.
+ * Purely logical — OS interface state is never touched.
+ * iface_allow_add() dedupes, ignores NULL/empty names, and is bounded
+ * at MAX_IFACES; returns 1 iff the name is in the list afterwards. */
+int iface_is_allowed(const sloth_state_t *s, const char *name);
+int iface_allow_add(sloth_state_t *s, const char *name);
 
 /* ── Key routing: does the active view claim this key over the global
  * view-switch letters? Kept in main.c as a small, centralized table;

@@ -565,16 +565,18 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     (void)user;
     int dlt = pcap_datalink(g_handle);
 
-    /* Data-stream election (#17): on SLL2 we can attribute the frame to
-     * an ingress interface and drop before decode when that iface is
-     * deselected. On SLL v1 / EN10MB the header carries no ifindex, so
-     * the toggle becomes a UI-only marker in the iface view. */
+    /* Data-stream election (#17 + #35): on SLL2 we can attribute the
+     * frame to an ingress interface and drop before decode when either
+     * election rejects it — runtime deselect ([y]) or launch-time
+     * allow-list (--iface / --monitor-only). On SLL v1 / EN10MB the
+     * header carries no ifindex, so both become UI-only markers. */
     if (dlt == MY_DLT_LINUX_SLL2 && hdr->caplen >= SLL2_HDRLEN) {
         uint32_t ifi = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16)
                      | ((uint32_t)data[6] <<  8) |  (uint32_t)data[7];
         const char *name = ifindex_lookup(ifi);
         if (name && name[0] && g_state
-            && iface_is_deselected(g_state, name))
+            && (iface_is_deselected(g_state, name)
+                || !iface_is_allowed(g_state, name)))
             return;
     }
 
