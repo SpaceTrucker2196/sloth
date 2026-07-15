@@ -416,6 +416,60 @@ void test_allow_independent_of_deselect(void) {
     ASSERT_EQ(dropped, 0);
 }
 
+/* ── allow-list exclusion marker (iface view) — issue #37 ── */
+
+void test_excluded_empty_list_marks_nothing(void) {
+    /* Bare launch: empty allow-list excludes nothing, render unchanged. */
+    sloth_state_t s = make_state_with_ifaces(3);
+    ASSERT_EQ(iface_is_excluded(&s, "eth0"),  0);
+    ASSERT_EQ(iface_is_excluded(&s, "wlan0"), 0);
+    ASSERT_EQ(iface_is_excluded(&s, "lo"),    0);
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), ' ');
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 1), 's');
+}
+
+void test_excluded_marks_unlisted_only(void) {
+    /* Non-empty list: unlisted ifaces get the 'x' marker, listed ones
+     * render exactly as unrestricted. */
+    sloth_state_t s = make_state_with_ifaces(3);
+    iface_allow_add(&s, "wlan0");
+    ASSERT_EQ(iface_is_excluded(&s, "eth0"),  1);
+    ASSERT_EQ(iface_is_excluded(&s, "lo"),    1);
+    ASSERT_EQ(iface_is_excluded(&s, "wlan0"), 0);
+    ASSERT_EQ(iface_row_prefix(&s, "eth0",  0), 'x');
+    ASSERT_EQ(iface_row_prefix(&s, "wlan0", 0), ' ');
+    /* excluded outranks the scanning marker: dropped data trumps
+     * radio state */
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 1), 'x');
+}
+
+void test_excluded_prefix_precedence(void) {
+    /* hidden > deselected > excluded: an iface rejected by both
+     * elections reads as the one the operator can still toggle. */
+    sloth_state_t s = make_state_with_ifaces(2);
+    iface_allow_add(&s, "wlan0");
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'x');
+    s.iface_sel = 0;
+    view_iface_key(&s, 'y');   /* deselect eth0 */
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'd');
+    view_iface_key(&s, 't');   /* hide eth0 */
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'h');
+    view_iface_key(&s, 't');   /* unhide */
+    view_iface_key(&s, 'y');   /* reselect → back to excluded */
+    ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'x');
+}
+
+void test_excluded_render_smoke(void) {
+    /* Exercise the draw path with an exclusion present — must not
+     * crash and must leave state untouched (draw is const). */
+    sloth_state_t s = make_state_with_ifaces(3);
+    iface_allow_add(&s, "wlan0");
+    s.iface_sel = 0;           /* selected row IS an excluded row */
+    view_iface_draw(&s);
+    ASSERT_EQ(s.iface_allowed_count, 1);
+    ASSERT_EQ(iface_is_excluded(&s, "eth0"), 1);
+}
+
 /* ── view_claims_key: which views own which shadow keys ──────
  *
  * The bug was that the global view-switch handler in main.c consumed
@@ -533,4 +587,10 @@ void run_state_tests(void) {
     RUN_TEST(test_allow_null_empty_ignored);
     RUN_TEST(test_allow_bounded_at_max);
     RUN_TEST(test_allow_independent_of_deselect);
+
+    TEST_SUITE("iface allow-list exclusion marker — #37");
+    RUN_TEST(test_excluded_empty_list_marks_nothing);
+    RUN_TEST(test_excluded_marks_unlisted_only);
+    RUN_TEST(test_excluded_prefix_precedence);
+    RUN_TEST(test_excluded_render_smoke);
 }

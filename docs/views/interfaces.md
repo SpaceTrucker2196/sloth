@@ -125,6 +125,15 @@ sloth --monitor-only --hop --data-socket unix:/var/run/sloth.sock
   and a warning goes to stderr — a headless sensor is never blinded.
   `Restart=always` re-resolves on the next start.
 
+**Excluded marker.** Interfaces present on the box but absent from a
+non-empty allow-list carry an `x` prefix and a dim `(excluded)`
+annotation in the interface view, mirroring the `d` / `(deselected)`
+treatment — a row marker always means "this iface's frames are being
+dropped". Prefix precedence is `h` (hidden) > `d` (deselected) > `x`
+(excluded) > `s` (scanning). There is no key to clear it: the
+allow-list is launch-time immutable, so `x` rows change only on
+restart. An empty allow-list (the default) marks nothing.
+
 The allow-list and the runtime deselect list are independent
 elections; the callback drops a frame when *either* rejects its
 ingress iface. Both are purely logical — OS interface state

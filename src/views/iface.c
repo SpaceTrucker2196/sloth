@@ -315,6 +315,25 @@ int iface_allow_add(sloth_state_t *s, const char *name) {
     return 1;
 }
 
+/* Display-side complement of iface_is_allowed (#37): true only when a
+ * non-empty allow-list is dropping this iface's frames. Split out so
+ * the view marks exactly what the capture callback rejects — an empty
+ * list excludes nothing, keeping the bare-launch render unchanged. */
+int iface_is_excluded(const sloth_state_t *s, const char *name) {
+    return s->iface_allowed_count > 0 && !iface_is_allowed(s, name);
+}
+
+/* Row-prefix election, the one source of truth for both render paths:
+ * hidden > deselected > excluded > scanning > default. Deselect wins
+ * over excluded so an iface rejected by both elections reads as the
+ * one the operator can still toggle. */
+char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan) {
+    if (iface_is_hidden(s, name))     return 'h';
+    if (iface_is_deselected(s, name)) return 'd';
+    if (iface_is_excluded(s, name))   return 'x';
+    return is_scan ? 's' : ' ';
+}
+
 /* ── draw ────────────────────────────────────────────────── */
 
 /* Format the monitor radio's scan state into `buf`: the channel list with
@@ -359,11 +378,11 @@ void view_iface_draw(const sloth_state_t *s) {
         const iface_stat_t *f = &s->ifaces[i];
         int hidden     = iface_is_hidden(s, f->name);
         int deselected = iface_is_deselected(s, f->name);
+        int excluded   = iface_is_excluded(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
         if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
-        /* prefix priority: hidden > deselected > scanning > default */
-        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
+        char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
 
@@ -388,6 +407,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    is_scan     ? scanbuf
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
+                   : excluded  ? "  (excluded)"
                    : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset();
         } else if (hidden) {
@@ -415,6 +435,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printw("%s", scanbuf); }
             else if (deselected) { tui_dim(); printw("  (deselected)"); }
+            else if (excluded)   { tui_dim(); printw("  (excluded)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
             printw("\n");
             tui_normal();
@@ -446,11 +467,12 @@ void view_iface_draw(const sloth_state_t *s) {
         const iface_stat_t *f = &s->ifaces[i];
         int hidden     = iface_is_hidden(s, f->name);
         int deselected = iface_is_deselected(s, f->name);
+        int excluded   = iface_is_excluded(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
         if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
         int sel     = (i == s->iface_sel);
-        char pfx    = hidden ? 'h' : (deselected ? 'd' : (is_scan ? 's' : ' '));
+        char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
 
@@ -475,6 +497,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    is_scan     ? scanbuf
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
+                   : excluded  ? "  (excluded)"
                    : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
             tui_reset(); printf("\n");
         } else if (hidden) {
@@ -498,6 +521,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
             if (is_scan) { tui_bright(); printf("%s", scanbuf); }
             else if (deselected) { tui_dim(); printf("  (deselected)"); }
+            else if (excluded)   { tui_dim(); printf("  (excluded)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
             printf("\n");
             tui_normal();

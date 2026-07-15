@@ -1512,6 +1512,15 @@ int iface_is_deselected(const sloth_state_t *s, const char *name);
 int iface_is_allowed(const sloth_state_t *s, const char *name);
 int iface_allow_add(sloth_state_t *s, const char *name);
 
+/* ── Allow-list exclusion marker (issue #37) ──
+ * Excluded = rejected by a NON-EMPTY allow-list; an empty list excludes
+ * nothing. Display predicate only — the capture callback composes the
+ * elections directly. iface_row_prefix() is the shared row-prefix
+ * election for both iface render paths:
+ * hidden 'h' > deselected 'd' > excluded 'x' > scanning 's' > ' '. */
+int iface_is_excluded(const sloth_state_t *s, const char *name);
+char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan);
+
 /* ── Key routing: does the active view claim this key over the global
  * view-switch letters? Kept in main.c as a small, centralized table;
  * exposed for direct unit-test coverage of the routing decision. */
