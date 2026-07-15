@@ -1528,6 +1528,10 @@ char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan);
  * exposed for direct unit-test coverage of the routing decision. */
 int view_claims_key(view_t v, int key);
 
+/* "[key] Name" label for a view — the tab bar and the [?] help card
+ * both read this so their key lists can't drift apart. */
+const char *view_label(view_t v);
+
 /* ── Device risk scoring — declared here (post-state) so we can name
  * sloth_state_t without a forward decl dance. See src/device_risk.c
  * and roadmap #16 phase 4. */

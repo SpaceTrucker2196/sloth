@@ -10,6 +10,7 @@ WITH_WIFI    ?= 1
 
 SRCS = src/main.c          \
        src/view_route.c    \
+       src/view_labels.c   \
        src/tui.c           \
        src/history.c       \
        src/bandwidth.c     \
@@ -204,6 +205,8 @@ endif
 TEST_SRCS = tests/main_test.c          \
             tests/null_tui.c           \
             src/view_route.c           \
+            src/view_labels.c          \
+            tests/test_help.c          \
             tests/fake_platform.c      \
             tests/scenarios.c          \
             tests/test_parse.c         \

@@ -48,41 +48,6 @@
 #include "views/karma.h"
 #include "views/rogue_radius.h"
 
-static const char *view_labels[VIEW_COUNT] = {
-    "[1] Interfaces",
-    "[2] Connections",
-    "[3] WiFi",
-    "[4] Packets",
-    "[5] Processes",
-    "[6] Stats",
-    "[7] Probe",
-    "[8] ARP",
-    "[9] mDNS",
-    "[0] NBNS",
-    "[d] DHCP",
-    "[s] SSDP",
-    "[b] Beacons",
-    "[a] Deauth",
-    "[h] HTTP",
-    "[t] TLS",
-    "[u] QUIC",
-    "[r] DNS",
-    "[p] NTP",
-    "[i] ICMP",
-    "[v] Alerts",
-    "[g] Devices",
-    "[?] Help",
-    "[o] Dash",
-    "[k] PNL",
-    "[e] EAPOL",
-    "[j] Seqnum",
-    "[w] Assoc",
-    "[m] Channel",
-    "[l] OSI",
-    "[x] Twins",
-    "[y] KARMA",
-    "[z] RADIUS",
-};
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
  * to the project's default phosphor pair. The IP / brand / SSID
@@ -709,14 +674,14 @@ static int draw_tabbar(const sloth_state_t *s) {
 
     for (int i = 0; i < VIEW_COUNT; i++) {
         /* "  [n] Label "  ≈ 2 sep + 2 label-padding + label width */
-        int lbl_w = (int)strlen(view_labels[i]) + 4;
+        int lbl_w = (int)strlen(view_label((view_t)i)) + 4;
         if (x + lbl_w >= max_x) {
             y++; x = 0;
             move(y, x);
         }
         tui_dim();   printw("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
-        printw(" %s ", view_labels[i]);
+        printw(" %s ", view_label((view_t)i));
         x += lbl_w;
     }
     tui_normal();
@@ -821,7 +786,7 @@ static void draw_tabbar(const sloth_state_t *s) {
     for (int i = 0; i < VIEW_COUNT; i++) {
         tui_dim(); printf("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
-        printf(" %s ", view_labels[i]);
+        printf(" %s ", view_label((view_t)i));
     }
     tui_dim(); printf("  [Tab] cycle  [q]uit\n");
     printf("------------------------------------------------------------\n");

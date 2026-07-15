@@ -38,17 +38,19 @@ void view_help_draw(const sloth_state_t *s) {
     tui_dim();    TPRINT("       press [?] or any view key to return");
     TPRINT("\n");
 
+    /* Rendered straight from view_label() — the same table the tab bar
+     * uses — so every view that exists appears here without a second
+     * list to keep in sync. Three columns, enum order. */
     section("View selection");
-    key_row("1", "Interfaces",   "d", "DHCP",     "u", "QUIC");
-    key_row("2", "Connections",  "s", "SSDP",     "r", "DNS");
-    key_row("3", "WiFi",         "b", "Beacons",  "p", "NTP");
-    key_row("4", "Packets",      "a", "Deauth",   "i", "ICMP");
-    key_row("5", "Processes",    "h", "HTTP",     "v", "Alerts");
-    key_row("6", "Stats",        "t", "TLS",      "g", "Devices");
-    key_row("7", "Probe",        "o", "Dashboard", "l", "OSI stack");
-    key_row("8", "ARP",          "",  "",         "",  "");
-    key_row("9", "mDNS",         "",  "",         "",  "");
-    key_row("0", "NBNS",         "",  "",         "",  "");
+    for (int v = 0; v < VIEW_COUNT; v += 3) {
+        tui_normal(); TPRINT("    ");
+        for (int c = 0; c < 3 && v + c < VIEW_COUNT; c++) {
+            tui_bright(); TPRINT("%-14s", view_label((view_t)(v + c)));
+            if (c < 2 && v + c + 1 < VIEW_COUNT) { tui_normal(); TPRINT("  "); }
+        }
+        TPRINT("\n");
+    }
+    tui_normal();
 
     section("Global");
     key_row("tab", "cycle views forward",

@@ -18,7 +18,8 @@
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
 injects packets, never scans, and never modifies kernel state — it observes what
-your host already sees and turns it into 27 views, six alert rules, an embedded
+your host already sees and turns it into dozens of live views, a suite of passive
+alert rules, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, seqnum-based MAC-randomisation deanonymisation),
 and an optional JSONL forensic log.
