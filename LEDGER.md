@@ -55,3 +55,4 @@
 | a9d2557 | 2026-07-06T00:31:10Z | claude-opus-4-8 | 143 | 2482 | 670208 | 3700 | 0.4349 | clamp http_log header vlen to silence -Wstringop-overread |
 | d36d69e | 2026-07-14T23:15:12Z | claude-fable-5,claude-opus-4-8 | 41041 | 140200 | 13684775 | 3386531 | 49.6834 | Encrypt agent instructions with git-crypt (agents/ move + pointers) |
 | 11fc1f5 | 2026-07-14T23:21:26Z | claude-fable-5 | 7300 | 68655 | 7612489 | 452106 | 20.1604 | Issue #35: --iface/--monitor-only headless data-stream scoping |
+| 08bc4a7 | 2026-07-15T00:21:46Z | claude-fable-5 | 73320 | 65444 | 5370935 | 432330 | 18.0229 | issue #37: iface allow-list exclusion marker |
