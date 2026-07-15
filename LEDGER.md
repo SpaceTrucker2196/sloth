@@ -57,3 +57,4 @@
 | 11fc1f5 | 2026-07-14T23:21:26Z | claude-fable-5 | 7300 | 68655 | 7612489 | 452106 | 20.1604 | Issue #35: --iface/--monitor-only headless data-stream scoping |
 | 08bc4a7 | 2026-07-15T00:21:46Z | claude-fable-5 | 73320 | 65444 | 5370935 | 432330 | 18.0229 | issue #37: iface allow-list exclusion marker |
 | 3cdb7cf | 2026-07-15T01:06:55Z | claude-fable-5 | 12218 | 74642 | 14003769 | 416868 | 26.1954 | issue #38: VIEW_ROGUE_RADIUS 802.1X EAP table |
+| 2ca5f4b | 2026-07-15T01:12:00Z | claude-fable-5,claude-opus-4-8 | 6943 | 33196 | 8984520 | 48050 | 6.4891 | issue #39: help-card/README view-label sync |
