@@ -12,3 +12,4 @@ never rewrite rows.
 | 37 | 08bc4a7 | 2026-07-14 | 1 | 3689 | yes | display-only marker over #35 predicates; prefix election extracted for direct test |
 | 38 | 3cdb7cf | 2026-07-14 | 1 | 3710 | yes | add-a-view recipe over existing #31 data layer; green on first converge |
 | 39 | 2ca5f4b | 2026-07-14 | 1 | 3778 | yes | docs-drift; extracted view_labels to shared file + capture-based drift guard |
+| 40 | 2dbf143 | 2026-07-14 | 1 | 3796 | yes | ICMP-tunnel detector; additive payload_len field + ring-scan rule, green on first converge |
