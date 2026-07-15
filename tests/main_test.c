@@ -84,6 +84,7 @@ void run_sensors_tests(void);
 void run_wifi_merge_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
+void run_rogue_radius_tests(void);
 void run_discovery_tests(void);
 void run_eap_parse_tests(void);
 void run_eap_track_tests(void);
@@ -180,6 +181,7 @@ int main(void) {
     run_wifi_merge_tests();
     run_twins_tests();
     run_karma_tests();
+    run_rogue_radius_tests();
     run_discovery_tests();
     run_eap_parse_tests();
     run_eap_track_tests();

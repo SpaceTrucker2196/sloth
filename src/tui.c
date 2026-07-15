@@ -46,6 +46,7 @@
 #include "views/osi.h"
 #include "views/twins.h"
 #include "views/karma.h"
+#include "views/rogue_radius.h"
 
 static const char *view_labels[VIEW_COUNT] = {
     "[1] Interfaces",
@@ -80,6 +81,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[l] OSI",
     "[x] Twins",
     "[y] KARMA",
+    "[z] RADIUS",
 };
 
 /* Row-bg lookup: backgrounds were retired, so every category collapses
@@ -498,6 +500,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_OSI:     view_osi_draw(s);           break;
     case VIEW_TWINS:   view_twins_draw(s);         break;
     case VIEW_KARMA:   view_karma_draw(s);         break;
+    case VIEW_ROGUE_RADIUS: view_rogue_radius_draw(s); break;
     default: break;
     }
 }

@@ -52,6 +52,7 @@ typedef enum {
     VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
     VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
     VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
+    VIEW_ROGUE_RADIUS = 32, /* 802.1X EAP method / identity-leak table (#38) */
     VIEW_COUNT
 } view_t;
 
@@ -1370,6 +1371,7 @@ typedef struct {
 
     rogue_radius_ap_t rogue_radius[MAX_ROGUE_RADIUS]; /* 802.1X EAP tracking (#31) */
     int               rogue_radius_count;
+    int               rogue_radius_sel;               /* VIEW_ROGUE_RADIUS row (#38) */
 
     /* ── Probe clients ──────────────────────────────────── */
     probe_client_t probe_clients[MAX_PROBE_CLIENTS];

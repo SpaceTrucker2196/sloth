@@ -45,6 +45,7 @@ One file per sloth view. Each covers:
 | `l` | OSI stack | [osi.md](osi.md) |
 | `x` | Twins     | [twins.md](twins.md) |
 | `y` | KARMA     | [karma.md](karma.md) |
+| `z` | Rogue RADIUS | [rogue-radius.md](rogue-radius.md) |
 
 ## WiFi SIGINT (v1.1)
 

@@ -85,6 +85,7 @@ SRCS = src/main.c          \
        src/views/twins.c     \
        src/karma_detect.c    \
        src/views/karma.c     \
+       src/views/rogue_radius.c \
        src/alerts.c          \
        src/views/alerts.c    \
        src/md5.c             \
@@ -354,6 +355,8 @@ TEST_SRCS = tests/main_test.c          \
             src/karma_detect.c             \
             src/views/karma.c              \
             tests/test_karma.c             \
+            src/views/rogue_radius.c       \
+            tests/test_rogue_radius.c      \
             src/alerts.c                   \
             src/views/alerts.c             \
             tests/test_alerts.c            \

@@ -44,6 +44,7 @@
 #include "views/osi.h"
 #include "views/twins.h"
 #include "views/karma.h"
+#include "views/rogue_radius.h"
 #include "karma_detect.h"
 #include "eap_track.h"
 #include "twins.h"
@@ -281,6 +282,7 @@ static void dispatch_to_view(sloth_state_t *s, int key) {
     case VIEW_OSI:     view_osi_key(s, key);           break;
     case VIEW_TWINS:   view_twins_key(s, key);         break;
     case VIEW_KARMA:   view_karma_key(s, key);         break;
+    case VIEW_ROGUE_RADIUS: view_rogue_radius_key(s, key); break;
     default: break;
     }
 }
@@ -351,6 +353,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'l': case 'L': s->active_view = VIEW_OSI;     return;
     case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
     case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
+    case 'z': case 'Z': s->active_view = VIEW_ROGUE_RADIUS; return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
