@@ -58,3 +58,4 @@
 | 08bc4a7 | 2026-07-15T00:21:46Z | claude-fable-5 | 73320 | 65444 | 5370935 | 432330 | 18.0229 | issue #37: iface allow-list exclusion marker |
 | 3cdb7cf | 2026-07-15T01:06:55Z | claude-fable-5 | 12218 | 74642 | 14003769 | 416868 | 26.1954 | issue #38: VIEW_ROGUE_RADIUS 802.1X EAP table |
 | 2ca5f4b | 2026-07-15T01:12:00Z | claude-fable-5,claude-opus-4-8 | 6943 | 33196 | 8984520 | 48050 | 6.4891 | issue #39: help-card/README view-label sync |
+| 2dbf143 | 2026-07-15T01:23:55Z | claude-opus-4-8 | 7499 | 62597 | 19857793 | 109976 | 12.6311 | issue #40: ICMP tunnel detector |
