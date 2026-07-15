@@ -89,6 +89,10 @@ int icmp_log_parse(const uint8_t *msg, int len,
     out->type  = type;
     out->code  = code;
     out->seq   = seq;
+    /* Bytes trailing the 8-byte ICMP echo header — the covert-channel
+     * signal. Interactive ping carries a fixed small payload (56 B
+     * Linux, 32 B Windows); ptunnel/icmptunnel/Loki fill toward MTU. */
+    out->payload_len = (len > 8) ? (uint16_t)(len - 8) : 0;
     out->is_v6 = is_v6 ? 1 : 0;
     out->ts    = time(NULL);
     return 1;

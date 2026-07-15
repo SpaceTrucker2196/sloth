@@ -197,6 +197,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
     case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
     case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
+    case ALERT_TYPE_ICMP_TUNNEL:            return "T1095";       /* Non-Application Layer Protocol (covert channel) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -719,6 +720,75 @@ static void rule_dns_tunnel(const sloth_state_t *s, time_t now) {
                  buckets[i].long_hits, DNS_TUNNEL_LABEL_THRESH);
         fire(ALERT_TYPE_DNS_TUNNEL, ALERT_SEV_CRIT,
              "DNS_TUNNEL", detail, key, buckets[i].src, 53, now);
+    }
+}
+
+/* ICMP tunnel / covert channel: ptunnel, icmptunnel, and Loki smuggle a
+ * TCP/data stream inside ICMP Echo payloads to slip past egress filters
+ * that permit ping. The passive tell is sustained Echo Requests between
+ * one src->dst pair carrying oversized payloads — interactive ping sends
+ * a fixed small payload (56 B Linux, 32 B Windows) about once a second,
+ * while a tunnel fills toward MTU at a high rate.
+ *
+ * Gate on payload size (> normal ping) AND volume (a burst from one
+ * pair), so a stray large diagnostic ping doesn't trip it. Metadata
+ * only — we read the ICMP length already captured, never the payload. */
+#define ICMP_TUNNEL_MIN_PAYLOAD 64   /* bytes past the 8-byte echo header */
+#define ICMP_TUNNEL_THRESHOLD   8    /* oversized echoes per pair per window */
+#define ICMP_TUNNEL_WINDOW_S    60
+
+static void rule_icmp_tunnel(const sloth_state_t *s, time_t now) {
+    typedef struct {
+        char src[46];
+        char dst[46];
+        int  count;
+        uint16_t min_len, max_len;
+    } bucket_t;
+    bucket_t buckets[16];
+    int      nb = 0;
+
+    for (int i = 0; i < s->icmp_log_count; i++) {
+        const icmp_log_entry_t *e = &s->icmp_log[i];
+        /* Echo Requests only (v4 type 8 / v6 128) — the request side
+         * carries the outbound tunnel data; replies mirror it. */
+        int is_echo_req = e->is_v6 ? (e->type == 128) : (e->type == 8);
+        if (!is_echo_req) continue;
+        if (e->payload_len < ICMP_TUNNEL_MIN_PAYLOAD) continue;
+        if (now - e->ts > ICMP_TUNNEL_WINDOW_S) continue;
+
+        int found = -1;
+        for (int j = 0; j < nb; j++)
+            if (strcmp(buckets[j].src, e->src) == 0 &&
+                strcmp(buckets[j].dst, e->dst) == 0) { found = j; break; }
+        if (found < 0) {
+            if (nb >= (int)(sizeof(buckets) / sizeof(buckets[0]))) continue;
+            snprintf(buckets[nb].src, sizeof(buckets[nb].src), "%s", e->src);
+            snprintf(buckets[nb].dst, sizeof(buckets[nb].dst), "%s", e->dst);
+            buckets[nb].count   = 1;
+            buckets[nb].min_len = e->payload_len;
+            buckets[nb].max_len = e->payload_len;
+            nb++;
+        } else {
+            buckets[found].count++;
+            if (e->payload_len < buckets[found].min_len) buckets[found].min_len = e->payload_len;
+            if (e->payload_len > buckets[found].max_len) buckets[found].max_len = e->payload_len;
+        }
+    }
+
+    for (int i = 0; i < nb; i++) {
+        if (buckets[i].count < ICMP_TUNNEL_THRESHOLD) continue;
+
+        char key[ALERT_KEY_LEN];
+        snprintf(key, sizeof(key), "icmp-tunnel:%.39s->%.39s",
+                 buckets[i].src, buckets[i].dst);
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%s->%s: %d oversized echo reqs (payload %u-%u B; ICMP covert channel)",
+                 buckets[i].src, buckets[i].dst, buckets[i].count,
+                 buckets[i].min_len, buckets[i].max_len);
+        /* Portless — ICMP has no port; dst is the tunnel endpoint. */
+        fire(ALERT_TYPE_ICMP_TUNNEL, ALERT_SEV_WARN,
+             "ICMP_TUNNEL", detail, key, buckets[i].dst, 0, now);
     }
 }
 
@@ -1717,6 +1787,7 @@ void alerts_update(sloth_state_t *s) {
     rule_bgp_notification_burst(s, now);
     rule_ssh_brute_force(s, now);
     rule_rdp_brute_force(s, now);
+    rule_icmp_tunnel(s, now);
     rule_snmp_community_brute(s, now);
     rule_mqtt_broker_brute(s, now);
     rule_evil_twin(s, now);

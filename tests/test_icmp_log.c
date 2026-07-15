@@ -30,6 +30,36 @@ static void build_icmp4_unreach(uint8_t *buf, uint8_t code) {
     buf[1] = code;
 }
 
+/* ── payload_len (ICMP-tunnel signal, #40) ───────────────── */
+
+static void test_payload_len_echo(void) {
+    /* 8-byte header + 100-byte payload → payload_len 100. */
+    uint8_t pkt[108];
+    memset(pkt, 0, sizeof(pkt));
+    build_icmp4_echo(pkt, 8, 0x1, 1);
+    icmp_log_entry_t e;
+    ASSERT(icmp_log_parse(pkt, sizeof(pkt), "a", "b", 0, &e));
+    ASSERT_EQ((int)e.payload_len, 100);
+}
+
+static void test_payload_len_header_only(void) {
+    /* Bare 8-byte echo → no payload. */
+    uint8_t pkt[8];
+    build_icmp4_echo(pkt, 8, 0x1, 1);
+    icmp_log_entry_t e;
+    ASSERT(icmp_log_parse(pkt, sizeof(pkt), "a", "b", 0, &e));
+    ASSERT_EQ((int)e.payload_len, 0);
+}
+
+static void test_payload_len_v6_echo(void) {
+    uint8_t pkt[8 + 200];
+    memset(pkt, 0, sizeof(pkt));
+    pkt[0] = 128;  /* v6 echo request */
+    icmp_log_entry_t e;
+    ASSERT(icmp_log_parse(pkt, sizeof(pkt), "fe80::1", "fe80::2", 1, &e));
+    ASSERT_EQ((int)e.payload_len, 200);
+}
+
 /* ── ICMPv4 parse ────────────────────────────────────────── */
 
 static void test_v4_echo_request(void) {
@@ -248,6 +278,11 @@ void run_icmp_log_tests(void) {
     TEST_SUITE("icmp_log rejection");
     RUN_TEST(test_parse_rejects_short);
     RUN_TEST(test_parse_null_ips_ok);
+
+    TEST_SUITE("icmp_log payload_len (#40)");
+    RUN_TEST(test_payload_len_echo);
+    RUN_TEST(test_payload_len_header_only);
+    RUN_TEST(test_payload_len_v6_echo);
 
     TEST_SUITE("icmp_log ring buffer");
     RUN_TEST(test_record_and_snapshot);

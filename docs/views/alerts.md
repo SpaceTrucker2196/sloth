@@ -54,6 +54,7 @@ omitted.
 | `MGMT_FUZZ` | WARN/CRIT | T1499 | malformed beacon IEs from one BSSID (length overrun, oversize SSID, truncated RSN) — mdk4 mode m / crafted aireplay frames; WARN ≥3, CRIT ≥5 | — (L2 only) |
 | `ROGUE_RADIUS` | WARN/CRIT | T1557.004 | a BSSID's 802.1X EAP conversation offered a weak inner method (EAP-MD5/GTC → CRIT) or leaked a real username with no anonymous outer identity (→ WARN) — eaphammer / hostapd-wpe lure | — (L2 only) |
 | `DNS_TUNNEL` | CRIT | T1071.004 | dnscat2 / iodine signature in DNS traffic | src / 53 |
+| `ICMP_TUNNEL` | WARN | T1095     | ≥ 8 Echo Requests one src→dst pair in 60 s carrying oversized payloads (≥ 64 B, above default ping's 56/32 B) — ptunnel / icmptunnel / Loki covert channel; detail shows the payload size range. Benign trigger: sustained `ping -s` / MTU path testing | dst / 0 |
 | `ATTACK_TOOL_UA` | CRIT | T1595     | HTTP User-Agent matches known offensive tooling | src / 80 |
 | `ATTACK_PATH` | CRIT | T1190     | HTTP path matches known exploit signature | src / 80 |
 | `SMB1_USE` | CRIT | T1210     | SMB1 dialect seen on the wire (deprecated 2017) | src / 445 |

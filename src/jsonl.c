@@ -219,6 +219,7 @@ void jsonl_emit_icmp(const icmp_log_entry_t *e) {
     kv_int(buf, LINEBUF, &off, "ty",   e->type);
     kv_int(buf, LINEBUF, &off, "code", e->code);
     kv_int(buf, LINEBUF, &off, "seq",  e->seq);
+    kv_int(buf, LINEBUF, &off, "plen", e->payload_len);
     kv_int(buf, LINEBUF, &off, "v6",   e->is_v6 ? 1 : 0);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

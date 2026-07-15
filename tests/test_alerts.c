@@ -1098,6 +1098,76 @@ static void test_dns_tunnel_few_long_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_DNS_TUNNEL), -1);
 }
 
+/* ── ICMP tunnel (#40) ───────────────────────────────────── */
+
+static void add_icmp_echo(sloth_state_t *s, const char *src, const char *dst,
+                          uint16_t payload_len, int is_v6) {
+    if (s->icmp_log_count >= MAX_ICMP_LOG) return;
+    icmp_log_entry_t *e = &s->icmp_log[s->icmp_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src, sizeof(e->src), "%s", src);
+    snprintf(e->dst, sizeof(e->dst), "%s", dst);
+    e->type        = is_v6 ? 128 : 8;   /* echo request */
+    e->is_v6       = is_v6 ? 1 : 0;
+    e->payload_len = payload_len;
+    e->ts          = time(NULL);
+}
+
+static void test_icmp_tunnel_fires(void) {
+    /* 8 oversized echo requests one pair → covert channel. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 8; i++)
+        add_icmp_echo(&s, "10.0.0.5", "8.8.8.8", (uint16_t)(512 + i), 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ICMP_TUNNEL);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_icmp_tunnel_small_pings_no_fire(void) {
+    /* Interactive ping: 56-byte payloads, well below the 64 B gate. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 30; i++)
+        add_icmp_echo(&s, "10.0.0.5", "8.8.8.8", 56, 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ICMP_TUNNEL), -1);
+}
+
+static void test_icmp_tunnel_single_large_ping_no_fire(void) {
+    /* One large diagnostic ping (ping -s 1400) is below the volume
+     * threshold — no alert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_icmp_echo(&s, "10.0.0.5", "8.8.8.8", 1400, 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ICMP_TUNNEL), -1);
+}
+
+static void test_icmp_tunnel_spread_across_pairs_no_fire(void) {
+    /* Oversized echoes to many distinct hosts (e.g. an MTU sweep) never
+     * concentrate on one pair, so no single bucket reaches threshold. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 12; i++) {
+        char dst[46];
+        snprintf(dst, sizeof(dst), "8.8.8.%d", i);
+        add_icmp_echo(&s, "10.0.0.5", dst, 900, 0);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ICMP_TUNNEL), -1);
+}
+
+static void test_icmp_tunnel_v6_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 8; i++)
+        add_icmp_echo(&s, "fe80::1", "fe80::2", 800, 1);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_ICMP_TUNNEL) >= 0);
+}
+
 /* ── Weak TLS ────────────────────────────────────────────── */
 
 static void add_tls(sloth_state_t *s, const char *src, const char *dst,
@@ -2570,6 +2640,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_dns_tunnel_fires_on_long_subdomain_burst);
     RUN_TEST(test_dns_tunnel_normal_traffic_no_fire);
     RUN_TEST(test_dns_tunnel_few_long_no_fire);
+    RUN_TEST(test_icmp_tunnel_fires);
+    RUN_TEST(test_icmp_tunnel_small_pings_no_fire);
+    RUN_TEST(test_icmp_tunnel_single_large_ping_no_fire);
+    RUN_TEST(test_icmp_tunnel_spread_across_pairs_no_fire);
+    RUN_TEST(test_icmp_tunnel_v6_fires);
     RUN_TEST(test_probe_flood_fires_on_high_rate);
     RUN_TEST(test_probe_flood_low_total_no_fire);
     RUN_TEST(test_probe_flood_exactly_at_frame_threshold_fires);

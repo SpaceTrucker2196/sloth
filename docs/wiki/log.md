@@ -135,3 +135,21 @@ and a pointer to `MISSION.md` for the passive-only guarantee.
 entry records the first-code landing so a future reader can see when the
 policy → module → checker sequence actually shipped and where the
 follow-up phases are still open.
+
+---
+
+## 2026-07-14 — ICMP-tunnel detector (#40) JSONL field
+
+**Source**: issue #40; commit adding `ALERT_TYPE_ICMP_TUNNEL` and the
+`icmp_log_entry_t.payload_len` field.
+
+**Doc updates**: [[jsonl-schema]] `icmp` record gained the additive
+`plen` integer (payload bytes past the ICMP header) — the signal the new
+`ICMP_TUNNEL` rule keys on. Additive per the schema-stability contract;
+older records simply omit it.
+
+**Index updates**: none (no new page).
+
+**Why**: the JSONL schema is a downstream contract (MISSION §3), so a new
+emitted field is logged even though it rode in on a detector change
+rather than a dedicated schema revision.

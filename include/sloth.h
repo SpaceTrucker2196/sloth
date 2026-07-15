@@ -662,6 +662,7 @@ typedef enum {
     ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
     ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
     ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
+    ALERT_TYPE_ICMP_TUNNEL,         /* oversized Echo payloads — ptunnel/icmptunnel/Loki (#40) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -701,6 +702,7 @@ typedef struct {
     char     dst[46];
     char     desc[24];  /* "Echo Req", "Echo Reply", "Unreachable", "TTL Exceeded", ... */
     uint16_t seq;       /* sequence (echo) or 0 */
+    uint16_t payload_len; /* bytes after the 8-byte ICMP header (tunnel signal) */
     uint8_t  type;
     uint8_t  code;
     uint8_t  is_v6;     /* 0=ICMPv4, 1=ICMPv6 */

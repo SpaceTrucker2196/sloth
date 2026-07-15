@@ -176,10 +176,12 @@ through as UTF-8.
 ### `icmp`
 
 ```json
-{"type":"icmp","ts":1700000005,"src":"192.168.1.5","dst":"8.8.8.8","desc":"Echo Req","ty":8,"code":0,"seq":42,"v6":0}
+{"type":"icmp","ts":1700000005,"src":"192.168.1.5","dst":"8.8.8.8","desc":"Echo Req","ty":8,"code":0,"seq":42,"plen":56,"v6":0}
 ```
 
-`ty`, `code`, `seq`, `v6` are integers (`v6=1` for ICMPv6).
+`ty`, `code`, `seq`, `plen`, `v6` are integers (`v6=1` for ICMPv6).
+`plen` is the payload length in bytes past the 8-byte ICMP header — the
+signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 
 ### `alert`
 
