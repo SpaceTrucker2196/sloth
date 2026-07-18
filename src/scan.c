@@ -25,15 +25,47 @@ static int scan_is_routable(const char *ip) {
 
 /* ── Core functions ──────────────────────────────────────── */
 
-void scan_update(sloth_state_t *s) {
-    time_t now = time(NULL);
+/* ── Local listening-port set ─────────────────────────────
+   Bitmap over the 65536 TCP ports, one bit per port we LISTEN on.
+   A remote peer that reaches one of these ports connected *to us*;
+   those are the only connections that can be a scan. Ephemeral source
+   ports we open for our own outbound flows (e.g. many parallel sockets
+   to a CDN like Cloudflare/Discord) are never in this set, so outbound
+   traffic can no longer masquerade as an inbound scan. See issue #41.
+   ──────────────────────────────────────────────────────── */
 
-    /* Walk TCP connections: track distinct local_port per remote_addr */
+static void scan_build_listen_set(const sloth_state_t *s, unsigned char bm[8192]) {
+    memset(bm, 0, 8192);
     for (int i = 0; i < s->conn_count; i++) {
         const conn_t *c = &s->conns[i];
         if (c->proto != PROTO_TCP) continue;
+        if (c->state != TCP_STATE_LISTEN) continue;
+        bm[c->local_port >> 3] |= (unsigned char)(1u << (c->local_port & 7));
+    }
+}
+
+static int scan_port_is_local_service(const unsigned char bm[8192], uint16_t port) {
+    return (bm[port >> 3] >> (port & 7)) & 1u;
+}
+
+void scan_update(sloth_state_t *s) {
+    time_t now = time(NULL);
+
+    unsigned char listen_bm[8192];
+    scan_build_listen_set(s, listen_bm);
+
+    /* Walk TCP connections: for each remote peer that reached one of our
+       listening ports, track the distinct local (service) ports it hit. */
+    for (int i = 0; i < s->conn_count; i++) {
+        const conn_t *c = &s->conns[i];
+        if (c->proto != PROTO_TCP) continue;
+        if (c->state == TCP_STATE_LISTEN) continue;   /* the listener itself */
         if (c->remote_addr[0] == '\0') continue;
         if (!scan_is_routable(c->remote_addr)) continue;
+        /* Only count when the local side is the destination — i.e. the
+           remote connected to a port we listen on (remote → us), not a
+           local ephemeral source port from an outbound flow. */
+        if (!scan_port_is_local_service(listen_bm, c->local_port)) continue;
 
         /* find or create entry */
         int found = -1;
