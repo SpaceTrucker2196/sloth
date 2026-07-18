@@ -10,13 +10,40 @@ static void make_state(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
 }
 
+/* Model an *inbound* connection: a remote peer reaching one of our
+ * listening service ports (remote → us). Since scan detection now keys
+ * off local ports we LISTEN on (issue #41), each call also seeds a LISTEN
+ * socket on lport. Duplicate LISTEN rows across calls are harmless — the
+ * detector folds them into a per-port bitmap. */
 static void add_tcp_conn(sloth_state_t *s, const char *remote, uint16_t lport) {
+    int l = s->conn_count++;
+    s->conns[l].proto = PROTO_TCP;
+    s->conns[l].state = TCP_STATE_LISTEN;
+    s->conns[l].local_port = lport;
+    snprintf(s->conns[l].local_addr, sizeof(s->conns[l].local_addr), "192.168.1.10");
+
     int i = s->conn_count++;
     s->conns[i].proto = PROTO_TCP;
+    s->conns[i].state = 1;   /* ESTABLISHED */
     snprintf(s->conns[i].remote_addr, sizeof(s->conns[i].remote_addr), "%s", remote);
-    s->conns[i].local_port  = lport;
-    s->conns[i].remote_port = 443;
+    s->conns[i].local_port  = lport;   /* our service port the remote hit */
+    s->conns[i].remote_port = 54321;   /* remote's ephemeral source port */
     snprintf(s->conns[i].local_addr, sizeof(s->conns[i].local_addr), "192.168.1.10");
+}
+
+/* Model an *outbound* connection: our host initiates to a remote service,
+ * so the local port is an ephemeral source port (never a listener) and the
+ * remote port is the service. This is the shape of the Discord/Cloudflare
+ * false positive in issue #41 — it must NOT count as a scan. */
+static void add_outbound_conn(sloth_state_t *s, const char *remote,
+                              uint16_t local_ephemeral, uint16_t remote_service) {
+    int i = s->conn_count++;
+    s->conns[i].proto = PROTO_TCP;
+    s->conns[i].state = 1;   /* ESTABLISHED */
+    snprintf(s->conns[i].remote_addr, sizeof(s->conns[i].remote_addr), "%s", remote);
+    s->conns[i].local_port  = local_ephemeral;
+    s->conns[i].remote_port = remote_service;
+    snprintf(s->conns[i].local_addr, sizeof(s->conns[i].local_addr), "192.168.1.158");
 }
 
 static void test_below_threshold_not_flagged(void) {
@@ -232,6 +259,51 @@ static void test_multiple_ips_independent(void) {
     ASSERT(scan_is_flagged(&s, "203.0.113.20") == 0);
 }
 
+/* issue #41: outbound sockets to a CDN (Cloudflare 162.159.0.0/16, here a
+ * Discord voice/WebSocket session) open many parallel connections to one
+ * remote IP, each with a distinct *ephemeral source* local port. None of
+ * those local ports is a listening service port, so this must never be read
+ * as an inbound port scan. Ports mirror the sample events in the issue. */
+static void test_outbound_cdn_not_flagged(void) {
+    sloth_state_t s; make_state(&s);
+    const uint16_t eph[] = {
+        52484, 60426, 39104, 49164, 40854,
+        33012, 58820, 45001, 61200, 50123,
+    };
+    for (int k = 0; k < (int)(sizeof(eph) / sizeof(eph[0])); k++)
+        add_outbound_conn(&s, "162.159.138.232", eph[k], 443);
+    scan_update(&s);
+    ASSERT(scan_is_flagged(&s, "162.159.138.232") == 0);
+    ASSERT(s.scan_count == 0);
+}
+
+/* A genuine inbound scan and a noisy outbound CDN flow to a *different*
+ * peer, seen at the same time, must not bleed into each other: only the
+ * inbound peer that reached our listening ports is flagged. */
+static void test_inbound_scan_amid_outbound_noise(void) {
+    sloth_state_t s; make_state(&s);
+    /* Outbound noise to Cloudflare — many ephemeral local ports, one peer. */
+    for (uint16_t p = 40000; p < 40016; p++)
+        add_outbound_conn(&s, "104.16.5.5", p, 443);
+    /* Inbound scan: one remote hitting 8 of our listening service ports. */
+    for (uint16_t p = 20; p < 28; p++)
+        add_tcp_conn(&s, "198.51.100.7", p);
+    scan_update(&s);
+    ASSERT(scan_is_flagged(&s, "198.51.100.7") >= SCAN_PORT_THRESH);
+    ASSERT(scan_is_flagged(&s, "104.16.5.5") == 0);
+}
+
+/* An inbound connection to a port we do NOT listen on cannot occur in the
+ * kernel, but guard against a stray/racy conn row without a matching LISTEN
+ * socket being counted: with no listener seeded, nothing is flagged. */
+static void test_no_listener_no_scan(void) {
+    sloth_state_t s; make_state(&s);
+    for (uint16_t p = 1024; p < 1040; p++)
+        add_outbound_conn(&s, "203.0.113.9", p, 80);
+    scan_update(&s);
+    ASSERT(s.scan_count == 0);
+}
+
 static void test_draw_no_scan(void) {
     sloth_state_t s; make_state(&s);
     conn_rebuild_idx(&s);
@@ -271,6 +343,9 @@ void run_scan_tests(void) {
     RUN_TEST(test_routable_boundary_multicast);
     RUN_TEST(test_routable_rejects_malformed_ips);
     RUN_TEST(test_multiple_ips_independent);
+    RUN_TEST(test_outbound_cdn_not_flagged);
+    RUN_TEST(test_inbound_scan_amid_outbound_noise);
+    RUN_TEST(test_no_listener_no_scan);
     RUN_TEST(test_draw_no_scan);
     RUN_TEST(test_draw_with_banner);
 }

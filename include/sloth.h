@@ -98,6 +98,13 @@ typedef struct {
 #define PROTO_TCP 6
 #define PROTO_UDP 17
 
+/* TCP socket state (conn_t.state), mirroring the kernel TCP_* enum as
+   reported by /proc/net/tcp. Only LISTEN is consulted outside jsonl's
+   pretty-printer: scan detection uses it to tell an inbound connection
+   (remote reached a port we listen on) from an outbound one whose local
+   port is just an ephemeral source port. See src/scan.c / issue #41. */
+#define TCP_STATE_LISTEN 0x0A
+
 typedef struct {
     char          local_addr[46];
     char          remote_addr[46];
