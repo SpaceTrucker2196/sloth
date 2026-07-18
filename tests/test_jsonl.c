@@ -586,6 +586,99 @@ static void test_emit_packets_once_only(void) {
     ASSERT(line_count(slurp(tmp_path)) == 2);
 }
 
+/* ── change-only snapshot emission (issue #42) ───────────────── */
+
+static void seed_one_pnl(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->pnl_clients[0].mac[0] = 0x02;   /* identity for the dedup key */
+    s->pnl_clients[0].mac[5] = 0x11;
+    snprintf(s->pnl_clients[0].ssids[0], sizeof(s->pnl_clients[0].ssids[0]), "HomeNet");
+    s->pnl_clients[0].ssid_count  = 1;
+    s->pnl_clients[0].probe_count = 3;
+    s->pnl_clients[0].last_seen   = 1700000000;
+    s->pnl_count = 1;
+}
+
+/* An unchanged row emitted twice in a row ships exactly once. */
+static void test_dedup_suppresses_unchanged_pnl(void) {
+    sloth_state_t s; seed_one_pnl(&s);
+    open_fresh();                    /* jsonl_open resets the change cache */
+    jsonl_emit_pnl_clients(&s);
+    jsonl_emit_pnl_clients(&s);      /* nothing changed → suppressed */
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 1);
+}
+
+/* A changed observation field re-emits the row. */
+static void test_dedup_emits_on_change_pnl(void) {
+    sloth_state_t s; seed_one_pnl(&s);
+    open_fresh();
+    jsonl_emit_pnl_clients(&s);
+    s.pnl_clients[0].probe_count = 4;   /* novel observation */
+    jsonl_emit_pnl_clients(&s);
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
+/* A new SSID appended to the PNL is a change and re-emits. */
+static void test_dedup_emits_on_new_ssid_pnl(void) {
+    sloth_state_t s; seed_one_pnl(&s);
+    open_fresh();
+    jsonl_emit_pnl_clients(&s);
+    snprintf(s.pnl_clients[0].ssids[1], sizeof(s.pnl_clients[0].ssids[1]), "Cafe");
+    s.pnl_clients[0].ssid_count = 2;
+    jsonl_emit_pnl_clients(&s);
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
+/* Two distinct MACs are tracked independently — one changing doesn't
+ * suppress or duplicate the other. */
+static void test_dedup_distinct_macs_independent(void) {
+    sloth_state_t s; seed_one_pnl(&s);
+    s.pnl_clients[1] = s.pnl_clients[0];
+    s.pnl_clients[1].mac[5] = 0x22;     /* different identity */
+    s.pnl_count = 2;
+    open_fresh();
+    jsonl_emit_pnl_clients(&s);          /* both new → 2 lines */
+    jsonl_emit_pnl_clients(&s);          /* both unchanged → 0 lines */
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
+/* jsonl_dedup_reset forces a full baseline re-emit (the mechanism a fresh
+ * sink / rotation relies on). */
+static void test_dedup_reset_reemits_baseline(void) {
+    sloth_state_t s; seed_one_pnl(&s);
+    open_fresh();
+    jsonl_emit_pnl_clients(&s);
+    jsonl_dedup_reset();
+    jsonl_emit_pnl_clients(&s);          /* unchanged, but cache cleared */
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
+/* seqnum_client dedups on the same principle: identical frame_count/hist
+ * suppresses, an advanced frame_count re-emits. */
+static void test_dedup_seqnum_suppress_then_change(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.seqnum_clients[0].mac[0]      = 0xde;
+    s.seqnum_clients[0].frame_count = 10;
+    s.seqnum_clients[0].hist[0]     = 0x100;
+    s.seqnum_clients[0].hist_n      = 1;
+    s.seqnum_count = 1;
+
+    open_fresh();
+    jsonl_emit_seqnum_clients(&s);       /* new → 1 */
+    jsonl_emit_seqnum_clients(&s);       /* unchanged → suppressed */
+    s.seqnum_clients[0].frame_count = 11;
+    s.seqnum_clients[0].hist[1]     = 0x105;
+    s.seqnum_clients[0].hist_n      = 2;
+    jsonl_emit_seqnum_clients(&s);       /* advanced → 1 more */
+    jsonl_close();
+    ASSERT(line_count(slurp(tmp_path)) == 2);
+}
+
 /* ── per-record() integration (a parallel write through the log API) ── */
 
 static void test_dns_log_record_writes_jsonl(void) {
@@ -626,6 +719,12 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
     RUN_TEST(test_emit_packets_once_only);
+    RUN_TEST(test_dedup_suppresses_unchanged_pnl);
+    RUN_TEST(test_dedup_emits_on_change_pnl);
+    RUN_TEST(test_dedup_emits_on_new_ssid_pnl);
+    RUN_TEST(test_dedup_distinct_macs_independent);
+    RUN_TEST(test_dedup_reset_reemits_baseline);
+    RUN_TEST(test_dedup_seqnum_suppress_then_change);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);

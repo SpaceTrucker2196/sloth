@@ -79,4 +79,8 @@ void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
  * predate this set; this function is purely additive. */
 void jsonl_emit_state_snapshots(sloth_state_t *s);
 
+/* Clear the change-only emission cache (issue #42) so the next snapshot
+ * re-emits a full baseline. Called on sink (re)open; exposed for tests. */
+void jsonl_dedup_reset(void);
+
 #endif /* JSONL_H */

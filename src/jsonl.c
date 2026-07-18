@@ -20,6 +20,75 @@ static int any_sink(void) {
     return g_fp != NULL || data_socket_has_clients();
 }
 
+/* ── Change-only snapshot emission (issue #42) ───────────────
+ * The entity-snapshot emitters (pnl_client, seqnum_client, …) run every
+ * poll (~1 Hz) and re-serialise every row whether or not anything
+ * changed. For a mostly idle population that is pure duplication — in
+ * production ~45 % of log volume was unchanged seqnum_client / pnl_client
+ * rows. Each row is reduced to a 64-bit signature of its semantic payload
+ * (identity + observation fields, never the envelope ts) and looked up in
+ * a small direct-mapped cache keyed by the row's natural identity. A row
+ * is written only when it is new, its signature changed, or
+ * JSONL_HEARTBEAT_SECS have elapsed since it was last emitted — so
+ * long-lived idle entities still refresh periodically and windowed
+ * consumers ("who was here 2–4 AM?") keep working.
+ *
+ * The cache is a pure optimisation: a hash collision can only cause an
+ * extra (harmless) emit, never a wrongful suppression, because a slot is
+ * consulted only when its stored identity matches exactly. */
+#define JSONL_HEARTBEAT_SECS 300
+#define JSONL_DEDUP_SLOTS    1024
+#define JSONL_DEDUP_KEYLEN   16
+#define FNV64_OFFSET         0xcbf29ce484222325ULL
+#define FNV64_PRIME          0x100000001b3ULL
+
+typedef struct {
+    uint64_t sig;
+    time_t   emit_ts;
+    uint8_t  key[JSONL_DEDUP_KEYLEN];
+    uint8_t  keylen;
+    uint8_t  kind;
+    uint8_t  used;
+} jsonl_dedup_slot_t;
+
+static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
+
+/* Snapshot event "kinds" — one per deduped emitter. */
+enum { JD_PNL = 1, JD_SEQNUM };
+
+static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
+    const unsigned char *p = (const unsigned char *)data;
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= FNV64_PRIME; }
+    return h;
+}
+
+/* Clear the change cache so the next snapshot re-emits a full baseline.
+ * Called when a sink is (re)opened and available to tests. */
+void jsonl_dedup_reset(void) {
+    memset(g_dedup, 0, sizeof(g_dedup));
+}
+
+/* Returns 1 if a row of this (kind,key) carrying signature `sig` should be
+ * emitted now (new / changed / heartbeat elapsed), 0 to suppress an
+ * unchanged duplicate. Records the decision. */
+static int jsonl_changed(uint8_t kind, const void *key, size_t keylen,
+                         uint64_t sig, time_t now) {
+    if (keylen > JSONL_DEDUP_KEYLEN) keylen = JSONL_DEDUP_KEYLEN;
+    uint64_t h = fnv1a(key, keylen, fnv1a(&kind, 1, FNV64_OFFSET));
+    jsonl_dedup_slot_t *sl = &g_dedup[h % JSONL_DEDUP_SLOTS];
+    int match = sl->used && sl->kind == kind && sl->keylen == (uint8_t)keylen
+                && memcmp(sl->key, key, keylen) == 0;
+    if (match && sl->sig == sig && (now - sl->emit_ts) < JSONL_HEARTBEAT_SECS)
+        return 0;
+    sl->used   = 1;
+    sl->kind   = kind;
+    sl->keylen = (uint8_t)keylen;
+    memcpy(sl->key, key, keylen);
+    sl->sig     = sig;
+    sl->emit_ts = now;
+    return 1;
+}
+
 int jsonl_open(const char *path) {
     if (!path || !path[0]) return 0;
     pthread_mutex_lock(&g_mu);
@@ -27,6 +96,7 @@ int jsonl_open(const char *path) {
     g_fp = fopen(path, "a");
     int ok = g_fp != NULL;
     pthread_mutex_unlock(&g_mu);
+    if (ok) jsonl_dedup_reset();   /* fresh sink → full baseline snapshot */
     return ok;
 }
 
@@ -607,6 +677,21 @@ void jsonl_emit_pnl_clients(const sloth_state_t *s) {
     time_t now = time(NULL);
     for (int i = 0; i < s->pnl_count; i++) {
         const pnl_client_t *e = &s->pnl_clients[i];
+
+        /* Suppress rows unchanged since last emit (issue #42). Signature
+         * covers identity + every observation field serialised below,
+         * excluding only the envelope ts. */
+        uint64_t sig = fnv1a(&e->mac_random,  sizeof(e->mac_random),  FNV64_OFFSET);
+        sig = fnv1a(&e->probe_count, sizeof(e->probe_count), sig);
+        sig = fnv1a(e->os_fp, sizeof(e->os_fp), sig);
+        sig = fnv1a(e->phy,   sizeof(e->phy),   sig);
+        sig = fnv1a(&e->first_seen, sizeof(e->first_seen), sig);
+        sig = fnv1a(&e->last_seen,  sizeof(e->last_seen),  sig);
+        sig = fnv1a(&e->ssid_count, sizeof(e->ssid_count), sig);
+        for (int k = 0; k < e->ssid_count; k++)
+            sig = fnv1a(e->ssids[k], strlen(e->ssids[k]), sig);
+        if (!jsonl_changed(JD_PNL, e->mac, sizeof(e->mac), sig, now)) continue;
+
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "pnl_client", now);
         kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
@@ -634,6 +719,17 @@ void jsonl_emit_seqnum_clients(const sloth_state_t *s) {
     time_t now = time(NULL);
     for (int i = 0; i < s->seqnum_count; i++) {
         const seqnum_client_t *e = &s->seqnum_clients[i];
+
+        /* Suppress rows unchanged since last emit (issue #42). frame_count
+         * and hist advance whenever the client is actively seen, so active
+         * devices still emit each cycle; only idle repeats are dropped. */
+        uint64_t sig = fnv1a(&e->mac_random,  sizeof(e->mac_random),  FNV64_OFFSET);
+        sig = fnv1a(&e->last_seen,   sizeof(e->last_seen),   sig);
+        sig = fnv1a(&e->frame_count, sizeof(e->frame_count), sig);
+        sig = fnv1a(&e->hist_n,      sizeof(e->hist_n),      sig);
+        sig = fnv1a(e->hist, (size_t)e->hist_n * sizeof(e->hist[0]), sig);
+        if (!jsonl_changed(JD_SEQNUM, e->mac, sizeof(e->mac), sig, now)) continue;
+
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "seqnum_client", now);
         kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
