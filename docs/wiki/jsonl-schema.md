@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`.
 
-**Last updated**: 2026-05-26.
+**Last updated**: 2026-07-18.
 
 ---
 
@@ -293,6 +293,21 @@ These records carry the current contents of each view-backing table.
 (the iOS client; any other view-rebuilding consumer) reconstruct the
 table from the latest snapshot keyed by the natural-identity field
 indicated below. Late-joining clients pick up state on the next tick.
+
+**Change-only emission (issue #42).** The high-volume snapshot types are
+not re-serialised every tick when nothing about a row changed. Each row
+is reduced to a 64-bit signature over its identity + observation fields
+(everything except the envelope `ts`); a row is written only when it is
+new, its signature changed, or `JSONL_HEARTBEAT_SECS` (300 s) have
+elapsed since it was last emitted. This suppresses the idle-repeat
+firehose (≈45 % of production volume was unchanged `seqnum_client` /
+`pnl_client` rows) while the heartbeat guarantees every live entity still
+refreshes at least every 5 minutes, so windowed queries ("who was here
+2–4 AM?") keep working. Consumers see fewer rows but the same
+latest-state-per-key reconstruction; the cache resets on sink (re)open so
+a fresh file always starts with a full baseline. Currently applied to
+`pnl_client` and `seqnum_client`; other snapshot types follow the same
+pattern as they are converted.
 
 | Record               | Identity key      | Fields |
 |----------------------|-------------------|--------|

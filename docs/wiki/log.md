@@ -153,3 +153,22 @@ older records simply omit it.
 **Why**: the JSONL schema is a downstream contract (MISSION §3), so a new
 emitted field is logged even though it rode in on a detector change
 rather than a dedicated schema revision.
+
+## 2026-07-18 — Change-only snapshot emission (#42)
+
+**Source**: issue #42 (log volume); commit adding a change cache to
+`src/jsonl.c` that suppresses re-emission of unchanged snapshot rows.
+
+**Doc updates**: [[jsonl-schema]] "State snapshot record types" gained a
+**Change-only emission** paragraph. Rows are now written only when new,
+changed, or `JSONL_HEARTBEAT_SECS` (300 s) stale — no schema/field change,
+purely an emission-cadence change. `pnl_client` and `seqnum_client` are
+converted first (≈45 % of production volume was unchanged rows); other
+snapshot types follow the same pattern later.
+
+**Index updates**: none (no new page).
+
+**Why**: the emission cadence is part of the downstream JSONL contract —
+consumers that assumed one row per entity per tick need to know the stream
+is now change-driven with a 5-minute heartbeat floor, even though the
+per-row fields are unchanged.
