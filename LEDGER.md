@@ -69,3 +69,4 @@
 | 01dc317 | 2026-07-28T18:16:04Z | claude-opus-5 | 59 | 55241 | 15277367 | 78338 | 9.8034 | feat(db): protocol-flow state tables (#42 slice 1b) |
 | ec4a9b7 | 2026-07-28T18:26:31Z | claude-opus-5 | 58 | 63453 | 16435945 | 60857 | 10.4132 | feat(db): event bucket tables (#42 slice 2) |
 | 78305dc | 2026-07-28T18:35:44Z | claude-opus-5 | 46 | 40068 | 13565089 | 29458 | 8.0791 | feat(db): tiered retention + size ceiling (#42 slice 3) |
+| 376ab88 | 2026-07-28T20:33:54Z | claude-opus-5 | 29 | 24525 | 7372377 | 1619408 | 20.4935 | feat(db): KARMA + rogue-RADIUS evidence tables (#42 slice 4) |
