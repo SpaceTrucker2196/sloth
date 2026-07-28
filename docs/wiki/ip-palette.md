@@ -78,6 +78,23 @@ Other heat usages keep the original gradient:
 - Standalone heat sparklines use the full CP_HEAT_LO/MID/HI/PEAK ramp
   independent of alert tiers.
 
+## Two render backends
+
+`src/tui.c` has an ncurses implementation and an ANSI fallback used when
+built with `WITH_NCURSES=0` (`make embedded`, headless appliance
+builds). Both must render the same phosphor, so the xterm-256 palette
+lives in `src/tui_palette.c` — the ncurses backend feeds it to
+`init_pair()`, the fallback emits it as `SGR 38;5;N`. Adding a colour
+means adding it there, not in either backend.
+
+Before issue #48 the colour helpers (`tui_ip_addstr`,
+`tui_brand_addstr`, `tui_alert_hot_attr`, …) called `attrset` / `addstr`
+unconditionally, so `WITH_NCURSES=0` did not compile at all. They now go
+through a small set of backend-neutral primitives.
+
+The degraded 8-colour path (terminals reporting `COLORS < 256`) is
+ncurses-only and keeps its own approximation table.
+
 ## Minimum geometry
 
 - Dashboard minimum: 100×33.

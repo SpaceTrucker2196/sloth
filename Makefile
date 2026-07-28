@@ -12,6 +12,7 @@ SRCS = src/main.c          \
        src/view_route.c    \
        src/view_labels.c   \
        src/tui.c           \
+       src/tui_palette.c   \
        src/history.c       \
        src/bandwidth.c     \
        src/dns.c           \
@@ -256,6 +257,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_pcap_write.c    \
             src/capture/capture.c      \
             tests/test_capture.c       \
+            src/tui_palette.c          \
+            tests/test_tui_palette.c   \
             tests/test_iface_graph.c   \
             tests/test_geo.c           \
             src/geo.c                  \

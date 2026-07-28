@@ -14,6 +14,7 @@
 
 #include "sloth.h"
 #include "tui.h"
+#include "tui_palette.h"
 #include "views/iface.h"
 #include "views/conns.h"
 #include "views/wifi.h"
@@ -49,6 +50,45 @@
 #include "views/rogue_radius.h"
 
 
+/* ── Backend-neutral output primitives ───────────────────── *
+ *
+ * The colour helpers below (IP / SSID / brand / alert-hot) are shared by
+ * both backends, so they are written against these four operations
+ * rather than against ncurses directly. Under WITH_NCURSES they are the
+ * curses calls; otherwise they emit SGR sequences resolved through
+ * tui_pair_colors(). Before #48 the helpers called attrset/addstr
+ * unconditionally and the no-ncurses build simply did not compile. */
+#ifdef WITH_NCURSES
+
+static void t_pair(int pair)      { attrset(COLOR_PAIR(pair)); }
+static void t_pair_bold(int pair) { attrset(COLOR_PAIR(pair) | A_BOLD); }
+static void t_puts(const char *s) { addstr(s); }
+static void t_putn(const char *s, int n) { addnstr(s, n); }
+static void t_putc(char c)        { addch((chtype)(unsigned char)c); }
+
+#else
+
+/* SGR: reset, then 256-colour fg (and bg only where a pair defines one
+ * — every pair but CP_HIGHLIGHT renders on the terminal default). An
+ * unmapped pair falls back to the phosphor normal so text is never
+ * emitted with whatever attribute happened to be live. */
+static void t_pair_attr(int pair, int bold) {
+    short fg = TUI_C_NORMAL, bg = -1;
+    tui_pair_colors(pair, &fg, &bg);
+    printf("\033[0m");
+    if (bold) printf("\033[1m");
+    printf("\033[38;5;%dm", (int)fg);
+    if (bg >= 0) printf("\033[48;5;%dm", (int)bg);
+}
+
+static void t_pair(int pair)      { t_pair_attr(pair, 0); }
+static void t_pair_bold(int pair) { t_pair_attr(pair, 1); }
+static void t_puts(const char *s) { fputs(s, stdout); }
+static void t_putn(const char *s, int n) { printf("%.*s", n, s); }
+static void t_putc(char c)        { fputc(c, stdout); }
+
+#endif /* WITH_NCURSES */
+
 /* Row-bg lookup: backgrounds were retired, so every category collapses
  * to the project's default phosphor pair. The IP / brand / SSID
  * helpers still take a `cat` for API stability — currently a no-op. */
@@ -72,7 +112,7 @@ static int cp_for_ip_on_cat(int cat, int ip_idx) {
 }
 
 void tui_pkt_bg_cat(int cat) {
-    attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
+    t_pair(cp_for_bg_cat(cat));
 }
 
 void tui_ip_addstr(const char *ip, int cat) {
@@ -86,7 +126,7 @@ void tui_ip_addstr(const char *ip, int cat) {
     int hot_sev = tui_alert_hot_check(ip);
     if (hot_sev >= 0) {
         tui_alert_hot_attr(hot_sev);
-        addstr(ip);
+        t_puts(ip);
         return;
     }
     /* Cross-panel highlight: when the dashboard's conn panel has focus
@@ -95,15 +135,15 @@ void tui_ip_addstr(const char *ip, int cat) {
      * same flow lights up across the dashboard. */
     extern int tui_ip_is_highlighted_(const char *);
     if (tui_ip_is_highlighted_(ip)) {
-        attrset(COLOR_PAIR(CP_HIGHLIGHT));
-        addstr(ip);
+        t_pair(CP_HIGHLIGHT);
+        t_puts(ip);
         return;
     }
-    int idx = ip_color_index(ip);
-    attr_t a  = COLOR_PAIR(cp_for_ip_on_cat(cat, idx));
-    if (ip_index_is_cross_panel(ip)) a |= A_BOLD;
-    attrset(a);
-    addstr(ip);
+    int idx  = ip_color_index(ip);
+    int pair = cp_for_ip_on_cat(cat, idx);
+    if (ip_index_is_cross_panel(ip)) t_pair_bold(pair);
+    else                             t_pair(pair);
+    t_puts(ip);
 }
 
 /* Static state + matcher — exposed via tui_set_highlight_ips(). The
@@ -189,18 +229,17 @@ void tui_alert_hot_attr(int sev) {
     int pair = (sev >= ALERT_SEV_CRIT) ? CP_ALERT_HOT_CRIT
              : (sev >= ALERT_SEV_WARN) ? CP_ALERT_HOT_WARN
              :                            CP_ALERT_HOT_LOW;
-    attr_t a = COLOR_PAIR(pair);
     /* Bold on WARN+CRIT so they pop above LOW (yellow) noise. */
-    if (sev >= ALERT_SEV_WARN) a |= A_BOLD;
-    attrset(a);
+    if (sev >= ALERT_SEV_WARN) t_pair_bold(pair);
+    else                       t_pair(pair);
 }
 
 void tui_ssid_addstr(const char *ssid, int cat) {
     extern int ip_color_index(const char *);
     if (!ssid || !ssid[0]) return;
     int idx = ip_color_index(ssid);
-    attrset(COLOR_PAIR(cp_for_ip_on_cat(cat, idx)));
-    addstr(ssid);
+    t_pair(cp_for_ip_on_cat(cat, idx));
+    t_puts(ssid);
 }
 
 /* ── Brand colourisation ─────────────────────────────────── */
@@ -349,15 +388,15 @@ void tui_brand_addstr(const char *text, int cat) {
     int start = find_brand(text, &brand, &mlen);
     if (start < 0) {
         /* No brand match — render in the row's plain pair. */
-        attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
-        addstr(text);
+        t_pair(cp_for_bg_cat(cat));
+        t_puts(text);
         return;
     }
 
     /* Prefix in default colour */
     if (start > 0) {
-        attrset(COLOR_PAIR(cp_for_bg_cat(cat)));
-        addnstr(text, start);
+        t_pair(cp_for_bg_cat(cat));
+        t_putn(text, start);
     }
 
     if (brand == BR_GOOGLE_BLUE) {
@@ -368,12 +407,12 @@ void tui_brand_addstr(const char *text, int cat) {
         };
         for (int i = 0; i < mlen; i++) {
             int slot = gseq[i % 6];
-            attrset(COLOR_PAIR(cp_for_brand_on_cat(cat, slot)));
-            addch((chtype)(unsigned char)text[start + i]);
+            t_pair(cp_for_brand_on_cat(cat, slot));
+            t_putc(text[start + i]);
         }
     } else {
-        attrset(COLOR_PAIR(cp_for_brand_on_cat(cat, brand)));
-        addnstr(text + start, mlen);
+        t_pair(cp_for_brand_on_cat(cat, brand));
+        t_putn(text + start, mlen);
     }
 
     /* Recurse for any further brand matches in the rest of the string. */
@@ -412,11 +451,11 @@ void tui_filter_status(const sloth_state_t *s) {
 void tui_info_color(const char *info) {
     extern int ip_color_index(const char *);   /* reuse djb2 hash */
     if (!info || !info[0]) {
-        attrset(COLOR_PAIR(CP_NORMAL));
+        t_pair(CP_NORMAL);
         return;
     }
     int idx = ip_color_index(info);
-    attrset(COLOR_PAIR(CP_INFO_BASE + (idx & 7)));
+    t_pair(CP_INFO_BASE + (idx & 7));
 }
 
 /* out must hold width*3+1 bytes (each glyph is 3 UTF-8 bytes). */
@@ -491,33 +530,23 @@ void tui_init(void) {
     if (has_colors()) {
         start_color();
         if (COLORS >= 256) {
+            /* Colours come from tui_palette.c so the ANSI fallback
+             * renders the same phosphor (#48). */
             /* nuclear teal-green pairs */
-            init_pair(CP_BRIGHT, 49, 0);        /* #00ffaf rgb(0,255,175) */
-            init_pair(CP_NORMAL, 43, 0);        /* #00d7af rgb(0,215,175) */
-            init_pair(CP_DIM,    29, 0);        /* #00875f rgb(0,135,95)  */
+            init_pair(CP_BRIGHT, TUI_C_BRIGHT, 0);
+            init_pair(CP_NORMAL, TUI_C_NORMAL, 0);
+            init_pair(CP_DIM,    TUI_C_DIM,    0);
             /* heat gradient pairs: grey → amber → orange → red */
-            init_pair(CP_HEAT_LO,   241, 0);   /* rgb(98,98,98)   */
-            init_pair(CP_HEAT_MID,  178, 0);   /* rgb(215,175,0)  */
-            init_pair(CP_HEAT_HI,   208, 0);   /* rgb(255,135,0)  */
-            init_pair(CP_HEAT_PEAK, 196, 0);   /* rgb(255,0,0)    */
+            init_pair(CP_HEAT_LO,   TUI_C_HEAT_LO,   0);
+            init_pair(CP_HEAT_MID,  TUI_C_HEAT_MID,  0);
+            init_pair(CP_HEAT_HI,   TUI_C_HEAT_HI,   0);
+            init_pair(CP_HEAT_PEAK, TUI_C_HEAT_PEAK, 0);
             /* Backgrounds disabled: every row sits on the terminal's
              * default bg. Hue and category cues are carried entirely by
              * the IP / brand / SSID foreground palettes. */
             short grey_bg[7] = { 0, 0, 0, 0, 0, 0, 0 };
-            /* 8 IP fg colours × 5 row bgs.
-             * Fallout-inspired phosphor palette — teal phosphor (already
-             * the project's base CP_NORMAL = 43) is the anchor; these eight
-             * orbit it with related hues a CRT might glow at: */
-            static const short ip_fg[8] = {
-                50,    /* #00ffd7  bright phosphor teal      */
-                80,    /* #5fd7d7  aged dim phosphor cyan    */
-                121,   /* #87ffaf  rad-green                  */
-                156,   /* #afff87  mutated lime               */
-                178,   /* #d7af00  amber CRT dial             */
-                215,   /* #ffaf5f  hazmat orange              */
-                174,   /* #d78787  faded crimson (Nuka)       */
-                110,   /* #87afd7  Vault-Tec blue             */
-            };
+            /* 8 IP fg colours × 5 row bgs — palette in tui_palette.c. */
+            const short *ip_fg = tui_ip_fg;
             for (int i = 0; i < 8; i++) {
                 init_pair(CP_IP_BASE_OTHER + i, ip_fg[i], grey_bg[0]);
                 init_pair(CP_IP_BASE_TCP   + i, ip_fg[i], grey_bg[1]);
@@ -527,28 +556,12 @@ void tui_init(void) {
                 init_pair(CP_IP_BASE_HTTP  + i, ip_fg[i], grey_bg[5]);
                 init_pair(CP_IP_BASE_TLS   + i, ip_fg[i], grey_bg[6]);
             }
-            /* Brand colour palette — 16 slots; indices map to BR_* in tui.h.
-             * Slots 0..7 mirror the original layout (per-cat pairs); slots
-             * 8..15 are the corporate-identity additions and live only on
-             * the default-bg pair range CP_BR_EXTRA_BASE..+7. */
-            static const short brand_fg[16] = {
-                 33,   /* Google blue     #0087ff */
-                167,   /* Google red      #d75f5f */
-                220,   /* Google yellow   #ffd700 */
-                 35,   /* Google green    #00af5f */
-                208,   /* Firefox orange  #ff8700 */
-                196,   /* Cloudflare red  #ff0000 */
-                244,   /* example grey    #808080 */
-                 99,   /* Discord blurple #875fff */
-                 27,   /* Facebook blue   #005fff */
-                 41,   /* Spotify green   #00d75f */
-                135,   /* Twitch purple   #af5fff */
-                214,   /* Amazon orange   #ffaf00 */
-                 31,   /* LinkedIn blue   #0087af */
-                124,   /* Netflix red     #af0000 */
-                202,   /* Reddit orange   #ff5f00 */
-                169,   /* Instagram pink  #d75faf */
-            };
+            /* Brand colour palette — 16 slots; indices map to BR_* in
+             * tui.h, colours in tui_palette.c. Slots 0..7 mirror the
+             * original layout (per-cat pairs); slots 8..15 are the
+             * corporate-identity additions and live only on the
+             * default-bg pair range CP_BR_EXTRA_BASE..+7. */
+            const short *brand_fg = tui_brand_fg;
             for (int i = 0; i < 8; i++) {
                 init_pair(CP_BR_BASE_OTHER + i, brand_fg[i], grey_bg[0]);
                 init_pair(CP_BR_BASE_TCP   + i, brand_fg[i], grey_bg[1]);
@@ -562,25 +575,15 @@ void tui_init(void) {
             for (int i = 0; i < 8; i++)
                 init_pair(CP_BR_EXTRA_BASE + i, brand_fg[8 + i], 0);
             /* Earth-tone palette for the packets info column. */
-            static const short info_fg[8] = {
-                95,    /* mauve         #875f5f */
-                101,   /* olive         #87875f */
-                137,   /* tan           #af875f */
-                144,   /* sage          #afaf87 */
-                173,   /* terracotta    #d7875f */
-                179,   /* wheat         #d7af87 */
-                138,   /* dusty rose    #af8787 */
-                102,   /* stone grey    #878787 */
-            };
             for (int i = 0; i < 8; i++)
-                init_pair(CP_INFO_BASE + i, info_fg[i], 0);
+                init_pair(CP_INFO_BASE + i, tui_info_fg[i], 0);
             /* Border pair: same hue family as CP_DIM (user wanted the
              * original dim phosphor — not the darker variant). */
-            init_pair(CP_BORDER, 29, 0);
+            init_pair(CP_BORDER, TUI_C_BORDER, 0);
             /* Cross-panel highlight: white-on-dim-phosphor.
              *   xterm 22 = #005f00 ~ 22% green = roughly 10-15% of cursor
              *   brightness (cursor is CP_BRIGHT = #00ffaf). */
-            init_pair(CP_HIGHLIGHT, 255, 22);
+            init_pair(CP_HIGHLIGHT, TUI_C_HL_FG, TUI_C_HL_BG);
             /* Alert-hot IP — three-tier palette. Same hue family as the
              * heat gradient so the eye reads them as escalating danger:
              *   LOW  = xterm 220 (#ffd700) bright amber-yellow
@@ -588,9 +591,9 @@ void tui_init(void) {
              *   CRIT = xterm 196 (#ff0000) red    (matches CP_HEAT_PEAK)
              * Render sites OR A_BOLD on WARN and CRIT so the eye picks
              * them out from yellow noise. */
-            init_pair(CP_ALERT_HOT_LOW,  220, 0);
-            init_pair(CP_ALERT_HOT_WARN, 208, 0);
-            init_pair(CP_ALERT_HOT_CRIT, 196, 0);
+            init_pair(CP_ALERT_HOT_LOW,  TUI_C_HOT_LOW,  0);
+            init_pair(CP_ALERT_HOT_WARN, TUI_C_HOT_WARN, 0);
+            init_pair(CP_ALERT_HOT_CRIT, TUI_C_HOT_CRIT, 0);
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
