@@ -56,6 +56,8 @@ source material.
 - [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
+- [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
+  retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.
 
 ## Factory infrastructure

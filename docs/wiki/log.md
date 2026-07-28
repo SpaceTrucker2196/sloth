@@ -238,3 +238,26 @@ first: the known-device roster (G4 in the persona doc) is the same shape
 and should extend `ownership.c` rather than introduce a second
 mechanism. The passive guarantee is untouched — a designation is a
 label, and nothing is transmitted.
+
+## 2026-07-28 — SQLite sink (#42) schema reference
+
+**Source**: issue #42; commits 61700b5 (schema v1 + state bucket),
+01dc317 (protocol flows), ec4a9b7 (event bucket), 78305dc (retention +
+size ceiling), 376ab88 (KARMA / rogue-RADIUS evidence).
+
+**Doc updates**: new [[sqlite-schema]] page — why the sink exists
+against the measured 38 GB/day, the 38-table layout by tier, the upsert
+semantics that make the file trustworthy, retention tiers, the MISSION
+§2 guardrails and what "identifier versus secret" means in practice,
+plus query recipes. README gained `--db` sections covering the flags.
+
+**Index updates**: [[index]] § Reference, next to [[jsonl-schema]].
+
+**Why**: the sink is a second durable contract alongside the JSONL
+schema, and the parts a reader most needs are the ones not visible in
+the DDL — that `assocs.source` is strongest-first so a naive MAX
+silently downgrades confirmed handshakes; that detector evidence sits in
+the finding tier so it cannot expire before the alert it justifies; that
+SNMP community strings are deliberately absent even though the wire
+format emits them; and the `auto_vacuum` caveat for files created before
+that pragma landed.
