@@ -14,3 +14,4 @@ never rewrite rows.
 | 39 | 2ca5f4b | 2026-07-14 | 1 | 3778 | yes | docs-drift; extracted view_labels to shared file + capture-based drift guard |
 | 40 | 2dbf143 | 2026-07-14 | 1 | 3796 | yes | ICMP-tunnel detector; additive payload_len field + ring-scan rule, green on first converge |
 | 45 | a688b25 | 2026-07-20 | 2 | 3813 | yes | factory-infra: risk gate scorer, advisory until owner enables agents/risk_enforce; selftest red once (md-under-agents precedence), green on iter 2 |
+| 46 | 4b1b577 | 2026-07-28 | 1 | 3831 | yes | field-reported silent scoping loss; extracted capture_activate_failed as test seam, negative-control run confirmed 4 assertions red on pre-fix logic |
