@@ -479,6 +479,44 @@ static const char SCHEMA_SQL[] =
     "  PRIMARY KEY (ip, port)"
     ");\n"
 
+
+    /* ── detector evidence (#30 / #31) ───────────────────── *
+     *
+     * karma_ap_t and rogue_radius_ap_t have no jsonl_emit_* at all —
+     * they are TUI-only and vanish on exit. Their alerts fire, so the
+     * *fact* that something was detected survives in `alerts`, but the
+     * evidence that justified it (SSID/PNL overlap, IE uniformity, the
+     * deauth chain, which EAP methods were offered, how many identities
+     * leaked) does not. That is the difference between "sloth said this
+     * AP was a Pineapple" and being able to show why.
+     *
+     * Both are bounded tiny — 64 + 32 rows — so this is close to free.
+     *
+     * MISSION §2: last_identity is a leaked EAP username, not a
+     * secret. Same call cleartext_creds makes — the exposure fact and
+     * the identifier, never the credential. */
+    "CREATE TABLE IF NOT EXISTS karma_candidates ("
+    "  bssid           TEXT PRIMARY KEY,"
+    "  ssid_count      INTEGER NOT NULL DEFAULT 0,"
+    "  pnl_overlap     INTEGER NOT NULL DEFAULT 0,"
+    "  pnl_jaccard_ppm INTEGER NOT NULL DEFAULT 0,"
+    "  ie_uniform      INTEGER NOT NULL DEFAULT 0,"
+    "  deauth_chain    INTEGER NOT NULL DEFAULT 0,"
+    "  score           INTEGER NOT NULL DEFAULT 0,"
+    "  top_ssid        TEXT,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS rogue_radius ("
+    "  bssid          TEXT PRIMARY KEY,"
+    "  eap_types_seen INTEGER NOT NULL DEFAULT 0,"
+    "  weak_method    INTEGER NOT NULL DEFAULT 0,"
+    "  identity_leaks INTEGER NOT NULL DEFAULT 0,"
+    "  last_identity  TEXT,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+
     /* ── passive sensor registry (#28) ───────────────────── */
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"

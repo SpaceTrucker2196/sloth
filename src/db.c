@@ -56,6 +56,12 @@ static const char *const TIER_ENTITY[] = {
 /* 12x — the findings. These are why the operator kept the file. */
 static const char *const TIER_FINDING[] = {
     "alerts", "cleartext_creds",
+    /* Detector evidence sits here, not in the entity tier, so it lives
+     * exactly as long as the alert it justifies. At 3x the evidence
+     * would expire while the CRIT it supports was still retained,
+     * recreating the #30/#31 hole through retention instead of through
+     * a missing emitter. 96 rows maximum, so the cost is nil. */
+    "karma_candidates", "rogue_radius",
 };
 
 #define NELEMS(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -81,7 +87,7 @@ enum {
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
     ST_ALERT, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
-    ST_SCAN, ST_SCAN_PORT,
+    ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
     ST_COUNT
 };
 
@@ -458,6 +464,37 @@ static const char *const SQL[ST_COUNT] = {
     " ON CONFLICT(ip,port) DO UPDATE SET"
     "  first_seen=MIN(scan_entry_ports.first_seen,excluded.first_seen),"
     "  last_seen=MAX(scan_entry_ports.last_seen,excluded.last_seen)",
+[ST_KARMA] =
+    "INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,"
+    "pnl_jaccard_ppm,ie_uniform,deauth_chain,score,top_ssid,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(bssid) DO UPDATE SET"
+    /* Evidence is high-water: the table is rebuilt from scratch each
+     * poll, so a radio that is briefly quiet would otherwise erase the
+     * peak that justified the alert. */
+    "  ssid_count=MAX(karma_candidates.ssid_count,excluded.ssid_count),"
+    "  pnl_overlap=MAX(karma_candidates.pnl_overlap,excluded.pnl_overlap),"
+    "  pnl_jaccard_ppm=MAX(karma_candidates.pnl_jaccard_ppm,"
+    "                      excluded.pnl_jaccard_ppm),"
+    "  ie_uniform=MAX(karma_candidates.ie_uniform,excluded.ie_uniform),"
+    "  deauth_chain=MAX(karma_candidates.deauth_chain,excluded.deauth_chain),"
+    "  score=MAX(karma_candidates.score,excluded.score),"
+    "  top_ssid=excluded.top_ssid,"
+    "  first_seen=MIN(karma_candidates.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(karma_candidates.last_seen,excluded.last_seen)",
+[ST_ROGUE_RADIUS] =
+    "INSERT INTO rogue_radius (bssid,eap_types_seen,weak_method,"
+    "identity_leaks,last_identity,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(bssid) DO UPDATE SET"
+    /* Offered EAP methods accumulate — an AP that once offered MD5
+     * offered it, whatever it advertises on the next handshake. */
+    "  eap_types_seen=(rogue_radius.eap_types_seen | excluded.eap_types_seen),"
+    "  weak_method=MAX(rogue_radius.weak_method,excluded.weak_method),"
+    "  identity_leaks=MAX(rogue_radius.identity_leaks,excluded.identity_leaks),"
+    "  last_identity=excluded.last_identity,"
+    "  first_seen=MIN(rogue_radius.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(rogue_radius.last_seen,excluded.last_seen)",
 };
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -1192,6 +1229,43 @@ static void write_events(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Detector evidence (#30 / #31). These tables exist because the
+ * detectors' supporting evidence had no durable home at all — the
+ * alert survived, the reasoning behind it did not. */
+static void write_detector_evidence(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->karma_count; i++) {
+        const karma_ap_t *k = &s->karma_aps[i];
+        char bssid[18]; mac_str(k->bssid, bssid);
+        time_t last = k->last_seen ? k->last_seen : now;
+        sqlite3_stmt *st = g_st[ST_KARMA];
+        bind_txt(st, 1, bssid);
+        sqlite3_bind_int(st, 2, k->ssid_count);
+        sqlite3_bind_int(st, 3, k->pnl_overlap);
+        sqlite3_bind_int(st, 4, k->pnl_jaccard_ppm);
+        sqlite3_bind_int(st, 5, k->ie_uniform ? 1 : 0);
+        sqlite3_bind_int(st, 6, k->deauth_chain ? 1 : 0);
+        sqlite3_bind_int(st, 7, k->score);
+        bind_txt(st, 8, k->top_ssid);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)last);
+        step_reset(ST_KARMA);
+    }
+    for (int i = 0; i < s->rogue_radius_count; i++) {
+        const rogue_radius_ap_t *r = &s->rogue_radius[i];
+        char bssid[18]; mac_str(r->bssid, bssid);
+        sqlite3_stmt *st = g_st[ST_ROGUE_RADIUS];
+        bind_txt(st, 1, bssid);
+        sqlite3_bind_int64(st, 2, (sqlite3_int64)r->eap_types_seen);
+        sqlite3_bind_int(st, 3, r->weak_method ? 1 : 0);
+        sqlite3_bind_int(st, 4, r->identity_leaks);
+        /* A leaked EAP identity is a username, not a credential. */
+        bind_txt(st, 5, r->last_identity);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(r->first_seen ? r->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(r->last_seen  ? r->last_seen  : now));
+        step_reset(ST_ROGUE_RADIUS);
+    }
+}
+
 /* ── retention and the size ceiling ──────────────────────── */
 
 void db_set_retain_days(int days) {
@@ -1335,6 +1409,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_ndp_and_sensors(s, now);
     write_proto_flows    (s, now);
     write_events         (s, now);
+    write_detector_evidence(s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

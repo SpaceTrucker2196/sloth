@@ -1199,6 +1199,170 @@ static void test_size_bytes_reports_a_real_size(void) {
     unlink(db_path);
 }
 
+/* ── detector evidence, #30 / #31 (#42 slice 4) ──────────── */
+
+/* The hole this closes: the KARMA alert survives in `alerts`, but
+ * before this the evidence behind it — SSID count, PNL overlap,
+ * Jaccard, IE uniformity, the deauth chain — was TUI-only and gone on
+ * exit. "sloth said this was a Pineapple" is not the same as being able
+ * to show why. */
+static void test_karma_evidence_persists(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    karma_ap_t *k = &s.karma_aps[s.karma_count++];
+    memset(k, 0, sizeof(*k));
+    k->bssid[0] = 0x00; k->bssid[1] = 0x13; k->bssid[2] = 0x37;
+    k->ssid_count      = 12;
+    k->pnl_overlap     = 5;
+    k->pnl_jaccard_ppm = 412000;
+    k->ie_uniform      = 1;
+    k->deauth_chain    = 1;
+    k->score           = 6;
+    snprintf(k->top_ssid, sizeof(k->top_ssid), "Starbucks");
+    k->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+
+    ASSERT_EQ(q_int("SELECT ssid_count FROM karma_candidates"), 12);
+    ASSERT_EQ(q_int("SELECT pnl_jaccard_ppm FROM karma_candidates"), 412000);
+    ASSERT_EQ(q_int("SELECT ie_uniform FROM karma_candidates"), 1);
+    ASSERT_EQ(q_int("SELECT deauth_chain FROM karma_candidates"), 1);
+    char ssid[64];
+    q_text("SELECT top_ssid FROM karma_candidates", ssid, sizeof(ssid));
+    ASSERT_STR(ssid, "Starbucks");
+    db_close();
+    unlink(db_path);
+}
+
+/* karma_update() rebuilds the table from scratch every poll, so a
+ * briefly-quiet radio would otherwise erase the peak that justified the
+ * alert. Evidence is high-water. */
+static void test_karma_evidence_is_high_water(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    karma_ap_t *k = &s.karma_aps[s.karma_count++];
+    memset(k, 0, sizeof(*k));
+    k->bssid[0] = 0xaa;
+    k->ssid_count   = 20;
+    k->score        = 6;
+    k->deauth_chain = 1;
+    db_tick(&s, 1700000000);
+
+    /* Next poll the radio is quiet: fewer SSIDs, no chain. */
+    s.karma_aps[0].ssid_count   = 2;
+    s.karma_aps[0].score        = 1;
+    s.karma_aps[0].deauth_chain = 0;
+    db_tick(&s, 1700000060);
+
+    ASSERT_EQ(q_int("SELECT ssid_count FROM karma_candidates"), 20);
+    ASSERT_EQ(q_int("SELECT score FROM karma_candidates"), 6);
+    ASSERT_EQ(q_int("SELECT deauth_chain FROM karma_candidates"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM karma_candidates"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* Offered EAP methods accumulate — an AP that once offered MD5 offered
+ * it, whatever it advertises on the next handshake. */
+static void test_rogue_radius_eap_types_accumulate(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    rogue_radius_ap_t *r = &s.rogue_radius[s.rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    r->bssid[0] = 0xbb;
+    r->eap_types_seen = (1u << 4);        /* MD5 */
+    r->weak_method    = 1;
+    r->identity_leaks = 3;
+    snprintf(r->last_identity, sizeof(r->last_identity), "alice@corp.example");
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT eap_types_seen FROM rogue_radius"), 1 << 4);
+
+    s.rogue_radius[0].eap_types_seen = (1u << 25);   /* PEAP only now */
+    s.rogue_radius[0].weak_method    = 0;
+    s.rogue_radius[0].identity_leaks = 1;
+    db_tick(&s, 1700000060);
+
+    ASSERT_EQ(q_int("SELECT eap_types_seen FROM rogue_radius"),
+              (1 << 4) | (1 << 25));
+    ASSERT_EQ(q_int("SELECT weak_method FROM rogue_radius"), 1);
+    ASSERT_EQ(q_int("SELECT identity_leaks FROM rogue_radius"), 3);
+
+    /* A leaked EAP identity is a username — the exposure fact, kept
+     * deliberately, exactly as cleartext_creds keeps one. */
+    char id[80];
+    q_text("SELECT last_identity FROM rogue_radius", id, sizeof(id));
+    ASSERT_STR(id, "alice@corp.example");
+    db_close();
+    unlink(db_path);
+}
+
+/* Evidence must outlive nothing less than the alert it justifies. At
+ * the entity tier it would expire at 3x while the CRIT it supports was
+ * still retained at 12x — recreating the #30/#31 hole through
+ * retention instead of through a missing emitter. */
+static void test_detector_evidence_shares_the_finding_tier(void) {
+    fresh_db();
+    db_set_retain_days(30);
+    long long old = NOW - 100 * DAY;      /* past 3x (90d), inside 12x */
+    char sql[768];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,count)"
+        " VALUES ('karma:aa',%lld,%lld,0,2,1);"
+        "INSERT INTO karma_candidates (bssid,score,first_seen,last_seen)"
+        " VALUES ('aa:00:00:00:00:00',6,%lld,%lld);"
+        "INSERT INTO rogue_radius (bssid,identity_leaks,first_seen,last_seen)"
+        " VALUES ('bb:00:00:00:00:00',3,%lld,%lld);"
+        "INSERT INTO devices (mac,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:01',%lld,%lld);",
+        old, old, old, old, old, old, old, old);
+    insert_at(sql);
+    db_maintain(NOW);
+
+    /* The entity is gone at 100 days... */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 0);
+    /* ...but the alert and the evidence behind it both survive. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM karma_candidates"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM rogue_radius"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* ...and the size ceiling must not take them either, for the same
+ * reason it does not take alerts. */
+static void test_ceiling_never_drops_detector_evidence(void) {
+    fresh_db();
+    db_set_retain_days(3650);
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO karma_candidates (bssid,score,first_seen,last_seen)"
+        " VALUES ('aa:00:00:00:00:00',6,%lld,%lld);", NOW, NOW);
+    insert_at(sql);
+
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    char pad[600];
+    memset(pad, 'x', sizeof(pad) - 1); pad[sizeof(pad) - 1] = '\0';
+    sqlite3_exec(h, "BEGIN", NULL, NULL, NULL);
+    for (int i = 0; i < 4000; i++) {
+        char ins[1024];
+        snprintf(ins, sizeof(ins),
+            "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,server_banner,"
+            "first_seen,last_seen) VALUES ('10.%d.%d.%d','10.0.0.1',1,'%s',%lld,%lld)",
+            i / 65536, (i / 256) % 256, i % 256, pad, NOW, NOW + i);
+        sqlite3_exec(h, ins, NULL, NULL, NULL);
+    }
+    sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    sqlite3_close(h);
+    ASSERT(db_size_bytes() > 1024 * 1024);
+
+    db_set_max_mb(1);
+    db_maintain(NOW);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM karma_candidates"), 1);
+    db_set_max_mb(DB_DEFAULT_MAX_MB);
+    db_close();
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -1262,4 +1426,11 @@ void run_db_tests(void) {
     RUN_TEST(test_ceiling_terminates_when_nothing_prunable);
     RUN_TEST(test_maintain_without_open_is_safe);
     RUN_TEST(test_size_bytes_reports_a_real_size);
+
+    TEST_SUITE("db: detector evidence (#30 / #31)");
+    RUN_TEST(test_karma_evidence_persists);
+    RUN_TEST(test_karma_evidence_is_high_water);
+    RUN_TEST(test_rogue_radius_eap_types_accumulate);
+    RUN_TEST(test_detector_evidence_shares_the_finding_tier);
+    RUN_TEST(test_ceiling_never_drops_detector_evidence);
 }
