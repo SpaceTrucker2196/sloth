@@ -67,6 +67,11 @@ source material.
 ## Reference
 
 - [[attack-map]] — threat class → entry-point view.
+- [personas/](../personas/README.md) — operator personas and their
+  scenario suites; the inspection step for operator experience, the way
+  `make test` is the inspection step for correctness.
+  - [wifi-surveyor](../personas/wifi-surveyor.md) — RF site surveys and
+    surveillance detection. Scored 2026-07-28.
 
 ## Source material
 
