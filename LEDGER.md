@@ -61,3 +61,4 @@
 | 2dbf143 | 2026-07-15T01:23:55Z | claude-opus-4-8 | 7499 | 62597 | 19857793 | 109976 | 12.6311 | issue #40: ICMP tunnel detector |
 | c0d36cd | 2026-07-20T13:45:19Z | claude-fable-5,claude-opus-4-8 | 57001 | 118774 | 9304620 | 639990 | 28.2024 | risk gate scorer (#45) |
 | 4b1b577 | 2026-07-28T16:33:18Z | claude-fable-5,claude-opus-4-8,claude-opus-5 | 33537 | 42451 | 6188815 | 249959 | 7.4844 | fix(capture): only negative pcap_activate returns fatal (#46) |
+| f5c848d | 2026-07-28T16:44:09Z | claude-opus-5 | 3772 | 35326 | 7586664 | 77255 | 5.4679 | fix(data-socket): baseline re-emit on client accept (#47) |
