@@ -61,6 +61,56 @@ timestamp, frame count.
   rtl88XXau on Linux).
 - The PNL is gold for social engineering. Treat it as sensitive.
 
+## Presence classification (#53)
+
+The **Presence** column separates emitters that were *present* from
+emitters that were *passing*. A surveyor working near a road hears a few
+hundred client MACs in an afternoon and only a fraction belong to the
+site; without this they are indistinguishable.
+
+| Value | Meaning |
+|---|---|
+| `resident` | present a long time (≥ 15 min), no transit shape |
+| `visitor`  | present for minutes (≥ 2 min) |
+| `passing`  | approached, peaked and receded — moved through RF range |
+| `?`        | too little evidence to say |
+
+The primitive is **trajectory shape**, not dwell. Dwell alone is
+confounded by channel hopping: a resident device the radio happened to
+hear once looks brief. A vehicle leaves an unmistakable signature.
+
+```
+  passing                       arrived and stayed
+   -40      ▁▃▅█▅▃▁              -40        ▁▃▅███████████
+   -80  ▁▁▁▁       ▁▁▁▁          -80  ▁▁▁▁▁▁
+        └── ~20 s ──┘                 └──── minutes ────┘
+```
+
+Both the rise into the peak and the fall out of it must reach 8 dB. A
+one-sided move is not a pass — a rise with no fall is a device waking,
+a fall with no rise is one sleeping, and neither moved.
+
+**The asymmetry is deliberate.** Dwell alone may promote an emitter to
+`visitor` or `resident`, because "was here a while" is a weak claim a
+long observation span already supports. Calling something `passing`
+asserts that it *moved*, which is the strong claim, so it requires
+trajectory evidence. A device heard once is `?`, never `passing` — the
+column is meant to be defensible in front of a client.
+
+Backed by `rssi_ring_t` on `probe_client_t` (16 samples / 60 s), pushed
+from `record_probe()`. The classifier is pure and lives in
+`src/presence.c`; it is unit-tested against hand-built trajectories
+rather than captured ones.
+
+The class is persisted to `probe_clients.presence` in the [[sqlite-schema]]
+sink at its strongest-ever verdict, so a pass survives in the record
+after the trajectory ages out of the live ring.
+
+**Not yet**: counting *recurring* transients — the same device passing
+three times in two hours, the signature of someone circling. That needs
+episode tracking on top of this and is tracked as S3.2 in
+`docs/personas/wifi-surveyor.md`.
+
 ## See also
 
 - Capture path: [`src/capture/probe.c`](../../src/capture/probe.c).

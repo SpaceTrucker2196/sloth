@@ -14,6 +14,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "db.h"
+#include "presence.h"
 
 static char db_path[] = "/tmp/sloth_db_XXXXXX";
 
@@ -1363,6 +1364,41 @@ static void test_ceiling_never_drops_detector_evidence(void) {
     unlink(db_path);
 }
 
+/* Presence class is persisted at its strongest-ever verdict (#53). The
+ * live RSSI ring only holds 60 s, so a device that demonstrably drove
+ * past would otherwise revert to "unknown" the moment its trajectory
+ * aged out — losing the single observation the operator was looking
+ * for. */
+static void test_presence_class_never_walks_back(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    probe_client_t *p = &s.probe_clients[s.probe_count++];
+    memset(p, 0, sizeof(*p));
+    p->mac[0] = 0x02; p->mac[5] = 0x77;
+    p->first_seen = 1700000000 - 30;
+    p->last_seen  = 1700000000;
+    /* A vehicle pass: rise, peak, recede inside the window. */
+    const int pass[] = { -85, -72, -58, -45, -44, -60, -75, -88 };
+    for (unsigned i = 0; i < sizeof(pass) / sizeof(pass[0]); i++) {
+        p->rssi_ring.dbm[p->rssi_ring.head] = (int8_t)pass[i];
+        p->rssi_ring.ts [p->rssi_ring.head] = 1700000000 - (7 - (int)i);
+        p->rssi_ring.head = (p->rssi_ring.head + 1) % RSSI_WIN_SAMPLES;
+        p->rssi_ring.count++;
+    }
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT presence FROM probe_clients"),
+              (int)PRESENCE_TRANSIENT);
+
+    /* Later the trajectory has aged out of the ring entirely. */
+    memset(&s.probe_clients[0].rssi_ring, 0, sizeof(rssi_ring_t));
+    s.probe_clients[0].last_seen = 1700000000 + 30;
+    db_tick(&s, 1700000000 + 30);
+    ASSERT_EQ(q_int("SELECT presence FROM probe_clients"),
+              (int)PRESENCE_TRANSIENT);
+    db_close();
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -1433,4 +1469,5 @@ void run_db_tests(void) {
     RUN_TEST(test_rogue_radius_eap_types_accumulate);
     RUN_TEST(test_detector_evidence_shares_the_finding_tier);
     RUN_TEST(test_ceiling_never_drops_detector_evidence);
+    RUN_TEST(test_presence_class_never_walks_back);
 }

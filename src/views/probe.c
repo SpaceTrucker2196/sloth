@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "oui.h"
 #include "capture/probe.h"
+#include "presence.h"
 #include "views/probe.h"
 
 #define PROBE_PAGE 30
@@ -95,11 +96,12 @@ void view_probe_draw(const sloth_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %s\n",
-           "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts", "Probing");
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %s\n",
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %s\n",
+           "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts",
+           "Presence", "Probing");
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %s\n",
            "-----------------", "------------", "------", "---",
-           "-----", "-----", "-------");
+           "-----", "-----", "--------", "-------");
     tui_normal();
 
     if (s->probe_count == 0) {
@@ -133,8 +135,12 @@ void view_probe_draw(const sloth_state_t *s) {
             TPRINT(" %-17s  %-12.12s  ", mac, vstr);
             for (int i = 0; i < 6; i++)
                 TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
-            TPRINT("  %3d  %5s  %5d  %.32s\n",
-                   c->channel, age, c->frame_count, ssid);
+            TPRINT("  %3d  %5s  %5d  %-8s  %.32s\n",
+                   c->channel, age, c->frame_count,
+                   presence_label(presence_classify(&c->rssi_ring,
+                                                    c->first_seen,
+                                                    c->last_seen, now)),
+                   ssid);
             tui_reset();
         } else {
             /* MAC: intensity by age */
@@ -160,6 +166,20 @@ void view_probe_draw(const sloth_state_t *s) {
                 : 0.0;
             tui_heat(frac);
             TPRINT("  %5d", c->frame_count);
+
+            /* Presence (#53): "passing" is the finding — a device that
+             * approached, peaked and receded. Rendered hot so it stands
+             * out from the resident population the operator expects. */
+            presence_class_t pc = presence_classify(&c->rssi_ring,
+                                                    c->first_seen,
+                                                    c->last_seen, now);
+            switch (pc) {
+            case PRESENCE_TRANSIENT: tui_heat(0.8);  break;
+            case PRESENCE_RESIDENT:  tui_normal();   break;
+            case PRESENCE_VISITOR:   tui_dim();      break;
+            default:                 tui_dim();      break;
+            }
+            TPRINT("  %-8s", presence_label(pc));
 
             /* SSID: bright for named targets, dim for wildcards */
             if (c->ssid[0]) tui_bright(); else tui_dim();

@@ -103,6 +103,7 @@ void run_capture_tests(void);
 void run_tui_palette_tests(void);
 void run_ownership_tests(void);
 void run_db_tests(void);
+void run_presence_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -205,6 +206,7 @@ int main(void) {
     run_tui_palette_tests();
     run_ownership_tests();
     run_db_tests();
+    run_presence_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

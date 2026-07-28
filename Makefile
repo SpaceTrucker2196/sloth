@@ -15,6 +15,7 @@ SRCS = src/main.c          \
        src/tui.c           \
        src/tui_palette.c   \
        src/ownership.c     \
+       src/presence.c      \
        src/db_schema.c     \
        src/history.c       \
        src/bandwidth.c     \
@@ -271,6 +272,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_tui_palette.c   \
             src/ownership.c            \
             tests/test_ownership.c     \
+            src/presence.c             \
+            tests/test_presence.c      \
             src/db_schema.c            \
             src/db.c                   \
             tests/test_db.c            \

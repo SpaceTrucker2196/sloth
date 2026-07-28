@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28 (rescored after #51, #52).
+**Last updated**: 2026-07-28 (rescored after #51, #52, #53).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -187,28 +187,38 @@ client MACs are observed; perhaps 25 belong to the site.
 **Pass**: a view or column separates devices by dwell — resident
 (hours), visitor (minutes), transient (seconds, RSSI rising then
 falling as it passes).
-**Result: FAIL.** No dwell or mobility classification exists anywhere.
-`probe_client_t` carries `first_seen`/`last_seen` and a *single*
-`signal_dbm` — no RSSI history at all. The only RSSI ring in the tree
-(`rssi_ring_t`, 16 samples / 60 s) is attached to `beacon_ap_t`, i.e.
-to **APs, not clients**, and feeds exactly one consumer: the
-`EVIL_TWIN_PROXIMITY` rule. That rule's own comment names "mobile
-devices roaming past" as the noise it must tolerate.
+**Result: PASS** (was `FAIL`; rescored 2026-07-28 after #53).
+`probe_client_t` now carries an `rssi_ring_t`, pushed from
+`record_probe()`, and `[7] Probe` has a **Presence** column reading
+resident / visitor / passing / ?, with "passing" rendered hot so it
+stands out from the resident population.
 
-So the single richest signal for Ilya's surveillance-detection work —
-*this emitter approached, peaked and receded in 40 seconds* — is
-currently modelled as an error term. He is left sorting 200 MACs by
-`last_seen − first_seen` in the JSONL by hand, which discards the
-trajectory shape that distinguishes a car from someone who parked.
+The classifier (`src/presence.c`) keys on **trajectory shape**, not
+dwell — dwell alone is confounded by channel hopping, since a resident
+device the radio happened to hear once looks brief. A vehicle leaves a
+rise-peak-fall signature; a device that arrived and stayed rises and
+plateaus; a stationary one wobbles a few dB.
+
+Note the asymmetry, which is what makes the column trustworthy: dwell
+alone may promote an emitter to visitor or resident, but calling
+something *passing* asserts that it moved, so it requires trajectory
+evidence. A device heard once is `?`, never `passing`. Ilya can defend
+the column in front of a client.
+
+The class is also persisted to `probe_clients.presence` at its
+strongest-ever verdict, so a pass survives in the record after the
+trajectory ages out of the 60-second ring.
 
 #### S3.2 Spot the car that came back (L)
 
 **Pass**: a transient device seen on three separate passes over two
 hours is surfaced as recurring — the signature of someone circling.
-**Result: FAIL.** Follows from S3.1; without transit episodes there is
-nothing to count recurrences of. This is the highest-value unmet ask in
-the whole suite: a recurring transient is the single most actionable
-observation in a surveillance-detection engagement.
+**Result: FAIL.** #53 supplies the missing primitive — there are now
+transit episodes to count — but nothing counts them. Needs episode
+tracking on top of the classifier: a per-MAC (or per-PNL-fingerprint,
+to survive randomisation) history of passes with their timestamps.
+Remains the most actionable single observation in a
+surveillance-detection engagement.
 
 ---
 
@@ -290,7 +300,7 @@ home for it.
 | S1.3 Unattended run | Q1 | PASS (see #50) |
 | S2.1 Repeater vs. rogue | Q2 | PARTIAL (was WRONG; #51) |
 | S2.2 Pineapple detection | Q2 | PASS |
-| S3.1 Transient vs. resident | Q3 | **FAIL** |
+| S3.1 Transient vs. resident | Q3 | PASS (was FAIL; #53) |
 | S3.2 Recurring transient | Q3 | **FAIL** |
 | S4.1 Probes for my SSID | Q4 | PASS (was FAIL; #52) |
 | S4.2 Attacks on my AP | Q4 | PASS (was PARTIAL; #52) |
@@ -322,7 +332,7 @@ in-tree material each would build on.
 |---|-----|-----------|-------|
 | ~~G1~~ | ~~**No "my network" designation**~~ | — | **Landed (#52).** `--my-ssid` / `--my-bssid`, the `MY_NET_RECON` rule, flood severity scoping, and twin-side pinning. Q4 fully answered. |
 | ~~G2~~ | ~~**Repeater/infrastructure classification**~~ | — | **Landed (#51).** 802.11k mutual/one-way neighbor advertisement now suppresses the twin verdict in both the alert and the view. Residual: APs that emit no Neighbor Reports, which is most budget extenders — see S2.1. |
-| G3 | **Client RSSI history + dwell classification** | `rssi_ring_t` (exists, AP-only) | Attach a ring to client records; classify RESIDENT / VISITOR / TRANSIENT from dwell plus trajectory shape. Unlocks S3.1 and makes S3.2 possible. Largest of the five. |
+| ~~G3~~ | ~~**Client RSSI history + dwell classification**~~ | — | **Landed (#53).** Client `rssi_ring_t`, `src/presence.c`, Presence column in `[7] Probe`, persisted class. S3.1 closed; S3.2 (recurring transients) now has its primitive and needs episode tracking. |
 | G4 | **Known-device roster** | `device_t`, device-risk scoring | `--known-macs FILE`; an unknown-device signal that means *unfamiliar* rather than *intrinsically odd*. |
 | G5 | **Cross-session client baseline** | `--snapshot-out` (#27), SQLite sink (#42) | Extend the survey diff from APs to clients. Cheapest once #42 lands — it is a query over persisted state, not new capture. |
 

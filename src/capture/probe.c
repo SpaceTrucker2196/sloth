@@ -188,6 +188,20 @@ static void parse_radiotap(const uint8_t *buf, int len,
 
 /* ── Client table update (caller holds g_mu) ─────────────── */
 
+/* Append an observation to a client's RSSI ring (#53). The ring is what
+ * lets presence_classify() tell a device that drove past from one that
+ * is sitting in the building — dwell alone cannot, because channel
+ * hopping makes a resident heard once look brief. Mirrors
+ * beacon_snoop's rssi_ring_push; the projection fields that one derives
+ * are AP-only and not needed here. */
+static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
+    rssi_ring_t *r = &c->rssi_ring;
+    r->dbm[r->head] = signal;
+    r->ts [r->head] = now;
+    r->head = (r->head + 1) % RSSI_WIN_SAMPLES;
+    if (r->count < RSSI_WIN_SAMPLES) r->count++;
+}
+
 static void record_probe(const uint8_t *mac, const char *ssid,
                          int8_t signal, int channel) {
     time_t now = time(NULL);
@@ -199,6 +213,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
             g_clients[i].channel     = channel;
             g_clients[i].last_seen   = now;
             g_clients[i].frame_count++;
+            client_rssi_push(&g_clients[i], signal, now);
             if (ssid[0])   /* prefer named probe over wildcard */
                 snprintf(g_clients[i].ssid, sizeof(g_clients[i].ssid),
                          "%s", ssid);
@@ -218,6 +233,10 @@ static void record_probe(const uint8_t *mac, const char *ssid,
         }
     }
 
+    /* Full reset: the slot may be a recycled eviction, and a stale RSSI
+     * ring would attribute the previous device's trajectory to this
+     * one — a wrong presence verdict rather than a missing one. */
+    memset(&g_clients[slot], 0, sizeof(g_clients[slot]));
     memcpy(g_clients[slot].mac, mac, 6);
     snprintf(g_clients[slot].ssid, sizeof(g_clients[slot].ssid), "%s", ssid);
     g_clients[slot].signal_dbm  = signal;
@@ -225,6 +244,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
     g_clients[slot].first_seen  = now;
     g_clients[slot].last_seen   = now;
     g_clients[slot].frame_count = 1;
+    client_rssi_push(&g_clients[slot], signal, now);
 }
 
 /* ── pcap callback ───────────────────────────────────────── */

@@ -73,9 +73,15 @@ static const char SCHEMA_SQL[] =
     "  signal_dbm  INTEGER,"
     "  channel     INTEGER,"
     "  frame_count INTEGER NOT NULL DEFAULT 0,"
+    /* presence_class_t (#53) — 0 unknown, 1 passing, 2 visitor,
+     * 3 resident. Persisted as the strongest verdict ever reached, so a
+     * device that demonstrably drove past stays "passing" in the record
+     * even after the trajectory has aged out of the live ring. */
+    "  presence    INTEGER NOT NULL DEFAULT 0,"
     "  first_seen  INTEGER NOT NULL,"
     "  last_seen   INTEGER NOT NULL"
     ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_probe_presence ON probe_clients(presence);\n"
 
     /* ── APs ──────────────────────────────────────────────── *
      * beacon_aps is the passive monitor-mode inventory; wifi_aps is

@@ -10,6 +10,7 @@
 #include <sqlite3.h>
 
 #include "ownership.h"
+#include "presence.h"
 
 #define DB_DEFAULT_INTERVAL_S 1
 /* Maintenance is hourly: pruning is a scan over every table, and the
@@ -128,10 +129,15 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(pnl_ssids.last_seen,excluded.last_seen)",
 [ST_PROBE_CLIENT] =
     "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,frame_count,"
-    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    "presence,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
     " ON CONFLICT(mac) DO UPDATE SET"
     "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
     "  channel=excluded.channel, frame_count=excluded.frame_count,"
+    /* Strongest verdict wins and is never walked back. The live ring
+     * only holds 60 s, so a device that drove past would otherwise
+     * revert to "unknown" the moment its trajectory aged out — losing
+     * the one observation the operator was looking for (#53). */
+    "  presence=MAX(probe_clients.presence,excluded.presence),"
     "  first_seen=MIN(probe_clients.first_seen,excluded.first_seen),"
     "  last_seen=MAX(probe_clients.last_seen,excluded.last_seen)",
 [ST_BEACON_AP] =
@@ -709,8 +715,11 @@ static void write_probe_clients(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int  (st, 3, p->signal_dbm);
         sqlite3_bind_int  (st, 4, p->channel);
         sqlite3_bind_int  (st, 5, p->frame_count);
-        sqlite3_bind_int64(st, 6, (sqlite3_int64)(p->first_seen ? p->first_seen : now));
-        sqlite3_bind_int64(st, 7, (sqlite3_int64)(p->last_seen  ? p->last_seen  : now));
+        sqlite3_bind_int  (st, 6, (int)presence_classify(&p->rssi_ring,
+                                                         p->first_seen,
+                                                         p->last_seen, now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(p->first_seen ? p->first_seen : now));
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)(p->last_seen  ? p->last_seen  : now));
         step_reset(ST_PROBE_CLIENT);
     }
 }

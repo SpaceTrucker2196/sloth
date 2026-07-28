@@ -1018,6 +1018,10 @@ typedef struct {
     time_t  first_seen;   /* set when the MAC is first observed */
     time_t  last_seen;
     int     frame_count;
+    /* RSSI history for presence classification (#53). Dwell alone
+     * cannot separate a resident device from one driving past — the
+     * trajectory shape can. See src/presence.h. */
+    rssi_ring_t rssi_ring;
 } probe_client_t;
 
 /* ── PNL: per-MAC Preferred Network List ─────────────────── *
