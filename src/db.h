@@ -38,6 +38,10 @@
  * shape changes; db_open() refuses a file written by a newer sloth. */
 #define DB_SCHEMA_VERSION 1
 
+/* Retention defaults. See db_set_retain_days / db_set_max_mb. */
+#define DB_DEFAULT_RETAIN_DAYS 30
+#define DB_DEFAULT_MAX_MB     512
+
 #ifdef WITH_SQLITE
 
 /* Open (creating if needed) the database at `path` and apply the
@@ -66,6 +70,36 @@ void db_tick(const sloth_state_t *s, time_t now);
 void db_set_interval(int secs);
 int  db_interval(void);
 
+/* Retention (--db-retain-days). 0 restores the default.
+ *
+ * Tiered, because not all rows are worth the same on a disk that is
+ * filling up. The configured window applies to observation and event
+ * rows; entities keep 3x that, and alerts and credential exposures
+ * keep 12x. The reasoning is what an investigator reaches for months
+ * later: "which devices were here" outlives "which BGP keepalives were
+ * counted", and "what fired, and when" outlives both. */
+void db_set_retain_days(int days);
+int  db_retain_days(void);
+
+/* Hard size ceiling in megabytes (--db-max-mb). 0 = unlimited.
+ *
+ * On breach the oldest observation rows go first, in batches, until
+ * the file is back under. Entity, alert and credential rows are NEVER
+ * dropped by this guard — a sensor that fills its disk should lose
+ * telemetry, not the findings the operator is keeping the disk for. If
+ * pruning every eligible row still leaves the file over the ceiling,
+ * that is reported once and the file is allowed to exceed it, because
+ * the alternative is discarding evidence to satisfy a number. */
+void db_set_max_mb(int mb);
+int  db_max_mb(void);
+
+/* Run the retention + ceiling pass. db_tick() calls this at most once
+ * an hour; exposed so tests can drive it directly. No-op when closed. */
+void db_maintain(time_t now);
+
+/* Database size in bytes (page_count * page_size), or -1 if closed. */
+long long db_size_bytes(void);
+
 /* True when `now` is far enough past the last write for another tick.
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
@@ -79,6 +113,12 @@ static inline void db_tick(const sloth_state_t *s, time_t now)
                                              { (void)s; (void)now; }
 static inline void db_set_interval(int secs) { (void)secs; }
 static inline int  db_interval(void)         { return 0; }
+static inline void db_set_retain_days(int d) { (void)d; }
+static inline int  db_retain_days(void)      { return 0; }
+static inline void db_set_max_mb(int mb)     { (void)mb; }
+static inline int  db_max_mb(void)           { return 0; }
+static inline void db_maintain(time_t now)   { (void)now; }
+static inline long long db_size_bytes(void)  { return -1; }
 static inline int  db_due(time_t now)        { (void)now; return 0; }
 
 #endif /* WITH_SQLITE */

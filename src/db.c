@@ -12,11 +12,53 @@
 #include "ownership.h"
 
 #define DB_DEFAULT_INTERVAL_S 1
+/* Maintenance is hourly: pruning is a scan over every table, and the
+ * thing it defends against (a disk filling over days) does not move
+ * fast enough to need checking at poll rate. */
+#define DB_MAINT_INTERVAL_S  3600
+#define DB_SECS_PER_DAY      86400
 
 static sqlite3 *g_db;
 static int      g_disabled;      /* set once on error — fail-open */
 static int      g_interval  = DB_DEFAULT_INTERVAL_S;
+static int      g_retain_days = DB_DEFAULT_RETAIN_DAYS;
+static int      g_max_mb      = DB_DEFAULT_MAX_MB;
 static time_t   g_last_tick;
+static time_t   g_last_maint;
+static int      g_over_ceiling_reported;
+
+/* ── retention tiers ─────────────────────────────────────
+ *
+ * Ordered by how long the row stays useful to an investigator, not by
+ * how it was produced. Observation rows answer "what was happening",
+ * entities answer "who was here", findings answer "what did we
+ * conclude" — and that is the order they stop mattering in. */
+
+/* 1x the configured window. Also the only tier the size ceiling may
+ * touch: these are the rows a full disk should cost you. */
+static const char *const TIER_OBSERVATION[] = {
+    "bgp_sessions", "ssh_flows", "rdp_flows", "snmp_flows", "mqtt_flows",
+    "ldap_events", "kerb_events", "smb_sessions",
+    "deauth_events", "seqnum_correlations", "twin_episodes",
+    "eapol_events", "scan_entries", "scan_entry_ports",
+};
+
+/* 3x — the inventory. "Which devices were on this network in March"
+ * outlives the individual observations that established it. */
+static const char *const TIER_ENTITY[] = {
+    "devices", "pnl_clients", "pnl_ssids", "probe_clients",
+    "beacon_aps", "beacon_ap_ssids", "wifi_aps", "wifi_stas",
+    "assocs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
+    "mdns_services", "nbns_names", "ssdp_devices",
+    "ndp_ras", "ndp_ra_prefixes", "sensors",
+};
+
+/* 12x — the findings. These are why the operator kept the file. */
+static const char *const TIER_FINDING[] = {
+    "alerts", "cleartext_creds",
+};
+
+#define NELEMS(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 /* Report the first error and stop writing. A database problem must
  * never take a capture down with it: the operator loses persistence,
@@ -508,7 +550,12 @@ int db_open(const char *path) {
      * the card's lifetime, and the exposure is the last few seconds of
      * telemetry on a power cut, which is an acceptable trade for a
      * passive sensor. */
-    if (!exec("PRAGMA journal_mode=WAL", "WAL")            ||
+    /* auto_vacuum must be set before the first table exists, so this
+     * only takes effect on a newly created file; an older one keeps
+     * auto_vacuum=NONE and reuses freed pages instead of returning
+     * them. Either way the file stops growing. */
+    if (!exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum") ||
+        !exec("PRAGMA journal_mode=WAL", "WAL")            ||
         !exec("PRAGMA synchronous=NORMAL", "synchronous")  ||
         !exec("PRAGMA foreign_keys=ON", "foreign_keys")    ||
         !exec(db_schema_sql(), "schema")                   ||
@@ -526,8 +573,10 @@ int db_open(const char *path) {
             return 0;
         }
     }
-    g_disabled  = 0;
-    g_last_tick = 0;
+    g_disabled   = 0;
+    g_last_tick  = 0;
+    g_last_maint = 0;
+    g_over_ceiling_reported = 0;
     return 1;
 }
 
@@ -536,8 +585,10 @@ void db_close(void) {
         if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
     }
     if (g_db) { sqlite3_close(g_db); g_db = NULL; }
-    g_disabled  = 0;
-    g_last_tick = 0;
+    g_disabled   = 0;
+    g_last_tick  = 0;
+    g_last_maint = 0;
+    g_over_ceiling_reported = 0;
 }
 
 int db_is_open(void) { return g_db != NULL && !g_disabled; }
@@ -1141,6 +1192,126 @@ static void write_events(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── retention and the size ceiling ──────────────────────── */
+
+void db_set_retain_days(int days) {
+    g_retain_days = days > 0 ? days : DB_DEFAULT_RETAIN_DAYS;
+}
+int db_retain_days(void) { return g_retain_days; }
+
+void db_set_max_mb(int mb) { g_max_mb = mb >= 0 ? mb : DB_DEFAULT_MAX_MB; }
+int  db_max_mb(void)       { return g_max_mb; }
+
+/* Scalar integer PRAGMA / SELECT. -1 on any failure, which callers
+ * treat as "don't know" and skip the guard rather than guessing. */
+static long long scalar(const char *sql) {
+    if (!g_db) return -1;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    long long v = -1;
+    if (sqlite3_step(st) == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return v;
+}
+
+long long db_size_bytes(void) {
+    if (!g_db) return -1;
+    long long pages = scalar("PRAGMA page_count");
+    long long psize = scalar("PRAGMA page_size");
+    if (pages < 0 || psize < 0) return -1;
+    return pages * psize;
+}
+
+/* DELETE ... WHERE last_seen < cutoff across a tier. Errors disable the
+ * sink like any other write failure. */
+static void prune_tier(const char *const *tables, int n, time_t cutoff) {
+    for (int i = 0; i < n; i++) {
+        char sql[160];
+        snprintf(sql, sizeof(sql),
+                 "DELETE FROM %s WHERE last_seen < %lld",
+                 tables[i], (long long)cutoff);
+        if (!exec(sql, "prune")) { db_fail("prune"); return; }
+    }
+}
+
+/* Delete the oldest `batch` observation rows across the whole tier.
+ * Returns the number actually removed, so the caller can stop when
+ * there is nothing left to give. */
+static long long prune_oldest_observations(int batch) {
+    long long removed = 0;
+    for (int i = 0; i < NELEMS(TIER_OBSERVATION); i++) {
+        char sql[240];
+        snprintf(sql, sizeof(sql),
+                 "DELETE FROM %s WHERE rowid IN ("
+                 "SELECT rowid FROM %s ORDER BY last_seen ASC LIMIT %d)",
+                 TIER_OBSERVATION[i], TIER_OBSERVATION[i], batch);
+        if (!exec(sql, "ceiling prune")) { db_fail("ceiling prune"); return removed; }
+        removed += sqlite3_changes(g_db);
+    }
+    return removed;
+}
+
+void db_maintain(time_t now) {
+    if (!db_is_open()) return;
+
+    long long day = DB_SECS_PER_DAY;
+    time_t obs_cutoff  = (time_t)(now - (long long)g_retain_days * day);
+    time_t ent_cutoff  = (time_t)(now - (long long)g_retain_days * day * 3);
+    time_t find_cutoff = (time_t)(now - (long long)g_retain_days * day * 12);
+
+    if (!exec("BEGIN IMMEDIATE", "maint begin")) { db_fail("maint begin"); return; }
+    prune_tier(TIER_OBSERVATION, NELEMS(TIER_OBSERVATION), obs_cutoff);
+    prune_tier(TIER_ENTITY,      NELEMS(TIER_ENTITY),      ent_cutoff);
+    prune_tier(TIER_FINDING,     NELEMS(TIER_FINDING),     find_cutoff);
+    if (g_disabled) { exec("ROLLBACK", "maint rollback"); return; }
+    if (!exec("COMMIT", "maint commit")) {
+        exec("ROLLBACK", "maint rollback");
+        db_fail("maint commit");
+        return;
+    }
+
+    /* Size ceiling. Only observation rows are eligible: a sensor that
+     * fills its disk should lose telemetry, not the findings the disk
+     * was being kept for. */
+    if (g_max_mb <= 0) { g_last_maint = now; return; }
+    long long ceiling = (long long)g_max_mb * 1024 * 1024;
+
+    for (int round = 0; round < 64; round++) {
+        long long size = db_size_bytes();
+        if (size < 0 || size <= ceiling) { g_over_ceiling_reported = 0; break; }
+
+        if (!exec("BEGIN IMMEDIATE", "ceiling begin")) { db_fail("ceiling begin"); return; }
+        long long removed = prune_oldest_observations(512);
+        if (g_disabled) { exec("ROLLBACK", "ceiling rollback"); return; }
+        if (!exec("COMMIT", "ceiling commit")) {
+            exec("ROLLBACK", "ceiling rollback");
+            db_fail("ceiling commit");
+            return;
+        }
+        /* Return freed pages to the filesystem where the file was
+         * created with incremental auto-vacuum. On an older file this
+         * is a no-op and the pages are simply reused, which still stops
+         * the file growing — it just will not shrink. */
+        exec("PRAGMA incremental_vacuum", "incremental_vacuum");
+
+        if (removed == 0) {
+            /* Nothing eligible left. Report once and stop: exceeding
+             * the ceiling is better than deleting protected evidence to
+             * satisfy a number, and silently looping forever is worse
+             * than both. */
+            if (!g_over_ceiling_reported) {
+                fprintf(stderr,
+                        "sloth: db over --db-max-mb (%lld MiB > %d MiB) with no "
+                        "prunable telemetry left; findings are never dropped\n",
+                        size / (1024 * 1024), g_max_mb);
+                g_over_ceiling_reported = 1;
+            }
+            break;
+        }
+    }
+    g_last_maint = now;
+}
+
 /* ── tick ────────────────────────────────────────────────── */
 
 void db_tick(const sloth_state_t *s, time_t now) {
@@ -1175,6 +1346,11 @@ void db_tick(const sloth_state_t *s, time_t now) {
         return;
     }
     g_last_tick = now;
+
+    /* Hourly, after the write so a maintenance stall never delays the
+     * observation it was triggered by. */
+    if (g_last_maint == 0) g_last_maint = now;
+    else if (now - g_last_maint >= DB_MAINT_INTERVAL_S) db_maintain(now);
 }
 
 #endif /* WITH_SQLITE */

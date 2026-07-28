@@ -116,7 +116,13 @@ for in normal vs anomalous traffic.
     "SELECT mac, ssid FROM pnl_ssids WHERE ssid='CorpWiFi';"
   ```
 
-  `--db-interval-secs N` sets the write cadence (default 1). Schema-level guardrails from [MISSION.md §2](MISSION.md) are enforced by the test suite: no password column on credential exposures, no PMKID / nonce / MIC columns anywhere — crackable material stays in the `--eapol-dir` file the operator explicitly asked for.
+  `--db-interval-secs N` sets the write cadence (default 1).
+
+  **Retention is tiered**, because not all rows are worth the same on a disk that is filling up. `--db-retain-days N` (default 30) sets the window for observation rows; entities keep **3×** that and alerts plus credential exposures keep **12×**. The order reflects what an investigator reaches for months later: *what fired* outlives *who was here*, which outlives *the individual observations*.
+
+  `--db-max-mb N` (default 512, 0 = unlimited) is a hard ceiling. On breach the oldest observation rows go first — **entity, alert and credential rows are never dropped by this guard**. A sensor that fills its disk should lose telemetry, not the findings the disk was being kept for. If pruning every eligible row still leaves the file over the ceiling, that is reported once and the file is allowed to exceed it, because the alternative is discarding evidence to satisfy a number.
+
+  Schema-level guardrails from [MISSION.md §2](MISSION.md) are enforced by the test suite: no password column on credential exposures, no PMKID / nonce / MIC columns anywhere — crackable material stays in the `--eapol-dir` file the operator explicitly asked for.
 
 ### Designating your own network
 

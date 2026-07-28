@@ -395,6 +395,7 @@ static void print_usage(const char *argv0) {
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
+            "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -467,6 +468,18 @@ static void print_usage(const char *argv0) {
             "  --db-interval-secs N\n"
             "                     seconds between database write ticks.\n"
             "                     Default 1. Raise it on slow storage.\n"
+            "  --db-retain-days N\n"
+            "                     age-out window for observation rows.\n"
+            "                     Default 30. Tiered: entities keep 3x\n"
+            "                     this, alerts and credential exposures\n"
+            "                     keep 12x -- what fired outlives who was\n"
+            "                     here, which outlives the individual\n"
+            "                     observations.\n"
+            "  --db-max-mb N      hard ceiling on the database, MiB.\n"
+            "                     Default 512, 0 = unlimited. On breach\n"
+            "                     the oldest observation rows go first;\n"
+            "                     entity, alert and credential rows are\n"
+            "                     never dropped by this guard.\n"
             "  --my-ssid SSID     designate SSID as the operator's own network\n"
             "                     (repeatable, max 16). Purely a label — no\n"
             "                     capture behaviour changes and nothing is\n"
@@ -577,6 +590,10 @@ int main(int argc, char **argv) {
             db_path = argv[++i];
         } else if (!strcmp(argv[i], "--db-interval-secs") && i + 1 < argc) {
             db_set_interval(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--db-retain-days") && i + 1 < argc) {
+            db_set_retain_days(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
+            db_set_max_mb(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--my-ssid") && i + 1 < argc) {
             if (!ownership_add_ssid(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--my-bssid") && i + 1 < argc) {
@@ -621,8 +638,10 @@ int main(int argc, char **argv) {
              * not something to silently continue without. */
             return 1;
         }
-        fprintf(stderr, "sloth: db %s (schema v%d, every %ds)\n",
-                db_path, DB_SCHEMA_VERSION, db_interval());
+        fprintf(stderr,
+                "sloth: db %s (schema v%d, every %ds, retain %dd, max %dMiB)\n",
+                db_path, DB_SCHEMA_VERSION, db_interval(),
+                db_retain_days(), db_max_mb());
     }
     if (pcap_dir) {
         alert_pcap_set_dir(pcap_dir);
