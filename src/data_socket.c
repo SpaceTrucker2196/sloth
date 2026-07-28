@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 
 #include "data_socket.h"
+#include "jsonl.h"
 
 #define MAX_CLIENTS  16
 
@@ -172,6 +173,7 @@ int data_socket_init(const char *spec) {
 
 void data_socket_tick(void) {
     if (g_listen_fd < 0) return;
+    int accepted = 0;
     pthread_mutex_lock(&g_mu);
     while (g_client_n < MAX_CLIENTS) {
         int c = g_accept_fn(g_listen_fd, NULL, NULL);
@@ -183,8 +185,21 @@ void data_socket_tick(void) {
         int one = 1;
         setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
         g_clients[g_client_n++] = c;
+        accepted++;
     }
     pthread_mutex_unlock(&g_mu);
+
+    /* A newly accepted client is a fresh sink, exactly like a reopened
+     * file — so it needs the same full baseline jsonl_open() grants.
+     * Without this the client sees only entities that happen to change
+     * after it connects; steady-state rows stay invisible until their
+     * next heartbeat (#47).
+     *
+     * Only on an actual accept: resetting every tick would re-emit the
+     * whole baseline continuously and undo #42. The reset is outside
+     * g_mu — jsonl has its own lock and emit_line() releases it before
+     * calling data_socket_emit(), so neither direction nests. */
+    if (accepted) jsonl_dedup_reset();
 }
 
 void data_socket_emit(const char *line) {

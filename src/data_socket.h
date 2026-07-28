@@ -20,7 +20,15 @@
 int  data_socket_init(const char *spec);
 
 /* Call from the main poll loop. Accepts any pending connections and
- * harvests dead ones. Cheap when no listener is configured. */
+ * harvests dead ones. Cheap when no listener is configured.
+ *
+ * Accepting at least one client clears the jsonl change-only cache
+ * (jsonl_dedup_reset), so the next snapshot pass re-emits a full
+ * baseline for the newcomer — a connecting client is a fresh sink in
+ * the same sense as a reopened file (#47). The baseline is also
+ * re-broadcast to already-connected clients and re-written to the file
+ * sink; redundant but harmless, since consumers already tolerate
+ * repeats from the heartbeat re-emit. */
 void data_socket_tick(void);
 
 /* Broadcast one JSON line to every connected client. A trailing '\n'

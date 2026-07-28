@@ -172,3 +172,24 @@ snapshot types follow the same pattern later.
 consumers that assumed one row per entity per tick need to know the stream
 is now change-driven with a 5-minute heartbeat floor, even though the
 per-row fields are unchanged.
+
+## 2026-07-28 — Data-socket clients get a change-cache baseline (#47)
+
+**Source**: issue #47 (field report from a production appliance);
+commit resetting the #42 change cache when `data_socket_tick()` accepts
+a client.
+
+**Doc updates**: [[jsonl-schema]] "Change-only emission" gained a
+paragraph covering the data-socket case. Before this, the cache reset on
+file-sink (re)open only, so a socket client connecting mid-run saw only
+entities that changed *after* it connected — steady-state rows stayed
+invisible to it until their next 5-minute heartbeat. The reset now also
+fires per accept.
+
+**Index updates**: none (no new page).
+
+**Why**: same reason as the #42 entry — emission cadence is part of the
+downstream contract. A consumer that reconnects needs to know it will be
+re-synced with a full baseline rather than having to wait out a
+heartbeat, since that determines whether reconnect is a viable re-sync
+strategy at all.

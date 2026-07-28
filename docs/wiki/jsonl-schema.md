@@ -305,7 +305,15 @@ firehose (≈45 % of production volume was unchanged `seqnum_client` /
 refreshes at least every 5 minutes, so windowed queries ("who was here
 2–4 AM?") keep working. Consumers see fewer rows but the same
 latest-state-per-key reconstruction; the cache resets on sink (re)open so
-a fresh file always starts with a full baseline. Currently applied to
+a fresh file always starts with a full baseline.
+
+A data-socket client that connects mid-run is a fresh sink in the same
+sense, and resets the cache too (issue #47) — otherwise it would see only
+what happens to change after it connects, and steady-state entities would
+stay invisible to it until their next 5-minute heartbeat. The reset is
+per *accept*, not per tick, so a reconnecting tailer always re-syncs; the
+cost is one redundant baseline re-broadcast to any clients already
+attached, which consumers already tolerate from the heartbeat. Currently applied to
 `pnl_client` and `seqnum_client`; other snapshot types follow the same
 pattern as they are converted.
 

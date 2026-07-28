@@ -14,6 +14,8 @@
 
 #include "runner.h"
 #include "data_socket.h"
+#include "sloth.h"
+#include "jsonl.h"
 
 static const char *sock_path(void) {
     static char path[64];
@@ -340,6 +342,132 @@ static void test_middle_client_disconnect_compacts(void) {
     data_socket_cleanup();
 }
 
+/* ── accept → change-cache baseline (issue #47) ──────────────
+ *
+ * A client that connects mid-run is a fresh sink: it never saw the rows
+ * the change-only cache (#42) is suppressing. These use the file sink to
+ * count what a snapshot pass actually emits — the socket client is a
+ * dup'd fd nothing reads, only its acceptance matters. */
+
+static char ds_jsonl_path[] = "/tmp/sloth_ds_jsonl_XXXXXX";
+
+static void ds_open_jsonl(void) {
+    int fd = mkstemp(ds_jsonl_path);
+    if (fd >= 0) close(fd);
+    jsonl_close();
+    FILE *fp = fopen(ds_jsonl_path, "w"); if (fp) fclose(fp);
+    ASSERT(jsonl_open(ds_jsonl_path));
+}
+
+static int ds_jsonl_lines(void) {
+    FILE *fp = fopen(ds_jsonl_path, "r");
+    if (!fp) return -1;
+    int n = 0, c, last = '\n';
+    while ((c = fgetc(fp)) != EOF) { if (c == '\n') n++; last = c; }
+    if (last != '\n') n++;      /* unterminated trailing line still counts */
+    fclose(fp);
+    return n;
+}
+
+static void ds_seed_pnl(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->pnl_clients[0].mac[0]      = 0x02;
+    s->pnl_clients[0].mac[5]      = 0x47;
+    snprintf(s->pnl_clients[0].ssids[0],
+             sizeof(s->pnl_clients[0].ssids[0]), "HomeNet");
+    s->pnl_clients[0].ssid_count  = 1;
+    s->pnl_clients[0].probe_count = 3;
+    s->pnl_clients[0].last_seen   = 1700000000;
+    s->pnl_count = 1;
+}
+
+/* The regression: without the reset the third pass stays suppressed and
+ * the just-connected client never learns this device exists. */
+static void test_accept_reemits_baseline(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    sloth_state_t s; ds_seed_pnl(&s);
+    ds_open_jsonl();
+    jsonl_emit_pnl_clients(&s);      /* new → 1 line */
+    jsonl_emit_pnl_clients(&s);      /* unchanged → suppressed */
+    ASSERT_EQ(ds_jsonl_lines(), 1);
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 1;         /* exactly one client connects */
+    data_socket_test_set_accept_fn(fake_accept);
+    data_socket_tick();
+    data_socket_test_set_accept_fn(NULL);
+
+    jsonl_emit_pnl_clients(&s);      /* still unchanged — but new sink */
+    ASSERT_EQ(ds_jsonl_lines(), 2);
+
+    jsonl_close();
+    unlink(ds_jsonl_path);
+    data_socket_cleanup();
+}
+
+/* The control that keeps the fix honest: a tick that accepts nobody must
+ * leave the cache alone. Resetting unconditionally would also pass the
+ * test above while re-emitting the entire baseline every poll cycle —
+ * exactly the volume #42 removed. */
+static void test_tick_without_accept_keeps_cache(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    sloth_state_t s; ds_seed_pnl(&s);
+    ds_open_jsonl();
+    jsonl_emit_pnl_clients(&s);      /* new → 1 line */
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 0;         /* fake immediately returns EAGAIN */
+    data_socket_test_set_accept_fn(fake_accept);
+    data_socket_tick();
+    data_socket_tick();
+    data_socket_test_set_accept_fn(NULL);
+
+    jsonl_emit_pnl_clients(&s);      /* unchanged, no new sink → silent */
+    ASSERT_EQ(ds_jsonl_lines(), 1);
+
+    jsonl_close();
+    unlink(ds_jsonl_path);
+    data_socket_cleanup();
+}
+
+/* Every accept is a fresh sink, including the second and later ones —
+ * a tailer that reconnects after a crash must get its baseline even
+ * though other clients are already attached. */
+static void test_second_client_also_reemits(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    sloth_state_t s; ds_seed_pnl(&s);
+    ds_open_jsonl();
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 1;
+    data_socket_test_set_accept_fn(fake_accept);
+    data_socket_tick();                  /* client A */
+    jsonl_emit_pnl_clients(&s);          /* new → 1 line */
+    jsonl_emit_pnl_clients(&s);          /* unchanged → suppressed */
+    ASSERT_EQ(ds_jsonl_lines(), 1);
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 1;
+    data_socket_tick();                  /* client B joins */
+    data_socket_test_set_accept_fn(NULL);
+
+    jsonl_emit_pnl_clients(&s);
+    ASSERT_EQ(ds_jsonl_lines(), 2);
+
+    jsonl_close();
+    unlink(ds_jsonl_path);
+    data_socket_cleanup();
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -354,4 +482,9 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_send_eagain_keeps_client);
     RUN_TEST(test_send_partial_harvests_client);
     RUN_TEST(test_tick_caps_at_max_clients);
+
+    TEST_SUITE("data socket (accept → baseline re-emit, #47)");
+    RUN_TEST(test_accept_reemits_baseline);
+    RUN_TEST(test_tick_without_accept_keeps_cache);
+    RUN_TEST(test_second_client_also_reemits);
 }
