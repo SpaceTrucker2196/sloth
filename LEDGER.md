@@ -71,3 +71,4 @@
 | 78305dc | 2026-07-28T18:35:44Z | claude-opus-5 | 46 | 40068 | 13565089 | 29458 | 8.0791 | feat(db): tiered retention + size ceiling (#42 slice 3) |
 | 376ab88 | 2026-07-28T20:33:54Z | claude-opus-5 | 29 | 24525 | 7372377 | 1619408 | 20.4935 | feat(db): KARMA + rogue-RADIUS evidence tables (#42 slice 4) |
 | bf10952 | 2026-07-28T20:35:58Z | claude-opus-5 | 9 | 8344 | 3422937 | 12799 | 2.0481 | docs: SQLite sink schema reference (#42 slice 5) |
+| c1f616c | 2026-07-28T20:50:13Z | claude-opus-5 | 68 | 57396 | 22048410 | 53844 | 12.9979 | feat(probe): presence classification (#53) |
