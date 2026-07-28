@@ -10,6 +10,7 @@
 #include "alert_pcap.h"
 #include "dga.h"
 #include "wifi_oui_attacker.h"
+#include "ownership.h"
 #include "event_wake.h"
 
 /* Engine state: deduped alert ring.
@@ -198,6 +199,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
     case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
     case ALERT_TYPE_ICMP_TUNNEL:            return "T1095";       /* Non-Application Layer Protocol (covert channel) */
+    case ALERT_TYPE_MY_NETWORK_RECON:       return "T1595";       /* Active Scanning — recon aimed at the operator */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -231,11 +233,17 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
         mac_to_str(e->bssid, bss, sizeof(bss));
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
+        /* A flood aimed at a network the operator designated as theirs
+         * is not the same event as one aimed at the cafe next door
+         * (#52). Same detector, higher stakes. */
+        int mine = ownership_is_my_bssid(e->bssid);
         snprintf(key,    sizeof(key),    "deauth:%s", tgt);
         snprintf(detail, sizeof(detail),
-                 "target=%s bssid=%s reason=%u count=%d",
-                 tgt, bss, e->reason, e->count);
-        fire(ALERT_TYPE_DEAUTH_FLOOD, ALERT_SEV_WARN,
+                 "target=%s bssid=%s reason=%u count=%d%s",
+                 tgt, bss, e->reason, e->count,
+                 mine ? " - YOUR network" : "");
+        fire(ALERT_TYPE_DEAUTH_FLOOD,
+             mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
              "DEAUTH_FLOOD", detail, key, NULL, 0, now);
     }
 }
@@ -268,11 +276,13 @@ static void rule_auth_flood(const sloth_state_t *s, time_t now) {
     mac_to_str(bssid, bss, sizeof(bss));
     char key[ALERT_KEY_LEN];
     char detail[ALERT_DETAIL_LEN];
+    int mine = ownership_is_my_bssid(bssid);   /* #52 — see rule_deauth_flood */
     snprintf(key,    sizeof(key),    "authflood:%s", bss);
     snprintf(detail, sizeof(detail),
-             "%d auth frames to %s in %ds (assoc-table DoS)",
-             n, bss, AUTH_FLOOD_WIN_SECS);
-    fire(ALERT_TYPE_AUTH_FLOOD, ALERT_SEV_WARN,
+             "%d auth frames to %s in %ds (assoc-table DoS)%s",
+             n, bss, AUTH_FLOOD_WIN_SECS, mine ? " - YOUR network" : "");
+    fire(ALERT_TYPE_AUTH_FLOOD,
+         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "AUTH_FLOOD", detail, key, NULL, 0, now);
 }
 
@@ -635,6 +645,66 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
          * port-scan. Real harm is in PNL leakage, not the probing. */
         fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_LOW,
              "PROBE_FLOOD", detail, key, NULL, 0, now);
+    }
+}
+
+/* Recon against an operator-designated network (#52).
+ *
+ * A client's PNL is the list of networks it remembers and probes for by
+ * name. When one of those is a network the operator designated as
+ * theirs, and the client is *not* associated to it, the device is
+ * carrying credentials-of-interest for a network it is not currently
+ * using — the on-air signature of someone who has connected before, or
+ * who is asking whether the network is here.
+ *
+ * Association is the exoneration, and it is evidence we already grade:
+ * a laptop sitting on the network legitimately remembers it. We check
+ * the assoc table by designated BSSID *or* by SSID, so --my-ssid alone
+ * is enough — the operator does not have to enumerate every BSSID of
+ * their own multi-AP deployment to avoid alerting on their own users.
+ *
+ * Deliberately NOT escalated on a randomised MAC. Probe-request MAC
+ * randomisation is default behaviour on current iOS and Android, so it
+ * describes the phone population, not the adversary; treating it as a
+ * signal here would fire on every handset that ever joined. */
+static int sta_is_associated_to_designated(const sloth_state_t *s,
+                                           const uint8_t mac[6]) {
+    for (int i = 0; i < s->assoc_count; i++) {
+        const assoc_t *a = &s->assocs[i];
+        if (memcmp(a->sta_mac, mac, 6) != 0) continue;
+        if (ownership_is_my_bssid(a->bssid)) return 1;
+        if (ownership_is_my_ssid(a->ssid))   return 1;
+    }
+    return 0;
+}
+
+static void rule_my_network_recon(const sloth_state_t *s, time_t now) {
+    if (!ownership_any()) return;      /* nothing designated — no work */
+    for (int i = 0; i < s->pnl_count; i++) {
+        const pnl_client_t *p = &s->pnl_clients[i];
+
+        const char *hit = NULL;
+        int n = p->ssid_count;
+        if (n > MAX_PNL_SSIDS_PER_CLI) n = MAX_PNL_SSIDS_PER_CLI;
+        for (int k = 0; k < n; k++) {
+            if (ownership_is_my_ssid(p->ssids[k])) { hit = p->ssids[k]; break; }
+        }
+        if (!hit) continue;
+        if (sta_is_associated_to_designated(s, p->mac)) continue;
+
+        char mac_buf[20];
+        mac_to_str(p->mac, mac_buf, sizeof(mac_buf));
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key,    sizeof(key),    "myrecon:%s", mac_buf);
+        snprintf(detail, sizeof(detail),
+                 "%s remembers '%.32s' but is not associated - %d probes",
+                 mac_buf, hit, p->probe_count);
+        /* WARN, not LOW: PROBE_FLOOD is LOW because generic probing is
+         * noise. This is not generic — it names the operator's network.
+         * Not CRIT either: a former guest's phone produces it honestly. */
+        fire(ALERT_TYPE_MY_NETWORK_RECON, ALERT_SEV_WARN,
+             "MY_NET_RECON", detail, key, NULL, 0, now);
     }
 }
 
@@ -1809,6 +1879,7 @@ void alerts_update(sloth_state_t *s) {
     rule_auth_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
+    rule_my_network_recon(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);

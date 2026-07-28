@@ -670,6 +670,7 @@ typedef enum {
     ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
     ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
     ALERT_TYPE_ICMP_TUNNEL,         /* oversized Echo payloads — ptunnel/icmptunnel/Loki (#40) */
+    ALERT_TYPE_MY_NETWORK_RECON,    /* unassociated client remembers an operator-designated SSID (#52) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

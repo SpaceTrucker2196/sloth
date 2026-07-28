@@ -36,9 +36,9 @@ omitted.
 | `PORT_SCAN` | LOW  | T1046     | one source touched ≥ 8 distinct local ports | scanner / 0 |
 | `NXDOMAIN_BURST` | LOW  | T1071.004 | ≥ 10 NXDOMAIN replies to one source in 60 s | src / 53 |
 | `PROBE_FLOOD` | LOW  | T1595     | 802.11 client flooding probe-requests | — (L2 only) |
-| `DEAUTH_FLOOD` | WARN | T1498.001 | ≥ 5 deauth/disassoc frames in 5 s to one target | — (L2 only) |
+| `DEAUTH_FLOOD` | WARN | T1498.001 | ≥ 5 deauth/disassoc frames in 5 s to one target. **CRIT** when the target BSSID is `--my-bssid` designated (#52) | — (L2 only) |
 | `BEACON_FLOOD` | WARN | T1498.001 | ≥ 40 distinct new BSSIDs first-seen in 10 s (mdk3/mdk4-style fake-AP flood) | — (L2 only) |
-| `AUTH_FLOOD` | WARN | T1499     | ≥ 30 802.11 auth frames to one BSSID in 5 s (association-table exhaustion DoS) | — (L2 only) |
+| `AUTH_FLOOD` | WARN | T1499     | ≥ 30 802.11 auth frames to one BSSID in 5 s (association-table exhaustion DoS). **CRIT** when the BSSID is `--my-bssid` designated (#52) | — (L2 only) |
 | `BEACONING` | WARN | T1071     | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
 | `DGA_DOMAIN` | WARN | T1568.002 | DNS qname matches DGA entropy heuristic | src / 53 |
 | `WEAK_TLS` | WARN | T1600     | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
@@ -54,6 +54,7 @@ omitted.
 | `MGMT_FUZZ` | WARN/CRIT | T1499 | malformed beacon IEs from one BSSID (length overrun, oversize SSID, truncated RSN) — mdk4 mode m / crafted aireplay frames; WARN ≥3, CRIT ≥5 | — (L2 only) |
 | `ROGUE_RADIUS` | WARN/CRIT | T1557.004 | a BSSID's 802.1X EAP conversation offered a weak inner method (EAP-MD5/GTC → CRIT) or leaked a real username with no anonymous outer identity (→ WARN) — eaphammer / hostapd-wpe lure | — (L2 only) |
 | `DNS_TUNNEL` | CRIT | T1071.004 | dnscat2 / iodine signature in DNS traffic | src / 53 |
+| `MY_NET_RECON` | WARN | T1595     | a client's PNL names an operator-designated SSID (`--my-ssid`) while the client is **not** associated to that network. Off entirely unless something is designated. Association exonerates — checked by designated BSSID *or* SSID, so the operator's own users never trip it. Benign trigger: a former guest's phone still remembers the network | — (L2 only) |
 | `ICMP_TUNNEL` | WARN | T1095     | ≥ 8 Echo Requests one src→dst pair in 60 s carrying oversized payloads (≥ 64 B, above default ping's 56/32 B) — ptunnel / icmptunnel / Loki covert channel; detail shows the payload size range. Benign trigger: sustained `ping -s` / MTU path testing | dst / 0 |
 | `ATTACK_TOOL_UA` | CRIT | T1595     | HTTP User-Agent matches known offensive tooling | src / 80 |
 | `ATTACK_PATH` | CRIT | T1190     | HTTP path matches known exploit signature | src / 80 |

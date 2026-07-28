@@ -102,6 +102,20 @@ for in normal vs anomalous traffic.
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark.
 
+### Designating your own network
+
+- **`sloth --my-ssid SSID`** / **`sloth --my-bssid BSSID`** (both repeatable, max 16 each) — tell sloth which networks are *yours*. This is a labelling input only: nothing about capture changes and nothing is transmitted, so the passive guarantee in [MISSION.md §2](MISSION.md) is untouched.
+
+  It answers the question sloth previously could not be asked — *is anyone reconnoitring my network?* A client whose Preferred Network List names a designated SSID while it is **not associated** to that network raises `MY_NET_RECON`. Association is the exoneration, checked by designated BSSID *or* SSID, so your own users never trip it and you do not have to enumerate every BSSID of a multi-AP deployment.
+
+  Designations also sharpen two existing detectors: deauth and auth floods aimed at a designated BSSID escalate WARN → CRIT, and a designated BSSID is never named the impostor half of an evil-twin pair (which the RSSI heuristic would otherwise often get backwards, since your own AP is usually the closest one).
+
+  ```sh
+  sudo ./sloth --hop --my-ssid CorpWiFi --my-bssid aa:bb:cc:dd:ee:ff
+  ```
+
+  With nothing designated every check is inert and behaviour is unchanged.
+
 ## WiFi SIGINT usage
 
 Sloth is fully passive — it never injects probe requests, never sends

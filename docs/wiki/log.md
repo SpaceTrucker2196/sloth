@@ -217,3 +217,24 @@ cross-vendor range extender as a CRIT rogue AP, which shipped as #51.
 S2.1 is rescored `WRONG` → `PARTIAL`; the residual case (APs that emit
 no 802.11k Neighbor Reports) is documented in the scenario rather than
 closed.
+
+## 2026-07-28 — Operator-designated networks (#52)
+
+**Source**: issue #52, itself raised by scoring the [wifi-surveyor
+persona suite](../personas/wifi-surveyor.md) scenarios S4.1 / S4.2;
+commit adding `src/ownership.c` and the `MY_NET_RECON` rule.
+
+**Doc updates**: `docs/views/alerts.md` gained a `MY_NET_RECON` row and
+severity-scoping notes on `DEAUTH_FLOOD` / `AUTH_FLOOD`. README gained a
+"Designating your own network" section. The persona suite rescored S4.1
+`FAIL` → `PASS` and S4.2 `PARTIAL` → `PASS`, closing Q4.
+
+**Index updates**: none (no new page).
+
+**Why**: this is sloth's first **operator-supplied context** input —
+previously the tool took observations and display preferences only,
+never an assertion about the world. Worth recording as an architectural
+first: the known-device roster (G4 in the persona doc) is the same shape
+and should extend `ownership.c` rather than introduce a second
+mechanism. The passive guarantee is untouched — a designation is a
+label, and nothing is transmitted.

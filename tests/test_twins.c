@@ -6,6 +6,7 @@
 #include "twins.h"
 #include "alerts.h"
 #include "views/twins.h"
+#include "ownership.h"
 
 /* Tests are state-driven only — twins_snapshot reads beacon_ap_t and
  * the taint tracker. add_beacon mirrors the helper from test_alerts.c. */
@@ -271,6 +272,62 @@ static void test_twins_unrelated_neighbors_still_episode(void) {
     ASSERT_EQ(s.twin_episode_count, 1);
 }
 
+
+/* #52: an operator-designated BSSID is never named the impostor.
+ * The RSSI heuristic would get this backwards in the common case —
+ * the operator's own AP is usually the closest, which rule 2 reads as
+ * the rogue. */
+static void test_twins_designated_bssid_is_always_real(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t mine[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t rogue[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    /* Mine is the STRONGER signal — without the designation the
+     * lower-RSSI rule would call it the twin. */
+    add_beacon(&s, "CorpWiFi", mine,  "WPA2", -40);
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2", -75);
+    ownership_add_bssid("aa:bb:cc:01:02:03");
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, mine,  6), 0);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].twin_bssid, rogue, 6), 0);
+    ownership_clear();
+}
+
+/* Control: same geometry, no designation -> the RSSI heuristic applies
+ * and picks the *weaker* side as real, i.e. the opposite assignment.
+ * This is what makes the test above meaningful. */
+static void test_twins_without_designation_rssi_decides(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t weak[6]   = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", strong, "WPA2", -40);
+    add_beacon(&s, "CorpWiFi", weak,   "WPA2", -75);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, weak,   6), 0);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].twin_bssid, strong, 6), 0);
+}
+
+/* Both designated -> no basis to pick between them; fall through to the
+ * existing heuristics rather than pretending to know. */
+static void test_twins_both_designated_falls_through(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", a, "WPA2", -40);
+    add_beacon(&s, "CorpWiFi", b, "WPA2", -75);
+    ownership_add_bssid("aa:bb:cc:01:02:03");
+    ownership_add_bssid("11:22:33:44:55:66");
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    /* Same outcome as the no-designation control. */
+    ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, b, 6), 0);
+    ownership_clear();
+}
+
 void run_twins_tests(void) {
     TEST_SUITE("twins snapshot");
     RUN_TEST(test_twins_empty_state_no_episodes);
@@ -285,6 +342,9 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_snapshot_idempotent);
     RUN_TEST(test_twins_infrastructure_peers_no_episode);
     RUN_TEST(test_twins_unrelated_neighbors_still_episode);
+    RUN_TEST(test_twins_designated_bssid_is_always_real);
+    RUN_TEST(test_twins_without_designation_rssi_decides);
+    RUN_TEST(test_twins_both_designated_falls_through);
 
     TEST_SUITE("twins view");
     RUN_TEST(test_view_twins_empty_does_not_crash);

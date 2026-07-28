@@ -86,6 +86,7 @@
 #include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
+#include "ownership.h"
 #include "discovery.h"
 #include "dns.h"
 #include "scan.h"
@@ -375,6 +376,7 @@ static void print_usage(const char *argv0) {
             "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
+            "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -434,6 +436,18 @@ static void print_usage(const char *argv0) {
             "                     client can find it by name. Loopback/unix sockets\n"
             "                     never advertise. sloth transmits nothing itself —\n"
             "                     avahi-daemon does the announcing.\n"
+            "  --my-ssid SSID     designate SSID as the operator's own network\n"
+            "                     (repeatable, max 16). Purely a label — no\n"
+            "                     capture behaviour changes and nothing is\n"
+            "                     transmitted. Unlocks MY_NET_RECON: a client\n"
+            "                     that remembers a designated SSID but is not\n"
+            "                     associated to it is probing your network.\n"
+            "  --my-bssid BSSID   designate an AP (aa:bb:cc:dd:ee:ff) as the\n"
+            "                     operator's own (repeatable, max 16). Deauth\n"
+            "                     and auth floods aimed at a designated BSSID\n"
+            "                     escalate WARN -> CRIT, and a designated\n"
+            "                     BSSID is never named the impostor half of an\n"
+            "                     evil-twin pair.\n"
             "  --snapshot-out FILE\n"
             "                     on exit, write a passive AP-inventory snapshot\n"
             "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
@@ -527,6 +541,10 @@ int main(int argc, char **argv) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
+        } else if (!strcmp(argv[i], "--my-ssid") && i + 1 < argc) {
+            if (!ownership_add_ssid(argv[++i])) return 2;
+        } else if (!strcmp(argv[i], "--my-bssid") && i + 1 < argc) {
+            if (!ownership_add_bssid(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
             snapshot_out = argv[++i];
         } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {

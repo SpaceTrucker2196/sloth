@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28 (rescored after #51).
+**Last updated**: 2026-07-28 (rescored after #51, #52).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -221,21 +221,35 @@ observation in a surveillance-detection engagement.
    sent directed probes for it?
 
 **Pass**: an alert or view scoped to *his* SSID.
-**Result: FAIL.** The observation exists — `pnl_client_t.ssids[]` is
-exactly "which networks does this device remember" — but **sloth has no
-concept of "mine"**. There is no `--my-ssid` / `--my-bssid`, so the
-question cannot be posed. Ilya can eyeball `[k] PNL` for the SSID, but
-not be *told*, and not overnight while he is asleep.
+**Result: PASS** (was `FAIL`; rescored 2026-07-28 after #52).
+`--my-ssid` / `--my-bssid` designate a network as his, and
+`MY_NET_RECON` fires on any client whose PNL names a designated SSID
+while it is not associated to that network. Association is the
+exoneration and is checked by designated BSSID *or* SSID, so his
+client's own staff do not each raise an alert and he does not have to
+enumerate every BSSID of a multi-AP site.
+
+It fires unattended, which was the actual requirement — the overnight
+Pi run now answers this question without him awake for it. Note the
+benign trigger, which he will need to explain in the report: a former
+guest's phone honestly remembers the network. The alert is WARN, not
+CRIT, for exactly that reason.
 
 #### S4.2 Someone is attacking my AP specifically (L)
 
 **Pass**: deauth floods, auth floods and probe floods aimed at his
 BSSID rank above the same activity aimed elsewhere.
-**Result: PARTIAL.** `DEAUTH_FLOOD`, `AUTH_FLOOD` and `PROBE_FLOOD`
-all exist and fire correctly, but on volume alone, unscoped. In a busy
-RF scene he must correlate BSSIDs by hand to learn whether the flood
-was aimed at his client or at the coffee shop next door — and severity
-does not reflect the difference.
+**Result: PASS** (was `PARTIAL`; rescored 2026-07-28 after #52).
+`DEAUTH_FLOOD` and `AUTH_FLOOD` escalate WARN → CRIT when the target
+BSSID is designated, and the detail line says `- YOUR network` so the
+distinction survives into `--report`. Floods aimed elsewhere keep their
+original severity: the scoping raises his case rather than lowering
+everyone else's.
+
+`PROBE_FLOOD` is deliberately not scoped. It keys on the *probing
+client*, which has no target BSSID to compare against — the
+"someone is probing me specifically" case is what `MY_NET_RECON`
+answers, and duplicating it here would double-report one event.
 
 ---
 
@@ -277,8 +291,8 @@ home for it.
 | S2.2 Pineapple detection | Q2 | PASS |
 | S3.1 Transient vs. resident | Q3 | **FAIL** |
 | S3.2 Recurring transient | Q3 | **FAIL** |
-| S4.1 Probes for my SSID | Q4 | **FAIL** |
-| S4.2 Attacks on my AP | Q4 | PARTIAL |
+| S4.1 Probes for my SSID | Q4 | PASS (was FAIL; #52) |
+| S4.2 Attacks on my AP | Q4 | PASS (was PARTIAL; #52) |
 | S5.1 Unknown clients | Q5 | **FAIL** |
 | S5.2 New since last survey | Q5 | PARTIAL |
 
@@ -305,7 +319,7 @@ in-tree material each would build on.
 
 | # | Gap | Builds on | Notes |
 |---|-----|-----------|-------|
-| G1 | **No "my network" designation** | `pnl_client_t.ssids[]`, deauth/auth/probe flood rules | `--my-ssid` / `--my-bssid` (repeatable). Unlocks S4.1 outright and re-ranks S4.2. Also lets the twin logic never nominate his own AP as the impostor. Smallest change, largest unlock. |
+| ~~G1~~ | ~~**No "my network" designation**~~ | — | **Landed (#52).** `--my-ssid` / `--my-bssid`, the `MY_NET_RECON` rule, flood severity scoping, and twin-side pinning. Q4 fully answered. |
 | ~~G2~~ | ~~**Repeater/infrastructure classification**~~ | — | **Landed (#51).** 802.11k mutual/one-way neighbor advertisement now suppresses the twin verdict in both the alert and the view. Residual: APs that emit no Neighbor Reports, which is most budget extenders — see S2.1. |
 | G3 | **Client RSSI history + dwell classification** | `rssi_ring_t` (exists, AP-only) | Attach a ring to client records; classify RESIDENT / VISITOR / TRANSIENT from dwell plus trajectory shape. Unlocks S3.1 and makes S3.2 possible. Largest of the five. |
 | G4 | **Known-device roster** | `device_t`, device-risk scoring | `--known-macs FILE`; an unknown-device signal that means *unfamiliar* rather than *intrinsically odd*. |
@@ -313,15 +327,22 @@ in-tree material each would build on.
 
 ### Sequencing note
 
-G2 has landed (#51). G1 is the next small one and is independent of
-everything else. G3 is the big one and should not block G1. G5 should
-wait for #42's state tables rather than growing a second persistence
-path.
+G1 (#52) and G2 (#51) have both landed, which closes Q4 and softens Q2.
+What remains is Q3 and Q5 — residency and familiarity. G3 is the big
+one and the highest remaining value: it is the only unmet ask that is
+about *surveillance detection* rather than inventory hygiene. G4 is
+small and now cheap, because #52 established how operator-supplied
+context enters the system — a known-MAC roster is the same shape as a
+designated SSID and should reuse the ownership module rather than
+inventing a second one. G5 should wait for #42's state tables rather
+than growing a second persistence path.
 
 None of the five requires transmitting anything, so all five sit inside
-MISSION §2. G1 and G4 add operator-supplied context, which is a new
-*input* class for sloth (today it takes only observations and display
-preferences) — worth noting as a design decision rather than assuming.
+MISSION §2. G1 introduced operator-supplied context as a new *input*
+class — sloth previously took only observations and display preferences
+— and that decision is now made and implemented in `src/ownership.c`.
+G4 is the same shape and should extend that module rather than start a
+parallel one.
 
 ---
 

@@ -6,6 +6,7 @@
 #include "views/alerts.h"
 #include "beacon_snoop.h"
 #include "auth_track.h"
+#include "ownership.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -676,6 +677,191 @@ static void test_infrastructure_peers_clamps_neighbor_count(void) {
     add_beacon(&s, "N", b, "WPA2");
     s.beacon_aps[0].neighbor_count = MAX_AP_NEIGHBORS + 99;
     ASSERT_EQ(ap_advertises_neighbor(&s.beacon_aps[0], b), 0);
+}
+
+
+/* ── operator-designated networks (#52) ─────────────────────
+ *
+ * Every test here clears the designation tables first: they are
+ * process-wide, and a leaked designation would silently change the
+ * severity of unrelated flood tests. */
+
+static void add_pnl(sloth_state_t *s, const uint8_t mac[6],
+                    const char *ssid) {
+    pnl_client_t *c = &s->pnl_clients[s->pnl_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac, mac, 6);
+    snprintf(c->ssids[0], 33, "%s", ssid);
+    c->ssid_count  = 1;
+    c->probe_count = 12;
+}
+
+static void add_assoc_entry(sloth_state_t *s, const uint8_t sta[6],
+                            const uint8_t bssid[6], const char *ssid) {
+    assoc_t *a = &s->assocs[s->assoc_count++];
+    memset(a, 0, sizeof(*a));
+    memcpy(a->sta_mac, sta, 6);
+    memcpy(a->bssid,   bssid, 6);
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    a->source = ASSOC_SRC_EAPOL;
+}
+
+/* The headline case: a device out there remembers the operator's
+ * network by name and is not on it. */
+static void test_my_net_recon_fires_for_unassociated_client(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_pnl(&s, mac, "CorpWiFi");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "02:aa:bb:cc:dd:ee") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "CorpWiFi") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "myrecon:02:aa:bb:cc:dd:ee") != NULL);
+}
+
+/* Association is the exoneration — the operator's own users all
+ * remember the network and must not each raise an alert. */
+static void test_my_net_recon_associated_client_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6]   = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_pnl(&s, mac, "CorpWiFi");
+    add_assoc_entry(&s, mac, bssid, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* Exoneration by designated BSSID too, so an operator who designated
+ * only BSSIDs still gets the association carve-out. */
+static void test_my_net_recon_assoc_by_designated_bssid_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_bssid("aa:bb:cc:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6]   = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_pnl(&s, mac, "CorpWiFi");
+    /* Assoc row carries a different SSID string but our BSSID. */
+    add_assoc_entry(&s, mac, bssid, "");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* Someone else's client associated to someone else's AP must not
+ * exonerate our probing stranger. */
+static void test_my_net_recon_unrelated_assoc_still_fires(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6]     = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t other[6]   = {0x02,0x11,0x22,0x33,0x44,0x55};
+    uint8_t foreign[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_pnl(&s, mac, "CorpWiFi");
+    add_assoc_entry(&s, other, foreign, "Cafe-Net");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON) >= 0);
+}
+
+/* A client remembering somebody else's network is not our business. */
+static void test_my_net_recon_other_ssid_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_pnl(&s, mac, "Starbucks");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* Nothing designated -> the rule is inert. This is the default for
+ * every existing deployment, so it must cost nothing and fire nothing. */
+static void test_my_net_recon_no_designation_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_pnl(&s, mac, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* Match must scan the whole PNL, not just slot 0. */
+static void test_my_net_recon_matches_any_pnl_slot(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    pnl_client_t *c = &s.pnl_clients[s.pnl_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac, mac, 6);
+    snprintf(c->ssids[0], 33, "Starbucks");
+    snprintf(c->ssids[1], 33, "Airport-Free");
+    snprintf(c->ssids[2], 33, "CorpWiFi");
+    c->ssid_count = 3;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON) >= 0);
+}
+
+/* An ssid_count larger than the array must not walk off the end. */
+static void test_my_net_recon_clamps_ssid_count(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_pnl(&s, mac, "Starbucks");
+    s.pnl_clients[0].ssid_count = MAX_PNL_SSIDS_PER_CLI + 50;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* ── flood severity scoping (#52) ───────────────────────── */
+
+static void test_deauth_flood_on_my_bssid_escalates_crit(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_bssid("aa:bb:cc:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x02,0x11,0x22,0x33,0x44,0x55};
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_deauth_flood_full(&s, dst, bssid, 7, 20);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "YOUR network") != NULL);
+}
+
+/* The same flood aimed elsewhere keeps its original severity — the
+ * scoping must raise our case, not lower everyone else's. */
+static void test_deauth_flood_elsewhere_stays_warn(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_bssid("aa:bb:cc:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x02,0x11,0x22,0x33,0x44,0x55};
+    uint8_t other[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_deauth_flood_full(&s, dst, other, 7, 20);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "YOUR network") == NULL);
+}
+
+/* With nothing designated, deauth severity is exactly as before. */
+static void test_deauth_flood_no_designation_stays_warn(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x02,0x11,0x22,0x33,0x44,0x55};
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_deauth_flood_full(&s, dst, bssid, 7, 20);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
 /* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
@@ -2760,6 +2946,19 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_neighbors_do_not_excuse_open_clone);
     RUN_TEST(test_infrastructure_peers_predicate);
     RUN_TEST(test_infrastructure_peers_clamps_neighbor_count);
+
+    TEST_SUITE("alerts: operator-designated networks (#52)");
+    RUN_TEST(test_my_net_recon_fires_for_unassociated_client);
+    RUN_TEST(test_my_net_recon_associated_client_no_fire);
+    RUN_TEST(test_my_net_recon_assoc_by_designated_bssid_no_fire);
+    RUN_TEST(test_my_net_recon_unrelated_assoc_still_fires);
+    RUN_TEST(test_my_net_recon_other_ssid_no_fire);
+    RUN_TEST(test_my_net_recon_no_designation_no_fire);
+    RUN_TEST(test_my_net_recon_matches_any_pnl_slot);
+    RUN_TEST(test_my_net_recon_clamps_ssid_count);
+    RUN_TEST(test_deauth_flood_on_my_bssid_escalates_crit);
+    RUN_TEST(test_deauth_flood_elsewhere_stays_warn);
+    RUN_TEST(test_deauth_flood_no_designation_stays_warn);
     RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);

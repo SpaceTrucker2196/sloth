@@ -4,6 +4,7 @@
 #include "twins.h"
 #include "alerts.h"
 #include "wifi_oui_attacker.h"
+#include "ownership.h"
 
 /* Decide which half of a (a, b) twin pair is the "real" AP:
  *   1. If alerts marked one BSSID tainted, the *other* is real.
@@ -13,6 +14,16 @@
 static void choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
                          const beacon_ap_t **real_out,
                          const beacon_ap_t **twin_out) {
+    /* An operator-designated BSSID is never the impostor (#52). This
+     * outranks the taint tracker and the RSSI heuristic below because
+     * it is asserted, not inferred — and the RSSI rule would otherwise
+     * often get it backwards: the operator's own AP is usually the
+     * *closest* one, which is exactly what rule 2 reads as the rogue. */
+    int a_mine = ownership_is_my_bssid(a->bssid);
+    int b_mine = ownership_is_my_bssid(b->bssid);
+    if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return; }
+    if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return; }
+
     int a_tainted = evil_twin_bssid_is_tainted(a->bssid);
     int b_tainted = evil_twin_bssid_is_tainted(b->bssid);
     if (a_tainted && !b_tainted) { *real_out = b; *twin_out = a; return; }
