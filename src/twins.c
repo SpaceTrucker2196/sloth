@@ -49,6 +49,11 @@ void twins_snapshot(sloth_state_t *s) {
             if (strcmp(a->enc, b->enc) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (memcmp(a->bssid, b->bssid, 3) == 0) continue; /* same OUI */
+            /* Same reasoning as the evil-twin rule (#51): co-operating
+             * infrastructure that happens to be cross-vendor is not a
+             * twin pair. Kept in step with alerts.c so the [x] Twins
+             * view and the alert never disagree about the same pair. */
+            if (ap_infrastructure_peers(a, b)) continue;
             if (already_recorded(s, a->bssid, b->bssid)) continue;
             if (s->twin_episode_count >= MAX_TWIN_EPISODES) return;
 

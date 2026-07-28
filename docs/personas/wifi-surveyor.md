@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28.
+**Last updated**: 2026-07-28 (rescored after #51).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -136,23 +136,30 @@ evil twin. All three beacon `CorpWiFi`, all WPA2-CCMP-PSK.
 
 **Pass**: the extender is identified as infrastructure; only the ESP32
 is flagged.
-**Result: WRONG.** `rule_evil_twin`'s WARN branch fires on *same SSID,
-same cipher, different vendor OUI* — which is precisely a store-bought
-extender behind a different-vendor router. Worse, the Phase-2
-escalation promotes WARN to **CRIT** when the two APs' vendor-IE
-fingerprint hashes differ, and a TP-Link extender's IEs will never
-match an Asus router's. The code comment reasons that "legit
-dual-vendor mesh is rare" — true in enterprise, false in exactly the
-SOHO and residential scenes Ilya surveys. He gets a CRIT rogue-AP
-finding on the client's own hardware, which is the specific mistake
-that costs him the account.
+**Result: PARTIAL** (was `WRONG`; rescored 2026-07-28 after #51).
 
-**What is already in the tree to fix it**: `beacon_ap_t.neighbors[]`
-holds parsed **802.11k Neighbor Reports** (tag 52), and
-`src/views/beacon.c` already answers "is this neighbor a BSSID we've
-also seen directly?" Co-operating infrastructure advertises its
-siblings; an impostor does not know they exist. That is a positive
-infrastructure signal sitting one wire away from the twin logic.
+`ap_infrastructure_peers()` now consults the parsed **802.11k Neighbor
+Reports** in `beacon_ap_t.neighbors[]`: if either AP advertises the
+other, the pair is co-operating infrastructure and neither the alert
+nor the `[x] Twins` view treats it as a twin. Membership is asserted by
+the deployment itself, which beats the OUI heuristic — an impostor
+cannot appear in the real AP's list and cannot make itself listed.
+
+**Residual limitation, and it is the common case at the low end.** The
+suppression needs at least one side to emit tag 52. Modern mesh kit
+(AiMesh, Deco, eero) generally does; a £25 single-box repeater
+generally does not. For those, sloth still has no evidence of a
+relationship and the cross-vendor heuristic still fires — so Ilya can
+still get a CRIT on a client's cheap extender. `PARTIAL`, not `PASS`,
+until a second infrastructure signal exists.
+
+The obvious candidate — "both BSSIDs present since early in the
+session" — is weak under `--hop`, which is his default: an AP's
+`first_seen` is confounded by when the radio first visited its channel,
+so a legitimate extender discovered on hop cycle three looks new.
+`beacon_ap_t` has no `first_seen` field today, so this is not a
+cheap addition either. Left open deliberately rather than shipped as a
+guess.
 
 #### S2.2 Catch an actual Pineapple (L)
 
@@ -266,7 +273,7 @@ home for it.
 | S1.1 AP inventory | Q1 | PASS |
 | S1.2 Client inventory | Q1 | PASS |
 | S1.3 Unattended run | Q1 | PASS (see #50) |
-| S2.1 Repeater vs. rogue | Q2 | **WRONG** |
+| S2.1 Repeater vs. rogue | Q2 | PARTIAL (was WRONG; #51) |
 | S2.2 Pineapple detection | Q2 | PASS |
 | S3.1 Transient vs. resident | Q3 | **FAIL** |
 | S3.2 Recurring transient | Q3 | **FAIL** |
@@ -299,16 +306,17 @@ in-tree material each would build on.
 | # | Gap | Builds on | Notes |
 |---|-----|-----------|-------|
 | G1 | **No "my network" designation** | `pnl_client_t.ssids[]`, deauth/auth/probe flood rules | `--my-ssid` / `--my-bssid` (repeatable). Unlocks S4.1 outright and re-ranks S4.2. Also lets the twin logic never nominate his own AP as the impostor. Smallest change, largest unlock. |
-| G2 | **Repeater/infrastructure classification** | `beacon_ap_t.neighbors[]` (802.11k, already parsed and rendered) | Positively identify co-operating infrastructure and downgrade the evil-twin alert for it. Fixes a `WRONG`, which outranks fixing a `FAIL`. |
+| ~~G2~~ | ~~**Repeater/infrastructure classification**~~ | — | **Landed (#51).** 802.11k mutual/one-way neighbor advertisement now suppresses the twin verdict in both the alert and the view. Residual: APs that emit no Neighbor Reports, which is most budget extenders — see S2.1. |
 | G3 | **Client RSSI history + dwell classification** | `rssi_ring_t` (exists, AP-only) | Attach a ring to client records; classify RESIDENT / VISITOR / TRANSIENT from dwell plus trajectory shape. Unlocks S3.1 and makes S3.2 possible. Largest of the five. |
 | G4 | **Known-device roster** | `device_t`, device-risk scoring | `--known-macs FILE`; an unknown-device signal that means *unfamiliar* rather than *intrinsically odd*. |
 | G5 | **Cross-session client baseline** | `--snapshot-out` (#27), SQLite sink (#42) | Extend the survey diff from APs to clients. Cheapest once #42 lands — it is a query over persisted state, not new capture. |
 
 ### Sequencing note
 
-G1 and G2 are independent and small. G3 is the big one and should not
-block them. G5 should wait for #42's state tables rather than growing a
-second persistence path.
+G2 has landed (#51). G1 is the next small one and is independent of
+everything else. G3 is the big one and should not block G1. G5 should
+wait for #42's state tables rather than growing a second persistence
+path.
 
 None of the five requires transmitting anything, so all five sit inside
 MISSION §2. G1 and G4 add operator-supplied context, which is a new
@@ -322,4 +330,5 @@ preferences) — worth noting as a design decision rather than assuming.
 - [[wifi-sigint]] — the view set this persona lives in.
 - [[mac-randomisation]] — why `[j] Seqnum` is what makes G5 tractable.
 - [[alerts]] — the rule catalogue scored above.
-- [[evil-twin-reproducer]] — scapy harness for re-testing S2.1 after G2.
+- [[evil-twin-reproducer]] — scapy harness for re-running S2.1 on real
+  hardware, including the budget-extender case #51 still misses.

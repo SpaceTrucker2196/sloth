@@ -29,6 +29,21 @@ static void add_beacon(sloth_state_t *s, const char *ssid,
     b->fp.oui[2]  = bssid[2];
 }
 
+/* Make `ap_bssid` advertise `neighbor_bssid` as an 802.11k neighbor. */
+static void add_neighbor(sloth_state_t *s, const uint8_t ap_bssid[6],
+                         const uint8_t neighbor_bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        beacon_ap_t *ap = &s->beacon_aps[i];
+        if (memcmp(ap->bssid, ap_bssid, 6) != 0) continue;
+        if (ap->neighbor_count >= MAX_AP_NEIGHBORS) return;
+        ap_neighbor_t *n = &ap->neighbors[ap->neighbor_count++];
+        memcpy(n->bssid, neighbor_bssid, 6);
+        n->channel  = ap->channel;
+        n->phy_type = 0;
+        return;
+    }
+}
+
 /* ── snapshot: episode materialisation ───────────────────── */
 
 static void test_twins_empty_state_no_episodes(void) {
@@ -226,6 +241,36 @@ static void test_view_twins_key_navigation(void) {
     ASSERT_EQ(s.twin_episode_sel, 0);  /* clamp at 0 */
 }
 
+/* #51: cross-vendor infrastructure produces no episode, so the view and
+ * the alert agree. Without this the [x] Twins view would keep listing a
+ * range extender the alert engine has already exonerated. */
+static void test_twins_infrastructure_peers_no_episode(void) {
+    alerts_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", router,   "WPA2", -70);
+    add_beacon(&s, "CorpWiFi", extender, "WPA2", -45);
+    add_neighbor(&s, router,   extender);
+    add_neighbor(&s, extender, router);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 0);
+}
+
+/* ...and an unrelated cross-vendor pair still produces one. */
+static void test_twins_unrelated_neighbors_still_episode(void) {
+    alerts_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t real[6]      = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t rogue[6]     = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t elsewhere[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_beacon(&s, "CorpWiFi", real,  "WPA2", -70);
+    add_beacon(&s, "CorpWiFi", rogue, "WPA2", -45);
+    add_neighbor(&s, real, elsewhere);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+}
+
 void run_twins_tests(void) {
     TEST_SUITE("twins snapshot");
     RUN_TEST(test_twins_empty_state_no_episodes);
@@ -238,6 +283,8 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_rssi_swing_from_twin_side);
     RUN_TEST(test_twins_taint_overrides_rssi_assignment);
     RUN_TEST(test_twins_snapshot_idempotent);
+    RUN_TEST(test_twins_infrastructure_peers_no_episode);
+    RUN_TEST(test_twins_unrelated_neighbors_still_episode);
 
     TEST_SUITE("twins view");
     RUN_TEST(test_view_twins_empty_does_not_crash);

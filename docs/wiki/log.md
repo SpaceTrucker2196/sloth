@@ -193,3 +193,27 @@ downstream contract. A consumer that reconnects needs to know it will be
 re-synced with a full baseline rather than having to wait out a
 heartbeat, since that determines whether reconnect is a viable re-sync
 strategy at all.
+
+## 2026-07-28 — UX personas + wifi-surveyor suite (and its first fix, #51)
+
+**Source**: a request for a UX test persona simulating a WiFi security
+survey; commit adding `docs/personas/`, and #51 which the suite's own
+scoring turned up.
+
+**Doc updates**: new `docs/personas/` tree — a README defining the
+verdict scheme and `wifi-surveyor.md`, an eleven-scenario suite scored
+against the tree. [[index]] gained a Reference entry pointing at it.
+No wiki page was modified; the suite cites `docs/views/*` and `src/*`
+as sources the same way a wiki page does, but it carries *results*, so
+it is a fixture rather than a concept page.
+
+**Index updates**: [[index]] § Reference.
+
+**Why**: `make test` proves the parsers do what they say; it cannot say
+whether what they say is what the operator needed. The suite is the
+inspection step for that second question, and it earned its keep
+immediately — scoring S2.1 surfaced that the evil-twin rule reports a
+cross-vendor range extender as a CRIT rogue AP, which shipped as #51.
+S2.1 is rescored `WRONG` → `PARTIAL`; the residual case (APs that emit
+no 802.11k Neighbor Reports) is documented in the scenario rather than
+closed.

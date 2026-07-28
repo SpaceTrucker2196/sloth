@@ -951,6 +951,14 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 3) == 0) continue; /* same OUI = same vendor */
+            /* Cross-vendor is not the same as unrelated. A range
+             * extender behind a different-vendor router is same-SSID,
+             * same-cipher, different-OUI *and* has a differing vendor-IE
+             * hash — so without this it lands on the CRIT branch below
+             * and we report a rogue AP on the operator's own hardware
+             * (#51). 802.11k neighbor advertisement is the deployment
+             * asserting membership; trust it over the OUI heuristic. */
+            if (ap_infrastructure_peers(a, b)) continue;
 
             char a_bssid[20], b_bssid[20];
             fmt_bssid(a_bssid, a->bssid);

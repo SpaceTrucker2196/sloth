@@ -518,6 +518,166 @@ static void test_evil_twin_same_cipher_diff_oui_fires_warn(void) {
     ASSERT(strstr(s.alerts[idx].detail, "11:22:33:44:55:66") != NULL);
 }
 
+/* ── Cross-vendor infrastructure is not a twin (#51) ────────
+ *
+ * Scene from docs/personas/wifi-surveyor.md S2.1: a router and a
+ * store-bought range extender from a different vendor, both beaconing
+ * the client's SSID with identical security. Same SSID, same cipher,
+ * different OUI, differing vendor-IE hash — every input the WARN branch
+ * keys on, plus the CRIT escalation. The 802.11k Neighbor Report is
+ * what distinguishes it from an impostor. */
+
+/* Make `ap` advertise `bssid` as an 802.11k neighbor (tag 52). */
+static void add_neighbor(sloth_state_t *s, const uint8_t ap_bssid[6],
+                         const uint8_t neighbor_bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        beacon_ap_t *ap = &s->beacon_aps[i];
+        if (memcmp(ap->bssid, ap_bssid, 6) != 0) continue;
+        if (ap->neighbor_count >= MAX_AP_NEIGHBORS) return;
+        ap_neighbor_t *n = &ap->neighbors[ap->neighbor_count++];
+        memcpy(n->bssid, neighbor_bssid, 6);
+        n->channel  = ap->channel;
+        n->phy_type = 0;
+        return;
+    }
+}
+
+/* Mutual advertisement — the controller-managed case. No alert. */
+static void test_evil_twin_mutual_neighbors_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", router,   "WPA2");
+    add_beacon(&s, "CorpWiFi", extender, "WPA2");
+    /* Differing vendor-IE hashes: without the neighbor check this is
+     * the CRIT escalation path, not merely WARN. */
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xA11CE;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xB0B;
+    add_neighbor(&s, router,   extender);
+    add_neighbor(&s, extender, router);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* One-directional is enough — in mixed deployments only the
+ * controller-managed side may emit tag 52. */
+static void test_evil_twin_one_way_neighbor_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", router,   "WPA2");
+    add_beacon(&s, "CorpWiFi", extender, "WPA2");
+    add_neighbor(&s, router, extender);   /* extender lists nobody */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    /* ...and the same holds with the roles reversed. */
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", router,   "WPA2");
+    add_beacon(&t, "CorpWiFi", extender, "WPA2");
+    add_neighbor(&t, extender, router);
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+}
+
+/* The suppression must be evidence-based, not blanket. An impostor
+ * cannot appear in the real AP's neighbor list, so a cross-vendor pair
+ * with neighbor reports that name *other* BSSIDs still fires — this is
+ * what stops the fix from blinding the detector. */
+static void test_evil_twin_unrelated_neighbors_still_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t elsewhere[6]= {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_beacon(&s, "CorpWiFi", router, "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue,  "WPA2");
+    /* The router advertises a real sibling on another floor; the rogue
+     * is not in that list and names nobody. */
+    add_neighbor(&s, router, elsewhere);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].key, "twin-fp:CorpWiFi") != NULL);
+}
+
+/* No 802.11k at all — the budget-extender case. We have no evidence of
+ * a relationship, so the OUI heuristic still governs and the alert
+ * still fires. Pinned deliberately: this is the documented residual
+ * limitation of #51, not an oversight. */
+static void test_evil_twin_no_neighbor_reports_still_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", a, "WPA2");
+    add_beacon(&s, "CorpWiFi", b, "WPA2");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);
+}
+
+/* A neighbor relationship must not rescue a genuine weak/strong twin.
+ * An OPEN clone of a WPA2 SSID is a real finding even between APs that
+ * know each other — that is a misconfigured or compromised extender,
+ * not a benign one. The CRIT branch is deliberately left unguarded. */
+static void test_evil_twin_neighbors_do_not_excuse_open_clone(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t open_ap[6]= {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", open_ap, "OPEN");
+    add_beacon(&s, "CorpWiFi", strong,  "WPA2");
+    add_neighbor(&s, strong,  open_ap);
+    add_neighbor(&s, open_ap, strong);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+/* ── the predicate itself ───────────────────────────────── */
+
+static void test_infrastructure_peers_predicate(void) {
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "N", a, "WPA2");
+    add_beacon(&s, "N", b, "WPA2");
+    const beacon_ap_t *pa = &s.beacon_aps[0];
+    const beacon_ap_t *pb = &s.beacon_aps[1];
+
+    ASSERT_EQ(ap_infrastructure_peers(pa, pb), 0);   /* no reports yet */
+    ASSERT_EQ(ap_advertises_neighbor(pa, b), 0);
+
+    add_neighbor(&s, a, b);
+    ASSERT_EQ(ap_advertises_neighbor(pa, b), 1);
+    ASSERT_EQ(ap_advertises_neighbor(pb, a), 0);     /* not symmetric */
+    ASSERT_EQ(ap_infrastructure_peers(pa, pb), 1);   /* ...but this is */
+    ASSERT_EQ(ap_infrastructure_peers(pb, pa), 1);
+
+    /* An AP paired with itself is not a relationship. */
+    ASSERT_EQ(ap_infrastructure_peers(pa, pa), 0);
+    /* NULL is safe. */
+    ASSERT_EQ(ap_infrastructure_peers(NULL, pb), 0);
+    ASSERT_EQ(ap_infrastructure_peers(pa, NULL), 0);
+    ASSERT_EQ(ap_advertises_neighbor(NULL, b), 0);
+    ASSERT_EQ(ap_advertises_neighbor(pa, NULL), 0);
+}
+
+/* A truncated / over-large neighbor_count must not walk off the array. */
+static void test_infrastructure_peers_clamps_neighbor_count(void) {
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "N", a, "WPA2");
+    add_beacon(&s, "N", b, "WPA2");
+    s.beacon_aps[0].neighbor_count = MAX_AP_NEIGHBORS + 99;
+    ASSERT_EQ(ap_advertises_neighbor(&s.beacon_aps[0], b), 0);
+}
+
 /* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
  * deployment from one vendor. Must not fire. */
 static void test_evil_twin_same_cipher_same_oui_no_fire(void) {
@@ -2593,6 +2753,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_detail_contains_bssids_and_ssid);
     RUN_TEST(test_evil_twin_same_cipher_diff_oui_fires_warn);
     RUN_TEST(test_evil_twin_same_cipher_same_oui_no_fire);
+    RUN_TEST(test_evil_twin_mutual_neighbors_no_fire);
+    RUN_TEST(test_evil_twin_one_way_neighbor_no_fire);
+    RUN_TEST(test_evil_twin_unrelated_neighbors_still_fires);
+    RUN_TEST(test_evil_twin_no_neighbor_reports_still_fires);
+    RUN_TEST(test_evil_twin_neighbors_do_not_excuse_open_clone);
+    RUN_TEST(test_infrastructure_peers_predicate);
+    RUN_TEST(test_infrastructure_peers_clamps_neighbor_count);
     RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);

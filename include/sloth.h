@@ -928,6 +928,26 @@ typedef struct {
     uint16_t fuzz_truncated_rsn;
 } beacon_ap_t;
 
+/* True when `ap` names `bssid` in its 802.11k Neighbor Report list. */
+int ap_advertises_neighbor(const beacon_ap_t *ap, const uint8_t bssid[6]);
+
+/* True when two APs are co-operating infrastructure rather than
+ * strangers sharing an SSID: either advertises the other as an 802.11k
+ * neighbor (tag 52).
+ *
+ * Neighbor Reports are how an AP tells clients where else to roam, so
+ * membership is asserted by the deployment itself. An impostor spoofing
+ * an SSID does not appear in the real AP's list and cannot make the
+ * real AP appear in its own — it would have to guess a BSSID that its
+ * target already advertises. One-directional is enough: in mixed
+ * deployments only the controller-managed side may emit tag 52.
+ *
+ * Used to keep same-SSID rules from calling a range extender a rogue
+ * AP (#51). Note the converse does not hold — plenty of legitimate
+ * consumer gear emits no Neighbor Reports at all, so a 0 here means
+ * "no evidence of a relationship", never "proven unrelated". */
+int ap_infrastructure_peers(const beacon_ap_t *a, const beacon_ap_t *b);
+
 /* ── Evil-twin episodes (Phase 5 — materialised view) ──── */
 #define MAX_TWIN_EPISODES 64
 

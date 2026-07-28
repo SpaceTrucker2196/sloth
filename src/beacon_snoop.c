@@ -728,3 +728,28 @@ void beacon_clear(void)
     g_new_bssid_head = 0;
     pthread_mutex_unlock(&g_mu);
 }
+
+/* ── 802.11k topology predicates (#51) ──────────────────────
+ * Live here because this file is what parses tag 52 into
+ * beacon_ap_t.neighbors[]; the consumers (the evil-twin rule, the
+ * twins view) sit above beacon data and would otherwise need a
+ * module cycle to share this. Contract in sloth.h. */
+
+int ap_advertises_neighbor(const beacon_ap_t *ap, const uint8_t bssid[6])
+{
+    if (!ap || !bssid) return 0;
+    int n = ap->neighbor_count;
+    if (n > MAX_AP_NEIGHBORS) n = MAX_AP_NEIGHBORS;
+    for (int i = 0; i < n; i++)
+        if (memcmp(ap->neighbors[i].bssid, bssid, 6) == 0) return 1;
+    return 0;
+}
+
+int ap_infrastructure_peers(const beacon_ap_t *a, const beacon_ap_t *b)
+{
+    if (!a || !b) return 0;
+    /* An AP listing itself is a parse artefact, not a relationship. */
+    if (memcmp(a->bssid, b->bssid, 6) == 0) return 0;
+    return ap_advertises_neighbor(a, b->bssid) ||
+           ap_advertises_neighbor(b, a->bssid);
+}
