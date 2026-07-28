@@ -7,6 +7,7 @@ PREFIX  ?= /usr/local
 WITH_NCURSES ?= 1
 WITH_PCAP    ?= 1
 WITH_WIFI    ?= 1
+WITH_SQLITE  ?= 1
 
 SRCS = src/main.c          \
        src/view_route.c    \
@@ -14,6 +15,7 @@ SRCS = src/main.c          \
        src/tui.c           \
        src/tui_palette.c   \
        src/ownership.c     \
+       src/db_schema.c     \
        src/history.c       \
        src/bandwidth.c     \
        src/dns.c           \
@@ -168,6 +170,13 @@ ifeq ($(WITH_PCAP),1)
     SRCS    += src/capture/probe.c
 endif
 
+# Embedded SQLite sink (#42). Disable with: make WITH_SQLITE=0
+ifeq ($(WITH_SQLITE),1)
+    CFLAGS  += -DWITH_SQLITE
+    LDFLAGS += -lsqlite3
+    SRCS    += src/db.c
+endif
+
 SRCS += src/pcap_write.c
 SRCS += src/geo.c
 SRCS += src/scan.c
@@ -189,15 +198,15 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -Iinclude -Isrc -c -o $@ $<
 
-# Minimal build for embedded targets (no ncurses, no pcap)
+# Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
-	$(MAKE) WITH_NCURSES=0 WITH_PCAP=0
+	$(MAKE) WITH_NCURSES=0 WITH_PCAP=0 WITH_SQLITE=0
 
 # ── Test build ───────────────────────────────────────────────────────────────
 # Compiled without ncurses/pcap — TPRINT falls back to printf, no terminal needed.
 # PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only platform
 # sources become empty translation units (their tests use the fake platform).
-TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI
+TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI -DWITH_SQLITE
 ifeq ($(UNAME),Linux)
     TEST_CFLAGS += -DPLATFORM_LINUX
 endif
@@ -262,6 +271,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_tui_palette.c   \
             src/ownership.c            \
             tests/test_ownership.c     \
+            src/db_schema.c            \
+            src/db.c                   \
+            tests/test_db.c            \
             tests/test_iface_graph.c   \
             tests/test_geo.c           \
             src/geo.c                  \
@@ -434,7 +446,7 @@ test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 $(TEST_BIN): $(TEST_SRCS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm -lpthread
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm -lpthread -lsqlite3
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,

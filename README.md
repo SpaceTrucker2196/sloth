@@ -102,6 +102,22 @@ for in normal vs anomalous traffic.
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark.
 
+### Persistent state (`--db`)
+
+- **`sloth --db FILE`** — persist entity state to a SQLite database (off by default). `-o` and `--data-socket` are unchanged and remain the wire format; this is the **retained artifact**.
+
+  A `-o` run writes ~38 GB/day because snapshot rows re-serialise every poll. The same information as durable state is megabytes, because sloth's cardinality is bounded by construction — every entity table in `include/sloth.h` is a fixed array, so rows are upserted per entity with `first_seen` / `last_seen` rather than appended per tick. That pair is what makes the file a history: *"who was here between 2 and 4 AM"* becomes a range scan instead of a log grep.
+
+  Read it with the `sqlite3` CLI. sloth exposes **no query surface** — the database is never served over the data socket and gets no RPC ([MISSION.md §4](MISSION.md)). Build without it via `make WITH_SQLITE=0`; `make embedded` already excludes it.
+
+  ```sh
+  sudo ./sloth --hop --db /var/lib/sloth/sloth.db
+  sqlite3 /var/lib/sloth/sloth.db \
+    "SELECT mac, ssid FROM pnl_ssids WHERE ssid='CorpWiFi';"
+  ```
+
+  `--db-interval-secs N` sets the write cadence (default 1). Schema-level guardrails from [MISSION.md §2](MISSION.md) are enforced by the test suite: no password column on credential exposures, no PMKID / nonce / MIC columns anywhere — crackable material stays in the `--eapol-dir` file the operator explicitly asked for.
+
 ### Designating your own network
 
 - **`sloth --my-ssid SSID`** / **`sloth --my-bssid BSSID`** (both repeatable, max 16 each) — tell sloth which networks are *yours*. This is a labelling input only: nothing about capture changes and nothing is transmitted, so the passive guarantee in [MISSION.md §2](MISSION.md) is untouched.

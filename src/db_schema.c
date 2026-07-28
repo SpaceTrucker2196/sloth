@@ -1,0 +1,258 @@
+/* Schema v1 for the embedded SQLite sink (#42).
+ *
+ * Kept in its own translation unit, and compiled unconditionally, so
+ * the MISSION §2 guardrail tests can assert on the DDL text without
+ * linking SQLite. Those tests are the enforcement mechanism for the
+ * rules in the comments below — a future column addition that violates
+ * one turns the suite red rather than relying on a reviewer noticing.
+ *
+ * Shape follows the maintainer classification in #42: every high-volume
+ * snapshot type collapses to an **entity** table keyed by its natural
+ * identity with first_seen / last_seen, so the row count is bounded by
+ * the fixed arrays in sloth.h rather than by uptime. Event tables
+ * (append-only, SIEM-relevant) and the telemetry types that are dropped
+ * entirely are not part of this commit — see db.h.
+ *
+ * Every table carries first_seen / last_seen. That pair is what turns a
+ * snapshot stream into a queryable history: "who was here between 2 and
+ * 4 AM" is a range scan, not a log grep. */
+
+#include "db.h"
+
+static const char SCHEMA_SQL[] =
+    /* ── meta ────────────────────────────────────────────── */
+    "CREATE TABLE IF NOT EXISTS meta ("
+    "  key   TEXT PRIMARY KEY,"
+    "  value TEXT NOT NULL"
+    ");\n"
+
+    /* ── devices — synthesised profiles keyed by MAC ──────── */
+    "CREATE TABLE IF NOT EXISTS devices ("
+    "  mac           TEXT PRIMARY KEY,"
+    "  ip            TEXT,"
+    "  hostname      TEXT,"
+    "  vendor        TEXT,"
+    "  last_ssid     TEXT,"
+    "  is_ap         INTEGER NOT NULL DEFAULT 0,"
+    "  signal_dbm    INTEGER,"
+    "  probe_count   INTEGER NOT NULL DEFAULT 0,"
+    "  sources       INTEGER NOT NULL DEFAULT 0,"
+    "  risk_signals  INTEGER NOT NULL DEFAULT 0,"
+    "  risk_level    INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen    INTEGER NOT NULL,"
+    "  last_seen     INTEGER NOT NULL"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);\n"
+
+    /* ── PNL — the 15%-of-volume type, as <=2048 rows ─────── *
+     * Split client/SSID so the SSID set is queryable: "which devices
+     * remember network X" is the deanonymisation question, and it is a
+     * join here rather than a scan of repeated JSON arrays. */
+    "CREATE TABLE IF NOT EXISTS pnl_clients ("
+    "  mac         TEXT PRIMARY KEY,"
+    "  mac_random  INTEGER NOT NULL DEFAULT 0,"
+    "  probe_count INTEGER NOT NULL DEFAULT 0,"
+    "  os_fp       TEXT,"
+    "  phy         TEXT,"
+    "  first_seen  INTEGER NOT NULL,"
+    "  last_seen   INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS pnl_ssids ("
+    "  mac        TEXT NOT NULL,"
+    "  ssid       TEXT NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (mac, ssid)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_pnl_ssids_ssid ON pnl_ssids(ssid);\n"
+
+    /* ── probe clients — unassociated 802.11 devices ──────── */
+    "CREATE TABLE IF NOT EXISTS probe_clients ("
+    "  mac         TEXT PRIMARY KEY,"
+    "  ssid        TEXT,"
+    "  signal_dbm  INTEGER,"
+    "  channel     INTEGER,"
+    "  frame_count INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen  INTEGER NOT NULL,"
+    "  last_seen   INTEGER NOT NULL"
+    ");\n"
+
+    /* ── APs ──────────────────────────────────────────────── *
+     * beacon_aps is the passive monitor-mode inventory; wifi_aps is
+     * the nl80211 scan list. Kept apart because they are different
+     * observations with different trust: one is what we heard on the
+     * air, the other is what the kernel reports. */
+    "CREATE TABLE IF NOT EXISTS beacon_aps ("
+    "  bssid       TEXT PRIMARY KEY,"
+    "  ssid        TEXT,"
+    "  signal_dbm  INTEGER,"
+    "  channel     INTEGER,"
+    "  enc         TEXT,"
+    "  beacon_ms   INTEGER,"
+    "  pairwise    TEXT,"
+    "  group_ciph  TEXT,"
+    "  akm         TEXT,"
+    "  mfp         INTEGER,"
+    "  vendor      TEXT,"
+    "  has_wps     INTEGER NOT NULL DEFAULT 0,"
+    "  wps_state   INTEGER,"
+    "  wps_locked  INTEGER,"
+    "  phy         TEXT,"
+    "  revealed    INTEGER NOT NULL DEFAULT 0,"
+    "  frame_count INTEGER NOT NULL DEFAULT 0,"
+    "  has_qbss    INTEGER NOT NULL DEFAULT 0,"
+    "  qbss_stations  INTEGER,"
+    "  qbss_chan_util INTEGER,"
+    "  first_seen  INTEGER NOT NULL,"
+    "  last_seen   INTEGER NOT NULL"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_beacon_aps_ssid ON beacon_aps(ssid);\n"
+    /* Distinct SSIDs per BSSID — the KARMA/PineAP signal, and the
+     * multi-VAP topology record. */
+    "CREATE TABLE IF NOT EXISTS beacon_ap_ssids ("
+    "  bssid      TEXT NOT NULL,"
+    "  ssid       TEXT NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (bssid, ssid)"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS wifi_aps ("
+    "  bssid      TEXT PRIMARY KEY,"
+    "  ssid       TEXT,"
+    "  signal_dbm INTEGER,"
+    "  channel    INTEGER,"
+    "  enc        TEXT,"
+    "  status     INTEGER,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+
+    /* ── stations and associations ───────────────────────── */
+    "CREATE TABLE IF NOT EXISTS wifi_stas ("
+    "  mac            TEXT PRIMARY KEY,"
+    "  signal_dbm     INTEGER,"
+    "  tx_rate_kbps   INTEGER,"
+    "  rx_rate_kbps   INTEGER,"
+    "  connected_secs INTEGER,"
+    "  inactive_ms    INTEGER,"
+    "  tx_bytes       INTEGER,"
+    "  rx_bytes       INTEGER,"
+    "  first_seen     INTEGER NOT NULL,"
+    "  last_seen      INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS assocs ("
+    "  bssid       TEXT NOT NULL,"
+    "  sta_mac     TEXT NOT NULL,"
+    "  ssid        TEXT,"
+    "  sta_random  INTEGER NOT NULL DEFAULT 0,"
+    "  source      INTEGER NOT NULL DEFAULT 0,"
+    "  channel     INTEGER,"
+    "  signal_dbm  INTEGER,"
+    "  frame_count INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen  INTEGER NOT NULL,"
+    "  last_seen   INTEGER NOT NULL,"
+    "  PRIMARY KEY (bssid, sta_mac)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_assocs_sta ON assocs(sta_mac);\n"
+
+    /* ── multi-radio merge (#21) ──────────────────────────── */
+    "CREATE TABLE IF NOT EXISTS wifi_merged ("
+    "  entity       TEXT PRIMARY KEY,"
+    "  sensor_mask  INTEGER NOT NULL DEFAULT 0,"
+    "  seen_by      INTEGER NOT NULL DEFAULT 0,"
+    "  best_rssi    INTEGER,"
+    "  best_sensor  INTEGER,"
+    "  channel      INTEGER,"
+    "  freq_mhz     INTEGER,"
+    "  observations INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL"
+    ");\n"
+
+    /* ── IP-layer entities ───────────────────────────────── */
+    "CREATE TABLE IF NOT EXISTS arp ("
+    "  ip         TEXT NOT NULL,"
+    "  mac        TEXT NOT NULL,"
+    "  iface      TEXT,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (ip, mac)"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS dhcp_leases ("
+    "  ip         TEXT PRIMARY KEY,"
+    "  hostname   TEXT,"
+    "  expire     INTEGER,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS top_hosts ("
+    "  ip         TEXT PRIMARY KEY,"
+    "  hostname   TEXT,"
+    "  owner      TEXT,"
+    "  conn_count INTEGER NOT NULL DEFAULT 0,"
+    "  rx_bytes   INTEGER NOT NULL DEFAULT 0,"
+    "  tx_bytes   INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+
+    /* ── service discovery ───────────────────────────────── */
+    "CREATE TABLE IF NOT EXISTS mdns_services ("
+    "  instance   TEXT PRIMARY KEY,"
+    "  service    TEXT,"
+    "  host       TEXT,"
+    "  ip         TEXT,"
+    "  port       INTEGER,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS nbns_names ("
+    "  name       TEXT NOT NULL,"
+    "  suffix     INTEGER NOT NULL,"
+    "  ip         TEXT,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (name, suffix)"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS ssdp_devices ("
+    "  usn        TEXT PRIMARY KEY,"
+    "  ip         TEXT,"
+    "  type       TEXT,"
+    "  location   TEXT,"
+    "  nts        TEXT,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+
+    /* ── IPv6 router advertisements ──────────────────────── */
+    "CREATE TABLE IF NOT EXISTS ndp_ras ("
+    "  src_ip          TEXT PRIMARY KEY,"
+    "  src_mac         TEXT,"
+    "  cur_hop_limit   INTEGER,"
+    "  flags           INTEGER,"
+    "  router_lifetime INTEGER,"
+    "  ra_count        INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen      INTEGER NOT NULL,"
+    "  last_seen       INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS ndp_ra_prefixes ("
+    "  src_ip     TEXT NOT NULL,"
+    "  prefix     TEXT NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (src_ip, prefix)"
+    ");\n"
+
+    /* ── passive sensor registry (#28) ───────────────────── */
+    "CREATE TABLE IF NOT EXISTS sensors ("
+    "  kind       INTEGER NOT NULL,"
+    "  iface      TEXT NOT NULL,"
+    "  name       TEXT,"
+    "  state      INTEGER NOT NULL DEFAULT 0,"
+    "  observed   INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (kind, iface)"
+    ");\n";
+
+const char *db_schema_sql(void) { return SCHEMA_SQL; }

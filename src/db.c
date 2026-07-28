@@ -1,0 +1,725 @@
+/* Embedded SQLite sink. Contract in db.h, schema in db_schema.c (#42). */
+
+#include "db.h"
+
+#ifdef WITH_SQLITE
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sqlite3.h>
+
+#include "ownership.h"
+
+#define DB_DEFAULT_INTERVAL_S 1
+
+static sqlite3 *g_db;
+static int      g_disabled;      /* set once on error — fail-open */
+static int      g_interval  = DB_DEFAULT_INTERVAL_S;
+static time_t   g_last_tick;
+
+/* Report the first error and stop writing. A database problem must
+ * never take a capture down with it: the operator loses persistence,
+ * not visibility. Subsequent failures are silent — one line in the
+ * journal, not one per poll. */
+static void db_fail(const char *what) {
+    if (!g_disabled) {
+        fprintf(stderr, "sloth: db %s failed: %s — persistence disabled\n",
+                what, g_db ? sqlite3_errmsg(g_db) : "?");
+        g_disabled = 1;
+    }
+}
+
+/* ── prepared statements ─────────────────────────────────── */
+
+enum {
+    ST_DEVICE, ST_PNL_CLIENT, ST_PNL_SSID, ST_PROBE_CLIENT,
+    ST_BEACON_AP, ST_BEACON_SSID, ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
+    ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
+    ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
+    ST_COUNT
+};
+
+static sqlite3_stmt *g_st[ST_COUNT];
+
+/* Upsert shape shared by every entity table.
+ *
+ * first_seen uses excluded-vs-existing MIN so a re-observation never
+ * moves the start of the entity's history, and last_seen uses MAX so
+ * an out-of-order tick cannot rewind it. Both matter because the whole
+ * point of the sink is that the time range is trustworthy. */
+static const char *const SQL[ST_COUNT] = {
+[ST_DEVICE] =
+    "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,"
+    "probe_count,sources,risk_signals,risk_level,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  ip=excluded.ip, hostname=excluded.hostname, vendor=excluded.vendor,"
+    "  last_ssid=excluded.last_ssid, is_ap=excluded.is_ap,"
+    "  signal_dbm=excluded.signal_dbm, probe_count=excluded.probe_count,"
+    "  sources=excluded.sources, risk_signals=excluded.risk_signals,"
+    "  risk_level=excluded.risk_level,"
+    "  first_seen=MIN(devices.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(devices.last_seen,excluded.last_seen)",
+[ST_PNL_CLIENT] =
+    "INSERT INTO pnl_clients (mac,mac_random,probe_count,os_fp,phy,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  mac_random=excluded.mac_random, probe_count=excluded.probe_count,"
+    "  os_fp=excluded.os_fp, phy=excluded.phy,"
+    "  first_seen=MIN(pnl_clients.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(pnl_clients.last_seen,excluded.last_seen)",
+[ST_PNL_SSID] =
+    "INSERT INTO pnl_ssids (mac,ssid,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4)"
+    " ON CONFLICT(mac,ssid) DO UPDATE SET"
+    "  first_seen=MIN(pnl_ssids.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(pnl_ssids.last_seen,excluded.last_seen)",
+[ST_PROBE_CLIENT] =
+    "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,frame_count,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
+    "  channel=excluded.channel, frame_count=excluded.frame_count,"
+    "  first_seen=MIN(probe_clients.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(probe_clients.last_seen,excluded.last_seen)",
+[ST_BEACON_AP] =
+    "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,beacon_ms,"
+    "pairwise,group_ciph,akm,mfp,vendor,has_wps,wps_state,wps_locked,phy,"
+    "revealed,frame_count,has_qbss,qbss_stations,qbss_chan_util,"
+    "first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,"
+    "?18,?19,?20,?21,?22)"
+    " ON CONFLICT(bssid) DO UPDATE SET"
+    "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
+    "  channel=excluded.channel, enc=excluded.enc,"
+    "  beacon_ms=excluded.beacon_ms, pairwise=excluded.pairwise,"
+    "  group_ciph=excluded.group_ciph, akm=excluded.akm, mfp=excluded.mfp,"
+    "  vendor=excluded.vendor, has_wps=excluded.has_wps,"
+    "  wps_state=excluded.wps_state, wps_locked=excluded.wps_locked,"
+    "  phy=excluded.phy, revealed=excluded.revealed,"
+    "  frame_count=excluded.frame_count, has_qbss=excluded.has_qbss,"
+    "  qbss_stations=excluded.qbss_stations,"
+    "  qbss_chan_util=excluded.qbss_chan_util,"
+    "  first_seen=MIN(beacon_aps.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(beacon_aps.last_seen,excluded.last_seen)",
+[ST_BEACON_SSID] =
+    "INSERT INTO beacon_ap_ssids (bssid,ssid,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4)"
+    " ON CONFLICT(bssid,ssid) DO UPDATE SET"
+    "  first_seen=MIN(beacon_ap_ssids.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(beacon_ap_ssids.last_seen,excluded.last_seen)",
+[ST_WIFI_AP] =
+    "INSERT INTO wifi_aps (bssid,ssid,signal_dbm,channel,enc,status,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
+    " ON CONFLICT(bssid) DO UPDATE SET"
+    "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
+    "  channel=excluded.channel, enc=excluded.enc, status=excluded.status,"
+    "  first_seen=MIN(wifi_aps.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(wifi_aps.last_seen,excluded.last_seen)",
+[ST_WIFI_STA] =
+    "INSERT INTO wifi_stas (mac,signal_dbm,tx_rate_kbps,rx_rate_kbps,"
+    "connected_secs,inactive_ms,tx_bytes,rx_bytes,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(mac) DO UPDATE SET"
+    "  signal_dbm=excluded.signal_dbm, tx_rate_kbps=excluded.tx_rate_kbps,"
+    "  rx_rate_kbps=excluded.rx_rate_kbps,"
+    "  connected_secs=excluded.connected_secs,"
+    "  inactive_ms=excluded.inactive_ms, tx_bytes=excluded.tx_bytes,"
+    "  rx_bytes=excluded.rx_bytes,"
+    "  first_seen=MIN(wifi_stas.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(wifi_stas.last_seen,excluded.last_seen)",
+[ST_ASSOC] =
+    "INSERT INTO assocs (bssid,sta_mac,ssid,sta_random,source,channel,"
+    "signal_dbm,frame_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(bssid,sta_mac) DO UPDATE SET"
+    "  ssid=excluded.ssid, sta_random=excluded.sta_random,"
+    /* Evidence grade only ever strengthens: a later weaker observation
+     * must not downgrade a confirmed EAPOL association.
+     *
+     * ASSOC_SRC_* is ordered strongest-FIRST (EAPOL=1, ASSOC=2,
+     * REASSOC=3), so "stronger" is the *smaller* value — but 0 is
+     * UNKNOWN, i.e. no evidence at all, and must never win. Hence the
+     * non-zero guards rather than a bare MIN(). */
+    "  source=CASE"
+    "    WHEN excluded.source=0 THEN assocs.source"
+    "    WHEN assocs.source=0   THEN excluded.source"
+    "    ELSE MIN(assocs.source,excluded.source) END,"
+    "  channel=excluded.channel, signal_dbm=excluded.signal_dbm,"
+    "  frame_count=excluded.frame_count,"
+    "  first_seen=MIN(assocs.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(assocs.last_seen,excluded.last_seen)",
+[ST_WIFI_MERGED] =
+    "INSERT INTO wifi_merged (entity,sensor_mask,seen_by,best_rssi,"
+    "best_sensor,channel,freq_mhz,observations,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(entity) DO UPDATE SET"
+    /* Coverage only accumulates — a radio that heard this entity once
+     * still heard it, even if it is tuned elsewhere now. */
+    "  sensor_mask=(wifi_merged.sensor_mask | excluded.sensor_mask),"
+    "  seen_by=MAX(wifi_merged.seen_by,excluded.seen_by),"
+    "  best_rssi=MAX(wifi_merged.best_rssi,excluded.best_rssi),"
+    "  best_sensor=excluded.best_sensor, channel=excluded.channel,"
+    "  freq_mhz=excluded.freq_mhz, observations=excluded.observations,"
+    "  first_seen=MIN(wifi_merged.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(wifi_merged.last_seen,excluded.last_seen)",
+[ST_ARP] =
+    "INSERT INTO arp (ip,mac,iface,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5)"
+    " ON CONFLICT(ip,mac) DO UPDATE SET iface=excluded.iface,"
+    "  first_seen=MIN(arp.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(arp.last_seen,excluded.last_seen)",
+[ST_DHCP_LEASE] =
+    "INSERT INTO dhcp_leases (ip,hostname,expire,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5)"
+    " ON CONFLICT(ip) DO UPDATE SET hostname=excluded.hostname,"
+    "  expire=excluded.expire,"
+    "  first_seen=MIN(dhcp_leases.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(dhcp_leases.last_seen,excluded.last_seen)",
+[ST_TOP_HOST] =
+    "INSERT INTO top_hosts (ip,hostname,owner,conn_count,rx_bytes,tx_bytes,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
+    " ON CONFLICT(ip) DO UPDATE SET hostname=excluded.hostname,"
+    "  owner=excluded.owner, conn_count=excluded.conn_count,"
+    /* Byte counters are cumulative-since-first_seen in state and reset
+     * when a host ages out of the ring, so keep the high-water mark
+     * rather than letting a fresh entry zero the history. */
+    "  rx_bytes=MAX(top_hosts.rx_bytes,excluded.rx_bytes),"
+    "  tx_bytes=MAX(top_hosts.tx_bytes,excluded.tx_bytes),"
+    "  first_seen=MIN(top_hosts.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(top_hosts.last_seen,excluded.last_seen)",
+[ST_MDNS] =
+    "INSERT INTO mdns_services (instance,service,host,ip,port,first_seen,"
+    "last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(instance) DO UPDATE SET service=excluded.service,"
+    "  host=excluded.host, ip=excluded.ip, port=excluded.port,"
+    "  first_seen=MIN(mdns_services.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(mdns_services.last_seen,excluded.last_seen)",
+[ST_NBNS] =
+    "INSERT INTO nbns_names (name,suffix,ip,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5)"
+    " ON CONFLICT(name,suffix) DO UPDATE SET ip=excluded.ip,"
+    "  first_seen=MIN(nbns_names.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(nbns_names.last_seen,excluded.last_seen)",
+[ST_SSDP] =
+    "INSERT INTO ssdp_devices (usn,ip,type,location,nts,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(usn) DO UPDATE SET ip=excluded.ip, type=excluded.type,"
+    "  location=excluded.location, nts=excluded.nts,"
+    "  first_seen=MIN(ssdp_devices.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ssdp_devices.last_seen,excluded.last_seen)",
+[ST_NDP_RA] =
+    "INSERT INTO ndp_ras (src_ip,src_mac,cur_hop_limit,flags,"
+    "router_lifetime,ra_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
+    " ON CONFLICT(src_ip) DO UPDATE SET src_mac=excluded.src_mac,"
+    "  cur_hop_limit=excluded.cur_hop_limit, flags=excluded.flags,"
+    "  router_lifetime=excluded.router_lifetime,"
+    "  ra_count=excluded.ra_count,"
+    "  first_seen=MIN(ndp_ras.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ndp_ras.last_seen,excluded.last_seen)",
+[ST_NDP_PREFIX] =
+    "INSERT INTO ndp_ra_prefixes (src_ip,prefix,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4)"
+    " ON CONFLICT(src_ip,prefix) DO UPDATE SET"
+    "  first_seen=MIN(ndp_ra_prefixes.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ndp_ra_prefixes.last_seen,excluded.last_seen)",
+[ST_SENSOR] =
+    "INSERT INTO sensors (kind,iface,name,state,observed,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(kind,iface) DO UPDATE SET name=excluded.name,"
+    "  state=excluded.state, observed=excluded.observed,"
+    "  first_seen=MIN(sensors.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(sensors.last_seen,excluded.last_seen)",
+};
+
+/* ── helpers ─────────────────────────────────────────────── */
+
+static void mac_str(const uint8_t mac[6], char out[18]) {
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+/* Bind a C string; SQLITE_TRANSIENT because the source is a stack
+ * buffer or a state field that may be overwritten before step(). */
+static void bind_txt(sqlite3_stmt *st, int i, const char *s) {
+    sqlite3_bind_text(st, i, s ? s : "", -1, SQLITE_TRANSIENT);
+}
+
+/* Run one prepared upsert and reset it for the next row. Any error
+ * disables the sink; the caller keeps going either way. */
+static void step_reset(int which) {
+    sqlite3_stmt *st = g_st[which];
+    if (!st) return;
+    if (sqlite3_step(st) != SQLITE_DONE) db_fail("write");
+    sqlite3_reset(st);
+    sqlite3_clear_bindings(st);
+}
+
+static int exec(const char *sql, const char *what) {
+    char *err = NULL;
+    if (sqlite3_exec(g_db, sql, NULL, NULL, &err) != SQLITE_OK) {
+        fprintf(stderr, "sloth: db %s failed: %s\n", what,
+                err ? err : sqlite3_errmsg(g_db));
+        sqlite3_free(err);
+        return 0;
+    }
+    return 1;
+}
+
+/* ── schema version ──────────────────────────────────────── */
+
+/* Refuse a file written by a newer sloth rather than silently writing
+ * rows the other version's readers will misinterpret. An older file is
+ * also refused for now: there is exactly one schema version, so a
+ * mismatch can only mean a hand-edited or corrupt file. */
+static int check_version(void) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT value FROM meta WHERE key='schema_version'", -1,
+            &st, NULL) != SQLITE_OK) {
+        fprintf(stderr, "sloth: db version query failed: %s\n",
+                sqlite3_errmsg(g_db));
+        return 0;
+    }
+    int found = 0, ok = 1;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *v = sqlite3_column_text(st, 0);
+        found = 1;
+        int have = v ? atoi((const char *)v) : -1;
+        if (have != DB_SCHEMA_VERSION) {
+            fprintf(stderr,
+                    "sloth: db schema v%d, this build writes v%d — "
+                    "use a separate file\n", have, DB_SCHEMA_VERSION);
+            ok = 0;
+        }
+    }
+    sqlite3_finalize(st);
+    if (!ok) return 0;
+    if (!found) {
+        char sql[128];
+        snprintf(sql, sizeof(sql),
+                 "INSERT INTO meta (key,value) VALUES "
+                 "('schema_version','%d')", DB_SCHEMA_VERSION);
+        if (!exec(sql, "version stamp")) return 0;
+    }
+    return 1;
+}
+
+/* ── open / close ────────────────────────────────────────── */
+
+int db_open(const char *path) {
+    if (!path || !path[0]) return 0;
+    if (sqlite3_open(path, &g_db) != SQLITE_OK) {
+        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
+                g_db ? sqlite3_errmsg(g_db) : "?");
+        sqlite3_close(g_db);
+        g_db = NULL;
+        return 0;
+    }
+    /* WAL so a reader (the operator's sqlite3 CLI) never blocks the
+     * writer mid-capture. synchronous=NORMAL fsyncs at checkpoint
+     * rather than per commit — at 1 Hz on an SD card the difference is
+     * the card's lifetime, and the exposure is the last few seconds of
+     * telemetry on a power cut, which is an acceptable trade for a
+     * passive sensor. */
+    if (!exec("PRAGMA journal_mode=WAL", "WAL")            ||
+        !exec("PRAGMA synchronous=NORMAL", "synchronous")  ||
+        !exec("PRAGMA foreign_keys=ON", "foreign_keys")    ||
+        !exec(db_schema_sql(), "schema")                   ||
+        !check_version()) {
+        sqlite3_close(g_db);
+        g_db = NULL;
+        return 0;
+    }
+    for (int i = 0; i < ST_COUNT; i++) {
+        if (!SQL[i]) continue;
+        if (sqlite3_prepare_v2(g_db, SQL[i], -1, &g_st[i], NULL) != SQLITE_OK) {
+            fprintf(stderr, "sloth: db prepare %d failed: %s\n", i,
+                    sqlite3_errmsg(g_db));
+            db_close();
+            return 0;
+        }
+    }
+    g_disabled  = 0;
+    g_last_tick = 0;
+    return 1;
+}
+
+void db_close(void) {
+    for (int i = 0; i < ST_COUNT; i++) {
+        if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
+    }
+    if (g_db) { sqlite3_close(g_db); g_db = NULL; }
+    g_disabled  = 0;
+    g_last_tick = 0;
+}
+
+int db_is_open(void) { return g_db != NULL && !g_disabled; }
+
+void db_set_interval(int secs) {
+    g_interval = secs > 0 ? secs : DB_DEFAULT_INTERVAL_S;
+}
+int db_interval(void) { return g_interval; }
+
+int db_due(time_t now) {
+    if (!db_is_open()) return 0;
+    if (g_last_tick == 0) return 1;               /* first tick always */
+    if (now < g_last_tick) return 1;              /* clock stepped back */
+    return (now - g_last_tick) >= g_interval;
+}
+
+/* ── per-table writers ───────────────────────────────────── */
+
+static void write_devices(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->device_count; i++) {
+        const device_t *d = &s->devices[i];
+        char mac[18]; mac_str(d->mac, mac);
+        sqlite3_stmt *st = g_st[ST_DEVICE];
+        bind_txt(st, 1, mac);
+        bind_txt(st, 2, d->ip);
+        bind_txt(st, 3, d->hostname);
+        bind_txt(st, 4, d->vendor);
+        bind_txt(st, 5, d->last_ssid);
+        sqlite3_bind_int  (st, 6,  d->is_ap ? 1 : 0);
+        sqlite3_bind_int  (st, 7,  d->signal_dbm);
+        sqlite3_bind_int  (st, 8,  d->probe_count);
+        sqlite3_bind_int  (st, 9,  d->sources);
+        sqlite3_bind_int  (st, 10, d->risk_signals);
+        sqlite3_bind_int  (st, 11, (int)d->risk_level);
+        /* device_t has no first_seen; the MIN() in the upsert pins the
+         * true first observation from whichever tick saw it first. */
+        sqlite3_bind_int64(st, 12, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+        sqlite3_bind_int64(st, 13, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+        step_reset(ST_DEVICE);
+    }
+}
+
+static void write_pnl(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->pnl_count; i++) {
+        const pnl_client_t *p = &s->pnl_clients[i];
+        char mac[18]; mac_str(p->mac, mac);
+        time_t first = p->first_seen ? p->first_seen : now;
+        time_t last  = p->last_seen  ? p->last_seen  : now;
+
+        sqlite3_stmt *st = g_st[ST_PNL_CLIENT];
+        bind_txt(st, 1, mac);
+        sqlite3_bind_int  (st, 2, p->mac_random ? 1 : 0);
+        sqlite3_bind_int  (st, 3, p->probe_count);
+        bind_txt(st, 4, p->os_fp);
+        bind_txt(st, 5, p->phy);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)first);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)last);
+        step_reset(ST_PNL_CLIENT);
+
+        int n = p->ssid_count;
+        if (n > MAX_PNL_SSIDS_PER_CLI) n = MAX_PNL_SSIDS_PER_CLI;
+        for (int k = 0; k < n; k++) {
+            if (!p->ssids[k][0]) continue;
+            sqlite3_stmt *ss = g_st[ST_PNL_SSID];
+            bind_txt(ss, 1, mac);
+            bind_txt(ss, 2, p->ssids[k]);
+            sqlite3_bind_int64(ss, 3, (sqlite3_int64)first);
+            sqlite3_bind_int64(ss, 4, (sqlite3_int64)last);
+            step_reset(ST_PNL_SSID);
+        }
+    }
+}
+
+static void write_probe_clients(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->probe_count; i++) {
+        const probe_client_t *p = &s->probe_clients[i];
+        char mac[18]; mac_str(p->mac, mac);
+        sqlite3_stmt *st = g_st[ST_PROBE_CLIENT];
+        bind_txt(st, 1, mac);
+        bind_txt(st, 2, p->ssid);
+        sqlite3_bind_int  (st, 3, p->signal_dbm);
+        sqlite3_bind_int  (st, 4, p->channel);
+        sqlite3_bind_int  (st, 5, p->frame_count);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(p->first_seen ? p->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(p->last_seen  ? p->last_seen  : now));
+        step_reset(ST_PROBE_CLIENT);
+    }
+}
+
+static void write_beacons(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *b = &s->beacon_aps[i];
+        char bssid[18]; mac_str(b->bssid, bssid);
+        time_t last = b->last_seen ? b->last_seen : now;
+
+        sqlite3_stmt *st = g_st[ST_BEACON_AP];
+        bind_txt(st, 1, bssid);
+        bind_txt(st, 2, b->ssid);
+        sqlite3_bind_int(st, 3,  b->signal_dbm);
+        sqlite3_bind_int(st, 4,  b->channel);
+        bind_txt(st, 5, b->enc);
+        sqlite3_bind_int(st, 6,  b->beacon_ms);
+        bind_txt(st, 7,  b->pairwise);
+        bind_txt(st, 8,  b->group);
+        bind_txt(st, 9,  b->akm);
+        sqlite3_bind_int(st, 10, b->mfp);
+        bind_txt(st, 11, b->vendor);
+        sqlite3_bind_int(st, 12, b->has_wps ? 1 : 0);
+        sqlite3_bind_int(st, 13, b->wps_state);
+        sqlite3_bind_int(st, 14, b->wps_locked);
+        bind_txt(st, 15, b->phy);
+        sqlite3_bind_int(st, 16, b->revealed ? 1 : 0);
+        sqlite3_bind_int(st, 17, b->frame_count);
+        sqlite3_bind_int(st, 18, b->has_qbss ? 1 : 0);
+        sqlite3_bind_int(st, 19, b->qbss_stations);
+        sqlite3_bind_int(st, 20, b->qbss_chan_util);
+        sqlite3_bind_int64(st, 21, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 22, (sqlite3_int64)last);
+        step_reset(ST_BEACON_AP);
+
+        int n = b->ssid_history_n;
+        if (n > MAX_AP_SSID_HISTORY) n = MAX_AP_SSID_HISTORY;
+        for (int k = 0; k < n; k++) {
+            if (!b->ssid_history[k][0]) continue;
+            sqlite3_stmt *ss = g_st[ST_BEACON_SSID];
+            bind_txt(ss, 1, bssid);
+            bind_txt(ss, 2, b->ssid_history[k]);
+            sqlite3_bind_int64(ss, 3, (sqlite3_int64)last);
+            sqlite3_bind_int64(ss, 4, (sqlite3_int64)last);
+            step_reset(ST_BEACON_SSID);
+        }
+    }
+}
+
+static void write_wifi_aps(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->ap_count; i++) {
+        const wifi_ap_t *a = &s->aps[i];
+        if (!a->bssid[0]) continue;
+        sqlite3_stmt *st = g_st[ST_WIFI_AP];
+        bind_txt(st, 1, a->bssid);
+        bind_txt(st, 2, a->ssid);
+        sqlite3_bind_int(st, 3, a->signal_dbm);
+        sqlite3_bind_int(st, 4, a->channel);
+        bind_txt(st, 5, a->enc);
+        sqlite3_bind_int(st, 6, a->status);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)now);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)now);
+        step_reset(ST_WIFI_AP);
+    }
+}
+
+static void write_wifi_stas(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->wifi_sta_count; i++) {
+        const wifi_sta_t *w = &s->wifi_stas[i];
+        if (!w->mac[0]) continue;
+        sqlite3_stmt *st = g_st[ST_WIFI_STA];
+        bind_txt(st, 1, w->mac);
+        sqlite3_bind_int  (st, 2, w->signal_dbm);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)w->tx_rate_kbps);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)w->rx_rate_kbps);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)w->connected_secs);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)w->inactive_ms);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)w->tx_bytes);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)w->rx_bytes);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)now);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)now);
+        step_reset(ST_WIFI_STA);
+    }
+}
+
+static void write_assocs(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->assoc_count; i++) {
+        const assoc_t *a = &s->assocs[i];
+        char bssid[18], sta[18];
+        mac_str(a->bssid, bssid);
+        mac_str(a->sta_mac, sta);
+        sqlite3_stmt *st = g_st[ST_ASSOC];
+        bind_txt(st, 1, bssid);
+        bind_txt(st, 2, sta);
+        bind_txt(st, 3, a->ssid);
+        sqlite3_bind_int  (st, 4, a->sta_random ? 1 : 0);
+        sqlite3_bind_int  (st, 5, a->source);
+        sqlite3_bind_int  (st, 6, a->channel);
+        sqlite3_bind_int  (st, 7, a->signal_dbm);
+        sqlite3_bind_int  (st, 8, a->frame_count);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
+        step_reset(ST_ASSOC);
+    }
+}
+
+static void write_wifi_merged(const sloth_state_t *s, time_t now) {
+    const wifi_merge_t *m = &s->wifi_merged;
+    for (int i = 0; i < m->count; i++) {
+        const wifi_merged_t *e = &m->ents[i];
+        char key[18]; mac_str(e->key, key);
+        sqlite3_stmt *st = g_st[ST_WIFI_MERGED];
+        bind_txt(st, 1, key);
+        sqlite3_bind_int  (st, 2, (int)e->sensor_mask);
+        sqlite3_bind_int  (st, 3, e->seen_by);
+        sqlite3_bind_int  (st, 4, e->best_rssi);
+        sqlite3_bind_int  (st, 5, e->best_sensor);
+        sqlite3_bind_int  (st, 6, e->channel);
+        sqlite3_bind_int  (st, 7, e->freq_mhz);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)e->observations);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)(e->first_seen ? e->first_seen : now));
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(e->last_seen  ? e->last_seen  : now));
+        step_reset(ST_WIFI_MERGED);
+    }
+}
+
+static void write_ip_entities(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->arp_count; i++) {
+        const arp_entry_t *a = &s->arp_entries[i];
+        char mac[18]; mac_str(a->mac, mac);
+        sqlite3_stmt *st = g_st[ST_ARP];
+        bind_txt(st, 1, a->ip);
+        bind_txt(st, 2, mac);
+        bind_txt(st, 3, a->iface);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)now);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)now);
+        step_reset(ST_ARP);
+    }
+    for (int i = 0; i < s->dhcp_count; i++) {
+        const dhcp_lease_t *d = &s->dhcp_leases[i];
+        sqlite3_stmt *st = g_st[ST_DHCP_LEASE];
+        bind_txt(st, 1, d->ip);
+        bind_txt(st, 2, d->hostname);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)d->expire);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)now);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)now);
+        step_reset(ST_DHCP_LEASE);
+    }
+    for (int i = 0; i < s->top_host_count; i++) {
+        const top_host_t *t = &s->top_hosts[i];
+        sqlite3_stmt *st = g_st[ST_TOP_HOST];
+        bind_txt(st, 1, t->ip);
+        bind_txt(st, 2, t->hostname);
+        bind_txt(st, 3, t->owner);
+        sqlite3_bind_int  (st, 4, t->conn_count);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)t->rx_bytes);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)t->tx_bytes);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(t->first_seen ? t->first_seen : now));
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)(t->last_seen  ? t->last_seen  : now));
+        step_reset(ST_TOP_HOST);
+    }
+}
+
+static void write_discovery(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mdns_count; i++) {
+        const mdns_service_t *m = &s->mdns_services[i];
+        if (!m->instance[0]) continue;
+        sqlite3_stmt *st = g_st[ST_MDNS];
+        bind_txt(st, 1, m->instance);
+        bind_txt(st, 2, m->service);
+        bind_txt(st, 3, m->host);
+        bind_txt(st, 4, m->ip);
+        sqlite3_bind_int  (st, 5, m->port);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(m->last_seen ? m->last_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(m->last_seen ? m->last_seen : now));
+        step_reset(ST_MDNS);
+    }
+    for (int i = 0; i < s->nbns_count; i++) {
+        const nbns_name_t *n = &s->nbns_names[i];
+        if (!n->name[0]) continue;
+        sqlite3_stmt *st = g_st[ST_NBNS];
+        bind_txt(st, 1, n->name);
+        sqlite3_bind_int(st, 2, n->suffix);
+        bind_txt(st, 3, n->ip);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)(n->last_seen ? n->last_seen : now));
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)(n->last_seen ? n->last_seen : now));
+        step_reset(ST_NBNS);
+    }
+    for (int i = 0; i < s->ssdp_count; i++) {
+        const ssdp_device_t *d = &s->ssdp_devices[i];
+        if (!d->usn[0]) continue;
+        sqlite3_stmt *st = g_st[ST_SSDP];
+        bind_txt(st, 1, d->usn);
+        bind_txt(st, 2, d->ip);
+        bind_txt(st, 3, d->type);
+        bind_txt(st, 4, d->location);
+        bind_txt(st, 5, d->nts);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+        step_reset(ST_SSDP);
+    }
+}
+
+static void write_ndp_and_sensors(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->ndp_ra_count; i++) {
+        const ndp_ra_event_t *r = &s->ndp_ras[i];
+        if (!r->src_ip[0]) continue;
+        char mac[18] = "";
+        if (r->has_src_mac) mac_str(r->src_mac, mac);
+        time_t first = r->first_seen ? r->first_seen : now;
+        time_t last  = r->last_seen  ? r->last_seen  : now;
+
+        sqlite3_stmt *st = g_st[ST_NDP_RA];
+        bind_txt(st, 1, r->src_ip);
+        bind_txt(st, 2, mac);
+        sqlite3_bind_int  (st, 3, r->cur_hop_limit);
+        sqlite3_bind_int  (st, 4, r->flags);
+        sqlite3_bind_int  (st, 5, r->router_lifetime);
+        sqlite3_bind_int  (st, 6, r->count);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)first);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)last);
+        step_reset(ST_NDP_RA);
+
+        int n = r->prefix_count;
+        if (n > NDP_RA_MAX_PREFIXES) n = NDP_RA_MAX_PREFIXES;
+        for (int k = 0; k < n; k++) {
+            if (!r->prefixes[k][0]) continue;
+            sqlite3_stmt *ps = g_st[ST_NDP_PREFIX];
+            bind_txt(ps, 1, r->src_ip);
+            bind_txt(ps, 2, r->prefixes[k]);
+            sqlite3_bind_int64(ps, 3, (sqlite3_int64)first);
+            sqlite3_bind_int64(ps, 4, (sqlite3_int64)last);
+            step_reset(ST_NDP_PREFIX);
+        }
+    }
+    for (int i = 0; i < s->sensor_count; i++) {
+        const sensor_t *sn = &s->sensors[i];
+        sqlite3_stmt *st = g_st[ST_SENSOR];
+        sqlite3_bind_int(st, 1, sn->kind);
+        bind_txt(st, 2, sn->iface);
+        bind_txt(st, 3, sn->name);
+        sqlite3_bind_int  (st, 4, sn->state);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)sn->observed);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(sn->first_seen ? sn->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(sn->last_seen  ? sn->last_seen  : now));
+        step_reset(ST_SENSOR);
+    }
+}
+
+/* ── tick ────────────────────────────────────────────────── */
+
+void db_tick(const sloth_state_t *s, time_t now) {
+    if (!s || !db_is_open()) return;
+
+    /* One transaction per tick. BEGIN IMMEDIATE takes the write lock up
+     * front so we fail fast against a competing writer instead of
+     * discovering it at COMMIT with a batch already staged. */
+    if (!exec("BEGIN IMMEDIATE", "begin")) { db_fail("begin"); return; }
+
+    write_devices        (s, now);
+    write_pnl            (s, now);
+    write_probe_clients  (s, now);
+    write_beacons        (s, now);
+    write_wifi_aps       (s, now);
+    write_wifi_stas      (s, now);
+    write_assocs         (s, now);
+    write_wifi_merged    (s, now);
+    write_ip_entities    (s, now);
+    write_discovery      (s, now);
+    write_ndp_and_sensors(s, now);
+
+    if (g_disabled) {
+        exec("ROLLBACK", "rollback");
+        return;
+    }
+    if (!exec("COMMIT", "commit")) {
+        exec("ROLLBACK", "rollback");
+        db_fail("commit");
+        return;
+    }
+    g_last_tick = now;
+}
+
+#endif /* WITH_SQLITE */

@@ -272,7 +272,8 @@ not membership. With MAC randomisation now default on every phone,
 **Pass**: new/gone/changed emitters since the last survey.
 **Result: PARTIAL.** `--snapshot-out` / `--baseline-in` (#27) does
 exactly this — **for APs only**. The client population, which is where
-Q3/Q4/Q5 all live, has no cross-session baseline. `[k] PNL` and
+Q3/Q4/Q5 all live, has no cross-session *diff*, though as of #42
+`--db` now persists the client state a diff would run over. `[k] PNL` and
 `[j] Seqnum` even survive MAC rotation *within* a session, so the
 fingerprint that would make cross-session client diffing work already
 exists; it just isn't persisted. Issue #42's SQLite sink is the natural

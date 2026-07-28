@@ -87,6 +87,7 @@
 #include "alert_pcap.h"
 #include "data_socket.h"
 #include "ownership.h"
+#include "db.h"
 #include "discovery.h"
 #include "dns.h"
 #include "scan.h"
@@ -219,6 +220,22 @@ static void poll_data(sloth_state_t *s) {
 #ifdef WITH_PCAP
     chanhop_drive(s);
 #endif
+    /* Durable state (#42) — last, so every snapshot above has already
+     * refreshed the tables it reads.
+     *
+     * Reads sloth_state_t directly rather than hanging off the jsonl
+     * emitters: every jsonl_emit_* short-circuits on any_sink(), which
+     * is false when neither -o nor --data-socket is active, so a
+     * --db-only run would silently write an empty database. It also
+     * keeps durable last_seen off the change-only cache, which would
+     * otherwise let it lag by up to the 300 s heartbeat.
+     *
+     * Its own cadence (--db-interval-secs), so slow storage never paces
+     * the poll loop. */
+    {
+        time_t db_now = time(NULL);
+        if (db_due(db_now)) db_tick(s, db_now);
+    }
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {
@@ -377,6 +394,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
+            "       [--db FILE] [--db-interval-secs N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created if it doesn't exist)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
@@ -436,6 +454,19 @@ static void print_usage(const char *argv0) {
             "                     client can find it by name. Loopback/unix sockets\n"
             "                     never advertise. sloth transmits nothing itself —\n"
             "                     avahi-daemon does the announcing.\n"
+            "  --db FILE          persist entity state to a SQLite database at\n"
+            "                     FILE (off by default). Bounded by the fixed\n"
+            "                     tables in sloth.h, not by uptime: state is\n"
+            "                     upserted per entity with first_seen /\n"
+            "                     last_seen rather than appended per tick, so a\n"
+            "                     long run costs megabytes where -o costs\n"
+            "                     gigabytes. Read it with the sqlite3 CLI --\n"
+            "                     sloth exposes no query surface (MISSION 4).\n"
+            "                     Independent of -o and --data-socket, which\n"
+            "                     remain the wire format and are unchanged.\n"
+            "  --db-interval-secs N\n"
+            "                     seconds between database write ticks.\n"
+            "                     Default 1. Raise it on slow storage.\n"
             "  --my-ssid SSID     designate SSID as the operator's own network\n"
             "                     (repeatable, max 16). Purely a label — no\n"
             "                     capture behaviour changes and nothing is\n"
@@ -484,6 +515,7 @@ int main(int argc, char **argv) {
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
+    const char *db_path        = NULL; /* --db FILE            (#42) */
     const char *snapshot_out   = NULL; /* --snapshot-out FILE  (#27) */
     const char *baseline_in    = NULL; /* --baseline-in  FILE  (#27) */
     const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
@@ -541,6 +573,10 @@ int main(int argc, char **argv) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
+        } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
+            db_path = argv[++i];
+        } else if (!strcmp(argv[i], "--db-interval-secs") && i + 1 < argc) {
+            db_set_interval(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--my-ssid") && i + 1 < argc) {
             if (!ownership_add_ssid(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--my-bssid") && i + 1 < argc) {
@@ -577,6 +613,16 @@ int main(int argc, char **argv) {
             fprintf(stderr, "could not open jsonl output %s\n", jsonl_path);
             return 1;
         }
+    }
+    if (db_path) {
+        if (!db_open(db_path)) {
+            /* Diagnostic already printed. A DB the operator explicitly
+             * asked for and which cannot be opened is a startup error,
+             * not something to silently continue without. */
+            return 1;
+        }
+        fprintf(stderr, "sloth: db %s (schema v%d, every %ds)\n",
+                db_path, DB_SCHEMA_VERSION, db_interval());
     }
     if (pcap_dir) {
         alert_pcap_set_dir(pcap_dir);
@@ -720,6 +766,7 @@ int main(int argc, char **argv) {
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
+    db_close();
     discovery_unpublish();
     data_socket_cleanup();
     return 0;
