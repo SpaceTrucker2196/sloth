@@ -66,3 +66,4 @@
 | 52cf47a | 2026-07-28T17:35:27Z | claude-opus-5 | 234 | 124333 | 33607350 | 247039 | 22.3836 | fix(alerts): 802.11k infrastructure predicate, repeater false positive (#51) |
 | fc1d9d3 | 2026-07-28T17:47:40Z | claude-opus-5 | 105 | 56150 | 19904773 | 91450 | 12.2712 | feat(alerts): my-network designation + MY_NET_RECON (#52) |
 | 61700b5 | 2026-07-28T18:02:00Z | claude-opus-5 | 107 | 97616 | 24208670 | 113110 | 15.6764 | feat(db): SQLite sink schema v1 + state bucket (#42) |
+| 01dc317 | 2026-07-28T18:16:04Z | claude-opus-5 | 59 | 55241 | 15277367 | 78338 | 9.8034 | feat(db): protocol-flow state tables (#42 slice 1b) |
