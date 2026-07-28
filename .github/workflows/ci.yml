@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get install -y libncurses-dev libpcap-dev
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
 
       - name: Build
         run: make
@@ -27,5 +27,10 @@ jobs:
       - name: Build without ncurses
         run: make clean && make WITH_NCURSES=0
 
-      - name: Build embedded (no ncurses, no pcap)
+      - name: Build embedded (no ncurses, no pcap, no sqlite)
         run: make clean && make embedded
+
+      # The sink is optional; a build without it must stay clean too,
+      # since the embedded target is not the only WITH_SQLITE=0 config.
+      - name: Build without sqlite
+        run: make clean && make WITH_SQLITE=0
