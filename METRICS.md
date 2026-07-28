@@ -16,3 +16,4 @@ never rewrite rows.
 | 45 | a688b25 | 2026-07-20 | 2 | 3813 | yes | factory-infra: risk gate scorer, advisory until owner enables agents/risk_enforce; selftest red once (md-under-agents precedence), green on iter 2 |
 | 46 | 4b1b577 | 2026-07-28 | 1 | 3831 | yes | field-reported silent scoping loss; extracted capture_activate_failed as test seam, negative-control run confirmed 4 assertions red on pre-fix logic |
 | 47 | f5c848d | 2026-07-28 | 1 | 3842 | yes | #42 follow-up; reset-on-accept via existing fake-accept seam, both mutations (no reset / unconditional reset) confirmed red; issue's "invisible forever" corrected to 300 s heartbeat window |
+| 48 | a6af13d | 2026-07-28 | 1 | 4440 | yes | build-config break; maintainer shape call = real ANSI backend + shared palette (src/tui_palette.c), not guard-out or stub-out. CI guard split to e2effaa (+40 surface); combined tree scored RISK 70/50 advisory — see issue for the breakdown |
