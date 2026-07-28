@@ -37,6 +37,7 @@ enum {
     ST_BEACON_AP, ST_BEACON_SSID, ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
+    ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
     ST_COUNT
 };
 
@@ -232,6 +233,107 @@ static const char *const SQL[ST_COUNT] = {
     "  state=excluded.state, observed=excluded.observed,"
     "  first_seen=MIN(sensors.first_seen,excluded.first_seen),"
     "  last_seen=MAX(sensors.last_seen,excluded.last_seen)",
+[ST_BGP] =
+    "INSERT INTO bgp_sessions (peer_a,peer_b,open_count,update_count,"
+    "notification_count,keepalive_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
+    " ON CONFLICT(peer_a,peer_b) DO UPDATE SET"
+    /* Counters keep a high-water mark: the in-memory ring resets a
+     * flow's counts when it is evicted, and the durable row means
+     * "what has this pair done", not "since the last eviction". Every
+     * protocol-flow table below follows the same rule. */
+    "  open_count=MAX(bgp_sessions.open_count,excluded.open_count),"
+    "  update_count=MAX(bgp_sessions.update_count,excluded.update_count),"
+    "  notification_count=MAX(bgp_sessions.notification_count,excluded.notification_count),"
+    "  keepalive_count=MAX(bgp_sessions.keepalive_count,excluded.keepalive_count),"
+    "  first_seen=MIN(bgp_sessions.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(bgp_sessions.last_seen,excluded.last_seen)",
+[ST_SSH] =
+    "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,server_banner,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6)"
+    " ON CONFLICT(src_ip,dst_ip) DO UPDATE SET"
+    "  banner_count=MAX(ssh_flows.banner_count,excluded.banner_count),"
+    "  server_banner=excluded.server_banner,"
+    "  first_seen=MIN(ssh_flows.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ssh_flows.last_seen,excluded.last_seen)",
+[ST_RDP] =
+    "INSERT INTO rdp_flows (src_ip,dst_ip,connect_req_count,last_cookie,"
+    "proto_mask,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(src_ip,dst_ip) DO UPDATE SET"
+    "  connect_req_count=MAX(rdp_flows.connect_req_count,excluded.connect_req_count),"
+    "  last_cookie=excluded.last_cookie,"
+    /* Requested-protocol bits accumulate — a client that once asked for
+     * legacy RDP did ask for it, whatever it negotiates later. */
+    "  proto_mask=(rdp_flows.proto_mask | excluded.proto_mask),"
+    "  first_seen=MIN(rdp_flows.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(rdp_flows.last_seen,excluded.last_seen)",
+[ST_SNMP] =
+    "INSERT INTO snmp_flows (src_ip,dst_ip,get_count,getnext_count,"
+    "getbulk_count,set_count,response_count,trap_count,version,"
+    "community_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+    " ON CONFLICT(src_ip,dst_ip) DO UPDATE SET"
+    "  get_count=MAX(snmp_flows.get_count,excluded.get_count),"
+    "  getnext_count=MAX(snmp_flows.getnext_count,excluded.getnext_count),"
+    "  getbulk_count=MAX(snmp_flows.getbulk_count,excluded.getbulk_count),"
+    "  set_count=MAX(snmp_flows.set_count,excluded.set_count),"
+    "  response_count=MAX(snmp_flows.response_count,excluded.response_count),"
+    "  trap_count=MAX(snmp_flows.trap_count,excluded.trap_count),"
+    "  version=excluded.version,"
+    "  community_count=MAX(snmp_flows.community_count,excluded.community_count),"
+    "  first_seen=MIN(snmp_flows.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(snmp_flows.last_seen,excluded.last_seen)",
+[ST_MQTT] =
+    "INSERT INTO mqtt_flows (src_ip,dst_ip,connect_count,connack_fail_count,"
+    "subscribe_count,publish_count,proto_level,last_username,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(src_ip,dst_ip) DO UPDATE SET"
+    "  connect_count=MAX(mqtt_flows.connect_count,excluded.connect_count),"
+    "  connack_fail_count=MAX(mqtt_flows.connack_fail_count,excluded.connack_fail_count),"
+    "  subscribe_count=MAX(mqtt_flows.subscribe_count,excluded.subscribe_count),"
+    "  publish_count=MAX(mqtt_flows.publish_count,excluded.publish_count),"
+    "  proto_level=excluded.proto_level, last_username=excluded.last_username,"
+    "  first_seen=MIN(mqtt_flows.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(mqtt_flows.last_seen,excluded.last_seen)",
+[ST_LDAP] =
+    "INSERT INTO ldap_events (src_ip,bind_count,bind_anon_count,"
+    "search_count,search_ref_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(src_ip) DO UPDATE SET"
+    "  bind_count=MAX(ldap_events.bind_count,excluded.bind_count),"
+    "  bind_anon_count=MAX(ldap_events.bind_anon_count,excluded.bind_anon_count),"
+    "  search_count=MAX(ldap_events.search_count,excluded.search_count),"
+    "  search_ref_count=MAX(ldap_events.search_ref_count,excluded.search_ref_count),"
+    "  first_seen=MIN(ldap_events.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ldap_events.last_seen,excluded.last_seen)",
+[ST_KERB] =
+    "INSERT INTO kerb_events (src_ip,as_req_count,as_rep_count,tgs_req_count,"
+    "tgs_rep_count,preauth_required_count,preauth_failed_count,"
+    "principal_unknown_count,error_other_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(src_ip) DO UPDATE SET"
+    "  as_req_count=MAX(kerb_events.as_req_count,excluded.as_req_count),"
+    "  as_rep_count=MAX(kerb_events.as_rep_count,excluded.as_rep_count),"
+    "  tgs_req_count=MAX(kerb_events.tgs_req_count,excluded.tgs_req_count),"
+    "  tgs_rep_count=MAX(kerb_events.tgs_rep_count,excluded.tgs_rep_count),"
+    "  preauth_required_count=MAX(kerb_events.preauth_required_count,excluded.preauth_required_count),"
+    "  preauth_failed_count=MAX(kerb_events.preauth_failed_count,excluded.preauth_failed_count),"
+    "  principal_unknown_count=MAX(kerb_events.principal_unknown_count,excluded.principal_unknown_count),"
+    "  error_other_count=MAX(kerb_events.error_other_count,excluded.error_other_count),"
+    "  first_seen=MIN(kerb_events.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(kerb_events.last_seen,excluded.last_seen)",
+[ST_SMB] =
+    "INSERT INTO smb_sessions (client_ip,server_ip,server_port,dialect,"
+    "obs_count,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    " ON CONFLICT(client_ip,server_ip,server_port) DO UPDATE SET"
+    /* Dialect is sticky to SMB1, mirroring the in-memory rule: once a
+     * flow has spoken SMB1 that is the finding, and a later SMB2
+     * negotiation on the same pair must not erase it. */
+    "  dialect=CASE WHEN smb_sessions.dialect='SMB1' OR excluded.dialect='SMB1'"
+    "    THEN 'SMB1' ELSE excluded.dialect END,"
+    "  obs_count=MAX(smb_sessions.obs_count,excluded.obs_count),"
+    "  first_seen=MIN(smb_sessions.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(smb_sessions.last_seen,excluded.last_seen)",
 };
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -688,6 +790,126 @@ static void write_ndp_and_sensors(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Protocol-flow aggregates. All eight follow the same shape: bind the
+ * endpoint key, the counters, whatever "last seen" scalar the parser
+ * keeps, then the timestamps. */
+static void write_proto_flows(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->bgp_session_count; i++) {
+        const bgp_session_t *b = &s->bgp_sessions[i];
+        sqlite3_stmt *st = g_st[ST_BGP];
+        bind_txt(st, 1, b->peer_a);
+        bind_txt(st, 2, b->peer_b);
+        sqlite3_bind_int(st, 3, b->open_count);
+        sqlite3_bind_int(st, 4, b->update_count);
+        sqlite3_bind_int(st, 5, b->notification_count);
+        sqlite3_bind_int(st, 6, b->keepalive_count);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(b->first_seen ? b->first_seen : now));
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)(b->last_seen  ? b->last_seen  : now));
+        step_reset(ST_BGP);
+    }
+    for (int i = 0; i < s->ssh_flow_count; i++) {
+        const ssh_flow_t *f = &s->ssh_flows[i];
+        sqlite3_stmt *st = g_st[ST_SSH];
+        bind_txt(st, 1, f->src_ip);
+        bind_txt(st, 2, f->dst_ip);
+        sqlite3_bind_int(st, 3, f->banner_count);
+        bind_txt(st, 4, f->server_banner);
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)(f->first_seen ? f->first_seen : now));
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(f->last_seen  ? f->last_seen  : now));
+        step_reset(ST_SSH);
+    }
+    for (int i = 0; i < s->rdp_flow_count; i++) {
+        const rdp_flow_t *f = &s->rdp_flows[i];
+        sqlite3_stmt *st = g_st[ST_RDP];
+        bind_txt(st, 1, f->src_ip);
+        bind_txt(st, 2, f->dst_ip);
+        sqlite3_bind_int(st, 3, f->connect_req_count);
+        /* mstshash cookie is the username being guessed — an exposed
+         * identifier, not a secret. Same call cleartext_cred makes. */
+        bind_txt(st, 4, f->last_cookie);
+        sqlite3_bind_int(st, 5, (int)f->proto_mask);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(f->first_seen ? f->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(f->last_seen  ? f->last_seen  : now));
+        step_reset(ST_RDP);
+    }
+    for (int i = 0; i < s->snmp_flow_count; i++) {
+        const snmp_flow_t *f = &s->snmp_flows[i];
+        sqlite3_stmt *st = g_st[ST_SNMP];
+        bind_txt(st, 1, f->src_ip);
+        bind_txt(st, 2, f->dst_ip);
+        sqlite3_bind_int(st, 3, f->get_count);
+        sqlite3_bind_int(st, 4, f->getnext_count);
+        sqlite3_bind_int(st, 5, f->getbulk_count);
+        sqlite3_bind_int(st, 6, f->set_count);
+        sqlite3_bind_int(st, 7, f->response_count);
+        sqlite3_bind_int(st, 8, f->trap_count);
+        sqlite3_bind_int(st, 9, f->version);
+        /* Count only. The community strings themselves are shared
+         * secrets in v1/v2c and never reach the file — see the MISSION
+         * §2 note in db_schema.c. The count is what the brute-force
+         * detector keys on. */
+        sqlite3_bind_int(st, 10, f->community_count);
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)(f->first_seen ? f->first_seen : now));
+        sqlite3_bind_int64(st, 12, (sqlite3_int64)(f->last_seen  ? f->last_seen  : now));
+        step_reset(ST_SNMP);
+    }
+    for (int i = 0; i < s->mqtt_flow_count; i++) {
+        const mqtt_flow_t *f = &s->mqtt_flows[i];
+        sqlite3_stmt *st = g_st[ST_MQTT];
+        bind_txt(st, 1, f->src_ip);
+        bind_txt(st, 2, f->dst_ip);
+        sqlite3_bind_int(st, 3, f->connect_count);
+        sqlite3_bind_int(st, 4, f->connack_fail_count);
+        sqlite3_bind_int(st, 5, f->subscribe_count);
+        sqlite3_bind_int(st, 6, f->publish_count);
+        sqlite3_bind_int(st, 7, f->proto_level);
+        bind_txt(st, 8, f->last_username);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)(f->first_seen ? f->first_seen : now));
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(f->last_seen  ? f->last_seen  : now));
+        step_reset(ST_MQTT);
+    }
+    for (int i = 0; i < s->ldap_event_count; i++) {
+        const ldap_event_t *e = &s->ldap_events[i];
+        sqlite3_stmt *st = g_st[ST_LDAP];
+        bind_txt(st, 1, e->src_ip);
+        sqlite3_bind_int(st, 2, e->bind_count);
+        sqlite3_bind_int(st, 3, e->bind_anon_count);
+        sqlite3_bind_int(st, 4, e->search_count);
+        sqlite3_bind_int(st, 5, e->search_ref_count);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(e->first_seen ? e->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(e->last_seen  ? e->last_seen  : now));
+        step_reset(ST_LDAP);
+    }
+    for (int i = 0; i < s->kerb_event_count; i++) {
+        const kerb_event_t *e = &s->kerb_events[i];
+        sqlite3_stmt *st = g_st[ST_KERB];
+        bind_txt(st, 1, e->src_ip);
+        sqlite3_bind_int(st, 2, e->as_req_count);
+        sqlite3_bind_int(st, 3, e->as_rep_count);
+        sqlite3_bind_int(st, 4, e->tgs_req_count);
+        sqlite3_bind_int(st, 5, e->tgs_rep_count);
+        sqlite3_bind_int(st, 6, e->preauth_required_count);
+        sqlite3_bind_int(st, 7, e->preauth_failed_count);
+        sqlite3_bind_int(st, 8, e->principal_unknown_count);
+        sqlite3_bind_int(st, 9, e->error_other_count);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(e->first_seen ? e->first_seen : now));
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)(e->last_seen  ? e->last_seen  : now));
+        step_reset(ST_KERB);
+    }
+    for (int i = 0; i < s->smb_session_count; i++) {
+        const smb_session_t *f = &s->smb_sessions[i];
+        sqlite3_stmt *st = g_st[ST_SMB];
+        bind_txt(st, 1, f->client_ip);
+        bind_txt(st, 2, f->server_ip);
+        sqlite3_bind_int(st, 3, (int)f->server_port);
+        bind_txt(st, 4, f->dialect);
+        sqlite3_bind_int(st, 5, f->count);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)(f->first_seen ? f->first_seen : now));
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)(f->last_seen  ? f->last_seen  : now));
+        step_reset(ST_SMB);
+    }
+}
+
 /* ── tick ────────────────────────────────────────────────── */
 
 void db_tick(const sloth_state_t *s, time_t now) {
@@ -709,6 +931,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_ip_entities    (s, now);
     write_discovery      (s, now);
     write_ndp_and_sensors(s, now);
+    write_proto_flows    (s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

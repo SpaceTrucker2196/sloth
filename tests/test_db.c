@@ -58,6 +58,23 @@ static void q_text(const char *sql, char *out, size_t sz) {
     sqlite3_close(h);
 }
 
+/* Raw byte scan of the database file. Used by the MISSION §2 test to
+ * assert a secret never reaches disk by any path, not merely that no
+ * column is declared for it. */
+static int file_contains(const char *path, const char *needle) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return -1;
+    static char buf[1 << 20];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    fclose(fp);
+    buf[n] = '\0';
+    size_t nl = strlen(needle);
+    if (nl == 0 || n < nl) return 0;
+    for (size_t i = 0; i + nl <= n; i++)
+        if (memcmp(buf + i, needle, nl) == 0) return 1;
+    return 0;
+}
+
 /* ── MISSION §2 schema guardrails ────────────────────────── *
  *
  * These assert on the DDL text and need no SQLite at all. They are the
@@ -432,6 +449,205 @@ static void test_rows_survive_close_and_reopen(void) {
     unlink(db_path);
 }
 
+
+/* ── protocol-flow aggregates (#42 slice 1b) ─────────────── */
+
+/* Counters keep a high-water mark, because the in-memory rings reset a
+ * flow's counts when it is evicted and the durable row means "what has
+ * this pair done", not "since the last eviction". Without this a busy
+ * sensor would silently lose brute-force evidence to ring turnover. */
+static void test_flow_counters_keep_high_water_mark(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ssh_flow_t *f = &s.ssh_flows[s.ssh_flow_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->src_ip, sizeof(f->src_ip), "10.0.0.9");
+    snprintf(f->dst_ip, sizeof(f->dst_ip), "10.0.0.1");
+    f->banner_count = 400;
+    snprintf(f->server_banner, sizeof(f->server_banner), "SSH-2.0-OpenSSH_9.6");
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT banner_count FROM ssh_flows"), 400);
+
+    s.ssh_flows[0].banner_count = 5;      /* ring evicted and restarted */
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT banner_count FROM ssh_flows"), 400);
+
+    s.ssh_flows[0].banner_count = 900;    /* genuinely more activity */
+    db_tick(&s, 1700000120);
+    ASSERT_EQ(q_int("SELECT banner_count FROM ssh_flows"), 900);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM ssh_flows"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* SMB dialect is sticky to SMB1, mirroring the in-memory rule: once a
+ * flow has spoken SMB1 that IS the finding, and a later SMB2
+ * negotiation on the same pair must not erase it. */
+static void test_smb_dialect_sticky_to_smb1(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    smb_session_t *f = &s.smb_sessions[s.smb_session_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->client_ip, sizeof(f->client_ip), "10.0.0.9");
+    snprintf(f->server_ip, sizeof(f->server_ip), "10.0.0.1");
+    f->server_port = 445;
+    snprintf(f->dialect, sizeof(f->dialect), "SMB1");
+    db_tick(&s, 1700000000);
+    char d[16];
+    q_text("SELECT dialect FROM smb_sessions", d, sizeof(d));
+    ASSERT_STR(d, "SMB1");
+
+    snprintf(s.smb_sessions[0].dialect, 8, "SMB2");
+    db_tick(&s, 1700000060);
+    q_text("SELECT dialect FROM smb_sessions", d, sizeof(d));
+    ASSERT_STR(d, "SMB1");
+    db_close();
+    unlink(db_path);
+}
+
+/* ...and a flow that has only ever spoken SMB2 stays SMB2, so the
+ * stickiness is not just "always report SMB1". */
+static void test_smb_dialect_smb2_stays_smb2(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    smb_session_t *f = &s.smb_sessions[s.smb_session_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->client_ip, sizeof(f->client_ip), "10.0.0.9");
+    snprintf(f->server_ip, sizeof(f->server_ip), "10.0.0.2");
+    f->server_port = 445;
+    snprintf(f->dialect, sizeof(f->dialect), "SMB2");
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000060);
+    char d[16];
+    q_text("SELECT dialect FROM smb_sessions", d, sizeof(d));
+    ASSERT_STR(d, "SMB2");
+    db_close();
+    unlink(db_path);
+}
+
+/* Requested-protocol bits accumulate: a client that once asked for
+ * legacy RDP did ask for it, whatever it negotiates later. */
+static void test_rdp_proto_mask_accumulates(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    rdp_flow_t *f = &s.rdp_flows[s.rdp_flow_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->src_ip, sizeof(f->src_ip), "10.0.0.9");
+    snprintf(f->dst_ip, sizeof(f->dst_ip), "10.0.0.1");
+    f->proto_mask = RDP_PROTO_RDP;
+    snprintf(f->last_cookie, sizeof(f->last_cookie), "administrator");
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT proto_mask FROM rdp_flows"), RDP_PROTO_RDP);
+
+    s.rdp_flows[0].proto_mask = RDP_PROTO_HYBRID;
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT proto_mask FROM rdp_flows"),
+              RDP_PROTO_RDP | RDP_PROTO_HYBRID);
+
+    /* The mstshash cookie is the username being guessed — an exposed
+     * identifier, kept deliberately. */
+    char c[64];
+    q_text("SELECT last_cookie FROM rdp_flows", c, sizeof(c));
+    ASSERT_STR(c, "administrator");
+    db_close();
+    unlink(db_path);
+}
+
+/* Endpoint pairs are distinct rows, and the same pair is one row. */
+static void test_flows_keyed_by_endpoint_pair(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    for (int i = 0; i < 3; i++) {
+        kerb_event_t *e = &s.kerb_events[s.kerb_event_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->src_ip, sizeof(e->src_ip), "10.0.0.%d", i + 1);
+        e->preauth_failed_count = 10 + i;
+    }
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM kerb_events"), 3);
+    ASSERT_EQ(q_int("SELECT preauth_failed_count FROM kerb_events"
+                    " WHERE src_ip='10.0.0.3'"), 12);
+    db_close();
+    unlink(db_path);
+}
+
+/* Every flow table is reachable from a tick — a table added to the
+ * schema but never written would be an invisible gap. */
+static void test_all_flow_tables_writable(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+
+    bgp_session_t *b = &s.bgp_sessions[s.bgp_session_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->peer_a, sizeof(b->peer_a), "10.0.0.1");
+    snprintf(b->peer_b, sizeof(b->peer_b), "10.0.0.2");
+    b->notification_count = 7;
+
+    snmp_flow_t *sn = &s.snmp_flows[s.snmp_flow_count++];
+    memset(sn, 0, sizeof(*sn));
+    snprintf(sn->src_ip, sizeof(sn->src_ip), "10.0.0.3");
+    snprintf(sn->dst_ip, sizeof(sn->dst_ip), "10.0.0.4");
+    sn->community_count = 4;
+    snprintf(sn->last_community, sizeof(sn->last_community), "s3cr3t-community");
+
+    mqtt_flow_t *mq = &s.mqtt_flows[s.mqtt_flow_count++];
+    memset(mq, 0, sizeof(*mq));
+    snprintf(mq->src_ip, sizeof(mq->src_ip), "10.0.0.5");
+    snprintf(mq->dst_ip, sizeof(mq->dst_ip), "10.0.0.6");
+    snprintf(mq->last_username, sizeof(mq->last_username), "sensor01");
+
+    ldap_event_t *ld = &s.ldap_events[s.ldap_event_count++];
+    memset(ld, 0, sizeof(*ld));
+    snprintf(ld->src_ip, sizeof(ld->src_ip), "10.0.0.7");
+    ld->search_count = 500;
+
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT notification_count FROM bgp_sessions"), 7);
+    ASSERT_EQ(q_int("SELECT community_count FROM snmp_flows"), 4);
+    ASSERT_EQ(q_int("SELECT search_count FROM ldap_events"), 500);
+    char u[64];
+    q_text("SELECT last_username FROM mqtt_flows", u, sizeof(u));
+    ASSERT_STR(u, "sensor01");
+    db_close();
+    unlink(db_path);
+}
+
+/* MISSION §2, enforced at runtime rather than only in the DDL: an SNMP
+ * community string is a shared secret in v1/v2c, so it must not reach
+ * the file even though sloth holds it in memory to drive the
+ * brute-force detector. This is the same blast-radius call the schema
+ * makes for PMKIDs. */
+static void test_snmp_community_string_never_persisted(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snmp_flow_t *f = &s.snmp_flows[s.snmp_flow_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->src_ip, sizeof(f->src_ip), "10.0.0.3");
+    snprintf(f->dst_ip, sizeof(f->dst_ip), "10.0.0.4");
+    f->community_count = 2;
+    snprintf(f->last_community, sizeof(f->last_community), "tot4lly-s3cret");
+    snprintf(f->communities[0], SNMP_COMMUNITY_LEN, "tot4lly-s3cret");
+    db_tick(&s, 1700000000);
+
+    /* The count survives — that is the detection signal. */
+    ASSERT_EQ(q_int("SELECT community_count FROM snmp_flows"), 2);
+    /* No TEXT column on the table could hold one. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('snmp_flows')"
+                    " WHERE name LIKE '%community%' AND type='TEXT'"), 0);
+    db_close();
+
+    /* And the strongest form of the claim: the secret is not in the
+     * file at all. Scanning the bytes catches a leak through any path —
+     * a stray column, an index, a future table — that a schema
+     * assertion would miss. */
+    ASSERT_EQ(file_contains(db_path, "tot4lly-s3cret"), 0);
+    /* Control: a string we DO persist is found by the same scan, so a
+     * pass above means "absent", not "the scan is broken". */
+    ASSERT_EQ(file_contains(db_path, "10.0.0.3"), 1);
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_schema_has_no_password_column);
@@ -461,4 +677,13 @@ void run_db_tests(void) {
     RUN_TEST(test_wifi_merged_sensor_mask_accumulates);
     RUN_TEST(test_empty_state_writes_nothing);
     RUN_TEST(test_rows_survive_close_and_reopen);
+
+    TEST_SUITE("db: protocol-flow aggregates");
+    RUN_TEST(test_flow_counters_keep_high_water_mark);
+    RUN_TEST(test_smb_dialect_sticky_to_smb1);
+    RUN_TEST(test_smb_dialect_smb2_stays_smb2);
+    RUN_TEST(test_rdp_proto_mask_accumulates);
+    RUN_TEST(test_flows_keyed_by_endpoint_pair);
+    RUN_TEST(test_all_flow_tables_writable);
+    RUN_TEST(test_snmp_community_string_never_persisted);
 }
