@@ -65,3 +65,4 @@
 | a6af13d | 2026-07-28T16:54:28Z | claude-opus-5 | 140 | 57504 | 12497522 | 99003 | 8.6771 | fix(tui): ANSI backend + shared palette, no-ncurses build (#48) |
 | 52cf47a | 2026-07-28T17:35:27Z | claude-opus-5 | 234 | 124333 | 33607350 | 247039 | 22.3836 | fix(alerts): 802.11k infrastructure predicate, repeater false positive (#51) |
 | fc1d9d3 | 2026-07-28T17:47:40Z | claude-opus-5 | 105 | 56150 | 19904773 | 91450 | 12.2712 | feat(alerts): my-network designation + MY_NET_RECON (#52) |
+| 61700b5 | 2026-07-28T18:02:00Z | claude-opus-5 | 107 | 97616 | 24208670 | 113110 | 15.6764 | feat(db): SQLite sink schema v1 + state bucket (#42) |
