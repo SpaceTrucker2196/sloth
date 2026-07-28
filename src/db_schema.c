@@ -351,6 +351,134 @@ static const char SCHEMA_SQL[] =
     "  PRIMARY KEY (client_ip, server_ip, server_port)"
     ");\n"
 
+
+    /* ── events (append-per-episode, SIEM-relevant) ──────── *
+     *
+     * Keyed by episode identity rather than by tick: an alert that
+     * persists for an hour is one row whose count and last_seen
+     * advance, not 3600 rows. Same reasoning as the entity tables —
+     * the file has to stay bounded to be useful.
+     *
+     * MISSION §2, enforced by tests in tests/test_db.c:
+     *
+     *  - cleartext_creds records the *fact* of exposure and the
+     *    username, never the password. `pw_observed` is a 0/1 flag and
+     *    is named to match the JSONL field exactly; there is no column
+     *    a password could occupy.
+     *  - eapol_events records that a handshake or PMKID was observed —
+     *    `has_pmkid` is likewise a 0/1 flag. The PMKID, ANonce, SNonce
+     *    and MIC themselves have no columns anywhere. Crackable
+     *    material stays in the --eapol-dir file the operator explicitly
+     *    asked for; a long-lived general-purpose DB is the wrong place
+     *    to accumulate it. */
+    "CREATE TABLE IF NOT EXISTS alerts ("
+    "  key        TEXT NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  type       INTEGER NOT NULL,"
+    "  sev        INTEGER NOT NULL,"
+    "  title      TEXT,"
+    "  detail     TEXT,"
+    "  technique  TEXT,"
+    "  match_ip   TEXT,"
+    "  match_port INTEGER,"
+    "  count      INTEGER NOT NULL DEFAULT 0,"
+    "  PRIMARY KEY (key, first_seen)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_alerts_last_seen ON alerts(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_alerts_sev ON alerts(sev);\n"
+
+    "CREATE TABLE IF NOT EXISTS cleartext_creds ("
+    "  ts          INTEGER NOT NULL,"
+    "  src         TEXT NOT NULL,"
+    "  dst         TEXT NOT NULL,"
+    "  dst_port    INTEGER NOT NULL,"
+    "  protocol    TEXT NOT NULL,"
+    "  username    TEXT,"
+    /* the exposure fact, never the secret */
+    "  pw_observed INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen  INTEGER NOT NULL,"
+    "  last_seen   INTEGER NOT NULL,"
+    "  PRIMARY KEY (ts, src, dst, dst_port, protocol)"
+    ");\n"
+
+    "CREATE TABLE IF NOT EXISTS eapol_events ("
+    "  bssid              TEXT NOT NULL,"
+    "  sta_mac            TEXT NOT NULL,"
+    "  ts                 INTEGER NOT NULL,"
+    "  msg_num            INTEGER NOT NULL,"
+    "  ssid               TEXT,"
+    /* the observation fact; the material itself has no column */
+    "  has_pmkid          INTEGER NOT NULL DEFAULT 0,"
+    "  handshake_complete INTEGER NOT NULL DEFAULT 0,"
+    "  signal_dbm         INTEGER,"
+    "  channel            INTEGER,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (bssid, sta_mac, ts, msg_num)"
+    ");\n"
+
+    "CREATE TABLE IF NOT EXISTS deauth_events ("
+    "  src        TEXT NOT NULL,"
+    "  dst        TEXT NOT NULL,"
+    "  bssid      TEXT NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  reason     INTEGER,"
+    "  subtype    INTEGER,"
+    "  obs_count  INTEGER NOT NULL DEFAULT 0,"
+    "  flood      INTEGER NOT NULL DEFAULT 0,"
+    "  PRIMARY KEY (src, dst, bssid, first_seen)"
+    ");\n"
+
+    "CREATE TABLE IF NOT EXISTS seqnum_correlations ("
+    "  mac_a        TEXT NOT NULL,"
+    "  mac_b        TEXT NOT NULL,"
+    "  mac_a_random INTEGER NOT NULL DEFAULT 0,"
+    "  mac_b_random INTEGER NOT NULL DEFAULT 0,"
+    "  gap          INTEGER,"
+    "  dt_ms        INTEGER,"
+    "  a_count      INTEGER NOT NULL DEFAULT 0,"
+    "  b_count      INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (mac_a, mac_b)"
+    ");\n"
+
+    "CREATE TABLE IF NOT EXISTS twin_episodes ("
+    "  ssid               TEXT NOT NULL,"
+    "  real_bssid         TEXT NOT NULL,"
+    "  twin_bssid         TEXT NOT NULL,"
+    "  enc                TEXT,"
+    "  real_rssi          INTEGER,"
+    "  twin_rssi          INTEGER,"
+    "  rssi_swing_dbm     INTEGER,"
+    "  attack_in_progress INTEGER NOT NULL DEFAULT 0,"
+    "  attacker_oui       INTEGER NOT NULL DEFAULT 0,"
+    "  hash_mismatch      INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (ssid, real_bssid, twin_bssid)"
+    ");\n"
+
+    /* Flagged entries only (#41): an unflagged scan_entry is one host
+     * touching a couple of ports, which is ordinary traffic, and
+     * persisting it would put the CDN false positives #41 removed
+     * straight back into the durable record. */
+    "CREATE TABLE IF NOT EXISTS scan_entries ("
+    "  ip         TEXT PRIMARY KEY,"
+    "  port_count INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL"
+    ");\n"
+    "CREATE TABLE IF NOT EXISTS scan_entry_ports ("
+    "  ip         TEXT NOT NULL,"
+    "  port       INTEGER NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (ip, port)"
+    ");\n"
+
     /* ── passive sensor registry (#28) ───────────────────── */
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"

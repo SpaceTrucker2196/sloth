@@ -82,28 +82,85 @@ static int file_contains(const char *path, const char *needle) {
  * that violates one turns the suite red instead of relying on a
  * reviewer spotting it in a diff. */
 
-static void test_schema_has_no_password_column(void) {
-    const char *sql = db_schema_sql();
-    ASSERT(sql != NULL);
-    /* Credential exposures record that a username crossed the wire in
-     * the clear. The password never enters sloth's memory and must
-     * never gain a column here. */
-    ASSERT(strstr(sql, "password") == NULL);
-    ASSERT(strstr(sql, "passwd")   == NULL);
+/* The rule is not "the string never appears" — `has_pmkid` and
+ * `pw_observed` are 0/1 flags recording that an exposure was observed,
+ * which is the finding and belongs in the file. The rule is that no
+ * column can *hold* the material: nothing named for a secret may be
+ * TEXT or BLOB. Checked against the live schema so it covers every
+ * table, including ones added later. */
+static void test_no_column_can_hold_secret_material(void) {
+    fresh_db();
+    static const char *const forbidden[] = {
+        "%pmkid%", "%nonce%", "%mic%", "%password%", "%passwd%",
+        "%community%", "%secret%", "%key_material%",
+    };
+    for (unsigned i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "SELECT COUNT(*) FROM sqlite_master m,"
+            " pragma_table_info(m.name) c"
+            " WHERE m.type='table' AND c.name LIKE '%s'"
+            " AND UPPER(c.type) IN ('TEXT','BLOB')", forbidden[i]);
+        ASSERT_EQ(q_int(sql), 0);
+    }
+    /* And the flags we *do* keep are integers, so the above is passing
+     * because the types are right, not because the columns are absent. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('eapol_events')"
+                    " WHERE name='has_pmkid' AND UPPER(type)='INTEGER'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('cleartext_creds')"
+                    " WHERE name='pw_observed' AND UPPER(type)='INTEGER'"), 1);
+    db_close();
+    unlink(db_path);
 }
 
-/* Crackable key material stays in the --eapol-dir file the operator
- * explicitly asked for. Concentrating it in a long-lived
- * general-purpose DB widens the blast radius of a stolen file for no
- * operational gain. */
-static void test_schema_has_no_key_material(void) {
+/* No column is named exactly for a secret either, whatever its type. */
+static void test_schema_has_no_secret_named_columns(void) {
     const char *sql = db_schema_sql();
-    ASSERT(strstr(sql, "pmkid")  == NULL);
-    ASSERT(strstr(sql, "PMKID")  == NULL);
-    ASSERT(strstr(sql, "anonce") == NULL);
-    ASSERT(strstr(sql, "snonce") == NULL);
-    ASSERT(strstr(sql, "nonce")  == NULL);
-    ASSERT(strstr(sql, "_mic")   == NULL);
+    ASSERT(sql != NULL);
+    ASSERT(strstr(sql, "  password ") == NULL);
+    ASSERT(strstr(sql, "  passwd ")   == NULL);
+    ASSERT(strstr(sql, "  pmkid ")    == NULL);
+    ASSERT(strstr(sql, "  anonce ")   == NULL);
+    ASSERT(strstr(sql, "  snonce ")   == NULL);
+    ASSERT(strstr(sql, "  mic ")      == NULL);
+}
+
+/* The strongest form of the claim: seed an EAPOL event carrying real
+ * key material and assert none of it reaches the file. A schema
+ * assertion cannot catch a leak through a future column, an index, or
+ * a stray bind — scanning the bytes can. */
+static void test_eapol_key_material_never_reaches_disk(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_event_t *e = &s.eapol_events[s.eapol_count++];
+    memset(e, 0, sizeof(*e));
+    e->bssid[0] = 0xaa; e->bssid[5] = 0x01;
+    e->sta_mac[0] = 0x02; e->sta_mac[5] = 0x99;
+    snprintf(e->ssid, sizeof(e->ssid), "CorpWiFi");
+    e->ts        = 1700000000;
+    e->msg_num   = 1;
+    e->has_pmkid = 1;
+    e->handshake_complete = 1;
+    /* Recognisable ASCII in the key fields: if any of these buffers is
+     * ever bound, the bytes show up in the file verbatim. */
+    memcpy(e->pmkid,  "PMKIDLEAK1234567", 16);
+    memcpy(e->anonce, "ANONCELEAK-0123456789abcdef01234", 32);
+    memcpy(e->snonce, "SNONCELEAK-0123456789abcdef01234", 32);
+    memcpy(e->mic,    "MICLEAK123456789", 16);
+    db_tick(&s, 1700000000);
+
+    /* The findings survive — that is the operational value. */
+    ASSERT_EQ(q_int("SELECT has_pmkid FROM eapol_events"), 1);
+    ASSERT_EQ(q_int("SELECT handshake_complete FROM eapol_events"), 1);
+    db_close();
+
+    ASSERT_EQ(file_contains(db_path, "PMKIDLEAK1234567"), 0);
+    ASSERT_EQ(file_contains(db_path, "ANONCELEAK"), 0);
+    ASSERT_EQ(file_contains(db_path, "SNONCELEAK"), 0);
+    ASSERT_EQ(file_contains(db_path, "MICLEAK123456789"), 0);
+    /* Control: the SSID we DO persist is found by the same scan. */
+    ASSERT_EQ(file_contains(db_path, "CorpWiFi"), 1);
+    unlink(db_path);
 }
 
 /* Every entity table carries the pair that makes the file a history
@@ -648,10 +705,243 @@ static void test_snmp_community_string_never_persisted(void) {
     unlink(db_path);
 }
 
+/* ── event episodes (#42 slice 2) ────────────────────────── */
+
+/* An alert that persists is ONE row whose count and last_seen advance,
+ * not one row per tick. At 1 Hz a single hour-long alert would
+ * otherwise be 3600 rows — the exact firehose the sink exists to avoid. */
+static void test_alert_episode_is_one_row(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key,    sizeof(a->key),    "portscan:10.0.0.9");
+    snprintf(a->title,  sizeof(a->title),  "PORT_SCAN");
+    snprintf(a->detail, sizeof(a->detail), "8 ports");
+    snprintf(a->technique, sizeof(a->technique), "T1046");
+    a->type = ALERT_TYPE_PORT_SCAN;
+    a->sev  = ALERT_SEV_LOW;
+    a->count = 1;
+    a->first_seen = 1700000000;
+    a->last_seen  = 1700000000;
+
+    for (int i = 0; i < 30; i++) {
+        s.alerts[0].last_seen = 1700000000 + i;
+        s.alerts[0].count     = i + 1;
+        db_tick(&s, 1700000000 + i);
+    }
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT count FROM alerts"), 30);
+    ASSERT_EQ(q_int("SELECT last_seen FROM alerts"), 1700000029);
+    ASSERT_EQ(q_int("SELECT first_seen FROM alerts"), 1700000000);
+    db_close();
+    unlink(db_path);
+}
+
+/* A second episode under the same key — the alert cleared and fired
+ * again later — is a distinct row, because first_seen is part of the
+ * identity. Merging them would erase the gap, which is the interesting
+ * part for an investigator. */
+static void test_alert_second_episode_is_new_row(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key, sizeof(a->key), "portscan:10.0.0.9");
+    a->type = ALERT_TYPE_PORT_SCAN;
+    a->first_seen = 1700000000;
+    a->last_seen  = 1700000010;
+    db_tick(&s, 1700000010);
+
+    s.alerts[0].first_seen = 1700009000;   /* fired again hours later */
+    s.alerts[0].last_seen  = 1700009010;
+    db_tick(&s, 1700009010);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 2);
+    db_close();
+    unlink(db_path);
+}
+
+/* Severity and detail track the live engine — the latest observation
+ * wins, matching how fire() overwrites them. */
+static void test_alert_severity_tracks_latest(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key, sizeof(a->key), "twin-fp:CorpWiFi");
+    a->sev = ALERT_SEV_WARN;
+    a->first_seen = 1700000000;
+    a->last_seen  = 1700000000;
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT sev FROM alerts"), ALERT_SEV_WARN);
+
+    s.alerts[0].sev = ALERT_SEV_CRIT;      /* escalated */
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT sev FROM alerts"), ALERT_SEV_CRIT);
+    db_close();
+    unlink(db_path);
+}
+
+/* Once a burst crossed the flood threshold, the episode was a flood —
+ * a later poll below the rate must not un-flag it. */
+static void test_deauth_flood_flag_latches(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    deauth_event_t *d = &s.deauth_events[s.deauth_count++];
+    memset(d, 0, sizeof(*d));
+    d->src[0] = 0xaa; d->dst[0] = 0xbb; d->bssid[0] = 0xcc;
+    d->flood = 1;
+    d->count = 40;
+    d->first_seen = 1700000000;
+    d->last_seen  = 1700000000;
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT flood FROM deauth_events"), 1);
+
+    s.deauth_events[0].flood = 0;
+    s.deauth_events[0].count = 2;
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT flood FROM deauth_events"), 1);
+    ASSERT_EQ(q_int("SELECT obs_count FROM deauth_events"), 40);
+    db_close();
+    unlink(db_path);
+}
+
+/* Twin evidence flags latch for the same reason: a twin caught
+ * mid-attack once was caught mid-attack. */
+static void test_twin_evidence_flags_latch(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    twin_episode_t *t = &s.twin_episodes[s.twin_episode_count++];
+    memset(t, 0, sizeof(*t));
+    snprintf(t->ssid, sizeof(t->ssid), "CorpWiFi");
+    t->real_bssid[0] = 0xaa; t->twin_bssid[0] = 0xbb;
+    t->attack_in_progress = 1;
+    t->attacker_oui       = 1;
+    t->rssi_swing_dbm     = 25;
+    t->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+
+    s.twin_episodes[0].attack_in_progress = 0;
+    s.twin_episodes[0].attacker_oui       = 0;
+    s.twin_episodes[0].rssi_swing_dbm     = 3;
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT attack_in_progress FROM twin_episodes"), 1);
+    ASSERT_EQ(q_int("SELECT attacker_oui FROM twin_episodes"), 1);
+    ASSERT_EQ(q_int("SELECT rssi_swing_dbm FROM twin_episodes"), 25);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM twin_episodes"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* Only flagged scan entries persist (#41). An unflagged entry is one
+ * host touching a couple of ports — ordinary traffic — and persisting
+ * it would put the CDN false positives #41 removed back into the
+ * durable record. */
+static void test_scan_entries_flagged_only(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    scan_entry_t *a = &s.scan_entries[s.scan_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->ip, sizeof(a->ip), "10.0.0.9");
+    a->flagged = 1; a->port_count = 3;
+    a->ports[0] = 22; a->ports[1] = 80; a->ports[2] = 443;
+    a->first_seen = 1700000000; a->last_seen = 1700000000;
+
+    scan_entry_t *b = &s.scan_entries[s.scan_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->ip, sizeof(b->ip), "10.0.0.10");
+    b->flagged = 0; b->port_count = 2;       /* ordinary traffic */
+    b->first_seen = 1700000000; b->last_seen = 1700000000;
+
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entries"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entries WHERE ip='10.0.0.10'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entry_ports"), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entry_ports WHERE port=443"), 1);
+
+    /* Re-ticking does not duplicate the port rows. */
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entry_ports"), 3);
+    db_close();
+    unlink(db_path);
+}
+
+/* A port_count larger than the array must not read past it. */
+static void test_scan_entry_clamps_port_count(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    scan_entry_t *a = &s.scan_entries[s.scan_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->ip, sizeof(a->ip), "10.0.0.9");
+    a->flagged = 1;
+    /* Distinct ports so the clamp is observable — a zero-filled array
+     * would collapse to a single (ip, 0) row under the primary key and
+     * the test would pass without proving anything. */
+    for (int k = 0; k < MAX_SCAN_PORTS; k++)
+        a->ports[k] = (uint16_t)(1000 + k);
+    a->port_count = MAX_SCAN_PORTS + 500;
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entry_ports"), MAX_SCAN_PORTS);
+    /* Nothing was read past the end of the array. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM scan_entry_ports WHERE port=0"), 0);
+    ASSERT_EQ(q_int("SELECT MAX(port) FROM scan_entry_ports"),
+              1000 + MAX_SCAN_PORTS - 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* Credential exposures keep the username (the exposure fact) and the
+ * pw_observed flag — and there is no column the password could go in. */
+static void test_cleartext_cred_keeps_username_not_secret(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    cleartext_cred_t *c = &s.cleartext_creds[s.cleartext_cred_count++];
+    memset(c, 0, sizeof(*c));
+    snprintf(c->src, sizeof(c->src), "10.0.0.9");
+    snprintf(c->dst, sizeof(c->dst), "10.0.0.1");
+    c->dst_port = 80;
+    snprintf(c->protocol, sizeof(c->protocol), "HTTP-Basic");
+    snprintf(c->username, sizeof(c->username), "alice");
+    c->password_observed = 1;
+    c->ts = 1700000000;
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000060);          /* same exposure, still one row */
+
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM cleartext_creds"), 1);
+    ASSERT_EQ(q_int("SELECT pw_observed FROM cleartext_creds"), 1);
+    char u[64];
+    q_text("SELECT username FROM cleartext_creds", u, sizeof(u));
+    ASSERT_STR(u, "alice");
+    db_close();
+    unlink(db_path);
+}
+
+/* Seqnum correlations are the deanonymisation output and must survive
+ * as a durable pair record. */
+static void test_seqnum_correlation_persists(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    c->mac_a[0] = 0x02; c->mac_a[5] = 0x01;
+    c->mac_b[0] = 0x06; c->mac_b[5] = 0x02;
+    c->mac_a_random = 1; c->mac_b_random = 1;
+    c->gap = 3; c->dt_ms = 120; c->a_count = 40; c->b_count = 38;
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000060);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM seqnum_correlations"), 1);
+    ASSERT_EQ(q_int("SELECT gap FROM seqnum_correlations"), 3);
+    ASSERT_EQ(q_int("SELECT a_count FROM seqnum_correlations"), 40);
+    db_close();
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
-    RUN_TEST(test_schema_has_no_password_column);
-    RUN_TEST(test_schema_has_no_key_material);
+    RUN_TEST(test_no_column_can_hold_secret_material);
+    RUN_TEST(test_schema_has_no_secret_named_columns);
+    RUN_TEST(test_eapol_key_material_never_reaches_disk);
     RUN_TEST(test_schema_tables_have_seen_columns);
 
     TEST_SUITE("db: open / close / versioning");
@@ -686,4 +976,15 @@ void run_db_tests(void) {
     RUN_TEST(test_flows_keyed_by_endpoint_pair);
     RUN_TEST(test_all_flow_tables_writable);
     RUN_TEST(test_snmp_community_string_never_persisted);
+
+    TEST_SUITE("db: event episodes");
+    RUN_TEST(test_alert_episode_is_one_row);
+    RUN_TEST(test_alert_second_episode_is_new_row);
+    RUN_TEST(test_alert_severity_tracks_latest);
+    RUN_TEST(test_deauth_flood_flag_latches);
+    RUN_TEST(test_twin_evidence_flags_latch);
+    RUN_TEST(test_scan_entries_flagged_only);
+    RUN_TEST(test_scan_entry_clamps_port_count);
+    RUN_TEST(test_cleartext_cred_keeps_username_not_secret);
+    RUN_TEST(test_seqnum_correlation_persists);
 }

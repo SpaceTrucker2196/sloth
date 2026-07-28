@@ -38,6 +38,8 @@ enum {
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
+    ST_ALERT, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
+    ST_SCAN, ST_SCAN_PORT,
     ST_COUNT
 };
 
@@ -334,6 +336,86 @@ static const char *const SQL[ST_COUNT] = {
     "  obs_count=MAX(smb_sessions.obs_count,excluded.obs_count),"
     "  first_seen=MIN(smb_sessions.first_seen,excluded.first_seen),"
     "  last_seen=MAX(smb_sessions.last_seen,excluded.last_seen)",
+[ST_ALERT] =
+    "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
+    "technique,match_ip,match_port,count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(key,first_seen) DO UPDATE SET"
+    /* An episode's detail and severity are regenerated each tick and
+     * the latest observation wins, matching the live engine. */
+    "  last_seen=MAX(alerts.last_seen,excluded.last_seen),"
+    "  sev=excluded.sev, detail=excluded.detail,"
+    "  count=MAX(alerts.count,excluded.count)",
+[ST_CRED] =
+    "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
+    "pw_observed,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"
+    " ON CONFLICT(ts,src,dst,dst_port,protocol) DO UPDATE SET"
+    "  username=excluded.username,"
+    /* Once a password was observed on an exposure, that stays true. */
+    "  pw_observed=MAX(cleartext_creds.pw_observed,excluded.pw_observed),"
+    "  last_seen=MAX(cleartext_creds.last_seen,excluded.last_seen)",
+[ST_EAPOL] =
+    "INSERT INTO eapol_events (bssid,sta_mac,ts,msg_num,ssid,has_pmkid,"
+    "handshake_complete,signal_dbm,channel,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(bssid,sta_mac,ts,msg_num) DO UPDATE SET"
+    "  ssid=excluded.ssid,"
+    /* Both flags are monotonic: an M2 that later completes its
+     * handshake, or a frame re-parsed with its PMKID recognised, must
+     * not be downgraded by a subsequent partial observation. */
+    "  has_pmkid=MAX(eapol_events.has_pmkid,excluded.has_pmkid),"
+    "  handshake_complete=MAX(eapol_events.handshake_complete,"
+    "                         excluded.handshake_complete),"
+    "  signal_dbm=excluded.signal_dbm, channel=excluded.channel,"
+    "  last_seen=MAX(eapol_events.last_seen,excluded.last_seen)",
+[ST_DEAUTH] =
+    "INSERT INTO deauth_events (src,dst,bssid,first_seen,last_seen,reason,"
+    "subtype,obs_count,flood) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"
+    " ON CONFLICT(src,dst,bssid,first_seen) DO UPDATE SET"
+    "  last_seen=MAX(deauth_events.last_seen,excluded.last_seen),"
+    "  obs_count=MAX(deauth_events.obs_count,excluded.obs_count),"
+    /* Once a burst crossed the flood threshold the episode was a
+     * flood, even if the rate later drops below it. */
+    "  flood=MAX(deauth_events.flood,excluded.flood)",
+[ST_SEQCORR] =
+    "INSERT INTO seqnum_correlations (mac_a,mac_b,mac_a_random,mac_b_random,"
+    "gap,dt_ms,a_count,b_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    " ON CONFLICT(mac_a,mac_b) DO UPDATE SET"
+    "  mac_a_random=excluded.mac_a_random, mac_b_random=excluded.mac_b_random,"
+    "  gap=excluded.gap, dt_ms=excluded.dt_ms,"
+    "  a_count=MAX(seqnum_correlations.a_count,excluded.a_count),"
+    "  b_count=MAX(seqnum_correlations.b_count,excluded.b_count),"
+    "  first_seen=MIN(seqnum_correlations.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(seqnum_correlations.last_seen,excluded.last_seen)",
+[ST_TWIN] =
+    "INSERT INTO twin_episodes (ssid,real_bssid,twin_bssid,enc,real_rssi,"
+    "twin_rssi,rssi_swing_dbm,attack_in_progress,attacker_oui,hash_mismatch,"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"
+    " ON CONFLICT(ssid,real_bssid,twin_bssid) DO UPDATE SET"
+    "  enc=excluded.enc, real_rssi=excluded.real_rssi,"
+    "  twin_rssi=excluded.twin_rssi,"
+    "  rssi_swing_dbm=MAX(twin_episodes.rssi_swing_dbm,excluded.rssi_swing_dbm),"
+    /* Evidence flags latch: a twin that was caught mid-attack once was
+     * caught mid-attack, whatever the next poll sees. */
+    "  attack_in_progress=MAX(twin_episodes.attack_in_progress,"
+    "                         excluded.attack_in_progress),"
+    "  attacker_oui=MAX(twin_episodes.attacker_oui,excluded.attacker_oui),"
+    "  hash_mismatch=MAX(twin_episodes.hash_mismatch,excluded.hash_mismatch),"
+    "  first_seen=MIN(twin_episodes.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(twin_episodes.last_seen,excluded.last_seen)",
+[ST_SCAN] =
+    "INSERT INTO scan_entries (ip,port_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4)"
+    " ON CONFLICT(ip) DO UPDATE SET"
+    "  port_count=MAX(scan_entries.port_count,excluded.port_count),"
+    "  first_seen=MIN(scan_entries.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(scan_entries.last_seen,excluded.last_seen)",
+[ST_SCAN_PORT] =
+    "INSERT INTO scan_entry_ports (ip,port,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4)"
+    " ON CONFLICT(ip,port) DO UPDATE SET"
+    "  first_seen=MIN(scan_entry_ports.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(scan_entry_ports.last_seen,excluded.last_seen)",
 };
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -910,6 +992,155 @@ static void write_proto_flows(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Event episodes. Keyed by episode identity, so an alert that persists
+ * for an hour is one row whose count and last_seen advance rather than
+ * 3600 rows. */
+static void write_events(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->alert_count; i++) {
+        const alert_t *a = &s->alerts[i];
+        sqlite3_stmt *st = g_st[ST_ALERT];
+        bind_txt(st, 1, a->key);
+        sqlite3_bind_int64(st, 2, (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
+        sqlite3_bind_int(st, 4, (int)a->type);
+        sqlite3_bind_int(st, 5, (int)a->sev);
+        bind_txt(st, 6, a->title);
+        bind_txt(st, 7, a->detail);
+        bind_txt(st, 8, a->technique);
+        bind_txt(st, 9, a->match_ip);
+        sqlite3_bind_int(st, 10, (int)a->match_port);
+        sqlite3_bind_int(st, 11, a->count);
+        step_reset(ST_ALERT);
+    }
+
+    for (int i = 0; i < s->cleartext_cred_count; i++) {
+        const cleartext_cred_t *c = &s->cleartext_creds[i];
+        sqlite3_stmt *st = g_st[ST_CRED];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)(c->ts ? c->ts : now));
+        bind_txt(st, 2, c->src);
+        bind_txt(st, 3, c->dst);
+        sqlite3_bind_int(st, 4, (int)c->dst_port);
+        bind_txt(st, 5, c->protocol);
+        /* Username is the exposure fact and is recorded deliberately.
+         * There is no password field on cleartext_cred_t to bind even
+         * if we wanted one — the parser never keeps it. */
+        bind_txt(st, 6, c->username);
+        sqlite3_bind_int(st, 7, c->password_observed ? 1 : 0);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)(c->ts ? c->ts : now));
+        sqlite3_bind_int64(st, 9, (sqlite3_int64)now);
+        step_reset(ST_CRED);
+    }
+
+    for (int i = 0; i < s->eapol_count; i++) {
+        const eapol_event_t *e = &s->eapol_events[i];
+        char bssid[18], sta[18];
+        mac_str(e->bssid, bssid);
+        mac_str(e->sta_mac, sta);
+        sqlite3_stmt *st = g_st[ST_EAPOL];
+        bind_txt(st, 1, bssid);
+        bind_txt(st, 2, sta);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(e->ts ? e->ts : now));
+        sqlite3_bind_int(st, 4, e->msg_num);
+        bind_txt(st, 5, e->ssid);
+        /* has_pmkid only. e->pmkid / anonce / snonce / mic are never
+         * bound anywhere — see the MISSION §2 note in db_schema.c. */
+        sqlite3_bind_int(st, 6, e->has_pmkid ? 1 : 0);
+        sqlite3_bind_int(st, 7, e->handshake_complete ? 1 : 0);
+        sqlite3_bind_int(st, 8, e->signal_dbm);
+        sqlite3_bind_int(st, 9, e->channel);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(e->ts ? e->ts : now));
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)now);
+        step_reset(ST_EAPOL);
+    }
+
+    for (int i = 0; i < s->deauth_count; i++) {
+        const deauth_event_t *d = &s->deauth_events[i];
+        char src[18], dst[18], bssid[18];
+        mac_str(d->src, src);
+        mac_str(d->dst, dst);
+        mac_str(d->bssid, bssid);
+        sqlite3_stmt *st = g_st[ST_DEAUTH];
+        bind_txt(st, 1, src);
+        bind_txt(st, 2, dst);
+        bind_txt(st, 3, bssid);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)(d->first_seen ? d->first_seen : now));
+        sqlite3_bind_int64(st, 5, (sqlite3_int64)(d->last_seen  ? d->last_seen  : now));
+        sqlite3_bind_int(st, 6, (int)d->reason);
+        sqlite3_bind_int(st, 7, (int)d->subtype);
+        sqlite3_bind_int(st, 8, d->count);
+        sqlite3_bind_int(st, 9, d->flood ? 1 : 0);
+        step_reset(ST_DEAUTH);
+    }
+
+    for (int i = 0; i < s->seqnum_correlation_count; i++) {
+        const seqnum_correlation_t *c = &s->seqnum_correlations[i];
+        char a[18], b[18];
+        mac_str(c->mac_a, a);
+        mac_str(c->mac_b, b);
+        sqlite3_stmt *st = g_st[ST_SEQCORR];
+        bind_txt(st, 1, a);
+        bind_txt(st, 2, b);
+        sqlite3_bind_int(st, 3, c->mac_a_random ? 1 : 0);
+        sqlite3_bind_int(st, 4, c->mac_b_random ? 1 : 0);
+        sqlite3_bind_int(st, 5, c->gap);
+        sqlite3_bind_int64(st, 6, (sqlite3_int64)c->dt_ms);
+        sqlite3_bind_int(st, 7, c->a_count);
+        sqlite3_bind_int(st, 8, c->b_count);
+        sqlite3_bind_int64(st, 9,  (sqlite3_int64)now);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)now);
+        step_reset(ST_SEQCORR);
+    }
+
+    for (int i = 0; i < s->twin_episode_count; i++) {
+        const twin_episode_t *t = &s->twin_episodes[i];
+        char real[18], twin[18];
+        mac_str(t->real_bssid, real);
+        mac_str(t->twin_bssid, twin);
+        sqlite3_stmt *st = g_st[ST_TWIN];
+        bind_txt(st, 1, t->ssid);
+        bind_txt(st, 2, real);
+        bind_txt(st, 3, twin);
+        bind_txt(st, 4, t->enc);
+        sqlite3_bind_int(st, 5, t->real_rssi);
+        sqlite3_bind_int(st, 6, t->twin_rssi);
+        sqlite3_bind_int(st, 7, (int)t->rssi_swing_dbm);
+        sqlite3_bind_int(st, 8, t->attack_in_progress ? 1 : 0);
+        sqlite3_bind_int(st, 9, t->attacker_oui ? 1 : 0);
+        sqlite3_bind_int(st, 10, t->hash_mismatch ? 1 : 0);
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)(t->last_seen ? t->last_seen : now));
+        sqlite3_bind_int64(st, 12, (sqlite3_int64)(t->last_seen ? t->last_seen : now));
+        step_reset(ST_TWIN);
+    }
+
+    for (int i = 0; i < s->scan_count; i++) {
+        const scan_entry_t *e = &s->scan_entries[i];
+        /* Flagged only (#41): an unflagged entry is one host touching a
+         * couple of ports, i.e. ordinary traffic, and persisting it
+         * would put the CDN false positives #41 removed back into the
+         * durable record. */
+        if (!e->flagged) continue;
+        time_t first = e->first_seen ? e->first_seen : now;
+        time_t last  = e->last_seen  ? e->last_seen  : now;
+        sqlite3_stmt *st = g_st[ST_SCAN];
+        bind_txt(st, 1, e->ip);
+        sqlite3_bind_int(st, 2, e->port_count);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)first);
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)last);
+        step_reset(ST_SCAN);
+
+        int n = e->port_count;
+        if (n > MAX_SCAN_PORTS) n = MAX_SCAN_PORTS;
+        for (int k = 0; k < n; k++) {
+            sqlite3_stmt *ps = g_st[ST_SCAN_PORT];
+            bind_txt(ps, 1, e->ip);
+            sqlite3_bind_int(ps, 2, (int)e->ports[k]);
+            sqlite3_bind_int64(ps, 3, (sqlite3_int64)first);
+            sqlite3_bind_int64(ps, 4, (sqlite3_int64)last);
+            step_reset(ST_SCAN_PORT);
+        }
+    }
+}
+
 /* ── tick ────────────────────────────────────────────────── */
 
 void db_tick(const sloth_state_t *s, time_t now) {
@@ -932,6 +1163,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_discovery      (s, now);
     write_ndp_and_sensors(s, now);
     write_proto_flows    (s, now);
+    write_events         (s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");
