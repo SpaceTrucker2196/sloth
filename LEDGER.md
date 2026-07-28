@@ -72,3 +72,4 @@
 | 376ab88 | 2026-07-28T20:33:54Z | claude-opus-5 | 29 | 24525 | 7372377 | 1619408 | 20.4935 | feat(db): KARMA + rogue-RADIUS evidence tables (#42 slice 4) |
 | bf10952 | 2026-07-28T20:35:58Z | claude-opus-5 | 9 | 8344 | 3422937 | 12799 | 2.0481 | docs: SQLite sink schema reference (#42 slice 5) |
 | c1f616c | 2026-07-28T20:50:13Z | claude-opus-5 | 68 | 57396 | 22048410 | 53844 | 12.9979 | feat(probe): presence classification (#53) |
+| 85ae491 | 2026-07-28T21:03:17Z | claude-opus-5 | 37 | 35637 | 12579364 | 29580 | 7.4766 | feat(alerts): recurring-transit detection (#54) |
