@@ -18,3 +18,14 @@ jobs:
 
       - name: Test
         run: make test
+
+      # The advertised build configurations are only real if something
+      # builds them. #48 shipped a WITH_NCURSES=0 break that survived
+      # because CI only ever built the default config. A unit test can't
+      # catch "this translation unit doesn't compile" — this is the
+      # inspection step for it.
+      - name: Build without ncurses
+        run: make clean && make WITH_NCURSES=0
+
+      - name: Build embedded (no ncurses, no pcap)
+        run: make clean && make embedded
