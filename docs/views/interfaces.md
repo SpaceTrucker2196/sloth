@@ -91,7 +91,16 @@ election is visible at a glance.
 `sll2_if_index` at offset 4. sloth opens `any` with `pcap_create` +
 `pcap_activate`, then calls `pcap_set_datalink(handle,
 DLT_LINUX_SLL2)`. libpcap ≥ 1.10 accepts this; ≥ 1.11 defaults to it
-for `any`. If the call fails (older libpcap, kernel refuses), sloth
+for `any`.
+
+`pcap_activate` reports failure with a *negative* return; positive
+returns are warnings on an otherwise usable handle. The `any` device
+has no promiscuous mode, so it routinely activates with
+`PCAP_WARNING_PROMISC_NOTSUP`. Only negative returns close the handle
+— treating warnings as fatal silently downgraded every capture to
+SLL v1 and disabled the filters below (issue #46).
+
+If the datalink call fails (older libpcap, kernel refuses), sloth
 falls back to `DLT_LINUX_SLL` v1 or `DLT_EN10MB` — capture still
 works, but the header doesn't identify an ingress iface, so the
 data-stream toggle becomes a UI-only marker with no filter effect.

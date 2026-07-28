@@ -1,3 +1,12 @@
+#include "capture/capture.h"
+
+/* Kept outside the WITH_PCAP guard: it is pure arithmetic on libpcap's
+   documented return contract, so the test build (which links no libpcap)
+   can still assert it. See capture.h for the contract and issue #46. */
+int capture_activate_failed(int rc) {
+    return rc < 0;
+}
+
 #ifdef WITH_PCAP
 
 #include <stdio.h>
@@ -12,7 +21,6 @@
 #include <net/if.h>       /* if_indextoname — issue #17 SLL2 lookup */
 
 #include "sloth.h"
-#include "capture/capture.h"
 #include "dns_snoop.h"
 #include "sni_snoop.h"
 #include "mdns_snoop.h"
@@ -631,7 +639,7 @@ void capture_start(sloth_state_t *s) {
         pcap_set_snaplen(g_handle, 65535);
         pcap_set_promisc(g_handle, 1);
         pcap_set_timeout(g_handle, 100);
-        if (pcap_activate(g_handle) != 0) {
+        if (capture_activate_failed(pcap_activate(g_handle))) {
             pcap_close(g_handle);
             g_handle = NULL;
         } else {

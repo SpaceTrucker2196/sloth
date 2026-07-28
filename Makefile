@@ -254,6 +254,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_services.c      \
             tests/test_arp.c           \
             tests/test_pcap_write.c    \
+            src/capture/capture.c      \
+            tests/test_capture.c       \
             tests/test_iface_graph.c   \
             tests/test_geo.c           \
             src/geo.c                  \
