@@ -11,6 +11,7 @@
 #include "dga.h"
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
+#include "transit.h"
 #include "event_wake.h"
 
 /* Engine state: deduped alert ring.
@@ -200,6 +201,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
     case ALERT_TYPE_ICMP_TUNNEL:            return "T1095";       /* Non-Application Layer Protocol (covert channel) */
     case ALERT_TYPE_MY_NETWORK_RECON:       return "T1595";       /* Active Scanning — recon aimed at the operator */
+    case ALERT_TYPE_RECURRING_TRANSIT:      return "T1595";       /* Active Scanning — physical reconnaissance */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -705,6 +707,43 @@ static void rule_my_network_recon(const sloth_state_t *s, time_t now) {
          * Not CRIT either: a former guest's phone produces it honestly. */
         fire(ALERT_TYPE_MY_NETWORK_RECON, ALERT_SEV_WARN,
              "MY_NET_RECON", detail, key, NULL, 0, now);
+    }
+}
+
+/* Recurring transit (#54).
+ *
+ * One device driving past is traffic. The same device driving past
+ * three times inside two hours is a circuit, and it is the observation
+ * an operator cannot make unaided — nobody remembers which of two
+ * hundred MACs they saw forty minutes ago.
+ *
+ * Severity is WARN, not CRIT: a delivery van on a round, or a neighbour
+ * with a short commute, produces this honestly. It is a lead, not a
+ * conclusion, and the detail line carries the pass count and closest
+ * approach so the operator can judge. */
+static void rule_recurring_transit(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->transit_count; i++) {
+        const transit_device_t *d = &s->transits[i];
+        int passes = 0;
+        for (int k = 0; k < d->pass_n; k++) {
+            long age = (long)(now - d->pass_ts[k]);
+            if (age < 0) age = 0;
+            if (age <= TRANSIT_WINDOW_SECS) passes++;
+        }
+        if (passes < TRANSIT_RECUR_THRESH) continue;
+
+        char mac_buf[20];
+        mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "transit:%s", mac_buf);
+        long span = (long)(d->last_seen - d->pass_ts[0]);
+        if (span < 0) span = 0;
+        snprintf(detail, sizeof(detail),
+                 "%s passed %d times in %ldm (closest %ddBm) - circling",
+                 mac_buf, passes, span / 60, (int)d->best_rssi);
+        fire(ALERT_TYPE_RECURRING_TRANSIT, ALERT_SEV_WARN,
+             "RECURRING_TRANSIT", detail, key, NULL, 0, now);
     }
 }
 
@@ -1880,6 +1919,7 @@ void alerts_update(sloth_state_t *s) {
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);
+    rule_recurring_transit(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);

@@ -671,6 +671,7 @@ typedef enum {
     ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
     ALERT_TYPE_ICMP_TUNNEL,         /* oversized Echo payloads — ptunnel/icmptunnel/Loki (#40) */
     ALERT_TYPE_MY_NETWORK_RECON,    /* unassociated client remembers an operator-designated SSID (#52) */
+    ALERT_TYPE_RECURRING_TRANSIT,   /* same device seen passing repeatedly — circling (#54) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1051,6 +1052,23 @@ typedef struct {
     time_t  first_seen;
     time_t  last_seen;
 } pnl_client_t;
+
+/* ── Recurring transits (#54) ─────────────────────────────── *
+ * Devices seen passing more than once. Bounded like everything else:
+ * the interesting population is small, and an unbounded table would be
+ * the one place a passive monitor could be made to allocate without
+ * limit by an attacker spraying randomised MACs. */
+#define MAX_TRANSIT_DEVICES 64
+#define MAX_TRANSIT_PASSES  16
+
+typedef struct {
+    uint8_t mac[6];                        /* canonical identity */
+    time_t  pass_ts[MAX_TRANSIT_PASSES];   /* start of each pass, oldest first */
+    int     pass_n;
+    int8_t  best_rssi;                     /* closest approach across passes */
+    time_t  first_seen;
+    time_t  last_seen;
+} transit_device_t;
 
 /* ── Sequence-number tracking ──────────────────────────────── *
  * 12-bit per-station seqnum is the deanonymisation primitive —
@@ -1438,6 +1456,8 @@ typedef struct {
     int                  seqnum_corr_sel;
 
     /* ── Association tracker snapshot ─────────────────────── */
+    transit_device_t     transits[MAX_TRANSIT_DEVICES];  /* #54 */
+    int                  transit_count;
     assoc_t              assocs[MAX_ASSOC_ENTRIES];
     int                  assoc_count;
     int                  assoc_sel;

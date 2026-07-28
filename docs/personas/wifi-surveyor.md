@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28 (rescored after #51, #52, #53).
+**Last updated**: 2026-07-28 (rescored after #51, #52, #53, #54).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -213,12 +213,30 @@ trajectory ages out of the 60-second ring.
 
 **Pass**: a transient device seen on three separate passes over two
 hours is surfaced as recurring — the signature of someone circling.
-**Result: FAIL.** #53 supplies the missing primitive — there are now
-transit episodes to count — but nothing counts them. Needs episode
-tracking on top of the classifier: a per-MAC (or per-PNL-fingerprint,
-to survive randomisation) history of passes with their timestamps.
-Remains the most actionable single observation in a
-surveillance-detection engagement.
+**Result: PASS** (was `FAIL`; rescored 2026-07-28 after #54).
+`src/transit.c` accumulates the transit verdicts from #53 across a
+horizon longer than the probe table's 120-second eviction, and
+`RECURRING_TRANSIT` fires at three passes inside two hours. It reaches
+Ilya on the overnight run, which was the point — this is the
+observation he cannot make unaided, since nobody remembers which of two
+hundred MACs they saw forty minutes ago.
+
+Two design points that decide whether he can trust it:
+
+- **Observations within 5 minutes coalesce into one pass.** A slow
+  drive-by, or a vehicle stopped at a light inside RF range, produces a
+  run of transit verdicts; counting each as an approach would
+  manufacture a circuit out of a single event.
+- **MAC randomisation does not defeat it.** A rotating device would
+  otherwise accumulate several half-counts and never reach the
+  threshold. `transit_canonical_mac()` resolves through the existing
+  `seqnum_correlations` table — the deanonymisation primitive `[j]`
+  already provides — so both addresses of a correlated pair land on one
+  key.
+
+Severity is WARN, not CRIT: a delivery round produces this honestly. It
+is a lead with the pass count and closest approach attached, not a
+conclusion.
 
 ---
 
@@ -301,25 +319,28 @@ home for it.
 | S2.1 Repeater vs. rogue | Q2 | PARTIAL (was WRONG; #51) |
 | S2.2 Pineapple detection | Q2 | PASS |
 | S3.1 Transient vs. resident | Q3 | PASS (was FAIL; #53) |
-| S3.2 Recurring transient | Q3 | **FAIL** |
+| S3.2 Recurring transient | Q3 | PASS (was FAIL; #54) |
 | S4.1 Probes for my SSID | Q4 | PASS (was FAIL; #52) |
 | S4.2 Attacks on my AP | Q4 | PASS (was PARTIAL; #52) |
 | S5.1 Unknown clients | Q5 | **FAIL** |
 | S5.2 New since last survey | Q5 | PARTIAL |
 
-**Reading**: sloth is already excellent at Q1 and at the adversarial
-half of Q2 — the inventory and the exotic-attack detectors are genuinely
-ahead of the field tools Ilya carries. Every failure clusters in the
-half of his job that is *not* about attacks at all: **establishing what
-is normal**. Residency, ownership, and familiarity are the three axes he
-reasons on, and sloth models none of them.
+**Reading (original, 2026-07-28 morning)**: sloth was already excellent
+at Q1 and at the adversarial half of Q2, and every failure clustered in
+the half of the job that is *not* about attacks — **establishing what is
+normal**. Residency, ownership and familiarity were the three axes Ilya
+reasons on, and sloth modelled none of them.
 
-That is a coherent gap, not five unrelated ones. Q3 needs *time*, Q4
-needs *ownership*, Q5 needs *familiarity* — and all three are cheap,
-because the underlying observations are already captured. What is
-missing is the operator's context: a way to tell sloth which network is
-his and which devices he already knows, and a memory of how long things
-stayed.
+**Reading (after #51–#54)**: Q3 (residency) and Q4 (ownership) are
+closed. Q5 (familiarity) is the remaining axis — sloth still cannot be
+told which devices are already known, so "unknown" means *intrinsically
+odd* rather than *unfamiliar*, and with MAC randomisation default on
+every handset that fires on the client's own staff.
+
+The shape of the fix is now established rather than speculative: #52
+introduced operator-supplied context as an input class, and a
+known-device roster is the same shape. It should extend
+`src/ownership.c` rather than start a parallel mechanism.
 
 ---
 

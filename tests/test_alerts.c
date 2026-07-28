@@ -7,6 +7,7 @@
 #include "beacon_snoop.h"
 #include "auth_track.h"
 #include "ownership.h"
+#include "transit.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -862,6 +863,69 @@ static void test_deauth_flood_no_designation_stays_warn(void) {
     int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+
+/* ── recurring transit (#54) ────────────────────────────── */
+
+static void seed_transit(sloth_state_t *s, const uint8_t mac[6],
+                         int passes, time_t now) {
+    transit_device_t *d = &s->transits[s->transit_count++];
+    memset(d, 0, sizeof(*d));
+    memcpy(d->mac, mac, 6);
+    for (int i = 0; i < passes; i++)
+        d->pass_ts[d->pass_n++] = now - (long)(passes - 1 - i) * 1800;
+    d->first_seen = d->pass_ts[0];
+    d->last_seen  = now;
+    d->best_rssi  = -44;
+}
+
+static void test_recurring_transit_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "02:aa:bb:cc:dd:01") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "circling") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "transit:02:aa:bb:cc:dd:01") != NULL);
+}
+
+/* Two passes is a round trip — going somewhere and coming back is what
+ * roads are for. The threshold has to mean something. */
+static void test_two_passes_do_not_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH - 1, time(NULL));
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
+}
+
+/* Passes that have aged out of the window do not count toward the
+ * threshold, so yesterday's traffic cannot trip today's alert. */
+static void test_stale_passes_do_not_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    time_t now = time(NULL);
+    transit_device_t *d = &s.transits[s.transit_count++];
+    memset(d, 0, sizeof(*d));
+    d->mac[0] = 0x02;
+    for (int i = 0; i < 5; i++)
+        d->pass_ts[d->pass_n++] = now - TRANSIT_WINDOW_SECS - 3600 - i;
+    d->last_seen = now;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
+}
+
+static void test_no_transits_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
 }
 
 /* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
@@ -2959,6 +3023,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_deauth_flood_on_my_bssid_escalates_crit);
     RUN_TEST(test_deauth_flood_elsewhere_stays_warn);
     RUN_TEST(test_deauth_flood_no_designation_stays_warn);
+
+    TEST_SUITE("alerts: recurring transit (#54)");
+    RUN_TEST(test_recurring_transit_fires_at_threshold);
+    RUN_TEST(test_two_passes_do_not_fire);
+    RUN_TEST(test_stale_passes_do_not_fire);
+    RUN_TEST(test_no_transits_no_fire);
     RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);

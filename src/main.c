@@ -87,6 +87,8 @@
 #include "alert_pcap.h"
 #include "data_socket.h"
 #include "ownership.h"
+#include "transit.h"
+#include "presence.h"
 #include "db.h"
 #include "discovery.h"
 #include "dns.h"
@@ -218,6 +220,23 @@ static void poll_data(sloth_state_t *s) {
         }
     }
 #ifdef WITH_PCAP
+    /* Recurring transit (#54): feed every client currently classified
+     * as passing into the episode tracker, keyed by a canonical
+     * identity so a randomising device's rotated MACs count as one.
+     * Runs after the probe snapshot has refreshed the client table. */
+    {
+        time_t t_now = time(NULL);
+        for (int i = 0; i < s->probe_count; i++) {
+            const probe_client_t *c = &s->probe_clients[i];
+            if (presence_classify(&c->rssi_ring, c->first_seen,
+                                  c->last_seen, t_now) != PRESENCE_TRANSIENT)
+                continue;
+            uint8_t id[6];
+            transit_canonical_mac(s, c->mac, id);
+            transit_observe(id, c->last_seen, c->signal_dbm);
+        }
+        transit_snapshot(s, t_now);
+    }
     chanhop_drive(s);
 #endif
     /* Durable state (#42) — last, so every snapshot above has already
