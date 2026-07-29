@@ -73,3 +73,4 @@
 | bf10952 | 2026-07-28T20:35:58Z | claude-opus-5 | 9 | 8344 | 3422937 | 12799 | 2.0481 | docs: SQLite sink schema reference (#42 slice 5) |
 | c1f616c | 2026-07-28T20:50:13Z | claude-opus-5 | 68 | 57396 | 22048410 | 53844 | 12.9979 | feat(probe): presence classification (#53) |
 | 85ae491 | 2026-07-28T21:03:17Z | claude-opus-5 | 37 | 35637 | 12579364 | 29580 | 7.4766 | feat(alerts): recurring-transit detection (#54) |
+| c4e7467 | 2026-07-29T03:23:21Z | claude-opus-5 | 32 | 35026 | 9300798 | 1913829 | 24.6645 | feat(alerts): known-device roster + UNKNOWN_DEVICE (#55) |
