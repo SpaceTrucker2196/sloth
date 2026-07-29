@@ -196,9 +196,16 @@ dispatch on all of them. Verified absent:
   classification in `src/presence.c`, recurring-transit accumulation in
   `src/transit.c`.
 
-### B3b. Parser-consistency debt ▲
+### B3b. Parser-consistency debt
 
-- **▲ Unify the two Wi-Fi paths.** sloth has *two* Wi-Fi code paths of
+- **✅ LANDED — Unify the two Wi-Fi paths.** `beacon_parse_ies()` is now
+  the single IE parser both paths call; the nl80211 scan path reports
+  the same RSN/WPS/QBSS/vendor/PHY depth as monitor mode, surfaced as
+  AKM/MFP and PHY columns in `[3] WiFi`. Two output spellings
+  (`<hidden>`/`Open` vs `""`/`OPEN`) are preserved on purpose — they
+  reach the JSONL `wifi_ap` record, so unifying them is a schema
+  decision, not a refactor. Original note follows.
+- **~~▲ Unify the two Wi-Fi paths.~~** sloth has *two* Wi-Fi code paths of
   very different depth: the monitor-mode engine
   (`src/capture/probe.c` + `src/beacon_snoop.c`) with the rich
   RSN/WPS/RNR/11k/QBSS/vendor parser, and the managed-mode nl80211 scan
@@ -265,9 +272,7 @@ The previous sequencing is fully delivered. Current order, weighting
 MISSION §4(1) ("coverage beats precision until coverage exists") against
 effort:
 
-1. **B3b — unify the two Wi-Fi parsers.** Pure debt with a clear
-   correctness story: capability depth should not depend on interface
-   mode. Nothing new to design.
+1. ~~**B3b — unify the two Wi-Fi parsers.**~~ ✅ landed.
 2. **B3 retry / FCS tracking.** The bytes are already in the radiotap
    header and are being skipped. Highest value per line of code in the
    whole file.

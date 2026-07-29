@@ -71,10 +71,27 @@ static const char *akm_name(uint8_t t) {
     }
 }
 
-int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
-                 char ssid_out[33], uint8_t bssid_out[6],
-                 int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
-                 beacon_rsn_t *rsn_out)
+/* Shared Information-Element walker (roadmap B3b).
+ *
+ * Split out of beacon_parse() so the managed-mode nl80211 scan path can
+ * reach the same parser. Before this, sloth had two Wi-Fi code paths of
+ * very different depth — this one with the full RSN/WPS/RNR/11k/QBSS/
+ * vendor decode, and src/platform/linux_wifi.c with SSID plus three
+ * booleans — so the *same AP reported different detail depending on
+ * which interface mode observed it*. That is a correctness
+ * inconsistency, not a missing feature.
+ *
+ * Takes the IE blob rather than a frame because that is what nl80211
+ * hands over (NL80211_BSS_INFORMATION_ELEMENTS); the beacon path passes
+ * dot11 + 36. `privacy` is the capability field's Privacy bit, which
+ * both sources have, and `beacon_ms` only feeds the fingerprint.
+ *
+ * Returns 1 always — an empty or malformed IE blob still yields a
+ * usable enc/ssid, with the malformed-frame counters set. */
+int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
+                     uint16_t beacon_ms,
+                     char ssid_out[33], int *channel_out, char enc_out[10],
+                     beacon_rsn_t *rsn_out)
 {
     if (rsn_out) {
         rsn_out->pairwise[0] = '\0';
@@ -104,22 +121,6 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     uint32_t vendor_hash = 2166136261u;
     int      vendor_hash_seen = 0;
     int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
-    /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
-    if (len < 36) return 0;
-
-    /* FC byte 0: type=0b00 (management), subtype=0b1000 (beacon) → 0x80 */
-    if (dot11[0] != 0x80) return 0;
-
-    /* BSSID at bytes 16-21 */
-    memcpy(bssid_out, dot11 + 16, 6);
-
-    /* Beacon interval at bytes 32-33, little-endian TUs (1 TU = 1024 µs) */
-    uint32_t bi_tu = (uint32_t)(dot11[32] | ((uint32_t)dot11[33] << 8));
-    *beacon_ms_out = (uint16_t)(bi_tu * 1024 / 1000);
-
-    /* Capability Information at bytes 34-35; bit 4 = Privacy */
-    uint16_t cap     = (uint16_t)(dot11[34] | ((uint16_t)dot11[35] << 8));
-    int      privacy = (cap >> 4) & 1;
 
     ssid_out[0]  = '\0';
     *channel_out = 0;
@@ -128,9 +129,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     int wpa_found = 0;
     int sae_found = 0;
 
-    /* Walk Information Elements starting at byte 36 */
-    const uint8_t *ie     = dot11 + 36;
-    int            ie_rem = len - 36;
+    const uint8_t *ie     = ies;
+    int            ie_rem = ies_len;
 
     while (ie_rem >= 2) {
         uint8_t tag = ie[0];
@@ -414,7 +414,7 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                       : has_vht ? "Wi-Fi 5"
                       : has_ht  ? "Wi-Fi 4" : "legacy";
         snprintf(rsn_out->phy, sizeof(rsn_out->phy), "%s", p);
-        rsn_out->fp.beacon_interval_ms = *beacon_ms_out;
+        rsn_out->fp.beacon_interval_ms = beacon_ms;
         /* Leave fp.vendor_ies_hash at 0 when the beacon had no
          * non-Microsoft tag-221 IE — the alerts code treats 0 on
          * either side as "no signal" and falls through to WARN. */
@@ -433,8 +433,34 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     else
         strncpy(enc_out, "OPEN",  10);
 
-    (void)signal;
     return 1;
+}
+
+int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
+                 char ssid_out[33], uint8_t bssid_out[6],
+                 int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
+                 beacon_rsn_t *rsn_out)
+{
+    /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
+    if (len < 36) return 0;
+
+    /* FC byte 0: type=0b00 (management), subtype=0b1000 (beacon) → 0x80 */
+    if (dot11[0] != 0x80) return 0;
+
+    /* BSSID at bytes 16-21 */
+    memcpy(bssid_out, dot11 + 16, 6);
+
+    /* Beacon interval at bytes 32-33, little-endian TUs (1 TU = 1024 µs) */
+    uint32_t bi_tu = (uint32_t)(dot11[32] | ((uint32_t)dot11[33] << 8));
+    *beacon_ms_out = (uint16_t)(bi_tu * 1024 / 1000);
+
+    /* Capability Information at bytes 34-35; bit 4 = Privacy */
+    uint16_t cap     = (uint16_t)(dot11[34] | ((uint16_t)dot11[35] << 8));
+    int      privacy = (cap >> 4) & 1;
+
+    (void)signal;
+    return beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
+                            ssid_out, channel_out, enc_out, rsn_out);
 }
 
 /* ── AP table ────────────────────────────────────────────── */

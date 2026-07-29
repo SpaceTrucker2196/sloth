@@ -49,6 +49,54 @@ The associated AP is highlighted; press Enter for the station detail
 - **Vendor mismatch**: your AP's BSSID OUI maps to a vendor that
   doesn't match the box on your shelf.
 
+## Security posture columns (roadmap B3b)
+
+The list carries **AKM/MFP** and **PHY** alongside `Enc`:
+
+| Column | Meaning |
+|---|---|
+| `Enc` | WPA3 / WPA2 / WPA / WEP / Open |
+| `AKM/MFP` | key-management suite, with an MFP suffix |
+| `PHY` | Wi-Fi 7 / 6 / 5 / 4 / legacy |
+
+The MFP suffix is the field an assessor scans this column for:
+
+- `+MFP` — management-frame protection **required**
+- `~mfp` — **capable but not required**, rendered hot. This is the
+  transition-mode posture a downgrade attack exploits, and the
+  distinction from "required" is the finding — burying it in a detail
+  pane would hide it.
+- no suffix — MFP off
+
+WPS-enabled APs render their PHY cell hot, since WPS remains a
+practical attack surface on SOHO gear.
+
+### Why this only appeared recently
+
+sloth had **two** Wi-Fi code paths of very different depth: the
+monitor-mode engine (`src/capture/probe.c` + `src/beacon_snoop.c`) with
+a full RSN/WPS/RNR/11k/QBSS/vendor IE parser, and this view's
+managed-mode nl80211 scan path (`src/platform/linux_wifi.c`) whose
+parser yielded an SSID plus three booleans. **The same AP reported far
+less detail depending on which interface mode observed it** — a
+correctness inconsistency rather than a missing feature.
+
+`beacon_parse_ies()` is now the single source of truth both paths call.
+The seam is the IE blob rather than a frame, because that is what
+nl80211 hands over (`NL80211_BSS_INFORMATION_ELEMENTS`).
+
+> **Two spellings survive on purpose.** The nl80211 path reports a
+> hidden SSID as `<hidden>` and open as `Open`, where the beacon parser
+> uses `""` and `OPEN`. Those strings reach the JSONL `wifi_ap` record,
+> so unifying them is a wire-format change and belongs in a deliberate
+> schema decision rather than arriving as a side effect of sharing a
+> parser. The mapping happens at the call site in `linux_wifi.c`.
+
+802.11k neighbour reports are deliberately **not** mirrored into
+`wifi_ap_t`: they are an AP-topology record belonging with the monitor
+table's `beacon_ap_t`, and copying the array into every scan result
+would cost ~7 KB of state for a view with nowhere to show it.
+
 ## See also
 
 - Backend: [`src/platform/linux_wifi.c`](../../src/platform/linux_wifi.c)

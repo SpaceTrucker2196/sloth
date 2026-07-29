@@ -144,6 +144,25 @@ static void draw_wifi_detail(const sloth_state_t *s) {
 
 /* ── Draw ───────────────────────────────────────────────── */
 
+
+/* Compact security posture for the AP list (roadmap B3b).
+ *
+ * The nl80211 scan path could not see any of this before — it produced
+ * SSID plus WPA2/WPA/WEP/Open and nothing else — so an AP looked far
+ * less interesting in managed mode than the same AP in monitor mode.
+ *
+ * MFP is rendered as a suffix because "capable" is the transition-mode
+ * posture a downgrade attack exploits, and "required" is not: the
+ * distinction is the finding, and burying it in a detail pane would
+ * hide the one field an assessor is scanning the column for. */
+static void fmt_akm_mfp(const wifi_ap_t *ap, char *out, int sz) {
+    const char *mfp = ap->mfp == 2 ? "+MFP"
+                    : ap->mfp == 1 ? "~mfp"
+                    : "";
+    if (ap->akm[0]) snprintf(out, (size_t)sz, "%.6s%s", ap->akm, mfp);
+    else            snprintf(out, (size_t)sz, "%s", mfp[0] ? mfp : "-");
+}
+
 void view_wifi_draw(const sloth_state_t *s) {
 #ifndef WITH_WIFI
     (void)s;
@@ -170,11 +189,13 @@ void view_wifi_draw(const sloth_state_t *s) {
 
     /* column headers */
     tui_dim();
-    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %s\n",
-           "SSID", "BSSID", "Vendor", "Ch", "Signal", "Enc");
-    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %s\n",
+    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %-5s %-10s %-8s\n",
+           "SSID", "BSSID", "Vendor", "Ch", "Signal", "Enc", "AKM/MFP",
+           "PHY");
+    TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %-5s %-10s %-8s\n",
            "--------------------------------", "-----------------",
-           "------------", "---", "--------------", "---");
+           "------------", "---", "--------------", "-----",
+           "----------", "--------");
     tui_normal();
 
     if (s->ap_count == 0) {
@@ -207,7 +228,10 @@ void view_wifi_draw(const sloth_state_t *s) {
                    assoc, ap->ssid, ap->bssid, vstr, ap->channel);
             for (int i = 0; i < 10; i++)
                 TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
-            TPRINT("]%4d  %-4s\n", ap->signal_dbm, ap->enc);
+            char akm_mfp[16];
+            fmt_akm_mfp(ap, akm_mfp, sizeof(akm_mfp));
+            TPRINT("]%4d  %-5s %-10s %-8s\n", ap->signal_dbm, ap->enc,
+                   akm_mfp, ap->phy[0] ? ap->phy : "-");
             tui_reset();
         } else {
             /* associated marker */
@@ -229,7 +253,18 @@ void view_wifi_draw(const sloth_state_t *s) {
             /* Encryption */
             if (strncmp(ap->enc, "Open", 4) == 0) tui_dim();
             else tui_bright();
-            TPRINT("  %-4s\n", ap->enc);
+            TPRINT("  %-5s", ap->enc);
+            /* AKM + MFP: "~mfp" (capable, downgrade-exposed) reads hot,
+             * "+MFP" (required) reads normal. */
+            char akm_mfp[16];
+            fmt_akm_mfp(ap, akm_mfp, sizeof(akm_mfp));
+            if      (ap->mfp == 1) tui_heat(0.6);
+            else if (ap->mfp == 2) tui_normal();
+            else                   tui_dim();
+            TPRINT(" %-10s", akm_mfp);
+            /* WPS on is worth noticing; PHY tier is context. */
+            if (ap->has_wps) tui_heat(0.5); else tui_dim();
+            TPRINT(" %-8s\n", ap->phy[0] ? ap->phy : "-");
             tui_normal();
         }
     }

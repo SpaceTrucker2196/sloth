@@ -1135,7 +1135,208 @@ static void test_record_no_attacker_flag_for_clean_oui(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+
+/* ── shared IE walker, entered directly (roadmap B3b) ─────
+ *
+ * beacon_parse_ies() is the seam the managed-mode nl80211 path uses:
+ * it hands over NL80211_BSS_INFORMATION_ELEMENTS, which is an IE blob
+ * with no 802.11 header in front of it. These build that blob by hand
+ * rather than wrapping a frame, because that is exactly how the other
+ * caller enters — a test that only ever went through beacon_parse()
+ * would not prove the entry point works. */
+
+/* Append one IE: tag, length, body. */
+static int ie_put(uint8_t *buf, int off, uint8_t tag,
+                  const uint8_t *body, int blen) {
+    buf[off++] = tag;
+    buf[off++] = (uint8_t)blen;
+    if (blen > 0) memcpy(buf + off, body, (size_t)blen);
+    return off + blen;
+}
+
+static void test_ies_direct_ssid_and_channel(void) {
+    uint8_t ies[128];
+    int off = 0;
+    off = ie_put(ies, off, 0, (const uint8_t *)"CorpWiFi", 8);
+    uint8_t ds[1] = { 11 };
+    off = ie_put(ies, off, 3, ds, 1);
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_STR(ssid, "CorpWiFi");
+    ASSERT_EQ(ch, 11);
+    /* No RSN, no WPA, privacy clear → open. Note the convention: this
+     * parser says "OPEN"; linux_wifi.c maps it to "Open" for the
+     * wire format it already publishes. */
+    ASSERT_STR(enc, "OPEN");
+}
+
+/* An empty SSID IE is a hidden network and stays empty here — the
+ * "<hidden>" spelling belongs to the nl80211 path, not the parser. */
+static void test_ies_direct_hidden_ssid_stays_empty(void) {
+    uint8_t ies[64];
+    int off = ie_put(ies, 0, 0, NULL, 0);
+    char ssid[33] = "x"; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ((int)ssid[0], 0);
+}
+
+/* Privacy bit with no RSN/WPA IE is WEP — the capability field is a
+ * parameter here because nl80211 supplies it separately from the IEs. */
+static void test_ies_direct_privacy_bit_is_wep(void) {
+    uint8_t ies[64];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"Old", 3);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1 /* privacy */, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(enc, "WEP");
+}
+
+/* The depth the managed-mode path previously threw away: a full RSN IE
+ * yields ciphers, AKM and MFP, not just "there was an RSN IE". */
+static void test_ies_direct_rsn_depth(void) {
+    /* RSN: version 1, group CCMP, 1 pairwise CCMP, 1 AKM PSK,
+     * RSN caps with MFPC set (bit 7 of the low byte). */
+    const uint8_t rsn_ie[] = {
+        0x01, 0x00,                    /* version 1            */
+        0x00, 0x0f, 0xac, 0x04,        /* group  = CCMP        */
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x04,  /* pairwise CCMP  */
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x02,  /* AKM PSK        */
+        0x80, 0x00,                    /* RSN caps: MFPC       */
+    };
+    uint8_t ies[128];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"Corp", 4);
+    off = ie_put(ies, off, 48, rsn_ie, (int)sizeof(rsn_ie));
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(enc, "WPA2");
+    ASSERT_STR(rsn.pairwise, "CCMP");
+    ASSERT_STR(rsn.group,    "CCMP");
+    ASSERT_STR(rsn.akm,      "PSK");
+    ASSERT_EQ(rsn.mfp, 1);          /* capable, not required */
+}
+
+/* MFP required is a distinct posture from MFP capable, and the
+ * difference is the whole point of the field — "capable" is the
+ * downgrade-exposed transition mode, "required" is not. Found by
+ * mutation: flipping the required branch to capable broke no test. */
+static void test_ies_direct_mfp_required(void) {
+    const uint8_t rsn_ie[] = {
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x08,  /* AKM SAE */
+        0xc0, 0x00,                          /* RSN caps: MFPR|MFPC */
+    };
+    uint8_t ies[128];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"Corp", 4);
+    off = ie_put(ies, off, 48, rsn_ie, (int)sizeof(rsn_ie));
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.mfp, 2);                   /* required */
+    ASSERT_STR(rsn.akm, "SAE");
+    ASSERT_STR(enc, "WPA3");                 /* SAE ⇒ WPA3 */
+}
+
+/* ...and neither bit set is MFP off, so all three states are pinned. */
+static void test_ies_direct_mfp_off(void) {
+    const uint8_t rsn_ie[] = {
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x04,
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x02,
+        0x00, 0x00,                          /* RSN caps: neither */
+    };
+    uint8_t ies[128];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"Corp", 4);
+    off = ie_put(ies, off, 48, rsn_ie, (int)sizeof(rsn_ie));
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.mfp, 0);
+}
+
+/* QBSS Load (tag 11) — free occupancy metric, and one of the fields
+ * the managed path could not previously see. */
+static void test_ies_direct_qbss(void) {
+    const uint8_t qbss[5] = { 0x2a, 0x00, 0x80, 0x00, 0x00 }; /* 42 stations, util 128 */
+    uint8_t ies[64];
+    int off = ie_put(ies, 0, 11, qbss, 5);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.has_qbss, 1);
+    ASSERT_EQ(rsn.qbss_stations, 42);
+    ASSERT_EQ(rsn.qbss_chan_util, 128);
+}
+
+/* rsn_out is fully zeroed on entry, so a caller reusing one struct
+ * across BSSes cannot leak the previous AP's posture into the next —
+ * the nl80211 loop does exactly that. */
+static void test_ies_direct_zeroes_output_on_entry(void) {
+    beacon_rsn_t rsn;
+    memset(&rsn, 0xff, sizeof(rsn));
+    uint8_t ies[32];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"N", 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ((int)rsn.pairwise[0], 0);
+    ASSERT_EQ((int)rsn.akm[0],      0);
+    ASSERT_EQ(rsn.mfp,              0);
+    ASSERT_EQ(rsn.has_wps,          0);
+    ASSERT_EQ(rsn.has_qbss,         0);
+    ASSERT_EQ(rsn.neighbor_count,   0);
+}
+
+/* A truncated blob must not walk off the end, and must record the
+ * overrun for the mgmt-fuzz detector. */
+static void test_ies_direct_overrun_is_counted(void) {
+    uint8_t ies[4] = { 0, 200, 'a', 'b' };   /* claims 200 bytes, has 2 */
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, 4, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.ie_overruns, 1);
+}
+
+static void test_ies_direct_empty_blob_is_safe(void) {
+    char ssid[33] = "x"; char enc[10] = ""; int ch = 9;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse_ies(NULL, 0, 0, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_EQ((int)ssid[0], 0);
+    ASSERT_EQ(ch, 0);
+    ASSERT_STR(enc, "OPEN");
+}
+
+/* NULL rsn_out is allowed — beacon_parse's own contract permits it. */
+static void test_ies_direct_null_rsn_is_safe(void) {
+    uint8_t ies[32];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"N", 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, NULL), 1);
+    ASSERT_STR(ssid, "N");
+}
+
 void run_beacon_snoop_tests(void) {
+    TEST_SUITE("beacon: shared IE walker (B3b)");
+    RUN_TEST(test_ies_direct_ssid_and_channel);
+    RUN_TEST(test_ies_direct_hidden_ssid_stays_empty);
+    RUN_TEST(test_ies_direct_privacy_bit_is_wep);
+    RUN_TEST(test_ies_direct_rsn_depth);
+    RUN_TEST(test_ies_direct_mfp_required);
+    RUN_TEST(test_ies_direct_mfp_off);
+    RUN_TEST(test_ies_direct_qbss);
+    RUN_TEST(test_ies_direct_zeroes_output_on_entry);
+    RUN_TEST(test_ies_direct_overrun_is_counted);
+    RUN_TEST(test_ies_direct_empty_blob_is_safe);
+    RUN_TEST(test_ies_direct_null_rsn_is_safe);
+
     TEST_SUITE("beacon_snoop");
     RUN_TEST(test_parse_rejects_non_beacon);
     RUN_TEST(test_parse_rejects_too_short);

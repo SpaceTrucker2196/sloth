@@ -47,6 +47,27 @@ typedef struct {
     int  truncated_rsn;
 } beacon_rsn_t;
 
+/* Walk an Information-Element blob and fill the same outputs
+ * beacon_parse produces (roadmap B3b).
+ *
+ * Exposed so the managed-mode nl80211 path can reach this parser
+ * instead of its own shallow one — nl80211 hands over
+ * NL80211_BSS_INFORMATION_ELEMENTS, which is exactly this blob, so the
+ * seam is the IE list rather than a frame. `privacy` is the capability
+ * field's Privacy bit; `beacon_ms` only feeds the fingerprint and may
+ * be 0 when the caller has no beacon interval.
+ *
+ * `rsn_out` is fully zeroed on entry. Returns 1.
+ *
+ * Note the output conventions are this file's, not linux_wifi.c's:
+ * a hidden SSID is "" (not "<hidden>") and open is "OPEN" (not
+ * "Open"). Callers that publish into a format with the other
+ * convention must map. */
+int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
+                     uint16_t beacon_ms,
+                     char ssid_out[33], int *channel_out, char enc_out[10],
+                     beacon_rsn_t *rsn_out);
+
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).
    Extracts SSID, BSSID, channel, encryption mode, beacon interval, and
    (if rsn_out != NULL) the RSN inventory.

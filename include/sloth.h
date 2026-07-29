@@ -500,6 +500,29 @@ typedef struct {
     int  channel;
     char enc[16];
     int  status;   /* NL80211_BSS_STATUS_* value, or -1 if not current */
+    /* ── Security / capability posture (roadmap B3b) ──────
+     * Filled by the shared beacon IE parser. Before B3b the nl80211
+     * scan path had its own parser yielding SSID plus three booleans,
+     * so the same AP reported far less detail in managed mode than in
+     * monitor mode. Empty string / 0 means the IE was absent.
+     *
+     * 802.11k neighbour reports are deliberately NOT mirrored here:
+     * they are an AP-topology record that belongs with the monitor
+     * table's beacon_ap_t, and copying the array into every scan
+     * result would cost 7 KB of state for a view that has nowhere to
+     * show it. */
+    char pairwise[12];
+    char group[12];
+    char akm[24];
+    int  mfp;            /* 0=off 1=capable 2=required */
+    char vendor[24];
+    int  has_wps;
+    int  wps_state;
+    int  wps_locked;
+    char phy[10];        /* "Wi-Fi 7" / "6" / "5" / "4" / "legacy" */
+    int  has_qbss;
+    int  qbss_stations;
+    int  qbss_chan_util;
 } wifi_ap_t;
 
 /* ── WiFi stations (our link to AP in managed mode, or clients in AP mode) ── */

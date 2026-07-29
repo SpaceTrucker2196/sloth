@@ -16,6 +16,7 @@
 #include <net/if.h>
 
 #include "sloth.h"
+#include "beacon_snoop.h"
 #include "platform/linux_wifi.h"
 
 /* ── Netlink attribute helpers ───────────────────────────── */
@@ -119,41 +120,61 @@ static int freq_to_channel(uint32_t mhz) {
     return 0;
 }
 
-/* ── 802.11 IE parser: SSID + encryption ─────────────────── */
+/* ── 802.11 IE parsing: delegated to the shared parser ───── *
+ *
+ * Roadmap B3b. This file used to carry its own IE walker yielding an
+ * SSID plus three booleans, so an AP seen in managed mode reported far
+ * less than the same AP seen in monitor mode — RSN ciphers, AKM, MFP,
+ * WPS state, vendor and PHY tier were all available in the beacon IEs
+ * and simply not read. beacon_parse_ies() is now the single source of
+ * truth for both paths.
+ *
+ * The output conventions differ between the two and are preserved
+ * rather than unified, because `enc` and `ssid` reach the JSONL
+ * wifi_ap record and changing their spelling would be a wire-format
+ * change, not a refactor:
+ *
+ *   hidden SSID   beacon parser ""      → this path "<hidden>"
+ *   open network  beacon parser "OPEN"  → this path "Open"
+ *
+ * Worth unifying, but as a deliberate schema decision rather than a
+ * side effect of sharing a parser. */
 
 static void parse_ies(const uint8_t *ies, int len, uint16_t cap,
-                      char *ssid, char *enc) {
-    int has_rsn = 0, has_wpa = 0;
-    ssid[0] = '\0';
+                      wifi_ap_t *ap) {
+    beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));   /* parser zeroes it too; belt and braces */
+    char   enc[10]  = "";
+    char   ssid[33] = "";
+    int    channel  = 0;
 
-    for (int i = 0; i + 2 <= len; ) {
-        uint8_t tag  = ies[i];
-        uint8_t elen = ies[i + 1];
-        if (i + 2 + elen > len) break;
+    beacon_parse_ies(ies, len, (cap >> 4) & 1, 0,
+                     ssid, &channel, enc, &rsn);
 
-        if (tag == 0 && ssid[0] == '\0') {
-            /* SSID (empty = hidden network) */
-            int sl = elen > 32 ? 32 : elen;
-            if (sl > 0) { memcpy(ssid, &ies[i + 2], sl); ssid[sl] = '\0'; }
-            else          memcpy(ssid, "<hidden>", 9);
-        } else if (tag == 48) {
-            /* RSN IE → WPA2/WPA3 */
-            has_rsn = 1;
-        } else if (tag == 221 && elen >= 4
-                   && ies[i+2] == 0x00 && ies[i+3] == 0x50
-                   && ies[i+4] == 0xf2 && ies[i+5] == 0x01) {
-            /* WPA vendor IE (Microsoft OUI, type 0x01) */
-            has_wpa = 1;
-        }
-        i += 2 + elen;
-    }
+    /* Map the beacon parser's conventions onto this path's. */
+    if (ssid[0]) snprintf(ap->ssid, sizeof(ap->ssid), "%s", ssid);
+    else         memcpy(ap->ssid, "<hidden>", 9);
 
-    if (ssid[0] == '\0') memcpy(ssid, "<hidden>", 9);
+    if (strcmp(enc, "OPEN") == 0) memcpy(ap->enc, "Open", 5);
+    else snprintf(ap->enc, sizeof(ap->enc), "%s", enc);
 
-    if      (has_rsn)     memcpy(enc, "WPA2", 5);
-    else if (has_wpa)     memcpy(enc, "WPA",  4);
-    else if (cap & 0x10)  memcpy(enc, "WEP",  4);  /* Privacy bit */
-    else                  memcpy(enc, "Open", 5);
+    /* The IE-derived channel is more reliable than the frequency when
+     * present, but nl80211 already gave us a frequency and the DS Param
+     * IE is absent on many 6 GHz APs — so only take it as a fallback. */
+    if (ap->channel == 0 && channel > 0) ap->channel = channel;
+
+    snprintf(ap->pairwise, sizeof(ap->pairwise), "%s", rsn.pairwise);
+    snprintf(ap->group,    sizeof(ap->group),    "%s", rsn.group);
+    snprintf(ap->akm,      sizeof(ap->akm),      "%s", rsn.akm);
+    snprintf(ap->vendor,   sizeof(ap->vendor),   "%s", rsn.vendor);
+    snprintf(ap->phy,      sizeof(ap->phy),      "%s", rsn.phy);
+    ap->mfp            = rsn.mfp;
+    ap->has_wps        = rsn.has_wps;
+    ap->wps_state      = rsn.wps_state;
+    ap->wps_locked     = rsn.wps_locked;
+    ap->has_qbss       = rsn.has_qbss;
+    ap->qbss_stations  = rsn.qbss_stations;
+    ap->qbss_chan_util = rsn.qbss_chan_util;
 }
 
 /* ── Parse one NL80211_CMD_NEW_SCAN_RESULTS message ─────── */
@@ -211,7 +232,7 @@ static int parse_scan_msg(const struct nlmsghdr *nlh,
         ap->channel    = freq_to_channel(freq);
 
         if (ies && ies_len > 0)
-            parse_ies(ies, ies_len, cap, ap->ssid, ap->enc);
+            parse_ies(ies, ies_len, cap, ap);
         else {
             memcpy(ap->ssid, "<no-ie>", 8);
             if (cap & 0x10) memcpy(ap->enc, "WEP",  4);
