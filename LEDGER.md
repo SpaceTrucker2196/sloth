@@ -77,3 +77,4 @@
 | 43a95a6 | 2026-07-29T03:32:58Z | claude-opus-5 | 65 | 49959 | 24047752 | 49888 | 13.7721 | feat(db): survey sessions + new-since-last-visit (#56) |
 | e7ddd7a | 2026-07-29T03:56:19Z | claude-opus-5 | 58 | 41251 | 23118299 | 51972 | 13.1104 | feat(tui): headless mode + poll-loop spin fix (#50) |
 | f3682c1 | 2026-07-29T05:27:54Z | claude-opus-5 | 131 | 93307 | 55201415 | 115784 | 31.0919 | refactor(wifi): unify the two IE parsers (roadmap B3b) |
+| 8166b6a | 2026-07-29T05:40:26Z | claude-opus-5 | 75 | 62518 | 33484190 | 77302 | 19.0784 | feat(rf): retry/FCS tracking + radiotap extraction (roadmap B3) |
