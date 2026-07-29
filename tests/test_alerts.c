@@ -8,6 +8,7 @@
 #include "auth_track.h"
 #include "ownership.h"
 #include "transit.h"
+#include "rf_quality.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -1049,6 +1050,72 @@ static void test_unknown_device_notes_randomised_mac(void) {
     ASSERT(idx >= 0);
     ASSERT(strstr(s.alerts[idx].detail, "randomised") != NULL);
     ownership_clear();
+}
+
+
+/* ── channel RF degradation (roadmap B3) ────────────────── */
+
+static void seed_channel(sloth_state_t *s, int ch, int retry_pct,
+                         int badfcs_pct, uint32_t frames) {
+    channel_summary_t *c = &s->channels[s->channel_count++];
+    memset(c, 0, sizeof(*c));
+    c->channel    = ch;
+    c->retry_pct  = retry_pct;
+    c->badfcs_pct = badfcs_pct;
+    c->frames     = frames;
+}
+
+static void test_rf_degraded_fires_at_threshold(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_channel(&s, 6, RF_RETRY_DEGRADED_PCT, 12, 900);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RF_DEGRADED);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "ch 6") != NULL);
+    ASSERT(strstr(s.alerts[idx].key, "rfdegraded:6") != NULL);
+}
+
+static void test_rf_degraded_below_threshold_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_channel(&s, 6, RF_RETRY_DEGRADED_PCT - 1, 2, 900);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RF_DEGRADED), -1);
+}
+
+/* -1 is "not enough frames to say" and must never be read as a ratio.
+ * Treating it as a number would make every quiet channel alert. */
+static void test_rf_degraded_unknown_ratio_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_channel(&s, 6, -1, -1, 3);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RF_DEGRADED), -1);
+}
+
+/* Each channel is judged on its own. */
+static void test_rf_degraded_is_per_channel(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_channel(&s, 1,  90, 30, 900);
+    seed_channel(&s, 11,  3,  0, 900);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RF_DEGRADED);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "ch 1") != NULL);
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_RF_DEGRADED) n++;
+    ASSERT_EQ(n, 1);
+}
+
+static void test_rf_degraded_no_channels_no_fire(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RF_DEGRADED), -1);
 }
 
 /* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
@@ -3162,6 +3229,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_designation_without_roster_is_inert);
     RUN_TEST(test_unconfigured_is_inert);
     RUN_TEST(test_unknown_device_notes_randomised_mac);
+
+    TEST_SUITE("alerts: channel RF degradation (B3)");
+    RUN_TEST(test_rf_degraded_fires_at_threshold);
+    RUN_TEST(test_rf_degraded_below_threshold_no_fire);
+    RUN_TEST(test_rf_degraded_unknown_ratio_no_fire);
+    RUN_TEST(test_rf_degraded_is_per_channel);
+    RUN_TEST(test_rf_degraded_no_channels_no_fire);
     RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);

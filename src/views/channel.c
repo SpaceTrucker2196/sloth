@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/channel.h"
+#include "rf_quality.h"
 
 /* Per-channel activity summary. Answers the operator's "where should
  * I park my monitor adapter?" question by aggregating APs + associated
@@ -105,11 +106,12 @@ void view_channel_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %4s  %s\n",
-           "Ch", "Band", "APs", "STAs", "Best", "Top SSID", "age", "activity");
-    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %4s  %s\n",
+    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %4s  %s\n",
+           "Ch", "Band", "APs", "STAs", "Best", "Top SSID", "retry",
+           "age", "activity");
+    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %4s  %s\n",
            "-----", "-------", "----", "----", "----",
-           "--------------------", "----", "--------");
+           "--------------------", "------", "----", "--------");
     tui_normal();
 
     if (s->channel_count == 0) {
@@ -172,6 +174,20 @@ void view_channel_draw(const sloth_state_t *s) {
 #endif
         } else {
             tui_dim(); TPRINT("  %-20s", "-");
+        }
+
+        /* Retry ratio (roadmap B3) — the passive signature of a channel
+         * in trouble. "-" is "not enough frames to say", which is not
+         * the same as 0%: a quiet channel is not a clean one. */
+        if (c->retry_pct < 0) {
+            tui_dim(); TPRINT("  %6s", "-");
+        } else {
+            if      (c->retry_pct >= RF_RETRY_DEGRADED_PCT) tui_heat(0.9);
+            else if (c->retry_pct >= RF_RETRY_DEGRADED_PCT / 2) tui_heat(0.5);
+            else tui_normal();
+            char rbuf[12];
+            snprintf(rbuf, sizeof(rbuf), "%d%%", c->retry_pct);
+            TPRINT("  %6s", rbuf);
         }
 
         tui_dim(); TPRINT("  %4s  ", age_buf);

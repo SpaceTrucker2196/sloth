@@ -176,13 +176,15 @@ dispatch on all of them. Verified absent:
 
 ### B3. PHY / signal-layer analysis
 
-- **▲ Retry-rate / FCS-error tracking.** `parse_radiotap()` explicitly
-  *skips* the FLAGS and RATE fields — it extracts only signal and
-  channel. Rising retries or FCS errors on a channel is the passive
-  signature of interference, a hidden node, or a jammer, and it needs no
-  new capture at all: just stop skipping bytes already in hand. Cheapest
-  real win in section B.
-  *Check: `src/capture/probe.c` `parse_radiotap`, the `off += 1` skips.*
+- **✅ LANDED — Retry-rate / FCS-error tracking.** Radiotap decoding
+  extracted to `src/radiotap.c` (and thereby unit-tested for the first
+  time — `probe.c` is not in the test build), widened to read FLAGS and
+  RATE. Per-channel accounting in `src/rf_quality.c`, a retry column in
+  `[m] Channel`, and the `RF_DEGRADED` alert. The extraction also fixed
+  a latent bug: the extended-present-bitmap loop re-tested the *first*
+  word's continuation bit and never advanced, so any capture from a
+  driver emitting extended bitmaps yielded **no signal and no channel at
+  all**.
 - **◆ Channel-utilisation / airtime view.** Combine B1 control-frame
   counts with the existing QBSS Load and per-channel frame rate into a
   live occupancy panel. This is the "spectrum analyser" the tool still
@@ -273,9 +275,7 @@ MISSION §4(1) ("coverage beats precision until coverage exists") against
 effort:
 
 1. ~~**B3b — unify the two Wi-Fi parsers.**~~ ✅ landed.
-2. **B3 retry / FCS tracking.** The bytes are already in the radiotap
-   header and are being skipped. Highest value per line of code in the
-   whole file.
+2. ~~**B3 retry / FCS tracking.**~~ ✅ landed.
 3. **B1 assoc-requests + action frames.** The largest unparsed passive
    surface, and the prerequisite for association-flood and BTM-abuse
    detection.

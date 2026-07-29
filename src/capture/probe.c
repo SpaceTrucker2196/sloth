@@ -9,6 +9,8 @@
 
 #include "sloth.h"
 #include "capture/probe.h"
+#include "radiotap.h"
+#include "rf_quality.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "probe_pnl.h"
@@ -138,53 +140,9 @@ static int find_monitor_iface(char *buf, int sz) {
 static int find_monitor_iface(char *buf, int sz) { (void)buf; (void)sz; return 0; }
 #endif
 
-/* ── Radiotap parser ─────────────────────────────────────── */
-
-#define RT_PAD(o, a)  (((o) + ((a)-1)) & ~((a)-1))
-
-static void parse_radiotap(const uint8_t *buf, int len,
-                           int8_t *signal, int *channel) {
-    *signal  = -100;
-    *channel = 0;
-    if (len < 8) return;
-
-    uint16_t rt_len = (uint16_t)(buf[2] | (buf[3] << 8));
-    if (rt_len < 8 || (int)rt_len > len) return;
-
-    uint32_t pres = (uint32_t)(buf[4] | (buf[5]<<8) | (buf[6]<<16) | (buf[7]<<24));
-
-    /* skip extended present bitmaps */
-    int off = 8;
-    while ((pres & (1u<<31)) && off + 4 <= (int)rt_len)
-        off += 4;
-
-    /* re-read first present word for field presence */
-    pres = (uint32_t)(buf[4] | (buf[5]<<8) | (buf[6]<<16) | (buf[7]<<24));
-
-    if (pres & (1u<< 0)) { off = RT_PAD(off, 8); off += 8; }  /* TSFT */
-    if (pres & (1u<< 1)) {                         off += 1; }  /* FLAGS */
-    if (pres & (1u<< 2)) {                         off += 1; }  /* RATE */
-    if (pres & (1u<< 3)) {                                       /* CHANNEL */
-        off = RT_PAD(off, 2);
-        if (off + 2 <= (int)rt_len) {
-            uint16_t freq = (uint16_t)(buf[off] | (buf[off+1] << 8));
-            /* Mirror the nl80211 freq→channel map (src/platform/linux_wifi.c)
-             * so a monitor capture and a managed-mode scan agree. Without the
-             * 6 GHz arm, 6 GHz frames landed on channel 0. */
-            if      (freq >= 2412 && freq <= 2472) *channel = (freq - 2407) / 5;
-            else if (freq == 2484)                 *channel = 14;
-            else if (freq >= 5160 && freq <= 5895) *channel = (freq - 5000) / 5;
-            else if (freq >= 5955 && freq <= 7115) *channel = (freq - 5950) / 5;
-        }
-        off += 4;
-    }
-    if (pres & (1u<< 4)) { off += 2; }                          /* FHSS */
-    if (pres & (1u<< 5)) {                                       /* DBM_ANTSIGNAL */
-        if (off < (int)rt_len) *signal = (int8_t)buf[off];
-    }
-}
-
-#undef RT_PAD
+/* Radiotap decoding lives in src/radiotap.c so it can be unit-tested —
+ * this file is compiled only under WITH_PCAP and is not in the test
+ * build, so a parser living here had no coverage. See radiotap.h. */
 
 /* ── Client table update (caller holds g_mu) ─────────────── */
 
@@ -259,8 +217,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     uint16_t rt_len = (uint16_t)(data[2] | (data[3] << 8));
     if ((int)rt_len >= len) return;
 
-    int8_t signal; int channel;
-    parse_radiotap(data, len, &signal, &channel);
+    radiotap_info_t rt;
+    radiotap_parse(data, len, &rt);
+    int8_t signal  = rt.signal_dbm;
+    int    channel = rt.channel;
 
     /* 802.11 frame starts after radiotap */
     const uint8_t *dot11     = data + rt_len;
@@ -274,6 +234,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     uint8_t fc0  = dot11[0];
     uint8_t type = (fc0 >> 2) & 0x03;
     uint8_t sub  = (fc0 >> 4) & 0x0f;
+
+    /* Per-channel RF quality (roadmap B3). The retry bit is Frame
+     * Control byte 1 bit 3; the FCS-failed flag came from radiotap.
+     * Counted for every frame type including control frames, because
+     * channel health is about the air, not about what the frame said —
+     * and a frame that failed its FCS is still evidence the channel is
+     * struggling even though its contents are untrustworthy. */
+    rf_quality_observe(channel, (dot11[1] & 0x08) ? 1 : 0, rt.bad_fcs,
+                       time(NULL));
 
     /* Log every frame for the monitor packets band, before the per-type
      * dispatch. addr2 (TA/SA) only exists from 16 bytes on — ACK/CTS carry

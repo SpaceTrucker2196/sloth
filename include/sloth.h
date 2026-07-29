@@ -696,6 +696,7 @@ typedef enum {
     ALERT_TYPE_MY_NETWORK_RECON,    /* unassociated client remembers an operator-designated SSID (#52) */
     ALERT_TYPE_RECURRING_TRANSIT,   /* same device seen passing repeatedly — circling (#54) */
     ALERT_TYPE_UNKNOWN_DEVICE,      /* device on a designated network, absent from the roster (#55) */
+    ALERT_TYPE_RF_DEGRADED,         /* sustained retry ratio on a channel — interference/jamming (B3) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1133,6 +1134,13 @@ typedef struct {
     int8_t  best_signal;    /* strongest signal among APs here  */
     char    top_ssid[33];   /* SSID of the strongest AP         */
     time_t  last_seen;
+    /* RF quality over the last window (roadmap B3). Retries and FCS
+     * failures are the passive signature of interference, a hidden
+     * node, or a jammer. -1 means "not enough frames to say", which is
+     * a different answer from 0% — a quiet channel is not a clean one. */
+    uint32_t frames;
+    int      retry_pct;
+    int      badfcs_pct;
 } channel_summary_t;
 
 /* ── Client ↔ AP association tracker ─────────────────────── */

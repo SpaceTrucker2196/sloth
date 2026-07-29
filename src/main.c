@@ -88,6 +88,7 @@
 #include "data_socket.h"
 #include "ownership.h"
 #include "transit.h"
+#include "rf_quality.h"
 #include "presence.h"
 #include "tui_palette.h"
 #include <sys/select.h>
@@ -170,6 +171,7 @@ static void poll_data(sloth_state_t *s) {
     seqnum_snapshot(s);
     assoc_snapshot(s);
     channel_summary_update(s);
+    rf_quality_snapshot(s, time(NULL));
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);

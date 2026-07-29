@@ -105,6 +105,8 @@ void run_ownership_tests(void);
 void run_db_tests(void);
 void run_presence_tests(void);
 void run_transit_tests(void);
+void run_radiotap_tests(void);
+void run_rf_quality_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -209,6 +211,8 @@ int main(void) {
     run_db_tests();
     run_presence_tests();
     run_transit_tests();
+    run_radiotap_tests();
+    run_rf_quality_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

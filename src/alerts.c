@@ -12,6 +12,7 @@
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
 #include "transit.h"
+#include "rf_quality.h"
 #include "event_wake.h"
 
 /* Engine state: deduped alert ring.
@@ -203,6 +204,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_MY_NETWORK_RECON:       return "T1595";       /* Active Scanning — recon aimed at the operator */
     case ALERT_TYPE_RECURRING_TRANSIT:      return "T1595";       /* Active Scanning — physical reconnaissance */
     case ALERT_TYPE_UNKNOWN_DEVICE:         return "T1200";       /* Hardware Additions — unrostered device on the network */
+    case ALERT_TYPE_RF_DEGRADED:            return "T1498";       /* Network DoS — the observable, not a claim of intent */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -787,6 +789,37 @@ static void rule_unknown_device(const sloth_state_t *s, time_t now) {
                  a->sta_random ? " (randomised MAC)" : "");
         fire(ALERT_TYPE_UNKNOWN_DEVICE, ALERT_SEV_WARN,
              "UNKNOWN_DEVICE", detail, key, NULL, 0, now);
+    }
+}
+
+/* Channel RF degradation (roadmap B3).
+ *
+ * A sustained retry ratio is the passive signature of a channel that is
+ * not working. It is deliberately NOT called "jamming": the same
+ * measurement is produced by a microwave oven, a distant client at the
+ * edge of range, a hidden node, and a deliberate jammer. sloth reports
+ * the observable and leaves attribution to the operator — the detail
+ * line carries the ratio and the sample size so they can judge.
+ *
+ * WARN, not CRIT, for the same reason. And it needs RF_MIN_FRAMES of
+ * traffic before it will say anything at all, so a channel the radio
+ * merely glanced at cannot trip it. */
+static void rule_rf_degraded(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->channel_count; i++) {
+        const channel_summary_t *c = &s->channels[i];
+        if (c->retry_pct < RF_RETRY_DEGRADED_PCT) continue;   /* -1 too */
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "rfdegraded:%d", c->channel);
+        snprintf(detail, sizeof(detail),
+                 "ch %d: %d%% retries, %d%% bad-FCS over %u frames "
+                 "- interference, hidden node or jamming",
+                 c->channel, c->retry_pct,
+                 c->badfcs_pct < 0 ? 0 : c->badfcs_pct,
+                 (unsigned)c->frames);
+        fire(ALERT_TYPE_RF_DEGRADED, ALERT_SEV_WARN,
+             "RF_DEGRADED", detail, key, NULL, 0, now);
     }
 }
 
@@ -1964,6 +1997,7 @@ void alerts_update(sloth_state_t *s) {
     rule_my_network_recon(s, now);
     rule_recurring_transit(s, now);
     rule_unknown_device(s, now);
+    rule_rf_degraded(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);

@@ -17,6 +17,8 @@ SRCS = src/main.c          \
        src/ownership.c     \
        src/presence.c      \
        src/transit.c       \
+       src/radiotap.c      \
+       src/rf_quality.c    \
        src/db_schema.c     \
        src/history.c       \
        src/bandwidth.c     \
@@ -277,6 +279,10 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_presence.c      \
             src/transit.c              \
             tests/test_transit.c       \
+            src/radiotap.c             \
+            tests/test_radiotap.c      \
+            src/rf_quality.c           \
+            tests/test_rf_quality.c    \
             src/db_schema.c            \
             src/db.c                   \
             tests/test_db.c            \
