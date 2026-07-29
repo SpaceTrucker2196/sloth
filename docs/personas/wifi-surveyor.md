@@ -116,9 +116,10 @@ exactly the defensibility he needs for S1.2's "how do you know?".
 2. Return, read the report.
 
 **Pass**: an unattended run yields a reviewable artifact without a TTY.
-**Result: PASS**, with a caveat — the run is now buildable without
-ncurses (#48) but still paints a screen; see #50. The `--report` /
-`--report-json` posture rollup is the artifact he wants.
+**Result: PASS.** `--headless` (#50) draws nothing and never touches
+the terminal, so the journal carries only sloth's own diagnostics.
+`--report` / `--report-json` is the artifact he collects in the
+morning, and #56 adds the *New since last survey* section to it.
 
 ---
 
@@ -340,7 +341,7 @@ home for it.
 |----------|----------|---------|
 | S1.1 AP inventory | Q1 | PASS |
 | S1.2 Client inventory | Q1 | PASS |
-| S1.3 Unattended run | Q1 | PASS (see #50) |
+| S1.3 Unattended run | Q1 | PASS |
 | S2.1 Repeater vs. rogue | Q2 | PARTIAL (was WRONG; #51) |
 | S2.2 Pineapple detection | Q2 | PASS |
 | S3.1 Transient vs. resident | Q3 | PASS (was FAIL; #53) |

@@ -95,6 +95,23 @@ through a small set of backend-neutral primitives.
 The degraded 8-colour path (terminals reporting `COLORS < 256`) is
 ncurses-only and keeps its own approximation table.
 
+## Colour policy and headless operation
+
+`--no-color`, or a non-empty `NO_COLOR` environment variable
+([no-color.org](https://no-color.org)), disables every escape sequence
+the renderers emit: SGR under the ANSI backend, and `start_color()`
+under ncurses. It does **not** stop drawing — that is `--headless`.
+
+The two are separate because "I am reading this over a serial console"
+and "nothing is reading this" are different situations. `--headless`
+never touches the terminal at all: no draw, no screen clear, no
+raw-mode termios change, no key read.
+
+The policy lives in `src/tui_palette.c` rather than `tui.c` because it
+is a property of the palette rather than of either renderer — and
+because `tui.c` is swapped for a stub in the test build, which would
+leave it untestable.
+
 ## Minimum geometry
 
 - Dashboard minimum: 100×33.

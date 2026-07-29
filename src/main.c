@@ -89,6 +89,8 @@
 #include "ownership.h"
 #include "transit.h"
 #include "presence.h"
+#include "tui_palette.h"
+#include <sys/select.h>
 #include "db.h"
 #include "discovery.h"
 #include "dns.h"
@@ -130,6 +132,20 @@ static void chanhop_drive(sloth_state_t *s) {
                                         &s->scan_cur_idx);
 }
 #endif
+
+/* Wait out a poll interval without touching the terminal (#50).
+ * Mirrors tui_poll_key's wake behaviour so headless and interactive
+ * runs have the same cadence — an alert wakes both early. */
+static void headless_wait(int timeout_ms, int wake_fd) {
+    struct timeval tv;
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    if (wake_fd < 0) { select(0, NULL, NULL, NULL, &tv); return; }
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(wake_fd, &rfds);
+    select(wake_fd + 1, &rfds, NULL, NULL, &tv);
+}
 
 static void poll_data(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
@@ -414,6 +430,7 @@ static void print_usage(const char *argv0) {
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
+            "       [--headless] [--no-color]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -500,6 +517,18 @@ static void print_usage(const char *argv0) {
             "                     the oldest observation rows go first;\n"
             "                     entity, alert and credential rows are\n"
             "                     never dropped by this guard.\n"
+            "  --headless         draw nothing and never touch the\n"
+            "                     terminal: no screen clears, no escape\n"
+            "                     sequences, no raw-mode termios change,\n"
+            "                     no key handling. For appliance and\n"
+            "                     systemd deployments where the output is\n"
+            "                     a journal, not a screen. Capture,\n"
+            "                     alerting and every sink (-o,\n"
+            "                     --data-socket, --db, --report) run\n"
+            "                     exactly as normal.\n"
+            "  --no-color         suppress colour escape sequences but\n"
+            "                     keep drawing. Also honoured via the\n"
+            "                     NO_COLOR environment variable.\n"
             "  --known-mac MAC    add MAC to the known-device roster\n"
             "                     (repeatable, max 512).\n"
             "  --known-macs FILE  load a roster: one MAC per line, #\n"
@@ -558,6 +587,7 @@ int main(int argc, char **argv) {
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
     const char *check_manifest = NULL; /* --check-manifest FILE   */
+    int         headless       = 0;    /* --headless           (#50) */
     const char *db_path        = NULL; /* --db FILE            (#42) */
     const char *snapshot_out   = NULL; /* --snapshot-out FILE  (#27) */
     const char *baseline_in    = NULL; /* --baseline-in  FILE  (#27) */
@@ -568,6 +598,13 @@ int main(int argc, char **argv) {
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
     time_t      session_start = time(NULL);
+    /* NO_COLOR (no-color.org): any non-empty value disables colour.
+     * Read before the flags so an explicit --no-color is redundant
+     * rather than conflicting. */
+    {
+        const char *nc = getenv("NO_COLOR");
+        if (nc && nc[0]) tui_set_color(0);
+    }
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -624,6 +661,11 @@ int main(int argc, char **argv) {
             db_set_retain_days(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
             db_set_max_mb(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--headless")) {
+            headless = 1;
+        } else if (!strcmp(argv[i], "--no-color") ||
+                   !strcmp(argv[i], "--no-colour")) {
+            tui_set_color(0);
         } else if (!strcmp(argv[i], "--known-mac") && i + 1 < argc) {
             if (!ownership_add_known_mac(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--known-macs") && i + 1 < argc) {
@@ -741,7 +783,19 @@ int main(int argc, char **argv) {
     }
     event_wake_init();
     updater_init(check_manifest);
-    tui_init();
+    if (headless) {
+        /* A headless run produces nothing an operator can see unless a
+         * sink is configured. Warn rather than fail — a bare --headless
+         * is a legitimate way to exercise the capture path — but say so,
+         * because silently doing nothing observable is the worse
+         * outcome. */
+        if (!jsonl_path && !data_socket && !db_path && !report_md && !report_json)
+            fprintf(stderr, "sloth: --headless with no -o, --data-socket, "
+                            "--db or --report: this run produces no output\n");
+        fprintf(stderr, "sloth: headless — terminal untouched\n");
+    } else {
+        tui_init();
+    }
 
     int first_poll = 1;
     while (!g_quit) {
@@ -765,13 +819,21 @@ int main(int argc, char **argv) {
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(time(NULL));
         updater_snapshot(&g_state);
-        tui_draw(&g_state);
-        int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
-        event_wake_drain();
-        handle_key(&g_state, ch);
+        if (headless) {
+            /* No draw, no key read, no termios. Just wait out the poll
+             * interval — honouring the wake fd so an alert still shortens
+             * the cycle exactly as it does interactively. */
+            headless_wait(g_state.poll_ms, event_wake_fd());
+            event_wake_drain();
+        } else {
+            tui_draw(&g_state);
+            int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
+            event_wake_drain();
+            handle_key(&g_state, ch);
+        }
     }
 
-    tui_cleanup();
+    if (!headless) tui_cleanup();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

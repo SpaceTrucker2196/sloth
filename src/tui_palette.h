@@ -34,6 +34,20 @@ extern const short tui_ip_fg[8];       /* Fallout phosphor IP palette   */
 extern const short tui_brand_fg[16];   /* brand / corporate identity    */
 extern const short tui_info_fg[8];     /* earth tones, packets info col */
 
+/* ── colour policy (#50) ──────────────────────────────────
+ *
+ * Lives here rather than in tui.c because it is a property of the
+ * palette, not of either renderer — and because tui.c is swapped out
+ * for a stub in the test build, which would leave this untestable.
+ *
+ * Disabling colour suppresses SGR emission in the ANSI backend and
+ * skips colour-pair init under ncurses. It does NOT stop drawing: that
+ * is what --headless is for. The two are separate because "I am reading
+ * this over a serial console" and "nothing is reading this" are
+ * different situations. */
+void tui_set_color(int enabled);
+int  tui_color_enabled(void);
+
 /* Resolve a colour-pair number to its xterm-256 foreground and
  * background. Writes *fg and *bg and returns 1 for a known pair;
  * returns 0 and leaves both untouched for anything unmapped (the

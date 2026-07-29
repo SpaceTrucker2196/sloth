@@ -102,6 +102,16 @@ for in normal vs anomalous traffic.
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark.
 
+### Headless operation
+
+- **`sloth --headless`** — draw nothing and never touch the terminal: no screen clears, no escape sequences, no raw-mode termios change, no key handling. Capture, alerting and every sink (`-o`, `--data-socket`, `--db`, `--report`) run exactly as normal. This is the mode for appliance and systemd deployments where the output is a journal, not a screen.
+
+  sloth warns (but still runs) if `--headless` is given with no sink configured, since that run produces nothing observable.
+
+- **`sloth --no-color`** — keep drawing but emit no colour escape sequences. Also honoured via the `NO_COLOR` environment variable ([no-color.org](https://no-color.org)). Useful over a serial console or when capturing a session to a file.
+
+  > **Note for existing headless deployments.** Before this, running the no-ncurses build with stdin redirected (systemd, `< /dev/null`) made the poll loop spin: `select()` reported the EOF stdin readable immediately, so the refresh interval never applied. Measured at ~76 000 redraws in two seconds against an intended ~10, which both burned a core and flooded the journal. `tui_poll_key` now waits on stdin only when it is a terminal, so this is fixed for `--no-color` and interactive runs too — not just under `--headless`.
+
 ### Persistent state (`--db`)
 
 - **`sloth --db FILE`** — persist entity state to a SQLite database (off by default). `-o` and `--data-socket` are unchanged and remain the wire format; this is the **retained artifact**.

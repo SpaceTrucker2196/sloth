@@ -49,6 +49,13 @@ const short tui_info_fg[8] = {
     102,   /* stone grey #878787 */
 };
 
+/* Colour is on unless the operator says otherwise — NO_COLOR or
+ * --no-color. */
+static int g_color = 1;
+
+void tui_set_color(int enabled) { g_color = enabled ? 1 : 0; }
+int  tui_color_enabled(void)    { return g_color; }
+
 /* Returns 1 and fills the fg / bg outputs for a mapped pair, 0 otherwise.
  * The band tests are ordered by pair number so the ranges stay
  * readable against the CP_* layout in tui.h. */

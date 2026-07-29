@@ -189,6 +189,47 @@ static void test_all_mapped_colors_in_range(void) {
     }
 }
 
+
+/* ── colour policy (#50) ─────────────────────────────────── */
+
+/* Colour is on unless the operator says otherwise, so an existing
+ * deployment sees no change. */
+static void test_color_is_enabled_by_default(void) {
+    ASSERT_EQ(tui_color_enabled(), 1);
+}
+
+static void test_color_can_be_disabled_and_restored(void) {
+    tui_set_color(0);
+    ASSERT_EQ(tui_color_enabled(), 0);
+    tui_set_color(1);
+    ASSERT_EQ(tui_color_enabled(), 1);
+}
+
+/* Any non-zero enables, matching how the flag and NO_COLOR are read. */
+static void test_color_setter_normalises(void) {
+    tui_set_color(42);
+    ASSERT_EQ(tui_color_enabled(), 1);
+    tui_set_color(0);
+    ASSERT_EQ(tui_color_enabled(), 0);
+    tui_set_color(-1);
+    ASSERT_EQ(tui_color_enabled(), 1);
+    tui_set_color(1);
+}
+
+/* Disabling colour must not disturb the palette itself — --no-color is
+ * a rendering decision, and a later re-enable has to produce the same
+ * colours it would have before. */
+static void test_disabling_color_leaves_palette_intact(void) {
+    short fg_before = 0, bg_before = 0;
+    ASSERT_EQ(tui_pair_colors(CP_NORMAL, &fg_before, &bg_before), 1);
+    tui_set_color(0);
+    short fg_after = 0, bg_after = 0;
+    ASSERT_EQ(tui_pair_colors(CP_NORMAL, &fg_after, &bg_after), 1);
+    ASSERT_EQ(fg_after, fg_before);
+    ASSERT_EQ(bg_after, bg_before);
+    tui_set_color(1);
+}
+
 void run_tui_palette_tests(void) {
     TEST_SUITE("tui palette (shared by ncurses + ANSI backends)");
     RUN_TEST(test_phosphor_scalars);
@@ -208,4 +249,10 @@ void run_tui_palette_tests(void) {
     RUN_TEST(test_unmapped_leaves_outputs_alone);
     RUN_TEST(test_null_outputs_are_safe);
     RUN_TEST(test_all_mapped_colors_in_range);
+
+    TEST_SUITE("tui palette (colour policy, #50)");
+    RUN_TEST(test_color_is_enabled_by_default);
+    RUN_TEST(test_color_can_be_disabled_and_restored);
+    RUN_TEST(test_color_setter_normalises);
+    RUN_TEST(test_disabling_color_leaves_palette_intact);
 }

@@ -73,6 +73,7 @@ static void t_putc(char c)        { addch((chtype)(unsigned char)c); }
  * unmapped pair falls back to the phosphor normal so text is never
  * emitted with whatever attribute happened to be live. */
 static void t_pair_attr(int pair, int bold) {
+    if (!tui_color_enabled()) return;
     short fg = TUI_C_NORMAL, bg = -1;
     tui_pair_colors(pair, &fg, &bg);
     printf("\033[0m");
@@ -527,7 +528,7 @@ void tui_init(void) {
     noecho();
     keypad(stdscr, TRUE);
     curs_set(0);
-    if (has_colors()) {
+    if (has_colors() && tui_color_enabled()) {
         start_color();
         if (COLORS >= 256) {
             /* Colours come from tui_palette.c so the ANSI fallback
@@ -752,15 +753,20 @@ int tui_poll_key(int timeout_ms, int wake_fd) {
    ═══════════════════════════════════════════════════════════ */
 #else
 
-/* nuclear teal-green: rgb(0, 215, 130) bright / rgb(0, 175, 105) normal / rgb(0, 100, 58) dim */
-void tui_bright(void) { printf("\033[38;2;0;215;130m\033[1m"); }
-void tui_normal(void) { printf("\033[0m\033[38;2;0;175;105m"); }
-void tui_dim(void)    { printf("\033[0m\033[38;2;0;100;58m");  }
-void tui_sel(void)    { printf("\033[0m\033[38;2;0;175;105m\033[7m"); }
-void tui_reset(void)  { printf("\033[0m\033[38;2;0;175;105m"); }
+/* nuclear teal-green: rgb(0, 215, 130) bright / rgb(0, 175, 105) normal / rgb(0, 100, 58) dim
+ *
+ * Every one of these is a no-op under --no-color / NO_COLOR (#50), so a
+ * run whose output is being read by a log shipper rather than a
+ * terminal carries no escape sequences at all. */
+void tui_bright(void) { if (tui_color_enabled()) printf("\033[38;2;0;215;130m\033[1m"); }
+void tui_normal(void) { if (tui_color_enabled()) printf("\033[0m\033[38;2;0;175;105m"); }
+void tui_dim(void)    { if (tui_color_enabled()) printf("\033[0m\033[38;2;0;100;58m");  }
+void tui_sel(void)    { if (tui_color_enabled()) printf("\033[0m\033[38;2;0;175;105m\033[7m"); }
+void tui_reset(void)  { if (tui_color_enabled()) printf("\033[0m\033[38;2;0;175;105m"); }
 
 /* heat gradient: grey → amber → orange → red */
 void tui_heat(double frac) {
+    if (!tui_color_enabled()) return;
     if      (frac < 0.15) printf("\033[38;2;98;98;98m");
     else if (frac < 0.40) printf("\033[38;2;215;175;0m");
     else if (frac < 0.70) printf("\033[38;2;255;135;0m");
@@ -781,7 +787,8 @@ void tui_init(void) {
 
 void tui_cleanup(void) {
     tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_term);
-    printf("\033[0m\n");
+    if (tui_color_enabled()) printf("\033[0m");
+    printf("\n");
 }
 
 static void draw_tabbar(const sloth_state_t *s) {
@@ -797,7 +804,11 @@ static void draw_tabbar(const sloth_state_t *s) {
 }
 
 void tui_draw(const sloth_state_t *s) {
-    printf("\033[2J\033[H");
+    /* The screen clear is a cursor-addressing sequence, not colour, so
+     * it is gated on the same switch: a consumer that asked for no
+     * escape sequences does not want this one either. Redrawing without
+     * it simply appends, which is what a log wants (#50). */
+    if (tui_color_enabled()) printf("\033[2J\033[H");
     tui_normal();
     draw_tabbar(s);
     dispatch_view(s);
@@ -826,15 +837,33 @@ int tui_poll_key(int timeout_ms, int wake_fd) {
     tv.tv_sec  = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-    int maxfd = STDIN_FILENO;
+    int maxfd = -1;
+
+    /* Only wait on stdin when it is actually a terminal.
+     *
+     * Under systemd (or any `< /dev/null`) stdin is at EOF, which
+     * select() reports as readable immediately — every time. read()
+     * then returns 0, we return 0, and the caller loops straight back
+     * in, so the timeout never applies and the poll loop spins a core
+     * flat out. Measured at ~76k redraws in two seconds against an
+     * intended ~10 (#50). Not a terminal means there are no keys to
+     * read, so the honest thing is to wait out the interval. */
+    int have_tty = isatty(STDIN_FILENO);
+    if (have_tty) {
+        FD_SET(STDIN_FILENO, &fds);
+        maxfd = STDIN_FILENO;
+    }
     if (wake_fd >= 0) {
         FD_SET(wake_fd, &fds);
         if (wake_fd > maxfd) maxfd = wake_fd;
     }
+    if (maxfd < 0) {                 /* nothing to wait on but the clock */
+        select(0, NULL, NULL, NULL, &tv);
+        return 0;
+    }
     if (select(maxfd + 1, &fds, NULL, NULL, &tv) <= 0)
         return 0;
-    if (!FD_ISSET(STDIN_FILENO, &fds))
+    if (!have_tty || !FD_ISSET(STDIN_FILENO, &fds))
         return 0;
 
     unsigned char c = 0;

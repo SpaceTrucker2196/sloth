@@ -281,3 +281,26 @@ that, so v1 files failed on a confusing SQL error instead of the clear
 version message. The rule is now written down: new tables are safe
 without a bump, new columns on existing tables are not. The version
 check also moved ahead of schema application so the clear message wins.
+
+## 2026-07-28 — Headless operation and the poll-loop spin (#50)
+
+**Source**: issue #50; commit adding `--headless`, `--no-color` /
+`NO_COLOR`, and the `tui_poll_key` tty guard.
+
+**Doc updates**: [[ip-palette]] gained a **Colour policy and headless
+operation** section covering the split between "no colour" and "no
+drawing". README gained a Headless operation section including the
+spin-fix note. The persona suite's S1.3 caveat is removed.
+
+**Index updates**: none.
+
+**Why**: the issue as filed was about escape sequences in the journal,
+and the fix for that is `--headless`. But measuring it turned up a
+larger defect behind the same symptom: with stdin at EOF (systemd,
+`< /dev/null`) `select()` reported stdin readable every time, so the
+refresh interval never applied and the loop spun — ~76 000 redraws in
+two seconds against an intended ~10, burning a core as well as flooding
+the journal. Recorded here because the fix (`isatty` guard in
+`tui_poll_key`) benefits interactive and `--no-color` runs too, not
+only `--headless`, and a future reader tracing the flag will otherwise
+miss why the guard exists.
