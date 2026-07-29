@@ -18,254 +18,266 @@ where one exists.
 
 Status legend: **▲ next** (clear, scoped, high value) · **◆ planned**
 (agreed direction, needs design) · **◇ exploratory** (worth doing, shape
-still open).
+still open) · **✅** landed.
+
+> **Verified 2026-07-28** against the tree at `e7ddd7a`. Every status
+> below was checked against the source, not carried forward — the
+> previous revision had drifted badly enough to be misleading (it listed
+> QBSS Load, auth-frame parsing, beacon-flood detection, the 6 GHz
+> frequency map and per-device RSSI history as open work when all five
+> had shipped). Re-verify before trusting a status older than a few
+> weeks; the checks are cheap greps and are named inline.
 
 ---
 
-## A. Open GitHub issues, grouped
+## Where things stand
 
-### A1. Data-integrity bug (fix before feature work)
+**No open GitHub issues.** Section A — the original issue backlog — is
+fully landed. Everything genuinely outstanding lives in section B, the
+802.11 depth work, plus the small residue in section C.
 
-- **✅ LANDED (2026-07-04, `83f2897`)** — **Packet/telemetry
-  de-duplication** — `#20`. Fixed via a monotonic once-only high-water
-  mark; each captured frame now emits exactly once. Original analysis
-  follows. The JSONL emit loop
-  (`src/jsonl.c` `jsonl_emit_all`, lines ~1057-1076) re-emits the entire
-  snapshot state every refresh cycle, not just newly-observed records.
-  Measured at ~90.8% duplicate packet records (42,304 emitted /
-  ~3,902 unique). This is **not** packets-only: every snapshot emitter it
-  calls — `jsonl_emit_beacons`, `_deauths`, `_probe_clients`,
-  `_pnl_clients`, `_seqnum_*`, `_assocs`, `_eapol_events`, `_wifi_aps`,
-  `_wifi_stas`, `_mdns_services` — has the same shape and almost
-  certainly the same defect. Fix: track a per-record "last emitted"
-  watermark (monotonic seq or last-seen cursor per ring) so each record
-  is serialised exactly once. Downstream SIEM consumers currently
-  count one event as many. This corrupts every drift/baseline feature
-  below, so it is the true blocker.
+---
 
-### A2. Multi-radio & channel coverage
+## A. Original issue backlog — ✅ complete
 
-- **✅ LANDED (2026-07-04)** — **Multi-radio Wi-Fi sensor merge** —
-  `#21`. Shipped as `src/wifi_merge.c`: an entity-keyed merge table
-  (AP BSSID / STA MAC) that folds observations from >1 monitor adapter
-  into one world model, tagging each with a source sensor id and
-  retaining `seen_by` / `sensor_mask` / `best_rssi` / `best_sensor`
-  observer metadata. Additive `wifi_merged` JSONL record; built on the
-  #28 sensor registry. Merge/dedup/error-handling covered in
-  `tests/test_wifi_merge.c`; live N-radio concurrent capture is
-  hardware-gated (needs two monitor adapters + `CAP_NET_ADMIN`).
-- **✅ LANDED (2026-07-04)** — **Adaptive passive channel scheduler** —
-  `#22`. Shipped as `src/wifi_chanhop.c` + a `set_channel` platform op
-  (nl80211), driven by `--hop` (opt-in, off by default). Required the
-  first amendment to MISSION §2 (narrow carve-out for retuning sloth's
-  own monitor interface). nl80211 path needs on-hardware Linux
-  verification. Original note follows for context: sloth previously did
-  **not** control the radio at all — it passively reads whatever channel
-  the card is externally tuned to (the Channel view literally instructs
-  the operator to "hop the adapter to other channels"). A conservative,
-  explainable dwell-weighting scheduler (busy channels get more dwell,
-  quiet channels keep a guaranteed minimum revisit, per-channel dwell
-  cap) would dramatically raise capture yield from a single radio. This
-  is the single biggest passive-coverage win available.
+Kept as a record of what the sequencing above delivered, not as work.
 
-### A3. Synthesis / assessment layer
+| Issue | What | Landed |
+|---|---|---|
+| `#20` | Packet/telemetry de-duplication (monotonic high-water mark) | `83f2897` |
+| `#21` | Multi-radio Wi-Fi sensor merge (`src/wifi_merge.c`) | 2026-07-04 |
+| `#22` | Adaptive passive channel scheduler (`--hop`, MISSION §2 carve-out) | 2026-07-04 |
+| `#23` | RF baseline + drift detection (`src/wifi_baseline.c`) | — |
+| `#24` | Wireless assessment / compliance evidence (`src/wifi_assess.c`) | — |
+| `#25` | First-launch prefers wireless monitor | — |
+| `#26` | Non-IP RF coverage roadmap (`docs/wiki/non-ip-sensors.md`) | 2026-07-04 |
+| `#27` | Site snapshot export/import (`src/wifi_snapshot.c`) | — |
+| `#28` | Passive sensor abstraction (`src/sensors.c`) | — |
 
-- **◆ RF baseline + drift detection** — `#23`. Learn "normal" for a
-  location/session (BSSID inventory, SSID↔BSSID map, OUI mix, channel
-  histogram, RSN/AKM/MFP posture, beacon behaviour, probe volume,
-  deauth rate, RSSI ranges) and flag meaningful drift. Additive, passive,
-  reads existing state. **Depends on #20** being fixed first.
-- **◆ Wireless assessment / compliance-evidence view** — `#24`. Translate
-  observed facts into conservative, evidence-anchored findings (MFP
-  optional, legacy cipher present, WPA2/WPA3 transition-mode exposure,
-  duplicate-SSID-different-vendor, hidden-SSID revealed, PMKID/EAPOL
-  captured, excessive/sensitive PNL). Not a policy engine — each finding
-  traces to a specific observation.
-- **◆ Site snapshot export/import** — `#27`. `--snapshot-out FILE` writes
-  a normalised passive summary on exit; `--baseline-in FILE` compares
-  current observations against a prior visit. Normalised observations,
-  not raw pcap. Pairs with #23.
+### A6. The 2026-07-28 arc — ✅ complete
 
-### A4. Ergonomics
+A day of field-reported fixes followed by a persona-driven feature run.
+Recorded here because none of it existed in the previous revision and it
+closes several section-B items by side effect.
 
-- **▲ First-launch prefers wireless monitor** — `#25`. When a
-  monitor-mode interface exists at startup, default the visible view to
-  the relevant Wi-Fi view/dashboard and start non-monitor interfaces
-  (loopback, docker, VPN, virtual) present-but-collapsed. Capture
-  behaviour unchanged; purely UI defaulting. Small, high-ergonomics win.
+**Field reports (bugs).** `#46` `pcap_activate` positive warnings treated
+as fatal, silently disabling `--iface`/`--monitor-only` scoping
+(`4b1b577`). `#47` data-socket clients never received a change-cache
+baseline (`f5c848d`). `#48` `WITH_NCURSES=0` did not compile, plus a CI
+guard so build configurations are actually built (`a6af13d`, `e2effaa`).
 
-### A5. Architecture / long-horizon
+**Operator experience.** `docs/personas/wifi-surveyor.md` (`6e58de0`) —
+an operator persona scored against eleven executable scenarios. It is a
+test fixture, not marketing: `make test` proves the parsers do what they
+say, and this is the inspection step for whether what they say is what
+the operator needed. It found `#51` within an hour of being written.
 
-- **◇ Passive sensor abstraction layer** — `#28`. A small, boring typed
-  "sensor" model (type, state, name, interface, observed count,
-  first/last-seen) so non-802.11 sources normalise into `sloth_state_t`
-  and JSONL the same way Wi-Fi does — **without** becoming a plugin ABI
-  or control surface. Enables #21 and everything in #26.
-- **✅ LANDED (2026-07-04)** — **Non-IP RF coverage roadmap** — `#26`.
-  Written up as `docs/wiki/non-ip-sensors.md`: the passive filter, the
-  seven questions every family must answer, and per-family sketches for
-  BLE, Zigbee, SDR metadata, GPS, ADS-B, Meshtastic, and CAN — sequenced
-  behind the #28 sensor abstraction. Original note follows. Parent
-  roadmap for future
-  passive sensor families: BLE advertisements, Zigbee/802.15.4, SDR
-  metadata, GPS context, ADS-B, Meshtastic/LoRa, CAN bus. Each new family
-  must answer: what's observable passively, what hardware, what enters
-  state, what view, what JSONL record, what's explicitly out of scope,
-  how it's tested without live hardware. Sequenced **after** #28 lands.
+**Findings it drove.** `#51` evil-twin rule reporting cross-vendor range
+extenders as CRIT rogue APs, fixed via 802.11k neighbour advertisement
+(`52cf47a`). `#52` operator-designated networks — `--my-ssid` /
+`--my-bssid` and `MY_NET_RECON` (`fc1d9d3`). `#53` presence
+classification from RSSI trajectory (`c1f616c`). `#54` recurring-transit
+detection (`85ae491`). `#55` known-device roster and `UNKNOWN_DEVICE`
+(`c4e7467`). `#50` `--headless` / `--no-color`, and a poll-loop spin that
+burned a core whenever stdin was not a terminal (`e7ddd7a`).
+
+**Storage.** `#42` embedded SQLite sink across six commits (`247731c`
+through `bf10952`, plus `43a95a6`): 40 tables, tiered retention, a size
+ceiling that never drops findings, schema-level MISSION §2 guardrails,
+and survey sessions. See [`docs/wiki/sqlite-schema.md`](docs/wiki/sqlite-schema.md).
+
+> **Unverified in the field.** `#42` was motivated by a measured
+> 12.6 GB / 8 h on a production node. Nothing here has confirmed what
+> `--db` does to that number on real traffic — only the reporting node
+> can. That measurement is the highest-value outstanding *validation*,
+> as distinct from outstanding work.
 
 ---
 
 ## B. Wi-Fi SIGINT deep-dive: gaps to best-in-class
 
-Per MISSION §4(4), 802.11 is where sloth's unique value lives. This is a
-gap analysis of the passive 802.11 surface as it stands, and the work
-that would make sloth the strongest passive Wi-Fi spectrum-analysis tool
-available. **All items are strictly passive** — read-only monitor
-capture, no injection, no active probing, no online cracking.
+Per MISSION §4(4), 802.11 is where sloth's unique value lives. **All
+items are strictly passive** — read-only monitor capture, no injection,
+no active probing, no online cracking.
 
-### B0. What sloth already does well (the baseline)
+### B0. Baseline — what already works
 
-So the gaps below are read against a real feature set, current 802.11
-capability includes: monitor-mode beacon/probe/deauth capture; full RSN
-parse (ciphers, AKM incl. SAE/OWE/FT/Suite-B, MFP/RSN-caps); WPA1 vendor
-IE; HT/VHT presence + HE/EHT/Multi-Link **PHY-tier classification**
-(so Wi-Fi 4/5/6/7 is *labelled*); WPS state incl. zero-UUID; 802.11k
-neighbour reports + RNR (6 GHz-capable neighbour extraction); vendor-IE
-fingerprint hash; PNL aggregation + OS fingerprint; EAPOL/PMKID/4-way
-capture with hashcat-22000 + replayable pcap; sequence-number MAC-
-randomisation correlation; association inventory with graded evidence;
-KARMA / evil-twin / evil-twin-proximity / Pineapple detection; deauth/
-disassoc flood + probe flood alerts. `freq_to_channel` already maps
-2.4/5/6 GHz. That is a strong base — the gaps are about **breadth of
-frame/IE coverage, PHY telemetry, and attack detection**, not starting
-from zero.
+Monitor-mode beacon/probe/deauth/auth capture; full RSN parse (ciphers,
+AKM incl. SAE/OWE/FT/Suite-B, MFP/RSN-caps); WPA1 vendor IE; HT/VHT/HE/
+EHT/Multi-Link **PHY-tier classification**; WPS state incl. zero-UUID;
+802.11k neighbour reports + RNR; QBSS Load; vendor-IE fingerprint hash;
+PNL aggregation + OS fingerprint; EAPOL/PMKID/4-way capture with
+hashcat-22000 + replayable pcap; sequence-number MAC-randomisation
+correlation; association inventory with graded evidence; presence
+classification and recurring-transit detection; KARMA / evil-twin /
+evil-twin-proximity / Pineapple / rogue-RADIUS / SSID-confusion /
+mgmt-fuzz detection; deauth, probe, beacon and auth flood alerts.
+2.4/5/**6 GHz** frequency mapping on both the monitor and nl80211 paths.
 
-### B1. Frame-type coverage holes  ▲ highest-leverage
+The gaps below are about **breadth of frame/IE coverage, PHY telemetry,
+and parser consistency** — not starting from zero.
 
-The monitor dispatch (`src/capture/probe.c` `on_probe_frame`) decodes
-only a subset of 802.11. Confirmed **not** parsed today:
+### B1. Frame-type coverage holes ▲ highest-leverage
 
-- **▲ Authentication frames (subtype 11).** The SAE (WPA3) and OWE
-  exchanges, plus shared-key/open auth, are invisible. Passive value:
-  auth-flood detection, SAE anti-clogging / downgrade observation,
-  detecting auth from MACs never seen probing. Also the front half of
-  every association is currently unobserved.
-- **▲ Association/Reassociation *requests* (subtypes 0/2).** Only the
-  *responses* are parsed. The request carries the client's supported
-  rates, HT/VHT/HE caps, requested SSID, RSN choice, and power-cap — a
-  rich client fingerprint and the "what did the client ask for vs what
-  the AP granted" delta.
-- **▲ Action frames (subtype 13).** Entirely unhandled. This is a large
+`src/capture/probe.c` decodes management subtypes it names but does not
+dispatch on all of them. Verified absent:
+
+- **▲ Association / Reassociation *requests* (subtypes 0 / 2).** Only
+  responses are parsed (`src/assoc_track.c`). The request carries the
+  client's supported rates, HT/VHT/HE capabilities, requested SSID, RSN
+  choice and power capability — a rich client fingerprint, plus the
+  *"what the client asked for versus what the AP granted"* delta, which
+  is where downgrade and misconfiguration show up. Also unblocks
+  association-flood detection (B4).
+  *Check: `grep -c assoc_req src/capture/probe.c` → 0.*
+- **▲ Action frames (subtype 13).** Entirely unhandled, and a large
   passive surface: 802.11v BSS-Transition-Management (roaming steering,
-  and BTM-based deauth-equivalent abuse), Radio Measurement (802.11k)
-  requests/reports, FT action (fast roaming), and spoofed/malformed
-  action frames used by modern WIDS-evasion tooling.
-- **◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).** Not decoded.
-  These are what you need for **airtime/channel-utilisation** accounting,
-  RTS/CTS-flood (airtime-DoS) detection, and hidden-node inference. Even
-  just counting them by type per channel yields a real utilisation
-  metric.
+  and BTM abuse as a deauth-equivalent), 802.11k Radio Measurement
+  request/report, FT action, and the spoofed/malformed action frames
+  modern WIDS-evasion tooling relies on.
+  *Check: `grep -cE 'subtype == 13|ACTION' src/capture/probe.c` → 0.*
+- **◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).** Recognised by
+  name in `frame_type_label()` but never counted or analysed. Counting
+  them by type per channel is what airtime / channel-utilisation
+  accounting needs, plus RTS/CTS-flood (airtime DoS) and hidden-node
+  inference.
 - **◆ Data-frame telemetry beyond EAPOL.** Data frames are inspected
   only to pull EAPOL-Key. Retry-bit rate, QoS TID distribution, frame
-  size histograms, and per-BSSID data volume are all cheap passive
-  signals (interference, jamming, exfil-shaped flows) left on the floor.
+  size histograms and per-BSSID data volume are cheap passive signals
+  (interference, jamming, exfil-shaped flows) currently discarded.
 
 ### B2. Information-element depth
 
-- **▲ QBSS Load IE (tag 11).** Not parsed. This is the AP *self-reported*
-  station count + channel utilisation + admission capacity — a free,
-  no-math congestion/occupancy metric. Cheapest high-value IE to add.
-- **◆ HT/VHT/HE/EHT operation + capability decode.** Today these are
-  presence flags feeding PHY-tier labelling. Decoding the operation
-  elements yields channel width (20/40/80/160/320 MHz), primary/secondary
-  channel, and the actual spatial-stream/MCS ceiling — needed for a real
-  spectrum-occupancy picture and for spotting mis-width / overlap.
+- **▲ HT / VHT / HE / EHT *operation* element decode.** Today these are
+  presence flags feeding PHY-tier labelling; the operation elements are
+  not decoded. They yield channel width (20/40/80/160/320 MHz),
+  primary/secondary channel and the real MCS ceiling — needed for a
+  spectrum-occupancy picture, for spotting mis-width and overlap, and as
+  the **durable fix for 6 GHz beacon channel**: the frequency map is now
+  correct, but beacon channel still comes from the DS Param IE (tag 3),
+  which many 6 GHz/HE APs omit.
+  *Check: `grep -cE 'he_oper|vht_oper|chan_width' src/beacon_snoop.c` → 0.*
 - **◆ Country / operating-class / power-constraint / TPC / DFS / CSA.**
-  Not parsed. Enables regulatory-domain cross-checks (AP advertising a
-  country/channel it shouldn't), DFS/radar-event observation, and
-  Channel-Switch-Announcement (tag 37) tracking — CSA is both a normal
-  roaming signal and a known passive-attack lever.
-- **▲ 6 GHz channel derivation on the monitor path.** Two coupled gaps
-  make 6 GHz effectively invisible to the SIGINT engine even though the
-  neighbour-report path already handles 6 GHz: (a) the radiotap parser's
-  freq→channel map stops at 5885 MHz (`src/capture/probe.c`), so 6 GHz
-  monitor frames get channel 0 — the `freq_to_channel` in
-  `src/platform/linux_wifi.c` already maps 5955-7115 and should be shared;
-  and (b) beacon channel is read only from the DS Param IE (tag 3), which
-  many 6 GHz/HE APs omit, so decoding the HE Operation element (B2 above)
-  is the durable fix. Cheap, concrete, and unblocks all 6E work.
-- **◆ Extended Capabilities, RM Enabled Capabilities, Mesh (11s), FT
-  (MDE/FTE).** Round out roaming (11r/k/v) telemetry and mesh visibility.
-- **◇ Multi-Link Element full decode (Wi-Fi 7 / MLO).** Today the
-  Multi-Link IE only flips the "Wi-Fi 7" tier. Decoding it gives the MLD
-  MAC ↔ per-link (affiliated) MAC mapping — the modern analogue of the
-  seqnum correlation trick, and essential for tracking Wi-Fi 7 devices
-  that present different MACs per link.
+  Not parsed. Enables regulatory cross-checks (an AP advertising a
+  country or channel it should not), DFS/radar observation, and
+  Channel-Switch-Announcement tracking — CSA is both a normal roaming
+  signal and a known passive-attack lever.
+  *Check: `grep -cE 'tag == 7|tag == 37|country' src/beacon_snoop.c` → 0.*
+- **◆ Extended Capabilities (127), RM Enabled Capabilities (70), Mesh
+  (113), FT MDE/FTE (54/55).** Round out 11r/k/v roaming telemetry and
+  mesh visibility. Note 11k *neighbour reports* (tag 52) and RNR are
+  already parsed — this is the rest of the family.
+- **◇ Multi-Link Element full decode (Wi-Fi 7 / MLO).** Today it only
+  flips the "Wi-Fi 7" tier. Decoding it gives the MLD MAC ↔ per-link
+  affiliated MAC mapping — the modern analogue of the seqnum correlation
+  trick, and the only way to track Wi-Fi 7 devices that present a
+  different MAC per link. Composes directly with `transit_canonical_mac()`
+  (`#54`), which already resolves identity through seqnum correlations.
 
 ### B3. PHY / signal-layer analysis
 
+- **▲ Retry-rate / FCS-error tracking.** `parse_radiotap()` explicitly
+  *skips* the FLAGS and RATE fields — it extracts only signal and
+  channel. Rising retries or FCS errors on a channel is the passive
+  signature of interference, a hidden node, or a jammer, and it needs no
+  new capture at all: just stop skipping bytes already in hand. Cheapest
+  real win in section B.
+  *Check: `src/capture/probe.c` `parse_radiotap`, the `off += 1` skips.*
 - **◆ Channel-utilisation / airtime view.** Combine B1 control-frame
-  counts + B2 QBSS Load + per-channel frame rate into a live occupancy
-  panel. This is the "spectrum analyser" the tool is currently missing —
-  the thing that turns "here are APs" into "here is how busy each channel
-  actually is."
-- **◆ Retry-rate / FCS-error tracking.** Radiotap already exposes FCS and
-  flags. Rising retries / FCS errors on a channel is the passive
-  signature of interference, a hidden node, or a jammer. No new capture
-  needed — just count what's already arriving.
-- **◇ Per-BSSID / per-STA RSSI history + movement.** evil-twin-proximity
-  already uses RSSI; generalise it to a signal-history sparkline per
-  device with an approaching/leaving indicator. Coarse presence/ranging,
-  no triangulation claims.
-- **◇ Fuller radiotap decode.** The monitor parser reads only RSSI +
-  (2.4/5 GHz) channel today. Rate/MCS (radiotap bit 19), VHT/HE/EHT
-  radiotap, bandwidth, and antenna fields are stepped over — decoding
-  them feeds the airtime/utilisation view and MIMO/PHY-rate telemetry.
+  counts with the existing QBSS Load and per-channel frame rate into a
+  live occupancy panel. This is the "spectrum analyser" the tool still
+  lacks — what turns *"here are the APs"* into *"here is how busy each
+  channel actually is"*.
+- **◇ Fuller radiotap decode.** Beyond FLAGS/RATE above: MCS
+  (radiotap bit 19), VHT/HE/EHT fields, bandwidth and antenna. Feeds the
+  airtime view and MIMO/PHY-rate telemetry.
+- ~~Per-BSSID / per-STA RSSI history + movement~~ — **✅ landed** as
+  `#53` / `#54`: `rssi_ring_t` on `probe_client_t`, trajectory-shape
+  classification in `src/presence.c`, recurring-transit accumulation in
+  `src/transit.c`.
 
-### B3b. Parser-consistency debt
+### B3b. Parser-consistency debt ▲
 
-- **◆ Unify the two Wi-Fi paths.** sloth has *two* Wi-Fi code paths with
-  very different depth: the monitor-mode engine (`src/capture/probe.c` +
-  `beacon_snoop.c`) with the rich RSN/WPS/RNR/11k/vendor parser, and the
-  managed-mode nl80211 scan path (`src/platform/linux_wifi.c`) whose IE
-  parser only yields SSID + RSN/WPA/WEP booleans. So the exact same AP
-  reports far less detail depending on which interface mode saw it. The
-  beacon IE parser should be the single source of truth both paths call,
-  so capability depth doesn't depend on interface mode.
+- **▲ Unify the two Wi-Fi paths.** sloth has *two* Wi-Fi code paths of
+  very different depth: the monitor-mode engine
+  (`src/capture/probe.c` + `src/beacon_snoop.c`) with the rich
+  RSN/WPS/RNR/11k/QBSS/vendor parser, and the managed-mode nl80211 scan
+  path (`src/platform/linux_wifi.c`) whose IE parser yields SSID plus
+  RSN/WPA/WEP booleans and nothing more. **The same AP reports far less
+  detail depending on which interface mode saw it.**
+
+  That is a correctness inconsistency rather than a missing feature,
+  which is why it ranks above most of B2 despite being less glamorous.
+  The beacon IE parser should be the single source of truth both paths
+  call.
+  *Check: `grep -cE 'akm|pairwise|mfp' src/platform/linux_wifi.c` → 0,
+  against 39 neighbour/RNR references in `beacon_snoop.c` alone.*
 
 ### B4. Attack / anomaly detection breadth
 
-Deauth-flood, probe-flood, evil-twin, KARMA, Pineapple exist. Gaps:
+Deauth, probe, beacon and auth floods, evil-twin (+ proximity, + attack
+chain), KARMA/Pineapple, rogue-RADIUS, SSID-confusion and mgmt-fuzz all
+exist. Gaps:
 
-- **▲ Beacon-flood / rogue-beacon (mdk3/mdk4 signature).** Sudden bloom
-  of many distinct SSIDs/BSSIDs from one radio neighbourhood, or beacons
-  whose sequence numbers don't advance monotonically for a known BSSID
-  (spoofed). High-signal, purely passive.
-- **◆ PMF/WPA3 downgrade + transition-mode exposure.** Flag APs
-  advertising WPA2/WPA3 mixed mode, MFP optional-not-required, or an OWE
-  transition BSS — the practical downgrade surfaces. Overlaps #24's
-  assessment view.
-- **◆ Authentication/association flood** (needs B1 auth+assoc-req).
-- **◆ CTS/RTS airtime-DoS** (needs B1 control frames).
-- **◇ Karma/known-beacon responder heuristics v2** and PMKID-harvest
-  tool fingerprints (AP or client behaviour that matches known passive-
-  harvest tooling), staying observation-only.
+- **◆ Association flood.** Needs B1 assoc-request parsing.
+- **◆ CTS/RTS airtime DoS.** Needs B1 control frames.
+- **◆ PMF/WPA3 downgrade + transition-mode exposure.** `wifi_assess.c`
+  already carries MFP and transition findings; what is missing is a
+  *live alert* for an AP advertising WPA2/WPA3 mixed mode, MFP
+  optional-not-required, or an OWE transition BSS. Overlaps `#24`.
+- **◇ KARMA / known-beacon responder heuristics v2**, and PMKID-harvest
+  tool fingerprints — AP or client behaviour matching known passive
+  harvesting tooling. Observation-only.
 
-### B5. Coverage & correlation (ties back to §A)
+### B5. Coverage & correlation
 
-- The channel scheduler (**#22**) and multi-radio merge (**#21**) are the
-  force-multipliers for everything in B1–B4: more of the spectrum seen,
-  more of the time, without transmitting. They belong to both sections.
-- Baseline/drift (**#23**) is what converts the richer per-frame/IE data
-  above into "what *changed*" — the question operators actually ask.
+The channel scheduler (`#22`) and multi-radio merge (`#21`) are the
+force-multipliers for everything in B1–B4: more spectrum seen, more of
+the time, without transmitting. Baseline/drift (`#23`) is what converts
+richer per-frame data into *"what changed"* — the question operators
+actually ask.
 
-### Suggested sequencing
+---
 
-1. **#20** duplicate-emission fix (unblocks all baseline/export work).
-2. **B2 QBSS Load** + **B1 auth / assoc-req / action** parsing
-   (cheap, large detection breadth per MISSION §4(1) "coverage first").
-3. **#22 channel scheduler** (biggest single passive-coverage gain).
-4. **B3 channel-utilisation view** + **#24 assessment view**
-   (turn the new data into operator answers).
-5. **#21 multi-radio** → **#28 sensor abstraction** → **#23 baseline**
-   → **#26 non-IP families** (the architectural long haul).
+## C. Smaller outstanding items
+
+- **◆ Evil-twin suppression for APs without 802.11k.** `#51` uses
+  neighbour advertisement to recognise co-operating infrastructure, which
+  modern mesh kit emits and budget single-box repeaters generally do not.
+  Those still trip the rule. The obvious second signal — *"both BSSIDs
+  present since early in the session"* — is weak under `--hop`, where an
+  AP's first observation is confounded by when the radio first visited
+  its channel. Scenario S2.1 in the persona suite is `PARTIAL` for this
+  reason and is the only scenario short of `PASS`.
+- **◇ Mutation-testing campaign, rounds 10+.** Paused at ~51 % kill rate
+  (938 / 1844 considered). Non-blocking and stateless; see `PROGRESS.md`.
+- **◇ Headless log hygiene, part two.** `--headless` (`#50`) silences the
+  draw path but deliberately keeps sloth's own stderr diagnostics — those
+  are what tell an operator the database opened or the monitor interface
+  was missing. If journal volume becomes a problem, the shape would be
+  log levels, not suppression.
+
+---
+
+## Suggested sequencing
+
+The previous sequencing is fully delivered. Current order, weighting
+MISSION §4(1) ("coverage beats precision until coverage exists") against
+effort:
+
+1. **B3b — unify the two Wi-Fi parsers.** Pure debt with a clear
+   correctness story: capability depth should not depend on interface
+   mode. Nothing new to design.
+2. **B3 retry / FCS tracking.** The bytes are already in the radiotap
+   header and are being skipped. Highest value per line of code in the
+   whole file.
+3. **B1 assoc-requests + action frames.** The largest unparsed passive
+   surface, and the prerequisite for association-flood and BTM-abuse
+   detection.
+4. **B2 HT/VHT/HE operation decode.** Unlocks real channel width and
+   completes 6 GHz beacon-channel derivation.
+5. **B1 control frames → B3 channel-utilisation view.** Turns the new
+   counts into the spectrum-occupancy answer the tool still cannot give.
+6. **B2 remainder** (country/CSA/TPC, ExtCap/RM/Mesh/FT, Multi-Link) and
+   **B4** detectors, which mostly fall out of 1–5 once the frames and
+   elements are parsed.
