@@ -1768,6 +1768,29 @@ static void test_icmp_tunnel_v6_fires(void) {
     ASSERT(find_alert(&s, ALERT_TYPE_ICMP_TUNNEL) >= 0);
 }
 
+static void test_icmp_tunnel_detail_keeps_full_v6_addrs(void) {
+    /* The detail string bounds each address with %.45s to give the
+     * compiler a provable read length (#58). 45 is the longest an IPv6
+     * literal can be, so a real address must survive whole — this is the
+     * assertion that catches a precision set too low. */
+    const char *src = "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+    const char *dst = "fdff:ffff:ffff:ffff:ffff:ffff:255.255.255.255";  /* 45 */
+    ASSERT_EQ((int)strlen(dst), 45);
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 8; i++)
+        add_icmp_echo(&s, src, dst, 800, 1);
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_ICMP_TUNNEL);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, src) != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, dst) != NULL);
+    /* And the tail survived too — the whole record fits in 256. */
+    ASSERT(strstr(s.alerts[idx].detail, "ICMP covert channel") != NULL);
+}
+
 /* ── Weak TLS ────────────────────────────────────────────── */
 
 static void add_tls(sloth_state_t *s, const char *src, const char *dst,
@@ -3288,6 +3311,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_icmp_tunnel_single_large_ping_no_fire);
     RUN_TEST(test_icmp_tunnel_spread_across_pairs_no_fire);
     RUN_TEST(test_icmp_tunnel_v6_fires);
+    RUN_TEST(test_icmp_tunnel_detail_keeps_full_v6_addrs);
     RUN_TEST(test_probe_flood_fires_on_high_rate);
     RUN_TEST(test_probe_flood_low_total_no_fire);
     RUN_TEST(test_probe_flood_exactly_at_frame_threshold_fires);

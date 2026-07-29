@@ -967,8 +967,16 @@ static void rule_icmp_tunnel(const sloth_state_t *s, time_t now) {
         snprintf(key, sizeof(key), "icmp-tunnel:%.39s->%.39s",
                  buckets[i].src, buckets[i].dst);
         char detail[ALERT_DETAIL_LEN];
+        /* %.45s bounds each address at the longest an IPv6 literal can be,
+         * so nothing real is ever truncated. The precision is what lets the
+         * compiler bound the read: src/dst are always NUL-terminated (only
+         * written via snprintf above, only read below nb), but that is not
+         * provable at this call, so a bare %s is assumed to run on into the
+         * rest of buckets[] — 1599 bytes of false-positive
+         * -Wformat-truncation. Same idiom as the key build above (#58). */
         snprintf(detail, sizeof(detail),
-                 "%s->%s: %d oversized echo reqs (payload %u-%u B; ICMP covert channel)",
+                 "%.45s->%.45s: %d oversized echo reqs "
+                 "(payload %u-%u B; ICMP covert channel)",
                  buckets[i].src, buckets[i].dst, buckets[i].count,
                  buckets[i].min_len, buckets[i].max_len);
         /* Portless — ICMP has no port; dst is the tunnel endpoint. */
