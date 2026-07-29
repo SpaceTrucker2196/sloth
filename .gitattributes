@@ -1,6 +1,6 @@
-# Agent-governing instructions are encrypted at rest (git-crypt) to prevent
-# third-party contamination / prompt-injection of the files that steer agent
-# behavior. Holders of the git-crypt key see plaintext in the working tree;
-# everyone else (GitHub, forks, PR authors) sees ciphertext they cannot read
-# or meaningfully alter. See agents/ and the root pointer files.
-agents/** filter=git-crypt diff=git-crypt
+# (no attribute rules currently in force)
+#
+# agents/ was previously git-crypt encrypted at rest. That was removed
+# on 2026-07-28: the folder holds operating procedure, not secrets, and
+# one of its files (dark-factory.md) is explicitly written as a public
+# teaching artifact. See the root CLAUDE.md for the reasoning.
