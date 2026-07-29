@@ -261,3 +261,23 @@ the finding tier so it cannot expire before the alert it justifies; that
 SNMP community strings are deliberately absent even though the wire
 format emits them; and the `auto_vacuum` caveat for files created before
 that pragma landed.
+
+## 2026-07-28 — Survey sessions and schema v2 (#56)
+
+**Source**: issue #56 (persona S5.2); commit adding the `sessions`
+table, `db_new_since()`, and a *New since last survey* report section.
+
+**Doc updates**: [[sqlite-schema]] gained a **Survey sessions** section
+and a rewritten schema-version note; the page is retitled schema v2 /
+40 tables. README gained the repeat-survey paragraph. The persona suite
+rescored S5.2 `PARTIAL` → `PASS`.
+
+**Index updates**: none.
+
+**Why**: the version note is the part worth recording. v2 exists
+because `probe_clients.presence` (#53) added a *column* to an existing
+table without a bump — and `CREATE TABLE IF NOT EXISTS` cannot apply
+that, so v1 files failed on a confusing SQL error instead of the clear
+version message. The rule is now written down: new tables are safe
+without a bump, new columns on existing tables are not. The version
+check also moved ahead of schema application so the clear message wins.

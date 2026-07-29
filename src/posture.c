@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "posture.h"
+#include "db.h"
 #include "alerts.h"
 #include "wifi_assess.h"
 #include "wifi_baseline.h"
@@ -159,6 +160,54 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
             for (int i = 0; i < dn; i++)
                 fprintf(out, "| %s | %s |\n", df[i].kind, df[i].detail);
             fprintf(out, "\n");
+        }
+    }
+
+    /* New since the previous visit (#56). Only meaningful with --db,
+     * because it is a comparison against a persisted history; without
+     * one the section is silently absent rather than claiming
+     * everything is new. first_seen is MIN-ed across every upsert, so
+     * an entity seen on an earlier visit keeps its original timestamp
+     * and only genuinely new ones fall inside this window. */
+    {
+        time_t since = db_previous_session_end();
+        if (db_is_open() && since > 0) {
+            char ts_prev[32];
+            iso_time(ts_prev, since);
+            fprintf(out, "## New since last survey (%s)\n\n", ts_prev);
+
+            static const struct {
+                db_new_kind_t kind;
+                const char   *heading;
+            } kinds[] = {
+                { DB_NEW_BEACON_AP,    "Access points" },
+                { DB_NEW_DEVICE,       "Devices"       },
+                { DB_NEW_PROBE_CLIENT, "Probe clients" },
+            };
+            int any = 0;
+            for (unsigned k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+                db_new_entity_t rows[32];
+                int n = db_new_since(kinds[k].kind, since, rows, 32);
+                int total = db_count_new_since(kinds[k].kind, since);
+                if (total == 0) continue;
+                any = 1;
+                fprintf(out, "**%s** — %d new\n\n", kinds[k].heading, total);
+                fprintf(out, "| Identity | Name | First seen |\n");
+                fprintf(out, "|----------|------|------------|\n");
+                for (int i = 0; i < n; i++) {
+                    char ts_first[32];
+                    iso_time(ts_first, rows[i].first_seen);
+                    fprintf(out, "| %s | %s | %s |\n",
+                            rows[i].ident,
+                            rows[i].label[0] ? rows[i].label : "-",
+                            ts_first);
+                }
+                if (total > n)
+                    fprintf(out, "\n_%d more not listed._\n", total - n);
+                fprintf(out, "\n");
+            }
+            if (!any)
+                fprintf(out, "Nothing new since the previous visit.\n\n");
         }
     }
 

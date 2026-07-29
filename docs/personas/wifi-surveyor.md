@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28 (rescored after #51–#55).
+**Last updated**: 2026-07-28 (rescored after #51–#56).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -311,10 +311,22 @@ associated devices; passers-by are S3.1/S3.2's job.
 1. `--baseline-in site-a.txt` from the prior visit.
 
 **Pass**: new/gone/changed emitters since the last survey.
-**Result: PARTIAL.** `--snapshot-out` / `--baseline-in` (#27) does
-exactly this — **for APs only**. The client population, which is where
-Q3/Q4/Q5 all live, has no cross-session *diff*, though as of #42
-`--db` now persists the client state a diff would run over. `[k] PNL` and
+**Result: PASS** (was `PARTIAL`; rescored 2026-07-28 after #56).
+`--snapshot-out` / `--baseline-in` (#27) still covers APs as a text
+artifact, and `--db` now answers the same question for **clients**, via
+`--report`.
+
+The data was already there after #42 — `first_seen` is MIN-ed across
+every upsert, so an entity from a previous visit keeps its original
+timestamp and only genuinely new ones fall inside the current window.
+What was missing was the boundary. A `sessions` table records each
+visit, `--site-label` names it, and the posture report grows a **New
+since last survey** section listing new APs, devices and probe clients
+with their first-seen times.
+
+A session that never recorded an end — a crash, a `kill -9` — falls
+back to its own start rather than reading as "no previous visit", which
+would flood the next report with the entire site. `[k] PNL` and
 `[j] Seqnum` even survive MAC rotation *within* a session, so the
 fingerprint that would make cross-session client diffing work already
 exists; it just isn't persisted. Issue #42's SQLite sink is the natural
@@ -336,7 +348,7 @@ home for it.
 | S4.1 Probes for my SSID | Q4 | PASS (was FAIL; #52) |
 | S4.2 Attacks on my AP | Q4 | PASS (was PARTIAL; #52) |
 | S5.1 Unknown clients | Q5 | PASS (was FAIL; #55) |
-| S5.2 New since last survey | Q5 | PARTIAL |
+| S5.2 New since last survey | Q5 | PASS (was PARTIAL; #56) |
 
 **Reading (original, 2026-07-28 morning)**: sloth was already excellent
 at Q1 and at the adversarial half of Q2, and every failure clustered in
@@ -350,9 +362,17 @@ from network designation (#52); familiarity from the device roster
 (#55). The last two are the same mechanism — operator-supplied context,
 which sloth did not accept as an input class at all this morning.
 
-What remains is not an axis but a join: **S5.2**, cross-session client
-diffing, which needs the persisted state from #42 rather than any new
-capture capability.
+S5.2 followed from #42 rather than from new capture work — the join was
+already possible once state persisted; only the session boundary was
+missing.
+
+**The one scenario still short of PASS is S2.1**, and deliberately so:
+the evil-twin suppression needs an AP to emit 802.11k Neighbor Reports,
+which mesh kit does and budget single-box repeaters generally do not.
+The obvious second signal — "both BSSIDs present since early in the
+session" — is weak under `--hop`, where an AP's first observation is
+confounded by when the radio first visited its channel. Left open rather
+than shipped as a guess.
 
 ---
 
@@ -367,7 +387,7 @@ in-tree material each would build on.
 | ~~G2~~ | ~~**Repeater/infrastructure classification**~~ | — | **Landed (#51).** 802.11k mutual/one-way neighbor advertisement now suppresses the twin verdict in both the alert and the view. Residual: APs that emit no Neighbor Reports, which is most budget extenders — see S2.1. |
 | ~~G3~~ | ~~**Client RSSI history + dwell classification**~~ | — | **Landed (#53).** Client `rssi_ring_t`, `src/presence.c`, Presence column in `[7] Probe`, persisted class. S3.1 closed; S3.2 (recurring transients) now has its primitive and needs episode tracking. |
 | ~~G4~~ | ~~**Known-device roster**~~ | — | **Landed (#55).** `--known-mac` / `--known-macs`, `UNKNOWN_DEVICE` alert requiring both roster and designation. Q5 closed. |
-| G5 | **Cross-session client baseline** | `--snapshot-out` (#27), SQLite sink (#42) | Extend the survey diff from APs to clients. Cheapest once #42 lands — it is a query over persisted state, not new capture. |
+| ~~G5~~ | ~~**Cross-session client baseline**~~ | — | **Landed (#56).** `sessions` table, `db_new_since()`, and a *New since last survey* section in `--report`. Q5 closed. |
 
 ### Sequencing note
 

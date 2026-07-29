@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the 38-table schema v1, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the 40-table schema v2, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -12,9 +12,9 @@ and findings, upserted per entity rather than appended per tick, so a
 month of operation costs megabytes instead of a terabyte.
 
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
-`tests/test_db.c`, issue #42.
+`tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-07-28.
+**Last updated**: 2026-07-28 (schema v2).
 
 ---
 
@@ -104,12 +104,20 @@ These are what make the file trustworthy rather than merely present.
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
 
-## Schema v1 — 38 tables
+## Schema v2 — 40 tables
 
-`meta` holds `schema_version`. `db_open()` refuses a file whose version
-differs from the running build, in either direction: with one version
-defined, a mismatch can only mean a hand-edited or corrupt file, and
-writing into it would produce rows a reader misinterprets.
+`meta` holds `schema_version`, currently **2**. `db_open()` refuses a
+file whose version differs from the running build, and checks it
+*before* applying the rest of the schema so a mismatch produces the
+version message rather than whatever SQL error the schema happens to hit
+first.
+
+**When to bump.** Adding a whole new table is safe without a bump —
+`CREATE TABLE IF NOT EXISTS` runs on every open, so an older file simply
+gains it. Adding a **column to an existing table** is not: that
+statement is a no-op on a table that already exists, and the column
+never appears. v2 exists because `probe_clients.presence` (#53) was
+added without a bump, so v1 files must be refused.
 
 ### Entities — "who was here"
 
@@ -162,6 +170,31 @@ hole: neither struct had a `jsonl_emit_*` at all, so the alert survived
 while the reasoning behind it — SSID/PNL overlap, Jaccard, IE
 uniformity, deauth chain, offered EAP methods, identity leaks — was
 TUI-only and gone on exit. 96 rows maximum.
+
+## Survey sessions
+
+`sessions` records one row per run — `started`, `ended`, and the
+`--site-label` if given. It exists so a returning surveyor can ask *what
+is new since last time*.
+
+The data for that was already present: `first_seen` is MIN-ed across
+every upsert, so an entity seen on a previous visit keeps its original
+timestamp and only genuinely new ones fall inside the current window.
+The session boundary is the only thing that was missing.
+
+`--report` grows a **New since last survey** section listing new APs,
+devices and probe clients. A session that never recorded an end (crash,
+`kill -9`) falls back to its own start rather than reading as "no
+previous visit", which would flood the next report with the whole site.
+
+```sh
+# what arrived between the last two visits, by hand
+sqlite3 sloth.db "
+  SELECT mac, vendor, datetime(first_seen,'unixepoch') FROM devices
+  WHERE first_seen >= (SELECT COALESCE(ended,started) FROM sessions
+                       ORDER BY started DESC LIMIT 1 OFFSET 1)
+  ORDER BY first_seen DESC;"
+```
 
 ## Retention
 

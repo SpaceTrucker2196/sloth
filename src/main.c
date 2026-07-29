@@ -676,6 +676,13 @@ int main(int argc, char **argv) {
                 "sloth: db %s (schema v%d, every %ds, retain %dd, max %dMiB)\n",
                 db_path, DB_SCHEMA_VERSION, db_interval(),
                 db_retain_days(), db_max_mb());
+        /* Record the visit so a later run can answer "what is new since
+         * last time" (#56). --site-label already carries the operator's
+         * name for the site, so reuse it rather than inventing one. */
+        db_session_begin(site_label, session_start);
+        if (db_previous_session_end() > 0)
+            fprintf(stderr, "sloth: previous visit ended %ld\n",
+                    (long)db_previous_session_end());
     }
     if (pcap_dir) {
         alert_pcap_set_dir(pcap_dir);
@@ -819,6 +826,7 @@ int main(int argc, char **argv) {
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
+    db_session_end(time(NULL));
     db_close();
     discovery_unpublish();
     data_socket_cleanup();

@@ -34,9 +34,21 @@
 
 #include "sloth.h"
 
-/* Schema version stamped into the meta table. Bumped whenever the
- * shape changes; db_open() refuses a file written by a newer sloth. */
-#define DB_SCHEMA_VERSION 1
+/* Schema version stamped into the meta table. db_open() refuses a file
+ * whose version differs from this build.
+ *
+ * Bump this whenever an EXISTING table changes shape. Adding a whole
+ * new table is safe without a bump — the schema runs
+ * CREATE TABLE IF NOT EXISTS on every open, so an older file simply
+ * gains it. Adding a *column* to an existing table is NOT safe that
+ * way, because CREATE TABLE IF NOT EXISTS is a no-op on a table that
+ * already exists and the new column never appears.
+ *
+ * v2: probe_clients.presence (#53) was added without a bump, so a v1
+ * file fails at schema application with a confusing SQL error instead
+ * of the clear version message. Bumped retroactively; v1 files are
+ * refused with an explanation. */
+#define DB_SCHEMA_VERSION 2
 
 /* Retention defaults. See db_set_retain_days / db_set_max_mb. */
 #define DB_DEFAULT_RETAIN_DAYS 30
@@ -100,6 +112,46 @@ void db_maintain(time_t now);
 /* Database size in bytes (page_count * page_size), or -1 if closed. */
 long long db_size_bytes(void);
 
+/* ── survey sessions (#56) ────────────────────────────────
+ *
+ * A surveyor returning to a site asks "what is new since last time".
+ * The data for that already exists — first_seen is MIN-ed across every
+ * upsert, so an entity seen on a previous visit keeps its original
+ * timestamp and only genuinely new ones fall inside this run. What was
+ * missing is the boundary: a record of when the visits were. */
+
+/* Record the start of a survey session. `site_label` may be NULL. */
+void db_session_begin(const char *site_label, time_t now);
+
+/* Stamp the current session's end. Safe if none was begun. */
+void db_session_end(time_t now);
+
+/* Start of the previous completed session at this site, or 0 if this is
+ * the first visit. This is the timestamp "new since last survey"
+ * compares against. */
+time_t db_previous_session_end(void);
+
+typedef enum {
+    DB_NEW_DEVICE = 0,
+    DB_NEW_PROBE_CLIENT,
+    DB_NEW_BEACON_AP,
+} db_new_kind_t;
+
+typedef struct {
+    char   ident[24];    /* MAC / BSSID as text */
+    char   label[72];    /* vendor, SSID or hostname — whatever names it */
+    time_t first_seen;
+} db_new_entity_t;
+
+/* Entities of `kind` first seen at or after `since`, newest first.
+ * Returns the number written to `out`. */
+int db_new_since(db_new_kind_t kind, time_t since,
+                 db_new_entity_t *out, int max);
+
+/* Count only — for a report that wants "14 new devices" without
+ * listing them all. */
+int db_count_new_since(db_new_kind_t kind, time_t since);
+
 /* True when `now` is far enough past the last write for another tick.
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
@@ -119,6 +171,27 @@ static inline void db_set_max_mb(int mb)     { (void)mb; }
 static inline int  db_max_mb(void)           { return 0; }
 static inline void db_maintain(time_t now)   { (void)now; }
 static inline long long db_size_bytes(void)  { return -1; }
+
+typedef enum {
+    DB_NEW_DEVICE = 0,
+    DB_NEW_PROBE_CLIENT,
+    DB_NEW_BEACON_AP,
+} db_new_kind_t;
+
+typedef struct {
+    char   ident[24];
+    char   label[72];
+    time_t first_seen;
+} db_new_entity_t;
+
+static inline void db_session_begin(const char *l, time_t n) { (void)l; (void)n; }
+static inline void db_session_end(time_t n)                  { (void)n; }
+static inline time_t db_previous_session_end(void)           { return 0; }
+static inline int db_new_since(db_new_kind_t k, time_t s,
+                               db_new_entity_t *o, int m)
+                               { (void)k; (void)s; (void)o; (void)m; return 0; }
+static inline int db_count_new_since(db_new_kind_t k, time_t s)
+                               { (void)k; (void)s; return 0; }
 static inline int  db_due(time_t now)        { (void)now; return 0; }
 
 #endif /* WITH_SQLITE */
@@ -127,5 +200,11 @@ static inline int  db_due(time_t now)        { (void)now; return 0; }
  * assert on it without linking SQLite: no password column, no key
  * material. Returns a NUL-terminated string of CREATE statements. */
 const char *db_schema_sql(void);
+
+/* Just the meta table. Applied before the version check so a
+ * mismatched file gets the clear "use a separate file" message rather
+ * than whatever SQL error the rest of the schema happens to hit
+ * first. */
+const char *db_schema_meta_sql(void);
 
 #endif /* SLOTH_DB_H */

@@ -26,6 +26,18 @@ static const char SCHEMA_SQL[] =
     "  value TEXT NOT NULL"
     ");\n"
 
+    /* ── survey sessions (#56) ───────────────────────────── *
+     * One row per run. "New since last survey" is a comparison against
+     * the previous session's end, and without this the operator would
+     * have to remember when they last visited. */
+    "CREATE TABLE IF NOT EXISTS sessions ("
+    "  id         INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  started    INTEGER NOT NULL,"
+    "  ended      INTEGER,"
+    "  site_label TEXT"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started);\n"
+
     /* ── devices — synthesised profiles keyed by MAC ──────── */
     "CREATE TABLE IF NOT EXISTS devices ("
     "  mac           TEXT PRIMARY KEY,"
@@ -535,4 +547,12 @@ static const char SCHEMA_SQL[] =
     "  PRIMARY KEY (kind, iface)"
     ");\n";
 
-const char *db_schema_sql(void) { return SCHEMA_SQL; }
+/* Applied before the version check — see db.h. */
+static const char META_SQL[] =
+    "CREATE TABLE IF NOT EXISTS meta ("
+    "  key   TEXT PRIMARY KEY,"
+    "  value TEXT NOT NULL"
+    ");\n";
+
+const char *db_schema_sql(void)      { return SCHEMA_SQL; }
+const char *db_schema_meta_sql(void) { return META_SQL; }

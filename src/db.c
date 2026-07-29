@@ -27,6 +27,8 @@ static int      g_max_mb      = DB_DEFAULT_MAX_MB;
 static time_t   g_last_tick;
 static time_t   g_last_maint;
 static int      g_over_ceiling_reported;
+static sqlite3_int64 g_session_id;        /* current survey session (#56) */
+static time_t        g_prev_session_end;  /* when the last visit ended */
 
 /* ── retention tiers ─────────────────────────────────────
  *
@@ -597,12 +599,18 @@ int db_open(const char *path) {
      * only takes effect on a newly created file; an older one keeps
      * auto_vacuum=NONE and reuses freed pages instead of returning
      * them. Either way the file stops growing. */
+    /* Version is checked BEFORE the rest of the schema. A file from an
+     * incompatible build otherwise fails on whatever statement happens
+     * to hit its missing column first, which tells the operator
+     * nothing useful — the version message tells them exactly what to
+     * do. Hence the meta table alone up front. */
     if (!exec("PRAGMA auto_vacuum=INCREMENTAL", "auto_vacuum") ||
         !exec("PRAGMA journal_mode=WAL", "WAL")            ||
         !exec("PRAGMA synchronous=NORMAL", "synchronous")  ||
         !exec("PRAGMA foreign_keys=ON", "foreign_keys")    ||
-        !exec(db_schema_sql(), "schema")                   ||
-        !check_version()) {
+        !exec(db_schema_meta_sql(), "meta schema")         ||
+        !check_version()                                   ||
+        !exec(db_schema_sql(), "schema")) {
         sqlite3_close(g_db);
         g_db = NULL;
         return 0;
@@ -619,6 +627,7 @@ int db_open(const char *path) {
     g_disabled   = 0;
     g_last_tick  = 0;
     g_last_maint = 0;
+    g_session_id = 0;
     g_over_ceiling_reported = 0;
     return 1;
 }
@@ -631,6 +640,8 @@ void db_close(void) {
     g_disabled   = 0;
     g_last_tick  = 0;
     g_last_maint = 0;
+    g_session_id = 0;
+    g_prev_session_end = 0;
     g_over_ceiling_reported = 0;
 }
 
@@ -1393,6 +1404,110 @@ void db_maintain(time_t now) {
         }
     }
     g_last_maint = now;
+}
+
+/* ── survey sessions and the "new since last visit" query (#56) ── */
+
+void db_session_begin(const char *site_label, time_t now) {
+    if (!db_is_open()) return;
+
+    /* Remember where the previous visit ended before inserting this
+     * one, so "new since last survey" has something to compare to. A
+     * session that never recorded an end (a crash, a kill -9) falls
+     * back to its start, which is the honest approximation. */
+    g_prev_session_end = 0;
+    sqlite3_stmt *q = NULL;
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT COALESCE(ended, started) FROM sessions"
+            " ORDER BY started DESC LIMIT 1", -1, &q, NULL) == SQLITE_OK) {
+        if (sqlite3_step(q) == SQLITE_ROW)
+            g_prev_session_end = (time_t)sqlite3_column_int64(q, 0);
+        sqlite3_finalize(q);
+    }
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db,
+            "INSERT INTO sessions (started, site_label) VALUES (?1, ?2)",
+            -1, &st, NULL) != SQLITE_OK) { db_fail("session begin"); return; }
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+    bind_txt(st, 2, site_label);
+    if (sqlite3_step(st) != SQLITE_DONE) db_fail("session begin");
+    sqlite3_finalize(st);
+    g_session_id = sqlite3_last_insert_rowid(g_db);
+}
+
+void db_session_end(time_t now) {
+    if (!db_is_open() || g_session_id == 0) return;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db,
+            "UPDATE sessions SET ended = ?1 WHERE id = ?2",
+            -1, &st, NULL) != SQLITE_OK) return;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+    sqlite3_bind_int64(st, 2, g_session_id);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+}
+
+time_t db_previous_session_end(void) { return g_prev_session_end; }
+
+/* (table, identity column, label column) per kind. The label is
+ * whatever names the entity to a human reading a report. */
+static int new_since_sql(db_new_kind_t kind, char *out, int sz,
+                         time_t since, int limit) {
+    const char *tbl, *ident, *label;
+    switch (kind) {
+    case DB_NEW_DEVICE:       tbl = "devices";       ident = "mac";
+                              label = "COALESCE(NULLIF(hostname,''),"
+                                      " NULLIF(vendor,''), '')"; break;
+    case DB_NEW_PROBE_CLIENT: tbl = "probe_clients"; ident = "mac";
+                              label = "COALESCE(NULLIF(ssid,''), '')"; break;
+    case DB_NEW_BEACON_AP:    tbl = "beacon_aps";    ident = "bssid";
+                              label = "COALESCE(NULLIF(ssid,''), '')"; break;
+    default: return 0;
+    }
+    snprintf(out, (size_t)sz,
+             "SELECT %s, %s, first_seen FROM %s WHERE first_seen >= %lld"
+             " ORDER BY first_seen DESC LIMIT %d",
+             ident, label, tbl, (long long)since, limit);
+    return 1;
+}
+
+int db_new_since(db_new_kind_t kind, time_t since,
+                 db_new_entity_t *out, int max) {
+    if (!db_is_open() || !out || max <= 0) return 0;
+    char sql[512];
+    if (!new_since_sql(kind, sql, (int)sizeof(sql), since, max)) return 0;
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    int n = 0;
+    while (n < max && sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *id = sqlite3_column_text(st, 0);
+        const unsigned char *lb = sqlite3_column_text(st, 1);
+        snprintf(out[n].ident, sizeof(out[n].ident), "%s", id ? (const char *)id : "");
+        snprintf(out[n].label, sizeof(out[n].label), "%s", lb ? (const char *)lb : "");
+        out[n].first_seen = (time_t)sqlite3_column_int64(st, 2);
+        n++;
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
+int db_count_new_since(db_new_kind_t kind, time_t since) {
+    if (!db_is_open()) return 0;
+    const char *tbl;
+    switch (kind) {
+    case DB_NEW_DEVICE:       tbl = "devices";       break;
+    case DB_NEW_PROBE_CLIENT: tbl = "probe_clients"; break;
+    case DB_NEW_BEACON_AP:    tbl = "beacon_aps";    break;
+    default: return 0;
+    }
+    char sql[192];
+    snprintf(sql, sizeof(sql),
+             "SELECT COUNT(*) FROM %s WHERE first_seen >= %lld",
+             tbl, (long long)since);
+    long long v = scalar(sql);
+    return v < 0 ? 0 : (int)v;
 }
 
 /* ── tick ────────────────────────────────────────────────── */

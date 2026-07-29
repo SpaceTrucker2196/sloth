@@ -116,6 +116,8 @@ for in normal vs anomalous traffic.
     "SELECT mac, ssid FROM pnl_ssids WHERE ssid='CorpWiFi';"
   ```
 
+  **Repeat surveys**: each run records a session, and `--report` grows a *New since last survey* section listing APs, devices and probe clients first seen since the previous visit. `--site-label` names the site. This works because `first_seen` is preserved across visits, so carried-over entities are excluded rather than re-reported.
+
   `--db-interval-secs N` sets the write cadence (default 1).
 
   **Retention is tiered**, because not all rows are worth the same on a disk that is filling up. `--db-retain-days N` (default 30) sets the window for observation rows; entities keep **3×** that and alerts plus credential exposures keep **12×**. The order reflects what an investigator reaches for months later: *what fired* outlives *who was here*, which outlives *the individual observations*.

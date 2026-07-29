@@ -169,20 +169,34 @@ static void test_eapol_key_material_never_reaches_disk(void) {
  * that forgets them is caught, whatever its column formatting. */
 static void test_schema_tables_have_seen_columns(void) {
     const char *sql = db_schema_sql();
-    int tables = 0, with_both = 0;
+    /* Tables that describe the file itself rather than something
+     * observed. Named explicitly so adding an entity table without the
+     * columns fails, while adding bookkeeping is a deliberate edit
+     * here — a bare "tables - N" would silently absorb the mistake. */
+    static const char *const exempt[] = { "meta (", "sessions (" };
+
+    int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
          p = strstr(p + 1, "CREATE TABLE")) {
         const char *end = strstr(p, ");");
         if (!end) break;
         tables++;
-        /* meta is the one table that is not an entity record. */
-        if (strstr(p, "meta (") && strstr(p, "meta (") < end) continue;
+
+        int is_exempt = 0;
+        for (unsigned e = 0; e < sizeof(exempt) / sizeof(exempt[0]); e++) {
+            const char *hit = strstr(p, exempt[e]);
+            if (hit && hit < end) { is_exempt = 1; break; }
+        }
+        if (is_exempt) continue;
+
+        entities++;
         const char *f = strstr(p, "first_seen");
         const char *l = strstr(p, "last_seen");
         if (f && f < end && l && l < end) with_both++;
     }
     ASSERT(tables > 15);
-    ASSERT_EQ(with_both, tables - 1);
+    ASSERT(entities > 15);
+    ASSERT_EQ(with_both, entities);
 }
 
 /* ── open / close / versioning ───────────────────────────── */
@@ -1399,6 +1413,159 @@ static void test_presence_class_never_walks_back(void) {
     unlink(db_path);
 }
 
+/* ── survey sessions and "new since last visit" (#56) ────── */
+
+/* The first visit has nothing to compare against, and must say so
+ * rather than reporting the entire site as new. */
+static void test_first_session_has_no_previous(void) {
+    fresh_db();
+    db_session_begin("Site A", 1700000000);
+    ASSERT_EQ((long long)db_previous_session_end(), 0LL);
+    db_session_end(1700003600);
+    db_close();
+    unlink(db_path);
+}
+
+/* A second visit compares against where the first one ended. */
+static void test_second_session_sees_the_first(void) {
+    fresh_db();
+    db_session_begin("Site A", 1700000000);
+    db_session_end(1700003600);
+    db_close();
+
+    ASSERT_EQ(db_open(db_path), 1);
+    db_session_begin("Site A", 1700090000);
+    ASSERT_EQ((long long)db_previous_session_end(), 1700003600LL);
+    db_close();
+    unlink(db_path);
+}
+
+/* A session that never recorded an end — a crash, a kill -9 — falls
+ * back to its start rather than reading as "no previous visit" and
+ * flooding the next report with everything. */
+static void test_crashed_session_falls_back_to_its_start(void) {
+    fresh_db();
+    db_session_begin("Site A", 1700000000);
+    /* no db_session_end */
+    db_close();
+
+    ASSERT_EQ(db_open(db_path), 1);
+    db_session_begin("Site A", 1700090000);
+    ASSERT_EQ((long long)db_previous_session_end(), 1700000000LL);
+    db_close();
+    unlink(db_path);
+}
+
+/* The heart of the feature: an entity carried over from a previous
+ * visit keeps its original first_seen, so only genuinely new ones fall
+ * inside the window. Without the MIN-ing upsert this would report the
+ * whole site as new on every visit. */
+static void test_new_since_excludes_carried_over_entities(void) {
+    fresh_db();
+    /* Visit one: two devices. */
+    db_session_begin("Site A", 1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_device(&s, 0x11, "10.0.0.5", 1700000100);
+    seed_device(&s, 0x22, "10.0.0.6", 1700000100);
+    db_tick(&s, 1700000100);
+    db_session_end(1700003600);
+    db_close();
+
+    /* Visit two: the same two return, plus one genuinely new. */
+    ASSERT_EQ(db_open(db_path), 1);
+    db_session_begin("Site A", 1700090000);
+    time_t since = db_previous_session_end();
+    s.devices[0].last_seen = 1700090100;
+    s.devices[1].last_seen = 1700090100;
+    seed_device(&s, 0x33, "10.0.0.7", 1700090100);
+    db_tick(&s, 1700090100);
+
+    ASSERT_EQ(db_count_new_since(DB_NEW_DEVICE, since), 1);
+    db_new_entity_t rows[8];
+    int n = db_new_since(DB_NEW_DEVICE, since, rows, 8);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR(rows[0].ident, "02:00:00:00:00:33");
+    db_close();
+    unlink(db_path);
+}
+
+/* Nothing new is a real answer, distinct from "no history". */
+static void test_new_since_reports_zero_when_nothing_new(void) {
+    fresh_db();
+    db_session_begin("Site A", 1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_device(&s, 0x11, "10.0.0.5", 1700000100);
+    db_tick(&s, 1700000100);
+    db_session_end(1700003600);
+    db_close();
+
+    ASSERT_EQ(db_open(db_path), 1);
+    db_session_begin("Site A", 1700090000);
+    time_t since = db_previous_session_end();
+    s.devices[0].last_seen = 1700090100;
+    db_tick(&s, 1700090100);
+    ASSERT_EQ(db_count_new_since(DB_NEW_DEVICE, since), 0);
+    db_close();
+    unlink(db_path);
+}
+
+/* Each entity kind is queried independently — a new AP must not be
+ * reported as a new device. */
+static void test_new_since_kinds_are_independent(void) {
+    fresh_db();
+    db_session_begin("Site A", 1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    memset(b, 0, sizeof(*b));
+    b->bssid[0] = 0xaa;
+    snprintf(b->ssid, sizeof(b->ssid), "NewNet");
+    b->last_seen = 1700000100;
+    db_tick(&s, 1700000100);
+
+    ASSERT_EQ(db_count_new_since(DB_NEW_BEACON_AP, 1699000000), 1);
+    ASSERT_EQ(db_count_new_since(DB_NEW_DEVICE, 1699000000), 0);
+    db_new_entity_t rows[4];
+    ASSERT_EQ(db_new_since(DB_NEW_BEACON_AP, 1699000000, rows, 4), 1);
+    ASSERT_STR(rows[0].label, "NewNet");
+    db_close();
+    unlink(db_path);
+}
+
+static void test_session_calls_without_open_are_safe(void) {
+    db_close();
+    db_session_begin("nowhere", 1700000000);   /* must not crash */
+    db_session_end(1700000001);
+    ASSERT_EQ((long long)db_previous_session_end(), 0LL);
+    db_new_entity_t rows[2];
+    ASSERT_EQ(db_new_since(DB_NEW_DEVICE, 0, rows, 2), 0);
+    ASSERT_EQ(db_count_new_since(DB_NEW_DEVICE, 0), 0);
+    ASSERT_EQ(db_new_since(DB_NEW_DEVICE, 0, NULL, 2), 0);
+}
+
+/* A v1 file predates the probe_clients.presence column added in #53.
+ * CREATE TABLE IF NOT EXISTS cannot add a column to an existing table,
+ * so it must be refused with the version message rather than failing on
+ * whatever statement happens to hit the missing column first. */
+static void test_stale_schema_version_refused_clearly(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','1');"
+        "CREATE TABLE probe_clients (mac TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);",
+        NULL, NULL, NULL);
+    sqlite3_close(h);
+
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -1470,4 +1637,14 @@ void run_db_tests(void) {
     RUN_TEST(test_detector_evidence_shares_the_finding_tier);
     RUN_TEST(test_ceiling_never_drops_detector_evidence);
     RUN_TEST(test_presence_class_never_walks_back);
+
+    TEST_SUITE("db: survey sessions (#56)");
+    RUN_TEST(test_first_session_has_no_previous);
+    RUN_TEST(test_second_session_sees_the_first);
+    RUN_TEST(test_crashed_session_falls_back_to_its_start);
+    RUN_TEST(test_new_since_excludes_carried_over_entities);
+    RUN_TEST(test_new_since_reports_zero_when_nothing_new);
+    RUN_TEST(test_new_since_kinds_are_independent);
+    RUN_TEST(test_session_calls_without_open_are_safe);
+    RUN_TEST(test_stale_schema_version_refused_clearly);
 }
