@@ -202,6 +202,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_ICMP_TUNNEL:            return "T1095";       /* Non-Application Layer Protocol (covert channel) */
     case ALERT_TYPE_MY_NETWORK_RECON:       return "T1595";       /* Active Scanning — recon aimed at the operator */
     case ALERT_TYPE_RECURRING_TRANSIT:      return "T1595";       /* Active Scanning — physical reconnaissance */
+    case ALERT_TYPE_UNKNOWN_DEVICE:         return "T1200";       /* Hardware Additions — unrostered device on the network */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -744,6 +745,48 @@ static void rule_recurring_transit(const sloth_state_t *s, time_t now) {
                  mac_buf, passes, span / 60, (int)d->best_rssi);
         fire(ALERT_TYPE_RECURRING_TRANSIT, ALERT_SEV_WARN,
              "RECURRING_TRANSIT", detail, key, NULL, 0, now);
+    }
+}
+
+/* Unknown device on a designated network (#55).
+ *
+ * The payoff from combining the roster with #52's designation: a device
+ * associated to a network the operator called theirs, which is not on
+ * the roster of devices they recognise. "Someone I do not know is on my
+ * client's WiFi" is actionable in a way that neither half is alone.
+ *
+ * Requires BOTH inputs, so it is silent unless the operator opted into
+ * each — and cannot fire noise at anyone who configured neither. It
+ * keys on association rather than probing on purpose: per-SSID MAC
+ * randomisation is stable across reconnects, so a rostered device keeps
+ * its address, whereas probe randomisation rotates constantly and would
+ * make every passing handset "unknown".
+ *
+ * WARN: a contractor's laptop the operator forgot to roster produces
+ * this honestly, and the fix is to add it. */
+static void rule_unknown_device(const sloth_state_t *s, time_t now) {
+    if (ownership_known_count() == 0) return;   /* no roster — inert */
+    if (!ownership_any())             return;   /* no designation — inert */
+
+    for (int i = 0; i < s->assoc_count; i++) {
+        const assoc_t *a = &s->assocs[i];
+        int mine = ownership_is_my_bssid(a->bssid) ||
+                   ownership_is_my_ssid(a->ssid);
+        if (!mine) continue;
+        if (ownership_is_known_device(a->sta_mac)) continue;
+
+        char sta[20], bss[20];
+        mac_to_str(a->sta_mac, sta, sizeof(sta));
+        mac_to_str(a->bssid,   bss, sizeof(bss));
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "unknowndev:%s", sta);
+        snprintf(detail, sizeof(detail),
+                 "%s on '%.16s' [%s] not in roster%s",
+                 sta, a->ssid[0] ? a->ssid : "?", bss,
+                 a->sta_random ? " (randomised MAC)" : "");
+        fire(ALERT_TYPE_UNKNOWN_DEVICE, ALERT_SEV_WARN,
+             "UNKNOWN_DEVICE", detail, key, NULL, 0, now);
     }
 }
 
@@ -1920,6 +1963,7 @@ void alerts_update(sloth_state_t *s) {
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);
     rule_recurring_transit(s, now);
+    rule_unknown_device(s, now);
     rule_attack_tool_ua(s, now);
     rule_attack_path(s, now);
     rule_weak_tls(s, now);

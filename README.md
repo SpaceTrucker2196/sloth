@@ -138,6 +138,20 @@ for in normal vs anomalous traffic.
 
   With nothing designated every check is inert and behaviour is unchanged.
 
+### Known-device roster
+
+- **`sloth --known-mac MAC`** / **`sloth --known-macs FILE`** — tell sloth which devices you already recognise. The file is one MAC per line with `#` comments; malformed lines are reported with their line number and skipped, so one typo does not discard a roster of 200 good entries.
+
+  Combined with a network designation above, a device associated to *your* network that is **not** on the roster raises `UNKNOWN_DEVICE`. Both inputs are required, so the check is silent unless you opted into each.
+
+  This is what separates *unfamiliar* from *intrinsically odd*. Without a roster, sloth can only score a device on properties — randomised MAC, unknown vendor, no hostname — and with randomisation default on every handset, that fires on your own staff.
+
+  **Roster reliability**: per-*probe* MAC randomisation rotates constantly, so a roster cannot follow a device that is only probing. Per-SSID randomisation used for *association* is stable — iOS and Android derive one MAC per network and keep it across reconnects — so a device rostered while on the network keeps that address. Roster associated devices; use the presence classification in [`[7] Probe`](docs/views/probe.md) for passers-by.
+
+  ```sh
+  sudo ./sloth --hop --my-ssid CorpWiFi --known-macs /etc/sloth/roster.txt
+  ```
+
 ## WiFi SIGINT usage
 
 Sloth is fully passive — it never injects probe requests, never sends

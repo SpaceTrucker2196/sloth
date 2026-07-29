@@ -413,6 +413,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
+            "       [--known-mac MAC] [--known-macs FILE]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -499,6 +500,16 @@ static void print_usage(const char *argv0) {
             "                     the oldest observation rows go first;\n"
             "                     entity, alert and credential rows are\n"
             "                     never dropped by this guard.\n"
+            "  --known-mac MAC    add MAC to the known-device roster\n"
+            "                     (repeatable, max 512).\n"
+            "  --known-macs FILE  load a roster: one MAC per line, #\n"
+            "                     comments. Malformed lines are reported\n"
+            "                     with their line number and skipped.\n"
+            "                     With a roster AND a --my-ssid/--my-bssid\n"
+            "                     designation, a device associated to your\n"
+            "                     network that is not on the roster raises\n"
+            "                     UNKNOWN_DEVICE. Both are required, so it\n"
+            "                     is silent unless you opted into each.\n"
             "  --my-ssid SSID     designate SSID as the operator's own network\n"
             "                     (repeatable, max 16). Purely a label — no\n"
             "                     capture behaviour changes and nothing is\n"
@@ -613,6 +624,10 @@ int main(int argc, char **argv) {
             db_set_retain_days(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
             db_set_max_mb(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--known-mac") && i + 1 < argc) {
+            if (!ownership_add_known_mac(argv[++i])) return 2;
+        } else if (!strcmp(argv[i], "--known-macs") && i + 1 < argc) {
+            if (ownership_load_known_macs(argv[++i]) < 0) return 2;
         } else if (!strcmp(argv[i], "--my-ssid") && i + 1 < argc) {
             if (!ownership_add_ssid(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--my-bssid") && i + 1 < argc) {

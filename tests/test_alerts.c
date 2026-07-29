@@ -928,6 +928,129 @@ static void test_no_transits_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
 }
 
+
+/* ── unknown device on a designated network (#55) ────────── */
+
+/* The payoff from combining the roster with #52's designation. Neither
+ * half alone is actionable; together they say "someone I do not
+ * recognise is on my client's WiFi". */
+static void test_unknown_device_on_my_network_fires(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "02:00:00:00:00:99") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "CorpWiFi") != NULL);
+    ownership_clear();
+}
+
+static void test_rostered_device_does_not_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t known[6] = {0x02,0x00,0x00,0x00,0x00,0x01};
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, known, bssid, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    ownership_clear();
+}
+
+/* A stranger on somebody else's network is not the operator's problem
+ * — that is most of a busy RF scene. */
+static void test_unknown_device_on_foreign_network_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t foreign[6]  = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_assoc_entry(&s, stranger, foreign, "Cafe-Net");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    ownership_clear();
+}
+
+/* BSSID designation alone is enough — an operator who listed BSSIDs
+ * rather than SSIDs still gets the alert. */
+static void test_unknown_device_matches_by_designated_bssid(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_bssid("aa:bb:cc:00:00:01");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE) >= 0);
+    ownership_clear();
+}
+
+/* Both inputs are required. A roster with no designation, or a
+ * designation with no roster, must be completely inert — otherwise the
+ * rule would fire on every device at a site where the operator supplied
+ * only half the context. */
+static void test_roster_without_designation_is_inert(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    ownership_clear();
+}
+
+static void test_designation_without_roster_is_inert(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    ownership_clear();
+}
+
+/* Neither configured — the default for every existing deployment. */
+static void test_unconfigured_is_inert(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+}
+
+/* The detail flags a randomised MAC so the operator knows why the
+ * address may not match anything they rostered. */
+static void test_unknown_device_notes_randomised_mac(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    uint8_t bssid[6]    = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
+    s.assocs[0].sta_random = 1;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "randomised") != NULL);
+    ownership_clear();
+}
+
 /* Same SSID + same cipher + SAME OUI — legit multi-AP enterprise / mesh
  * deployment from one vendor. Must not fire. */
 static void test_evil_twin_same_cipher_same_oui_no_fire(void) {
@@ -3029,6 +3152,16 @@ void run_alerts_tests(void) {
     RUN_TEST(test_two_passes_do_not_fire);
     RUN_TEST(test_stale_passes_do_not_fire);
     RUN_TEST(test_no_transits_no_fire);
+
+    TEST_SUITE("alerts: unknown device on my network (#55)");
+    RUN_TEST(test_unknown_device_on_my_network_fires);
+    RUN_TEST(test_rostered_device_does_not_fire);
+    RUN_TEST(test_unknown_device_on_foreign_network_no_fire);
+    RUN_TEST(test_unknown_device_matches_by_designated_bssid);
+    RUN_TEST(test_roster_without_designation_is_inert);
+    RUN_TEST(test_designation_without_roster_is_inert);
+    RUN_TEST(test_unconfigured_is_inert);
+    RUN_TEST(test_unknown_device_notes_randomised_mac);
     RUN_TEST(test_evil_twin_diff_cipher_same_ssid_no_fire);
     RUN_TEST(test_evil_twin_same_open_diff_oui_no_fire);
     RUN_TEST(test_evil_twin_open_plus_wpa2_diff_oui_still_crit);

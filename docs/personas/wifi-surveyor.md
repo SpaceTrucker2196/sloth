@@ -15,7 +15,7 @@ questions those tools make him assemble by hand.
 **Sources**: `docs/views/*.md`, `docs/wiki/wifi-sigint.md`,
 `src/alerts.c`, `src/twins.c`, `src/karma_detect.c`, `include/sloth.h`.
 
-**Last updated**: 2026-07-28 (rescored after #51, #52, #53, #54).
+**Last updated**: 2026-07-28 (rescored after #51–#55).
 
 > Pronouns for this persona (he/him) are taken from the brief that
 > commissioned it; they describe this fixture, not sloth's operators
@@ -287,11 +287,24 @@ answers, and duplicating it here would double-report one event.
 
 **Pass**: a supplied roster of known MACs marks everything else as
 unknown.
-**Result: FAIL.** No roster import exists. `device_risk_signals`
-(`RANDOM_MAC`, `UNKNOWN_VENDOR`, `NO_HOSTNAME`, `PROBE_ONLY`) is a
-usable *proxy* for suspiciousness, but it scores intrinsic properties,
-not membership. With MAC randomisation now default on every phone,
-`RANDOM_MAC` fires on the client's own staff.
+**Result: PASS** (was `FAIL`; rescored 2026-07-28 after #55).
+`--known-mac` / `--known-macs FILE` extend `src/ownership.c`, and a
+device associated to a designated network but absent from the roster
+raises `UNKNOWN_DEVICE`. Both inputs are required, so it is silent
+unless Ilya supplied each — which also means it cannot fire noise at a
+site where he only did half the setup.
+
+This is the distinction he needed: *unfamiliar*, not *intrinsically
+odd*. `device_risk_signals` still scores properties, and with
+randomisation default on every handset `RANDOM_MAC` fires on the
+client's own staff — the population he wanted filtered out.
+
+**Roster reliability, which he needs to understand before using it**:
+per-*probe* randomisation rotates constantly, so a roster cannot follow
+a device that is only probing. Per-SSID randomisation used for
+*association* is stable — one MAC per network, kept across reconnects —
+so a device rostered while on the network keeps that address. He rosters
+associated devices; passers-by are S3.1/S3.2's job.
 
 #### S5.2 New since last week's survey (L)
 
@@ -322,7 +335,7 @@ home for it.
 | S3.2 Recurring transient | Q3 | PASS (was FAIL; #54) |
 | S4.1 Probes for my SSID | Q4 | PASS (was FAIL; #52) |
 | S4.2 Attacks on my AP | Q4 | PASS (was PARTIAL; #52) |
-| S5.1 Unknown clients | Q5 | **FAIL** |
+| S5.1 Unknown clients | Q5 | PASS (was FAIL; #55) |
 | S5.2 New since last survey | Q5 | PARTIAL |
 
 **Reading (original, 2026-07-28 morning)**: sloth was already excellent
@@ -331,16 +344,15 @@ the half of the job that is *not* about attacks — **establishing what is
 normal**. Residency, ownership and familiarity were the three axes Ilya
 reasons on, and sloth modelled none of them.
 
-**Reading (after #51–#54)**: Q3 (residency) and Q4 (ownership) are
-closed. Q5 (familiarity) is the remaining axis — sloth still cannot be
-told which devices are already known, so "unknown" means *intrinsically
-odd* rather than *unfamiliar*, and with MAC randomisation default on
-every handset that fires on the client's own staff.
+**Reading (after #51–#55)**: all three axes are closed. Residency came
+from trajectory shape (#53) plus episode accumulation (#54); ownership
+from network designation (#52); familiarity from the device roster
+(#55). The last two are the same mechanism — operator-supplied context,
+which sloth did not accept as an input class at all this morning.
 
-The shape of the fix is now established rather than speculative: #52
-introduced operator-supplied context as an input class, and a
-known-device roster is the same shape. It should extend
-`src/ownership.c` rather than start a parallel mechanism.
+What remains is not an axis but a join: **S5.2**, cross-session client
+diffing, which needs the persisted state from #42 rather than any new
+capture capability.
 
 ---
 
@@ -354,7 +366,7 @@ in-tree material each would build on.
 | ~~G1~~ | ~~**No "my network" designation**~~ | — | **Landed (#52).** `--my-ssid` / `--my-bssid`, the `MY_NET_RECON` rule, flood severity scoping, and twin-side pinning. Q4 fully answered. |
 | ~~G2~~ | ~~**Repeater/infrastructure classification**~~ | — | **Landed (#51).** 802.11k mutual/one-way neighbor advertisement now suppresses the twin verdict in both the alert and the view. Residual: APs that emit no Neighbor Reports, which is most budget extenders — see S2.1. |
 | ~~G3~~ | ~~**Client RSSI history + dwell classification**~~ | — | **Landed (#53).** Client `rssi_ring_t`, `src/presence.c`, Presence column in `[7] Probe`, persisted class. S3.1 closed; S3.2 (recurring transients) now has its primitive and needs episode tracking. |
-| G4 | **Known-device roster** | `device_t`, device-risk scoring | `--known-macs FILE`; an unknown-device signal that means *unfamiliar* rather than *intrinsically odd*. |
+| ~~G4~~ | ~~**Known-device roster**~~ | — | **Landed (#55).** `--known-mac` / `--known-macs`, `UNKNOWN_DEVICE` alert requiring both roster and designation. Q5 closed. |
 | G5 | **Cross-session client baseline** | `--snapshot-out` (#27), SQLite sink (#42) | Extend the survey diff from APs to clients. Cheapest once #42 lands — it is a query over persisted state, not new capture. |
 
 ### Sequencing note

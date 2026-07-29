@@ -29,6 +29,11 @@
 #define MAX_MY_SSIDS   16
 #define MAX_MY_BSSIDS  16
 
+/* The roster is per-engagement, not per-fleet. A site with more than
+ * this many devices is one where the operator wants an inventory
+ * system, not a CLI flag. */
+#define MAX_KNOWN_MACS 512
+
 /* Register a designation. Returns 1 on success, 0 if the input was
  * empty/malformed or the table is full (diagnostic on stderr). Both are
  * idempotent — designating the same value twice is not an error and
@@ -46,6 +51,40 @@ int ownership_add_bssid(const char *str);
  * different networks on the air. */
 int ownership_is_my_ssid(const char *ssid);
 int ownership_is_my_bssid(const uint8_t bssid[6]);
+
+/* ── known-device roster (#55) ────────────────────────────
+ *
+ * "Which devices are mine" sits beside "which networks are mine"
+ * because they are the same kind of input: context the operator has and
+ * the radio cannot infer. Without it sloth can only score a device as
+ * *intrinsically odd* (randomised MAC, unknown vendor, no hostname) —
+ * and with randomisation default on every handset, that fires on the
+ * operator's own staff, which is precisely the population they wanted
+ * filtered out.
+ *
+ * Reliability note worth knowing before rostering anything: per-*probe*
+ * MAC randomisation rotates constantly, so a roster cannot follow a
+ * device that is only probing. Per-SSID randomisation used for
+ * *association* is stable — iOS and Android derive one MAC per network
+ * and keep it across reconnects — so a device rostered while on the
+ * network keeps that address. The roster is therefore reliable for the
+ * population it targets (associated devices) and not for passing
+ * probers, which #53/#54 cover instead. */
+
+/* Register one MAC. Same format and strictness as ownership_add_bssid.
+ * Idempotent. */
+int ownership_add_known_mac(const char *str);
+
+/* Load a roster file: one MAC per line, `#` comments, blank lines
+ * skipped, trailing comments allowed. Returns the number added, or -1
+ * if the file could not be opened. Malformed lines are reported with
+ * their line number and skipped — a roster that silently rostered
+ * nothing would leave the operator believing their devices were
+ * recognised while every one of them alerted. */
+int ownership_load_known_macs(const char *path);
+
+int ownership_is_known_device(const uint8_t mac[6]);
+int ownership_known_count(void);
 
 /* True when the operator designated anything at all. Rules use this to
  * skip work entirely in the common unconfigured case. */
