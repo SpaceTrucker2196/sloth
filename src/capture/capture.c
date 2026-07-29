@@ -1,10 +1,26 @@
 #include "capture/capture.h"
 
+/* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
+ * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
+ * interface index as sll2_if_index (offset 4). Selectable via
+ * pcap_set_datalink() after activate on libpcap ≥ 1.10; default for
+ * "any" on ≥ 1.11. Enables per-iface data-stream filtering (#17).
+ *
+ * Above the WITH_PCAP guard because capture_dlt_has_ifindex() below is
+ * compiled into the test build, which links no libpcap. */
+#define MY_DLT_LINUX_SLL  113
+#define MY_DLT_LINUX_SLL2 276
+
 /* Kept outside the WITH_PCAP guard: it is pure arithmetic on libpcap's
    documented return contract, so the test build (which links no libpcap)
    can still assert it. See capture.h for the contract and issue #46. */
 int capture_activate_failed(int rc) {
     return rc < 0;
+}
+
+/* Also outside the guard, and for the same reason. See capture.h. */
+int capture_dlt_has_ifindex(int dlt) {
+    return dlt == MY_DLT_LINUX_SLL2;
 }
 
 #ifdef WITH_PCAP
@@ -487,14 +503,6 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%u", pkt->proto);
     }
 }
-
-/* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
- * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
- * interface index as sll2_if_index (offset 4). Selectable via
- * pcap_set_datalink() after activate on libpcap ≥ 1.10; default for
- * "any" on ≥ 1.11. Enables per-iface data-stream filtering (#17). */
-#define MY_DLT_LINUX_SLL  113
-#define MY_DLT_LINUX_SLL2 276
 
 /* SLL2 header layout (per pcap-linktype(7)):
  *   0  protocol   (2)  big-endian ethertype

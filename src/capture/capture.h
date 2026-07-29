@@ -16,6 +16,22 @@
    pinned by the test suite without linking libpcap. */
 int capture_activate_failed(int rc);
 
+/* Can frames on this datalink be attributed to an ingress interface?
+
+   Only DLT_LINUX_SLL2 carries sll2_if_index, which is what the
+   data-stream election keys on (#17, #35). On SLL v1, EN10MB or anything
+   else the per-iface filter in on_packet() is skipped outright, so
+   --iface / --monitor-only silently pass every frame.
+
+   Capture reaches a non-SLL2 datalink by several routes — pcap_set_datalink()
+   rejected by an older libpcap or kernel, the pcap_open_live() fallback, or
+   capture never starting at all. Callers test this end state rather than
+   enumerating causes, so a future route is covered for free (#57).
+
+   Declared and compiled without WITH_PCAP so the classification can be
+   pinned by the test suite without linking libpcap. */
+int capture_dlt_has_ifindex(int dlt);
+
 #ifdef WITH_PCAP
 
 /* Start a background pcap capture thread writing into s->packets[].

@@ -96,10 +96,9 @@
 #include "discovery.h"
 #include "dns.h"
 #include "scan.h"
-#include "capture/probe.h"   /* self-stubbing without WITH_PCAP */
-#ifdef WITH_PCAP
-#  include "capture/capture.h"
-#endif
+#include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
+#include "capture/capture.h"   /* likewise — and #57's scope check needs it
+                                  in the no-pcap build too */
 
 static sloth_state_t g_state;
 static volatile int g_quit = 0;
@@ -782,6 +781,24 @@ int main(int argc, char **argv) {
         else
             fprintf(stderr, "sloth: --monitor-only: no monitor-mode "
                     "interface found; data stream left unrestricted\n");
+    }
+    /* #57: the allow-list only bites on SLL2, the one datalink carrying an
+     * ingress ifindex. Several routes land elsewhere — pcap_set_datalink()
+     * refused by an older libpcap, the open_live fallback, capture failing
+     * outright — and every one of them leaves scoping inert while capture
+     * looks healthy. Test the end state, not the routes. Ordering matters:
+     * capture_start() has set pkt_linktype and both allow-list sources have
+     * been seeded, and tui_init() has not yet taken the terminal. */
+    if (g_state.iface_allowed_count > 0
+        && !capture_dlt_has_ifindex(g_state.pkt_linktype)) {
+        if (g_state.pkt_linktype == 0)
+            fprintf(stderr, "sloth: --iface/--monitor-only requested but "
+                    "packet capture is disabled; scope is INACTIVE\n");
+        else
+            fprintf(stderr, "sloth: --iface/--monitor-only requested but "
+                    "capture datalink is %d (not SLL2/276); per-interface "
+                    "scope is INACTIVE — all traffic is captured\n",
+                    g_state.pkt_linktype);
     }
     event_wake_init();
     updater_init(check_manifest);

@@ -64,10 +64,56 @@ static void test_activate_unknown_codes_follow_sign(void) {
     ASSERT_NE(capture_activate_failed(-99), 0);
 }
 
+/* ── ingress-ifindex datalinks (#57) ──────────────────────── */
+
+/* Datalink values per pcap-linktype(7), pinned here for the same reason
+   as the activate codes above: the test build links no libpcap. */
+#define D_NULL         0
+#define D_EN10MB       1
+#define D_LINUX_SLL  113
+#define D_LINUX_SLL2 276
+#define D_IEEE802_11 105
+#define D_RADIOTAP   127
+
+static void test_sll2_carries_ifindex(void) {
+    ASSERT(capture_dlt_has_ifindex(D_LINUX_SLL2));
+}
+
+static void test_other_datalinks_carry_no_ifindex(void) {
+    /* The #46 damage, stated directly: SLL v1 is what capture falls back
+       to, and it has no ingress ifindex, so --iface / --monitor-only pass
+       every frame. Reaching this datalink must be reportable. */
+    ASSERT_EQ(capture_dlt_has_ifindex(D_LINUX_SLL), 0);
+    ASSERT_EQ(capture_dlt_has_ifindex(D_EN10MB), 0);
+    ASSERT_EQ(capture_dlt_has_ifindex(D_IEEE802_11), 0);
+    ASSERT_EQ(capture_dlt_has_ifindex(D_RADIOTAP), 0);
+}
+
+static void test_unset_linktype_carries_no_ifindex(void) {
+    /* pkt_linktype is 0 when capture never started (no root, no devices,
+       or a build without WITH_PCAP). main.c reports that case separately,
+       but it must not be mistaken for a scoping-capable datalink. */
+    ASSERT_EQ(capture_dlt_has_ifindex(D_NULL), 0);
+}
+
+static void test_unknown_datalinks_carry_no_ifindex(void) {
+    /* Fail closed: an unrecognised DLT is assumed to lack the ifindex, so
+       a new capture route reports scope-inactive rather than claiming a
+       filter that never runs. */
+    ASSERT_EQ(capture_dlt_has_ifindex(9999), 0);
+    ASSERT_EQ(capture_dlt_has_ifindex(-1), 0);
+}
+
 void run_capture_tests(void) {
     TEST_SUITE("capture pcap_activate classification");
     RUN_TEST(test_activate_success_is_not_failure);
     RUN_TEST(test_activate_warnings_are_not_failure);
     RUN_TEST(test_activate_errors_are_failure);
     RUN_TEST(test_activate_unknown_codes_follow_sign);
+
+    TEST_SUITE("capture ingress-ifindex datalinks");
+    RUN_TEST(test_sll2_carries_ifindex);
+    RUN_TEST(test_other_datalinks_carry_no_ifindex);
+    RUN_TEST(test_unset_linktype_carries_no_ifindex);
+    RUN_TEST(test_unknown_datalinks_carry_no_ifindex);
 }

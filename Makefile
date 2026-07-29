@@ -170,9 +170,16 @@ LDFLAGS += -lpthread -lm
 ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
     LDFLAGS += -lpcap
-    SRCS    += src/capture/capture.c
     SRCS    += src/capture/probe.c
 endif
+
+# Unconditional: capture.c is almost entirely inside its own WITH_PCAP
+# guard, but the pure datalink/return-code classifiers above that guard
+# are compiled and linked in every configuration — main.c calls
+# capture_dlt_has_ifindex() to report inactive scoping even in a build
+# with no capture at all (#46, #57). TEST_SRCS already lists it
+# unconditionally for the same reason.
+SRCS += src/capture/capture.c
 
 # Embedded SQLite sink (#42). Disable with: make WITH_SQLITE=0
 ifeq ($(WITH_SQLITE),1)
