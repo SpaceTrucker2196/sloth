@@ -67,6 +67,11 @@ static const char *akm_name(uint8_t t) {
     case 12: return "Suite-B-192";
     case 18: return "OWE";
     case 19: return "FT-PSK-SHA384";
+    /* WPA3 R3 / 802.11be. Named here because the transition-mode rule
+     * treats PSK alongside SAE-EXT-KEY as a downgrade path exactly as
+     * it treats PSK alongside plain SAE (#62). */
+    case 24: return "SAE-EXT-KEY";
+    case 25: return "FT-SAE-EXT-KEY";
     default: return "?";
     }
 }
@@ -93,26 +98,13 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                      char ssid_out[33], int *channel_out, char enc_out[10],
                      beacon_rsn_t *rsn_out)
 {
-    if (rsn_out) {
-        rsn_out->pairwise[0] = '\0';
-        rsn_out->group[0]    = '\0';
-        rsn_out->akm[0]      = '\0';
-        rsn_out->mfp         = 0;
-        rsn_out->vendor[0]   = '\0';
-        rsn_out->has_wps     = 0;
-        rsn_out->wps_state   = 0;
-        rsn_out->wps_locked  = 0;
-        rsn_out->phy[0]      = '\0';
-        rsn_out->neighbor_count = 0;
-        memset(rsn_out->neighbors, 0, sizeof(rsn_out->neighbors));
-        memset(&rsn_out->fp, 0, sizeof(rsn_out->fp));
-        rsn_out->has_qbss       = 0;
-        rsn_out->qbss_stations  = 0;
-        rsn_out->qbss_chan_util = 0;
-        rsn_out->ie_overruns    = 0;
-        rsn_out->oversize_ssid  = 0;
-        rsn_out->truncated_rsn  = 0;
-    }
+    /* One memset rather than a field-by-field reset. The header
+     * promises rsn_out is "fully zeroed on entry", but clearing each
+     * field by hand makes that a promise the next field addition
+     * quietly breaks — which is exactly what happened when akm_bits
+     * and pairwise_bits landed (#60). Zeroing the object makes the
+     * documented contract structural. */
+    if (rsn_out) memset(rsn_out, 0, sizeof(*rsn_out));
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
      * body so two same-vendor APs (same firmware, same caps) produce
@@ -273,14 +265,21 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             if (off + 2 <= (int)tln) {
                 uint16_t pw = (uint16_t)(ie[2+off] | ((uint16_t)ie[2+off+1] << 8));
                 off += 2;
-                /* Pairwise list — record the first suite (most beacons
-                 * just advertise one; if more, we still capture the
-                 * primary cipher). */
-                if (rsn_out && pw > 0 && off + 4 <= (int)tln) {
-                    if (ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac) {
+                /* Pairwise list — the first suite feeds the display
+                 * string (most beacons advertise one, and that is the
+                 * primary cipher); every suite feeds the bitmap, which
+                 * is what "was TKIP also on offer?" needs (#60). Bounds
+                 * are rechecked per entry because `pw` comes off the
+                 * air and may overstate the list. */
+                for (int k = 0; k < (int)pw && off + k*4 + 4 <= (int)tln; k++) {
+                    const uint8_t *sel = ie + 2 + off + k*4;
+                    if (!(sel[0]==0x00 && sel[1]==0x0f && sel[2]==0xac)) continue;
+                    if (!rsn_out) continue;
+                    if (k == 0)
                         snprintf(rsn_out->pairwise, sizeof(rsn_out->pairwise),
-                                 "%s", cipher_name(ie[2+off+3]));
-                    }
+                                 "%s", cipher_name(sel[3]));
+                    if (sel[3] < 32)
+                        rsn_out->pairwise_bits |= RSN_SUITE_BIT(sel[3]);
                 }
                 off += pw * 4;
                 if (off + 2 <= (int)tln) {
@@ -294,6 +293,12 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                             continue;
                         uint8_t t = ie[2+off+3];
                         if (t == 8 || t == 9) sae_found = 1;
+                        /* Every suite lands in the bitmap even when the
+                         * display string is already full at three — the
+                         * fourth AKM is exactly the one a crowded
+                         * transition-mode BSS hides (#60, #62). */
+                        if (rsn_out && t < 32)
+                            rsn_out->akm_bits |= RSN_SUITE_BIT(t);
                         if (rsn_out && akm_taken < 3) {
                             const char *nm = akm_name(t);
                             int cur = (int)strlen(rsn_out->akm);

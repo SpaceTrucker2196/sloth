@@ -45,7 +45,45 @@ typedef struct {
     int  ie_overruns;
     int  oversize_ssid;
     int  truncated_rsn;
+    /* Suite-selector bitmaps: bit N set means 00-0F-AC suite type N was
+     * advertised. `akm[]` above is display-oriented — it caps at three
+     * entries and joins names — so it cannot answer "are PSK and SAE
+     * both on offer?", which is the WPA3-transition and ask-vs-grant
+     * downgrade question (#60, #62). Substring matching it is actively
+     * wrong: "SAE" matches inside "FT-SAE" and "SAE-EXT-KEY", and a
+     * fourth suite is silently dropped. These are the machine-readable
+     * form; the strings stay for display. Suite types above 31 are not
+     * representable and are skipped — none are defined today. */
+    uint32_t akm_bits;
+    uint32_t pairwise_bits;
 } beacon_rsn_t;
+
+/* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151
+ * for AKM, Table 9-149 for ciphers). */
+#define RSN_SUITE_BIT(t)  (1u << (t))
+
+/* AKM families worth naming, because the downgrade rules ask about the
+ * family rather than one selector. Keep these in sync with akm_name(). */
+#define RSN_AKM_PSK          RSN_SUITE_BIT(2)
+#define RSN_AKM_FT_PSK       RSN_SUITE_BIT(4)
+#define RSN_AKM_PSK_SHA256   RSN_SUITE_BIT(6)
+#define RSN_AKM_SAE          RSN_SUITE_BIT(8)
+#define RSN_AKM_FT_SAE       RSN_SUITE_BIT(9)
+#define RSN_AKM_OWE          RSN_SUITE_BIT(18)
+#define RSN_AKM_SAE_EXT      RSN_SUITE_BIT(24)
+#define RSN_AKM_FT_SAE_EXT   RSN_SUITE_BIT(25)
+
+/* Any PSK-based AKM — the WPA2 lane of a transition-mode BSS. */
+#define RSN_AKM_PSK_FAMILY \
+    (RSN_AKM_PSK | RSN_AKM_FT_PSK | RSN_AKM_PSK_SHA256)
+
+/* Any SAE-based AKM — the WPA3 lane. */
+#define RSN_AKM_SAE_FAMILY \
+    (RSN_AKM_SAE | RSN_AKM_FT_SAE | RSN_AKM_SAE_EXT | RSN_AKM_FT_SAE_EXT)
+
+/* Pairwise ciphers the posture rules care about. */
+#define RSN_CIPHER_TKIP      RSN_SUITE_BIT(2)
+#define RSN_CIPHER_CCMP      RSN_SUITE_BIT(4)
 
 /* Walk an Information-Element blob and fill the same outputs
  * beacon_parse produces (roadmap B3b).

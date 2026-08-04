@@ -1323,6 +1323,141 @@ static void test_ies_direct_null_rsn_is_safe(void) {
     ASSERT_STR(ssid, "N");
 }
 
+/* ── RSN suite bitmaps (#60) ─────────────────────────────── */
+
+/* Build a beacon carrying one RSN IE with the given pairwise and AKM
+ * suite-type lists, and parse it. Keeps the bitmap tests to their
+ * subject instead of repeating the IE skeleton per case. */
+static void parse_rsn_suites(const uint8_t *pw, int pw_n,
+                             const uint8_t *akm, int akm_n,
+                             uint16_t caps, beacon_rsn_t *rsn_out) {
+    uint8_t ie[128];
+    int n = 0;
+    ie[n++] = 0x30;                              /* tag 48 = RSN */
+    int len_at = n++;                            /* length, back-filled */
+    ie[n++] = 0x01; ie[n++] = 0x00;              /* version */
+    ie[n++] = 0x00; ie[n++] = 0x0f; ie[n++] = 0xac; ie[n++] = 0x04;  /* group */
+    ie[n++] = (uint8_t)pw_n; ie[n++] = 0x00;
+    for (int i = 0; i < pw_n; i++) {
+        ie[n++] = 0x00; ie[n++] = 0x0f; ie[n++] = 0xac; ie[n++] = pw[i];
+    }
+    ie[n++] = (uint8_t)akm_n; ie[n++] = 0x00;
+    for (int i = 0; i < akm_n; i++) {
+        ie[n++] = 0x00; ie[n++] = 0x0f; ie[n++] = 0xac; ie[n++] = akm[i];
+    }
+    ie[n++] = (uint8_t)(caps & 0xff); ie[n++] = (uint8_t)(caps >> 8);
+    ie[len_at] = (uint8_t)(n - 2);
+
+    uint8_t f[BEACON_HDR_LEN + 2 + 128];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;   /* empty SSID */
+    memcpy(f + BEACON_HDR_LEN + 2, ie, (size_t)n);
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    ASSERT_EQ(beacon_parse(f, BEACON_HDR_LEN + 2 + n, -50,
+                           ssid, bssid, &ch, enc, &bms, rsn_out), 1);
+}
+
+static void test_akm_bits_single_psk(void) {
+    static const uint8_t pw[]  = {4};    /* CCMP */
+    static const uint8_t akm[] = {2};    /* PSK  */
+    beacon_rsn_t r;
+    parse_rsn_suites(pw, 1, akm, 1, 0, &r);
+    ASSERT_EQ(r.akm_bits, RSN_AKM_PSK);
+    ASSERT_EQ(r.pairwise_bits, RSN_CIPHER_CCMP);
+    ASSERT(r.akm_bits & RSN_AKM_PSK_FAMILY);
+    ASSERT_EQ(r.akm_bits & RSN_AKM_SAE_FAMILY, 0u);
+}
+
+static void test_akm_bits_sae_is_not_ft_sae(void) {
+    /* The reason the bitmap exists. strstr(akm,"SAE") is true for a
+     * pure FT-SAE BSS, so a substring test cannot tell the two apart —
+     * but they are different suites and only one is plain SAE. */
+    static const uint8_t pw[]   = {4};
+    static const uint8_t sae[]  = {8};
+    static const uint8_t ftsae[]= {9};
+    beacon_rsn_t a, b;
+    parse_rsn_suites(pw, 1, sae,   1, 0, &a);
+    parse_rsn_suites(pw, 1, ftsae, 1, 0, &b);
+
+    ASSERT(a.akm_bits & RSN_AKM_SAE);
+    ASSERT_EQ(a.akm_bits & RSN_AKM_FT_SAE, 0u);
+    ASSERT(b.akm_bits & RSN_AKM_FT_SAE);
+    ASSERT_EQ(b.akm_bits & RSN_AKM_SAE, 0u);
+    /* Both are still the SAE family — that is the useful grouping. */
+    ASSERT(a.akm_bits & RSN_AKM_SAE_FAMILY);
+    ASSERT(b.akm_bits & RSN_AKM_SAE_FAMILY);
+    /* And the display string is genuinely ambiguous between them. */
+    ASSERT(strstr(a.akm, "SAE") != NULL);
+    ASSERT(strstr(b.akm, "SAE") != NULL);
+}
+
+static void test_akm_bits_transition_mode_psk_and_sae(void) {
+    /* WPA2/WPA3 transition: both lanes advertised at once. This is the
+     * exact state #62's alert keys on. */
+    static const uint8_t pw[]  = {4};
+    static const uint8_t akm[] = {2, 8};   /* PSK + SAE */
+    beacon_rsn_t r;
+    parse_rsn_suites(pw, 1, akm, 2, 0, &r);
+    ASSERT(r.akm_bits & RSN_AKM_PSK_FAMILY);
+    ASSERT(r.akm_bits & RSN_AKM_SAE_FAMILY);
+}
+
+static void test_akm_bits_survive_past_display_cap(void) {
+    /* The display string joins at most three AKMs. A fourth suite must
+     * still reach the bitmap — a crowded transition BSS is precisely
+     * where the downgrade lane hides. */
+    static const uint8_t pw[]  = {4};
+    static const uint8_t akm[] = {1, 5, 6, 8};   /* 802.1X, -SHA256, PSK-SHA256, SAE */
+    beacon_rsn_t r;
+    parse_rsn_suites(pw, 1, akm, 4, 0, &r);
+
+    ASSERT(strstr(r.akm, "SAE") == NULL);        /* truncated out of the string */
+    ASSERT(r.akm_bits & RSN_AKM_SAE);            /* but present in the bitmap */
+    ASSERT(r.akm_bits & RSN_AKM_PSK_SHA256);
+    ASSERT(r.akm_bits & RSN_AKM_PSK_FAMILY);
+}
+
+static void test_akm_bits_sae_ext_key(void) {
+    /* WPA3 R3. Type 24 alongside PSK is a transition path just as
+     * type 8 is, so the family mask has to cover it. */
+    static const uint8_t pw[]  = {4};
+    static const uint8_t akm[] = {2, 24};
+    beacon_rsn_t r;
+    parse_rsn_suites(pw, 1, akm, 2, 0, &r);
+    ASSERT(r.akm_bits & RSN_AKM_SAE_EXT);
+    ASSERT(r.akm_bits & RSN_AKM_SAE_FAMILY);
+    ASSERT(r.akm_bits & RSN_AKM_PSK_FAMILY);
+    ASSERT_STR(r.akm, "PSK,SAE-EXT-KEY");
+}
+
+static void test_pairwise_bits_tkip_alongside_ccmp(void) {
+    /* The display string keeps only the first cipher, so a TKIP suite
+     * listed second is invisible to it — and TKIP on offer is the
+     * finding. */
+    static const uint8_t pw[]  = {4, 2};   /* CCMP then TKIP */
+    static const uint8_t akm[] = {2};
+    beacon_rsn_t r;
+    parse_rsn_suites(pw, 2, akm, 1, 0, &r);
+    ASSERT_STR(r.pairwise, "CCMP");
+    ASSERT(r.pairwise_bits & RSN_CIPHER_CCMP);
+    ASSERT(r.pairwise_bits & RSN_CIPHER_TKIP);
+}
+
+static void test_suite_bits_zero_when_no_rsn(void) {
+    /* An open BSS has no RSN IE at all; the bitmaps must read empty
+     * rather than carrying anything from a previous parse. */
+    uint8_t f[BEACON_HDR_LEN + 2];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t r;
+    memset(&r, 0xFF, sizeof(r));
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &r), 1);
+    ASSERT_EQ(r.akm_bits, 0u);
+    ASSERT_EQ(r.pairwise_bits, 0u);
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -1351,6 +1486,13 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_qbss_load);
     RUN_TEST(test_parse_qbss_absent);
     RUN_TEST(test_parse_rsn_inventory_wpa2_psk_ccmp);
+    RUN_TEST(test_akm_bits_single_psk);
+    RUN_TEST(test_akm_bits_sae_is_not_ft_sae);
+    RUN_TEST(test_akm_bits_transition_mode_psk_and_sae);
+    RUN_TEST(test_akm_bits_survive_past_display_cap);
+    RUN_TEST(test_akm_bits_sae_ext_key);
+    RUN_TEST(test_pairwise_bits_tkip_alongside_ccmp);
+    RUN_TEST(test_suite_bits_zero_when_no_rsn);
     RUN_TEST(test_parse_rsn_inventory_wpa3_sae_mfp_required);
     RUN_TEST(test_parse_vendor_ie_apple);
     RUN_TEST(test_parse_vendor_ie_wps);
