@@ -18,6 +18,7 @@
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "auth_track.h"
+#include "action_snoop.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -340,6 +341,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
          * to; a burst there means an association-table exhaustion DoS. */
         auth_observe(dot11 + 16, time(NULL));
+        return;
+    }
+
+    if (sub == 13) {
+        /* Action frame (802.11k/v/r) — #59. The whole management
+         * surface behind this subtype was previously labelled and
+         * dropped. Parsing lives in action_snoop.c rather than here:
+         * this file is compiled only under WITH_PCAP and is absent from
+         * TEST_SRCS, so logic placed here cannot be tested. */
+        action_observe(dot11, dot11_len, time(NULL));
         return;
     }
 
