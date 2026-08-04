@@ -9,6 +9,190 @@ static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
 static pthread_mutex_t g_mu  = PTHREAD_MUTEX_INITIALIZER;
 
+/* ── Association / reassociation REQUEST parse (#60) ──────── */
+
+/* Fixed body length before the IE list, per IEEE 802.11-2020.
+ *   AssocReq   §9.3.3.6: capability(2) + listen interval(2)
+ *   ReassocReq §9.3.3.8: the same, plus current AP address(6) */
+#define ASSOC_REQ_FIXED    4
+#define REASSOC_REQ_FIXED  10
+#define DOT11_HDR_LEN      24
+
+/* Supported Rates (tag 1) and Extended Supported Rates (tag 50) carry
+ * rates in 500 kbit/s units. The top bit flags "basic rate"; mask it
+ * off — the question here is what the client supports, not what the
+ * BSS requires. */
+static uint32_t rate_bit(uint8_t raw) {
+    switch (raw & 0x7f) {
+    case 2:   return ASSOC_RATE_1M;
+    case 4:   return ASSOC_RATE_2M;
+    case 11:  return ASSOC_RATE_5M5;
+    case 12:  return ASSOC_RATE_6M;
+    case 18:  return ASSOC_RATE_9M;
+    case 22:  return ASSOC_RATE_11M;
+    case 24:  return ASSOC_RATE_12M;
+    case 36:  return ASSOC_RATE_18M;
+    case 48:  return ASSOC_RATE_24M;
+    case 72:  return ASSOC_RATE_36M;
+    case 96:  return ASSOC_RATE_48M;
+    case 108: return ASSOC_RATE_54M;
+    default:  return 0;   /* HT/VHT MCS rates live in their own IEs */
+    }
+}
+
+/* Walk the rate IEs only. The rest of the IE list goes through
+ * beacon_parse_ies(), which already knows RSN, PHY tier and the vendor
+ * fingerprint — but does not extract rates, since a beacon's rate list
+ * answers a different question than a client's. */
+static uint32_t parse_rates(const uint8_t *ies, int len) {
+    uint32_t bits = 0;
+    int off = 0;
+    while (off + 2 <= len) {
+        uint8_t tag = ies[off];
+        uint8_t tln = ies[off + 1];
+        if (off + 2 + (int)tln > len) break;      /* truncated — stop */
+        if (tag == 1 || tag == 50) {
+            for (int i = 0; i < (int)tln; i++)
+                bits |= rate_bit(ies[off + 2 + i]);
+        }
+        off += 2 + tln;
+    }
+    return bits;
+}
+
+int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
+    if (!dot11 || !out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (len < DOT11_HDR_LEN) return 0;
+
+    /* Subtype 0 = AssocReq, subtype 2 = ReassocReq; type 0, proto 0.
+     * FC0 = (subtype<<4) → 0x00 and 0x20 respectively. Compared whole
+     * so a nonzero protocol version is rejected rather than parsed. */
+    uint8_t fc0 = dot11[0];
+    int is_reassoc;
+    if      (fc0 == 0x00) is_reassoc = 0;
+    else if (fc0 == 0x20) is_reassoc = 1;
+    else return 0;
+
+    int fixed = is_reassoc ? REASSOC_REQ_FIXED : ASSOC_REQ_FIXED;
+    if (len < DOT11_HDR_LEN + fixed) return 0;
+
+    out->is_reassoc = is_reassoc;
+    /* A request travels STA → AP: addr2 is the client, addr3 the BSSID.
+     * The mirror of the response case, where addr1 is the client. */
+    memcpy(out->sta,   dot11 + 10, 6);
+    memcpy(out->bssid, dot11 + 16, 6);
+    out->capability_info = (uint16_t)(dot11[24] | ((uint16_t)dot11[25] << 8));
+    out->listen_interval = (uint16_t)(dot11[26] | ((uint16_t)dot11[27] << 8));
+
+    const uint8_t *ies    = dot11 + DOT11_HDR_LEN + fixed;
+    int            ie_len = len   - DOT11_HDR_LEN - fixed;
+    if (ie_len < 0) return 0;
+
+    out->supported_rates = parse_rates(ies, ie_len);
+
+    /* Reuse the one IE parser (roadmap B3b) rather than adding a fourth
+     * copy of the walk. Its seam is the IE blob, so an assoc request
+     * feeds it as readily as a beacon: the tags that matter here —
+     * SSID(0), RSN(48), HT/VHT/HE/EHT, vendor(221) — are identical.
+     *
+     * Its channel and enc outputs are discarded: both are AP-side
+     * notions (a client sends no DS Parameter Set, and the capability
+     * Privacy bit means something different coming from a STA), so
+     * reading them here would invent posture the frame doesn't carry. */
+    beacon_rsn_t rsn;
+    char         enc[10];
+    int          channel = 0;
+    beacon_parse_ies(ies, ie_len, 0, 0,
+                     out->requested_ssid, &channel, enc, &rsn);
+
+    out->akm_bits       = rsn.akm_bits;
+    out->pairwise_bits  = rsn.pairwise_bits;
+    out->requested_mfp  = rsn.mfp;
+    out->vendor_ie_hash = rsn.fp.vendor_ies_hash;
+    snprintf(out->phy, sizeof(out->phy), "%s", rsn.phy);
+    return 1;
+}
+
+/* Requests table, keyed by the same (BSSID, STA) pair as the grants
+ * above and bounded the same way. Deliberately not the 256 the issue
+ * proposes: a request only earns its slot once there is a grant to
+ * compare it against, and grants cap at MAX_ASSOC_ENTRIES — so a
+ * larger request table would hold rows that can never pair. Under an
+ * assoc flood the LRU eviction is what protects us, not the size. */
+static assoc_req_t     g_req[MAX_ASSOC_ENTRIES];
+static int             g_req_n = 0;
+static pthread_mutex_t g_req_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
+    (void)signal; (void)channel;   /* recorded with the grant, not the ask */
+    if (!req) return;
+    /* Same unicast-only guard the grant path applies. */
+    if ((req->sta[0] & 0x01) || (req->bssid[0] & 0x01)) return;
+    int all0_s = 1, all0_b = 1;
+    for (int i = 0; i < 6; i++) {
+        if (req->sta[i])   all0_s = 0;
+        if (req->bssid[i]) all0_b = 0;
+    }
+    if (all0_s || all0_b) return;
+
+    time_t now = time(NULL);
+    pthread_mutex_lock(&g_req_mu);
+
+    int idx = -1;
+    for (int i = 0; i < g_req_n; i++) {
+        if (memcmp(g_req[i].bssid, req->bssid, 6) == 0 &&
+            memcmp(g_req[i].sta,   req->sta,   6) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        if (g_req_n < MAX_ASSOC_ENTRIES) {
+            idx = g_req_n++;
+        } else {
+            /* Evict least-recently-seen, as the grant table does. */
+            idx = 0;
+            for (int i = 1; i < g_req_n; i++)
+                if (g_req[i].ts < g_req[idx].ts) idx = i;
+        }
+    }
+    /* Latest ask wins outright: a client that re-requests with
+     * different parameters has changed its mind, and the delta must be
+     * computed against what it asked for most recently. */
+    g_req[idx]    = *req;
+    g_req[idx].ts = now;
+    pthread_mutex_unlock(&g_req_mu);
+}
+
+int assoc_request_find(const uint8_t bssid[6], const uint8_t sta[6],
+                       assoc_req_t *out) {
+    if (!bssid || !sta) return 0;
+    pthread_mutex_lock(&g_req_mu);
+    int found = 0;
+    for (int i = 0; i < g_req_n; i++) {
+        if (memcmp(g_req[i].bssid, bssid, 6) == 0 &&
+            memcmp(g_req[i].sta,   sta,   6) == 0) {
+            if (out) *out = g_req[i];
+            found = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_req_mu);
+    return found;
+}
+
+int assoc_request_count(void) {
+    pthread_mutex_lock(&g_req_mu);
+    int n = g_req_n;
+    pthread_mutex_unlock(&g_req_mu);
+    return n;
+}
+
+void assoc_request_clear(void) {
+    pthread_mutex_lock(&g_req_mu);
+    g_req_n = 0;
+    memset(g_req, 0, sizeof(g_req));
+    pthread_mutex_unlock(&g_req_mu);
+}
+
 static int pair_eq(const assoc_t *a, const uint8_t bssid[6],
                                        const uint8_t sta[6]) {
     return memcmp(a->bssid, bssid, 6) == 0 &&

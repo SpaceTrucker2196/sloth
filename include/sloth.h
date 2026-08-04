@@ -1167,6 +1167,56 @@ typedef struct {
     int     frame_count;
 } assoc_t;
 
+/* ── Association / reassociation REQUEST (#60) ─────────────
+ *
+ * What the client asked for, as distinct from what the AP granted
+ * (assoc_t above, built from responses). The pair is the point: a STA
+ * that requests WPA3-SAE with MFP required and ends up on WPA2-PSK has
+ * been downgraded, and that delta is the runtime signature of
+ * CVE-2023-52424. The request is also the richest passive client
+ * fingerprint available without touching the radio — rates, PHY tier,
+ * RSN choice and capability bits, all volunteered.
+ *
+ * akm_bits / pairwise_bits use the same 00-0F-AC suite-type encoding
+ * as beacon_rsn_t (see RSN_AKM_* in beacon_snoop.h), so requested and
+ * granted are directly comparable. */
+typedef struct {
+    uint8_t  sta[6];              /* addr2 — the requesting client */
+    uint8_t  bssid[6];            /* addr3 — the AP asked          */
+    uint16_t capability_info;
+    uint16_t listen_interval;
+    char     requested_ssid[33];
+    uint32_t supported_rates;     /* bitmap, see ASSOC_RATE_* below */
+    uint32_t akm_bits;
+    uint32_t pairwise_bits;
+    int      requested_mfp;       /* 0=none 1=capable 2=required */
+    char     phy[10];             /* "Wi-Fi 7" / "6" / "5" / "4" / "legacy" */
+    uint32_t vendor_ie_hash;
+    int      is_reassoc;          /* subtype 2 rather than 0 */
+    time_t   ts;
+} assoc_req_t;
+
+/* Supported-rate bitmap. Rates are carried in 500 kbit/s units with the
+ * top bit marking "basic"; we index the common 802.11a/b/g set and
+ * ignore the basic flag, since the question is which rates the client
+ * supports at all. Bit positions are stable — appended, never renumbered. */
+#define ASSOC_RATE_1M     (1u << 0)
+#define ASSOC_RATE_2M     (1u << 1)
+#define ASSOC_RATE_5M5    (1u << 2)
+#define ASSOC_RATE_6M     (1u << 3)
+#define ASSOC_RATE_9M     (1u << 4)
+#define ASSOC_RATE_11M    (1u << 5)
+#define ASSOC_RATE_12M    (1u << 6)
+#define ASSOC_RATE_18M    (1u << 7)
+#define ASSOC_RATE_24M    (1u << 8)
+#define ASSOC_RATE_36M    (1u << 9)
+#define ASSOC_RATE_48M    (1u << 10)
+#define ASSOC_RATE_54M    (1u << 11)
+/* A client offering only the 802.11b rates (1/2/5.5/11) is a legacy
+ * device — useful both as a fingerprint and as a posture signal. */
+#define ASSOC_RATES_11B_ONLY \
+    (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
+
 /* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
  * One per observed EAPOL-Key frame. M2 events carry the M1+M2
  * combined info (handshake_complete=1) when their M1 was seen. */

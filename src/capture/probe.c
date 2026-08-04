@@ -344,6 +344,17 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         return;
     }
 
+    if (sub == 0 || sub == 2) {
+        /* Association / reassociation request — #60. The client's side
+         * of the exchange: what it asked for, versus what assoc_observe
+         * records the AP granting. Parsing lives in assoc_track.c for
+         * the same testability reason as the Action dispatch below. */
+        assoc_req_t req;
+        if (assoc_request_parse(dot11, dot11_len, &req))
+            assoc_request_observe(&req, signal, channel);
+        return;
+    }
+
     if (sub == 13) {
         /* Action frame (802.11k/v/r) — #59. The whole management
          * surface behind this subtype was previously labelled and
