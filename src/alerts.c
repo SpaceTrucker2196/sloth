@@ -6,6 +6,7 @@
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
 #include "auth_track.h"
+#include "assoc_track.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -197,6 +198,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
     case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
     case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
+    case ALERT_TYPE_ASSOC_FLOOD:            return "T1498.001";   /* Direct Network Flood (assoc requests) */
     case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
     case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
     case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
@@ -289,6 +291,41 @@ static void rule_auth_flood(const sloth_state_t *s, time_t now) {
     fire(ALERT_TYPE_AUTH_FLOOD,
          mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "AUTH_FLOOD", detail, key, NULL, 0, now);
+}
+
+static void rule_assoc_flood(const sloth_state_t *s, time_t now) {
+    /* Association-request flood — the missing member of the flood set
+     * (beacon, deauth, probe and auth are already covered). Rate is
+     * per-BSSID so a busy AP with many ordinary clients doesn't trip
+     * it; only an outlier does.
+     *
+     * The distinct-STA count shapes the message rather than gating the
+     * alert. Few STAs at high rate is a targeted or broken client; many
+     * STAs at high rate is a spoofed-MAC flood, which is what the
+     * common tooling actually emits. Gating on either number would
+     * blind the rule to the other attack. */
+    (void)s;
+    uint8_t bssid[6];
+    int distinct = 0;
+    int n = assoc_flood_bssid(now, ASSOC_FLOOD_WIN_SECS, ASSOC_FLOOD_THRESH,
+                              bssid, &distinct);
+    if (n < ASSOC_FLOOD_THRESH) return;
+
+    char bss[20];
+    mac_to_str(bssid, bss, sizeof(bss));
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    int mine = ownership_is_my_bssid(bssid);   /* #52 — see rule_deauth_flood */
+    snprintf(key,    sizeof(key),    "assocflood:%s", bss);
+    snprintf(detail, sizeof(detail),
+             "%d assoc reqs to %s from %d STA%s in %ds%s%s",
+             n, bss, distinct, distinct == 1 ? "" : "s",
+             ASSOC_FLOOD_WIN_SECS,
+             distinct > 3 ? " (spoofed-MAC flood)" : " (few sources)",
+             mine ? " - YOUR network" : "");
+    fire(ALERT_TYPE_ASSOC_FLOOD,
+         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+         "ASSOC_FLOOD", detail, key, NULL, 0, now);
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -2000,6 +2037,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rogue_radius(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
+    rule_assoc_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

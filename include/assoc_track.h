@@ -55,6 +55,20 @@ int  assoc_request_find(const uint8_t bssid[6], const uint8_t sta[6],
  * for less than the one before it — see ASSOC_DG_* in sloth.h. */
 int  assoc_request_downgrade_count(void);
 
+/* Busiest BSSID by association-request count within `window_s`, when it
+ * reaches `thresh`. Returns the count (0 if none qualifies), writes the
+ * BSSID to out_bssid and the number of distinct source STAs to
+ * *distinct_stas (either may be NULL).
+ *
+ * The distinct-STA count is reported rather than gated on, because it
+ * separates two different attacks that share one rate signature: many
+ * requests from few STAs is a targeted or misbehaving client, many from
+ * many is a spoofed-MAC flood. Gating on either would blind the rule to
+ * the other. */
+int  assoc_flood_bssid(time_t now, int window_s, int thresh,
+                       uint8_t out_bssid[6], int *distinct_stas);
+void assoc_flood_clear(void);
+
 /* Test introspection. */
 int  assoc_count(void);
 int  assoc_request_count(void);

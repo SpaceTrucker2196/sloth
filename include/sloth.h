@@ -697,6 +697,7 @@ typedef enum {
     ALERT_TYPE_RECURRING_TRANSIT,   /* same device seen passing repeatedly — circling (#54) */
     ALERT_TYPE_UNKNOWN_DEVICE,      /* device on a designated network, absent from the roster (#55) */
     ALERT_TYPE_RF_DEGRADED,         /* sustained retry ratio on a channel — interference/jamming (B3) */
+    ALERT_TYPE_ASSOC_FLOOD,         /* association-request flood at one BSSID (#60) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -820,6 +821,10 @@ typedef struct {
  * reconnect); an mdk-style flood sprays dozens per second at one BSSID. */
 #define AUTH_FLOOD_THRESH      30   /* auth frames to one BSSID in the window */
 #define AUTH_FLOOD_WIN_SECS     5
+/* Association-request flood (#60) — the missing member of the flood set.
+ * Issue #60 specifies "> 20 per BSSID per 60 s", so 21 is the floor. */
+#define ASSOC_FLOOD_THRESH     21
+#define ASSOC_FLOOD_WIN_SECS   60
 
 typedef struct {
     uint8_t  src[6];

@@ -435,6 +435,95 @@ static void test_first_request_never_flags(void) {
     assoc_request_clear();
 }
 
+
+/* ── assoc-request flood window (#60) ────────────────────── */
+
+/* Feed n requests to one BSSID from `stas` distinct source MACs,
+ * round-robin, all stamped now. */
+static void flood_n(int n, int stas) {
+    for (int i = 0; i < n; i++) {
+        assoc_req_t r;
+        memset(&r, 0, sizeof(r));
+        memcpy(r.bssid, RQ_BSSID, 6);
+        r.sta[0] = 0x12; r.sta[1] = 0x22; r.sta[2] = 0x33;
+        r.sta[3] = 0x44; r.sta[4] = 0x55;
+        r.sta[5] = (uint8_t)(i % stas);
+        assoc_request_observe(&r, -50, 6);
+    }
+}
+
+static void test_flood_below_threshold_silent(void) {
+    assoc_flood_clear(); assoc_request_clear();
+    flood_n(ASSOC_FLOOD_THRESH - 1, 4);
+    uint8_t b[6]; int distinct = 0;
+    ASSERT_EQ(assoc_flood_bssid(time(NULL), ASSOC_FLOOD_WIN_SECS,
+                                ASSOC_FLOOD_THRESH, b, &distinct), 0);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_flood_at_threshold_reports(void) {
+    assoc_flood_clear(); assoc_request_clear();
+    flood_n(ASSOC_FLOOD_THRESH, 4);
+    uint8_t b[6]; int distinct = 0;
+    int n = assoc_flood_bssid(time(NULL), ASSOC_FLOOD_WIN_SECS,
+                              ASSOC_FLOOD_THRESH, b, &distinct);
+    ASSERT_EQ(n, ASSOC_FLOOD_THRESH);
+    ASSERT_EQ(memcmp(b, RQ_BSSID, 6), 0);
+    ASSERT_EQ(distinct, 4);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_flood_counts_distinct_stas(void) {
+    /* Same rate, different shape: one talkative STA versus many
+     * spoofed ones. The count must tell them apart, since that is what
+     * separates a broken client from a MAC-spoofing flood. */
+    assoc_flood_clear(); assoc_request_clear();
+    flood_n(ASSOC_FLOOD_THRESH + 4, 1);
+    uint8_t b[6]; int distinct = 0;
+    assoc_flood_bssid(time(NULL), ASSOC_FLOOD_WIN_SECS,
+                      ASSOC_FLOOD_THRESH, b, &distinct);
+    ASSERT_EQ(distinct, 1);
+
+    assoc_flood_clear(); assoc_request_clear();
+    flood_n(ASSOC_FLOOD_THRESH + 4, 25);
+    distinct = 0;
+    assoc_flood_bssid(time(NULL), ASSOC_FLOOD_WIN_SECS,
+                      ASSOC_FLOOD_THRESH, b, &distinct);
+    ASSERT_EQ(distinct, 25);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_flood_window_expiry(void) {
+    /* Events older than the window must not count, or the alert never
+     * clears once tripped. */
+    assoc_flood_clear(); assoc_request_clear();
+    flood_n(ASSOC_FLOOD_THRESH + 4, 4);
+    uint8_t b[6];
+    time_t future = time(NULL) + ASSOC_FLOOD_WIN_SECS + 10;
+    ASSERT_EQ(assoc_flood_bssid(future, ASSOC_FLOOD_WIN_SECS,
+                                ASSOC_FLOOD_THRESH, b, NULL), 0);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_flood_is_per_bssid(void) {
+    /* Requests spread over many APs are an ordinary busy environment,
+     * not a flood at any one of them. */
+    assoc_flood_clear(); assoc_request_clear();
+    for (int i = 0; i < ASSOC_FLOOD_THRESH * 3; i++) {
+        assoc_req_t r;
+        memset(&r, 0, sizeof(r));
+        memcpy(r.bssid, RQ_BSSID, 6);
+        r.bssid[5] = (uint8_t)(i % 10);          /* 10 different APs */
+        memcpy(r.sta, RQ_STA, 6);
+        r.sta[5] = (uint8_t)(i % 7);
+        assoc_request_observe(&r, -50, 6);
+    }
+    uint8_t b[6];
+    ASSERT_EQ(assoc_flood_bssid(time(NULL), ASSOC_FLOOD_WIN_SECS,
+                                ASSOC_FLOOD_THRESH, b, NULL), 0);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
 void run_assoc_track_tests(void) {
     TEST_SUITE("assoc_track");
     RUN_TEST(test_empty);
@@ -468,4 +557,11 @@ void run_assoc_track_tests(void) {
     RUN_TEST(test_dropping_rsn_entirely_is_not_akm_downgrade);
     RUN_TEST(test_downgrade_pairwise_tkip);
     RUN_TEST(test_first_request_never_flags);
+
+    TEST_SUITE("assoc flood window (#60)");
+    RUN_TEST(test_flood_below_threshold_silent);
+    RUN_TEST(test_flood_at_threshold_reports);
+    RUN_TEST(test_flood_counts_distinct_stas);
+    RUN_TEST(test_flood_window_expiry);
+    RUN_TEST(test_flood_is_per_bssid);
 }

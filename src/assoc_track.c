@@ -124,6 +124,10 @@ static assoc_req_t     g_req[MAX_ASSOC_ENTRIES];
 static int             g_req_n = 0;
 static pthread_mutex_t g_req_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* Defined with the flood window below; every observed request feeds it. */
+static void flood_record(const uint8_t bssid[6], const uint8_t sta[6],
+                         time_t now);
+
 void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     (void)signal; (void)channel;   /* recorded with the grant, not the ask */
     if (!req) return;
@@ -137,6 +141,11 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     if (all0_s || all0_b) return;
 
     time_t now = time(NULL);
+    /* Every request feeds the flood window, including repeats from one
+     * STA — the rate is the signal there, independent of whether the
+     * ask changed. */
+    flood_record(req->bssid, req->sta, now);
+
     pthread_mutex_lock(&g_req_mu);
 
     int idx = -1, found_existing = 0;
@@ -217,6 +226,83 @@ int assoc_request_count(void) {
     int n = g_req_n;
     pthread_mutex_unlock(&g_req_mu);
     return n;
+}
+
+/* ── Assoc-request flood window (#60) ─────────────────────── */
+
+/* Sized to hold well over the fire threshold across the window, so a
+ * flood cannot push its own early evidence out before the rule reads
+ * it. Same shape as the auth-flood ring. */
+#define ASSOC_REQ_RING 256
+
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sta[6];
+    time_t  ts;
+} assoc_req_evt_t;
+
+static assoc_req_evt_t g_ring[ASSOC_REQ_RING];
+static int             g_ring_i;
+static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void flood_record(const uint8_t bssid[6], const uint8_t sta[6],
+                         time_t now) {
+    pthread_mutex_lock(&g_ring_mu);
+    assoc_req_evt_t *e = &g_ring[g_ring_i];
+    memcpy(e->bssid, bssid, 6);
+    memcpy(e->sta,   sta,   6);
+    e->ts = now;
+    g_ring_i = (g_ring_i + 1) % ASSOC_REQ_RING;
+    pthread_mutex_unlock(&g_ring_mu);
+}
+
+int assoc_flood_bssid(time_t now, int window_s, int thresh,
+                      uint8_t out_bssid[6], int *distinct_stas) {
+    int best = 0, best_distinct = 0;
+    pthread_mutex_lock(&g_ring_mu);
+    for (int i = 0; i < ASSOC_REQ_RING; i++) {
+        if (!g_ring[i].ts || now - g_ring[i].ts > window_s) continue;
+        /* Tally each BSSID from its first in-window slot only, so one
+         * BSSID isn't scored repeatedly. */
+        int seen_earlier = 0;
+        for (int j = 0; j < i; j++)
+            if (g_ring[j].ts && now - g_ring[j].ts <= window_s &&
+                memcmp(g_ring[j].bssid, g_ring[i].bssid, 6) == 0) {
+                seen_earlier = 1; break;
+            }
+        if (seen_earlier) continue;
+
+        int c = 0, distinct = 0;
+        for (int j = 0; j < ASSOC_REQ_RING; j++) {
+            if (!g_ring[j].ts || now - g_ring[j].ts > window_s) continue;
+            if (memcmp(g_ring[j].bssid, g_ring[i].bssid, 6) != 0) continue;
+            c++;
+            /* First appearance of this STA within the BSSID's events. */
+            int sta_seen = 0;
+            for (int k = 0; k < j; k++)
+                if (g_ring[k].ts && now - g_ring[k].ts <= window_s &&
+                    memcmp(g_ring[k].bssid, g_ring[i].bssid, 6) == 0 &&
+                    memcmp(g_ring[k].sta,   g_ring[j].sta,   6) == 0) {
+                    sta_seen = 1; break;
+                }
+            if (!sta_seen) distinct++;
+        }
+        if (c >= thresh && c > best) {
+            best = c;
+            best_distinct = distinct;
+            if (out_bssid) memcpy(out_bssid, g_ring[i].bssid, 6);
+        }
+    }
+    pthread_mutex_unlock(&g_ring_mu);
+    if (distinct_stas) *distinct_stas = best_distinct;
+    return best;
+}
+
+void assoc_flood_clear(void) {
+    pthread_mutex_lock(&g_ring_mu);
+    memset(g_ring, 0, sizeof(g_ring));
+    g_ring_i = 0;
+    pthread_mutex_unlock(&g_ring_mu);
 }
 
 int assoc_request_downgrade_count(void) {

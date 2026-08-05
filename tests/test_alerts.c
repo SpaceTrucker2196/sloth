@@ -1,6 +1,7 @@
 #include <string.h>
 #include <time.h>
 #include "runner.h"
+#include "assoc_track.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "views/alerts.h"
@@ -3149,6 +3150,85 @@ static void test_view_key_clear(void) {
     ASSERT_EQ(s.alert_count, 0);
 }
 
+
+/* ── Assoc-request flood (#60) ───────────────────────────── */
+
+static void feed_assoc_reqs(const uint8_t bssid[6], int n, int stas) {
+    for (int i = 0; i < n; i++) {
+        assoc_req_t r;
+        memset(&r, 0, sizeof(r));
+        memcpy(r.bssid, bssid, 6);
+        r.sta[0] = 0x12; r.sta[1] = 0x22; r.sta[2] = 0x33;
+        r.sta[3] = 0x44; r.sta[4] = 0x55; r.sta[5] = (uint8_t)(i % stas);
+        assoc_request_observe(&r, -50, 6);
+    }
+}
+
+static void test_assoc_flood_fires(void) {
+    alerts_clear();
+    assoc_flood_clear();
+    assoc_request_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11 };
+    feed_assoc_reqs(ap, ASSOC_FLOOD_THRESH + 5, 8);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ASSOC_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:11") != NULL);
+    /* Many sources at high rate is the spoofed-MAC shape. */
+    ASSERT(strstr(s.alerts[idx].detail, "spoofed-MAC flood") != NULL);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_assoc_flood_quiet_no_fire(void) {
+    alerts_clear();
+    assoc_flood_clear();
+    assoc_request_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x12 };
+    feed_assoc_reqs(ap, 5, 3);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ASSOC_FLOOD), -1);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_assoc_flood_few_sources_labelled(void) {
+    /* Same rate, one source: a targeted or broken client, not a
+     * spoofing flood. The detail has to say which, since the response
+     * differs. */
+    alerts_clear();
+    assoc_flood_clear();
+    assoc_request_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x13 };
+    feed_assoc_reqs(ap, ASSOC_FLOOD_THRESH + 2, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ASSOC_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "from 1 STA ") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "few sources") != NULL);
+    assoc_flood_clear(); assoc_request_clear();
+}
+
+static void test_assoc_flood_my_network_is_crit(void) {
+    alerts_clear();
+    assoc_flood_clear();
+    assoc_request_clear();
+    ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x14 };
+    ownership_add_bssid("aa:bb:cc:dd:ee:14");
+    feed_assoc_reqs(ap, ASSOC_FLOOD_THRESH + 1, 6);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ASSOC_FLOOD);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "YOUR network") != NULL);
+    ownership_clear();
+    assoc_flood_clear(); assoc_request_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3159,6 +3239,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_beacon_flood_few_no_fire);
     RUN_TEST(test_auth_flood_fires);
     RUN_TEST(test_auth_flood_quiet_no_fire);
+    RUN_TEST(test_assoc_flood_fires);
+    RUN_TEST(test_assoc_flood_quiet_no_fire);
+    RUN_TEST(test_assoc_flood_few_sources_labelled);
+    RUN_TEST(test_assoc_flood_my_network_is_crit);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);
