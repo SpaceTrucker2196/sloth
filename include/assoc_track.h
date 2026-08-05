@@ -25,6 +25,11 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
 void assoc_forget(const uint8_t bssid[6], const uint8_t sta[6]);
 
 void assoc_snapshot(sloth_state_t *s);
+
+/* Copy the request table into s->assoc_reqs[], downgrades first then
+ * most recent — the rows an operator needs are the ones where
+ * something was given up. */
+void assoc_request_snapshot(sloth_state_t *s);
 void assoc_clear(void);
 
 /* Parse an association (subtype 0) or reassociation (subtype 2)

@@ -785,6 +785,38 @@ void jsonl_emit_channels(const sloth_state_t *s) {
     }
 }
 
+/* What clients asked for, and what they gave up asking for it (#60).
+ * Emitted alongside `assoc` rather than folded into it: the ask and the
+ * grant are separate observations, and a request exists even when no
+ * association follows — which is exactly the case worth seeing. */
+void jsonl_emit_assoc_reqs(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->assoc_req_count; i++) {
+        const assoc_req_t *e = &s->assoc_reqs[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_assoc_req", now);
+        kv_mac(buf, LINEBUF, &off, "bssid",           e->bssid);
+        kv_mac(buf, LINEBUF, &off, "sta_mac",         e->sta);
+        kv_str(buf, LINEBUF, &off, "requested_ssid",  e->requested_ssid);
+        kv_int(buf, LINEBUF, &off, "is_reassoc",      e->is_reassoc ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "listen_interval", e->listen_interval);
+        kv_int(buf, LINEBUF, &off, "capability_info", e->capability_info);
+        kv_int(buf, LINEBUF, &off, "akm_bits",        (long long)e->akm_bits);
+        kv_int(buf, LINEBUF, &off, "pairwise_bits",   (long long)e->pairwise_bits);
+        kv_int(buf, LINEBUF, &off, "requested_mfp",   e->requested_mfp);
+        kv_int(buf, LINEBUF, &off, "supported_rates", (long long)e->supported_rates);
+        kv_str(buf, LINEBUF, &off, "phy",             e->phy);
+        kv_int(buf, LINEBUF, &off, "vendor_ie_hash",  (long long)e->vendor_ie_hash);
+        kv_int(buf, LINEBUF, &off, "downgrade_flags", e->downgrade_flags);
+        kv_int(buf, LINEBUF, &off, "prev_akm_bits",   (long long)e->prev_akm_bits);
+        kv_int(buf, LINEBUF, &off, "prev_mfp",        e->prev_mfp);
+        kv_int(buf, LINEBUF, &off, "last_seen",       (long long)e->ts);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1239,6 +1271,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_seqnum_correlations(s);
     jsonl_emit_channels          (s);
     jsonl_emit_assocs            (s);
+    jsonl_emit_assoc_reqs        (s);
     jsonl_emit_eapol_events      (s);
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);

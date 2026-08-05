@@ -15,6 +15,7 @@
 #include "sloth.h"
 #include "db.h"
 #include "presence.h"
+#include "beacon_snoop.h"
 
 static char db_path[] = "/tmp/sloth_db_XXXXXX";
 
@@ -259,6 +260,107 @@ static void test_tick_null_state_is_safe(void) {
     fresh_db();
     db_tick(NULL, 1700000000);
     ASSERT_EQ(db_is_open(), 1);
+    db_close();
+    unlink(db_path);
+}
+
+
+/* ── assoc_reqs (#60) ────────────────────────────────────── */
+
+static void seed_req(sloth_state_t *s, uint8_t last, int dg, uint32_t akm) {
+    memset(s, 0, sizeof(*s));
+    assoc_req_t *r = &s->assoc_reqs[0];
+    memcpy(r->bssid, "\xaa\xbb\xcc\x11\x22\x33", 6);
+    r->sta[0]=0x12; r->sta[1]=0x22; r->sta[2]=0x33;
+    r->sta[3]=0x44; r->sta[4]=0x55; r->sta[5]=last;
+    snprintf(r->requested_ssid, sizeof(r->requested_ssid), "home");
+    r->akm_bits        = akm;
+    r->requested_mfp   = 2;
+    r->downgrade_flags = dg;
+    r->ts              = 1700000000;
+    s->assoc_req_count = 1;
+}
+
+static void test_assoc_reqs_written(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_req(&s, 0x66, 0, RSN_AKM_SAE);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM assoc_reqs"), 1);
+    ASSERT_EQ(q_int("SELECT requested_mfp FROM assoc_reqs"), 2);
+    ASSERT_EQ(q_int("SELECT akm_bits FROM assoc_reqs"), (long long)RSN_AKM_SAE);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_assoc_reqs_upsert_keeps_one_row(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_req(&s, 0x66, 0, RSN_AKM_SAE);
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM assoc_reqs"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_assoc_reqs_downgrade_flag_is_sticky(void) {
+    /* A downgrade already recorded must survive the client recovering.
+     * Having been moved onto weaker parameters is the durable fact an
+     * operator needs from history; a later clean request does not undo
+     * that it happened. */
+    fresh_db();
+    sloth_state_t s;
+    seed_req(&s, 0x66, ASSOC_DG_AKM | ASSOC_DG_MFP, RSN_AKM_PSK);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT downgrade_flags FROM assoc_reqs"),
+              (long long)(ASSOC_DG_AKM | ASSOC_DG_MFP));
+
+    seed_req(&s, 0x66, 0, RSN_AKM_SAE);      /* recovered, flags clear */
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM assoc_reqs"), 1);
+    ASSERT_EQ(q_int("SELECT downgrade_flags FROM assoc_reqs"),
+              (long long)(ASSOC_DG_AKM | ASSOC_DG_MFP));
+    /* The current ask is still updated — only the flags accumulate. */
+    ASSERT_EQ(q_int("SELECT akm_bits FROM assoc_reqs"), (long long)RSN_AKM_SAE);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_assoc_reqs_partial_index_exists(void) {
+    /* The downgrade query is the one an operator actually runs; it gets
+     * a partial index so it stays cheap as history grows. */
+    fresh_db();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
+                    " WHERE type='index' AND name='idx_assoc_reqs_dg'"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+
+/* Every table the schema creates must belong to exactly one retention
+ * tier. A table with no tier is never aged out and grows without bound
+ * — the failure mode #42's size ceiling exists to prevent, reintroduced
+ * one table at a time. This is the check that would have caught it.
+ *
+ * Note what this does NOT check: that DB_SCHEMA_VERSION was bumped when
+ * the table was added. Nothing can check that automatically — a fresh
+ * file gets every table regardless of version, so the omission only
+ * surfaces when an existing older database is opened. That is the
+ * failure METRICS #56 records from #53. Bump it by hand. */
+static void test_every_table_has_a_retention_tier(void) {
+    fresh_db();
+    /* meta and sessions are bookkeeping, not observation data, and are
+     * deliberately never aged out. */
+    long long untiered = q_int(
+        "SELECT COUNT(*) FROM sqlite_master m"
+        " WHERE m.type='table'"
+        "   AND m.name NOT LIKE 'sqlite_%'"
+        "   AND m.name NOT IN ('meta','sessions')"
+        "   AND NOT EXISTS (SELECT 1 FROM pragma_table_info(m.name)"
+        "                   WHERE name IN ('last_seen','bucket_ts','ts',"
+        "                                  'run_ts','first_seen'))");
+    ASSERT_EQ(untiered, 0);
     db_close();
     unlink(db_path);
 }
@@ -1582,6 +1684,11 @@ void run_db_tests(void) {
     RUN_TEST(test_tick_null_state_is_safe);
 
     TEST_SUITE("db: write cadence");
+    RUN_TEST(test_every_table_has_a_retention_tier);
+    RUN_TEST(test_assoc_reqs_written);
+    RUN_TEST(test_assoc_reqs_upsert_keeps_one_row);
+    RUN_TEST(test_assoc_reqs_downgrade_flag_is_sticky);
+    RUN_TEST(test_assoc_reqs_partial_index_exists);
     RUN_TEST(test_due_respects_interval);
 
     TEST_SUITE("db: entity upserts");

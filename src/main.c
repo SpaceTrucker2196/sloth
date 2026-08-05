@@ -169,6 +169,7 @@ static void poll_data(sloth_state_t *s) {
     eapol_snapshot(s);
     seqnum_snapshot(s);
     assoc_snapshot(s);
+    assoc_request_snapshot(s);
     channel_summary_update(s);
     rf_quality_snapshot(s, time(NULL));
     mdns_snapshot(s);

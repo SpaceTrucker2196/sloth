@@ -1567,6 +1567,11 @@ typedef struct {
     int                  transit_count;
     assoc_t              assocs[MAX_ASSOC_ENTRIES];
     int                  assoc_count;
+    /* What clients asked for (#60), paired with the grants above by
+     * (bssid, sta). Same bound: a request only matters once there is a
+     * grant to compare it against. */
+    assoc_req_t          assoc_reqs[MAX_ASSOC_ENTRIES];
+    int                  assoc_req_count;
     int                  assoc_sel;
 
     /* ── Channel activity summary ─────────────────────────── */

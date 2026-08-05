@@ -173,6 +173,37 @@ static const char SCHEMA_SQL[] =
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_assocs_sta ON assocs(sta_mac);\n"
 
+    /* What the client asked for, beside what it was granted (#60).
+     * Keyed the same as assocs so the two join directly. downgrade_flags
+     * records an ask that weakened against the previous one from the
+     * same pair — the observable form of the CVE-2023-52424 signature.
+     *
+     * No key material: AKM and cipher selections are suite *identifiers*
+     * (00-0F-AC type numbers), not secrets, and nothing derived from a
+     * handshake lands here. */
+    "CREATE TABLE IF NOT EXISTS assoc_reqs ("
+    "  bssid           TEXT NOT NULL,"
+    "  sta_mac         TEXT NOT NULL,"
+    "  requested_ssid  TEXT,"
+    "  is_reassoc      INTEGER NOT NULL DEFAULT 0,"
+    "  listen_interval INTEGER,"
+    "  akm_bits        INTEGER NOT NULL DEFAULT 0,"
+    "  pairwise_bits   INTEGER NOT NULL DEFAULT 0,"
+    "  requested_mfp   INTEGER NOT NULL DEFAULT 0,"
+    "  supported_rates INTEGER NOT NULL DEFAULT 0,"
+    "  phy             TEXT,"
+    "  vendor_ie_hash  INTEGER NOT NULL DEFAULT 0,"
+    "  downgrade_flags INTEGER NOT NULL DEFAULT 0,"
+    "  prev_akm_bits   INTEGER NOT NULL DEFAULT 0,"
+    "  prev_mfp        INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen      INTEGER NOT NULL,"
+    "  last_seen       INTEGER NOT NULL,"
+    "  PRIMARY KEY (bssid, sta_mac)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_assoc_reqs_sta ON assoc_reqs(sta_mac);\n"
+    "CREATE INDEX IF NOT EXISTS idx_assoc_reqs_dg  ON assoc_reqs(downgrade_flags)"
+    "  WHERE downgrade_flags <> 0;\n"
+
     /* ── multi-radio merge (#21) ──────────────────────────── */
     "CREATE TABLE IF NOT EXISTS wifi_merged ("
     "  entity       TEXT PRIMARY KEY,"

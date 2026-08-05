@@ -51,7 +51,7 @@ static const char *const TIER_OBSERVATION[] = {
 static const char *const TIER_ENTITY[] = {
     "devices", "pnl_clients", "pnl_ssids", "probe_clients",
     "beacon_aps", "beacon_ap_ssids", "wifi_aps", "wifi_stas",
-    "assocs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
+    "assocs", "assoc_reqs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
     "mdns_services", "nbns_names", "ssdp_devices",
     "ndp_ras", "ndp_ra_prefixes", "sensors",
 };
@@ -86,6 +86,7 @@ static void db_fail(const char *what) {
 enum {
     ST_DEVICE, ST_PNL_CLIENT, ST_PNL_SSID, ST_PROBE_CLIENT,
     ST_BEACON_AP, ST_BEACON_SSID, ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
+    ST_ASSOC_REQ,
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
@@ -209,6 +210,29 @@ static const char *const SQL[ST_COUNT] = {
     "  frame_count=excluded.frame_count,"
     "  first_seen=MIN(assocs.first_seen,excluded.first_seen),"
     "  last_seen=MAX(assocs.last_seen,excluded.last_seen)",
+
+[ST_ASSOC_REQ] =
+    "INSERT INTO assoc_reqs (bssid,sta_mac,requested_ssid,is_reassoc,"
+    "listen_interval,akm_bits,pairwise_bits,requested_mfp,supported_rates,"
+    "phy,vendor_ie_hash,downgrade_flags,prev_akm_bits,prev_mfp,"
+    "first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)"
+    " ON CONFLICT(bssid,sta_mac) DO UPDATE SET"
+    "  requested_ssid=excluded.requested_ssid,"
+    "  is_reassoc=excluded.is_reassoc,"
+    "  listen_interval=excluded.listen_interval,"
+    "  akm_bits=excluded.akm_bits, pairwise_bits=excluded.pairwise_bits,"
+    "  requested_mfp=excluded.requested_mfp,"
+    "  supported_rates=excluded.supported_rates,"
+    "  phy=excluded.phy, vendor_ie_hash=excluded.vendor_ie_hash,"
+    /* A downgrade already recorded is not erased by a later clean
+     * request: the client having been moved is the durable fact, and
+     * an operator reading history needs it to survive the recovery. */
+    "  downgrade_flags=assoc_reqs.downgrade_flags|excluded.downgrade_flags,"
+    "  prev_akm_bits=excluded.prev_akm_bits, prev_mfp=excluded.prev_mfp,"
+    "  first_seen=MIN(assoc_reqs.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(assoc_reqs.last_seen,excluded.last_seen)",
+
 [ST_WIFI_MERGED] =
     "INSERT INTO wifi_merged (entity,sensor_mask,seen_by,best_rssi,"
     "best_sensor,channel,freq_mhz,observations,first_seen,last_seen)"
@@ -834,6 +858,33 @@ static void write_assocs(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int64(st, 9,  (sqlite3_int64)(a->first_seen ? a->first_seen : now));
         sqlite3_bind_int64(st, 10, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
         step_reset(ST_ASSOC);
+    }
+}
+
+static void write_assoc_reqs(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->assoc_req_count; i++) {
+        const assoc_req_t *a = &s->assoc_reqs[i];
+        char bssid[18], sta[18];
+        mac_str(a->bssid, bssid);
+        mac_str(a->sta,   sta);
+        sqlite3_stmt *st = g_st[ST_ASSOC_REQ];
+        bind_txt(st, 1, bssid);
+        bind_txt(st, 2, sta);
+        bind_txt(st, 3, a->requested_ssid);
+        sqlite3_bind_int  (st,  4, a->is_reassoc ? 1 : 0);
+        sqlite3_bind_int  (st,  5, a->listen_interval);
+        sqlite3_bind_int64(st,  6, (sqlite3_int64)a->akm_bits);
+        sqlite3_bind_int64(st,  7, (sqlite3_int64)a->pairwise_bits);
+        sqlite3_bind_int  (st,  8, a->requested_mfp);
+        sqlite3_bind_int64(st,  9, (sqlite3_int64)a->supported_rates);
+        bind_txt(st, 10, a->phy);
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)a->vendor_ie_hash);
+        sqlite3_bind_int  (st, 12, a->downgrade_flags);
+        sqlite3_bind_int64(st, 13, (sqlite3_int64)a->prev_akm_bits);
+        sqlite3_bind_int  (st, 14, a->prev_mfp);
+        sqlite3_bind_int64(st, 15, (sqlite3_int64)(a->ts ? a->ts : now));
+        sqlite3_bind_int64(st, 16, (sqlite3_int64)(a->ts ? a->ts : now));
+        step_reset(ST_ASSOC_REQ);
     }
 }
 
@@ -1527,6 +1578,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_wifi_aps       (s, now);
     write_wifi_stas      (s, now);
     write_assocs         (s, now);
+    write_assoc_reqs     (s, now);
     write_wifi_merged    (s, now);
     write_ip_entities    (s, now);
     write_discovery      (s, now);

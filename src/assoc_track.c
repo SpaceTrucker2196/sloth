@@ -434,6 +434,31 @@ void assoc_snapshot(sloth_state_t *s)
     pthread_mutex_unlock(&g_mu);
 }
 
+void assoc_request_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_req_mu);
+    int n = g_req_n < MAX_ASSOC_ENTRIES ? g_req_n : MAX_ASSOC_ENTRIES;
+    /* Downgrades first, then most recent — an operator scanning this
+     * list wants the clients that gave something up at the top, not
+     * buried among ordinary associations. */
+    int order[MAX_ASSOC_ENTRIES];
+    for (int i = 0; i < n; i++) order[i] = i;
+    for (int i = 0; i < n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++) {
+            const assoc_req_t *a = &g_req[order[j]];
+            const assoc_req_t *b = &g_req[order[best]];
+            int a_dg = a->downgrade_flags != 0;
+            int b_dg = b->downgrade_flags != 0;
+            if (a_dg != b_dg ? a_dg : a->ts > b->ts) best = j;
+        }
+        if (best != i) { int t = order[i]; order[i] = order[best]; order[best] = t; }
+    }
+    for (int i = 0; i < n; i++) s->assoc_reqs[i] = g_req[order[i]];
+    s->assoc_req_count = n;
+    pthread_mutex_unlock(&g_req_mu);
+}
+
 void assoc_clear(void) {
     pthread_mutex_lock(&g_mu);
     g_n = 0;
