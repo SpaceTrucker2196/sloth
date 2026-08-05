@@ -324,6 +324,117 @@ static void test_req_table_rejects_multicast(void) {
     assoc_request_clear();
 }
 
+/* ── downgrade delta across successive requests (#60) ─────── */
+
+/* Build + parse + observe one request carrying the given IEs. */
+static void observe_ies(const uint8_t *ies, int ie_len) {
+    uint8_t f[256];
+    int n = build_req(f, 0, 0, 1, ies, ie_len);
+    assoc_req_t r;
+    ASSERT_EQ(assoc_request_parse(f, n, &r), 1);
+    assoc_request_observe(&r, -50, 6);
+}
+
+/* RSN offering PSK with MFP off — the WPA2 fallback lane. */
+static const uint8_t IES_WPA2_PSK[] = {
+    0x00, 0x04, 'h','o','m','e',
+    0x30, 0x14,
+    0x01, 0x00,
+    0x00, 0x0f, 0xac, 0x04,
+    0x01, 0x00, 0x00, 0x0f, 0xac, 0x04,
+    0x01, 0x00, 0x00, 0x0f, 0xac, 0x02,          /* AKM PSK */
+    0x00, 0x00                                    /* no MFP */
+};
+
+static void test_downgrade_sae_to_psk(void) {
+    /* The signature: a client that asked for SAE comes back asking for
+     * PSK. That retry is the downgrade, and it is the one place it is
+     * actually visible on the air. */
+    assoc_request_clear();
+    observe_ies(IES_WPA3_SAE, (int)sizeof(IES_WPA3_SAE));
+    ASSERT_EQ(assoc_request_downgrade_count(), 0);
+
+    observe_ies(IES_WPA2_PSK, (int)sizeof(IES_WPA2_PSK));
+    ASSERT_EQ(assoc_request_downgrade_count(), 1);
+
+    assoc_req_t got;
+    ASSERT_EQ(assoc_request_find(RQ_BSSID, RQ_STA, &got), 1);
+    ASSERT(got.downgrade_flags & ASSOC_DG_AKM);
+    ASSERT(got.downgrade_flags & ASSOC_DG_MFP);   /* required -> off */
+    ASSERT(got.prev_akm_bits & RSN_AKM_SAE);
+    ASSERT_EQ(got.prev_mfp, 2);
+    assoc_request_clear();
+}
+
+static void test_upgrade_is_not_a_downgrade(void) {
+    /* PSK then SAE is a client getting stronger. Must not fire. */
+    assoc_request_clear();
+    observe_ies(IES_WPA2_PSK, (int)sizeof(IES_WPA2_PSK));
+    observe_ies(IES_WPA3_SAE, (int)sizeof(IES_WPA3_SAE));
+    ASSERT_EQ(assoc_request_downgrade_count(), 0);
+    assoc_request_clear();
+}
+
+static void test_repeat_same_ask_is_not_a_downgrade(void) {
+    /* An ordinary retry with identical parameters is not a downgrade —
+     * otherwise every roaming client trips this. */
+    assoc_request_clear();
+    observe_ies(IES_WPA3_SAE, (int)sizeof(IES_WPA3_SAE));
+    observe_ies(IES_WPA3_SAE, (int)sizeof(IES_WPA3_SAE));
+    ASSERT_EQ(assoc_request_downgrade_count(), 0);
+    assoc_request_clear();
+}
+
+static void test_dropping_rsn_entirely_is_not_akm_downgrade(void) {
+    /* A client that stops sending RSN altogether is roaming to an open
+     * BSS, not being downgraded onto PSK. The AKM flag requires the PSK
+     * arm precisely so this stays quiet. */
+    static const uint8_t ies_open[] = { 0x00, 0x04, 'h','o','m','e' };
+    assoc_request_clear();
+    observe_ies(IES_WPA3_SAE, (int)sizeof(IES_WPA3_SAE));
+    observe_ies(ies_open, (int)sizeof(ies_open));
+    assoc_req_t got;
+    ASSERT_EQ(assoc_request_find(RQ_BSSID, RQ_STA, &got), 1);
+    ASSERT_EQ(got.downgrade_flags & ASSOC_DG_AKM, 0);
+    /* MFP genuinely did drop, and that is worth recording on its own. */
+    ASSERT(got.downgrade_flags & ASSOC_DG_MFP);
+    assoc_request_clear();
+}
+
+static void test_downgrade_pairwise_tkip(void) {
+    /* TKIP appearing where it was absent — deprecated cipher newly on
+     * offer from the same client. */
+    static const uint8_t ies_tkip[] = {
+        0x00, 0x04, 'h','o','m','e',
+        0x30, 0x18,
+        0x01, 0x00,
+        0x00, 0x0f, 0xac, 0x02,
+        0x02, 0x00, 0x00, 0x0f, 0xac, 0x04,       /* pairwise CCMP ... */
+                    0x00, 0x0f, 0xac, 0x02,       /* ... and TKIP      */
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x02,
+        0x00, 0x00
+    };
+    assoc_request_clear();
+    observe_ies(IES_WPA2_PSK, (int)sizeof(IES_WPA2_PSK));
+    observe_ies(ies_tkip, (int)sizeof(ies_tkip));
+    assoc_req_t got;
+    ASSERT_EQ(assoc_request_find(RQ_BSSID, RQ_STA, &got), 1);
+    ASSERT(got.downgrade_flags & ASSOC_DG_PAIRWISE);
+    assoc_request_clear();
+}
+
+static void test_first_request_never_flags(void) {
+    /* Nothing to compare against — a lone request cannot be a
+     * downgrade, however weak it is. */
+    assoc_request_clear();
+    observe_ies(IES_WPA2_PSK, (int)sizeof(IES_WPA2_PSK));
+    assoc_req_t got;
+    ASSERT_EQ(assoc_request_find(RQ_BSSID, RQ_STA, &got), 1);
+    ASSERT_EQ(got.downgrade_flags, 0);
+    ASSERT_EQ(got.prev_akm_bits, 0u);
+    assoc_request_clear();
+}
+
 void run_assoc_track_tests(void) {
     TEST_SUITE("assoc_track");
     RUN_TEST(test_empty);
@@ -349,4 +460,12 @@ void run_assoc_track_tests(void) {
     RUN_TEST(test_req_table_stores_and_finds);
     RUN_TEST(test_req_table_latest_ask_wins);
     RUN_TEST(test_req_table_rejects_multicast);
+
+    TEST_SUITE("assoc downgrade delta (#60)");
+    RUN_TEST(test_downgrade_sae_to_psk);
+    RUN_TEST(test_upgrade_is_not_a_downgrade);
+    RUN_TEST(test_repeat_same_ask_is_not_a_downgrade);
+    RUN_TEST(test_dropping_rsn_entirely_is_not_akm_downgrade);
+    RUN_TEST(test_downgrade_pairwise_tkip);
+    RUN_TEST(test_first_request_never_flags);
 }

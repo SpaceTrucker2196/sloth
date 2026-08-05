@@ -51,6 +51,10 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel);
 int  assoc_request_find(const uint8_t bssid[6], const uint8_t sta[6],
                         assoc_req_t *out);
 
+/* Number of tracked (BSSID, STA) pairs whose most recent request asked
+ * for less than the one before it — see ASSOC_DG_* in sloth.h. */
+int  assoc_request_downgrade_count(void);
+
 /* Test introspection. */
 int  assoc_count(void);
 int  assoc_request_count(void);

@@ -1193,8 +1193,28 @@ typedef struct {
     char     phy[10];             /* "Wi-Fi 7" / "6" / "5" / "4" / "legacy" */
     uint32_t vendor_ie_hash;
     int      is_reassoc;          /* subtype 2 rather than 0 */
+    int      downgrade_flags;     /* ASSOC_DG_* — see below */
+    uint32_t prev_akm_bits;       /* the ask this one replaced */
+    int      prev_mfp;
     time_t   ts;
 } assoc_req_t;
+
+/* Downgrade observed across successive requests from one STA to one
+ * BSSID: the client asked for less than it asked for last time.
+ *
+ * This is the observable form of the CVE-2023-52424 signature. The
+ * issue's framing — compare requested AKM against "granted" AKM from
+ * the association response — has no source: an Association Response
+ * carries no RSNE outside the FT and OWE cases (IEEE 802.11-2020
+ * §9.3.3.7). The AP does not echo the negotiated suite; the client's
+ * request *is* the selection, and the AP only accepts or rejects it.
+ *
+ * So the downgrade is visible as a retry that asks for less — which is
+ * what actually happens on the air when a client is forced off its
+ * first choice. See the note on issue #60. */
+#define ASSOC_DG_AKM       (1 << 0)  /* lost SAE, fell back to PSK      */
+#define ASSOC_DG_MFP       (1 << 1)  /* management-frame protection cut */
+#define ASSOC_DG_PAIRWISE  (1 << 2)  /* TKIP appeared where CCMP was    */
 
 /* Supported-rate bitmap. Rates are carried in 500 kbit/s units with the
  * top bit marking "basic"; we index the common 802.11a/b/g set and

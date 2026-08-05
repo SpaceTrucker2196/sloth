@@ -139,10 +139,12 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     time_t now = time(NULL);
     pthread_mutex_lock(&g_req_mu);
 
-    int idx = -1;
+    int idx = -1, found_existing = 0;
     for (int i = 0; i < g_req_n; i++) {
         if (memcmp(g_req[i].bssid, req->bssid, 6) == 0 &&
-            memcmp(g_req[i].sta,   req->sta,   6) == 0) { idx = i; break; }
+            memcmp(g_req[i].sta,   req->sta,   6) == 0) {
+            idx = i; found_existing = 1; break;
+        }
     }
     if (idx < 0) {
         if (g_req_n < MAX_ASSOC_ENTRIES) {
@@ -154,11 +156,42 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
                 if (g_req[i].ts < g_req[idx].ts) idx = i;
         }
     }
+    /* Compare against the ask this one replaces, before overwriting.
+     * A retry that asks for less is the downgrade actually happening —
+     * see the ASSOC_DG_* note in sloth.h for why this, and not the
+     * response, is where the signature is visible. */
+    int      flags    = 0;
+    uint32_t prev_akm = 0;
+    int      prev_mfp = 0;
+    if (found_existing) {
+        const assoc_req_t *old = &g_req[idx];
+        prev_akm = old->akm_bits;
+        prev_mfp = old->requested_mfp;
+        /* SAE was on the table and is now gone, with PSK in its place.
+         * Requires the PSK arm: a client that simply stopped sending
+         * RSN (roaming to an open BSS) is a different event. */
+        if ((old->akm_bits & RSN_AKM_SAE_FAMILY) &&
+            !(req->akm_bits & RSN_AKM_SAE_FAMILY) &&
+             (req->akm_bits & RSN_AKM_PSK_FAMILY))
+            flags |= ASSOC_DG_AKM;
+        /* Protection strictly reduced: required -> capable, or either
+         * -> none. */
+        if (req->requested_mfp < old->requested_mfp)
+            flags |= ASSOC_DG_MFP;
+        /* TKIP newly on offer where it was not before. */
+        if (!(old->pairwise_bits & RSN_CIPHER_TKIP) &&
+             (req->pairwise_bits & RSN_CIPHER_TKIP))
+            flags |= ASSOC_DG_PAIRWISE;
+    }
+
     /* Latest ask wins outright: a client that re-requests with
-     * different parameters has changed its mind, and the delta must be
-     * computed against what it asked for most recently. */
-    g_req[idx]    = *req;
-    g_req[idx].ts = now;
+     * different parameters has changed its mind, and any later
+     * comparison must measure against what it asked for most recently. */
+    g_req[idx]                 = *req;
+    g_req[idx].ts              = now;
+    g_req[idx].downgrade_flags = flags;
+    g_req[idx].prev_akm_bits   = prev_akm;
+    g_req[idx].prev_mfp        = prev_mfp;
     pthread_mutex_unlock(&g_req_mu);
 }
 
@@ -182,6 +215,15 @@ int assoc_request_find(const uint8_t bssid[6], const uint8_t sta[6],
 int assoc_request_count(void) {
     pthread_mutex_lock(&g_req_mu);
     int n = g_req_n;
+    pthread_mutex_unlock(&g_req_mu);
+    return n;
+}
+
+int assoc_request_downgrade_count(void) {
+    pthread_mutex_lock(&g_req_mu);
+    int n = 0;
+    for (int i = 0; i < g_req_n; i++)
+        if (g_req[i].downgrade_flags) n++;
     pthread_mutex_unlock(&g_req_mu);
     return n;
 }
