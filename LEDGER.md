@@ -78,3 +78,4 @@
 | e7ddd7a | 2026-07-29T03:56:19Z | claude-opus-5 | 58 | 41251 | 23118299 | 51972 | 13.1104 | feat(tui): headless mode + poll-loop spin fix (#50) |
 | f3682c1 | 2026-07-29T05:27:54Z | claude-opus-5 | 131 | 93307 | 55201415 | 115784 | 31.0919 | refactor(wifi): unify the two IE parsers (roadmap B3b) |
 | 8166b6a | 2026-07-29T05:40:26Z | claude-opus-5 | 75 | 62518 | 33484190 | 77302 | 19.0784 | feat(rf): retry/FCS tracking + radiotap extraction (roadmap B3) |
+| 64edbc4 | 2026-08-10T18:00:00Z | claude-fable-5, claude-opus-5 | 577 | 252049 | 87833241 | 3135835 | 91.3231 | Wi-Fi adapters + joined SSID visible by default; 802.11 monitor frames merged into packet timeline with dark-grey rows |
