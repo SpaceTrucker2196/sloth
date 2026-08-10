@@ -321,9 +321,9 @@ static void test_draw_assoc_band_when_monitoring(void) {
     ASSERT(1);
 }
 
-/* With a monitor interface active, the packets band lists 802.11 frames
- * from s->mon_frames instead of IP packets; must not crash. */
-static void test_draw_mon_frames_band_when_monitoring(void) {
+/* With a monitor interface active, the packets band interleaves 802.11
+ * frames from s->mon_frames with the IP packets; must not crash. */
+static void test_draw_merged_packets_band_when_monitoring(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     uint8_t a1[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -362,7 +362,7 @@ void run_dashboard_tests(void) {
     RUN_TEST(test_draw_with_monitor_iface);
     RUN_TEST(test_draw_with_monitor_error);
     RUN_TEST(test_draw_assoc_band_when_monitoring);
-    RUN_TEST(test_draw_mon_frames_band_when_monitoring);
+    RUN_TEST(test_draw_merged_packets_band_when_monitoring);
     RUN_TEST(test_conn_panel_drills_to_assoc_when_monitoring);
     RUN_TEST(test_conn_panel_drills_to_conns_without_monitor);
     RUN_TEST(test_iface_is_hidden_matches);

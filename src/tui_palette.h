@@ -27,6 +27,7 @@
 #define TUI_C_HOT_LOW    220   /* #ffd700 amber-yellow */
 #define TUI_C_HOT_WARN   208   /* #ff8700 orange       */
 #define TUI_C_HOT_CRIT   196   /* #ff0000 red          */
+#define TUI_C_MON_BG     236   /* #303030 dark grey — monitor-sourced rows */
 
 /* Table-driven pairs. Indices are the low 3 (or 4) bits of the
  * hash-derived colour index — see tui.h for the pair-number layout. */

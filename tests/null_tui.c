@@ -12,6 +12,9 @@ void tui_normal(void)        {}
 void tui_dim(void)           {}
 void tui_sel(void)           {}
 void tui_reset(void)         {}
+void tui_mon_bright(void)    {}
+void tui_mon_normal(void)    {}
+void tui_mon_dim(void)       {}
 void tui_heat(double frac)   { (void)frac; }
 void tui_filter_status(const sloth_state_t *s) { (void)s; }
 void tui_pkt_bg_cat(int cat) { (void)cat; }

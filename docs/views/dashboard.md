@@ -30,6 +30,13 @@ available rows. Minimum recommended terminal is 100×33.
 Bands sum to LINES exactly — spare rows from the integer divide go
 to conn / packets so the bottom band always reaches the last line.
 
+The packets band is one merged timeline: IP packets and — when a
+monitor radio is up — the 802.11 frames it hears, interleaved newest
+first. Monitor-sourced rows render on a dark grey background and carry
+the monitor iface name, so the two capture streams read apart per row
+(see [`packets.md`](packets.md)). The band title names both sources
+(`iface=any  mon=wlan1mon`) plus the associated `ssid=` when known.
+
 ## Color and typography
 
 - **IPs** are hashed to one of 8 Fallout-phosphor colours. The same

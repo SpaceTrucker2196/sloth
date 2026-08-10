@@ -18,15 +18,50 @@ static void ring_range(const sloth_state_t *s, int *count, int *start) {
     *start = (s->pkt_count < MAX_PACKETS) ? 0            : s->pkt_head;
 }
 
+/* ── Merged timeline over the IP ring + 802.11 monitor snapshot ────
+ * Declared in sloth.h; also feeds the dashboard packets band. Both
+ * sources are individually time-ordered (the ring by arrival, the
+ * snapshot newest-first), so position k resolves with one two-cursor
+ * walk — no allocation, no sort. The mon clock is whole seconds; on a
+ * tie the mon frame sorts first. */
+int pkt_mon_merged_count(const sloth_state_t *s) {
+    int count = (s->pkt_count < MAX_PACKETS) ? s->pkt_count : MAX_PACKETS;
+    return count + s->mon_frame_count;
+}
+
+int pkt_mon_merged_at(const sloth_state_t *s, int k, int *is_mon, int *idx) {
+    int count, start;
+    ring_range(s, &count, &start);
+    if (k < 0 || k >= count + s->mon_frame_count) return 0;
+
+    int i = 0;                        /* IP cursor, oldest first  */
+    int m = s->mon_frame_count - 1;   /* mon cursor, oldest first */
+    for (;;) {
+        int take_mon;
+        if      (i >= count) take_mon = 1;
+        else if (m < 0)      take_mon = 0;
+        else {
+            const packet_info_t *p = &s->packets[(start + i) % MAX_PACKETS];
+            take_mon = (s->mon_frames[m].ts <= (time_t)p->ts_sec);
+        }
+        if (k == 0) {
+            *is_mon = take_mon;
+            *idx    = take_mon ? m : (start + i) % MAX_PACKETS;
+            return 1;
+        }
+        if (take_mon) m--; else i++;
+        k--;
+    }
+}
+
 #ifdef WITH_PCAP
 /* ── Detail panel ───────────────────────────────────────── */
 
 static void draw_detail(const sloth_state_t *s) {
-    int count, start;
-    ring_range(s, &count, &start);
-    int sel = (count > 0) ? s->pkt_sel : 0;
-    int idx = (start + sel) % MAX_PACKETS;
-    const packet_info_t *p = &s->packets[idx];
+    /* pkt_detail_idx is the absolute ring index resolved when the panel
+     * was opened — the merged timeline means pkt_sel alone no longer
+     * identifies a packets[] slot. */
+    const packet_info_t *p = &s->packets[s->pkt_detail_idx % MAX_PACKETS];
 
     char src[64], dst[64];
     if (p->src_port) {
@@ -89,66 +124,41 @@ static void draw_detail(const sloth_state_t *s) {
 /* ── Draw ───────────────────────────────────────────────── */
 
 #ifdef WITH_PCAP
-/* Full-screen 802.11 monitor-frame list (shown in place of the IP packet
- * view when a monitor interface is active). Scrollable, follows
- * mon_frame_sel; mon_frames is stored newest-first. */
-static void mon_age(time_t ts, char *buf, int sz) {
-    time_t a = time(NULL) - ts;
-    if      (a <   60) snprintf(buf, sz, "%llds", (long long)a);
-    else if (a < 3600) snprintf(buf, sz, "%lldm", (long long)(a / 60));
-    else               snprintf(buf, sz, "%lldh", (long long)(a / 3600));
-}
+/* One 802.11 monitor frame as a merged-timeline row. Dark grey bg
+ * (tui_mon_*) is the "this came from the passive monitor" marker —
+ * the operator asked for exactly this so interleaved streams read
+ * apart at a glance. Columns mirror the IP row layout: the mon clock
+ * has no usec, so the time fraction renders as dashes. */
+static void draw_mon_row(const sloth_state_t *s, const mon_frame_t *f,
+                         int selected) {
+    char src[20], dst[20], line[192];
+    snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
+             f->addr2[0], f->addr2[1], f->addr2[2],
+             f->addr2[3], f->addr2[4], f->addr2[5]);
+    snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
+             f->addr1[0], f->addr1[1], f->addr1[2],
+             f->addr1[3], f->addr1[4], f->addr1[5]);
+    char info[40];
+    snprintf(info, sizeof(info), "%.12s %ddBm", f->label, f->signal_dbm);
+    snprintf(line, sizeof(line),
+             " %04u.------  %-21s  " "\xe2\x86\x92" "  %-21s  %-3s  %5s  %5u  %-28.28s  [%s]",
+             (unsigned)(f->ts % 10000), src, dst, "--", "80211",
+             (unsigned)f->len, info,
+             s->probe_iface[0] ? s->probe_iface : "monitor");
 
-static void draw_mon_frames_fs(const sloth_state_t *s) {
+    if (selected) tui_sel(); else tui_mon_normal();
 #ifdef WITH_NCURSES
-    int page = LINES - 4;
+    /* Pad to (nearly) the terminal width so the grey band is solid,
+     * clipping so the row never wraps. Byte-wise like clipline() — the
+     * lone UTF-8 arrow costs the band a couple of trailing columns. */
+    int pad = COLS - 1;
+    if (pad > (int)sizeof(line) - 1) pad = (int)sizeof(line) - 1;
+    if (pad < 1) pad = 1;
+    printw("%-*.*s\n", pad, pad, line);
 #else
-    int page = 30;
+    printf("%-140.140s\n", line);
 #endif
-    if (page < 1) page = 1;
-
-    int count = s->mon_frame_count;
-    tui_normal(); TPRINT(" 802.11 frames: ");
-    tui_bright(); TPRINT("%d", count);
-    tui_dim();    TPRINT("  iface: ");
-    tui_bright(); TPRINT("%s", s->probe_iface[0] ? s->probe_iface : "monitor");
-    tui_normal(); TPRINT("\n");
-
-    tui_dim();
-    TPRINT(" %-6s  %-9s  %-17s  %-17s  %5s  %4s\n",
-           "age", "type", "src", "dst", "len", "sig");
-    tui_normal();
-
-    if (count == 0) {
-        tui_dim(); TPRINT("  (listening \xe2\x80\x94 no frames captured yet)\n");
-        tui_normal(); return;
-    }
-
-    int sel = s->mon_frame_sel;
-    if (sel >= count) sel = count - 1;
-    if (sel < 0)      sel = 0;
-    int top = sel - page / 2;
-    if (top + page > count) top = count - page;
-    if (top < 0)            top = 0;
-    int end = top + page;
-    if (end > count) end = count;
-
-    for (int i = top; i < end; i++) {
-        const mon_frame_t *f = &s->mon_frames[i];
-        char src[20], dst[20], age[24];
-        snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 f->addr2[0], f->addr2[1], f->addr2[2],
-                 f->addr2[3], f->addr2[4], f->addr2[5]);
-        snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 f->addr1[0], f->addr1[1], f->addr1[2],
-                 f->addr1[3], f->addr1[4], f->addr1[5]);
-        mon_age(f->ts, age, sizeof(age));
-        if (i == sel) tui_sel(); else tui_normal();
-        TPRINT(" %-6s  %-9.9s  %-17s  %-17s  %5u  %4d\n",
-               age, f->label, src, dst, (unsigned)f->len, f->signal_dbm);
-        if (i == sel) tui_reset();
-    }
-    tui_normal();
+    tui_reset();
 }
 #endif /* WITH_PCAP */
 
@@ -158,7 +168,6 @@ void view_packets_draw(const sloth_state_t *s) {
     tui_dim(); TPRINT("  Packet capture disabled (build with WITH_PCAP=1)\n");
     tui_normal(); return;
 #else
-    if (s->probe_iface[0]) { draw_mon_frames_fs(s); return; }
     if (s->pkt_detail) { draw_detail(s); return; }
 
 #ifdef WITH_NCURSES
@@ -168,8 +177,10 @@ void view_packets_draw(const sloth_state_t *s) {
     int page = PKTS_PAGE;
 #endif
 
-    int count, start;
-    ring_range(s, &count, &start);
+    /* Merged timeline: IP capture + 802.11 monitor frames in one
+     * chronological list. Without a monitor radio the mon side is
+     * empty and this is exactly the old IP-only view. */
+    int count = pkt_mon_merged_count(s);
 
     /* status bar */
     tui_normal(); TPRINT(" Packets: ");
@@ -178,6 +189,11 @@ void view_packets_draw(const sloth_state_t *s) {
     if (s->pkt_iface[0]) {
         tui_dim();    TPRINT("  iface: ");
         tui_bright(); TPRINT("%s", s->pkt_iface);
+    }
+    if (s->probe_iface[0]) {
+        tui_dim();    TPRINT("  mon: ");
+        tui_bright(); TPRINT("%s", s->probe_iface);
+        tui_dim();    TPRINT(" (%d frames, grey rows)", s->mon_frame_count);
     }
     /* show associated WiFi network if known */
 #ifdef WITH_WIFI
@@ -237,6 +253,8 @@ void view_packets_draw(const sloth_state_t *s) {
     }
 
     int sel = s->pkt_paused ? s->pkt_sel : count - 1;
+    if (sel >= count) sel = count - 1;
+    if (sel < 0)      sel = 0;
 
     int top = sel - page / 2;
     if (top + page > count) top = count - page;
@@ -245,8 +263,13 @@ void view_packets_draw(const sloth_state_t *s) {
     if (end > count) end = count;
 
     for (int row = top; row < end; row++) {
-        int                  idx = (start + row) % MAX_PACKETS;
-        const packet_info_t *p   = &s->packets[idx];
+        int is_mon = 0, idx = 0;
+        if (!pkt_mon_merged_at(s, row, &is_mon, &idx)) continue;
+        if (is_mon) {
+            draw_mon_row(s, &s->mon_frames[idx], row == sel);
+            continue;
+        }
+        const packet_info_t *p = &s->packets[idx];
 
 #ifdef WITH_NCURSES
         int cat = (int)pkt_categorize(p->proto, p->src_port, p->dst_port);
@@ -419,15 +442,6 @@ void view_packets_draw(const sloth_state_t *s) {
 /* ── Key handler ────────────────────────────────────────── */
 
 void view_packets_key(sloth_state_t *s, int key) {
-    /* Monitor mode: this view is the 802.11 frame list — navigate it. */
-    if (s->probe_iface[0]) {
-        if (key == SLOTH_KEY_UP && s->mon_frame_sel > 0)
-            s->mon_frame_sel--;
-        else if (key == SLOTH_KEY_DOWN && s->mon_frame_count > 0 &&
-                 s->mon_frame_sel < s->mon_frame_count - 1)
-            s->mon_frame_sel++;
-        return;
-    }
     if (s->pkt_detail) {
         if (key == '\r' || key == '\n' || key == '\033')
             s->pkt_detail = 0;
@@ -458,14 +472,22 @@ void view_packets_key(sloth_state_t *s, int key) {
         return;
     }
 
-    int count, start;
-    ring_range(s, &count, &start);
-    (void)start;
+    /* Navigation runs over the merged timeline — IP packets and 802.11
+     * monitor frames share one selection. */
+    int count = pkt_mon_merged_count(s);
 
     switch (key) {
-    case '\r': case '\n':
-        if (s->pkt_paused && count > 0) s->pkt_detail = 1;
+    case '\r': case '\n': {
+        /* Detail exists only for IP packets (raw bytes + decode); a
+         * selected monitor frame just ignores Enter. */
+        int is_mon = 0, idx = 0;
+        if (s->pkt_paused && count > 0 &&
+            pkt_mon_merged_at(s, s->pkt_sel, &is_mon, &idx) && !is_mon) {
+            s->pkt_detail     = 1;
+            s->pkt_detail_idx = idx;
+        }
         break;
+    }
     case '/': case 'f': case 'F':
         s->pkt_filter_mode = 1;
         s->pkt_filter_len  = (int)strlen(s->pkt_filter);

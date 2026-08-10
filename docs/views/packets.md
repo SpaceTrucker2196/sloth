@@ -4,14 +4,21 @@ Live packet capture with hex detail and BPF filter.
 
 ## Monitor mode
 
-When a monitor-mode Wi-Fi interface is active, this view switches to the
-**802.11 frame list** the radio is hearing — age, subtype (`Beacon`,
-`ProbeReq`, `Auth`, `Deauth`, `Data`, `RTS`/`CTS`/`ACK`, …), source
-(TA/SA) → destination (RA/DA), length, and signal — scrollable with
-up/down, newest first. Frames are captured by the monitor pcap
-(radiotap + 802.11), separate from the IP capture below. With no monitor
-interface the view is the IP packet capture described here. The same
-auto-switch applies to the dashboard's packets band.
+When a monitor-mode Wi-Fi interface is active, the **802.11 frames** the
+radio hears merge into this list chronologically alongside the IP
+capture — one timeline, two sources. Monitor-sourced rows render on a
+**dark grey background** (the one sanctioned exception to the
+no-row-tint convention) so the eye separates "heard over RF by the
+monitor radio" from "captured on the IP stream" per row. A monitor row
+shows subtype (`Beacon`, `ProbeReq`, `Auth`, `Deauth`, `Data`,
+`RTS`/`CTS`/`ACK`, …), source (TA/SA) → destination (RA/DA), proto
+`80211`, length, label + signal, and the monitor iface name. Frames come
+from the monitor pcap (radiotap + 802.11), separate from the IP capture.
+Navigation is one selection across the merged list; Enter's hex detail
+exists only for IP rows (monitor frames keep no raw bytes here — see
+the beacons/probes views for RF detail). The same merge applies to the
+dashboard's packets band. With no monitor interface the view is exactly
+the IP packet capture described below.
 
 ## Source
 

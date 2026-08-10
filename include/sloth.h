@@ -1395,7 +1395,6 @@ typedef struct {
 
     mon_frame_t   mon_frames[MAX_MON_FRAMES]; /* 802.11 frames, newest first */
     int           mon_frame_count;
-    int           mon_frame_sel;              /* selected row in the frames view */
 
     sensor_t      sensors[MAX_SENSORS];       /* passive sensor registry (#28) */
     int           sensor_count;
@@ -1415,6 +1414,7 @@ typedef struct {
     int  pkt_filter_mode;      /* non-zero = filter input prompt is open */
     char pkt_filter_err[128];  /* last compile/apply error, "" = ok */
     int  pkt_detail;           /* non-zero = detail panel open */
+    int  pkt_detail_idx;       /* absolute packets[] index the panel shows */
     int  pkt_linktype;         /* pcap DLT link type (set by capture_start) */
     char pkt_export_msg[80];   /* last pcap export result shown in status */
     char pkt_iface[32];        /* pcap capture interface, "" if none */
@@ -1688,6 +1688,17 @@ int iface_allow_add(sloth_state_t *s, const char *name);
  * hidden 'h' > deselected 'd' > excluded 'x' > scanning 's' > ' '. */
 int iface_is_excluded(const sloth_state_t *s, const char *name);
 char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan);
+
+/* ── Merged packet timeline (shared by packets view + dashboard band) ──
+ * One chronological sequence over BOTH capture streams: the IP packet
+ * ring and the 802.11 monitor-frame snapshot. Position k counts from
+ * the oldest (k = 0) to the newest (count - 1). pkt_mon_merged_at()
+ * fills *is_mon and *idx — an absolute packets[] ring index, or a
+ * mon_frames[] index (0 = newest) — and returns 0 when k is out of
+ * range. Ties (the mon clock is whole seconds) order the mon frame
+ * first. Lives in src/views/packets.c. */
+int pkt_mon_merged_count(const sloth_state_t *s);
+int pkt_mon_merged_at(const sloth_state_t *s, int k, int *is_mon, int *idx);
 
 /* ── Key routing: does the active view claim this key over the global
  * view-switch letters? Kept in main.c as a small, centralized table;

@@ -84,6 +84,16 @@ void tui_bar(double val, double max, int width, char *out); /* block bar; out ne
 #define CP_ALERT_HOT_CRIT 108    /* red    — IOC hit, active attack */
 #define ALERT_HOT_TTL_S 3600
 
+/* ── Monitor-sourced rows: phosphor on dark grey ─────────── *
+ * Rows fed by the passive monitor radio (802.11 frames) render on a
+ * dark grey bg so they read apart from the IP capture at a glance when
+ * the two streams interleave. This is the ONE sanctioned exception to
+ * the "rows render on the terminal default" convention — operator-
+ * requested, and scoped to monitor-sourced rows only. */
+#define CP_MON_ROW        109    /* normal phosphor on dark grey */
+#define CP_MON_ROW_DIM    110    /* dim phosphor on dark grey    */
+#define CP_MON_ROW_BRIGHT 111    /* bright phosphor on dark grey */
+
 /* Mark `ip` as alert-hot at severity `sev` (alert_sev_t), with absolute
  * timestamp `t` (epoch s). Idempotent — re-calls refresh the timestamp
  * so a recurring alert keeps the override alive. A higher sev call on an
@@ -135,6 +145,12 @@ void tui_dim(void);    /* faint glow: labels, borders, hints              */
 void tui_sel(void);    /* reversed: selected row highlight                */
 void tui_reset(void);  /* back to normal                                  */
 void tui_heat(double frac); /* heat gradient 0=grey … 1=red              */
+
+/* Monitor-sourced row variants of bright/normal/dim — same phosphor
+ * levels, dark grey bg (CP_MON_ROW_*). Close with tui_reset(). */
+void tui_mon_bright(void);
+void tui_mon_normal(void);
+void tui_mon_dim(void);
 
 /* If a filter is set (or being edited), emit a small status label.
  * Call after the view-specific header text on the same line. */

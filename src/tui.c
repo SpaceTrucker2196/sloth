@@ -116,6 +116,12 @@ void tui_pkt_bg_cat(int cat) {
     t_pair(cp_for_bg_cat(cat));
 }
 
+/* Monitor-sourced rows: same phosphor levels, dark grey bg. Backend-
+ * neutral — the ANSI path resolves the bg via tui_pair_colors(). */
+void tui_mon_bright(void) { t_pair(CP_MON_ROW_BRIGHT); }
+void tui_mon_normal(void) { t_pair(CP_MON_ROW); }
+void tui_mon_dim(void)    { t_pair(CP_MON_ROW_DIM); }
+
 void tui_ip_addstr(const char *ip, int cat) {
     extern int ip_color_index(const char *);              /* ip_color.h */
     extern int ip_index_is_cross_panel(const char *);
@@ -595,6 +601,10 @@ void tui_init(void) {
             init_pair(CP_ALERT_HOT_LOW,  TUI_C_HOT_LOW,  0);
             init_pair(CP_ALERT_HOT_WARN, TUI_C_HOT_WARN, 0);
             init_pair(CP_ALERT_HOT_CRIT, TUI_C_HOT_CRIT, 0);
+
+            init_pair(CP_MON_ROW,        TUI_C_NORMAL, TUI_C_MON_BG);
+            init_pair(CP_MON_ROW_DIM,    TUI_C_DIM,    TUI_C_MON_BG);
+            init_pair(CP_MON_ROW_BRIGHT, TUI_C_BRIGHT, TUI_C_MON_BG);
         } else {
             init_pair(CP_BRIGHT,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_NORMAL,    COLOR_GREEN, COLOR_BLACK);
@@ -647,6 +657,12 @@ void tui_init(void) {
             init_pair(CP_ALERT_HOT_LOW,  COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_ALERT_HOT_WARN, COLOR_YELLOW, COLOR_BLACK);
             init_pair(CP_ALERT_HOT_CRIT, COLOR_RED,    COLOR_BLACK);
+
+            /* No dark grey in the 8-colour cube — white bg would shout,
+             * so monitor rows fall back to plain phosphor on black. */
+            init_pair(CP_MON_ROW,        COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_MON_ROW_DIM,    COLOR_GREEN, COLOR_BLACK);
+            init_pair(CP_MON_ROW_BRIGHT, COLOR_GREEN, COLOR_BLACK);
         }
     }
 }

@@ -349,24 +349,89 @@ void test_detail_draw_no_crash(void) {
     ASSERT(1);
 }
 
-/* When a monitor interface is active, the packets view is the 802.11
- * frame list; up/down navigate mon_frame_sel, clamped at both ends. */
-static void test_mon_frame_nav_when_monitoring(void) {
+/* Seed n monitor frames, newest-first as mon_frame_snapshot stores
+ * them, with descending whole-second timestamps starting at ts_new. */
+static void push_mon_frames(sloth_state_t *s, int n, time_t ts_new) {
+    for (int i = 0; i < n; i++) {
+        mon_frame_t *f = &s->mon_frames[i];
+        memset(f, 0, sizeof(*f));
+        f->ts  = ts_new - i;
+        f->len = 100;
+        snprintf(f->label, sizeof(f->label), "Beacon");
+    }
+    s->mon_frame_count = n;
+}
+
+/* Merged timeline: 3 IP packets at t=1000..1002 (push_packets) + 2 mon
+ * frames at t=1003..1004 must interleave chronologically, mon frames
+ * flagged so the renderer can grey them. */
+static void test_merged_timeline_order(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    push_packets(&s, 3);              /* ts 1000, 1001, 1002 */
+    push_mon_frames(&s, 2, 1004);     /* ts 1004(newest), 1003 */
+
+    ASSERT_EQ(pkt_mon_merged_count(&s), 5);
+    int is_mon = -1, idx = -1;
+    ASSERT(pkt_mon_merged_at(&s, 0, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 0); ASSERT_EQ(idx, 0);          /* ts 1000 */
+    ASSERT(pkt_mon_merged_at(&s, 2, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 0); ASSERT_EQ(idx, 2);          /* ts 1002 */
+    ASSERT(pkt_mon_merged_at(&s, 3, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 1); ASSERT_EQ(idx, 1);          /* mon ts 1003 */
+    ASSERT(pkt_mon_merged_at(&s, 4, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 1); ASSERT_EQ(idx, 0);          /* mon ts 1004 */
+    ASSERT(!pkt_mon_merged_at(&s, 5, &is_mon, &idx)); /* out of range */
+}
+
+/* A same-second tie orders the mon frame first (its clock has no usec). */
+static void test_merged_timeline_tie_mon_first(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    push_packets(&s, 1);              /* ts 1000 */
+    push_mon_frames(&s, 1, 1000);     /* ts 1000 */
+    int is_mon = -1, idx = -1;
+    ASSERT(pkt_mon_merged_at(&s, 0, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 1);
+    ASSERT(pkt_mon_merged_at(&s, 1, &is_mon, &idx));
+    ASSERT_EQ(is_mon, 0);
+}
+
+/* With a monitor radio active the view stays navigable as ONE list:
+ * pause jumps to the newest merged row, up/down clamp on the merged
+ * bounds, Enter opens detail only on IP rows. */
+static void test_merged_nav_when_monitoring(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
-    s.mon_frame_count = 5;
-    s.mon_frame_sel   = 0;
+    push_packets(&s, 2);              /* merged rows 0..1 (ts 1000, 1001) */
+    push_mon_frames(&s, 3, 1004);     /* merged rows 2..4 (ts 1002..1004) */
+
+    view_packets_key(&s, 'p');        /* pause → newest merged row */
+    ASSERT_EQ(s.pkt_paused, 1);
+    ASSERT_EQ(s.pkt_sel, 4);
+
+    view_packets_key(&s, SLOTH_KEY_DOWN);        /* clamp at bottom */
+    ASSERT_EQ(s.pkt_sel, 4);
+
+    view_packets_key(&s, '\n');       /* mon row: no detail panel */
+    ASSERT_EQ(s.pkt_detail, 0);
+
+    for (int i = 0; i < 6; i++) view_packets_key(&s, SLOTH_KEY_UP);
+    ASSERT_EQ(s.pkt_sel, 0);          /* clamp at top */
 
     view_packets_key(&s, SLOTH_KEY_DOWN);
-    ASSERT_EQ(s.mon_frame_sel, 1);
-    view_packets_key(&s, SLOTH_KEY_UP);
-    ASSERT_EQ(s.mon_frame_sel, 0);
-    view_packets_key(&s, SLOTH_KEY_UP);          /* clamp at top */
-    ASSERT_EQ(s.mon_frame_sel, 0);
+    ASSERT_EQ(s.pkt_sel, 1);
+    view_packets_key(&s, '\n');       /* IP row: detail opens on it */
+    ASSERT_EQ(s.pkt_detail, 1);
+    ASSERT_EQ(s.pkt_detail_idx, 1);
+}
 
-    s.mon_frame_sel = 4;
-    view_packets_key(&s, SLOTH_KEY_DOWN);        /* clamp at bottom */
-    ASSERT_EQ(s.mon_frame_sel, 4);
+/* Merged draw must not crash with both streams populated. */
+static void test_merged_draw_no_crash(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    push_packets(&s, 4);
+    push_mon_frames(&s, 4, 1010);
+    view_packets_draw(&s);
+    ASSERT(1);
 }
 
 void run_packets_tests(void) {
@@ -412,6 +477,9 @@ void run_packets_tests(void) {
     RUN_TEST(test_detail_blocks_nav);
     RUN_TEST(test_detail_draw_no_crash);
 
-    TEST_SUITE("view_packets_key/monitor frames");
-    RUN_TEST(test_mon_frame_nav_when_monitoring);
+    TEST_SUITE("packets/merged monitor timeline");
+    RUN_TEST(test_merged_timeline_order);
+    RUN_TEST(test_merged_timeline_tie_mon_first);
+    RUN_TEST(test_merged_nav_when_monitoring);
+    RUN_TEST(test_merged_draw_no_crash);
 }

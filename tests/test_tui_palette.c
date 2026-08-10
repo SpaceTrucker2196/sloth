@@ -51,16 +51,28 @@ static void test_alert_hot_tiers(void) {
 
 /* ── backgrounds ─────────────────────────────────────────── */
 
-static void test_highlight_is_the_only_pair_with_a_bg(void) {
+static void test_highlight_and_mon_rows_are_the_only_pairs_with_a_bg(void) {
     /* Row backgrounds were retired: everything renders on the terminal
-     * default. CP_HIGHLIGHT is the documented exception. */
+     * default. Two documented exceptions: CP_HIGHLIGHT, and the
+     * monitor-sourced row pairs (operator-requested dark grey so the
+     * 802.11 stream reads apart from the IP capture). */
     ASSERT_EQ(bg_of(CP_HIGHLIGHT), 22);      /* #005f00 */
     ASSERT_EQ(fg_of(CP_HIGHLIGHT), 255);     /* white   */
+
+    ASSERT_EQ(bg_of(CP_MON_ROW),        236);  /* #303030 dark grey */
+    ASSERT_EQ(bg_of(CP_MON_ROW_DIM),    236);
+    ASSERT_EQ(bg_of(CP_MON_ROW_BRIGHT), 236);
+    /* Same phosphor levels as the default-bg trio. */
+    ASSERT_EQ(fg_of(CP_MON_ROW),        fg_of(CP_NORMAL));
+    ASSERT_EQ(fg_of(CP_MON_ROW_DIM),    fg_of(CP_DIM));
+    ASSERT_EQ(fg_of(CP_MON_ROW_BRIGHT), fg_of(CP_BRIGHT));
 
     for (int p = 1; p <= CP_BR_EXTRA_BASE + 7; p++) {
         short fg = 0, bg = 0;
         if (!tui_pair_colors(p, &fg, &bg)) continue;
         if (p == CP_HIGHLIGHT) continue;
+        if (p == CP_MON_ROW || p == CP_MON_ROW_DIM ||
+            p == CP_MON_ROW_BRIGHT) continue;
         ASSERT_EQ(bg, -1);
     }
 }
@@ -235,7 +247,7 @@ void run_tui_palette_tests(void) {
     RUN_TEST(test_phosphor_scalars);
     RUN_TEST(test_heat_gradient_ascends);
     RUN_TEST(test_alert_hot_tiers);
-    RUN_TEST(test_highlight_is_the_only_pair_with_a_bg);
+    RUN_TEST(test_highlight_and_mon_rows_are_the_only_pairs_with_a_bg);
     RUN_TEST(test_ip_palette_values);
     RUN_TEST(test_ip_bands_agree_across_categories);
     RUN_TEST(test_brand_palette_values);

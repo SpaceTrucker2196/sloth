@@ -88,7 +88,6 @@ void draw_conn_band          (const sloth_state_t *s, int y0, int h, int x0, int
 void draw_assoc_band         (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_top_hosts_panel    (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_packets_band       (const sloth_state_t *s, int y0, int h, int x0, int w);
-void draw_mon_frames_band    (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_crit_alerts_band   (const sloth_state_t *s, int y0, int h, int x0, int w);
 
 void draw_wifi_panel         (const sloth_state_t *s, int y0, int h, int x, int w);

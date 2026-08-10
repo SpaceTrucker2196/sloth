@@ -371,43 +371,29 @@ void draw_assoc_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     }
 }
 
-/* ── Monitor frames (802.11) — shown in place of the IP packets band ── */
+/* ── Monitor frames (802.11) — merged into the IP packets band ── */
 
-/* When a monitor interface is active, the packets band lists the raw
- * 802.11 frames the radio is hearing (from the monitor pcap) instead of
- * the host's IP packets. Read-only, newest first. */
-void draw_mon_frames_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
-    char title[48];
-    snprintf(title, sizeof(title), "Monitor frames (%s)",
+/* One 802.11 monitor frame as a packets-band row. Dark grey bg is the
+ * "heard by the passive monitor radio" marker, so interleaved streams
+ * read apart per row. clipline() pads under the current attr, which
+ * carries the grey across the full band width. */
+static void draw_mon_band_row(const sloth_state_t *s, int y, int x0, int w,
+                              const mon_frame_t *f) {
+    char ts_buf[12], src[20], dst[20];
+    struct tm *tm = localtime(&f->ts);
+    if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
+    else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
+    snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
+             f->addr2[0], f->addr2[1], f->addr2[2],
+             f->addr2[3], f->addr2[4], f->addr2[5]);   /* TA / SA */
+    snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
+             f->addr1[0], f->addr1[1], f->addr1[2],
+             f->addr1[3], f->addr1[4], f->addr1[5]);   /* RA / DA */
+
+    attrset(COLOR_PAIR(CP_MON_ROW));
+    clipline(y, x0, w, "  %-8s  %-21s " G_ARROW " %-21s  %-5s  %.12s %ddBm  [%s]",
+             ts_buf, src, dst, "80211", f->label, f->signal_dbm,
              s->probe_iface[0] ? s->probe_iface : "monitor");
-    panel_title(y0, x0, w, title, DASH_PANEL_PACKETS);
-
-    attrset(COLOR_PAIR(CP_DIM));
-    clipline(y0 + 1, x0, w, "  %-9s %-17s " G_ARROW " %-17s %5s %4s",
-             "type", "src", "dst", "len", "sig");
-
-    int rows = h - 2;
-    if (rows < 1) return;
-    int n = s->mon_frame_count < rows ? s->mon_frame_count : rows;
-
-    for (int i = 0; i < n; i++) {
-        const mon_frame_t *f = &s->mon_frames[i];
-        char src[20], dst[20];
-        snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 f->addr2[0], f->addr2[1], f->addr2[2],
-                 f->addr2[3], f->addr2[4], f->addr2[5]);   /* TA / SA */
-        snprintf(dst, sizeof(dst), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 f->addr1[0], f->addr1[1], f->addr1[2],
-                 f->addr1[3], f->addr1[4], f->addr1[5]);   /* RA / DA */
-        attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x0, w,
-                 "  %-9.9s %-17s " G_ARROW " %-17s %5u %4d",
-                 f->label, src, dst, (unsigned)f->len, f->signal_dbm);
-    }
-    for (int i = n; i < rows; i++) {
-        attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x0, w, "");
-    }
 }
 
 /* Render a "5m20s" / "1h23m" / "2d4h" age, capped at 9999 in each unit. */
@@ -540,6 +526,9 @@ static void draw_packets_title(const sloth_state_t *s, int y, int x0, int w) {
     if (s->pkt_iface[0])
         n += snprintf(title + n, sizeof(title) - n,
                       "  iface=%s", s->pkt_iface);
+    if (s->probe_iface[0])
+        n += snprintf(title + n, sizeof(title) - n,
+                      "  mon=%s", s->probe_iface);
 #ifdef WITH_WIFI
     for (int i = 0; i < s->ap_count; i++) {
         if (s->aps[i].status == WIFI_STATUS_ASSOC && s->aps[i].ssid[0]) {
@@ -936,16 +925,22 @@ void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     int rows = h - 3;
     if (rows < 1) rows = 1;
 
-    int show = s->pkt_count < rows ? s->pkt_count : rows;
+    /* Merged timeline (IP + 802.11 monitor frames), newest first —
+     * monitor rows carry the dark grey bg so the two capture streams
+     * read apart. Without a monitor radio this is the IP ring alone. */
+    int total = pkt_mon_merged_count(s);
+    int show  = total < rows ? total : rows;
     for (int i = 0; i < rows; i++) {
-        if (i >= show) {
+        int is_mon = 0, idx = 0;
+        if (i >= show || !pkt_mon_merged_at(s, total - 1 - i, &is_mon, &idx)) {
             attrset(COLOR_PAIR(CP_NORMAL));
             clipline(y0 + 2 + i, x0, w, "");
             continue;
         }
-        /* newest first */
-        int slot = (s->pkt_head - 1 - i + MAX_PACKETS) % MAX_PACKETS;
-        draw_packet_row(y0 + 2 + i, x0, w, &s->packets[slot]);
+        if (is_mon)
+            draw_mon_band_row(s, y0 + 2 + i, x0, w, &s->mon_frames[idx]);
+        else
+            draw_packet_row(y0 + 2 + i, x0, w, &s->packets[idx]);
     }
     /* Bottom-of-band bargraph (live frequency of info values). */
     if (h >= 4)

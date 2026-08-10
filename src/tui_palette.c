@@ -75,6 +75,9 @@ int tui_pair_colors(int pair, short *fg, short *bg) {
     case CP_ALERT_HOT_WARN: f = TUI_C_HOT_WARN;  break;
     case CP_ALERT_HOT_CRIT: f = TUI_C_HOT_CRIT;  break;
     case CP_HIGHLIGHT:      f = TUI_C_HL_FG; b = TUI_C_HL_BG; break;
+    case CP_MON_ROW:        f = TUI_C_NORMAL; b = TUI_C_MON_BG; break;
+    case CP_MON_ROW_DIM:    f = TUI_C_DIM;    b = TUI_C_MON_BG; break;
+    case CP_MON_ROW_BRIGHT: f = TUI_C_BRIGHT; b = TUI_C_MON_BG; break;
     default:
         /* Banded ranges: every row-category variant of a given index
          * resolves to the same foreground, because row backgrounds were
