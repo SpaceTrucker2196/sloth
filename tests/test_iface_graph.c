@@ -258,6 +258,20 @@ static void test_hide_non_monitor(void) {
     ASSERT(!iface_is_hidden(&s, "wlan0"));
 }
 
+/* A managed Wi-Fi station stays visible alongside the monitor radio —
+ * both adapters (and the network the station is joined to) are the
+ * default picture, only wired/loopback/virtual noise is hidden. */
+static void test_hide_non_monitor_keeps_wifi_station(void) {
+    sloth_state_t s = make_state(4);   /* eth0, wlan0, lo, tun0 */
+    s.ifaces[1].mode = IFACE_MODE_WIFI;          /* wlan0 = managed station */
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    iface_hide_non_monitor(&s);
+    ASSERT(!iface_is_hidden(&s, "wlan0"));
+    ASSERT(iface_is_hidden(&s, "eth0"));
+    ASSERT(iface_is_hidden(&s, "lo"));
+    ASSERT(iface_is_hidden(&s, "tun0"));
+}
+
 static void test_hide_non_monitor_keeps_capture_iface(void) {
     sloth_state_t s = make_state(4);
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan0");
@@ -302,5 +316,6 @@ void run_iface_graph_tests(void) {
     RUN_TEST(test_scan_indicator_no_probe_iface);
     RUN_TEST(test_scan_bar_renders);
     RUN_TEST(test_hide_non_monitor);
+    RUN_TEST(test_hide_non_monitor_keeps_wifi_station);
     RUN_TEST(test_hide_non_monitor_keeps_capture_iface);
 }

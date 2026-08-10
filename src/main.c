@@ -823,9 +823,11 @@ int main(int argc, char **argv) {
         if (first_poll) {
             first_poll = 0;
             /* #25: with a monitor radio present, hide the noise interfaces
-             * (loopback, docker, VPN, non-monitor wlan) so the operator's
-             * focus is the RF world. Un-hideable via [1]. Runs once, after
-             * the first poll populates the interface list. */
+             * (loopback, docker, VPN, wired) so the operator's focus is
+             * the radio world. Wi-Fi netdevs — the monitor radio AND any
+             * managed station with its joined SSID — stay visible.
+             * Un-hideable via [1]. Runs once, after the first poll
+             * populates the interface list. */
             if (g_state.probe_iface[0])
                 iface_hide_non_monitor(&g_state);
         }

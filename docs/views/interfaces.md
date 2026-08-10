@@ -25,7 +25,7 @@ seconds at 1 Hz) history feeds the sparkline graphs.
  ── Interfaces ─────────────────────────────────────────────────
  iface      Mode Vendor        rx/s        tx/s      rx history        rx total   tx total
  eth0       ETH  Intel Corp    1.0 MB/s    200 KB/s  ▂▃▄▅▆▇█▇▆▅▃▂▂▁_   5.0 GB     1.0 GB
- wlan0      WIFI Apple         500 KB/s    50 KB/s   __▁_▁▁▂▂▁__▁_▁    200 MB     50 MB
+ wlan0      WIFI Apple         500 KB/s    50 KB/s   __▁_▁▁▂▂▁__▁_▁    200 MB     50 MB    ssid: HomeNet
  wlan0mon   MON  Alfa Networks 2.0 MB/s    0 B/s     _▁▂▃▄▅▆▇█▆▄▂▁_    600 MB     0 B     [monitor]
  lo         ETH  -             0 B/s       0 B/s     ________________  0 B        0 B
                  ^                                   ^
@@ -34,7 +34,14 @@ seconds at 1 Hz) history feeds the sparkline graphs.
 
 Monitor-mode rows render bright and carry a trailing `[monitor]`
 marker — the operator can see at a glance whether at least one
-radio is available for WiFi SIGINT.
+radio is available for WiFi SIGINT. A managed Wi-Fi station carries a
+trailing `ssid: <network>` while associated, so the joined network is
+visible without opening the WiFi view.
+
+With a monitor radio present, the first poll hides the wired /
+loopback / virtual noise (issue #25) but keeps **every Wi-Fi netdev**
+visible — the monitor radio and the managed station sit side by side
+by default. `t` un-hides anything.
 
 Each sparkline stretches across the available row width (`HIST_LEN`
 samples mapped to as many cells as fit). Heat colours scale per

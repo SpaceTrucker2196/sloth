@@ -261,13 +261,18 @@ int iface_is_hidden(const sloth_state_t *s, const char *name) {
     return 0;
 }
 
-/* #25: hide every interface except the monitor capture radio (and the IP
- * capture iface, if any) so a monitor-mode launch foregrounds the RF world.
+/* #25: hide the wired / loopback / virtual noise so a monitor-mode
+ * launch foregrounds the radio world. Wi-Fi netdevs stay visible in
+ * BOTH modes — the monitor capture radio and any managed station
+ * (whose associated SSID the row shows) are exactly what the operator
+ * wants side by side. The IP capture iface, if concrete, also stays.
  * Display-only; the operator can un-hide from the interface view. */
 void iface_hide_non_monitor(sloth_state_t *s) {
     for (int i = 0; i < s->iface_count; i++) {
         const char *nm = s->ifaces[i].name;
         if (!nm[0]) continue;
+        if (s->ifaces[i].mode == IFACE_MODE_WIFI ||
+            s->ifaces[i].mode == IFACE_MODE_MONITOR) continue;
         if (s->probe_iface[0] && strcmp(nm, s->probe_iface) == 0) continue;
         if (s->pkt_iface[0]   && strcmp(nm, s->pkt_iface)   == 0) continue;
         if (iface_is_hidden(s, nm)) continue;
@@ -353,6 +358,21 @@ static void fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
                         s->scan_chans[i]);
 }
 
+/* SSID of the network the managed radio is joined to ("" = none).
+ * nl80211 scan results flag the associated BSS; with one managed
+ * station the attribution to the IFACE_MODE_WIFI row is unambiguous. */
+static void fmt_assoc_ssid(const sloth_state_t *s, const iface_stat_t *f,
+                           char *buf, int sz) {
+    buf[0] = '\0';
+    if (f->mode != IFACE_MODE_WIFI) return;
+    for (int i = 0; i < s->ap_count; i++) {
+        if (s->aps[i].status == WIFI_STATUS_ASSOC && s->aps[i].ssid[0]) {
+            snprintf(buf, sz, "  ssid: %.32s", s->aps[i].ssid);
+            return;
+        }
+    }
+}
+
 void view_iface_draw(const sloth_state_t *s) {
     if (s->iface_graph) { draw_iface_graph(s); return; }
 
@@ -385,6 +405,8 @@ void view_iface_draw(const sloth_state_t *s) {
         char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
+        char ssidbuf[48];
+        fmt_assoc_ssid(s, f, ssidbuf, sizeof(ssidbuf));
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -408,7 +430,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
                    : excluded  ? "  (excluded)"
-                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ssidbuf));
             tui_reset();
         } else if (hidden) {
             tui_dim();
@@ -437,6 +459,7 @@ void view_iface_draw(const sloth_state_t *s) {
             else if (deselected) { tui_dim(); printw("  (deselected)"); }
             else if (excluded)   { tui_dim(); printw("  (excluded)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
+            else if (ssidbuf[0]) { tui_bright(); printw("%s", ssidbuf); }
             printw("\n");
             tui_normal();
         }
@@ -475,6 +498,8 @@ void view_iface_draw(const sloth_state_t *s) {
         char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
+        char ssidbuf[48];
+        fmt_assoc_ssid(s, f, ssidbuf, sizeof(ssidbuf));
 
         const iface_hist_t *h = NULL;
         for (int j = 0; j < MAX_IFACES; j++) {
@@ -498,7 +523,7 @@ void view_iface_draw(const sloth_state_t *s) {
                    : hidden    ? "  (hidden)"
                    : deselected? "  (deselected)"
                    : excluded  ? "  (excluded)"
-                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ""));
+                   : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ssidbuf));
             tui_reset(); printf("\n");
         } else if (hidden) {
             tui_dim();
@@ -523,6 +548,7 @@ void view_iface_draw(const sloth_state_t *s) {
             else if (deselected) { tui_dim(); printf("  (deselected)"); }
             else if (excluded)   { tui_dim(); printf("  (excluded)"); }
             else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
+            else if (ssidbuf[0]) { tui_bright(); printf("%s", ssidbuf); }
             printf("\n");
             tui_normal();
         }
