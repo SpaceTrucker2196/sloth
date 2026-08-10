@@ -66,7 +66,11 @@ Single binary `sloth`. Test binary `sloth_test`.
 ## UI conventions
 
 - Terminal **backgrounds are disabled** — rows render on the terminal
-  default. Don't reintroduce row tints without asking.
+  default. Don't reintroduce row tints without asking. One sanctioned
+  exception (owner-requested, 2026-08-10): rows sourced from the
+  passive monitor radio render on dark grey (`CP_MON_ROW*`, xterm 236)
+  wherever the 802.11 stream interleaves with the IP capture, so the
+  operator can tell per row which interface heard what.
 - **IP palette = Fallout phosphor**: 8 hash-derived colours orbiting
   the project's teal phosphor base. Same IP → same colour everywhere.
   IPs appearing in ≥2 dashboard sources render **bold**.
