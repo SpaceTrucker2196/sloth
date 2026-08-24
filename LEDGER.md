@@ -80,3 +80,4 @@
 | 8166b6a | 2026-07-29T05:40:26Z | claude-opus-5 | 75 | 62518 | 33484190 | 77302 | 19.0784 | feat(rf): retry/FCS tracking + radiotap extraction (roadmap B3) |
 | 64edbc4 | 2026-08-10T18:00:00Z | claude-fable-5, claude-opus-5 | 577 | 252049 | 87833241 | 3135835 | 91.3231 | Wi-Fi adapters + joined SSID visible by default; 802.11 monitor frames merged into packet timeline with dark-grey rows |
 | d3a07c2 | 2026-08-24T21:00:14Z | claude-fable-5, claude-opus-4-8, claude-opus-5 | 112 | 32825 | 19315612 | 848989 | 26.2434 | agents/AGENTS.md: pcap-fixture policy settled as repo standard |
+| 9434cf8 | 2026-08-24T21:07:51Z | claude-opus-5 | 50 | 30289 | 3983388 | 39744 | 3.1466 | ROADMAP.md re-verified against the tree and the 14 open issues |
