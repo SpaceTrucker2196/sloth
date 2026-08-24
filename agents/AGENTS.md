@@ -48,6 +48,18 @@ Single binary `sloth`. Test binary `sloth_test`.
 - **Hand-crafted protocol tests.** Parsers are tested with raw byte
   arrays built from first principles per RFC. Don't write circular
   tests (parser feeding its own output back).
+- **No pcap fixtures.** The same rule, stated for the 802.11 detector
+  work because it keeps getting re-argued: detector tests are annotated
+  `uint8_t` arrays built per the relevant IEEE clause, not captures from
+  a lab rig. Precedent is `tests/test_beacon_snoop.c` (#33) and
+  `tests/test_action_snoop.c` (#59); `tests/` holds zero `.pcap` files
+  and should stay that way. Hand-built frames reach the truncated,
+  malformed and adversarial cases a capture can't, and need no radio.
+  The gap that leaves is real and worth stating: they prove the parser
+  against the spec, not against what `mdk4` or `bettercap` actually put
+  on the air. A capture is a later *integration* layer on top, never a
+  substitute. The `needs-pcap-fixture` label means exactly that —
+  wanted as follow-up validation, not blocking.
 - **No mocks of real-data interfaces.** The fake platform in
   `tests/fake_platform.c` lives there for a reason.
 - **Per-view docs follow the template** in `docs/views/README.md`:
