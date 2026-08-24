@@ -32,9 +32,28 @@ still open) · **✅** landed.
 
 ## Where things stand
 
-**No open GitHub issues.** Section A — the original issue backlog — is
-fully landed. Everything genuinely outstanding lives in section B, the
-802.11 depth work, plus the small residue in section C.
+> **Re-verified 2026-08-24** against the tree at `f2fe12f`, as a triage
+> sweep over every open issue. The line below ("no open GitHub issues")
+> was true when written on 2026-07-28 and stopped being true on 08-03.
+> It is the same drift this file warns about at the top, four weeks
+> later — worth leaving visible rather than quietly overwriting.
+
+~~**No open GitHub issues.**~~ **Fourteen are open** (`#59`–`#72`),
+all of it section-B work now filed rather than merely listed here.
+Section A — the original issue backlog — remains fully landed.
+
+Two are half-landed and are the first thing to finish:
+
+- **`#59` BTM abuse** — slice 1 of 4 (`5432574`). The Action-frame
+  dispatcher and BTM Request parser exist; the alert rule, surfaces and
+  docs do not.
+- **`#60` Assoc requests** — slices 1–5a (`5efb233` … `a3f5b4d`). Parser,
+  downgrade delta, `ASSOC_FLOOD` and the data layer all landed; the UI
+  surfaces (slice 5b) do not.
+
+Both hold a half-built surface — an alert type with no rule, a data layer
+with no view — which is the state that reads as done to the next agent
+and isn't.
 
 ---
 
@@ -129,22 +148,37 @@ dispatch on all of them. Verified absent:
   *"what the client asked for versus what the AP granted"* delta, which
   is where downgrade and misconfiguration show up. Also unblocks
   association-flood detection (B4).
-  *Check: `grep -c assoc_req src/capture/probe.c` → 0.*
+  *Was: `grep -c assoc_req src/capture/probe.c` → 0.* **Now landed**
+  (`#60`, `4fbe9f3`): `probe.c:347` dispatches subtypes 0 and 2, the
+  ask-vs-grant delta is in (`487b617`), and `ALERT_TYPE_ASSOC_FLOOD`
+  fires (`123a6e8`). Remaining: slice 5b, the UI surfaces.
 - **▲ Action frames (subtype 13).** Entirely unhandled, and a large
   passive surface: 802.11v BSS-Transition-Management (roaming steering,
   and BTM abuse as a deauth-equivalent), 802.11k Radio Measurement
   request/report, FT action, and the spoofed/malformed action frames
   modern WIDS-evasion tooling relies on.
-  *Check: `grep -cE 'subtype == 13|ACTION' src/capture/probe.c` → 0.*
+  *Was: `grep -cE 'subtype == 13|ACTION' src/capture/probe.c` → 0.*
+  **Dispatcher landed** (`#59`, `5432574`): Category 10 BTM Requests
+  parse, Categories 5 / 6 / 127 are counted as stubs. Remaining: the
+  `BTM_ABUSE` rule and surfaces. RRM (`#61`) and CSA (`#63`) extend the
+  same dispatcher and are unblocked by it.
 - **◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).** Recognised by
   name in `frame_type_label()` but never counted or analysed. Counting
   them by type per channel is what airtime / channel-utilisation
   accounting needs, plus RTS/CTS-flood (airtime DoS) and hidden-node
-  inference.
+  inference. Filed as `#64` (counters + RTS flood) and `#70` (Bl0ck /
+  Block-Ack paralysis), split because they share a frame type and
+  nothing else. Note CTS and ACK carry only a Receiver Address — they
+  attribute to a channel, not to an AP.
 - **◆ Data-frame telemetry beyond EAPOL.** Data frames are inspected
-  only to pull EAPOL-Key. Retry-bit rate, QoS TID distribution, frame
-  size histograms and per-BSSID data volume are cheap passive signals
-  (interference, jamming, exfil-shaped flows) currently discarded.
+  only to pull EAPOL-Key (`probe.c:262`). Retry-bit rate, QoS TID
+  distribution, frame size histograms and per-BSSID data volume are
+  cheap passive signals (interference, jamming, exfil-shaped flows)
+  currently discarded. The larger miss found during the 08-24 sweep is
+  that there is **no LLC/SNAP → IP bridge at all**: a data frame on the
+  monitor radio never reaches `decode_ipv4()`, so the monitor path and
+  the IP capture see disjoint worlds even on an open network. Filed as
+  `#72`; it blocks `#69`.
 
 ### B2. Information-element depth
 
@@ -228,15 +262,33 @@ Deauth, probe, beacon and auth floods, evil-twin (+ proximity, + attack
 chain), KARMA/Pineapple, rogue-RADIUS, SSID-confusion and mgmt-fuzz all
 exist. Gaps:
 
-- **◆ Association flood.** Needs B1 assoc-request parsing.
-- **◆ CTS/RTS airtime DoS.** Needs B1 control frames.
+- ~~**◆ Association flood.**~~ ✅ landed (`#60`, `123a6e8`). The
+  issue's "≤ 3 distinct STAs" gate was dropped deliberately: flood
+  tooling randomises source MACs, so a real flood is *many* distinct
+  STAs and the gate would have suppressed the common shape.
+- **◆ CTS/RTS airtime DoS.** Needs B1 control frames — `#64`.
 - **◆ PMF/WPA3 downgrade + transition-mode exposure.** `wifi_assess.c`
   already carries MFP and transition findings; what is missing is a
   *live alert* for an AP advertising WPA2/WPA3 mixed mode, MFP
   optional-not-required, or an OWE transition BSS. Overlaps `#24`.
+  Filed as `#62`, and now the cheapest issue open: its one real
+  dependency — an exact AKM bitmap, since `strstr(akm,"SAE")` also
+  matches `FT-SAE` — shipped inside `#60` slice 1 (`5efb233`).
 - **◇ KARMA / known-beacon responder heuristics v2**, and PMKID-harvest
   tool fingerprints — AP or client behaviour matching known passive
-  harvesting tooling. Observation-only.
+  harvesting tooling. Observation-only. Filed as `#68`, and the one
+  issue genuinely gated on captures: a frame layout can be built from a
+  spec, a tool's fingerprint cannot be invented. Ship the table format
+  and matcher; leave the signature rows empty until captures exist.
+- **◆ Enterprise client accepting no server cert (CVE-2023-52160).**
+  `#65`. The AP-side rule (`ROGUE_RADIUS`, `#31`) warns about attacker
+  infrastructure; this is the client-side mirror — a PEAP session
+  reaching EAP-Success with no TLS ServerHello or Certificate observed,
+  which is your own devices demonstrating they would fall for it.
+  Viable, with one seam to widen first: `eap_track_observe()` receives
+  only the BSSID (`eapol_log.c:310`), and this rule needs the STA and
+  the frame direction — both already computed at that call site, just
+  not passed.
 
 ### B5. Coverage & correlation
 
@@ -276,13 +328,25 @@ effort:
 
 1. ~~**B3b — unify the two Wi-Fi parsers.**~~ ✅ landed.
 2. ~~**B3 retry / FCS tracking.**~~ ✅ landed.
-3. **B1 assoc-requests + action frames.** The largest unparsed passive
-   surface, and the prerequisite for association-flood and BTM-abuse
-   detection.
-4. **B2 HT/VHT/HE operation decode.** Unlocks real channel width and
-   completes 6 GHz beacon-channel derivation.
-5. **B1 control frames → B3 channel-utilisation view.** Turns the new
-   counts into the spectrum-occupancy answer the tool still cannot give.
-6. **B2 remainder** (country/CSA/TPC, ExtCap/RM/Mesh/FT, Multi-Link) and
-   **B4** detectors, which mostly fall out of 1–5 once the frames and
-   elements are parsed.
+3. **`#59` slices 2–4** — the `BTM_ABUSE` rule, surfaces, docs. Finish
+   the oldest half-landed tail before opening anything new.
+4. **`#60` slice 5b** — `[w]` Assoc columns (`req_akm` / `prev_akm` /
+   `∆`), `[k]` PNL PHY tier, `--report`, docs.
+5. **`#62` PMF/WPA3 downgrade.** ~1 week, closes a B4 ◆, dependency
+   already paid.
+6. **`#65` PEAP no-server-cert.** Small, and the only issue open that
+   catches evidence of a *shipping* CVE (CVE-2023-52160) against
+   handsets already on the network. Widen the `eap_track_observe()` seam
+   first — it needs the STA and the direction.
+7. **`#63` CSA abuse.** Extends `#59`'s dispatcher; composes with
+   `#62`'s posture flags.
+8. **`#66` HT/VHT/HE/EHT operation decode.** Unlocks real channel width,
+   completes the durable 6 GHz beacon-channel fix, and is the data model
+   the airtime view needs.
+9. **`#61` RRM**, then **`#64`** control-frame counters → the B3
+   channel-utilisation view.
+
+Backlog after that: `#70` (Bl0ck), `#67` (Wi-Fi 7 MLO — a real
+correctness bug, since seqnum correlation misreports one MLO device as
+three, but future-weighted), `#68` (tool fingerprints, capture-gated),
+`#71`/`#72` (the `#69` prerequisites) and `#69` itself.
