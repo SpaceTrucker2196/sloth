@@ -95,3 +95,4 @@
 | e468143 | 2026-08-25T15:41:21Z | claude-opus-5 | 23 | 15747 | 7972853 | 18689 | 4.5671 | #72 — 802.11 data-frame to IP bridge |
 | 16d12c9 | 2026-08-25T15:50:13Z | claude-opus-5 | 47 | 27383 | 17179827 | 31038 | 9.5851 | #67 — Multi-Link Element decode, MLD canonical identity |
 | 6565330 | 2026-08-25T16:07:05Z | claude-opus-5 | 30 | 16075 | 10715667 | 18924 | 5.9491 | DB schema v4 — batched column bump, Makefile header deps |
+| d7d628a | 2026-08-25T16:17:08Z | claude-opus-5 | 36 | 27075 | 13312681 | 29028 | 7.6237 | #68 — tool-fingerprint mechanism, empty signature table |
