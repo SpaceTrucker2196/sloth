@@ -96,3 +96,4 @@
 | 16d12c9 | 2026-08-25T15:50:13Z | claude-opus-5 | 47 | 27383 | 17179827 | 31038 | 9.5851 | #67 — Multi-Link Element decode, MLD canonical identity |
 | 6565330 | 2026-08-25T16:07:05Z | claude-opus-5 | 30 | 16075 | 10715667 | 18924 | 5.9491 | DB schema v4 — batched column bump, Makefile header deps |
 | d7d628a | 2026-08-25T16:17:08Z | claude-opus-5 | 36 | 27075 | 13312681 | 29028 | 7.6237 | #68 — tool-fingerprint mechanism, empty signature table |
+| 0f6da33 | 2026-08-25T16:28:28Z | claude-opus-5 | 36 | 25181 | 13827103 | 27375 | 7.8170 | #71 — HTTP response-side parsing |
