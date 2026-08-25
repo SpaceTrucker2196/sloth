@@ -700,6 +700,7 @@ typedef enum {
     ALERT_TYPE_ASSOC_FLOOD,         /* association-request flood at one BSSID (#60) */
     ALERT_TYPE_BTM_ABUSE,           /* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
     ALERT_TYPE_WPA_DOWNGRADE,       /* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
+    ALERT_TYPE_PEAP_NO_SERVER_CERT, /* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1059,6 +1060,18 @@ typedef struct {
     int      weak_method;      /* 1 = a weak method (MD5/GTC) was offered */
     int      identity_leaks;   /* Response/Identity frames with a real username */
     char     last_identity[64];/* most recent leaked identity (printable) */
+    /* CVE-2023-52160 evidence (#65). A TLS-in-EAP method (PEAP / TLS /
+     * TTLS) that reached EAP-Success without the AP ever presenting a
+     * ServerHello or a Certificate means the client authenticated to an
+     * unverified server. The AP-side rule above says "this AP offers a
+     * weak method"; this says "a client here accepted no server at all".
+     *
+     * Counts sessions, not frames: one misconfigured client completing
+     * one handshake is the finding, and a chatty AP must not inflate it. */
+    int      nocert_sessions;      /* TLS-in-EAP successes with no server cert */
+    int      nocert_no_hello;      /* subset where no ServerHello was seen either */
+    uint8_t  last_nocert_sta[6];   /* most recent client that did it */
+    time_t   last_nocert_ts;
     time_t   first_seen;
     time_t   last_seen;
 } rogue_radius_ap_t;

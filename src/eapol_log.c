@@ -307,7 +307,11 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     const uint8_t *eapol = d + hdr + 8;
     int            elen  = len - hdr - 8;
     if (elen >= 4 && eapol[1] == 0x00) {
-        eap_track_observe(bssid, eapol + 4, elen - 4, time(NULL));
+        /* from_ds means the AP transmitted it — the direction the
+         * CVE-2023-52160 rule needs to know a server identity was
+         * actually presented rather than merely present in the flow. */
+        eap_track_observe(bssid, sta, from_ds ? 1 : 0,
+                          eapol + 4, elen - 4, time(NULL));
         return 1;
     }
     uint8_t nonce[32], mic[16], pmkid[16];

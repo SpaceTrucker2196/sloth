@@ -36,7 +36,37 @@ typedef struct {
     int  id;               /* EAP identifier */
     int  type;             /* method type for Request/Response; -1 otherwise */
     char identity[64];     /* set for Response/Identity frames; "" otherwise */
+    /* TLS-in-EAP payload (#65). For PEAP / EAP-TLS / EAP-TTLS the
+     * Type-Data is Flags(1) [+ TLS Message Length(4) when the L bit is
+     * set] followed by TLS record bytes. These point into the caller's
+     * buffer — valid only as long as it is. tls_len is 0 when the
+     * method is not TLS-based or the fragment carries no data. */
+    const uint8_t *tls;
+    int  tls_len;
+    int  tls_flags;        /* EAP_TLS_FLAG_* */
 } eap_info_t;
+
+/* EAP-TLS Flags octet — RFC 5216 §3.1. */
+#define EAP_TLS_FLAG_LENGTH  0x80   /* L — TLS Message Length present */
+#define EAP_TLS_FLAG_MORE    0x40   /* M — more fragments follow      */
+#define EAP_TLS_FLAG_START   0x20   /* S — start                      */
+
+/* True for the EAP methods that carry a TLS handshake. */
+int eap_type_is_tls_based(int type);
+
+/* Walk the TLS records in `data` looking for handshake messages, and
+ * report whether a ServerHello (2) and/or a Certificate (11) appear.
+ * Either output pointer may be NULL. Returns 1 if the buffer looked
+ * like a TLS record at all, 0 otherwise.
+ *
+ * Deliberately does not reassemble: a continuation fragment carries no
+ * record header and is not parseable on its own. ServerHello is the
+ * first server handshake message and small, so it lands in the first
+ * server fragment and is reliably visible; Certificate usually does
+ * too, but a large chain can push it past the fragment boundary. That
+ * asymmetry is why the two are reported separately — see #65. */
+int tls_scan_handshake(const uint8_t *data, int len,
+                       int *saw_server_hello, int *saw_certificate);
 
 /* Parse an EAP packet starting at its Code byte. Returns 1 on success
  * (out populated), 0 if too short or malformed. */

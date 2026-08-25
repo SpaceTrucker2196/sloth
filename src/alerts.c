@@ -217,6 +217,7 @@ const char *alert_technique(alert_type_t type) {
      * would claim the second half on the evidence of the first. */
     case ALERT_TYPE_BTM_ABUSE:              return "T1498";       /* Network DoS — 802.11v forced roam */
     case ALERT_TYPE_WPA_DOWNGRADE:          return "T1600";       /* Weaken Encryption — the AP offers the weak lane */
+    case ALERT_TYPE_PEAP_NO_SERVER_CERT:    return "T1557";       /* AiTM — the client authenticated to an unverified server */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -1617,6 +1618,57 @@ static void rule_rogue_radius(const sloth_state_t *s, time_t now) {
  * correlate. */
 #define EVIL_TWIN_PROXIMITY_DBM 15
 
+
+/* CVE-2023-52160 — a TLS-in-EAP session that reached EAP-Success with
+ * no server identity presented (#65).
+ *
+ * ROGUE_RADIUS above says "this AP offers a weak method": it warns the
+ * operator about attacker infrastructure. This says something different
+ * and more uncomfortable — *a client here accepted a server that never
+ * proved who it was*. That is a property of the client's supplicant
+ * configuration, and it stays silent until a device actually does it.
+ *
+ * Both are needed. The AP-side rule fires on infrastructure the
+ * operator may not control; this one fires on their own fleet. */
+static void rule_peap_no_server_cert(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->rogue_radius_count; i++) {
+        const rogue_radius_ap_t *r = &s->rogue_radius[i];
+        if (r->nocert_sessions <= 0) continue;
+
+        char bssid[20], sta[20];
+        fmt_bssid(bssid, r->bssid);
+        mac_to_str(r->last_nocert_sta, sta, sizeof(sta));
+
+        int mine     = ownership_is_my_bssid(r->bssid);
+        int rostered = ownership_is_known_device(r->last_nocert_sta);
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "peapnocert:%s", bssid);
+        snprintf(detail, sizeof(detail),
+                 "%.17s -> %.17s EAP-Success with no %s (%d session%s)%s%s",
+                 sta, bssid,
+                 /* Which half was missing changes how much to trust it.
+                  * No ServerHello at all means the AP never started a
+                  * TLS handshake — unambiguous. A ServerHello without a
+                  * Certificate is the same finding, but a large cert
+                  * chain can also cross an EAP fragment boundary we do
+                  * not reassemble, so the wording is weaker. */
+                 r->nocert_no_hello > 0 ? "TLS ServerHello"
+                                        : "Certificate observed",
+                 r->nocert_sessions, r->nocert_sessions == 1 ? "" : "s",
+                 mine     ? " - YOUR network" : "",
+                 rostered ? " - rostered client" : "");
+
+        /* CRIT on the operator's own network or their own device: in
+         * both cases this is their fleet demonstrating it would fall for
+         * a rogue enterprise AP, which is the CVE's actual population. */
+        fire(ALERT_TYPE_PEAP_NO_SERVER_CERT,
+             (mine || rostered) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+             "PEAP_NO_CERT", detail, key, NULL, 0, now);
+    }
+}
+
 static void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -2236,6 +2288,7 @@ void alerts_update(sloth_state_t *s) {
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);
+    rule_peap_no_server_cert(s, now);
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_assoc_flood(s, now);

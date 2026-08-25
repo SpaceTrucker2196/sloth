@@ -3660,6 +3660,85 @@ static void test_wpa_downgrade_clean_wpa3_is_quiet(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE), -1);
 }
 
+
+/* ── PEAP no-server-cert rule (#65) ──────────────────────── */
+
+static rogue_radius_ap_t *add_nocert(sloth_state_t *s, uint8_t last,
+                                     int sessions, int no_hello) {
+    rogue_radius_ap_t *r = &s->rogue_radius[s->rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    r->bssid[0] = 0xde; r->bssid[1] = 0xad; r->bssid[2] = 0xbe;
+    r->bssid[3] = 0xef; r->bssid[4] = 0x00; r->bssid[5] = last;
+    r->last_nocert_sta[0] = 0x12; r->last_nocert_sta[1] = 0x22;
+    r->last_nocert_sta[2] = 0x33; r->last_nocert_sta[3] = 0x44;
+    r->last_nocert_sta[4] = 0x55; r->last_nocert_sta[5] = 0x66;
+    r->nocert_sessions = sessions;
+    r->nocert_no_hello = no_hello;
+    r->last_seen = time(NULL);
+    return r;
+}
+
+static void test_peap_nocert_fires(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_nocert(&s, 0x01, 1, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PEAP_NO_SERVER_CERT);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "no TLS ServerHello") != NULL);
+    ASSERT_EQ(strcmp(s.alerts[idx].technique, "T1557"), 0);
+}
+
+static void test_peap_nocert_wording_softer_without_hello_miss(void) {
+    /* A ServerHello was seen but no Certificate. Same finding, but a
+     * large cert chain can also cross an EAP fragment boundary sloth
+     * does not reassemble — so the detail must not overclaim. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_nocert(&s, 0x02, 1, 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PEAP_NO_SERVER_CERT);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "no Certificate observed") != NULL);
+}
+
+static void test_peap_nocert_quiet_when_clean(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_nocert(&s, 0x03, 0, 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PEAP_NO_SERVER_CERT), -1);
+}
+
+static void test_peap_nocert_my_bssid_is_crit(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_nocert(&s, 0x04, 1, 1);
+    ownership_add_bssid("de:ad:be:ef:00:04");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PEAP_NO_SERVER_CERT);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ownership_clear();
+}
+
+static void test_peap_nocert_rostered_client_is_crit(void) {
+    /* The CVE's actual population: the operator's own handsets, shipped
+     * with a supplicant configuration that accepts an unverified
+     * server. A rostered device doing it is the finding that matters. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_nocert(&s, 0x05, 1, 1);
+    ownership_add_known_mac("12:22:33:44:55:66");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PEAP_NO_SERVER_CERT);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "rostered client") != NULL);
+    ownership_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3700,6 +3779,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_wpa_downgrade_exercised_lane_is_crit);
     RUN_TEST(test_wpa_downgrade_stale_delta_does_not_escalate);
     RUN_TEST(test_wpa_downgrade_clean_wpa3_is_quiet);
+    RUN_TEST(test_peap_nocert_fires);
+    RUN_TEST(test_peap_nocert_wording_softer_without_hello_miss);
+    RUN_TEST(test_peap_nocert_quiet_when_clean);
+    RUN_TEST(test_peap_nocert_my_bssid_is_crit);
+    RUN_TEST(test_peap_nocert_rostered_client_is_crit);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

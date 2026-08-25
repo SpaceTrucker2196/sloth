@@ -27,6 +27,9 @@ source material.
   evil-twin detection layer (Phases 1-4).
 - [[btm-abuse]] — 802.11v BSS-Transition forcing + `BTM_ABUSE` alert
   (#59): the forced roam that leaves no deauth frame behind.
+- [[enterprise-rogue]] — the two halves of the WPA-Enterprise problem:
+  `ROGUE_RADIUS` (#31, the AP) and `PEAP_NO_SERVER_CERT` (#65,
+  CVE-2023-52160, your own fleet).
 - [[ipv6-ndp]] — Router Advertisement tracker + `ROGUE_RA` alert
   (mitm6 / Slaacers detection).
 - [[smb-snoop]] — SMB1 detection + `SMB1_USE` alert (EternalBlue /

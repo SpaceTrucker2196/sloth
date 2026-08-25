@@ -85,13 +85,16 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
-    /* Columns — BSSID 17 | methods 20 | weak 4 | leaks 5 | identity/age */
+    /* Columns — BSSID 17 | methods 20 | weak 4 | leaks 5 | TLS? 5 |
+     * identity/age. TLS? is the CVE-2023-52160 column (#65): did the
+     * AP present a server identity before a client accepted it. */
     tui_dim();
-    TPRINT(" %-17s  %-20s  %-4s  %-5s  %s\n",
-           "BSSID", "EAP methods", "weak", "leaks", "Last identity / seen");
-    TPRINT(" %-17s  %-20s  %-4s  %-5s  %s\n",
+    TPRINT(" %-17s  %-20s  %-4s  %-5s  %-5s  %s\n",
+           "BSSID", "EAP methods", "weak", "leaks", "TLS?",
+           "Last identity / seen");
+    TPRINT(" %-17s  %-20s  %-4s  %-5s  %-5s  %s\n",
            "-----------------", "--------------------", "----", "-----",
-           "--------------------");
+           "-----", "--------------------");
     tui_normal();
 
     if (n == 0) {
@@ -122,11 +125,18 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
         snprintf(last, sizeof(last), "%.40s (%s)",
                  r->last_identity[0] ? r->last_identity : "-", age);
 
+        /* '-' means no TLS-in-EAP session has completed here at all, so
+         * there is nothing to judge; a cross means one completed with
+         * no server identity presented. A tick is never shown, because
+         * absence of a finding is not proof the handshake was sound —
+         * only that this one was not caught missing. */
+        const char *tls_s = (r->nocert_sessions > 0) ? "NONE" : "-";
+
 #ifdef WITH_NCURSES
         if (row == sel) {
             tui_sel();
-            printw(" %-17s  %-20.20s  %-4s  %5d  %s\n",
-                   bssid, methods, wk, r->identity_leaks, last);
+            printw(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
+                   bssid, methods, wk, r->identity_leaks, tls_s, last);
             tui_reset();
         } else {
             tui_bright(); printw(" %-17s", bssid);
@@ -135,18 +145,20 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
             printw("  %-4s", wk);
             if (r->identity_leaks > 0) tui_bright(); else tui_dim();
             printw("  %5d", r->identity_leaks);
+            if (r->nocert_sessions > 0) tui_heat(1.0); else tui_dim();
+            printw("  %-5s", tls_s);
             tui_dim();    printw("  %s\n", last);
             tui_normal();
         }
 #else
         if (row == sel) {
             tui_sel();
-            printf(" %-17s  %-20.20s  %-4s  %5d  %s",
-                   bssid, methods, wk, r->identity_leaks, last);
+            printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s",
+                   bssid, methods, wk, r->identity_leaks, tls_s, last);
             tui_reset(); printf("\n");
         } else {
-            printf(" %-17s  %-20.20s  %-4s  %5d  %s\n",
-                   bssid, methods, wk, r->identity_leaks, last);
+            printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
+                   bssid, methods, wk, r->identity_leaks, tls_s, last);
         }
 #endif
     }
@@ -156,6 +168,8 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
     tui_dim();
     TPRINT(" weak = MD5/GTC offered (eaphammer / hostapd-wpe lure);"
            " leaks = non-anonymous Response/Identity\n");
+    TPRINT(" TLS? NONE = a client completed EAP here with no server cert"
+           " presented (CVE-2023-52160)\n");
     tui_normal();
 }
 

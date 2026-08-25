@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Eleven are open** (`#61`, `#63`–`#72`),
+~~**No open GitHub issues.**~~ **Ten are open** (`#61`, `#63`, `#64`, `#66`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -276,8 +276,8 @@ exist. Gaps:
   issue genuinely gated on captures: a frame layout can be built from a
   spec, a tool's fingerprint cannot be invented. Ship the table format
   and matcher; leave the signature rows empty until captures exist.
-- **◆ Enterprise client accepting no server cert (CVE-2023-52160).**
-  `#65`. The AP-side rule (`ROGUE_RADIUS`, `#31`) warns about attacker
+- ~~**◆ Enterprise client accepting no server cert (CVE-2023-52160).**~~
+  ✅ landed (`#65`). The AP-side rule (`ROGUE_RADIUS`, `#31`) warns about attacker
   infrastructure; this is the client-side mirror — a PEAP session
   reaching EAP-Success with no TLS ServerHello or Certificate observed,
   which is your own devices demonstrating they would fall for it.
@@ -329,10 +329,7 @@ effort:
 4. ~~**`#60` slice 5b** — `[w]` Assoc columns, `[k]` PNL PHY tier,
    `--report`, docs.~~ ✅ landed 2026-08-24.
 5. ~~**`#62` PMF/WPA3 downgrade.**~~ ✅ landed 2026-08-25.
-6. **`#65` PEAP no-server-cert.** Small, and the only issue open that
-   catches evidence of a *shipping* CVE (CVE-2023-52160) against
-   handsets already on the network. Widen the `eap_track_observe()` seam
-   first — it needs the STA and the direction.
+6. ~~**`#65` PEAP no-server-cert.**~~ ✅ landed 2026-08-25.
 7. **`#63` CSA abuse.** Extends `#59`'s dispatcher; composes with
    `#62`'s posture flags.
 8. **`#66` HT/VHT/HE/EHT operation decode.** Unlocks real channel width,

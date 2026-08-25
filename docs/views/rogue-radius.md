@@ -76,6 +76,37 @@ operator's eye.
   conversation — enterprise evil twins fire this view and the twin
   detector together.
 
+## The `TLS?` column — CVE-2023-52160 (#65)
+
+`ROGUE_RADIUS` above is about the AP: which methods it offers, whose
+usernames it collects. The `TLS?` column answers the opposite question,
+about the **client**.
+
+In a sound TLS-in-EAP exchange the AP sends a **ServerHello** and a
+**Certificate** before the client commits, and both travel unencrypted
+inside EAP-Request frames where a monitor-mode radio can see them. If
+EAP-Success arrives and neither was observed, a client on this network
+authenticated to a server that never proved who it was — the runtime
+signature of [CVE-2023-52160](https://nvd.nist.gov/vuln/detail/CVE-2023-52160),
+which shipped on millions of Android and ChromeOS handsets.
+
+| Shown | Meaning |
+|---|---|
+| `-` | no TLS-in-EAP session has completed here — nothing to judge |
+| `NONE` | a session completed with **no server identity presented** |
+
+A tick is deliberately never shown. The absence of a finding is not
+proof the handshake was sound, only that this one was not caught
+missing — sloth does not reassemble EAP-TLS fragments, so a long
+certificate chain can cross a boundary it does not follow.
+
+`NONE` fires `ALERT_TYPE_PEAP_NO_SERVER_CERT`, and the alert detail
+distinguishes the confident case (`no TLS ServerHello` — the AP never
+started a handshake) from the weaker one (`no Certificate observed`).
+
+Full write-up, including what to do when it fires:
+[enterprise-rogue](../wiki/enterprise-rogue.md).
+
 ## See also
 
 - [eapol.md](eapol.md) — the EAPOL-Key / handshake capture the same
