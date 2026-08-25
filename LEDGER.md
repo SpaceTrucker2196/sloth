@@ -88,3 +88,4 @@
 | 8c83ae8 | 2026-08-25T14:45:09Z | claude-opus-5 | 70 | 40373 | 15277588 | 481193 | 13.4604 | #62 — WPA/PMF downgrade alert |
 | eef2944 | 2026-08-25T14:56:48Z | claude-opus-5 | 62 | 35263 | 15487088 | 45585 | 9.0813 | #65 — PEAP no-server-cert (CVE-2023-52160) |
 | 06061f9 | 2026-08-25T15:04:53Z | claude-opus-5 | 30 | 26238 | 8036504 | 26431 | 4.9387 | #63 — CSA abuse detector |
+| fe623f3 | 2026-08-25T15:12:26Z | claude-opus-5 | 30 | 22407 | 7832410 | 593419 | 10.4107 | #66 — HT/VHT/HE/EHT operation IE decode |
