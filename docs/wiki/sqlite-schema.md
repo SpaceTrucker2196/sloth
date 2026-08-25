@@ -104,9 +104,9 @@ These are what make the file trustworthy rather than merely present.
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
 
-## Schema v3 — 41 tables
+## Schema v4 — 41 tables
 
-`meta` holds `schema_version`, currently **3**. `db_open()` refuses a
+`meta` holds `schema_version`, currently **4**. `db_open()` refuses a
 file whose version differs from the running build, and checks it
 *before* applying the rest of the schema so a mismatch produces the
 version message rather than whatever SQL error the schema happens to hit
@@ -119,6 +119,20 @@ statement is a no-op on a table that already exists, and the column
 never appears. v2 exists because `probe_clients.presence` (#53) was
 added without a bump, so v1 files must be refused. v3 came with
 `assoc_reqs` (#60).
+
+**v4 is a deliberately batched bump.** Four columns across three issues
+each wanted one, and each on its own was a poor trade — making every
+existing database refuse to open, for one field:
+
+| Issue | Column | Table |
+|---|---|---|
+| `#60` | `phy_confirmed` | `pnl_clients` |
+| `#62` | `downgrade_flags`, `akm_bits` | `beacon_aps` |
+| `#65` | `nocert_sessions`, `nocert_no_hello`, `last_nocert_sta`, `last_nocert_ts` | `rogue_radius` |
+
+Taken together it is one break instead of three, and it is the right
+moment to take the next one too: if you are adding a column, look at
+what else has been deferred first.
 
 The consequence worth remembering when reading a slice note: `#59`'s
 `btm_requests` and anything else that adds only a *table* rides the

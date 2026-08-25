@@ -48,7 +48,7 @@
  * file fails at schema application with a confusing SQL error instead
  * of the clear version message. Bumped retroactively; v1 files are
  * refused with an explanation. */
-#define DB_SCHEMA_VERSION 3
+#define DB_SCHEMA_VERSION 4
 
 /* Retention defaults. See db_set_retain_days / db_set_max_mb. */
 #define DB_DEFAULT_RETAIN_DAYS 30

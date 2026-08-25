@@ -124,10 +124,13 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(devices.last_seen,excluded.last_seen)",
 [ST_PNL_CLIENT] =
     "INSERT INTO pnl_clients (mac,mac_random,probe_count,os_fp,phy,"
-    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    "phy_confirmed,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
     " ON CONFLICT(mac) DO UPDATE SET"
     "  mac_random=excluded.mac_random, probe_count=excluded.probe_count,"
     "  os_fp=excluded.os_fp, phy=excluded.phy,"
+    /* MAX, not overwrite: corroboration is a fact about the device that
+     * a later probe-only observation does not retract (#60). */
+    "  phy_confirmed=MAX(pnl_clients.phy_confirmed,excluded.phy_confirmed),"
     "  first_seen=MIN(pnl_clients.first_seen,excluded.first_seen),"
     "  last_seen=MAX(pnl_clients.last_seen,excluded.last_seen)",
 [ST_PNL_SSID] =
@@ -153,9 +156,9 @@ static const char *const SQL[ST_COUNT] = {
     "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,beacon_ms,"
     "pairwise,group_ciph,akm,mfp,vendor,has_wps,wps_state,wps_locked,phy,"
     "revealed,frame_count,has_qbss,qbss_stations,qbss_chan_util,"
-    "first_seen,last_seen)"
+    "downgrade_flags,akm_bits,first_seen,last_seen)"
     " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,"
-    "?18,?19,?20,?21,?22)"
+    "?18,?19,?20,?21,?22,?23,?24)"
     " ON CONFLICT(bssid) DO UPDATE SET"
     "  ssid=excluded.ssid, signal_dbm=excluded.signal_dbm,"
     "  channel=excluded.channel, enc=excluded.enc,"
@@ -167,6 +170,11 @@ static const char *const SQL[ST_COUNT] = {
     "  frame_count=excluded.frame_count, has_qbss=excluded.has_qbss,"
     "  qbss_stations=excluded.qbss_stations,"
     "  qbss_chan_util=excluded.qbss_chan_util,"
+    /* OR, not overwrite: an AP that offered a downgrade lane and later
+     * stopped still offered it, and that is what history is for. Same
+     * reasoning as assoc_reqs.downgrade_flags. */
+    "  downgrade_flags=(beacon_aps.downgrade_flags|excluded.downgrade_flags),"
+    "  akm_bits=(beacon_aps.akm_bits|excluded.akm_bits),"
     "  first_seen=MIN(beacon_aps.first_seen,excluded.first_seen),"
     "  last_seen=MAX(beacon_aps.last_seen,excluded.last_seen)",
 [ST_BEACON_SSID] =
@@ -543,14 +551,26 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(karma_candidates.last_seen,excluded.last_seen)",
 [ST_ROGUE_RADIUS] =
     "INSERT INTO rogue_radius (bssid,eap_types_seen,weak_method,"
-    "identity_leaks,last_identity,first_seen,last_seen)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    "identity_leaks,last_identity,nocert_sessions,nocert_no_hello,"
+    "last_nocert_sta,last_nocert_ts,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
     " ON CONFLICT(bssid) DO UPDATE SET"
     /* Offered EAP methods accumulate — an AP that once offered MD5
      * offered it, whatever it advertises on the next handshake. */
     "  eap_types_seen=(rogue_radius.eap_types_seen | excluded.eap_types_seen),"
     "  weak_method=MAX(rogue_radius.weak_method,excluded.weak_method),"
     "  identity_leaks=MAX(rogue_radius.identity_leaks,excluded.identity_leaks),"
+    /* MAX for the same reason every other counter here uses it: the
+     * in-memory table is bounded and LRU-evicted, so a re-created row
+     * restarts at zero and taking `excluded` would erase the sessions
+     * that justified an alert still in the alerts table (#65). */
+    "  nocert_sessions=MAX(rogue_radius.nocert_sessions,"
+    "                      excluded.nocert_sessions),"
+    "  nocert_no_hello=MAX(rogue_radius.nocert_no_hello,"
+    "                      excluded.nocert_no_hello),"
+    "  last_nocert_sta=excluded.last_nocert_sta,"
+    "  last_nocert_ts=MAX(rogue_radius.last_nocert_ts,"
+    "                     excluded.last_nocert_ts),"
     "  last_identity=excluded.last_identity,"
     "  first_seen=MIN(rogue_radius.first_seen,excluded.first_seen),"
     "  last_seen=MAX(rogue_radius.last_seen,excluded.last_seen)",
@@ -749,8 +769,9 @@ static void write_pnl(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int  (st, 3, p->probe_count);
         bind_txt(st, 4, p->os_fp);
         bind_txt(st, 5, p->phy);
-        sqlite3_bind_int64(st, 6, (sqlite3_int64)first);
-        sqlite3_bind_int64(st, 7, (sqlite3_int64)last);
+        sqlite3_bind_int  (st, 6, p->phy_confirmed ? 1 : 0);
+        sqlite3_bind_int64(st, 7, (sqlite3_int64)first);
+        sqlite3_bind_int64(st, 8, (sqlite3_int64)last);
         step_reset(ST_PNL_CLIENT);
 
         int n = p->ssid_count;
@@ -813,8 +834,10 @@ static void write_beacons(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int(st, 18, b->has_qbss ? 1 : 0);
         sqlite3_bind_int(st, 19, b->qbss_stations);
         sqlite3_bind_int(st, 20, b->qbss_chan_util);
-        sqlite3_bind_int64(st, 21, (sqlite3_int64)last);
-        sqlite3_bind_int64(st, 22, (sqlite3_int64)last);
+        sqlite3_bind_int  (st, 21, b->downgrade_flags);
+        sqlite3_bind_int64(st, 22, (sqlite3_int64)b->akm_bits);
+        sqlite3_bind_int64(st, 23, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 24, (sqlite3_int64)last);
         step_reset(ST_BEACON_AP);
 
         int n = b->ssid_history_n;
@@ -1397,8 +1420,16 @@ static void write_detector_evidence(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int(st, 4, r->identity_leaks);
         /* A leaked EAP identity is a username, not a credential. */
         bind_txt(st, 5, r->last_identity);
-        sqlite3_bind_int64(st, 6, (sqlite3_int64)(r->first_seen ? r->first_seen : now));
-        sqlite3_bind_int64(st, 7, (sqlite3_int64)(r->last_seen  ? r->last_seen  : now));
+        sqlite3_bind_int(st, 6, r->nocert_sessions);
+        sqlite3_bind_int(st, 7, r->nocert_no_hello);
+        /* The client that accepted no server. A MAC, not key material —
+         * the same class of identifier as last_identity above. */
+        char nocert_sta[18];
+        mac_str(r->last_nocert_sta, nocert_sta);
+        bind_txt(st, 8, r->nocert_sessions > 0 ? nocert_sta : "");
+        sqlite3_bind_int64(st, 9, (sqlite3_int64)r->last_nocert_ts);
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)(r->first_seen ? r->first_seen : now));
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)(r->last_seen  ? r->last_seen  : now));
         step_reset(ST_ROGUE_RADIUS);
     }
 }

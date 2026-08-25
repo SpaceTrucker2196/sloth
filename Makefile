@@ -476,8 +476,14 @@ TEST_BIN = sloth_test
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-$(TEST_BIN): $(TEST_SRCS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $^ -lm -lpthread -lsqlite3
+# Headers are dependencies too. Without them a header-only change — a
+# new struct field, a bumped constant — leaves the test binary stale,
+# and the suite reports on code that is no longer there. That is worse
+# than a slow build: it looks like a passing test.
+TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h                        src/platform/*.h tests/*.h)
+
+$(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,

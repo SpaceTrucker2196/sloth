@@ -1791,6 +1791,121 @@ static void test_btm_requests_in_finding_retention_tier(void) {
     unlink(db_path);
 }
 
+
+/* ── Schema v4: the batched column bump ──────────────────── */
+
+static void test_schema_version_is_four(void) {
+    fresh_db();
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "4");
+    db_close();
+    unlink(db_path);
+}
+
+static void test_v4_columns_exist(void) {
+    /* Four columns deferred across #60, #62 and #65, taken as one bump
+     * rather than three separate breaks or three permanent gaps. */
+    fresh_db();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('pnl_clients')"
+                    " WHERE name='phy_confirmed'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('beacon_aps')"
+                    " WHERE name='downgrade_flags'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('rogue_radius')"
+                    " WHERE name IN ('nocert_sessions','nocert_no_hello',"
+                    "                'last_nocert_sta','last_nocert_ts')"), 4);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_downgrade_flags_accumulate_on_the_ap(void) {
+    /* An AP that offered a downgrade lane and later stopped still
+     * offered it. Overwriting would let a posture disappear from
+     * history the moment the AP was reconfigured — which is exactly
+     * when an investigator wants to see it. */
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *a = &s.beacon_aps[s.beacon_count++];
+    memset(a, 0, sizeof(*a));
+    a->bssid[5] = 0x77;
+    snprintf(a->enc, sizeof(a->enc), "WPA3");
+    a->downgrade_flags = WPA_DG_TRANSITION_SAE_PSK;
+    a->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+
+    a->downgrade_flags = WPA_DG_MFP_OPTIONAL;   /* a different lane later */
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT downgrade_flags FROM beacon_aps"),
+              WPA_DG_TRANSITION_SAE_PSK | WPA_DG_MFP_OPTIONAL);
+
+    a->downgrade_flags = 0;                     /* reconfigured clean */
+    db_tick(&s, 1700000200);
+    ASSERT_EQ(q_int("SELECT downgrade_flags FROM beacon_aps"),
+              WPA_DG_TRANSITION_SAE_PSK | WPA_DG_MFP_OPTIONAL);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_phy_confirmed_never_regresses(void) {
+    /* Corroboration is a fact about the device. A later probe-only
+     * observation does not retract it. */
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    pnl_client_t *p = &s.pnl_clients[s.pnl_count++];
+    memset(p, 0, sizeof(*p));
+    p->mac[5] = 0x33;
+    snprintf(p->phy, sizeof(p->phy), "Wi-Fi 6");
+    p->phy_confirmed = 1;
+    p->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+
+    p->phy_confirmed = 0;
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_nocert_counters_never_regress(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    rogue_radius_ap_t *r = &s.rogue_radius[s.rogue_radius_count++];
+    memset(r, 0, sizeof(*r));
+    r->bssid[5] = 0x44;
+    r->nocert_sessions = 4;
+    r->nocert_no_hello = 2;
+    r->last_nocert_sta[0] = 0x12; r->last_nocert_sta[5] = 0x66;
+    r->last_nocert_ts = 1700000000;
+    r->last_seen = 1700000000;
+    db_tick(&s, 1700000000);
+
+    /* The in-memory table is LRU-evicted; a re-created row restarts at
+     * zero, and taking `excluded` would erase the sessions that
+     * justified an alert still sitting in the alerts table. */
+    r->nocert_sessions = 1;
+    r->nocert_no_hello = 0;
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT nocert_sessions FROM rogue_radius"), 4);
+    ASSERT_EQ(q_int("SELECT nocert_no_hello FROM rogue_radius"), 2);
+    char sta[24];
+    q_text("SELECT last_nocert_sta FROM rogue_radius", sta, sizeof(sta));
+    ASSERT_EQ(strcmp(sta, "12:00:00:00:00:66"), 0);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_v4_columns_carry_no_key_material(void) {
+    /* The #42 guardrail sweeps the live schema, so it picks these up
+     * without modification — asserted explicitly because "the guardrail
+     * covers it" is a claim worth checking rather than assuming. */
+    fresh_db();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('rogue_radius')"
+                    " WHERE name LIKE '%nonce%' OR name LIKE '%mic%'"
+                    "    OR name LIKE '%pmkid%' OR name LIKE '%passw%'"), 0);
+    db_close();
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -1819,6 +1934,12 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
+    RUN_TEST(test_schema_version_is_four);
+    RUN_TEST(test_v4_columns_exist);
+    RUN_TEST(test_downgrade_flags_accumulate_on_the_ap);
+    RUN_TEST(test_phy_confirmed_never_regresses);
+    RUN_TEST(test_nocert_counters_never_regress);
+    RUN_TEST(test_v4_columns_carry_no_key_material);
     RUN_TEST(test_due_respects_interval);
 
     TEST_SUITE("db: entity upserts");

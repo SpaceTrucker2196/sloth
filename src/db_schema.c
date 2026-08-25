@@ -66,6 +66,10 @@ static const char SCHEMA_SQL[] =
     "  probe_count INTEGER NOT NULL DEFAULT 0,"
     "  os_fp       TEXT,"
     "  phy         TEXT,"
+    /* 1 when an association request corroborated the tier rather than
+     * it being inferred from probes alone (#60). Without it a stored
+     * tier is a floor of unknown tightness. */
+    "  phy_confirmed INTEGER NOT NULL DEFAULT 0,"
     "  first_seen  INTEGER NOT NULL,"
     "  last_seen   INTEGER NOT NULL"
     ");\n"
@@ -116,6 +120,12 @@ static const char SCHEMA_SQL[] =
     "  wps_state   INTEGER,"
     "  wps_locked  INTEGER,"
     "  phy         TEXT,"
+    /* WPA_DG_* bits — the weaker lanes this AP advertises beside its
+     * primary one (#62). Historical posture is the point: an operator
+     * asking "was this AP in transition mode in March" needs the answer
+     * to have been recorded in March. */
+    "  downgrade_flags INTEGER NOT NULL DEFAULT 0,"
+    "  akm_bits    INTEGER NOT NULL DEFAULT 0,"
     "  revealed    INTEGER NOT NULL DEFAULT 0,"
     "  frame_count INTEGER NOT NULL DEFAULT 0,"
     "  has_qbss    INTEGER NOT NULL DEFAULT 0,"
@@ -597,6 +607,14 @@ static const char SCHEMA_SQL[] =
     "  weak_method    INTEGER NOT NULL DEFAULT 0,"
     "  identity_leaks INTEGER NOT NULL DEFAULT 0,"
     "  last_identity  TEXT,"
+    /* CVE-2023-52160 evidence (#65). The alert persists in `alerts`
+     * either way; this is the per-AP counter behind it, so a later
+     * reader can ask "how many clients accepted no server here" rather
+     * than counting alert episodes. */
+    "  nocert_sessions INTEGER NOT NULL DEFAULT 0,"
+    "  nocert_no_hello INTEGER NOT NULL DEFAULT 0,"
+    "  last_nocert_sta TEXT,"
+    "  last_nocert_ts  INTEGER,"
     "  first_seen INTEGER NOT NULL,"
     "  last_seen  INTEGER NOT NULL"
     ");\n"
