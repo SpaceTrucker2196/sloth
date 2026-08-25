@@ -91,3 +91,4 @@
 | fe623f3 | 2026-08-25T15:12:26Z | claude-opus-5 | 30 | 22407 | 7832410 | 593419 | 10.4107 | #66 — HT/VHT/HE/EHT operation IE decode |
 | f0a67ef | 2026-08-25T15:19:28Z | claude-opus-5 | 24 | 21725 | 7056763 | 23818 | 4.3098 | #61 — RRM survey abuse detector |
 | 93d1dd0 | 2026-08-25T15:27:42Z | claude-opus-5 | 36 | 25848 | 11069137 | 29235 | 6.4733 | #64 — control-frame counters + RTS flood |
+| 5ab6dda | 2026-08-25T15:35:16Z | claude-opus-5 | 30 | 21750 | 9572055 | 24609 | 5.5760 | #70 — Bl0ck / Block-Ack paralysis detection |
