@@ -934,6 +934,16 @@ typedef struct {
      * 0 = none pending. The [b] view shows it as CSA->N. */
     uint8_t  pending_csa_channel;
     uint8_t  pending_csa_count;
+    /* Operating geometry from the operation IEs (#66). primary_channel
+     * is authoritative where the capability-derived `channel` above is
+     * best-effort; channel_source names which IE supplied it so a wrong
+     * channel is attributable rather than mysterious. */
+    uint8_t  primary_channel;
+    uint8_t  channel_source;      /* sloth_ch_source_t */
+    uint16_t operating_width;     /* sloth_ch_width_t; 0 = not decoded */
+    uint8_t  secondary_offset;    /* HT convention: 0 none, 1 above, 3 below */
+    uint8_t  center_seg0;         /* channel centre frequency segment 0 */
+    uint8_t  center_seg1;         /* segment 1; non-zero only for 80+80/160 */
     /* Vendor-IE fingerprint — best-guess AP vendor from tag-221 OUIs
      * (Apple AirPort, Cisco, Mikrotik, Ubiquiti, etc.) and a WPS flag.
      * WPS-enabled APs are operationally interesting because PixieDust
@@ -1292,6 +1302,39 @@ typedef struct {
  * device — useful both as a fingerprint and as a posture signal. */
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
+
+/* ── Operating channel width and primary channel (#66) ─────
+ *
+ * The capability IEs say what a radio *can* do; the operation IEs say
+ * what this BSS is *doing*. Until they were decoded sloth treated every
+ * AP as 20 MHz, which makes any airtime or occupancy answer wrong by up
+ * to a factor of sixteen.
+ *
+ * The other half is the durable 6 GHz fix. The beacon channel has come
+ * from the DS Parameter Set (tag 3), which many 6 GHz and HE APs simply
+ * omit — HE Operation's 6 GHz Operation Info is the authoritative
+ * source, and EHT Operation carries the equivalent for 320 MHz. */
+typedef enum {
+    CH_WIDTH_UNKNOWN =    0,
+    CH_WIDTH_20      =   20,
+    CH_WIDTH_40      =   40,
+    CH_WIDTH_80      =   80,
+    CH_WIDTH_160     =  160,
+    CH_WIDTH_320     =  320,
+    CH_WIDTH_80P80   = 8080,   /* 80+80 non-contiguous */
+} sloth_ch_width_t;
+
+/* Where the primary channel number came from. A wrong channel is
+ * otherwise unattributable, and the sources genuinely disagree: DS
+ * Param is absent on much 6 GHz gear, and radiotap reports where the
+ * *radio* was, not what the AP said. */
+typedef enum {
+    CH_SRC_UNKNOWN  = 0,
+    CH_SRC_DS_PARAM = 1,   /* tag 3 */
+    CH_SRC_HT_OPER  = 2,   /* tag 61 */
+    CH_SRC_HE_6GHZ  = 3,   /* tag 255 ext 36, 6 GHz Operation Info */
+    CH_SRC_EHT_OPER = 4,   /* tag 255 ext 106 */
+} sloth_ch_source_t;
 
 /* ── Channel Switch Announcement (#63) ─────────────────────
  *

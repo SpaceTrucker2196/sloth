@@ -1611,6 +1611,201 @@ static void test_ies_transition_mode_bitmap_has_both_lanes(void) {
     ASSERT_EQ(rsn.mfp, 1);                        /* capable, not required */
 }
 
+
+/* ── Operation-IE decode (#66) ───────────────────────────── */
+
+static void test_ht_operation_20mhz(void) {
+    /* STA Channel Width set but no secondary offset. "May use more than
+     * 20" is not the same as "is using 40" — reading the width bit
+     * alone reports 40 MHz for a 20 MHz BSS. */
+    uint8_t ies[64];
+    uint8_t ht[2] = { 6, 0x04 };          /* primary 6, width=1, offset=0 */
+    int off = ie_put(ies, 0, 61, ht, 2);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_20);
+    ASSERT_EQ(rsn.oper_primary_channel, 6);
+    ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HT_OPER);
+}
+
+static void test_ht_operation_40mhz_needs_both(void) {
+    uint8_t ies[64];
+    uint8_t ht[2] = { 6, 0x05 };          /* width=1, offset=1 (above) */
+    int off = ie_put(ies, 0, 61, ht, 2);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
+    ASSERT_EQ(rsn.oper_secondary_offset, 1);
+}
+
+static void test_vht_operation_80mhz(void) {
+    uint8_t ies[64];
+    uint8_t vht[3] = { 1, 42, 0 };        /* width=1, CCFS0=42, no CCFS1 */
+    int off = ie_put(ies, 0, 192, vht, 3);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_80);
+    ASSERT_EQ(rsn.oper_center_seg0, 42);
+}
+
+static void test_vht_operation_160_vs_80p80(void) {
+    /* Two 80 MHz segments 8 apart are one contiguous 160; further
+     * apart is genuinely 80+80. Reporting 80+80 as 160 would overstate
+     * contiguous spectrum by a factor of two. */
+    uint8_t ies[64];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+
+    uint8_t contig[3] = { 1, 50, 58 };    /* gap 8 */
+    int off = ie_put(ies, 0, 192, contig, 3);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_160);
+
+    uint8_t split[3] = { 1, 42, 155 };    /* far apart */
+    off = ie_put(ies, 0, 192, split, 3);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_80P80);
+}
+
+static void test_vht_width_zero_defers_to_ht(void) {
+    /* VHT width 0 means "defer to HT". Overwriting the HT decision with
+     * it would narrow every 40 MHz BSS that also carries a VHT IE. */
+    uint8_t ies[64];
+    uint8_t ht[2]  = { 36, 0x05 };
+    uint8_t vht[3] = { 0, 0, 0 };
+    int off = ie_put(ies, 0, 61, ht, 2);
+    off = ie_put(ies, off, 192, vht, 3);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
+}
+
+/* HE Operation: ext(1) params(3) colour(1) basic-MCS(2) then optionals. */
+static int put_he_oper(uint8_t *buf, int off, int with_vht, int with_cohost,
+                       int with_6ghz, uint8_t prim, uint8_t control,
+                       uint8_t ccfs0, uint8_t ccfs1) {
+    uint8_t body[32];
+    int b = 0;
+    body[b++] = 36;                                   /* ext ID */
+    body[b++] = 0x00;
+    body[b++] = (uint8_t)((with_vht ? 0x40 : 0) | (with_cohost ? 0x80 : 0));
+    body[b++] = (uint8_t)(with_6ghz ? 0x02 : 0x00);
+    body[b++] = 0x00;                                 /* BSS colour */
+    body[b++] = 0x00; body[b++] = 0x00;               /* basic MCS */
+    if (with_vht)    { body[b++] = 0; body[b++] = 0; body[b++] = 0; }
+    if (with_cohost) { body[b++] = 0; }
+    if (with_6ghz) {
+        body[b++] = prim; body[b++] = control;
+        body[b++] = ccfs0; body[b++] = ccfs1; body[b++] = 0;
+    }
+    return ie_put(buf, off, 255, body, b);
+}
+
+static void test_he_6ghz_supplies_the_primary_channel(void) {
+    /* The durable 6 GHz fix: much 6 GHz gear omits the DS Parameter
+     * Set entirely, so this is the only channel there is. */
+    uint8_t ies[96];
+    int off = put_he_oper(ies, 0, 0, 0, 1, 37, 0x02, 39, 0);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_primary_channel, 37);
+    ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HE_6GHZ);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_80);
+    /* And it becomes the reported channel, since nothing else named one. */
+    ASSERT_EQ(ch, 37);
+}
+
+static void test_he_optional_field_order_matters(void) {
+    /* The three optional fields appear in a fixed order. Skipping the
+     * wrong number of bytes reads the 6 GHz block from the wrong
+     * offset, which yields a plausible channel rather than a failure —
+     * so both preceding optionals are exercised here. */
+    uint8_t ies[96];
+    int off = put_he_oper(ies, 0, 1 /* VHT op */, 1 /* co-host */, 1,
+                          53, 0x01, 55, 0);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_primary_channel, 53);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
+}
+
+static void test_he_operation_channel_beats_ds_param(void) {
+    /* Both present and disagreeing. The operation IE is what the BSS is
+     * actually on; IE order in a beacon is not guaranteed, so the DS
+     * Param appears *after* here to prove the resolution is not
+     * order-dependent. */
+    uint8_t ies[96];
+    int off = put_he_oper(ies, 0, 0, 0, 1, 37, 0x00, 37, 0);
+    uint8_t ds[1] = { 11 };
+    off = ie_put(ies, off, 3, ds, 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(ch, 37);
+    ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HE_6GHZ);
+}
+
+static void test_ds_param_is_the_source_when_alone(void) {
+    uint8_t ies[32];
+    uint8_t ds[1] = { 11 };
+    int off = ie_put(ies, 0, 3, ds, 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(ch, 11);
+    ASSERT_EQ(rsn.oper_channel_source, CH_SRC_DS_PARAM);
+}
+
+static void test_eht_operation_320mhz(void) {
+    uint8_t ies[64];
+    uint8_t body[10];
+    int b = 0;
+    body[b++] = 106;                      /* ext ID */
+    body[b++] = 0x01;                     /* params: info present */
+    body[b++] = 0; body[b++] = 0; body[b++] = 0; body[b++] = 0;  /* MCS */
+    body[b++] = 0x04;                     /* control: width 4 = 320 */
+    body[b++] = 31; body[b++] = 0;
+    int off = ie_put(ies, 0, 255, body, b);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_320);
+    ASSERT_EQ(rsn.oper_center_seg0, 31);
+}
+
+static void test_no_operation_ie_leaves_width_unknown(void) {
+    /* Absence must be distinguishable from 20 MHz — an AP we have not
+     * decoded is not an AP we know is narrow. */
+    uint8_t ies[32];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"x", 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
+    ASSERT_EQ(rsn.oper_channel_source, CH_SRC_UNKNOWN);
+}
+
+static void test_truncated_operation_ies_are_safe(void) {
+    /* Each operation IE one byte shorter than its own minimum. */
+    uint8_t ies[64];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    uint8_t one[1] = { 6 };
+    int off = ie_put(ies, 0, 61, one, 1);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
+    uint8_t two[2] = { 1, 42 };
+    off = ie_put(ies, 0, 192, two, 2);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -1706,4 +1901,17 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_ies_owe_transition_element_flagged);
     RUN_TEST(test_ies_other_wfa_vendor_types_are_not_owe);
     RUN_TEST(test_ies_transition_mode_bitmap_has_both_lanes);
+    TEST_SUITE("HT/VHT/HE/EHT operation IEs (#66)");
+    RUN_TEST(test_ht_operation_20mhz);
+    RUN_TEST(test_ht_operation_40mhz_needs_both);
+    RUN_TEST(test_vht_operation_80mhz);
+    RUN_TEST(test_vht_operation_160_vs_80p80);
+    RUN_TEST(test_vht_width_zero_defers_to_ht);
+    RUN_TEST(test_he_6ghz_supplies_the_primary_channel);
+    RUN_TEST(test_he_optional_field_order_matters);
+    RUN_TEST(test_he_operation_channel_beats_ds_param);
+    RUN_TEST(test_ds_param_is_the_source_when_alone);
+    RUN_TEST(test_eht_operation_320mhz);
+    RUN_TEST(test_no_operation_ie_leaves_width_unknown);
+    RUN_TEST(test_truncated_operation_ies_are_safe);
 }

@@ -77,6 +77,15 @@ typedef struct {
     int  csa_new_op_class;   /* 0 when only tag 37 was present */
     int  csa_switch_mode;
     int  csa_switch_count;
+    /* Operation-IE decode (#66). oper_width is a sloth_ch_width_t;
+     * 0 means no operation IE was present and the caller should keep
+     * whatever it had. */
+    int  oper_primary_channel;
+    int  oper_channel_source;   /* sloth_ch_source_t */
+    int  oper_width;
+    int  oper_secondary_offset;
+    int  oper_center_seg0;
+    int  oper_center_seg1;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151

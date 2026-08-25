@@ -255,12 +255,12 @@ void view_beacon_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
            "SSID", "BSSID", "Sig", "Ch", "Enc",
            "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
            "----------------------", "-----------------",
-           "----", "---", "-----", "---------", "--------",
+           "----", "-------", "-----", "---------", "--------",
            "----------", "---", "---------", "--------", "----");
     tui_normal();
 
@@ -330,6 +330,18 @@ void view_beacon_draw(const sloth_state_t *s) {
          * downgrade lane the column names it — that is the finding, and
          * "cap" alone never conveyed it. With no downgrade the column
          * falls back to the MFP state it always showed. */
+        /* Channel with its operating width (#66): "36/80" is a very
+         * different amount of spectrum from "36", and sloth treated
+         * every AP as 20 MHz until the operation IEs were decoded. */
+        char ch_buf[10];
+        if (ap->operating_width == CH_WIDTH_80P80)
+            snprintf(ch_buf, sizeof(ch_buf), "%d/80+", ap->channel);
+        else if (ap->operating_width)
+            snprintf(ch_buf, sizeof(ch_buf), "%d/%u", ap->channel,
+                     (unsigned)ap->operating_width);
+        else
+            snprintf(ch_buf, sizeof(ch_buf), "%d", ap->channel);
+
         const char *dg_s  = wifi_downgrade_column(ap->downgrade_flags);
         const char *mfp_s = dg_s ? dg_s
                           : (ap->mfp == 2) ? "REQ"
@@ -352,8 +364,8 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
-                   ssid, bssid_str(ap->bssid), sig_buf, ap->channel,
+            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
+                   ssid, bssid_str(ap->bssid), sig_buf, ch_buf,
                    ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s, age_buf);
             tui_reset();
         } else {
@@ -370,7 +382,7 @@ void view_beacon_draw(const sloth_state_t *s) {
             TPRINT("  %4s", sig_buf);
 
             tui_normal();
-            TPRINT("  %3d", ap->channel);
+            TPRINT("  %-7s", ch_buf);
 
             /* enc color: OPEN/WEP dim, WPA/WPA2/WPA3 normal/bright */
             if (strcmp(ap->enc, "OPEN") == 0 || strcmp(ap->enc, "WEP") == 0)

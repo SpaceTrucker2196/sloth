@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Nine are open** (`#61`, `#64`, `#66`–`#72`),
+~~**No open GitHub issues.**~~ **Eight are open** (`#61`, `#64`, `#67`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -178,16 +178,17 @@ dispatch on all of them. Verified absent:
 
 ### B2. Information-element depth
 
-- **▲ HT / VHT / HE / EHT *operation* element decode.** Today these are
-  presence flags feeding PHY-tier labelling; the operation elements are
-  not decoded. They yield channel width (20/40/80/160/320 MHz),
-  primary/secondary channel and the real MCS ceiling — needed for a
-  spectrum-occupancy picture, for spotting mis-width and overlap, and as
-  the **durable fix for 6 GHz beacon channel**: the frequency map is now
-  correct, but beacon channel still comes from the DS Param IE (tag 3),
-  which many 6 GHz/HE APs omit.
-  *Check: `grep -cE 'he_oper|vht_oper|chan_width' src/beacon_snoop.c` → 0.*
-- **◆ Country / operating-class / power-constraint / TPC / DFS / CSA.**
+- ~~**▲ HT / VHT / HE / EHT *operation* element decode.**~~ ✅ landed
+  (`#66`). Tags 61 / 192 / 255-ext-36 / 255-ext-106 yield channel width
+  (20/40/80/160/320 and non-contiguous 80+80), primary/secondary
+  channel, and the **durable 6 GHz beacon-channel fix** — HE Operation's
+  6 GHz Operation Info now outranks the DS Param IE, which much 6 GHz
+  gear omits entirely. `channel_source` records which IE supplied the
+  number so a wrong channel is attributable. The MCS ceiling is *not*
+  decoded: the basic-MCS maps are parsed past but not stored, since
+  nothing consumes them yet.
+- **◆ Country / operating-class / power-constraint / TPC / DFS.** (CSA
+  itself landed with `#63`.)
   Not parsed. Enables regulatory cross-checks (an AP advertising a
   country or channel it should not), DFS/radar observation, and
   Channel-Switch-Announcement tracking — CSA is both a normal roaming
@@ -331,9 +332,7 @@ effort:
 5. ~~**`#62` PMF/WPA3 downgrade.**~~ ✅ landed 2026-08-25.
 6. ~~**`#65` PEAP no-server-cert.**~~ ✅ landed 2026-08-25.
 7. ~~**`#63` CSA abuse.**~~ ✅ landed 2026-08-25.
-8. **`#66` HT/VHT/HE/EHT operation decode.** Unlocks real channel width,
-   completes the durable 6 GHz beacon-channel fix, and is the data model
-   the airtime view needs.
+8. ~~**`#66` HT/VHT/HE/EHT operation decode.**~~ ✅ landed 2026-08-25.
 9. **`#61` RRM**, then **`#64`** control-frame counters → the B3
    channel-utilisation view.
 

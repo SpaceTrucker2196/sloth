@@ -68,6 +68,41 @@ depend on the AP having offered the weak lane in the first place.
 - Beacon interval of 100 ms (= 102.4 ms, the standard).
 - WPA2 / WPA3 encryption.
 
+## Channel width (#66)
+
+The `Ch` column shows the primary channel and the **operating width**:
+`36/80` is a very different amount of spectrum from `36`. `80+`
+means 80+80 MHz non-contiguous.
+
+Until the operation IEs were decoded sloth treated every AP as 20 MHz,
+which makes any airtime or occupancy answer wrong by up to a factor of
+sixteen. Width comes from HT Operation (tag 61), VHT Operation (tag
+192), HE Operation (255 ext 36) and EHT Operation (255 ext 106) — the
+*operation* IEs, which say what the BSS is doing, as opposed to the
+*capability* IEs, which say what the radio could do.
+
+Two distinctions the parser is careful about, because both are easy to
+get wrong in the direction that overstates:
+
+- **40 MHz needs both** the HT width bit *and* a non-zero secondary
+  channel offset. The width bit alone means "may use more than 20".
+- **160 MHz and 80+80 are different.** Two 80 MHz segments whose centres
+  are 8 apart are one contiguous 160; further apart is genuinely
+  non-contiguous. Reporting the second as the first overstates
+  contiguous spectrum by a factor of two.
+
+A blank width means no operation IE was decoded — which is not the same
+as 20 MHz, and the JSONL `operating_width` is `0` rather than `20` for
+exactly that reason.
+
+### The durable 6 GHz channel fix
+
+The beacon channel used to come from the DS Parameter Set (tag 3),
+which **much 6 GHz and HE gear omits entirely**. HE Operation's 6 GHz
+Operation Info carries the authoritative primary channel, and it now
+wins when both are present. The JSONL record carries `channel_source`
+so a wrong channel is attributable rather than mysterious.
+
 ## Pending channel switches (#63)
 
 When an AP is announcing a **Channel Switch**, the `PHY` cell is

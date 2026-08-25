@@ -189,14 +189,116 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             rsn_out->qbss_chan_util = ie[4];
         } else if (tag == 45)  { has_ht  = 1;
             if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HT_PRESENT;
+        } else if (tag == 61 && tln >= 2 && rsn_out) {
+            /* HT Operation (§9.4.2.56): Primary Channel(1), then the
+             * HT Operation Information byte —
+             *   bits 0-1  Secondary Channel Offset (1 above, 3 below)
+             *   bit  2    STA Channel Width (0 = 20 only, 1 = any)
+             *
+             * The pair is what says 40 MHz: width alone means "may use
+             * more than 20", and only a non-zero secondary offset says
+             * where the other half is. Reading the width bit on its own
+             * reports 40 MHz for a 20 MHz BSS. */
+            rsn_out->oper_primary_channel = ie[2];
+            rsn_out->oper_channel_source  = CH_SRC_HT_OPER;
+            rsn_out->oper_secondary_offset = ie[3] & 0x03;
+            int any_width = (ie[3] >> 2) & 0x01;
+            rsn_out->oper_width =
+                (any_width && rsn_out->oper_secondary_offset) ? CH_WIDTH_40
+                                                              : CH_WIDTH_20;
         } else if (tag == 191) { has_vht = 1;
             if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_VHT_PRESENT;
+        } else if (tag == 192 && tln >= 3 && rsn_out) {
+            /* VHT Operation (§9.4.2.158): Channel Width(1), CCFS0(1),
+             * CCFS1(1). Width 0 means "defer to HT" — so it must not
+             * overwrite what tag 61 already decided. Width 1 is 80 MHz
+             * unless CCFS1 is present, which promotes it to 160 or
+             * 80+80 depending on how far apart the two centres are. */
+            uint8_t w = ie[2];
+            rsn_out->oper_center_seg0 = ie[3];
+            rsn_out->oper_center_seg1 = ie[4];
+            if (w == 1) {
+                if (ie[4] == 0) {
+                    rsn_out->oper_width = CH_WIDTH_80;
+                } else {
+                    int gap = ie[4] > ie[3] ? ie[4] - ie[3] : ie[3] - ie[4];
+                    /* Adjacent 80s (centres 8 apart) are one 160 MHz
+                     * channel; anything further is genuinely 80+80. */
+                    rsn_out->oper_width = (gap == 8) ? CH_WIDTH_160
+                                                     : CH_WIDTH_80P80;
+                }
+            } else if (w == 2) {
+                rsn_out->oper_width = CH_WIDTH_160;
+            } else if (w == 3) {
+                rsn_out->oper_width = CH_WIDTH_80P80;
+            }
         } else if (tag == 255 && tln >= 1) {
             uint8_t ext = ie[2];
             if (ext == 35)               { has_he  = 1;
                 if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HE_PRESENT;
             }
-            if (ext == 81 || ext == 108) has_eht = 1;
+            if (ext == 36 && tln >= 7 && rsn_out) {
+                /* HE Operation (§9.4.2.249). Fixed part after the ext
+                 * ID: HE Operation Parameters(3), BSS Color(1), Basic
+                 * MCS(2). Three optional fields follow, each present
+                 * only if its bit is set, and *in this order* — get the
+                 * order wrong and the 6 GHz block is read from the
+                 * wrong offset, which yields a plausible channel number
+                 * rather than an obvious failure. */
+                uint8_t p0 = ie[3], p1 = ie[4];
+                int vht_op_present  = (p1 & 0x40) != 0;   /* param bit 14 */
+                int cohost_present  = (p1 & 0x80) != 0;   /* bit 15       */
+                int sixghz_present  = (ie[5] & 0x02) != 0;/* bit 17       */
+                (void)p0;
+                int off = 3 + 3 + 1 + 2;      /* ext + params + colour + MCS */
+                if (vht_op_present) off += 3;
+                if (cohost_present) off += 1;
+                if (sixghz_present && off + 5 <= 2 + (int)tln) {
+                    /* 6 GHz Operation Info: Primary Channel(1),
+                     * Control(1), CCFS0(1), CCFS1(1), Min Rate(1).
+                     * This is the durable 6 GHz channel fix — much
+                     * 6 GHz gear omits the DS Parameter Set entirely. */
+                    rsn_out->oper_primary_channel = ie[off];
+                    rsn_out->oper_channel_source  = CH_SRC_HE_6GHZ;
+                    rsn_out->oper_center_seg0     = ie[off + 2];
+                    rsn_out->oper_center_seg1     = ie[off + 3];
+                    switch (ie[off + 1] & 0x03) {
+                    case 0: rsn_out->oper_width = CH_WIDTH_20;  break;
+                    case 1: rsn_out->oper_width = CH_WIDTH_40;  break;
+                    case 2: rsn_out->oper_width = CH_WIDTH_80;  break;
+                    case 3: rsn_out->oper_width =
+                                ie[off + 3] ? CH_WIDTH_160 : CH_WIDTH_80;
+                            break;
+                    default: break;
+                    }
+                }
+            }
+            if (ext == 106 && tln >= 6 && rsn_out) {
+                /* EHT Operation (§9.4.2.311): Params(1), Basic MCS(4),
+                 * then EHT Operation Information when params bit 0 is
+                 * set — Control(1), CCFS0(1), CCFS1(1). Control bits
+                 * 0-2 are the channel width, where 4 is 320 MHz. */
+                int info_present = (ie[3] & 0x01) != 0;
+                int off = 3 + 1 + 4;
+                if (info_present && off + 3 <= 2 + (int)tln) {
+                    int w = ie[off] & 0x07;
+                    rsn_out->oper_center_seg0 = ie[off + 1];
+                    rsn_out->oper_center_seg1 = ie[off + 2];
+                    switch (w) {
+                    case 0: rsn_out->oper_width = CH_WIDTH_20;  break;
+                    case 1: rsn_out->oper_width = CH_WIDTH_40;  break;
+                    case 2: rsn_out->oper_width = CH_WIDTH_80;  break;
+                    case 3: rsn_out->oper_width = CH_WIDTH_160; break;
+                    case 4: rsn_out->oper_width = CH_WIDTH_320; break;
+                    default: break;
+                    }
+                    /* Only claim the channel when nothing better did:
+                     * HE's 6 GHz block names a primary channel, EHT's
+                     * control field does not. */
+                    if (rsn_out->oper_channel_source == CH_SRC_UNKNOWN)
+                        rsn_out->oper_channel_source = CH_SRC_EHT_OPER;
+                }
+            }
 
         } else if (tag == 201 && tln >= 4 && rsn_out) {
             /* 802.11ax/be Reduced Neighbor Report (RNR).
@@ -298,8 +400,14 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             rsn_out->csa_new_channel  = ie[4];
             rsn_out->csa_switch_count = ie[5];
         } else if (tag == 3 && tln == 1) {
-            /* DS Parameter Set — channel number */
+            /* DS Parameter Set — channel number. Best-effort: much
+             * 6 GHz and HE gear omits it entirely, which is why the
+             * operation IEs above are the durable source (#66). */
             *channel_out = ie[2];
+            if (rsn_out && rsn_out->oper_channel_source == CH_SRC_UNKNOWN) {
+                rsn_out->oper_primary_channel = ie[2];
+                rsn_out->oper_channel_source  = CH_SRC_DS_PARAM;
+            }
 
         } else if (tag == 48 && tln >= 8) {
             /* RSN (WPA2/WPA3). Layout (after tag+len):
@@ -480,6 +588,16 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
     }
 
     if (rsn_out) {
+        /* An operation IE that named a primary channel outranks the DS
+         * Parameter Set — it is what the BSS is actually operating on,
+         * and on 6 GHz it is often the only source there is (#66). IE
+         * order in a beacon is not guaranteed, so this resolves after
+         * the walk rather than inside it. */
+        if (rsn_out->oper_channel_source != CH_SRC_UNKNOWN &&
+            rsn_out->oper_channel_source != CH_SRC_DS_PARAM &&
+            rsn_out->oper_primary_channel > 0)
+            *channel_out = rsn_out->oper_primary_channel;
+
         const char *p = has_eht ? "Wi-Fi 7"
                       : has_he  ? "Wi-Fi 6"
                       : has_vht ? "Wi-Fi 5"
@@ -631,6 +749,16 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                  * that omits the IE does not retract it. Matches how
                  * has_wps accumulates two lines below. */
                 if (rsn->has_wpa1)  g_aps[i].has_wpa1  = 1;
+        g_aps[i].primary_channel  = (uint8_t)rsn->oper_primary_channel;
+        g_aps[i].channel_source   = (uint8_t)rsn->oper_channel_source;
+        g_aps[i].secondary_offset = (uint8_t)rsn->oper_secondary_offset;
+        g_aps[i].center_seg0      = (uint8_t)rsn->oper_center_seg0;
+        g_aps[i].center_seg1      = (uint8_t)rsn->oper_center_seg1;
+        /* Width is upgrade-only within a record: a beacon that omits
+         * the VHT Operation IE should not silently narrow an AP we have
+         * already seen operating at 80 MHz. */
+        if (rsn->oper_width > g_aps[i].operating_width)
+            g_aps[i].operating_width = (uint16_t)rsn->oper_width;
                 if (rsn->owe_trans) g_aps[i].owe_trans = 1;
         /* A pending switch is live only while the AP keeps announcing
          * it. Clearing on a beacon without the IE is what makes the
@@ -736,6 +864,16 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].akm_bits      = rsn->akm_bits;
         g_aps[slot].pairwise_bits = rsn->pairwise_bits;
         g_aps[slot].has_wpa1      = rsn->has_wpa1 ? 1 : 0;
+        g_aps[slot].primary_channel  = (uint8_t)rsn->oper_primary_channel;
+        g_aps[slot].channel_source   = (uint8_t)rsn->oper_channel_source;
+        g_aps[slot].secondary_offset = (uint8_t)rsn->oper_secondary_offset;
+        g_aps[slot].center_seg0      = (uint8_t)rsn->oper_center_seg0;
+        g_aps[slot].center_seg1      = (uint8_t)rsn->oper_center_seg1;
+        /* Width is upgrade-only within a record: a beacon that omits
+         * the VHT Operation IE should not silently narrow an AP we have
+         * already seen operating at 80 MHz. */
+        if (rsn->oper_width > g_aps[slot].operating_width)
+            g_aps[slot].operating_width = (uint16_t)rsn->oper_width;
         g_aps[slot].owe_trans     = rsn->owe_trans ? 1 : 0;
         /* A pending switch is live only while the AP keeps announcing
          * it. Clearing on a beacon without the IE is what makes the

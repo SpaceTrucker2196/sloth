@@ -580,6 +580,14 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
          * AP advertises about itself. 0 for a clean posture. */
         kv_int(buf, LINEBUF, &off, "downgrade_flags", e->downgrade_flags);
         kv_int(buf, LINEBUF, &off, "akm_bits",   (long long)e->akm_bits);
+        /* Additive (#66): what the BSS is actually operating on, as
+         * distinct from what its radio can do. channel_source names
+         * which IE supplied the primary channel, so a wrong one is
+         * attributable — DS Param is absent on much 6 GHz gear. */
+        kv_int(buf, LINEBUF, &off, "operating_width",  e->operating_width);
+        kv_int(buf, LINEBUF, &off, "primary_channel",  e->primary_channel);
+        kv_int(buf, LINEBUF, &off, "channel_source",   e->channel_source);
+        kv_int(buf, LINEBUF, &off, "secondary_offset", e->secondary_offset);
         kv_str(buf, LINEBUF, &off, "vendor",     e->vendor);
         kv_int(buf, LINEBUF, &off, "has_wps",    e->has_wps ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "wps_state",  e->wps_state);
