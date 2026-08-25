@@ -783,12 +783,41 @@ typedef struct {
 /* ── HTTP request log ───────────────────────────────────── */
 #define MAX_HTTP_LOG 256
 
+/* Bounded response body (#71). 512 bytes covers every connectivity
+ * check sentinel with room to spare — Apple's is ~90, Microsoft's 22,
+ * Firefox's 8 — while a page large enough to matter is one we are not
+ * going to hold anyway. The bound exists so a large download cannot be
+ * buffered, not to be generous. */
+#define HTTP_RESP_BODY_MAX 512
+
 typedef struct {
     char   src[46];        /* source IP */
+    char   dst[46];        /* destination IP — the flow's other end */
+    uint16_t src_port;
+    uint16_t dst_port;
     char   method[10];     /* GET POST PUT etc */
     char   host[64];       /* Host header value */
     char   path[128];      /* request URI */
     char   user_agent[64]; /* User-Agent header, truncated */
+    /* ── Response side (#71) ──────────────────────────────
+     *
+     * is_response distinguishes a parsed response from a request; the
+     * two share this struct because they share a flow and pairing them
+     * is the point.
+     *
+     * body_complete is the field that matters most, and the reason this
+     * is not simply "capture the body". sloth does not reassemble TCP,
+     * so a body larger than the segment carrying the status line
+     * arrives truncated. A consumer doing a byte-exact comparison must
+     * be able to tell **"different" from "incomplete"** — a partial body
+     * that happens to differ is not evidence of anything. */
+    int      is_response;
+    uint16_t status;             /* 200, 204, 302 … 0 for a request */
+    int      content_length;     /* -1 when the header was absent */
+    int      chunked;            /* Transfer-Encoding: chunked */
+    int      body_complete;      /* the whole declared body is here */
+    int      resp_body_len;
+    char     resp_body[HTTP_RESP_BODY_MAX];
     /* JA4H client fingerprint (FoxIO spec): a(10) _ b(12) _ c(12) _ d(12)
      * = 49 chars + NUL. Section a encodes method/version/cookie flag/
      * referer flag/numheaders/lang; b hashes observed header names; c

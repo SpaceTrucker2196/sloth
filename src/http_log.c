@@ -89,6 +89,202 @@ static int cookie_name_cmp(const void *a, const void *b) {
     return strcmp((const char *)a, (const char *)b);
 }
 
+/* ── HTTP/1.x response parser (#71) ───────────────────────── */
+
+/* Case-insensitive header lookup within one header block. Returns a
+ * pointer to the value (past the colon and any spaces) and its length,
+ * or NULL. */
+static const char *hdr_find(const char *hdrs, int hlen,
+                            const char *name, int *vlen) {
+    int nlen = (int)strlen(name);
+    int i = 0;
+    while (i < hlen) {
+        int line_end = i;
+        while (line_end < hlen && hdrs[line_end] != '\r' &&
+               hdrs[line_end] != '\n') line_end++;
+        int colon = i;
+        while (colon < line_end && hdrs[colon] != ':') colon++;
+        if (colon < line_end && ci_eq(hdrs + i, colon - i, name, nlen)) {
+            int v = colon + 1;
+            while (v < line_end && (hdrs[v] == ' ' || hdrs[v] == '\t')) v++;
+            if (vlen) *vlen = line_end - v;
+            return hdrs + v;
+        }
+        i = line_end;
+        while (i < hlen && (hdrs[i] == '\r' || hdrs[i] == '\n')) i++;
+    }
+    return NULL;
+}
+
+int http_log_parse_response(const uint8_t *data, int len,
+                            const char *src_ip, http_log_entry_t *out)
+{
+    if (!data || !out || len < 12) return 0;
+    memset(out, 0, sizeof(*out));
+    out->content_length = -1;
+
+    const char *p = (const char *)data;
+    /* Status line: "HTTP/1.x SSS reason". Anything else is either a
+     * request, a continuation segment, or not HTTP — and a continuation
+     * is the important one to reject, because its first bytes are body
+     * data that can look like anything. */
+    if (strncmp(p, "HTTP/1.", 7) != 0) return 0;
+    if (p[7] != '0' && p[7] != '1') return 0;
+    if (p[8] != ' ') return 0;
+    if (p[9] < '0' || p[9] > '9' ||
+        p[10] < '0' || p[10] > '9' ||
+        p[11] < '0' || p[11] > '9') return 0;
+
+    out->is_response = 1;
+    out->status = (uint16_t)((p[9] - '0') * 100 + (p[10] - '0') * 10 +
+                             (p[11] - '0'));
+    snprintf(out->src, sizeof(out->src), "%s", src_ip ? src_ip : "");
+    out->ts = time(NULL);
+
+    /* Find the header/body boundary. Absent one, the headers ran past
+     * this segment and there is no body here to speak of. */
+    int body_off = -1;
+    for (int i = 0; i + 3 < len; i++) {
+        if (p[i] == '\r' && p[i+1] == '\n' &&
+            p[i+2] == '\r' && p[i+3] == '\n') { body_off = i + 4; break; }
+        /* Bare-LF header terminators exist in the wild, and a rogue
+         * portal has no reason to be well-behaved. */
+        if (p[i] == '\n' && p[i+1] == '\n') { body_off = i + 2; break; }
+    }
+
+    int hdr_len = (body_off > 0) ? body_off : len;
+    int vlen = 0;
+    const char *v = hdr_find(p, hdr_len, "content-length", &vlen);
+    if (v && vlen > 0) {
+        int n = 0, ok = 0;
+        for (int i = 0; i < vlen && v[i] >= '0' && v[i] <= '9'; i++) {
+            n = n * 10 + (v[i] - '0');
+            ok = 1;
+            if (n > 1 << 24) { ok = 0; break; }   /* absurd; treat as absent */
+        }
+        if (ok) out->content_length = n;
+    }
+    v = hdr_find(p, hdr_len, "transfer-encoding", &vlen);
+    if (v && vlen >= 7 && ci_eq(v, 7, "chunked", 7)) out->chunked = 1;
+
+    if (body_off < 0) return 1;          /* headers alone in this segment */
+
+    int avail = len - body_off;
+    if (avail < 0) avail = 0;
+    int take = avail < HTTP_RESP_BODY_MAX ? avail : HTTP_RESP_BODY_MAX;
+    memcpy(out->resp_body, p + body_off, (size_t)take);
+    out->resp_body_len = take;
+
+    /* Completeness, stated rather than assumed.
+     *
+     * A 204 has no body by definition, so it is complete the moment the
+     * headers end. Otherwise the declared length has to match what
+     * arrived, and it has to fit inside the bound — a body longer than
+     * HTTP_RESP_BODY_MAX is one sloth deliberately did not keep, which
+     * is not the same as one it failed to receive, but for a consumer
+     * doing an exact comparison the two are equally unusable.
+     *
+     * Chunked is never complete: the body is interleaved with chunk
+     * sizes and this does not decode them. Saying so is the honest
+     * output; pretending the raw bytes are the body would produce a
+     * mismatch on a response that is actually correct. */
+    if (out->chunked) {
+        out->body_complete = 0;
+    } else if (out->status == 204 || out->content_length == 0) {
+        out->body_complete = 1;
+    } else if (out->content_length > 0) {
+        out->body_complete = (out->content_length == take);
+    } else {
+        /* No Content-Length and not chunked: the body runs to
+         * connection close, and we cannot know we have all of it. */
+        out->body_complete = 0;
+    }
+    return 1;
+}
+
+/* ── Request/response pairing (#71) ────────────────────────
+ *
+ * One slot per flow, holding the most recent request. Bounded and
+ * LRU-evicted like every other table here. */
+#define HTTP_FLOW_MAX 64
+
+typedef struct {
+    char     cli[46];        /* the request's source */
+    char     srv[46];
+    uint16_t cli_port;
+    uint16_t srv_port;
+    char     host[64];
+    char     path[128];
+    int      in_flight;      /* a request is awaiting its response */
+    time_t   ts;
+} http_flow_t;
+
+static http_flow_t     g_flow[HTTP_FLOW_MAX];
+static int             g_flow_n;
+static pthread_mutex_t g_flow_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void flow_note_request(const http_log_entry_t *req) {
+    if (!req || !req->src[0] || !req->dst[0]) return;
+    pthread_mutex_lock(&g_flow_mu);
+    int idx = -1;
+    for (int i = 0; i < g_flow_n; i++)
+        if (g_flow[i].cli_port == req->src_port &&
+            g_flow[i].srv_port == req->dst_port &&
+            strcmp(g_flow[i].cli, req->src) == 0 &&
+            strcmp(g_flow[i].srv, req->dst) == 0) { idx = i; break; }
+    if (idx < 0) {
+        if (g_flow_n < HTTP_FLOW_MAX) {
+            idx = g_flow_n++;
+        } else {
+            idx = 0;
+            for (int i = 1; i < HTTP_FLOW_MAX; i++)
+                if (g_flow[i].ts < g_flow[idx].ts) idx = i;
+        }
+        memset(&g_flow[idx], 0, sizeof(g_flow[idx]));
+        snprintf(g_flow[idx].cli, sizeof(g_flow[idx].cli), "%s", req->src);
+        snprintf(g_flow[idx].srv, sizeof(g_flow[idx].srv), "%s", req->dst);
+        g_flow[idx].cli_port = req->src_port;
+        g_flow[idx].srv_port = req->dst_port;
+    }
+    /* A second request before the first was answered is pipelining, and
+     * "which one does the next response answer" stops being knowable.
+     * Marked unpairable rather than guessed: attributing a response to
+     * the wrong URL is worse for a sentinel comparison than not
+     * attributing it at all. */
+    if (g_flow[idx].in_flight) {
+        g_flow[idx].in_flight = -1;      /* ambiguous */
+    } else if (g_flow[idx].in_flight == 0) {
+        g_flow[idx].in_flight = 1;
+        snprintf(g_flow[idx].host, sizeof(g_flow[idx].host), "%s", req->host);
+        snprintf(g_flow[idx].path, sizeof(g_flow[idx].path), "%s", req->path);
+    }
+    g_flow[idx].ts = req->ts;
+    pthread_mutex_unlock(&g_flow_mu);
+}
+
+int http_log_pair_response(http_log_entry_t *resp) {
+    if (!resp || !resp->is_response) return 0;
+    int paired = 0;
+    pthread_mutex_lock(&g_flow_mu);
+    /* The response travels server -> client, so the four-tuple is the
+     * request's reversed. */
+    for (int i = 0; i < g_flow_n; i++) {
+        if (g_flow[i].cli_port != resp->dst_port) continue;
+        if (g_flow[i].srv_port != resp->src_port) continue;
+        if (strcmp(g_flow[i].cli, resp->dst) != 0) continue;
+        if (strcmp(g_flow[i].srv, resp->src) != 0) continue;
+        if (g_flow[i].in_flight == 1) {
+            snprintf(resp->host, sizeof(resp->host), "%s", g_flow[i].host);
+            snprintf(resp->path, sizeof(resp->path), "%s", g_flow[i].path);
+            paired = 1;
+        }
+        g_flow[i].in_flight = 0;         /* answered, ambiguous or not */
+        break;
+    }
+    pthread_mutex_unlock(&g_flow_mu);
+    return paired;
+}
+
 int http_log_parse(const uint8_t *data, int len, const char *src_ip,
                    http_log_entry_t *out)
 {
@@ -341,6 +537,11 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
 
 void http_log_record(const http_log_entry_t *e)
 {
+    /* A request opens the pairing window for its flow (#71). Done here
+     * rather than in the parser so a caller that parses without
+     * recording — the credential scanner does — cannot open one. */
+    if (e && !e->is_response) flow_note_request(e);
+
     pthread_mutex_lock(&g_mu);
     g_log[g_head] = *e;
     g_head = (g_head + 1) % MAX_HTTP_LOG;
@@ -373,4 +574,8 @@ void http_log_clear(void)
     g_head  = 0;
     g_count = 0;
     pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_flow_mu);
+    memset(g_flow, 0, sizeof(g_flow));
+    g_flow_n = 0;
+    pthread_mutex_unlock(&g_flow_mu);
 }

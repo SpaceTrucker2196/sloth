@@ -261,6 +261,19 @@ void jsonl_emit_http(const http_log_entry_t *e) {
     kv_str(buf, LINEBUF, &off, "path",   e->path);
     if (e->ja4h[0])
         kv_str(buf, LINEBUF, &off, "ja4h", e->ja4h);
+    /* Response side (#71), additive. body_complete is the field a
+     * consumer must key on before comparing bytes: sloth does not
+     * reassemble TCP, so "different" and "incomplete" are different
+     * answers and only the first means anything. The body itself is
+     * deliberately not emitted — it can be page content of any kind,
+     * and the forensic value is in the status and the completeness. */
+    if (e->is_response) {
+        kv_int(buf, LINEBUF, &off, "status",         e->status);
+        kv_int(buf, LINEBUF, &off, "content_length", e->content_length);
+        kv_int(buf, LINEBUF, &off, "chunked",        e->chunked ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "body_complete",  e->body_complete ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "body_len",       e->resp_body_len);
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

@@ -93,7 +93,25 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     int pay_len = tlen - tcp_hdr;
     if (pay_len < 16) return;
     http_log_entry_t entry;
+
+    /* Responses first (#71): a response and a request cannot be
+     * confused — one starts "HTTP/1.x", the other a method — and trying
+     * the request parser on a response wastes the pass. */
+    if (http_log_parse_response(tp + tcp_hdr, pay_len, pkt->src, &entry)) {
+        snprintf(entry.dst, sizeof(entry.dst), "%s", pkt->dst);
+        entry.src_port = pkt->src_port;
+        entry.dst_port = pkt->dst_port;
+        http_log_pair_response(&entry);
+        snprintf(pkt->info, sizeof(pkt->info), "HTTP %u %.40s",
+                 entry.status, entry.host[0] ? entry.host : "");
+        http_log_record(&entry);
+        return;
+    }
+
     if (!http_log_parse(tp + tcp_hdr, pay_len, pkt->src, &entry)) return;
+    snprintf(entry.dst, sizeof(entry.dst), "%s", pkt->dst);
+    entry.src_port = pkt->src_port;
+    entry.dst_port = pkt->dst_port;
     if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
     snprintf(pkt->info, sizeof(pkt->info), "HTTP %.54s", entry.host[0] ? entry.host : "?");
     http_log_record(&entry);

@@ -165,6 +165,29 @@ through as UTF-8.
 | `path`   | string | request URI |
 | `ja4h`   | string | 49-char JA4H client fingerprint (FoxIO spec). Omitted when not computed. See [[../views/http]] for the section breakdown. |
 
+**Response records (#71).** The same record type carries responses,
+distinguished by the presence of `status`. `host` and `path` are the
+*request's*, filled in by pairing — absent when the response could not
+be confidently paired.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `status` | int | HTTP status code |
+| `content_length` | int | the declared length, or `-1` when the header was absent |
+| `chunked` | int | 1 = `Transfer-Encoding: chunked`, which sloth does **not** decode |
+| `body_complete` | int | **key on this before comparing bytes.** 1 = the whole declared body was captured; 0 = a prefix, or none |
+| `body_len` | int | bytes actually captured, bounded at 512 |
+
+`body_complete` is the field that matters. sloth does not reassemble
+TCP, so a body larger than the segment carrying its status line arrives
+short. **"Different" and "incomplete" are different answers**, and a
+partial body that happens to differ from an expected value is not
+evidence of anything. A consumer doing a byte-exact comparison must
+compare only when `body_complete` is 1 and treat 0 as "don't know".
+
+The body itself is not emitted: it can be page content of any kind, and
+the forensic value is in the status and the completeness.
+
 ### `ntp`
 
 ```json

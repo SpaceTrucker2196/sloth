@@ -367,6 +367,265 @@ static void test_ja4h_deterministic(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+
+/* ── HTTP response-side parsing (#71) ────────────────────── */
+
+static int mk_resp(char *buf, int cap, const char *status_line,
+                   const char *hdrs, const char *body) {
+    int n = snprintf(buf, (size_t)cap, "%s\r\n%s\r\n%s",
+                     status_line, hdrs, body ? body : "");
+    return n < cap ? n : cap - 1;
+}
+
+static void test_response_status_line(void) {
+    char b[512];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK",
+                    "Content-Length: 5\r\n", "hello");
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.is_response, 1);
+    ASSERT_EQ((int)e.status, 200);
+    ASSERT_EQ(e.content_length, 5);
+    ASSERT_EQ(e.resp_body_len, 5);
+    ASSERT_EQ(memcmp(e.resp_body, "hello", 5), 0);
+    ASSERT_EQ(e.body_complete, 1);
+}
+
+static void test_requests_are_not_responses(void) {
+    /* And more importantly the reverse: a request must not parse as a
+     * response, or every GET becomes a status line. */
+    const char *req = "GET /x HTTP/1.1\r\nHost: a.example\r\n\r\n";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)req,
+                                      (int)strlen(req), "1.2.3.4", &e), 0);
+}
+
+static void test_continuation_segment_rejected(void) {
+    /* A mid-body segment carries no status line. Its first bytes are
+     * body data and can look like anything — accepting one would
+     * fabricate a status code out of page content. */
+    const char *mid = "<html><body>this is the middle of a page</body>";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)mid,
+                                      (int)strlen(mid), "1.2.3.4", &e), 0);
+}
+
+static void test_204_has_no_body_and_is_complete(void) {
+    /* Google's connectivity check. A 204 has no body by definition, so
+     * it is complete the moment the headers end — and a consumer must
+     * be able to tell that from "we did not see the body". */
+    char b[256];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 204 No Content",
+                    "Content-Length: 0\r\n", "");
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ((int)e.status, 204);
+    ASSERT_EQ(e.resp_body_len, 0);
+    ASSERT_EQ(e.body_complete, 1);
+}
+
+static void test_truncated_body_is_incomplete_not_different(void) {
+    /* **The distinction this whole parser exists to make.** sloth does
+     * not reassemble TCP, so a body larger than its segment arrives
+     * short. A consumer comparing bytes must be able to tell "different"
+     * from "incomplete" — a partial body that happens to differ from an
+     * expected value is not evidence of anything. */
+    char b[512];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK",
+                    "Content-Length: 5000\r\n", "only the start");
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.content_length, 5000);
+    ASSERT(e.resp_body_len > 0);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_body_longer_than_the_bound_is_incomplete(void) {
+    char b[2048];
+    char body[1200];
+    memset(body, 'A', sizeof(body) - 1);
+    body[sizeof(body) - 1] = '\0';
+    char hdrs[64];
+    snprintf(hdrs, sizeof(hdrs), "Content-Length: %d\r\n",
+             (int)strlen(body));
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK", hdrs, body);
+    http_log_entry_t e;
+    http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e);
+    ASSERT_EQ(e.resp_body_len, HTTP_RESP_BODY_MAX);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_chunked_is_never_complete(void) {
+    /* The body is interleaved with chunk-size lines and this does not
+     * decode them. Calling the raw bytes "the body" would produce a
+     * mismatch on a response that is actually correct. */
+    char b[512];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK",
+                    "Transfer-Encoding: chunked\r\n", "5\r\nhello\r\n0\r\n\r\n");
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.chunked, 1);
+    ASSERT_EQ(e.body_complete, 0);
+
+    /* The case the chunked check actually earns its keep on, and the
+     * one an attacker would reach for: chunked *and* a Content-Length
+     * that matches the raw bytes on the wire. Every other route to
+     * body_complete=0 is closed, so without the chunked branch this
+     * response is declared complete and its chunk-size lines get
+     * compared against a sentinel as though they were the body. */
+    const char *raw = "5\r\nhello\r\n0\r\n\r\n";
+    char hdrs[96];
+    snprintf(hdrs, sizeof(hdrs),
+             "Transfer-Encoding: chunked\r\nContent-Length: %d\r\n",
+             (int)strlen(raw));
+    n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK", hdrs, raw);
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.chunked, 1);
+    ASSERT_EQ(e.content_length, (int)strlen(raw));
+    ASSERT_EQ(e.resp_body_len, (int)strlen(raw));
+    ASSERT_EQ(e.body_complete, 0);
+
+    /* And chunked on a 204, which the status shortcut would otherwise
+     * call complete. */
+    n = mk_resp(b, sizeof(b), "HTTP/1.1 204 No Content",
+                "Transfer-Encoding: chunked\r\n", "");
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_no_content_length_is_incomplete(void) {
+    /* Body runs to connection close; we cannot know we have all of it. */
+    char b[256];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK",
+                    "Content-Type: text/html\r\n", "some bytes");
+    http_log_entry_t e;
+    http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e);
+    ASSERT_EQ(e.content_length, -1);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_headers_only_segment(void) {
+    /* No blank line: the headers ran past this segment. */
+    const char *h = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nServer: x";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)h,
+                                      (int)strlen(h), "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.resp_body_len, 0);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_bare_lf_header_terminator(void) {
+    /* A rogue portal has no reason to be well-behaved, and bare-LF
+     * terminators exist in the wild. */
+    const char *r = "HTTP/1.1 200 OK\nContent-Length: 2\n\nhi";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse_response((const uint8_t *)r,
+                                      (int)strlen(r), "1.2.3.4", &e), 1);
+    ASSERT_EQ(e.resp_body_len, 2);
+    ASSERT_EQ(e.body_complete, 1);
+}
+
+static void test_absurd_content_length_treated_as_absent(void) {
+    char b[256];
+    int n = mk_resp(b, sizeof(b), "HTTP/1.1 200 OK",
+                    "Content-Length: 99999999999\r\n", "x");
+    http_log_entry_t e;
+    http_log_parse_response((const uint8_t *)b, n, "1.2.3.4", &e);
+    ASSERT_EQ(e.content_length, -1);
+    ASSERT_EQ(e.body_complete, 0);
+}
+
+static void test_malformed_status_lines_rejected(void) {
+    http_log_entry_t e;
+    const char *bad[] = {
+        "HTTP/2.0 200 OK\r\n\r\n",       /* not 1.x */
+        "HTTP/1.1 2OO OK\r\n\r\n",       /* letters, not digits */
+        "HTTP/1.1200 OK\r\n\r\n",        /* no space */
+        "HTTP/1.",                        /* truncated */
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        ASSERT_EQ(http_log_parse_response((const uint8_t *)bad[i],
+                                          (int)strlen(bad[i]),
+                                          "1.2.3.4", &e), 0);
+}
+
+/* ── pairing ── */
+
+static void mk_req(http_log_entry_t *e, const char *host, const char *path) {
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src, sizeof(e->src), "10.0.0.5");
+    snprintf(e->dst, sizeof(e->dst), "17.253.1.1");
+    e->src_port = 51000;
+    e->dst_port = 80;
+    snprintf(e->method, sizeof(e->method), "GET");
+    snprintf(e->host, sizeof(e->host), "%s", host);
+    snprintf(e->path, sizeof(e->path), "%s", path);
+    e->ts = time(NULL);
+}
+
+static void mk_resp_entry(http_log_entry_t *e) {
+    memset(e, 0, sizeof(*e));
+    e->is_response = 1;
+    snprintf(e->src, sizeof(e->src), "17.253.1.1");
+    snprintf(e->dst, sizeof(e->dst), "10.0.0.5");
+    e->src_port = 80;
+    e->dst_port = 51000;
+}
+
+static void test_response_pairs_with_its_request(void) {
+    http_log_clear();
+    http_log_entry_t req, resp;
+    mk_req(&req, "captive.apple.com", "/hotspot-detect.html");
+    http_log_record(&req);
+    mk_resp_entry(&resp);
+    ASSERT_EQ(http_log_pair_response(&resp), 1);
+    ASSERT_STR(resp.host, "captive.apple.com");
+    ASSERT_STR(resp.path, "/hotspot-detect.html");
+    http_log_clear();
+}
+
+static void test_unmatched_response_is_unpaired(void) {
+    /* A response on a flow we never saw a request for. Attaching it to
+     * whatever request happened to be around would attribute it to the
+     * wrong URL, which for a sentinel comparison is worse than nothing. */
+    http_log_clear();
+    http_log_entry_t resp;
+    mk_resp_entry(&resp);
+    resp.dst_port = 51999;              /* a different flow */
+    ASSERT_EQ(http_log_pair_response(&resp), 0);
+    ASSERT_EQ((int)resp.host[0], 0);
+    http_log_clear();
+}
+
+static void test_pipelining_is_left_unpaired(void) {
+    /* Two requests in flight: which one the next response answers stops
+     * being knowable, so neither is claimed. */
+    http_log_clear();
+    http_log_entry_t a, b, resp;
+    mk_req(&a, "one.example", "/a");
+    http_log_record(&a);
+    mk_req(&b, "two.example", "/b");
+    http_log_record(&b);
+    mk_resp_entry(&resp);
+    ASSERT_EQ(http_log_pair_response(&resp), 0);
+    ASSERT_EQ((int)resp.host[0], 0);
+    http_log_clear();
+}
+
+static void test_pairing_consumes_the_request(void) {
+    /* A second response on the same flow must not re-use the first
+     * request — keep-alive means the next answer is to something else. */
+    http_log_clear();
+    http_log_entry_t req, r1, r2;
+    mk_req(&req, "one.example", "/a");
+    http_log_record(&req);
+    mk_resp_entry(&r1);
+    ASSERT_EQ(http_log_pair_response(&r1), 1);
+    mk_resp_entry(&r2);
+    ASSERT_EQ(http_log_pair_response(&r2), 0);
+    http_log_clear();
+}
+
 void run_http_log_tests(void) {
     TEST_SUITE("http_log");
     RUN_TEST(test_parse_get);
@@ -393,4 +652,23 @@ void run_http_log_tests(void) {
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+    TEST_SUITE("HTTP response parsing (#71)");
+    RUN_TEST(test_response_status_line);
+    RUN_TEST(test_requests_are_not_responses);
+    RUN_TEST(test_continuation_segment_rejected);
+    RUN_TEST(test_204_has_no_body_and_is_complete);
+    RUN_TEST(test_truncated_body_is_incomplete_not_different);
+    RUN_TEST(test_body_longer_than_the_bound_is_incomplete);
+    RUN_TEST(test_chunked_is_never_complete);
+    RUN_TEST(test_no_content_length_is_incomplete);
+    RUN_TEST(test_headers_only_segment);
+    RUN_TEST(test_bare_lf_header_terminator);
+    RUN_TEST(test_absurd_content_length_treated_as_absent);
+    RUN_TEST(test_malformed_status_lines_rejected);
+
+    TEST_SUITE("HTTP request/response pairing (#71)");
+    RUN_TEST(test_response_pairs_with_its_request);
+    RUN_TEST(test_unmatched_response_is_unpaired);
+    RUN_TEST(test_pipelining_is_left_unpaired);
+    RUN_TEST(test_pairing_consumes_the_request);
 }
