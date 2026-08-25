@@ -725,6 +725,153 @@ static void test_csa_snapshot_newest_first(void) {
     csa_clear();
 }
 
+
+/* ── 802.11k Radio Measurement (#61) ─────────────────────── */
+
+/* Build an RRM Measurement Request carrying one Beacon Request, with an
+ * optional SSID subelement — the field the whole detector turns on. */
+static int build_rrm_req(uint8_t *f, const uint8_t bssid[6],
+                         const uint8_t sta[6], uint8_t chan, uint8_t mode,
+                         const char *ssid) {
+    memset(f, 0, HDR);
+    f[0] = 0xD0;
+    memcpy(f + 4,  sta,   6);      /* addr1 — the client being asked */
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);      /* addr3 — the BSS asking         */
+    int off = HDR;
+    f[off++] = ACTION_CAT_RRM;
+    f[off++] = RRM_ACT_MEASUREMENT_REQUEST;
+    f[off++] = 0x01;               /* dialog token   */
+    f[off++] = 0x00; f[off++] = 0x00;  /* repetitions */
+
+    int slen = ssid ? (int)strlen(ssid) : 0;
+    int body = 3 + 13 + (ssid ? 2 + slen : 0);
+    f[off++] = 38;                 /* Measurement Request element */
+    f[off++] = (uint8_t)body;
+    f[off++] = 0x01;               /* measurement token */
+    f[off++] = 0x00;               /* measurement mode  */
+    f[off++] = RRM_MEAS_TYPE_BEACON;
+    f[off++] = 81;                 /* operating class */
+    f[off++] = chan;
+    f[off++] = 0x00; f[off++] = 0x00;   /* random interval */
+    f[off++] = 0x64; f[off++] = 0x00;   /* duration        */
+    f[off++] = mode;               /* 0 passive, 1 active, 2 table */
+    for (int i = 0; i < 6; i++) f[off++] = 0xff;   /* wildcard BSSID */
+    if (ssid) {
+        f[off++] = 0;              /* subelement 0 = SSID */
+        f[off++] = (uint8_t)slen;
+        memcpy(f + off, ssid, (size_t)slen);
+        off += slen;
+    }
+    return off;
+}
+
+static const uint8_t RRM_STA[6] = { 0x12, 0x22, 0x33, 0x44, 0x55, 0x88 };
+
+static void test_rrm_targeted_request_parsed(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ(p.targeted_reqs, 1);
+    ASSERT_EQ(p.broadcast_reqs, 0);
+    ASSERT_STR(p.last_ssid, "corp-wifi");
+    ASSERT_EQ(p.last_channel, 6);
+    rrm_clear();
+}
+
+static void test_rrm_request_without_ssid_is_broadcast(void) {
+    /* No SSID subelement: the AP is asking "what can you hear", which
+     * is ordinary steering. Counting it as targeted would make every
+     * controller-managed network trip the rule. */
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, NULL);
+    rrm_parse_action(f, n, 1000);
+    sloth_rrm_pair_t p;
+    rrm_find(AP_A, RRM_STA, &p);
+    ASSERT_EQ(p.targeted_reqs, 0);
+    ASSERT_EQ(p.broadcast_reqs, 1);
+    rrm_clear();
+}
+
+static void test_rrm_report_counted_but_separate(void) {
+    /* A report is evidence a survey *succeeded*, not that one was
+     * attempted. Folding it into the request count would let a chatty
+     * client incriminate its own AP. */
+    rrm_clear();
+    uint8_t f[128];
+    memset(f, 0, HDR);
+    f[0] = 0xD0;
+    memcpy(f + 4,  AP_A,    6);
+    memcpy(f + 10, RRM_STA, 6);    /* the client replying */
+    memcpy(f + 16, AP_A,    6);
+    int off = HDR;
+    f[off++] = ACTION_CAT_RRM;
+    f[off++] = RRM_ACT_MEASUREMENT_REPORT;
+    f[off++] = 0x01;
+    f[off++] = 39; f[off++] = 3;
+    f[off++] = 0x01; f[off++] = 0x00; f[off++] = RRM_MEAS_TYPE_BEACON;
+    ASSERT_EQ(rrm_parse_action(f, off, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ(p.reports_seen, 1);
+    ASSERT_EQ(p.targeted_reqs, 0);
+    rrm_clear();
+}
+
+static void test_rrm_non_beacon_measurement_ignored(void) {
+    /* Channel Load and Noise Histogram are measurement types too, and
+     * neither surveys anything about other networks. */
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    f[HDR + 5 + 2 + 2] = 3;        /* measurement type 3 = Channel Load */
+    rrm_parse_action(f, n, 1000);
+    ASSERT_EQ(rrm_pair_count(), 0);
+    rrm_clear();
+}
+
+static void test_rrm_busiest_pair_needs_the_threshold(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    for (int i = 0; i < RRM_SURVEY_THRESH - 1; i++)
+        rrm_parse_action(f, n, 1000 + i);
+    ASSERT_EQ(rrm_busiest_pair(1010, RRM_SURVEY_WIN_SECS,
+                               RRM_SURVEY_THRESH, NULL, NULL), 0);
+    rrm_parse_action(f, n, 1010);
+    ASSERT_EQ(rrm_busiest_pair(1010, RRM_SURVEY_WIN_SECS,
+                               RRM_SURVEY_THRESH, NULL, NULL),
+              RRM_SURVEY_THRESH);
+    rrm_clear();
+}
+
+static void test_rrm_broadcast_requests_do_not_reach_the_threshold(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, NULL);
+    for (int i = 0; i < RRM_SURVEY_THRESH * 2; i++)
+        rrm_parse_action(f, n, 1000 + i);
+    ASSERT_EQ(rrm_busiest_pair(1020, RRM_SURVEY_WIN_SECS,
+                               RRM_SURVEY_THRESH, NULL, NULL), 0);
+    rrm_clear();
+}
+
+static void test_rrm_reached_through_action_observe(void) {
+    rrm_clear();
+    action_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 11, 1, "guest");
+    action_observe(f, n, 2000);
+    ASSERT_EQ(rrm_pair_count(), 1);
+    ASSERT_EQ(action_category_count(ACTION_CAT_RRM), 1);
+    rrm_clear();
+    action_clear();
+}
+
 void run_action_snoop_tests(void) {
     TEST_SUITE("action frame category demux (#59)");
     RUN_TEST(test_category_read);
@@ -773,4 +920,12 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_csa_window_expires);
     RUN_TEST(test_csa_reached_through_action_observe);
     RUN_TEST(test_csa_snapshot_newest_first);
+    TEST_SUITE("802.11k Radio Measurement (#61)");
+    RUN_TEST(test_rrm_targeted_request_parsed);
+    RUN_TEST(test_rrm_request_without_ssid_is_broadcast);
+    RUN_TEST(test_rrm_report_counted_but_separate);
+    RUN_TEST(test_rrm_non_beacon_measurement_ignored);
+    RUN_TEST(test_rrm_busiest_pair_needs_the_threshold);
+    RUN_TEST(test_rrm_broadcast_requests_do_not_reach_the_threshold);
+    RUN_TEST(test_rrm_reached_through_action_observe);
 }

@@ -173,6 +173,7 @@ static void poll_data(sloth_state_t *s) {
     assoc_request_snapshot(s);
     btm_snapshot(s);
     csa_snapshot(s);
+    rrm_snapshot(s);
     channel_summary_update(s);
     rf_quality_snapshot(s, time(NULL));
     mdns_snapshot(s);

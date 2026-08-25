@@ -219,6 +219,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_WPA_DOWNGRADE:          return "T1600";       /* Weaken Encryption — the AP offers the weak lane */
     case ALERT_TYPE_PEAP_NO_SERVER_CERT:    return "T1557";       /* AiTM — the client authenticated to an unverified server */
     case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
+    case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -487,6 +488,83 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
  *              a minute. A legitimate AP picks one and commits.
  *   steering — the target channel is where a known rogue is sitting.
  */
+
+/* 802.11k survey abuse (#61).
+ *
+ * A Beacon Request asks a client to scan and report what it can hear.
+ * The client obliges — that is the protocol working. It is also how an
+ * AP enumerates the airspace *through someone else's radio*, from a
+ * position its own antenna cannot reach, and the report that comes back
+ * is exactly the input needed to build a convincing evil twin.
+ *
+ * The discriminator is not the rate on its own. A legitimate AP steering
+ * its own clients asks about networks *it* advertises; an outsider asks
+ * about SSIDs it has never beaconed. */
+static void rule_rrm_survey_abuse(const sloth_state_t *s, time_t now) {
+    uint8_t bssid[6], sta[6];
+    int reqs = rrm_busiest_pair(now, RRM_SURVEY_WIN_SECS,
+                                RRM_SURVEY_THRESH, bssid, sta);
+    if (reqs < RRM_SURVEY_THRESH) return;
+
+    sloth_rrm_pair_t pair;
+    if (!rrm_find(bssid, sta, &pair)) return;
+
+    /* Has the asker ever been heard beaconing at all, and if so, the
+     * SSID it is asking about?
+     *
+     * The two questions are separate on purpose. With --hop the AP
+     * inventory is a sample, so "we have never heard this BSSID" tells
+     * us nothing about what it does or does not advertise — inferring
+     * from that would make hop mode fire on every AP the sweep missed.
+     * Only a BSSID we *have* heard beaconing can be said to be asking
+     * about something it does not advertise. */
+    int asker_beacons = 0, asks_own_ssid = 0;
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        if (memcmp(a->bssid, bssid, 6) != 0) continue;
+        asker_beacons = 1;
+        if (pair.last_ssid[0] && strcmp(a->ssid, pair.last_ssid) == 0)
+            asks_own_ssid = 1;
+        /* Multi-VAP: the same radio may advertise the SSID under a
+         * different BSSID in its own history. */
+        for (int h = 0; h < a->ssid_history_n; h++)
+            if (pair.last_ssid[0] &&
+                strcmp(a->ssid_history[h], pair.last_ssid) == 0)
+                asks_own_ssid = 1;
+    }
+    int fishing = asker_beacons && !asks_own_ssid;
+
+    /* The strongest condition in the issue: an outsider surveying the
+     * operator's own network through the operator's own clients. */
+    int my_ssid  = pair.last_ssid[0] && ownership_is_my_ssid(pair.last_ssid);
+    int my_bssid = ownership_is_my_bssid(bssid);
+    int outsider_on_my_net = my_ssid && !my_bssid;
+
+    if (!fishing && !outsider_on_my_net) return;
+
+    int twin = btm_candidate_is_twin(s, bssid);
+
+    char bss[20], stastr[20];
+    mac_to_str(bssid, bss,    sizeof(bss));
+    mac_to_str(sta,   stastr, sizeof(stastr));
+
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "rrm:%.17s->%.17s", bss, stastr);
+    snprintf(detail, sizeof(detail),
+             "RRM survey: %.17s -> %.17s asked for SSID='%.20s' "
+             "%d req/%ds, %d reported back, evil-twin=%s%s%s",
+             bss, stastr, pair.last_ssid[0] ? pair.last_ssid : "(any)",
+             reqs, RRM_SURVEY_WIN_SECS, pair.reports_seen,
+             twin ? "yes" : "no",
+             fishing ? ", asker never beaconed that SSID" : "",
+             outsider_on_my_net ? " - surveying YOUR network" : "");
+
+    fire(ALERT_TYPE_RRM_SURVEY_ABUSE,
+         (outsider_on_my_net || twin) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+         "RRM_SURVEY", detail, key, NULL, 0, now);
+}
+
 static void rule_csa_abuse(const sloth_state_t *s, time_t now) {
     /* One pass per BSSID that announced anything recently.
      *
@@ -2389,6 +2467,7 @@ void alerts_update(sloth_state_t *s) {
     rule_btm_abuse(s, now);
     rule_wpa_downgrade(s, now);
     rule_csa_abuse(s, now);
+    rule_rrm_survey_abuse(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

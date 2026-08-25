@@ -438,6 +438,25 @@ void view_beacon_draw(const sloth_state_t *s) {
             tui_normal();
         }
     }
+
+    /* 802.11k survey activity (#61). A footer rather than a column:
+     * it is a property of the airspace over the last few minutes, not
+     * of any one row, and most of the time there is nothing to say. */
+    int surveys = 0, reports = 0;
+    for (int i = 0; i < s->rrm_pair_count; i++) {
+        surveys += s->rrm_pairs[i].targeted_reqs;
+        reports += s->rrm_pairs[i].reports_seen;
+    }
+    if (surveys > 0) {
+        tui_dim();
+        TPRINT(" RRM surveys: ");
+        tui_normal();
+        TPRINT("%d targeted request%s", surveys, surveys == 1 ? "" : "s");
+        tui_dim();
+        TPRINT(" in the last %ds, %d reported back\n",
+               RRM_SURVEY_WIN_SECS, reports);
+        tui_normal();
+    }
     tui_normal();
 }
 

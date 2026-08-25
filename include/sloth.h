@@ -702,6 +702,7 @@ typedef enum {
     ALERT_TYPE_WPA_DOWNGRADE,       /* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
     ALERT_TYPE_PEAP_NO_SERVER_CERT, /* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
     ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
+    ALERT_TYPE_RRM_SURVEY_ABUSE,    /* 802.11k Beacon Request used to survey the air through a client (#61) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1303,6 +1304,36 @@ typedef struct {
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
 
+/* ── 802.11k Radio Measurement survey (#61) ────────────────
+ *
+ * An RRM Beacon Request asks a client to scan and report back what it
+ * can hear: BSSIDs, channels, RSSIs. The client obliges — that is the
+ * protocol working. It is also a way for an AP to enumerate the
+ * airspace *through* someone else's radio, from a position where its
+ * own antenna cannot reach, and the report it gets back is precisely
+ * the input needed to build a convincing evil twin.
+ *
+ * The frames are protocol-legitimate; the abuse is behavioural. So the
+ * detector is a rate with context rather than a signature, and the
+ * discriminator is whether the requester is asking about an SSID it has
+ * any business asking about. */
+#define SLOTH_RRM_MAX_PAIRS   64
+#define RRM_SURVEY_WIN_SECS  300
+#define RRM_SURVEY_THRESH      6   /* targeted requests per pair per window */
+
+typedef struct {
+    uint8_t bssid[6];         /* the AP asking          */
+    uint8_t sta[6];           /* the client being asked */
+    int     targeted_reqs;    /* requests naming a specific SSID */
+    int     broadcast_reqs;   /* requests with no SSID subelement */
+    int     reports_seen;     /* the client's replies — evidence, not alert */
+    char    last_ssid[33];    /* SSID named by the most recent targeted ask */
+    uint8_t last_channel;
+    uint8_t last_mode;        /* 0 passive, 1 active, 2 table */
+    time_t  first_seen;
+    time_t  last_seen;
+} sloth_rrm_pair_t;
+
 /* ── Operating channel width and primary channel (#66) ─────
  *
  * The capability IEs say what a radio *can* do; the operation IEs say
@@ -1773,6 +1804,9 @@ typedef struct {
     /* Channel-switch announcements (#63), newest first. */
     sloth_csa_event_t    csa_events[SLOTH_CSA_MAX_EVENTS];
     int                  csa_count;
+    /* 802.11k survey activity (#61), busiest first. */
+    sloth_rrm_pair_t     rrm_pairs[SLOTH_RRM_MAX_PAIRS];
+    int                  rrm_pair_count;
 
     /* ── Channel activity summary ─────────────────────────── */
     channel_summary_t    channels[MAX_CHAN_ENTRIES];

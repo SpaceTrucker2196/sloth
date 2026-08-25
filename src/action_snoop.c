@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -140,6 +141,7 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
         csa_parse_action(dot11, len, now);
         return;
     }
+    if (cat == ACTION_CAT_RRM) { rrm_parse_action(dot11, len, now); return; }
     if (cat != ACTION_CAT_WNM || action != WNM_ACT_BTM_REQUEST) return;
     sloth_btm_req_t req;
     if (action_parse_btm_req(dot11, len, &req)) btm_observe(&req, now);
@@ -273,6 +275,178 @@ void csa_clear(void) {
     g_csa_i = 0;
     g_csa_n = 0;
     pthread_mutex_unlock(&g_csa_mu);
+}
+
+/* ── 802.11k Radio Measurement (#61) ─────────────────────── */
+
+static sloth_rrm_pair_t g_rrm[SLOTH_RRM_MAX_PAIRS];
+static int              g_rrm_n;
+static pthread_mutex_t  g_rrm_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Caller holds g_rrm_mu. LRU-evicts, for the reason every other table
+ * here does: under a survey campaign the newest pair is the
+ * interesting one. */
+static sloth_rrm_pair_t *rrm_slot(const uint8_t bssid[6],
+                                  const uint8_t sta[6], time_t now) {
+    for (int i = 0; i < g_rrm_n; i++)
+        if (memcmp(g_rrm[i].bssid, bssid, 6) == 0 &&
+            memcmp(g_rrm[i].sta,   sta,   6) == 0) return &g_rrm[i];
+
+    int slot;
+    if (g_rrm_n < SLOTH_RRM_MAX_PAIRS) {
+        slot = g_rrm_n++;
+    } else {
+        slot = 0;
+        for (int i = 1; i < SLOTH_RRM_MAX_PAIRS; i++)
+            if (g_rrm[i].last_seen < g_rrm[slot].last_seen) slot = i;
+    }
+    memset(&g_rrm[slot], 0, sizeof(g_rrm[slot]));
+    memcpy(g_rrm[slot].bssid, bssid, 6);
+    memcpy(g_rrm[slot].sta,   sta,   6);
+    g_rrm[slot].first_seen = now;
+    return &g_rrm[slot];
+}
+
+int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
+    uint8_t action = 0;
+    int cat = action_parse_category(dot11, len, &action);
+    if (cat != ACTION_CAT_RRM) return 0;
+    if (action != RRM_ACT_MEASUREMENT_REQUEST &&
+        action != RRM_ACT_MEASUREMENT_REPORT) return 0;
+
+    /* AP -> STA for a request: addr1 is the client being asked, addr3
+     * the BSS asking. A report travels the other way, but is recorded
+     * against the same pair — the conversation is what matters, not
+     * which end spoke last. */
+    const uint8_t *sta   = (action == RRM_ACT_MEASUREMENT_REQUEST)
+                           ? dot11 + 4 : dot11 + 10;
+    const uint8_t *bssid = dot11 + 16;
+    if ((sta[0] & 0x01) || (bssid[0] & 0x01)) return 0;
+
+    /* Category(1) Action(1) DialogToken(1), then Measurement Request
+     * or Report elements (tag 38 / 39). */
+    int off = DOT11_HDR_LEN + 3;
+    if (action == RRM_ACT_MEASUREMENT_REQUEST) off += 2;  /* + repetitions */
+    int found = 0;
+
+    while (off + 2 <= len) {
+        uint8_t tag = dot11[off];
+        uint8_t tln = dot11[off + 1];
+        if (off + 2 + (int)tln > len) break;
+        const uint8_t *b = dot11 + off + 2;
+
+        if (action == RRM_ACT_MEASUREMENT_REPORT && tag == 39) {
+            pthread_mutex_lock(&g_rrm_mu);
+            sloth_rrm_pair_t *p = rrm_slot(bssid, sta, now);
+            p->reports_seen++;
+            p->last_seen = now;
+            pthread_mutex_unlock(&g_rrm_mu);
+            found = 1;
+        } else if (action == RRM_ACT_MEASUREMENT_REQUEST &&
+                   tag == 38 && tln >= 3 && b[2] == RRM_MEAS_TYPE_BEACON) {
+            /* Measurement Request: Token(1) Mode(1) Type(1), then the
+             * Beacon Request body — OpClass(1) Channel(1)
+             * RandomInterval(2) Duration(2) Mode(1) BSSID(6), then
+             * optional subelements. Subelement 0 is the SSID: the
+             * field the whole detector turns on. */
+            char ssid[33] = "";
+            int  targeted = 0;
+            uint8_t chan = (tln >= 5) ? b[4] : 0;
+            uint8_t mode = (tln >= 12) ? b[11] : 0;
+            int sub = 3 + 13;                 /* past the fixed body */
+            while (sub + 2 <= (int)tln) {
+                uint8_t sid  = b[sub];
+                uint8_t slen = b[sub + 1];
+                if (sub + 2 + (int)slen > (int)tln) break;
+                if (sid == 0 && slen > 0) {
+                    int n = slen < 32 ? slen : 32;
+                    memcpy(ssid, b + sub + 2, (size_t)n);
+                    ssid[n] = '\0';
+                    targeted = 1;
+                }
+                sub += 2 + slen;
+            }
+
+            pthread_mutex_lock(&g_rrm_mu);
+            sloth_rrm_pair_t *p = rrm_slot(bssid, sta, now);
+            if (targeted) {
+                p->targeted_reqs++;
+                snprintf(p->last_ssid, sizeof(p->last_ssid), "%s", ssid);
+            } else {
+                p->broadcast_reqs++;
+            }
+            p->last_channel = chan;
+            p->last_mode    = mode;
+            p->last_seen    = now;
+            pthread_mutex_unlock(&g_rrm_mu);
+            found = 1;
+        }
+        off += 2 + tln;
+    }
+    return found;
+}
+
+int rrm_busiest_pair(time_t now, int window_s, int thresh,
+                     uint8_t out_bssid[6], uint8_t out_sta[6]) {
+    int best = 0;
+    pthread_mutex_lock(&g_rrm_mu);
+    for (int i = 0; i < g_rrm_n; i++) {
+        if (!g_rrm[i].last_seen || now - g_rrm[i].last_seen > window_s)
+            continue;
+        if (g_rrm[i].targeted_reqs < thresh) continue;
+        if (g_rrm[i].targeted_reqs <= best) continue;
+        best = g_rrm[i].targeted_reqs;
+        if (out_bssid) memcpy(out_bssid, g_rrm[i].bssid, 6);
+        if (out_sta)   memcpy(out_sta,   g_rrm[i].sta,   6);
+    }
+    pthread_mutex_unlock(&g_rrm_mu);
+    return best;
+}
+
+int rrm_find(const uint8_t bssid[6], const uint8_t sta[6],
+             sloth_rrm_pair_t *out) {
+    int hit = 0;
+    pthread_mutex_lock(&g_rrm_mu);
+    for (int i = 0; i < g_rrm_n; i++)
+        if (memcmp(g_rrm[i].bssid, bssid, 6) == 0 &&
+            memcmp(g_rrm[i].sta,   sta,   6) == 0) {
+            if (out) *out = g_rrm[i];
+            hit = 1; break;
+        }
+    pthread_mutex_unlock(&g_rrm_mu);
+    return hit;
+}
+
+void rrm_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_rrm_mu);
+    int n = g_rrm_n;
+    memcpy(s->rrm_pairs, g_rrm, (size_t)n * sizeof(g_rrm[0]));
+    s->rrm_pair_count = n;
+    pthread_mutex_unlock(&g_rrm_mu);
+    for (int i = 1; i < s->rrm_pair_count; i++) {
+        sloth_rrm_pair_t t = s->rrm_pairs[i];
+        int j = i - 1;
+        while (j >= 0 && s->rrm_pairs[j].targeted_reqs < t.targeted_reqs) {
+            s->rrm_pairs[j + 1] = s->rrm_pairs[j];
+            j--;
+        }
+        s->rrm_pairs[j + 1] = t;
+    }
+}
+
+int rrm_pair_count(void) {
+    pthread_mutex_lock(&g_rrm_mu);
+    int n = g_rrm_n;
+    pthread_mutex_unlock(&g_rrm_mu);
+    return n;
+}
+
+void rrm_clear(void) {
+    pthread_mutex_lock(&g_rrm_mu);
+    memset(g_rrm, 0, sizeof(g_rrm));
+    g_rrm_n = 0;
+    pthread_mutex_unlock(&g_rrm_mu);
 }
 
 int action_category_count(uint8_t category) {

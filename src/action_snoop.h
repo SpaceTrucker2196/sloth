@@ -33,6 +33,14 @@
  * announcement a beacon broadcasts, but aimed at one STA. */
 #define SPECTRUM_ACT_CHANNEL_SWITCH  4
 
+/* Radio Measurement Action field values — Table 9-361. */
+#define RRM_ACT_MEASUREMENT_REQUEST  0
+#define RRM_ACT_MEASUREMENT_REPORT   1
+
+/* Measurement Type inside the Measurement Request element (tag 38).
+ * 5 is the Beacon Request — "go and look at the air for me". */
+#define RRM_MEAS_TYPE_BEACON         5
+
 /* WNM Action field values — IEEE 802.11-2020 Table 9-368. */
 #define WNM_ACT_BTM_QUERY     6
 #define WNM_ACT_BTM_REQUEST   7
@@ -182,6 +190,34 @@ void csa_snapshot(sloth_state_t *s);
 
 int  csa_event_count(void);
 void csa_clear(void);
+
+/* ── 802.11k Radio Measurement (#61) ───────────────────────
+ *
+ * Beacon Requests are counted per (BSSID, STA), split by whether the
+ * request named a specific SSID. That split is the detector: a
+ * legitimate AP steering its own clients asks about networks *it*
+ * advertises, so a request naming an SSID the asker has never beaconed
+ * is an outsider fishing through someone else's radio.
+ *
+ * Beacon *Reports* — the client's reply — are counted and stored but
+ * raise nothing on their own. They are evidence a survey succeeded,
+ * not evidence one was attempted, and conflating the two would let a
+ * chatty client incriminate its own AP. */
+
+/* Parse and record a Radio Measurement action frame. Returns 1 when a
+ * Beacon Request or Report was recognised. */
+int  rrm_parse_action(const uint8_t *dot11, int len, time_t now);
+
+/* Busiest (BSSID, STA) pair by *targeted* Beacon Requests inside
+ * `window_s`, when it reaches `thresh`. Returns that count. */
+int  rrm_busiest_pair(time_t now, int window_s, int thresh,
+                      uint8_t out_bssid[6], uint8_t out_sta[6]);
+
+int  rrm_find(const uint8_t bssid[6], const uint8_t sta[6],
+              sloth_rrm_pair_t *out);
+void rrm_snapshot(sloth_state_t *s);
+int  rrm_pair_count(void);
+void rrm_clear(void);
 
 /* Frames seen for `category` since the last clear. Test introspection
  * and the seam the #61 RRM work reads before it grows a real table. */

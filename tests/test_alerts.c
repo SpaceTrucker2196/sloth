@@ -3853,6 +3853,129 @@ static void test_csa_one_alert_per_bssid_not_per_event(void) {
     ASSERT_EQ(count_alerts(&s, ALERT_TYPE_CSA_ABUSE), 1);
 }
 
+
+/* ── RRM survey abuse rule (#61) ─────────────────────────── */
+
+static const uint8_t RRM_AP[6]  = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x80 };
+static const uint8_t RRM_CLI[6] = { 0x12, 0x22, 0x33, 0x44, 0x55, 0x88 };
+
+/* Drive the live RRM table — the rule reads it, not the snapshot. */
+static void feed_rrm(const uint8_t *bssid, const uint8_t *sta,
+                     int n, const char *ssid) {
+    uint8_t f[160];
+    memset(f, 0, 24);
+    f[0] = 0xD0;
+    memcpy(f + 4,  sta,   6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);
+    int off = 24;
+    f[off++] = ACTION_CAT_RRM;
+    f[off++] = RRM_ACT_MEASUREMENT_REQUEST;
+    f[off++] = 0x01; f[off++] = 0x00; f[off++] = 0x00;
+    int slen = ssid ? (int)strlen(ssid) : 0;
+    f[off++] = 38;
+    f[off++] = (uint8_t)(3 + 13 + (ssid ? 2 + slen : 0));
+    f[off++] = 0x01; f[off++] = 0x00; f[off++] = RRM_MEAS_TYPE_BEACON;
+    f[off++] = 81; f[off++] = 6;
+    f[off++] = 0; f[off++] = 0; f[off++] = 0x64; f[off++] = 0; f[off++] = 0;
+    for (int i = 0; i < 6; i++) f[off++] = 0xff;
+    if (ssid) {
+        f[off++] = 0; f[off++] = (uint8_t)slen;
+        memcpy(f + off, ssid, (size_t)slen); off += slen;
+    }
+    for (int i = 0; i < n; i++) rrm_parse_action(f, off, time(NULL));
+}
+
+static void test_rrm_asking_about_its_own_ssid_is_quiet(void) {
+    /* A controller steering its own clients asks about networks it
+     * advertises. This is 802.11k working, at any rate. */
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x80, "corp-wifi", "WPA2", RSN_AKM_PSK, 2, 300);
+    (void)a;
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH * 2, "corp-wifi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE), -1);
+    rrm_clear();
+}
+
+static void test_rrm_fishing_for_a_foreign_ssid_fires(void) {
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x80, "guest-net", "WPA2", RSN_AKM_PSK, 2, 300);
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH, "corp-wifi");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "never beaconed that SSID") != NULL);
+    ASSERT_EQ(strcmp(s.alerts[idx].technique, "T1595.002"), 0);
+    rrm_clear();
+}
+
+static void test_rrm_unheard_asker_does_not_fire(void) {
+    /* The hop-mode guard. A BSSID we have never heard beacon tells us
+     * nothing about what it does or does not advertise — inferring
+     * "never beaconed that SSID" from a sampling gap would make --hop
+     * fire on every AP the sweep happened to miss. */
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH * 2, "corp-wifi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE), -1);
+    rrm_clear();
+}
+
+static void test_rrm_multi_vap_ssid_history_exonerates(void) {
+    /* One radio, several VAPs: the SSID may be in the AP's history
+     * rather than its current beacon. Matching only the live SSID would
+     * report every multi-SSID deployment as fishing. */
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x80, "guest-net", "WPA2", RSN_AKM_PSK, 2, 300);
+    snprintf(a->ssid_history[0], 33, "corp-wifi");
+    a->ssid_history_n = 1;
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH * 2, "corp-wifi");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE), -1);
+    rrm_clear();
+}
+
+static void test_rrm_outsider_surveying_my_ssid_is_crit(void) {
+    /* The strongest condition: someone else's AP asking the operator's
+     * clients about the operator's network. */
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x80, "guest-net", "WPA2", RSN_AKM_PSK, 2, 300);
+    ownership_add_ssid("corp-wifi");
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH, "corp-wifi");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "surveying YOUR network") != NULL);
+    ownership_clear(); rrm_clear();
+}
+
+static void test_rrm_my_own_ap_surveying_my_ssid_is_not_an_outsider(void) {
+    /* Designating both the SSID and the BSSID means this is the
+     * operator's own controller doing its job. */
+    alerts_clear(); ownership_clear(); rrm_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x80, "guest-net", "WPA2", RSN_AKM_PSK, 2, 300);
+    ownership_add_ssid("corp-wifi");
+    ownership_add_bssid("aa:bb:cc:dd:ee:80");
+    feed_rrm(RRM_AP, RRM_CLI, RRM_SURVEY_THRESH, "corp-wifi");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RRM_SURVEY_ABUSE);
+    /* Still fires — the asker has never beaconed that SSID — but as a
+     * WARN, not as an outsider surveying the network. */
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "surveying YOUR network") == NULL);
+    ownership_clear(); rrm_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3905,6 +4028,12 @@ void run_alerts_tests(void) {
     RUN_TEST(test_csa_repeat_of_one_target_is_not_a_storm);
     RUN_TEST(test_csa_target_hosting_a_twin_is_crit);
     RUN_TEST(test_csa_one_alert_per_bssid_not_per_event);
+    RUN_TEST(test_rrm_asking_about_its_own_ssid_is_quiet);
+    RUN_TEST(test_rrm_fishing_for_a_foreign_ssid_fires);
+    RUN_TEST(test_rrm_unheard_asker_does_not_fire);
+    RUN_TEST(test_rrm_multi_vap_ssid_history_exonerates);
+    RUN_TEST(test_rrm_outsider_surveying_my_ssid_is_crit);
+    RUN_TEST(test_rrm_my_own_ap_surveying_my_ssid_is_not_an_outsider);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Eight are open** (`#61`, `#64`, `#67`–`#72`),
+~~**No open GitHub issues.**~~ **Seven are open** (`#64`, `#67`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -333,8 +333,8 @@ effort:
 6. ~~**`#65` PEAP no-server-cert.**~~ ✅ landed 2026-08-25.
 7. ~~**`#63` CSA abuse.**~~ ✅ landed 2026-08-25.
 8. ~~**`#66` HT/VHT/HE/EHT operation decode.**~~ ✅ landed 2026-08-25.
-9. **`#61` RRM**, then **`#64`** control-frame counters → the B3
-   channel-utilisation view.
+9. ~~**`#61` RRM.**~~ ✅ landed 2026-08-25. Then **`#64`** control-frame
+   counters → the B3 channel-utilisation view.
 
 Backlog after that: `#70` (Bl0ck), `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as

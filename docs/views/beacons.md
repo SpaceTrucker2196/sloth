@@ -118,6 +118,31 @@ known rogue. Clients honour CSA, which is what makes it a quieter
 alternative to a deauth flood, and it works on firmware that ignores
 deauth entirely.
 
+## RRM surveys (#61)
+
+A footer line appears when 802.11k **Beacon Requests** have been seen:
+
+```
+ RRM surveys: 7 targeted requests in the last 300s, 3 reported back
+```
+
+A Beacon Request asks a client to scan and report what it can hear —
+BSSIDs, channels, RSSIs. The client obliges, because that is what
+802.11k is for. It is also how an AP enumerates the airspace *through
+someone else's radio*, from a position its own antenna cannot reach,
+and the report that comes back is precisely the input needed to build a
+convincing evil twin.
+
+The distinction the footer draws is between **targeted** requests (which
+name a specific SSID in a subelement) and broadcast ones (which do not).
+Only the first is a signal. `ALERT_TYPE_RRM_SURVEY_ABUSE` fires when the
+asker has been heard beaconing *something* but has never advertised the
+SSID it is asking about — a legitimate AP asks about its own networks.
+
+The "has been heard beaconing something" half is the `--hop` guard: on a
+channel-hopping sensor the AP inventory is a sample, so a BSSID we have
+never heard tells us nothing about what it does or does not advertise.
+
 ## What's suspicious
 
 - **A heat-coloured `posture` cell.** See the table above. A migration
