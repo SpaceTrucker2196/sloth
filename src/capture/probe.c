@@ -270,8 +270,18 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;
         beacon_rsn_t rsn;
         if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel,
-                         enc, &bms, &rsn))
+                         enc, &bms, &rsn)) {
             beacon_record(bssid, ssid, signal, channel, enc, bms, &rsn);
+            /* A CSA in a beacon is broadcast to every associated client
+             * at once (#63). addr2 is passed separately from addr3 even
+             * though a beacon's are normally identical — a forged one
+             * is where they differ, and that is the whole signal. */
+            if (rsn.csa_present)
+                csa_observe(dot11 + 16, dot11 + 10,
+                            rsn.csa_new_channel, rsn.csa_new_op_class,
+                            rsn.csa_switch_mode, rsn.csa_switch_count,
+                            CSA_SRC_BEACON, channel, time(NULL));
+        }
         return;
     }
 

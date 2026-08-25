@@ -701,6 +701,7 @@ typedef enum {
     ALERT_TYPE_BTM_ABUSE,           /* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
     ALERT_TYPE_WPA_DOWNGRADE,       /* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
     ALERT_TYPE_PEAP_NO_SERVER_CERT, /* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
+    ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -929,6 +930,10 @@ typedef struct {
     /* WPA_DG_* bits — computed per poll from the fields above plus, for
      * the OWE case, the presence of a paired open BSS. */
     uint8_t  downgrade_flags;
+    /* In-flight channel switch announced in this AP's beacons (#63).
+     * 0 = none pending. The [b] view shows it as CSA->N. */
+    uint8_t  pending_csa_channel;
+    uint8_t  pending_csa_count;
     /* Vendor-IE fingerprint — best-guess AP vendor from tag-221 OUIs
      * (Apple AirPort, Cisco, Mikrotik, Ubiquiti, etc.) and a WPS flag.
      * WPS-enabled APs are operationally interesting because PixieDust
@@ -1287,6 +1292,47 @@ typedef struct {
  * device — useful both as a fingerprint and as a posture signal. */
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
+
+/* ── Channel Switch Announcement (#63) ─────────────────────
+ *
+ * CSA is how an AP moves its clients to a new channel — radar
+ * avoidance under DFS, load balancing, a firmware reconfiguration.
+ * Clients honour it, which is the point and also the problem: a
+ * spoofed CSA claiming to come from the legitimate BSSID moves every
+ * associated STA onto a channel the attacker chose, without a single
+ * deauth frame and without out-signalling anything.
+ *
+ * Cheaper and quieter than a deauth flood, and it works on firmware
+ * that ignores deauth entirely. The same frame repeated with changing
+ * targets is a denial of service instead — clients churn between
+ * channels and never settle. */
+#define SLOTH_CSA_MAX_EVENTS  128
+
+/* Where the announcement was carried. A beacon CSA is broadcast to
+ * every associated client; an Action-frame CSA is addressed, and can be
+ * aimed at one STA without the rest of the BSS noticing. */
+typedef enum {
+    CSA_SRC_BEACON     = 0,
+    CSA_SRC_PROBE_RESP = 1,
+    CSA_SRC_ACTION     = 2,
+} sloth_csa_source_t;
+
+typedef struct {
+    uint8_t  bssid[6];        /* addr3 — the BSS being moved   */
+    uint8_t  ta[6];           /* addr2 — who actually sent it  */
+    uint8_t  new_op_class;    /* from tag 60; 0 when absent    */
+    uint8_t  new_channel;
+    uint8_t  switch_mode;     /* 0 = advisory, 1 = stop transmitting now */
+    uint8_t  switch_count;    /* TBTTs until the switch         */
+    uint8_t  source;          /* sloth_csa_source_t             */
+    uint8_t  from_channel;    /* channel we heard it on, 0 = unknown */
+    time_t   ts;
+} sloth_csa_event_t;
+
+/* > 3 distinct target channels from one BSSID inside the window is a
+ * storm: a legitimate AP picks one destination and commits to it. */
+#define CSA_STORM_THRESH    4
+#define CSA_STORM_WIN_SECS 60
 
 /* ── WPA / PMF downgrade posture (#62) ─────────────────────
  *
@@ -1681,6 +1727,9 @@ typedef struct {
      * a client landed, btm_steer_t is who told it to move. */
     btm_steer_t          btm_steers[MAX_BTM_PAIRS];
     int                  btm_steer_count;
+    /* Channel-switch announcements (#63), newest first. */
+    sloth_csa_event_t    csa_events[SLOTH_CSA_MAX_EVENTS];
+    int                  csa_count;
 
     /* ── Channel activity summary ─────────────────────────── */
     channel_summary_t    channels[MAX_CHAN_ENTRIES];

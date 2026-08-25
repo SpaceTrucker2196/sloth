@@ -340,6 +340,16 @@ void view_beacon_draw(const sloth_state_t *s) {
         const char *vend  = ap->vendor[0] ? ap->vendor : "-";
         const char *phy_s = ap->phy[0]    ? ap->phy    : "-";
 
+        /* A pending channel switch replaces the PHY cell while it is in
+         * flight (#63). It is transient and it is the more urgent fact:
+         * the PHY tier will still be there after the AP has moved. */
+        char phy_or_csa[12];
+        if (ap->pending_csa_channel) {
+            snprintf(phy_or_csa, sizeof(phy_or_csa), "CSA>%u",
+                     ap->pending_csa_channel);
+            phy_s = phy_or_csa;
+        }
+
         if (row == s->beacon_sel) {
             tui_sel();
             TPRINT(" %-22.22s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
@@ -406,6 +416,9 @@ void view_beacon_draw(const sloth_state_t *s) {
                 else if (strncmp(ap->phy, "Wi-Fi 5", 7) == 0) tui_normal();
                 else                                          tui_dim();
             } else { tui_dim(); }
+            /* A pending switch overrides the PHY shading — it is the
+             * transient fact and the more urgent one. */
+            if (ap->pending_csa_channel) tui_heat(0.8);
             TPRINT("  %-8.8s", phy_s);
 
             tui_dim();

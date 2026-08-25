@@ -218,6 +218,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_BTM_ABUSE:              return "T1498";       /* Network DoS — 802.11v forced roam */
     case ALERT_TYPE_WPA_DOWNGRADE:          return "T1600";       /* Weaken Encryption — the AP offers the weak lane */
     case ALERT_TYPE_PEAP_NO_SERVER_CERT:    return "T1557";       /* AiTM — the client authenticated to an unverified server */
+    case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -468,6 +469,99 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
  * observation floor below needs per-BSSID history a per-frame parser
  * does not have. Flagged as a §4.2 departure from the issue's wording.
  */
+
+/* Channel Switch Announcement abuse (#63).
+ *
+ * CSA is how an AP moves its clients to a new channel, and clients
+ * honour it — which is the point, and the problem. A spoofed
+ * announcement claiming the legitimate BSSID moves every associated STA
+ * onto a channel the attacker chose, with no deauth frame and without
+ * having to out-signal anything. It also works on firmware that ignores
+ * deauth, because roaming support is a certification checkbox.
+ *
+ * Three shapes, in descending confidence:
+ *
+ *   spoofed  — the transmitter is not the BSS it claims to speak for.
+ *              In a genuine announcement addr2 == addr3.
+ *   storm    — several distinct target channels from one BSSID inside
+ *              a minute. A legitimate AP picks one and commits.
+ *   steering — the target channel is where a known rogue is sitting.
+ */
+static void rule_csa_abuse(const sloth_state_t *s, time_t now) {
+    /* One pass per BSSID that announced anything recently.
+     *
+     * This is work-saving, not correctness: fire() already dedups on the
+     * key, so without it an AP announcing on every beacon still produces
+     * one alert — it would just re-scan the ring once per event to get
+     * there. Mutation testing established that, and the comment used to
+     * claim otherwise. */
+    uint8_t done[SLOTH_CSA_MAX_EVENTS][6];
+    int done_n = 0;
+
+    for (int i = 0; i < s->csa_count; i++) {
+        const sloth_csa_event_t *e = &s->csa_events[i];
+        if (!e->ts || now - e->ts > CSA_STORM_WIN_SECS) continue;
+
+        int seen = 0;
+        for (int d = 0; d < done_n; d++)
+            if (memcmp(done[d], e->bssid, 6) == 0) { seen = 1; break; }
+        if (seen) continue;
+        if (done_n < SLOTH_CSA_MAX_EVENTS) memcpy(done[done_n++], e->bssid, 6);
+
+        /* Spoof: addr2 != addr3. Only meaningful for Action frames —
+         * a beacon's addresses are the same by construction, so a
+         * mismatch there means the frame was misread, not forged. */
+        int spoofed = (e->source == CSA_SRC_ACTION) &&
+                      memcmp(e->ta, e->bssid, 6) != 0;
+
+        int targets = csa_distinct_targets(e->bssid, now, CSA_STORM_WIN_SECS);
+        int storm   = targets >= CSA_STORM_THRESH;
+
+        /* Is the destination somewhere a known rogue is sitting? The
+         * twin episodes are the materialised evil-twin set, and an AP
+         * on the target channel that is the rogue half of a pair is the
+         * landing site this announcement is aiming at. */
+        int to_twin = 0, to_downgrade = 0;
+        for (int j = 0; j < s->beacon_count; j++) {
+            const beacon_ap_t *a = &s->beacon_aps[j];
+            if (a->channel != e->new_channel) continue;
+            if (btm_candidate_is_twin(s, a->bssid)) to_twin = 1;
+            /* Composes with #62: landing clients on an AP that offers a
+             * downgrade lane is worse than landing them anywhere else. */
+            if (a->downgrade_flags) to_downgrade = 1;
+        }
+
+        if (!spoofed && !storm && !to_twin) continue;
+
+        int mine = ownership_is_my_bssid(e->bssid);
+        char bss[20], ta[20];
+        mac_to_str(e->bssid, bss, sizeof(bss));
+        mac_to_str(e->ta,    ta,  sizeof(ta));
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "csa:%.17s", bss);
+        snprintf(detail, sizeof(detail),
+                 "%.17s -> chan %u (op_class %u) mode=%u src=%s%s%s%s%s%s",
+                 bss, e->new_channel, e->new_op_class, e->switch_mode,
+                 e->source == CSA_SRC_ACTION ? "action" : "beacon",
+                 spoofed ? ", forged TA " : "",
+                 spoofed ? ta : "",
+                 storm ? ", storm" : "",
+                 to_twin ? ", target hosts a known twin" : "",
+                 mine ? " - YOUR network" : "");
+        if (storm && !spoofed && !to_twin)
+            snprintf(detail + strlen(detail),
+                     sizeof(detail) - strlen(detail),
+                     " (%d distinct targets/%ds)", targets, CSA_STORM_WIN_SECS);
+
+        fire(ALERT_TYPE_CSA_ABUSE,
+             (spoofed || to_twin || to_downgrade || mine) ? ALERT_SEV_CRIT
+                                                          : ALERT_SEV_WARN,
+             "CSA_ABUSE", detail, key, NULL, 0, now);
+    }
+}
+
 static void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -2294,6 +2388,7 @@ void alerts_update(sloth_state_t *s) {
     rule_assoc_flood(s, now);
     rule_btm_abuse(s, now);
     rule_wpa_downgrade(s, now);
+    rule_csa_abuse(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

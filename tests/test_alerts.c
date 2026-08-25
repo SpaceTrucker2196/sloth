@@ -3739,6 +3739,120 @@ static void test_peap_nocert_rostered_client_is_crit(void) {
     ownership_clear();
 }
 
+
+/* ── CSA abuse rule (#63) ────────────────────────────────── */
+
+static void add_csa(sloth_state_t *s, const uint8_t *bssid,
+                    const uint8_t *ta, uint8_t chan, int source) {
+    sloth_csa_event_t *e = &s->csa_events[s->csa_count++];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->bssid, bssid, 6);
+    memcpy(e->ta, ta ? ta : bssid, 6);
+    e->new_channel = chan;
+    e->switch_mode = 1;
+    e->switch_count = 3;
+    e->source = (uint8_t)source;
+    e->ts = time(NULL);
+}
+
+static const uint8_t CSA_AP[6]    = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x70 };
+static const uint8_t CSA_ROGUE[6] = { 0x66, 0x66, 0x66, 0x66, 0x66, 0x66 };
+
+static void test_csa_legit_single_target_quiet(void) {
+    /* One announcement, one destination, sent by the BSS itself. This
+     * is DFS working, and it must stay silent. */
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    add_csa(&s, CSA_AP, CSA_AP, 36, CSA_SRC_BEACON);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_CSA_ABUSE), -1);
+}
+
+static void test_csa_forged_transmitter_is_crit(void) {
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    add_csa(&s, CSA_AP, CSA_ROGUE, 11, CSA_SRC_ACTION);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_CSA_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "forged TA") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "66:66:66:66:66:66") != NULL);
+}
+
+static void test_csa_beacon_address_mismatch_is_not_a_forgery(void) {
+    /* A beacon's addr2 and addr3 are the same by construction, so a
+     * mismatch there means the frame was misread rather than forged.
+     * Treating it as a spoof would turn a parser bug into an attack. */
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    add_csa(&s, CSA_AP, CSA_ROGUE, 11, CSA_SRC_BEACON);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_CSA_ABUSE), -1);
+}
+
+static void test_csa_storm_fires(void) {
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < CSA_STORM_THRESH; i++)
+        add_csa(&s, CSA_AP, CSA_AP, (uint8_t)(36 + i * 4), CSA_SRC_BEACON);
+    /* The rule reads the live ring for the distinct count, so the ring
+     * has to see the same events the snapshot does. */
+    for (int i = 0; i < CSA_STORM_THRESH; i++)
+        csa_observe(CSA_AP, CSA_AP, 36 + i * 4, 0, 1, 3,
+                    CSA_SRC_BEACON, 6, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_CSA_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "storm") != NULL);
+    csa_clear();
+}
+
+static void test_csa_repeat_of_one_target_is_not_a_storm(void) {
+    /* An AP announcing the same switch on every beacon until it happens
+     * is doing exactly what the standard says. Counting announcements
+     * instead of destinations would fire on every DFS event. */
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < CSA_STORM_THRESH * 3; i++) {
+        add_csa(&s, CSA_AP, CSA_AP, 36, CSA_SRC_BEACON);
+        csa_observe(CSA_AP, CSA_AP, 36, 0, 1, 3, CSA_SRC_BEACON, 6,
+                    time(NULL));
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_CSA_ABUSE), -1);
+    csa_clear();
+}
+
+static void test_csa_target_hosting_a_twin_is_crit(void) {
+    /* The destination is where a known rogue is sitting. That is the
+     * difference between a channel change and a forced roam. */
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    add_csa(&s, CSA_AP, CSA_AP, 40, CSA_SRC_BEACON);
+    beacon_ap_t *rogue = add_ap(&s, 0x71, "corp", "WPA2", RSN_AKM_PSK, 2, 120);
+    rogue->channel = 40;
+    twin_episode_t *t = &s.twin_episodes[s.twin_episode_count++];
+    memset(t, 0, sizeof(*t));
+    memcpy(t->twin_bssid, rogue->bssid, 6);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_CSA_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "known twin") != NULL);
+}
+
+static void test_csa_one_alert_per_bssid_not_per_event(void) {
+    /* An AP announcing on every beacon must produce one finding, not
+     * one per frame. */
+    alerts_clear(); ownership_clear(); csa_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 5; i++)
+        add_csa(&s, CSA_AP, CSA_ROGUE, 11, CSA_SRC_ACTION);
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_CSA_ABUSE), 1);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3784,6 +3898,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_peap_nocert_quiet_when_clean);
     RUN_TEST(test_peap_nocert_my_bssid_is_crit);
     RUN_TEST(test_peap_nocert_rostered_client_is_crit);
+    RUN_TEST(test_csa_legit_single_target_quiet);
+    RUN_TEST(test_csa_forged_transmitter_is_crit);
+    RUN_TEST(test_csa_beacon_address_mismatch_is_not_a_forgery);
+    RUN_TEST(test_csa_storm_fires);
+    RUN_TEST(test_csa_repeat_of_one_target_is_not_a_storm);
+    RUN_TEST(test_csa_target_hosting_a_twin_is_crit);
+    RUN_TEST(test_csa_one_alert_per_bssid_not_per_event);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

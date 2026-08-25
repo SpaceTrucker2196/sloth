@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Ten are open** (`#61`, `#63`, `#64`, `#66`–`#72`),
+~~**No open GitHub issues.**~~ **Nine are open** (`#61`, `#64`, `#66`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -330,8 +330,7 @@ effort:
    `--report`, docs.~~ ✅ landed 2026-08-24.
 5. ~~**`#62` PMF/WPA3 downgrade.**~~ ✅ landed 2026-08-25.
 6. ~~**`#65` PEAP no-server-cert.**~~ ✅ landed 2026-08-25.
-7. **`#63` CSA abuse.** Extends `#59`'s dispatcher; composes with
-   `#62`'s posture flags.
+7. ~~**`#63` CSA abuse.**~~ ✅ landed 2026-08-25.
 8. **`#66` HT/VHT/HE/EHT operation decode.** Unlocks real channel width,
    completes the durable 6 GHz beacon-channel fix, and is the data model
    the airtime view needs.

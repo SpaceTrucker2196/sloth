@@ -68,6 +68,21 @@ depend on the AP having offered the weak lane in the first place.
 - Beacon interval of 100 ms (= 102.4 ms, the standard).
 - WPA2 / WPA3 encryption.
 
+## Pending channel switches (#63)
+
+When an AP is announcing a **Channel Switch**, the `PHY` cell is
+replaced by `CSA>N` — the channel it is moving to — heat-coloured while
+the switch is in flight. It is transient and the more urgent fact; the
+PHY tier will still be there after the AP has moved.
+
+A legitimate switch is DFS doing its job: the AP heard radar, it has to
+leave, and it tells its clients where it is going. The abuse cases are
+in `ALERT_TYPE_CSA_ABUSE` — a forged transmitter, several distinct
+targets in a minute, or a destination channel that happens to host a
+known rogue. Clients honour CSA, which is what makes it a quieter
+alternative to a deauth flood, and it works on firmware that ignores
+deauth entirely.
+
 ## What's suspicious
 
 - **A heat-coloured `posture` cell.** See the table above. A migration

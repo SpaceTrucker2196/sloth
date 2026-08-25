@@ -135,9 +135,144 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
     /* Category 10 / Action 7 is the one this module deep-parses. The
      * others stay counted-only until their own issues land (#61 RRM,
      * #63 CSA), and the count is what those issues start from. */
+    if (cat == ACTION_CAT_SPECTRUM &&
+        action == SPECTRUM_ACT_CHANNEL_SWITCH) {
+        csa_parse_action(dot11, len, now);
+        return;
+    }
     if (cat != ACTION_CAT_WNM || action != WNM_ACT_BTM_REQUEST) return;
     sloth_btm_req_t req;
     if (action_parse_btm_req(dot11, len, &req)) btm_observe(&req, now);
+}
+
+/* ── Channel Switch Announcement ring (#63) ──────────────── */
+
+static sloth_csa_event_t g_csa[SLOTH_CSA_MAX_EVENTS];
+static int               g_csa_i;      /* next write slot */
+static int               g_csa_n;      /* entries ever written, capped */
+static pthread_mutex_t   g_csa_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void csa_observe(const uint8_t bssid[6], const uint8_t *ta,
+                 int new_channel, int new_op_class,
+                 int switch_mode, int switch_count,
+                 int source, int from_channel, time_t now) {
+    if (!bssid) return;
+    /* Channel 0 is not a channel. An IE that announces one is malformed
+     * rather than interesting, and recording it would put a bogus
+     * target into the distinct-channel count the storm rule reads. */
+    if (new_channel <= 0 || new_channel > 233) return;
+
+    pthread_mutex_lock(&g_csa_mu);
+    sloth_csa_event_t *e = &g_csa[g_csa_i];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->bssid, bssid, 6);
+    memcpy(e->ta, ta ? ta : bssid, 6);
+    e->new_channel  = (uint8_t)new_channel;
+    e->new_op_class = (uint8_t)(new_op_class > 0 ? new_op_class : 0);
+    e->switch_mode  = (uint8_t)(switch_mode ? 1 : 0);
+    e->switch_count = (uint8_t)(switch_count & 0xff);
+    e->source       = (uint8_t)source;
+    e->from_channel = (uint8_t)(from_channel > 0 ? from_channel : 0);
+    e->ts           = now;
+    g_csa_i = (g_csa_i + 1) % SLOTH_CSA_MAX_EVENTS;
+    if (g_csa_n < SLOTH_CSA_MAX_EVENTS) g_csa_n++;
+    pthread_mutex_unlock(&g_csa_mu);
+}
+
+int csa_parse_action(const uint8_t *dot11, int len, time_t now) {
+    uint8_t action = 0;
+    int cat = action_parse_category(dot11, len, &action);
+    if (cat != ACTION_CAT_SPECTRUM ||
+        action != SPECTRUM_ACT_CHANNEL_SWITCH) return 0;
+
+    /* Body after Category + Action is one or more elements. Tag 37 is
+     * the announcement; tag 60 carries it with an operating class. */
+    int off = DOT11_HDR_LEN + 2;
+    int mode = 0, chan = 0, count = 0, opclass = 0, found = 0;
+    while (off + 2 <= len) {
+        uint8_t tag = dot11[off];
+        uint8_t tln = dot11[off + 1];
+        if (off + 2 + (int)tln > len) break;
+        const uint8_t *b = dot11 + off + 2;
+        if (tag == 37 && tln >= 3) {
+            mode = b[0]; chan = b[1]; count = b[2]; found = 1;
+        } else if (tag == 60 && tln >= 4) {
+            mode = b[0]; opclass = b[1]; chan = b[2]; count = b[3];
+            found = 1;
+        }
+        off += 2 + tln;
+    }
+    if (!found) return 0;
+
+    /* addr2 is the real transmitter and addr3 the BSS it claims to
+     * speak for. Keeping both is the whole spoof signal: in a genuine
+     * announcement they are the same address. */
+    csa_observe(dot11 + 16, dot11 + 10, chan, opclass, mode, count,
+                CSA_SRC_ACTION, 0, now);
+    return 1;
+}
+
+int csa_distinct_targets(const uint8_t bssid[6], time_t now, int window_s) {
+    int seen[256];
+    memset(seen, 0, sizeof(seen));
+    int n = 0;
+    pthread_mutex_lock(&g_csa_mu);
+    for (int i = 0; i < g_csa_n; i++) {
+        const sloth_csa_event_t *e = &g_csa[i];
+        if (!e->ts || now - e->ts > window_s) continue;
+        if (memcmp(e->bssid, bssid, 6) != 0) continue;
+        if (!seen[e->new_channel]) { seen[e->new_channel] = 1; n++; }
+    }
+    pthread_mutex_unlock(&g_csa_mu);
+    return n;
+}
+
+int csa_latest(const uint8_t bssid[6], time_t now, int window_s,
+               sloth_csa_event_t *out) {
+    int hit = 0;
+    time_t best = 0;
+    pthread_mutex_lock(&g_csa_mu);
+    for (int i = 0; i < g_csa_n; i++) {
+        const sloth_csa_event_t *e = &g_csa[i];
+        if (!e->ts || now - e->ts > window_s) continue;
+        if (memcmp(e->bssid, bssid, 6) != 0) continue;
+        if (e->ts < best) continue;
+        best = e->ts;
+        if (out) *out = *e;
+        hit = 1;
+    }
+    pthread_mutex_unlock(&g_csa_mu);
+    return hit;
+}
+
+void csa_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_csa_mu);
+    int n = g_csa_n;
+    for (int k = 0; k < n; k++) {
+        /* Walk backwards from the write cursor so the copy is
+         * newest-first without a sort. */
+        int idx = (g_csa_i - 1 - k + SLOTH_CSA_MAX_EVENTS * 2)
+                  % SLOTH_CSA_MAX_EVENTS;
+        s->csa_events[k] = g_csa[idx];
+    }
+    s->csa_count = n;
+    pthread_mutex_unlock(&g_csa_mu);
+}
+
+int csa_event_count(void) {
+    pthread_mutex_lock(&g_csa_mu);
+    int n = g_csa_n;
+    pthread_mutex_unlock(&g_csa_mu);
+    return n;
+}
+
+void csa_clear(void) {
+    pthread_mutex_lock(&g_csa_mu);
+    memset(g_csa, 0, sizeof(g_csa));
+    g_csa_i = 0;
+    g_csa_n = 0;
+    pthread_mutex_unlock(&g_csa_mu);
 }
 
 int action_category_count(uint8_t category) {

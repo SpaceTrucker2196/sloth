@@ -277,6 +277,26 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                 if (!dup) rsn_out->neighbor_count++;
             }
 
+        } else if (tag == 37 && tln >= 3 && rsn_out) {
+            /* Channel Switch Announcement (§9.4.2.19):
+             *   Switch Mode(1)  New Channel(1)  Switch Count(1)
+             * Switch Mode 1 means "stop transmitting until the switch",
+             * which is what makes a spoofed CSA an effective silencer
+             * even if the client never follows the move. */
+            rsn_out->csa_present      = 1;
+            rsn_out->csa_switch_mode  = ie[2];
+            rsn_out->csa_new_channel  = ie[3];
+            rsn_out->csa_switch_count = ie[4];
+        } else if (tag == 60 && tln >= 4 && rsn_out) {
+            /* Extended CSA (§9.4.2.55) adds the operating class, which
+             * is how a 6 GHz or 160 MHz move is expressed at all. It
+             * takes precedence over tag 37 when both are present —
+             * same announcement, more of it. */
+            rsn_out->csa_present      = 1;
+            rsn_out->csa_switch_mode  = ie[2];
+            rsn_out->csa_new_op_class = ie[3];
+            rsn_out->csa_new_channel  = ie[4];
+            rsn_out->csa_switch_count = ie[5];
         } else if (tag == 3 && tln == 1) {
             /* DS Parameter Set — channel number */
             *channel_out = ie[2];
@@ -612,6 +632,14 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                  * has_wps accumulates two lines below. */
                 if (rsn->has_wpa1)  g_aps[i].has_wpa1  = 1;
                 if (rsn->owe_trans) g_aps[i].owe_trans = 1;
+        /* A pending switch is live only while the AP keeps announcing
+         * it. Clearing on a beacon without the IE is what makes the
+         * [b] column mean "switching now" rather than "switched once,
+         * some time ago". */
+        g_aps[i].pending_csa_channel =
+            rsn->csa_present ? (uint8_t)rsn->csa_new_channel : 0;
+        g_aps[i].pending_csa_count =
+            rsn->csa_present ? (uint8_t)rsn->csa_switch_count : 0;
                 /* Vendor IE / WPS — only overwrite if we found new
                  * info; preserve a previously-set vendor on bare
                  * re-records. */
@@ -709,6 +737,14 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].pairwise_bits = rsn->pairwise_bits;
         g_aps[slot].has_wpa1      = rsn->has_wpa1 ? 1 : 0;
         g_aps[slot].owe_trans     = rsn->owe_trans ? 1 : 0;
+        /* A pending switch is live only while the AP keeps announcing
+         * it. Clearing on a beacon without the IE is what makes the
+         * [b] column mean "switching now" rather than "switched once,
+         * some time ago". */
+        g_aps[slot].pending_csa_channel =
+            rsn->csa_present ? (uint8_t)rsn->csa_new_channel : 0;
+        g_aps[slot].pending_csa_count =
+            rsn->csa_present ? (uint8_t)rsn->csa_switch_count : 0;
         snprintf(g_aps[slot].vendor, sizeof(g_aps[slot].vendor),
                  "%s", rsn->vendor);
         g_aps[slot].has_wps    = rsn->has_wps;

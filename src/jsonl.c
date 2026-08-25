@@ -858,6 +858,30 @@ void jsonl_emit_btm_steers(const sloth_state_t *s) {
     }
 }
 
+/* Channel-switch announcements (#63). Every announcement, legitimate
+ * or not — a consumer judging one needs the ordinary DFS traffic around
+ * it, and `ta` versus `bssid` is the forgery signal. */
+void jsonl_emit_csa_events(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->csa_count; i++) {
+        const sloth_csa_event_t *e = &s->csa_events[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_csa_event", now);
+        kv_mac(buf, LINEBUF, &off, "bssid",        e->bssid);
+        kv_mac(buf, LINEBUF, &off, "ta",           e->ta);
+        kv_int(buf, LINEBUF, &off, "new_channel",  e->new_channel);
+        kv_int(buf, LINEBUF, &off, "new_op_class", e->new_op_class);
+        kv_int(buf, LINEBUF, &off, "switch_mode",  e->switch_mode);
+        kv_int(buf, LINEBUF, &off, "switch_count", e->switch_count);
+        kv_int(buf, LINEBUF, &off, "source",       e->source);
+        kv_int(buf, LINEBUF, &off, "from_channel", e->from_channel);
+        kv_int(buf, LINEBUF, &off, "ts",           (long long)e->ts);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1314,6 +1338,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_assocs            (s);
     jsonl_emit_assoc_reqs        (s);
     jsonl_emit_btm_steers        (s);
+    jsonl_emit_csa_events        (s);
     jsonl_emit_eapol_events      (s);
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);

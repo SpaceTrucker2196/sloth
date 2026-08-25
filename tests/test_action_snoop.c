@@ -578,6 +578,153 @@ static void test_btm_other_wnm_actions_counted_not_tabled(void) {
     action_clear();
 }
 
+
+/* ── Channel Switch Announcement (#63) ───────────────────── */
+
+/* Build a Spectrum Management / CSA Action frame. `ta` is addr2 — the
+ * real transmitter, which a forged announcement gets wrong. */
+static int build_csa_action(uint8_t *f, const uint8_t bssid[6],
+                            const uint8_t ta[6], int use_ext,
+                            uint8_t mode, uint8_t opclass,
+                            uint8_t chan, uint8_t count) {
+    memset(f, 0, HDR);
+    f[0] = 0xD0;
+    memcpy(f + 4,  bssid, 6);      /* addr1 — broadcast in practice */
+    memcpy(f + 10, ta,    6);      /* addr2 — the transmitter       */
+    memcpy(f + 16, bssid, 6);      /* addr3 — the BSS claimed       */
+    int off = HDR;
+    f[off++] = ACTION_CAT_SPECTRUM;
+    f[off++] = SPECTRUM_ACT_CHANNEL_SWITCH;
+    if (use_ext) {
+        f[off++] = 60; f[off++] = 4;
+        f[off++] = mode; f[off++] = opclass; f[off++] = chan; f[off++] = count;
+    } else {
+        f[off++] = 37; f[off++] = 3;
+        f[off++] = mode; f[off++] = chan; f[off++] = count;
+    }
+    return off;
+}
+
+static void test_csa_action_parsed(void) {
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 1, 0, 36, 3);
+    ASSERT_EQ(csa_parse_action(f, n, 5000), 1);
+    ASSERT_EQ(csa_event_count(), 1);
+    sloth_csa_event_t e;
+    ASSERT_EQ(csa_latest(AP_A, 5000, 60, &e), 1);
+    ASSERT_EQ(e.new_channel, 36);
+    ASSERT_EQ(e.switch_mode, 1);
+    ASSERT_EQ(e.switch_count, 3);
+    ASSERT_EQ(e.source, CSA_SRC_ACTION);
+    csa_clear();
+}
+
+static void test_csa_extended_carries_op_class(void) {
+    /* Tag 60 is how a 6 GHz or 160 MHz move is expressed at all —
+     * without the operating class the channel number is ambiguous. */
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 1, 0, 131, 37, 2);
+    ASSERT_EQ(csa_parse_action(f, n, 5000), 1);
+    sloth_csa_event_t e;
+    csa_latest(AP_A, 5000, 60, &e);
+    ASSERT_EQ(e.new_op_class, 131);
+    ASSERT_EQ(e.new_channel, 37);
+    csa_clear();
+}
+
+static void test_csa_records_the_real_transmitter(void) {
+    /* The spoof signal: addr2 is who sent it, addr3 is who it claims to
+     * be. Storing only the BSSID would erase the entire finding. */
+    csa_clear();
+    static const uint8_t ROGUE[6] = {0x66,0x66,0x66,0x66,0x66,0x66};
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, ROGUE, 0, 1, 0, 11, 1);
+    csa_parse_action(f, n, 5000);
+    sloth_csa_event_t e;
+    csa_latest(AP_A, 5000, 60, &e);
+    ASSERT(memcmp(e.bssid, AP_A,  6) == 0);
+    ASSERT(memcmp(e.ta,    ROGUE, 6) == 0);
+    csa_clear();
+}
+
+static void test_csa_rejects_channel_zero(void) {
+    /* Channel 0 is not a channel. Recording it would put a bogus target
+     * into the distinct-channel count the storm rule reads. */
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0, 0, 1);
+    csa_parse_action(f, n, 5000);
+    ASSERT_EQ(csa_event_count(), 0);
+    csa_clear();
+}
+
+static void test_csa_other_spectrum_actions_ignored(void) {
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0, 6, 1);
+    f[HDR + 1] = 0;                       /* Measurement Request */
+    ASSERT_EQ(csa_parse_action(f, n, 5000), 0);
+    ASSERT_EQ(csa_event_count(), 0);
+    csa_clear();
+}
+
+static void test_csa_distinct_targets_counts_channels(void) {
+    csa_clear();
+    uint8_t f[64];
+    for (int c = 0; c < 3; c++) {
+        int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0,
+                                 (uint8_t)(36 + c * 4), 1);
+        csa_parse_action(f, n, 5000 + c);
+    }
+    /* Same channel twice must not count twice — the storm signal is
+     * distinct destinations, not announcement volume. */
+    int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0, 36, 1);
+    csa_parse_action(f, n, 5003);
+    ASSERT_EQ(csa_distinct_targets(AP_A, 5010, 60), 3);
+    csa_clear();
+}
+
+static void test_csa_window_expires(void) {
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0, 36, 1);
+    csa_parse_action(f, n, 5000);
+    ASSERT_EQ(csa_distinct_targets(AP_A, 5000 + 61, 60), 0);
+    csa_clear();
+}
+
+static void test_csa_reached_through_action_observe(void) {
+    csa_clear();
+    action_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 1, 0, 44, 2);
+    action_observe(f, n, 6000);
+    ASSERT_EQ(csa_event_count(), 1);
+    ASSERT_EQ(action_category_count(ACTION_CAT_SPECTRUM), 1);
+    csa_clear();
+    action_clear();
+}
+
+static void test_csa_snapshot_newest_first(void) {
+    csa_clear();
+    uint8_t f[64];
+    for (int c = 0; c < 3; c++) {
+        int n = build_csa_action(f, AP_A, AP_A, 0, 0, 0,
+                                 (uint8_t)(36 + c), 1);
+        csa_parse_action(f, n, 7000 + c);
+    }
+    sloth_state_t *st = calloc(1, sizeof(*st));
+    ASSERT(st != NULL);
+    csa_snapshot(st);
+    ASSERT_EQ(st->csa_count, 3);
+    ASSERT_EQ(st->csa_events[0].new_channel, 38);
+    ASSERT_EQ(st->csa_events[2].new_channel, 36);
+    free(st);
+    csa_clear();
+}
+
 void run_action_snoop_tests(void) {
     TEST_SUITE("action frame category demux (#59)");
     RUN_TEST(test_category_read);
@@ -616,4 +763,14 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_btm_snapshot_orders_most_recent_first);
     RUN_TEST(test_btm_observe_reached_through_action_observe);
     RUN_TEST(test_btm_other_wnm_actions_counted_not_tabled);
+    TEST_SUITE("Channel Switch Announcement (#63)");
+    RUN_TEST(test_csa_action_parsed);
+    RUN_TEST(test_csa_extended_carries_op_class);
+    RUN_TEST(test_csa_records_the_real_transmitter);
+    RUN_TEST(test_csa_rejects_channel_zero);
+    RUN_TEST(test_csa_other_spectrum_actions_ignored);
+    RUN_TEST(test_csa_distinct_targets_counts_channels);
+    RUN_TEST(test_csa_window_expires);
+    RUN_TEST(test_csa_reached_through_action_observe);
+    RUN_TEST(test_csa_snapshot_newest_first);
 }

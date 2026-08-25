@@ -67,6 +67,16 @@ typedef struct {
      * lane; presence is the signal, the pairing is checked by the rule
      * because one beacon cannot see the other BSS. */
     int  owe_trans;
+    /* Channel Switch Announcement (#63): tag 37, or tag 60 when the AP
+     * also names a new operating class. csa_present distinguishes "no
+     * switch announced" from a switch to channel 0, which is not a
+     * channel — the IE is absent far more often than it is present, so
+     * conflating the two would report a pending switch on every AP. */
+    int  csa_present;
+    int  csa_new_channel;
+    int  csa_new_op_class;   /* 0 when only tag 37 was present */
+    int  csa_switch_mode;
+    int  csa_switch_count;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151

@@ -22,10 +22,16 @@
  * there is untestable. Same reasoning that moved radiotap_parse out. */
 
 /* Category codes — IEEE 802.11-2020 Table 9-51. */
+#define ACTION_CAT_SPECTRUM 0    /* Spectrum Management (802.11h) */
 #define ACTION_CAT_RRM      5    /* Radio Measurement   (802.11k) */
 #define ACTION_CAT_FT       6    /* Fast BSS Transition (802.11r) */
 #define ACTION_CAT_WNM     10    /* Wireless Net Mgmt   (802.11v) */
 #define ACTION_CAT_VENDOR 127    /* Vendor Specific               */
+
+/* Spectrum Management Action field values — Table 9-51.
+ * 4 is the addressed Channel Switch Announcement (§9.6.2.4): the same
+ * announcement a beacon broadcasts, but aimed at one STA. */
+#define SPECTRUM_ACT_CHANNEL_SWITCH  4
 
 /* WNM Action field values — IEEE 802.11-2020 Table 9-368. */
 #define WNM_ACT_BTM_QUERY     6
@@ -140,6 +146,42 @@ void btm_snapshot(sloth_state_t *s);
 /* Test introspection. */
 int  btm_pair_count(void);
 void btm_clear(void);
+
+/* ── Channel Switch Announcement (#63) ─────────────────────
+ *
+ * Records every announcement seen, from beacons, probe responses and
+ * addressed Action frames alike, in one ring. The rule reads the ring
+ * rather than the AP table because the abuse cases are about *who
+ * announced what, when* — a spoofed announcement never reaches the AP
+ * table at all, since it claims a BSSID whose real beacons say
+ * something else. */
+
+/* Record one announcement. `ta` may be NULL when the transmitter is not
+ * separable from the BSSID (the beacon path, where they are the same
+ * address by construction). */
+void csa_observe(const uint8_t bssid[6], const uint8_t *ta,
+                 int new_channel, int new_op_class,
+                 int switch_mode, int switch_count,
+                 int source, int from_channel, time_t now);
+
+/* Parse a Spectrum Management / Channel Switch Announcement Action
+ * frame and record it. Returns 1 if one was found, 0 otherwise. */
+int  csa_parse_action(const uint8_t *dot11, int len, time_t now);
+
+/* Distinct target channels announced for `bssid` within `window_s`.
+ * A legitimate AP picks one destination and commits; several distinct
+ * targets in a minute is client churn, not roaming. */
+int  csa_distinct_targets(const uint8_t bssid[6], time_t now, int window_s);
+
+/* Most recent announcement for `bssid` in the window, or 0. */
+int  csa_latest(const uint8_t bssid[6], time_t now, int window_s,
+                sloth_csa_event_t *out);
+
+/* Copy the ring into s->csa_events[], newest first. */
+void csa_snapshot(sloth_state_t *s);
+
+int  csa_event_count(void);
+void csa_clear(void);
 
 /* Frames seen for `category` since the last clear. Test introspection
  * and the seam the #61 RRM work reads before it grows a real table. */
