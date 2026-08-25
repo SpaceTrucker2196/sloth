@@ -704,6 +704,7 @@ typedef enum {
     ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
     ALERT_TYPE_RRM_SURVEY_ABUSE,    /* 802.11k Beacon Request used to survey the air through a client (#61) */
     ALERT_TYPE_RTS_FLOOD,           /* RTS flood reserving the channel — airtime denial of service (#64) */
+    ALERT_TYPE_BLOCKACK_ATTACK,     /* spoofed BAR resetting a peer's Block-Ack window — Bl0ck (#70) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

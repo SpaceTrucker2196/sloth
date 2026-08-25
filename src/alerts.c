@@ -222,6 +222,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
     case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
     case ALERT_TYPE_RTS_FLOOD:              return "T1498";       /* Network DoS — the channel reserved out from under everyone */
+    case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -515,6 +516,55 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
  * The sustain requirement is what separates this from a retry burst. A
  * client fighting interference emits RTS hard for a moment; a flood
  * keeps going. */
+
+/* Block-Ack paralysis — the Bl0ck attack (#70, arXiv 2302.05899).
+ *
+ * A spoofed Block-Ack Request sent on behalf of a legitimate station
+ * forces its peer to advance the Block-Ack receive window past frames
+ * that are still queued. Everything in the skipped range is discarded
+ * and the connection stalls.
+ *
+ * It is quiet by design: no deauth, no flood, nothing the rate rules
+ * watch for. What the operator sees is a client that stopped working.
+ *
+ * The corroborating retry burst is reported, not required. A stalled
+ * connection usually retries hard, but requiring it would make the rule
+ * depend on rf_quality having sampled the right channel at the right
+ * moment — and on a hopping sensor that is a coin flip. */
+static void rule_blockack_attack(const sloth_state_t *s, time_t now) {
+    sloth_bar_state_t b;
+    memset(&b, 0, sizeof(b));
+    if (bar_worst_offender(now, 300, &b) <= 0) return;
+
+    int mine = ownership_is_my_bssid(b.bssid);
+
+    /* Is the receiving side visibly struggling? rf_quality tracks the
+     * retry ratio per channel; a stalled Block-Ack window shows up
+     * there as sustained retries. Evidence for the operator, not a
+     * gate on the alert. */
+    int degraded = 0;
+    for (int i = 0; i < s->channel_count; i++)
+        if (s->channels[i].retry_pct >= RF_RETRY_DEGRADED_PCT) degraded = 1;
+
+    char rx[20], tx[20];
+    mac_to_str(b.bssid, rx, sizeof(rx));
+    mac_to_str(b.sta,   tx, sizeof(tx));
+
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "bl0ck:%.17s:%.17s:%u", rx, tx, b.tid);
+    snprintf(detail, sizeof(detail),
+             "Bl0ck: %.17s -> %.17s TID %u SSN jump %u, %u suspicious of "
+             "%u BARs%s%s",
+             tx, rx, b.tid, b.last_jump, b.suspicious_bars, b.total_bars,
+             degraded ? " (channel retrying hard)" : "",
+             mine ? " - YOUR network" : "");
+
+    fire(ALERT_TYPE_BLOCKACK_ATTACK,
+         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+         "BLOCKACK_ATK", detail, key, NULL, 0, now);
+}
+
 static void rule_rts_flood(const sloth_state_t *s, time_t now) {
     (void)s;
     uint8_t ta[6];
@@ -2514,6 +2564,7 @@ void alerts_update(sloth_state_t *s) {
     rule_csa_abuse(s, now);
     rule_rrm_survey_abuse(s, now);
     rule_rts_flood(s, now);
+    rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

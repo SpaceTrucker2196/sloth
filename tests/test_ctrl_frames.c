@@ -261,6 +261,157 @@ static void test_snapshot_annotates_existing_rows_only(void) {
     ctrl_clear();
 }
 
+
+/* ── Block-Ack paralysis (Bl0ck) — #70 ───────────────────── */
+
+/* BAR: FC(2) Duration(2) RA(6) TA(6) BAR-Control(2) SSC(2) = 20 bytes.
+ * BAR Control bits 12-15 are the TID; the Starting Sequence Control
+ * puts the fragment number in bits 0-3 and the SSN in bits 4-15. */
+static int build_bar(uint8_t *f, const uint8_t ra[6], const uint8_t ta[6],
+                     int tid, uint16_t ssn, int multi_tid) {
+    memset(f, 0, 20);
+    f[0] = fc0(CTRL_SUB_BLOCKACK_REQ);
+    memcpy(f + 4,  ra, 6);
+    memcpy(f + 10, ta, 6);
+    uint16_t ctl = (uint16_t)((tid << 12) | (multi_tid ? 0x0002 : 0));
+    f[16] = (uint8_t)(ctl & 0xff);
+    f[17] = (uint8_t)(ctl >> 8);
+    uint16_t ssc = (uint16_t)(ssn << 4);
+    f[18] = (uint8_t)(ssc & 0xff);
+    f[19] = (uint8_t)(ssc >> 8);
+    return 20;
+}
+
+static void test_ssn_forward_distance_basic(void) {
+    ASSERT_EQ(bar_ssn_forward_distance(100, 150), 50);
+    ASSERT_EQ(bar_ssn_forward_distance(100, 100), 0);
+}
+
+static void test_ssn_forward_distance_wraps(void) {
+    /* The hazard the whole module rests on. SSN is 12 bits, so a
+     * station transmitting steadily wraps roughly every 4096 frames —
+     * which is often. A plain subtraction here gives -4080, and any
+     * "jump > 128" test written on it either never fires or always
+     * does, depending on the sign convention. */
+    ASSERT_EQ(bar_ssn_forward_distance(4090, 10), 16);
+    ASSERT_EQ(bar_ssn_forward_distance(4095, 0),  1);
+    /* Backwards is a large forward distance, not a negative one — the
+     * sequence space is a circle and there is no "behind". */
+    ASSERT_EQ(bar_ssn_forward_distance(10, 4090), 4080);
+}
+
+static void test_bar_first_frame_sets_the_baseline(void) {
+    /* Every connection sloth joins is joined mid-flight. Treating the
+     * first observed SSN as a jump would flag all of them. */
+    ctrl_clear();
+    uint8_t f[24];
+    int n = build_bar(f, RA_A, TA_A, 3, 2000, 0);
+    ctrl_observe(f, n, 6, 1000);
+    sloth_bar_state_t b;
+    ASSERT_EQ(bar_find(RA_A, TA_A, 3, &b), 1);
+    ASSERT_EQ((int)b.total_bars, 1);
+    ASSERT_EQ((int)b.suspicious_bars, 0);
+    ASSERT_EQ((int)b.last_ssn, 2000);
+    ctrl_clear();
+}
+
+static void test_bar_ordinary_advance_is_not_suspicious(void) {
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 2000, 0), 6, 1000);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 2020, 0), 6, 1001);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 2064, 0), 6, 1002);
+    sloth_bar_state_t b;
+    bar_find(RA_A, TA_A, 3, &b);
+    ASSERT_EQ((int)b.total_bars, 3);
+    ASSERT_EQ((int)b.suspicious_bars, 0);
+    ctrl_clear();
+}
+
+static void test_bar_large_jump_is_suspicious(void) {
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 2000, 0), 6, 1000);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3,
+                              (uint16_t)(2000 + BAR_SUSPICIOUS_JUMP + 1),
+                              0), 6, 1001);
+    sloth_bar_state_t b;
+    bar_find(RA_A, TA_A, 3, &b);
+    ASSERT_EQ((int)b.suspicious_bars, 1);
+    ASSERT_EQ((int)b.last_jump, BAR_SUSPICIOUS_JUMP + 1);
+    ctrl_clear();
+}
+
+static void test_bar_wrap_is_not_a_jump(void) {
+    /* The false-positive case that matters. 4090 -> 10 is a forward
+     * advance of 16 frames across the wrap, not a jump of 4080. */
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 4090, 0), 6, 1000);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 10,   0), 6, 1001);
+    sloth_bar_state_t b;
+    bar_find(RA_A, TA_A, 3, &b);
+    ASSERT_EQ((int)b.total_bars, 2);
+    ASSERT_EQ((int)b.suspicious_bars, 0);
+    ctrl_clear();
+}
+
+static void test_bar_state_is_per_tid(void) {
+    /* Different traffic classes have independent sequence spaces.
+     * Sharing state across TIDs would read every interleaved voice and
+     * best-effort BAR as a jump. */
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 0, 100,  0), 6, 1000);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 6, 3000, 0), 6, 1000);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 0, 120,  0), 6, 1001);
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 6, 3020, 0), 6, 1001);
+    ASSERT_EQ(bar_pair_count(), 2);
+    sloth_bar_state_t b;
+    bar_find(RA_A, TA_A, 0, &b);
+    ASSERT_EQ((int)b.suspicious_bars, 0);
+    bar_find(RA_A, TA_A, 6, &b);
+    ASSERT_EQ((int)b.suspicious_bars, 0);
+    ctrl_clear();
+}
+
+static void test_bar_multi_tid_skipped(void) {
+    /* A multi-TID BAR carries a list rather than one TID. Reading its
+     * layout as the single-TID one would invent both a TID and an SSN. */
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 2000, 1), 6, 1000);
+    ASSERT_EQ(bar_pair_count(), 0);
+    /* Still counted as a control frame — the airtime was spent. */
+    ASSERT_EQ(ctrl_channel_subtype(6, CTRL_SUB_BLOCKACK_REQ), 1);
+    ctrl_clear();
+}
+
+static void test_bar_worst_offender_and_window(void) {
+    ctrl_clear();
+    uint8_t f[24];
+    ctrl_observe(f, build_bar(f, RA_A, TA_A, 3, 100, 0), 6, 1000);
+    for (int i = 1; i <= 3; i++)
+        ctrl_observe(f, build_bar(f, RA_A, TA_A, 3,
+                                  (uint16_t)(100 + i * 500), 0), 6, 1000 + i);
+    sloth_bar_state_t b;
+    ASSERT_EQ(bar_worst_offender(1010, 300, &b), 3);
+    ASSERT_EQ(b.tid, 3);
+    ASSERT(memcmp(b.sta, TA_A, 6) == 0);
+    /* Past the window there is nothing to report. */
+    ASSERT_EQ(bar_worst_offender(1003 + 301, 300, NULL), 0);
+    ctrl_clear();
+}
+
+static void test_bar_truncated_frame_is_safe(void) {
+    ctrl_clear();
+    uint8_t f[24];
+    build_bar(f, RA_A, TA_A, 3, 2000, 0);
+    ctrl_observe(f, 19, 6, 1000);      /* one byte short of the SSC */
+    ASSERT_EQ(bar_pair_count(), 0);
+    ctrl_clear();
+}
+
 void run_ctrl_frames_tests(void) {
     TEST_SUITE("control-frame counting (#64)");
     RUN_TEST(test_rts_counted_per_source_and_channel);
@@ -279,4 +430,15 @@ void run_ctrl_frames_tests(void) {
     RUN_TEST(test_rts_flood_window_expires);
     RUN_TEST(test_source_table_evicts_the_stalest);
     RUN_TEST(test_snapshot_annotates_existing_rows_only);
+    TEST_SUITE("Block-Ack paralysis / Bl0ck (#70)");
+    RUN_TEST(test_ssn_forward_distance_basic);
+    RUN_TEST(test_ssn_forward_distance_wraps);
+    RUN_TEST(test_bar_first_frame_sets_the_baseline);
+    RUN_TEST(test_bar_ordinary_advance_is_not_suspicious);
+    RUN_TEST(test_bar_large_jump_is_suspicious);
+    RUN_TEST(test_bar_wrap_is_not_a_jump);
+    RUN_TEST(test_bar_state_is_per_tid);
+    RUN_TEST(test_bar_multi_tid_skipped);
+    RUN_TEST(test_bar_worst_offender_and_window);
+    RUN_TEST(test_bar_truncated_frame_is_safe);
 }

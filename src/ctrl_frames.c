@@ -22,6 +22,9 @@ typedef struct {
     time_t   last_seen;
 } ctrl_chan_t;
 
+/* Defined below, beside the rest of the Bl0ck state. */
+static void bar_observe(const uint8_t *dot11, int len, time_t now);
+
 static ctrl_src_t      g_src[CTRL_MAX_SOURCES];
 static int             g_src_n;
 static ctrl_chan_t     g_chan[CTRL_MAX_CHANNELS];
@@ -101,6 +104,8 @@ void ctrl_observe(const uint8_t *dot11, int len, int channel, time_t now) {
         c->last_seen = now;
     }
 
+    if (sub == CTRL_SUB_BLOCKACK_REQ) bar_observe(dot11, len, now);
+
     int off = ta_offset(sub, len);
     if (off >= 0) {
         const uint8_t *ta = dot11 + off;
@@ -114,6 +119,117 @@ void ctrl_observe(const uint8_t *dot11, int len, int channel, time_t now) {
     }
 
     pthread_mutex_unlock(&g_mu);
+}
+
+/* ── Block-Ack paralysis (Bl0ck) — #70 ───────────────────── */
+
+static sloth_bar_state_t g_bar[BAR_MAX_PAIRS];
+static int               g_bar_n;
+
+int bar_ssn_forward_distance(uint16_t from, uint16_t to) {
+    /* Modulo the 12-bit sequence space. A plain (to - from) is negative
+     * or enormous on every wrap, and a station transmitting steadily
+     * wraps roughly every 4096 frames — which is often. This is the
+     * arithmetic the whole detector rests on. */
+    return (int)(((unsigned)to - (unsigned)from) & (BAR_SSN_MODULUS - 1));
+}
+
+/* Caller holds g_mu. */
+static sloth_bar_state_t *bar_slot(const uint8_t bssid[6],
+                                   const uint8_t sta[6], int tid,
+                                   time_t now) {
+    for (int i = 0; i < g_bar_n; i++)
+        if (g_bar[i].tid == tid &&
+            memcmp(g_bar[i].bssid, bssid, 6) == 0 &&
+            memcmp(g_bar[i].sta,   sta,   6) == 0) return &g_bar[i];
+    int slot;
+    if (g_bar_n < BAR_MAX_PAIRS) {
+        slot = g_bar_n++;
+    } else {
+        slot = 0;
+        for (int i = 1; i < BAR_MAX_PAIRS; i++)
+            if (g_bar[i].last_bar_ts < g_bar[slot].last_bar_ts) slot = i;
+    }
+    memset(&g_bar[slot], 0, sizeof(g_bar[slot]));
+    memcpy(g_bar[slot].bssid, bssid, 6);
+    memcpy(g_bar[slot].sta,   sta,   6);
+    g_bar[slot].tid        = (uint8_t)tid;
+    g_bar[slot].first_seen = now;
+    return &g_bar[slot];
+}
+
+/* Fold a Block-Ack Request into the per-TID state. Caller holds g_mu.
+ *
+ * BAR layout after the header: BAR Control(2), then the Block Ack
+ * Starting Sequence Control(2) — fragment number in bits 0-3, the
+ * starting sequence number in bits 4-15. */
+static void bar_observe(const uint8_t *dot11, int len, time_t now) {
+    if (len < 20) return;
+    uint16_t ctl = (uint16_t)(dot11[16] | (dot11[17] << 8));
+    /* Multi-TID BARs carry a list rather than one TID and are rare
+     * enough that guessing at their layout would risk inventing jumps.
+     * Skipped rather than misread. */
+    if (ctl & 0x0002) return;
+    int tid = (ctl >> 12) & 0x0f;
+
+    uint16_t ssc = (uint16_t)(dot11[18] | (dot11[19] << 8));
+    uint16_t ssn = (uint16_t)(ssc >> 4);
+
+    const uint8_t *ra = dot11 + 4;    /* the peer being asked to advance */
+    const uint8_t *ta = dot11 + 10;   /* who the BAR claims to be from   */
+    if ((ta[0] & 0x01) || (ra[0] & 0x01)) return;
+
+    sloth_bar_state_t *b = bar_slot(ra, ta, tid, now);
+    b->total_bars++;
+
+    /* The first BAR for a triple establishes the baseline. Treating it
+     * as a jump would flag every connection sloth joins mid-flight,
+     * which is every connection when the sensor starts. */
+    if (b->last_bar_ts) {
+        int jump = bar_ssn_forward_distance(b->last_ssn, ssn);
+        if (jump > BAR_SUSPICIOUS_JUMP) {
+            b->suspicious_bars++;
+            b->last_jump = (uint16_t)jump;
+        }
+    }
+    b->last_ssn     = ssn;
+    b->last_bar_ts  = now;
+}
+
+int bar_worst_offender(time_t now, int window_s, sloth_bar_state_t *out) {
+    int best = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_bar_n; i++) {
+        if (!g_bar[i].last_bar_ts) continue;
+        if (now - g_bar[i].last_bar_ts > window_s) continue;
+        if ((int)g_bar[i].suspicious_bars <= best) continue;
+        best = (int)g_bar[i].suspicious_bars;
+        if (out) *out = g_bar[i];
+    }
+    pthread_mutex_unlock(&g_mu);
+    return best;
+}
+
+int bar_find(const uint8_t bssid[6], const uint8_t sta[6], int tid,
+             sloth_bar_state_t *out) {
+    int hit = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_bar_n; i++)
+        if (g_bar[i].tid == tid &&
+            memcmp(g_bar[i].bssid, bssid, 6) == 0 &&
+            memcmp(g_bar[i].sta,   sta,   6) == 0) {
+            if (out) *out = g_bar[i];
+            hit = 1; break;
+        }
+    pthread_mutex_unlock(&g_mu);
+    return hit;
+}
+
+int bar_pair_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_bar_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
 }
 
 int ctrl_channel_total(int channel) {
@@ -212,7 +328,9 @@ void ctrl_clear(void) {
     pthread_mutex_lock(&g_mu);
     memset(g_src, 0, sizeof(g_src));
     memset(g_chan, 0, sizeof(g_chan));
+    memset(g_bar, 0, sizeof(g_bar));
     g_src_n = 0;
     g_chan_n = 0;
+    g_bar_n = 0;
     pthread_mutex_unlock(&g_mu);
 }

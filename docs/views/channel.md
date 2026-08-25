@@ -77,6 +77,33 @@ so it arrives long enough that a length-based guess at "is there a
 transmitter here" would read six bytes past the Receiver Address and
 invent one out of the checksum.
 
+## Block-Ack paralysis (#70)
+
+Block-Ack Requests are counted per `(receiver, transmitter, TID)` and
+watched for a **Starting Sequence Number that jumps forward** further
+than traffic could account for. That is the passive signature of the
+[Bl0ck attack](https://arxiv.org/pdf/2302.05899): a spoofed BAR sent on
+behalf of a legitimate station forces its peer to advance the receive
+window past frames that are still queued, discarding everything in the
+skipped range.
+
+It leaves no other trace. No deauth, no flood, nothing any rate rule
+watches for — the operator sees a client that stopped working.
+
+Two details that make the difference between a detector and a nuisance:
+
+- **The arithmetic is modulo 4096.** SSN is a 12-bit field, so a station
+  transmitting steadily wraps every few thousand frames. Computed as a
+  plain subtraction, `4090 → 10` reads as a jump of 4080 rather than an
+  advance of 16, and the rule fires constantly on healthy links.
+- **State is per TID.** Traffic classes have independent sequence
+  spaces, so sharing state across them reads every interleaved voice and
+  best-effort BAR as a jump.
+
+Multi-TID BARs carry a list rather than a single TID and are skipped
+rather than misread — guessing at that layout would invent both a TID
+and a sequence number.
+
 ## Retry ratio (roadmap B3)
 
 The **retry** column is the fraction of frames on that channel carrying

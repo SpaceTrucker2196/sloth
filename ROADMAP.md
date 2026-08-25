@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Six are open** (`#67`–`#72`),
+~~**No open GitHub issues.**~~ **Five are open** (`#67`, `#68`, `#69`, `#71`, `#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -158,9 +158,9 @@ dispatch on all of them. Verified absent:
   (`3aceecf`). Categories 5 / 6 / 127 are counted as stubs — RRM
   (`#61`) and CSA (`#63`) extend the same dispatcher and are unblocked
   by it. See [`docs/wiki/btm-abuse.md`](docs/wiki/btm-abuse.md).
-- ~~**◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).**~~ ✅ counters
-  and the RTS-flood rule landed (`#64`); `#70` (Bl0ck / Block-Ack
-  paralysis) remains. `src/ctrl_frames.c` counts per source and per
+- ~~**◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).**~~ ✅ complete.
+  Counters and the RTS-flood rule (`#64`), Bl0ck / Block-Ack paralysis
+  (`#70`). `src/ctrl_frames.c` counts per source and per
   channel, and the `[m]` view shows observed control volume beside the
   AP-self-reported QBSS Load. CTS and ACK carry only a Receiver
   Address, so they attribute to a channel and to nothing finer.
@@ -336,7 +336,7 @@ effort:
    halves of its data model: widths from `#66`, observed control-frame
    volume from `#64`.
 
-Backlog after that: `#70` (Bl0ck), `#67` (Wi-Fi 7 MLO — a real
+Backlog after that: ~~`#70` (Bl0ck)~~ ✅, `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as
 three, but future-weighted), `#68` (tool fingerprints, capture-gated),
 `#71`/`#72` (the `#69` prerequisites) and `#69` itself.
