@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Three are open** (`#68`, `#69`, `#71`),
+~~**No open GitHub issues.**~~ **Two are open** (`#69`, `#71`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -272,12 +272,15 @@ exist. Gaps:
   (BSSID, kind). The `[b]` MFP column became a `posture` column. CRIT
   when the BSSID is designated or when `#60`'s assoc delta shows a
   client actually took the lane.
-- **◇ KARMA / known-beacon responder heuristics v2**, and PMKID-harvest
-  tool fingerprints — AP or client behaviour matching known passive
-  harvesting tooling. Observation-only. Filed as `#68`, and the one
-  issue genuinely gated on captures: a frame layout can be built from a
-  spec, a tool's fingerprint cannot be invented. Ship the table format
-  and matcher; leave the signature rows empty until captures exist.
+- ~~**◇ KARMA / known-beacon responder heuristics v2**, and
+  PMKID-harvest tool fingerprints.~~ ✅ mechanism landed (`#68`).
+  `src/tool_fingerprint.c` carries the row format, the matcher and the
+  confidence model; the `KARMA_AP` detail gains a tool hint and a
+  `+PMKID` marker. The **signature table ships empty on purpose** — a
+  tool's fingerprint is an empirical fact about a binary and invented
+  rows would pass every test while matching nothing. Each real row lands
+  with the capture that corroborates it, one per commit. See
+  [`docs/wiki/tool-fingerprints.md`](docs/wiki/tool-fingerprints.md).
 - ~~**◆ Enterprise client accepting no server cert (CVE-2023-52160).**~~
   ✅ landed (`#65`). The AP-side rule (`ROGUE_RADIUS`, `#31`) warns about attacker
   infrastructure; this is the client-side mirror — a PEAP session
@@ -341,5 +344,5 @@ effort:
 
 Backlog after that: ~~`#70` (Bl0ck)~~ ✅, `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as
-three, but future-weighted), `#68` (tool fingerprints, capture-gated),
+three, but future-weighted), ~~`#68` (tool fingerprints)~~ ✅ mechanism,
 `#71` (the remaining `#69` prerequisite) and `#69` itself.

@@ -49,7 +49,7 @@ omitted.
 | `ARP_SPOOF` | CRIT | T1557.002 | one IP maps to two MACs within a short window | — (L2 only) |
 | `ROGUE_DHCP` | CRIT | T1557     | unexpected DHCP OFFER from a non-baseline server | dhcp-srv / 67 |
 | `EVIL_TWIN` | CRIT | T1557     | duplicate SSID with mismatched BSSID / cipher | — (L2 only) |
-| `KARMA_AP` | CRIT | T1557     | one BSSID beacons ≥3 distinct SSIDs; detail names PNL-match count (PineAP beacon-response) and flags a concurrent deauth flood as deauth-then-lure | — (L2 only) |
+| `KARMA_AP` | CRIT | T1557     | one BSSID beacons ≥3 distinct SSIDs; detail names PNL-match count (PineAP beacon-response), flags a concurrent deauth flood as deauth-then-lure, marks `+PMKID` when a PMKID has been harvested **from that BSSID** (#68 — a protocol observable, unlike a tool's beacon quirks), and names the tool when the signature table can. That table is **empty on purpose**: a tool's fingerprint is an empirical fact about a binary, not something derivable from a spec, and invented rows would pass every test while matching nothing. See [[tool-fingerprints]] | — (L2 only) |
 | `SSID_CONFUSION` | CRIT | T1557.004 | same SSID advertised on a second BSSID with downgraded RSN — WPA3→WPA2, MFP required→off, GCMP→CCMP (CVE-2023-52424), or 802.1X-Enterprise cloned as PSK (eaphammer/hostapd-wpe lure, #31) | — (L2 only) |
 | `MGMT_FUZZ` | WARN/CRIT | T1499 | malformed beacon IEs from one BSSID (length overrun, oversize SSID, truncated RSN) — mdk4 mode m / crafted aireplay frames; WARN ≥3, CRIT ≥5 | — (L2 only) |
 | `ROGUE_RADIUS` | WARN/CRIT | T1557.004 | a BSSID's 802.1X EAP conversation offered a weak inner method (EAP-MD5/GTC → CRIT) or leaked a real username with no anonymous outer identity (→ WARN) — eaphammer / hostapd-wpe lure | — (L2 only) |

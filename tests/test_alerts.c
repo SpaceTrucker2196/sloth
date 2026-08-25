@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
+#include "karma_detect.h"
 #include "wifi_assess.h"
 #include "sloth.h"
 #include "alerts.h"
@@ -3976,6 +3977,70 @@ static void test_rrm_my_own_ap_surveying_my_ssid_is_not_an_outsider(void) {
     ownership_clear(); rrm_clear();
 }
 
+
+/* ── KARMA tool hint + PMKID harvest (#68) ───────────────── */
+
+static void test_karma_pmkid_harvest_noted(void) {
+    /* Unlike a tool's beacon quirks, a harvested PMKID is a *protocol*
+     * observable — an AP soliciting them is doing something
+     * hcxdumptool-shaped whichever binary is doing it. So this half of
+     * #68 needs no signature table and works today. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x90, "free-wifi", "OPEN", 0, 0, 300);
+    for (int i = 0; i < KARMA_SSID_THRESH; i++)
+        snprintf(a->ssid_history[a->ssid_history_n++], 33, "net-%d", i);
+
+    eapol_event_t *e = &s.eapol_events[s.eapol_count++];
+    memset(e, 0, sizeof(*e));
+    memcpy(e->bssid, a->bssid, 6);
+    e->has_pmkid = 1;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "+PMKID") != NULL);
+}
+
+static void test_karma_pmkid_from_another_bssid_not_credited(void) {
+    /* A PMKID harvested elsewhere says nothing about this AP. Matching
+     * on presence rather than on the BSSID would credit every KARMA AP
+     * in range with someone else's evidence. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x91, "free-wifi", "OPEN", 0, 0, 300);
+    for (int i = 0; i < KARMA_SSID_THRESH; i++)
+        snprintf(a->ssid_history[a->ssid_history_n++], 33, "net-%d", i);
+
+    eapol_event_t *e = &s.eapol_events[s.eapol_count++];
+    memset(e, 0, sizeof(*e));
+    e->bssid[5] = 0xff;                  /* a different AP */
+    e->has_pmkid = 1;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "+PMKID") == NULL);
+}
+
+static void test_karma_names_no_tool_while_the_table_is_empty(void) {
+    /* The mechanism is wired; the data is honest about not existing.
+     * Until a real signature lands the alert must not speculate — and
+     * when one does, this test is what proves the wiring already
+     * worked. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x92, "free-wifi", "OPEN", 0, 0, 300);
+    a->beacon_ms = 100;
+    a->fp.vendor_ies_hash = 0xdeadbeef;
+    for (int i = 0; i < KARMA_SSID_THRESH; i++)
+        snprintf(a->ssid_history[a->ssid_history_n++], 33, "net-%d", i);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "[") == NULL);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -4034,6 +4099,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_rrm_multi_vap_ssid_history_exonerates);
     RUN_TEST(test_rrm_outsider_surveying_my_ssid_is_crit);
     RUN_TEST(test_rrm_my_own_ap_surveying_my_ssid_is_not_an_outsider);
+    RUN_TEST(test_karma_pmkid_harvest_noted);
+    RUN_TEST(test_karma_pmkid_from_another_bssid_not_credited);
+    RUN_TEST(test_karma_names_no_tool_while_the_table_is_empty);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

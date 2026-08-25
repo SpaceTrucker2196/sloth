@@ -10,6 +10,8 @@
 #include "action_snoop.h"
 #include "wifi_assess.h"
 #include "ctrl_frames.h"
+#include "tool_fingerprint.h"
+#include "karma_detect.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -1495,10 +1497,13 @@ static void rule_icmp_tunnel(const sloth_state_t *s, time_t now) {
  * mana, hostapd-wpe) impersonate every SSID a victim probes for, so
  * one MAC ends up advertising 3, 5, 20 different network names.
  *
- * Threshold: >= 3 distinct SSIDs from one BSSID. False positives are
- * possible (some captive-portal gear cycles SSIDs) but the operator
- * almost always wants to look. */
-#define KARMA_SSID_THRESH 3
+ * Threshold: KARMA_SSID_THRESH distinct SSIDs from one BSSID, defined
+ * in karma_detect.h. False positives are possible (some captive-portal
+ * gear cycles SSIDs) but the operator almost always wants to look.
+ *
+ * The constant used to be defined here as well, with the same value —
+ * two definitions of one threshold, either of which could be retuned
+ * without the other. Consolidated when #68 needed a third reader. */
 
 /* How many of this BSSID's advertised SSIDs appear in the union of
  * nearby clients' preferred-network lists. KARMA / PineAP Beacon
@@ -1552,22 +1557,58 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  a->bssid[3], a->bssid[4], a->bssid[5]);
         int overlap = karma_pnl_overlap(s, a);
         int deauth  = karma_deauth_active(s, now);
+
+        /* Has a PMKID been harvested from this BSSID (#68)? Unlike a
+         * tool's beacon quirks, this is a *protocol* observable — an AP
+         * that solicits PMKIDs is doing something hcxdumptool-shaped
+         * regardless of which binary is doing it — so it needs no
+         * signature table and ships working. */
+        int pmkid = 0;
+        for (int e = 0; e < s->eapol_count; e++)
+            if (s->eapol_events[e].has_pmkid &&
+                memcmp(s->eapol_events[e].bssid, a->bssid, 6) == 0) {
+                pmkid = 1;
+                break;
+            }
+
+        /* Name the tool when the signature table can. It is empty today
+         * on purpose (see tool_fingerprint.h), so this adds nothing to
+         * the detail until real signatures land — which is the point:
+         * the mechanism is in and proven, the data is honest about not
+         * existing yet. */
+        sloth_tool_obs_t obs;
+        memset(&obs, 0, sizeof(obs));
+        obs.vendor_ie_hash     = a->fp.vendor_ies_hash;
+        obs.beacon_interval_ms = a->beacon_ms;
+        obs.karma_echo         = 1;
+        obs.pmkid_seen         = pmkid;
+        sloth_tool_conf_t conf = TOOL_CONF_NONE;
+        const char *tool_lbl   = "";
+        tool_fingerprint_match(&obs, &conf, &tool_lbl);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         char pnl_note[32]   = "";
         char chain_note[24] = "";
+        char tool_note[40]  = "";
+        char pmkid_note[16] = "";
         if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
                      ", %d in client PNLs", overlap);
         if (deauth)
             snprintf(chain_note, sizeof(chain_note),
                      " +deauth-then-lure");
+        if (pmkid)
+            snprintf(pmkid_note, sizeof(pmkid_note), " +PMKID");
+        if (tool_lbl[0])
+            snprintf(tool_note, sizeof(tool_note), " [%.20s/%s]",
+                     tool_lbl, tool_confidence_name(conf));
         snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
         /* Compact: ALERT_DETAIL_LEN is 96, so the PNL + attack-chain
          * notes must stay short or the tail (the deauth marker) is cut. */
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s",
-                 bssid_str, a->ssid_history_n, pnl_note, chain_note);
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s",
+                 bssid_str, a->ssid_history_n, pnl_note, chain_note,
+                 pmkid_note, tool_note);
         fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
              "KARMA_AP", detail, key, NULL, 0, now);
     }
