@@ -69,7 +69,7 @@ for in normal vs anomalous traffic.
 | [**DHCP**](docs/views/dhcp.md)             | Live DHCP event log: DISCOVER/REQUEST/ACK |
 | [**SSDP**](docs/views/ssdp.md)             | UPnP device table from UDP/1900 NOTIFY / M-SEARCH |
 | [**Beacons**](docs/views/beacons.md)       | Passive 802.11 beacon sniffer — APs visible to a monitor-mode iface, with pairwise cipher / AKM / MFP status from the RSN IE, and hidden-SSID reveal from probe-responses |
-| [**Deauth**](docs/views/deauth.md)         | 802.11 deauth/disassoc frames; flood detection per target MAC |
+| [**Deauth**](docs/views/deauth.md)         | 802.11 deauth/disassoc frames with per-target flood detection, plus 802.11v BSS-Transition steering — the forced roam that moves a client with no deauth frame at all ([BTM abuse](docs/wiki/btm-abuse.md)) |
 | [**HTTP**](docs/views/http.md)             | Plaintext HTTP requests: method, host, path |
 | [**TLS**](docs/views/tls.md)               | TLS ClientHello log: SNI host, version, and **JA3 fingerprint** |
 | [**QUIC**](docs/views/quic.md)             | QUIC Initial packets: version + DNS-resolved host |

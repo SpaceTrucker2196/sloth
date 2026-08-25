@@ -334,6 +334,8 @@ pattern as they are converted.
 | `seqnum_correlation` | `mac_a`+`mac_b`   | `mac_a`, `mac_b`, `mac_a_random`, `mac_b_random`, `gap`, `dt_ms`, `a_count`, `b_count` |
 | `channel_summary`    | `channel`         | `channel`, `ap_count`, `assoc_count`, `best_signal`, `top_ssid`, `last_seen` |
 | `assoc`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `sta_random`, `source` (`ASSOC_SRC_*`), `channel`, `signal_dbm`, `first_seen`, `last_seen`, `frame_count` |
+| `wifi_assoc_req`     | `bssid`+`sta_mac` | what the client *asked* for (#60), beside the `assoc` grant: `requested_ssid`, `is_reassoc`, `listen_interval`, `capability_info`, `akm_bits`, `pairwise_bits` (00-0F-AC suite-type bitmaps — see `RSN_AKM_*`), `requested_mfp` (0/1/2), `supported_rates`, `phy`, `vendor_ie_hash`, `downgrade_flags` (`ASSOC_DG_*`), `prev_akm_bits`, `prev_mfp`, `last_seen` |
+| `btm_request`        | `bssid`+`sta_mac` | 802.11v steering (#59). `req_count` is every BTM Request for the pair; `imminent_count` is the subset carrying Disassociation Imminent — **the field to key on**, since ordinary load balancing and a forced roam are otherwise the same record. Plus `request_mode`, `disassoc_timer` (beacon intervals), `validity_interval`, `candidate_count`, `candidates_truncated`, `candidate_0`…`candidate_n` (where the AP is pointing the client), `first_seen`, `last_seen` |
 | `eapol`              | `bssid`+`sta_mac` | `bssid`, `sta_mac`, `ssid`, `event_ts`, `msg_num`, `has_pmkid`, `handshake_complete`, `signal_dbm`, `channel` |
 | `mdns_service`       | `instance`        | `instance`, `service`, `host`, `ip`, `port`, `last_seen` |
 | `nbns_name`          | `name`+`ip`       | `name`, `ip`, `suffix`, `last_seen` |

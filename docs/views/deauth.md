@@ -55,14 +55,58 @@ supports monitor mode).
   actively trying to keep a specific device off the network. Surface
   it: check `[8] ARP` to identify whose MAC it is.
 
+## BTM steering (802.11v)
+
+Below the deauth table the view lists **BSS Transition Management**
+steering — the 802.11v mechanism an AP uses to ask a client to move to
+a different BSS.
+
+```
+ ── BTM steering (802.11v) ──
+ AP                 STA                 Reqs  Force  Timer  Candidate          Last
+ aa:bb:cc:dd:ee:30  12:34:56:78:9a:bc      7      4     10  aa:bb:cc:dd:ee:31   3s
+ aa:bb:cc:dd:ee:30  12:34:56:78:9a:c1      2      0      0  aa:bb:cc:dd:ee:32  41s
+```
+
+- **Reqs** — every BTM Request seen for that AP/client pair.
+- **Force** — the subset carrying **Disassociation Imminent**: "you are
+  about to be dropped". This is the column that matters. Row heat
+  tracks it, not the total, so a chatty AP doing legitimate steering
+  does not read as an attack.
+- **Timer** — the disassociation timer, in beacon intervals.
+- **Candidate** — the first BSSID the AP is pointing the client at,
+  with `+n` when more were offered.
+
+**This section is why the view is worth opening with an empty deauth
+table.** A BTM Request with Disassociation Imminent moves a client
+without a single deauth frame, so `DEAUTH_FLOOD` never sees it and the
+table above stays clean while clients are being pushed around.
+
+The attack is documented in
+[Ali & Kulkarni (2023)](https://www.sciencedirect.com/science/article/abs/pii/S0167404823001712):
+because 802.11v steering carries no RSSI proximity constraint, an
+attacker can force a roam onto their own AP from further away than a
+deauth-and-lure would allow, and against clients whose firmware ignores
+deauth entirely. See [BTM abuse](../wiki/btm-abuse.md) for the full
+detection write-up.
+
 ## Defences
+
 
 - Enable 802.11w (Protected Management Frames) on your AP. Modern
   WPA3 networks have this by default.
 - WPA3 also kills the WPA-handshake-capture angle.
 
+- 802.11w does **not** stop BTM abuse the way it stops deauth spoofing.
+  Protected Management Frames authenticate the Action frame, so a PMF
+  network rejects a forged BTM Request from an outsider — but a rogue
+  AP a client has genuinely associated to can still steer it, and
+  clients on transition-mode or PMF-optional BSSs are unprotected.
+  Check the `MFP` posture in `[b]`.
+
 ## See also
 
-- Parser: [`src/deauth_snoop.c`](../../src/deauth_snoop.c).
+- Parsers: [`src/deauth_snoop.c`](../../src/deauth_snoop.c),
+  [`src/action_snoop.c`](../../src/action_snoop.c) (BTM).
 - Reason code reference:
   [IEEE 802.11 Status / Reason codes](https://infocenter.nordicsemi.com/index.jsp?topic=%2Fsdk_nrf5_v17.0.2%2Fgroup__wlan__defines__reason__codes.html).

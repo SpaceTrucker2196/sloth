@@ -104,9 +104,9 @@ These are what make the file trustworthy rather than merely present.
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
 
-## Schema v2 — 40 tables
+## Schema v3 — 41 tables
 
-`meta` holds `schema_version`, currently **2**. `db_open()` refuses a
+`meta` holds `schema_version`, currently **3**. `db_open()` refuses a
 file whose version differs from the running build, and checks it
 *before* applying the rest of the schema so a mismatch produces the
 version message rather than whatever SQL error the schema happens to hit
@@ -117,7 +117,14 @@ first.
 gains it. Adding a **column to an existing table** is not: that
 statement is a no-op on a table that already exists, and the column
 never appears. v2 exists because `probe_clients.presence` (#53) was
-added without a bump, so v1 files must be refused.
+added without a bump, so v1 files must be refused. v3 came with
+`assoc_reqs` (#60).
+
+The consequence worth remembering when reading a slice note: `#59`'s
+`btm_requests` and anything else that adds only a *table* rides the
+current version. There is also no automated guard here — a fresh file
+gets every table regardless of version, so a missing bump only surfaces
+when an existing older database is opened, which no test does.
 
 ### Entities — "who was here"
 
@@ -132,6 +139,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 | `wifi_aps` | `bssid` | nl80211 scan list — kept **separate** from `beacon_aps` because they are different observations with different trust: what we heard on the air versus what the kernel reports |
 | `wifi_stas` | `mac` | |
 | `assocs` | `(bssid, sta_mac)` | graded evidence; see the upsert rule above |
+| `assoc_reqs` | `(bssid, sta_mac)` | what the client *asked* for (#60) — the ask beside the grant. `downgrade_flags` OR-accumulates: a client recovering to strong parameters does not erase having been moved onto weak ones |
 | `wifi_merged` | `entity` | multi-radio coverage (#21) |
 | `arp` | `(ip, mac)` | |
 | `dhcp_leases` | `ip` | |
@@ -165,11 +173,20 @@ put the CDN false positives #41 removed back into the durable record.
 
 ### Detector evidence — "why we concluded that"
 
-`karma_candidates` (#30) and `rogue_radius` (#31). These closed a real
-hole: neither struct had a `jsonl_emit_*` at all, so the alert survived
-while the reasoning behind it — SSID/PNL overlap, Jaccard, IE
-uniformity, deauth chain, offered EAP methods, identity leaks — was
-TUI-only and gone on exit. 96 rows maximum.
+`karma_candidates` (#30), `rogue_radius` (#31) and `btm_requests` (#59).
+
+The first two closed a real hole: neither struct had a `jsonl_emit_*` at
+all, so the alert survived while the reasoning behind it — SSID/PNL
+overlap, Jaccard, IE uniformity, deauth chain, offered EAP methods,
+identity leaks — was TUI-only and gone on exit. 96 rows maximum.
+
+`btm_requests` records **every** 802.11v steer, forcing or not, keyed by
+`(bssid, sta_mac)`. Storing only the alerting subset would leave no
+baseline: ordinary load balancing and a forced roam are the same frame,
+separated by one bit and a rate. Counters upsert with `MAX` rather than
+`excluded`, because the in-memory table is LRU-evicted and a pair that
+ages out and returns restarts at 1 — taking the fresh value would erase
+the steering that justified an alert still sitting in `alerts`.
 
 ## Survey sessions
 
@@ -205,7 +222,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 |---|---|---|
 | observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors |
-| finding | 12× | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius` |
+| finding | 12× | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 
 The ordering is what an investigator reaches for months later: *what
 fired* outlives *who was here*, which outlives *the individual

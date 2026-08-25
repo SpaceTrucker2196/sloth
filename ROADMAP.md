@@ -42,18 +42,15 @@ still open) · **✅** landed.
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
-Two are half-landed and are the first thing to finish:
+One is half-landed and is the first thing to finish:
 
-- **`#59` BTM abuse** — slice 1 of 4 (`5432574`). The Action-frame
-  dispatcher and BTM Request parser exist; the alert rule, surfaces and
-  docs do not.
+- ~~**`#59` BTM abuse**~~ — ✅ closed 2026-08-24 across four slices.
 - **`#60` Assoc requests** — slices 1–5a (`5efb233` … `a3f5b4d`). Parser,
   downgrade delta, `ASSOC_FLOOD` and the data layer all landed; the UI
   surfaces (slice 5b) do not.
 
-Both hold a half-built surface — an alert type with no rule, a data layer
-with no view — which is the state that reads as done to the next agent
-and isn't.
+`#60` still holds a half-built surface — a data layer with no view —
+which is the state that reads as done to the next agent and isn't.
 
 ---
 
@@ -158,10 +155,11 @@ dispatch on all of them. Verified absent:
   request/report, FT action, and the spoofed/malformed action frames
   modern WIDS-evasion tooling relies on.
   *Was: `grep -cE 'subtype == 13|ACTION' src/capture/probe.c` → 0.*
-  **Dispatcher landed** (`#59`, `5432574`): Category 10 BTM Requests
-  parse, Categories 5 / 6 / 127 are counted as stubs. Remaining: the
-  `BTM_ABUSE` rule and surfaces. RRM (`#61`) and CSA (`#63`) extend the
-  same dispatcher and are unblocked by it.
+  ✅ **Landed** (`#59`): dispatcher and BTM Request parser (`5432574`),
+  `ALERT_TYPE_BTM_ABUSE` (`2cf45d9`), persistence and surfaces
+  (`3aceecf`). Categories 5 / 6 / 127 are counted as stubs — RRM
+  (`#61`) and CSA (`#63`) extend the same dispatcher and are unblocked
+  by it. See [`docs/wiki/btm-abuse.md`](docs/wiki/btm-abuse.md).
 - **◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).** Recognised by
   name in `frame_type_label()` but never counted or analysed. Counting
   them by type per channel is what airtime / channel-utilisation
@@ -328,8 +326,8 @@ effort:
 
 1. ~~**B3b — unify the two Wi-Fi parsers.**~~ ✅ landed.
 2. ~~**B3 retry / FCS tracking.**~~ ✅ landed.
-3. **`#59` slices 2–4** — the `BTM_ABUSE` rule, surfaces, docs. Finish
-   the oldest half-landed tail before opening anything new.
+3. ~~**`#59` slices 2–4** — the `BTM_ABUSE` rule, surfaces, docs.~~
+   ✅ landed 2026-08-24.
 4. **`#60` slice 5b** — `[w]` Assoc columns (`req_akm` / `prev_akm` /
    `∆`), `[k]` PNL PHY tier, `--report`, docs.
 5. **`#62` PMF/WPA3 downgrade.** ~1 week, closes a B4 ◆, dependency
