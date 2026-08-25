@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/http.h"
+#include "captive_portal.h"
 #include "http_log.h"
 #include "filter.h"
 
@@ -66,10 +67,28 @@ void view_http_draw(const sloth_state_t *s) {
         const char *host = e->host[0] ? e->host : "?";
         const char *path = e->path[0] ? e->path : "/";
 
+        /* Connectivity-check rows carry an inline verdict (#69). A
+         * sentinel URL has exactly one correct answer, so the row can
+         * say whether it got it — and `?` is a third state, not a
+         * hedge: sloth does not reassemble TCP, so a response it did
+         * not see whole is one it cannot judge. */
+        char status_buf[8];
+        snprintf(status_buf, sizeof(status_buf), "%u", e->status);
+
+        const char *cp_tag = "";
+        if (cp_is_sentinel_host(e->host)) {
+            if (!e->is_response)          cp_tag = " [check]";
+            else if (!e->body_complete)   cp_tag = " [?]";
+            else if (cp_check_response(e)) cp_tag = " [HIJACK]";
+            else                          cp_tag = " [ok]";
+        }
+
         if (row == s->http_log_sel) {
             tui_sel();
-            TPRINT(" %-8s  %-15.15s  %-7.7s  %-24.24s  %.40s\n",
-                   ts_buf, e->src, e->method, host, path);
+            TPRINT(" %-8s  %-15.15s  %-7.7s  %-24.24s  %.40s%s\n",
+                   ts_buf, e->src,
+                   e->is_response ? status_buf : e->method,
+                   host, path, cp_tag);
             tui_reset();
         } else {
             tui_dim(); TPRINT(" %-8s", ts_buf);
@@ -80,13 +99,20 @@ void view_http_draw(const sloth_state_t *s) {
                 tui_bright();
             else
                 tui_normal();
-            TPRINT("  %-7.7s", e->method);
+            TPRINT("  %-7.7s", e->is_response ? status_buf : e->method);
 
             tui_normal();
             TPRINT("  %-24.24s", host);
 
             tui_dim();
-            TPRINT("  %.40s\n", path);
+            TPRINT("  %.40s", path);
+            if (cp_tag[0]) {
+                if (strcmp(cp_tag, " [HIJACK]") == 0) tui_heat(1.0);
+                else if (strcmp(cp_tag, " [ok]") == 0) tui_normal();
+                else tui_dim();
+                TPRINT("%s", cp_tag);
+            }
+            TPRINT("\n");
             tui_normal();
         }
     }

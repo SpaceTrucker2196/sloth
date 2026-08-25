@@ -12,6 +12,7 @@
 #include "ctrl_frames.h"
 #include "tool_fingerprint.h"
 #include "karma_detect.h"
+#include "captive_portal.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -224,6 +225,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
     case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
     case ALERT_TYPE_RTS_FLOOD:              return "T1498";       /* Network DoS — the channel reserved out from under everyone */
+    case ALERT_TYPE_CAPTIVE_PORTAL:         return "T1557";       /* AiTM — the connectivity check answered by the attacker */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -565,6 +567,75 @@ static void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     fire(ALERT_TYPE_BLOCKACK_ATTACK,
          mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "BLOCKACK_ATK", detail, key, NULL, 0, now);
+}
+
+
+/* Captive-portal interception (#69).
+ *
+ * Every modern OS probes a fixed URL to decide whether it is behind a
+ * captive portal, and expects a published, byte-exact answer. That
+ * probe is deliberately unauthenticated and deliberately plaintext —
+ * which is what makes it work, and what makes it hijackable. A rogue AP
+ * answers with something else, and the victim's OS obligingly opens a
+ * browser at the attacker's page.
+ *
+ * This is not a heuristic. The expected answer is documented and fixed,
+ * so anything else on that host and path is an interception. The only
+ * hard part is knowing whether the whole answer was seen, which is what
+ * #71's body_complete is for.
+ *
+ * One alert type with a kind bitfield rather than the seven types the
+ * issue proposes, following ALERT_TYPE_WPA_DOWNGRADE: seven types for
+ * one detector would put seven rows in the rule table for what an
+ * operator reads as a single finding, and the dedup key already
+ * separates them per host. Flagged as a §4.2 departure. */
+static void rule_captive_portal(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->cp_event_count; i++) {
+        const cp_event_t *e = &s->cp_events[i];
+        if (!e->kind) continue;
+        /* Events are a rolling ring; only recent ones are findings. */
+        if (e->ts && now - e->ts > 600) continue;
+
+        /* Which BSSID is the client on? A portal is hosted by whatever
+         * the client associated to, and naming it turns "someone
+         * intercepted this" into "that AP intercepted this". */
+        char bss[20] = "";
+        int  on_twin = 0;
+        for (int a = 0; a < s->assoc_count; a++) {
+            if (!s->assocs[a].sta_mac[0] && !s->assocs[a].sta_mac[5]) continue;
+            /* The association table is keyed by MAC and the portal
+             * event by IP, so this only resolves when a single client
+             * is associated — enough to name the AP in the common
+             * single-client-under-test case, and silent otherwise
+             * rather than guessing. */
+            if (s->assoc_count != 1) break;
+            mac_to_str(s->assocs[a].bssid, bss, sizeof(bss));
+            on_twin = btm_candidate_is_twin(s, s->assocs[a].bssid);
+            break;
+        }
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "portal:%.30s:%u", e->host, e->kind);
+        snprintf(detail, sizeof(detail),
+                 "%.30s intercepted for %.15s - %s%s%s%s%s",
+                 e->host, e->src[0] ? e->src : "?",
+                 cp_kind_label(e->kind),
+                 e->evidence[0] ? " (" : "",
+                 e->evidence[0] ? e->evidence : "",
+                 e->evidence[0] ? ")" : "",
+                 on_twin ? " - AP is a known evil twin" : "");
+
+        /* DNS_UNEXPECTED is the soft one: these operators' addressing
+         * changes, and being wrong about a CDN range must not produce a
+         * CRIT. Everything else is unambiguous — a sentinel resolving
+         * into private space or answering with the wrong bytes is not
+         * something that happens by accident. */
+        alert_sev_t sev = (e->kind == CP_KIND_DNS_UNEXPECTED)
+                          ? ALERT_SEV_WARN : ALERT_SEV_CRIT;
+        fire(ALERT_TYPE_CAPTIVE_PORTAL, sev,
+             "CAPTIVE_PORTAL", detail, key, NULL, 0, now);
+    }
 }
 
 static void rule_rts_flood(const sloth_state_t *s, time_t now) {
@@ -2605,6 +2676,7 @@ void alerts_update(sloth_state_t *s) {
     rule_csa_abuse(s, now);
     rule_rrm_survey_abuse(s, now);
     rule_rts_flood(s, now);
+    rule_captive_portal(s, now);
     rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);

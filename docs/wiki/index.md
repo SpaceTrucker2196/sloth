@@ -27,6 +27,9 @@ source material.
   evil-twin detection layer (Phases 1-4).
 - [[btm-abuse]] — 802.11v BSS-Transition forcing + `BTM_ABUSE` alert
   (#59): the forced roam that leaves no deauth frame behind.
+- [[captive-portal]] — connectivity-check interception (#69): the
+  rogue portal that answers your OS's probe, and the three
+  independent signals that catch it.
 - [[tool-fingerprints]] — naming the attacker's tool from passive
   beacon characteristics (#68). Ships with an **empty** signature
   table, and explains why that is the honest state.

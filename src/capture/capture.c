@@ -1,4 +1,5 @@
 #include "capture/capture.h"
+#include "captive_portal.h"
 #include "dot11_data.h"
 #include "radiotap.h"
 
@@ -102,6 +103,16 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
         entry.src_port = pkt->src_port;
         entry.dst_port = pkt->dst_port;
         http_log_pair_response(&entry);
+        /* A connectivity-check probe answered by something other than
+         * the real endpoint (#69). Only fires on a complete body — see
+         * cp_check_response. */
+        int cp = cp_check_response(&entry);
+        if (cp) {
+            char ev[80];
+            snprintf(ev, sizeof(ev), "HTTP %u, %d body bytes",
+                     entry.status, entry.resp_body_len);
+            cp_record((uint8_t)cp, entry.host, pkt->dst, ev, time(NULL));
+        }
         snprintf(pkt->info, sizeof(pkt->info), "HTTP %u %.40s",
                  entry.status, entry.host[0] ? entry.host : "");
         http_log_record(&entry);
@@ -174,6 +185,14 @@ static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     tls_log_entry_t entry;
     if (!tls_log_parse(tp + tcp_hdr, pay_len, pkt->src, pkt->dst, &entry)) return;
     if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
+    /* A sentinel host reached over TLS at a private address is a portal
+     * terminating the connection (#69). Independent of the body check —
+     * a rogue that chunks its HTTP answer still has to do this. */
+    {
+        int cp = cp_check_tls(entry.host, pkt->dst);
+        if (cp) cp_record((uint8_t)cp, entry.host, pkt->src, pkt->dst,
+                          time(NULL));
+    }
     snprintf(pkt->info, sizeof(pkt->info), "%s %.46s",
              entry.tls_ver, entry.host[0] ? entry.host : pkt->dst);
     tls_log_record(&entry);
@@ -350,8 +369,14 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
             if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
             dns_log_entry_t dqe;
-            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe))
+            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe)) {
                 dns_log_record(&dqe);
+                /* A connectivity-check host resolving into private or
+                 * CGNAT space is a portal answering for it (#69). */
+                int cp = cp_check_dns(dqe.qname, dqe.answer);
+                if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
+                                  dqe.answer, time(NULL));
+            }
         } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
             mdns_snoop(tp + 8, tlen - 8);
             snprintf(pkt->info, sizeof(pkt->info), "mDNS");
@@ -468,8 +493,14 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
             dns_log_entry_t dqe;
-            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe))
+            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe)) {
                 dns_log_record(&dqe);
+                /* A connectivity-check host resolving into private or
+                 * CGNAT space is a portal answering for it (#69). */
+                int cp = cp_check_dns(dqe.qname, dqe.answer);
+                if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
+                                  dqe.answer, time(NULL));
+            }
         } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
             mdns_snoop(tp + 8, tlen - 8);
             snprintf(pkt->info, sizeof(pkt->info), "mDNS");

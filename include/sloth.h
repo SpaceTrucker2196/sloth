@@ -704,6 +704,7 @@ typedef enum {
     ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
     ALERT_TYPE_RRM_SURVEY_ABUSE,    /* 802.11k Beacon Request used to survey the air through a client (#61) */
     ALERT_TYPE_RTS_FLOOD,           /* RTS flood reserving the channel — airtime denial of service (#64) */
+    ALERT_TYPE_CAPTIVE_PORTAL,      /* connectivity-check probe intercepted — rogue portal (#69) */
     ALERT_TYPE_BLOCKACK_ATTACK,     /* spoofed BAR resetting a peer's Block-Ack window — Bl0ck (#70) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
@@ -1352,6 +1353,33 @@ typedef struct {
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
 
+/* ── Captive-portal interception (#69) ─────────────────────
+ *
+ * Every modern OS probes a fixed URL to decide whether it is behind a
+ * captive portal, and expects a published, byte-exact answer. A rogue
+ * AP answers with something else — which is exactly what makes the
+ * victim's OS open a browser at the attacker's page.
+ *
+ * Three independent signals, because a portal evading one still has to
+ * pass the others: the body was wrong, the DNS answer was local, or the
+ * TLS connection terminated locally. */
+typedef enum {
+    CP_KIND_HIJACK         = 1 << 0,  /* wrong body on a sentinel URL     */
+    CP_KIND_DNS_SPOOF      = 1 << 1,  /* sentinel host -> RFC1918 / CGNAT */
+    CP_KIND_DNS_UNEXPECTED = 1 << 2,  /* -> outside the known ranges      */
+    CP_KIND_TLS_MITM       = 1 << 3,  /* sentinel SNI -> private address  */
+} cp_kind_t;
+
+#define CP_MAX_EVENTS 64
+
+typedef struct {
+    char     host[64];        /* the sentinel that was interfered with */
+    char     src[46];         /* the client that probed                */
+    char     evidence[80];    /* what was seen instead                 */
+    uint8_t  kind;            /* cp_kind_t                             */
+    time_t   ts;
+} cp_event_t;
+
 /* ── Wi-Fi 7 Multi-Link Devices (#67) ──────────────────────
  *
  * MLO defeats sequence-number correlation structurally. seqnum_track
@@ -1884,6 +1912,9 @@ typedef struct {
     /* Wi-Fi 7 Multi-Link Devices (#67). */
     sloth_mld_t          mlds[SLOTH_MLD_MAX];
     int                  mld_count;
+    /* Captive-portal interception events (#69), newest first. */
+    cp_event_t           cp_events[CP_MAX_EVENTS];
+    int                  cp_event_count;
 
     /* ── Channel activity summary ─────────────────────────── */
     channel_summary_t    channels[MAX_CHAN_ENTRIES];

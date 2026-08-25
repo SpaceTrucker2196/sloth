@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "captive_portal.h"
 #include "sensors.h"
 #include "bandwidth.h"
 #include "data_socket.h"
@@ -966,6 +967,29 @@ void jsonl_emit_mlds(const sloth_state_t *s) {
     }
 }
 
+/* Captive-portal interception events (#69). One record per detection,
+ * carrying which of the three independent signals fired — a consumer
+ * correlating them wants to know whether the body, the DNS answer or
+ * the TLS destination gave it away, because a portal evading one still
+ * has to pass the others. */
+void jsonl_emit_cp_events(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->cp_event_count; i++) {
+        const cp_event_t *e = &s->cp_events[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "captive_portal_event", now);
+        kv_str(buf, LINEBUF, &off, "host",     e->host);
+        kv_str(buf, LINEBUF, &off, "src",      e->src);
+        kv_int(buf, LINEBUF, &off, "kind",     e->kind);
+        kv_str(buf, LINEBUF, &off, "kind_label", cp_kind_label(e->kind));
+        kv_str(buf, LINEBUF, &off, "evidence", e->evidence);
+        kv_int(buf, LINEBUF, &off, "ts",       (long long)e->ts);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1425,6 +1449,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_csa_events        (s);
     jsonl_emit_rrm_pairs         (s);
     jsonl_emit_mlds              (s);
+    jsonl_emit_cp_events         (s);
     jsonl_emit_eapol_events      (s);
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);

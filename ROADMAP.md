@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Two are open** (`#69`, `#71`),
+~~**No open GitHub issues.**~~ **None are open.**
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -345,4 +345,4 @@ effort:
 Backlog after that: ~~`#70` (Bl0ck)~~ ✅, `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as
 three, but future-weighted), ~~`#68` (tool fingerprints)~~ ✅ mechanism,
-`#71` (the remaining `#69` prerequisite) and `#69` itself.
+~~`#71`~~ ✅ and ~~`#69`~~ ✅ — the backlog is empty.
