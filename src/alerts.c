@@ -8,6 +8,7 @@
 #include "auth_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
+#include "wifi_assess.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -215,6 +216,7 @@ const char *alert_technique(alert_type_t type) {
      * ATTACK_PATH alert carries T1557 for it. Tagging this one T1557
      * would claim the second half on the evidence of the first. */
     case ALERT_TYPE_BTM_ABUSE:              return "T1498";       /* Network DoS — 802.11v forced roam */
+    case ALERT_TYPE_WPA_DOWNGRADE:          return "T1600";       /* Weaken Encryption — the AP offers the weak lane */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -446,6 +448,83 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
     fire(ALERT_TYPE_BTM_ABUSE,
          (twin_target || mine || rostered) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "BTM_ABUSE", detail, key, NULL, 0, now);
+}
+
+
+/* WPA / PMF downgrade posture (#62).
+ *
+ * Fires on an AP advertising a lane weaker than the one it is also
+ * advertising. Nothing here is an attack — every condition is a
+ * configuration the AP broadcasts about itself — but each is the
+ * prerequisite an attacker needs, and a client takes the weak lane if
+ * the AP offers it. CVE-2023-52424 and the Dragonblood family both
+ * depend on the AP having offered one.
+ *
+ * The seam is deliberate: the parser sets the per-BSS facts, this reads
+ * the AP table and fires. beacon_parse_ies() is a pure function reached
+ * by both the monitor-mode and nl80211 paths, and giving it a side
+ * effect on global alert state would be the wrong shape — plus the
+ * observation floor below needs per-BSSID history a per-frame parser
+ * does not have. Flagged as a §4.2 departure from the issue's wording.
+ */
+static void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+
+        /* A single beacon caught mid-hop is a sample, not a
+         * configuration. Without this floor --hop would alert on every
+         * AP it brushes past. */
+        if (!a->first_seen ||
+            now - a->first_seen < WPA_DOWNGRADE_MIN_OBSERVED_S) continue;
+
+        /* Filled by wifi_downgrade_update() at the top of
+         * alerts_update, so the [b] view reads the same field rather
+         * than deriving it a second time. */
+        uint8_t flags = a->downgrade_flags;
+        if (!flags) continue;
+
+        int mine = ownership_is_my_bssid(a->bssid);
+
+        /* Escalate when a client has actually been moved onto the weak
+         * lane rather than merely offered it (#60). An assoc-request
+         * downgrade recorded against this BSSID is that evidence — the
+         * offer being taken up is a different severity from the offer
+         * standing open. */
+        int exercised = 0;
+        for (int k = 0; k < s->assoc_req_count; k++) {
+            const assoc_req_t *r = &s->assoc_reqs[k];
+            if (!r->downgrade_flags) continue;
+            if (memcmp(r->bssid, a->bssid, 6) != 0) continue;
+            if (r->ts && now - r->ts > 3600) continue;
+            exercised = 1;
+            break;
+        }
+
+        char bss[20];
+        mac_to_str(a->bssid, bss, sizeof(bss));
+
+        /* One alert per (BSSID, kind): an AP offering two lanes is two
+         * things to fix, and collapsing them would hide whichever the
+         * operator did not read. */
+        for (int b = 0; b < 4; b++) {
+            uint8_t kind = (uint8_t)(1u << b);
+            if (!(flags & kind)) continue;
+
+            char key[ALERT_KEY_LEN];
+            char detail[ALERT_DETAIL_LEN];
+            snprintf(key, sizeof(key), "wpadg:%.17s:%u", bss, kind);
+            snprintf(detail, sizeof(detail),
+                     "%.17s \"%.20s\" posture=%s (observed %lds)%s%s",
+                     bss, a->ssid[0] ? a->ssid : "<hidden>",
+                     wifi_downgrade_label(kind),
+                     (long)(now - a->first_seen),
+                     exercised ? " - a client took the weak lane" : "",
+                     mine ? " - YOUR network" : "");
+            fire(ALERT_TYPE_WPA_DOWNGRADE,
+                 (mine || exercised) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+                 "WPA_DOWNGRADE", detail, key, NULL, 0, now);
+        }
+    }
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -2131,6 +2210,8 @@ static void dump_new_alert_pcaps(const sloth_state_t *s) {
 void alerts_update(sloth_state_t *s) {
     if (!s) return;
     time_t now = time(NULL);
+    /* Derive posture before any rule reads it (#62). */
+    wifi_downgrade_update(s);
     rule_port_scan(s, now);
     rule_deauth_flood(s, now);
     rule_nxdomain_burst(s, now);
@@ -2159,6 +2240,7 @@ void alerts_update(sloth_state_t *s) {
     rule_auth_flood(s, now);
     rule_assoc_flood(s, now);
     rule_btm_abuse(s, now);
+    rule_wpa_downgrade(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

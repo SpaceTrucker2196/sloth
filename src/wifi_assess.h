@@ -21,4 +21,31 @@ typedef struct {
  * count (<= max). */
 int wifi_assess(const sloth_state_t *s, wifi_finding_t *out, int max);
 
+/* Downgrade lanes this AP advertises about itself — the WPA_DG_* bits.
+ *
+ * Pure function of one record, which is what makes it testable and what
+ * keeps it out of the beacon parser: giving a parser reached by both
+ * the monitor and nl80211 paths a side effect on alert state would be
+ * the wrong seam (#62).
+ *
+ * WPA_DG_OWE_TRANSITION is *not* computed here. It needs a paired open
+ * BSS, and one record cannot see another; the rule adds that bit. */
+uint8_t wifi_downgrade_flags(const beacon_ap_t *a);
+
+/* Human label for a single WPA_DG_* bit. "" for anything else. */
+const char *wifi_downgrade_label(uint8_t kind);
+
+/* Fill downgrade_flags on every beacon record, including the OWE
+ * transition bit that needs a paired open BSS. Called at the top of
+ * alerts_update so the rule and the [b] view read the same field
+ * rather than each deriving it — the pairing loop existing twice is
+ * how the two would drift apart. Idempotent. */
+void wifi_downgrade_update(sloth_state_t *s);
+
+/* Worst downgrade lane on this record, as a compact column label:
+ * "WPA1+RSN" > "WPA2+3" > "OWE-tr" > "MFP-opt". Returns NULL when the
+ * record advertises no downgrade, so the caller can fall back to
+ * whatever it showed before. */
+const char *wifi_downgrade_column(uint8_t flags);
+
 #endif /* WIFI_ASSESS_H */

@@ -1511,6 +1511,106 @@ static void test_akm_label_never_overruns(void) {
     ASSERT(strlen(b) < sizeof(b));
 }
 
+
+/* ── WPA1 and OWE-transition IE detection (#62) ───────────── */
+
+/* RSN IE body: version 1, group CCMP, one pairwise CCMP, then the
+ * caller's AKM suite types, then RSN capabilities. */
+static int put_rsn(uint8_t *buf, int off, const uint8_t *akm_types,
+                   int n_akm, uint16_t rsn_caps) {
+    uint8_t body[64];
+    int b = 0;
+    body[b++] = 0x01; body[b++] = 0x00;                       /* version */
+    body[b++] = 0x00; body[b++] = 0x0f; body[b++] = 0xac; body[b++] = 0x04;
+    body[b++] = 0x01; body[b++] = 0x00;                       /* 1 pairwise */
+    body[b++] = 0x00; body[b++] = 0x0f; body[b++] = 0xac; body[b++] = 0x04;
+    body[b++] = (uint8_t)n_akm; body[b++] = 0x00;
+    for (int i = 0; i < n_akm; i++) {
+        body[b++] = 0x00; body[b++] = 0x0f; body[b++] = 0xac;
+        body[b++] = akm_types[i];
+    }
+    body[b++] = (uint8_t)(rsn_caps & 0xff);
+    body[b++] = (uint8_t)(rsn_caps >> 8);
+    return ie_put(buf, off, 48, body, b);
+}
+
+static void test_ies_wpa1_alongside_rsn_flagged(void) {
+    /* Microsoft OUI 00:50:F2 type 1 is the legacy WPA IE. Beside an RSN
+     * IE it means TKIP is still on offer to anything that asks. */
+    uint8_t ies[160];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"legacy", 6);
+    uint8_t akm[1] = { 2 };                       /* PSK */
+    off = put_rsn(ies, off, akm, 1, 0x0000);
+    uint8_t wpa1[] = { 0x00, 0x50, 0xf2, 0x01, 0x01, 0x00 };
+    off = ie_put(ies, off, 221, wpa1, (int)sizeof(wpa1));
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_EQ(rsn.has_wpa1, 1);
+    ASSERT(rsn.akm_bits & RSN_AKM_PSK);
+}
+
+static void test_ies_no_wpa1_when_absent(void) {
+    uint8_t ies[160];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"modern", 6);
+    uint8_t akm[1] = { 8 };                       /* SAE */
+    off = put_rsn(ies, off, akm, 1, 0x00c0);      /* MFPC|MFPR */
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.has_wpa1, 0);
+    ASSERT_EQ(rsn.owe_trans, 0);
+}
+
+static void test_ies_owe_transition_element_flagged(void) {
+    /* Wi-Fi Alliance OUI 50:6F:9A, type 0x1C. */
+    uint8_t ies[160];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"owe-net", 7);
+    uint8_t akm[1] = { 18 };                      /* OWE */
+    off = put_rsn(ies, off, akm, 1, 0x00c0);
+    uint8_t owe[] = { 0x50, 0x6f, 0x9a, 0x1c,
+                      0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01, 0x06 };
+    off = ie_put(ies, off, 221, owe, (int)sizeof(owe));
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.owe_trans, 1);
+    ASSERT(rsn.akm_bits & RSN_AKM_OWE);
+}
+
+static void test_ies_other_wfa_vendor_types_are_not_owe(void) {
+    /* Same OUI, different type. Matching on the OUI alone would flag
+     * every WFA vendor IE — Wi-Fi Direct, WMM, Hotspot 2.0 — as an OWE
+     * transition. */
+    uint8_t ies[160];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"p2p", 3);
+    uint8_t akm[1] = { 8 };
+    off = put_rsn(ies, off, akm, 1, 0x00c0);
+    uint8_t wfa[] = { 0x50, 0x6f, 0x9a, 0x09, 0x01, 0x02 };   /* P2P */
+    off = ie_put(ies, off, 221, wfa, (int)sizeof(wfa));
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.owe_trans, 0);
+}
+
+static void test_ies_transition_mode_bitmap_has_both_lanes(void) {
+    /* PSK and SAE simultaneously. The display string would show both
+     * here, but four AKMs would push one out — the bitmap is what the
+     * #62 rule reads. */
+    uint8_t ies[160];
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"trans", 5);
+    uint8_t akm[2] = { 2, 8 };
+    off = put_rsn(ies, off, akm, 2, 0x0080);      /* MFPC only */
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    ASSERT(rsn.akm_bits & RSN_AKM_PSK_FAMILY);
+    ASSERT(rsn.akm_bits & RSN_AKM_SAE_FAMILY);
+    ASSERT_EQ(rsn.mfp, 1);                        /* capable, not required */
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -1600,4 +1700,10 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_akm_label_transition_mode_shows_both);
     RUN_TEST(test_akm_label_open_and_unknown);
     RUN_TEST(test_akm_label_never_overruns);
+    TEST_SUITE("WPA1 / OWE-transition IE detection (#62)");
+    RUN_TEST(test_ies_wpa1_alongside_rsn_flagged);
+    RUN_TEST(test_ies_no_wpa1_when_absent);
+    RUN_TEST(test_ies_owe_transition_element_flagged);
+    RUN_TEST(test_ies_other_wfa_vendor_types_are_not_owe);
+    RUN_TEST(test_ies_transition_mode_bitmap_has_both_lanes);
 }

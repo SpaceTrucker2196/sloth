@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "oui.h"
 #include "views/beacon.h"
+#include "wifi_assess.h"
 #include "beacon_snoop.h"
 
 #define BEACON_PAGE 30
@@ -254,12 +255,12 @@ void view_beacon_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
            "SSID", "BSSID", "Sig", "Ch", "Enc",
-           "Pairwise", "MFP", "AKM", "WPS", "Vendor", "PHY", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-3s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY", "Last");
+    TPRINT(" %-22s  %-17s  %4s  %3s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
            "----------------------", "-----------------",
-           "----", "---", "-----", "---------", "---",
+           "----", "---", "-----", "---------", "--------",
            "----------", "---", "---------", "--------", "----");
     tui_normal();
 
@@ -325,7 +326,13 @@ void view_beacon_draw(const sloth_state_t *s) {
         else if (age < 3600) snprintf(age_buf, sizeof(age_buf), "%dm",  age / 60);
         else                 snprintf(age_buf, sizeof(age_buf), "%dh",  age / 3600);
 
-        const char *mfp_s = (ap->mfp == 2) ? "REQ"
+        /* Posture, not just MFP (#62). When the AP advertises a
+         * downgrade lane the column names it — that is the finding, and
+         * "cap" alone never conveyed it. With no downgrade the column
+         * falls back to the MFP state it always showed. */
+        const char *dg_s  = wifi_downgrade_column(ap->downgrade_flags);
+        const char *mfp_s = dg_s ? dg_s
+                          : (ap->mfp == 2) ? "REQ"
                           : (ap->mfp == 1) ? "cap" : "-";
         const char *pw    = ap->pairwise[0] ? ap->pairwise : "-";
         const char *akm   = ap->akm[0]      ? ap->akm      : "-";
@@ -335,7 +342,7 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-3s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
+            TPRINT(" %-22.22s  %-17.17s  %4s  %3d  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
                    ssid, bssid_str(ap->bssid), sig_buf, ap->channel,
                    ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s, age_buf);
             tui_reset();
@@ -369,11 +376,14 @@ void view_beacon_draw(const sloth_state_t *s) {
             else                          tui_normal();
             TPRINT("  %-9.9s", pw);
 
-            /* MFP — REQ bright, cap normal, off (-) dim */
-            if (ap->mfp == 2)       tui_bright();
-            else if (ap->mfp == 1)  tui_normal();
-            else                    tui_dim();
-            TPRINT("  %-3s", mfp_s);
+            /* Posture — a named downgrade lane is heat-coloured
+             * because it is the finding; otherwise the old MFP shading
+             * (REQ bright, cap normal, off dim). */
+            if (dg_s)                    tui_heat(0.85);
+            else if (ap->mfp == 2)       tui_bright();
+            else if (ap->mfp == 1)       tui_normal();
+            else                         tui_dim();
+            TPRINT("  %-8s", mfp_s);
 
             tui_normal();
             TPRINT("  %-10.10s", akm);

@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Twelve are open** (`#61`–`#72`),
+~~**No open GitHub issues.**~~ **Eleven are open** (`#61`, `#63`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -263,13 +263,13 @@ exist. Gaps:
   tooling randomises source MACs, so a real flood is *many* distinct
   STAs and the gate would have suppressed the common shape.
 - **◆ CTS/RTS airtime DoS.** Needs B1 control frames — `#64`.
-- **◆ PMF/WPA3 downgrade + transition-mode exposure.** `wifi_assess.c`
-  already carries MFP and transition findings; what is missing is a
-  *live alert* for an AP advertising WPA2/WPA3 mixed mode, MFP
-  optional-not-required, or an OWE transition BSS. Overlaps `#24`.
-  Filed as `#62`, and now the cheapest issue open: its one real
-  dependency — an exact AKM bitmap, since `strstr(akm,"SAE")` also
-  matches `FT-SAE` — shipped inside `#60` slice 1 (`5efb233`).
+- ~~**◆ PMF/WPA3 downgrade + transition-mode exposure.**~~ ✅ landed
+  (`#62`). `ALERT_TYPE_WPA_DOWNGRADE` fires on four lanes — SAE+PSK
+  transition, OWE-with-open-companion, MFP-optional-on-SAE, and WPA1
+  beside RSN — after a 30 s observation floor, one alert per
+  (BSSID, kind). The `[b]` MFP column became a `posture` column. CRIT
+  when the BSSID is designated or when `#60`'s assoc delta shows a
+  client actually took the lane.
 - **◇ KARMA / known-beacon responder heuristics v2**, and PMKID-harvest
   tool fingerprints — AP or client behaviour matching known passive
   harvesting tooling. Observation-only. Filed as `#68`, and the one
@@ -328,8 +328,7 @@ effort:
    ✅ landed 2026-08-24.
 4. ~~**`#60` slice 5b** — `[w]` Assoc columns, `[k]` PNL PHY tier,
    `--report`, docs.~~ ✅ landed 2026-08-24.
-5. **`#62` PMF/WPA3 downgrade.** ~1 week, closes a B4 ◆, dependency
-   already paid.
+5. ~~**`#62` PMF/WPA3 downgrade.**~~ ✅ landed 2026-08-25.
 6. **`#65` PEAP no-server-cert.** Small, and the only issue open that
    catches evidence of a *shipping* CVE (CVE-2023-52160) against
    handsets already on the network. Widen the `eap_track_observe()` seam

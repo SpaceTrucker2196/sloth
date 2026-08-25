@@ -361,11 +361,24 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             uint8_t o0 = ie[2], o1 = ie[3], o2 = ie[4];
             uint8_t ty = ie[5];
             int     is_microsoft = (o0==0x00 && o1==0x50 && o2==0xf2);
+            /* Wi-Fi Alliance OUI 50:6F:9A. Type 0x1C is the OWE
+             * Transition Mode element: it names the companion BSS an
+             * OWE network runs in the clear so legacy clients can still
+             * join. Legitimate by design, and the open half is the
+             * downgrade lane (#62). */
+            if (rsn_out && o0==0x50 && o1==0x6f && o2==0x9a && ty==0x1c)
+                rsn_out->owe_trans = 1;
             /* Microsoft Vendor-Specific OUI 00:50:F2.
              *   type 1 = WPA IE
              *   type 4 = Wi-Fi Protected Setup IE                     */
             if (is_microsoft) {
-                if (ty == 0x01) wpa_found = 1;
+                if (ty == 0x01) {
+                    wpa_found = 1;
+                    /* Recorded separately from `enc`: the finding for
+                     * #62 is WPA1 *alongside* RSN, and `enc` reports
+                     * only the strongest mode present. */
+                    if (rsn_out) rsn_out->has_wpa1 = 1;
+                }
                 if (rsn_out && ty == 0x04) {
                     rsn_out->has_wps = 1;
                     int uuid_e_zero_seen = 0;
@@ -590,7 +603,15 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                          "%s", rsn->group);
                 snprintf(g_aps[i].akm, sizeof(g_aps[i].akm),
                          "%s", rsn->akm);
-                g_aps[i].mfp = rsn->mfp;
+                g_aps[i].mfp           = rsn->mfp;
+                g_aps[i].akm_bits      = rsn->akm_bits;
+                g_aps[i].pairwise_bits = rsn->pairwise_bits;
+                /* Sticky: an AP that has ever advertised WPA1 or an OWE
+                 * transition has offered that lane, and a later beacon
+                 * that omits the IE does not retract it. Matches how
+                 * has_wps accumulates two lines below. */
+                if (rsn->has_wpa1)  g_aps[i].has_wpa1  = 1;
+                if (rsn->owe_trans) g_aps[i].owe_trans = 1;
                 /* Vendor IE / WPS — only overwrite if we found new
                  * info; preserve a previously-set vendor on bare
                  * re-records. */
@@ -668,6 +689,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].signal_dbm = signal;
     g_aps[slot].channel    = channel;
     g_aps[slot].beacon_ms  = beacon_ms;
+    g_aps[slot].first_seen = now;
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
     if (ssid[0]) {
@@ -682,7 +704,11 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                  "%s", rsn->group);
         snprintf(g_aps[slot].akm, sizeof(g_aps[slot].akm),
                  "%s", rsn->akm);
-        g_aps[slot].mfp = rsn->mfp;
+        g_aps[slot].mfp           = rsn->mfp;
+        g_aps[slot].akm_bits      = rsn->akm_bits;
+        g_aps[slot].pairwise_bits = rsn->pairwise_bits;
+        g_aps[slot].has_wpa1      = rsn->has_wpa1 ? 1 : 0;
+        g_aps[slot].owe_trans     = rsn->owe_trans ? 1 : 0;
         snprintf(g_aps[slot].vendor, sizeof(g_aps[slot].vendor),
                  "%s", rsn->vendor);
         g_aps[slot].has_wps    = rsn->has_wps;

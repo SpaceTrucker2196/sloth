@@ -149,6 +149,47 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
         }
     }
 
+    /* Downgrade postures (#62). wifi_assess already reports encryption
+     * hygiene per AP; this is the narrower question of which APs are
+     * advertising a *second, weaker* lane beside their primary one —
+     * the prerequisite CVE-2023-52424 and Dragonblood both need. */
+    {
+        int dg_aps = 0;
+        for (int i = 0; i < s->beacon_count; i++)
+            if (s->beacon_aps[i].downgrade_flags) dg_aps++;
+        if (dg_aps > 0) {
+            fprintf(out, "## Downgrade lanes advertised\n\n");
+            fprintf(out, "%d AP%s offering a weaker lane beside its "
+                         "primary one.\n\n",
+                    dg_aps, dg_aps == 1 ? " is" : "s are");
+            fprintf(out, "| BSSID | SSID | Lanes |\n");
+            fprintf(out, "|-------|------|-------|\n");
+            for (int i = 0; i < s->beacon_count; i++) {
+                const beacon_ap_t *a = &s->beacon_aps[i];
+                if (!a->downgrade_flags) continue;
+                char bss[18];
+                snprintf(bss, sizeof(bss), "%02x:%02x:%02x:%02x:%02x:%02x",
+                         a->bssid[0], a->bssid[1], a->bssid[2],
+                         a->bssid[3], a->bssid[4], a->bssid[5]);
+                char lanes[96];
+                size_t lo = 0;
+                lanes[0] = '\0';
+                for (int b = 0; b < 4; b++) {
+                    uint8_t kind = (uint8_t)(1u << b);
+                    if (!(a->downgrade_flags & kind)) continue;
+                    int n = snprintf(lanes + lo, sizeof(lanes) - lo, "%s%s",
+                                     lo ? ", " : "",
+                                     wifi_downgrade_label(kind));
+                    if (n < 0 || (size_t)n >= sizeof(lanes) - lo) break;
+                    lo += (size_t)n;
+                }
+                fprintf(out, "| `%s` | %s | **%s** |\n", bss,
+                        a->ssid[0] ? a->ssid : "&lt;hidden&gt;", lanes);
+            }
+            fprintf(out, "\n");
+        }
+    }
+
     /* Association downgrades (#60). The ask-vs-ask delta: a client that
      * requested SAE with MFP required and then re-requested for less
      * has been moved, and neither request shows it alone. This is the

@@ -57,6 +57,16 @@ typedef struct {
      * representable and are skipped — none are defined today. */
     uint32_t akm_bits;
     uint32_t pairwise_bits;
+    /* Legacy WPA1 vendor IE (00:50:F2 type 1). Tracked separately from
+     * `enc` because the finding is WPA1 *alongside* RSN — an AP still
+     * offering TKIP to anything that asks — and `enc` reports only the
+     * strongest mode it found (#62). */
+    int  has_wpa1;
+    /* Wi-Fi Alliance OWE Transition Mode element (OUI 50:6F:9A type
+     * 0x1C). Names the paired BSS an OWE network offers as its open
+     * lane; presence is the signal, the pairing is checked by the rule
+     * because one beacon cannot see the other BSS. */
+    int  owe_trans;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151

@@ -699,6 +699,7 @@ typedef enum {
     ALERT_TYPE_RF_DEGRADED,         /* sustained retry ratio on a channel — interference/jamming (B3) */
     ALERT_TYPE_ASSOC_FLOOD,         /* association-request flood at one BSSID (#60) */
     ALERT_TYPE_BTM_ABUSE,           /* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
+    ALERT_TYPE_WPA_DOWNGRADE,       /* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -914,6 +915,19 @@ typedef struct {
     char     group[12];
     char     akm[24];          /* "PSK" / "SAE" / "PSK,FT-PSK" / "802.1X" */
     int      mfp;
+    /* Machine-readable form of the same suites (#60, #62). The strings
+     * above are display-oriented and cap at three AKMs; these do not,
+     * which is what makes "PSK and SAE simultaneously" answerable. */
+    uint32_t akm_bits;
+    uint32_t pairwise_bits;
+    /* WPA1 vendor IE (00:50:F2 type 1) seen alongside the RSN IE, and
+     * the Wi-Fi Alliance OWE Transition Mode element (50:6F:9A type
+     * 0x1C). Both are downgrade lanes an AP advertises about itself. */
+    uint8_t  has_wpa1;
+    uint8_t  owe_trans;
+    /* WPA_DG_* bits — computed per poll from the fields above plus, for
+     * the OWE case, the presence of a paired open BSS. */
+    uint8_t  downgrade_flags;
     /* Vendor-IE fingerprint — best-guess AP vendor from tag-221 OUIs
      * (Apple AirPort, Cisco, Mikrotik, Ubiquiti, etc.) and a WPS flag.
      * WPS-enabled APs are operationally interesting because PixieDust
@@ -947,6 +961,7 @@ typedef struct {
      * identical IE tuple — the ie_uniformity signal (#30). 0 = unknown. */
     uint32_t ssid_history_fp[MAX_AP_SSID_HISTORY];
     int      ssid_history_n;
+    time_t   first_seen;       /* set on insert; the posture debounce reads it */
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:
@@ -1259,6 +1274,29 @@ typedef struct {
  * device — useful both as a fingerprint and as a posture signal. */
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
+
+/* ── WPA / PMF downgrade posture (#62) ─────────────────────
+ *
+ * Four ways an AP can offer a client a weaker lane than the one it is
+ * advertising. None of these is an attack in itself — every one is a
+ * configuration the AP is choosing to broadcast — but each is the
+ * *prerequisite* an attacker needs, and a client will take the weak
+ * lane if the AP offers it.
+ *
+ * Kept as a bitfield rather than one "worst posture" value because an
+ * AP can offer several at once, and which ones it offers is the finding
+ * an operator has to fix. */
+typedef enum {
+    WPA_DG_TRANSITION_SAE_PSK = 1 << 0, /* PSK and SAE both on offer   */
+    WPA_DG_OWE_TRANSITION     = 1 << 1, /* OWE BSS paired with an open one */
+    WPA_DG_MFP_OPTIONAL       = 1 << 2, /* SAE with MFP capable-not-required */
+    WPA_DG_WPA1_ALONGSIDE     = 1 << 3, /* legacy WPA1 IE beside the RSN IE */
+} sloth_downgrade_kind_t;
+
+/* An AP must be observed for at least this long before its posture is
+ * reported. A single beacon caught while channel-hopping is a sample,
+ * not a configuration, and firing on it would make --hop noisy. */
+#define WPA_DOWNGRADE_MIN_OBSERVED_S 30
 
 /* ── BSS Transition Management steering (#59) ──────────────
  *

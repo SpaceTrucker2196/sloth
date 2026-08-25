@@ -27,16 +27,40 @@ absent, so consumers can tell "no data" from a genuine zero).
 ## View
 
 ```
- ── Beacons ────────────────────────────────────────────────────
- SSID             sig  ch
- home_5g          -42  36     ← bright green channel → strong + WPA3
- neighbor_24      -67  11
- (hidden)         -71  6      ← cloaked SSID; still visible by BSSID
- FBI-Surveillance -58  1      ← funny name on a coffee-shop AP
+ SSID                    BSSID               Sig   Ch  Enc    Pairwise   posture   AKM         WPS  Vendor     PHY       Last
+ home_5g                 c8:0a:a9:1b:2c:3d   -42   36  WPA3   CCMP       REQ       SAE         -    Apple      Wi-Fi 6   2s
+ corp-wifi               00:11:22:33:44:55   -55    6  WPA3   CCMP       WPA2+3    SAE,PSK     -    Cisco      Wi-Fi 6   1s
+ legacy-net              de:ad:be:ef:00:01   -60   11  WPA2   CCMP       WPA1+RSN  PSK         ON   ?          Wi-Fi 4   4s
+ (hidden)                d8:5d:4c:5e:6f:70   -71    6  WPA2   CCMP       cap       PSK         -    ?          Wi-Fi 5   9s
 ```
 
 SSID names are coloured via the same hash-palette as Probe — same SSID
 gets the same colour wherever it appears.
+
+### The `posture` column
+
+This column used to show MFP alone (`REQ` / `cap` / `-`). It still does
+when the AP's posture is clean — but when the AP advertises a **weaker
+lane beside its primary one** the column names that instead, heat-
+coloured, because that is the finding (#62):
+
+| Shown | Meaning |
+|---|---|
+| `WPA1+RSN` | a legacy WPA1 IE beside the RSN IE — TKIP still on offer |
+| `WPA2+3` | PSK and SAE both in the AKM list — WPA3 transition mode |
+| `OWE-tr` | an OWE BSS with a paired open companion BSS |
+| `MFP-opt` | SAE with MFP capable-but-not-required — the Dragonblood primitive |
+| `REQ` / `cap` / `-` | no downgrade lane; the MFP state as before |
+
+Worst-first when several apply — the column has room for one, and an AP
+still offering TKIP is a bigger problem than one whose MFP is merely
+optional. The `[v]` Alerts view carries one `WPA_DOWNGRADE` alert per
+lane, so nothing is lost by the column showing only the worst.
+
+**None of these is an attack.** Each is a configuration the AP is
+broadcasting about itself, and each is the prerequisite an attacker
+needs: CVE-2023-52424 (SSID Confusion) and the Dragonblood family both
+depend on the AP having offered the weak lane in the first place.
 
 ## What's normal
 
@@ -45,6 +69,13 @@ gets the same colour wherever it appears.
 - WPA2 / WPA3 encryption.
 
 ## What's suspicious
+
+- **A heat-coloured `posture` cell.** See the table above. A migration
+  window is a legitimate reason to run WPA3 transition mode; a posture
+  that has been there for weeks is a compliance finding. sloth reports
+  the live state — "this AP is *currently* offering a downgrade path" —
+  and leaves the duration judgement to the operator, since the AP table
+  does not persist across runs unless `--db` is on.
 
 - **Twin SSID** with different BSSID and stronger signal than the real
   AP — classic [evil-twin

@@ -576,6 +576,10 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_str(buf, LINEBUF, &off, "group",      e->group);
         kv_str(buf, LINEBUF, &off, "akm",        e->akm);
         kv_int(buf, LINEBUF, &off, "mfp",        e->mfp);
+        /* Additive (#62): WPA_DG_* bits — the downgrade lanes this
+         * AP advertises about itself. 0 for a clean posture. */
+        kv_int(buf, LINEBUF, &off, "downgrade_flags", e->downgrade_flags);
+        kv_int(buf, LINEBUF, &off, "akm_bits",   (long long)e->akm_bits);
         kv_str(buf, LINEBUF, &off, "vendor",     e->vendor);
         kv_int(buf, LINEBUF, &off, "has_wps",    e->has_wps ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "wps_state",  e->wps_state);

@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
+#include "wifi_assess.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "views/alerts.h"
@@ -3461,6 +3462,204 @@ static void test_btm_abuse_reports_total_alongside_imminent(void) {
     btm_clear();
 }
 
+
+/* ── WPA / PMF downgrade posture (#62) ───────────────────── */
+
+static beacon_ap_t *add_ap(sloth_state_t *s, uint8_t last, const char *ssid,
+                           const char *enc, uint32_t akm, int mfp,
+                           int observed_secs) {
+    beacon_ap_t *a = &s->beacon_aps[s->beacon_count++];
+    memset(a, 0, sizeof(*a));
+    a->bssid[0] = 0xaa; a->bssid[1] = 0xbb; a->bssid[2] = 0xcc;
+    a->bssid[3] = 0xdd; a->bssid[4] = 0xee; a->bssid[5] = last;
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    snprintf(a->enc,  sizeof(a->enc),  "%s", enc);
+    a->akm_bits  = akm;
+    a->mfp       = mfp;
+    a->first_seen = time(NULL) - observed_secs;
+    a->last_seen  = time(NULL);
+    return a;
+}
+
+static int count_alerts(const sloth_state_t *s, alert_type_t t) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++) if (s->alerts[i].type == t) n++;
+    return n;
+}
+
+/* ── the pure flag computation ── */
+
+static void test_downgrade_flags_transition_mode(void) {
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.akm_bits = RSN_AKM_PSK | RSN_AKM_SAE;
+    a.mfp = 2;
+    ASSERT(wifi_downgrade_flags(&a) & WPA_DG_TRANSITION_SAE_PSK);
+}
+
+static void test_downgrade_flags_pure_wpa3_is_clean(void) {
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.akm_bits = RSN_AKM_SAE;
+    a.mfp = 2;
+    ASSERT_EQ((int)wifi_downgrade_flags(&a), 0);
+}
+
+static void test_downgrade_flags_mfp_optional_needs_sae(void) {
+    /* MFP-optional is only the Dragonblood primitive on a BSS that
+     * offers SAE. A WPA2-PSK AP with MFP capable-not-required is
+     * ordinary and already reported by wifi_assess as its own finding —
+     * firing here too would double-count every WPA2 network in range. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.akm_bits = RSN_AKM_PSK; a.mfp = 1;
+    ASSERT_EQ((int)(wifi_downgrade_flags(&a) & WPA_DG_MFP_OPTIONAL), 0);
+    a.akm_bits = RSN_AKM_SAE;
+    ASSERT(wifi_downgrade_flags(&a) & WPA_DG_MFP_OPTIONAL);
+}
+
+static void test_downgrade_flags_mfp_off_is_not_this_finding(void) {
+    /* mfp==0 is "no MFP at all", a different and older finding. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.akm_bits = RSN_AKM_SAE; a.mfp = 0;
+    ASSERT_EQ((int)(wifi_downgrade_flags(&a) & WPA_DG_MFP_OPTIONAL), 0);
+}
+
+static void test_downgrade_flags_wpa1_needs_rsn(void) {
+    /* WPA1 on its own is a legacy AP, already reported elsewhere. The
+     * finding here is WPA1 *alongside* RSN — TKIP still on offer to
+     * anything that asks for it. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.has_wpa1 = 1; a.akm_bits = 0;
+    ASSERT_EQ((int)(wifi_downgrade_flags(&a) & WPA_DG_WPA1_ALONGSIDE), 0);
+    a.akm_bits = RSN_AKM_PSK;
+    ASSERT(wifi_downgrade_flags(&a) & WPA_DG_WPA1_ALONGSIDE);
+}
+
+static void test_downgrade_flags_family_not_substring(void) {
+    /* FT-SAE and SAE-EXT-KEY are the SAE lane. A substring test on the
+     * display string reported transition mode for a pure FT-SAE BSS. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    a.akm_bits = RSN_AKM_FT_SAE; a.mfp = 2;
+    ASSERT_EQ((int)wifi_downgrade_flags(&a), 0);
+    a.akm_bits = RSN_AKM_FT_SAE | RSN_AKM_FT_PSK;
+    ASSERT(wifi_downgrade_flags(&a) & WPA_DG_TRANSITION_SAE_PSK);
+}
+
+/* ── the rule ── */
+
+static void test_wpa_downgrade_transition_fires(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x60, "corp", "WPA3", RSN_AKM_PSK | RSN_AKM_SAE, 2, 120);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "WPA2+WPA3 transition") != NULL);
+    ASSERT_EQ(strcmp(s.alerts[idx].technique, "T1600"), 0);
+}
+
+static void test_wpa_downgrade_observation_floor(void) {
+    /* Seen for 5 seconds: a sample caught mid-hop, not a configuration.
+     * Without this floor --hop alerts on every AP it brushes past. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x61, "corp", "WPA3", RSN_AKM_PSK | RSN_AKM_SAE, 2, 5);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE), -1);
+}
+
+static void test_wpa_downgrade_two_kinds_two_alerts(void) {
+    /* An AP offering two lanes is two things to fix. Collapsing them
+     * would hide whichever the operator did not read. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *a = add_ap(&s, 0x62, "corp", "WPA3",
+                            RSN_AKM_PSK | RSN_AKM_SAE, 1, 120);
+    a->has_wpa1 = 1;
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_WPA_DOWNGRADE), 3);
+}
+
+static void test_wpa_downgrade_owe_transition_needs_the_pair(void) {
+    /* The element on its own is not the finding — the open BSS it
+     * points at is the downgrade lane, and without one there is nothing
+     * to downgrade to. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    beacon_ap_t *o = add_ap(&s, 0x63, "cafe", "WPA3", RSN_AKM_OWE, 2, 120);
+    o->owe_trans = 1;
+    /* A same-SSID neighbour that is *not* open. The companion has to be
+     * the open lane specifically — without this second AP the test
+     * passes against a pairing loop that accepts any neighbour at all. */
+    add_ap(&s, 0x6f, "cafe", "WPA2", RSN_AKM_PSK, 2, 120);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE), -1);
+
+    alerts_clear();
+    seed_state(&s);
+    o = add_ap(&s, 0x63, "cafe", "WPA3", RSN_AKM_OWE, 2, 120);
+    o->owe_trans = 1;
+    add_ap(&s, 0x64, "cafe", "OPEN", 0, 0, 120);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "OWE transition") != NULL);
+}
+
+static void test_wpa_downgrade_my_bssid_is_crit(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x65, "corp", "WPA3", RSN_AKM_PSK | RSN_AKM_SAE, 2, 120);
+    ownership_add_bssid("aa:bb:cc:dd:ee:65");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "YOUR network") != NULL);
+    ownership_clear();
+}
+
+static void test_wpa_downgrade_exercised_lane_is_crit(void) {
+    /* The offer standing open is a WARN. A client having taken it —
+     * evidence from #60's assoc-request delta — is an incident. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x66, "corp", "WPA3", RSN_AKM_PSK | RSN_AKM_SAE, 2, 120);
+    assoc_req_t *r = &s.assoc_reqs[s.assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->bssid, s.beacon_aps[0].bssid, 6);
+    r->downgrade_flags = ASSOC_DG_AKM;
+    r->ts = time(NULL) - 60;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "took the weak lane") != NULL);
+}
+
+static void test_wpa_downgrade_stale_delta_does_not_escalate(void) {
+    /* A downgrade from two hours ago is history, not a live incident. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x67, "corp", "WPA3", RSN_AKM_PSK | RSN_AKM_SAE, 2, 120);
+    assoc_req_t *r = &s.assoc_reqs[s.assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->bssid, s.beacon_aps[0].bssid, 6);
+    r->downgrade_flags = ASSOC_DG_AKM;
+    r->ts = time(NULL) - 7200;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_wpa_downgrade_clean_wpa3_is_quiet(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_ap(&s, 0x68, "corp", "WPA3", RSN_AKM_SAE, 2, 120);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPA_DOWNGRADE), -1);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3487,6 +3686,20 @@ void run_alerts_tests(void) {
     RUN_TEST(test_btm_abuse_rostered_client_is_crit);
     RUN_TEST(test_btm_abuse_dedup_key_is_the_pair);
     RUN_TEST(test_btm_abuse_reports_total_alongside_imminent);
+    RUN_TEST(test_downgrade_flags_transition_mode);
+    RUN_TEST(test_downgrade_flags_pure_wpa3_is_clean);
+    RUN_TEST(test_downgrade_flags_mfp_optional_needs_sae);
+    RUN_TEST(test_downgrade_flags_mfp_off_is_not_this_finding);
+    RUN_TEST(test_downgrade_flags_wpa1_needs_rsn);
+    RUN_TEST(test_downgrade_flags_family_not_substring);
+    RUN_TEST(test_wpa_downgrade_transition_fires);
+    RUN_TEST(test_wpa_downgrade_observation_floor);
+    RUN_TEST(test_wpa_downgrade_two_kinds_two_alerts);
+    RUN_TEST(test_wpa_downgrade_owe_transition_needs_the_pair);
+    RUN_TEST(test_wpa_downgrade_my_bssid_is_crit);
+    RUN_TEST(test_wpa_downgrade_exercised_lane_is_crit);
+    RUN_TEST(test_wpa_downgrade_stale_delta_does_not_escalate);
+    RUN_TEST(test_wpa_downgrade_clean_wpa3_is_quiet);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);
