@@ -85,3 +85,4 @@
 | 90e189e | 2026-08-25T03:08:59Z | claude-opus-5 | 46 | 24454 | 7414204 | 32619 | 4.6449 | #59 slice 3 — BTM persistence and surfaces |
 | 1f693d5 | 2026-08-25T03:13:12Z | claude-opus-5 | 42 | 14897 | 7425699 | 28436 | 4.3698 | #59 slice 4 — BTM abuse docs, issue closed |
 | caeb92c | 2026-08-25T03:29:27Z | claude-opus-5 | 76 | 41122 | 15070177 | 55888 | 9.1224 | #60 slice 5b — assoc/PNL surfaces, issue closed |
+| 8c83ae8 | 2026-08-25T14:45:09Z | claude-opus-5 | 70 | 40373 | 15277588 | 481193 | 13.4604 | #62 — WPA/PMF downgrade alert |
