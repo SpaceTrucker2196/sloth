@@ -237,6 +237,15 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             if (ext == 35)               { has_he  = 1;
                 if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HE_PRESENT;
             }
+            /* EHT Capabilities (108) / EHT Operation (106) / Multi-Link
+             * (107) all mean 802.11be. Kept as its own statement rather
+             * than folded into the operation-IE branches below, because
+             * the capability IE is the one that is always present — an
+             * AP advertising Wi-Fi 7 without an EHT Operation element is
+             * ordinary, and tying the tier to the operation IE would
+             * label it Wi-Fi 6. */
+            if (ext == 81 || ext == 106 || ext == 107 || ext == 108)
+                has_eht = 1;
             if (ext == 36 && tln >= 7 && rsn_out) {
                 /* HE Operation (§9.4.2.249). Fixed part after the ext
                  * ID: HE Operation Parameters(3), BSS Color(1), Basic
@@ -272,6 +281,13 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                     default: break;
                     }
                 }
+            }
+            if (ext == 107 && rsn_out) {
+                /* Multi-Link Element (#67). The body is handed on so
+                 * the capture path can take the MLD identity out of it;
+                 * parsing an identity is not a shared-parser concern. */
+                rsn_out->mle_body = ie + 2;
+                rsn_out->mle_len  = tln;
             }
             if (ext == 106 && tln >= 6 && rsn_out) {
                 /* EHT Operation (§9.4.2.311): Params(1), Basic MCS(4),

@@ -4,6 +4,7 @@
 #include <time.h>
 #include "assoc_track.h"
 #include "probe_pnl.h"
+#include "mle.h"
 #include "beacon_snoop.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
@@ -111,6 +112,8 @@ int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     out->pairwise_bits  = rsn.pairwise_bits;
     out->requested_mfp  = rsn.mfp;
     out->vendor_ie_hash = rsn.fp.vendor_ies_hash;
+    out->mle_body       = rsn.mle_body;
+    out->mle_len        = rsn.mle_len;
     snprintf(out->phy, sizeof(out->phy), "%s", rsn.phy);
     return 1;
 }
@@ -151,6 +154,14 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
      * before any assoc_track lock is taken, so the two modules never
      * hold each other's mutexes — probe_pnl takes its own. */
     if (req->phy[0]) probe_pnl_note_assoc_phy(req->sta, req->phy);
+
+    /* The client's own Multi-Link Element (#67): the handset that
+     * seqnum correlation would otherwise report as three devices. */
+    if (req->mle_body && req->mle_len > 0) {
+        sloth_mld_t mld;
+        if (mle_parse(req->mle_body, req->mle_len, &mld))
+            mle_observe(&mld, now);
+    }
 
     pthread_mutex_lock(&g_req_mu);
 

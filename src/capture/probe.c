@@ -20,6 +20,7 @@
 #include "auth_track.h"
 #include "action_snoop.h"
 #include "ctrl_frames.h"
+#include "mle.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -287,6 +288,13 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * at once (#63). addr2 is passed separately from addr3 even
              * though a beacon's are normally identical — a forged one
              * is where they differ, and that is the whole signal. */
+            /* An AP's own Multi-Link Element (#67) — the AP-side MLD.
+             * The client side arrives via assoc_request_parse. */
+            if (rsn.mle_body && rsn.mle_len > 0) {
+                sloth_mld_t mld;
+                if (mle_parse(rsn.mle_body, rsn.mle_len, &mld))
+                    mle_observe(&mld, time(NULL));
+            }
             if (rsn.csa_present)
                 csa_observe(dot11 + 16, dot11 + 10,
                             rsn.csa_new_channel, rsn.csa_new_op_class,

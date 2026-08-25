@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Four are open** (`#67`, `#68`, `#69`, `#71`),
+~~**No open GitHub issues.**~~ **Three are open** (`#68`, `#69`, `#71`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -197,12 +197,14 @@ dispatch on all of them. Verified absent:
   (113), FT MDE/FTE (54/55).** Round out 11r/k/v roaming telemetry and
   mesh visibility. Note 11k *neighbour reports* (tag 52) and RNR are
   already parsed — this is the rest of the family.
-- **◇ Multi-Link Element full decode (Wi-Fi 7 / MLO).** Today it only
-  flips the "Wi-Fi 7" tier. Decoding it gives the MLD MAC ↔ per-link
-  affiliated MAC mapping — the modern analogue of the seqnum correlation
-  trick, and the only way to track Wi-Fi 7 devices that present a
-  different MAC per link. Composes directly with `transit_canonical_mac()`
-  (`#54`), which already resolves identity through seqnum correlations.
+- ~~**◇ Multi-Link Element full decode (Wi-Fi 7 / MLO).**~~ ✅ landed
+  (`#67`). `src/mle.c` decodes the Basic variant's MLD MAC and the
+  Per-STA Profile link addresses, and `transit_canonical_mac()` resolves
+  a link address to its MLD **ahead of** the seqnum correlation: the MLE
+  is the protocol asserting the identity, the correlation is sloth
+  inferring it. For an MLD the inference is not merely weaker but
+  absent — its radios have independent sequence spaces and never
+  correlate — so one handset was being counted as three.
 
 ### B3. PHY / signal-layer analysis
 

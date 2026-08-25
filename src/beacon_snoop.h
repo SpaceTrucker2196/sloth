@@ -86,6 +86,12 @@ typedef struct {
     int  oper_secondary_offset;
     int  oper_center_seg0;
     int  oper_center_seg1;
+    /* Multi-Link Element (#67). The element body is copied out rather
+     * than parsed here, because the parser is shared with the nl80211
+     * path and recording a device identity is not a parsing concern —
+     * the capture path decides whether to observe it. 0 = absent. */
+    const uint8_t *mle_body;
+    int  mle_len;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151

@@ -1272,6 +1272,13 @@ typedef struct {
     char     phy[10];             /* "Wi-Fi 7" / "6" / "5" / "4" / "legacy" */
     uint32_t vendor_ie_hash;
     int      is_reassoc;          /* subtype 2 rather than 0 */
+    /* Multi-Link Element from the request, when present (#67). The
+     * client's own MLE is the half that matters — a beacon's describes
+     * an AP's MLD, this one describes the handset that seqnum
+     * correlation would otherwise report as three devices. Points into
+     * the caller's frame buffer and is valid only during the parse. */
+    const uint8_t *mle_body;
+    int      mle_len;
     int      downgrade_flags;     /* ASSOC_DG_* — see below */
     uint32_t prev_akm_bits;       /* the ask this one replaced */
     int      prev_mfp;
@@ -1315,6 +1322,32 @@ typedef struct {
  * device — useful both as a fingerprint and as a posture signal. */
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
+
+/* ── Wi-Fi 7 Multi-Link Devices (#67) ──────────────────────
+ *
+ * MLO defeats sequence-number correlation structurally. seqnum_track
+ * links randomised addresses belonging to one radio by their shared
+ * monotonic counter; a Multi-Link Device runs several radios at once,
+ * each with its own address and its own independent sequence space. So
+ * one Wi-Fi 7 handset reads as two or three separate devices, and every
+ * count, roster check and UNKNOWN_DEVICE decision made about it is
+ * wrong in a way that looks entirely plausible.
+ *
+ * The Multi-Link Element is the protocol *asserting* the identity
+ * rather than sloth inferring it, which is why it takes precedence over
+ * the seqnum guess wherever both are available. */
+#define SLOTH_MLD_MAX        64
+#define SLOTH_MLD_MAX_LINKS   3   /* 2.4 / 5 / 6 GHz simultaneously */
+
+typedef struct {
+    uint8_t mld_mac[6];                          /* the stable identity */
+    uint8_t link_mac[SLOTH_MLD_MAX_LINKS][6];    /* affiliated per-link */
+    uint8_t link_id[SLOTH_MLD_MAX_LINKS];
+    int     link_count;
+    int     links_truncated;   /* more affiliated links than we can hold */
+    time_t  first_seen;
+    time_t  last_seen;
+} sloth_mld_t;
 
 /* ── 802.11k Radio Measurement survey (#61) ────────────────
  *
@@ -1819,6 +1852,9 @@ typedef struct {
     /* 802.11k survey activity (#61), busiest first. */
     sloth_rrm_pair_t     rrm_pairs[SLOTH_RRM_MAX_PAIRS];
     int                  rrm_pair_count;
+    /* Wi-Fi 7 Multi-Link Devices (#67). */
+    sloth_mld_t          mlds[SLOTH_MLD_MAX];
+    int                  mld_count;
 
     /* ── Channel activity summary ─────────────────────────── */
     channel_summary_t    channels[MAX_CHAN_ENTRIES];

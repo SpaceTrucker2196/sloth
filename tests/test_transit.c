@@ -7,6 +7,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "transit.h"
+#include "mle.h"
 
 #define T0 1700000000L
 #define MIN 60L
@@ -243,6 +244,57 @@ static void test_clear_empties_everything(void) {
     ASSERT_EQ(transit_pass_count(MAC_A, T0, TRANSIT_WINDOW_SECS), 0);
 }
 
+
+/* ── MLO takes precedence over seqnum inference (#67) ─────── */
+
+static void test_canonical_prefers_the_mld_assertion(void) {
+    /* An MLE is the protocol *asserting* that these addresses are one
+     * device; a seqnum correlation is sloth inferring it. Assertion
+     * beats inference — and here they disagree deliberately, so the
+     * test says which one won rather than only that something did. */
+    mle_clear();
+    static const uint8_t MLD[6]  = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    static const uint8_t LINK[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x11 };
+    static const uint8_t OTHER[6]= { 0x00, 0x00, 0x00, 0x00, 0x00, 0x02 };
+
+    sloth_mld_t m;
+    memset(&m, 0, sizeof(m));
+    memcpy(m.mld_mac, MLD, 6);
+    memcpy(m.link_mac[0], LINK, 6);
+    m.link_count = 1;
+    mle_observe(&m, 1000);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    /* A seqnum correlation pointing somewhere else, and numerically
+     * smaller — so it would win under the seqnum rule alone. */
+    seqnum_correlation_t *c = &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, LINK,  6);
+    memcpy(c->mac_b, OTHER, 6);
+
+    uint8_t out[6];
+    transit_canonical_mac(&s, LINK, out);
+    ASSERT(memcmp(out, MLD, 6) == 0);
+    mle_clear();
+}
+
+static void test_canonical_falls_back_to_seqnum_without_an_mle(void) {
+    /* No MLE for this address: the seqnum correlation is all there is,
+     * and it must still work. */
+    mle_clear();
+    static const uint8_t A[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x77 };
+    static const uint8_t B[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x11 };
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_correlation_t *c = &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, A, 6);
+    memcpy(c->mac_b, B, 6);
+    uint8_t out[6];
+    transit_canonical_mac(&s, A, out);
+    ASSERT(memcmp(out, B, 6) == 0);      /* numerically smaller wins */
+    mle_clear();
+}
+
 void run_transit_tests(void) {
     TEST_SUITE("transit: pass coalescing");
     RUN_TEST(test_burst_of_observations_is_one_pass);
@@ -270,4 +322,7 @@ void run_transit_tests(void) {
     RUN_TEST(test_device_table_is_bounded_and_evicts_stalest);
     RUN_TEST(test_pass_array_is_bounded);
     RUN_TEST(test_clear_empties_everything);
+    TEST_SUITE("MLO canonical identity (#67)");
+    RUN_TEST(test_canonical_prefers_the_mld_assertion);
+    RUN_TEST(test_canonical_falls_back_to_seqnum_without_an_mle);
 }

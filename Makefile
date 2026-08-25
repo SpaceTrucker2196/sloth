@@ -88,6 +88,7 @@ SRCS = src/main.c          \
        src/action_snoop.c    \
        src/ctrl_frames.c     \
        src/dot11_data.c      \
+       src/mle.c             \
        src/wifi_snapshot.c   \
        src/wifi_assess.c     \
        src/wifi_baseline.c   \
@@ -390,6 +391,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_ctrl_frames.c       \
             src/dot11_data.c               \
             tests/test_dot11_data.c        \
+            src/mle.c                      \
+            tests/test_mle.c               \
             src/wifi_snapshot.c            \
             tests/test_wifi_snapshot.c     \
             src/wifi_assess.c              \

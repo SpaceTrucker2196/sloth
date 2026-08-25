@@ -1806,6 +1806,55 @@ static void test_truncated_operation_ies_are_safe(void) {
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
 }
 
+
+/* ── PHY tier from the capability IEs ─────────────────────
+ *
+ * These exist because #66 silently dropped the line that sets has_eht
+ * while restructuring this branch, and nothing caught it: every AP
+ * stopped being labelled Wi-Fi 7 and the suite stayed green. The tier
+ * ladder now has a test per rung. */
+
+static void test_phy_tier_ladder(void) {
+    uint8_t ies[64];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+
+    int off = ie_put(ies, 0, 0, (const uint8_t *)"x", 1);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(rsn.phy, "legacy");
+
+    uint8_t none[1] = { 0 };
+    off = ie_put(ies, 0, 45, none, 1);                  /* HT Capabilities */
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(rsn.phy, "Wi-Fi 4");
+
+    off = ie_put(ies, 0, 191, none, 1);                 /* VHT Capabilities */
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(rsn.phy, "Wi-Fi 5");
+
+    uint8_t he[1] = { 35 };                             /* ext 35 = HE Cap */
+    off = ie_put(ies, 0, 255, he, 1);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_STR(rsn.phy, "Wi-Fi 6");
+}
+
+static void test_phy_tier_wifi7_from_each_eht_element(void) {
+    /* Any of the 802.11be extended IDs means Wi-Fi 7. The capability
+     * IE (108) is the one always present — an AP advertising Wi-Fi 7
+     * without an EHT *Operation* element is ordinary, so tying the tier
+     * to the operation IE would label it Wi-Fi 6. */
+    uint8_t ies[64];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    const uint8_t exts[] = { 81, 106, 107, 108 };
+    for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+        uint8_t body[1] = { exts[i] };
+        int off = ie_put(ies, 0, 255, body, 1);
+        beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+        ASSERT_STR(rsn.phy, "Wi-Fi 7");
+    }
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -1914,4 +1963,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_eht_operation_320mhz);
     RUN_TEST(test_no_operation_ie_leaves_width_unknown);
     RUN_TEST(test_truncated_operation_ies_are_safe);
+    TEST_SUITE("PHY tier ladder");
+    RUN_TEST(test_phy_tier_ladder);
+    RUN_TEST(test_phy_tier_wifi7_from_each_eht_element);
 }

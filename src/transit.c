@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "transit.h"
+#include "mle.h"
 
 static transit_device_t g_dev[MAX_TRANSIT_DEVICES];
 static int              g_count;
@@ -109,6 +110,18 @@ void transit_canonical_mac(const sloth_state_t *s, const uint8_t mac[6],
                            uint8_t out[6]) {
     if (!out || !mac) return;
     memcpy(out, mac, 6);
+
+    /* MLO first (#67). A Multi-Link Element is the protocol *asserting*
+     * that these addresses are one device; the seqnum correlation below
+     * is sloth inferring it from a shared counter. Assertion beats
+     * inference — and for an MLD the inference is not merely weaker but
+     * wrong, since its radios have independent sequence spaces and
+     * never correlate at all.
+     *
+     * Reads the live table rather than state so the resolution works
+     * for callers that have no snapshot to hand. */
+    if (mle_canonical(mac, out)) return;
+
     if (!s) return;
 
     /* Randomised MACs from one physical radio share a monotonic

@@ -925,6 +925,34 @@ void jsonl_emit_rrm_pairs(const sloth_state_t *s) {
     }
 }
 
+/* Wi-Fi 7 Multi-Link Devices (#67). One record per MLD, listing the
+ * per-link addresses its radios use simultaneously — the mapping that
+ * lets a consumer stop counting one handset as three devices. */
+void jsonl_emit_mlds(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *e = &s->mlds[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_mld", now);
+        kv_mac(buf, LINEBUF, &off, "mld_mac",    e->mld_mac);
+        kv_int(buf, LINEBUF, &off, "link_count", e->link_count);
+        kv_int(buf, LINEBUF, &off, "links_truncated",
+               e->links_truncated ? 1 : 0);
+        for (int j = 0; j < e->link_count && j < SLOTH_MLD_MAX_LINKS; j++) {
+            char key[16];
+            snprintf(key, sizeof(key), "link_%d_mac", j);
+            kv_mac(buf, LINEBUF, &off, key, e->link_mac[j]);
+            snprintf(key, sizeof(key), "link_%d_id", j);
+            kv_int(buf, LINEBUF, &off, key, e->link_id[j]);
+        }
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1383,6 +1411,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_btm_steers        (s);
     jsonl_emit_csa_events        (s);
     jsonl_emit_rrm_pairs         (s);
+    jsonl_emit_mlds              (s);
     jsonl_emit_eapol_events      (s);
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);
