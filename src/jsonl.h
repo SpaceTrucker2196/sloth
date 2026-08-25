@@ -57,6 +57,7 @@ void jsonl_emit_seqnum_correlations(const sloth_state_t *s);
 void jsonl_emit_channels      (const sloth_state_t *s);
 void jsonl_emit_assocs        (const sloth_state_t *s);
 void jsonl_emit_assoc_reqs    (const sloth_state_t *s);
+void jsonl_emit_btm_steers    (const sloth_state_t *s);
 void jsonl_emit_eapol_events  (const sloth_state_t *s);
 void jsonl_emit_mdns_services (const sloth_state_t *s);
 void jsonl_emit_nbns_names    (const sloth_state_t *s);

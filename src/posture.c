@@ -148,6 +148,53 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
         }
     }
 
+    /* 802.11v steering (#59). Sits in the report because a forced roam
+     * is the one Wi-Fi attack that leaves no deauth trace — an operator
+     * reading a clean deauth section needs this to know whether clients
+     * were moved anyway. Ordinary steering is listed alongside the
+     * forcing so the reader can see the baseline it stands out from. */
+    if (s->btm_steer_count > 0) {
+        int forcing = 0;
+        for (int i = 0; i < s->btm_steer_count; i++)
+            if (s->btm_steers[i].imminent_count > 0) forcing++;
+
+        fprintf(out, "## 802.11v BSS-Transition steering\n\n");
+        fprintf(out, "%d steered client%s observed, %d with "
+                     "Disassociation Imminent set.\n\n",
+                s->btm_steer_count, s->btm_steer_count == 1 ? "" : "s",
+                forcing);
+        fprintf(out, "| AP | STA | Requests | Forcing | Candidates |\n");
+        fprintf(out, "|----|-----|----------|---------|------------|\n");
+        for (int i = 0; i < s->btm_steer_count; i++) {
+            const btm_steer_t *b = &s->btm_steers[i];
+            char ap[18], sta[18];
+            snprintf(ap,  sizeof(ap),  "%02x:%02x:%02x:%02x:%02x:%02x",
+                     b->bssid[0], b->bssid[1], b->bssid[2],
+                     b->bssid[3], b->bssid[4], b->bssid[5]);
+            snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     b->sta[0], b->sta[1], b->sta[2],
+                     b->sta[3], b->sta[4], b->sta[5]);
+            char cand[MAX_AP_NEIGHBORS * 19 + 1];
+            size_t off = 0;
+            cand[0] = '\0';
+            for (int c = 0; c < b->candidate_count && c < MAX_AP_NEIGHBORS; c++) {
+                int n = snprintf(cand + off, sizeof(cand) - off,
+                                 "%s`%02x:%02x:%02x:%02x:%02x:%02x`",
+                                 off ? ", " : "",
+                                 b->candidates[c][0], b->candidates[c][1],
+                                 b->candidates[c][2], b->candidates[c][3],
+                                 b->candidates[c][4], b->candidates[c][5]);
+                if (n < 0 || (size_t)n >= sizeof(cand) - off) break;
+                off += (size_t)n;
+            }
+            fprintf(out, "| `%s` | `%s` | %d | %s | %s |\n",
+                    ap, sta, b->req_count,
+                    b->imminent_count ? "**yes**" : "no",
+                    cand[0] ? cand : "-");
+        }
+        fprintf(out, "\n");
+    }
+
     if (wifi_baseline_ready()) {
         drift_finding_t df[64];
         int dn = wifi_baseline_drift(s, df, 64);

@@ -17,6 +17,14 @@ static const char *mac_str(const uint8_t *m) {
     return g_mac_buf;
 }
 
+/* mac_str above returns a shared static buffer, so two calls in one
+ * expression silently print the same address twice. Rows that show a
+ * pair use this instead. */
+static void mac_fmt(char out[18], const uint8_t *m) {
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+             m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
 static const char *reason_str(uint16_t code) {
     switch (code) {
     case 0:  return "Reserved";
@@ -33,6 +41,8 @@ static const char *reason_str(uint16_t code) {
     }
 }
 
+static void draw_btm_section(const sloth_state_t *s, int rows);
+
 static int is_broadcast(const uint8_t *m) {
     return m[0]==0xff && m[1]==0xff && m[2]==0xff &&
            m[3]==0xff && m[4]==0xff && m[5]==0xff;
@@ -45,9 +55,25 @@ void view_deauth_draw(const sloth_state_t *s) {
 #else
     int page = DEAUTH_PAGE;
 #endif
+    /* Split the screen when there is 802.11v steering to show. The BTM
+     * section is capped at a third so a busy steering table can never
+     * push the deauth rows — the view's primary subject — off screen. */
+    int btm_rows = 0;
+    if (s->btm_steer_count > 0) {
+        btm_rows = s->btm_steer_count + 3;      /* blank, title, header */
+        int cap = page / 3;
+        if (cap < 5) cap = 5;
+        if (btm_rows > cap) btm_rows = cap;
+        page -= btm_rows;
+        if (page < 1) page = 1;
+    }
 
     tui_normal(); TPRINT(" Deauth/Disassoc events: ");
     tui_bright();  TPRINT("%d", s->deauth_count);
+    if (s->btm_steer_count) {
+        tui_normal(); TPRINT("   BTM steers: ");
+        tui_bright(); TPRINT("%d", s->btm_steer_count);
+    }
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     if (s->probe_iface[0])
         TPRINT("  iface: %s", s->probe_iface);
@@ -88,6 +114,12 @@ void view_deauth_draw(const sloth_state_t *s) {
         tui_dim();
         TPRINT("  (no deauth/disassoc frames seen on monitor iface)\n");
         tui_normal();
+        /* Not a return: an empty deauth table with live BTM steering is
+         * precisely the case this section exists for. 802.11v moves a
+         * client without a deauth frame, so returning here would show
+         * the operator "nothing is throwing clients off" at the moment
+         * something is. */
+        draw_btm_section(s, btm_rows);
         return;
     }
 
@@ -157,6 +189,77 @@ void view_deauth_draw(const sloth_state_t *s) {
         }
     }
     tui_normal();
+    draw_btm_section(s, btm_rows);
+}
+
+/* 802.11v steering (#59), below the deauth table because it answers the
+ * same operator question — "who is throwing clients off this network" —
+ * for the mechanism deauth detection cannot see. A BTM Request with
+ * Disassociation Imminent moves a client with no deauth frame at all,
+ * so an operator staring at an empty deauth table above needs this
+ * section to know it happened.
+ *
+ * Every steer is listed, not only the alerting ones. Ordinary 802.11v
+ * load balancing is the baseline that makes a forcing row legible, and
+ * the imminent count is what separates them. */
+static void draw_btm_section(const sloth_state_t *s, int rows) {
+    if (s->btm_steer_count <= 0 || rows <= 2) return;
+
+    tui_normal();
+    TPRINT("\n ── BTM steering (802.11v) ──\n");
+    tui_dim();
+    TPRINT(" %-17s  %-17s  %5s  %5s  %5s  %-17s  %s\n",
+           "AP", "STA", "Reqs", "Force", "Timer", "Candidate", "Last");
+    TPRINT(" %-17s  %-17s  %5s  %5s  %5s  %-17s  %s\n",
+           "-----------------", "-----------------", "-----", "-----",
+           "-----", "-----------------", "----");
+    tui_normal();
+
+    time_t now = time(NULL);
+    int shown = rows - 3;
+    if (shown > s->btm_steer_count) shown = s->btm_steer_count;
+    for (int i = 0; i < shown; i++) {
+        const btm_steer_t *b = &s->btm_steers[i];
+
+        char ap[18], sta[18], cand[18];
+        mac_fmt(ap,  b->bssid);
+        mac_fmt(sta, b->sta);
+        if (b->candidate_count > 0) mac_fmt(cand, b->candidates[0]);
+        else                        snprintf(cand, sizeof(cand), "-");
+
+        int age = (int)(now - b->last_seen);
+        char age_buf[16];
+        if      (age < 60)   snprintf(age_buf, sizeof(age_buf), "%ds", age);
+        else if (age < 3600) snprintf(age_buf, sizeof(age_buf), "%dm", age / 60);
+        else                 snprintf(age_buf, sizeof(age_buf), "%dh", age / 3600);
+
+        /* Heat tracks the forcing count, not the total: a chatty AP
+         * doing legitimate steering should not read as an attack. */
+        if (b->imminent_count >= BTM_ABUSE_THRESH) tui_heat(1.0);
+        else if (b->imminent_count)                tui_heat(0.6);
+        else                                       tui_normal();
+        TPRINT(" %-17.17s", ap);
+        tui_dim();
+        TPRINT("  %-17.17s", sta);
+        tui_normal();
+        TPRINT("  %5d", b->req_count);
+        if (b->imminent_count >= BTM_ABUSE_THRESH) tui_heat(1.0);
+        else if (b->imminent_count)                tui_heat(0.6);
+        else                                       tui_dim();
+        TPRINT("  %5d", b->imminent_count);
+        tui_dim();
+        TPRINT("  %5u", b->last_disassoc_timer);
+        TPRINT("  %-17.17s", cand);
+        if (b->candidate_count > 1) TPRINT(" +%d", b->candidate_count - 1);
+        TPRINT("  %s", age_buf);
+        TPRINT("\n");
+        tui_normal();
+    }
+    if (shown < s->btm_steer_count) {
+        tui_dim();
+        TPRINT("  ... %d more\n", s->btm_steer_count - shown);
+        tui_normal();
+    }
 }
 
 void view_deauth_key(sloth_state_t *s, int key) {

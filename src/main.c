@@ -52,6 +52,7 @@
 #include "eapol_log.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
+#include "action_snoop.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -170,6 +171,7 @@ static void poll_data(sloth_state_t *s) {
     seqnum_snapshot(s);
     assoc_snapshot(s);
     assoc_request_snapshot(s);
+    btm_snapshot(s);
     channel_summary_update(s);
     rf_quality_snapshot(s, time(NULL));
     mdns_snapshot(s);

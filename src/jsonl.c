@@ -817,6 +817,39 @@ void jsonl_emit_assoc_reqs(const sloth_state_t *s) {
     }
 }
 
+/* 802.11v steering (#59). One record per (BSSID, STA) the AP has sent
+ * a BTM Request to, forcing or not — a consumer correlating an alert
+ * needs the ordinary steering around it to tell an attack from a
+ * roaming policy. `imminent_count` is the subset the alert acts on. */
+void jsonl_emit_btm_steers(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->btm_steer_count; i++) {
+        const btm_steer_t *e = &s->btm_steers[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "btm_request", now);
+        kv_mac(buf, LINEBUF, &off, "bssid",             e->bssid);
+        kv_mac(buf, LINEBUF, &off, "sta_mac",           e->sta);
+        kv_int(buf, LINEBUF, &off, "req_count",         e->req_count);
+        kv_int(buf, LINEBUF, &off, "imminent_count",    e->imminent_count);
+        kv_int(buf, LINEBUF, &off, "request_mode",      e->last_request_mode);
+        kv_int(buf, LINEBUF, &off, "disassoc_timer",    e->last_disassoc_timer);
+        kv_int(buf, LINEBUF, &off, "validity_interval", e->last_validity_interval);
+        kv_int(buf, LINEBUF, &off, "candidate_count",   e->candidate_count);
+        kv_int(buf, LINEBUF, &off, "candidates_truncated",
+               e->candidates_truncated ? 1 : 0);
+        for (int c = 0; c < e->candidate_count && c < MAX_AP_NEIGHBORS; c++) {
+            char key[16];
+            snprintf(key, sizeof(key), "candidate_%d", c);
+            kv_mac(buf, LINEBUF, &off, key, e->candidates[c]);
+        }
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)e->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1272,6 +1305,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_channels          (s);
     jsonl_emit_assocs            (s);
     jsonl_emit_assoc_reqs        (s);
+    jsonl_emit_btm_steers        (s);
     jsonl_emit_eapol_events      (s);
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);

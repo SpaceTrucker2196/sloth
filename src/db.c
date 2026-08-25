@@ -65,6 +65,12 @@ static const char *const TIER_FINDING[] = {
      * recreating the #30/#31 hole through retention instead of through
      * a missing emitter. 96 rows maximum, so the cost is nil. */
     "karma_candidates", "rogue_radius",
+    /* Same reasoning: btm_requests is what justifies a BTM_ABUSE CRIT.
+     * At 3x the evidence would expire while the finding it supports was
+     * still retained. Bounded at MAX_BTM_PAIRS rows, so the cost is
+     * nil — and the ordinary-steering rows kept alongside are the
+     * baseline that makes the forcing ones legible. */
+    "btm_requests",
 };
 
 #define NELEMS(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -86,7 +92,7 @@ static void db_fail(const char *what) {
 enum {
     ST_DEVICE, ST_PNL_CLIENT, ST_PNL_SSID, ST_PROBE_CLIENT,
     ST_BEACON_AP, ST_BEACON_SSID, ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
-    ST_ASSOC_REQ,
+    ST_ASSOC_REQ, ST_BTM_REQ,
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
@@ -232,6 +238,27 @@ static const char *const SQL[ST_COUNT] = {
     "  prev_akm_bits=excluded.prev_akm_bits, prev_mfp=excluded.prev_mfp,"
     "  first_seen=MIN(assoc_reqs.first_seen,excluded.first_seen),"
     "  last_seen=MAX(assoc_reqs.last_seen,excluded.last_seen)",
+
+[ST_BTM_REQ] =
+    "INSERT INTO btm_requests (bssid,sta_mac,req_count,imminent_count,"
+    "last_request_mode,disassoc_timer,validity_interval,candidates,"
+    "candidate_count,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(bssid,sta_mac) DO UPDATE SET"
+    /* MAX, not excluded: the in-memory table is bounded and LRU-evicted,
+     * so a pair that ages out and comes back restarts its counters. The
+     * file is the longer memory and must not lose the earlier steering
+     * — same reason the #42 flow counters upsert with MAX. */
+    "  req_count=MAX(btm_requests.req_count,excluded.req_count),"
+    "  imminent_count=MAX(btm_requests.imminent_count,"
+    "                     excluded.imminent_count),"
+    "  last_request_mode=excluded.last_request_mode,"
+    "  disassoc_timer=excluded.disassoc_timer,"
+    "  validity_interval=excluded.validity_interval,"
+    "  candidates=excluded.candidates,"
+    "  candidate_count=excluded.candidate_count,"
+    "  first_seen=MIN(btm_requests.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(btm_requests.last_seen,excluded.last_seen)",
 
 [ST_WIFI_MERGED] =
     "INSERT INTO wifi_merged (entity,sensor_mask,seen_by,best_rssi,"
@@ -885,6 +912,45 @@ static void write_assoc_reqs(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int64(st, 15, (sqlite3_int64)(a->ts ? a->ts : now));
         sqlite3_bind_int64(st, 16, (sqlite3_int64)(a->ts ? a->ts : now));
         step_reset(ST_ASSOC_REQ);
+    }
+}
+
+/* Join the candidate BSSIDs into one text column. Bounded by
+ * construction: MAX_AP_NEIGHBORS entries at 18 chars each. */
+static void btm_candidates_str(const btm_steer_t *b, char *out, size_t sz) {
+    size_t off = 0;
+    out[0] = '\0';
+    for (int i = 0; i < b->candidate_count && i < MAX_AP_NEIGHBORS; i++) {
+        char one[18];
+        mac_str(b->candidates[i], one);
+        int n = snprintf(out + off, sz - off, "%s%s", off ? "," : "", one);
+        if (n < 0 || (size_t)n >= sz - off) break;
+        off += (size_t)n;
+    }
+}
+
+static void write_btm_requests(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->btm_steer_count; i++) {
+        const btm_steer_t *b = &s->btm_steers[i];
+        char bssid[18], sta[18], cand[MAX_AP_NEIGHBORS * 18 + 1];
+        mac_str(b->bssid, bssid);
+        mac_str(b->sta,   sta);
+        btm_candidates_str(b, cand, sizeof(cand));
+        sqlite3_stmt *st = g_st[ST_BTM_REQ];
+        bind_txt(st, 1, bssid);
+        bind_txt(st, 2, sta);
+        sqlite3_bind_int(st, 3, b->req_count);
+        sqlite3_bind_int(st, 4, b->imminent_count);
+        sqlite3_bind_int(st, 5, b->last_request_mode);
+        sqlite3_bind_int(st, 6, b->last_disassoc_timer);
+        sqlite3_bind_int(st, 7, b->last_validity_interval);
+        bind_txt(st, 8, cand);
+        sqlite3_bind_int(st, 9, b->candidate_count);
+        sqlite3_bind_int64(st, 10,
+            (sqlite3_int64)(b->first_seen ? b->first_seen : now));
+        sqlite3_bind_int64(st, 11,
+            (sqlite3_int64)(b->last_seen ? b->last_seen : now));
+        step_reset(ST_BTM_REQ);
     }
 }
 
@@ -1579,6 +1645,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_wifi_stas      (s, now);
     write_assocs         (s, now);
     write_assoc_reqs     (s, now);
+    write_btm_requests   (s, now);
     write_wifi_merged    (s, now);
     write_ip_entities    (s, now);
     write_discovery      (s, now);

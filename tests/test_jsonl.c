@@ -698,6 +698,48 @@ static void test_dns_log_record_writes_jsonl(void) {
 
 /* ── Suite ───────────────────────────────────────────────── */
 
+
+static void test_btm_steer_record(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    btm_steer_t *b = &s.btm_steers[s.btm_steer_count++];
+    static const uint8_t AP[6]  = {0xaa,0xbb,0xcc,0xdd,0xee,0x30};
+    static const uint8_t STA[6] = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+    static const uint8_t CD[6]  = {0xaa,0xbb,0xcc,0xdd,0xee,0x31};
+    memcpy(b->bssid, AP, 6);
+    memcpy(b->sta,   STA, 6);
+    memcpy(b->candidates[0], CD, 6);
+    b->candidate_count      = 1;
+    b->req_count            = 7;
+    b->imminent_count       = 4;
+    b->last_disassoc_timer  = 10;
+    b->first_seen = b->last_seen = 1700000000;
+    jsonl_emit_btm_steers(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(strstr(body, "\"type\":\"btm_request\"") != NULL);
+    ASSERT(strstr(body, "\"bssid\":\"aa:bb:cc:dd:ee:30\"") != NULL);
+    ASSERT(strstr(body, "\"sta_mac\":\"12:34:56:78:9a:bc\"") != NULL);
+    ASSERT(strstr(body, "\"req_count\":7") != NULL);
+    /* The forcing subset is the field a consumer keys on — without it
+     * an ordinary steering record and an attack look identical. */
+    ASSERT(strstr(body, "\"imminent_count\":4") != NULL);
+    ASSERT(strstr(body, "\"candidate_0\":\"aa:bb:cc:dd:ee:31\"") != NULL);
+    unlink(tmp_path);
+}
+
+static void test_btm_steer_empty_emits_nothing(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_btm_steers(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(strstr(body, "btm_request") == NULL);
+    unlink(tmp_path);
+}
+
 void run_jsonl_tests(void) {
     TEST_SUITE("jsonl open/close");
     RUN_TEST(test_open_close);
@@ -732,4 +774,6 @@ void run_jsonl_tests(void) {
 
     TEST_SUITE("jsonl record-hook");
     RUN_TEST(test_dns_log_record_writes_jsonl);
+    RUN_TEST(test_btm_steer_record);
+    RUN_TEST(test_btm_steer_empty_emits_nothing);
 }

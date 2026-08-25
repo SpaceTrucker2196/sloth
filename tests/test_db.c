@@ -1668,6 +1668,129 @@ static void test_stale_schema_version_refused_clearly(void) {
     unlink(db_path);
 }
 
+
+/* ── BTM steering persistence (#59) ──────────────────────── */
+
+static void seed_btm(sloth_state_t *s, int reqs, int imminent, int cands) {
+    memset(s, 0, sizeof(*s));
+    btm_steer_t *b = &s->btm_steers[s->btm_steer_count++];
+    static const uint8_t AP[6]  = {0xaa,0xbb,0xcc,0xdd,0xee,0x30};
+    static const uint8_t STA[6] = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+    memcpy(b->bssid, AP,  6);
+    memcpy(b->sta,   STA, 6);
+    b->req_count           = reqs;
+    b->imminent_count      = imminent;
+    b->last_request_mode   = 0x04;
+    b->last_disassoc_timer = 10;
+    b->last_validity_interval = 3;
+    b->candidate_count = cands;
+    for (int i = 0; i < cands; i++) {
+        b->candidates[i][0] = 0xaa; b->candidates[i][1] = 0xbb;
+        b->candidates[i][2] = 0xcc; b->candidates[i][3] = 0xdd;
+        b->candidates[i][4] = 0xee; b->candidates[i][5] = (uint8_t)(0x40 + i);
+    }
+    b->first_seen = 1700000000;
+    b->last_seen  = 1700000000;
+}
+
+static void test_btm_requests_written(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 7, 4, 1);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM btm_requests"), 1);
+    ASSERT_EQ(q_int("SELECT req_count FROM btm_requests"), 7);
+    ASSERT_EQ(q_int("SELECT imminent_count FROM btm_requests"), 4);
+    ASSERT_EQ(q_int("SELECT disassoc_timer FROM btm_requests"), 10);
+    char c[64];
+    q_text("SELECT candidates FROM btm_requests", c, sizeof(c));
+    ASSERT_EQ(strcmp(c, "aa:bb:cc:dd:ee:40"), 0);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_candidates_joined(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 2, 0, 3);
+    db_tick(&s, 1700000000);
+    char c[128];
+    q_text("SELECT candidates FROM btm_requests", c, sizeof(c));
+    ASSERT_EQ(strcmp(c, "aa:bb:cc:dd:ee:40,aa:bb:cc:dd:ee:41,"
+                        "aa:bb:cc:dd:ee:42"), 0);
+    ASSERT_EQ(q_int("SELECT candidate_count FROM btm_requests"), 3);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_upsert_keeps_one_row(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 4, 2, 1);
+    db_tick(&s, 1700000000);
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM btm_requests"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_counts_never_regress(void) {
+    /* The in-memory table is bounded and LRU-evicted, so a pair that
+     * ages out and returns restarts its counters at 1. The file is the
+     * longer memory: taking `excluded` here would erase the steering
+     * that justified an alert still in the alerts table. */
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 9, 5, 1);
+    db_tick(&s, 1700000000);
+    seed_btm(&s, 1, 1, 1);              /* the pair came back fresh */
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT req_count FROM btm_requests"), 9);
+    ASSERT_EQ(q_int("SELECT imminent_count FROM btm_requests"), 5);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM btm_requests"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_first_seen_does_not_move(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 4, 2, 1);
+    db_tick(&s, 1700000000);
+    s.btm_steers[0].first_seen = 1700009999;   /* a later re-observation */
+    s.btm_steers[0].last_seen  = 1700009999;
+    db_tick(&s, 1700009999);
+    ASSERT_EQ(q_int("SELECT first_seen FROM btm_requests"), 1700000000);
+    ASSERT_EQ(q_int("SELECT last_seen FROM btm_requests"),  1700009999);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_forcing_index_exists(void) {
+    fresh_db();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
+                    " WHERE type='index' AND name='idx_btm_forcing'"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+static void test_btm_requests_in_finding_retention_tier(void) {
+    /* Evidence must outlive the finding it justifies. At the entity tier
+     * a BTM_ABUSE CRIT could still be in the alerts table with the
+     * steering that produced it already aged out. */
+    fresh_db();
+    sloth_state_t s;
+    seed_btm(&s, 4, 4, 1);
+    db_tick(&s, 1700000000);
+    db_set_retain_days(1);
+    /* 4x the window: past the 1x observation and 3x entity tiers, well
+     * inside the 12x finding tier. */
+    db_maintain(1700000000 + 4 * 86400);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM btm_requests"), 1);
+    db_close();
+    unlink(db_path);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -1689,6 +1812,13 @@ void run_db_tests(void) {
     RUN_TEST(test_assoc_reqs_upsert_keeps_one_row);
     RUN_TEST(test_assoc_reqs_downgrade_flag_is_sticky);
     RUN_TEST(test_assoc_reqs_partial_index_exists);
+    RUN_TEST(test_btm_requests_written);
+    RUN_TEST(test_btm_requests_candidates_joined);
+    RUN_TEST(test_btm_requests_upsert_keeps_one_row);
+    RUN_TEST(test_btm_requests_counts_never_regress);
+    RUN_TEST(test_btm_requests_first_seen_does_not_move);
+    RUN_TEST(test_btm_requests_forcing_index_exists);
+    RUN_TEST(test_btm_requests_in_finding_retention_tier);
     RUN_TEST(test_due_respects_interval);
 
     TEST_SUITE("db: entity upserts");

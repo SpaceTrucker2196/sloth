@@ -1,5 +1,7 @@
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "deauth_snoop.h"
@@ -242,6 +244,89 @@ static void test_view_draw_disassoc(void) {
     ASSERT_EQ(s.deauth_events[0].subtype, 10);
 }
 
+
+/* ── BTM section in the deauth view (#59) ────────────────── */
+
+static void seed_btm_row(sloth_state_t *s, int imminent) {
+    btm_steer_t *b = &s->btm_steers[s->btm_steer_count++];
+    memset(b, 0, sizeof(*b));
+    b->bssid[0] = 0xaa; b->bssid[5] = 0x30;
+    b->sta[0]   = 0x12; b->sta[5]   = 0xbc;
+    b->candidates[0][0] = 0xaa; b->candidates[0][5] = 0x31;
+    b->candidate_count  = 1;
+    b->req_count        = imminent + 2;
+    b->imminent_count   = imminent;
+    b->last_seen        = time(NULL);
+}
+
+/* TPRINT is printf in the test build, so the view's output can be
+ * captured and asserted on rather than smoke-tested. Same technique as
+ * test_help.c. Without this the empty-deauth case below would "pass"
+ * against a draw that renders nothing at all. */
+static void capture_deauth(const sloth_state_t *s, char *buf, int sz) {
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    FILE *tmp = tmpfile();
+    dup2(fileno(tmp), fileno(stdout));
+    view_deauth_draw(s);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    rewind(tmp);
+    int n = (int)fread(buf, 1, sz - 1, tmp);
+    buf[n < 0 ? 0 : n] = '\0';
+    fclose(tmp);
+}
+
+static void test_view_draw_btm_section(void) {
+    deauth_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_btm_row(&s, BTM_ABUSE_THRESH);
+    char buf[8192];
+    capture_deauth(&s, buf, sizeof(buf));
+    ASSERT(strstr(buf, "BTM steering") != NULL);
+    ASSERT(strstr(buf, "aa:00:00:00:00:30") != NULL);   /* the AP   */
+    ASSERT(strstr(buf, "12:00:00:00:00:bc") != NULL);   /* the STA  */
+    ASSERT(strstr(buf, "aa:00:00:00:00:31") != NULL);   /* candidate */
+}
+
+static void test_view_draw_btm_with_no_deauths(void) {
+    /* The case the section exists for: 802.11v moves a client without a
+     * deauth frame, so an empty deauth table must not short-circuit the
+     * draw. An early return here would show the operator "nothing is
+     * throwing clients off" at the moment something is. */
+    deauth_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_btm_row(&s, BTM_ABUSE_THRESH);
+    ASSERT_EQ(s.deauth_count, 0);
+    char buf[8192];
+    capture_deauth(&s, buf, sizeof(buf));
+    ASSERT(strstr(buf, "no deauth/disassoc frames") != NULL);
+    ASSERT(strstr(buf, "BTM steering") != NULL);
+    ASSERT(strstr(buf, "aa:00:00:00:00:30") != NULL);
+}
+
+static void test_view_draw_no_btm_section_when_empty(void) {
+    /* No steering, no section — the view must not grow a header for a
+     * table with nothing in it. */
+    deauth_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    char buf[8192];
+    capture_deauth(&s, buf, sizeof(buf));
+    ASSERT(strstr(buf, "BTM steering") == NULL);
+}
+
+static void test_view_draw_btm_table_full(void) {
+    /* Row budget: a steering table larger than the screen must not run
+     * off the end or index past the array. */
+    deauth_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    for (int i = 0; i < MAX_BTM_PAIRS; i++) seed_btm_row(&s, i % 5);
+    ASSERT_EQ(s.btm_steer_count, MAX_BTM_PAIRS);
+    view_deauth_draw(&s);
+    ASSERT(1);
+}
+
 /* ── view_deauth_key tests ───────────────────────────────── */
 
 static void test_view_key_nav(void) {
@@ -305,6 +390,10 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_view_draw_normal);
     RUN_TEST(test_view_draw_with_flood);
     RUN_TEST(test_view_draw_disassoc);
+    RUN_TEST(test_view_draw_btm_section);
+    RUN_TEST(test_view_draw_btm_with_no_deauths);
+    RUN_TEST(test_view_draw_no_btm_section_when_empty);
+    RUN_TEST(test_view_draw_btm_table_full);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
 }

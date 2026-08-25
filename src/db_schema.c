@@ -204,6 +204,41 @@ static const char SCHEMA_SQL[] =
     "CREATE INDEX IF NOT EXISTS idx_assoc_reqs_dg  ON assoc_reqs(downgrade_flags)"
     "  WHERE downgrade_flags <> 0;\n"
 
+    /* ── 802.11v BTM steering (#59) ───────────────────────
+     *
+     * Detector evidence for ALERT_TYPE_BTM_ABUSE, and the record of
+     * ordinary steering alongside it — the two are the same frame and
+     * only the rate and the Disassociation Imminent bit separate them,
+     * so storing only the alerting subset would leave no baseline to
+     * judge the next one against.
+     *
+     * candidates is a comma-joined BSSID list, not a child table: it is
+     * a short list read whole, never joined against, and a second table
+     * would cost a foreign key and a retention rule for no query anyone
+     * would write.
+     *
+     * A new table on an existing v3 file needs no version bump —
+     * db_open applies the schema after the version check, and CREATE
+     * TABLE IF NOT EXISTS creates what is missing. The bump #60 slice
+     * 5a took was for the table it added at v2; this rides it. */
+    "CREATE TABLE IF NOT EXISTS btm_requests ("
+    "  bssid            TEXT NOT NULL,"
+    "  sta_mac          TEXT NOT NULL,"
+    "  req_count        INTEGER NOT NULL DEFAULT 0,"
+    "  imminent_count   INTEGER NOT NULL DEFAULT 0,"
+    "  last_request_mode INTEGER NOT NULL DEFAULT 0,"
+    "  disassoc_timer   INTEGER NOT NULL DEFAULT 0,"
+    "  validity_interval INTEGER NOT NULL DEFAULT 0,"
+    "  candidates       TEXT,"
+    "  candidate_count  INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen       INTEGER NOT NULL,"
+    "  last_seen        INTEGER NOT NULL,"
+    "  PRIMARY KEY (bssid, sta_mac)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_btm_sta ON btm_requests(sta_mac);\n"
+    "CREATE INDEX IF NOT EXISTS idx_btm_forcing ON btm_requests(imminent_count)"
+    "  WHERE imminent_count > 0;\n"
+
     /* ── multi-radio merge (#21) ──────────────────────────── */
     "CREATE TABLE IF NOT EXISTS wifi_merged ("
     "  entity       TEXT PRIMARY KEY,"
