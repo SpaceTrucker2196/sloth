@@ -89,3 +89,4 @@
 | eef2944 | 2026-08-25T14:56:48Z | claude-opus-5 | 62 | 35263 | 15487088 | 45585 | 9.0813 | #65 — PEAP no-server-cert (CVE-2023-52160) |
 | 06061f9 | 2026-08-25T15:04:53Z | claude-opus-5 | 30 | 26238 | 8036504 | 26431 | 4.9387 | #63 — CSA abuse detector |
 | fe623f3 | 2026-08-25T15:12:26Z | claude-opus-5 | 30 | 22407 | 7832410 | 593419 | 10.4107 | #66 — HT/VHT/HE/EHT operation IE decode |
+| f0a67ef | 2026-08-25T15:19:28Z | claude-opus-5 | 24 | 21725 | 7056763 | 23818 | 4.3098 | #61 — RRM survey abuse detector |
