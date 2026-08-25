@@ -1,4 +1,6 @@
 #include "capture/capture.h"
+#include "dot11_data.h"
+#include "radiotap.h"
 
 /* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
  * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
@@ -533,6 +535,25 @@ static int decode_frame(const uint8_t *data, int caplen, int dlt,
         if (caplen < SLL2_HDRLEN) return 0;
         ethertype = u16be(data + 0);
         offset    = SLL2_HDRLEN;
+    } else if (dlt == DLT_IEEE802_11_RADIO) {
+        /* The monitor radio (#72). Until this existed the two capture
+         * paths saw disjoint worlds — 802.11 metadata on one side, IP
+         * on the other — with no bridge even on an open network where
+         * the payload is in the clear.
+         *
+         * Radiotap first, then the variable 802.11 header, then
+         * LLC/SNAP. The arithmetic lives in dot11_data.c because that
+         * is where the risk is and this file is not in TEST_SRCS. */
+        radiotap_info_t rti;
+        if (!radiotap_parse(data, caplen, &rti)) return 0;
+        int rt = rti.hdr_len;
+        if (rt <= 0 || rt >= caplen) return 0;
+        const uint8_t *dot11 = data + rt;
+        int dlen = caplen - rt;
+        int poff = 0;
+        if (dot11_data_payload(dot11, dlen, &poff, &ethertype)
+            != DOT11_DATA_OK) return 0;
+        offset = rt + poff;
     } else {
         return 0;
     }

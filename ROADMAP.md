@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Five are open** (`#67`, `#68`, `#69`, `#71`, `#72`),
+~~**No open GitHub issues.**~~ **Four are open** (`#67`, `#68`, `#69`, `#71`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -168,11 +168,12 @@ dispatch on all of them. Verified absent:
   only to pull EAPOL-Key (`probe.c:262`). Retry-bit rate, QoS TID
   distribution, frame size histograms and per-BSSID data volume are
   cheap passive signals (interference, jamming, exfil-shaped flows)
-  currently discarded. The larger miss found during the 08-24 sweep is
-  that there is **no LLC/SNAP → IP bridge at all**: a data frame on the
-  monitor radio never reaches `decode_ipv4()`, so the monitor path and
-  the IP capture see disjoint worlds even on an open network. Filed as
-  `#72`; it blocks `#69`.
+  currently discarded. ~~The larger miss found during the 08-24 sweep is
+  that there is **no LLC/SNAP → IP bridge at all**~~ — ✅ landed
+  (`#72`): `src/dot11_data.c` locates the payload and `decode_frame()`
+  now handles `DLT_IEEE802_11_RADIO`, so the monitor radio and the IP
+  capture are one picture on an open network. Encrypted frames are
+  rejected rather than parsed, per MISSION §2. `#69` still needs `#71`.
 
 ### B2. Information-element depth
 
@@ -339,4 +340,4 @@ effort:
 Backlog after that: ~~`#70` (Bl0ck)~~ ✅, `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as
 three, but future-weighted), `#68` (tool fingerprints, capture-gated),
-`#71`/`#72` (the `#69` prerequisites) and `#69` itself.
+`#71` (the remaining `#69` prerequisite) and `#69` itself.
