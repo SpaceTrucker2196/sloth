@@ -84,3 +84,4 @@
 | 95a71cc | 2026-08-25T03:01:18Z | claude-opus-5 | 147 | 63154 | 18578302 | 315611 | 14.0248 | #59 slice 2 — ALERT_TYPE_BTM_ABUSE rule |
 | 90e189e | 2026-08-25T03:08:59Z | claude-opus-5 | 46 | 24454 | 7414204 | 32619 | 4.6449 | #59 slice 3 — BTM persistence and surfaces |
 | 1f693d5 | 2026-08-25T03:13:12Z | claude-opus-5 | 42 | 14897 | 7425699 | 28436 | 4.3698 | #59 slice 4 — BTM abuse docs, issue closed |
+| caeb92c | 2026-08-25T03:29:27Z | claude-opus-5 | 76 | 41122 | 15070177 | 55888 | 9.1224 | #60 slice 5b — assoc/PNL surfaces, issue closed |
