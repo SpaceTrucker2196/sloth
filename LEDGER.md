@@ -93,3 +93,4 @@
 | 93d1dd0 | 2026-08-25T15:27:42Z | claude-opus-5 | 36 | 25848 | 11069137 | 29235 | 6.4733 | #64 — control-frame counters + RTS flood |
 | 5ab6dda | 2026-08-25T15:35:16Z | claude-opus-5 | 30 | 21750 | 9572055 | 24609 | 5.5760 | #70 — Bl0ck / Block-Ack paralysis detection |
 | e468143 | 2026-08-25T15:41:21Z | claude-opus-5 | 23 | 15747 | 7972853 | 18689 | 4.5671 | #72 — 802.11 data-frame to IP bridge |
+| 16d12c9 | 2026-08-25T15:50:13Z | claude-opus-5 | 47 | 27383 | 17179827 | 31038 | 9.5851 | #67 — Multi-Link Element decode, MLD canonical identity |
