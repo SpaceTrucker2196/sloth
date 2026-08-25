@@ -7,6 +7,7 @@
 #include "beacon_snoop.h"
 #include "auth_track.h"
 #include "assoc_track.h"
+#include "action_snoop.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -207,6 +208,13 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_RECURRING_TRANSIT:      return "T1595";       /* Active Scanning — physical reconnaissance */
     case ALERT_TYPE_UNKNOWN_DEVICE:         return "T1200";       /* Hardware Additions — unrostered device on the network */
     case ALERT_TYPE_RF_DEGRADED:            return "T1498";       /* Network DoS — the observable, not a claim of intent */
+    /* T1498 rather than T1557: what is observed is a client being
+     * forced off its AP, which is denial of service. Whether it lands
+     * on an attacker AP — the AiTM the forcing exists to set up — is a
+     * separate observation, and when the chain completes the
+     * ATTACK_PATH alert carries T1557 for it. Tagging this one T1557
+     * would claim the second half on the evidence of the first. */
+    case ALERT_TYPE_BTM_ABUSE:              return "T1498";       /* Network DoS — 802.11v forced roam */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -326,6 +334,118 @@ static void rule_assoc_flood(const sloth_state_t *s, time_t now) {
     fire(ALERT_TYPE_ASSOC_FLOOD,
          mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "ASSOC_FLOOD", detail, key, NULL, 0, now);
+}
+
+/* Has this BSSID ever been heard beaconing? A legitimate AP steering
+ * its own clients has, by definition, been advertising the BSS it is
+ * moving them off. A transmitter address that has never emitted a
+ * beacon is claiming an authority we have no evidence it holds.
+ *
+ * Reads the snapshot rather than beacon_snoop's live table so the rule
+ * stays a pure function of state, which is what makes it testable.
+ *
+ * The honest limit: on a channel-hopping sensor, "never beaconed" means
+ * "not while we were listening". The tell is therefore reported in the
+ * detail rather than used to escalate severity on its own. */
+static int btm_source_ever_beaconed(const sloth_state_t *s,
+                                    const uint8_t bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, bssid, 6) == 0) return 1;
+    return 0;
+}
+
+/* Is this BSSID the rogue half of a detected twin pair? twin_episodes
+ * is the materialised evil-twin candidate set (twins_snapshot runs
+ * ahead of alerts_update in the poll loop), so this is a direct read
+ * rather than a second derivation of the twin rule. Only the twin half
+ * matches: the real half being offered as a roam target is what a
+ * legitimate steer looks like. */
+static int btm_candidate_is_twin(const sloth_state_t *s,
+                                 const uint8_t bssid[6]) {
+    for (int i = 0; i < s->twin_episode_count; i++)
+        if (memcmp(s->twin_episodes[i].twin_bssid, bssid, 6) == 0) return 1;
+    return 0;
+}
+
+/* BTM forcing (#59) — the 802.11v deauth-equivalent.
+ *
+ * A BSS Transition Management Request with Disassociation Imminent set
+ * tells a client it is about to be dropped and should go elsewhere.
+ * One is a legitimate "this radio is going down". Four to the same
+ * client in a minute is an AP that will not take no for an answer, and
+ * it moves the client without a single deauth frame — which is why
+ * ALERT_TYPE_DEAUTH_FLOOD never sees this attack. */
+static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
+    uint8_t bssid[6], sta[6];
+    int total = 0;
+    int imminent = btm_forcing_pair(now, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                                    bssid, sta, &total);
+    if (imminent < BTM_ABUSE_THRESH) return;
+
+    char bss[20], stastr[20];
+    mac_to_str(bssid, bss,    sizeof(bss));
+    mac_to_str(sta,   stastr, sizeof(stastr));
+
+    /* Where is the client being sent? The durable row carries the
+     * candidate list from the most recent Request. */
+    btm_steer_t row;
+    int have_row = btm_find(bssid, sta, &row);
+    int twin_target = 0;
+    int fabricated = 0;
+    char cand[64];
+    int  coff = 0;
+    cand[0] = '\0';
+    if (have_row) {
+        for (int i = 0; i < row.candidate_count && i < MAX_AP_NEIGHBORS; i++) {
+            if (btm_candidate_is_twin(s, row.candidates[i])) twin_target = 1;
+            /* A candidate we have never heard beacon is a destination
+             * that may not exist. Real steering points at real APs; a
+             * fabricated candidate list is how a forced roam is aimed
+             * somewhere the client cannot verify. Same hop-mode caveat
+             * as the source tell — reported, not escalated on. */
+            if (!btm_source_ever_beaconed(s, row.candidates[i])) fabricated = 1;
+            /* Name the first two only. The list can hold eight, the
+             * detail field is shared with every other rule, and #58
+             * landed because an unbounded address in a detail string
+             * tripped -Wformat-truncation. Two is enough to recognise
+             * the destination; the full list is in the [a] view. */
+            if (i < 2) {
+                char c[20];
+                mac_to_str(row.candidates[i], c, sizeof(c));
+                coff += snprintf(cand + coff, sizeof(cand) - (size_t)coff,
+                                 "%s%.17s", coff ? "," : "", c);
+                if (coff >= (int)sizeof(cand)) { coff = (int)sizeof(cand) - 1; break; }
+            }
+        }
+        if (row.candidate_count > 2 || row.candidates_truncated)
+            snprintf(cand + coff, sizeof(cand) - (size_t)coff, ",+%d",
+                     row.candidate_count - 2);
+    }
+
+    int mine    = ownership_is_my_bssid(bssid);
+    int rostered = ownership_is_known_device(sta);
+    int no_beacon = !btm_source_ever_beaconed(s, bssid);
+
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "btm:%.17s->%.17s", bss, stastr);
+    snprintf(detail, sizeof(detail),
+             "BTM force: %.17s -> %.17s %d/%d req %ds, candidates=%.40s, "
+             "evil-twin=%s%s%s%s%s",
+             bss, stastr, imminent, total, BTM_ABUSE_WIN_SECS,
+             cand[0] ? cand : "none",
+             twin_target ? "yes" : "no",
+             no_beacon ? ", source never beaconed" : "",
+             fabricated ? ", candidate never beaconed" : "",
+             mine     ? " - YOUR network" : "",
+             rostered ? " - rostered client" : "");
+
+    /* CRIT when the destination is a known rogue (the forcing has an
+     * identified landing site), or when the operator has told us this
+     * network or this client is theirs. */
+    fire(ALERT_TYPE_BTM_ABUSE,
+         (twin_target || mine || rostered) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+         "BTM_ABUSE", detail, key, NULL, 0, now);
 }
 
 static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
@@ -2038,6 +2158,7 @@ void alerts_update(sloth_state_t *s) {
     rule_beacon_flood(s, now);
     rule_auth_flood(s, now);
     rule_assoc_flood(s, now);
+    rule_btm_abuse(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

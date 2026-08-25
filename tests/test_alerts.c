@@ -2,6 +2,7 @@
 #include <time.h>
 #include "runner.h"
 #include "assoc_track.h"
+#include "action_snoop.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "views/alerts.h"
@@ -3229,6 +3230,237 @@ static void test_assoc_flood_my_network_is_crit(void) {
     assoc_flood_clear(); assoc_request_clear();
 }
 
+
+/* ── BTM forcing (#59) ───────────────────────────────────── */
+
+static const uint8_t BTM_AP[6]   = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x20 };
+static const uint8_t BTM_STA[6]  = { 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc };
+static const uint8_t BTM_CAND[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x21 };
+
+/* Drive the steering table directly. The frame-level path is covered in
+ * test_action_snoop.c; here the question is what the rule does with a
+ * populated table, so the parser is not in the loop. */
+static void feed_btm_reqs(const uint8_t bssid[6], const uint8_t sta[6],
+                          int n, int imminent, const uint8_t *cand) {
+    time_t now = time(NULL);
+    for (int i = 0; i < n; i++) {
+        sloth_btm_req_t r;
+        memset(&r, 0, sizeof(r));
+        memcpy(r.bssid, bssid, 6);
+        memcpy(r.target_sta, sta, 6);
+        r.request_mode = imminent ? BTM_REQ_DISASSOC_IMM
+                                  : BTM_REQ_PREF_CANDIDATE;
+        r.disassoc_timer = 10;
+        if (cand) {
+            memcpy(r.candidate_bssids[0], cand, 6);
+            r.candidate_count = 1;
+        }
+        btm_observe(&r, now);
+    }
+}
+
+/* Put a BSSID in the beacon snapshot so the "never beaconed" tells can
+ * be exercised in both directions. */
+static void add_beacon_ap(sloth_state_t *s, const uint8_t bssid[6],
+                          const char *ssid) {
+    beacon_ap_t *a = &s->beacon_aps[s->beacon_count++];
+    memset(a, 0, sizeof(*a));
+    memcpy(a->bssid, bssid, 6);
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    snprintf(a->enc,  sizeof(a->enc),  "WPA2");
+    a->last_seen = time(NULL);
+}
+
+static void test_btm_abuse_fires_at_threshold(void) {
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:20") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "12:34:56:78:9a:bc") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "evil-twin=no") != NULL);
+    ASSERT_EQ(strcmp(s.alerts[idx].technique, "T1498"), 0);
+    btm_clear();
+}
+
+static void test_btm_abuse_below_threshold_quiet(void) {
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH - 1, 1, NULL);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BTM_ABUSE), -1);
+    btm_clear();
+}
+
+static void test_btm_abuse_ignores_ordinary_steering(void) {
+    /* Well above the rate, but every Request leaves the client the
+     * choice. This is 802.11v load balancing and must stay silent — the
+     * assertion that keeps the rule off a busy enterprise AP. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH * 4, 0, NULL);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BTM_ABUSE), -1);
+    btm_clear();
+}
+
+static void test_btm_abuse_evil_twin_candidate_is_crit(void) {
+    /* The forcing has an identified landing site: the candidate the AP
+     * is pointing the client at is the rogue half of a detected twin
+     * pair. That is the difference between a DoS and a completed AiTM
+     * setup, so it is the escalation. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP,   "corp-wifi");
+    add_beacon_ap(&s, BTM_CAND, "corp-wifi");
+    twin_episode_t *t = &s.twin_episodes[s.twin_episode_count++];
+    memset(t, 0, sizeof(*t));
+    snprintf(t->ssid, sizeof(t->ssid), "corp-wifi");
+    memcpy(t->real_bssid, BTM_AP,   6);
+    memcpy(t->twin_bssid, BTM_CAND, 6);
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, BTM_CAND);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "evil-twin=yes") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "aa:bb:cc:dd:ee:21") != NULL);
+    btm_clear();
+}
+
+static void test_btm_abuse_real_half_candidate_is_not_twin(void) {
+    /* Being steered toward the *legitimate* AP of a twin pair is what
+     * recovery looks like, not an attack. Matching either half would
+     * turn every twin episode into a CRIT. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP,   "corp-wifi");
+    add_beacon_ap(&s, BTM_CAND, "corp-wifi");
+    twin_episode_t *t = &s.twin_episodes[s.twin_episode_count++];
+    memset(t, 0, sizeof(*t));
+    memcpy(t->real_bssid, BTM_CAND, 6);   /* candidate is the real one */
+    memcpy(t->twin_bssid, BTM_AP,   6);
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, BTM_CAND);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "evil-twin=no") != NULL);
+    btm_clear();
+}
+
+static void test_btm_abuse_source_never_beaconed_reported(void) {
+    /* No beacon table entry for the transmitter: it is claiming an
+     * authority we have no evidence it holds. Reported in the detail,
+     * not escalated — on a hopping sensor "never" means "not while we
+     * were listening". */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "source never beaconed") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    btm_clear();
+}
+
+static void test_btm_abuse_known_source_omits_the_tell(void) {
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "source never beaconed") == NULL);
+    btm_clear();
+}
+
+static void test_btm_abuse_fabricated_candidate_reported(void) {
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");   /* source known, target not */
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, BTM_CAND);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "candidate never beaconed") != NULL);
+    btm_clear();
+}
+
+static void test_btm_abuse_my_bssid_is_crit(void) {
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    ownership_add_bssid("aa:bb:cc:dd:ee:20");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "YOUR network") != NULL);
+    ownership_clear(); btm_clear();
+}
+
+static void test_btm_abuse_rostered_client_is_crit(void) {
+    /* An unrostered client being forced somewhere is a finding. One of
+     * the operator's own devices being forced is an incident. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    ownership_add_known_mac("12:34:56:78:9a:bc");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "rostered client") != NULL);
+    ownership_clear(); btm_clear();
+}
+
+static void test_btm_abuse_dedup_key_is_the_pair(void) {
+    /* Two clients forced by the same AP are two findings: the operator
+     * needs to know how many devices were moved, and a per-BSSID key
+     * would collapse them into one row with a count. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t STA2[6] = { 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbd };
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    alerts_update(&s);
+    feed_btm_reqs(BTM_AP, STA2, BTM_ABUSE_THRESH + 2, 1, NULL);
+    alerts_update(&s);
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_BTM_ABUSE) n++;
+    ASSERT_EQ(n, 2);
+    btm_clear();
+}
+
+static void test_btm_abuse_reports_total_alongside_imminent(void) {
+    /* The operator needs both numbers: how hard the AP is pushing, and
+     * how much of that push was forcing. */
+    alerts_clear(); btm_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH, 1, NULL);
+    feed_btm_reqs(BTM_AP, BTM_STA, 3, 0, NULL);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(idx >= 0);
+    char want[32];
+    snprintf(want, sizeof(want), "%d/%d req", BTM_ABUSE_THRESH,
+             BTM_ABUSE_THRESH + 3);
+    ASSERT(strstr(s.alerts[idx].detail, want) != NULL);
+    btm_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -3243,6 +3475,18 @@ void run_alerts_tests(void) {
     RUN_TEST(test_assoc_flood_quiet_no_fire);
     RUN_TEST(test_assoc_flood_few_sources_labelled);
     RUN_TEST(test_assoc_flood_my_network_is_crit);
+    RUN_TEST(test_btm_abuse_fires_at_threshold);
+    RUN_TEST(test_btm_abuse_below_threshold_quiet);
+    RUN_TEST(test_btm_abuse_ignores_ordinary_steering);
+    RUN_TEST(test_btm_abuse_evil_twin_candidate_is_crit);
+    RUN_TEST(test_btm_abuse_real_half_candidate_is_not_twin);
+    RUN_TEST(test_btm_abuse_source_never_beaconed_reported);
+    RUN_TEST(test_btm_abuse_known_source_omits_the_tell);
+    RUN_TEST(test_btm_abuse_fabricated_candidate_reported);
+    RUN_TEST(test_btm_abuse_my_bssid_is_crit);
+    RUN_TEST(test_btm_abuse_rostered_client_is_crit);
+    RUN_TEST(test_btm_abuse_dedup_key_is_the_pair);
+    RUN_TEST(test_btm_abuse_reports_total_alongside_imminent);
     RUN_TEST(test_nxdomain_burst_fires_at_threshold);
     RUN_TEST(test_nxdomain_below_threshold_no_fire);
     RUN_TEST(test_nxdomain_outside_window_no_fire);

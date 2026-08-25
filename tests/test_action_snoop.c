@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include "runner.h"
 #include "action_snoop.h"
 
@@ -38,6 +39,14 @@ static const uint8_t AP_A[6]   = {0xaa,0xbb,0xcc,0x11,0x22,0x33};
 static const uint8_t STA_A[6]  = {0x11,0x22,0x33,0x44,0x55,0x66};
 static const uint8_t CAND_1[6] = {0xde,0xad,0xbe,0xef,0x00,0x01};
 static const uint8_t CAND_2[6] = {0xde,0xad,0xbe,0xef,0x00,0x02};
+
+/* STA_A above is group-addressed — 0x11 has the I/G bit set — which the
+ * parser does not care about but btm_observe's unicast guard rightly
+ * rejects. The steering-table tests need real client addresses, so they
+ * use these. (#60 slice 2 hit the identical trap with the identical
+ * constant; noted here so the third time is caught by reading.) */
+static const uint8_t STA_U[6] = {0x12,0x22,0x33,0x44,0x55,0x66};
+static const uint8_t STA_V[6] = {0x12,0x22,0x33,0x44,0x55,0x77};
 
 static void fill_hdr(uint8_t *f, uint8_t fc0,
                      const uint8_t da[6], const uint8_t bssid[6]) {
@@ -329,6 +338,246 @@ static void test_observe_ignores_non_action(void) {
     action_clear();
 }
 
+
+/* ── BTM steering table + rate window (slice 2) ───────────── */
+
+/* Build a BTM Request and hand it straight to btm_observe with a
+ * controlled clock. Going through the parser rather than hand-filling
+ * sloth_btm_req_t keeps the table tests honest about what the wire
+ * actually produces. */
+static void feed_btm(const uint8_t bssid[6], const uint8_t sta[6],
+                     uint8_t mode, time_t ts,
+                     const uint8_t *cand /* may be NULL */) {
+    /* Fixed body is 7 bytes — category, action, token, mode, a
+     * two-byte disassoc timer, validity — plus a 15-byte Neighbor
+     * Report if a candidate is asked for. Sizing this at 6 overruns by
+     * one and makes the parse fail for a reason that looks like a
+     * parser bug. */
+    uint8_t f[HDR + 7 + 15];
+    fill_hdr(f, 0xD0, sta, bssid);
+    int off = put_btm_fixed(f, 0x01, mode, 0, 0);
+    if (cand) off = put_candidate(f, off, cand);
+    sloth_btm_req_t r;
+    ASSERT_EQ(action_parse_btm_req(f, off, &r), 1);
+    btm_observe(&r, ts);
+}
+
+static void test_btm_table_records_a_pair(void) {
+    btm_clear();
+    feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 1000, CAND_1);
+    ASSERT_EQ(btm_pair_count(), 1);
+    btm_steer_t row;
+    ASSERT_EQ(btm_find(AP_A, STA_U, &row), 1);
+    ASSERT_EQ(row.req_count, 1);
+    ASSERT_EQ(row.imminent_count, 1);
+    ASSERT_EQ(row.candidate_count, 1);
+    ASSERT(memcmp(row.candidates[0], CAND_1, 6) == 0);
+    ASSERT_EQ((int)row.first_seen, 1000);
+    ASSERT_EQ((int)row.last_seen,  1000);
+    btm_clear();
+}
+
+static void test_btm_table_accumulates_and_separates_imminent(void) {
+    /* Three steers, one of them forcing. The row has to carry both
+     * numbers: the total is what the operator sees in the view, the
+     * imminent subset is what the rule acts on. Collapsing them would
+     * make ordinary load balancing indistinguishable from forcing. */
+    btm_clear();
+    feed_btm(AP_A, STA_U, 0,                      1000, NULL);
+    feed_btm(AP_A, STA_U, BTM_REQ_PREF_CANDIDATE, 1001, NULL);
+    feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM,   1002, NULL);
+    btm_steer_t row;
+    ASSERT_EQ(btm_find(AP_A, STA_U, &row), 1);
+    ASSERT_EQ(row.req_count, 3);
+    ASSERT_EQ(row.imminent_count, 1);
+    ASSERT_EQ((int)row.first_seen, 1000);
+    ASSERT_EQ((int)row.last_seen,  1002);
+    ASSERT_EQ(btm_pair_count(), 1);
+    btm_clear();
+}
+
+static void test_btm_table_keys_on_the_pair_not_the_ap(void) {
+    /* An AP steering two clients is two rows. Keying on the BSSID alone
+     * would let load balancing across many clients look like repeated
+     * forcing of one. */
+    btm_clear();
+    feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 1000, NULL);
+    feed_btm(AP_A, STA_V, BTM_REQ_DISASSOC_IMM, 1001, NULL);
+    ASSERT_EQ(btm_pair_count(), 2);
+    btm_clear();
+}
+
+static void test_btm_candidates_replaced_not_merged(void) {
+    /* Where the AP is pointing the client *now*. A merged list would
+     * show a destination it has stopped offering as a live option.
+     *
+     * The shrink is the case that matters and the one an overwrite-only
+     * implementation gets wrong: going from two candidates to one has
+     * to leave slot 1 empty, or a stale destination outlives the
+     * Request that offered it. */
+    btm_clear();
+    uint8_t f[HDR + 7 + 15 * 2];
+    fill_hdr(f, 0xD0, STA_U, AP_A);
+    int off = put_btm_fixed(f, 0x01, BTM_REQ_DISASSOC_IMM, 0, 0);
+    off = put_candidate(f, off, CAND_1);
+    off = put_candidate(f, off, CAND_2);
+    sloth_btm_req_t r;
+    ASSERT_EQ(action_parse_btm_req(f, off, &r), 1);
+    ASSERT_EQ(r.candidate_count, 2);
+    btm_observe(&r, 1000);
+
+    btm_steer_t row;
+    ASSERT_EQ(btm_find(AP_A, STA_U, &row), 1);
+    ASSERT_EQ(row.candidate_count, 2);
+    ASSERT(memcmp(row.candidates[1], CAND_2, 6) == 0);
+
+    /* Now a Request offering only CAND_2. */
+    feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 1001, CAND_2);
+    ASSERT_EQ(btm_find(AP_A, STA_U, &row), 1);
+    ASSERT_EQ(row.candidate_count, 1);
+    ASSERT(memcmp(row.candidates[0], CAND_2, 6) == 0);
+    static const uint8_t ZERO6[6] = {0,0,0,0,0,0};
+    ASSERT(memcmp(row.candidates[1], ZERO6, 6) == 0);
+    btm_clear();
+}
+
+static void test_btm_rejects_group_and_zero_addresses(void) {
+    /* BTM is addressed management. A group-addressed target means the
+     * frame was misread, not that a broadcast steer happened. */
+    btm_clear();
+    static const uint8_t BCAST[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+    static const uint8_t ZERO[6]  = {0,0,0,0,0,0};
+    sloth_btm_req_t r;
+    memset(&r, 0, sizeof(r));
+    memcpy(r.bssid, AP_A, 6); memcpy(r.target_sta, BCAST, 6);
+    btm_observe(&r, 1000);
+    memcpy(r.bssid, AP_A, 6); memcpy(r.target_sta, ZERO, 6);
+    btm_observe(&r, 1000);
+    memcpy(r.bssid, ZERO, 6); memcpy(r.target_sta, STA_U, 6);
+    btm_observe(&r, 1000);
+    ASSERT_EQ(btm_pair_count(), 0);
+    btm_clear();
+}
+
+static void test_btm_forcing_window_counts_imminent_only(void) {
+    btm_clear();
+    for (int i = 0; i < BTM_ABUSE_THRESH; i++)
+        feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 2000 + i, NULL);
+    /* Two ordinary steers in the same window raise the total but not
+     * the count the threshold is measured against. */
+    feed_btm(AP_A, STA_U, 0, 2010, NULL);
+    feed_btm(AP_A, STA_U, 0, 2011, NULL);
+    uint8_t bss[6], sta[6];
+    int total = 0;
+    int n = btm_forcing_pair(2020, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                             bss, sta, &total);
+    ASSERT_EQ(n, BTM_ABUSE_THRESH);
+    ASSERT_EQ(total, BTM_ABUSE_THRESH + 2);
+    ASSERT(memcmp(bss, AP_A,  6) == 0);
+    ASSERT(memcmp(sta, STA_U, 6) == 0);
+    btm_clear();
+}
+
+static void test_btm_forcing_ignores_non_imminent_rate(void) {
+    /* An AP steering one client hard, but always leaving it the choice.
+     * That is 802.11v working as designed and must not alert — this is
+     * the assertion that stops the rule firing on ordinary roaming. */
+    btm_clear();
+    for (int i = 0; i < BTM_ABUSE_THRESH * 3; i++)
+        feed_btm(AP_A, STA_U, BTM_REQ_PREF_CANDIDATE, 2000 + i, NULL);
+    int total = 0;
+    ASSERT_EQ(btm_forcing_pair(2020, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                               NULL, NULL, &total), 0);
+    btm_clear();
+}
+
+static void test_btm_forcing_below_threshold_is_quiet(void) {
+    btm_clear();
+    for (int i = 0; i < BTM_ABUSE_THRESH - 1; i++)
+        feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 2000 + i, NULL);
+    ASSERT_EQ(btm_forcing_pair(2010, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                               NULL, NULL, NULL), 0);
+    btm_clear();
+}
+
+static void test_btm_forcing_window_expires(void) {
+    btm_clear();
+    for (int i = 0; i < BTM_ABUSE_THRESH; i++)
+        feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 2000 + i, NULL);
+    /* Read one second past the window from the newest event. */
+    time_t past = 2000 + BTM_ABUSE_THRESH - 1 + BTM_ABUSE_WIN_SECS + 1;
+    ASSERT_EQ(btm_forcing_pair(past, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                               NULL, NULL, NULL), 0);
+    /* The durable row survives the window — the view still shows it. */
+    ASSERT_EQ(btm_pair_count(), 1);
+    btm_clear();
+}
+
+static void test_btm_forcing_does_not_pool_across_pairs(void) {
+    /* Threshold-1 forcing steers at each of two clients is a busy AP,
+     * not a forced roam. Pooling them would invent an attack. */
+    btm_clear();
+    for (int i = 0; i < BTM_ABUSE_THRESH - 1; i++) {
+        feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 2000 + i, NULL);
+        feed_btm(AP_A, STA_V, BTM_REQ_DISASSOC_IMM, 2000 + i, NULL);
+    }
+    ASSERT_EQ(btm_forcing_pair(2010, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
+                               NULL, NULL, NULL), 0);
+    btm_clear();
+}
+
+static void test_btm_snapshot_orders_most_recent_first(void) {
+    btm_clear();
+    feed_btm(AP_A, STA_U, BTM_REQ_DISASSOC_IMM, 1000, NULL);
+    feed_btm(AP_A, STA_V, BTM_REQ_DISASSOC_IMM, 2000, NULL);
+    sloth_state_t *s = calloc(1, sizeof(*s));
+    ASSERT(s != NULL);
+    btm_snapshot(s);
+    ASSERT_EQ(s->btm_steer_count, 2);
+    ASSERT(memcmp(s->btm_steers[0].sta, STA_V, 6) == 0);
+    ASSERT(memcmp(s->btm_steers[1].sta, STA_U, 6) == 0);
+    free(s);
+    btm_clear();
+}
+
+static void test_btm_observe_reached_through_action_observe(void) {
+    /* The capture path calls action_observe, not btm_observe. If the
+     * dispatch inside it regressed, every table test above would still
+     * pass while nothing was recorded in the field. */
+    btm_clear();
+    action_clear();
+    uint8_t f[HDR + 7];
+    fill_hdr(f, 0xD0, STA_U, AP_A);
+    put_btm_fixed(f, 0x01, BTM_REQ_DISASSOC_IMM, 0, 0);
+    action_observe(f, (int)sizeof(f), 3000);
+    ASSERT_EQ(btm_pair_count(), 1);
+    ASSERT_EQ(action_category_count(ACTION_CAT_WNM), 1);
+    btm_steer_t row;
+    ASSERT_EQ(btm_find(AP_A, STA_U, &row), 1);
+    ASSERT_EQ((int)row.last_seen, 3000);
+    btm_clear();
+    action_clear();
+}
+
+static void test_btm_other_wnm_actions_counted_not_tabled(void) {
+    /* A BTM Query or Response is part of the same conversation but is
+     * not a steer. Counting them as steers would let a chatty client
+     * push its own AP over the threshold. */
+    btm_clear();
+    action_clear();
+    uint8_t f[HDR + 7];
+    fill_hdr(f, 0xD0, STA_U, AP_A);
+    put_btm_fixed(f, 0x01, BTM_REQ_DISASSOC_IMM, 0, 0);
+    f[HDR + 1] = WNM_ACT_BTM_RESPONSE;
+    action_observe(f, (int)sizeof(f), 3000);
+    f[HDR + 1] = WNM_ACT_BTM_QUERY;
+    action_observe(f, (int)sizeof(f), 3000);
+    ASSERT_EQ(action_category_count(ACTION_CAT_WNM), 2);
+    ASSERT_EQ(btm_pair_count(), 0);
+    btm_clear();
+    action_clear();
+}
+
 void run_action_snoop_tests(void) {
     TEST_SUITE("action frame category demux (#59)");
     RUN_TEST(test_category_read);
@@ -352,4 +601,19 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_observe_counts_by_category);
     RUN_TEST(test_observe_counts_unhandled_categories);
     RUN_TEST(test_observe_ignores_non_action);
+
+    TEST_SUITE("BTM steering table and rate window (#59)");
+    RUN_TEST(test_btm_table_records_a_pair);
+    RUN_TEST(test_btm_table_accumulates_and_separates_imminent);
+    RUN_TEST(test_btm_table_keys_on_the_pair_not_the_ap);
+    RUN_TEST(test_btm_candidates_replaced_not_merged);
+    RUN_TEST(test_btm_rejects_group_and_zero_addresses);
+    RUN_TEST(test_btm_forcing_window_counts_imminent_only);
+    RUN_TEST(test_btm_forcing_ignores_non_imminent_rate);
+    RUN_TEST(test_btm_forcing_below_threshold_is_quiet);
+    RUN_TEST(test_btm_forcing_window_expires);
+    RUN_TEST(test_btm_forcing_does_not_pool_across_pairs);
+    RUN_TEST(test_btm_snapshot_orders_most_recent_first);
+    RUN_TEST(test_btm_observe_reached_through_action_observe);
+    RUN_TEST(test_btm_other_wnm_actions_counted_not_tabled);
 }

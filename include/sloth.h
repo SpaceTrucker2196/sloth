@@ -698,6 +698,7 @@ typedef enum {
     ALERT_TYPE_UNKNOWN_DEVICE,      /* device on a designated network, absent from the roster (#55) */
     ALERT_TYPE_RF_DEGRADED,         /* sustained retry ratio on a channel — interference/jamming (B3) */
     ALERT_TYPE_ASSOC_FLOOD,         /* association-request flood at one BSSID (#60) */
+    ALERT_TYPE_BTM_ABUSE,           /* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -825,6 +826,16 @@ typedef struct {
  * Issue #60 specifies "> 20 per BSSID per 60 s", so 21 is the floor. */
 #define ASSOC_FLOOD_THRESH     21
 #define ASSOC_FLOOD_WIN_SECS   60
+/* BTM-forcing (#59). Not a flood — the rate is low by design, because
+ * one BSS Transition Management Request with Disassociation Imminent
+ * set is enough to move a client. Issue #59 specifies "> N per (BSSID,
+ * STA) per 60 s, default N = 3", so 4 is the floor.
+ *
+ * The window is per *pair*, not per BSSID: an AP steering many clients
+ * is load balancing, and an AP steering one client four times in a
+ * minute is not taking no for an answer. */
+#define BTM_ABUSE_THRESH        4
+#define BTM_ABUSE_WIN_SECS     60
 
 typedef struct {
     uint8_t  src[6];
@@ -1242,6 +1253,40 @@ typedef struct {
 #define ASSOC_RATES_11B_ONLY \
     (ASSOC_RATE_1M | ASSOC_RATE_2M | ASSOC_RATE_5M5 | ASSOC_RATE_11M)
 
+/* ── BSS Transition Management steering (#59) ──────────────
+ *
+ * One row per (BSSID, STA) pair the AP has sent a BTM Request to. The
+ * pair is the unit because that is what the attack targets: BTM is
+ * addressed steering, not a broadcast, so "how often has this AP told
+ * *this* client to leave" is the whole question.
+ *
+ * Legitimate 802.11v load balancing produces these too, which is why
+ * the row records the picture rather than a verdict — the operator
+ * reading [a] sees every steer, and the alert fires on the subset that
+ * carries Disassociation Imminent at a rate no roaming policy needs.
+ *
+ * `candidates` is the list from the most recent Request: where the AP
+ * says the client should go. Cross-referenced against the evil-twin
+ * episode set, it answers whether the destination is a known rogue. */
+#define MAX_BTM_PAIRS  128
+
+typedef struct {
+    uint8_t bssid[6];         /* addr3 — the AP doing the steering  */
+    uint8_t sta[6];           /* addr1 — the client being steered   */
+    int     req_count;        /* BTM Requests seen for this pair    */
+    int     imminent_count;   /* subset carrying Disassociation Imminent */
+    uint8_t last_request_mode;
+    uint16_t last_disassoc_timer;   /* in beacon intervals */
+    uint8_t last_validity_interval;
+    /* Candidate list from the most recent Request. Bounded by the same
+     * limit the parser uses, so a row can hold whatever was parsed. */
+    uint8_t candidates[MAX_AP_NEIGHBORS][6];
+    int     candidate_count;
+    int     candidates_truncated;
+    time_t  first_seen;
+    time_t  last_seen;
+} btm_steer_t;
+
 /* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
  * One per observed EAPOL-Key frame. M2 events carry the M1+M2
  * combined info (handshake_complete=1) when their M1 was seen. */
@@ -1573,6 +1618,11 @@ typedef struct {
     assoc_req_t          assoc_reqs[MAX_ASSOC_ENTRIES];
     int                  assoc_req_count;
     int                  assoc_sel;
+    /* 802.11v steering (#59). Sits with the association tables because
+     * it answers the same question from the other end: assoc_t is where
+     * a client landed, btm_steer_t is who told it to move. */
+    btm_steer_t          btm_steers[MAX_BTM_PAIRS];
+    int                  btm_steer_count;
 
     /* ── Channel activity summary ─────────────────────────── */
     channel_summary_t    channels[MAX_CHAN_ENTRIES];

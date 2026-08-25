@@ -87,9 +87,59 @@ int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out);
  * why the tests cover each combination. */
 int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out);
 
-/* Record one Action frame. Counts per category; deep-parses nothing
- * beyond what the category demux needs. Thread-safe (capture thread). */
+/* Record one Action frame. Counts per category, and folds any WNM BTM
+ * Request into the per-(BSSID, STA) steering table below. Thread-safe
+ * (capture thread). */
 void action_observe(const uint8_t *dot11, int len, time_t now);
+
+/* ── BTM steering table (#59 slice 2) ──────────────────────
+ *
+ * Two structures, for two different questions, following the shape
+ * assoc_track.c settled on:
+ *
+ *   the table  — one durable row per (BSSID, STA), the picture the [a]
+ *                view, JSONL and SQLite export. Survives the window.
+ *   the ring   — timestamped events, read only by the rate query. A
+ *                rolling window cannot be answered from the table
+ *                because the table has no history, only a count.
+ *
+ * Keeping the count in the table *and* the events in the ring is not
+ * redundancy: the table's count is "how many ever", the ring's is "how
+ * many just now", and the alert needs the second while the operator
+ * reading the view needs the first. */
+
+/* Record a parsed BTM Request. Split from action_observe so tests can
+ * drive the table directly with a controlled clock — action_observe
+ * calls time(NULL) internally the way the rest of the capture path
+ * does. Thread-safe. */
+void btm_observe(const sloth_btm_req_t *req, time_t now);
+
+/* Busiest (BSSID, STA) pair by BTM Requests carrying Disassociation
+ * Imminent within `window_s`, when it reaches `thresh`. Returns that
+ * count (0 if none qualifies) and writes the pair out; any output
+ * pointer may be NULL. `total_out` receives the pair's total Request
+ * count in the window, imminent or not.
+ *
+ * Only imminent Requests are counted toward the threshold. A Request
+ * without B2 set cannot force anything — the client is free to decline
+ * — and a busy enterprise AP steering clients for load balancing emits
+ * exactly those. Rate alone would alert on ordinary 802.11v roaming,
+ * which is the false positive that gets a detector switched off. */
+int  btm_forcing_pair(time_t now, int window_s, int thresh,
+                      uint8_t out_bssid[6], uint8_t out_sta[6],
+                      int *total_out);
+
+/* Look up the durable row for a pair. Returns 1 and fills *out on hit. */
+int  btm_find(const uint8_t bssid[6], const uint8_t sta[6],
+              btm_steer_t *out);
+
+/* Copy the table into s->btm_steers[], most recently steered first —
+ * an operator scanning the section wants the live steering at the top. */
+void btm_snapshot(sloth_state_t *s);
+
+/* Test introspection. */
+int  btm_pair_count(void);
+void btm_clear(void);
 
 /* Frames seen for `category` since the last clear. Test introspection
  * and the seam the #61 RRM work reads before it grows a real table. */
