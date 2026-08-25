@@ -97,3 +97,4 @@
 | 6565330 | 2026-08-25T16:07:05Z | claude-opus-5 | 30 | 16075 | 10715667 | 18924 | 5.9491 | DB schema v4 — batched column bump, Makefile header deps |
 | d7d628a | 2026-08-25T16:17:08Z | claude-opus-5 | 36 | 27075 | 13312681 | 29028 | 7.6237 | #68 — tool-fingerprint mechanism, empty signature table |
 | 0f6da33 | 2026-08-25T16:28:28Z | claude-opus-5 | 36 | 25181 | 13827103 | 27375 | 7.8170 | #71 — HTTP response-side parsing |
+| 5fbbcac | 2026-08-25T16:37:00Z | claude-opus-5 | 29 | 27357 | 11978059 | 29950 | 6.9726 | #69 — captive-portal interception detection |
