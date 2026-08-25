@@ -110,13 +110,22 @@ void view_pnl_draw(const sloth_state_t *s) {
         if (c->os_fp[0]) { tui_bright(); TPRINT("  %-8.8s", c->os_fp); }
         else             { tui_dim();    TPRINT("  %-8s",  "?"); }
 
-        /* PHY tier — Wi-Fi 6+ bright, Wi-Fi 5 normal, older dim. */
+        /* PHY tier — Wi-Fi 6+ bright, Wi-Fi 5 normal, older dim.
+         *
+         * A trailing '*' marks a tier confirmed by an association
+         * request rather than inferred from a probe (#60). Probes are
+         * the weaker evidence: clients send stripped-down variants that
+         * omit VHT/HE while scanning, so an unmarked tier is a floor,
+         * not a measurement. */
         if (c->phy[0]) {
             if (strncmp(c->phy, "Wi-Fi 6", 7) == 0 ||
                 strncmp(c->phy, "Wi-Fi 7", 7) == 0) tui_bright();
             else if (strncmp(c->phy, "Wi-Fi 5", 7) == 0) tui_normal();
             else                                          tui_dim();
-            TPRINT("  %-8.8s", c->phy);
+            char phy_buf[12];
+            snprintf(phy_buf, sizeof(phy_buf), "%s%s", c->phy,
+                     c->phy_confirmed ? "*" : "");
+            TPRINT("  %-8.8s", phy_buf);
         } else {
             tui_dim(); TPRINT("  %-8s", "?");
         }

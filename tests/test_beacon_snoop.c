@@ -1458,6 +1458,59 @@ static void test_suite_bits_zero_when_no_rsn(void) {
     ASSERT_EQ(r.pairwise_bits, 0u);
 }
 
+
+/* ── AKM suite-bitmap display label (#60 slice 5b) ────────── */
+
+static void test_akm_label_single_families(void) {
+    char b[12];
+    rsn_akm_label(RSN_AKM_SAE, b, sizeof(b));  ASSERT_STR(b, "SAE");
+    rsn_akm_label(RSN_AKM_PSK, b, sizeof(b));  ASSERT_STR(b, "PSK");
+    rsn_akm_label(RSN_AKM_OWE, b, sizeof(b));  ASSERT_STR(b, "OWE");
+    rsn_akm_label(RSN_SUITE_BIT(1), b, sizeof(b)); ASSERT_STR(b, "802.1X");
+}
+
+static void test_akm_label_collapses_roaming_variants(void) {
+    /* FT-SAE and SAE-EXT-KEY are the SAE lane. A row answering "which
+     * lane is this client on" should not have to know the difference —
+     * that is what the substring bug in slice 1 was about. */
+    char b[12];
+    rsn_akm_label(RSN_AKM_FT_SAE,     b, sizeof(b)); ASSERT_STR(b, "SAE");
+    rsn_akm_label(RSN_AKM_SAE_EXT,    b, sizeof(b)); ASSERT_STR(b, "SAE");
+    rsn_akm_label(RSN_AKM_FT_SAE_EXT, b, sizeof(b)); ASSERT_STR(b, "SAE");
+    rsn_akm_label(RSN_AKM_FT_PSK,     b, sizeof(b)); ASSERT_STR(b, "PSK");
+}
+
+static void test_akm_label_transition_mode_shows_both(void) {
+    /* The whole point: PSK and SAE simultaneously is the downgrade lane
+     * (#62), and a label that showed only one would hide it. Strongest
+     * lane first — the weaker one is the finding. */
+    char b[12];
+    rsn_akm_label(RSN_AKM_SAE | RSN_AKM_PSK, b, sizeof(b));
+    ASSERT_STR(b, "SAE+PSK");
+}
+
+static void test_akm_label_open_and_unknown(void) {
+    char b[12];
+    rsn_akm_label(0, b, sizeof(b));
+    ASSERT_STR(b, "open");
+    /* A suite this build does not name must not read as "open" — that
+     * would report an encrypted BSS as an unencrypted one. */
+    rsn_akm_label(RSN_SUITE_BIT(30), b, sizeof(b));
+    ASSERT_STR(b, "?");
+    rsn_akm_label(RSN_AKM_SAE | RSN_SUITE_BIT(30), b, sizeof(b));
+    ASSERT_STR(b, "SAE+?");
+}
+
+static void test_akm_label_never_overruns(void) {
+    /* Every family at once, into a buffer too small for it. */
+    char b[6];
+    memset(b, 0x7f, sizeof(b));
+    rsn_akm_label(RSN_AKM_SAE | RSN_AKM_PSK | RSN_AKM_OWE |
+                  RSN_SUITE_BIT(1) | RSN_SUITE_BIT(30), b, sizeof(b));
+    ASSERT_EQ((int)strnlen(b, sizeof(b)), (int)strlen(b));
+    ASSERT(strlen(b) < sizeof(b));
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -1541,4 +1594,10 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_ie_overrun_counted);
     RUN_TEST(test_parse_truncated_rsn_counted);
     RUN_TEST(test_parse_wellformed_no_fuzz_counts);
+    TEST_SUITE("RSN AKM display label (#60)");
+    RUN_TEST(test_akm_label_single_families);
+    RUN_TEST(test_akm_label_collapses_roaming_variants);
+    RUN_TEST(test_akm_label_transition_mode_shows_both);
+    RUN_TEST(test_akm_label_open_and_unknown);
+    RUN_TEST(test_akm_label_never_overruns);
 }

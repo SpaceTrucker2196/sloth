@@ -329,7 +329,7 @@ pattern as they are converted.
 | `beacon`             | `bssid`           | `ssid`, `bssid`, `signal_dbm`, `channel`, `enc`, `beacon_ms`, `pairwise`, `group`, `akm`, `mfp` (0/1/2), `vendor`, `has_wps`, `wps_state`, `wps_locked`, `phy`, `revealed`, `last_seen`, `frame_count`, `fp_flags` (`AP_FP_FLAG_*` bitset), `vendor_ies_hash`, `rssi_min_60s`, `rssi_max_60s`, `ssid_history[]`, `neighbors[{bssid, channel, phy_type}]`, `fuzz_ie_overruns`/`fuzz_oversize_ssid`/`fuzz_truncated_rsn` (malformed-IE counters, emitted only when non-zero — feed the `MGMT_FUZZ` alert) |
 | `deauth`             | `bssid`+`dst`     | `src`, `dst`, `bssid`, `reason`, `subtype`, `first_seen`, `last_seen`, `count`, `flood` |
 | `probe_client`       | `mac`             | `mac`, `ssid`, `signal_dbm`, `channel`, `first_seen`, `last_seen`, `frame_count` |
-| `pnl_client`         | `mac`             | `mac`, `mac_random`, `probe_count`, `os_fp`, `phy`, `first_seen`, `last_seen`, `ssids[]` |
+| `pnl_client`         | `mac`             | `mac`, `mac_random`, `probe_count`, `os_fp`, `phy`, `phy_confirmed` (1 = the tier was corroborated by an association request rather than inferred from probes, #60), `first_seen`, `last_seen`, `ssids[]` |
 | `seqnum_client`      | `mac`             | `mac`, `mac_random`, `last_seen`, `frame_count`, `hist[]` (12-bit seqnums in observation order) |
 | `seqnum_correlation` | `mac_a`+`mac_b`   | `mac_a`, `mac_b`, `mac_a_random`, `mac_b_random`, `gap`, `dt_ms`, `a_count`, `b_count` |
 | `channel_summary`    | `channel`         | `channel`, `ap_count`, `assoc_count`, `best_signal`, `top_ssid`, `last_seen` |

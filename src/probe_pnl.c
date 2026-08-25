@@ -102,6 +102,24 @@ static int phy_rank(const char *p) {
     return 0;
 }
 
+int probe_pnl_note_assoc_phy(const uint8_t mac[6], const char *phy) {
+    if (!phy || !phy[0]) return 0;
+    int hit = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_n; i++) {
+        if (!mac_eq(g_tbl[i].mac, mac)) continue;
+        if (phy_rank(phy) > phy_rank(g_tbl[i].phy))
+            snprintf(g_tbl[i].phy, sizeof(g_tbl[i].phy), "%s", phy);
+        /* Confirmed even when the tier does not move: the point is that
+         * an association request corroborated it, not that it improved. */
+        g_tbl[i].phy_confirmed = 1;
+        hit = 1;
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return hit;
+}
+
 void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
                         const char *os_fp, const char *phy)
 {

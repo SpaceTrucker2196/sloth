@@ -1,8 +1,15 @@
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "assoc_track.h"
 #include "beacon_snoop.h"
+#include "probe_pnl.h"
+#include "tui.h"
+#include "views/assoc.h"
+#include "views/pnl.h"
 
 static void m(uint8_t out[6], uint8_t a, uint8_t b, uint8_t c,
                               uint8_t d, uint8_t e, uint8_t f) {
@@ -524,6 +531,180 @@ static void test_flood_is_per_bssid(void) {
     assoc_flood_clear(); assoc_request_clear();
 }
 
+
+/* ── PNL PHY corroboration + view surfaces (#60 slice 5b) ─── */
+
+/* TPRINT is printf in the test build, so both views can be captured
+ * and asserted on. Same technique as test_help.c. */
+static void capture_draw(void (*draw)(const sloth_state_t *),
+                         const sloth_state_t *st, char *buf, int sz) {
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    FILE *tmp = tmpfile();
+    dup2(fileno(tmp), fileno(stdout));
+    draw(st);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    rewind(tmp);
+    int n = (int)fread(buf, 1, sz - 1, tmp);
+    buf[n < 0 ? 0 : n] = '\0';
+    fclose(tmp);
+}
+
+static void test_pnl_phy_confirmed_by_assoc_request(void) {
+    /* A probe said Wi-Fi 5; the association request says Wi-Fi 6. The
+     * request is the stronger evidence and the tier moves. */
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x66);
+    probe_pnl_observe(sta, "home", NULL, "Wi-Fi 5");
+    ASSERT_EQ(probe_pnl_note_assoc_phy(sta, "Wi-Fi 6"), 1);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    probe_pnl_snapshot(&st);
+    ASSERT_EQ(st.pnl_count, 1);
+    ASSERT_STR(st.pnl_clients[0].phy, "Wi-Fi 6");
+    ASSERT_EQ(st.pnl_clients[0].phy_confirmed, 1);
+    /* An association request is not a probe. */
+    ASSERT_EQ(st.pnl_clients[0].probe_count, 1);
+    probe_pnl_clear();
+}
+
+static void test_pnl_phy_confirmation_without_upgrade(void) {
+    /* The request agrees with the probe. The tier does not move, but it
+     * is now corroborated — which is the distinction the marker shows. */
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x67);
+    probe_pnl_observe(sta, "home", NULL, "Wi-Fi 6");
+    ASSERT_EQ(probe_pnl_note_assoc_phy(sta, "Wi-Fi 6"), 1);
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    probe_pnl_snapshot(&st);
+    ASSERT_STR(st.pnl_clients[0].phy, "Wi-Fi 6");
+    ASSERT_EQ(st.pnl_clients[0].phy_confirmed, 1);
+    probe_pnl_clear();
+}
+
+static void test_pnl_phy_never_downgrades(void) {
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x68);
+    probe_pnl_observe(sta, "home", NULL, "Wi-Fi 7");
+    ASSERT_EQ(probe_pnl_note_assoc_phy(sta, "Wi-Fi 4"), 1);
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    probe_pnl_snapshot(&st);
+    ASSERT_STR(st.pnl_clients[0].phy, "Wi-Fi 7");
+    probe_pnl_clear();
+}
+
+static void test_pnl_phy_does_not_create_a_row(void) {
+    /* A client that associated but never sent a directed probe has no
+     * preferred-network list. Creating an empty row would put a device
+     * with no PNL into the PNL view. */
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x69);
+    ASSERT_EQ(probe_pnl_note_assoc_phy(sta, "Wi-Fi 6"), 0);
+    ASSERT_EQ(probe_pnl_count(), 0);
+    probe_pnl_clear();
+}
+
+static void test_pnl_view_marks_confirmed_tier(void) {
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x6a);
+    probe_pnl_observe(sta, "home", NULL, "Wi-Fi 6");
+    probe_pnl_note_assoc_phy(sta, "Wi-Fi 6");
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    probe_pnl_snapshot(&st);
+    char buf[8192];
+    capture_draw(view_pnl_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "Wi-Fi 6*") != NULL);
+    probe_pnl_clear();
+}
+
+static void test_pnl_view_unconfirmed_tier_unmarked(void) {
+    probe_pnl_clear();
+    uint8_t sta[6]; m(sta, 0x12,0x22,0x33,0x44,0x55,0x6b);
+    probe_pnl_observe(sta, "home", NULL, "Wi-Fi 6");
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    probe_pnl_snapshot(&st);
+    char buf[8192];
+    capture_draw(view_pnl_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "Wi-Fi 6")  != NULL);
+    ASSERT(strstr(buf, "Wi-Fi 6*") == NULL);
+    probe_pnl_clear();
+}
+
+/* ── [w] Assoc view: the ask, and what it replaced ────────── */
+
+static void seed_grant_and_ask(sloth_state_t *st, uint32_t akm,
+                               uint32_t prev_akm, int dg) {
+    memset(st, 0, sizeof(*st));
+    assoc_t *a = &st->assocs[st->assoc_count++];
+    m(a->bssid,   0xaa,0xbb,0xcc,0xdd,0xee,0x50);
+    m(a->sta_mac, 0x12,0x22,0x33,0x44,0x55,0x70);
+    snprintf(a->ssid, sizeof(a->ssid), "corp-wifi");
+    a->source     = ASSOC_SRC_EAPOL;
+    a->channel    = 6;
+    a->signal_dbm = -50;
+    a->last_seen  = time(NULL);
+
+    assoc_req_t *r = &st->assoc_reqs[st->assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    m(r->bssid, 0xaa,0xbb,0xcc,0xdd,0xee,0x50);
+    m(r->sta,   0x12,0x22,0x33,0x44,0x55,0x70);
+    r->akm_bits        = akm;
+    r->prev_akm_bits   = prev_akm;
+    r->downgrade_flags = dg;
+    r->requested_mfp   = dg & ASSOC_DG_MFP ? 0 : 2;
+    r->prev_mfp        = 2;
+}
+
+static void test_assoc_view_shows_the_ask(void) {
+    sloth_state_t st;
+    seed_grant_and_ask(&st, RSN_AKM_SAE, 0, 0);
+    char buf[8192];
+    capture_draw(view_assoc_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "asked") != NULL);      /* the column header */
+    ASSERT(strstr(buf, "SAE")   != NULL);
+    /* No downgrade, so no marker at all — asserted on the glyph rather
+     * than on "->", because a marker block that runs with no flags set
+     * still emits a bare delta and would slip past a text-only check. */
+    ASSERT(strstr(buf, "\xe2\x88\x86") == NULL);
+    ASSERT(strstr(buf, "->") == NULL);
+    assoc_clear();
+}
+
+static void test_assoc_view_marks_akm_downgrade(void) {
+    /* The row has to say what was given up, not merely that something
+     * was — "SAE->PSK" is actionable, a bare glyph is not. */
+    sloth_state_t st;
+    seed_grant_and_ask(&st, RSN_AKM_PSK, RSN_AKM_SAE, ASSOC_DG_AKM);
+    char buf[8192];
+    capture_draw(view_assoc_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "\xe2\x88\x86")  != NULL);
+    ASSERT(strstr(buf, "SAE->PSK") != NULL);
+    assoc_clear();
+}
+
+static void test_assoc_view_marks_mfp_downgrade(void) {
+    sloth_state_t st;
+    seed_grant_and_ask(&st, RSN_AKM_SAE, RSN_AKM_SAE, ASSOC_DG_MFP);
+    char buf[8192];
+    capture_draw(view_assoc_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "MFP2->0") != NULL);
+    assoc_clear();
+}
+
+static void test_assoc_view_no_request_shows_dash(void) {
+    /* A grant we saw without ever catching the request — common when
+     * sloth started mid-association. The column must not claim "open". */
+    sloth_state_t st;
+    seed_grant_and_ask(&st, RSN_AKM_SAE, 0, 0);
+    st.assoc_req_count = 0;                    /* drop the ask */
+    char buf[8192];
+    capture_draw(view_assoc_draw, &st, buf, sizeof(buf));
+    ASSERT(strstr(buf, "open") == NULL);
+    assoc_clear();
+}
+
 void run_assoc_track_tests(void) {
     TEST_SUITE("assoc_track");
     RUN_TEST(test_empty);
@@ -564,4 +745,17 @@ void run_assoc_track_tests(void) {
     RUN_TEST(test_flood_counts_distinct_stas);
     RUN_TEST(test_flood_window_expiry);
     RUN_TEST(test_flood_is_per_bssid);
+    TEST_SUITE("PNL PHY corroboration (#60)");
+    RUN_TEST(test_pnl_phy_confirmed_by_assoc_request);
+    RUN_TEST(test_pnl_phy_confirmation_without_upgrade);
+    RUN_TEST(test_pnl_phy_never_downgrades);
+    RUN_TEST(test_pnl_phy_does_not_create_a_row);
+    RUN_TEST(test_pnl_view_marks_confirmed_tier);
+    RUN_TEST(test_pnl_view_unconfirmed_tier_unmarked);
+
+    TEST_SUITE("[w] Assoc view — the ask (#60)");
+    RUN_TEST(test_assoc_view_shows_the_ask);
+    RUN_TEST(test_assoc_view_marks_akm_downgrade);
+    RUN_TEST(test_assoc_view_marks_mfp_downgrade);
+    RUN_TEST(test_assoc_view_no_request_shows_dash);
 }

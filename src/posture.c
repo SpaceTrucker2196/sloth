@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "posture.h"
+#include "beacon_snoop.h"
 #include "db.h"
 #include "alerts.h"
 #include "wifi_assess.h"
@@ -144,6 +145,59 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
             for (int i = 0; i < wn; i++)
                 fprintf(out, "| %s | %s | %s |\n",
                         wf[i].severity, wf[i].title, wf[i].evidence);
+            fprintf(out, "\n");
+        }
+    }
+
+    /* Association downgrades (#60). The ask-vs-ask delta: a client that
+     * requested SAE with MFP required and then re-requested for less
+     * has been moved, and neither request shows it alone. This is the
+     * runtime signature of CVE-2023-52424 from the client side — the
+     * AP-side prerequisite is SSID_CONFUSION. */
+    {
+        int dg = 0;
+        for (int i = 0; i < s->assoc_req_count; i++)
+            if (s->assoc_reqs[i].downgrade_flags) dg++;
+
+        if (s->assoc_req_count > 0) {
+            fprintf(out, "## Association requests\n\n");
+            fprintf(out, "%d client ask%s observed, **%d** carrying a "
+                         "downgrade.\n\n",
+                    s->assoc_req_count, s->assoc_req_count == 1 ? "" : "s",
+                    dg);
+        }
+        if (dg > 0) {
+            fprintf(out, "| STA | AP | SSID | Asked | Previously | Lost |\n");
+            fprintf(out, "|-----|----|------|-------|------------|------|\n");
+            for (int i = 0; i < s->assoc_req_count; i++) {
+                const assoc_req_t *r = &s->assoc_reqs[i];
+                if (!r->downgrade_flags) continue;
+                char sta[18], ap[18], ask[12], prev[12], lost[48];
+                snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                         r->sta[0], r->sta[1], r->sta[2],
+                         r->sta[3], r->sta[4], r->sta[5]);
+                snprintf(ap, sizeof(ap), "%02x:%02x:%02x:%02x:%02x:%02x",
+                         r->bssid[0], r->bssid[1], r->bssid[2],
+                         r->bssid[3], r->bssid[4], r->bssid[5]);
+                rsn_akm_label(r->akm_bits,      ask,  sizeof(ask));
+                rsn_akm_label(r->prev_akm_bits, prev, sizeof(prev));
+                lost[0] = '\0';
+                size_t lo = 0;
+                if (r->downgrade_flags & ASSOC_DG_AKM)
+                    lo += (size_t)snprintf(lost + lo, sizeof(lost) - lo,
+                                           "%sAKM", lo ? ", " : "");
+                if (r->downgrade_flags & ASSOC_DG_MFP)
+                    lo += (size_t)snprintf(lost + lo, sizeof(lost) - lo,
+                                           "%sMFP (%d->%d)", lo ? ", " : "",
+                                           r->prev_mfp, r->requested_mfp);
+                if (r->downgrade_flags & ASSOC_DG_PAIRWISE)
+                    snprintf(lost + lo, sizeof(lost) - lo,
+                             "%scipher", lo ? ", " : "");
+                fprintf(out, "| `%s` | `%s` | %s | %s | %s | **%s** |\n",
+                        sta, ap,
+                        r->requested_ssid[0] ? r->requested_ssid : "-",
+                        ask, prev, lost);
+            }
             fprintf(out, "\n");
         }
     }

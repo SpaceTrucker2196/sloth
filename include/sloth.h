@@ -1090,6 +1090,13 @@ typedef struct {
      * "legacy" — derived from HT (45), VHT (191), HE / EHT (255 ext).
      * Pins the device generation across MAC rotations. */
     char    phy[10];
+    /* 1 when the tier came from an association request rather than a
+     * probe (#60). A probe request advertises what the client is
+     * willing to say while scanning, and stripped-down probe variants
+     * that omit VHT/HE are common; an association request is what it
+     * commits to on joining. Same string, better evidence — so the
+     * distinction is a flag rather than a second field. */
+    int     phy_confirmed;
     time_t  first_seen;
     time_t  last_seen;
 } pnl_client_t;

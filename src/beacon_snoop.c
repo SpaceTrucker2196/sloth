@@ -76,6 +76,39 @@ static const char *akm_name(uint8_t t) {
     }
 }
 
+/* Family labels for a suite bitmap. Ordered strongest-lane-first so a
+ * transition-mode BSS reads "SAE+PSK" rather than "PSK+SAE" — the
+ * stronger lane is the one the client would prefer, and the weaker one
+ * is the finding. */
+void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz) {
+    if (!out || sz == 0) return;
+    out[0] = '\0';
+    if (akm_bits == 0) { snprintf(out, sz, "open"); return; }
+
+    static const struct { uint32_t mask; const char *name; } fam[] = {
+        { RSN_AKM_SAE_FAMILY, "SAE"    },
+        { RSN_AKM_PSK_FAMILY, "PSK"    },
+        { RSN_AKM_OWE,        "OWE"    },
+        { RSN_SUITE_BIT(1) | RSN_SUITE_BIT(3) | RSN_SUITE_BIT(5) |
+          RSN_SUITE_BIT(11) | RSN_SUITE_BIT(12),
+                              "802.1X" },
+    };
+    size_t off = 0;
+    uint32_t named = 0;
+    for (size_t i = 0; i < sizeof(fam) / sizeof(fam[0]); i++) {
+        if (!(akm_bits & fam[i].mask)) continue;
+        named |= akm_bits & fam[i].mask;
+        int n = snprintf(out + off, sz - off, "%s%s",
+                         off ? "+" : "", fam[i].name);
+        if (n < 0 || (size_t)n >= sz - off) return;
+        off += (size_t)n;
+    }
+    /* Suites this build does not name still have to show up, or a row
+     * would silently read "open" for a BSS that is anything but. */
+    if (akm_bits & ~named)
+        snprintf(out + off, sz - off, "%s?", off ? "+" : "");
+}
+
 /* Shared Information-Element walker (roadmap B3b).
  *
  * Split out of beacon_parse() so the managed-mode nl80211 scan path can

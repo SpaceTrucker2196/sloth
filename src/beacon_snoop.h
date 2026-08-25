@@ -2,6 +2,7 @@
 #define BEACON_SNOOP_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "sloth.h"
 
 /* Cipher / AKM / MFP info extracted from the RSN IE of a beacon, plus
@@ -84,6 +85,18 @@ typedef struct {
 /* Pairwise ciphers the posture rules care about. */
 #define RSN_CIPHER_TKIP      RSN_SUITE_BIT(2)
 #define RSN_CIPHER_CCMP      RSN_SUITE_BIT(4)
+
+/* Short display label for an AKM suite bitmap — "SAE", "PSK",
+ * "SAE+PSK" for a transition-mode BSS, "802.1X", "OWE", "open" when no
+ * AKM is advertised, "?" for suites this build does not name.
+ *
+ * Lives here because this is where akm_bits is produced and akm_name()
+ * already exists; the alternative was a second suite-to-name table in
+ * whichever view needed one first. Families collapse — FT-SAE and
+ * SAE-EXT-KEY both read "SAE" — because the question a row is
+ * answering is which lane the client is on, not which roaming variant.
+ * Writes at most `sz` bytes including the NUL. */
+void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz);
 
 /* Walk an Information-Element blob and fill the same outputs
  * beacon_parse produces (roadmap B3b).

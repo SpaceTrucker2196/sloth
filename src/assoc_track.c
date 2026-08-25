@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "assoc_track.h"
+#include "probe_pnl.h"
 #include "beacon_snoop.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
@@ -145,6 +146,11 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
      * STA — the rate is the signal there, independent of whether the
      * ask changed. */
     flood_record(req->bssid, req->sta, now);
+
+    /* Corroborate the client's PHY tier in the PNL (#60). Done here,
+     * before any assoc_track lock is taken, so the two modules never
+     * hold each other's mutexes — probe_pnl takes its own. */
+    if (req->phy[0]) probe_pnl_note_assoc_phy(req->sta, req->phy);
 
     pthread_mutex_lock(&g_req_mu);
 

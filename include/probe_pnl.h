@@ -33,6 +33,20 @@ const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen);
  *   "legacy"   none of the above
  * The string is a static literal — callers do not own it. */
 const char *probe_pnl_phy_ies(const uint8_t *ies, int ielen);
+/* Fold an association request's PHY tier into an existing PNL row
+ * (#60). Upgrade-only through the same rank ladder probe observations
+ * use, and marks the row's tier as confirmed.
+ *
+ * Enriches only rows that already exist: a client that has associated
+ * but never sent a directed probe has no preferred-network list to
+ * show, and creating an empty row for it would put a device with no
+ * PNL into the PNL view. Returns 1 if a row was enriched, 0 otherwise.
+ *
+ * Does not touch probe_count — an association request is not a probe,
+ * and counting it as one would inflate the column the view uses to
+ * rank how chatty a client is. */
+int  probe_pnl_note_assoc_phy(const uint8_t mac[6], const char *phy);
+
 void probe_pnl_snapshot(sloth_state_t *s);
 void probe_pnl_clear(void);
 

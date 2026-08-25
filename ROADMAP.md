@@ -38,19 +38,14 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Fourteen are open** (`#59`–`#72`),
+~~**No open GitHub issues.**~~ **Twelve are open** (`#61`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
-One is half-landed and is the first thing to finish:
+Both of the half-landed issues are now closed:
 
 - ~~**`#59` BTM abuse**~~ — ✅ closed 2026-08-24 across four slices.
-- **`#60` Assoc requests** — slices 1–5a (`5efb233` … `a3f5b4d`). Parser,
-  downgrade delta, `ASSOC_FLOOD` and the data layer all landed; the UI
-  surfaces (slice 5b) do not.
-
-`#60` still holds a half-built surface — a data layer with no view —
-which is the state that reads as done to the next agent and isn't.
+- ~~**`#60` Assoc requests**~~ — ✅ closed 2026-08-24 across five.
 
 ---
 
@@ -145,10 +140,13 @@ dispatch on all of them. Verified absent:
   *"what the client asked for versus what the AP granted"* delta, which
   is where downgrade and misconfiguration show up. Also unblocks
   association-flood detection (B4).
-  *Was: `grep -c assoc_req src/capture/probe.c` → 0.* **Now landed**
-  (`#60`, `4fbe9f3`): `probe.c:347` dispatches subtypes 0 and 2, the
-  ask-vs-grant delta is in (`487b617`), and `ALERT_TYPE_ASSOC_FLOOD`
-  fires (`123a6e8`). Remaining: slice 5b, the UI surfaces.
+  *Was: `grep -c assoc_req src/capture/probe.c` → 0.* ✅ **Landed**
+  (`#60`): `probe.c:347` dispatches subtypes 0 and 2, the ask-vs-ask
+  downgrade delta is in (`487b617`), `ALERT_TYPE_ASSOC_FLOOD` fires
+  (`123a6e8`), and the data layer and surfaces followed. Note the delta
+  is measured across *successive requests*, not request-versus-grant:
+  an assoc response carries no RSNE outside FT/OWE (§9.3.3.7), so
+  "granted AKM" is not a value the protocol supplies.
 - **▲ Action frames (subtype 13).** Entirely unhandled, and a large
   passive surface: 802.11v BSS-Transition-Management (roaming steering,
   and BTM abuse as a deauth-equivalent), 802.11k Radio Measurement
@@ -328,8 +326,8 @@ effort:
 2. ~~**B3 retry / FCS tracking.**~~ ✅ landed.
 3. ~~**`#59` slices 2–4** — the `BTM_ABUSE` rule, surfaces, docs.~~
    ✅ landed 2026-08-24.
-4. **`#60` slice 5b** — `[w]` Assoc columns (`req_akm` / `prev_akm` /
-   `∆`), `[k]` PNL PHY tier, `--report`, docs.
+4. ~~**`#60` slice 5b** — `[w]` Assoc columns, `[k]` PNL PHY tier,
+   `--report`, docs.~~ ✅ landed 2026-08-24.
 5. **`#62` PMF/WPA3 downgrade.** ~1 week, closes a B4 ◆, dependency
    already paid.
 6. **`#65` PEAP no-server-cert.** Small, and the only issue open that

@@ -21,8 +21,9 @@ the same set of SSIDs.
 
 Per client (keyed on MAC): the unique set of SSIDs probed for, total
 probe count, first-seen / last-seen timestamps, randomised-MAC flag,
-and an OS fingerprint derived from vendor-specific IEs in the probe
-requests (see "OS fingerprint" below). Wildcard probes (broadcast /
+an OS fingerprint derived from vendor-specific IEs in the probe
+requests (see "OS fingerprint" below), and the maximum PHY tier the
+device has advertised. Wildcard probes (broadcast /
 empty SSID) are dropped — they leak no PNL info.
 
 Storage is capped at `MAX_PNL_CLIENTS = 128` clients × 16 SSIDs each;
@@ -54,12 +55,12 @@ variants over time).
 ```
  PNL clients: 6 (3 real / 3 randomized)  [up/dn] navigate  [c] clear
 
- MAC                vendor          OS        #    age   hits  preferred networks
- -----------------  --------------  --------  ---  ----  ----  ----------------------
- a0:b1:c2:d3:e4:f5  Apple           Apple     4    7s    47    HomeWiFi, Starbucks, Acme-Corp, eduroam
- 02:11:22:33:44:55  (random)        Apple     2    12s   8     HomeWiFi, ACME-Guest
- 02:aa:bb:cc:dd:ee  (random)        Android   3    34s   12    Starbucks, eduroam, BA-Lounge
- b8:27:eb:00:11:22  Raspberry Pi    ?         1    1m    3     LabNetwork
+ MAC                vendor          OS        PHY       #    age   hits  preferred networks
+ -----------------  --------------  --------  --------  ---  ----  ----  ----------------------
+ a0:b1:c2:d3:e4:f5  Apple           Apple     Wi-Fi 6*  4    7s    47    HomeWiFi, Starbucks, Acme-Corp, eduroam
+ 02:11:22:33:44:55  (random)        Apple     Wi-Fi 6   2    12s   8     HomeWiFi, ACME-Guest
+ 02:aa:bb:cc:dd:ee  (random)        Android   Wi-Fi 5   3    34s   12    Starbucks, eduroam, BA-Lounge
+ b8:27:eb:00:11:22  Raspberry Pi    ?         Wi-Fi 4   1    1m    3     LabNetwork
 ```
 
 The `vendor` column comes from the OUI of the burned-in MAC (real
@@ -67,6 +68,25 @@ devices only). The `OS` column comes from vendor-IE fingerprinting
 and works across MAC randomisation — randomised iOS clients still
 emit the Apple vendor IE, which is how you correlate randomised
 probes to their owner OS.
+
+### `PHY` and the `*` marker
+
+`PHY` is the highest tier the device has advertised — derived from the
+HT (45), VHT (191) and HE / EHT (255 ext) capability IEs. It is
+upgrade-only: a device that later sends a stripped-down probe omitting
+VHT keeps the stronger tier.
+
+A trailing **`*`** means the tier was corroborated by an **association
+request** rather than inferred from probes alone (#60). The distinction
+matters because probes are the weaker evidence — clients routinely send
+reduced capability sets while scanning to save airtime, so an unmarked
+tier is a *floor*, not a measurement. An association request is what the
+device commits to when it actually joins.
+
+Corroboration only enriches rows that already exist. A device that has
+associated but never sent a directed probe has no preferred-network
+list, and inventing an empty row for it would put a device with no PNL
+into the PNL view.
 
 ## What's normal
 

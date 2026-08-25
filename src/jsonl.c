@@ -699,6 +699,10 @@ void jsonl_emit_pnl_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "probe_count", (long long)e->probe_count);
         kv_str(buf, LINEBUF, &off, "os_fp",       e->os_fp);
         kv_str(buf, LINEBUF, &off, "phy",         e->phy);
+        /* Additive (#60): 1 when an association request corroborated
+         * the tier, 0 when it is inferred from probes alone. A consumer
+         * that ignores it sees exactly what it saw before. */
+        kv_int(buf, LINEBUF, &off, "phy_confirmed", e->phy_confirmed ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ssids\":[");
