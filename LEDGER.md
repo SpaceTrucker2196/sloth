@@ -82,3 +82,4 @@
 | d3a07c2 | 2026-08-24T21:00:14Z | claude-fable-5, claude-opus-4-8, claude-opus-5 | 112 | 32825 | 19315612 | 848989 | 26.2434 | agents/AGENTS.md: pcap-fixture policy settled as repo standard |
 | 9434cf8 | 2026-08-24T21:07:51Z | claude-opus-5 | 50 | 30289 | 3983388 | 39744 | 3.1466 | ROADMAP.md re-verified against the tree and the 14 open issues |
 | 95a71cc | 2026-08-25T03:01:18Z | claude-opus-5 | 147 | 63154 | 18578302 | 315611 | 14.0248 | #59 slice 2 — ALERT_TYPE_BTM_ABUSE rule |
+| 90e189e | 2026-08-25T03:08:59Z | claude-opus-5 | 46 | 24454 | 7414204 | 32619 | 4.6449 | #59 slice 3 — BTM persistence and surfaces |
