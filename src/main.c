@@ -53,6 +53,7 @@
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
+#include "ctrl_frames.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -175,6 +176,7 @@ static void poll_data(sloth_state_t *s) {
     csa_snapshot(s);
     rrm_snapshot(s);
     channel_summary_update(s);
+    ctrl_snapshot(s);   /* annotates the channel rows built above (#64) */
     rf_quality_snapshot(s, time(NULL));
     mdns_snapshot(s);
     nbns_snapshot(s);

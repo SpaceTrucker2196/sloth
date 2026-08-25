@@ -106,12 +106,12 @@ void view_channel_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %4s  %s\n",
+    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %6s  %4s  %s\n",
            "Ch", "Band", "APs", "STAs", "Best", "Top SSID", "retry",
-           "age", "activity");
-    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %4s  %s\n",
+           "ctrl", "age", "activity");
+    TPRINT(" %-5s  %-7s  %4s  %4s  %4s  %-20s  %6s  %6s  %4s  %s\n",
            "-----", "-------", "----", "----", "----",
-           "--------------------", "------", "----", "--------");
+           "--------------------", "------", "------", "----", "--------");
     tui_normal();
 
     if (s->channel_count == 0) {
@@ -188,6 +188,27 @@ void view_channel_draw(const sloth_state_t *s) {
             char rbuf[12];
             snprintf(rbuf, sizeof(rbuf), "%d%%", c->retry_pct);
             TPRINT("  %6s", rbuf);
+        }
+
+        /* Observed control-frame volume (#64). RTS/CTS/ACK dominate a
+         * channel's real airtime, so this is the measured half of the
+         * occupancy picture the QBSS Load IE only self-reports. "-" is
+         * "none counted", which on a channel with APs on it usually
+         * means the sweep has not dwelt here long. */
+        if (c->ctrl_total == 0) {
+            tui_dim(); TPRINT("  %6s", "-");
+        } else {
+            char cbuf[12];
+            snprintf(cbuf, sizeof(cbuf), "%u", (unsigned)c->ctrl_total);
+            /* Heat on the RTS share rather than the raw count: a busy
+             * channel has plenty of ACKs and that is normal, while a
+             * channel that is mostly RTS is one being reserved. */
+            unsigned rts_share = c->ctrl_total
+                               ? (c->ctrl_rts * 100u) / c->ctrl_total : 0u;
+            if      (rts_share >= 50) tui_heat(0.9);
+            else if (rts_share >= 25) tui_heat(0.5);
+            else                      tui_normal();
+            TPRINT("  %6s", cbuf);
         }
 
         tui_dim(); TPRINT("  %4s  ", age_buf);

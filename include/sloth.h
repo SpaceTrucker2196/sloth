@@ -703,6 +703,7 @@ typedef enum {
     ALERT_TYPE_PEAP_NO_SERVER_CERT, /* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
     ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
     ALERT_TYPE_RRM_SURVEY_ABUSE,    /* 802.11k Beacon Request used to survey the air through a client (#61) */
+    ALERT_TYPE_RTS_FLOOD,           /* RTS flood reserving the channel — airtime denial of service (#64) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1208,6 +1209,16 @@ typedef struct {
     uint32_t frames;
     int      retry_pct;
     int      badfcs_pct;
+    /* Observed control-frame volume on this channel (#64). Control
+     * frames dominate real utilisation, so without them the QBSS Load
+     * IE is the AP's *self-reported* occupancy rather than the measured
+     * one. CTS and ACK carry no transmitter address, so they can be
+     * attributed to a channel and to nothing finer. */
+    uint32_t ctrl_total;
+    uint32_t ctrl_rts;
+    uint32_t ctrl_cts;
+    uint32_t ctrl_ack;
+    uint32_t ctrl_blockack;
 } channel_summary_t;
 
 /* ── Client ↔ AP association tracker ─────────────────────── */

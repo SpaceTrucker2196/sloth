@@ -795,6 +795,15 @@ void jsonl_emit_channels(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "assoc_count", e->assoc_count);
         kv_int(buf, LINEBUF, &off, "best_signal", e->best_signal);
         kv_str(buf, LINEBUF, &off, "top_ssid",    e->top_ssid);
+        /* Additive (#64): observed control-frame volume. The measured
+         * half of channel occupancy, as distinct from the QBSS Load IE
+         * an AP reports about itself. CTS and ACK carry no transmitter
+         * address, so these are per-channel and cannot be finer. */
+        kv_int(buf, LINEBUF, &off, "ctrl_total",    (long long)e->ctrl_total);
+        kv_int(buf, LINEBUF, &off, "ctrl_rts",      (long long)e->ctrl_rts);
+        kv_int(buf, LINEBUF, &off, "ctrl_cts",      (long long)e->ctrl_cts);
+        kv_int(buf, LINEBUF, &off, "ctrl_ack",      (long long)e->ctrl_ack);
+        kv_int(buf, LINEBUF, &off, "ctrl_blockack", (long long)e->ctrl_blockack);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);

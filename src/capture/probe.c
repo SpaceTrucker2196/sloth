@@ -19,6 +19,7 @@
 #include "assoc_track.h"
 #include "auth_track.h"
 #include "action_snoop.h"
+#include "ctrl_frames.h"
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -251,6 +252,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     mon_frame_record(type, sub, dot11 + 4,
                      dot11_len >= 16 ? dot11 + 10 : NULL,
                      (uint16_t)dot11_len, signal);
+
+    if (type == 1) {
+        /* Control frames (#64). Dispatched *above* the 24-byte guard
+         * below: a CTS or ACK is 14 bytes and an RTS is 20, so every
+         * control frame there is would be dropped by a check written
+         * for management headers. Parsing lives in ctrl_frames.c
+         * because this file is absent from TEST_SRCS. */
+        ctrl_observe(dot11, dot11_len, channel, time(NULL));
+        return;
+    }
 
     /* The detailed per-type parsers below assume a full management header. */
     if (dot11_len < 24) return;

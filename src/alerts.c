@@ -9,6 +9,7 @@
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "wifi_assess.h"
+#include "ctrl_frames.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -220,6 +221,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_PEAP_NO_SERVER_CERT:    return "T1557";       /* AiTM — the client authenticated to an unverified server */
     case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
     case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
+    case ALERT_TYPE_RTS_FLOOD:              return "T1498";       /* Network DoS — the channel reserved out from under everyone */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -500,6 +502,49 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
  * The discriminator is not the rate on its own. A legitimate AP steering
  * its own clients asks about networks *it* advertises; an outsider asks
  * about SSIDs it has never beaconed. */
+
+/* RTS flood (#64) — airtime denial of service.
+ *
+ * An RTS asks every radio in earshot to stay quiet for the NAV
+ * reservation it carries. That is the mechanism that makes 802.11 work
+ * around hidden nodes, and it is also a way to silence a channel
+ * without transmitting anything a flood detector was watching for: no
+ * deauth, no beacon, no association, just a request to be quiet
+ * repeated faster than anyone can talk between the gaps.
+ *
+ * The sustain requirement is what separates this from a retry burst. A
+ * client fighting interference emits RTS hard for a moment; a flood
+ * keeps going. */
+static void rule_rts_flood(const sloth_state_t *s, time_t now) {
+    (void)s;
+    uint8_t ta[6];
+    int max_nav = 0, dur = 0;
+    int n = ctrl_rts_flood(now, 60, RTS_FLOOD_RATE, RTS_FLOOD_SUSTAIN_S,
+                           ta, &max_nav, &dur);
+    if (n <= 0) return;
+
+    /* A Duration above the legal maximum cannot come from a conforming
+     * radio, so it is not "a busy client" under any reading — it is a
+     * generated frame. That is a different claim from a high rate, and
+     * it is the one worth escalating on. */
+    int illegal_nav = max_nav > CTRL_NAV_MAX_LEGAL;
+    int mine        = ownership_is_my_bssid(ta);
+
+    char src[20];
+    mac_to_str(ta, src, sizeof(src));
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "rtsflood:%.17s", src);
+    snprintf(detail, sizeof(detail),
+             "%.17s sent %d RTS over %ds (~%d/s), max NAV %dus%s%s",
+             src, n, dur, dur > 0 ? n / dur : n, max_nav,
+             illegal_nav ? " - above the legal maximum" : "",
+             mine ? " - YOUR network" : "");
+    fire(ALERT_TYPE_RTS_FLOOD,
+         (illegal_nav || mine) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+         "RTS_FLOOD", detail, key, NULL, 0, now);
+}
+
 static void rule_rrm_survey_abuse(const sloth_state_t *s, time_t now) {
     uint8_t bssid[6], sta[6];
     int reqs = rrm_busiest_pair(now, RRM_SURVEY_WIN_SECS,
@@ -2468,6 +2513,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wpa_downgrade(s, now);
     rule_csa_abuse(s, now);
     rule_rrm_survey_abuse(s, now);
+    rule_rts_flood(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);
     rule_my_network_recon(s, now);

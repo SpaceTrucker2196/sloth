@@ -38,7 +38,7 @@ still open) · **✅** landed.
 > It is the same drift this file warns about at the top, four weeks
 > later — worth leaving visible rather than quietly overwriting.
 
-~~**No open GitHub issues.**~~ **Seven are open** (`#64`, `#67`–`#72`),
+~~**No open GitHub issues.**~~ **Six are open** (`#67`–`#72`),
 all of it section-B work now filed rather than merely listed here.
 Section A — the original issue backlog — remains fully landed.
 
@@ -158,14 +158,12 @@ dispatch on all of them. Verified absent:
   (`3aceecf`). Categories 5 / 6 / 127 are counted as stubs — RRM
   (`#61`) and CSA (`#63`) extend the same dispatcher and are unblocked
   by it. See [`docs/wiki/btm-abuse.md`](docs/wiki/btm-abuse.md).
-- **◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).** Recognised by
-  name in `frame_type_label()` but never counted or analysed. Counting
-  them by type per channel is what airtime / channel-utilisation
-  accounting needs, plus RTS/CTS-flood (airtime DoS) and hidden-node
-  inference. Filed as `#64` (counters + RTS flood) and `#70` (Bl0ck /
-  Block-Ack paralysis), split because they share a frame type and
-  nothing else. Note CTS and ACK carry only a Receiver Address — they
-  attribute to a channel, not to an AP.
+- ~~**◆ Control frames (type 1: RTS/CTS/ACK/BlockAck).**~~ ✅ counters
+  and the RTS-flood rule landed (`#64`); `#70` (Bl0ck / Block-Ack
+  paralysis) remains. `src/ctrl_frames.c` counts per source and per
+  channel, and the `[m]` view shows observed control volume beside the
+  AP-self-reported QBSS Load. CTS and ACK carry only a Receiver
+  Address, so they attribute to a channel and to nothing finer.
 - **◆ Data-frame telemetry beyond EAPOL.** Data frames are inspected
   only to pull EAPOL-Key (`probe.c:262`). Retry-bit rate, QoS TID
   distribution, frame size histograms and per-BSSID data volume are
@@ -263,7 +261,7 @@ exist. Gaps:
   issue's "≤ 3 distinct STAs" gate was dropped deliberately: flood
   tooling randomises source MACs, so a real flood is *many* distinct
   STAs and the gate would have suppressed the common shape.
-- **◆ CTS/RTS airtime DoS.** Needs B1 control frames — `#64`.
+- ~~**◆ CTS/RTS airtime DoS.**~~ ✅ landed (`#64`) as `ALERT_TYPE_RTS_FLOOD`.
 - ~~**◆ PMF/WPA3 downgrade + transition-mode exposure.**~~ ✅ landed
   (`#62`). `ALERT_TYPE_WPA_DOWNGRADE` fires on four lanes — SAE+PSK
   transition, OWE-with-open-companion, MFP-optional-on-SAE, and WPA1
@@ -333,8 +331,10 @@ effort:
 6. ~~**`#65` PEAP no-server-cert.**~~ ✅ landed 2026-08-25.
 7. ~~**`#63` CSA abuse.**~~ ✅ landed 2026-08-25.
 8. ~~**`#66` HT/VHT/HE/EHT operation decode.**~~ ✅ landed 2026-08-25.
-9. ~~**`#61` RRM.**~~ ✅ landed 2026-08-25. Then **`#64`** control-frame
-   counters → the B3 channel-utilisation view.
+9. ~~**`#61` RRM**, then **`#64`** control-frame counters.~~ ✅ both
+   landed 2026-08-25. The B3 channel-utilisation view now has both
+   halves of its data model: widths from `#66`, observed control-frame
+   volume from `#64`.
 
 Backlog after that: `#70` (Bl0ck), `#67` (Wi-Fi 7 MLO — a real
 correctness bug, since seqnum correlation misreports one MLO device as

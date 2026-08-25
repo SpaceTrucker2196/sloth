@@ -86,6 +86,7 @@ SRCS = src/main.c          \
        src/wifi_chanhop.c    \
        src/auth_track.c      \
        src/action_snoop.c    \
+       src/ctrl_frames.c     \
        src/wifi_snapshot.c   \
        src/wifi_assess.c     \
        src/wifi_baseline.c   \
@@ -384,6 +385,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_auth_track.c        \
             src/action_snoop.c             \
             tests/test_action_snoop.c      \
+            src/ctrl_frames.c              \
+            tests/test_ctrl_frames.c       \
             src/wifi_snapshot.c            \
             tests/test_wifi_snapshot.c     \
             src/wifi_assess.c              \

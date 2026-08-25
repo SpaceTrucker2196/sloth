@@ -30,13 +30,14 @@ cannot disagree about what channel an AP is on. 2.4, 5 and 6 GHz.
 | `Best` | strongest AP signal, dBm |
 | `Top SSID` | SSID of that AP, hash-coloured |
 | `retry` | retry ratio over the last 5 minutes |
+| `ctrl` | observed control frames (RTS / CTS / ACK / Block-Ack) on the channel |
 | `age` | since the most recent observation |
 | `activity` | bar, relative to the busiest channel |
 
 ## View
 
 ```
- Ch     Band     APs  STAs  Best  Top SSID               retry   age  activity
+ Ch     Band     APs  STAs  Best  Top SSID               retry    ctrl   age  activity
  -----  -------  ---- ----  ----  --------------------  ------  ----  --------
  6      2.4GHz      7    12   -41  CorpWiFi                 61%    2s  ████████████████████████
  1      2.4GHz      4     3   -58  Guest-Net                14%    3s  ██████████
@@ -45,6 +46,36 @@ cannot disagree about what channel an AP is on. 2.4, 5 and 6 GHz.
  149    5GHz        2     0   -71  (hidden)                   -   19s  ██
  37     6GHz        1     0   -74  CorpWiFi-6E                -   41s  █
 ```
+
+## Control-frame volume (#64)
+
+The **ctrl** column counts RTS, CTS, ACK and Block-Ack frames seen on
+the channel. Control frames dominate real airtime, so this is the
+*measured* half of channel occupancy — as distinct from the QBSS Load
+element, which is what an AP reports about itself.
+
+The cell is heat-coloured on the **RTS share**, not the raw count. A
+busy channel has plenty of ACKs and that is entirely normal; a channel
+that is mostly RTS is one being *reserved*, which is the shape
+`ALERT_TYPE_RTS_FLOOD` fires on.
+
+`-` means none counted. On a channel with APs on it that usually means
+the `--hop` sweep has not dwelt here long, rather than that the channel
+is quiet.
+
+### Why this is per-channel and not per-AP
+
+RTS, PS-Poll and the Block-Ack pair carry a transmitter address. **CTS
+and ACK carry only a Receiver Address** — no TA, no BSSID. They can be
+attributed to the channel they were heard on and to nothing finer.
+Rather than invent an attribution the frame does not carry, the
+per-source table holds only the frames that name a source, and the
+per-channel totals hold everything.
+
+That distinction is easy to lose: a captured CTS includes a 4-byte FCS,
+so it arrives long enough that a length-based guess at "is there a
+transmitter here" would read six bytes past the Receiver Address and
+invent one out of the checksum.
 
 ## Retry ratio (roadmap B3)
 
