@@ -98,3 +98,4 @@
 | d7d628a | 2026-08-25T16:17:08Z | claude-opus-5 | 36 | 27075 | 13312681 | 29028 | 7.6237 | #68 — tool-fingerprint mechanism, empty signature table |
 | 0f6da33 | 2026-08-25T16:28:28Z | claude-opus-5 | 36 | 25181 | 13827103 | 27375 | 7.8170 | #71 — HTTP response-side parsing |
 | 5fbbcac | 2026-08-25T16:37:00Z | claude-opus-5 | 29 | 27357 | 11978059 | 29950 | 6.9726 | #69 — captive-portal interception detection |
+| f6b09d8 | 2026-08-26T01:43:56Z | claude-opus-5 | 9 | 6491 | 3266355 | 825311 | 10.0486 | PROGRESS.md — 802.11 backlog run close-out |
