@@ -48,6 +48,29 @@ work exposed as a new In-progress entry.
 *(nothing actively in flight — pick from "Open follow-ups" or the
 paused work below)*
 
+### Open follow-ups from the 2026-08-25 run
+**Owner**: unassigned — all three are owner decisions or need hardware
+**Status**: not blocking anything.
+1. **`#68` signature rows.** The tool-fingerprint matcher ships with an
+   empty table on purpose: a tool's fingerprint is an empirical fact
+   about a binary and invented rows would pass every test while matching
+   nothing. Each real row needs a capture from a rig. Procedure is in
+   `docs/wiki/tool-fingerprints.md`; flip
+   `test_table_is_empty_on_purpose` to `> 0` with the first row.
+2. **`sae_found` / SAE-EXT-KEY.** A WPA3-R3 AP advertising only AKM 24
+   is tagged `WPA2`. One line now that `RSN_AKM_SAE_FAMILY` exists, but
+   it changes the `enc` string, which MISSION §4.3 treats as a stable
+   JSONL contract — an external-contract call, not an agent's.
+3. **The `[C]` captive-portal view.** Deliberately not built: portal
+   events are episodic and a dedicated view would be empty almost
+   always, so the verdict went into `[h]` beside the traffic instead.
+   Standard eleven-step addition if the owner disagrees.
+
+Two smaller gaps named in `docs/wiki/captive-portal.md`: DHCP option 114
+is not parsed (so the RFC 8910 origin cross-check has nothing to compare
+against), and request bodies are not captured (so the credential-POST
+hint is a separate MISSION §2 conversation).
+
 ### Paused: Mutation-testing follow-ups (rounds 10+)
 **Owner**: next agent
 **Started**: 2026-05-28 — paused 2026-05-28 by operator request
@@ -76,6 +99,61 @@ non-blocking and stateless.
 ---
 
 ## Recently landed
+
+### 2026-08-24/25 — the 802.11 backlog, closed
+**Commits**: `d3a07c2` (agents policy), `9434cf8` (roadmap re-verify),
+`ef15e24`, `3aceecf`, `4052fa3` (#59), `10dc6bf` (#60), `dd736de` (#62),
+`bf4029e` (#65), `fde7bc4` (#63), `3510c76` (#66), `e72ec0f` (#61),
+`93d1dd0` + `52b7665` (#64), `2e55128` (#70), `8d1efd6` (#72),
+`5c7d134` (#67), `03f977d` (schema v4), `6c90c75` (#68), `63988d0` (#71),
+`d9461d4` (#69)
+**Touched**: `src/action_snoop.c`, `src/alerts.c`, `src/beacon_snoop.c`,
+`src/eap_parse.c`, `src/eap_track.c`, `src/http_log.c`, and five new
+modules — `src/ctrl_frames.c`, `src/dot11_data.c`, `src/mle.c`,
+`src/tool_fingerprint.c`, `src/captive_portal.c`
+**Why**: a triage sweep found fourteen open issues, two of them
+half-landed with a surface that read as finished and was not — an alert
+type with no rule (`#59`), a data layer with no view (`#60`). Finished
+those, then worked the rest in dependency order.
+
+Suite went 5906 → 6687 assertions. Alert types 33 → 48.
+`DB_SCHEMA_VERSION` 3 → 4. **No open issues.**
+
+**What the run actually demonstrated.** Mutation testing found
+something other than a missing assertion seven times: three wrong
+tests, two pieces of dead code, one wrong comment, and one fixture too
+unrealistic for its own mutant to bite (`test_cts_and_ack_have_no_source`
+used bare 10-byte frames; a captured CTS carries an FCS and is long
+enough for a length-based TA guess to read six bytes past the Receiver
+Address). The habit worth keeping: when a mutant survives, check whether
+the *test* is wrong before adding another.
+
+**Three defects found in already-shipped code:**
+
+1. `#66` dropped the line setting `has_eht` while restructuring the
+   tag-255 branch. The variable stayed declared and read, so it compiled
+   clean and the suite stayed green — while every AP silently stopped
+   being labelled Wi-Fi 7. Nothing covered the PHY-tier ladder from
+   beacon IEs. Found working on `#67`, fixed there, one test per rung.
+2. `$(TEST_BIN)` listed no header prerequisites, so a header-only change
+   never rebuilt the test binary. Found during the schema bump when a
+   mutation appeared to survive against a stale build. Every header-only
+   change in this repo's history was tested against one.
+3. `KARMA_SSID_THRESH` was defined in both `karma_detect.h` and
+   `alerts.c` with the same value — two definitions of one threshold,
+   either retunable without the other.
+
+**A process mishap, recorded because it is visible in the log.**
+`93d1dd0` is labelled `chore(metrics)` and contains all of `#64`.
+`git add -A` with `:!` exclusions exits non-zero on gitignored paths, so
+the `&&` chain skipped the feature commit while leaving everything
+staged. Pushed before it was noticed; `52b7665` carries the rationale
+forward rather than rewriting shared history.
+
+**Follow-ups**: see "Open follow-ups" below — `#68`'s signature rows
+need a capture rig, `sae_found` / SAE-EXT-KEY is a §4.3 contract call,
+and the `[C]` captive-portal view was deliberately not built.
+
 
 ### 2026-07-28 — Field-reported fixes, the operator persona, and the SQLite sink
 **Commits**: `4b1b577`, `f5c848d`, `a6af13d`, `e2effaa`, `6e58de0`,
