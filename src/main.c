@@ -442,7 +442,7 @@ static void print_usage(const char *argv0) {
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
-            "       [--headless] [--no-color]\n"
+            "       [--headless] [--no-color] [--version]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -541,6 +541,9 @@ static void print_usage(const char *argv0) {
             "  --no-color         suppress colour escape sequences but\n"
             "                     keep drawing. Also honoured via the\n"
             "                     NO_COLOR environment variable.\n"
+            "  --version, -V      print the version and exit. The banner\n"
+            "                     shows it too, but that needs the TUI\n"
+            "                     running — no use on a headless sensor.\n"
             "  --known-mac MAC    add MAC to the known-device roster\n"
             "                     (repeatable, max 512).\n"
             "  --known-macs FILE  load a roster: one MAC per line, #\n"
@@ -673,6 +676,15 @@ int main(int argc, char **argv) {
             db_set_retain_days(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
             db_set_max_mb(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--version") ||
+                   !strcmp(argv[i], "-V")) {
+            /* The version has only ever been visible in the TUI banner,
+             * which means checking a deployed binary meant starting the
+             * interface — awkward on a headless sensor and impossible
+             * in a script. Goes to stdout, not stderr: this is the
+             * requested output, not a diagnostic. */
+            printf("sloth %s\n", SLOTH_VERSION);
+            return 0;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
         } else if (!strcmp(argv[i], "--no-color") ||

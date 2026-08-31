@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "version.h"
+#include "sloth.h"
 
 /* Semver parse + compare, covering the shapes SLOTH_VERSION and git
  * tags actually emit, plus the classic 1.10.0 > 1.9.0 lexical trap. */
@@ -94,6 +95,43 @@ static void test_cmp_build_metadata_ignored(void) {
     ASSERT_EQ(semver_cmp(&a, &b), 0);
 }
 
+
+/* ── The version is reachable without the TUI ─────────────
+ *
+ * SLOTH_VERSION has only ever surfaced in the ncurses banner, which
+ * meant checking a deployed binary required starting the interface —
+ * no use on a headless sensor and impossible in a script. `--version`
+ * closes that, and these pin the two things a caller depends on: the
+ * constant is well-formed, and it is the same one the updater compares
+ * against. The flag's exit path itself is in main.c, which is not in
+ * the test build. */
+
+static void test_baked_version_is_well_formed(void) {
+    semver_t v;
+    ASSERT_EQ(semver_parse(SLOTH_VERSION, &v), 1);
+    /* A zero across the board would parse but means the constant was
+     * never set. */
+    ASSERT(v.major + v.minor + v.patch > 0);
+}
+
+static void test_baked_version_orders_after_every_released_tag(void) {
+    /* A release that forgets to bump the constant ships a binary
+     * claiming to be its predecessor — and the updater then reports an
+     * upgrade is available forever. Comparing against the last tag
+     * catches that without hard-coding the current one. */
+    static const char *shipped[] = {
+        "1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0",
+        "1.5.0", "1.5.1", "1.6.0", "1.7.0",
+    };
+    semver_t cur;
+    ASSERT_EQ(semver_parse(SLOTH_VERSION, &cur), 1);
+    for (size_t i = 0; i < sizeof(shipped) / sizeof(shipped[0]); i++) {
+        semver_t old;
+        ASSERT_EQ(semver_parse(shipped[i], &old), 1);
+        ASSERT(semver_cmp(&cur, &old) > 0);
+    }
+}
+
 void run_version_tests(void) {
     TEST_SUITE("version — parse");
     RUN_TEST(test_parse_basic);
@@ -108,4 +146,7 @@ void run_version_tests(void) {
     RUN_TEST(test_cmp_prerelease_sorts_below);
     RUN_TEST(test_cmp_prerelease_string);
     RUN_TEST(test_cmp_build_metadata_ignored);
+    TEST_SUITE("baked SLOTH_VERSION");
+    RUN_TEST(test_baked_version_is_well_formed);
+    RUN_TEST(test_baked_version_orders_after_every_released_tag);
 }

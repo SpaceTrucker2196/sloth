@@ -110,6 +110,8 @@ for in normal vs anomalous traffic.
 
 - **`sloth --no-color`** — keep drawing but emit no colour escape sequences. Also honoured via the `NO_COLOR` environment variable ([no-color.org](https://no-color.org)). Useful over a serial console or when capturing a session to a file.
 
+- **`sloth --version`** (or `-V`) — print the version and exit. The TUI banner shows it too, but that needs the interface running, which is no use on a headless sensor or in a deployment script checking what it just rolled out.
+
   > **Note for existing headless deployments.** Before this, running the no-ncurses build with stdin redirected (systemd, `< /dev/null`) made the poll loop spin: `select()` reported the EOF stdin readable immediately, so the refresh interval never applied. Measured at ~76 000 redraws in two seconds against an intended ~10, which both burned a core and flooded the journal. `tui_poll_key` now waits on stdin only when it is a terminal, so this is fixed for `--no-color` and interactive runs too — not just under `--headless`.
 
 ### Persistent state (`--db`)
