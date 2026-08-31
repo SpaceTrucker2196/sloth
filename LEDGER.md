@@ -100,3 +100,4 @@
 | 5fbbcac | 2026-08-25T16:37:00Z | claude-opus-5 | 29 | 27357 | 11978059 | 29950 | 6.9726 | #69 — captive-portal interception detection |
 | f6b09d8 | 2026-08-26T01:43:56Z | claude-opus-5 | 9 | 6491 | 3266355 | 825311 | 10.0486 | PROGRESS.md — 802.11 backlog run close-out |
 | c1a1f8b | 2026-08-26T01:58:28Z | claude-opus-5 | 19 | 8431 | 8270732 | 12799 | 4.4742 | release v1.8.0 |
+| b84bcba | 2026-08-31T04:57:19Z | claude-opus-5 | 50 | 15900 | 22028506 | 862566 | 20.0377 | --version flag + stale-build audit |
