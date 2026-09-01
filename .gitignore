@@ -6,3 +6,7 @@ sloth_test
 *.dSYM/
 __pycache__/
 .DS_Store
+
+# Build artifact for the research corpus (#73). research.db itself
+# IS committed — see the note on the research-index target.
+research_ingest

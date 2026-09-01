@@ -399,6 +399,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_tool_fingerprint.c  \
             src/captive_portal.c           \
             tests/test_captive_portal.c    \
+            research/ingest/research_ingest.c \
+            tests/test_research_ingest.c   \
+            tests/test_research_corpus.c   \
             src/wifi_snapshot.c            \
             tests/test_wifi_snapshot.c     \
             src/wifi_assess.c              \
@@ -478,6 +481,18 @@ TEST_SRCS = tests/main_test.c          \
 
 TEST_BIN = sloth_test
 
+# ── Research corpus (#73) ───────────────────────────────────────────────────
+# research.db is committed: it is small, deterministic (documents are
+# visited in sorted path order, so a rebuild is byte-identical), and
+# committing it means --with-research works from a fresh clone with no
+# build step. Regenerate after editing anything under research/.
+RESEARCH_SRCS = research/ingest/main.c research/ingest/research_ingest.c
+
+.PHONY: research-index
+research-index:
+	$(CC) $(CFLAGS) -Iresearch/ingest -o research_ingest $(RESEARCH_SRCS) -lsqlite3
+	./research_ingest research research.db
+
 .PHONY: test
 test: $(TEST_BIN)
 	./$(TEST_BIN)
@@ -489,7 +504,7 @@ test: $(TEST_BIN)
 TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h                        src/platform/*.h tests/*.h)
 
 $(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,

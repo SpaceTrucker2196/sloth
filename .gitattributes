@@ -1,6 +1,5 @@
-# (no attribute rules currently in force)
-#
-# agents/ was previously git-crypt encrypted at rest. That was removed
-# on 2026-07-28: the folder holds operating procedure, not secrets, and
-# one of its files (dark-factory.md) is explicitly written as a public
-# teaching artifact. See the root CLAUDE.md for the reasoning.
+# The research corpus index (#73) is a committed SQLite file. Marking it
+# binary keeps git from attempting line-based diffs or CRLF conversion
+# on it — both of which would corrupt the file rather than merely make
+# the diff unreadable.
+research.db binary

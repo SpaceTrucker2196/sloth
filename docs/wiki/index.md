@@ -27,6 +27,8 @@ source material.
   evil-twin detection layer (Phases 1-4).
 - [[btm-abuse]] — 802.11v BSS-Transition forcing + `BTM_ABUSE` alert
   (#59): the forced roam that leaves no deauth frame behind.
+- [[research-corpus]] — the machine-readable side of the cite-sources
+  habit (#73): one document per source, FTS5-indexed, guarded.
 - [[captive-portal]] — connectivity-check interception (#69): the
   rogue portal that answers your OS's probe, and the three
   independent signals that catch it.
