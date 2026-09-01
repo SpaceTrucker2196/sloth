@@ -65,6 +65,20 @@ Single binary `sloth`. Test binary `sloth_test`.
 - **Per-view docs follow the template** in `docs/views/README.md`:
   protocol → what sloth captures → text mockup → normal → suspicious →
   see-also.
+- **Detectors cite their sources.** Every alert rule names what it is
+  detecting *from*: the CVE, the CERT advisory, the MITRE technique, the
+  IEEE clause, or the paper. Not decoration — a behavioural threshold
+  with no cited basis is indistinguishable from a guess, and the
+  operator deciding whether to act on a CRIT needs to know which it is.
+  In practice that means the rule table row in `docs/views/alerts.md`
+  and the `alert_technique()` entry, plus a wiki page for anything with
+  a non-obvious mechanism.
+
+  The habit has been followed since the first detector batch without
+  ever being written down here, which is why `#73` proposes enforcing
+  it at runtime. Enforcement should follow documentation, so it is
+  documented now: a new detector with no cited basis is incomplete, the
+  same way an untested one is.
 
 ## Conventions
 
