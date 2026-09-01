@@ -101,3 +101,4 @@
 | f6b09d8 | 2026-08-26T01:43:56Z | claude-opus-5 | 9 | 6491 | 3266355 | 825311 | 10.0486 | PROGRESS.md — 802.11 backlog run close-out |
 | c1a1f8b | 2026-08-26T01:58:28Z | claude-opus-5 | 19 | 8431 | 8270732 | 12799 | 4.4742 | release v1.8.0 |
 | b84bcba | 2026-08-31T04:57:19Z | claude-opus-5 | 50 | 15900 | 22028506 | 862566 | 20.0377 | --version flag + stale-build audit |
+| 16b83ee | 2026-09-01T00:23:59Z | claude-opus-5 | 19 | 11362 | 6936281 | 1752663 | 21.2789 | agents/AGENTS.md: cite-sources habit documented (#73) |
