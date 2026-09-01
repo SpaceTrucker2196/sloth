@@ -102,3 +102,4 @@
 | c1a1f8b | 2026-08-26T01:58:28Z | claude-opus-5 | 19 | 8431 | 8270732 | 12799 | 4.4742 | release v1.8.0 |
 | b84bcba | 2026-08-31T04:57:19Z | claude-opus-5 | 50 | 15900 | 22028506 | 862566 | 20.0377 | --version flag + stale-build audit |
 | 16b83ee | 2026-09-01T00:23:59Z | claude-opus-5 | 19 | 11362 | 6936281 | 1752663 | 21.2789 | agents/AGENTS.md: cite-sources habit documented (#73) |
+| c17326e | 2026-09-01T00:32:57Z | claude-opus-5 | 34 | 30911 | 15203043 | 36181 | 8.7363 | #73 slice 1 — research corpus + FTS5 ingest |
