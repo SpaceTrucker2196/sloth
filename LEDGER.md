@@ -103,3 +103,4 @@
 | b84bcba | 2026-08-31T04:57:19Z | claude-opus-5 | 50 | 15900 | 22028506 | 862566 | 20.0377 | --version flag + stale-build audit |
 | 16b83ee | 2026-09-01T00:23:59Z | claude-opus-5 | 19 | 11362 | 6936281 | 1752663 | 21.2789 | agents/AGENTS.md: cite-sources habit documented (#73) |
 | c17326e | 2026-09-01T00:32:57Z | claude-opus-5 | 34 | 30911 | 15203043 | 36181 | 8.7363 | #73 slice 1 — research corpus + FTS5 ingest |
+| 780add3 | 2026-09-03T19:50:09Z | claude-opus-5 | 84 | 59073 | 38503940 | 1925982 | 39.9890 | #73 slice 2 — research query layer + --with-research |
