@@ -10,3 +10,7 @@ __pycache__/
 # Build artifact for the research corpus (#73). research.db itself
 # IS committed — see the note on the research-index target.
 research_ingest
+
+# The MCP server (#73). Built on demand via `make research-mcp`; not
+# part of `all`, because the monitor links the query layer directly.
+sloth-research-mcp

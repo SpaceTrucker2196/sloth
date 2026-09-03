@@ -1,4 +1,5 @@
-/* research_ingest — build research.db from research/**.md (#73 slice 1).
+/* research_ingest — build research.db from the markdown under
+ * research/ (#73 slice 1).
  *
  * Walks the corpus, parses each document with the pure parser beside
  * this file, and writes one FTS5 row per section. Deliberately thin:

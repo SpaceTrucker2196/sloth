@@ -183,24 +183,16 @@ int rq_cite(rq_handle_t *h, const char *topic, char out[][RQ_STR], int max) {
     return n;
 }
 
-int rq_recent(rq_handle_t *h, int days, time_t now, rq_hit_t *out, int max) {
-    if (!h || !h->db || !out || max <= 0) return 0;
-    if (days <= 0) days = 7;
-    if (max > RQ_MAX_HITS) max = RQ_MAX_HITS;
-
-    /* retrieved is stored as YYYY-MM-DD text, so the cutoff is computed
-     * as text and compared lexically — which is correct for that format
-     * and needs no date parsing on either side. */
-    time_t cutoff_t = now - (time_t)days * 86400;
+/* YYYY-MM-DD in UTC, bounded rather than trusted. GCC cannot prove a
+ * struct tm's fields are in range and warns about the truncation that
+ * would follow — and it is right to: a garbage tm should produce a date
+ * that matches nothing, not one that silently matches everything. Same
+ * treatment as #58, which was the last -Wformat-truncation here: bound
+ * the input, do not silence the warning. Returns 0 on failure. */
+static int iso_date(time_t t, char out[16]) {
     struct tm tm_buf;
-    struct tm *tm = gmtime_r(&cutoff_t, &tm_buf);
+    struct tm *tm = gmtime_r(&t, &tm_buf);
     if (!tm) return 0;
-    /* Bounded rather than trusted. GCC cannot prove a struct tm's
-     * fields are in range and warns about the truncation that would
-     * follow — and it is right to: a garbage tm should produce a cutoff
-     * that finds nothing, not one that silently matches everything.
-     * Same treatment as #58, which was the last -Wformat-truncation
-     * here: bound the input, do not silence the warning. */
     int yy = tm->tm_year + 1900, mm = tm->tm_mon + 1, dd = tm->tm_mday;
     if (yy < 0)    yy = 0;
     if (yy > 9999) yy = 9999;
@@ -208,19 +200,33 @@ int rq_recent(rq_handle_t *h, int days, time_t now, rq_hit_t *out, int max) {
     if (mm > 12)   mm = 12;
     if (dd < 1)    dd = 1;
     if (dd > 31)   dd = 31;
-    char cutoff[16];
-    snprintf(cutoff, sizeof(cutoff), "%04d-%02d-%02d", yy, mm, dd);
+    snprintf(out, 16, "%04d-%02d-%02d", yy, mm, dd);
+    return 1;
+}
+
+int rq_recent(rq_handle_t *h, int days, time_t now, rq_hit_t *out, int max) {
+    if (!h || !h->db || !out || max <= 0) return 0;
+    if (days <= 0) days = 7;
+    if (max > RQ_MAX_HITS) max = RQ_MAX_HITS;
+
+    /* retrieved is stored as YYYY-MM-DD text, so the window is computed
+     * as text and compared lexically — which is correct for that format
+     * and needs no date parsing on either side. */
+    char lo[16], hi[16];
+    if (!iso_date(now - (time_t)days * 86400, lo)) return 0;
+    if (!iso_date(now, hi)) return 0;
 
     const char *sql =
         "SELECT title, substr(body,1,200), source_url, retrieved, topics, path"
         "  FROM research"
-        " WHERE retrieved >= ?1"
+        " WHERE retrieved >= ?1 AND retrieved <= ?2"
         " ORDER BY retrieved DESC, path"
-        " LIMIT ?2";
+        " LIMIT ?3";
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(h->db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
-    sqlite3_bind_text(st, 1, cutoff, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 2, max);
+    sqlite3_bind_text(st, 1, lo, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, hi, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 3, max);
 
     int n = 0;
     while (n < max && sqlite3_step(st) == SQLITE_ROW)

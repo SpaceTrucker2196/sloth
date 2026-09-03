@@ -76,9 +76,14 @@ int rq_for_alert(rq_handle_t *h, const char *alert_kind,
 int rq_cite(rq_handle_t *h, const char *topic,
             char out[][RQ_STR], int max);
 
-/* Documents retrieved within `days` of `now`. Feeds the weekly brief.
- * `now` is passed rather than read so the query is testable against a
- * fixed clock. */
+/* Documents retrieved in the [now - days, now] window. Feeds the weekly
+ * brief. `now` is passed rather than read so the query is testable
+ * against a fixed clock.
+ *
+ * Bounded at both ends, not just below. A retrieved date after `now` is
+ * a bad frontmatter field or a clock that moved, and quietly counting
+ * it as "the last 7 days" makes the brief wrong in the direction nobody
+ * checks. */
 int rq_recent(rq_handle_t *h, int days, time_t now, rq_hit_t *out, int max);
 
 #else  /* !WITH_SQLITE */

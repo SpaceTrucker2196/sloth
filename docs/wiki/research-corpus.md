@@ -121,10 +121,9 @@ sloth --with-research research.db
 
 That is a departure from the issue, which has sloth spawn a subprocess
 and speak JSON-RPC to ask about its own data file. One implementation,
-two front doors: sloth links it, and the MCP server (still to come) is a
-transport wrapper for the external consumers MCP is actually for —
-Claude sessions and scheduled tasks querying a corpus they did not
-build.
+two front doors: sloth links it, and the MCP server below is a transport
+wrapper for the external consumers MCP is actually for — Claude sessions
+and scheduled tasks querying a corpus they did not build.
 
 **Additive by construction.** A corpus that is missing, unreadable or
 carrying the wrong schema logs one line and leaves sloth running with no
@@ -162,6 +161,94 @@ appear four times in a References block and read as four citations.
 A `--report` regenerated tomorrow must be byte-identical to today's, and
 relevance scores shift as the corpus grows.
 
+## The MCP server
+
+`sloth-research-mcp` exposes the same four functions over MCP, for
+consumers that are not sloth. It is not part of `all`:
+
+```
+make research-mcp
+./sloth-research-mcp --db research.db
+```
+
+Register it with an MCP client:
+
+```json
+{ "mcpServers": {
+    "sloth-research": {
+      "command": "/path/to/sloth/sloth-research-mcp",
+      "args": ["--db", "/path/to/sloth/research.db"]
+    } } }
+```
+
+Four tools: `research_search`, `research_for_alert`, `research_cite`,
+`research_recent`. Their descriptions say explicitly that `for_alert`
+wants the enum name and not the display title, because that distinction
+already cost three bugs on sloth's own side of the same query layer.
+
+**A missing corpus is not a startup failure.** The server still answers
+`initialize` and `tools/list`, and every tool call reports why it has
+nothing. A client that cannot start its server sees a connection error,
+which says far less than "the corpus is not built".
+
+### Where the code lives, and why it is split
+
+| file | what it owns |
+|---|---|
+| `research/mcp/json.c` | reading JSON |
+| `research/mcp/mcp.c` | one request → one response |
+| `research/mcp/main.c` | the pipe, and nothing else |
+
+`mcp_handle()` is a pure function of (corpus, request, clock), so the
+protocol has real tests. A dispatcher that only existed inside a read
+loop could only be tested by spawning a process and talking to it —
+slower, flakier, and it catches less.
+
+### The JSON reader
+
+This tree had no JSON *parser*: `jsonl.c` writes and cannot read. The
+two options were vendoring one into a codebase that has carried no
+third-party source, or scanning the raw text for `"key":`.
+
+The scan is wrong in a way that matters here. A request whose
+*arguments* contain the string `"name"` — a search for `alert "name"
+field`, say — would have its tool name read out of the user's own query.
+Input arriving over a pipe from something other than us is exactly where
+that stops being hypothetical. So: a bounded recursive-descent parser,
+no allocation, ~300 lines, with the subset MCP needs.
+
+What it deliberately refuses rather than accepts loosely:
+
+- `\u` escapes above U+00FF — refused, not folded to `?` or split into
+  a broken byte pair.
+- Raw control characters inside strings. The transport is
+  newline-delimited, so a raw newline would let one request masquerade
+  as two.
+- Leading zeros, `+1`, `nan`, `inf` — all of which `strtod` accepts and
+  JSON does not.
+- Trailing content after the root value. `{...} {...}` on one line means
+  the framing already went wrong upstream.
+- Anything past the node, text or depth caps — an error, never a
+  truncation.
+
+A half-parsed request answered as if it were whole is the failure mode
+worth engineering against.
+
+### Errors: protocol vs tool
+
+| situation | shape |
+|---|---|
+| unparseable, no method, unknown method, unknown tool | JSON-RPC `error` |
+| missing argument, corpus unavailable | `result` with `isError: true` |
+| nothing matched | `result` with `isError: false` |
+
+The middle row is the MCP convention and it is the useful one: the model
+sees the reason and can correct itself, instead of the transport
+failing. The last row matters just as much — reporting "no results" as a
+failure would train a client to retry a query that will never succeed.
+
+A message with no `id` is a notification and draws no reply at all.
+
 ## `--report` References
 
 With a corpus loaded, the report gains a References section listing the
@@ -187,10 +274,9 @@ At slice 2 that is most of them: 11 of 47 kinds are cited.
 
 ## What is not here yet
 
-- **The MCP server.** `sloth-research-mcp` over stdio, exposing the
-  four operations to external consumers. The query layer it wraps is
-  done and tested; what remains is the JSON-RPC transport.
 - **Slice 3** — a Research view.
+- **Coverage.** 11 of 47 alert kinds have a document. The guard stays
+  warning-only until the rest are written.
 
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the
 quit key, checked before the view switch as an absolute global. `c` and

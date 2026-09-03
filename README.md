@@ -111,6 +111,7 @@ for in normal vs anomalous traffic.
 - **`sloth --no-color`** — keep drawing but emit no colour escape sequences. Also honoured via the `NO_COLOR` environment variable ([no-color.org](https://no-color.org)). Useful over a serial console or when capturing a session to a file.
 
 - **`sloth --with-research research.db`** — load the research corpus so `--report` cites the sources behind each alert that fired. Additive: an unreadable or missing corpus logs one line and sloth runs without it. See [the corpus notes](docs/wiki/research-corpus.md).
+- **`make research-mcp`** — build `sloth-research-mcp`, an MCP server over the same corpus for consumers that are not sloth. Not part of `all`; the monitor links the query layer directly rather than talking JSON-RPC to its own data file.
 
 - **`sloth --version`** (or `-V`) — print the version and exit. The TUI banner shows it too, but that needs the interface running, which is no use on a headless sensor or in a deployment script checking what it just rolled out.
 

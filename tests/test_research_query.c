@@ -323,6 +323,28 @@ static void test_max_is_respected(void) {
     rq_close(h);
 }
 
+static void test_recent_is_bounded_above_too(void) {
+    /* Found by the MCP tests, fixed here. The window was open-ended
+     * above, so `days=1` evaluated at a date before the corpus was
+     * written returned every document in it — the cutoff was below all
+     * of them. In production `now` is the real clock and nothing is
+     * dated ahead of it, which is exactly why this would never have
+     * shown up until a retrieved field was wrong or a clock moved, and
+     * then it would have made the weekly brief silently complete. */
+    rq_handle_t *h = corpus();
+    ASSERT(h != NULL);
+    if (!h) return;
+    rq_hit_t hits[RQ_MAX_HITS];
+    ASSERT_EQ(rq_recent(h, 1, 1000000000 /* 2001-09-09 */,
+                        hits, RQ_MAX_HITS), 0);
+    /* And a window that does span the corpus still works, so the fix
+     * bounded rather than broke it. */
+    ASSERT_GT(rq_recent(h, 365, 1798761600 /* 2027-01-01 */,
+                        hits, RQ_MAX_HITS), 0);
+    rq_close(h);
+}
+
+
 void run_research_query_tests(void) {
     TEST_SUITE("research query: open and degrade (#73)");
     RUN_TEST(test_open_and_close);
@@ -353,4 +375,5 @@ void run_research_query_tests(void) {
     TEST_SUITE("research query: recent (#73)");
     RUN_TEST(test_recent_respects_the_window);
     RUN_TEST(test_recent_defaults_a_bad_window);
+    RUN_TEST(test_recent_is_bounded_above_too);
 }

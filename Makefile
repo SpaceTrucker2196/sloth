@@ -409,6 +409,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_research_corpus.c   \
             research/query.c               \
             tests/test_research_query.c    \
+            research/mcp/json.c            \
+            research/mcp/mcp.c             \
+            tests/test_research_mcp.c      \
             src/wifi_snapshot.c            \
             tests/test_wifi_snapshot.c     \
             src/wifi_assess.c              \
@@ -500,6 +503,18 @@ research-index:
 	$(CC) $(CFLAGS) -Iresearch/ingest -o research_ingest $(RESEARCH_SRCS) -lsqlite3
 	./research_ingest research research.db
 
+# The MCP server is a separate binary on purpose. sloth links the query
+# layer directly (see research/query.h); this exists for the external
+# consumers MCP is actually for, and keeping it out of `all` means the
+# monitor never grows a JSON-RPC surface it does not use.
+MCP_SRCS = research/mcp/main.c research/mcp/mcp.c research/mcp/json.c \
+           research/query.c
+
+.PHONY: research-mcp
+research-mcp:
+	$(CC) $(CFLAGS) -DWITH_SQLITE -Iinclude -Iresearch -Iresearch/mcp \
+	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
+
 .PHONY: test
 test: $(TEST_BIN)
 	./$(TEST_BIN)
@@ -508,10 +523,12 @@ test: $(TEST_BIN)
 # new struct field, a bumped constant — leaves the test binary stale,
 # and the suite reports on code that is no longer there. That is worse
 # than a slow build: it looks like a passing test.
-TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h                        src/platform/*.h tests/*.h)
+TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h \
+                       src/platform/*.h tests/*.h research/*.h \
+                       research/ingest/*.h research/mcp/*.h)
 
 $(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
@@ -525,7 +542,7 @@ mutate:
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 clean:
-	rm -f $(OBJS) $(TARGET) $(TEST_BIN)
+	rm -f $(OBJS) $(TARGET) $(TEST_BIN) research_ingest sloth-research-mcp
 
 install: $(TARGET)
 	install -m 755 $(TARGET) $(PREFIX)/bin/$(TARGET)
