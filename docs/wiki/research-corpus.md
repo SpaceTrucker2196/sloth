@@ -109,14 +109,88 @@ failing in the same commit that closes it — the same shape as
    exist, and the coverage line will tick up.
 4. Commit both the document and the regenerated `research.db`.
 
+## Querying it
+
+`research/query.c` implements the four operations #73 specifies —
+`search`, `for_alert`, `cite`, `recent` — as a **library**, not only as
+an MCP server. sloth links it directly:
+
+```
+sloth --with-research research.db
+```
+
+That is a departure from the issue, which has sloth spawn a subprocess
+and speak JSON-RPC to ask about its own data file. One implementation,
+two front doors: sloth links it, and the MCP server (still to come) is a
+transport wrapper for the external consumers MCP is actually for —
+Claude sessions and scheduled tasks querying a corpus they did not
+build.
+
+**Additive by construction.** A corpus that is missing, unreadable or
+carrying the wrong schema logs one line and leaves sloth running with no
+research context:
+
+```
+sloth: research corpus unavailable: cannot open /nope/x.db — continuing without it
+```
+
+Every entry point tolerates a NULL handle and returns zero results, and
+the no-SQLite build stubs the whole layer to no-ops. Nothing in the
+capture path may depend on research context.
+
+### Two things the tokenizer forces
+
+**Alert-kind lookup cannot use FTS5 MATCH.** `unicode61` splits on
+underscores, so `alert_kinds MATCH 'ALERT_TYPE_EVIL_TWIN'` needs only
+the tokens *alert*, *type*, *evil*, *twin* to be present — and a
+document naming **only** `ALERT_TYPE_EVIL_TWIN_PROXIMITY` contains every
+one. The References block for one alert would cite a document about a
+different one, which is worse than citing nothing because it looks
+right. `rq_for_alert` and `rq_cite` use delimiter-wrapped `LIKE`
+against the stored list instead, which is exact.
+
+Free-text `search` still goes through MATCH — fuzzy is the point there.
+Only its *filter* is exact.
+
+**`for_alert` returns documents, not sections.** The index stores a row
+per heading, so a document with four matching sections would otherwise
+appear four times in a References block and read as four citations.
+
+### Ordering is stable on purpose
+
+`for_alert` and `cite` order by retrieved date and path, never by BM25.
+A `--report` regenerated tomorrow must be byte-identical to today's, and
+relevance scores shift as the corpus grows.
+
+## `--report` References
+
+With a corpus loaded, the report gains a References section listing the
+sources behind each alert that fired:
+
+```markdown
+## References
+
+**BTM_ABUSE**
+
+- [IEEE 802.11-2020 §9.6.14 — BSS Transition Management](https://…) — retrieved 2026-08-31
+```
+
+The lookup key is `alert_type_name()`, **not** the alert's display
+title. Titles are capped at `ALERT_TITLE_LEN` and abbreviated to fit —
+`BLOCKACK_ATK` for `ALERT_TYPE_BLOCKACK_ATTACK`, `PEAP_NO_CERT` for
+`ALERT_TYPE_PEAP_NO_SERVER_CERT` — so keying on them silently loses
+citations for every alert whose title was shortened, and a partly-empty
+References block looks exactly like a complete one.
+
+An alert with no documents emits nothing rather than an empty heading.
+At slice 2 that is most of them: 11 of 47 kinds are cited.
+
 ## What is not here yet
 
-Slice 1 is the corpus and the index. Still to come per #73:
-
-- **Slice 2** — `sloth-research-mcp`, exposing `research.search`,
-  `research.cite`, `research.for_alert` and `research.recent` over
-  stdio, plus a `--with-research` flag.
-- **Slice 3** — a Research view and a References block in `--report`.
+- **The MCP server.** `sloth-research-mcp` over stdio, exposing the
+  four operations to external consumers. The query layer it wraps is
+  done and tested; what remains is the JSON-RPC transport.
+- **Slice 3** — a Research view.
 
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the
 quit key, checked before the view switch as an absolute global. `c` and

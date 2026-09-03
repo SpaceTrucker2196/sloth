@@ -56,6 +56,7 @@
 #include "ctrl_frames.h"
 #include "mle.h"
 #include "captive_portal.h"
+#include "query.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -150,6 +151,12 @@ static void headless_wait(int timeout_ms, int wake_fd) {
     FD_SET(wake_fd, &rfds);
     select(wake_fd + 1, &rfds, NULL, NULL, &tv);
 }
+
+/* The research corpus (#73), NULL when --with-research was not given
+ * or the corpus could not be opened. Passed explicitly to the one
+ * consumer that wants it rather than read as a global — see the note on
+ * posture_render_md. */
+static rq_handle_t *g_research = NULL;
 
 static void poll_data(sloth_state_t *s) {
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
@@ -443,6 +450,7 @@ static void print_usage(const char *argv0) {
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
             "       [--headless] [--no-color] [--version]\n"
+            "       [--with-research research.db]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -544,6 +552,10 @@ static void print_usage(const char *argv0) {
             "  --version, -V      print the version and exit. The banner\n"
             "                     shows it too, but that needs the TUI\n"
             "                     running — no use on a headless sensor.\n"
+            "  --with-research FILE\n"
+            "                     load the research corpus for per-alert\n"
+            "                     citations in --report. Additive: an\n"
+            "                     unreadable corpus warns and continues.\n"
             "  --known-mac MAC    add MAC to the known-device roster\n"
             "                     (repeatable, max 512).\n"
             "  --known-macs FILE  load a roster: one MAC per line, #\n"
@@ -676,6 +688,15 @@ int main(int argc, char **argv) {
             db_set_retain_days(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
             db_set_max_mb(atoi(argv[++i]));
+        } else if (!strcmp(argv[i], "--with-research") && i + 1 < argc) {
+            /* Additive by construction (#73): a corpus that is missing,
+             * unreadable or carrying the wrong schema logs a warning
+             * and leaves sloth running with no research context. The
+             * capture path must never depend on it. */
+            g_research = rq_open(argv[++i]);
+            if (!g_research)
+                fprintf(stderr, "sloth: research corpus unavailable: %s "
+                                "— continuing without it\n", rq_open_error());
         } else if (!strcmp(argv[i], "--version") ||
                    !strcmp(argv[i], "-V")) {
             /* The version has only ever been visible in the TUI banner,
@@ -890,7 +911,7 @@ int main(int argc, char **argv) {
     if (report_md) {
         FILE *fp = fopen(report_md, "w");
         if (fp) {
-            posture_render_md(fp, &g_state, session_start);
+            posture_render_md(fp, &g_state, session_start, g_research);
             fclose(fp);
             fprintf(stderr, "sloth: posture report -> %s\n", report_md);
         } else {

@@ -232,6 +232,48 @@ const char *alert_technique(alert_type_t type) {
     return "";
 }
 
+/* Enum name for an alert type. Generated from the same list as the
+ * enum via X-macro-free duplication, which is a wart — but the
+ * alternative is either an X-macro rewrite of a header a dozen files
+ * include, or deriving the name from the display title, which does not
+ * work: titles are abbreviated to fit ALERT_TITLE_LEN.
+ *
+ * The test suite asserts every type has a non-empty name, so a new
+ * alert that forgets an entry here fails rather than silently losing
+ * its citations. */
+const char *alert_type_name(alert_type_t type) {
+#define N(x) case x: return #x
+    switch (type) {
+    N(ALERT_TYPE_PORT_SCAN);            N(ALERT_TYPE_DEAUTH_FLOOD);
+    N(ALERT_TYPE_NXDOMAIN_BURST);       N(ALERT_TYPE_THREAT_DOMAIN);
+    N(ALERT_TYPE_THREAT_IP);            N(ALERT_TYPE_BEACONING);
+    N(ALERT_TYPE_DGA_DOMAIN);           N(ALERT_TYPE_ARP_SPOOF);
+    N(ALERT_TYPE_ROGUE_DHCP);           N(ALERT_TYPE_ROGUE_RA);
+    N(ALERT_TYPE_SMB1_USE);             N(ALERT_TYPE_KERB_PREAUTH_BURST);
+    N(ALERT_TYPE_LDAP_SEARCH_FLOOD);    N(ALERT_TYPE_BGP_NOTIFICATION_BURST);
+    N(ALERT_TYPE_SSH_BRUTE_FORCE);      N(ALERT_TYPE_RDP_BRUTE_FORCE);
+    N(ALERT_TYPE_SNMP_COMMUNITY_BRUTE); N(ALERT_TYPE_MQTT_BROKER_BRUTE);
+    N(ALERT_TYPE_EVIL_TWIN);            N(ALERT_TYPE_EVIL_TWIN_PROXIMITY);
+    N(ALERT_TYPE_KARMA_AP);             N(ALERT_TYPE_DNS_TUNNEL);
+    N(ALERT_TYPE_PROBE_FLOOD);          N(ALERT_TYPE_ATTACK_TOOL_UA);
+    N(ALERT_TYPE_ATTACK_PATH);          N(ALERT_TYPE_WEAK_TLS);
+    N(ALERT_TYPE_NO_MONITOR_MODE);      N(ALERT_TYPE_CLEARTEXT_CRED);
+    N(ALERT_TYPE_BEACON_FLOOD);         N(ALERT_TYPE_AUTH_FLOOD);
+    N(ALERT_TYPE_SSID_CONFUSION);       N(ALERT_TYPE_MGMT_FUZZ);
+    N(ALERT_TYPE_ROGUE_RADIUS);         N(ALERT_TYPE_ICMP_TUNNEL);
+    N(ALERT_TYPE_MY_NETWORK_RECON);     N(ALERT_TYPE_RECURRING_TRANSIT);
+    N(ALERT_TYPE_UNKNOWN_DEVICE);       N(ALERT_TYPE_RF_DEGRADED);
+    N(ALERT_TYPE_ASSOC_FLOOD);          N(ALERT_TYPE_BTM_ABUSE);
+    N(ALERT_TYPE_WPA_DOWNGRADE);        N(ALERT_TYPE_PEAP_NO_SERVER_CERT);
+    N(ALERT_TYPE_CSA_ABUSE);            N(ALERT_TYPE_RRM_SURVEY_ABUSE);
+    N(ALERT_TYPE_RTS_FLOOD);            N(ALERT_TYPE_CAPTIVE_PORTAL);
+    N(ALERT_TYPE_BLOCKACK_ATTACK);
+    case ALERT_TYPE_COUNT: break;
+    }
+#undef N
+    return "";
+}
+
 /* ── Rules ───────────────────────────────────────────────── */
 
 static void rule_port_scan(const sloth_state_t *s, time_t now) {

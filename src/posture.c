@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "posture.h"
+#include "query.h"
 #include "beacon_snoop.h"
 #include "db.h"
 #include "alerts.h"
@@ -60,7 +61,8 @@ static int bucketize_techniques(const sloth_state_t *s,
     return n;
 }
 
-int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
+int posture_render_md(FILE *out, const sloth_state_t *s,
+                      time_t session_start, struct rq_handle *research) {
     if (!out || !s) return 0;
     time_t now = time(NULL);
     char ts_start[32], ts_end[32];
@@ -145,6 +147,50 @@ int posture_render_md(FILE *out, const sloth_state_t *s, time_t session_start) {
             for (int i = 0; i < wn; i++)
                 fprintf(out, "| %s | %s | %s |\n",
                         wf[i].severity, wf[i].title, wf[i].evidence);
+            fprintf(out, "\n");
+        }
+    }
+
+    /* Per-alert references from the research corpus (#73). Populated
+     * only when --with-research supplied a readable corpus; absent
+     * otherwise, which is the additive contract — a report without
+     * citations is the report sloth produced before this existed. */
+    if (research && s->alert_count > 0) {
+        char seen[MAX_ALERTS][40];
+        int  seen_n = 0;
+        int  printed_header = 0;
+
+        for (int i = 0; i < s->alert_count; i++) {
+            const alert_t *a = &s->alerts[i];
+            /* alert_t carries the technique and the title, not the enum
+             * name, so the lookup key is the title — which is what the
+             * corpus frontmatter would have to name anyway for a human
+             * to connect the two. */
+            const char *kind = alert_type_name(a->type);
+            if (!kind[0]) continue;
+
+            int dup = 0;
+            for (int k = 0; k < seen_n; k++)
+                if (!strcmp(seen[k], kind)) { dup = 1; break; }
+            if (dup) continue;
+            if (seen_n < MAX_ALERTS)
+                snprintf(seen[seen_n++], sizeof(seen[0]), "%s", kind);
+
+            rq_hit_t hits[RQ_MAX_HITS];
+            int n = rq_for_alert(research, kind, hits, RQ_MAX_HITS);
+            if (n <= 0) continue;
+
+            if (!printed_header) {
+                fprintf(out, "## References\n\n");
+                fprintf(out, "Sources backing the alerts above, from the "
+                             "research corpus.\n\n");
+                printed_header = 1;
+            }
+            fprintf(out, "**%s**\n\n", a->title);
+            for (int k = 0; k < n; k++)
+                fprintf(out, "- [%s](%s) — retrieved %s\n",
+                        hits[k].title[0] ? hits[k].title : hits[k].path,
+                        hits[k].source_url, hits[k].retrieved);
             fprintf(out, "\n");
         }
     }

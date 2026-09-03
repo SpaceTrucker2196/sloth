@@ -192,6 +192,11 @@ ifeq ($(WITH_SQLITE),1)
     CFLAGS  += -DWITH_SQLITE
     LDFLAGS += -lsqlite3
     SRCS    += src/db.c
+    # The research corpus (#73) is an FTS5 index, so it goes wherever
+    # SQLite goes. query.h stubs to no-ops without it, and every caller
+    # already tolerates a NULL handle — the additive contract means the
+    # no-SQLite build simply never has research context.
+    SRCS    += research/query.c
 endif
 
 SRCS += src/pcap_write.c
@@ -213,7 +218,7 @@ $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) -Iinclude -Isrc -c -o $@ $<
+	$(CC) $(CFLAGS) -Iinclude -Isrc -Iresearch -c -o $@ $<
 
 # Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
@@ -402,6 +407,8 @@ TEST_SRCS = tests/main_test.c          \
             research/ingest/research_ingest.c \
             tests/test_research_ingest.c   \
             tests/test_research_corpus.c   \
+            research/query.c               \
+            tests/test_research_query.c    \
             src/wifi_snapshot.c            \
             tests/test_wifi_snapshot.c     \
             src/wifi_assess.c              \
@@ -504,7 +511,7 @@ test: $(TEST_BIN)
 TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h                        src/platform/*.h tests/*.h)
 
 $(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
+	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
