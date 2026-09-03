@@ -92,7 +92,7 @@ whole-token: `ALERT_TYPE_ROGUE` must not pass by being a prefix of
 
 **Warning-only — every alert kind has at least one document.** This is
 the direction #73 ultimately wants, and it needs the content pass first.
-At slice 1 that is **11 of 47** kinds cited. Failing on it now would
+At the time of writing that is **13 of 49** kinds cited. Failing on it now would
 mean a red suite until the corpus is finished, which turns a guard into
 something to be worked around rather than satisfied.
 
@@ -270,12 +270,12 @@ citations for every alert whose title was shortened, and a partly-empty
 References block looks exactly like a complete one.
 
 An alert with no documents emits nothing rather than an empty heading.
-At slice 2 that is most of them: 11 of 47 kinds are cited.
+That is most of them: 13 of 49 kinds are cited.
 
 ## What is not here yet
 
 - **Slice 3** — a Research view.
-- **Coverage.** 11 of 47 alert kinds have a document. The guard stays
+- **Coverage.** 13 of 49 alert kinds have a document. The guard stays
   warning-only until the rest are written.
 
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the

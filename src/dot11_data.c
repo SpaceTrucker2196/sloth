@@ -78,3 +78,52 @@ int dot11_data_payload(const uint8_t *dot11, int len,
     if (ethertype)   *ethertype   = (uint16_t)((llc[6] << 8) | llc[7]);
     return DOT11_DATA_OK;
 }
+
+int dot11_data_addrs(const uint8_t *dot11, int len,
+                     uint8_t bssid[6], uint8_t sa[6], uint8_t da[6]) {
+    if (!dot11 || len < 24) return 0;
+    if (((dot11[0] >> 2) & 0x03) != 2) return 0;
+
+    int to_ds   =  dot11[1]       & 0x01;
+    int from_ds = (dot11[1] >> 1) & 0x01;
+    const uint8_t *a1 = dot11 + 4, *a2 = dot11 + 10, *a3 = dot11 + 16;
+
+    if (to_ds && from_ds) {
+        /* addr4 sits after the header's fixed part; sa is only readable
+         * when the frame is long enough to carry it. */
+        if (da) memcpy(da, a3, 6);
+        if (sa) {
+            if (len < 30) return 0;
+            memcpy(sa, dot11 + 24, 6);
+        }
+        return DOT11_ADDRS_NO_BSSID;
+    }
+    if (from_ds) {                       /* AP -> STA */
+        if (da)    memcpy(da,    a1, 6);
+        if (bssid) memcpy(bssid, a2, 6);
+        if (sa)    memcpy(sa,    a3, 6);
+    } else if (to_ds) {                  /* STA -> AP */
+        if (bssid) memcpy(bssid, a1, 6);
+        if (sa)    memcpy(sa,    a2, 6);
+        if (da)    memcpy(da,    a3, 6);
+    } else {                             /* IBSS */
+        if (da)    memcpy(da,    a1, 6);
+        if (sa)    memcpy(sa,    a2, 6);
+        if (bssid) memcpy(bssid, a3, 6);
+    }
+    return 1;
+}
+
+int dot11_is_group_addr(const uint8_t addr[6]) {
+    return addr ? (addr[0] & 0x01) : 0;
+}
+
+int dot11_frag_num(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 24) return -1;
+    return dot11[22] & 0x0f;
+}
+
+int dot11_more_frags(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 2) return -1;
+    return (dot11[1] >> 2) & 0x01;
+}

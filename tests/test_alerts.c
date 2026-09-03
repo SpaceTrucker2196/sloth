@@ -1,6 +1,7 @@
 #include <string.h>
 #include <time.h>
 #include "runner.h"
+#include "fragattack.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "karma_detect.h"
@@ -4041,6 +4042,98 @@ static void test_karma_names_no_tool_while_the_table_is_empty(void) {
     ASSERT(strstr(s.alerts[idx].detail, "[") == NULL);
 }
 
+/* ── FragAttacks (#75 slice 1) ───────────────────────────── */
+
+/* The detector module is fed frames, not state fields, so these seed it
+ * the way the capture path does. Downlink (FromDS) frame: addr1 = DA,
+ * addr2 = BSSID, addr3 = SA. */
+static int frag_frame(uint8_t *f, uint8_t fc1, const uint8_t *da,
+                      const uint8_t *bssid, const uint8_t *sa,
+                      int frag_num, uint16_t ethertype) {
+    memset(f, 0, 128);
+    f[0] = 2 << 2;
+    f[1] = (uint8_t)(fc1 | 0x02);            /* FromDS */
+    memcpy(f + 4, da, 6); memcpy(f + 10, bssid, 6); memcpy(f + 16, sa, 6);
+    f[22] = (uint8_t)(frag_num & 0x0f);
+    if (fc1 & 0x40) return 40;               /* protected: body is ciphertext */
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = (uint8_t)(ethertype >> 8);
+    f[31] = (uint8_t)(ethertype & 0xff);
+    return 36;
+}
+
+static const uint8_t FA_BSS[6] = { 0x02, 0xaa, 0xbb, 0, 0, 1 };
+static const uint8_t FA_STA[6] = { 0x02, 0xaa, 0xbb, 0, 0, 0x10 };
+static const uint8_t FA_AP[6]  = { 0x02, 0xaa, 0xbb, 0, 0, 0x20 };
+static const uint8_t FA_BC[6]  = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+static void test_frag_plaintext_fires(void) {
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    int n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 0, 0);  /* key install */
+    frag_observe(f, n, 1000);
+    n = frag_frame(f, 0, FA_STA, FA_BSS, FA_AP, 0, 0x0800);
+    frag_observe(f, n, 1001);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* A station whose encrypted traffic we have already seen has no
+         * legitimate reason to send one plaintext non-EAPOL frame, so
+         * this is CRIT on the first, not on a threshold. */
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-26140") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "02:aa:bb:00:00:01") != NULL);
+    }
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_BCAST), -1);
+    frag_clear();
+}
+
+static void test_frag_bcast_fires(void) {
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    int n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 0, 0);
+    frag_observe(f, n, 1000);
+    n = frag_frame(f, 0x04, FA_BC, FA_BSS, FA_AP, 0, 0x0800);  /* MoreFrag */
+    frag_observe(f, n, 1001);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_BCAST);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-26145") != NULL);
+    }
+    /* The two must not both fire on one frame, or the alert names the
+     * wrong CVE and sends the operator to the wrong advisory. */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT), -1);
+    frag_clear();
+}
+
+static void test_frag_quiet_on_an_open_network(void) {
+    /* Every frame unprotected, none of it an attack. The case that
+     * decides whether this detector is usable at all. */
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    for (int k = 0; k < 10; k++) {
+        int n = frag_frame(f, 0, FA_STA, FA_BSS, FA_AP, 0, 0x0800);
+        frag_observe(f, n, 1000 + k);
+        n = frag_frame(f, 0x04, FA_BC, FA_BSS, FA_AP, 0, 0x0800);
+        frag_observe(f, n, 1000 + k);
+    }
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_BCAST), -1);
+    frag_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -4295,4 +4388,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+
+    TEST_SUITE("alerts: FragAttacks (#75)");
+    RUN_TEST(test_frag_plaintext_fires);
+    RUN_TEST(test_frag_bcast_fires);
+    RUN_TEST(test_frag_quiet_on_an_open_network);
 }

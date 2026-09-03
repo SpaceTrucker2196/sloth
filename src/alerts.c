@@ -13,6 +13,7 @@
 #include "tool_fingerprint.h"
 #include "karma_detect.h"
 #include "captive_portal.h"
+#include "fragattack.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
 #include "dga.h"
@@ -226,6 +227,11 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
     case ALERT_TYPE_RTS_FLOOD:              return "T1498";       /* Network DoS — the channel reserved out from under everyone */
     case ALERT_TYPE_CAPTIVE_PORTAL:         return "T1557";       /* AiTM — the connectivity check answered by the attacker */
+    /* FragAttacks (Vanhoef, USENIX Security 2021). Injecting frames
+     * into a session whose key the attacker does not hold is AiTM; the
+     * plaintext frames it produces are also the sniffable artefact. */
+    case ALERT_TYPE_FRAG_PLAINTEXT:         return "T1557";       /* CVE-2020-26140 / -26143 */
+    case ALERT_TYPE_FRAG_BCAST:             return "T1557";       /* CVE-2020-26145 */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -267,7 +273,8 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_WPA_DOWNGRADE);        N(ALERT_TYPE_PEAP_NO_SERVER_CERT);
     N(ALERT_TYPE_CSA_ABUSE);            N(ALERT_TYPE_RRM_SURVEY_ABUSE);
     N(ALERT_TYPE_RTS_FLOOD);            N(ALERT_TYPE_CAPTIVE_PORTAL);
-    N(ALERT_TYPE_BLOCKACK_ATTACK);
+    N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
+    N(ALERT_TYPE_FRAG_BCAST);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -677,6 +684,52 @@ static void rule_captive_portal(const sloth_state_t *s, time_t now) {
                           ? ALERT_SEV_WARN : ALERT_SEV_CRIT;
         fire(ALERT_TYPE_CAPTIVE_PORTAL, sev,
              "CAPTIVE_PORTAL", detail, key, NULL, 0, now);
+    }
+}
+
+/* FragAttacks slice 1 — issue #75. Reads fragattack.c directly rather
+ * than a snapshot on sloth_state_t, the same shape rule_rts_flood uses
+ * for ctrl_frames.c: there is no view yet, and copying a table into
+ * state so one rule can read it is plumbing with no reader. */
+static void rule_fragattack(const sloth_state_t *s, time_t now) {
+    (void)s;
+    for (int i = 0; i < frag_bss_count(); i++) {
+        const frag_bss_t *b = frag_bss_at(i);
+        if (!b) continue;
+
+        char bss[20], sa[20], da[20];
+        mac_to_str(b->bssid,   bss, sizeof(bss));
+        mac_to_str(b->last_sa, sa,  sizeof(sa));
+        mac_to_str(b->last_da, da,  sizeof(da));
+
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+
+        if (b->plaintext_unicast > 0) {
+            snprintf(key, sizeof(key), "fragplain:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u unprotected data frame%s on %.17s after key install"
+                     " - last %.17s -> %.17s (CVE-2020-26140/-26143)",
+                     b->plaintext_unicast,
+                     b->plaintext_unicast == 1 ? "" : "s", bss, sa, da);
+            /* CRIT on the first one. This is not a threshold detector:
+             * a station whose encrypted traffic we have already seen
+             * has no legitimate reason to send one plaintext non-EAPOL
+             * frame, so the count is evidence volume, not confidence. */
+            fire(ALERT_TYPE_FRAG_PLAINTEXT, ALERT_SEV_CRIT,
+                 "FRAG_PLAINTEXT", detail, key, NULL, 0, now);
+        }
+
+        if (b->plaintext_bcast_frag > 0) {
+            snprintf(key, sizeof(key), "fragbcast:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u plaintext broadcast fragment%s on %.17s"
+                     " - broadcast reassembly is not permitted in an RSN"
+                     " (CVE-2020-26145)",
+                     b->plaintext_bcast_frag,
+                     b->plaintext_bcast_frag == 1 ? "" : "s", bss);
+            fire(ALERT_TYPE_FRAG_BCAST, ALERT_SEV_CRIT,
+                 "FRAG_BCAST", detail, key, NULL, 0, now);
+        }
     }
 }
 
@@ -2719,6 +2772,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rrm_survey_abuse(s, now);
     rule_rts_flood(s, now);
     rule_captive_portal(s, now);
+    rule_fragattack(s, now);
     rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);

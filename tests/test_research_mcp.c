@@ -522,8 +522,18 @@ static void test_output_is_never_partially_written(void) {
         "{\"name\":\"research_search\",\"arguments\":{\"query\":\"wpa3\"}}}";
     rq_handle_t *h = corpus();
     char buf[MCP_OUT_MAX];
+
+    /* Sweep up to just past the response's natural length rather than a
+     * fixed 1200: the corpus grows, and a hard-coded ceiling turns
+     * "every document about wpa3" into a failing test the day someone
+     * writes another one. Adding a document must never break a test
+     * about buffer arithmetic. */
+    ASSERT_EQ(mcp_handle(h, req, 1788000000, buf, sizeof(buf)), MCP_OK);
+    size_t natural = strlen(buf);
+    ASSERT(natural > 0 && natural + 16 < sizeof(buf));
+
     int seen_ok = 0, seen_over = 0;
-    for (size_t cap = 1; cap <= 1200; cap++) {
+    for (size_t cap = 1; cap <= natural + 16; cap++) {
         buf[0] = '\0';
         mcp_result_t r = mcp_handle(h, req, 1788000000, buf, cap);
         if (r == MCP_OVERFLOW) { seen_over = 1; continue; }

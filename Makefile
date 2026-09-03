@@ -199,6 +199,7 @@ ifeq ($(WITH_SQLITE),1)
     SRCS    += research/query.c
 endif
 
+SRCS += src/fragattack.c
 SRCS += src/pcap_write.c
 SRCS += src/geo.c
 SRCS += src/scan.c
@@ -404,6 +405,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_tool_fingerprint.c  \
             src/captive_portal.c           \
             tests/test_captive_portal.c    \
+            src/fragattack.c               \
+            tests/test_fragattack.c        \
             research/ingest/research_ingest.c \
             tests/test_research_ingest.c   \
             tests/test_research_corpus.c   \

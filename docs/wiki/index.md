@@ -32,6 +32,9 @@ source material.
 - [[captive-portal]] — connectivity-check interception (#69): the
   rogue portal that answers your OS's probe, and the three
   independent signals that catch it.
+- [[fragattacks]] — the Vanhoef 2021 family (#75): which two of the
+  twelve are passively observable, why the A-MSDU detector as usually
+  described cannot work, and why the gate is per-station and ordered
 - [[tool-fingerprints]] — naming the attacker's tool from passive
   beacon characteristics (#68). Ships with an **empty** signature
   table, and explains why that is the honest state.

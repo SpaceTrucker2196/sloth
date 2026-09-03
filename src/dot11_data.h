@@ -59,4 +59,47 @@ int dot11_data_header_len(const uint8_t *dot11, int len);
 int dot11_data_payload(const uint8_t *dot11, int len,
                        int *payload_off, uint16_t *ethertype);
 
+/* Which of the three (or four) address fields is the BSSID, the source
+ * and the destination — issue #75.
+ *
+ * This is the table every 802.11 detector needs and every one of them
+ * gets wrong at least once, because the fields *move* with ToDS/FromDS
+ * (§9.3.2.1 Table 9-26):
+ *
+ *   ToDS FromDS   addr1   addr2   addr3   addr4
+ *     0     0      DA      SA     BSSID    --      IBSS
+ *     0     1      DA     BSSID    SA      --      AP -> STA
+ *     1     0     BSSID    SA      DA      --      STA -> AP
+ *     1     1      RA      TA      DA      SA      WDS / mesh
+ *
+ * Reading addr3 as the BSSID unconditionally — the shape that looks
+ * right because it holds for a beacon — attributes every downlink frame
+ * to its *sender* instead of its AP, which silently merges every
+ * station on the network into one bogus BSS.
+ *
+ * The four-address case has no single BSSID: a WDS frame crosses two
+ * of them. Reported as such rather than guessed, so a caller that needs
+ * one can skip the frame instead of inventing an attribution.
+ *
+ * Any output may be NULL. Returns 1 when every requested field was
+ * filled, 0 when the frame is too short or is not a data frame, and
+ * DOT11_ADDRS_NO_BSSID when the frame is four-address (sa/da are still
+ * written; bssid is not). */
+#define DOT11_ADDRS_NO_BSSID  2
+
+int dot11_data_addrs(const uint8_t *dot11, int len,
+                     uint8_t bssid[6], uint8_t sa[6], uint8_t da[6]);
+
+/* Group-addressed (broadcast or multicast): the I/G bit is the low bit
+ * of the first octet (§9.2.4.3.2). Named because `addr[0] & 1` at a
+ * call site reads like a typo. */
+int dot11_is_group_addr(const uint8_t addr[6]);
+
+/* Fragment number from Sequence Control, and whether More Fragments is
+ * set. Sequence Control is always at offset 22 regardless of the QoS,
+ * HT-Control and addr4 additions that follow it. Returns -1 if `len`
+ * cannot hold it. */
+int dot11_frag_num(const uint8_t *dot11, int len);
+int dot11_more_frags(const uint8_t *dot11, int len);
+
 #endif /* DOT11_DATA_H */

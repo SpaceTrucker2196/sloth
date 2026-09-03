@@ -15,6 +15,7 @@
 #include "deauth_snoop.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "fragattack.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "auth_track.h"
@@ -267,12 +268,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* The detailed per-type parsers below assume a full management header. */
     if (dot11_len < 24) return;
 
-    /* Data frames (type 2): only of interest for EAPOL-Key extraction.
-     * eapol_observe_dot11 internally rejects anything that's not an
-     * EAPOL-Key frame, so the cost of unconditional dispatch is just
-     * the LLC SNAP check inside. */
+    /* Data frames (type 2). eapol_observe_dot11 rejects anything that
+     * is not an EAPOL-Key frame internally, so the cost of
+     * unconditional dispatch is just the LLC SNAP check inside.
+     *
+     * frag_observe (#75) needs the *encrypted* ones too — the whole
+     * FragAttacks family is about frames on a protected network — so it
+     * runs on every data frame, before any payload check. */
     if (type == 2) {
         eapol_observe_dot11(dot11, dot11_len, signal, channel);
+        frag_observe(dot11, dot11_len, time(NULL));
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */

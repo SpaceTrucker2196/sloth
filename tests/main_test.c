@@ -83,6 +83,7 @@ void run_dot11_data_tests(void);
 void run_mle_tests(void);
 void run_tool_fingerprint_tests(void);
 void run_captive_portal_tests(void);
+void run_fragattack_tests(void);
 void run_research_ingest_tests(void);
 void run_research_corpus_tests(void);
 void run_research_query_tests(void);
@@ -199,6 +200,7 @@ int main(void) {
     run_mle_tests();
     run_tool_fingerprint_tests();
     run_captive_portal_tests();
+    run_fragattack_tests();
     run_research_ingest_tests();
     run_research_corpus_tests();
     run_research_query_tests();
