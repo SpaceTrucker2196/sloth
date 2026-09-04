@@ -2,7 +2,7 @@
 source_url: https://papers.mathyvanhoef.com/usenix2021.pdf
 retrieved: 2026-09-03
 topics: [fragattacks, fragmentation, aggregation, amsdu, rsn, plaintext-injection, wpa2, wpa3]
-alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED]
+alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED, ALERT_TYPE_FRAG_AMSDU]
 citation: Vanhoef, "Fragment and Forge: Breaking Wi-Fi Through Frame Aggregation and Fragmentation", USENIX Security 2021
 ---
 # FragAttacks — Vanhoef, USENIX Security 2021

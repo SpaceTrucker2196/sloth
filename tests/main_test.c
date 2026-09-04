@@ -88,6 +88,7 @@ void run_research_ingest_tests(void);
 void run_research_corpus_tests(void);
 void run_research_query_tests(void);
 void run_research_mcp_tests(void);
+void run_research_view_tests(void);
 void run_wifi_snapshot_tests(void);
 void run_wifi_assess_tests(void);
 void run_wifi_baseline_tests(void);
@@ -205,6 +206,7 @@ int main(void) {
     run_research_corpus_tests();
     run_research_query_tests();
     run_research_mcp_tests();
+    run_research_view_tests();
     run_wifi_snapshot_tests();
     run_wifi_assess_tests();
     run_wifi_baseline_tests();

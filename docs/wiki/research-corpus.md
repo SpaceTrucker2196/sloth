@@ -92,7 +92,7 @@ whole-token: `ALERT_TYPE_ROGUE` must not pass by being a prefix of
 
 **Warning-only — every alert kind has at least one document.** This is
 the direction #73 ultimately wants, and it needs the content pass first.
-At the time of writing that is **13 of 49** kinds cited. Failing on it now would
+At the time of writing that is **18 of 54** kinds cited. Failing on it now would
 mean a red suite until the corpus is finished, which turns a guard into
 something to be worked around rather than satisfied.
 
@@ -270,12 +270,31 @@ citations for every alert whose title was shortened, and a partly-empty
 References block looks exactly like a complete one.
 
 An alert with no documents emits nothing rather than an empty heading.
-That is most of them: 13 of 49 kinds are cited.
+That is most of them: 18 of 54 kinds are cited.
+
+## The `[f]` Research view
+
+Slice 3. One row per alert kind that has fired, with the sources behind
+it — a companion to `[v]` Alerts, answering the question that view
+raises: *why should I believe this?*
+
+The uncited rows are the point. A `CRIT` with no document behind it is a
+behavioural threshold with no cited basis, which `agents/AGENTS.md` says
+is indistinguishable from a guess — and the operator deciding whether to
+act needs to know which they are looking at. A view that showed only the
+covered kinds would answer the easy half of the question.
+
+`research/coverage.c` builds the table after `alerts_update()` on each
+poll, through the same `rq_for_alert()` the References block uses. With
+no corpus loaded it still lists every fired kind with no sources, and
+the header says *not loaded* rather than leaving the reader to infer it:
+"nothing is cited" and "no corpus is loaded" look identical if the table
+is simply empty.
+
+Full write-up in [`docs/views/research.md`](../views/research.md).
 
 ## What is not here yet
-
-- **Slice 3** — a Research view.
-- **Coverage.** 13 of 49 alert kinds have a document. The guard stays
+- **Coverage.** 18 of 54 alert kinds have a document. The guard stays
   warning-only until the rest are written.
 
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the

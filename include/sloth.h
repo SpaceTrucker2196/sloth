@@ -53,6 +53,7 @@ typedef enum {
     VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
     VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
     VIEW_ROGUE_RADIUS = 32, /* 802.1X EAP method / identity-leak table (#38) */
+    VIEW_RESEARCH = 33, /* research-corpus coverage for the alerts that fired (#73) */
     VIEW_COUNT
 } view_t;
 
@@ -938,6 +939,36 @@ typedef struct {
     int     head;                  /* next write slot */
     int     count;                 /* entries populated (≤ SAMPLES) */
 } rssi_ring_t;
+
+/* ── Research-corpus coverage (#73 slice 3) ──────────────────
+ *
+ * One row per alert kind that has fired this session, with what the
+ * corpus has to say about it. The view is a companion to VIEW_ALERTS
+ * and answers the question that view raises: *why should I believe
+ * this?*
+ *
+ * Rows with zero documents are the point, not a gap to hide. An
+ * operator deciding whether to act on a CRIT needs to know whether the
+ * threshold behind it has a cited basis or is a guess — which is the
+ * argument agents/AGENTS.md makes for citing sources at all. */
+#define MAX_RESEARCH_COV   32
+#define MAX_RESEARCH_DOCS   8
+
+typedef struct {
+    char title[80];
+    char source_url[128];
+    char retrieved[16];
+} research_doc_t;
+
+typedef struct {
+    char kind[48];         /* the ALERT_TYPE_* enum name */
+    char label[24];        /* the alert's display title  */
+    int  severity;         /* highest severity seen for this kind */
+    int  fired;            /* occurrences this session */
+    int  doc_count;        /* rows written to docs[] */
+    int  docs_truncated;   /* the corpus had more than MAX_RESEARCH_DOCS */
+    research_doc_t docs[MAX_RESEARCH_DOCS];
+} research_cov_t;
 
 /* 802.11k Neighbor Report entry — one neighbor AP advertised by the
  * subject AP's beacon (tag 52). Used to map enterprise WiFi topology
@@ -1868,6 +1899,14 @@ typedef struct {
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;
     int            karma_sel;
+
+    /* Research-corpus coverage (#73 slice 3). */
+    research_cov_t research_cov[MAX_RESEARCH_COV];
+    int            research_cov_count;
+    int            research_sel;
+    int            research_docs_total;   /* documents in the corpus */
+    int            research_open;         /* 1 when a corpus is loaded */
+    char           research_status[96];   /* why not, when it is not */
 
     rogue_radius_ap_t rogue_radius[MAX_ROGUE_RADIUS]; /* 802.1X EAP tracking (#31) */
     int               rogue_radius_count;

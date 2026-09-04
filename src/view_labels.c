@@ -40,6 +40,7 @@ static const char *view_labels[VIEW_COUNT] = {
     "[x] Twins",
     "[y] KARMA",
     "[z] RADIUS",
+    "[f] Research",
 };
 
 const char *view_label(view_t v) {

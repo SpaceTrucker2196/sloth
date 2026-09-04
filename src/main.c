@@ -45,6 +45,8 @@
 #include "views/twins.h"
 #include "views/karma.h"
 #include "views/rogue_radius.h"
+#include "views/research.h"
+#include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"
 #include "twins.h"
@@ -225,6 +227,11 @@ static void poll_data(sloth_state_t *s) {
     bd_update(s, time(NULL));
     eap_track_snapshot(s);   /* 802.1X EAP method tracking for ROGUE_RADIUS (#31) */
     alerts_update(s);
+    /* After alerts_update so coverage sees this poll's alerts, not the
+     * previous one's. NULL handle is fine — the view then shows every
+     * fired kind with no sources, which is the honest picture when no
+     * corpus is loaded. */
+    research_coverage_snapshot(s, g_research);
     karma_update(s);   /* KARMA/PineAP candidate table for VIEW_KARMA (#30) */
     /* Feed the tui's alert-hot list: every alert with a concrete match_ip
      * gets the severity-coloured override for ALERT_HOT_TTL_S (1h).
@@ -355,6 +362,7 @@ static void dispatch_to_view(sloth_state_t *s, int key) {
     case VIEW_TWINS:   view_twins_key(s, key);         break;
     case VIEW_KARMA:   view_karma_key(s, key);         break;
     case VIEW_ROGUE_RADIUS: view_rogue_radius_key(s, key); break;
+    case VIEW_RESEARCH: view_research_key(s, key); break;
     default: break;
     }
 }
@@ -426,6 +434,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
     case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
     case 'z': case 'Z': s->active_view = VIEW_ROGUE_RADIUS; return;
+    case 'f': case 'F': s->active_view = VIEW_RESEARCH; return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
@@ -694,9 +703,16 @@ int main(int argc, char **argv) {
              * and leaves sloth running with no research context. The
              * capture path must never depend on it. */
             g_research = rq_open(argv[++i]);
-            if (!g_research)
+            if (!g_research) {
                 fprintf(stderr, "sloth: research corpus unavailable: %s "
                                 "— continuing without it\n", rq_open_error());
+                /* Kept for the [f] view's header. "not loaded" alone
+                 * sends the operator to check a flag they already
+                 * passed; the reason is the actionable half. */
+                snprintf(g_state.research_status,
+                         sizeof(g_state.research_status), "%s",
+                         rq_open_error());
+            }
         } else if (!strcmp(argv[i], "--version") ||
                    !strcmp(argv[i], "-V")) {
             /* The version has only ever been visible in the TUI banner,

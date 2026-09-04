@@ -47,6 +47,7 @@ One file per sloth view. Each covers:
 | `y` | KARMA     | [karma.md](karma.md) |
 | `z` | Rogue RADIUS | [rogue-radius.md](rogue-radius.md) |
 | `m` | Channel   | [channel.md](channel.md) |
+| `f` | Research  | [research.md](research.md) |
 
 ## WiFi SIGINT (v1.1)
 

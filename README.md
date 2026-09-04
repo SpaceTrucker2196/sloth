@@ -46,6 +46,7 @@ for in normal vs anomalous traffic.
 [t] TLS         [u] QUIC         [r] DNS       [p] NTP       [i] ICMP
 [v] Alerts      [g] Devices      [o] Dashboard [l] OSI stack [?] Help
 [x] Twins       [y] KARMA        [z] RADIUS                  ← evil-twin, PineAP & 802.1X lures
+[f] Research                                                 ← sources behind each alert that fired
 [k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
 [m] Channel                                                  ← per-channel histogram
 ```
