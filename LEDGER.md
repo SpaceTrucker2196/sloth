@@ -106,3 +106,4 @@
 | 780add3 | 2026-09-03T19:50:09Z | claude-opus-5 | 84 | 59073 | 38503940 | 1925982 | 39.9890 | #73 slice 2 — research query layer + --with-research |
 | ca2f230 | 2026-09-03T20:10:16Z | claude-opus-5 | 80 | 52381 | 4228665 | 109341 | 4.5177 | #73 slice 2 — sloth-research-mcp stdio transport |
 | 09fafad | 2026-09-03T23:00:45Z | claude-opus-5 | 94 | 60309 | 8727106 | 236176 | 8.2335 | #75 slice 1 — FragAttacks plaintext-in-RSN + broadcast fragments |
+| e2c87f9 | 2026-09-04T13:47:32Z | claude-opus-5 | 65 | 27185 | 8472076 | 277953 | 7.6955 | #74 Detector B (concurrent half) — SAE/PSK split across BSSIDs |
