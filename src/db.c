@@ -1,6 +1,7 @@
 /* Embedded SQLite sink. Contract in db.h, schema in db_schema.c (#42). */
 
 #include "db.h"
+#include "beacon_snoop.h"   /* RSN_AKM_*_FAMILY */
 
 #ifdef WITH_SQLITE
 
@@ -20,6 +21,11 @@
 #define DB_SECS_PER_DAY      86400
 
 static sqlite3 *g_db;
+
+/* Regressions found at the most recent tick (#74). Declared up here
+ * rather than beside its query because db_close() must clear it. */
+static db_akm_regression_t g_akm_reg[DB_MAX_AKM_REGRESSIONS];
+static int                 g_akm_reg_n;
 static int      g_disabled;      /* set once on error — fail-open */
 static int      g_interval  = DB_DEFAULT_INTERVAL_S;
 static int      g_retain_days = DB_DEFAULT_RETAIN_DAYS;
@@ -50,7 +56,8 @@ static const char *const TIER_OBSERVATION[] = {
  * outlives the individual observations that established it. */
 static const char *const TIER_ENTITY[] = {
     "devices", "pnl_clients", "pnl_ssids", "probe_clients",
-    "beacon_aps", "beacon_ap_ssids", "wifi_aps", "wifi_stas",
+    "beacon_aps", "beacon_ap_ssids", "ssid_akm_history",
+    "wifi_aps", "wifi_stas",
     "assocs", "assoc_reqs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
     "mdns_services", "nbns_names", "ssdp_devices",
     "ndp_ras", "ndp_ra_prefixes", "sensors",
@@ -91,7 +98,8 @@ static void db_fail(const char *what) {
 
 enum {
     ST_DEVICE, ST_PNL_CLIENT, ST_PNL_SSID, ST_PROBE_CLIENT,
-    ST_BEACON_AP, ST_BEACON_SSID, ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
+    ST_BEACON_AP, ST_BEACON_SSID, ST_SSID_AKM,
+    ST_WIFI_AP, ST_WIFI_STA, ST_ASSOC,
     ST_ASSOC_REQ, ST_BTM_REQ,
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
@@ -183,6 +191,21 @@ static const char *const SQL[ST_COUNT] = {
     " ON CONFLICT(bssid,ssid) DO UPDATE SET"
     "  first_seen=MIN(beacon_ap_ssids.first_seen,excluded.first_seen),"
     "  last_seen=MAX(beacon_ap_ssids.last_seen,excluded.last_seen)",
+[ST_SSID_AKM] =
+    /* akm_bits is part of the primary key, which is the whole design.
+     * beacon_aps ORs its akm_bits on conflict and therefore records
+     * only that an AP has *ever* offered both families — transition
+     * mode and a config regression are indistinguishable there. Keying
+     * on the AKM set means each distinct posture gets its own row and
+     * its own window, so "was SAE-only for a day, is PSK-only now" is
+     * two rows that do not overlap, and transition mode is one row
+     * carrying both families. ON CONFLICT can then only ever widen a
+     * window, never merge two postures into one. */
+    "INSERT INTO ssid_akm_history (ssid,bssid,akm_bits,first_seen,last_seen)"
+    " VALUES (?1,?2,?3,?4,?5)"
+    " ON CONFLICT(ssid,bssid,akm_bits) DO UPDATE SET"
+    "  first_seen=MIN(ssid_akm_history.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(ssid_akm_history.last_seen,excluded.last_seen)",
 [ST_WIFI_AP] =
     "INSERT INTO wifi_aps (bssid,ssid,signal_dbm,channel,enc,status,"
     "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
@@ -714,6 +737,11 @@ void db_close(void) {
     g_session_id = 0;
     g_prev_session_end = 0;
     g_over_ceiling_reported = 0;
+    /* The regression cache is evidence from a file we no longer have
+     * open. Left behind, sloth keeps reporting a finding it can no
+     * longer substantiate — and after a --db swap it would attribute
+     * the old file's history to the new one. */
+    g_akm_reg_n = 0;
 }
 
 int db_is_open(void) { return g_db != NULL && !g_disabled; }
@@ -850,6 +878,21 @@ static void write_beacons(const sloth_state_t *s, time_t now) {
             sqlite3_bind_int64(ss, 3, (sqlite3_int64)last);
             sqlite3_bind_int64(ss, 4, (sqlite3_int64)last);
             step_reset(ST_BEACON_SSID);
+        }
+
+        /* Posture history (#74). Hidden SSIDs are skipped: the
+         * regression this feeds is per-SSID, and every hidden AP would
+         * otherwise share the empty name and be compared against every
+         * other one. APs with no RSN IE at all (akm_bits 0) carry no
+         * posture to record. */
+        if (b->ssid[0] && b->akm_bits) {
+            sqlite3_stmt *as = g_st[ST_SSID_AKM];
+            bind_txt(as, 1, b->ssid);
+            bind_txt(as, 2, bssid);
+            sqlite3_bind_int64(as, 3, (sqlite3_int64)b->akm_bits);
+            sqlite3_bind_int64(as, 4, (sqlite3_int64)last);
+            sqlite3_bind_int64(as, 5, (sqlite3_int64)last);
+            step_reset(ST_SSID_AKM);
         }
     }
 }
@@ -1660,6 +1703,76 @@ int db_count_new_since(db_new_kind_t kind, time_t since) {
 
 /* ── tick ────────────────────────────────────────────────── */
 
+
+/* ── AKM regression (#74) ────────────────────────────────────────────
+ *
+ * Recomputed once per tick and cached: a new history row can only
+ * appear at a tick, and the alert rule runs every poll. */
+static void refresh_akm_regressions(void) {
+    g_akm_reg_n = 0;
+    if (!g_db) return;
+
+    /* `was` is a SAE-family-only posture sustained across the window;
+     * `now` is a PSK-family-only posture on the same (SSID, BSSID) that
+     * is the *latest* one recorded there.
+     *
+     * "Latest" rather than "recent": the claim is that the AP is PSK-only
+     * now, and a timestamp comparison against the clock would make the
+     * same file answer differently depending on when it was asked. It
+     * also stops a network that briefly went PSK a year ago and came
+     * back to SAE from firing forever. */
+    static const char *sql =
+        "SELECT w.ssid, w.bssid, w.akm_bits, w.first_seen, w.last_seen,"
+        "       n.akm_bits, n.first_seen"
+        "  FROM ssid_akm_history w"
+        "  JOIN ssid_akm_history n"
+        "    ON n.ssid = w.ssid AND n.bssid = w.bssid"
+        " WHERE (w.akm_bits & ?1) != 0 AND (w.akm_bits & ?2) = 0"
+        "   AND (n.akm_bits & ?2) != 0 AND (n.akm_bits & ?1) = 0"
+        "   AND (w.last_seen - w.first_seen) >= ?3"
+        "   AND n.last_seen > w.last_seen"
+        /* Keyed on n's own (ssid, bssid), not w's. They are equal by the
+         * join, so it reads the same — but written against w it would
+         * also be satisfied by a row belonging to a *different* SSID on
+         * the same radio whose timestamp happened to match, which is
+         * the one-BSSID-many-SSIDs shape KARMA produces. */
+        "   AND n.last_seen = (SELECT MAX(m.last_seen) FROM ssid_akm_history m"
+        "                       WHERE m.ssid = n.ssid AND m.bssid = n.bssid)"
+        " ORDER BY n.first_seen DESC, w.ssid, w.bssid"
+        " LIMIT ?4";
+
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) return;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)RSN_AKM_SAE_FAMILY);
+    sqlite3_bind_int64(st, 2, (sqlite3_int64)RSN_AKM_PSK_FAMILY);
+    sqlite3_bind_int64(st, 3, (sqlite3_int64)DB_AKM_SUSTAIN_S);
+    sqlite3_bind_int  (st, 4, DB_MAX_AKM_REGRESSIONS);
+
+    while (g_akm_reg_n < DB_MAX_AKM_REGRESSIONS &&
+           sqlite3_step(st) == SQLITE_ROW) {
+        db_akm_regression_t *r = &g_akm_reg[g_akm_reg_n++];
+        memset(r, 0, sizeof(*r));
+        const unsigned char *v;
+        v = sqlite3_column_text(st, 0);
+        snprintf(r->ssid,  sizeof(r->ssid),  "%s", v ? (const char *)v : "");
+        v = sqlite3_column_text(st, 1);
+        snprintf(r->bssid, sizeof(r->bssid), "%s", v ? (const char *)v : "");
+        r->was_akm        = (uint32_t)sqlite3_column_int64(st, 2);
+        r->was_first_seen = (time_t)  sqlite3_column_int64(st, 3);
+        r->was_last_seen  = (time_t)  sqlite3_column_int64(st, 4);
+        r->now_akm        = (uint32_t)sqlite3_column_int64(st, 5);
+        r->now_first_seen = (time_t)  sqlite3_column_int64(st, 6);
+    }
+    sqlite3_finalize(st);
+}
+
+int db_akm_regressions(db_akm_regression_t *out, int max) {
+    if (!out || max <= 0) return 0;
+    int n = g_akm_reg_n < max ? g_akm_reg_n : max;
+    for (int i = 0; i < n; i++) out[i] = g_akm_reg[i];
+    return n;
+}
+
 void db_tick(const sloth_state_t *s, time_t now) {
     if (!s || !db_is_open()) return;
 
@@ -1695,6 +1808,9 @@ void db_tick(const sloth_state_t *s, time_t now) {
         return;
     }
     g_last_tick = now;
+
+    /* After COMMIT: the query must see this tick's rows. */
+    refresh_akm_regressions();
 
     /* Hourly, after the write so a maintenance stall never delays the
      * observation it was triggered by. */

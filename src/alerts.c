@@ -5,6 +5,7 @@
 #include "threat_intel.h"
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
+#include "db.h"
 #include "auth_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
@@ -235,6 +236,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_FRAG_CACHE:             return "T1557";       /* CVE-2020-24586 — injection via a poisoned reassembly */
     case ALERT_TYPE_FRAG_MIXED:             return "T1557";       /* CVE-2020-26147 */
     case ALERT_TYPE_SAE_PSK_SPLIT:          return "T1557.004";   /* Evil Twin — the PSK-only half is the lane the attacker wants taken */
+    case ALERT_TYPE_SAE_PSK_REGRESSION:     return "T1562.004";   /* Impair Defenses — the AP's own posture was lowered */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -279,6 +281,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
     N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
     N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
+    N(ALERT_TYPE_SAE_PSK_REGRESSION);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -839,6 +842,43 @@ static void rule_sae_psk_split(const sloth_state_t *s, time_t now) {
                  "SAE_PSK_SPLIT", detail, key, NULL, 0, now);
             break;
         }
+    }
+}
+
+/* One BSSID that sustained SAE-only and now advertises PSK-only —
+ * issue #74 Detector B, the temporal half.
+ *
+ * The sibling of rule_sae_psk_split. That one compares two BSSIDs at
+ * one moment; this compares one BSSID against its own past, which no
+ * amount of in-memory state can answer — wifi_baseline.c is a single
+ * session-scoped snapshot with no time dimension, and beacon_aps.akm_bits
+ * is OR'd on conflict, so it records that an AP has *ever* offered both
+ * families and cannot tell transition mode from a regression.
+ *
+ * So the evidence is a persisted table and the query lives in db.c,
+ * making this the first rule to read from the database. Without
+ * WITH_SQLITE db_akm_regressions() returns 0 and the rule is silent —
+ * correct, because without a file there is no past to compare against.
+ *
+ * T1562.004 rather than T1557: nothing here says an adversary is
+ * present. What it says is that a network's posture was lowered and
+ * stayed lowered, which is a finding whether the cause was an intruder
+ * or an administrator. */
+static void rule_sae_psk_regression(const sloth_state_t *s, time_t now) {
+    (void)s;
+    db_akm_regression_t regs[DB_MAX_AKM_REGRESSIONS];
+    int n = db_akm_regressions(regs, DB_MAX_AKM_REGRESSIONS);
+    for (int i = 0; i < n; i++) {
+        const db_akm_regression_t *r = &regs[i];
+        long days = (long)((r->was_last_seen - r->was_first_seen) / 86400);
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "saereg:%.40s:%.17s", r->ssid, r->bssid);
+        snprintf(detail, sizeof(detail),
+                 "'%.16s' on %.17s was SAE-only for %ldd and now advertises"
+                 " PSK-only - WPA3 protection lost on this BSSID",
+                 r->ssid, r->bssid, days);
+        fire(ALERT_TYPE_SAE_PSK_REGRESSION, ALERT_SEV_CRIT,
+             "SAE_PSK_REGRESSION", detail, key, NULL, 0, now);
     }
 }
 
@@ -2883,6 +2923,7 @@ void alerts_update(sloth_state_t *s) {
     rule_captive_portal(s, now);
     rule_fragattack(s, now);
     rule_sae_psk_split(s, now);
+    rule_sae_psk_regression(s, now);
     rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);

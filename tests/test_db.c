@@ -1906,6 +1906,195 @@ static void test_v4_columns_carry_no_key_material(void) {
     unlink(db_path);
 }
 
+/* ── AKM posture history (#74 Detector B, temporal half) ── */
+
+/* One beacon AP with a given SSID/BSSID/AKM set, ticked at `when`. The
+ * detector's whole subject is how these rows move over time, so every
+ * test here drives the clock explicitly. */
+static void tick_beacon_akm(const char *ssid, uint8_t last_octet,
+                            uint32_t akm_bits, time_t when) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->ssid, sizeof(b->ssid), "%s", ssid);
+    b->bssid[0] = 0x00; b->bssid[1] = 0x11; b->bssid[2] = 0x22;
+    b->bssid[5] = last_octet;
+    b->akm_bits = akm_bits;
+    b->last_seen = when;
+    db_tick(&s, when);
+}
+
+#define T0 1700000000                       /* the SAE window opens */
+#define T_DAY 86400
+
+static void test_akm_history_row_per_posture(void) {
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    /* Same posture twice is one row with a widened window — that window
+     * is what the sustain requirement measures. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM ssid_akm_history"), 1);
+    ASSERT_EQ(q_int("SELECT last_seen - first_seen FROM ssid_akm_history"),
+              2 * T_DAY);
+
+    /* A different posture on the same BSSID is a *second* row, not an
+     * update. beacon_aps ORs akm_bits together and therefore cannot
+     * tell transition mode from a regression; this is why the table
+     * exists. */
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM ssid_akm_history"), 2);
+    db_close();
+}
+
+static void test_akm_history_skips_what_it_cannot_key(void) {
+    fresh_db();
+    /* Hidden SSID: the regression is per-SSID, so every hidden AP would
+     * share the empty name and be compared against every other one. */
+    tick_beacon_akm("", 1, RSN_AKM_SAE, T0);
+    /* No RSN IE at all: no posture to record. */
+    tick_beacon_akm("Open", 2, 0, T0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM ssid_akm_history"), 0);
+    db_close();
+}
+
+static void test_akm_regression_fires_after_a_sustained_window(void) {
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 1);
+    ASSERT_STR(r[0].ssid, "Corp");
+    ASSERT_STR(r[0].bssid, "00:11:22:00:00:01");
+    ASSERT_EQ((int)r[0].was_akm, (int)RSN_AKM_SAE);
+    ASSERT_EQ((int)r[0].now_akm, (int)RSN_AKM_PSK);
+    ASSERT_EQ(r[0].was_last_seen - r[0].was_first_seen, (time_t)(2 * T_DAY));
+    db_close();
+}
+
+static void test_akm_regression_needs_the_sustain(void) {
+    /* A single beacon caught mid-hop says nothing about how the AP is
+     * configured. Without the sustain requirement this is a sample
+     * reported as a regression. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 60);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_ignores_transition_mode(void) {
+    /* An AP offering both families is WPA_DOWNGRADE's finding, and it
+     * is one row here carrying both bits — never a pair that does not
+     * overlap, which is what a regression is. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE | RSN_AKM_PSK, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE | RSN_AKM_PSK, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_clears_when_sae_returns(void) {
+    /* The "now" posture has to be the *latest* one recorded, not merely
+     * a later one. Otherwise a network that briefly dropped to PSK and
+     * came back to WPA3 keeps firing forever, and the alert becomes a
+     * permanent scar rather than a state. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 1);
+
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 4 * T_DAY);
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_reports_the_current_posture(void) {
+    /* "Now" must be the *latest* posture, not merely a later one. An AP
+     * that went SAE -> PSK -> OWE is not PSK-only now, and reporting it
+     * as such sends the operator to look for a lane that is no longer
+     * on offer. A plain "later than the SAE window" test does not catch
+     * this, because the SAE window has not moved. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 1);
+
+    tick_beacon_akm("Corp", 1, RSN_AKM_OWE, T0 + 5 * T_DAY);
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_does_not_cross_ssids_on_one_bssid(void) {
+    /* One BSSID advertising several SSIDs is the KARMA / PineAP shape,
+     * and sloth already tracks it (beacon_ap_ssids). Joining on BSSID
+     * alone would read "Corp was SAE-only, and something on this radio
+     * is PSK-only now" as Corp regressing — inventing a finding out of
+     * two unrelated networks that happen to share a transmitter. */
+    fresh_db();
+    tick_beacon_akm("Corp",  1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp",  1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    tick_beacon_akm("Guest", 1, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+
+    /* And with Corp's own posture having moved on at the same instant,
+     * so a timestamp comparison alone cannot separate the two SSIDs.
+     * This is the case that distinguishes joining on (ssid, bssid) from
+     * joining on bssid — with the latter, Corp reads as having
+     * regressed to Guest's PSK. */
+    tick_beacon_akm("Corp", 1, RSN_AKM_OWE, T0 + 3 * T_DAY);
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_is_per_bssid(void) {
+    /* Two BSSIDs disagreeing is rule_sae_psk_split's finding, not this
+     * one. This rule only ever compares a BSSID against its own past. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 2, RSN_AKM_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+}
+
+static void test_akm_regression_covers_the_families(void) {
+    /* SAE-EXT-KEY and FT-PSK are the same lanes under different suite
+     * numbers. Matching suites 8 and 2 alone misses a WPA3-R3 AP. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE_EXT, T0);
+    tick_beacon_akm("Corp", 1, RSN_AKM_SAE_EXT, T0 + 2 * T_DAY);
+    tick_beacon_akm("Corp", 1, RSN_AKM_FT_PSK, T0 + 3 * T_DAY);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 1);
+    db_close();
+}
+
+static void test_akm_regression_is_silent_without_a_file(void) {
+    /* A fresh database has no past, so the detector has no basis for
+     * the claim and must say nothing rather than guess from one tick. */
+    fresh_db();
+    tick_beacon_akm("Corp", 1, RSN_AKM_PSK, T0);
+    db_akm_regression_t r[DB_MAX_AKM_REGRESSIONS];
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    db_close();
+
+    /* And with the sink closed entirely. */
+    ASSERT_EQ(db_akm_regressions(r, DB_MAX_AKM_REGRESSIONS), 0);
+    ASSERT_EQ(db_akm_regressions(NULL, 4), 0);
+    ASSERT_EQ(db_akm_regressions(r, 0), 0);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -2005,4 +2194,17 @@ void run_db_tests(void) {
     RUN_TEST(test_new_since_kinds_are_independent);
     RUN_TEST(test_session_calls_without_open_are_safe);
     RUN_TEST(test_stale_schema_version_refused_clearly);
+
+    TEST_SUITE("db: AKM posture history (#74)");
+    RUN_TEST(test_akm_history_row_per_posture);
+    RUN_TEST(test_akm_history_skips_what_it_cannot_key);
+    RUN_TEST(test_akm_regression_fires_after_a_sustained_window);
+    RUN_TEST(test_akm_regression_needs_the_sustain);
+    RUN_TEST(test_akm_regression_ignores_transition_mode);
+    RUN_TEST(test_akm_regression_clears_when_sae_returns);
+    RUN_TEST(test_akm_regression_reports_the_current_posture);
+    RUN_TEST(test_akm_regression_does_not_cross_ssids_on_one_bssid);
+    RUN_TEST(test_akm_regression_is_per_bssid);
+    RUN_TEST(test_akm_regression_covers_the_families);
+    RUN_TEST(test_akm_regression_is_silent_without_a_file);
 }

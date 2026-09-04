@@ -1,7 +1,10 @@
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <time.h>
 #include "runner.h"
 #include "fragattack.h"
+#include "db.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "karma_detect.h"
@@ -4324,6 +4327,70 @@ static void test_sae_psk_split_fires_once_per_ssid(void) {
     if (idx >= 0) ASSERT_EQ(s.alerts[idx].count, 1);
 }
 
+/* ── SAE/PSK regression (#74 Detector B, temporal half) ─── */
+
+#ifdef WITH_SQLITE
+static void reg_tick(const char *ssid, uint32_t akm, time_t when,
+                     const char *path) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->ssid, sizeof(b->ssid), "%s", ssid);
+    b->bssid[0] = 0x00; b->bssid[1] = 0x11; b->bssid[2] = 0x22; b->bssid[5] = 1;
+    b->akm_bits  = akm;
+    b->last_seen = when;
+    (void)path;
+    db_tick(&s, when);
+}
+
+static void test_sae_psk_regression_fires(void) {
+    /* The first alert rule that reads from the database. It cannot be
+     * driven from sloth_state_t at all: the evidence is what this BSSID
+     * looked like yesterday. */
+    char path[] = "/tmp/sloth_akmreg_XXXXXX";
+    int fd = mkstemp(path);
+    if (fd >= 0) close(fd);
+    unlink(path);
+    db_close();
+    ASSERT_EQ(db_open(path), 1);
+
+    reg_tick("Corp", RSN_AKM_SAE, 1700000000,             path);
+    reg_tick("Corp", RSN_AKM_SAE, 1700000000 + 2 * 86400, path);
+    reg_tick("Corp", RSN_AKM_PSK, 1700000000 + 3 * 86400, path);
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SAE_PSK_REGRESSION);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "Corp") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "SAE-only for 2d") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "00:11:22:00:00:01") != NULL);
+    }
+    /* The concurrent rule has nothing to compare against — one BSSID
+     * cannot disagree with itself, and the two must not double-report. */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    db_close();
+    unlink(path);
+}
+#endif
+
+static void test_sae_psk_regression_silent_without_a_database(void) {
+    /* Without WITH_SQLITE, or with the sink closed, there is no past to
+     * compare against and the rule must say nothing rather than guess
+     * from the current beacon. */
+    db_close();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    add_beacon_akm(&s, "Corp", a, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_REGRESSION), -1);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -4592,4 +4659,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_sae_psk_split_quiet_cases);
     RUN_TEST(test_sae_psk_split_covers_the_akm_families);
     RUN_TEST(test_sae_psk_split_fires_once_per_ssid);
+
+    TEST_SUITE("alerts: SAE/PSK regression (#74)");
+#ifdef WITH_SQLITE
+    RUN_TEST(test_sae_psk_regression_fires);
+#endif
+    RUN_TEST(test_sae_psk_regression_silent_without_a_database);
 }

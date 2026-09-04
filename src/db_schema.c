@@ -144,6 +144,24 @@ static const char SCHEMA_SQL[] =
     "  last_seen  INTEGER NOT NULL,"
     "  PRIMARY KEY (bssid, ssid)"
     ");\n"
+    /* Posture over time, per (SSID, BSSID, AKM set) — issue #74.
+     *
+     * beacon_aps cannot answer this. Its akm_bits column is OR'd on
+     * conflict, deliberately, so it records that an AP has *ever*
+     * offered SAE and *ever* offered PSK — which makes transition mode
+     * and a config regression identical there. A row per distinct AKM
+     * set, with its own first_seen/last_seen, separates them by time:
+     * transition mode is one row carrying both families, a regression
+     * is two rows that do not overlap. */
+    "CREATE TABLE IF NOT EXISTS ssid_akm_history ("
+    "  ssid       TEXT NOT NULL,"
+    "  bssid      TEXT NOT NULL,"
+    "  akm_bits   INTEGER NOT NULL,"
+    "  first_seen INTEGER NOT NULL,"
+    "  last_seen  INTEGER NOT NULL,"
+    "  PRIMARY KEY (ssid, bssid, akm_bits)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_ssid_akm_ssid ON ssid_akm_history(ssid);\n"
     "CREATE TABLE IF NOT EXISTS wifi_aps ("
     "  bssid      TEXT PRIMARY KEY,"
     "  ssid       TEXT,"

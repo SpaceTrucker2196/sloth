@@ -50,6 +50,37 @@
  * refused with an explanation. */
 #define DB_SCHEMA_VERSION 4
 
+/* ── AKM regression (#74 Detector B, temporal half) ──────────────────
+ *
+ * An SSID that was SAE-only on one BSSID for a sustained window and is
+ * PSK-only on that same BSSID now. The concurrent form — two BSSIDs
+ * disagreeing at the same moment — is ALERT_TYPE_SAE_PSK_SPLIT and
+ * needs no history; this is the other one, and it cannot be answered
+ * without a persisted file.
+ *
+ * Note the sustain requirement is what makes it a regression rather
+ * than a sample. A single beacon caught mid-`--hop` says nothing about
+ * what the AP was configured as, so the SAE window has to have been
+ * observed across at least DB_AKM_SUSTAIN_S. That in turn means a fresh
+ * database is silent here for its first day, which is correct: sloth
+ * has no basis for the claim yet.
+ *
+ * Computed at db_tick, not on demand. A new row can only appear at a
+ * tick, so querying more often than that costs SQL for an answer that
+ * cannot have changed — and the alert rule runs every poll. */
+#define DB_AKM_SUSTAIN_S   (24 * 3600)
+#define DB_MAX_AKM_REGRESSIONS 16
+
+typedef struct {
+    char     ssid[33];
+    char     bssid[18];
+    uint32_t was_akm;      /* the SAE-family set it advertised before */
+    uint32_t now_akm;      /* the PSK-family set it advertises now    */
+    time_t   was_first_seen;
+    time_t   was_last_seen;
+    time_t   now_first_seen;
+} db_akm_regression_t;
+
 /* Retention defaults. See db_set_retain_days / db_set_max_mb. */
 #define DB_DEFAULT_RETAIN_DAYS 30
 #define DB_DEFAULT_MAX_MB     512
@@ -152,6 +183,10 @@ int db_new_since(db_new_kind_t kind, time_t since,
  * listing them all. */
 int db_count_new_since(db_new_kind_t kind, time_t since);
 
+/* Regressions found at the most recent tick, newest transition first.
+ * Returns the number written. */
+int db_akm_regressions(db_akm_regression_t *out, int max);
+
 /* True when `now` is far enough past the last write for another tick.
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
@@ -171,6 +206,8 @@ static inline void db_set_max_mb(int mb)     { (void)mb; }
 static inline int  db_max_mb(void)           { return 0; }
 static inline void db_maintain(time_t now)   { (void)now; }
 static inline long long db_size_bytes(void)  { return -1; }
+static inline int db_akm_regressions(db_akm_regression_t *o, int m)
+       { (void)o; (void)m; return 0; }
 
 typedef enum {
     DB_NEW_DEVICE = 0,
