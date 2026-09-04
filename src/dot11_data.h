@@ -2,6 +2,7 @@
 #define DOT11_DATA_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /* 802.11 data-frame payload location — issue #72.
  *
@@ -115,5 +116,32 @@ int dot11_more_frags(const uint8_t *dot11, int len);
  * Returns -1 if `dot11` is not a data frame or `len` cannot hold the
  * field. */
 int dot11_data_tid(const uint8_t *dot11, int len);
+
+/* The QoS Control field's A-MSDU Present bit (bit 7 of its first
+ * octet), or -1 when the frame is not a QoS data frame or is too short.
+ *
+ * Separate from dot11_data_payload(), which returns DOT11_DATA_ENCRYPTED
+ * before it ever reaches the A-MSDU check — correct for its purpose,
+ * useless for this one. CVE-2020-24588 is an attack on *encrypted*
+ * MPDUs, and the QoS Control field sits in the plaintext MAC header, so
+ * the bit is readable even though the body is not. */
+int dot11_amsdu_present(const uint8_t *dot11, int len);
+
+/* The 48-bit CCMP/TKIP packet number, or -1 when the frame is not
+ * protected, carries no Extended IV, or is too short.
+ *
+ * The PN is transmitted in the clear immediately after the MAC header
+ * (IEEE 802.11-2020 §12.5.3.2) as PN0, PN1, reserved, KeyID, PN2..PN5,
+ * with the low-order octet first and the high-order four after the
+ * KeyID octet — an ordering that exists for hardware reasons and traps
+ * anyone who reads the eight bytes as a big-endian integer.
+ *
+ * Bit 5 of the KeyID octet is the Extended IV bit. Without it the frame
+ * is WEP or original TKIP, which have no 48-bit PN at all, so the same
+ * eight bytes mean something else entirely.
+ *
+ * Returned as int64_t because a 48-bit value has no room for a
+ * sentinel: every uint64_t is a legal PN. */
+int64_t dot11_ccmp_pn(const uint8_t *dot11, int len);
 
 #endif /* DOT11_DATA_H */

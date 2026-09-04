@@ -55,7 +55,7 @@ slice 2. Neither is gated on the RSN-witnessed state the two above use:
 the fragment cache the first abuses, and the reassembly the second
 mixes protection states within, both exist before decryption.
 
-## What it does not support
+## The A-MSDU detector reads the paper sideways
 
 The paper does not license the A-MSDU detector as it is usually
 described. The subframe headers CVE-2020-24588 manipulates are inside
@@ -64,6 +64,16 @@ header. A passive monitor that does not decrypt — and sloth does not,
 per `MISSION.md` §2 — cannot compare a subframe DA against Address 3 or
 read a subframe's LLC prefix. Any detector claiming to is either
 decrypting or guessing.
+
+What the paper *does* license is detecting the replay. §5 describes the
+attack as retransmitting a frame the victim already sent with the
+aggregation bit flipped, and CCMP's own replay-protection rule
+(802.11-2020 §12.5.3.4.4) says a packet number is never reused under one
+key. `ALERT_TYPE_FRAG_AMSDU` is the intersection: same transmitter, same
+PN, differing A-MSDU bit. The evidence is entirely in the plaintext MAC
+and CCMP headers.
+
+## What it does not support
 
 Nor does the paper support treating a detection as a compromise. Every
 signal here is a frame that was *transmitted*. Whether the victim's

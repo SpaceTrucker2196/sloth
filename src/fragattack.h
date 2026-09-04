@@ -41,14 +41,33 @@
  *
  * ── What is deliberately not here ──
  *
- * CVE-2020-24588 (A-MSDU flip) is not implementable as the issue
- * specifies it: the A-MSDU subframe headers live inside the ciphertext,
- * so the proposed signals — subframe DA vs Address 3, subframe length,
- * subframe LLC prefix — are not passively observable and sloth does not
- * crack (MISSION §2). Only the A-MSDU Present bit itself is visible,
- * being in the plaintext MAC header. See the triage comment on #75 for
- * the replacement signal (a duplicate sequence number whose A-MSDU bit
- * differs), which is slice 3.
+ * ── CVE-2020-24588, and why it is detected sideways ──
+ *
+ * Not implementable as the issue specifies. The A-MSDU subframe headers
+ * live inside the ciphertext, so the proposed signals — subframe DA vs
+ * Address 3, subframe length, subframe LLC prefix — are not passively
+ * observable, and sloth does not crack (MISSION §2). Only the A-MSDU
+ * Present bit is visible, sitting in the plaintext MAC header, and on
+ * its own it fires on any hardware that aggregates.
+ *
+ * The attack is a *replay*: the adversary captures a frame the victim
+ * already sent and retransmits it with that one bit flipped, so the
+ * receiver reparses the same ciphertext as aggregated subframes.
+ *
+ * So the signal is the replay, identified by the CCMP packet number.
+ * A PN is never legitimately reused under one key — that is the whole
+ * basis of CCMP replay protection (§12.5.3.4.4) — so the same
+ * transmitter emitting the same PN twice is already an anomaly, and
+ * the same PN twice with the A-MSDU bit differing is this attack
+ * specifically.
+ *
+ * That is strictly stronger than the sequence-number version proposed
+ * in the #75 triage. Sequence numbers are 12 bits and wrap every 4096
+ * frames, which at any real rate is under a second, so a seqnum-keyed
+ * detector needs a window short enough to be evaded and long enough to
+ * false-positive. The PN is 48 bits and monotonic. It also has no
+ * meaning on unprotected frames, which is correct: -24588 is an attack
+ * on encrypted MPDUs, and a plaintext A-MSDU is CVE-2020-26144.
  *
  * CVE-2020-24587 (mixed key) needs PTK-rotation visibility — the
  * current M1-M4 EAPOL parser does not distinguish a GTK rekey from the
@@ -86,6 +105,14 @@
 #define FRAG_MAX_STATIONS 128
 #define FRAG_MAX_SESSIONS 128
 #define FRAG_MAX_ASSOC_EVT 128
+#define FRAG_MAX_MPDUS     256
+
+/* How long a recorded MPDU stays comparable. The attacker replays
+ * promptly — the victim's fragment cache and replay window are what
+ * the attack rides, and both are short-lived. Bounding it also keeps
+ * the table from holding evidence long enough to be matched against
+ * an unrelated key rotation, after which PNs legitimately restart. */
+#define FRAG_MPDU_WINDOW_S  10
 
 typedef struct {
     uint8_t  bssid[6];
@@ -116,6 +143,12 @@ typedef struct {
      * Protected bit — some encrypted, some not. */
     uint32_t mixed_protect;
 
+    /* CVE-2020-24588: the same protected MPDU — same transmitter, same
+     * CCMP packet number — seen twice with the A-MSDU Present bit
+     * differing between the two. See the note below on why this is the
+     * signal and the one the issue proposed is not. */
+    uint32_t amsdu_flip;
+
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and
      * per-alert pcap carry the rest. */
@@ -144,6 +177,10 @@ int              frag_find(const uint8_t bssid[6]);
 
 /* Test introspection: number of open (incomplete) fragment sessions. */
 int              frag_session_count(void);
+
+/* Test introspection: protected MPDUs currently held for A-MSDU
+ * comparison. */
+int              frag_mpdu_count(void);
 
 void frag_clear(void);
 

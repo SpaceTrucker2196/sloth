@@ -268,6 +268,70 @@ static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
     if (!more) sess_close(s);   /* reassembly complete */
 }
 
+
+/* ── A-MSDU flip (CVE-2020-24588) ────────────────────────────────────
+ *
+ * Keyed on (transmitter, CCMP PN). A PN is never legitimately reused
+ * under one key, so a repeat is already an anomaly; a repeat whose
+ * A-MSDU Present bit differs is the aggregation attack. See the long
+ * note in fragattack.h for why this is keyed on the PN and not the
+ * sequence number. */
+typedef struct {
+    uint8_t ta[6];
+    uint8_t bssid[6];
+    int64_t pn;
+    uint16_t sc;
+    uint8_t amsdu;
+    time_t  ts;
+} frag_mpdu_t;
+
+static frag_mpdu_t g_mpdu[FRAG_MAX_MPDUS];
+static int         g_mpdu_n;
+
+/* Returns 1 when this MPDU is a replay of one already recorded whose
+ * A-MSDU bit differs. Records it otherwise. */
+static int mpdu_note(const uint8_t bssid[6], const uint8_t ta[6],
+                     int64_t pn, uint16_t sc, int amsdu, time_t now) {
+    int slot = -1;
+    for (int i = 0; i < g_mpdu_n; i++) {
+        frag_mpdu_t *m = &g_mpdu[i];
+        /* Aged-out rows are reused rather than compared. A PN that
+         * matches across a key rotation is not a replay — after a
+         * rekey they legitimately restart from zero. */
+        if (now - m->ts > FRAG_MPDU_WINDOW_S) { if (slot < 0) slot = i; continue; }
+        if (m->pn != pn || !mac_eq(m->ta, ta)) continue;
+        if (m->amsdu != (uint8_t)amsdu) {
+            /* Do not update the stored bit. The attacker may replay the
+             * same MPDU repeatedly, and each one is a separate
+             * transmission worth counting — overwriting would make only
+             * the first count and the rest look like the new normal. */
+            m->ts = now;
+            return 1;
+        }
+        m->ts = now;                        /* a plain retransmission */
+        return 0;
+    }
+
+    if (slot < 0) {
+        if (g_mpdu_n < FRAG_MAX_MPDUS) {
+            slot = g_mpdu_n++;
+        } else {
+            slot = 0;
+            for (int k = 1; k < g_mpdu_n; k++)
+                if (g_mpdu[k].ts < g_mpdu[slot].ts) slot = k;
+        }
+    }
+    frag_mpdu_t *m = &g_mpdu[slot];
+    memset(m, 0, sizeof(*m));
+    memcpy(m->ta,    ta,    6);
+    memcpy(m->bssid, bssid, 6);
+    m->pn    = pn;
+    m->sc    = sc;
+    m->amsdu = (uint8_t)amsdu;
+    m->ts    = now;
+    return 0;
+}
+
 void frag_observe(const uint8_t *dot11, int len, time_t now) {
     if (!dot11 || len < 24) return;
     if (((dot11[0] >> 2) & 0x03) != 2) return;      /* data frames only */
@@ -291,6 +355,24 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
     int fragmented = (fn > 0) || (more == 1);
 
     frag_bss_t *b = bss_get(bssid, now);
+
+    /* A-MSDU flip (#75 slice 3). Runs before every gate below: it needs
+     * no witnessed key install — the CCMP PN it keys on is itself proof
+     * the frame is protected — and it is the one detector here that
+     * only ever looks at encrypted frames. */
+    int64_t pn = dot11_ccmp_pn(dot11, len);
+    int amsdu  = dot11_amsdu_present(dot11, len);
+    if (pn >= 0 && amsdu >= 0) {
+        /* addr2 is the transmitter in every frame long enough to have
+         * one, independent of the DS bits. */
+        uint16_t sc = (uint16_t)(dot11[22] | (dot11[23] << 8));
+        if (mpdu_note(bssid, dot11 + 10, pn, sc, amsdu, now)) {
+            b->amsdu_flip++;
+            memcpy(b->last_sa, sa, 6);
+            memcpy(b->last_da, da, 6);
+            b->last_hit = now;
+        }
+    }
 
     /* Session bookkeeping runs before the protected/plaintext branch
      * below and regardless of it — see frag_track's comment. */
@@ -345,6 +427,8 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
 
 int frag_bss_count(void) { return g_bss_n; }
 
+int frag_mpdu_count(void) { return g_mpdu_n; }
+
 const frag_bss_t *frag_bss_at(int i) {
     return (i >= 0 && i < g_bss_n) ? &g_bss[i] : NULL;
 }
@@ -356,8 +440,10 @@ void frag_clear(void) {
     memset(g_sta,  0, sizeof(g_sta));
     memset(g_sess, 0, sizeof(g_sess));
     memset(g_assoc_evt, 0, sizeof(g_assoc_evt));
+    memset(g_mpdu, 0, sizeof(g_mpdu));
     g_bss_n       = 0;
     g_sta_n       = 0;
     g_sess_n      = 0;
     g_assoc_evt_n = 0;
+    g_mpdu_n      = 0;
 }

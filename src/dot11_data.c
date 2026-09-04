@@ -142,3 +142,38 @@ int dot11_data_tid(const uint8_t *dot11, int len) {
     if (qos_off >= len) return -1;
     return dot11[qos_off] & 0x0f;
 }
+
+int dot11_amsdu_present(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 2) return -1;
+    if (((dot11[0] >> 2) & 0x03) != 2) return -1;
+    int sub = (dot11[0] >> 4) & 0x0f;
+    if (!(sub & 0x08)) return -1;          /* no QoS Control field */
+
+    int to_ds   =  dot11[1]       & 0x01;
+    int from_ds = (dot11[1] >> 1) & 0x01;
+    int qos_off = 24 + ((to_ds && from_ds) ? 6 : 0);
+    if (qos_off >= len) return -1;
+    return (dot11[qos_off] >> 7) & 0x01;
+}
+
+int64_t dot11_ccmp_pn(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 24) return -1;
+    if (((dot11[0] >> 2) & 0x03) != 2) return -1;
+    if (!(dot11[1] & 0x40)) return -1;               /* not protected */
+
+    int hdr = dot11_data_header_len(dot11, len);
+    if (hdr < 0 || hdr + 8 > len) return -1;
+    const uint8_t *iv = dot11 + hdr;
+
+    /* Without the Extended IV bit these eight bytes are a WEP IV or an
+     * original-TKIP one, neither of which carries a 48-bit PN. Reading
+     * them anyway would invent a number that looks like evidence. */
+    if (!(iv[3] & 0x20)) return -1;
+
+    return (int64_t)((uint64_t)iv[0]              |
+                     ((uint64_t)iv[1] <<  8)      |
+                     ((uint64_t)iv[4] << 16)      |
+                     ((uint64_t)iv[5] << 24)      |
+                     ((uint64_t)iv[6] << 32)      |
+                     ((uint64_t)iv[7] << 40));
+}

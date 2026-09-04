@@ -671,6 +671,210 @@ static void test_session_table_full_evicts_stalest(void) {
     ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
 }
 
+/* ── CVE-2020-24588: A-MSDU flip ────────────────────────────────────── */
+
+/* A protected QoS data frame carrying a CCMP header. The PN is
+ * transmitted in the clear right after the MAC header as
+ * PN0 PN1 rsvd KeyID PN2 PN3 PN4 PN5 — low octet first, the high four
+ * *after* the KeyID octet (§12.5.3.2). Written out here rather than
+ * looped so the ordering is visible: reading those eight bytes as a
+ * big-endian integer is the mistake this layout invites. */
+static int build_ccmp(uint8_t *f, uint64_t pn, int amsdu, uint16_t sc,
+                      const uint8_t *ta, int ext_iv) {
+    memset(f, 0, 128);
+    f[0] = (uint8_t)((8 << 4) | (2 << 2));      /* QoS Data */
+    f[1] = (uint8_t)(FC1_FROMDS | FC1_PROTECTED);
+    memcpy(f + 4,  STA_A, 6);                   /* addr1 = DA    */
+    memcpy(f + 10, ta,    6);                   /* addr2 = BSSID/TA */
+    memcpy(f + 16, STA_B, 6);                   /* addr3 = SA    */
+    f[22] = (uint8_t)(sc & 0xff);
+    f[23] = (uint8_t)(sc >> 8);
+    f[24] = amsdu ? 0x80 : 0x00;                /* QoS Control   */
+    f[25] = 0;
+
+    uint8_t *iv = f + 26;                       /* 24 + 2 QoS    */
+    iv[0] = (uint8_t)( pn        & 0xff);       /* PN0 */
+    iv[1] = (uint8_t)((pn >>  8) & 0xff);       /* PN1 */
+    iv[2] = 0;                                  /* reserved */
+    iv[3] = (uint8_t)(ext_iv ? 0x20 : 0x00);    /* KeyID + ExtIV */
+    iv[4] = (uint8_t)((pn >> 16) & 0xff);       /* PN2 */
+    iv[5] = (uint8_t)((pn >> 24) & 0xff);       /* PN3 */
+    iv[6] = (uint8_t)((pn >> 32) & 0xff);       /* PN4 */
+    iv[7] = (uint8_t)((pn >> 40) & 0xff);       /* PN5 */
+    return 26 + 8 + 16;                         /* ciphertext body */
+}
+
+static void test_ccmp_pn_reads_the_split_layout(void) {
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x0102030405060ULL & 0xffffffffffffULL, 0, 7,
+                       BSSID, 1);
+    ASSERT_EQ(dot11_ccmp_pn(f, n),
+              (int64_t)(0x0102030405060ULL & 0xffffffffffffULL));
+    ASSERT_EQ(dot11_amsdu_present(f, n), 0);
+
+    /* All 48 bits, so a truncation to 32 shows up. */
+    n = build_ccmp(f, 0xffeeddccbbaaULL, 1, 7, BSSID, 1);
+    ASSERT_EQ(dot11_ccmp_pn(f, n), (int64_t)0xffeeddccbbaaULL);
+    ASSERT_EQ(dot11_amsdu_present(f, n), 1);
+}
+
+static void test_ccmp_pn_refuses_what_has_none(void) {
+    uint8_t f[128];
+    /* No Extended IV: WEP or original TKIP, neither of which has a
+     * 48-bit PN. Those eight bytes mean something else. */
+    int n = build_ccmp(f, 0x112233445566ULL, 0, 7, BSSID, 0);
+    ASSERT_EQ(dot11_ccmp_pn(f, n), -1);
+
+    /* Not protected at all. */
+    n = build_ccmp(f, 0x112233445566ULL, 0, 7, BSSID, 1);
+    f[1] &= (uint8_t)~FC1_PROTECTED;
+    ASSERT_EQ(dot11_ccmp_pn(f, n), -1);
+
+    /* Truncated before the CCMP header is complete. */
+    n = build_ccmp(f, 0x112233445566ULL, 0, 7, BSSID, 1);
+    for (int cut = 0; cut < 34; cut++)
+        ASSERT_EQ(dot11_ccmp_pn(f, cut), -1);
+    ASSERT_EQ(dot11_ccmp_pn(f, 34), (int64_t)0x112233445566ULL);
+
+    /* A non-QoS frame has no A-MSDU bit to read. */
+    n = build_ccmp(f, 0x112233445566ULL, 1, 7, BSSID, 1);
+    f[0] = (uint8_t)(2 << 2);                    /* plain Data */
+    ASSERT_EQ(dot11_amsdu_present(f, n), -1);
+}
+
+static void test_amsdu_flip_fires_on_a_replayed_pn(void) {
+    /* The attack: the adversary captures a frame the victim sent and
+     * retransmits it with one bit changed. Same transmitter, same PN,
+     * differing A-MSDU bit. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000042ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp(f, 0x000000000042ULL, 1, 100, BSSID, 1);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->amsdu_flip, 1u);
+    ASSERT_EQ(bss()->last_hit, (time_t)1001);
+}
+
+static void test_amsdu_flip_needs_no_witnessed_key_install(void) {
+    /* Unlike every other detector in this file. The PN it keys on is
+     * itself proof the frame is protected, so requiring a separate
+     * witness would only delay the alert. Asserted because the gate is
+     * a few lines above it and easy to acquire by accident. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x00000000deadULL, 1, 5, BSSID, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp(f, 0x00000000deadULL, 0, 5, BSSID, 1);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() && bss()->amsdu_flip == 1u);
+    /* And no plaintext counter moved: these frames are encrypted. */
+    if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 0u);
+}
+
+static void test_plain_retransmission_is_not_a_flip(void) {
+    /* A retry carries the same sequence number *and* the same PN, and
+     * happens constantly. Without the differing-bit requirement this
+     * detector fires on every congested link. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000042ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 1000);
+    frag_observe(f, n, 1001);
+    frag_observe(f, n, 1002);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 0u);
+}
+
+static void test_distinct_pns_never_collide(void) {
+    /* Ordinary traffic: every frame a new PN, and A-MSDU aggregation
+     * switching on and off as the driver sees fit. None of it is an
+     * attack, and this is the volume case the detector has to survive. */
+    frag_clear();
+    uint8_t f[128];
+    for (int i = 0; i < 200; i++) {
+        int n = build_ccmp(f, (uint64_t)(1000 + i), i & 1, (uint16_t)i,
+                           BSSID, 1);
+        frag_observe(f, n, 1000 + i / 10);
+    }
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 0u);
+}
+
+static void test_flip_is_per_transmitter(void) {
+    /* Two radios may legitimately use the same PN — they have different
+     * keys. Keying on the PN alone would make every busy BSS an alert. */
+    frag_clear();
+    uint8_t other[6] = { 0x02, 0xaa, 0xbb, 0x00, 0x00, 0x09 };
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000077ULL, 0, 3, BSSID, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp(f, 0x000000000077ULL, 1, 3, other, 1);
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(bss() ? bss()->amsdu_flip : 99u, 0u);
+    int j = frag_find(other);
+    if (j >= 0) ASSERT_EQ(frag_bss_at(j)->amsdu_flip, 0u);
+}
+
+static void test_flip_window_expires(void) {
+    /* PNs restart from zero after a rekey, so a match across a long gap
+     * is not a replay. The window is what stops the table holding
+     * evidence long enough to be matched against a different key. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000042ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp(f, 0x000000000042ULL, 1, 100, BSSID, 1);
+    frag_observe(f, n, 1000 + FRAG_MPDU_WINDOW_S + 1);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 0u);
+}
+
+static void test_repeated_flips_each_count(void) {
+    /* The attacker may replay the same MPDU several times. Each is a
+     * separate transmission — overwriting the stored bit on the first
+     * match would make the rest look like the new normal. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000042ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp(f, 0x000000000042ULL, 1, 100, BSSID, 1);
+    frag_observe(f, n, 1001);
+    frag_observe(f, n, 1002);
+    frag_observe(f, n, 1003);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 3u);
+}
+
+static void test_mpdu_table_is_bounded(void) {
+    frag_clear();
+    uint8_t f[128];
+    for (int i = 0; i < FRAG_MAX_MPDUS + 40; i++) {
+        int n = build_ccmp(f, (uint64_t)(5000 + i), 0, (uint16_t)i, BSSID, 1);
+        frag_observe(f, n, 2000);
+    }
+    ASSERT(frag_mpdu_count() <= FRAG_MAX_MPDUS);
+    frag_clear();
+    ASSERT_EQ(frag_mpdu_count(), 0);
+}
+
+static void test_unprotected_amsdu_is_not_this_detector(void) {
+    /* A plaintext A-MSDU is CVE-2020-26144, not -24588, and it has no
+     * PN to key on. Silently counting it here would attribute the wrong
+     * CVE and send the operator to the wrong advisory. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000042ULL, 0, 100, BSSID, 1);
+    f[1] &= (uint8_t)~FC1_PROTECTED;
+    frag_observe(f, n, 1000);
+    f[24] = 0x80;                                /* flip A-MSDU */
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(frag_mpdu_count(), 0);
+    ASSERT_EQ(bss() ? bss()->amsdu_flip : 99u, 0u);
+}
+
 void run_fragattack_tests(void);
 void run_fragattack_tests(void) {
     TEST_SUITE("802.11 addressing (#75)");
@@ -698,6 +902,19 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_later_broadcast_fragment_also_fires);
     RUN_TEST(test_unfragmented_broadcast_is_ordinary);
     RUN_TEST(test_protected_broadcast_fragment_is_ordinary);
+
+    TEST_SUITE("fragattacks: A-MSDU flip, CVE-2020-24588 (#75 slice 3)");
+    RUN_TEST(test_ccmp_pn_reads_the_split_layout);
+    RUN_TEST(test_ccmp_pn_refuses_what_has_none);
+    RUN_TEST(test_amsdu_flip_fires_on_a_replayed_pn);
+    RUN_TEST(test_amsdu_flip_needs_no_witnessed_key_install);
+    RUN_TEST(test_plain_retransmission_is_not_a_flip);
+    RUN_TEST(test_distinct_pns_never_collide);
+    RUN_TEST(test_flip_is_per_transmitter);
+    RUN_TEST(test_flip_window_expires);
+    RUN_TEST(test_repeated_flips_each_count);
+    RUN_TEST(test_mpdu_table_is_bounded);
+    RUN_TEST(test_unprotected_amsdu_is_not_this_detector);
 
     TEST_SUITE("fragattacks: table behaviour (#75)");
     RUN_TEST(test_bsses_are_tracked_separately);

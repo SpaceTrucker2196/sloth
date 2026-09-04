@@ -237,6 +237,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_FRAG_MIXED:             return "T1557";       /* CVE-2020-26147 */
     case ALERT_TYPE_SAE_PSK_SPLIT:          return "T1557.004";   /* Evil Twin — the PSK-only half is the lane the attacker wants taken */
     case ALERT_TYPE_SAE_PSK_REGRESSION:     return "T1562.004";   /* Impair Defenses — the AP's own posture was lowered */
+    case ALERT_TYPE_FRAG_AMSDU:             return "T1557";       /* CVE-2020-24588 — frames injected into a session whose key the attacker lacks */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -281,7 +282,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
     N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
     N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
-    N(ALERT_TYPE_SAE_PSK_REGRESSION);
+    N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -736,6 +737,24 @@ static void rule_fragattack(const sloth_state_t *s, time_t now) {
                      b->plaintext_bcast_frag == 1 ? "" : "s", bss);
             fire(ALERT_TYPE_FRAG_BCAST, ALERT_SEV_CRIT,
                  "FRAG_BCAST", detail, key, NULL, 0, now);
+        }
+
+        /* Slice 3 — issue #75. */
+
+        if (b->amsdu_flip > 0) {
+            snprintf(key, sizeof(key), "fragamsdu:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u protected MPDU%s on %.17s replayed with the A-MSDU"
+                     " bit flipped - last %.17s -> %.17s (CVE-2020-24588)",
+                     b->amsdu_flip, b->amsdu_flip == 1 ? "" : "s",
+                     bss, sa, da);
+            /* CRIT on the first. A CCMP packet number is never reused
+             * under one key, so a repeat is already outside the
+             * protocol before the flipped bit is considered — this is
+             * not a threshold detector and the count is evidence
+             * volume, not confidence. */
+            fire(ALERT_TYPE_FRAG_AMSDU, ALERT_SEV_CRIT,
+                 "FRAG_AMSDU", detail, key, NULL, 0, now);
         }
 
         /* Slice 2 — issue #75. */

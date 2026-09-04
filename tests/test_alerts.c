@@ -4150,6 +4150,41 @@ static void test_frag_bcast_fires(void) {
     frag_clear();
 }
 
+static void test_frag_amsdu_fires(void) {
+    /* A protected QoS frame and its replay with the A-MSDU bit flipped.
+     * CCMP header layout: PN0 PN1 rsvd KeyID PN2..PN5 at offset 26
+     * (24 + 2 QoS), ExtIV bit set in the KeyID octet. */
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    for (int pass = 0; pass < 2; pass++) {
+        memset(f, 0, sizeof(f));
+        f[0] = (uint8_t)((8 << 4) | (2 << 2));   /* QoS Data */
+        f[1] = 0x02 | 0x40;                      /* FromDS + Protected */
+        memcpy(f + 4,  FA_STA, 6);
+        memcpy(f + 10, FA_BSS, 6);
+        memcpy(f + 16, FA_AP,  6);
+        f[22] = 0x10;
+        f[24] = pass ? 0x80 : 0x00;              /* the flipped bit */
+        f[26] = 0x42;                            /* PN0 */
+        f[29] = 0x20;                            /* ExtIV */
+        frag_observe(f, 50, 1000 + pass);
+    }
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_AMSDU);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-24588") != NULL);
+    }
+    /* Encrypted frames: none of the plaintext rules may fire on them,
+     * or the operator gets three CVEs for one event. */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_BCAST), -1);
+    frag_clear();
+}
+
 static void test_frag_quiet_on_an_open_network(void) {
     /* Every frame unprotected, none of it an attack. The case that
      * decides whether this detector is usable at all. */
@@ -4682,6 +4717,7 @@ void run_alerts_tests(void) {
     TEST_SUITE("alerts: FragAttacks (#75)");
     RUN_TEST(test_frag_plaintext_fires);
     RUN_TEST(test_frag_bcast_fires);
+    RUN_TEST(test_frag_amsdu_fires);
     RUN_TEST(test_frag_quiet_on_an_open_network);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");

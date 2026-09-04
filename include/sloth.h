@@ -712,6 +712,7 @@ typedef enum {
     ALERT_TYPE_FRAG_MIXED,          /* reassembly mixes an encrypted fragment with a plaintext one — CVE-2020-26147 (#75 slice 2) */
     ALERT_TYPE_SAE_PSK_SPLIT,       /* one SSID advertised as SAE-only by one BSSID and PSK-only by another (#74) */
     ALERT_TYPE_SAE_PSK_REGRESSION,  /* one BSSID that sustained SAE-only and now advertises PSK-only (#74) */
+    ALERT_TYPE_FRAG_AMSDU,          /* same protected MPDU replayed with the A-MSDU bit flipped — CVE-2020-24588 (#75) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

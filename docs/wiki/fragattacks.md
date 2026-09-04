@@ -23,7 +23,7 @@ actually proves.
 |---|---|---|
 | 2020-24586 | does not clear the fragment cache on (re)connect | **yes — shipped, slice 2** |
 | 2020-24587 | reassembles fragments encrypted under different keys | needs PTK-rotation visibility — **slice 4** |
-| 2020-24588 | accepts non-SPP A-MSDU frames | **not as usually described** — see below |
+| 2020-24588 | accepts non-SPP A-MSDU frames | **yes, sideways — shipped.** Not as usually described; see below |
 | 2020-26139 | forwards EAPOL from an unauthenticated sender | yes, needs handshake state — slice 4 |
 | 2020-26140 | accepts plaintext data frames in a protected network | **yes — shipped** |
 | 2020-26141 | does not verify the TKIP MIC of fragmented frames | no (MIC is under the key) |
@@ -151,10 +151,10 @@ that say what they carry. The broadcast rule does not: fragmentation
 itself is the violation and broadcast EAPOL does not exist, so it needs
 no exemption at all.
 
-## Why the A-MSDU detector is not here
+### `FRAG_AMSDU` — CVE-2020-24588, detected sideways
 
-CVE-2020-24588 is the most cited of the family, and the detector usually
-proposed for it cannot work passively.
+The most cited of the family, and the detector usually proposed for it
+**cannot work passively**.
 
 The attack flips the A-MSDU Present bit on an encrypted MPDU so the
 receiver reparses the payload as aggregated subframes with
@@ -168,11 +168,63 @@ Control field carrying the bit is in the plaintext MAC header, so the
 What is left is the bit alone, which fires on any hardware that
 aggregates — most of it.
 
-The signal worth building instead: the attack replays a frame the victim
-already sent, with the bit flipped. **The same sequence number appearing
-twice with a differing A-MSDU bit** is specific in a way the bit alone
-is not, and `src/seqnum_track.c` already tracks sequence numbers. That
-is slice 3.
+**So sloth detects the replay instead.** The attacker does not forge a
+frame; they capture one the victim already sent and retransmit it with
+one bit changed. That makes the observable a *duplicate MPDU whose
+A-MSDU bit differs*.
+
+#### Why the packet number, not the sequence number
+
+The #75 triage proposed keying this on the sequence number. The CCMP
+packet number is strictly better and it is what shipped.
+
+| | sequence number | CCMP PN |
+|---|---|---|
+| width | 12 bits | 48 bits |
+| wraps | every 4096 frames — under a second at any real rate | never under one key |
+| reuse | routine | a protocol violation (§12.5.3.4.4) |
+
+A seqnum-keyed detector needs a comparison window short enough to be
+evaded and long enough to false-positive. The PN has no such tension: a
+repeat is *already* an anomaly before the flipped bit is considered, so
+the rule is "same transmitter, same PN, different A-MSDU bit" with
+nothing else propping it up.
+
+It also has no meaning on unprotected frames, which is exactly right —
+-24588 is an attack on encrypted MPDUs, and a plaintext A-MSDU is
+CVE-2020-26144, a different row in the table above.
+
+#### What it excludes, and how
+
+- **A plain retransmission** carries the same PN *and* the same bit.
+  Excluded by construction, not by a threshold — which matters, because
+  retries are constant on a congested link.
+- **Two radios using the same PN** is normal: they have different keys.
+  The key includes the transmitter.
+- **A rekey** legitimately restarts PNs from zero, so the comparison
+  window is 10 seconds. The attacker replays promptly — the victim's
+  replay window and fragment cache are what the attack rides, and both
+  are short-lived.
+
+This is the only FragAttacks rule here with **no key-install gate**. It
+does not need one: the PN is itself proof the frame is protected.
+
+#### Reading the PN
+
+It is transmitted in the clear immediately after the MAC header, and the
+byte order traps people:
+
+```
+PN0  PN1  rsvd  KeyID  PN2  PN3  PN4  PN5
+```
+
+Low octet first, then the *high four* after the KeyID octet. Reading
+those eight bytes as a big-endian integer produces a plausible number
+that is wrong, and nothing downstream would notice. Bit 5 of the KeyID
+octet is the Extended IV bit; without it the frame is WEP or original
+TKIP, which have no 48-bit PN at all, so the same eight bytes mean
+something else entirely and `dot11_ccmp_pn()` returns -1 rather than
+inventing evidence.
 
 ## Addressing
 
