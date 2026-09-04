@@ -127,3 +127,18 @@ int dot11_more_frags(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
     return (dot11[1] >> 2) & 0x01;
 }
+
+int dot11_data_tid(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 2) return -1;
+    int type = (dot11[0] >> 2) & 0x03;
+    if (type != 2) return -1;
+
+    int sub = (dot11[0] >> 4) & 0x0f;
+    if (!(sub & 0x08)) return 0;      /* non-QoS: implicit single queue */
+
+    int to_ds   =  dot11[1]       & 0x01;
+    int from_ds = (dot11[1] >> 1) & 0x01;
+    int qos_off = 24 + ((to_ds && from_ds) ? 6 : 0);
+    if (qos_off >= len) return -1;
+    return dot11[qos_off] & 0x0f;
+}

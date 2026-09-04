@@ -708,6 +708,8 @@ typedef enum {
     ALERT_TYPE_BLOCKACK_ATTACK,     /* spoofed BAR resetting a peer's Block-Ack window — Bl0ck (#70) */
     ALERT_TYPE_FRAG_PLAINTEXT,      /* plaintext data frame after key install — FragAttacks CVE-2020-26140/-26143 (#75) */
     ALERT_TYPE_FRAG_BCAST,          /* plaintext broadcast fragment on a protected BSS — CVE-2020-26145 (#75) */
+    ALERT_TYPE_FRAG_CACHE,          /* fragment reassembly straddles a (re)association — CVE-2020-24586 (#75 slice 2) */
+    ALERT_TYPE_FRAG_MIXED,          /* reassembly mixes an encrypted fragment with a plaintext one — CVE-2020-26147 (#75 slice 2) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

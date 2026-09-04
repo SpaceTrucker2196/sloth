@@ -210,6 +210,41 @@ static void test_truncation_at_every_boundary(void) {
     ASSERT_EQ(dot11_data_header_len(f, 10), -1);
 }
 
+/* ── dot11_data_tid (#75 slice 2) ───────────────────────────────────── */
+
+static void test_non_qos_tid_is_zero(void) {
+    uint8_t f[128];
+    int n = build_data(f, 0, 0, 0x0800, 0, 0);
+    ASSERT_EQ(dot11_data_tid(f, n), 0);
+}
+
+static void test_qos_tid_is_the_low_nibble(void) {
+    uint8_t f[128];
+    int n = build_data(f, 8, 0, 0x0800, 0, 0);
+    f[24] = 0x05;                          /* TID 5, A-MSDU bit clear */
+    ASSERT_EQ(dot11_data_tid(f, n), 5);
+}
+
+static void test_qos_tid_moves_with_addr4(void) {
+    /* Same trap as the A-MSDU bit: a fixed offset reads into the
+     * address field on a WDS/mesh frame instead of QoS Control. */
+    uint8_t f[128];
+    int n = build_data(f, 8, FC1_TODS | FC1_FROMDS, 0x0800, 0, 0);
+    f[24] = 0xff;                          /* not QoS Control here */
+    f[30] = 0x07;                          /* the real QoS Control byte */
+    ASSERT_EQ(dot11_data_tid(f, n), 7);
+}
+
+static void test_tid_rejects_non_data_and_short(void) {
+    uint8_t f[128];
+    int n = build_data(f, 8, 0, 0x0800, 0, 0);
+    f[0] = 0x80;                           /* beacon */
+    ASSERT_EQ(dot11_data_tid(f, n), -1);
+    f[0] = (uint8_t)((8 << 4) | (2 << 2)); /* QoS data again */
+    ASSERT_EQ(dot11_data_tid(f, 24), -1);  /* too short for QoS Control */
+    ASSERT_EQ(dot11_data_tid(NULL, n), -1);
+}
+
 void run_dot11_data_tests(void) {
     TEST_SUITE("802.11 data-frame header length (#72)");
     RUN_TEST(test_base_header);
@@ -230,4 +265,10 @@ void run_dot11_data_tests(void) {
     RUN_TEST(test_ipv6_ethertype_passes_through);
     RUN_TEST(test_management_and_control_rejected);
     RUN_TEST(test_truncation_at_every_boundary);
+
+    TEST_SUITE("802.11 QoS TID (#75 slice 2)");
+    RUN_TEST(test_non_qos_tid_is_zero);
+    RUN_TEST(test_qos_tid_is_the_low_nibble);
+    RUN_TEST(test_qos_tid_moves_with_addr4);
+    RUN_TEST(test_tid_rejects_non_data_and_short);
 }

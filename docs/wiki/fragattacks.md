@@ -12,16 +12,16 @@ share one outcome: an adversary in radio range can get frames of their
 choosing accepted into an encrypted WPA/WPA2/WPA3 session **without
 holding the key**.
 
-Sloth implements two of them. This page explains which, why the other
-ten are harder or impossible to observe passively, and — the part worth
-reading before you trust the alert — what the detector's gate actually
-proves.
+Sloth implements four of them. This page explains which, why the other
+eight are harder or impossible to observe passively, and — the part
+worth reading before you trust the alert — what each detector's gate
+actually proves.
 
 ## The twelve
 
 | CVE | what the receiver does wrong | passively observable? |
 |---|---|---|
-| 2020-24586 | does not clear the fragment cache on (re)connect | yes, needs a fragment-session table — **slice 2** |
+| 2020-24586 | does not clear the fragment cache on (re)connect | **yes — shipped, slice 2** |
 | 2020-24587 | reassembles fragments encrypted under different keys | needs PTK-rotation visibility — **slice 4** |
 | 2020-24588 | accepts non-SPP A-MSDU frames | **not as usually described** — see below |
 | 2020-26139 | forwards EAPOL from an unauthenticated sender | yes, needs handshake state — slice 4 |
@@ -31,8 +31,8 @@ proves.
 | 2020-26143 | accepts fragmented plaintext data frames | **yes — shipped** |
 | 2020-26144 | accepts plaintext A-MSDU starting with an EAPOL RFC1042 header | yes, plaintext only — not yet built |
 | 2020-26145 | accepts plaintext broadcast fragments as full frames | **yes — shipped** |
-| 2020-26146 | reassembles encrypted fragments with non-consecutive PNs | yes — the CCMP PN is in the clear — slice 2 |
-| 2020-26147 | reassembles mixed encrypted/plaintext fragments | yes, slice 2 |
+| 2020-26146 | reassembles encrypted fragments with non-consecutive PNs | **not as slice 2 was originally described** — see below |
+| 2020-26147 | reassembles mixed encrypted/plaintext fragments | **yes — shipped, slice 2** |
 
 Several of these are only ever visible as the *attacker's* frames on the
 air. Nothing sloth can see tells it whether the victim's driver actually
@@ -54,6 +54,55 @@ RSN, broadcast frames are never fragmented — reassembling one is the bug
 — so the fragment is already a violation before anything reassembles
 it. Sloth fires on the fragment rather than waiting for a completion
 that only the victim can perform.
+
+### `FRAG_CACHE` — CVE-2020-24586
+
+The fragment cache is supposed to be cleared on every (re)association.
+Sloth tracks reassembly sessions keyed on `(BSSID, SA, DA, TID)`: a
+fragment with the More Fragments bit set and fragment number 0 opens a
+session, and any later fragment for the same key is its continuation.
+
+If a continuation **completes** a session that started **before** a
+(re)association response sloth witnessed for either endpoint, the
+completion straddles a boundary at which the buffer should have been
+empty. There is no benign reading of that — it is the CVE's own failure
+mode, not a threshold being crossed.
+
+This one is deliberately **not** gated on the RSN-witnessed state
+`FRAG_PLAINTEXT` and `FRAG_BCAST` use. The fragment cache exists before
+decryption — an implementation's failure to clear it does not care
+whether the fragments in it are plaintext or ciphertext — so the
+detector fires on either.
+
+Association timing uses a **strict** "after": a session that opens the
+same second an association lands is not reported, because sloth's
+one-second clock resolution cannot show which came first.
+
+### `FRAG_MIXED` — CVE-2020-26147
+
+The same session table catches a second, unrelated bug: a reassembly
+whose fragments do not agree on the Protected bit. An all-encrypted
+sequence is normal. An all-plaintext one is normal on an open network.
+A sequence that starts encrypted and completes plaintext, or the
+reverse, is neither — each fragment is individually unremarkable, and
+the violation only exists once they are combined into one MSDU.
+
+### Why CVE-2020-26146 is not here despite slice 1 saying "slice 2"
+
+The CCMP packet number is transmitted in the clear (it has to be — the
+receiver needs it to reconstruct the nonce), so reading it was never the
+obstacle this page's earlier draft implied. The obstacle is what the PN
+*is*: one counter shared by every frame sent under one key on one TID,
+not a per-reassembly sequence. Two fragments of one MSDU only get
+consecutive PNs if literally nothing else was transmitted on that TID
+between them — which the spec expects but does not enforce — and a
+retried fragment (a retry gets a fresh PN even though its fragment
+number and sequence number are unchanged) opens a gap on its own. A
+same-session "PN must be N+1" check built against that reality would be
+noisy on exactly the ordinary multi-station traffic this detector family
+is supposed to be quiet against. Left for a slice that can test the
+retry case honestly, rather than shipped and found unusable in the
+field.
 
 ## The gate, and why it is not the beacon
 

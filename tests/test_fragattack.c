@@ -442,6 +442,235 @@ static void test_clear_empties_everything(void) {
     if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 0u);
 }
 
+/* ── slice 2: fragment sessions ─────────────────────────────────────── */
+/*
+ * All frames below use sub=0 (non-QoS), so dot11_data_tid() is always 0
+ * and every session in these tests shares one TID — the interesting
+ * variable is the association timing and the Protected bit, not TID
+ * bucketing (dot11_data_tid has its own tests in test_dot11_data.c).
+ */
+
+/* CVE-2020-24586. */
+
+static void test_cache_poison_fires_when_completion_straddles_assoc(void) {
+    frag_clear();
+    uint8_t f[128];
+    /* Fragment 0, unprotected — deliberately *not* preceded by a
+     * witnessed key install, to show this detector does not depend on
+     * slice 1's gate: the fragment cache exists before decryption. */
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    frag_note_association(BSSID, STA_B, 1005);   /* straddles */
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1010);
+
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->cache_poison, 1u);
+    ASSERT_EQ(bss()->last_sa[5], STA_B[5]);
+    ASSERT_EQ(bss()->last_da[5], STA_A[5]);
+}
+
+static void test_cache_poison_silent_without_an_association_event(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    /* No frag_note_association call at all. */
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 0u);
+}
+
+static void test_cache_poison_silent_when_assoc_precedes_the_session(void) {
+    /* The station associated a while ago and has been sending
+     * fragmented traffic since — ordinary operation, not a straddle. */
+    frag_clear();
+    frag_note_association(BSSID, STA_B, 900);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 0u);
+}
+
+static void test_cache_poison_checks_both_endpoints(void) {
+    /* The association event is recorded against DA here, not SA — a
+     * downlink completion straddling the *destination* station's
+     * association is the same bug from the other side of the link. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    frag_note_association(BSSID, STA_A, 1005);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 1u);
+}
+
+static void test_cache_poison_same_second_is_not_a_straddle(void) {
+    /* Second-resolution clock: an association landing in the same
+     * second as the fragment that opened the session cannot be shown
+     * to be *after* it, so it is not reported as a straddle. */
+    frag_clear();
+    frag_note_association(BSSID, STA_B, 1000);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 0u);
+}
+
+static void test_continuation_with_no_open_session_is_silent(void) {
+    /* sloth joined the capture mid-reassembly (a hopped-away-and-back
+     * radio). There is nothing on file to compare it against. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, STA_B, 2, 0x0800);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 0u);
+    ASSERT_EQ(frag_session_count(), 0);
+}
+
+/* CVE-2020-26147. */
+
+static void test_mixed_protect_fires_encrypted_then_plaintext(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG,
+                 STA_A, BSSID, STA_B, 0, 0);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_protect, 1u);
+}
+
+static void test_mixed_protect_fires_plaintext_then_encrypted(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_protect, 1u);
+}
+
+static void test_mixed_protect_silent_when_consistent(void) {
+    frag_clear();
+    uint8_t f[128];
+    /* All-encrypted sequence. */
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG,
+                 STA_A, BSSID, STA_B, 0, 0);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_protect, 0u);
+
+    /* All-plaintext sequence, different DA so it is a fresh session. */
+    frag_clear();
+    n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_protect, 0u);
+}
+
+/* ── session lifecycle ──────────────────────────────────────────────── */
+
+static void test_session_closes_on_completing_fragment(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    ASSERT_EQ(frag_session_count(), 1);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);   /* MoreFrag=0 */
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(frag_session_count(), 0);
+}
+
+static void test_session_stays_open_across_a_middle_fragment(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1001);                    /* still More Frag */
+    ASSERT_EQ(frag_session_count(), 1);
+}
+
+static void test_new_fragment_zero_replaces_an_abandoned_session(void) {
+    /* An unfinished reassembly is not itself evidence. A second
+     * fragment 0 under the same key must reset start_seen/protected
+     * rather than merge with the first — otherwise a stale abandoned
+     * session's Protected bit would falsely mark a later, entirely
+     * consistent reassembly as mixed. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);                    /* plaintext, abandoned */
+    n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0);
+    frag_observe(f, n, 2000);                    /* fresh start, encrypted */
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 2001);                    /* consistent completion */
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_protect, 0u);
+}
+
+static void test_sessions_are_cleared(void) {
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    frag_note_association(BSSID, STA_B, 1005);
+    ASSERT_EQ(frag_session_count(), 1);
+
+    frag_clear();
+    ASSERT_EQ(frag_session_count(), 0);
+
+    /* And the association table: replaying only the completion after a
+     * clear must not still see the pre-clear association. */
+    n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 0u);
+}
+
+static void test_session_table_full_evicts_stalest(void) {
+    frag_clear();
+    uint8_t f[128];
+    for (int i = 0; i < FRAG_MAX_SESSIONS; i++) {
+        uint8_t da[6] = { 0x02, 0, 0, 0, 0, (uint8_t)i };
+        int n = build(f, 0, FC1_MOREFRAG, da, BSSID, STA_B, 0, 0x0800);
+        frag_observe(f, n, 2000 + i);             /* index 0 is stalest */
+    }
+    ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
+
+    uint8_t fresh_da[6] = { 0x02, 0, 0, 0, 0, 0xfe };
+    int n = build(f, 0, FC1_MOREFRAG, fresh_da, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 9000);
+    ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
+
+    /* The evicted (stalest) session no longer straddles anything: a
+     * completion for it now looks like an unopened session. */
+    uint8_t evicted_da[6] = { 0x02, 0, 0, 0, 0, 0 };
+    n = build(f, 0, 0, evicted_da, BSSID, STA_B, 1, 0x0800);
+    frag_observe(f, n, 9001);
+    ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
+}
+
 void run_fragattack_tests(void);
 void run_fragattack_tests(void) {
     TEST_SUITE("802.11 addressing (#75)");
@@ -476,4 +705,24 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_four_address_frames_are_skipped);
     RUN_TEST(test_malformed_and_short_are_safe);
     RUN_TEST(test_clear_empties_everything);
+
+    TEST_SUITE("fragattacks: fragment cache poison, CVE-2020-24586 (#75 slice 2)");
+    RUN_TEST(test_cache_poison_fires_when_completion_straddles_assoc);
+    RUN_TEST(test_cache_poison_silent_without_an_association_event);
+    RUN_TEST(test_cache_poison_silent_when_assoc_precedes_the_session);
+    RUN_TEST(test_cache_poison_checks_both_endpoints);
+    RUN_TEST(test_cache_poison_same_second_is_not_a_straddle);
+    RUN_TEST(test_continuation_with_no_open_session_is_silent);
+
+    TEST_SUITE("fragattacks: mixed reassembly, CVE-2020-26147 (#75 slice 2)");
+    RUN_TEST(test_mixed_protect_fires_encrypted_then_plaintext);
+    RUN_TEST(test_mixed_protect_fires_plaintext_then_encrypted);
+    RUN_TEST(test_mixed_protect_silent_when_consistent);
+
+    TEST_SUITE("fragattacks: session lifecycle (#75 slice 2)");
+    RUN_TEST(test_session_closes_on_completing_fragment);
+    RUN_TEST(test_session_stays_open_across_a_middle_fragment);
+    RUN_TEST(test_new_fragment_zero_replaces_an_abandoned_session);
+    RUN_TEST(test_sessions_are_cleared);
+    RUN_TEST(test_session_table_full_evicts_stalest);
 }

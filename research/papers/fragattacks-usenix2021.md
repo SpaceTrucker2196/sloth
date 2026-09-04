@@ -2,7 +2,7 @@
 source_url: https://papers.mathyvanhoef.com/usenix2021.pdf
 retrieved: 2026-09-03
 topics: [fragattacks, fragmentation, aggregation, amsdu, rsn, plaintext-injection, wpa2, wpa3]
-alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST]
+alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED]
 citation: Vanhoef, "Fragment and Forge: Breaking Wi-Fi Through Frame Aggregation and Fragmentation", USENIX Security 2021
 ---
 # FragAttacks — Vanhoef, USENIX Security 2021
@@ -49,6 +49,12 @@ install" bugs, so the detector needs evidence the key was installed, and
 a station's own encrypted traffic is that evidence. A beacon advertising
 RSN is not: it says what the AP offers, not what this station completed.
 
+`ALERT_TYPE_FRAG_CACHE` (-24586) and `ALERT_TYPE_FRAG_MIXED` (-26147)
+ride a fragment-session table keyed on `(BSSID, SA, DA, TID)`, added in
+slice 2. Neither is gated on the RSN-witnessed state the two above use:
+the fragment cache the first abuses, and the reassembly the second
+mixes protection states within, both exist before decryption.
+
 ## What it does not support
 
 The paper does not license the A-MSDU detector as it is usually
@@ -66,9 +72,9 @@ twelve CVEs exist precisely because that decision varies by vendor.
 
 ## Related
 
-- CVE-2020-26146 and -26147 concern reassembly of fragments with
-  non-consecutive packet numbers and of mixed encrypted/plaintext
-  fragments. The CCMP packet number is transmitted in the clear, so both
-  are observable — but only with a fragment session table, which sloth
-  does not yet keep.
+- CVE-2020-26146 (non-consecutive packet numbers) is not implemented.
+  The CCMP PN is readable, but it is one counter shared by every frame
+  on a (key, TID), not a per-reassembly sequence — ordinary interleaved
+  traffic and fragment retries both open gaps that are not attacks. See
+  `docs/wiki/fragattacks.md` for the full argument.
 - Advisory index: https://github.com/vanhoefm/fragattacks/blob/master/ADVISORIES.md

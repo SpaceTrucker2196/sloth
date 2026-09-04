@@ -50,9 +50,33 @@
  * the replacement signal (a duplicate sequence number whose A-MSDU bit
  * differs), which is slice 3.
  *
- * CVE-2020-24586/-24587 (fragment-cache poison, mixed key) need a
- * fragment session table and PTK-rotation visibility respectively.
- * Slices 2 and 4.
+ * CVE-2020-24587 (mixed key) needs PTK-rotation visibility — the
+ * current M1-M4 EAPOL parser does not distinguish a GTK rekey from the
+ * initial handshake, so it stays out. Slice 4.
+ *
+ * ── Slice 2 ──
+ *
+ * Adds a fragment-session table keyed on (BSSID, SA, DA, TID) and two
+ * more detectors that ride it:
+ *
+ *   CVE-2020-24586  fragment cache poisoned across a (re)association
+ *   CVE-2020-26147  reassembly mixes an encrypted fragment with a
+ *                   plaintext one
+ *
+ * CVE-2020-26146 (non-consecutive packet numbers) is NOT here despite
+ * `docs/wiki/fragattacks.md` having called it "slice 2" before this
+ * code existed. The CCMP PN is transmitted in the clear, so reading it
+ * is not the obstacle — the obstacle is that PN is a single counter
+ * shared by every frame sent under one key on one TID, not a
+ * per-reassembly sequence. Two fragments of one MSDU only get
+ * consecutive PNs if nothing else on that TID was transmitted between
+ * them, which the 802.11 spec expects but does not enforce, and any
+ * frame from another exchange, or a retried fragment (a retry gets a
+ * fresh PN even though the fragment number and sequence number do
+ * not change), opens a gap that is not an attack. A same-session
+ * detector with that failure mode would be noisy on exactly the
+ * ordinary multi-station traffic this issue is meant to be quiet
+ * against. Left for a slice that can test the retry case honestly.
  *
  * Lives outside src/capture/probe.c for the reason ctrl_frames.c and
  * dot11_data.c do: probe.c is compiled only under WITH_PCAP and is
@@ -60,6 +84,8 @@
 
 #define FRAG_MAX_BSS      64
 #define FRAG_MAX_STATIONS 128
+#define FRAG_MAX_SESSIONS 128
+#define FRAG_MAX_ASSOC_EVT 128
 
 typedef struct {
     uint8_t  bssid[6];
@@ -80,6 +106,16 @@ typedef struct {
      * in a protected network at all, so one is already wrong. */
     uint32_t plaintext_bcast_frag;
 
+    /* CVE-2020-24586: a continuation fragment completed a reassembly
+     * that started before a (re)association response we witnessed for
+     * one of the two endpoints. The fragment cache should have been
+     * cleared at that boundary. */
+    uint32_t cache_poison;
+
+    /* CVE-2020-26147: a reassembly whose fragments do not agree on the
+     * Protected bit — some encrypted, some not. */
+    uint32_t mixed_protect;
+
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and
      * per-alert pcap carry the rest. */
@@ -93,10 +129,21 @@ typedef struct {
  * ordering rule above is testable. */
 void frag_observe(const uint8_t *dot11, int len, time_t now);
 
+/* Record that (bssid, sta) completed a (re)association — issue #75
+ * slice 2. Called from the same probe.c site that already feeds
+ * assoc_observe() on a status-0 assoc/reassoc response, so the two
+ * trackers see identical evidence. `now` is passed rather than read
+ * for the same testability reason as frag_observe. */
+void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
+                           time_t now);
+
 int              frag_bss_count(void);
 const frag_bss_t *frag_bss_at(int i);
 /* Index of `bssid` in the table, or -1. */
 int              frag_find(const uint8_t bssid[6]);
+
+/* Test introspection: number of open (incomplete) fragment sessions. */
+int              frag_session_count(void);
 
 void frag_clear(void);
 

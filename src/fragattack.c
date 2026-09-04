@@ -21,6 +21,43 @@ typedef struct {
 static frag_sta_t g_sta[FRAG_MAX_STATIONS];
 static int        g_sta_n;
 
+/* ── Slice 2: fragment sessions + association timing ──────── */
+
+/* One open reassembly, keyed on all four of (bssid, sa, da, tid).
+ * sa/da rather than a resolved "station" identity: they are exactly
+ * the transmitter/receiver pair a real defragmentation buffer is keyed
+ * on, in either direction, with no need to resolve which one is the AP
+ * (see dot11_data.h's addressing table — that resolution is what goes
+ * wrong when done unconditionally). */
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sa[6];
+    uint8_t da[6];
+    uint8_t tid;
+    time_t  start_seen;       /* when fragment 0 opened this session */
+    int     start_protected;  /* its Protected bit */
+    time_t  last_seen;
+} frag_session_t;
+
+static frag_session_t g_sess[FRAG_MAX_SESSIONS];
+static int            g_sess_n;
+
+/* One (bssid, sta) pair's most recent (re)association. Separate from
+ * assoc_track.c's table on purpose: that one is keyed by evidence
+ * *strength* (EAPOL beats assoc-response) for the "who is on the
+ * network" view, which is the wrong merge rule here — a plain
+ * assoc-response *is* the fragment-cache-clearing event this detector
+ * cares about, and waiting for EAPOL would miss an open network
+ * entirely. */
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sta[6];
+    time_t  last_assoc;
+} frag_assoc_evt_t;
+
+static frag_assoc_evt_t g_assoc_evt[FRAG_MAX_ASSOC_EVT];
+static int              g_assoc_evt_n;
+
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
 }
@@ -104,6 +141,133 @@ static void sta_mark_protected(const uint8_t bssid[6], const uint8_t sta[6],
     g_sta[i].last_seen = now;
 }
 
+void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
+                           time_t now) {
+    if (!bssid || !sta) return;
+    for (int i = 0; i < g_assoc_evt_n; i++) {
+        if (mac_eq(g_assoc_evt[i].bssid, bssid) &&
+            mac_eq(g_assoc_evt[i].sta, sta)) {
+            g_assoc_evt[i].last_assoc = now;
+            return;
+        }
+    }
+    int i;
+    if (g_assoc_evt_n < FRAG_MAX_ASSOC_EVT) {
+        i = g_assoc_evt_n++;
+    } else {
+        i = 0;
+        for (int k = 1; k < g_assoc_evt_n; k++)
+            if (g_assoc_evt[k].last_assoc < g_assoc_evt[i].last_assoc) i = k;
+    }
+    memcpy(g_assoc_evt[i].bssid, bssid, 6);
+    memcpy(g_assoc_evt[i].sta,   sta,   6);
+    g_assoc_evt[i].last_assoc = now;
+}
+
+/* Did (bssid, mac) complete a (re)association strictly after `since`?
+ * Strict: a session that opens the same second an association lands is
+ * not reported as straddling it, since sloth's clock resolution cannot
+ * order the two. */
+static int frag_assoc_after(const uint8_t bssid[6], const uint8_t mac[6],
+                            time_t since) {
+    for (int i = 0; i < g_assoc_evt_n; i++) {
+        if (mac_eq(g_assoc_evt[i].bssid, bssid) &&
+            mac_eq(g_assoc_evt[i].sta, mac) &&
+            g_assoc_evt[i].last_assoc > since)
+            return 1;
+    }
+    return 0;
+}
+
+static frag_session_t *sess_find(const uint8_t bssid[6], const uint8_t sa[6],
+                                 const uint8_t da[6], uint8_t tid) {
+    for (int i = 0; i < g_sess_n; i++) {
+        frag_session_t *s = &g_sess[i];
+        if (mac_eq(s->bssid, bssid) && mac_eq(s->sa, sa) &&
+            mac_eq(s->da, da) && s->tid == tid)
+            return s;
+    }
+    return NULL;
+}
+
+/* Opens a fresh session under (bssid, sa, da, tid), replacing any
+ * unfinished one under the same key — a reassembly that never
+ * completed before a new fragment 0 arrived was abandoned, and is not
+ * itself evidence of anything. */
+static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
+                      const uint8_t da[6], uint8_t tid,
+                      int protected_bit, time_t now) {
+    frag_session_t *s = sess_find(bssid, sa, da, tid);
+    if (!s) {
+        if (g_sess_n < FRAG_MAX_SESSIONS) {
+            s = &g_sess[g_sess_n++];
+        } else {
+            s = &g_sess[0];
+            for (int k = 1; k < g_sess_n; k++)
+                if (g_sess[k].last_seen < s->last_seen) s = &g_sess[k];
+        }
+        memcpy(s->bssid, bssid, 6);
+        memcpy(s->sa,    sa,    6);
+        memcpy(s->da,    da,    6);
+        s->tid = tid;
+    }
+    s->start_seen      = now;
+    s->start_protected = protected_bit;
+    s->last_seen        = now;
+}
+
+static void sess_close(frag_session_t *s) {
+    int idx = (int)(s - g_sess);
+    if (idx != g_sess_n - 1) g_sess[idx] = g_sess[g_sess_n - 1];
+    g_sess_n--;
+}
+
+/* Fragment-session bookkeeping — issue #75 slice 2. Runs for every
+ * fragmented data frame regardless of its Protected bit: the
+ * defragmentation buffer this family of bugs abuses exists before
+ * decryption, so cache poisoning and mixed reassembly are not gated on
+ * the RSN-witnessed state slice 1's plaintext detectors use. */
+static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
+                       const uint8_t sa[6], const uint8_t da[6],
+                       uint8_t tid, int fn, int more, int protected_bit,
+                       time_t now) {
+    if (fn == 0) {
+        sess_open(bssid, sa, da, tid, protected_bit, now);
+        return;
+    }
+
+    /* Continuation with no fragment 0 on file: sloth joined the
+     * exchange mid-stream (a hopped-away-and-back radio, most likely),
+     * and there is nothing to compare it against. */
+    frag_session_t *s = sess_find(bssid, sa, da, tid);
+    if (!s) return;
+
+    /* CVE-2020-24586: the receiving side's fragment cache should be
+     * empty immediately after a (re)association. A continuation that
+     * arrives after one we witnessed for either endpoint completes a
+     * reassembly that should not have been possible. */
+    if (frag_assoc_after(bssid, sa, s->start_seen) ||
+        frag_assoc_after(bssid, da, s->start_seen)) {
+        b->cache_poison++;
+        memcpy(b->last_sa, sa, 6);
+        memcpy(b->last_da, da, 6);
+        b->last_hit = now;
+    }
+
+    /* CVE-2020-26147: neither half is wrong alone — an encrypted
+     * fragment and a plaintext one are each ordinary in isolation. The
+     * bug is combining them into one MSDU. */
+    if (protected_bit != s->start_protected) {
+        b->mixed_protect++;
+        memcpy(b->last_sa, sa, 6);
+        memcpy(b->last_da, da, 6);
+        b->last_hit = now;
+    }
+
+    s->last_seen = now;
+    if (!more) sess_close(s);   /* reassembly complete */
+}
+
 void frag_observe(const uint8_t *dot11, int len, time_t now) {
     if (!dot11 || len < 24) return;
     if (((dot11[0] >> 2) & 0x03) != 2) return;      /* data frames only */
@@ -121,7 +285,21 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
     if (rc != 1) return;
 
     int protected_bit = (dot11[1] & 0x40) != 0;
+    int fn   = dot11_frag_num(dot11, len);
+    int more = dot11_more_frags(dot11, len);
+    if (fn < 0 || more < 0) return;
+    int fragmented = (fn > 0) || (more == 1);
+
     frag_bss_t *b = bss_get(bssid, now);
+
+    /* Session bookkeeping runs before the protected/plaintext branch
+     * below and regardless of it — see frag_track's comment. */
+    if (fragmented) {
+        int tid = dot11_data_tid(dot11, len);
+        if (tid >= 0)
+            frag_track(b, bssid, sa, da, (uint8_t)tid, fn, more,
+                      protected_bit, now);
+    }
 
     if (protected_bit) {
         b->protected_frames++;
@@ -138,11 +316,6 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
      * mid-association — the overwhelmingly common case, and not a
      * signal. */
     if (sta_find(bssid, sa) < 0) return;
-
-    int fn   = dot11_frag_num(dot11, len);
-    int more = dot11_more_frags(dot11, len);
-    if (fn < 0 || more < 0) return;
-    int fragmented = (fn > 0) || (more == 1);
 
     if (dot11_is_group_addr(da)) {
         /* CVE-2020-26145. Broadcast reassembly is not permitted in a
@@ -176,9 +349,15 @@ const frag_bss_t *frag_bss_at(int i) {
     return (i >= 0 && i < g_bss_n) ? &g_bss[i] : NULL;
 }
 
+int frag_session_count(void) { return g_sess_n; }
+
 void frag_clear(void) {
-    memset(g_bss, 0, sizeof(g_bss));
-    memset(g_sta, 0, sizeof(g_sta));
-    g_bss_n = 0;
-    g_sta_n = 0;
+    memset(g_bss,  0, sizeof(g_bss));
+    memset(g_sta,  0, sizeof(g_sta));
+    memset(g_sess, 0, sizeof(g_sess));
+    memset(g_assoc_evt, 0, sizeof(g_assoc_evt));
+    g_bss_n       = 0;
+    g_sta_n       = 0;
+    g_sess_n      = 0;
+    g_assoc_evt_n = 0;
 }

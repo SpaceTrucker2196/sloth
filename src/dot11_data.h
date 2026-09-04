@@ -102,4 +102,18 @@ int dot11_is_group_addr(const uint8_t addr[6]);
 int dot11_frag_num(const uint8_t *dot11, int len);
 int dot11_more_frags(const uint8_t *dot11, int len);
 
+/* QoS Control's Traffic Identifier (low nibble, §9.4.1.4 / §9.2.4.5.1)
+ * — issue #75 slice 2.
+ *
+ * Non-QoS data frames carry no TID field; fragmentation for those is
+ * grouped implicitly rather than per traffic class, so TID 0 is
+ * returned for them, matching how a single best-effort queue behaves.
+ * The QoS Control field moves with addr4 the same way it does in
+ * dot11_data_header_len — reading it at a fixed offset would land in
+ * the middle of the address field on a WDS/mesh frame.
+ *
+ * Returns -1 if `dot11` is not a data frame or `len` cannot hold the
+ * field. */
+int dot11_data_tid(const uint8_t *dot11, int len);
+
 #endif /* DOT11_DATA_H */

@@ -232,6 +232,8 @@ const char *alert_technique(alert_type_t type) {
      * plaintext frames it produces are also the sniffable artefact. */
     case ALERT_TYPE_FRAG_PLAINTEXT:         return "T1557";       /* CVE-2020-26140 / -26143 */
     case ALERT_TYPE_FRAG_BCAST:             return "T1557";       /* CVE-2020-26145 */
+    case ALERT_TYPE_FRAG_CACHE:             return "T1557";       /* CVE-2020-24586 — injection via a poisoned reassembly */
+    case ALERT_TYPE_FRAG_MIXED:             return "T1557";       /* CVE-2020-26147 */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -274,7 +276,8 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_CSA_ABUSE);            N(ALERT_TYPE_RRM_SURVEY_ABUSE);
     N(ALERT_TYPE_RTS_FLOOD);            N(ALERT_TYPE_CAPTIVE_PORTAL);
     N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
-    N(ALERT_TYPE_FRAG_BCAST);
+    N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
+    N(ALERT_TYPE_FRAG_MIXED);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -729,6 +732,35 @@ static void rule_fragattack(const sloth_state_t *s, time_t now) {
                      b->plaintext_bcast_frag == 1 ? "" : "s", bss);
             fire(ALERT_TYPE_FRAG_BCAST, ALERT_SEV_CRIT,
                  "FRAG_BCAST", detail, key, NULL, 0, now);
+        }
+
+        /* Slice 2 — issue #75. */
+
+        if (b->cache_poison > 0) {
+            snprintf(key, sizeof(key), "fragcache:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u fragment reassembly%s on %.17s completed after a"
+                     " (re)association - last %.17s -> %.17s"
+                     " (CVE-2020-24586)",
+                     b->cache_poison, b->cache_poison == 1 ? "" : "ies",
+                     bss, sa, da);
+            /* CRIT: the fragment cache should be empty at that boundary
+             * by construction, so a completion that straddles it has no
+             * benign reading, only a range of buggy ones. */
+            fire(ALERT_TYPE_FRAG_CACHE, ALERT_SEV_CRIT,
+                 "FRAG_CACHE", detail, key, NULL, 0, now);
+        }
+
+        if (b->mixed_protect > 0) {
+            snprintf(key, sizeof(key), "fragmixed:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u reassembly%s on %.17s mixed an encrypted fragment"
+                     " with a plaintext one - last %.17s -> %.17s"
+                     " (CVE-2020-26147)",
+                     b->mixed_protect, b->mixed_protect == 1 ? "" : "ies",
+                     bss, sa, da);
+            fire(ALERT_TYPE_FRAG_MIXED, ALERT_SEV_CRIT,
+                 "FRAG_MIXED", detail, key, NULL, 0, now);
         }
     }
 }

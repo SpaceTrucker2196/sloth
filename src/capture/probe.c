@@ -349,6 +349,12 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
             assoc_observe(bssid_p, sta_p, ssid[0] ? ssid : NULL,
                           src, signal, channel);
+            /* frag_note_association (#75 slice 2): the fragment cache
+             * should be cleared at exactly this event. Fed from the
+             * same status-0 evidence as assoc_observe, not its result —
+             * a station demoted by a later EAPOL-ranked entry still
+             * really did (re)associate at this moment. */
+            frag_note_association(bssid_p, sta_p, time(NULL));
         }
         return;
     }
