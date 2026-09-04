@@ -15,18 +15,223 @@
  */
 
 
-static void test_table_is_empty_on_purpose(void) {
-    /* Not an accident, and worth asserting: a future contributor
-     * deleting a row by mistake should see this fail rather than
-     * silently ship a detector that matches nothing. When the first
-     * real signature lands this test changes to `> 0` in the same
-     * commit as the capture that justifies it. */
-    ASSERT_EQ(tool_signature_count(), 0);
+static void test_table_has_its_signatures(void) {
+    /* Was ==0 while the table shipped empty. The first row landed in
+     * #74; a contributor deleting one by mistake should still see this
+     * fail rather than silently ship a detector that matches nothing. */
+    ASSERT_EQ(tool_signature_count(), 2);
 }
 
-static void test_empty_table_matches_nothing(void) {
-    /* And it must say "unknown" rather than guessing. A detector with
-     * no data has to be silent, not creative. */
+static void test_every_shipped_row_declares_its_provenance(void) {
+    /* The rule in tool_fingerprint.c is that a row arrives with the
+     * capture that corroborates it. The ESP32 Marauder row does not —
+     * it came from #74's research, and landing it is only defensible
+     * because the flag is *in the evidence string*, where an operator
+     * reading the alert sees it.
+     *
+     * So: no row ships without evidence, and no row ships without a
+     * discriminating field. Both are enforced here rather than in
+     * review, because both are the shape a hurried addition takes. */
+    ASSERT(tool_signature_count() > 0);
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        ASSERT(sig != NULL);
+        if (!sig) continue;
+        ASSERT(sig->evidence != NULL && sig->evidence[0] != '\0');
+        /* The flag drives behaviour, the string is what an operator
+         * reads. A row where they disagree reports a confidence its
+         * own provenance note contradicts. */
+        ASSERT_EQ(sig->unverified ? 1 : 0,
+                  strncmp(sig->evidence, "UNVERIFIED", 10) == 0 ? 1 : 0);
+        ASSERT(sig->human_label != NULL && sig->human_label[0] != '\0');
+        ASSERT(sig->tool != SLOTH_TOOL_UNKNOWN);
+        /* An all-wildcard row matches every AP and means nothing. */
+        ASSERT(sig->vendor_ie_hash || sig->beacon_interval_ms ||
+               sig->supported_rates || sig->require_flags ||
+               sig->forbid_flags);
+    }
+    ASSERT(tool_signature_at(-1) == NULL);
+    ASSERT(tool_signature_at(tool_signature_count()) == NULL);
+}
+
+static void test_unverified_rows_cannot_report_high(void) {
+    /* The whole safety property of landing rows without captures. A
+     * synthetic *verified* row pinning the same three things reports
+     * HIGH; the shipped unverified one cannot. */
+    static const sloth_tool_sig_t verified[] = {
+        { SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0,
+          AP_FP_FLAG_ESPRESSIF_OUI, 0, 0, 0, 0,
+          "verified-three", "synthetic capture, test only" },
+    };
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.vendor_ie_hash     = 0xabcd1234;
+    obs.beacon_interval_ms = 102;
+    obs.fp_flags           = AP_FP_FLAG_ESPRESSIF_OUI;
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+    ASSERT_EQ((int)tool_fingerprint_match_table(verified, 1, &obs, &conf, NULL),
+              (int)SLOTH_TOOL_HOSTAPD_MANA);
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_HIGH);
+
+    /* Same three fields, marked unverified. */
+    static const sloth_tool_sig_t unverified[] = {
+        { SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0,
+          AP_FP_FLAG_ESPRESSIF_OUI, 0, 0, 0, 1,
+          "unverified-three", "UNVERIFIED - synthetic, test only" },
+    };
+    ASSERT_EQ((int)tool_fingerprint_match_table(unverified, 1, &obs, &conf,
+                                                NULL),
+              (int)SLOTH_TOOL_HOSTAPD_MANA);
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_MED);
+
+    /* The cap is a ceiling, not an assignment: a one-field unverified
+     * row still reports LOW, not MED. */
+    memset(&obs, 0, sizeof(obs));
+    obs.fp_flags   = AP_FP_FLAG_HAK5_OUI;
+    obs.karma_echo = 1;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+              (int)SLOTH_TOOL_PINEAPPLE_MK7);
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_LOW);
+}
+
+static void test_no_row_depends_on_an_unpopulated_flag(void) {
+    /* AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS is defined and nothing in the
+     * tree ever sets it. A row requiring it can never match; a row
+     * forbidding it always passes and scores a hit for a comparison
+     * that did not happen — inflating confidence for nothing. Either
+     * way the row lies about how much it checked, and neither failure
+     * is visible by reading the row. */
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        if (!sig) continue;
+        ASSERT_EQ(sig->require_flags & AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS, 0);
+        ASSERT_EQ(sig->forbid_flags  & AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS, 0);
+    }
+}
+
+static void test_pineapple_row_is_the_hak5_oui(void) {
+    /* One field, so LOW confidence — and that is the honest level.
+     * Unlike Espressif, a Hak5 vanity OUI does not turn up in an air
+     * conditioner, so one field is still worth saying. */
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.fp_flags   = AP_FP_FLAG_HAK5_OUI;
+    obs.karma_echo = 1;
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+    const char *label = "";
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_PINEAPPLE_MK7);
+    ASSERT_STR(label, "Pineapple MK7");
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_LOW);
+
+    /* Never without the KARMA echo: an enrichment on a finding, not a
+     * finding. A Hak5 OUI alone is somebody carrying a Pineapple, which
+     * is not the same as running one. */
+    obs.karma_echo = 0;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_UNKNOWN);
+}
+
+static void test_the_two_rows_do_not_collide(void) {
+    /* Distinct OUI families, so no observation can satisfy both — and
+     * the Marauder row, pinning more, must outrank if one ever could.
+     * Asserted because "add a row" is the operation most likely to
+     * quietly break another row. */
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.karma_echo         = 1;
+    obs.beacon_interval_ms = 102;
+    obs.fp_flags           = AP_FP_FLAG_HAK5_OUI;
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+              (int)SLOTH_TOOL_PINEAPPLE_MK7);
+
+    obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+              (int)SLOTH_TOOL_ESP32_MARAUDER);
+    /* Three fields agree on the Marauder row, which the field-count
+     * model calls HIGH — but the row has no capture behind it, so the
+     * unverified cap holds it at MED. Thoroughness and provenance are
+     * different axes and the reported confidence must respect both. */
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_MED);
+}
+
+static void test_require_flags_needs_every_bit(void) {
+    /* The shipped row requires one flag, so all-bits and any-bit
+     * behave identically against it — a future two-flag row is where
+     * the difference bites, and "any of these" is a much weaker claim
+     * than the row's author meant to make. Driven through the table
+     * entry point, which exists for exactly this. */
+    static const sloth_tool_sig_t sigs[] = {
+        { SLOTH_TOOL_WIFI_DUCK, 0, 0, 0,
+          AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_WPS_UUID_ZERO, 0, 0, 0, 0,
+          "two-flag", "synthetic, test only" },
+    };
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+
+    obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI;          /* one of two */
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+              (int)SLOTH_TOOL_UNKNOWN);
+    obs.fp_flags = AP_FP_FLAG_WPS_UUID_ZERO;          /* the other  */
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+              (int)SLOTH_TOOL_UNKNOWN);
+    obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_WPS_UUID_ZERO;
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+              (int)SLOTH_TOOL_WIFI_DUCK);
+    /* Extra unrelated flags must not block it — require is a subset
+     * test, not equality. */
+    obs.fp_flags |= AP_FP_FLAG_HE_PRESENT;
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+              (int)SLOTH_TOOL_WIFI_DUCK);
+}
+
+static void test_marauder_row_needs_all_three_signals(void) {
+    /* 100 TU is the 802.11 default and an Espressif OUI ships in real
+     * IoT, so neither means anything alone. The row's claim is the
+     * combination — Espressif, no HT, default interval — and every one
+     * of the three has to be load-bearing or the row fires on a smart
+     * plug. */
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.beacon_interval_ms = 102;
+    obs.fp_flags           = AP_FP_FLAG_ESPRESSIF_OUI;
+    obs.karma_echo         = 1;
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+    const char *label = "";
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_ESP32_MARAUDER);
+    ASSERT_STR(label, "ESP32 Marauder");
+
+    /* An Espressif AP that *does* negotiate HT is an IoT device, not a
+     * rogue: a 2026 access point with no HT is the discriminating part. */
+    obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_HT_PRESENT;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_UNKNOWN);
+
+    /* Not Espressif at all. */
+    obs.fp_flags = 0;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_UNKNOWN);
+
+    /* A non-default beacon interval. */
+    obs.fp_flags           = AP_FP_FLAG_ESPRESSIF_OUI;
+    obs.beacon_interval_ms = 300;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_UNKNOWN);
+
+    /* And without a KARMA echo it stays silent. The row is an
+     * enrichment on an existing finding, never a standalone claim —
+     * that gate is what makes an unverified row safe to ship. */
+    obs.beacon_interval_ms = 102;
+    obs.karma_echo         = 0;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+              (int)SLOTH_TOOL_UNKNOWN);
+}
+
+static void test_unmatched_observation_is_unknown(void) {
+    /* A detector with no matching data has to be silent, not creative. */
     sloth_tool_obs_t obs;
     memset(&obs, 0, sizeof(obs));
     obs.vendor_ie_hash     = 0xdeadbeef;
@@ -185,8 +390,15 @@ static void test_more_pinned_fields_beats_fewer(void) {
 
 void run_tool_fingerprint_tests(void) {
     TEST_SUITE("tool fingerprint table (#68)");
-    RUN_TEST(test_table_is_empty_on_purpose);
-    RUN_TEST(test_empty_table_matches_nothing);
+    RUN_TEST(test_table_has_its_signatures);
+    RUN_TEST(test_every_shipped_row_declares_its_provenance);
+    RUN_TEST(test_unverified_rows_cannot_report_high);
+    RUN_TEST(test_no_row_depends_on_an_unpopulated_flag);
+    RUN_TEST(test_pineapple_row_is_the_hak5_oui);
+    RUN_TEST(test_the_two_rows_do_not_collide);
+    RUN_TEST(test_require_flags_needs_every_bit);
+    RUN_TEST(test_marauder_row_needs_all_three_signals);
+    RUN_TEST(test_unmatched_observation_is_unknown);
     RUN_TEST(test_null_observation_is_safe);
     RUN_TEST(test_every_tool_id_has_a_name);
     RUN_TEST(test_confidence_names);

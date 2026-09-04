@@ -1895,6 +1895,7 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         memset(&obs, 0, sizeof(obs));
         obs.vendor_ie_hash     = a->fp.vendor_ies_hash;
         obs.beacon_interval_ms = a->beacon_ms;
+        obs.fp_flags           = a->fp.flags;
         obs.karma_echo         = 1;
         obs.pmkid_seen         = pmkid;
         sloth_tool_conf_t conf = TOOL_CONF_NONE;

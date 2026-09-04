@@ -25,6 +25,13 @@ static const uint8_t kEspressifOuis[][3] = {
     {0xb4, 0xe6, 0x2d},   /* Espressif (ESP32 — newer)       */
     {0xc4, 0x4f, 0x33},   /* Espressif (ESP32 — newer)       */
     {0xec, 0xfa, 0xbc},   /* Espressif (ESP32-C3)            */
+    /* From #74. The Flipper Zero's Wi-Fi devboard is an ESP32-S2, so
+     * this block reaches sloth as "Flipper" in the field — but the OUI
+     * cannot say that. It cannot separate a Flipper devboard from an
+     * ESP32 Marauder from any other ESP32 project, which is why it sits
+     * in the Espressif table and not a Flipper one. Unverified: taken
+     * from the issue's research, not measured here. */
+    {0xac, 0x0b, 0xfb},   /* Espressif (ESP32-S2 — Flipper devboard) */
 };
 
 static int oui_in_table(const uint8_t oui[3],

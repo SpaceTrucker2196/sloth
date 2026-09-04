@@ -24,13 +24,94 @@
  * One row per commit. A signature that arrives without its capture is
  * a guess wearing a data structure. */
 static const sloth_tool_sig_t TOOL_SIGNATURES[] = {
-    /* Intentionally empty — see above. */
-    { 0, 0, 0, 0, 0, 0, NULL, NULL }   /* terminator, never matched */
+    /* ── UNVERIFIED ──────────────────────────────────────────────────
+     *
+     * Read this before trusting the row below or adding another like
+     * it.
+     *
+     * The rule above says one row per commit, each landing with the
+     * capture that corroborates it. This row does not have one. Its
+     * values came from a research task (#74), not from a rig, and
+     * nobody here has watched an ESP32 Marauder transmit. The owner's
+     * call was to land it flagged rather than leave the table empty,
+     * which is the right trade — but only because the flag is in the
+     * `evidence` string, where an operator reading the alert sees it.
+     *
+     * A row is unverified until someone captures the tool and replaces
+     * the evidence string with the capture and the version. Until then
+     * it is a hypothesis sloth is willing to state out loud, and the
+     * confidence model is what keeps it honest: two characteristics
+     * gated behind a KARMA echo, not a standalone claim.
+     *
+     * ── What this row can and cannot say ──
+     *
+     * 100 TU is the 802.11 default and legacy-only rates are shared by
+     * a decade of cheap hardware, so neither means anything alone. The
+     * discriminating part is the *combination* with an Espressif OUI
+     * and no HT Capabilities — a 2026 access point that negotiates no
+     * HT is either very old or not really an access point.
+     *
+     * The rate set #74 gives (1/2/5.5/11) is not pinned: beacons do not
+     * reach this matcher with supported_rates populated (see the note
+     * on sloth_tool_obs_t). Claiming it while never comparing it would
+     * inflate the confidence score for a field nothing fills. */
+    {   SLOTH_TOOL_ESP32_MARAUDER,
+        0,                              /* vendor-IE hash: unmeasured  */
+        102,                            /* 100 TU -> 102 ms            */
+        0,                              /* rates: not observable here  */
+        AP_FP_FLAG_ESPRESSIF_OUI,       /* require                     */
+        AP_FP_FLAG_HT_PRESENT,          /* forbid: no HT Capabilities  */
+        1,                              /* only alongside a KARMA echo */
+        0,
+        1,                              /* unverified: caps conf at MED */
+        "ESP32 Marauder",
+        "UNVERIFIED - values from issue #74 research, 2026-09-04; "
+        "no capture. Replace with a rig capture + firmware version." },
+
+    /* Pineapple MK7. Also unverified, also from #74, and a much thinner
+     * row than the one above — it pins exactly one characteristic.
+     *
+     * That is the honest shape of what #74 supplies. Its Pineapple data
+     * is "the default OUI list and the default SSIDs": the OUIs were
+     * already in kHak5Ouis, and there is no SSID field here to put the
+     * rest in. So one field, LOW confidence, gated behind a KARMA echo.
+     *
+     * Thin is not worthless here, and the reason is the difference from
+     * the Espressif row. 00:13:37 is a Hak5 vanity prefix and 00:c0:ca
+     * is the Alfa radio they ship with it — neither turns up in an air
+     * conditioner. An Espressif OUI on its own says "some ESP32", which
+     * is why that row needs three fields to say anything; a Hak5 OUI on
+     * an AP that just echoed three SSIDs says "Pineapple" at low
+     * confidence all by itself.
+     *
+     * Not pinned, deliberately: AP_FP_FLAG_DEFAULT_HOSTAPD_CAPS. The
+     * MK7 runs hostapd and the flag exists, but nothing in the tree
+     * sets it. A require on a flag nobody populates never matches; a
+     * forbid on one always passes and inflates the hit count for a
+     * comparison that did not happen. */
+    {   SLOTH_TOOL_PINEAPPLE_MK7,
+        0,                              /* vendor-IE hash: unmeasured  */
+        0,                              /* interval: #74 gives none    */
+        0,                              /* rates: not observable here  */
+        AP_FP_FLAG_HAK5_OUI,            /* require                     */
+        0,
+        1,                              /* only alongside a KARMA echo */
+        0,
+        1,                              /* unverified: caps conf at MED */
+        "Pineapple MK7",
+        "UNVERIFIED - OUI list from issue #74 research, 2026-09-04; "
+        "no capture. Replace with a rig capture + firmware version." },
+
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL } /* terminator, never matched */
 };
 
 #define SIG_ROWS ((int)(sizeof(TOOL_SIGNATURES) / sizeof(TOOL_SIGNATURES[0])) - 1)
 
 int tool_signature_count(void) { return SIG_ROWS; }
+
+const sloth_tool_sig_t *tool_signature_at(int i) {
+    return (i >= 0 && i < SIG_ROWS) ? &TOOL_SIGNATURES[i] : NULL;
+}
 
 const char *tool_name(sloth_tool_id_t id) {
     switch (id) {
@@ -76,6 +157,7 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
     sloth_tool_id_t best      = SLOTH_TOOL_UNKNOWN;
     int             best_hits = 0;
     const char     *best_lbl  = "";
+    int             best_unv  = 0;
 
     for (int i = 0; i < n_sigs; i++) {
         const sloth_tool_sig_t *sig = &sigs[i];
@@ -96,6 +178,19 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
         }
         if (sig->supported_rates) {
             if (sig->supported_rates != obs->supported_rates) continue;
+            hits++;
+        }
+        /* Presence and absence count as one characteristic each, not
+         * one per bit: a row demanding two flags is pinning one aspect
+         * of the beacon's shape, and letting it outscore a vendor-IE
+         * hash match would rank a weak row above a strong one. */
+        if (sig->require_flags) {
+            if ((obs->fp_flags & sig->require_flags) != sig->require_flags)
+                continue;
+            hits++;
+        }
+        if (sig->forbid_flags) {
+            if (obs->fp_flags & sig->forbid_flags) continue;
             hits++;
         }
         /* Preconditions, not characteristics: they gate the row without
@@ -119,16 +214,24 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
         if (hits > best_hits) {
             best_hits = hits;
             best      = sig->tool;
+            best_unv  = sig->unverified;
             best_lbl  = sig->human_label ? sig->human_label
                                          : tool_name(sig->tool);
         }
     }
 
     if (best == SLOTH_TOOL_UNKNOWN) return SLOTH_TOOL_UNKNOWN;
-    if (conf)
+    if (conf) {
         *conf = best_hits >= 3 ? TOOL_CONF_HIGH
               : best_hits == 2 ? TOOL_CONF_MED
                                : TOOL_CONF_LOW;
+        /* A row with no capture behind it cannot be reported as high
+         * confidence no matter how much of the beacon it compared. The
+         * field count says how thorough the comparison was; it says
+         * nothing about whether the values compared against are right,
+         * and an operator reading "high" would reasonably assume both. */
+        if (best_unv && *conf > TOOL_CONF_MED) *conf = TOOL_CONF_MED;
+    }
     if (label) *label = best_lbl;
     return best;
 }

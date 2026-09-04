@@ -22,11 +22,11 @@
  * air — which is worse than an empty one, because it looks like
  * coverage.
  *
- * So the mechanism ships and the data does not. `TOOL_SIGNATURES` is
- * deliberately empty; each future row lands with the capture that
- * corroborates it, one row per commit. `tool_signature_count()` exists
- * so the tests can assert the table is empty *on purpose* rather than
- * by accident, and so a UI can say "no signature database loaded"
+ * So the mechanism shipped and the data did not. The table is no
+ * longer empty — see the note above TOOL_SIGNATURES for what its one
+ * row is and, more importantly, what its provenance is not.
+ * `tool_signature_count()` exists so the tests can assert the count
+ * deliberately, and so a UI can say "no signature database loaded"
  * rather than "no tool detected".
  *
  * A contributor with a lab rig adds a tool by editing the table. They
@@ -64,17 +64,47 @@ typedef struct {
     uint32_t vendor_ie_hash;      /* 0 = wildcard */
     uint16_t beacon_interval_ms;  /* 0 = wildcard */
     uint32_t supported_rates;     /* 0 = wildcard, ASSOC_RATE_* bitmap */
+    /* AP_FP_FLAG_* that must be set / must be clear. Both 0 = wildcard.
+     *
+     * Added for the first real signature (#74): half of what identifies
+     * a cheap rogue is what its beacon *lacks* — no HT Capabilities, no
+     * Country IE — and an all-positive schema cannot say "absent". A
+     * forbid mask is not the same as omitting the field: omitting means
+     * "do not care", forbidding means "and this must not be there",
+     * which is a distinct and much stronger claim. */
+    uint8_t  require_flags;
+    uint8_t  forbid_flags;
     uint8_t  requires_karma_echo; /* only match when a KARMA event fired */
     uint8_t  requires_pmkid;      /* only match after a PMKID was seen  */
+    /* No capture behind this row — its values came from research rather
+     * than a rig (#74). Caps the reported confidence at MED however
+     * many fields agree.
+     *
+     * The two are different axes and conflating them is the whole risk
+     * of shipping unverified rows: field count measures how much of the
+     * beacon was compared, provenance measures whether the values being
+     * compared against are right. A row can pin three characteristics
+     * perfectly and still be three guesses. */
+    uint8_t  unverified;
     const char *human_label;
-    const char *evidence;         /* where the values came from */
+    /* Where the values came from. By convention this starts with
+     * "UNVERIFIED - " exactly when `unverified` is set, and a test
+     * enforces the agreement — the flag drives behaviour, the string is
+     * what an operator reads, and they must not drift apart. */
+    const char *evidence;
 } sloth_tool_sig_t;
 
 /* Observed characteristics of one AP, assembled by the caller. */
 typedef struct {
     uint32_t vendor_ie_hash;
     uint16_t beacon_interval_ms;
+    /* Beacons do not carry this today — supported_rates lives on
+     * assoc_req_t, and nothing populates it on the beacon path. Left in
+     * because a signature may legitimately pin it once an assoc-request
+     * observation is wired in, and a caller that cannot fill it leaves
+     * it 0, which every row treats as "not compared". */
     uint32_t supported_rates;
+    uint8_t  fp_flags;            /* AP_FP_FLAG_* from ap_fingerprint_t */
     int      karma_echo;          /* this BSSID triggered a KARMA event */
     int      pmkid_seen;          /* a PMKID was harvested from it      */
 } sloth_tool_obs_t;
@@ -106,10 +136,17 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
                                              sloth_tool_conf_t *conf,
                                              const char **label);
 
-/* Rows currently compiled in. **Zero today, on purpose** — see the note
- * at the top of this file. Callers should say "no signature database"
- * rather than "no tool detected" when this is 0. */
+/* Rows currently compiled in. Callers should say "no signature
+ * database" rather than "no tool detected" when this is 0. */
 int tool_signature_count(void);
+
+/* Row `i` of the compiled-in table, or NULL. Exists so a test can hold
+ * every shipped row to the provenance rule — a signature whose evidence
+ * string is empty cannot be re-checked when it stops matching, and that
+ * is the form the mistake takes. Enforcement in the suite rather than
+ * in review, for the same reason #73 argues detectors should cite their
+ * sources at runtime. */
+const sloth_tool_sig_t *tool_signature_at(int i);
 
 /* Display name for a tool id; "" for SLOTH_TOOL_UNKNOWN. */
 const char *tool_name(sloth_tool_id_t id);

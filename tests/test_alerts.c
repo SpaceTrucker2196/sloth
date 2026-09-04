@@ -2163,6 +2163,38 @@ static void test_karma_three_ssids_fires(void) {
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
 }
 
+static void test_karma_names_the_tool_from_fingerprint_flags(void) {
+    /* The signature table's one row keys on ap_fingerprint_t flags, and
+     * nothing else in the suite proves those reach the matcher. Without
+     * this the row can never fire in production and every test still
+     * passes — the table would look like coverage and be inert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x24,0x6f,0x28,0x33,0x44,0x55};   /* Espressif */
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    b->beacon_ms = 102;                       /* 100 TU */
+    b->fp.flags  = AP_FP_FLAG_ESPRESSIF_OUI;  /* and no HT */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "ESP32 Marauder") != NULL);
+
+    /* The same AP negotiating HT is an IoT device, and the alert must
+     * stop naming a tool rather than name the wrong one. */
+    alerts_clear();
+    seed_state(&s);
+    seed_karma_ap(&s, bssid, ssids, 3);
+    b = &s.beacon_aps[s.beacon_count - 1];
+    b->beacon_ms = 102;
+    b->fp.flags  = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_HT_PRESENT;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "Marauder") == NULL);
+}
+
 static void test_karma_two_ssids_no_fire(void) {
     /* Threshold is 3 — two SSIDs is benign (some APs do migrate). */
     alerts_clear();
@@ -4577,6 +4609,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_e2e_full_attack_chain);
     RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
+    RUN_TEST(test_karma_names_the_tool_from_fingerprint_flags);
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
     RUN_TEST(test_karma_pnl_overlap_in_detail);
