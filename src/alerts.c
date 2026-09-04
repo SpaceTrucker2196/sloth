@@ -234,6 +234,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_FRAG_BCAST:             return "T1557";       /* CVE-2020-26145 */
     case ALERT_TYPE_FRAG_CACHE:             return "T1557";       /* CVE-2020-24586 — injection via a poisoned reassembly */
     case ALERT_TYPE_FRAG_MIXED:             return "T1557";       /* CVE-2020-26147 */
+    case ALERT_TYPE_SAE_PSK_SPLIT:          return "T1557.004";   /* Evil Twin — the PSK-only half is the lane the attacker wants taken */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -277,7 +278,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_RTS_FLOOD);            N(ALERT_TYPE_CAPTIVE_PORTAL);
     N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
     N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
-    N(ALERT_TYPE_FRAG_MIXED);
+    N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -761,6 +762,82 @@ static void rule_fragattack(const sloth_state_t *s, time_t now) {
                      bss, sa, da);
             fire(ALERT_TYPE_FRAG_MIXED, ALERT_SEV_CRIT,
                  "FRAG_MIXED", detail, key, NULL, 0, now);
+        }
+    }
+}
+
+/* One SSID, two BSSIDs, incompatible AKM — issue #74 Detector B, the
+ * concurrent half.
+ *
+ * rule_evil_twin has two branches and this falls between them. Its CRIT
+ * branch needs a *weak* enc (OPEN/WEP) beside a strong one, and WPA2 is
+ * not weak. Its WARN branch needs the same cipher and a different
+ * vendor OUI, and these two do not have the same cipher. So an SSID
+ * advertised as SAE-only by one BSSID and PSK-only by another — the
+ * exact shape a rogue AP takes when it mirrors an SSID at the security
+ * level it can actually crack — produced nothing.
+ *
+ * Not transition mode. An AP offering PSK *and* SAE together is
+ * ALERT_TYPE_WPA_DOWNGRADE (#62); each side here must offer one family
+ * and not the other, so a transition-mode AP is neither side and this
+ * stays silent on it. The two rules answer different questions: one AP
+ * offering a weak lane, versus two APs disagreeing about which lane
+ * exists.
+ *
+ * Note what this does *not* cover: the same BSSID changing from SAE to
+ * PSK over time. That is #74's config-regression case and it needs
+ * persisted AKM history, which sloth does not keep — `beacon_aps` rows
+ * are upserted, so yesterday's posture is overwritten by today's. */
+static void rule_sae_psk_split(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+        if (!a->ssid[0]) continue;          /* hidden -> cannot correlate */
+
+        int a_sae = (a->akm_bits & RSN_AKM_SAE_FAMILY) &&
+                   !(a->akm_bits & RSN_AKM_PSK_FAMILY);
+        if (!a_sae) continue;               /* walk from the SAE side only */
+
+        for (int j = 0; j < s->beacon_count; j++) {
+            if (i == j) continue;
+            const beacon_ap_t *b = &s->beacon_aps[j];
+            if (strcmp(a->ssid, b->ssid) != 0) continue;
+            if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
+            if (!(b->akm_bits & RSN_AKM_PSK_FAMILY)) continue;
+            if (b->akm_bits & RSN_AKM_SAE_FAMILY)    continue;
+
+            /* Did a client actually take the weak lane? An assoc
+             * request naming PSK to the PSK-only BSSID is
+             * offered-*and*-taken, which is the difference between a
+             * misconfiguration and an incident. */
+            int taken = 0;
+            for (int k = 0; k < s->assoc_req_count; k++) {
+                const assoc_req_t *r = &s->assoc_reqs[k];
+                if (memcmp(r->bssid, b->bssid, 6) != 0) continue;
+                if (!(r->akm_bits & RSN_AKM_PSK_FAMILY)) continue;
+                if (r->akm_bits & RSN_AKM_SAE_FAMILY)    continue;
+                taken = 1;
+                break;
+            }
+            /* Different vendor OUI means this is not the same physical
+             * AP's other radio, which is the one benign explanation for
+             * a split. Same OUI stays WARN: a dual-band unit configured
+             * inconsistently is a real finding but not an intrusion. */
+            int diff_oui = memcmp(a->bssid, b->bssid, 3) != 0;
+
+            char a_bssid[20], b_bssid[20];
+            mac_to_str(a->bssid, a_bssid, sizeof(a_bssid));
+            mac_to_str(b->bssid, b_bssid, sizeof(b_bssid));
+            char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+            snprintf(key, sizeof(key), "saesplit:%.40s", a->ssid);
+            snprintf(detail, sizeof(detail),
+                     "'%.16s' is SAE-only on %s and PSK-only on %s%s%s",
+                     a->ssid, a_bssid, b_bssid,
+                     diff_oui ? " - different vendor" : "",
+                     taken ? " - a client associated with PSK" : "");
+            fire(ALERT_TYPE_SAE_PSK_SPLIT,
+                 (taken || diff_oui) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+                 "SAE_PSK_SPLIT", detail, key, NULL, 0, now);
+            break;
         }
     }
 }
@@ -2805,6 +2882,7 @@ void alerts_update(sloth_state_t *s) {
     rule_rts_flood(s, now);
     rule_captive_portal(s, now);
     rule_fragattack(s, now);
+    rule_sae_psk_split(s, now);
     rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);

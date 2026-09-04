@@ -4134,6 +4134,196 @@ static void test_frag_quiet_on_an_open_network(void) {
     frag_clear();
 }
 
+/* ── SAE/PSK split (#74 Detector B, concurrent half) ─────── */
+
+/* add_beacon() sets no AKM bits, so the split rule needs a variant that
+ * does. enc stays the display string it always was; akm_bits is the
+ * machine-readable form the rule reads. */
+static void add_beacon_akm(sloth_state_t *s, const char *ssid,
+                           const uint8_t bssid[6], const char *enc,
+                           uint32_t akm_bits) {
+    add_beacon(s, ssid, bssid, enc);
+    if (s->beacon_count > 0)
+        s->beacon_aps[s->beacon_count - 1].akm_bits = akm_bits;
+}
+
+static void add_assoc_req_akm(sloth_state_t *s, const uint8_t bssid[6],
+                              uint32_t akm_bits) {
+    if (s->assoc_req_count >= MAX_ASSOC_ENTRIES) return;
+    assoc_req_t *r = &s->assoc_reqs[s->assoc_req_count++];
+    memset(r, 0, sizeof(*r));
+    memcpy(r->bssid, bssid, 6);
+    r->sta[0]   = 0x02; r->sta[5] = 0x99;
+    r->akm_bits = akm_bits;
+    r->ts       = time(NULL);
+}
+
+static void test_sae_psk_split_fires(void) {
+    /* The gap between rule_evil_twin's two branches: WPA2 is not weak,
+     * so the CRIT branch skips it, and the ciphers differ, so the WARN
+     * branch skips it too. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* Different vendor OUI removes the one benign explanation — the
+         * same physical AP's other radio. */
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "SAE-only on 00:11:22") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "PSK-only on aa:bb:cc") != NULL);
+    }
+}
+
+static void test_sae_psk_split_same_vendor_is_warn(void) {
+    /* A dual-band unit configured inconsistently is a real finding and
+     * not an intrusion. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0x00, 0x11, 0x22, 0, 0, 2 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_WARN);
+}
+
+static void test_sae_psk_split_escalates_when_taken(void) {
+    /* Offered-and-taken is the difference between a misconfiguration
+     * and an incident, so it outranks the same-vendor discount. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0x00, 0x11, 0x22, 0, 0, 2 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK);
+    add_assoc_req_akm(&s, b, RSN_AKM_PSK);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "client associated") != NULL);
+    }
+}
+
+static void test_transition_mode_is_not_a_split(void) {
+    /* An AP offering PSK *and* SAE is ALERT_TYPE_WPA_DOWNGRADE (#62).
+     * Each side of a split must offer one family and not the other, so
+     * a transition-mode AP is neither side. Without this the two rules
+     * both fire on every WPA3-transition network in range and the
+     * operator gets two names for one fact. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE | RSN_AKM_PSK);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    /* And the mirror: transition mode on the PSK side. */
+    alerts_clear();
+    seed_state(&s);
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK | RSN_AKM_SAE);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+}
+
+static void test_sae_psk_split_quiet_cases(void) {
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+
+    /* Two SAE-only APs under one SSID: a normal WPA3 deployment. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA3", RSN_AKM_SAE);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    /* Different SSIDs: unrelated networks, one WPA3 and one WPA2, which
+     * is what most of the air looks like. */
+    alerts_clear();
+    seed_state(&s);
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Guest", b, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    /* Hidden SSID cannot be correlated, so an empty name must not match
+     * every other empty name and indict the whole band. */
+    alerts_clear();
+    seed_state(&s);
+    add_beacon_akm(&s, "", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "", b, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    /* OWE beside SAE is the OWE-transition pattern, already covered by
+     * WPA_DOWNGRADE. It is neither the PSK nor the SAE side here. */
+    alerts_clear();
+    seed_state(&s);
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "OPEN", RSN_AKM_OWE);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+
+    /* And an SSID with only one AP has nothing to disagree with. */
+    alerts_clear();
+    seed_state(&s);
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT), -1);
+}
+
+static void test_sae_psk_split_covers_the_akm_families(void) {
+    /* FT-PSK and SAE-EXT-KEY are the same lanes under different suite
+     * numbers. A rule matching only suite 2 and suite 8 misses a
+     * WPA3-R3 AP entirely — the #62 widening argument, restated here
+     * because this rule reads akm_bits directly. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE_EXT);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_FT_PSK);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT) >= 0);
+}
+
+static void test_sae_psk_split_fires_once_per_ssid(void) {
+    /* Three PSK-only BSSIDs under one SSID is one finding, not three.
+     * The dedup key is the SSID, and the walk breaks on the first
+     * match, so iteration order cannot change the alert. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+    uint8_t c[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 3 };
+    add_beacon_akm(&s, "Corp", a, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, "Corp", b, "WPA2", RSN_AKM_PSK);
+    add_beacon_akm(&s, "Corp", c, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    int n = 0, idx = -1;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_SAE_PSK_SPLIT) { n++; idx = i; }
+    ASSERT_EQ(n, 1);
+    /* One row is not enough: fire() dedups on the key, so a rule that
+     * kept walking would produce one row with count 2. The count is
+     * shown to the operator as "how many times this happened", and two
+     * BSSIDs disagreeing is one fact, not two. */
+    if (idx >= 0) ASSERT_EQ(s.alerts[idx].count, 1);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -4393,4 +4583,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_plaintext_fires);
     RUN_TEST(test_frag_bcast_fires);
     RUN_TEST(test_frag_quiet_on_an_open_network);
+
+    TEST_SUITE("alerts: SAE/PSK split (#74)");
+    RUN_TEST(test_sae_psk_split_fires);
+    RUN_TEST(test_sae_psk_split_same_vendor_is_warn);
+    RUN_TEST(test_sae_psk_split_escalates_when_taken);
+    RUN_TEST(test_transition_mode_is_not_a_split);
+    RUN_TEST(test_sae_psk_split_quiet_cases);
+    RUN_TEST(test_sae_psk_split_covers_the_akm_families);
+    RUN_TEST(test_sae_psk_split_fires_once_per_ssid);
 }
