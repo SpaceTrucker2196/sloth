@@ -110,3 +110,4 @@
 | 57142a3 | 2026-09-04T19:21:07Z | claude-opus-5 | 53 | 31820 | 8056821 | 320487 | 8.0290 | #74 Detector B (temporal half) — SAE->PSK regression from persisted AKM history |
 | 7584bb0 | 2026-09-04T19:38:10Z | claude-opus-5 | 68 | 39504 | 12424153 | 55639 | 7.7564 | #74 fingerprint rows — ESP32 Marauder + Pineapple MK7, flagged unverified |
 | 9ccc642 | 2026-09-04T20:14:11Z | claude-opus-5 | 36 | 26203 | 7374001 | 31400 | 4.6563 | #75 slice 3 — A-MSDU flip via CCMP packet-number replay |
+| 5a08f03 | 2026-09-04T20:27:48Z | claude-opus-5 | 65 | 32786 | 14524344 | 43166 | 8.5138 | #73 slice 3 — [f] Research view |
