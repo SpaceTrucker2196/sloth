@@ -714,6 +714,7 @@ typedef enum {
     ALERT_TYPE_SAE_PSK_SPLIT,       /* one SSID advertised as SAE-only by one BSSID and PSK-only by another (#74) */
     ALERT_TYPE_SAE_PSK_REGRESSION,  /* one BSSID that sustained SAE-only and now advertises PSK-only (#74) */
     ALERT_TYPE_FRAG_AMSDU,          /* same protected MPDU replayed with the A-MSDU bit flipped — CVE-2020-24588 (#75) */
+    ALERT_TYPE_FRAG_AMSDU_EAPOL,    /* plaintext A-MSDU whose first subframe claims to carry EAPOL — CVE-2020-26144 (#75 slice 4) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

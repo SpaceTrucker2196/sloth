@@ -4185,6 +4185,73 @@ static void test_frag_amsdu_fires(void) {
     frag_clear();
 }
 
+/* One A-MSDU subframe with a controllable LLC/SNAP EtherType — the
+ * signal CVE-2020-26144 needs and frag_frame() above cannot give it,
+ * because frag_frame builds a non-QoS frame with no A-MSDU bit at all. */
+static int frag_amsdu_frame(uint8_t *f, const uint8_t *da,
+                            const uint8_t *bssid, const uint8_t *sa,
+                            uint16_t sub_ethertype) {
+    memset(f, 0, 128);
+    f[0] = (uint8_t)((8 << 4) | (2 << 2));   /* QoS Data */
+    f[1] = 0x02;                              /* FromDS */
+    memcpy(f + 4,  da,    6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, sa,    6);
+    f[24] = 0x80;                             /* QoS Control: A-MSDU=1 */
+    int sub_hdr = 26;
+    memcpy(f + sub_hdr,     da, 6);           /* subframe DA */
+    memcpy(f + sub_hdr + 6, sa, 6);           /* subframe SA */
+    int llc = sub_hdr + 14;
+    f[llc + 0] = 0xaa; f[llc + 1] = 0xaa; f[llc + 2] = 0x03;
+    f[llc + 6] = (uint8_t)(sub_ethertype >> 8);
+    f[llc + 7] = (uint8_t)(sub_ethertype & 0xff);
+    f[llc + 8] = 0x45;
+    return llc + 9;
+}
+
+static void test_frag_amsdu_eapol_fires(void) {
+    /* A plaintext A-MSDU whose sub-frame claims EAPOL, after the same
+     * station's key install was witnessed. Real EAPOL is never
+     * aggregated, so this has no benign reading. */
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    int n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 0, 0);  /* key install */
+    frag_observe(f, n, 1000);
+    n = frag_amsdu_frame(f, FA_STA, FA_BSS, FA_AP, 0x888E);
+    frag_observe(f, n, 1001);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_AMSDU_EAPOL);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-26144") != NULL);
+    }
+    /* Not the plain-unicast rule's territory, or the operator gets sent
+     * to the wrong advisory. */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT), -1);
+    frag_clear();
+}
+
+static void test_frag_amsdu_eapol_silent_on_ordinary_aggregation(void) {
+    /* A subframe carrying anything other than EAPOL is just a driver
+     * aggregating frames, which is routine. */
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+    int n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 0, 0);
+    frag_observe(f, n, 1000);
+    n = frag_amsdu_frame(f, FA_STA, FA_BSS, FA_AP, 0x0800);
+    frag_observe(f, n, 1001);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_AMSDU_EAPOL), -1);
+    frag_clear();
+}
+
 static void test_frag_quiet_on_an_open_network(void) {
     /* Every frame unprotected, none of it an attack. The case that
      * decides whether this detector is usable at all. */
@@ -4718,6 +4785,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_plaintext_fires);
     RUN_TEST(test_frag_bcast_fires);
     RUN_TEST(test_frag_amsdu_fires);
+    RUN_TEST(test_frag_amsdu_eapol_fires);
+    RUN_TEST(test_frag_amsdu_eapol_silent_on_ordinary_aggregation);
     RUN_TEST(test_frag_quiet_on_an_open_network);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");

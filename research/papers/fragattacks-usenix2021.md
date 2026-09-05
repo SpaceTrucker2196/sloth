@@ -2,7 +2,7 @@
 source_url: https://papers.mathyvanhoef.com/usenix2021.pdf
 retrieved: 2026-09-03
 topics: [fragattacks, fragmentation, aggregation, amsdu, rsn, plaintext-injection, wpa2, wpa3]
-alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED, ALERT_TYPE_FRAG_AMSDU]
+alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED, ALERT_TYPE_FRAG_AMSDU, ALERT_TYPE_FRAG_AMSDU_EAPOL]
 citation: Vanhoef, "Fragment and Forge: Breaking Wi-Fi Through Frame Aggregation and Fragmentation", USENIX Security 2021
 ---
 # FragAttacks — Vanhoef, USENIX Security 2021
@@ -72,6 +72,19 @@ aggregation bit flipped, and CCMP's own replay-protection rule
 key. `ALERT_TYPE_FRAG_AMSDU` is the intersection: same transmitter, same
 PN, differing A-MSDU bit. The evidence is entirely in the plaintext MAC
 and CCMP headers.
+
+## The other half of the same design flaw needs no workaround
+
+CVE-2020-26144 is the paper's other A-MSDU finding, and unlike -24588 it
+needs none of the above: the frame in question is unprotected, so the
+subframe header — including its LLC/SNAP — is not behind any cipher at
+all. What licenses `ALERT_TYPE_FRAG_AMSDU_EAPOL` is a fact the paper
+states about legitimate 802.11 traffic rather than about the attack:
+EAPOL is always its own MPDU, never a subframe of an aggregated one. A
+plaintext A-MSDU whose first subframe's LLC/SNAP claims the EAPOL
+EtherType is therefore not an ambiguous signal needing a replacement
+proxy the way -24588's was — it is the paper's own confusion case,
+observed directly.
 
 ## What it does not support
 

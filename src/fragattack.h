@@ -71,7 +71,23 @@
  *
  * CVE-2020-24587 (mixed key) needs PTK-rotation visibility — the
  * current M1-M4 EAPOL parser does not distinguish a GTK rekey from the
- * initial handshake, so it stays out. Slice 4.
+ * initial handshake, so it stays out.
+ *
+ * ── Slice 4 ──
+ *
+ * Adds one more detector, unrelated in mechanism to the mixed-key gap
+ * above (that one is still out — see the note it left behind):
+ *
+ *   CVE-2020-26144  plaintext A-MSDU whose first subframe claims to
+ *                   carry EAPOL
+ *
+ * Unlike -24588, this is readable in the clear: the frame is plaintext,
+ * so the A-MSDU subframe header (DA/SA/Length) and its LLC/SNAP are not
+ * behind any cipher. Real EAPOL is never aggregated — it is always its
+ * own MPDU, never a subframe — so a subframe claiming EtherType 0x888E
+ * has no benign reading. This is the plaintext half of the same design
+ * flaw -24588 detects the encrypted half of: an unauthenticated A-MSDU
+ * bit that lets a receiver be tricked about what it is parsing.
  *
  * ── Slice 2 ──
  *
@@ -148,6 +164,14 @@ typedef struct {
      * differing between the two. See the note below on why this is the
      * signal and the one the issue proposed is not. */
     uint32_t amsdu_flip;
+
+    /* CVE-2020-26144: a plaintext A-MSDU whose first subframe's
+     * LLC/SNAP claims EtherType EAPOL (0x888E). Real EAPOL is never
+     * aggregated, so this has no benign reading. The plaintext
+     * counterpart to amsdu_flip above — that one needs the CCMP PN
+     * because its evidence is encrypted; this one needs nothing but
+     * the subframe header because its evidence is not. */
+    uint32_t amsdu_eapol_spoof;
 
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and

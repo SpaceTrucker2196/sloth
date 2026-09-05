@@ -12,8 +12,8 @@ share one outcome: an adversary in radio range can get frames of their
 choosing accepted into an encrypted WPA/WPA2/WPA3 session **without
 holding the key**.
 
-Sloth implements four of them. This page explains which, why the other
-eight are harder or impossible to observe passively, and — the part
+Sloth implements five of them. This page explains which, why the other
+seven are harder or impossible to observe passively, and — the part
 worth reading before you trust the alert — what each detector's gate
 actually proves.
 
@@ -29,7 +29,7 @@ actually proves.
 | 2020-26141 | does not verify the TKIP MIC of fragmented frames | no (MIC is under the key) |
 | 2020-26142 | processes fragmented frames as full frames | no (a receiver-side decision) |
 | 2020-26143 | accepts fragmented plaintext data frames | **yes — shipped** |
-| 2020-26144 | accepts plaintext A-MSDU starting with an EAPOL RFC1042 header | yes, plaintext only — not yet built |
+| 2020-26144 | accepts plaintext A-MSDU starting with an EAPOL RFC1042 header | **yes, plaintext only — shipped, slice 4** |
 | 2020-26145 | accepts plaintext broadcast fragments as full frames | **yes — shipped** |
 | 2020-26146 | reassembles encrypted fragments with non-consecutive PNs | **not as slice 2 was originally described** — see below |
 | 2020-26147 | reassembles mixed encrypted/plaintext fragments | **yes — shipped, slice 2** |
@@ -225,6 +225,46 @@ octet is the Extended IV bit; without it the frame is WEP or original
 TKIP, which have no 48-bit PN at all, so the same eight bytes mean
 something else entirely and `dot11_ccmp_pn()` returns -1 rather than
 inventing evidence.
+
+### `FRAG_AMSDU_EAPOL` — CVE-2020-26144, the plaintext half
+
+`FRAG_AMSDU` above detects the *encrypted* half of the aggregation
+design flaw by replay, because the subframe headers a direct check
+would need are inside the ciphertext. CVE-2020-26144 is the same flaw's
+other half, and it needs no such workaround: the frame is **plaintext**,
+so the A-MSDU subframe header — DA(6), SA(6), Length(2), then an
+ordinary LLC/SNAP — sits in the clear right where any other subframe's
+would.
+
+The check is one fact: real EAPOL is never aggregated. It is always its
+own MPDU, never a subframe of one. So a plaintext A-MSDU whose first
+subframe's LLC/SNAP claims EtherType `0x888E` (EAPOL) is not "unusual
+aggregation" — it is a receiver being handed a subframe dressed as an
+authenticator message, which is the confusion this CVE describes. There
+is no threshold and no rate to tune: the claim itself is the finding.
+
+**Same key-install gate as `FRAG_PLAINTEXT`.** This is plaintext
+traffic being judged, so the same false-positive story applies for the
+same reason: without evidence this station's key was already installed,
+an unprotected A-MSDU is an open network or a station mid-association,
+not a finding. The gate is per `(BSSID, station)` and ordered, exactly
+as above.
+
+**Only the first subframe is read.** A-MSDU subframes are each preceded
+by a Length field, but trusting that field to walk to the second
+subframe means trusting the exact value this attack manipulates
+elsewhere in the family — reading past the first would be leaning on
+the evidence to validate itself. The first subframe is also the one a
+spoofed EAPOL claim would occupy, so nothing downstream of it matters
+for this check.
+
+**What is not reused from `FRAG_PLAINTEXT`'s EtherType reader.** That
+function (`first_frag_ethertype()`) explicitly declines any A-MSDU
+frame — an aggregated body has no single LLC header, only a run of
+subframes, so treating it as one would misread the first subframe's
+length or DA/SA as if they were payload. This detector's reader
+(`first_amsdu_subframe_ethertype()`) is the A-MSDU-aware sibling that
+function's own comment points to.
 
 ## Addressing
 

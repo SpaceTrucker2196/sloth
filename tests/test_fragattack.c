@@ -875,6 +875,143 @@ static void test_unprotected_amsdu_is_not_this_detector(void) {
     ASSERT_EQ(bss() ? bss()->amsdu_flip : 99u, 0u);
 }
 
+/* ── CVE-2020-26144: plaintext A-MSDU claiming EAPOL ─────────────────── */
+
+/* One downlink QoS data frame carrying a single A-MSDU subframe whose
+ * LLC/SNAP EtherType is controllable. Unlike build_ccmp above, this is
+ * unprotected on purpose: -26144's evidence sits in the subframe
+ * header, which is inside the ciphertext for an encrypted frame and
+ * plainly visible for this one. */
+static int build_amsdu(uint8_t *f, const uint8_t *da, const uint8_t *bssid,
+                       const uint8_t *sa, uint16_t sub_ethertype) {
+    memset(f, 0, 160);
+    f[0] = (uint8_t)((8 << 4) | (2 << 2));      /* QoS Data */
+    f[1] = FC1_FROMDS;
+    memcpy(f + 4,  da,    6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, sa,    6);
+    f[24] = 0x80;                                /* QoS Control: A-MSDU=1 */
+    f[25] = 0;
+
+    int sub_hdr = 26;
+    memcpy(f + sub_hdr,     da, 6);              /* subframe DA */
+    memcpy(f + sub_hdr + 6, sa, 6);              /* subframe SA */
+    /* Subframe Length (2 bytes) left zero — the detector never reads
+     * it, the same way it never reads Address 3 against a subframe DA:
+     * both are the signals the issue proposed and the header rejected
+     * as unreadable on the encrypted frame this is not. */
+    int llc = sub_hdr + 14;
+    f[llc + 0] = 0xaa; f[llc + 1] = 0xaa; f[llc + 2] = 0x03;
+    f[llc + 6] = (uint8_t)(sub_ethertype >> 8);
+    f[llc + 7] = (uint8_t)(sub_ethertype & 0xff);
+    f[llc + 8] = 0x45;
+    return llc + 9;
+}
+
+static void test_amsdu_eapol_subframe_fires(void) {
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x888E);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->amsdu_eapol_spoof, 1u);
+    ASSERT_EQ(bss()->last_sa[5], STA_B[5]);
+    ASSERT_EQ(bss()->last_da[5], STA_A[5]);
+    ASSERT_EQ(bss()->last_hit, (time_t)1001);
+    /* Not the plain-unicast counter — that would send the operator to
+     * the wrong CVE's advisory. */
+    ASSERT_EQ(bss()->plaintext_unicast, 0u);
+}
+
+static void test_amsdu_non_eapol_subframe_is_ordinary(void) {
+    /* Aggregation is routine. Only a subframe that specifically claims
+     * EAPOL is the confusion bug — anything else is a driver doing what
+     * A-MSDU is for. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) {
+        ASSERT_EQ(bss()->amsdu_eapol_spoof, 0u);
+        ASSERT_EQ(bss()->plaintext_unicast, 0u);
+    }
+}
+
+static void test_amsdu_eapol_needs_witnessed_key_install(void) {
+    /* Same false-positive defence as every other plaintext detector in
+     * this file: an open network or a station still associating must
+     * not be indicted by its own first frames. */
+    frag_clear();
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x888E);
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 0u);
+}
+
+static void test_encrypted_amsdu_eapol_is_not_this_detector(void) {
+    /* Mirrors test_unprotected_amsdu_is_not_this_detector. An encrypted
+     * A-MSDU's subframe header is inside the ciphertext, so there is no
+     * subframe EtherType to read — this detector must stay silent and
+     * leave the encrypted case to amsdu_flip. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp(f, 0x000000000099ULL, 1, 42, BSSID, 1);
+    frag_observe(f, n, 1000);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 0u);
+}
+
+static void test_amsdu_non_snap_subframe_is_not_counted(void) {
+    /* Bare LLC has its protocol identifier elsewhere; reading an
+     * EtherType out of it is invented, and inventing 0x888E would fire
+     * on any subframe whose first two bytes happen to match. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x888E);
+    f[40] = 0xe0; f[41] = 0xe0;                  /* not AA AA 03 */
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 0u);
+}
+
+static void test_amsdu_eapol_continuation_fragment_is_silent(void) {
+    /* A-MSDU and fragmentation do not combine on the frames this
+     * detector reasons about; a continuation carries no subframe header
+     * of its own, so guessing one would be inventing evidence. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x888E);
+    f[22] = 1;                                   /* fragment number 1 */
+    frag_observe(f, n, 1001);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 0u);
+}
+
+static void test_amsdu_eapol_truncated_is_safe(void) {
+    /* Cut before the subframe LLC/SNAP is complete. Must decline, not
+     * read past the buffer or invent an EtherType — asserted at every
+     * length up to the boundary, then proven the boundary itself is
+     * not overly conservative by firing once the frame is whole. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[160];
+    int n = build_amsdu(f, STA_A, BSSID, STA_B, 0x888E);
+    /* 26 (MAC header + QoS Control) + 14 (subframe DA/SA/Length) + 8
+     * (LLC/SNAP through the EtherType) — the frame's trailing data byte
+     * is not needed to read it. */
+    int need = 26 + 14 + 8;
+    for (int cut = 0; cut < need; cut++)
+        frag_observe(f, cut, 1001 + cut);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 0u);
+
+    frag_observe(f, need, 9000);
+    ASSERT_EQ(bss() ? bss()->amsdu_eapol_spoof : 99u, 1u);
+    ASSERT(n >= need);
+}
+
 void run_fragattack_tests(void);
 void run_fragattack_tests(void) {
     TEST_SUITE("802.11 addressing (#75)");
@@ -915,6 +1052,15 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_repeated_flips_each_count);
     RUN_TEST(test_mpdu_table_is_bounded);
     RUN_TEST(test_unprotected_amsdu_is_not_this_detector);
+
+    TEST_SUITE("fragattacks: plaintext A-MSDU claiming EAPOL, CVE-2020-26144 (#75 slice 4)");
+    RUN_TEST(test_amsdu_eapol_subframe_fires);
+    RUN_TEST(test_amsdu_non_eapol_subframe_is_ordinary);
+    RUN_TEST(test_amsdu_eapol_needs_witnessed_key_install);
+    RUN_TEST(test_encrypted_amsdu_eapol_is_not_this_detector);
+    RUN_TEST(test_amsdu_non_snap_subframe_is_not_counted);
+    RUN_TEST(test_amsdu_eapol_continuation_fragment_is_silent);
+    RUN_TEST(test_amsdu_eapol_truncated_is_safe);
 
     TEST_SUITE("fragattacks: table behaviour (#75)");
     RUN_TEST(test_bsses_are_tracked_separately);

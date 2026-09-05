@@ -91,6 +91,32 @@ static int first_frag_ethertype(const uint8_t *dot11, int len) {
     return (llc[6] << 8) | llc[7];
 }
 
+/* EtherType claimed by the first A-MSDU subframe of a plaintext frame,
+ * or -1. CVE-2020-26144: the case first_frag_ethertype() above declines
+ * — an A-MSDU body has no single LLC header, only a run of subframes
+ * each with its own — but here plaintext is exactly what makes reading
+ * one meaningful. An encrypted A-MSDU's subframe headers sit inside the
+ * ciphertext (that is why -24588 above is detected by PN replay
+ * instead); a plaintext one puts them in the clear.
+ *
+ * The subframe header is DA(6) SA(6) Length(2), then a body with the
+ * same LLC/SNAP shape dot11_data_payload() reads for an unaggregated
+ * frame. Only the first subframe is read: it is the one a spoofed
+ * EAPOL claim would occupy, and the ones after it are unreachable
+ * without trusting the very length field this bug is about. */
+static int first_amsdu_subframe_ethertype(const uint8_t *dot11, int len) {
+    if (dot11_frag_num(dot11, len) != 0) return -1;
+    if (dot11_amsdu_present(dot11, len) != 1) return -1;
+
+    int hdr = dot11_data_header_len(dot11, len);
+    if (hdr < 0) return -1;
+    int llc = hdr + 14;   /* subframe DA(6) + SA(6) + Length(2) */
+    if (llc + 8 > len) return -1;
+    const uint8_t *p = dot11 + llc;
+    if (p[0] != 0xaa || p[1] != 0xaa || p[2] != 0x03) return -1;
+    return (p[6] << 8) | p[7];
+}
+
 int frag_find(const uint8_t bssid[6]) {
     if (!bssid) return -1;
     for (int i = 0; i < g_bss_n; i++)
@@ -407,6 +433,17 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
          * completion that only the victim can perform. */
         if (!fragmented) return;
         b->plaintext_bcast_frag++;
+    } else if (amsdu == 1) {
+        /* CVE-2020-26144, slice 4. first_frag_ethertype() above
+         * declines an A-MSDU frame outright — no single LLC header to
+         * read — which is right for the encrypted case but leaves this
+         * plaintext one silently uncounted. EAPOL is never legitimately
+         * aggregated, so a subframe claiming to be one has no benign
+         * reading, unlike the plain-unicast branch below where EAPOL is
+         * an expected exemption. */
+        int et = first_amsdu_subframe_ethertype(dot11, len);
+        if (et != ETHERTYPE_EAPOL) return;
+        b->amsdu_eapol_spoof++;
     } else {
         /* CVE-2020-26140 / -26143. EAPOL is legitimately unprotected
          * even after key install — that is how rekeying works — so it
