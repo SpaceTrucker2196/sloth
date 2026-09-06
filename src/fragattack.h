@@ -69,25 +69,56 @@
  * meaning on unprotected frames, which is correct: -24588 is an attack
  * on encrypted MPDUs, and a plaintext A-MSDU is CVE-2020-26144.
  *
- * CVE-2020-24587 (mixed key) needs PTK-rotation visibility — the
- * current M1-M4 EAPOL parser does not distinguish a GTK rekey from the
- * initial handshake, so it stays out.
- *
  * ── Slice 4 ──
  *
- * Adds one more detector, unrelated in mechanism to the mixed-key gap
- * above (that one is still out — see the note it left behind):
+ * Adds two more detectors:
  *
  *   CVE-2020-26144  plaintext A-MSDU whose first subframe claims to
  *                   carry EAPOL
+ *   CVE-2020-24587  fragment reassembly spans a completed PTK rotation
+ *                   ("mixed key")
  *
- * Unlike -24588, this is readable in the clear: the frame is plaintext,
- * so the A-MSDU subframe header (DA/SA/Length) and its LLC/SNAP are not
- * behind any cipher. Real EAPOL is never aggregated — it is always its
- * own MPDU, never a subframe — so a subframe claiming EtherType 0x888E
- * has no benign reading. This is the plaintext half of the same design
- * flaw -24588 detects the encrypted half of: an unauthenticated A-MSDU
- * bit that lets a receiver be tricked about what it is parsing.
+ * Unlike -24588, -26144 is readable in the clear: the frame is
+ * plaintext, so the A-MSDU subframe header (DA/SA/Length) and its
+ * LLC/SNAP are not behind any cipher. Real EAPOL is never aggregated —
+ * it is always its own MPDU, never a subframe — so a subframe claiming
+ * EtherType 0x888E has no benign reading. This is the plaintext half of
+ * the same design flaw -24588 detects the encrypted half of: an
+ * unauthenticated A-MSDU bit that lets a receiver be tricked about what
+ * it is parsing.
+ *
+ * -24587 was the one item the #75 triage flagged as needing state that
+ * did not exist: eapol_log.c's M1-M4 parser could not tell a PTK rekey
+ * apart from the initial handshake, so a fragment session had nothing
+ * to compare against a later fragment of the same reassembly. It now
+ * tracks a per-(BSSID, STA) generation counter, bumped when an M3
+ * carries a new ANonce (`eapol_key_generation()`); a session records
+ * that counter when it opens (fragment number 0), and a completing
+ * fragment whose current generation has moved past it spans a
+ * mid-reassembly rekey — the mixed-key bug. Keyed on ANonce rather than
+ * "an M3 arrived" because an AP retries M3 verbatim (same ANonce) when
+ * M4 is lost, and counting retries would fire on ordinary handshake
+ * loss. Gated on both fragments being encrypted (an unencrypted one is
+ * FRAG_MIXED's territory) and on a nonzero generation at session open
+ * (0 means sloth never witnessed an install for this pair — reporting a
+ * rekey without that evidence would be a guess, not a finding).
+ *
+ * CVE-2020-26139 (an AP forwarding an EAPOL frame from a station that
+ * has not completed authentication out to another client) still stays
+ * out, but for a different reason than earlier notes on this issue
+ * claimed. It is not a wired-side-only bug: read literally, "forwards to
+ * connected clients" means the re-addressed frame *is* transmitted
+ * wirelessly — an uplink EAPOL from station A naming station B as its
+ * destination, followed by a downlink EAPOL from the AP to B carrying
+ * A as the source, would both be on-air and in principle visible to a
+ * detector that tracks per-station authentication state, which
+ * eapol_log.c already does. What is not yet verified is the precise
+ * wire-level shape of "destination" in the attack — whether it rides
+ * the 802.11 addressing, an 802.1X PAE group address, or something the
+ * paper specifies that a title alone does not — and shipping a rule on
+ * a guessed shape risks a detector that never fires or fires on the
+ * wrong thing. Left for a slice that starts from the paper's own frame
+ * trace rather than its one-line advisory description.
  *
  * ── Slice 2 ──
  *
@@ -172,6 +203,14 @@ typedef struct {
      * because its evidence is encrypted; this one needs nothing but
      * the subframe header because its evidence is not. */
     uint32_t amsdu_eapol_spoof;
+
+    /* CVE-2020-24587: a fragment reassembly completed after eapol_log.c
+     * witnessed a PTK rotation (a new-ANonce M3) for the pair — the
+     * reassembly spans two different keys. Only counted when both
+     * fragments are encrypted (an unencrypted one is mixed_protect's
+     * territory) and when a generation was actually observed at session
+     * open (0 means no evidence, not "no rekey"). */
+    uint32_t mixed_key;
 
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and

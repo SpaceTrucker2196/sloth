@@ -4,6 +4,7 @@
 #include <time.h>
 #include "runner.h"
 #include "fragattack.h"
+#include "eapol_log.h"
 #include "db.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
@@ -4252,6 +4253,89 @@ static void test_frag_amsdu_eapol_silent_on_ordinary_aggregation(void) {
     frag_clear();
 }
 
+/* CVE-2020-24587 — drives a real M3 through eapol_log.c so the rule
+ * reads the same generation counter frag_track() does, not a
+ * test-only shortcut. */
+static const uint8_t FA_ANONCE[32] = {
+    0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,
+    0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
+    0xb0,0xb1,0xb2,0xb3,0xb4,0xb5,0xb6,0xb7,
+    0xb8,0xb9,0xba,0xbb,0xbc,0xbd,0xbe,0xbf,
+};
+static const uint8_t FA_ANONCE2[32] = {
+    0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,
+    0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+    0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,
+    0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+};
+
+static void frag_drive_m3(const uint8_t *bssid, const uint8_t *sta,
+                          const uint8_t *anonce) {
+    uint8_t body[99];
+    memset(body, 0, sizeof(body));
+    body[0] = 0x02; body[1] = 0x03;
+    uint16_t ki = (1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02;
+    body[4] = 0x02;
+    body[5] = (uint8_t)(ki >> 8);
+    body[6] = (uint8_t)(ki & 0xff);
+    memcpy(body + 17, anonce, 32);
+    body[2] = 0; body[3] = 99 - 4;
+
+    uint8_t f[160];
+    memset(f, 0, sizeof(f));
+    f[0] = 0x08; f[1] = 0x02;                  /* Data, FromDS */
+    memcpy(f + 4,  sta,   6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8E;
+    memcpy(f + 32, body, sizeof(body));
+    eapol_observe_dot11(f, 32 + (int)sizeof(body), -50, 6);
+}
+
+static void test_frag_mixkey_fires(void) {
+    alerts_clear();
+    frag_clear();
+    eapol_clear();
+    frag_drive_m3(FA_BSS, FA_AP, FA_ANONCE);
+    uint8_t f[128];
+    int n = frag_frame(f, 0x44, FA_STA, FA_BSS, FA_AP, 0, 0);  /* Protected+MoreFrag */
+    frag_observe(f, n, 1000);
+    frag_drive_m3(FA_BSS, FA_AP, FA_ANONCE2);                  /* the rekey */
+    n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 1, 0);      /* Protected */
+    frag_observe(f, n, 1010);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_MIXKEY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-24587") != NULL);
+    }
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_MIXED), -1);
+    frag_clear();
+    eapol_clear();
+}
+
+static void test_frag_mixkey_silent_without_a_rekey(void) {
+    alerts_clear();
+    frag_clear();
+    eapol_clear();
+    frag_drive_m3(FA_BSS, FA_AP, FA_ANONCE);
+    uint8_t f[128];
+    int n = frag_frame(f, 0x44, FA_STA, FA_BSS, FA_AP, 0, 0);
+    frag_observe(f, n, 1000);
+    n = frag_frame(f, 0x40, FA_STA, FA_BSS, FA_AP, 1, 0);
+    frag_observe(f, n, 1010);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_MIXKEY), -1);
+    frag_clear();
+    eapol_clear();
+}
+
 static void test_frag_quiet_on_an_open_network(void) {
     /* Every frame unprotected, none of it an attack. The case that
      * decides whether this detector is usable at all. */
@@ -4787,6 +4871,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_amsdu_fires);
     RUN_TEST(test_frag_amsdu_eapol_fires);
     RUN_TEST(test_frag_amsdu_eapol_silent_on_ordinary_aggregation);
+    RUN_TEST(test_frag_mixkey_fires);
+    RUN_TEST(test_frag_mixkey_silent_without_a_rekey);
     RUN_TEST(test_frag_quiet_on_an_open_network);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");

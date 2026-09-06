@@ -375,6 +375,108 @@ static void test_eapol_clean_bssid_no_provenance_comment(void) {
     cleanup_taint_dir(dir);
 }
 
+/* ── PTK generation, #75 slice 4 (CVE-2020-24587) ──────────────────── */
+
+static const uint8_t ANONCE2[32] = {
+    0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,
+    0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+    0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,
+    0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+};
+
+static const uint8_t GEN_BSSID[6] = BSSID;
+static const uint8_t GEN_STA[6]   = STA;
+
+/* M3: KeyACK=1, MIC=1, Install=1 (802.11-2016 §12.7.6, Table 12-8). */
+static int drive_m3(const uint8_t *anonce) {
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, anonce, M2_MIC, NULL);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    return eapol_observe_dot11(frame, fn, -50, 6);
+}
+
+static void test_generation_zero_for_unknown_pair(void) {
+    eapol_clear();
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
+}
+
+static void test_generation_bumps_on_first_m3(void) {
+    eapol_clear();
+    ASSERT_EQ(drive_m3(ANONCE), 1);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 1);
+}
+
+static void test_generation_ignores_a_retransmitted_m3(void) {
+    /* An AP resends M3 verbatim — same ANonce — when M4 is lost. Every
+     * retry counting as a new generation would make ordinary handshake
+     * loss look like a rekey storm. */
+    eapol_clear();
+    drive_m3(ANONCE);
+    drive_m3(ANONCE);
+    drive_m3(ANONCE);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 1);
+}
+
+static void test_generation_bumps_on_a_new_anonce(void) {
+    /* A genuine rekey — periodic PTK refresh or a fresh association —
+     * draws a new ANonce, which is exactly what distinguishes it from a
+     * retry above. */
+    eapol_clear();
+    drive_m3(ANONCE);
+    drive_m3(ANONCE2);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 2);
+    drive_m3(ANONCE);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 3);
+}
+
+static void test_generation_bumps_on_first_m3_even_with_a_zero_anonce(void) {
+    /* installed_anonce starts zeroed. Without has_installed to say
+     * whether anything has actually been recorded yet, a first M3 whose
+     * ANonce happens to be all-zero would read as "no change" against
+     * that zeroed buffer and never bump — has_installed is what tells
+     * the two states apart. */
+    eapol_clear();
+    ASSERT_EQ(drive_m3(NULL), 1);      /* NULL -> build_eapol_key zeroes it */
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 1);
+}
+
+static void test_generation_is_per_pair(void) {
+    eapol_clear();
+    uint8_t other_sta[6] = { 0x11, 0x21, 0x31, 0x41, 0x51, 0x61 };
+    drive_m3(ANONCE);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA),  1);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, other_sta), 0);
+}
+
+static void test_generation_cleared(void) {
+    eapol_clear();
+    drive_m3(ANONCE);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 1);
+    eapol_clear();
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
+}
+
+static void test_generation_not_bumped_by_m1_or_m2(void) {
+    /* Only Install=1 (M3) says a key is being installed. M1/M2 exchange
+     * nonces but install nothing yet. */
+    eapol_clear();
+    uint8_t eapol[128];
+    uint16_t ki1 = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki1, ANONCE, NULL, NULL);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    eapol_observe_dot11(frame, fn, -45, 6);
+
+    uint16_t ki2 = (1 << 8) | (1 << 3) | 0x02;
+    en = build_eapol_key(eapol, ki2, SNONCE, M2_MIC, NULL);
+    fn = build_frame(frame, eapol, en, /*from_ds=*/0);
+    eapol_observe_dot11(frame, fn, -45, 6);
+
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -386,4 +488,14 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_pmkid_emits_pcap_when_eapol_dir_set);
     RUN_TEST(test_eapol_tainted_bssid_emits_provenance_comment);
     RUN_TEST(test_eapol_clean_bssid_no_provenance_comment);
+
+    TEST_SUITE("eapol_log: PTK generation, CVE-2020-24587 (#75 slice 4)");
+    RUN_TEST(test_generation_zero_for_unknown_pair);
+    RUN_TEST(test_generation_bumps_on_first_m3);
+    RUN_TEST(test_generation_bumps_on_first_m3_even_with_a_zero_anonce);
+    RUN_TEST(test_generation_ignores_a_retransmitted_m3);
+    RUN_TEST(test_generation_bumps_on_a_new_anonce);
+    RUN_TEST(test_generation_is_per_pair);
+    RUN_TEST(test_generation_cleared);
+    RUN_TEST(test_generation_not_bumped_by_m1_or_m2);
 }

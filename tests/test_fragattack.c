@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "fragattack.h"
 #include "dot11_data.h"
+#include "eapol_log.h"
 
 /*
  * FragAttacks slice 1 — issue #75.
@@ -586,6 +587,163 @@ static void test_mixed_protect_silent_when_consistent(void) {
     if (bss()) ASSERT_EQ(bss()->mixed_protect, 0u);
 }
 
+/* CVE-2020-24587. */
+
+/* Drives a real M3 through eapol_log.c to advance the (bssid, sta)
+ * generation frag_track() reads via eapol_key_generation() — the same
+ * mechanism, not a test-only backdoor. M3 alone is enough: it is the
+ * message that carries Install=1. */
+static const uint8_t MK_ANONCE[32] = {
+    0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,
+    0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
+    0xb0,0xb1,0xb2,0xb3,0xb4,0xb5,0xb6,0xb7,
+    0xb8,0xb9,0xba,0xbb,0xbc,0xbd,0xbe,0xbf,
+};
+static const uint8_t MK_ANONCE2[32] = {
+    0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,
+    0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+    0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,
+    0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+};
+
+static void drive_m3(const uint8_t *bssid, const uint8_t *sta,
+                     const uint8_t *anonce) {
+    uint8_t body[99];
+    memset(body, 0, sizeof(body));
+    body[0] = 0x02;                            /* EAPOL version */
+    body[1] = 0x03;                            /* type = EAPOL-Key */
+    /* M3: KeyACK=1 (bit7), MIC=1 (bit8), Install=1 (bit6), pairwise
+     * (bit3), descriptor version 2 (802.11-2016 Table 12-8). */
+    uint16_t ki = (1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02;
+    body[4] = 0x02;
+    body[5] = (uint8_t)(ki >> 8);
+    body[6] = (uint8_t)(ki & 0xff);
+    memcpy(body + 17, anonce, 32);
+    body[2] = 0; body[3] = 99 - 4;             /* Length */
+
+    uint8_t f[160];
+    memset(f, 0, sizeof(f));
+    f[0] = 0x08;                                /* Data, non-QoS */
+    f[1] = FC1_FROMDS;                          /* AP -> STA */
+    memcpy(f + 4,  sta,   6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8E;
+    memcpy(f + 32, body, sizeof(body));
+    eapol_observe_dot11(f, 32 + (int)sizeof(body), -50, 6);
+}
+
+static void test_mixed_key_fires_across_a_rekey(void) {
+    /* Session opens under one PTK generation, a rekey completes while it
+     * is open, and the continuation completes under a new one. */
+    frag_clear();
+    eapol_clear();
+    drive_m3(BSSID, STA_B, MK_ANONCE);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);
+    drive_m3(BSSID, STA_B, MK_ANONCE2);          /* the rekey */
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->mixed_key, 1u);
+    /* Both fragments were encrypted throughout — this is not also a
+     * Protected-bit mismatch. */
+    ASSERT_EQ(bss()->mixed_protect, 0u);
+}
+
+static void test_mixed_key_silent_without_a_rekey(void) {
+    frag_clear();
+    eapol_clear();
+    drive_m3(BSSID, STA_B, MK_ANONCE);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_key, 0u);
+}
+
+static void test_mixed_key_needs_witnessed_generation(void) {
+    /* No M3 ever observed for this pair: sloth has no basis to claim a
+     * rekey happened, whatever the fragments themselves look like. */
+    frag_clear();
+    eapol_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_key, 0u);
+}
+
+static void test_mixed_key_silent_on_the_first_install_ever_seen(void) {
+    /* The session opened with no witnessed generation (sloth joined
+     * mid-capture), and the *first* M3 sloth has ever seen for this pair
+     * lands while it is still open. That is not evidence of a rekey
+     * spanning the session — it is sloth acquiring its first evidence of
+     * any key at all — so it must not fire merely because the current
+     * generation (1) now exceeds the recorded start (0). Distinguishes
+     * "0 means no evidence" from "0 means generation zero". */
+    frag_clear();
+    eapol_clear();
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);                    /* no M3 yet: start_gen=0 */
+    drive_m3(BSSID, STA_B, MK_ANONCE);            /* first-ever install */
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_key, 0u);
+}
+
+static void test_mixed_key_needs_both_fragments_encrypted(void) {
+    /* A rekey happened, but the reassembly also crosses a Protected-bit
+     * change — that is mixed_protect's finding, not this one. Counting
+     * it here too would send the operator to two CVEs for one event. */
+    frag_clear();
+    eapol_clear();
+    drive_m3(BSSID, STA_B, MK_ANONCE);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);
+    drive_m3(BSSID, STA_B, MK_ANONCE2);
+    n = build(f, 0, 0, STA_A, BSSID, STA_B, 1, 0x0800);   /* plaintext */
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->mixed_key, 0u);
+    ASSERT_EQ(bss()->mixed_protect, 1u);
+}
+
+static void test_mixed_key_retransmitted_m3_is_not_a_rekey(void) {
+    /* An AP resending M3 verbatim (lost M4) must not look like a rekey
+     * mid-session — eapol_log.c's own generation counter already
+     * defends this, and this test pins that the defence reaches through
+     * to the fragment detector. */
+    frag_clear();
+    eapol_clear();
+    drive_m3(BSSID, STA_B, MK_ANONCE);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_PROTECTED | FC1_MOREFRAG, STA_A, BSSID, STA_B,
+                 0, 0);
+    frag_observe(f, n, 1000);
+    drive_m3(BSSID, STA_B, MK_ANONCE);            /* same ANonce: a retry */
+    n = build(f, 0, FC1_PROTECTED, STA_A, BSSID, STA_B, 1, 0);
+    frag_observe(f, n, 1010);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->mixed_key, 0u);
+}
+
 /* ── session lifecycle ──────────────────────────────────────────────── */
 
 static void test_session_closes_on_completing_fragment(void) {
@@ -1081,6 +1239,14 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_mixed_protect_fires_encrypted_then_plaintext);
     RUN_TEST(test_mixed_protect_fires_plaintext_then_encrypted);
     RUN_TEST(test_mixed_protect_silent_when_consistent);
+
+    TEST_SUITE("fragattacks: mixed key, CVE-2020-24587 (#75 slice 4)");
+    RUN_TEST(test_mixed_key_fires_across_a_rekey);
+    RUN_TEST(test_mixed_key_silent_without_a_rekey);
+    RUN_TEST(test_mixed_key_needs_witnessed_generation);
+    RUN_TEST(test_mixed_key_silent_on_the_first_install_ever_seen);
+    RUN_TEST(test_mixed_key_needs_both_fragments_encrypted);
+    RUN_TEST(test_mixed_key_retransmitted_m3_is_not_a_rekey);
 
     TEST_SUITE("fragattacks: session lifecycle (#75 slice 2)");
     RUN_TEST(test_session_closes_on_completing_fragment);

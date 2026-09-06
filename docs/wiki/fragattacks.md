@@ -12,19 +12,19 @@ share one outcome: an adversary in radio range can get frames of their
 choosing accepted into an encrypted WPA/WPA2/WPA3 session **without
 holding the key**.
 
-Sloth implements five of them. This page explains which, why the other
-seven are harder or impossible to observe passively, and — the part
-worth reading before you trust the alert — what each detector's gate
-actually proves.
+Sloth implements six of them. This page explains which, why the other
+six are harder or impossible to observe passively (or, for one, simply
+not yet built), and — the part worth reading before you trust the
+alert — what each detector's gate actually proves.
 
 ## The twelve
 
 | CVE | what the receiver does wrong | passively observable? |
 |---|---|---|
 | 2020-24586 | does not clear the fragment cache on (re)connect | **yes — shipped, slice 2** |
-| 2020-24587 | reassembles fragments encrypted under different keys | needs PTK-rotation visibility — **slice 4** |
+| 2020-24587 | reassembles fragments encrypted under different keys | **yes — shipped, slice 4** |
 | 2020-24588 | accepts non-SPP A-MSDU frames | **yes, sideways — shipped.** Not as usually described; see below |
-| 2020-26139 | forwards EAPOL from an unauthenticated sender | yes, needs handshake state — slice 4 |
+| 2020-26139 | AP forwards an EAPOL frame from a station that has not completed authentication to another client | **not yet — needs the paper's own frame trace**, not just its one-line advisory; see below |
 | 2020-26140 | accepts plaintext data frames in a protected network | **yes — shipped** |
 | 2020-26141 | does not verify the TKIP MIC of fragmented frames | no (MIC is under the key) |
 | 2020-26142 | processes fragmented frames as full frames | no (a receiver-side decision) |
@@ -103,6 +103,34 @@ noisy on exactly the ordinary multi-station traffic this detector family
 is supposed to be quiet against. Left for a slice that can test the
 retry case honestly, rather than shipped and found unusable in the
 field.
+
+### Why CVE-2020-26139 is not here, and a correction to earlier notes on this issue
+
+Earlier notes on #75 (this page included) framed -26139 as needing
+"handshake state" without saying what that state would actually gate
+on, which on inspection was papering over not having read the attack
+closely enough to build it. Worth correcting rather than leaving as a
+vague "slice 4" placeholder.
+
+The advisory line is "an AP forwards an EAPOL frame from a station that
+has not completed authentication to another client". Read literally,
+the forwarded frame *is* transmitted wirelessly — an infrastructure BSS
+has no other path to another client — so this is not the
+wired-side-only, structurally unobservable case that -26141/-26142 are.
+In principle: an uplink EAPOL frame naming another station as its
+destination, followed by a downlink EAPOL frame from the AP to that
+station carrying the original sender as source, both on-air, and the
+original sender's authentication state is exactly what `eapol_log.c`
+already tracks.
+
+What stopped this shipping this slice is not observability but
+precision. "Names another station as its destination" needs a specific
+answer for *where in the frame* that destination lives — 802.11
+addressing, an 802.1X PAE group address, or something the paper's own
+frame trace specifies that a one-line advisory does not — and guessing
+wrong ships a detector that either never fires or fires on ordinary
+traffic. That is a paper-reading task, not a coding one, and it stayed
+undone rather than being shipped on a guess.
 
 ## The gate, and why it is not the beacon
 
@@ -265,6 +293,48 @@ subframes, so treating it as one would misread the first subframe's
 length or DA/SA as if they were payload. This detector's reader
 (`first_amsdu_subframe_ethertype()`) is the A-MSDU-aware sibling that
 function's own comment points to.
+
+### `FRAG_MIXKEY` — CVE-2020-24587, the mixed-key attack
+
+This was the one item slice 1's triage flagged as needing state that did
+not exist: `eapol_log.c`'s M1–M4 parser tracked a handshake but had no
+way to tell a **rekey** apart from the initial one, so a fragment
+session had nothing to compare a later fragment of the same reassembly
+against. It now does.
+
+**A per-`(BSSID, STA)` generation counter**, bumped when an M3 carries
+an **ANonce that differs from the one last installed**. M3 is the
+message that matters — it is the AP telling the station Install=1, the
+moment the key changes — not M4, which only confirms the station
+complied and may never be seen on a hopping radio.
+
+The ANonce comparison, not a message count, is what makes this usable.
+An AP resends M3 verbatim — same ANonce — when M4 is lost, which
+happens constantly on a lossy or hopping capture, and every one of
+those retries would otherwise look like a fresh rekey. A genuine rekey
+(periodic PTK refresh, or a fresh association) draws a new ANonce every
+time, which is exactly the property that tells the two apart.
+
+A fragment session records that counter when it opens (fragment 0). A
+continuation fragment that **completes** the reassembly after the
+current generation has moved past the recorded one was assembled from
+fragments encrypted under two different keys — the mixed-key bug.
+
+**Two gates, both load-bearing:**
+
+- **Both fragments must be encrypted.** A session that starts encrypted
+  and completes plaintext (or the reverse) is `FRAG_MIXED`'s finding,
+  not this one — counting it here too would send the operator to two
+  CVEs for one event.
+- **The recorded generation must be nonzero.** Zero means eapol_log.c
+  never witnessed an install for this pair at all — not "generation
+  zero". If the *first* M3 sloth has ever seen for a pair lands while a
+  session opened with no prior evidence is still in flight, the current
+  generation (1) exceeds the recorded one (0), but that is sloth
+  acquiring its first evidence of any key, not a rekey spanning the
+  session. Reporting a rekey without evidence a key existed at all
+  would be a guess dressed as a detection, the same rule every
+  plaintext detector in this file follows for its own gate.
 
 ## Addressing
 

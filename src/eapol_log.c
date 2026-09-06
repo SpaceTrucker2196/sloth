@@ -42,6 +42,16 @@ typedef struct {
     uint8_t  m_frames[4][EAPOL_FRAME_MAX];
     int      m_frame_lens[4];
     time_t   m_frame_ts[4];
+
+    /* PTK generation (#75 slice 4, CVE-2020-24587). Bumped when an M3
+     * carries an ANonce that differs from the one last installed — see
+     * the comment at the msg==3 handler for why ANonce, not merely
+     * "another M3 arrived". installed_anonce starts zeroed and
+     * has_installed distinguishes that from a legitimately all-zero
+     * nonce. */
+    int      generation;
+    uint8_t  installed_anonce[32];
+    int      has_installed;
 } pending_t;
 static pending_t g_pending[MAX_PENDING];
 static int       g_pending_n = 0;
@@ -52,6 +62,17 @@ static char g_out_dir[256];
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
+}
+
+/* Read-only lookup — never allocates. Used by eapol_key_generation() so
+ * a mere query cannot evict a live pending handshake. */
+static const pending_t *pending_find(const uint8_t bssid[6],
+                                      const uint8_t sta[6]) {
+    for (int i = 0; i < g_pending_n; i++) {
+        if (mac_eq(g_pending[i].bssid, bssid) && mac_eq(g_pending[i].sta, sta))
+            return &g_pending[i];
+    }
+    return NULL;
 }
 
 static pending_t *pending_find_or_alloc(const uint8_t bssid[6],
@@ -438,6 +459,24 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     } else if (msg == 3) {
         memcpy(ev.anonce, nonce, 32);
         memcpy(ev.mic,    mic,   16);
+        /* PTK generation bump — #75 slice 4, CVE-2020-24587. M3 is the
+         * AP telling the station to install a key (Install=1 is part of
+         * msg 3's own classification above), so it is the moment a
+         * fragment reassembly detector needs to know "the key changed
+         * under this pair", not M4 (which only confirms the station
+         * complied and may never arrive on a hopping radio).
+         *
+         * Gated on the ANonce changing rather than "an M3 arrived": an
+         * AP retries M3 verbatim — same ANonce — when M4 is lost, and
+         * every one of those retries would otherwise look like a fresh
+         * rekey. A genuine rekey (periodic PTK refresh, or a second
+         * association) draws a new ANonce, so comparing it is exact
+         * where counting messages is not. */
+        if (!p->has_installed || memcmp(p->installed_anonce, nonce, 32) != 0) {
+            p->generation++;
+            memcpy(p->installed_anonce, nonce, 32);
+            p->has_installed = 1;
+        }
         push_event(&ev);
     } else if (msg == 4) {
         memcpy(ev.mic, mic, 16);
@@ -485,4 +524,12 @@ int eapol_event_count(void) {
     int n = g_count;
     pthread_mutex_unlock(&g_mu);
     return n;
+}
+
+int eapol_key_generation(const uint8_t bssid[6], const uint8_t sta[6]) {
+    pthread_mutex_lock(&g_mu);
+    const pending_t *p = pending_find(bssid, sta);
+    int gen = p ? p->generation : 0;
+    pthread_mutex_unlock(&g_mu);
+    return gen;
 }

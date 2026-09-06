@@ -2,6 +2,7 @@
 
 #include "fragattack.h"
 #include "dot11_data.h"
+#include "eapol_log.h"
 
 #define ETHERTYPE_EAPOL 0x888E
 
@@ -36,6 +37,11 @@ typedef struct {
     uint8_t tid;
     time_t  start_seen;       /* when fragment 0 opened this session */
     int     start_protected;  /* its Protected bit */
+    /* PTK generation eapol_log.c had observed for (bssid, sa) when this
+     * session opened — CVE-2020-24587 (#75 slice 4). 0 means no install
+     * was witnessed for this pair, not "generation zero" — see
+     * frag_track's use of it. */
+    int     start_generation;
     time_t  last_seen;
 } frag_session_t;
 
@@ -222,7 +228,7 @@ static frag_session_t *sess_find(const uint8_t bssid[6], const uint8_t sa[6],
  * itself evidence of anything. */
 static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
                       const uint8_t da[6], uint8_t tid,
-                      int protected_bit, time_t now) {
+                      int protected_bit, int generation, time_t now) {
     frag_session_t *s = sess_find(bssid, sa, da, tid);
     if (!s) {
         if (g_sess_n < FRAG_MAX_SESSIONS) {
@@ -237,8 +243,9 @@ static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
         memcpy(s->da,    da,    6);
         s->tid = tid;
     }
-    s->start_seen      = now;
-    s->start_protected = protected_bit;
+    s->start_seen       = now;
+    s->start_protected  = protected_bit;
+    s->start_generation = generation;
     s->last_seen        = now;
 }
 
@@ -258,7 +265,8 @@ static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
                        uint8_t tid, int fn, int more, int protected_bit,
                        time_t now) {
     if (fn == 0) {
-        sess_open(bssid, sa, da, tid, protected_bit, now);
+        int gen = eapol_key_generation(bssid, sa);
+        sess_open(bssid, sa, da, tid, protected_bit, gen, now);
         return;
     }
 
@@ -285,6 +293,22 @@ static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
      * bug is combining them into one MSDU. */
     if (protected_bit != s->start_protected) {
         b->mixed_protect++;
+        memcpy(b->last_sa, sa, 6);
+        memcpy(b->last_da, da, 6);
+        b->last_hit = now;
+    }
+
+    /* CVE-2020-24587 (#75 slice 4): the reassembly spans a completed PTK
+     * rotation. Meaningful only when both fragments are encrypted — a
+     * Protected-bit mismatch is mixed_protect's finding, not this one —
+     * and only when a generation was actually observed when the session
+     * opened: 0 means sloth never witnessed an install for this pair,
+     * and reporting a rekey without that evidence would be a guess
+     * dressed as a detection, the same rule every plaintext detector in
+     * this file follows for its own gate. */
+    if (protected_bit && s->start_protected && s->start_generation > 0 &&
+        eapol_key_generation(bssid, sa) > s->start_generation) {
+        b->mixed_key++;
         memcpy(b->last_sa, sa, 6);
         memcpy(b->last_da, da, 6);
         b->last_hit = now;

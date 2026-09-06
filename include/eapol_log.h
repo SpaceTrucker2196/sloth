@@ -45,4 +45,13 @@ void eapol_set_output_dir(const char *dir);
 /* Test introspection. */
 int  eapol_event_count(void);
 
+/* PTK generation for (bssid, sta): the number of times sloth has
+ * witnessed an M3 (key install) carrying a new ANonce for this pair,
+ * distinguishing a rekey from a retransmitted M3 — see the comment at
+ * the msg==3 handler. Returns 0 if the pair has never been seen, so a
+ * caller cannot mistake "unknown" for "one generation observed".
+ * Feeds the FragAttacks mixed-key detector (#75 slice 4,
+ * CVE-2020-24587) in src/fragattack.c. */
+int  eapol_key_generation(const uint8_t bssid[6], const uint8_t sta[6]);
+
 #endif /* SLOTH_EAPOL_LOG_H */

@@ -2,7 +2,7 @@
 source_url: https://papers.mathyvanhoef.com/usenix2021.pdf
 retrieved: 2026-09-03
 topics: [fragattacks, fragmentation, aggregation, amsdu, rsn, plaintext-injection, wpa2, wpa3]
-alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED, ALERT_TYPE_FRAG_AMSDU, ALERT_TYPE_FRAG_AMSDU_EAPOL]
+alert_kinds: [ALERT_TYPE_FRAG_PLAINTEXT, ALERT_TYPE_FRAG_BCAST, ALERT_TYPE_FRAG_CACHE, ALERT_TYPE_FRAG_MIXED, ALERT_TYPE_FRAG_AMSDU, ALERT_TYPE_FRAG_AMSDU_EAPOL, ALERT_TYPE_FRAG_MIXKEY]
 citation: Vanhoef, "Fragment and Forge: Breaking Wi-Fi Through Frame Aggregation and Fragmentation", USENIX Security 2021
 ---
 # FragAttacks — Vanhoef, USENIX Security 2021
@@ -85,6 +85,24 @@ plaintext A-MSDU whose first subframe's LLC/SNAP claims the EAPOL
 EtherType is therefore not an ambiguous signal needing a replacement
 proxy the way -24588's was — it is the paper's own confusion case,
 observed directly.
+
+## The mixed-key finding needed state the tool didn't have yet
+
+The paper's own description of CVE-2020-24587 — "receivers do not check
+that all fragments of a frame were protected by the same key" — is a
+claim about the *receiver's* omission, not a signal a monitor can read
+off one frame. Passively confirming it needs to know whether a key
+*changed* between two fragments of one reassembly, which needs a
+concept of key generation `eapol_log.c` did not track when this paper
+was first cited.
+
+`ALERT_TYPE_FRAG_MIXKEY` adds that: a per-`(BSSID, STA)` counter bumped
+on an M3 whose ANonce differs from the one last installed (Install=1 is
+part of §12.7.6's own M3 definition, so this is reading the standard's
+own state machine, not inventing one). A fragment session that opened
+under one generation and completes after the counter has moved is
+exactly the receiver failure the paper describes: two fragments,
+combined, that were never encrypted under the same key.
 
 ## What it does not support
 

@@ -239,6 +239,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_SAE_PSK_REGRESSION:     return "T1562.004";   /* Impair Defenses — the AP's own posture was lowered */
     case ALERT_TYPE_FRAG_AMSDU:             return "T1557";       /* CVE-2020-24588 — frames injected into a session whose key the attacker lacks */
     case ALERT_TYPE_FRAG_AMSDU_EAPOL:       return "T1557";       /* CVE-2020-26144 — a plaintext subframe impersonating an authenticator message */
+    case ALERT_TYPE_FRAG_MIXKEY:            return "T1557";       /* CVE-2020-24587 — frames injected by combining fragments across a key rotation */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -284,7 +285,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
     N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
     N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
-    N(ALERT_TYPE_FRAG_AMSDU_EAPOL);
+    N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -804,6 +805,22 @@ static void rule_fragattack(const sloth_state_t *s, time_t now) {
                      bss, sa, da);
             fire(ALERT_TYPE_FRAG_MIXED, ALERT_SEV_CRIT,
                  "FRAG_MIXED", detail, key, NULL, 0, now);
+        }
+
+        /* Slice 4 — issue #75, CVE-2020-24587. */
+
+        if (b->mixed_key > 0) {
+            snprintf(key, sizeof(key), "fragmixkey:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u reassembly%s on %.17s spanned a completed key"
+                     " rotation - last %.17s -> %.17s (CVE-2020-24587)",
+                     b->mixed_key, b->mixed_key == 1 ? "" : "ies",
+                     bss, sa, da);
+            /* CRIT: a fragment cache that survives a PTK rekey and
+             * completes a reassembly across it has no benign reading —
+             * the two fragments were never encrypted under the same key. */
+            fire(ALERT_TYPE_FRAG_MIXKEY, ALERT_SEV_CRIT,
+                 "FRAG_MIXKEY", detail, key, NULL, 0, now);
         }
     }
 }
