@@ -104,6 +104,46 @@ protected by BIP, which appends a Management MIC element rather than
 setting the Protected bit. Reading that bit on a broadcast answers a
 question it was never asked.
 
+## The chain, as a marker
+
+#76 also proposed `EVIL_TWIN_BTM_CHAIN`: action → deauth → new-BSSID
+beacon within 3 s with an RSSI delta. It shipped as a **marker on the
+existing `EVIL_TWIN` alert**, not as a new one, and the reasoning is
+worth keeping.
+
+Every link in that chain already fires. A BTM burst raises `BTM_ABUSE`,
+a deauth flood raises `DEAUTH_FLOOD`, a new same-SSID BSSID raises
+`EVIL_TWIN`, a sudden RSSI jump raises `EVIL_TWIN_PROXIMITY`. A chain
+detector on top would be a **fifth row describing the same seconds of
+air** — and five alerts for one event teaches an operator to ignore all
+five. `KARMA_AP` had already settled this shape with its
+`+deauth-then-lure` marker rather than a separate alert.
+
+So `EVIL_TWIN` gains `+btm-steered by <AP>`.
+
+**The link is tighter than the issue proposed.** Not "a steer happened
+and a twin appeared" — that is two things in the same minute, and
+treating co-occurrence as causation is how a correlator becomes noise.
+The marker requires that the BTM Request **named that exact BSSID as its
+destination**, in the candidate list, while carrying Disassociation
+Imminent. That is the AP telling a client to associate to the rogue: the
+whole attack in one field.
+
+**It escalates as well as annotates.** A same-cipher-different-OUI twin
+is normally WARN, because a cross-vendor deployment is a real
+possibility. A twin with traffic actively being pushed at it is not
+ambiguous, so the marker raises it to CRIT. That escalation is the value
+of the chain, delivered without a separate alert to triage.
+
+**Bounded to 300 s.** The steering table is durable by design — it
+survives the rate window so the `[a]` view can show every steer — so an
+unbounded lookup would mark every twin seen for the rest of a long
+session against one steer from its start.
+
+**Imminent-only**, for the same reason `BTM_ABUSE` counts only those: a
+Request without B2 set cannot force anything, and a load-balancing
+controller emits exactly those all day.
+
 ## What #76 proposed that was already built
 
 Worth recording, because the issue was filed from a stale grep and the

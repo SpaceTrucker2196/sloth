@@ -4762,6 +4762,123 @@ static void test_action_alerts_quiet_on_an_ordinary_bss(void) {
     beacon_clear();
 }
 
+/* ── BTM-steered twin marker (#76) ───────────────────────── */
+
+static void seed_steer(sloth_state_t *s, const uint8_t steerer[6],
+                       const uint8_t candidate[6], int imminent) {
+    if (s->btm_steer_count >= MAX_BTM_PAIRS) return;
+    btm_steer_t *st = &s->btm_steers[s->btm_steer_count++];
+    memset(st, 0, sizeof(*st));
+    memcpy(st->bssid, steerer, 6);
+    st->sta[0] = 0x12; st->sta[5] = 0x99;
+    st->req_count      = 1;
+    st->imminent_count = imminent;
+    memcpy(st->candidates[0], candidate, 6);
+    st->candidate_count = 1;
+    st->first_seen = st->last_seen = time(NULL);
+}
+
+static void test_twin_marked_when_btm_steered_at_it(void) {
+    /* The chain from #76, as a marker rather than a sixth alert. The
+     * link is tight on purpose: not "a steer happened and a twin
+     * appeared" but "the steer named *this* BSSID as the destination". */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
+    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    add_beacon(&s, "Corp", legit, "WPA2");
+    add_beacon(&s, "Corp", rogue, "WPA2");
+    seed_steer(&s, legit, rogue, 3);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, "+btm-steered by 00:11:22") != NULL);
+        /* The marker escalates: a twin with traffic actively pushed at
+         * it is not an ambiguous same-SSID sighting. */
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+    }
+    /* And no separate alert type appeared — one finding, better
+     * described, which is the whole point of choosing a marker. */
+    int twins = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN) twins++;
+    ASSERT_EQ(twins, 1);
+}
+
+static void test_twin_unmarked_without_a_matching_candidate(void) {
+    /* A steer naming some *other* BSSID is ordinary 802.11v roaming
+     * happening near a twin. Two things in the same minute is not a
+     * chain, and treating it as one is how a correlator becomes noise. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6]  = {0x00,0x11,0x22,0,0,1};
+    uint8_t rogue[6]  = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t other[6]  = {0x00,0x11,0x22,0,0,9};
+    add_beacon(&s, "Corp", legit, "WPA2");
+    add_beacon(&s, "Corp", rogue, "WPA2");
+    seed_steer(&s, legit, other, 3);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(s.alerts[i].detail, "btm-steered") == NULL);
+}
+
+static void test_twin_unmarked_for_non_imminent_steers(void) {
+    /* A Request without Disassociation Imminent cannot force anything —
+     * the client is free to decline — and a load-balancing controller
+     * emits exactly those all day. Same gate rule_btm_abuse uses. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
+    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    add_beacon(&s, "Corp", legit, "WPA2");
+    add_beacon(&s, "Corp", rogue, "WPA2");
+    seed_steer(&s, legit, rogue, 0);          /* no imminent bit */
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(s.alerts[i].detail, "btm-steered") == NULL);
+}
+
+static void test_twin_steer_window_expires(void) {
+    /* The steering table is durable — it survives the rate window by
+     * design — so without a time bound a steer from the start of a
+     * long session marks every twin seen for the rest of it. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t legit[6] = {0x00,0x11,0x22,0,0,1};
+    uint8_t rogue[6] = {0xaa,0xbb,0xcc,0,0,2};
+    add_beacon(&s, "Corp", legit, "WPA2");
+    add_beacon(&s, "Corp", rogue, "WPA2");
+    seed_steer(&s, legit, rogue, 3);
+    s.btm_steers[0].last_seen = time(NULL) - 4000;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(s.alerts[i].detail, "btm-steered") == NULL);
+}
+
+static void test_weak_strong_twin_also_names_the_steerer(void) {
+    /* The CRIT branch is already CRIT, so the marker only annotates —
+     * but naming the steering AP is the actionable half: which radio is
+     * pushing clients at the rogue, not just that a rogue exists. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t weak[6]   = {0xaa,0xbb,0xcc,0,0,2};
+    uint8_t strong[6] = {0x00,0x11,0x22,0,0,1};
+    add_beacon(&s, "Cafe", weak,   "OPEN");
+    add_beacon(&s, "Cafe", strong, "WPA2");
+    seed_steer(&s, strong, weak, 2);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, "+btm-steered by 00:11:22") != NULL);
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+    }
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -5048,4 +5165,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_sa_query_flood_alert_fires);
     RUN_TEST(test_mfp_unprotected_alert_fires);
     RUN_TEST(test_action_alerts_quiet_on_an_ordinary_bss);
+
+    TEST_SUITE("alerts: BTM-steered twin marker (#76)");
+    RUN_TEST(test_twin_marked_when_btm_steered_at_it);
+    RUN_TEST(test_twin_unmarked_without_a_matching_candidate);
+    RUN_TEST(test_twin_unmarked_for_non_imminent_steers);
+    RUN_TEST(test_twin_steer_window_expires);
+    RUN_TEST(test_weak_strong_twin_also_names_the_steerer);
 }

@@ -445,6 +445,44 @@ static int btm_source_ever_beaconed(const sloth_state_t *s,
  * rather than a second derivation of the twin rule. Only the twin half
  * matches: the real half being offered as a roam target is what a
  * legitimate steer looks like. */
+/* Was `bssid` named as a destination in a recent BTM Request that
+ * carried Disassociation Imminent — issue #76's chain, as a marker
+ * rather than a sixth alert.
+ *
+ * Every link in that chain already fires: a BTM burst raises
+ * BTM_ABUSE, a deauth flood raises DEAUTH_FLOOD, a new same-SSID BSSID
+ * raises EVIL_TWIN, an RSSI jump raises EVIL_TWIN_PROXIMITY. A separate
+ * chain alert would be a fifth row describing the same seconds of air,
+ * and five alerts for one event teaches an operator to ignore all five.
+ * KARMA_AP already settled this shape with its +deauth-then-lure
+ * marker; this follows it.
+ *
+ * The link is deliberately tight. Not "a steer happened and a twin
+ * appeared" — that is two things in the same minute — but "the steer
+ * named *this* BSSID as where the client should go". A candidate list
+ * pointing at a known twin is the AP telling a client to associate to
+ * the rogue, which is the whole attack in one field.
+ *
+ * Imminent-only for the same reason rule_btm_abuse counts only those: a
+ * Request without B2 set cannot force anything, and a load-balancing
+ * controller emits exactly those all day.
+ *
+ * Returns the steering AP's index in s->btm_steers[], or -1. */
+#define TWIN_STEER_WINDOW_S 300
+
+static int btm_steered_to(const sloth_state_t *s, const uint8_t bssid[6],
+                          time_t now) {
+    for (int i = 0; i < s->btm_steer_count; i++) {
+        const btm_steer_t *st = &s->btm_steers[i];
+        if (st->imminent_count <= 0) continue;
+        if (st->last_seen && now - st->last_seen > TWIN_STEER_WINDOW_S)
+            continue;
+        for (int c = 0; c < st->candidate_count && c < MAX_AP_NEIGHBORS; c++)
+            if (memcmp(st->candidates[c], bssid, 6) == 0) return i;
+    }
+    return -1;
+}
+
 static int btm_candidate_is_twin(const sloth_state_t *s,
                                  const uint8_t bssid[6]) {
     for (int i = 0; i < s->twin_episode_count; i++)
@@ -2130,10 +2168,25 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 fmt_bssid(b_bssid, b->bssid);
                 char key[ALERT_KEY_LEN];
                 char detail[ALERT_DETAIL_LEN];
+                /* Already CRIT, so the marker only annotates here —
+                 * but naming the steering AP is the actionable half:
+                 * the operator learns which radio is pushing clients
+                 * at the rogue, not just that a rogue exists. */
+                char steer_note[40] = "";
+                int steer = btm_steered_to(s, a->bssid, now);
+                if (steer < 0) steer = btm_steered_to(s, b->bssid, now);
+                if (steer >= 0) {
+                    char steerer[20];
+                    mac_to_str(s->btm_steers[steer].bssid, steerer,
+                               sizeof(steerer));
+                    snprintf(steer_note, sizeof(steer_note),
+                             " +btm-steered by %.17s", steerer);
+                }
                 snprintf(key, sizeof(key), "twin:%.40s", a->ssid);
                 snprintf(detail, sizeof(detail),
-                         "'%.16s' on %s[%.6s] AND %s[%.6s] - twin",
-                         a->ssid, a_bssid, a->enc, b_bssid, b->enc);
+                         "'%.16s' on %s[%.6s] AND %s[%.6s] - twin%s",
+                         a->ssid, a_bssid, a->enc, b_bssid, b->enc,
+                         steer_note);
                 fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
                      "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
@@ -2199,6 +2252,25 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 reason = "attacker-tool OUI present";
             }
 
+            /* #76's chain, as a marker. A twin a BTM Request actively
+             * steered a client toward under Disassociation Imminent is
+             * not an ambiguous same-SSID sighting — it is a rogue with
+             * traffic being pushed at it, so the marker escalates as
+             * well as annotates. That escalation is the whole value of
+             * the chain, delivered without a separate alert. */
+            char steer_note[40] = "";
+            int steer_a = btm_steered_to(s, a->bssid, now);
+            int steer_b = btm_steered_to(s, b->bssid, now);
+            int steer = steer_a >= 0 ? steer_a : steer_b;
+            if (steer >= 0) {
+                char steerer[20];
+                mac_to_str(s->btm_steers[steer].bssid, steerer,
+                           sizeof(steerer));
+                snprintf(steer_note, sizeof(steer_note),
+                         " +btm-steered by %.17s", steerer);
+                if (sev < ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
+            }
+
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
             /* Distinct dedup key — coexists with the CRIT "twin:" key
@@ -2206,8 +2278,8 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * under the same SSID. */
             snprintf(key, sizeof(key), "twin-fp:%.40s", a->ssid);
             snprintf(detail, sizeof(detail),
-                     "'%.16s' on %s AND %s [%.6s] - %s",
-                     a->ssid, a_bssid, b_bssid, a->enc, reason);
+                     "'%.16s' on %s AND %s [%.6s] - %s%s",
+                     a->ssid, a_bssid, b_bssid, a->enc, reason, steer_note);
             fire(ALERT_TYPE_EVIL_TWIN, sev,
                  "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
