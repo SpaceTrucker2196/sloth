@@ -113,3 +113,4 @@
 | 5a08f03 | 2026-09-04T20:27:48Z | claude-opus-5 | 65 | 32786 | 14524344 | 43166 | 8.5138 | #73 slice 3 — [f] Research view |
 | 856935e | 2026-09-07T16:41:07Z | claude-opus-5 | 75 | 38389 | 18616194 | 506539 | 15.3336 | #75 complete — PN-gap and EAPOL-relay detectors |
 | e0f12dd | 2026-09-07T17:08:37Z | claude-opus-5 | 46 | 36583 | 12554476 | 44935 | 7.6414 | #76 — SA-Query flood + unprotected robust action frames |
+| 0fb3c5e | 2026-09-07T17:27:33Z | claude-opus-5 | 27 | 15765 | 7841066 | 20309 | 4.5179 | #76 — BTM-steered twin marker |
