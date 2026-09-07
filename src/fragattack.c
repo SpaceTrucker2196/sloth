@@ -42,6 +42,19 @@ typedef struct {
      * was witnessed for this pair, not "generation zero" — see
      * frag_track's use of it. */
     int     start_generation;
+    /* The previous fragment's CCMP PN and fragment number, for
+     * CVE-2020-26146. -1 when the fragment carried no readable PN —
+     * unprotected, or WEP/original-TKIP with no Extended IV. */
+    int64_t last_pn;
+    int     last_fn;
+    /* Sequence Control of the MSDU this session is reassembling. All
+     * fragments of one MSDU share it (§9.2.4.4), so it is what tells a
+     * continuation of *this* MSDU from the first fragment of the next
+     * one that happened to reuse the (bssid, sa, da, tid) key. Only the
+     * PN check consults it: the cache-poison and mixed-protect
+     * detectors are about the receiver's buffer, which is keyed on the
+     * address tuple alone. */
+    uint16_t seq_ctrl;
     time_t  last_seen;
 } frag_session_t;
 
@@ -228,7 +241,8 @@ static frag_session_t *sess_find(const uint8_t bssid[6], const uint8_t sa[6],
  * itself evidence of anything. */
 static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
                       const uint8_t da[6], uint8_t tid,
-                      int protected_bit, int generation, time_t now) {
+                      int protected_bit, int generation,
+                      int64_t pn, int fn, uint16_t sc, time_t now) {
     frag_session_t *s = sess_find(bssid, sa, da, tid);
     if (!s) {
         if (g_sess_n < FRAG_MAX_SESSIONS) {
@@ -246,6 +260,9 @@ static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
     s->start_seen       = now;
     s->start_protected  = protected_bit;
     s->start_generation = generation;
+    s->last_pn          = pn;
+    s->last_fn          = fn;
+    s->seq_ctrl         = (uint16_t)(sc & 0xfff0);   /* sequence, not fragment */
     s->last_seen        = now;
 }
 
@@ -263,10 +280,10 @@ static void sess_close(frag_session_t *s) {
 static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
                        const uint8_t sa[6], const uint8_t da[6],
                        uint8_t tid, int fn, int more, int protected_bit,
-                       time_t now) {
+                       int64_t pn, uint16_t sc, time_t now) {
     if (fn == 0) {
         int gen = eapol_key_generation(bssid, sa);
-        sess_open(bssid, sa, da, tid, protected_bit, gen, now);
+        sess_open(bssid, sa, da, tid, protected_bit, gen, pn, fn, sc, now);
         return;
     }
 
@@ -313,6 +330,35 @@ static void frag_track(frag_bss_t *b, const uint8_t bssid[6],
         memcpy(b->last_da, da, 6);
         b->last_hit = now;
     }
+
+    /* CVE-2020-26146: §12.5.3.4.4 requires the fragments of one MSDU to
+     * carry consecutive packet numbers, so a gap means the reassembly
+     * is stitching together fragments from different bursts — which is
+     * the attack.
+     *
+     * Compared against the *fragment-number* delta rather than expecting
+     * exactly +1. A fragment sloth did not hear — a hopped radio, a
+     * missed frame on a busy channel — advances both by the same amount
+     * and is not an attack; only a PN that moves by a different step
+     * than the fragment number is. A repeat of the same fragment
+     * carries the same PN and the same FN, so a retry is excluded by
+     * the same arithmetic rather than by a special case.
+     *
+     * Both sides need a readable PN: unprotected fragments have none,
+     * and a WEP or original-TKIP IV is not a 48-bit PN at all. */
+    if (pn >= 0 && s->last_pn >= 0 && fn > s->last_fn &&
+        (uint16_t)(sc & 0xfff0) == s->seq_ctrl) {
+        int64_t pn_step = pn - s->last_pn;
+        int64_t fn_step = (int64_t)(fn - s->last_fn);
+        if (pn_step != fn_step) {
+            b->pn_gap++;
+            memcpy(b->last_sa, sa, 6);
+            memcpy(b->last_da, da, 6);
+            b->last_hit = now;
+        }
+    }
+    if (pn >= 0) s->last_pn = pn;
+    if (fn > s->last_fn) s->last_fn = fn;
 
     s->last_seen = now;
     if (!more) sess_close(s);   /* reassembly complete */
@@ -424,13 +470,43 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
         }
     }
 
+    /* CVE-2020-26139: an EAPOL frame the AP forwarded between two
+     * stations.
+     *
+     * On an infrastructure BSS, EAPOL only ever travels between a
+     * station and the authenticator — it is not a peer-to-peer
+     * protocol. So a frame carrying EtherType 0x888E where *neither*
+     * address is the BSSID is one the AP relayed on behalf of a sender
+     * it should not have, which is the bug.
+     *
+     * Structural, and that is the point: every other plaintext
+     * detector here needs a witnessed key install because "we did not
+     * see the association" is indistinguishable from "there was none".
+     * This one needs no history at all — the frame is wrong on its own
+     * addressing.
+     *
+     * Requires ToDS or FromDS. In an IBSS there is no AP, addr3 is the
+     * BSSID and both stations are peers, so every EAPOL frame would
+     * match and mean nothing. Unicast only, for the same reason: a
+     * group address can never equal the BSSID, so including broadcast
+     * would fire on a shape the CVE does not describe. */
+    if ((dot11[1] & 0x03) && !dot11_is_group_addr(da) &&
+        !mac_eq(sa, bssid) && !mac_eq(da, bssid) &&
+        first_frag_ethertype(dot11, len) == ETHERTYPE_EAPOL) {
+        b->eapol_relay++;
+        memcpy(b->last_sa, sa, 6);
+        memcpy(b->last_da, da, 6);
+        b->last_hit = now;
+    }
+
     /* Session bookkeeping runs before the protected/plaintext branch
      * below and regardless of it — see frag_track's comment. */
     if (fragmented) {
         int tid = dot11_data_tid(dot11, len);
         if (tid >= 0)
             frag_track(b, bssid, sa, da, (uint8_t)tid, fn, more,
-                      protected_bit, now);
+                      protected_bit, pn,
+                      (uint16_t)(dot11[22] | (dot11[23] << 8)), now);
     }
 
     if (protected_bit) {
@@ -526,6 +602,8 @@ void frag_snapshot(sloth_state_t *s) {
         r->amsdu_flip           = b->amsdu_flip;
         r->amsdu_eapol_spoof    = b->amsdu_eapol_spoof;
         r->mixed_key            = b->mixed_key;
+        r->pn_gap               = b->pn_gap;
+        r->eapol_relay          = b->eapol_relay;
         memcpy(r->last_sa, b->last_sa, 6);
         memcpy(r->last_da, b->last_da, 6);
         r->last_hit = b->last_hit;

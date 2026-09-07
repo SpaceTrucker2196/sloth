@@ -33,7 +33,13 @@
  * silently indexes under the wrong alert kind. */
 
 #define RI_MAX_TOPICS       12
-#define RI_MAX_ALERT_KINDS   8
+/* Raised from 8 in #75. The cap was set when no document named more
+ * than three alert kinds; the first to exceed it was the FragAttacks
+ * paper, which is one source covering a twelve-CVE family and backs
+ * nine of sloth's detectors on its own. Splitting it into nine
+ * documents would have repeated the same source URL nine times to
+ * satisfy an arbitrary bound. */
+#define RI_MAX_ALERT_KINDS  16
 #define RI_MAX_SECTIONS     32
 #define RI_STR              128
 #define RI_BODY            4096

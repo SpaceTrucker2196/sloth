@@ -42,7 +42,8 @@ static uint32_t findings_total(const frag_bss_row_t *r) {
      * BSS with zero attacks look like it had hundreds. */
     return r->plaintext_unicast + r->plaintext_bcast_frag
          + r->cache_poison + r->mixed_protect + r->amsdu_flip
-         + r->amsdu_eapol_spoof + r->mixed_key;
+         + r->amsdu_eapol_spoof + r->mixed_key
+         + r->pn_gap + r->eapol_relay;
 }
 
 /* One row of the detail breakdown: display title, CVE(s), the counter
@@ -144,6 +145,8 @@ void view_fragattack_draw(const sloth_state_t *s) {
     draw_detail_row("FRAG_AMSDU",       "CVE-2020-24588",        r->amsdu_flip);
     draw_detail_row("FRAG_AMSDU_EAPOL", "CVE-2020-26144",        r->amsdu_eapol_spoof);
     draw_detail_row("FRAG_MIXKEY",      "CVE-2020-24587",        r->mixed_key);
+    draw_detail_row("FRAG_PN_GAP",      "CVE-2020-26146",        r->pn_gap);
+    draw_detail_row("FRAG_EAPOL_RELAY", "CVE-2020-26139",        r->eapol_relay);
 
     tui_dim();
     TPRINT("  %u protected frame%s witnessed on this BSSID (key-install gate)\n",

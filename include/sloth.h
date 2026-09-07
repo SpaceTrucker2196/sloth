@@ -717,6 +717,8 @@ typedef enum {
     ALERT_TYPE_FRAG_AMSDU,          /* same protected MPDU replayed with the A-MSDU bit flipped — CVE-2020-24588 (#75) */
     ALERT_TYPE_FRAG_AMSDU_EAPOL,    /* plaintext A-MSDU whose first subframe claims to carry EAPOL — CVE-2020-26144 (#75 slice 4) */
     ALERT_TYPE_FRAG_MIXKEY,         /* fragment reassembly spans a completed PTK rotation — CVE-2020-24587 (#75 slice 4) */
+    ALERT_TYPE_FRAG_PN_GAP,         /* encrypted fragments reassembled with non-consecutive PNs — CVE-2020-26146 (#75) */
+    ALERT_TYPE_FRAG_EAPOL_RELAY,    /* EAPOL forwarded between two stations by the AP — CVE-2020-26139 (#75) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -992,6 +994,8 @@ typedef struct {
     uint32_t amsdu_flip;          /* FRAG_AMSDU      — CVE-2020-24588 */
     uint32_t amsdu_eapol_spoof;   /* FRAG_AMSDU_EAPOL — CVE-2020-26144 */
     uint32_t mixed_key;           /* FRAG_MIXKEY     — CVE-2020-24587 */
+    uint32_t pn_gap;              /* FRAG_PN_GAP     — CVE-2020-26146 */
+    uint32_t eapol_relay;         /* FRAG_EAPOL_RELAY — CVE-2020-26139 */
     uint8_t  last_sa[6];
     uint8_t  last_da[6];
     time_t   last_hit;

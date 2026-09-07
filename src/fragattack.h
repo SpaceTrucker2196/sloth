@@ -213,6 +213,23 @@ typedef struct {
      * open (0 means no evidence, not "no rekey"). */
     uint32_t mixed_key;
 
+    /* CVE-2020-26146: two encrypted fragments of one reassembly whose
+     * CCMP packet numbers are not consecutive. §12.5.3.4.4 requires the
+     * fragments of one MSDU to carry consecutive PNs, so a gap means
+     * the reassembly is combining fragments from different bursts —
+     * which is the whole point of the attack. Compared against the
+     * *fragment-number* delta rather than expecting +1, so a fragment
+     * sloth simply did not hear is not reported as an attack. */
+    uint32_t pn_gap;
+
+    /* CVE-2020-26139: an EAPOL frame the AP forwarded between two
+     * stations. On an infrastructure BSS, EAPOL only ever travels
+     * between a station and the authenticator, so a frame where
+     * neither address is the BSSID is one the AP relayed on behalf of
+     * a sender it should not have — no association history needed to
+     * say so. */
+    uint32_t eapol_relay;
+
     /* The most recent offender, for the alert line. Kept rather than a
      * list because the alert names one example and the JSONL row and
      * per-alert pcap carry the rest. */

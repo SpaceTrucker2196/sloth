@@ -4336,6 +4336,60 @@ static void test_frag_mixkey_silent_without_a_rekey(void) {
     eapol_clear();
 }
 
+static void test_frag_pn_gap_and_eapol_relay_fire(void) {
+    /* The last two of the twelve. Neither needs a witnessed key
+     * install: the PN is itself proof of protection, and an EAPOL frame
+     * between two stations is wrong on its own addressing. */
+    alerts_clear();
+    frag_clear();
+    uint8_t f[128];
+
+    /* Two encrypted fragments whose PNs jump while the fragment number
+     * advances by one. */
+    for (int pass = 0; pass < 2; pass++) {
+        memset(f, 0, sizeof(f));
+        f[0] = (uint8_t)((8 << 4) | (2 << 2));
+        f[1] = (uint8_t)(0x02 | 0x40 | (pass ? 0 : 0x04));  /* MoreFrag on 0 */
+        memcpy(f + 4,  FA_STA, 6);
+        memcpy(f + 10, FA_BSS, 6);
+        memcpy(f + 16, FA_AP,  6);
+        f[22] = (uint8_t)pass;                   /* fragment number */
+        f[26] = pass ? 0xF0 : 0x01;              /* PN0 jumps, not +1 */
+        f[29] = 0x20;                            /* ExtIV */
+        frag_observe(f, 50, 1000);
+    }
+
+    /* An EAPOL frame between two stations. */
+    memset(f, 0, sizeof(f));
+    f[0] = (uint8_t)(2 << 2);
+    f[1] = 0x02;                                 /* FromDS */
+    memcpy(f + 4,  FA_STA, 6);                   /* DA    */
+    memcpy(f + 10, FA_BSS, 6);                   /* BSSID */
+    memcpy(f + 16, FA_AP,  6);                   /* SA — not the AP */
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8e;
+    frag_observe(f, 36, 1001);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_PN_GAP);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2020-26146") != NULL);
+    }
+    int j = find_alert(&s, ALERT_TYPE_FRAG_EAPOL_RELAY);
+    ASSERT(j >= 0);
+    if (j >= 0) {
+        ASSERT_EQ(s.alerts[j].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[j].detail, "CVE-2020-26139") != NULL);
+    }
+    /* EAPOL is exempt from the plaintext rule, so one frame must not
+     * produce two CVEs. */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_PLAINTEXT), -1);
+    frag_clear();
+}
+
 static void test_frag_quiet_on_an_open_network(void) {
     /* Every frame unprotected, none of it an attack. The case that
      * decides whether this detector is usable at all. */
@@ -4873,6 +4927,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_amsdu_eapol_silent_on_ordinary_aggregation);
     RUN_TEST(test_frag_mixkey_fires);
     RUN_TEST(test_frag_mixkey_silent_without_a_rekey);
+    RUN_TEST(test_frag_pn_gap_and_eapol_relay_fire);
     RUN_TEST(test_frag_quiet_on_an_open_network);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");

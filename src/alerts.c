@@ -240,6 +240,10 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_FRAG_AMSDU:             return "T1557";       /* CVE-2020-24588 — frames injected into a session whose key the attacker lacks */
     case ALERT_TYPE_FRAG_AMSDU_EAPOL:       return "T1557";       /* CVE-2020-26144 — a plaintext subframe impersonating an authenticator message */
     case ALERT_TYPE_FRAG_MIXKEY:            return "T1557";       /* CVE-2020-24587 — frames injected by combining fragments across a key rotation */
+    case ALERT_TYPE_FRAG_PN_GAP:            return "T1557";       /* CVE-2020-26146 */
+    /* T1557 as well: the relayed EAPOL is what lets an unauthenticated
+     * sender reach a peer it has no business reaching. */
+    case ALERT_TYPE_FRAG_EAPOL_RELAY:       return "T1557";       /* CVE-2020-26139 */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -285,7 +289,8 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
     N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
     N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
-    N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);
+    N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);         N(ALERT_TYPE_FRAG_PN_GAP);
+    N(ALERT_TYPE_FRAG_EAPOL_RELAY);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -740,6 +745,30 @@ static void rule_fragattack(const sloth_state_t *s, time_t now) {
                      b->plaintext_bcast_frag == 1 ? "" : "s", bss);
             fire(ALERT_TYPE_FRAG_BCAST, ALERT_SEV_CRIT,
                  "FRAG_BCAST", detail, key, NULL, 0, now);
+        }
+
+        /* Completing the family — issue #75. */
+
+        if (b->pn_gap > 0) {
+            snprintf(key, sizeof(key), "fragpn:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u encrypted reassembl%s on %.17s with non-consecutive"
+                     " packet numbers - last %.17s -> %.17s (CVE-2020-26146)",
+                     b->pn_gap, b->pn_gap == 1 ? "y" : "ies", bss, sa, da);
+            fire(ALERT_TYPE_FRAG_PN_GAP, ALERT_SEV_CRIT,
+                 "FRAG_PN_GAP", detail, key, NULL, 0, now);
+        }
+
+        if (b->eapol_relay > 0) {
+            snprintf(key, sizeof(key), "fragrelay:%.17s", bss);
+            snprintf(detail, sizeof(detail),
+                     "%u EAPOL frame%s forwarded between stations on %.17s"
+                     " - last %.17s -> %.17s, neither is the AP"
+                     " (CVE-2020-26139)",
+                     b->eapol_relay, b->eapol_relay == 1 ? "" : "s",
+                     bss, sa, da);
+            fire(ALERT_TYPE_FRAG_EAPOL_RELAY, ALERT_SEV_CRIT,
+                 "FRAG_EAPOL_RELAY", detail, key, NULL, 0, now);
         }
 
         /* Slice 3 — issue #75. */

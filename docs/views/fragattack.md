@@ -43,6 +43,8 @@ no schema change — this view is a counter table, not an event log.
   FRAG_AMSDU         CVE-2020-24588               1
   FRAG_AMSDU_EAPOL   CVE-2020-26144               0
   FRAG_MIXKEY        CVE-2020-24587               0
+  FRAG_PN_GAP        CVE-2020-26146               0
+  FRAG_EAPOL_RELAY   CVE-2020-26139               0
   1 protected frame witnessed on this BSSID (key-install gate)
 ```
 
@@ -67,7 +69,7 @@ deliberately keeps it a separate line under the detail pane instead.
 
 ## Suspicious
 
-Any nonzero row. Each of the seven counters maps to one CVE with its
+Any nonzero row. Each of the nine counters maps to one CVE with its
 own detection logic — see [`alerts.md`](alerts.md) for what each rule
 actually watches for and its false-positive gates, and
 [the FragAttacks notes](../wiki/fragattacks.md) for the full mechanism,

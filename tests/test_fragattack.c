@@ -1170,6 +1170,237 @@ static void test_amsdu_eapol_truncated_is_safe(void) {
     ASSERT(n >= need);
 }
 
+/* ── CVE-2020-26146: non-consecutive PNs in one reassembly ─────────── */
+
+/* A protected QoS fragment with a CCMP header. Same PN layout as
+ * build_ccmp; this one sets the fragment number and More-Fragments so
+ * it lands in the reassembly tracker. */
+static int build_ccmp_frag_sc(uint8_t *f, uint64_t pn, int fn, int more,
+                              int protect, uint16_t seq) {
+    memset(f, 0, 128);
+    f[0] = (uint8_t)((8 << 4) | (2 << 2));       /* QoS Data */
+    f[1] = (uint8_t)(FC1_FROMDS | (more ? FC1_MOREFRAG : 0)
+                     | (protect ? FC1_PROTECTED : 0));
+    memcpy(f + 4,  STA_A, 6);
+    memcpy(f + 10, BSSID, 6);
+    memcpy(f + 16, STA_B, 6);
+    uint16_t sc = (uint16_t)((seq << 4) | (fn & 0x0f));
+    f[22] = (uint8_t)(sc & 0xff);
+    f[23] = (uint8_t)(sc >> 8);
+    f[24] = 0;                                   /* QoS Control, TID 0 */
+    f[25] = 0;
+    if (protect) {
+        uint8_t *iv = f + 26;
+        iv[0] = (uint8_t)( pn        & 0xff);
+        iv[1] = (uint8_t)((pn >>  8) & 0xff);
+        iv[3] = 0x20;                            /* ExtIV */
+        iv[4] = (uint8_t)((pn >> 16) & 0xff);
+        iv[5] = (uint8_t)((pn >> 24) & 0xff);
+        iv[6] = (uint8_t)((pn >> 32) & 0xff);
+        iv[7] = (uint8_t)((pn >> 40) & 0xff);
+    }
+    return 26 + 8 + 16;
+}
+
+static int build_ccmp_frag(uint8_t *f, uint64_t pn, int fn, int more,
+                           int protect) {
+    return build_ccmp_frag_sc(f, pn, fn, more, protect, 7);
+}
+
+static void test_pn_check_is_scoped_to_one_msdu(void) {
+    /* Fragments of one MSDU share a sequence number (§9.2.4.4). Without
+     * that in the comparison, the first fragment of the *next* MSDU on
+     * the same (bssid, sa, da, tid) would be measured against the last
+     * fragment of the previous one — and the PN gap between two
+     * separate MSDUs means nothing.
+     *
+     * Only the PN check consults it: cache poisoning and mixed-protect
+     * are about the receiver's buffer, which is keyed on addresses. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag_sc(f, 100, 0, 1, 1, 7);
+    frag_observe(f, n, 1000);
+    /* A continuation claiming a different sequence number is not part
+     * of this reassembly, so its PN is not compared. */
+    n = build_ccmp_frag_sc(f, 900, 1, 0, 1, 9);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->pn_gap, 0u);
+}
+
+static void test_consecutive_pns_are_normal(void) {
+    /* The ordinary case, and the one this detector has to survive:
+     * every fragmented encrypted MSDU on the network looks like this. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag(f, 100, 0, 1, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 101, 1, 1, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 102, 2, 0, 1);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->pn_gap, 0u);
+}
+
+static void test_non_consecutive_pn_fires(void) {
+    /* §12.5.3.4.4 requires the fragments of one MSDU to carry
+     * consecutive PNs. A jump means the reassembly is stitching
+     * together fragments from different bursts. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag(f, 100, 0, 1, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 500, 1, 0, 1);        /* PN jumps, FN does not */
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->pn_gap, 1u);
+    ASSERT_EQ(bss()->last_hit, (time_t)1000);
+}
+
+static void test_a_missed_fragment_is_not_an_attack(void) {
+    /* The case that decides whether this is usable on a hopping radio.
+     * A fragment sloth did not hear advances the PN *and* the fragment
+     * number by the same step. Expecting a bare +1 would report every
+     * missed frame as CVE-2020-26146. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag(f, 100, 0, 1, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 102, 2, 0, 1);        /* fragment 1 missed */
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->pn_gap, 0u);
+}
+
+static void test_retransmitted_fragment_is_not_a_gap(void) {
+    /* A retry carries the same PN and the same fragment number, so the
+     * same arithmetic excludes it — no special case needed, which is
+     * why there is not one. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag(f, 100, 0, 1, 1);
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 101, 1, 1, 1);
+    frag_observe(f, n, 1000);
+    frag_observe(f, n, 1001);                    /* the same fragment again */
+    frag_observe(f, n, 1002);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->pn_gap, 0u);
+}
+
+static void test_pn_gap_needs_both_sides_encrypted(void) {
+    /* An unprotected fragment carries no PN. Comparing against a
+     * missing one would either invent a gap or silently pass; neither
+     * is a detection. A Protected mismatch is mixed_protect's finding. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build_ccmp_frag(f, 100, 0, 1, 0);    /* plaintext fragment 0 */
+    frag_observe(f, n, 1000);
+    n = build_ccmp_frag(f, 900, 1, 0, 1);        /* encrypted, wild PN */
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->pn_gap, 0u);
+}
+
+/* ── CVE-2020-26139: EAPOL relayed between two stations ────────────── */
+
+static void test_eapol_between_stations_fires(void) {
+    /* EAPOL is not a peer-to-peer protocol on an infrastructure BSS.
+     * Neither address is the BSSID, so the AP forwarded it on behalf of
+     * a sender it should not have. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, STA_B, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(bss()->eapol_relay, 1u);
+    /* And not counted as plaintext-in-RSN: EAPOL is exempt there, and
+     * one frame must not produce two CVEs. */
+    ASSERT_EQ(bss()->plaintext_unicast, 0u);
+}
+
+static void test_ordinary_eapol_to_the_ap_is_silent(void) {
+    /* The normal case: a station authenticating. Downlink, so addr2 is
+     * the BSSID and addr3 the SA — here the AP *is* the sender, which
+     * is what every 4-way handshake looks like. Without this the
+     * detector fires on every association on the network. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, BSSID, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->eapol_relay, 0u);
+
+    /* And the uplink half: STA -> AP, addr1 = BSSID = DA. */
+    memset(f, 0, sizeof(f));
+    f[0] = (uint8_t)(2 << 2);
+    f[1] = FC1_TODS;
+    memcpy(f + 4,  BSSID, 6);                    /* addr1 = BSSID */
+    memcpy(f + 10, STA_A, 6);                    /* addr2 = SA    */
+    memcpy(f + 16, BSSID, 6);                    /* addr3 = DA    */
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8e;
+    frag_observe(f, 36, 1001);
+    if (bss()) ASSERT_EQ(bss()->eapol_relay, 0u);
+}
+
+static void test_eapol_relay_ignores_ibss(void) {
+    /* An IBSS has no AP: addr3 is the BSSID and both stations are
+     * peers, so every EAPOL frame would match and mean nothing. */
+    frag_clear();
+    uint8_t f[128];
+    memset(f, 0, sizeof(f));
+    f[0] = (uint8_t)(2 << 2);
+    f[1] = 0;                                    /* no ToDS, no FromDS */
+    memcpy(f + 4,  STA_A, 6);                    /* DA    */
+    memcpy(f + 10, STA_B, 6);                    /* SA    */
+    memcpy(f + 16, BSSID, 6);                    /* BSSID */
+    f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
+    f[30] = 0x88; f[31] = 0x8e;
+    frag_observe(f, 36, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->eapol_relay, 0u);
+}
+
+static void test_eapol_relay_is_unicast_only(void) {
+    /* A group address can never equal the BSSID, so including broadcast
+     * would fire on a shape the CVE does not describe. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, BCAST, BSSID, STA_B, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->eapol_relay, 0u);
+}
+
+static void test_non_eapol_between_stations_is_ordinary(void) {
+    /* Station-to-station IP traffic through the AP is what a network is
+     * for. Only EAPOL is the finding. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->eapol_relay, 0u);
+}
+
+static void test_eapol_relay_needs_no_witnessed_association(void) {
+    /* The point of the addressing argument. Every other plaintext
+     * detector here needs a witnessed key install, because "we did not
+     * see the association" is indistinguishable from "there was none".
+     * This one is wrong on its own addressing, so it fires on the first
+     * frame of a capture. */
+    frag_clear();
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, STA_B, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    ASSERT(bss() && bss()->eapol_relay == 1u);
+    ASSERT_EQ(bss() ? bss()->protected_frames : 99u, 0u);
+}
+
 void run_fragattack_tests(void);
 void run_fragattack_tests(void) {
     TEST_SUITE("802.11 addressing (#75)");
@@ -1219,6 +1450,22 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_amsdu_non_snap_subframe_is_not_counted);
     RUN_TEST(test_amsdu_eapol_continuation_fragment_is_silent);
     RUN_TEST(test_amsdu_eapol_truncated_is_safe);
+
+    TEST_SUITE("fragattacks: PN gaps, CVE-2020-26146 (#75)");
+    RUN_TEST(test_consecutive_pns_are_normal);
+    RUN_TEST(test_pn_check_is_scoped_to_one_msdu);
+    RUN_TEST(test_non_consecutive_pn_fires);
+    RUN_TEST(test_a_missed_fragment_is_not_an_attack);
+    RUN_TEST(test_retransmitted_fragment_is_not_a_gap);
+    RUN_TEST(test_pn_gap_needs_both_sides_encrypted);
+
+    TEST_SUITE("fragattacks: EAPOL relay, CVE-2020-26139 (#75)");
+    RUN_TEST(test_eapol_between_stations_fires);
+    RUN_TEST(test_ordinary_eapol_to_the_ap_is_silent);
+    RUN_TEST(test_eapol_relay_ignores_ibss);
+    RUN_TEST(test_eapol_relay_is_unicast_only);
+    RUN_TEST(test_non_eapol_between_stations_is_ordinary);
+    RUN_TEST(test_eapol_relay_needs_no_witnessed_association);
 
     TEST_SUITE("fragattacks: table behaviour (#75)");
     RUN_TEST(test_bsses_are_tracked_separately);

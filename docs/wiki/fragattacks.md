@@ -16,7 +16,7 @@ Sloth implements eight of them, across seven detectors (-26140 and
 -26143 share `FRAG_PLAINTEXT` — the fragmented and unfragmented
 variants of the same accepting-plaintext bug). This page explains
 which, why the remaining four are harder or impossible to observe
-passively (or, for one, simply not yet built), and — the part worth
+passively, and — the part worth
 reading before you trust the alert — what each detector's gate
 actually proves.
 
@@ -27,14 +27,14 @@ actually proves.
 | 2020-24586 | does not clear the fragment cache on (re)connect | **yes — shipped, slice 2** |
 | 2020-24587 | reassembles fragments encrypted under different keys | **yes — shipped, slice 4** |
 | 2020-24588 | accepts non-SPP A-MSDU frames | **yes, sideways — shipped.** Not as usually described; see below |
-| 2020-26139 | AP forwards an EAPOL frame from a station that has not completed authentication to another client | **not yet — needs the paper's own frame trace**, not just its one-line advisory; see below |
+| 2020-26139 | AP forwards an EAPOL frame from a station that has not completed authentication to another client | **yes — shipped.** Detected by its addressing footprint, not by authentication state; see below |
 | 2020-26140 | accepts plaintext data frames in a protected network | **yes — shipped** |
 | 2020-26141 | does not verify the TKIP MIC of fragmented frames | no (MIC is under the key) |
 | 2020-26142 | processes fragmented frames as full frames | no (a receiver-side decision) |
 | 2020-26143 | accepts fragmented plaintext data frames | **yes — shipped** |
 | 2020-26144 | accepts plaintext A-MSDU starting with an EAPOL RFC1042 header | **yes, plaintext only — shipped, slice 4** |
 | 2020-26145 | accepts plaintext broadcast fragments as full frames | **yes — shipped** |
-| 2020-26146 | reassembles encrypted fragments with non-consecutive PNs | **not as slice 2 was originally described** — see below |
+| 2020-26146 | reassembles encrypted fragments with non-consecutive PNs | **yes — shipped** |
 | 2020-26147 | reassembles mixed encrypted/plaintext fragments | **yes — shipped, slice 2** |
 
 Several of these are only ever visible as the *attacker's* frames on the
@@ -90,50 +90,99 @@ A sequence that starts encrypted and completes plaintext, or the
 reverse, is neither — each fragment is individually unremarkable, and
 the violation only exists once they are combined into one MSDU.
 
-### Why CVE-2020-26146 is not here despite slice 1 saying "slice 2"
+### `FRAG_PN_GAP` — CVE-2020-26146
 
-The CCMP packet number is transmitted in the clear (it has to be — the
-receiver needs it to reconstruct the nonce), so reading it was never the
-obstacle this page's earlier draft implied. The obstacle is what the PN
-*is*: one counter shared by every frame sent under one key on one TID,
-not a per-reassembly sequence. Two fragments of one MSDU only get
-consecutive PNs if literally nothing else was transmitted on that TID
-between them — which the spec expects but does not enforce — and a
-retried fragment (a retry gets a fresh PN even though its fragment
-number and sequence number are unchanged) opens a gap on its own. A
-same-session "PN must be N+1" check built against that reality would be
-noisy on exactly the ordinary multi-station traffic this detector family
-is supposed to be quiet against. Left for a slice that can test the
-retry case honestly, rather than shipped and found unusable in the
-field.
+Two encrypted fragments of one reassembly whose CCMP packet numbers are
+not consecutive.
 
-### Why CVE-2020-26139 is not here, and a correction to earlier notes on this issue
+§12.5.3.4.4 requires the fragments of one MSDU to carry consecutive PNs;
+the vulnerability is receivers that fail to check. So a gap means the
+receiver is stitching together fragments from different bursts, which is
+the attack.
 
-Earlier notes on #75 (this page included) framed -26139 as needing
-"handshake state" without saying what that state would actually gate
-on, which on inspection was papering over not having read the attack
-closely enough to build it. Worth correcting rather than leaving as a
-vague "slice 4" placeholder.
+**This page previously argued the detector was unshippable.** Two
+objections were raised and both turned out to be wrong, which is worth
+recording because they are the objections anyone would raise again:
 
-The advisory line is "an AP forwards an EAPOL frame from a station that
-has not completed authentication to another client". Read literally,
-the forwarded frame *is* transmitted wirelessly — an infrastructure BSS
-has no other path to another client — so this is not the
-wired-side-only, structurally unobservable case that -26141/-26142 are.
-In principle: an uplink EAPOL frame naming another station as its
-destination, followed by a downlink EAPOL frame from the AP to that
-station carrying the original sender as source, both on-air, and the
-original sender's authentication state is exactly what `eapol_log.c`
-already tracks.
+> *"The PN is one counter shared by every frame sent under one key on
+> one TID, so two fragments only get consecutive PNs if nothing else
+> was transmitted between them."*
 
-What stopped this shipping this slice is not observability but
-precision. "Names another station as its destination" needs a specific
-answer for *where in the frame* that destination lives — 802.11
-addressing, an 802.1X PAE group address, or something the paper's own
-frame trace specifies that a one-line advisory does not — and guessing
-wrong ships a detector that either never fires or fires on ordinary
-traffic. That is a paper-reading task, not a coding one, and it stayed
-undone rather than being shipped on a guess.
+Transmission is serialised per TID, and a conforming transmitter does
+not interleave other MPDUs into a fragment burst — which is precisely
+why the receiver-side check the CVE is about is possible at all. The
+session is keyed on the TID, and the PN comparison is additionally
+scoped to one sequence number, so the first fragment of the *next* MSDU
+is never measured against the last fragment of the previous one.
+
+> *"A retry gets a fresh PN even though its fragment number is
+> unchanged."*
+
+It does not. A retransmitted MPDU is retransmitted verbatim, with the
+same PN — the frame is already encrypted under a nonce derived from that
+PN, and re-encrypting under a new one would produce different ciphertext
+and defeat the receiver's own replay handling. A retry therefore carries
+the same PN *and* the same fragment number.
+
+**What makes it shippable is comparing deltas, not expecting `+1`.** The
+rule is that the PN advances by the same step as the fragment number:
+
+| situation | ΔPN | ΔFN | verdict |
+|---|---|---|---|
+| ordinary consecutive fragments | 1 | 1 | quiet |
+| a fragment sloth did not hear | 2 | 2 | quiet |
+| a retransmitted fragment | 0 | 0 | not compared |
+| **fragments from different bursts** | **≠ ΔFN** | | **fires** |
+
+The missed-fragment row is the one that decides whether this is usable
+on a hopping radio, and a bare `+1` check fails it. The retry row falls
+out of the same arithmetic rather than needing a special case, which is
+why there is not one.
+
+Both fragments must carry a readable PN: an unprotected fragment has
+none, and a WEP or original-TKIP IV is not a 48-bit PN at all. A
+Protected mismatch between fragments is `FRAG_MIXED`'s finding, not this
+one.
+
+### `FRAG_EAPOL_RELAY` — CVE-2020-26139
+
+An EAPOL frame the AP forwarded between two stations.
+
+**This one was also previously deferred**, on the grounds that "names
+another station as its destination" needed the paper's frame trace to
+pin down *where in the frame* that destination lives. That framing made
+the problem harder than it is by looking for the attack's mechanism
+instead of its footprint.
+
+On an infrastructure BSS, EAPOL travels only between a station and the
+authenticator. It is not a peer-to-peer protocol — there is no
+legitimate EAPOL exchange between two clients. So the footprint needs no
+handshake state and no authentication tracking at all:
+
+**A data frame carrying EtherType `0x888E` where neither the source nor
+the destination is the BSSID.**
+
+If neither address is the AP, the AP relayed the frame on behalf of a
+sender it should not have, which is the bug. That is structural, and it
+is the reason this rule is the odd one out in the family: every other
+plaintext detector here needs a witnessed key install, because *"we did
+not see the association"* is indistinguishable from *"there was none"*.
+This frame is wrong on its own addressing, so it fires on the first
+frame of a capture.
+
+Two exclusions, each carrying its weight:
+
+- **ToDS or FromDS must be set.** An IBSS has no AP: addr3 is the BSSID
+  and both stations are peers, so every EAPOL frame in an ad-hoc network
+  would match and mean nothing.
+- **Unicast only.** A group address can never equal the BSSID, so
+  including broadcast would fire on a shape the CVE does not describe.
+
+What this does *not* claim is that the sender was unauthenticated —
+sloth cannot know that, and the earlier note was right that inferring it
+from a hopping radio's association history would be a guess. It claims
+something narrower and stronger: this frame took a path EAPOL has no
+business taking.
 
 ## The gate, and why it is not the beacon
 
@@ -342,7 +391,7 @@ fragments encrypted under two different keys — the mixed-key bug.
 ## The view
 
 `[c] FragAttacks` (slice 5, `src/views/fragattack.c`) is the operator
-surface for the seven counters above: one row per BSSID, sorted by
+surface for the nine counters above: one row per BSSID, sorted by
 most-recent finding, with a per-CVE breakdown for the selected row.
 It reads no packets and adds no SQLite table — `src/alert_pcap.c`
 already carries the triggering frames for each fired alert, which is a

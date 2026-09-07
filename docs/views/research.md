@@ -57,7 +57,7 @@ to `research_for_alert` over the MCP server or grep for in
 
 ## Normal
 
-Most kinds show `-`. At the time of writing the corpus covers 18 of 54
+Most kinds show `-`. At the time of writing the corpus covers 22 of 58
 alert kinds, so an ordinary session shows more uncited rows than cited
 ones.
 
