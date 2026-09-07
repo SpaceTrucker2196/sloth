@@ -46,6 +46,7 @@
 #include "views/karma.h"
 #include "views/rogue_radius.h"
 #include "views/research.h"
+#include "views/fragattack.h"
 #include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"
@@ -58,6 +59,7 @@
 #include "ctrl_frames.h"
 #include "mle.h"
 #include "captive_portal.h"
+#include "fragattack.h"
 #include "query.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
@@ -186,6 +188,7 @@ static void poll_data(sloth_state_t *s) {
     btm_snapshot(s);
     csa_snapshot(s);
     rrm_snapshot(s);
+    frag_snapshot(s);   /* VIEW_FRAGATTACK (#75 slice 5) */
     mle_snapshot(s);
     cp_snapshot(s);
     channel_summary_update(s);
@@ -363,6 +366,7 @@ static void dispatch_to_view(sloth_state_t *s, int key) {
     case VIEW_KARMA:   view_karma_key(s, key);         break;
     case VIEW_ROGUE_RADIUS: view_rogue_radius_key(s, key); break;
     case VIEW_RESEARCH: view_research_key(s, key); break;
+    case VIEW_FRAGATTACK: view_fragattack_key(s, key); break;
     default: break;
     }
 }
@@ -435,6 +439,7 @@ static void handle_key(sloth_state_t *s, int key) {
     case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
     case 'z': case 'Z': s->active_view = VIEW_ROGUE_RADIUS; return;
     case 'f': case 'F': s->active_view = VIEW_RESEARCH; return;
+    case 'c': case 'C': s->active_view = VIEW_FRAGATTACK; return;
     case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);

@@ -49,6 +49,7 @@
 #include "views/karma.h"
 #include "views/rogue_radius.h"
 #include "views/research.h"
+#include "views/fragattack.h"
 
 
 /* ── Backend-neutral output primitives ───────────────────── *
@@ -514,6 +515,7 @@ static void dispatch_view(const sloth_state_t *s) {
     case VIEW_KARMA:   view_karma_draw(s);         break;
     case VIEW_ROGUE_RADIUS: view_rogue_radius_draw(s); break;
     case VIEW_RESEARCH: view_research_draw(s);      break;
+    case VIEW_FRAGATTACK: view_fragattack_draw(s);  break;
     default: break;
     }
 }

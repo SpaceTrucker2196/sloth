@@ -47,6 +47,7 @@ for in normal vs anomalous traffic.
 [v] Alerts      [g] Devices      [o] Dashboard [l] OSI stack [?] Help
 [x] Twins       [y] KARMA        [z] RADIUS                  ← evil-twin, PineAP & 802.1X lures
 [f] Research                                                 ← sources behind each alert that fired
+[c] FragAttacks                                               ← per-BSSID counters for the seven CVE-2020-262xx/245xx rules
 [k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
 [m] Channel                                                  ← per-channel histogram
 ```

@@ -304,3 +304,26 @@ the journal. Recorded here because the fix (`isatty` guard in
 `tui_poll_key`) benefits interactive and `--no-color` runs too, not
 only `--headless`, and a future reader tracing the flag will otherwise
 miss why the guard exists.
+
+## 2026-09-07 — FragAttacks tracker view (#75 slice 5)
+
+**Source**: issue #75; commit adding `VIEW_FRAGATTACK` / `[c]`,
+`src/views/fragattack.c`, `frag_snapshot()`.
+
+**Doc updates**: [[fragattacks]] gained a **The view** section and its
+intro/CVE-count corrected from "six" to "eight of twelve, seven
+detectors" — stale since slice 4 landed and only now noticed while
+touching the page. New per-view doc
+[`docs/views/fragattack.md`](../views/fragattack.md).
+
+**Index updates**: [[fragattacks]] bullet updated to mention the view
+and the corrected count.
+
+**Why**: seven detectors had been shipping since slice 1 with no
+operator-visible surface short of grepping alert history. The view adds
+no new data source — it mirrors `src/fragattack.c`'s existing per-BSS
+counters — and deliberately adds no SQLite table or evidence blob,
+since `src/alert_pcap.c` already carries better forensic evidence than
+a truncated blob would. `[c]` is the key because `[f]` went to #73's
+Research view first and was, by the time slice 5 landed, the only
+letter still free in the global switch.

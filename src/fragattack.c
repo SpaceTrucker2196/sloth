@@ -496,6 +496,44 @@ const frag_bss_t *frag_bss_at(int i) {
 
 int frag_session_count(void) { return g_sess_n; }
 
+void frag_snapshot(sloth_state_t *s) {
+    if (!s) return;
+
+    int n = g_bss_n < MAX_FRAG_ROWS ? g_bss_n : MAX_FRAG_ROWS;
+
+    /* Sorted by last_hit DESC, same rule probe_pnl_snapshot uses for
+     * PNL clients: the BSS that just produced a finding belongs at the
+     * top, not wherever bss_get() happened to insert it. */
+    int order[FRAG_MAX_BSS];
+    for (int i = 0; i < n; i++) order[i] = i;
+    for (int i = 0; i < n - 1; i++) {
+        int best = i;
+        for (int j = i + 1; j < n; j++)
+            if (g_bss[order[j]].last_hit > g_bss[order[best]].last_hit)
+                best = j;
+        if (best != i) { int t = order[i]; order[i] = order[best]; order[best] = t; }
+    }
+
+    for (int i = 0; i < n; i++) {
+        const frag_bss_t *b = &g_bss[order[i]];
+        frag_bss_row_t   *r = &s->frag_rows[i];
+        memcpy(r->bssid, b->bssid, 6);
+        r->protected_frames     = b->protected_frames;
+        r->plaintext_unicast    = b->plaintext_unicast;
+        r->plaintext_bcast_frag = b->plaintext_bcast_frag;
+        r->cache_poison         = b->cache_poison;
+        r->mixed_protect        = b->mixed_protect;
+        r->amsdu_flip           = b->amsdu_flip;
+        r->amsdu_eapol_spoof    = b->amsdu_eapol_spoof;
+        r->mixed_key            = b->mixed_key;
+        memcpy(r->last_sa, b->last_sa, 6);
+        memcpy(r->last_da, b->last_da, 6);
+        r->last_hit = b->last_hit;
+    }
+    s->frag_row_count = n;
+    if (s->frag_sel >= n) s->frag_sel = n > 0 ? n - 1 : 0;
+}
+
 void frag_clear(void) {
     memset(g_bss,  0, sizeof(g_bss));
     memset(g_sta,  0, sizeof(g_sta));

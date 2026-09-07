@@ -54,6 +54,7 @@ typedef enum {
     VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
     VIEW_ROGUE_RADIUS = 32, /* 802.1X EAP method / identity-leak table (#38) */
     VIEW_RESEARCH = 33, /* research-corpus coverage for the alerts that fired (#73) */
+    VIEW_FRAGATTACK = 34, /* per-BSSID FragAttacks counters (#75 slice 5) */
     VIEW_COUNT
 } view_t;
 
@@ -971,6 +972,30 @@ typedef struct {
     int  docs_truncated;   /* the corpus had more than MAX_RESEARCH_DOCS */
     research_doc_t docs[MAX_RESEARCH_DOCS];
 } research_cov_t;
+
+/* ── FragAttacks per-BSS view snapshot (#75 slice 5) ──
+ *
+ * Mirrors frag_bss_t (src/fragattack.h) rather than reusing it
+ * directly — the same decoupling every other WiFi-SIGINT view already
+ * has from its detector's internal table, so a change to the
+ * detector's bookkeeping can't silently reshape what the view renders.
+ * 64 mirrors FRAG_MAX_BSS in fragattack.h. */
+#define MAX_FRAG_ROWS 64
+
+typedef struct {
+    uint8_t bssid[6];
+    uint32_t protected_frames;    /* stations witnessed installing a key */
+    uint32_t plaintext_unicast;   /* FRAG_PLAINTEXT  — CVE-2020-26140/-26143 */
+    uint32_t plaintext_bcast_frag;/* FRAG_BCAST      — CVE-2020-26145 */
+    uint32_t cache_poison;        /* FRAG_CACHE      — CVE-2020-24586 */
+    uint32_t mixed_protect;       /* FRAG_MIXED      — CVE-2020-26147 */
+    uint32_t amsdu_flip;          /* FRAG_AMSDU      — CVE-2020-24588 */
+    uint32_t amsdu_eapol_spoof;   /* FRAG_AMSDU_EAPOL — CVE-2020-26144 */
+    uint32_t mixed_key;           /* FRAG_MIXKEY     — CVE-2020-24587 */
+    uint8_t  last_sa[6];
+    uint8_t  last_da[6];
+    time_t   last_hit;
+} frag_bss_row_t;
 
 /* 802.11k Neighbor Report entry — one neighbor AP advertised by the
  * subject AP's beacon (tag 52). Used to map enterprise WiFi topology
@@ -1909,6 +1934,11 @@ typedef struct {
     int            research_docs_total;   /* documents in the corpus */
     int            research_open;         /* 1 when a corpus is loaded */
     char           research_status[96];   /* why not, when it is not */
+
+    /* FragAttacks per-BSS snapshot (#75 slice 5). */
+    frag_bss_row_t frag_rows[MAX_FRAG_ROWS];
+    int            frag_row_count;
+    int            frag_sel;
 
     rogue_radius_ap_t rogue_radius[MAX_ROGUE_RADIUS]; /* 802.1X EAP tracking (#31) */
     int               rogue_radius_count;

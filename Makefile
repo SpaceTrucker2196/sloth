@@ -201,6 +201,7 @@ endif
 
 SRCS += src/fragattack.c
 SRCS += src/views/research.c
+SRCS += src/views/fragattack.c
 SRCS += research/coverage.c
 SRCS += src/pcap_write.c
 SRCS += src/geo.c
@@ -412,6 +413,8 @@ TEST_SRCS = tests/main_test.c          \
             research/coverage.c            \
             src/views/research.c           \
             tests/test_research_view.c     \
+            src/views/fragattack.c         \
+            tests/test_fragattack_view.c   \
             research/ingest/research_ingest.c \
             tests/test_research_ingest.c   \
             tests/test_research_corpus.c   \

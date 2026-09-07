@@ -48,6 +48,7 @@ One file per sloth view. Each covers:
 | `z` | Rogue RADIUS | [rogue-radius.md](rogue-radius.md) |
 | `m` | Channel   | [channel.md](channel.md) |
 | `f` | Research  | [research.md](research.md) |
+| `c` | FragAttacks | [fragattack.md](fragattack.md) |
 
 ## WiFi SIGINT (v1.1)
 

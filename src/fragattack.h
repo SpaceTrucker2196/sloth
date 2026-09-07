@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <time.h>
+#include "sloth.h"
 
 /* FragAttacks — issue #75, slice 1.
  *
@@ -244,6 +245,13 @@ int              frag_session_count(void);
 /* Test introspection: protected MPDUs currently held for A-MSDU
  * comparison. */
 int              frag_mpdu_count(void);
+
+/* Copy the per-BSS table into s->frag_rows for VIEW_FRAGATTACK (#75
+ * slice 5), sorted by last_hit descending — the BSS that just fired
+ * belongs at the top, not wherever bss_get() happened to insert it.
+ * Mirrors frag_bss_t into frag_bss_row_t rather than exposing the
+ * internal table to the view directly. */
+void frag_snapshot(sloth_state_t *s);
 
 void frag_clear(void);
 

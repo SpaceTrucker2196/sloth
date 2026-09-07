@@ -12,10 +12,13 @@ share one outcome: an adversary in radio range can get frames of their
 choosing accepted into an encrypted WPA/WPA2/WPA3 session **without
 holding the key**.
 
-Sloth implements six of them. This page explains which, why the other
-six are harder or impossible to observe passively (or, for one, simply
-not yet built), and — the part worth reading before you trust the
-alert — what each detector's gate actually proves.
+Sloth implements eight of them, across seven detectors (-26140 and
+-26143 share `FRAG_PLAINTEXT` — the fragmented and unfragmented
+variants of the same accepting-plaintext bug). This page explains
+which, why the remaining four are harder or impossible to observe
+passively (or, for one, simply not yet built), and — the part worth
+reading before you trust the alert — what each detector's gate
+actually proves.
 
 ## The twelve
 
@@ -335,6 +338,19 @@ fragments encrypted under two different keys — the mixed-key bug.
   session. Reporting a rekey without evidence a key existed at all
   would be a guess dressed as a detection, the same rule every
   plaintext detector in this file follows for its own gate.
+
+## The view
+
+`[c] FragAttacks` (slice 5, `src/views/fragattack.c`) is the operator
+surface for the seven counters above: one row per BSSID, sorted by
+most-recent finding, with a per-CVE breakdown for the selected row.
+It reads no packets and adds no SQLite table — `src/alert_pcap.c`
+already carries the triggering frames for each fired alert, which is a
+better fixture seed than a truncated evidence blob in a database row
+would have been. See [`docs/views/fragattack.md`](../views/fragattack.md).
+
+`[f]` went to #73's Research view first, so `[c]` is the key — the
+last free letter in the global switch at the time slice 5 landed.
 
 ## Addressing
 
