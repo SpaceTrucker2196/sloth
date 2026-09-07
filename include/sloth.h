@@ -973,6 +973,13 @@ typedef struct {
     int  severity;         /* highest severity seen for this kind */
     int  fired;            /* occurrences this session */
     int  doc_count;        /* rows written to docs[] */
+    /* This kind cites no external source *by design* — alert_technique()
+     * returns "" for it, meaning sloth is reporting its own operational
+     * state rather than detecting an adversary. Distinct from an
+     * uncited detector, which is a gap. Without the distinction the
+     * coverage number can never reach its own target and stops meaning
+     * anything. */
+    int  no_basis;
     int  docs_truncated;   /* the corpus had more than MAX_RESEARCH_DOCS */
     research_doc_t docs[MAX_RESEARCH_DOCS];
 } research_cov_t;

@@ -188,20 +188,100 @@ static void test_corpus_backed_rows_carry_provenance(void) {
     rq_close(h);
 }
 
+/* A corpus with exactly one document, citing exactly one kind. Used to
+ * reach the uncited-detector path, which the shipped corpus no longer
+ * offers: 59 of 60 kinds are cited and the sixtieth has no external
+ * basis by design.
+ *
+ * That path has not become unreachable in production — a detector added
+ * tomorrow starts uncited, which is precisely the case this view exists
+ * to show — so it keeps its test rather than losing one to the corpus
+ * having got better. Returns NULL if the sqlite3 CLI is unavailable. */
+static rq_handle_t *sparse_corpus(const char *path) {
+    unlink(path);
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "sqlite3 %s \"CREATE VIRTUAL TABLE research USING fts5("
+        "title, body, source_url UNINDEXED, retrieved UNINDEXED, topics,"
+        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');\""
+        " >/dev/null 2>&1", path);
+    if (system(cmd) != 0) return NULL;
+    snprintf(cmd, sizeof(cmd),
+        "sqlite3 %s \"INSERT INTO research VALUES('only doc','body',"
+        "'https://example.org/1','2026-09-07','t',"
+        "'ALERT_TYPE_EVIL_TWIN','research/x/1.md');\" >/dev/null 2>&1", path);
+    if (system(cmd) != 0) { unlink(path); return NULL; }
+    return rq_open(path);
+}
+
 static void test_uncovered_kinds_still_get_a_row(void) {
     /* The whole argument for this view. A kind with no sources must be
      * visible, not filtered out — an operator deciding whether to act
      * on a CRIT needs to know the threshold has no cited basis. */
+    const char *tmp = "/tmp/sloth_cov_sparse.db";
+    rq_handle_t *h = sparse_corpus(tmp);
+    if (!h) return;                              /* no sqlite3 CLI; skip */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    add_alert(&s, ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, "EVIL_TWIN", 1);
+    add_alert(&s, ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, "PORT_SCAN", 1);
+    research_coverage_snapshot(&s, h);
+    ASSERT_EQ(s.research_cov_count, 2);
+    const research_cov_t *gap = find_kind(&s, "ALERT_TYPE_PORT_SCAN");
+    ASSERT(gap != NULL);
+    if (gap) {
+        ASSERT_EQ(gap->doc_count, 0);
+        /* An uncited *detector* is a gap, not a deliberate absence. */
+        ASSERT_EQ(gap->no_basis, 0);
+    }
+    const research_cov_t *ok = find_kind(&s, "ALERT_TYPE_EVIL_TWIN");
+    ASSERT(ok && ok->doc_count > 0);
+    view_research_draw(&s);
+    rq_close(h);
+    unlink(tmp);
+}
+
+static void test_no_basis_kinds_are_not_counted_as_gaps(void) {
+    /* alert_technique() returns "" for a rule reporting sloth's own
+     * posture rather than an adversary. Counting those against coverage
+     * makes the number unreachable — 59 of 60 forever — and a target
+     * that cannot be met stops being read. */
     rq_handle_t *h = rq_open("research.db");
     ASSERT(h != NULL);
     if (!h) return;
     sloth_state_t s; memset(&s, 0, sizeof(s));
-    add_alert(&s, ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, "PORT_SCAN", 1);
+    add_alert(&s, ALERT_TYPE_NO_MONITOR_MODE, ALERT_SEV_LOW, "NO_MONITOR", 1);
+    add_alert(&s, ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, "EVIL_TWIN", 1);
     research_coverage_snapshot(&s, h);
-    ASSERT_EQ(s.research_cov_count, 1);
-    ASSERT_EQ(s.research_cov[0].doc_count, 0);
+
+    const research_cov_t *nm = find_kind(&s, "ALERT_TYPE_NO_MONITOR_MODE");
+    ASSERT(nm != NULL);
+    if (nm) {
+        ASSERT_EQ(nm->no_basis, 1);
+        ASSERT_EQ(nm->doc_count, 0);
+    }
+    /* A rule that *does* have a technique is never no_basis, whether or
+     * not the corpus happens to cite it. */
+    const research_cov_t *et = find_kind(&s, "ALERT_TYPE_EVIL_TWIN");
+    ASSERT(et && et->no_basis == 0);
     view_research_draw(&s);
+
+    /* The ratio the header shows: the no-basis kind is in neither half.
+     * Counting it as an uncovered gap makes coverage unreachable —
+     * 59 of 60 forever — and a target that cannot be met stops being
+     * read at all. */
+    int cited = 0;
+    int citable = research_coverage_ratio(&s, &cited);
+    ASSERT_EQ(citable, 1);
+    ASSERT_EQ(cited, 1);
     rq_close(h);
+}
+
+static void test_coverage_ratio_edges(void) {
+    ASSERT_EQ(research_coverage_ratio(NULL, NULL), 0);
+    int cited = 99;
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ASSERT_EQ(research_coverage_ratio(&s, &cited), 0);
+    ASSERT_EQ(cited, 0);
 }
 
 static void test_missing_corpus_and_loaded_corpus_differ(void) {
@@ -325,6 +405,8 @@ void run_research_view_tests(void) {
     TEST_SUITE("research view: against the corpus (#73 slice 3)");
     RUN_TEST(test_corpus_backed_rows_carry_provenance);
     RUN_TEST(test_uncovered_kinds_still_get_a_row);
+    RUN_TEST(test_no_basis_kinds_are_not_counted_as_gaps);
+    RUN_TEST(test_coverage_ratio_edges);
     RUN_TEST(test_missing_corpus_and_loaded_corpus_differ);
     RUN_TEST(test_more_documents_than_fit_are_reported);
 

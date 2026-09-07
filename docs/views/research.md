@@ -57,11 +57,16 @@ to `research_for_alert` over the MCP server or grep for in
 
 ## Normal
 
-Most kinds show `-`. At the time of writing the corpus covers 24 of 60
-alert kinds, so an ordinary session shows more uncited rows than cited
-ones.
+At the time of writing the corpus covers **59 of 60** citable kinds, so
+most rows show a count. A `-` is a detector with nothing behind it — a
+gap, and a work item.
 
-That is not a defect in the view. It is the view working.
+`n/a` is different and is coloured differently: the kind has no external
+basis *by design*, because it reports sloth's own state rather than an
+adversary. `ALERT_TYPE_NO_MONITOR_MODE` is the case that exists today.
+Nothing to cite and nothing cited are different claims, and the view
+does not conflate them — nor does the ratio in the header, which counts
+neither half of a `n/a` row.
 
 ## Suspicious
 

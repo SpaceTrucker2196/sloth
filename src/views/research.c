@@ -3,6 +3,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/research.h"
+#include "coverage.h"
 
 /* Research corpus — issue #73 slice 3.
  *
@@ -46,15 +47,14 @@ void view_research_draw(const sloth_state_t *s) {
 #endif
 
     int cited = 0;
-    for (int i = 0; i < s->research_cov_count; i++)
-        if (s->research_cov[i].doc_count > 0) cited++;
+    int citable = research_coverage_ratio(s, &cited);
 
     tui_normal(); TPRINT(" Research corpus: ");
     if (s->research_open) {
         tui_bright(); TPRINT("loaded");
         tui_dim();    TPRINT("  cited ");
         tui_bright(); TPRINT("%d", cited);
-        tui_dim();    TPRINT("/%d fired alert kinds", s->research_cov_count);
+        tui_dim();    TPRINT("/%d citable alert kinds", citable);
     } else {
         tui_heat(0.5); TPRINT("not loaded");
         tui_dim();
@@ -100,8 +100,12 @@ void view_research_draw(const sloth_state_t *s) {
         /* Zero is coloured, not blank. A blank cell reads as "not
          * applicable"; this is "nothing backs this rule", which is a
          * finding about sloth rather than about the network. */
-        if (c->doc_count > 0) { tui_bright(); TPRINT("%4d", c->doc_count); }
-        else                  { tui_heat(0.5); TPRINT("%4s", "-"); }
+        if (c->doc_count > 0)  { tui_bright(); TPRINT("%4d", c->doc_count); }
+        /* "n/a" and "-" are different claims: nothing to cite, versus
+         * nothing cited. Colouring them the same would make a deliberate
+         * absence read as a gap. */
+        else if (c->no_basis)  { tui_dim();    TPRINT("%4s", "n/a"); }
+        else                   { tui_heat(0.5); TPRINT("%4s", "-"); }
         tui_normal();
         tui_dim(); TPRINT("  %s\n", c->kind);
         tui_normal();
@@ -114,6 +118,15 @@ void view_research_draw(const sloth_state_t *s) {
     tui_bright(); TPRINT("%s", c->kind);
     tui_dim(); TPRINT(" ──\n"); tui_normal();
 
+    if (c->doc_count == 0 && c->no_basis) {
+        tui_dim();
+        TPRINT("  This rule reports sloth's own state rather than an\n"
+               "  adversary, so there is no external source to cite.\n"
+               "  alert_technique() returns no MITRE technique for it,\n"
+               "  which is where that is recorded.\n");
+        tui_normal();
+        return;
+    }
     if (c->doc_count == 0) {
         tui_heat(0.5);
         TPRINT("  No document in the corpus cites this rule.\n");

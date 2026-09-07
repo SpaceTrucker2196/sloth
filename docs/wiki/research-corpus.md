@@ -92,7 +92,7 @@ whole-token: `ALERT_TYPE_ROGUE` must not pass by being a prefix of
 
 **Warning-only — every alert kind has at least one document.** This is
 the direction #73 ultimately wants, and it needs the content pass first.
-At the time of writing that is **24 of 60** kinds cited. Failing on it now would
+At the time of writing that is **59 of 60** kinds cited. Failing on it now would
 mean a red suite until the corpus is finished, which turns a guard into
 something to be worked around rather than satisfied.
 
@@ -270,7 +270,7 @@ citations for every alert whose title was shortened, and a partly-empty
 References block looks exactly like a complete one.
 
 An alert with no documents emits nothing rather than an empty heading.
-That is most of them: 24 of 60 kinds are cited.
+That is most of them: 59 of 60 kinds are cited.
 
 ## The `[f]` Research view
 
@@ -293,9 +293,30 @@ is simply empty.
 
 Full write-up in [`docs/views/research.md`](../views/research.md).
 
+## The kind that will never be cited
+
+`ALERT_TYPE_NO_MONITOR_MODE` reports that sloth has no monitor-mode
+radio. It is sloth's own operational state, not a claim about an
+adversary, and there is no CVE, advisory, technique or clause to cite
+for it.
+
+`alert_technique()` already said so — it returns `""` for exactly this
+case — so that is where the fact lives, and `research/coverage.c` reads
+it rather than keeping a second list the two could disagree about.
+
+The distinction matters to the number. Counted as a gap, coverage reads
+59 of 60 forever and a target that cannot be met stops being read. The
+`[f]` view therefore shows **`n/a`** for such a kind rather than `-`,
+and excludes it from both halves of the ratio: *nothing to cite* and
+*nothing cited* are different claims and must not be coloured the same.
+
+Any future detector that reports sloth's own state rather than the
+network's gets this treatment automatically, by having no technique.
+
 ## What is not here yet
-- **Coverage.** 24 of 60 alert kinds have a document. The guard stays
-  warning-only until the rest are written.
+- **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth
+  never will — see below. The guard can now be flipped from
+  warning-only whenever you want it enforcing.
 
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the
 quit key, checked before the view switch as an absolute global. `c` and

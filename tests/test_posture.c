@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "posture.h"
@@ -211,17 +213,35 @@ static void test_lookup_uses_the_enum_name_not_the_title(void) {
 }
 
 static void test_uncited_alert_produces_no_block(void) {
-    /* 11 of 47 kinds are cited at slice 1. An alert with no documents
-     * must not emit an empty References heading. */
+    /* An alert with no documents must not emit an empty References
+     * heading.
+     *
+     * Driven from a synthetic one-document corpus rather than the
+     * shipped one. That is not a mock: it is a real FTS5 file the query
+     * layer runs against unmodified. It is needed because the shipped
+     * corpus now cites 59 of 60 kinds, so no real alert reaches this
+     * path — and the path is still live, because a detector added
+     * tomorrow starts uncited. */
+    const char *tmp = "/tmp/sloth_posture_sparse.db";
+    unlink(tmp);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+        "sqlite3 %s \"CREATE VIRTUAL TABLE research USING fts5("
+        "title, body, source_url UNINDEXED, retrieved UNINDEXED, topics,"
+        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');\""
+        " >/dev/null 2>&1", tmp);
+    if (system(cmd) != 0) return;                /* no sqlite3 CLI; skip */
+
     sloth_state_t s; memset(&s, 0, sizeof(s));
     seed_titled_alert(&s, ALERT_TYPE_PORT_SCAN, "PORT_SCAN");
-    rq_handle_t *h = rq_open("research.db");
+    rq_handle_t *h = rq_open(tmp);
     ASSERT(h != NULL);
-    if (!h) return;
+    if (!h) { unlink(tmp); return; }
     static char buf[65536];
     render_with(&s, h, buf, sizeof(buf));
     ASSERT(strstr(buf, "## References") == NULL);
     rq_close(h);
+    unlink(tmp);
 }
 
 static void test_repeated_alerts_cited_once(void) {

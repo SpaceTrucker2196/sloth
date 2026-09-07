@@ -66,6 +66,13 @@ void research_coverage_snapshot(sloth_state_t *s, struct rq_handle *h) {
                          "%.15s", hits[d].retrieved);
             }
             row->doc_count = n;
+            /* alert_technique() is already the authoritative statement
+             * of whether a kind has an external basis: it returns "" for
+             * the ones that report sloth's own posture — NO_MONITOR_MODE
+             * being the case it was written for. Reading it here rather
+             * than keeping a second list means the two cannot disagree. */
+            const char *tech = alert_technique(a->type);
+            row->no_basis = !(tech && tech[0]);
         } else if ((int)a->sev > row->severity) {
             /* The worst severity this kind reached, not the first seen.
              * A WARN and a CRIT of the same kind sort by the CRIT. */
@@ -91,4 +98,17 @@ void research_coverage_snapshot(sloth_state_t *s, struct rq_handle *h) {
         s->research_sel = s->research_cov_count > 0
                         ? s->research_cov_count - 1 : 0;
     if (s->research_sel < 0) s->research_sel = 0;
+}
+
+int research_coverage_ratio(const sloth_state_t *s, int *cited_out) {
+    if (cited_out) *cited_out = 0;
+    if (!s) return 0;
+    int citable = 0, cited = 0;
+    for (int i = 0; i < s->research_cov_count; i++) {
+        if (s->research_cov[i].no_basis) continue;
+        citable++;
+        if (s->research_cov[i].doc_count > 0) cited++;
+    }
+    if (cited_out) *cited_out = cited;
+    return citable;
 }

@@ -23,4 +23,14 @@ struct rq_handle;
  * path as a missing corpus and the view still explains itself. */
 void research_coverage_snapshot(sloth_state_t *s, struct rq_handle *h);
 
+/* How many of the fired kinds *can* be cited, and how many are. Kinds
+ * whose alert_technique() is empty are excluded from both halves: a
+ * rule reporting sloth's own posture has no external source, and
+ * counting it against coverage makes the target unreachable.
+ *
+ * Lives here rather than in the view because it is arithmetic with a
+ * judgement in it, and the view is not in a position to be tested on
+ * what it prints. */
+int research_coverage_ratio(const sloth_state_t *s, int *cited_out);
+
 #endif /* RESEARCH_COVERAGE_H */
