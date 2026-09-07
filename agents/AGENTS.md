@@ -75,10 +75,28 @@ Single binary `sloth`. Test binary `sloth_test`.
   a non-obvious mechanism.
 
   The habit has been followed since the first detector batch without
-  ever being written down here, which is why `#73` proposes enforcing
-  it at runtime. Enforcement should follow documentation, so it is
-  documented now: a new detector with no cited basis is incomplete, the
-  same way an untested one is.
+  ever being written down here, which is why `#73` proposed enforcing
+  it. Enforcement should follow documentation, so it was documented
+  first: a new detector with no cited basis is incomplete, the same way
+  an untested one is.
+
+  **Enforced since #73's content pass.**
+  `tests/test_research_corpus.c :: test_every_citable_alert_kind_is_cited`
+  fails when an `ALERT_TYPE_*` with a MITRE technique has no document in
+  `research/**.md` naming it. Adding a detector therefore means adding
+  its source, in the same change, or the suite goes red and names the
+  kind in its output.
+
+  The exception is deliberate and narrow: `alert_technique()` returning
+  `""` marks a rule that reports sloth's own operational state rather
+  than an adversary — `ALERT_TYPE_NO_MONITOR_MODE` is the only one
+  today — and there is no CVE, advisory or clause to cite for one. Those
+  are excluded from the count rather than treated as gaps. If you find
+  yourself wanting that exemption for a real detector, the detector
+  needs a source, not an exemption.
+
+  Adding a document: `docs/wiki/research-corpus.md`. One source may back
+  several kinds — group by source, not by alert.
 
 ## Conventions
 
