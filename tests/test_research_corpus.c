@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 #include "runner.h"
 #include "sloth.h"
+#include "alerts.h"
 
 /*
  * The corpus guard — issue #73, slice 1.
@@ -15,14 +16,34 @@
  * query silently returns zero hits. This catches that immediately, and
  * it passes now.
  *
- * **Warning-only: every alert kind has at least one document.** That is
- * the direction the issue ultimately wants, and it needs the week-2
- * content pass first — 46 alert kinds, 11 cited at slice 1. Failing on
- * it today would mean a red suite until the corpus is finished, which
- * makes the guard something to be worked around rather than satisfied.
- * Same shape as #68's empty signature table: ship the mechanism, be
- * honest that the data is not there yet, and flip it in the commit that
- * closes the gap.
+ * **Enforced since the content pass: every alert kind that *can* be
+ * cited is.** Warning-only through slices 1-3, on the grounds that a
+ * red suite until the corpus was finished would make the guard
+ * something to work around rather than satisfy. The corpus is finished,
+ * so it fails now.
+ *
+ * "Can be cited" is doing work. alert_technique() returns "" for a rule
+ * reporting sloth's own operational state rather than an adversary —
+ * ALERT_TYPE_NO_MONITOR_MODE is the case that exists — and there is no
+ * CVE, advisory or clause to cite for one. Those are excluded rather
+ * than counted as gaps: a target that cannot be met stops being read.
+ *
+ * ── The tokenizer trap, again ──
+ *
+ * This file's coverage query used `alert_kinds MATCH <kind>` from slice
+ * 1 until the content pass. That is wrong, for the reason documented on
+ * rq_for_alert: FTS5's unicode61 tokenizer splits on underscores and a
+ * bare term sequence is a *phrase*, so MATCH 'ALERT_TYPE_EVIL_TWIN'
+ * is satisfied by a document naming only ALERT_TYPE_EVIL_TWIN_PROXIMITY
+ * — the shorter kind's tokens are a consecutive prefix of the longer
+ * one's.
+ *
+ * The guard therefore over-reported coverage for three slices. It
+ * happened to reach the same number as an exact query today, because
+ * every kind that is a token-prefix of another is also independently
+ * cited, but that is luck and not correctness. Now delimiter-wrapped
+ * LIKE, the same comparison research/query.c makes, with a test that
+ * fails if it ever goes back.
  */
 
 /* Every ALERT_TYPE_* the build knows about, via the table every alert
@@ -133,48 +154,104 @@ static void test_every_row_carries_provenance(void) {
     sqlite3_close(db);
 }
 
-static void test_alert_kind_coverage_reported(void) {
-    /* Warning-only, deliberately. See the note at the top of this file.
-     * It prints what is missing so the gap is visible in every run
-     * rather than discovered when someone goes looking. */
+/* Exact whole-token containment, not FTS5 MATCH. See the tokenizer note
+ * at the top of this file. Identical comparison to rq_for_alert's. */
+static int corpus_cites(sqlite3 *db, const char *kind) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+            "SELECT COUNT(*) FROM research"
+            " WHERE (' ' || alert_kinds || ' ') LIKE ('% ' || ?1 || ' %')",
+            -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(st, 1, kind, -1, SQLITE_TRANSIENT);
+    int hits = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int(st, 0) : 0;
+    sqlite3_finalize(st);
+    return hits;
+}
+
+static void test_coverage_query_is_exact_not_fts_match(void) {
+    /* The regression this guard shipped with for three slices. A
+     * document naming only ALERT_TYPE_EVIL_TWIN_PROXIMITY must not
+     * satisfy coverage for ALERT_TYPE_EVIL_TWIN — under MATCH it does,
+     * because the shorter kind's tokens are a consecutive prefix of the
+     * longer one's and a bare term sequence is a phrase query.
+     *
+     * Built as its own one-row corpus so the assertion holds whatever
+     * the shipped corpus happens to contain. */
+    sqlite3 *db = NULL;
+    if (sqlite3_open(":memory:", &db) != SQLITE_OK) { sqlite3_close(db); return; }
+    char *err = NULL;
+    int ok = sqlite3_exec(db,
+        "CREATE VIRTUAL TABLE research USING fts5(title, body,"
+        " source_url UNINDEXED, retrieved UNINDEXED, topics, alert_kinds,"
+        " path UNINDEXED, tokenize = 'porter unicode61');"
+        "INSERT INTO research VALUES('d','b','u','2026-01-01','t',"
+        "'ALERT_TYPE_EVIL_TWIN_PROXIMITY','p');",
+        NULL, NULL, &err) == SQLITE_OK;
+    if (err) sqlite3_free(err);
+    ASSERT(ok);
+    if (!ok) { sqlite3_close(db); return; }
+
+    ASSERT_EQ(corpus_cites(db, "ALERT_TYPE_EVIL_TWIN"), 0);
+    ASSERT_EQ(corpus_cites(db, "ALERT_TYPE_EVIL_TWIN_PROXIMITY"), 1);
+
+    /* And the shape MATCH gets wrong, asserted directly so the comment
+     * above is not the only record of why this function exists. */
+    sqlite3_stmt *st = NULL;
+    sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM research"
+                           " WHERE alert_kinds MATCH 'ALERT_TYPE_EVIL_TWIN'",
+                       -1, &st, NULL);
+    int fts = (sqlite3_step(st) == SQLITE_ROW) ? sqlite3_column_int(st, 0) : -1;
+    sqlite3_finalize(st);
+    ASSERT_EQ(fts, 1);          /* MATCH says yes; it is wrong */
+    sqlite3_close(db);
+}
+
+static void test_every_citable_alert_kind_is_cited(void) {
+    /* Enforced since the content pass. A new detector arrives uncited
+     * and turns the suite red until someone writes down what it detects
+     * *from* — which is the rule agents/AGENTS.md states and this is the
+     * mechanism that holds it.
+     *
+     * Iterates the enum rather than parsing include/sloth.h, so a kind
+     * cannot escape the guard by being formatted unusually. Both
+     * alert_type_name() and alert_technique() are already asserted total
+     * over the enum elsewhere. */
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);
     if (!db) return;
 
-    FILE *f = fopen("include/sloth.h", "r");
-    ASSERT(f != NULL);
-    if (!f) { sqlite3_close(db); return; }
+    int total = 0, citable = 0, cited = 0, no_basis = 0;
+    char missing[512];
+    int  moff = 0;
+    missing[0] = '\0';
 
-    char line[512];
-    int total = 0, cited = 0;
-    while (fgets(line, sizeof(line), f)) {
-        char name[128];
-        if (sscanf(line, " ALERT_TYPE_%127[A-Z0-9_],", name) != 1) continue;
-        char full[160];
-        snprintf(full, sizeof(full), "ALERT_TYPE_%s", name);
-        if (!strcmp(full, "ALERT_TYPE_COUNT")) continue;
+    for (int t = 0; t < (int)ALERT_TYPE_COUNT; t++) {
+        const char *kind = alert_type_name((alert_type_t)t);
+        ASSERT(kind && kind[0]);
+        if (!kind || !kind[0]) continue;
         total++;
 
-        sqlite3_stmt *st = NULL;
-        sqlite3_prepare_v2(db,
-            "SELECT COUNT(*) FROM research WHERE alert_kinds MATCH ?1",
-            -1, &st, NULL);
-        sqlite3_bind_text(st, 1, full, -1, SQLITE_TRANSIENT);
-        int hits = (sqlite3_step(st) == SQLITE_ROW)
-                   ? sqlite3_column_int(st, 0) : 0;
-        sqlite3_finalize(st);
-        if (hits > 0) cited++;
+        const char *tech = alert_technique((alert_type_t)t);
+        if (!tech || !tech[0]) { no_basis++; continue; }
+        citable++;
+
+        if (corpus_cites(db, kind) > 0) { cited++; continue; }
+        if (moff < (int)sizeof(missing) - 40)
+            moff += snprintf(missing + moff, sizeof(missing) - (size_t)moff,
+                             "%s%s", moff ? ", " : "", kind);
     }
-    fclose(f);
     sqlite3_close(db);
 
-    printf("    corpus coverage: %d/%d alert kinds cited "
-           "(warning-only until the content pass lands)\n", cited, total);
-    /* What *is* asserted: the mechanism resolves at least one kind. A
-     * coverage report that could never find anything would look like
-     * progress while measuring nothing. */
+    printf("    corpus coverage: %d/%d citable alert kinds cited"
+           " (%d have no external basis)\n", cited, citable, no_basis);
+    if (cited != citable)
+        printf("    UNCITED: %s\n", missing);
+
     ASSERT(total > 0);
-    ASSERT(cited > 0);
+    ASSERT(citable > 0);
+    /* The guard. A detector with no cited basis is incomplete, the same
+     * way an untested one is — agents/AGENTS.md § Discipline. */
+    ASSERT_EQ(cited, citable);
 }
 
 void run_research_corpus_tests(void) {
@@ -182,5 +259,6 @@ void run_research_corpus_tests(void) {
     RUN_TEST(test_corpus_is_present_and_readable);
     RUN_TEST(test_no_document_cites_a_nonexistent_alert_kind);
     RUN_TEST(test_every_row_carries_provenance);
-    RUN_TEST(test_alert_kind_coverage_reported);
+    RUN_TEST(test_coverage_query_is_exact_not_fts_match);
+    RUN_TEST(test_every_citable_alert_kind_is_cited);
 }

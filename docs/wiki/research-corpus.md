@@ -78,28 +78,56 @@ Regenerate with `make research-index` after editing anything under
 `research/`. `.gitattributes` marks it binary so git does not attempt
 line diffs or CRLF conversion on it.
 
-## The guard, and why it is half-enforced
+## The guard
 
-`tests/test_research_corpus.c` checks two directions. Only one can be
-enforced today.
+`tests/test_research_corpus.c` checks two directions. **Both are
+enforced.**
 
-**Enforced — no document cites an alert kind that does not exist.**
-Frontmatter names kinds as strings, so a renamed or deleted
-`ALERT_TYPE_*` leaves documents pointing at nothing and the runtime
-query returns zero hits with no indication why. The match is
-whole-token: `ALERT_TYPE_ROGUE` must not pass by being a prefix of
-`ALERT_TYPE_ROGUE_RA`.
+**No document cites an alert kind that does not exist.** Frontmatter
+names kinds as strings, so a renamed or deleted `ALERT_TYPE_*` leaves
+documents pointing at nothing and the runtime query returns zero hits
+with no indication why.
 
-**Warning-only — every alert kind has at least one document.** This is
-the direction #73 ultimately wants, and it needs the content pass first.
-At the time of writing that is **59 of 60** kinds cited. Failing on it now would
-mean a red suite until the corpus is finished, which turns a guard into
-something to be worked around rather than satisfied.
+**Every alert kind that can be cited is.** Enforced since the content
+pass. A new detector arrives uncited and turns the suite red until
+someone writes down what it detects *from* — the rule
+`agents/AGENTS.md` § Discipline states, with a mechanism behind it.
 
-The suite prints the coverage every run, so the gap stays visible rather
-than being discovered when somebody goes looking. Flip the check to
-failing in the same commit that closes it — the same shape as
-[#68's empty signature table](tool-fingerprints.md).
+*"Can be cited"* is doing work. `alert_technique()` returns `""` for a
+rule reporting sloth's own operational state rather than an adversary,
+and there is no CVE, advisory or clause to cite for one. Those are
+excluded rather than counted as gaps — see below.
+
+The suite prints coverage every run:
+
+```
+    corpus coverage: 59/59 citable alert kinds cited (1 have no external basis)
+```
+
+and names the offenders when it fails, so the fix is obvious from the
+output rather than requiring a query.
+
+### The tokenizer trap, again
+
+This check used `alert_kinds MATCH <kind>` from slice 1 until the
+content pass, and that was **wrong for three slices**.
+
+FTS5's `unicode61` tokenizer splits on underscores, and a bare sequence
+of terms is a *phrase* query. So `MATCH 'ALERT_TYPE_EVIL_TWIN'` is
+satisfied by a document naming only `ALERT_TYPE_EVIL_TWIN_PROXIMITY` —
+the shorter kind's tokens are a consecutive prefix of the longer one's.
+
+It is the same trap `rq_for_alert` hit in slice 2 and was fixed for; the
+guard was simply never updated to match. It happened to report the same
+number as an exact query, because every kind that is a token-prefix of
+another is also independently cited — but that is luck, not correctness,
+and a guard that is right by luck is not a guard.
+
+Now delimiter-wrapped `LIKE`, identical to the query layer's, with
+`test_coverage_query_is_exact_not_fts_match` asserting both that the
+exact form rejects the prefix case and that `MATCH` accepts it. The
+second half matters: without it the test documents a preference rather
+than a bug.
 
 ## Adding a document
 
