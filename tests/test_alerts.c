@@ -4663,6 +4663,105 @@ static void test_sae_psk_regression_silent_without_a_database(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_SAE_PSK_REGRESSION), -1);
 }
 
+/* ── Action-frame coverage (#76) ─────────────────────────── */
+
+static int aq_frame(uint8_t *f, uint8_t cat, const uint8_t bssid[6],
+                    const uint8_t sta[6], int protect) {
+    memset(f, 0, 64);
+    f[0] = 0xD0;                                 /* Action */
+    f[1] = (uint8_t)(protect ? 0x40 : 0x00);
+    memcpy(f + 4,  sta,   6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);
+    f[24] = cat;
+    f[25] = 0;
+    return 28;
+}
+
+static void test_sa_query_flood_alert_fires(void) {
+    alerts_clear();
+    saq_clear();
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x11,0x22,0x33};
+    uint8_t sta[6]   = {0x12,0x22,0x33,0x44,0x55,0x66};
+    uint8_t f[64];
+    time_t now = time(NULL);
+    for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta, 1);
+        action_observe(f, n, now);
+    }
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        /* The detail has to say what the storm *means* — the AP is
+         * refusing spoofed disassociations, which is MFP working, not
+         * the client being attacked directly. */
+        ASSERT(strstr(s.alerts[i].detail, "spoofed disassociations") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "aa:bb:cc:11:22:33") != NULL);
+    }
+    saq_clear();
+}
+
+static void test_mfp_unprotected_alert_fires(void) {
+    alerts_clear();
+    action_mfp_clear();
+    beacon_clear();
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x11,0x22,0x44};
+    uint8_t sta[6]   = {0x12,0x22,0x33,0x44,0x55,0x66};
+    beacon_rsn_t rsn; memset(&rsn, 0, sizeof(rsn));
+    rsn.mfp = 2;                                 /* MFP required */
+    beacon_record(bssid, "Corp", -50, 6, "WPA3", 100, &rsn);
+
+    uint8_t f[64];
+    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta, 0);
+    action_observe(f, n, time(NULL));
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_MFP_UNPROTECTED);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2019-16275") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "MFP required") != NULL);
+    }
+    action_mfp_clear();
+    beacon_clear();
+}
+
+static void test_action_alerts_quiet_on_an_ordinary_bss(void) {
+    /* MFP capable-but-not-required with a handful of SA Queries is the
+     * ordinary WPA2/WPA3 picture. Neither rule may fire on it. */
+    alerts_clear();
+    action_mfp_clear();
+    saq_clear();
+    beacon_clear();
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x11,0x22,0x55};
+    uint8_t sta[6]   = {0x12,0x22,0x33,0x44,0x55,0x66};
+    beacon_rsn_t rsn; memset(&rsn, 0, sizeof(rsn));
+    rsn.mfp = 1;
+    beacon_record(bssid, "Guest", -50, 6, "WPA2", 100, &rsn);
+
+    uint8_t f[64];
+    time_t now = time(NULL);
+    for (int i = 0; i < 3; i++) {
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta, 1);
+        action_observe(f, n, now);
+    }
+    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta, 0);
+    action_observe(f, n, now);
+
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MFP_UNPROTECTED), -1);
+    action_mfp_clear();
+    saq_clear();
+    beacon_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -4944,4 +5043,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_sae_psk_regression_fires);
 #endif
     RUN_TEST(test_sae_psk_regression_silent_without_a_database);
+
+    TEST_SUITE("alerts: action-frame coverage (#76)");
+    RUN_TEST(test_sa_query_flood_alert_fires);
+    RUN_TEST(test_mfp_unprotected_alert_fires);
+    RUN_TEST(test_action_alerts_quiet_on_an_ordinary_bss);
 }

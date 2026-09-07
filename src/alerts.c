@@ -244,6 +244,13 @@ const char *alert_technique(alert_type_t type) {
     /* T1557 as well: the relayed EAPOL is what lets an unauthenticated
      * sender reach a peer it has no business reaching. */
     case ALERT_TYPE_FRAG_EAPOL_RELAY:       return "T1557";       /* CVE-2020-26139 */
+    /* T1499 Endpoint DoS: the storm is the AP answering spoofed
+     * disassociations, and what it costs is the client's airtime and
+     * association. */
+    case ALERT_TYPE_SA_QUERY_FLOOD:         return "T1499";       /* #76 */
+    /* T1562.004 Impair Defenses: an unprotected robust action frame on
+     * an MFP-required BSS is the protection not being applied. */
+    case ALERT_TYPE_MFP_UNPROTECTED:        return "T1562.004";   /* CVE-2019-16275 */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -290,7 +297,8 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
     N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
     N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);         N(ALERT_TYPE_FRAG_PN_GAP);
-    N(ALERT_TYPE_FRAG_EAPOL_RELAY);
+    N(ALERT_TYPE_FRAG_EAPOL_RELAY);    N(ALERT_TYPE_SA_QUERY_FLOOD);
+    N(ALERT_TYPE_MFP_UNPROTECTED);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -965,6 +973,71 @@ static void rule_sae_psk_regression(const sloth_state_t *s, time_t now) {
         fire(ALERT_TYPE_SAE_PSK_REGRESSION, ALERT_SEV_CRIT,
              "SAE_PSK_REGRESSION", detail, key, NULL, 0, now);
     }
+}
+
+/* SA-Query storm — issue #76.
+ *
+ * Not an attack on the client. SA Query is management-frame
+ * protection's own mechanism: an AP that receives an *unprotected*
+ * disassociation claiming to be from an associated station does not act
+ * on it, it asks the station whether it is still there. So a storm is
+ * the visible symptom of someone spraying spoofed disassociations at an
+ * MFP-protected network — which is what deauth flooding becomes once
+ * MFP takes the direct route away.
+ *
+ * The attacker's own frames may never be heard: they are aimed at the
+ * AP and sloth may be on another channel or out of range of the
+ * transmitter. The AP's response is sent on the BSS's own channel and
+ * is heard. Detecting the answer rather than the question is the whole
+ * reason this rule earns its place beside the deauth flood rule. */
+static void rule_sa_query_flood(const sloth_state_t *s, time_t now) {
+    (void)s;
+    uint8_t bssid[6], sta[6];
+    int count = 0;
+    if (!saq_flood_pair(now, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                        bssid, sta, &count)) return;
+
+    char bss[20], stastr[20];
+    mac_to_str(bssid, bss,    sizeof(bss));
+    mac_to_str(sta,   stastr, sizeof(stastr));
+    char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "saqflood:%.17s:%.17s", bss, stastr);
+    snprintf(detail, sizeof(detail),
+             "%d SA-Query frames in %ds between %.17s and %.17s"
+             " - the AP is refusing spoofed disassociations",
+             count, SAQ_FLOOD_WIN_SECS, bss, stastr);
+    /* CRIT: a legitimate exchange is a handful of frames over a few
+     * hundred milliseconds (§11.13). Sustained means the AP is fending
+     * something off, and MFP is doing its job — which is worth telling
+     * the operator precisely because nothing else will. */
+    fire(ALERT_TYPE_SA_QUERY_FLOOD, ALERT_SEV_CRIT,
+         "SA_QUERY_FLOOD", detail, key, NULL, 0, now);
+}
+
+/* Unprotected robust action frame on an MFP-required BSS — issue #76,
+ * CVE-2019-16275.
+ *
+ * The BSS's own beacon says management frames must be protected, and
+ * one arrived that was not. Either the stack is non-conforming or the
+ * frame was injected, and the CVE is the first being exploitable as the
+ * second. Sloth cannot tell them apart and does not claim to. */
+static void rule_mfp_unprotected(const sloth_state_t *s, time_t now) {
+    (void)s;
+    uint8_t bssid[6], cat[1] = { 0 };
+    int count = 0;
+    if (action_mfp_violations(bssid, &count, cat) <= 0 || count <= 0) return;
+
+    char bss[20];
+    mac_to_str(bssid, bss, sizeof(bss));
+    char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+    snprintf(key, sizeof(key), "mfpunprot:%.17s", bss);
+    snprintf(detail, sizeof(detail),
+             "%d unprotected robust action frame%s on %.17s"
+             " (category %u) - this BSS advertises MFP required"
+             " (CVE-2019-16275)",
+             count, count == 1 ? "" : "s", bss, (unsigned)cat[0]);
+    fire(ALERT_TYPE_MFP_UNPROTECTED, ALERT_SEV_CRIT,
+         "MFP_UNPROTECTED", detail, key, NULL, 0, now);
 }
 
 static void rule_rts_flood(const sloth_state_t *s, time_t now) {
@@ -3010,6 +3083,8 @@ void alerts_update(sloth_state_t *s) {
     rule_fragattack(s, now);
     rule_sae_psk_split(s, now);
     rule_sae_psk_regression(s, now);
+    rule_sa_query_flood(s, now);
+    rule_mfp_unprotected(s, now);
     rule_blockack_attack(s, now);
     rule_dns_tunnel(s, now);
     rule_probe_flood(s, now);

@@ -3,6 +3,11 @@
 #include <pthread.h>
 
 #include "action_snoop.h"
+#include "beacon_snoop.h"
+
+static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
+    return memcmp(a, b, 6) == 0;
+}
 
 /* 802.11 management header is 24 bytes; the Action body starts there.
  * Category and Action occupy the first two body bytes. */
@@ -124,6 +129,159 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
     return 1;
 }
 
+
+/* ── SA Query storms (#76) ──────────────────────────────────────────── */
+
+typedef struct {
+    uint8_t bssid[6];
+    uint8_t sta[6];
+    time_t  ts[SAQ_FLOOD_THRESH * 4];
+    int     head;
+    int     n;
+    time_t  last_seen;
+} saq_pair_t;
+
+static saq_pair_t      g_saq[SAQ_MAX_PAIRS];
+static int             g_saq_n;
+static pthread_mutex_t g_saq_mu = PTHREAD_MUTEX_INITIALIZER;
+
+#define SAQ_RING ((int)(sizeof(((saq_pair_t *)0)->ts) / sizeof(time_t)))
+
+static void saq_observe(const uint8_t bssid[6], const uint8_t sta[6],
+                        time_t now) {
+    pthread_mutex_lock(&g_saq_mu);
+    saq_pair_t *p = NULL;
+    for (int i = 0; i < g_saq_n; i++)
+        if (mac_eq(g_saq[i].bssid, bssid) && mac_eq(g_saq[i].sta, sta)) {
+            p = &g_saq[i];
+            break;
+        }
+    if (!p) {
+        int slot;
+        if (g_saq_n < SAQ_MAX_PAIRS) {
+            slot = g_saq_n++;
+        } else {
+            slot = 0;
+            for (int k = 1; k < g_saq_n; k++)
+                if (g_saq[k].last_seen < g_saq[slot].last_seen) slot = k;
+        }
+        p = &g_saq[slot];
+        memset(p, 0, sizeof(*p));
+        memcpy(p->bssid, bssid, 6);
+        memcpy(p->sta,   sta,   6);
+    }
+    /* A timestamp ring rather than a counter: the window has to slide,
+     * or a network that saw a legitimate burst an hour ago carries it
+     * forever and the threshold means nothing. */
+    p->ts[p->head] = now;
+    p->head = (p->head + 1) % SAQ_RING;
+    if (p->n < SAQ_RING) p->n++;
+    p->last_seen = now;
+    pthread_mutex_unlock(&g_saq_mu);
+}
+
+int saq_flood_pair(time_t now, int window_s, int thresh,
+                   uint8_t out_bssid[6], uint8_t out_sta[6],
+                   int *out_count) {
+    if (out_count) *out_count = 0;
+    int best = 0;
+    pthread_mutex_lock(&g_saq_mu);
+    for (int i = 0; i < g_saq_n; i++) {
+        const saq_pair_t *p = &g_saq[i];
+        int in_win = 0;
+        for (int k = 0; k < p->n; k++)
+            if (now - p->ts[k] <= window_s && now >= p->ts[k]) in_win++;
+        if (in_win > best) {
+            best = in_win;
+            if (out_bssid) memcpy(out_bssid, p->bssid, 6);
+            if (out_sta)   memcpy(out_sta,   p->sta,   6);
+        }
+    }
+    pthread_mutex_unlock(&g_saq_mu);
+    if (out_count) *out_count = best;
+    return best >= thresh ? best : 0;
+}
+
+int saq_pair_count(void) { return g_saq_n; }
+
+void saq_clear(void) {
+    pthread_mutex_lock(&g_saq_mu);
+    memset(g_saq, 0, sizeof(g_saq));
+    g_saq_n = 0;
+    pthread_mutex_unlock(&g_saq_mu);
+}
+
+/* ── Unprotected robust action frames (#76) ─────────────────────────── */
+
+int action_category_is_robust(uint8_t category) {
+    /* An exclusion list, not an allow-list. The category space grows,
+     * and an allow-list goes quiet on every category added after it was
+     * written without anything failing. */
+    return !(category == ACTION_CAT_PUBLIC ||
+             category == ACTION_CAT_UNPROT_WNM ||
+             category == ACTION_CAT_VENDOR);
+}
+
+typedef struct {
+    uint8_t bssid[6];
+    int     count;
+    uint8_t worst_category;
+    time_t  last_seen;
+} mfp_violation_t;
+
+static mfp_violation_t g_mfpv[MFP_VIOLATION_MAX_BSS];
+static int             g_mfpv_n;
+static pthread_mutex_t g_mfpv_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static void mfp_violation_note(const uint8_t bssid[6], uint8_t category,
+                               time_t now) {
+    pthread_mutex_lock(&g_mfpv_mu);
+    mfp_violation_t *v = NULL;
+    for (int i = 0; i < g_mfpv_n; i++)
+        if (mac_eq(g_mfpv[i].bssid, bssid)) { v = &g_mfpv[i]; break; }
+    if (!v) {
+        int slot;
+        if (g_mfpv_n < MFP_VIOLATION_MAX_BSS) {
+            slot = g_mfpv_n++;
+        } else {
+            slot = 0;
+            for (int k = 1; k < g_mfpv_n; k++)
+                if (g_mfpv[k].last_seen < g_mfpv[slot].last_seen) slot = k;
+        }
+        v = &g_mfpv[slot];
+        memset(v, 0, sizeof(*v));
+        memcpy(v->bssid, bssid, 6);
+        v->worst_category = category;
+    }
+    v->count++;
+    v->last_seen = now;
+    pthread_mutex_unlock(&g_mfpv_mu);
+}
+
+int action_mfp_violations(uint8_t out_bssid[6], int *out_count,
+                          uint8_t out_category[1]) {
+    pthread_mutex_lock(&g_mfpv_mu);
+    int n = g_mfpv_n, best = -1;
+    for (int i = 0; i < g_mfpv_n; i++)
+        if (best < 0 || g_mfpv[i].count > g_mfpv[best].count) best = i;
+    if (best >= 0) {
+        if (out_bssid)   memcpy(out_bssid, g_mfpv[best].bssid, 6);
+        if (out_count)   *out_count = g_mfpv[best].count;
+        if (out_category) out_category[0] = g_mfpv[best].worst_category;
+    } else {
+        if (out_count) *out_count = 0;
+    }
+    pthread_mutex_unlock(&g_mfpv_mu);
+    return n;
+}
+
+void action_mfp_clear(void) {
+    pthread_mutex_lock(&g_mfpv_mu);
+    memset(g_mfpv, 0, sizeof(g_mfpv));
+    g_mfpv_n = 0;
+    pthread_mutex_unlock(&g_mfpv_mu);
+}
+
 void action_observe(const uint8_t *dot11, int len, time_t now) {
     uint8_t action = 0;
     int cat = action_parse_category(dot11, len, &action);
@@ -132,6 +290,38 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
     g_cat_count[cat]++;
     g_total++;
     pthread_mutex_unlock(&g_mu);
+
+    /* Management frames are always three-address: addr1 = DA/RA,
+     * addr2 = SA/TA, addr3 = BSSID (§9.3.3.1). No DS-bit table to
+     * consult, unlike a data frame. */
+    if (len >= 24) {
+        const uint8_t *da    = dot11 + 4;
+        const uint8_t *bssid = dot11 + 16;
+
+        /* CVE-2019-16275: an individually addressed robust Action frame
+         * with the Protected bit clear, on a BSS whose own beacon says
+         * MFP is required.
+         *
+         * Group-addressed frames are excluded because BIP protects them
+         * with a Management MIC element rather than the Protected bit,
+         * so reading that bit on a broadcast answers a question it was
+         * never asked. */
+        if (action_category_is_robust((uint8_t)cat) &&
+            !(dot11[1] & 0x40) && !(da[0] & 0x01) &&
+            beacon_find_mfp(bssid) == 2)
+            mfp_violation_note(bssid, (uint8_t)cat, now);
+
+        /* SA Query: the AP's response to an unprotected disassociation
+         * it refused to act on. Both directions count — the request
+         * from the AP and the station's response are one exchange, and
+         * a storm shows up in both. */
+        if (cat == ACTION_CAT_SA_QUERY) {
+            /* The station is whichever address is not the BSSID. */
+            const uint8_t *ta = dot11 + 10;
+            const uint8_t *sta = mac_eq(ta, bssid) ? da : ta;
+            if (!(sta[0] & 0x01)) saq_observe(bssid, sta, now);
+        }
+    }
 
     /* Category 10 / Action 7 is the one this module deep-parses. The
      * others stay counted-only until their own issues land (#61 RRM,

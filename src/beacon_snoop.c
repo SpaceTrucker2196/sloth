@@ -955,6 +955,20 @@ int beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33])
     return hit;
 }
 
+int beacon_find_mfp(const uint8_t bssid[6])
+{
+    if (!bssid) return -1;
+    int found = -1;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_count; i++) {
+        if (memcmp(g_aps[i].bssid, bssid, 6) != 0) continue;
+        found = g_aps[i].mfp;
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return found;
+}
+
 void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid)
 {
     if (!ssid || !ssid[0]) return;

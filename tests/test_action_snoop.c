@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "runner.h"
 #include "action_snoop.h"
+#include "beacon_snoop.h"
+#include "sloth.h"
 
 /*
  * Action frames (management subtype 13) — issue #59.
@@ -872,6 +874,249 @@ static void test_rrm_reached_through_action_observe(void) {
     action_clear();
 }
 
+/* ── SA-Query storms and MFP violations (#76) ──────────────────────── */
+
+/* One Action frame: category, action, and the AP as transmitter unless
+ * `from_sta` says the station sent it. `protect` sets the Protected bit,
+ * which on an individually addressed robust action frame is what MFP
+ * requires. */
+static int build_action(uint8_t *f, uint8_t category, uint8_t action,
+                        const uint8_t bssid[6], const uint8_t sta[6],
+                        int from_sta, int protect, int group_da) {
+    memset(f, 0, 64);
+    f[0] = 0xD0;                                  /* Action, subtype 13 */
+    f[1] = (uint8_t)(protect ? 0x40 : 0x00);
+    if (from_sta) {
+        memcpy(f + 4,  bssid, 6);                 /* DA = the AP  */
+        memcpy(f + 10, sta,   6);                 /* SA = the STA */
+    } else {
+        memcpy(f + 4,  sta,   6);
+        memcpy(f + 10, bssid, 6);
+    }
+    if (group_da) memset(f + 4, 0xff, 6);
+    memcpy(f + 16, bssid, 6);                     /* addr3 = BSSID */
+    f[HDR + 0] = category;
+    f[HDR + 1] = action;
+    f[HDR + 2] = 0x01;                            /* transaction id */
+    f[HDR + 3] = 0x00;
+    return HDR + 4;
+}
+
+/* Put one AP in the beacon table with a given MFP state. The MFP
+ * detector reads the BSS's own advertisement, so there is no way to
+ * test it without one. */
+static void seed_beacon_mfp(const uint8_t bssid[6], int mfp) {
+    beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));
+    rsn.mfp = mfp;
+    beacon_record(bssid, "TestNet", -50, 6, "WPA3", 100, &rsn);
+}
+
+static void test_robust_category_is_an_exclusion_list(void) {
+    /* An allow-list goes quiet on every category added after it was
+     * written, and nothing fails when it does. The three exclusions are
+     * the categories the standard defines as never protected. */
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_PUBLIC), 0);
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_UNPROT_WNM), 0);
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_VENDOR), 0);
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_WNM), 1);
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_RRM), 1);
+    ASSERT_EQ(action_category_is_robust(ACTION_CAT_SA_QUERY), 1);
+    /* A category nobody has assigned yet still counts as robust. */
+    ASSERT_EQ(action_category_is_robust(50), 1);
+}
+
+static void test_mfp_violation_fires_on_a_required_bss(void) {
+    action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);                     /* MFP required */
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    action_observe(f, n, 1000);
+    uint8_t bss[6], cat[1];
+    int count = 0;
+    ASSERT_EQ(action_mfp_violations(bss, &count, cat), 1);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ((int)cat[0], ACTION_CAT_WNM);
+    ASSERT_EQ(memcmp(bss, AP_A, 6), 0);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_protected_frame_is_not_a_violation(void) {
+    action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 1, 0);
+    action_observe(f, n, 1000);
+    int count = 0;
+    ASSERT_EQ(action_mfp_violations(NULL, &count, NULL), 0);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_mfp_capable_is_not_required(void) {
+    /* MFP capable-but-not-required is the ordinary WPA2 posture and an
+     * unprotected action frame there is legal. Firing on it would mean
+     * an alert on essentially every network in range. */
+    action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 1);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    action_observe(f, n, 1000);
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_unheard_bss_is_not_a_violation(void) {
+    /* "No beacon on file" is not "MFP is off". On a hopping radio most
+     * BSSIDs are unheard most of the time, and conflating the two fires
+     * on every network sloth has not tuned to yet. */
+    action_mfp_clear(); beacon_clear();
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    action_observe(f, n, 1000);
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
+    ASSERT_EQ(beacon_find_mfp(AP_A), -1);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_never_protected_categories_are_exempt(void) {
+    /* A Public Action frame is unprotected by definition. Counting one
+     * would fire on every ANQP exchange on a Passpoint network. */
+    action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_PUBLIC, 0, AP_A, STA_U, 0, 0, 0);
+    action_observe(f, n, 1000);
+    n = build_action(f, ACTION_CAT_VENDOR, 0, AP_A, STA_U, 0, 0, 0);
+    action_observe(f, n, 1001);
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_group_addressed_action_is_not_read_for_mfp(void) {
+    /* Group-addressed management frames are protected by BIP, which
+     * appends a Management MIC element rather than setting the
+     * Protected bit. Reading that bit on a broadcast answers a question
+     * it was never asked. */
+    action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 1);
+    action_observe(f, n, 1000);
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
+    action_mfp_clear(); beacon_clear();
+}
+
+static void test_sa_query_flood_fires(void) {
+    saq_clear(); beacon_clear();
+    uint8_t f[64];
+    for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
+        int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                             AP_A, STA_U, 0, 1, 0);
+        action_observe(f, n, 1000);
+    }
+    uint8_t bss[6], sta[6];
+    int count = 0;
+    ASSERT(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                          bss, sta, &count) > 0);
+    ASSERT_EQ(count, SAQ_FLOOD_THRESH);
+    ASSERT_EQ(memcmp(bss, AP_A, 6), 0);
+    ASSERT_EQ(memcmp(sta, STA_U, 6), 0);
+    saq_clear();
+}
+
+static void test_sa_query_normal_exchange_is_quiet(void) {
+    /* A legitimate exchange is a handful of frames over a few hundred
+     * milliseconds (§11.13). The threshold has to sit above that or
+     * every spoofed-disassoc refusal — MFP working — becomes an alert. */
+    saq_clear(); beacon_clear();
+    uint8_t f[64];
+    for (int i = 0; i < 3; i++) {
+        int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                             AP_A, STA_U, 0, 1, 0);
+        action_observe(f, n, 1000);
+        n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_RESPONSE,
+                         AP_A, STA_U, 1, 1, 0);
+        action_observe(f, n, 1000);
+    }
+    ASSERT_EQ(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                             NULL, NULL, NULL), 0);
+    saq_clear();
+}
+
+static void test_sa_query_window_slides(void) {
+    /* A counter that never forgets carries an old burst forever and the
+     * threshold stops meaning anything. */
+    saq_clear(); beacon_clear();
+    uint8_t f[64];
+    for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
+        int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                             AP_A, STA_U, 0, 1, 0);
+        action_observe(f, n, 1000);
+    }
+    ASSERT(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                          NULL, NULL, NULL) > 0);
+    ASSERT_EQ(saq_flood_pair(1000 + SAQ_FLOOD_WIN_SECS + 1,
+                             SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                             NULL, NULL, NULL), 0);
+    saq_clear();
+}
+
+static void test_sa_query_counts_both_directions_per_station(void) {
+    /* The request from the AP and the station's response are one
+     * exchange; a storm shows up in both. But two different stations
+     * are two exchanges, and merging them would let ordinary traffic on
+     * a busy BSS reach the threshold. */
+    saq_clear(); beacon_clear();
+    uint8_t f[64];
+    for (int i = 0; i < SAQ_FLOOD_THRESH - 1; i++) {
+        int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                             AP_A, STA_U, 0, 1, 0);
+        action_observe(f, n, 1000);
+        n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                         AP_A, STA_V, 0, 1, 0);
+        action_observe(f, n, 1000);
+    }
+    ASSERT_EQ(saq_pair_count(), 2);
+    ASSERT_EQ(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                             NULL, NULL, NULL), 0);
+    /* One more to STA_U alone crosses it. */
+    int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_RESPONSE,
+                         AP_A, STA_U, 1, 1, 0);
+    action_observe(f, n, 1000);
+    uint8_t sta[6];
+    ASSERT(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                          NULL, sta, NULL) > 0);
+    ASSERT_EQ(memcmp(sta, STA_U, 6), 0);
+    saq_clear();
+}
+
+static void test_sa_query_table_is_bounded_and_clears(void) {
+    saq_clear();
+    uint8_t f[64], sta[6];
+    memcpy(sta, STA_U, 6);
+    for (int i = 0; i < SAQ_MAX_PAIRS + 20; i++) {
+        sta[5] = (uint8_t)(i & 0xff);
+        sta[4] = (uint8_t)(i >> 8);
+        int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                             AP_A, sta, 0, 1, 0);
+        action_observe(f, n, 1000 + i);
+    }
+    ASSERT(saq_pair_count() <= SAQ_MAX_PAIRS);
+    saq_clear();
+    ASSERT_EQ(saq_pair_count(), 0);
+}
+
+static void test_action_short_frames_are_safe(void) {
+    action_mfp_clear(); saq_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                         AP_A, STA_U, 0, 0, 0);
+    for (int cut = 0; cut <= n; cut++) action_observe(f, cut, 1000);
+    ASSERT(1);                                   /* no crash is the claim */
+    action_mfp_clear(); saq_clear(); beacon_clear();
+}
+
 void run_action_snoop_tests(void) {
     TEST_SUITE("action frame category demux (#59)");
     RUN_TEST(test_category_read);
@@ -928,4 +1173,21 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_rrm_busiest_pair_needs_the_threshold);
     RUN_TEST(test_rrm_broadcast_requests_do_not_reach_the_threshold);
     RUN_TEST(test_rrm_reached_through_action_observe);
+
+    TEST_SUITE("action: MFP-unprotected robust frames (#76)");
+    RUN_TEST(test_robust_category_is_an_exclusion_list);
+    RUN_TEST(test_mfp_violation_fires_on_a_required_bss);
+    RUN_TEST(test_protected_frame_is_not_a_violation);
+    RUN_TEST(test_mfp_capable_is_not_required);
+    RUN_TEST(test_unheard_bss_is_not_a_violation);
+    RUN_TEST(test_never_protected_categories_are_exempt);
+    RUN_TEST(test_group_addressed_action_is_not_read_for_mfp);
+
+    TEST_SUITE("action: SA-Query storms (#76)");
+    RUN_TEST(test_sa_query_flood_fires);
+    RUN_TEST(test_sa_query_normal_exchange_is_quiet);
+    RUN_TEST(test_sa_query_window_slides);
+    RUN_TEST(test_sa_query_counts_both_directions_per_station);
+    RUN_TEST(test_sa_query_table_is_bounded_and_clears);
+    RUN_TEST(test_action_short_frames_are_safe);
 }

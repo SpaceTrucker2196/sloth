@@ -719,6 +719,8 @@ typedef enum {
     ALERT_TYPE_FRAG_MIXKEY,         /* fragment reassembly spans a completed PTK rotation — CVE-2020-24587 (#75 slice 4) */
     ALERT_TYPE_FRAG_PN_GAP,         /* encrypted fragments reassembled with non-consecutive PNs — CVE-2020-26146 (#75) */
     ALERT_TYPE_FRAG_EAPOL_RELAY,    /* EAPOL forwarded between two stations by the AP — CVE-2020-26139 (#75) */
+    ALERT_TYPE_SA_QUERY_FLOOD,      /* SA-Query storm — the MFP-era shape of a disassoc flood (#76) */
+    ALERT_TYPE_MFP_UNPROTECTED,     /* unprotected robust action frame on an MFP-required BSS — CVE-2019-16275 (#76) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

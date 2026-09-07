@@ -25,8 +25,15 @@
 #define ACTION_CAT_SPECTRUM 0    /* Spectrum Management (802.11h) */
 #define ACTION_CAT_RRM      5    /* Radio Measurement   (802.11k) */
 #define ACTION_CAT_FT       6    /* Fast BSS Transition (802.11r) */
+#define ACTION_CAT_SA_QUERY 8    /* SA Query            (802.11w) */
 #define ACTION_CAT_WNM     10    /* Wireless Net Mgmt   (802.11v) */
+#define ACTION_CAT_PUBLIC   4    /* Public — never protected      */
+#define ACTION_CAT_UNPROT_WNM 11 /* Unprotected WNM — never protected */
 #define ACTION_CAT_VENDOR 127    /* Vendor Specific               */
+
+/* SA Query Action field values — §9.6.10. */
+#define SAQ_ACT_REQUEST   0
+#define SAQ_ACT_RESPONSE  1
 
 /* Spectrum Management Action field values — Table 9-51.
  * 4 is the addressed Channel Switch Announcement (§9.6.2.4): the same
@@ -221,6 +228,64 @@ void rrm_clear(void);
 
 /* Frames seen for `category` since the last clear. Test introspection
  * and the seam the #61 RRM work reads before it grows a real table. */
+/* ── SA Query storms (#76) ───────────────────────────────────────────
+ *
+ * SA Query is management-frame protection's own mechanism: when an AP
+ * receives an *unprotected* disassociation or deauthentication claiming
+ * to be from an associated station, it does not act on it. It sends an
+ * SA Query Request and waits — a station that is really still there
+ * answers, and the spoofed frame is discarded.
+ *
+ * So a storm of SA Queries is not an attack on the client. It is the
+ * *visible symptom* of someone spraying spoofed disassociation frames
+ * at an MFP-protected network, which is what deauth flooding becomes
+ * once MFP takes the direct route away. The attacker's own frames may
+ * never be heard on the channel sloth is sitting on; the AP's response
+ * to them is broadcast on the BSS's own channel and is heard.
+ *
+ * A legitimate exchange is a handful of frames: the AP retries a small
+ * number of times over a few hundred milliseconds (§11.13) and stops.
+ * Anything sustained is a network answering an attack. */
+#define SAQ_FLOOD_WIN_SECS   10
+#define SAQ_FLOOD_THRESH     12   /* per (BSSID, STA) in the window */
+#define SAQ_MAX_PAIRS        64
+
+/* The busiest (BSSID, STA) pair in the window, or 0 if none reaches
+ * `thresh`. Writes the pair and its count. */
+int  saq_flood_pair(time_t now, int window_s, int thresh,
+                    uint8_t out_bssid[6], uint8_t out_sta[6], int *out_count);
+int  saq_pair_count(void);
+void saq_clear(void);
+
+/* ── Unprotected robust action frames (#76, CVE-2019-16275) ──────────
+ *
+ * On a BSS advertising MFP *required*, an individually addressed
+ * robust Action frame must be protected. One that is not is either a
+ * non-conforming stack or an injected frame, and CVE-2019-16275 is the
+ * former being exploitable as the latter.
+ *
+ * "Robust" is every Action category except the ones the standard
+ * defines as never protected — Public (4), Unprotected WNM (11) and
+ * Vendor Specific (127). Naming the exclusions rather than listing the
+ * inclusions is deliberate: the category space grows, and a detector
+ * built on an allow-list goes quiet on every category added after it
+ * was written, silently.
+ *
+ * Individually addressed only. Group-addressed management frames are
+ * protected by BIP, which appends a Management MIC element rather than
+ * setting the Protected bit — so reading that bit on a broadcast frame
+ * answers a question it was never asked. */
+int  action_category_is_robust(uint8_t category);
+
+#define MFP_VIOLATION_MAX_BSS 32
+
+/* BSSIDs seen emitting an unprotected robust action frame while their
+ * own beacon advertises MFP required. Returns the count; writes the
+ * worst offender and its tally when non-zero. */
+int  action_mfp_violations(uint8_t out_bssid[6], int *out_count,
+                           uint8_t out_category[1]);
+void action_mfp_clear(void);
+
 int  action_category_count(uint8_t category);
 
 /* Total Action frames observed, including categories with no handler. */

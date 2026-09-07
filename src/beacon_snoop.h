@@ -188,6 +188,16 @@ void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid);
  * network name. */
 int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
 
+/* Management-frame protection state this BSSID's beacon advertises:
+ * 2 = required, 1 = capable but not required, 0 = off, -1 = the BSSID
+ * has never been heard beacon.
+ *
+ * The -1 matters and is not the same as 0. On a hopping radio most
+ * BSSIDs are unheard most of the time, and a detector that reads "no
+ * beacon on file" as "MFP is off" fires on every network it has not
+ * tuned to yet. Callers must distinguish. */
+int  beacon_find_mfp(const uint8_t bssid[6]);
+
 /* Clear the internal AP table. */
 void beacon_clear(void);
 
