@@ -114,3 +114,4 @@
 | 856935e | 2026-09-07T16:41:07Z | claude-opus-5 | 75 | 38389 | 18616194 | 506539 | 15.3336 | #75 complete — PN-gap and EAPOL-relay detectors |
 | e0f12dd | 2026-09-07T17:08:37Z | claude-opus-5 | 46 | 36583 | 12554476 | 44935 | 7.6414 | #76 — SA-Query flood + unprotected robust action frames |
 | 0fb3c5e | 2026-09-07T17:27:33Z | claude-opus-5 | 27 | 15765 | 7841066 | 20309 | 4.5179 | #76 — BTM-steered twin marker |
+| 2b49f2d | 2026-09-07T18:17:22Z | claude-opus-5 | 36 | 35056 | 11223908 | 40012 | 6.8887 | #73 corpus content pass — 59/60 alert kinds cited |
