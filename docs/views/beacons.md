@@ -49,6 +49,43 @@ a new field on an existing SQLite table needs a schema version bump that
 invalidates every prior database file, and that cost isn't worth paying
 for a display/forensic nuance already visible in the JSONL log.
 
+## IE-ordering fingerprint (#77)
+
+Every beacon's element list is hashed by *identity and order*: the
+Element ID of each element, plus the extension ID for tag 255 and the
+OUI + OUI type for tag 221, FNV-1a in the order they appear. Element
+bodies are not hashed, so renaming the SSID or moving channel leaves it
+unchanged; `vendor_ies_hash` already covers vendor-IE bodies.
+
+IEEE 802.11-2020 §9.3.3.2 (Table 9-34) fixes the beacon element order,
+but which optional elements a stack emits — and how faithfully it
+follows that order — is a property of the software building the frame
+(hostapd, a vendor SDK, ESP-IDF, a beacon-spam loop). Element presence
+and order as a device fingerprint is the technique of Vanhoef et al.,
+*Why MAC Address Randomization is not Enough* (AsiaCCS 2016), applied
+there to probe requests; this is the AP-side analogue.
+
+- **Transient elements are skipped**: Channel Switch (37), Quiet (40),
+  Extended Channel Switch (60), Channel Switch Wrapper (196) and Quiet
+  Channel (198) announce an event for a few beacons on an unchanged AP.
+  Hashing them would make every DFS move look like a new stack.
+- **A frame that overruns contributes nothing**: a truncated element
+  list is a prefix, and its hash would name a stack that does not exist.
+  `0` means not decoded; a later `0` never overwrites a real value.
+- **Latest non-zero wins** per BSSID, same as `vendor_ies_hash`.
+
+This is an observable, not a verdict. There is no table of known stack
+hashes behind it — those are empirical facts about firmware that need a
+capture to establish (see [`tool-fingerprints.md`](../wiki/tool-fingerprints.md)).
+What it supports today is comparison: two BSSIDs claiming different
+vendors but emitting the same element order, or a known AP whose order
+changes mid-session.
+
+Additive JSONL fields on the `beacon` record: `ie_order_hash`,
+`ie_order_count` (elements that entered the hash). Monitor-mode only,
+not shown in the TUI and not persisted to `--db` — the same placement
+as `vendor_ies_hash`.
+
 ## View
 
 ```

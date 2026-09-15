@@ -351,3 +351,24 @@ Model Name/Model Number/Serial Number attribute parsing — is spec-defined
 (WFA WPS 2.0 §12) and hand-testable from TLV bytes like every other
 parser in this file. Shipped that slice only; see the issue-77 triage
 comment for the rest.
+
+---
+
+## 2026-09-15 — Beacon IE-ordering fingerprint (#77 slice)
+
+**Source**: issue #77, bullet 1 ("Beacon IE ordering fingerprint") — the
+observable half. `src/beacon_snoop.c`, `include/sloth.h`, `src/jsonl.c`.
+
+**Doc updates**: [`docs/views/beacons.md`](../views/beacons.md) gained an
+"IE-ordering fingerprint (#77)" section. [[jsonl-schema]]'s `beacon` row
+gained `ie_order_hash` / `ie_order_count`. [[tool-fingerprints]]'
+"Adding a tool" asks captures to record the new hash.
+
+**Why**: the bullet asks for an IE-order hash per BSSID matched against a
+curated table of vendor stacks. The hash is spec-shaped (IEEE 802.11-2020
+§9.3.3.2 fixes element order; Vanhoef et al., AsiaCCS 2016, established
+presence/order as a device fingerprint) and hand-testable; the table is
+not — it needs captures from each stack, the same wall
+`tool_fingerprint.c` documents. Shipped the hash as a plain observable;
+no signature field, no verdict. It also gives the "vendor-IE consistency
+drift" follow-up something to compare.

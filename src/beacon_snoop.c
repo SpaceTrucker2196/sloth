@@ -159,6 +159,22 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
      * built on different silicon produces a different one. */
     uint32_t vendor_hash = 2166136261u;
     int      vendor_hash_seen = 0;
+    /* IE-ordering fingerprint (#77). IEEE 802.11-2020 §9.3.3.2 (Table
+     * 9-34) fixes the order of beacon elements, but which optional
+     * elements an implementation emits, and how faithfully it follows
+     * that order, is a property of the stack — hostapd, a vendor SDK,
+     * ESP-IDF, a hand-rolled beacon-spam loop. Element *presence and
+     * order* as a device fingerprint is the technique Vanhoef et al.,
+     * "Why MAC Address Randomization is not Enough" (AsiaCCS 2016),
+     * applied to probe requests; this is the AP-side analogue.
+     *
+     * Only element identity is hashed, never bodies: an SSID rename or
+     * a channel change must not move it, and vendor_ies_hash already
+     * covers vendor bodies. Identity is the Element ID, plus the
+     * extension ID for 255 (every 11ax/11be element shares that tag)
+     * and OUI + OUI type for 221 (WMM and WPS share an OUI). */
+    uint32_t order_hash  = 2166136261u;
+    int      order_count = 0;
     int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
 
     ssid_out[0]  = '\0';
@@ -186,6 +202,24 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * decoder below requires tln >= 8, so this would otherwise be
          * silently skipped. Independent count; does not alter parse flow. */
         if (tag == 48 && tln < 8 && rsn_out) rsn_out->truncated_rsn++;
+
+        /* Elements that announce an event rather than describe the BSS
+         * — Channel Switch (37), Quiet (40), Extended Channel Switch
+         * (60), Channel Switch Wrapper (196), Quiet Channel (198) — come
+         * and go for a few beacons on an unchanged AP. Hashing them
+         * would make every DFS move look like a different stack. */
+        if (tag != 37 && tag != 40 && tag != 60 &&
+            tag != 196 && tag != 198) {
+            order_hash ^= tag; order_hash *= 16777619u;
+            if (tag == 255 && tln >= 1) {
+                order_hash ^= ie[2]; order_hash *= 16777619u;
+            } else if (tag == 221 && tln >= 4) {
+                for (int b = 2; b < 6; b++) {
+                    order_hash ^= ie[b]; order_hash *= 16777619u;
+                }
+            }
+            order_count++;
+        }
 
         if (tag == 0) {
             /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal. */
@@ -658,6 +692,13 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * non-Microsoft tag-221 IE — the alerts code treats 0 on
          * either side as "no signal" and falls through to WARN. */
         rsn_out->fp.vendor_ies_hash = vendor_hash_seen ? vendor_hash : 0u;
+        /* An overrun leaves only a prefix of the element list; hashing
+         * it would name a stack that does not exist. 0 = not decoded,
+         * and beacon_record never lets 0 overwrite a real value. */
+        if (order_count > 0 && rsn_out->ie_overruns == 0) {
+            rsn_out->fp.ie_order_hash  = order_hash ? order_hash : 1u;
+            rsn_out->fp.ie_order_count = (uint16_t)order_count;
+        }
     }
 
     /* Determine encryption, strongest first */
@@ -883,6 +924,12 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 g_aps[i].fp.flags |= rsn->fp.flags;
                 if (rsn->fp.vendor_ies_hash)
                     g_aps[i].fp.vendor_ies_hash = rsn->fp.vendor_ies_hash;
+                /* Same latest-non-zero rule for the order hash (#77); the
+                 * count travels with it so the pair never disagrees. */
+                if (rsn->fp.ie_order_hash) {
+                    g_aps[i].fp.ie_order_hash  = rsn->fp.ie_order_hash;
+                    g_aps[i].fp.ie_order_count = rsn->fp.ie_order_count;
+                }
                 if (rsn->fp.beacon_interval_ms)
                     g_aps[i].fp.beacon_interval_ms = rsn->fp.beacon_interval_ms;
             }

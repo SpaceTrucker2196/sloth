@@ -208,7 +208,10 @@ here rather than catastrophic.
 
 1. **Capture its beacons on a rig you control.**
 2. Read the values sloth computes: the `beacon` JSONL record's
-   `vendor_ies_hash` and `beacon_ms`, and the supported-rate set.
+   `vendor_ies_hash` and `beacon_ms`, and the supported-rate set. Record
+   `ie_order_hash` too (#77): the signature struct has no field for it
+   yet, but a capture that notes it now will not need repeating when
+   one is added.
 3. **Add one row** to `TOOL_SIGNATURES`, with `evidence` naming the
    capture *and the tool version*. Signatures drift as tools update, and
    a row with no provenance cannot be re-checked when it stops matching.

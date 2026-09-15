@@ -620,6 +620,9 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         /* fp — flags + vendor-IE hash; OUI is the BSSID prefix, omit. */
         kv_int(buf, LINEBUF, &off, "fp_flags",       e->fp.flags);
         kv_int(buf, LINEBUF, &off, "vendor_ies_hash",(long long)e->fp.vendor_ies_hash);
+        /* Additive (#77): IE-ordering fingerprint; 0 = not decoded. */
+        kv_int(buf, LINEBUF, &off, "ie_order_hash",  (long long)e->fp.ie_order_hash);
+        kv_int(buf, LINEBUF, &off, "ie_order_count", e->fp.ie_order_count);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
         /* QBSS Load — AP self-reported occupancy (omitted when the IE

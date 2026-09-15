@@ -280,6 +280,26 @@ static void test_emit_twin_episode_empty_no_output(void) {
     ASSERT(!contains(body, "twin_episode"));
 }
 
+/* Beacon record carries the IE-ordering fingerprint (#77) — additive
+ * fields beside vendor_ies_hash. 0xb6770ade == 3061254878. */
+static void test_emit_beacon_ie_order_fields(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    snprintf(b->ssid, sizeof(b->ssid), "Lab");
+    b->fp.ie_order_hash  = 0xb6770adeu;
+    b->fp.ie_order_count = 8;
+
+    jsonl_emit_beacons(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"beacon\""));
+    ASSERT(contains(body, "\"ie_order_hash\":3061254878"));
+    ASSERT(contains(body, "\"ie_order_count\":8"));
+}
+
 /* TCP entry with rtt_us == 0 should omit rtt_ms entirely (not emit "0.0"). */
 static void test_emit_connections_omits_zero_rtt(void) {
     open_fresh();
@@ -758,6 +778,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_connections_omits_zero_rtt);
     RUN_TEST(test_emit_twin_episode_full_fields);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
+    RUN_TEST(test_emit_beacon_ie_order_fields);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
     RUN_TEST(test_emit_packets_once_only);

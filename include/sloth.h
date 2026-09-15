@@ -932,6 +932,13 @@ typedef struct {
     uint16_t beacon_interval_ms;   /* parsed once at first observation */
     uint32_t vendor_ies_hash;      /* hash of concatenated tag-221 IEs (Phase 2) */
     uint8_t  flags;                /* AP_FP_FLAG_* bitset (Phase 2) */
+    /* IE-ordering fingerprint (#77): FNV-1a over the identity of each
+     * element in beacon order — Element ID, plus the extension ID for
+     * tag 255 and OUI + OUI type for tag 221 — bodies excluded. Names
+     * the IE-emitting stack rather than the network. 0 = not decoded
+     * (no elements, or the frame overran). See beacon_snoop.c. */
+    uint32_t ie_order_hash;
+    uint16_t ie_order_count;       /* elements that entered the hash */
 } ap_fingerprint_t;
 
 /* RSSI sliding-window ring — Phase 3. 16 slots ≈ 1.6 s of typical

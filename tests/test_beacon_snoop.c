@@ -1978,6 +1978,237 @@ static void test_phy_tier_wifi7_from_each_eht_element(void) {
     }
 }
 
+/* ── IE-ordering fingerprint (#77) ────────────────────────
+ *
+ * fp.ie_order_hash is FNV-1a 32 over the *identity* of each element in
+ * the order it appears: the Element ID, plus the Element ID Extension
+ * for tag 255 and the OUI + OUI type for tag 221. Element bodies are
+ * not hashed — that is vendor_ies_hash's job — so an SSID rename or a
+ * channel change leaves the order hash alone.
+ *
+ * The expected constants below were computed outside the tree (a
+ * three-line Python FNV-1a over the listed token bytes), not by calling
+ * the parser, so the known-answer test pins the definition rather than
+ * whatever the implementation happens to produce. */
+
+/* A realistic hostapd-shaped element list: SSID, Supported Rates, DS
+ * Parameter Set, TIM, RSN, HT Capabilities, HE Capabilities (255/35),
+ * WMM (221 00:50:F2 type 2). Returns the blob length. */
+static int build_ordered_ies(uint8_t *ies, const char *ssid, uint8_t chan,
+                             int swap_rates_and_ds) {
+    static const uint8_t rates[] = { 0x82, 0x84, 0x8b, 0x96 };
+    static const uint8_t tim[]   = { 0x00, 0x01, 0x00, 0x00 };
+    static const uint8_t rsn[]   = {
+        0x01, 0x00,                         /* version 1          */
+        0x00, 0x0f, 0xac, 0x04,             /* group CCMP         */
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, /* 1 pairwise: CCMP   */
+        0x01, 0x00, 0x00, 0x0f, 0xac, 0x02, /* 1 AKM: PSK         */
+        0x00, 0x00                          /* RSN capabilities   */
+    };
+    static const uint8_t ht_cap[26] = { 0 };
+    static const uint8_t he_cap[]   = { 35, 0, 0, 0, 0, 0, 0 };
+    static const uint8_t wmm[]      = { 0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00 };
+    uint8_t ds[1] = { chan };
+    int off = 0;
+    off = ie_put(ies, off, 0, (const uint8_t *)ssid, (int)strlen(ssid));
+    if (swap_rates_and_ds) {
+        off = ie_put(ies, off, 3, ds, 1);
+        off = ie_put(ies, off, 1, rates, sizeof(rates));
+    } else {
+        off = ie_put(ies, off, 1, rates, sizeof(rates));
+        off = ie_put(ies, off, 3, ds, 1);
+    }
+    off = ie_put(ies, off, 5,   tim,    sizeof(tim));
+    off = ie_put(ies, off, 48,  rsn,    sizeof(rsn));
+    off = ie_put(ies, off, 45,  ht_cap, sizeof(ht_cap));
+    off = ie_put(ies, off, 255, he_cap, sizeof(he_cap));
+    off = ie_put(ies, off, 221, wmm,    sizeof(wmm));
+    return off;
+}
+
+/* Tokens 00 01 03 05 30 2d ff 23 dd 00 50 f2 02 -> 0xb6770ade. */
+static void test_ie_order_known_answer(void) {
+    uint8_t ies[256];
+    int n = build_ordered_ies(ies, "Lab", 6, 0);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.fp.ie_order_hash, 0xb6770adeu);
+    ASSERT_EQ(rsn.fp.ie_order_count, 8);
+}
+
+/* Same element list, different contents (SSID, channel) — same hash.
+ * That is the property that makes it a *stack* fingerprint rather than
+ * a per-network one. */
+static void test_ie_order_ignores_element_bodies(void) {
+    uint8_t a[256], b[256];
+    int na = build_ordered_ies(a, "Lab", 6, 0);
+    int nb = build_ordered_ies(b, "SomethingElseEntirely", 11, 0);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t ra, rb;
+    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra);
+    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb);
+    ASSERT(ra.fp.ie_order_hash != 0u);
+    ASSERT_EQ(ra.fp.ie_order_hash, rb.fp.ie_order_hash);
+}
+
+/* Same set of elements, two of them swapped — different hash, same
+ * count. Tokens 00 03 01 05 30 2d ff 23 dd 00 50 f2 02 -> 0x8aa818f2. */
+static void test_ie_order_swap_changes_hash(void) {
+    uint8_t a[256], b[256];
+    int na = build_ordered_ies(a, "Lab", 6, 0);
+    int nb = build_ordered_ies(b, "Lab", 6, 1);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t ra, rb;
+    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra);
+    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb);
+    ASSERT(ra.fp.ie_order_hash != rb.fp.ie_order_hash);
+    ASSERT_EQ(rb.fp.ie_order_hash, 0x8aa818f2u);
+    ASSERT_EQ(ra.fp.ie_order_count, rb.fp.ie_order_count);
+}
+
+/* Every 802.11ax/be element is tag 255; without the extension ID an HE
+ * Capabilities and an HE Operation element would hash identically. */
+static void test_ie_order_extension_id_is_part_of_identity(void) {
+    uint8_t ies[16];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t r35, r36;
+    uint8_t he_cap[1] = { 35 }, he_op[1] = { 36 };
+    int n = ie_put(ies, 0, 255, he_cap, 1);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r35);
+    n = ie_put(ies, 0, 255, he_op, 1);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r36);
+    ASSERT(r35.fp.ie_order_hash != r36.fp.ie_order_hash);
+    /* Tokens ff 23 -> 0x8d1e5197; ff 24 -> 0x8a1e4cde. */
+    ASSERT_EQ(r35.fp.ie_order_hash, 0x8d1e5197u);
+    ASSERT_EQ(r36.fp.ie_order_hash, 0x8a1e4cdeu);
+}
+
+/* Likewise tag 221: WMM (00:50:F2/2) and WPS (00:50:F2/4) at the same
+ * position are different elements. The OUI type byte must count, not
+ * just the OUI. */
+static void test_ie_order_vendor_oui_type_is_part_of_identity(void) {
+    uint8_t ies[16];
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rw, rp;
+    static const uint8_t wmm[] = { 0x00, 0x50, 0xf2, 0x02, 0x00 };
+    static const uint8_t wps[] = { 0x00, 0x50, 0xf2, 0x04, 0x00 };
+    int n = ie_put(ies, 0, 221, wmm, sizeof(wmm));
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rw);
+    n = ie_put(ies, 0, 221, wps, sizeof(wps));
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rp);
+    /* dd 00 50 f2 02 -> 0xd6f5b0d4; dd 00 50 f2 04 -> 0xd4f5adae. */
+    ASSERT_EQ(rw.fp.ie_order_hash, 0xd6f5b0d4u);
+    ASSERT_EQ(rp.fp.ie_order_hash, 0xd4f5adaeu);
+}
+
+/* An AP mid-channel-switch or scheduling a quiet period carries extra
+ * elements for a few beacons (CSA 37, Quiet 40, ECSA 60, Channel Switch
+ * Wrapper 196, Quiet Channel 198). Those announce an event, not the
+ * stack, so they must not move the fingerprint. */
+static void test_ie_order_skips_transient_elements(void) {
+    uint8_t base[256], busy[512];
+    int nb = build_ordered_ies(base, "Lab", 6, 0);
+    memcpy(busy, base, (size_t)nb);
+    int n = nb;
+    static const uint8_t csa[]  = { 1, 11, 5 };
+    static const uint8_t quiet[] = { 1, 1, 10, 0, 0, 0 };
+    static const uint8_t ecsa[] = { 1, 81, 11, 5 };
+    static const uint8_t wrap[] = { 0 };
+    static const uint8_t qchan[] = { 0 };
+    n = ie_put(busy, n, 37,  csa,   sizeof(csa));
+    n = ie_put(busy, n, 40,  quiet, sizeof(quiet));
+    n = ie_put(busy, n, 60,  ecsa,  sizeof(ecsa));
+    n = ie_put(busy, n, 196, wrap,  sizeof(wrap));
+    n = ie_put(busy, n, 198, qchan, sizeof(qchan));
+
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rb, rx;
+    beacon_parse_ies(base, nb, 1, 102, ssid, &ch, enc, &rb);
+    beacon_parse_ies(busy, n,  1, 102, ssid, &ch, enc, &rx);
+    ASSERT_EQ(rx.csa_present, 1);             /* the CSA was still parsed */
+    ASSERT_EQ(rx.fp.ie_order_hash,  rb.fp.ie_order_hash);
+    ASSERT_EQ(rx.fp.ie_order_count, rb.fp.ie_order_count);
+}
+
+/* A beacon that ends in an overrun is a partial element list. Hashing
+ * the prefix would report a stack that does not exist, so the frame
+ * contributes no fingerprint at all. */
+static void test_ie_order_zero_on_overrun(void) {
+    uint8_t ies[256];
+    int n = build_ordered_ies(ies, "Lab", 6, 0);
+    ies[n++] = 50;       /* Extended Supported Rates ... */
+    ies[n++] = 40;       /* ... claiming 40 bytes that are not there */
+    ies[n++] = 0x0c;
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.ie_overruns, 1);
+    ASSERT_EQ(rsn.fp.ie_order_hash, 0u);
+    ASSERT_EQ(rsn.fp.ie_order_count, 0);
+}
+
+/* No elements at all — 0 is "unknown", never a hash. */
+static void test_ie_order_zero_when_no_elements(void) {
+    uint8_t ies[1] = { 0 };
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, 0, 0, 0, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.fp.ie_order_hash, 0u);
+    ASSERT_EQ(rsn.fp.ie_order_count, 0);
+}
+
+/* The AP table keeps the latest non-zero order hash: a malformed frame
+ * (hash 0) must not erase a good fingerprint, but a genuinely different
+ * order — firmware update, or someone else on this BSSID — replaces it.
+ * Same contract as vendor_ies_hash beside it. */
+static void test_record_ie_order_latest_nonzero_wins(void) {
+    beacon_clear();
+    beacon_rsn_t r1 = {0};
+    r1.fp.ie_order_hash  = 0x11111111u;
+    r1.fp.ie_order_count = 9;
+    beacon_record(BSSID_A, "Net", -60, 6, "WPA2", 102, &r1);
+
+    beacon_rsn_t r2 = {0};          /* overrun frame: no fingerprint */
+    beacon_record(BSSID_A, "Net", -60, 6, "WPA2", 102, &r2);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_hash, 0x11111111u);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_count, 9);
+
+    beacon_rsn_t r3 = {0};
+    r3.fp.ie_order_hash  = 0x22222222u;
+    r3.fp.ie_order_count = 7;
+    beacon_record(BSSID_A, "Net", -60, 6, "WPA2", 102, &r3);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_hash, 0x22222222u);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_count, 7);
+}
+
+/* End to end through a real beacon frame, so the monitor-mode path
+ * (beacon_parse -> beacon_record -> snapshot) is proven to carry it. */
+static void test_record_ie_order_from_parsed_frame(void) {
+    uint8_t ies[256];
+    int n = build_ordered_ies(ies, "Lab", 6, 0);
+    uint8_t f[BEACON_HDR_LEN + 256];
+    fill_hdr(f, BSSID_B, 100, 0x0010);
+    memcpy(f + BEACON_HDR_LEN, ies, (size_t)n);
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, BEACON_HDR_LEN + n, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    beacon_clear();
+    beacon_record(bssid, ssid, -50, ch, enc, bms, &rsn);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_hash, 0xb6770adeu);
+    ASSERT_EQ(s.beacon_aps[0].fp.ie_order_count, 8);
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -2094,4 +2325,15 @@ void run_beacon_snoop_tests(void) {
     TEST_SUITE("PHY tier ladder");
     RUN_TEST(test_phy_tier_ladder);
     RUN_TEST(test_phy_tier_wifi7_from_each_eht_element);
+    TEST_SUITE("IE-ordering fingerprint (#77)");
+    RUN_TEST(test_ie_order_known_answer);
+    RUN_TEST(test_ie_order_ignores_element_bodies);
+    RUN_TEST(test_ie_order_swap_changes_hash);
+    RUN_TEST(test_ie_order_extension_id_is_part_of_identity);
+    RUN_TEST(test_ie_order_vendor_oui_type_is_part_of_identity);
+    RUN_TEST(test_ie_order_skips_transient_elements);
+    RUN_TEST(test_ie_order_zero_on_overrun);
+    RUN_TEST(test_ie_order_zero_when_no_elements);
+    RUN_TEST(test_record_ie_order_latest_nonzero_wins);
+    RUN_TEST(test_record_ie_order_from_parsed_frame);
 }
