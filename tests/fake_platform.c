@@ -63,4 +63,5 @@ platform_ops_t g_platform = {
     fake_get_dhcp,
     fake_init,
     fake_cleanup,
+    NULL,   /* set_channel: tests never retune a radio */
 };

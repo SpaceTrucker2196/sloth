@@ -44,8 +44,8 @@ void parse_hex_addr6(const char *hex, char *addr, uint16_t *port) {
 
 int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
     char line[256];
-    fgets(line, sizeof(line), f);   /* Inter-| header */
-    fgets(line, sizeof(line), f);   /* face  | header */
+    if (!fgets(line, sizeof(line), f)) return 0;   /* Inter-| header */
+    if (!fgets(line, sizeof(line), f)) return 0;   /* face  | header */
 
     int n = 0;
     while (n < max && fgets(line, sizeof(line), f)) {
@@ -94,7 +94,7 @@ int parse_proc_ifaces(FILE *f, iface_stat_t *out, int max) {
 
 void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
     char line[512];
-    fgets(line, sizeof(line), f);   /* skip header */
+    if (!fgets(line, sizeof(line), f)) return;   /* skip header */
 
     while (*n < max && fgets(line, sizeof(line), f)) {
         char local[32], remote[32];
@@ -124,7 +124,7 @@ void parse_proc_conns(FILE *f, int proto, conn_t *out, int max, int *n) {
 
 void parse_proc_conns6(FILE *f, int proto, conn_t *out, int max, int *n) {
     char line[640];
-    fgets(line, sizeof(line), f);   /* skip header */
+    if (!fgets(line, sizeof(line), f)) return;   /* skip header */
 
     while (*n < max && fgets(line, sizeof(line), f)) {
         /* IPv6 address fields are 32+1+4 = 37 chars each */

@@ -526,7 +526,7 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
         memcpy(sec_d_hex, full, 12);
     }
 
-    snprintf(out->ja4h, sizeof(out->ja4h), "%s_%.12s_%s_%s",
+    snprintf(out->ja4h, sizeof(out->ja4h), "%.10s_%.12s_%s_%s",
              sec_a, sec_b_full, sec_c_hex, sec_d_hex);
 
     out->ts = time(NULL);

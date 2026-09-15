@@ -346,8 +346,10 @@ int tls_log_parse(const uint8_t *data, int len,
      * Section c: 12 hex chars, sha256(sorted extensions [excl SNI +
      *            ALPN] + "_" + sig_algs as-observed). */
     char sni_flag = sni[0] ? (sni_is_ip_only(sni) ? 'i' : 'd') : 'n';
-    int  nc = ja4_nciphers > 99 ? 99 : ja4_nciphers;
-    int  ne = ja4_nexts    > 99 ? 99 : ja4_nexts;
+    /* unsigned char so the compiler can bound each %02u at 3 bytes;
+     * the counts are 0..128 / 0..64 by construction and JA4 caps at 99. */
+    unsigned char nc = (unsigned char)(ja4_nciphers > 99 ? 99 : ja4_nciphers);
+    unsigned char ne = (unsigned char)(ja4_nexts    > 99 ? 99 : ja4_nexts);
     char alpn2[3];
     if (ja4_alpn_first && ja4_alpn_last) {
         alpn2[0] = ja4_alpn_first;
@@ -358,7 +360,7 @@ int tls_log_parse(const uint8_t *data, int len,
     alpn2[2] = '\0';
 
     char sec_a[16];
-    snprintf(sec_a, sizeof(sec_a), "t%s%c%02d%02d%s",
+    snprintf(sec_a, sizeof(sec_a), "t%s%c%02u%02u%s",
              ja4_version(best_ver), sni_flag, nc, ne, alpn2);
 
     /* Section b: sorted ciphers → hex list → sha256 → first 12 hex. */

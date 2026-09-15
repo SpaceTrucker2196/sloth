@@ -3525,6 +3525,33 @@ static int count_alerts(const sloth_state_t *s, alert_type_t t) {
     return n;
 }
 
+static void add_cred(sloth_state_t *s, const char *src, const char *dst,
+                     uint16_t port, const char *proto, const char *user) {
+    cleartext_cred_t *c = &s->cleartext_creds[s->cleartext_cred_count++];
+    memset(c, 0, sizeof(*c));
+    snprintf(c->src,      sizeof(c->src),      "%s", src);
+    snprintf(c->dst,      sizeof(c->dst),      "%s", dst);
+    snprintf(c->protocol, sizeof(c->protocol), "%s", proto);
+    snprintf(c->username, sizeof(c->username), "%s", user);
+    c->dst_port = port;
+}
+
+/* Two users on the same max-length IPv6 flow are two exposures. With a
+ * 96-byte dedup key the username never made it into the key at all
+ * (it starts at byte 120), so the second user collapsed into the first
+ * alert's count and was never surfaced. */
+static void test_cleartext_cred_ipv6_distinct_users_not_coalesced(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    const char *src = "0000:0000:0000:0000:0000:ffff:192.168.100.200";
+    const char *dst = "0000:0000:0000:0000:0000:ffff:192.168.100.201";
+    add_cred(&s, src, dst, 110, "POP3", "alice");
+    add_cred(&s, src, dst, 110, "POP3", "bob");
+
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_CLEARTEXT_CRED), 2);
+}
+
 /* ── the pure flag computation ── */
 
 static void test_downgrade_flags_transition_mode(void) {
@@ -5171,5 +5198,6 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_unmarked_without_a_matching_candidate);
     RUN_TEST(test_twin_unmarked_for_non_imminent_steers);
     RUN_TEST(test_twin_steer_window_expires);
+    RUN_TEST(test_cleartext_cred_ipv6_distinct_users_not_coalesced);
     RUN_TEST(test_weak_strong_twin_also_names_the_steerer);
 }

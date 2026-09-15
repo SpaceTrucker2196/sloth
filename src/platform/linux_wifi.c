@@ -44,8 +44,11 @@ static int find_wlan_ifaces(char names[][16], int max) {
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f) return 0;
     char line[256];
-    fgets(line, sizeof(line), f);  /* header 1 */
-    fgets(line, sizeof(line), f);  /* header 2 */
+    if (!fgets(line, sizeof(line), f) ||   /* header 1 */
+        !fgets(line, sizeof(line), f)) {   /* header 2 */
+        fclose(f);
+        return 0;
+    }
     int n = 0;
     while (n < max && fgets(line, sizeof(line), f)) {
         char *p = line;

@@ -643,7 +643,8 @@ const char *device_risk_label(device_risk_level_t l);
 #define MAX_ALERTS         128
 #define ALERT_TITLE_LEN     20
 #define ALERT_DETAIL_LEN   256   /* holds the longest rule detail incl. two IPv6 addrs */
-#define ALERT_KEY_LEN       96   /* dedup id: "<rule>:%.39s->%.39s:%u" worst case */
+#define ALERT_KEY_LEN      192   /* dedup id; worst case is rule_cleartext_cred:
+                                  * two 45-char IPv6 + port + proto + 63-char user = 184 */
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
 #define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
 

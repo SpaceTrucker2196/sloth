@@ -46,7 +46,7 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
         FILE *sf;
         snprintf(path, sizeof(path), "/sys/class/net/%s/mtu", out[i].name);
         if ((sf = fopen(path, "r")) != NULL) {
-            fscanf(sf, "%u", &out[i].mtu);
+            if (fscanf(sf, "%u", &out[i].mtu) != 1) out[i].mtu = 0;
             fclose(sf);
         }
         snprintf(path, sizeof(path), "/sys/class/net/%s/speed", out[i].name);
