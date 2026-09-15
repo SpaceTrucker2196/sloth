@@ -206,4 +206,12 @@ commit. Never hand-author, estimate, or rewrite rows (append-only); if
 the script can't produce a row, stop and surface it. See
 `ledger.py --help` for flags (`--dry-run`, `--commit <sha>`).
 
+**Exception — hosts without `ledger.py` (owner decision, 2026-09-15).**
+The OpenClaw server that runs the scheduled issue loop and weekly
+release has no `~/.claude/billing/ledger.py`. Agents there push green
+commits without a ledger row instead of stopping. Say so in the
+commit body (`ledger: skipped, no ledger.py on this host`) and never
+hand-author a substitute row. Anywhere the script exists, the rule
+above still applies.
+
 Energy (optional, read-only): `~/.claude/billing/ledger.py --energy-total` estimates the rough datacenter kWh behind the whole ledger; `--energy` adds a per-row estimate. Order-of-magnitude only.
