@@ -120,3 +120,4 @@
 | d015f3f | 2026-09-15T18:42:26Z | claude-opus-5 | 6 | 2046 | 356171 | 1350 | 0.2428 | agents: interim ledger exception for this host |
 | 17ecd61 | 2026-09-15T18:46:47Z | claude-opus-5 | 52 | 26263 | 3377846 | 43307 | 2.7788 | agents: drop ledger exception, ledger.py installed |
 | 874f6b9 | 2026-09-15T18:55:17Z | claude-opus-5 | 248 | 142966 | 18184135 | 468819 | 17.3556 | #77 slice: beacon IE-ordering fingerprint (ie_order_hash/ie_order_count) |
+| 1f108a8 | 2026-09-15T19:05:11Z | claude-opus-5 | 164 | 49894 | 6464450 | 113072 | 5.6111 | fix(jsonl): clamp builder appends, LINEBUF 8192 — hostile-SSID stack overflow |
