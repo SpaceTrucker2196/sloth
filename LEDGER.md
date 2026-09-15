@@ -118,3 +118,4 @@
 | c4c8d54 | 2026-09-07T20:02:02Z | claude-opus-5 | 21 | 14091 | 6205817 | 632974 | 9.7850 | #73 — enforce corpus coverage guard, fix its FTS5 match |
 | d7c23f8 | 2026-09-15T18:42:14Z | claude-opus-5 | 252 | 80550 | 10222794 | 324679 | 10.3732 | warning-clean build on gcc 13; ALERT_KEY_LEN 96->192 (IPv6 cred key) |
 | d015f3f | 2026-09-15T18:42:26Z | claude-opus-5 | 6 | 2046 | 356171 | 1350 | 0.2428 | agents: interim ledger exception for this host |
+| 17ecd61 | 2026-09-15T18:46:47Z | claude-opus-5 | 52 | 26263 | 3377846 | 43307 | 2.7788 | agents: drop ledger exception, ledger.py installed |
