@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -114,10 +115,32 @@ int jsonl_is_open(void) {
     return ok;
 }
 
+/* Bounded append into `buf` (size `sz`) at *off. snprintf returns the
+ * length it *would* have written, so a bare `off += snprintf(...)`
+ * lets `off` pass the end; `sz - off` then wraps to a huge size_t and
+ * the next write lands out of bounds. A hostile AP reaches that with
+ * escape-heavy SSIDs. Clamp so *off never exceeds sz - 1 — the output
+ * truncates, memory stays in bounds. Every builder write goes here. */
+static void appendf(char *buf, int sz, int *off, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+static void appendf(char *buf, int sz, int *off, const char *fmt, ...) {
+    if (sz <= 0) return;
+    if (*off < 0) *off = 0;
+    if (*off >= sz - 1) { *off = sz - 1; buf[*off] = '\0'; return; }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, (size_t)(sz - *off), fmt, ap);
+    va_end(ap);
+    if (n < 0) { buf[*off] = '\0'; return; }
+    *off += n;
+    if (*off > sz - 1) *off = sz - 1;
+}
+
 /* Append RFC 8259-compatible escaping of `s` into `out` (size `sz`),
  * advancing *off. Truncates silently. Used by all emitters. */
 static void json_escape(const char *s, char *out, int sz, int *off) {
     if (!s) s = "";
+    if (*off > sz - 1) *off = sz - 1;
     for (; *s && *off + 6 < sz; s++) {
         unsigned char c = (unsigned char)*s;
         switch (c) {
@@ -128,8 +151,7 @@ static void json_escape(const char *s, char *out, int sz, int *off) {
             case '\t': out[(*off)++] = '\\'; out[(*off)++] = 't';  break;
             default:
                 if (c < 0x20) {
-                    *off += snprintf(out + *off, (size_t)(sz - *off),
-                                     "\\u%04x", c);
+                    appendf(out, sz, off, "\\u%04x", c);
                 } else {
                     out[(*off)++] = (char)c;
                 }
@@ -139,9 +161,10 @@ static void json_escape(const char *s, char *out, int sz, int *off) {
 }
 
 /* Output buffer for the CEF/syslog transform. Sized for the richest
- * record (beacon with full neighbor arrays) + the framing overhead
- * a syslog header + SD-element can add (~200 bytes). */
-#define EMIT_XFORM_MAX 2560
+ * record (a worst-case LINEBUF line, defined below) re-escaped by the
+ * CEF/syslog rules, plus the framing a syslog header + SD-element can
+ * add. */
+#define EMIT_XFORM_MAX 16384
 
 /* Helper: write a complete record to every active sink — the
  * configured file (if any) and every connected data-socket client.
@@ -171,25 +194,26 @@ static void emit_line(const char *line) {
 
 /* ── builder helpers ─────────────────────────────────────── */
 
-/* 2048 is enough for the richest snapshot record (beacon with full
- * neighbor + ssid-history arrays); the event emitters all comfortably
- * fit in their original 1 KiB envelope. */
-#define LINEBUF 2048
+/* Sized for the hostile worst case, not the typical one. Beacon and
+ * PNL records carry attacker-chosen SSID / WPS strings that
+ * json_escape can expand 6x (\u00XX): a beacon with every string
+ * field full runs ~4.5 KiB, a PNL client with 16 probed SSIDs ~3.4
+ * KiB. At the old 2048 a hostile AP overflowed the buffer. appendf
+ * keeps any future overrun in bounds; this keeps it from truncating. */
+#define LINEBUF 8192
 
 static void kv_str(char *buf, int sz, int *off, const char *key, const char *val) {
-    *off += snprintf(buf + *off, (size_t)(sz - *off), ",\"%s\":\"", key);
+    appendf(buf, sz, off, ",\"%s\":\"", key);
     json_escape(val, buf, sz, off);
-    *off += snprintf(buf + *off, (size_t)(sz - *off), "\"");
+    appendf(buf, sz, off, "\"");
 }
 
 static void kv_int(char *buf, int sz, int *off, const char *key, long long val) {
-    *off += snprintf(buf + *off, (size_t)(sz - *off),
-                     ",\"%s\":%lld", key, val);
+    appendf(buf, sz, off, ",\"%s\":%lld", key, val);
 }
 
 static void kv_double(char *buf, int sz, int *off, const char *key, double val) {
-    *off += snprintf(buf + *off, (size_t)(sz - *off),
-                     ",\"%s\":%.2f", key, val);
+    appendf(buf, sz, off, ",\"%s\":%.2f", key, val);
 }
 
 static void kv_mac(char *buf, int sz, int *off, const char *key,
@@ -201,8 +225,8 @@ static void kv_mac(char *buf, int sz, int *off, const char *key,
 }
 
 static void start_obj(char *buf, int sz, int *off, const char *type, time_t ts) {
-    *off = snprintf(buf, (size_t)sz,
-                    "{\"type\":\"%s\",\"ts\":%lld", type, (long long)ts);
+    *off = 0;
+    appendf(buf, sz, off, "{\"type\":\"%s\",\"ts\":%lld", type, (long long)ts);
 }
 
 static void end_obj(char *buf, int sz, int *off) {
@@ -413,8 +437,7 @@ void jsonl_emit_connections(const sloth_state_t *s) {
             kv_str(buf, LINEBUF, &off, "state", jsonl_tcp_state_name(c->state));
             if (c->rtt_us) {
                 /* RTT formatted with one decimal — emit as raw number, not via kv_int. */
-                off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                                ",\"rtt_ms\":%.1f", c->rtt_us / 1000.0);
+                appendf(buf, LINEBUF, &off, ",\"rtt_ms\":%.1f", c->rtt_us / 1000.0);
             }
             kv_int(buf, LINEBUF, &off, "retx", (long long)c->retrans);
         }
@@ -639,18 +662,15 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
             kv_int(buf, LINEBUF, &off, "fuzz_truncated_rsn", e->fuzz_truncated_rsn);
         }
         /* ssid_history as a JSON array — bounded by MAX_AP_SSID_HISTORY. */
-        off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                        ",\"ssid_history\":[");
+        appendf(buf, LINEBUF, &off, ",\"ssid_history\":[");
         for (int k = 0; k < e->ssid_history_n; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s\"", k ? "," : "");
+            appendf(buf, LINEBUF, &off, "%s\"", k ? "," : "");
             json_escape(e->ssid_history[k], buf, LINEBUF, &off);
-            off += snprintf(buf + off, (size_t)(LINEBUF - off), "\"");
+            appendf(buf, LINEBUF, &off, "\"");
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         /* neighbors[] — array of {bssid, channel, phy_type}. */
-        off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                        ",\"neighbors\":[");
+        appendf(buf, LINEBUF, &off, ",\"neighbors\":[");
         for (int k = 0; k < e->neighbor_count; k++) {
             const ap_neighbor_t *n = &e->neighbors[k];
             char nb[20];
@@ -658,11 +678,10 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
                      "%02x:%02x:%02x:%02x:%02x:%02x",
                      n->bssid[0], n->bssid[1], n->bssid[2],
                      n->bssid[3], n->bssid[4], n->bssid[5]);
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s{\"bssid\":\"%s\",\"channel\":%d,\"phy_type\":%d}",
+            appendf(buf, LINEBUF, &off, "%s{\"bssid\":\"%s\",\"channel\":%d,\"phy_type\":%d}",
                             k ? "," : "", nb, n->channel, n->phy_type);
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -741,14 +760,13 @@ void jsonl_emit_pnl_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "phy_confirmed", e->phy_confirmed ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ssids\":[");
+        appendf(buf, LINEBUF, &off, ",\"ssids\":[");
         for (int k = 0; k < e->ssid_count; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s\"", k ? "," : "");
+            appendf(buf, LINEBUF, &off, "%s\"", k ? "," : "");
             json_escape(e->ssids[k], buf, LINEBUF, &off);
-            off += snprintf(buf + off, (size_t)(LINEBUF - off), "\"");
+            appendf(buf, LINEBUF, &off, "\"");
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -776,12 +794,11 @@ void jsonl_emit_seqnum_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "mac_random",  e->mac_random ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"hist\":[");
+        appendf(buf, LINEBUF, &off, ",\"hist\":[");
         for (int k = 0; k < e->hist_n; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s%u", k ? "," : "", e->hist[k]);
+            appendf(buf, LINEBUF, &off, "%s%u", k ? "," : "", e->hist[k]);
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1109,12 +1126,11 @@ void jsonl_emit_scan_entries(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "flagged",    e->flagged ? 1 : 0);
         /* Distinct ports as a small array — bounded by MAX_SCAN_PORTS. */
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ports\":[");
+        appendf(buf, LINEBUF, &off, ",\"ports\":[");
         for (int k = 0; k < e->port_count && k < MAX_SCAN_PORTS; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s%u", k ? "," : "", e->ports[k]);
+            appendf(buf, LINEBUF, &off, "%s%u", k ? "," : "", e->ports[k]);
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1185,12 +1201,11 @@ void jsonl_emit_processes(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "rx_bytes",   (long long)e->rx_bytes);
         kv_double(buf, LINEBUF, &off, "tx_rate", e->tx_rate);
         kv_double(buf, LINEBUF, &off, "rx_rate", e->rx_rate);
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"ports\":[");
+        appendf(buf, LINEBUF, &off, ",\"ports\":[");
         for (int k = 0; k < e->port_count; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s%u", k ? "," : "", e->ports[k]);
+            appendf(buf, LINEBUF, &off, "%s%u", k ? "," : "", e->ports[k]);
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1211,14 +1226,13 @@ void jsonl_emit_ndp_ras(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "first_seen",      (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",       (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "count",           (long long)e->count);
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), ",\"prefixes\":[");
+        appendf(buf, LINEBUF, &off, ",\"prefixes\":[");
         for (int k = 0; k < e->prefix_count; k++) {
-            off += snprintf(buf + off, (size_t)(LINEBUF - off),
-                            "%s\"", k ? "," : "");
+            appendf(buf, LINEBUF, &off, "%s\"", k ? "," : "");
             json_escape(e->prefixes[k], buf, LINEBUF, &off);
-            off += snprintf(buf + off, (size_t)(LINEBUF - off), "\"");
+            appendf(buf, LINEBUF, &off, "\"");
         }
-        off += snprintf(buf + off, (size_t)(LINEBUF - off), "]");
+        appendf(buf, LINEBUF, &off, "]");
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

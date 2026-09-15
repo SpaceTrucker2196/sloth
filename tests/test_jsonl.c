@@ -300,6 +300,88 @@ static void test_emit_beacon_ie_order_fields(void) {
     ASSERT(contains(body, "\"ie_order_count\":8"));
 }
 
+/* Hostile-AP worst case: every attacker-controlled string field filled
+ * to capacity with a byte json_escape expands 6x (\u0001). The record
+ * used to overrun LINEBUF — snprintf's would-be length pushed `off`
+ * past the buffer, (size_t)(LINEBUF - off) wrapped, and the next write
+ * landed out of bounds. It must now come out whole: the closing "]}"
+ * of neighbors[] proves nothing was truncated. */
+static void fill_ctl(char *dst, size_t sz) {
+    memset(dst, 0x01, sz - 1);
+    dst[sz - 1] = '\0';
+}
+
+/* slurp() caps at 4 KiB; worst-case records are larger. */
+static const char *slurp_big(const char *path, size_t *n_out) {
+    static char body[32768];
+    FILE *fp = fopen(path, "r");
+    size_t n = fp ? fread(body, 1, sizeof(body) - 1, fp) : 0;
+    if (fp) fclose(fp);
+    body[n] = '\0';
+    ASSERT(n > 0 && n < sizeof(body) - 1);
+    *n_out = n;
+    return body;
+}
+
+static void test_emit_beacon_worst_case_escaping_fits(void) {
+    open_fresh();
+    static sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    fill_ctl(b->ssid, sizeof(b->ssid));
+    fill_ctl(b->enc, sizeof(b->enc));
+    fill_ctl(b->pairwise, sizeof(b->pairwise));
+    fill_ctl(b->group, sizeof(b->group));
+    fill_ctl(b->akm, sizeof(b->akm));
+    fill_ctl(b->vendor, sizeof(b->vendor));
+    fill_ctl(b->wps_manufacturer, sizeof(b->wps_manufacturer));
+    fill_ctl(b->wps_model_name, sizeof(b->wps_model_name));
+    fill_ctl(b->wps_model_number, sizeof(b->wps_model_number));
+    fill_ctl(b->wps_serial, sizeof(b->wps_serial));
+    fill_ctl(b->phy, sizeof(b->phy));
+    for (int k = 0; k < MAX_AP_SSID_HISTORY; k++)
+        fill_ctl(b->ssid_history[k], sizeof(b->ssid_history[k]));
+    b->ssid_history_n = MAX_AP_SSID_HISTORY;
+    b->has_qbss = 1;
+    b->fuzz_ie_overruns = 1;
+    for (int k = 0; k < MAX_AP_NEIGHBORS; k++) {
+        memset(b->neighbors[k].bssid, 0xff, 6);
+        b->neighbors[k].channel  = -2147483647 - 1;
+        b->neighbors[k].phy_type = -2147483647 - 1;
+    }
+    b->neighbor_count = MAX_AP_NEIGHBORS;
+
+    jsonl_emit_beacons(&s);
+    jsonl_close();
+
+    size_t n = 0;
+    const char *body = slurp_big(tmp_path, &n);
+    ASSERT(contains(body, "\"type\":\"beacon\""));
+    ASSERT(contains(body, "\"wps_serial\":\"\\u0001"));
+    ASSERT(n >= 3 && strcmp(body + n - 3, "]}\n") == 0);
+}
+
+/* Same exposure on the PNL record: any client's probe requests fill
+ * ssids[] with up to MAX_PNL_SSIDS_PER_CLI attacker-chosen SSIDs. */
+static void test_emit_pnl_worst_case_escaping_fits(void) {
+    open_fresh();
+    static sloth_state_t s; memset(&s, 0, sizeof(s));
+    pnl_client_t *c = &s.pnl_clients[s.pnl_count++];
+    c->mac[0] = 0x02;
+    fill_ctl(c->os_fp, sizeof(c->os_fp));
+    fill_ctl(c->phy, sizeof(c->phy));
+    for (int k = 0; k < MAX_PNL_SSIDS_PER_CLI; k++)
+        fill_ctl(c->ssids[k], sizeof(c->ssids[k]));
+    c->ssid_count = MAX_PNL_SSIDS_PER_CLI;
+
+    jsonl_emit_pnl_clients(&s);
+    jsonl_close();
+
+    size_t n = 0;
+    const char *body = slurp_big(tmp_path, &n);
+    ASSERT(contains(body, "\"type\":\"pnl_client\""));
+    ASSERT(n >= 3 && strcmp(body + n - 3, "]}\n") == 0);
+}
+
 /* TCP entry with rtt_us == 0 should omit rtt_ms entirely (not emit "0.0"). */
 static void test_emit_connections_omits_zero_rtt(void) {
     open_fresh();
@@ -779,6 +861,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_twin_episode_full_fields);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_beacon_ie_order_fields);
+    RUN_TEST(test_emit_beacon_worst_case_escaping_fits);
+    RUN_TEST(test_emit_pnl_worst_case_escaping_fits);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
     RUN_TEST(test_emit_packets_once_only);
