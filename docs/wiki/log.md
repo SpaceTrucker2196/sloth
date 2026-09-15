@@ -327,3 +327,27 @@ since `src/alert_pcap.c` already carries better forensic evidence than
 a truncated blob would. `[c]` is the key because `[f]` went to #73's
 Research view first and was, by the time slice 5 landed, the only
 letter still free in the global switch.
+
+---
+
+## 2026-09-15 — WPS vendor-string leakage (#77 slice)
+
+**Source**: issue #77 ("Attack-hardware fingerprint layer"); the
+buildable-without-hardware slice of it. `src/beacon_snoop.c`,
+`src/beacon_snoop.h`, `include/sloth.h`, `src/jsonl.c`,
+`src/views/beacon.c`.
+
+**Doc updates**: [`docs/views/beacons.md`](../views/beacons.md) gained a
+"WPS vendor-string leakage (#77)" section. [[jsonl-schema]]'s `beacon`
+row gained the four new additive fields.
+
+**Why**: #77 asked for a curated attack-hardware fingerprint corpus
+(specific Cisco/Aruba/Ubiquiti/MikroTik stacks, Pineapple/Marauder/
+eaphammer captures) and a pcap-fixture test plan — both blocked, the
+first on "empirical fact about a binary" grounds `tool_fingerprint.c`
+already documents, the second on `agents/AGENTS.md`'s no-pcap-fixtures
+rule. The one bullet in the issue that needed neither — WPS Manufacturer/
+Model Name/Model Number/Serial Number attribute parsing — is spec-defined
+(WFA WPS 2.0 §12) and hand-testable from TLV bytes like every other
+parser in this file. Shipped that slice only; see the issue-77 triage
+comment for the rest.

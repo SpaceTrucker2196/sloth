@@ -606,6 +606,13 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "has_wps",    e->has_wps ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "wps_state",  e->wps_state);
         kv_int(buf, LINEBUF, &off, "wps_locked", e->wps_locked);
+        /* Additive (#77): WPS Manufacturer / Model Name / Model Number /
+         * Serial Number, when the beacon's WPS IE leaks them. "" when
+         * absent, same convention as `vendor` above. */
+        kv_str(buf, LINEBUF, &off, "wps_manufacturer", e->wps_manufacturer);
+        kv_str(buf, LINEBUF, &off, "wps_model_name",    e->wps_model_name);
+        kv_str(buf, LINEBUF, &off, "wps_model_number",  e->wps_model_number);
+        kv_str(buf, LINEBUF, &off, "wps_serial",        e->wps_serial);
         kv_str(buf, LINEBUF, &off, "phy",        e->phy);
         kv_int(buf, LINEBUF, &off, "revealed",   e->revealed ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);

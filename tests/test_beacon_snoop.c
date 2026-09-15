@@ -808,6 +808,129 @@ static void test_parse_wps_state_notconfigured_unlocked(void) {
     ASSERT_EQ(rsn.wps_locked, 1);   /* Unlocked */
 }
 
+/* WPS vendor-string leakage (#77): Manufacturer(0x1021), Model
+ * Name(0x1023), Model Number(0x1024), Serial Number(0x1042) — all four
+ * in one IE, per WFA WPS 2.0 §12. */
+static void test_parse_wps_vendor_strings(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 45,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x21, 0x00, 0x07, 'T','P','-','L','i','n','k',
+        0x10, 0x23, 0x00, 0x09, 'A','r','c','h','e','r',' ','C','7',
+        0x10, 0x24, 0x00, 0x02, 'v','2',
+        0x10, 0x42, 0x00, 0x07, 'S','N','1','2','3','4','5',
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_STR(rsn.wps_manufacturer, "TP-Link");
+    ASSERT_STR(rsn.wps_model_name,   "Archer C7");
+    ASSERT_STR(rsn.wps_model_number, "v2");
+    ASSERT_STR(rsn.wps_serial,       "SN12345");
+}
+
+/* WPS present but no vendor-string attributes — the common case. Must
+ * not fabricate data; empty means absent, same convention as every
+ * other optional field in this parser. */
+static void test_parse_wps_vendor_strings_absent(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x0e,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x44, 0x00, 0x01, 0x02,
+        0x10, 0x57, 0x00, 0x01, 0x01,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_STR(rsn.wps_manufacturer, "");
+    ASSERT_STR(rsn.wps_model_name,   "");
+    ASSERT_STR(rsn.wps_model_number, "");
+    ASSERT_STR(rsn.wps_serial,       "");
+}
+
+/* Model Name's destination buffer is 33 bytes (32 usable + NUL), but the
+ * attribute's own length field can claim anything the enclosing IE has
+ * room for — up to 255, since a hostile AP does not have to respect its
+ * own spec's 32-byte ceiling. The copy must clamp to the destination,
+ * not the claimed length, or a beacon like this overflows the field. */
+static void test_parse_wps_vendor_string_truncates_oversized(void) {
+    uint8_t wps_ie[2 + 4 + 4 + 40];
+    wps_ie[0] = 0xdd;
+    wps_ie[1] = (uint8_t)(4 + 4 + 40);     /* OUI+type + attr hdr + data */
+    wps_ie[2] = 0x00; wps_ie[3] = 0x50; wps_ie[4] = 0xf2; wps_ie[5] = 0x04;
+    wps_ie[6] = 0x10; wps_ie[7] = 0x23;    /* Model Name */
+    wps_ie[8] = 0x00; wps_ie[9] = 40;      /* claims 40 bytes of data */
+    memset(wps_ie + 10, 'A', 40);
+
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ((int)strlen(rsn.wps_model_name), 32);
+    for (int i = 0; i < 32; i++)
+        ASSERT_EQ(rsn.wps_model_name[i], 'A');
+}
+
+/* beacon_record propagation, mirroring test_record_persists_vendor_and_wps. */
+static void test_record_persists_wps_vendor_strings(void) {
+    beacon_clear();
+    beacon_rsn_t rsn = {0};
+    rsn.has_wps = 1;
+    snprintf(rsn.wps_manufacturer, sizeof(rsn.wps_manufacturer), "Netgear");
+    snprintf(rsn.wps_model_name,   sizeof(rsn.wps_model_name),   "R7000");
+    snprintf(rsn.wps_model_number, sizeof(rsn.wps_model_number), "v1.0");
+    snprintf(rsn.wps_serial,       sizeof(rsn.wps_serial),       "SN00001");
+    beacon_record(BSSID_A, "NetgearNet", -55, 6, "WPA2", 102, &rsn);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].wps_manufacturer, "Netgear");
+    ASSERT_STR(s.beacon_aps[0].wps_model_name,   "R7000");
+    ASSERT_STR(s.beacon_aps[0].wps_model_number, "v1.0");
+    ASSERT_STR(s.beacon_aps[0].wps_serial,       "SN00001");
+}
+
+/* A later beacon that still has WPS but no vendor-string attributes
+ * (has_wps=1, wps_manufacturer=="") must not wipe a manufacturer string
+ * learned from an earlier beacon — same "only overwrite if we found new
+ * info" contract as `vendor` above it. Passing rsn=NULL would not
+ * exercise this: the whole `if (rsn) {...}` update block is skipped in
+ * that case, so the per-field guard never runs. The per-field emptiness
+ * has to arrive inside a non-NULL rsn to test the guard at all. */
+static void test_record_wps_vendor_strings_preserved_on_bare_rerecord(void) {
+    beacon_clear();
+    beacon_rsn_t rsn = {0};
+    rsn.has_wps = 1;
+    snprintf(rsn.wps_manufacturer, sizeof(rsn.wps_manufacturer), "Netgear");
+    beacon_record(BSSID_A, "Net", -70, 1, "WPA2", 102, &rsn);
+
+    beacon_rsn_t rsn2 = {0};
+    rsn2.has_wps = 1;   /* WPS IE present again, but no vendor attrs this time */
+    beacon_record(BSSID_A, "Net", -65, 1, "WPA2", 102, &rsn2);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].wps_manufacturer, "Netgear");
+}
+
 static void test_record_tracks_ssid_history(void) {
     beacon_clear();
     /* Same BSSID, four different SSIDs over time. */
@@ -1919,6 +2042,11 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_rnr_and_tag52_merge);
     RUN_TEST(test_parse_wps_state_configured_locked);
     RUN_TEST(test_parse_wps_state_notconfigured_unlocked);
+    RUN_TEST(test_parse_wps_vendor_strings);
+    RUN_TEST(test_parse_wps_vendor_strings_absent);
+    RUN_TEST(test_parse_wps_vendor_string_truncates_oversized);
+    RUN_TEST(test_record_persists_wps_vendor_strings);
+    RUN_TEST(test_record_wps_vendor_strings_preserved_on_bare_rerecord);
     RUN_TEST(test_record_tracks_ssid_history);
     RUN_TEST(test_record_ssid_history_fingerprints);
     RUN_TEST(test_record_persists_neighbors);

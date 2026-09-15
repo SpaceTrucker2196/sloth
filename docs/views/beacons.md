@@ -24,6 +24,31 @@ the AP itself is broadcasting — and appears as `qbss_stations` /
 `qbss_chan_util` in the `beacon` JSONL record (omitted when the IE is
 absent, so consumers can tell "no data" from a genuine zero).
 
+## WPS vendor-string leakage (#77)
+
+When the AP's WPS IE carries the optional Manufacturer / Model Name /
+Model Number / Serial Number attributes (WFA WPS 2.0 §12, IDs
+`0x1021`/`0x1023`/`0x1024`/`0x1042`), the detail screen shows a `WPS ID:`
+line beneath the `WPS:` state, e.g. `WPS ID: Realtek / RTL8196E (v1.2)
+SN:1234567890`. Many SOHO routers and default hostapd/OpenWrt builds
+broadcast these in plaintext on every beacon.
+
+This is a passive fingerprinting/TSCM signal, not an attack detector: it
+names what the AP says about itself, the same way `Vendor:` does from
+the OUI. It needs no attribution to a specific tool to be useful — an
+operator doing a sweep can search a site for a serial number, or notice
+that a "different" SSID shares a model/serial with an AP they already
+know. No signature table, no verdict, nothing unverified: the values
+come straight off the wire, letter for letter. Absent when the WPS IE
+carries none of these attributes (the common case) or `WPS:` is `-`.
+
+Additive JSONL fields on the `beacon` record: `wps_manufacturer`,
+`wps_model_name`, `wps_model_number`, `wps_serial` (all `""` when
+absent). Not persisted to `--db` — like `#60f`'s `phy_confirmed` column,
+a new field on an existing SQLite table needs a schema version bump that
+invalidates every prior database file, and that cost isn't worth paying
+for a display/forensic nuance already visible in the JSONL log.
+
 ## View
 
 ```

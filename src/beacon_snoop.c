@@ -25,6 +25,20 @@ static void note_new_bssid(time_t now) {
     g_new_bssid_head = (g_new_bssid_head + 1) % BEACON_NEW_TS_RING;
 }
 
+/* Bounded copy of a WPS TLV string attribute into a fixed field. The
+ * attribute body is not NUL-terminated in the frame, and a hostile AP
+ * can claim any length the enclosing IE has room for — the wrem check
+ * in the caller only proves the bytes exist in the IE, not that they
+ * fit the destination, so the copy is clamped here regardless of what
+ * the attribute claims. */
+static void wps_attr_str(char *dst, size_t dst_sz,
+                          const uint8_t *data, uint16_t len) {
+    size_t n = len;
+    if (n > dst_sz - 1) n = dst_sz - 1;
+    memcpy(dst, data, n);
+    dst[n] = '\0';
+}
+
 int beacon_recent_new_bssids(time_t now, int window_s) {
     int n = 0;
     pthread_mutex_lock(&g_mu);
@@ -553,6 +567,26 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                             for (int z = 0; z < 16; z++)
                                 if (adata[z] != 0) { all_zero = 0; break; }
                             if (all_zero) uuid_e_zero_seen = 1;
+                        } else if (aid == 0x1021 && alen >= 1) {
+                            /* Manufacturer */
+                            wps_attr_str(rsn_out->wps_manufacturer,
+                                         sizeof(rsn_out->wps_manufacturer),
+                                         adata, alen);
+                        } else if (aid == 0x1023 && alen >= 1) {
+                            /* Model Name */
+                            wps_attr_str(rsn_out->wps_model_name,
+                                         sizeof(rsn_out->wps_model_name),
+                                         adata, alen);
+                        } else if (aid == 0x1024 && alen >= 1) {
+                            /* Model Number */
+                            wps_attr_str(rsn_out->wps_model_number,
+                                         sizeof(rsn_out->wps_model_number),
+                                         adata, alen);
+                        } else if (aid == 0x1042 && alen >= 1) {
+                            /* Serial Number */
+                            wps_attr_str(rsn_out->wps_serial,
+                                         sizeof(rsn_out->wps_serial),
+                                         adata, alen);
                         }
                         wp   += 4 + alen;
                         wrem -= 4 + alen;
@@ -793,6 +827,22 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 if (rsn->has_wps) g_aps[i].has_wps = 1;
                 if (rsn->wps_state)  g_aps[i].wps_state  = rsn->wps_state;
                 if (rsn->wps_locked) g_aps[i].wps_locked = rsn->wps_locked;
+                if (rsn->wps_manufacturer[0])
+                    snprintf(g_aps[i].wps_manufacturer,
+                             sizeof(g_aps[i].wps_manufacturer),
+                             "%s", rsn->wps_manufacturer);
+                if (rsn->wps_model_name[0])
+                    snprintf(g_aps[i].wps_model_name,
+                             sizeof(g_aps[i].wps_model_name),
+                             "%s", rsn->wps_model_name);
+                if (rsn->wps_model_number[0])
+                    snprintf(g_aps[i].wps_model_number,
+                             sizeof(g_aps[i].wps_model_number),
+                             "%s", rsn->wps_model_number);
+                if (rsn->wps_serial[0])
+                    snprintf(g_aps[i].wps_serial,
+                             sizeof(g_aps[i].wps_serial),
+                             "%s", rsn->wps_serial);
                 if (rsn->phy[0])
                     snprintf(g_aps[i].phy, sizeof(g_aps[i].phy),
                              "%s", rsn->phy);
@@ -904,6 +954,18 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].has_wps    = rsn->has_wps;
         g_aps[slot].wps_state  = rsn->wps_state;
         g_aps[slot].wps_locked = rsn->wps_locked;
+        snprintf(g_aps[slot].wps_manufacturer,
+                 sizeof(g_aps[slot].wps_manufacturer),
+                 "%s", rsn->wps_manufacturer);
+        snprintf(g_aps[slot].wps_model_name,
+                 sizeof(g_aps[slot].wps_model_name),
+                 "%s", rsn->wps_model_name);
+        snprintf(g_aps[slot].wps_model_number,
+                 sizeof(g_aps[slot].wps_model_number),
+                 "%s", rsn->wps_model_number);
+        snprintf(g_aps[slot].wps_serial,
+                 sizeof(g_aps[slot].wps_serial),
+                 "%s", rsn->wps_serial);
         snprintf(g_aps[slot].phy, sizeof(g_aps[slot].phy),
                  "%s", rsn->phy);
         g_aps[slot].has_qbss       = rsn->has_qbss;

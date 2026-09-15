@@ -1077,6 +1077,13 @@ typedef struct {
      * candidate; locked -> attempts will be refused. */
     int      wps_state;
     int      wps_locked;
+    /* WPS vendor-string leakage (#77) — see beacon_snoop.h::beacon_rsn_t
+     * for the rationale. Monitor-mode only: like neighbors[] above, this
+     * is not mirrored onto wifi_ap_t (the managed-mode scan struct). */
+    char     wps_manufacturer[65];
+    char     wps_model_name[33];
+    char     wps_model_number[33];
+    char     wps_serial[33];
     /* Max PHY tier advertised by the AP — same scheme as pnl_client_t.phy. */
     char     phy[10];
     /* 1 if this beacon was originally hidden (empty SSID in the beacon

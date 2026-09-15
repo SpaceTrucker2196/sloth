@@ -131,6 +131,21 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         tui_normal(); TPRINT("-");
     }
     TPRINT("\n");
+    /* WPS vendor-string leakage (#77): only shown when the beacon's WPS
+     * IE actually leaked one of these — most APs don't. Fingerprinting
+     * value regardless of which tool, if any, is behind the AP. */
+    if (ap->wps_manufacturer[0] || ap->wps_model_name[0] ||
+        ap->wps_model_number[0] || ap->wps_serial[0]) {
+        tui_dim(); TPRINT("  WPS ID:      "); tui_heat(0.7);
+        TPRINT("%s", ap->wps_manufacturer[0] ? ap->wps_manufacturer : "?");
+        if (ap->wps_model_name[0] || ap->wps_model_number[0]) {
+            TPRINT(" / %s", ap->wps_model_name[0] ? ap->wps_model_name : "?");
+            if (ap->wps_model_number[0])
+                TPRINT(" (%s)", ap->wps_model_number);
+        }
+        if (ap->wps_serial[0]) TPRINT("  SN:%s", ap->wps_serial);
+        TPRINT("\n");
+    }
 
     /* Associated clients we've observed. */
     int my_assocs[MAX_ASSOC_ENTRIES];

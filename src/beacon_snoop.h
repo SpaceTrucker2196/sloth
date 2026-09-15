@@ -23,6 +23,18 @@ typedef struct {
     int  has_wps;       /* Wi-Fi Protected Setup IE present */
     int  wps_state;     /* 0=unknown 1=NotConfigured 2=Configured */
     int  wps_locked;    /* 0=unknown 1=unlocked       2=locked    */
+    /* WPS vendor-string leakage (#77): Manufacturer / Model Name / Model
+     * Number / Serial Number attributes inside the WPS IE (WFA WPS 2.0
+     * §12, attribute IDs 0x1021/0x1023/0x1024/0x1042). Many SOHO routers
+     * and default hostapd/OpenWrt builds broadcast these in plaintext on
+     * every beacon — a fingerprinting/TSCM signal that needs no
+     * attacker-tool attribution to be useful. "" = attribute absent.
+     * Buffer sizes are the spec's own per-attribute length ceiling
+     * (64/32/32/32) plus a NUL. */
+    char wps_manufacturer[65];
+    char wps_model_name[33];
+    char wps_model_number[33];
+    char wps_serial[33];
     /* Max PHY tier — "Wi-Fi 7" / "6" / "5" / "4" / "legacy" / "" */
     char phy[10];
     /* 802.11k Neighbor Report list (tag 52). Up to MAX_AP_NEIGHBORS;
