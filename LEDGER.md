@@ -119,3 +119,4 @@
 | d7c23f8 | 2026-09-15T18:42:14Z | claude-opus-5 | 252 | 80550 | 10222794 | 324679 | 10.3732 | warning-clean build on gcc 13; ALERT_KEY_LEN 96->192 (IPv6 cred key) |
 | d015f3f | 2026-09-15T18:42:26Z | claude-opus-5 | 6 | 2046 | 356171 | 1350 | 0.2428 | agents: interim ledger exception for this host |
 | 17ecd61 | 2026-09-15T18:46:47Z | claude-opus-5 | 52 | 26263 | 3377846 | 43307 | 2.7788 | agents: drop ledger exception, ledger.py installed |
+| 874f6b9 | 2026-09-15T18:55:17Z | claude-opus-5 | 248 | 142966 | 18184135 | 468819 | 17.3556 | #77 slice: beacon IE-ordering fingerprint (ie_order_hash/ie_order_count) |
