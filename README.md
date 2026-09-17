@@ -471,7 +471,7 @@ the top.
 
 ## Status
 
-Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use, unmodified; contact jeff@river.io for commercial, enterprise, or other licensing).
+Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
 
