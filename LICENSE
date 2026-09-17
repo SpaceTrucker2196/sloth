@@ -1,0 +1,194 @@
+SLOTH SOURCE-AVAILABLE LICENSE
+Version 1.0, September 2026
+
+Copyright (c) 2026 River.io LLC. All rights reserved.
+
+This is not an open-source license. It grants limited rights to use the
+Software free of charge for non-commercial purposes. Any use outside
+those rights needs a separate written license from River.io LLC.
+
+For commercial, enterprise, or other licensing, contact:
+    River.io LLC
+    jeff@river.io
+    https://river.io
+
+
+1. DEFINITIONS
+
+"Software" means the sloth source code, binaries, documentation, test
+fixtures, research corpus, and all other files distributed in this
+repository, in any form.
+
+"Licensor" means River.io LLC.
+
+"You" means the individual or legal entity exercising rights under this
+License.
+
+"Non-Commercial Use" means use by a natural person for personal study,
+hobby, education, academic research, or evaluation, where no payment,
+fee, compensation, or other commercial advantage is sought or received
+by You or by any person or entity on whose behalf You act.
+
+"Commercial Use" means any use that is not Non-Commercial Use. This
+includes, without limitation: use in the course of employment or trade;
+use to provide any service to a third party, whether or not for a fee;
+use in a product or service offering; use to generate revenue; use in
+security assessments, audits, penetration tests, wireless surveys, or
+technical surveillance countermeasures performed for a client or
+employer; and use by any legal entity.
+
+"Enterprise Use" means use by, for, or on behalf of any company,
+corporation, partnership, limited liability company, non-profit
+organization, educational institution acting in an operational (not
+teaching or research) capacity, government body, or any other legal
+entity other than a natural person acting alone.
+
+"Law Enforcement Use" means use by, for, or on behalf of any police,
+sheriff, prosecutorial, intelligence, national-security, military,
+border, immigration, customs, correctional, or regulatory-enforcement
+agency at any level of any government, or any contractor, vendor, or
+agent acting for such an agency, or any private party acting under
+color of law.
+
+"Derivative Work" means any work that is based on or incorporates the
+Software or any part of it, including any modification, translation,
+port, adaptation, fork with changes, or work that includes copied or
+adapted source, detection logic, alert rules, fingerprint data, or
+documentation from the Software.
+
+
+2. GRANT OF RIGHTS
+
+Subject to the conditions in Section 3 and the prohibitions in
+Section 4, Licensor grants You a worldwide, royalty-free,
+non-exclusive, non-transferable, non-sublicensable, revocable license
+to:
+
+  (a) view, download, and study the Software;
+  (b) compile the Software from unmodified source;
+  (c) run the Software for Non-Commercial Use;
+  (d) redistribute exact, unmodified copies of the Software, in source
+      or compiled form, for Non-Commercial Use, provided this License
+      is included with every copy; and
+  (e) Notwithstanding Section 4(a), 4(b), and 4(d), You may package
+      unmodified source or unmodified compiled binaries solely for
+      distribution through public software repositories (for example
+      distribution package archives or user-contributed package
+      repositories), provided the package makes no changes to the
+      Software other than build-system integration, and provided this
+      License accompanies the package.
+
+You may make private modifications to the Software for Your own
+Non-Commercial Use on systems You control. You may not distribute those
+modifications (see Section 4(d)).
+
+
+3. CONDITIONS
+
+Every copy or redistribution of the Software must:
+
+  (a) retain this License in full, unaltered;
+  (b) retain all copyright, attribution, and license notices in the
+      Software; and
+  (c) not misrepresent the origin of the Software or imply endorsement
+      by Licensor.
+
+
+4. PROHIBITED USES
+
+You may NOT, under this License:
+
+  (a) make Commercial Use of the Software;
+  (b) make Enterprise Use of the Software;
+  (c) make Law Enforcement Use of the Software;
+  (d) distribute, publish, or make available any Derivative Work;
+  (e) offer the Software, or access to it, as a hosted service, managed
+      service, or appliance to any third party;
+  (f) remove, obscure, or alter any license, copyright, or attribution
+      notice;
+  (g) use the names "sloth", "River.io", or the sloth logo to endorse or
+      promote products or services without prior written permission;
+  (h) use the Software in violation of any applicable law, including
+      any law governing the interception of communications, computer
+      access, wireless spectrum use, or privacy.
+
+Any use listed in this Section requires a separate written license from
+Licensor. Contact the address at the top of this document.
+
+
+5. CONTRIBUTIONS
+
+If You submit any code, documentation, data, or other material to
+Licensor for inclusion in the Software ("Contribution"), You grant
+Licensor a perpetual, worldwide, irrevocable, royalty-free, fully
+sublicensable license to use, reproduce, modify, distribute, and
+relicense the Contribution under any terms, including this License and
+any commercial license. You represent that You have the right to grant
+this license for Your Contribution.
+
+
+6. NO TRADEMARK LICENSE
+
+This License does not grant any right to use Licensor's trademarks,
+trade names, or logos except as required for reasonable and customary
+attribution under Section 3.
+
+
+7. TERMINATION
+
+This License terminates automatically if You breach any term of it. On
+termination You must stop all use of the Software and destroy all
+copies in Your possession or control. Sections 5, 6, 8, 9, and 10
+survive termination.
+
+Licensor may terminate this License for any user or for all users on
+30 days' notice posted in the repository. Copies lawfully obtained
+before that notice may continue to be used under the terms then in
+effect for Non-Commercial Use only.
+
+
+8. DISCLAIMER OF WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+NON-INFRINGEMENT. LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL
+DETECT ANY PARTICULAR ATTACK, DEVICE, OR CONDITION, OR THAT IT WILL BE
+FREE OF FALSE POSITIVES OR FALSE NEGATIVES.
+
+
+9. LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE, INCLUDING ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES.
+
+
+10. LAWFUL USE
+
+The Software passively observes radio and network traffic. The legality
+of such observation varies by jurisdiction and by the network being
+observed. You are solely responsible for ensuring that Your use of the
+Software complies with all applicable laws. Licensor provides no legal
+advice and accepts no responsibility for Your use.
+
+
+11. GENERAL
+
+This License is the entire agreement between You and Licensor about the
+Software. If any provision is held unenforceable, the remainder stays in
+effect. Failure to enforce any provision is not a waiver. This License
+is governed by the laws of the State in which Licensor is organized,
+without regard to conflict-of-laws rules.
+
+
+SUMMARY (not a substitute for the terms above)
+
+  Free for individuals for non-commercial use; private modifications allowed,
+  but modified versions may not be distributed.
+  No commercial use. No enterprise use. No law-enforcement use.
+  No distribution of modified versions.
+  Packaging unmodified source for distro repositories is allowed.
+  Everything else: contact jeff@river.io for a license.
