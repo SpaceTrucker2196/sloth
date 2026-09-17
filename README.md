@@ -477,6 +477,6 @@ Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt
 
 ## License
 
-sloth is **source-available**, not open source. The [Sloth Source-Available License 1.0](LICENSE) grants free use to individuals for non-commercial purposes, unmodified. It does not permit commercial use, enterprise use, law-enforcement use, or distribution of modified versions. Packaging unmodified source for distribution repositories is permitted.
+sloth is **source-available**, not open source. The [Sloth Source-Available License 1.0](LICENSE) grants free use to individuals for non-commercial purposes, including private modifications on systems they control. Modified versions may not be distributed; commercial use, enterprise use, and law-enforcement use are not permitted. Packaging unmodified source for distribution repositories is permitted.
 
 For any other use, contact River.io LLC at jeff\@river.io.
