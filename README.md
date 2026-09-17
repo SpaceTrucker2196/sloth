@@ -471,6 +471,12 @@ the top.
 
 ## Status
 
-Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: see project root.
+Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use, unmodified; contact jeff@river.io for commercial, enterprise, or other licensing).
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
+
+## License
+
+sloth is **source-available**, not open source. The [Sloth Source-Available License 1.0](LICENSE) grants free use to individuals for non-commercial purposes, unmodified. It does not permit commercial use, enterprise use, law-enforcement use, or distribution of modified versions. Packaging unmodified source for distribution repositories is permitted.
+
+For any other use, contact River.io LLC at jeff\@river.io.
