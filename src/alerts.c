@@ -251,6 +251,20 @@ const char *alert_technique(alert_type_t type) {
     /* T1562.004 Impair Defenses: an unprotected robust action frame on
      * an MFP-required BSS is the protection not being applied. */
     case ALERT_TYPE_MFP_UNPROTECTED:        return "T1562.004";   /* CVE-2019-16275 */
+    /* Deliberately empty, and not for the NO_MONITOR_MODE reason (#80).
+     * What is observed is a *third party's* device left in its
+     * unconfigured onboarding state — an exposure, with no adversary
+     * behaviour in evidence. ATT&CK models what an adversary does, and
+     * the techniques that would fit (T1557 for the AiTM an attacker
+     * sets up after joining the setup AP, T1600 for weakened crypto)
+     * would each claim an attack on evidence of a posture. That is the
+     * reasoning BTM_ABUSE already applied when it took T1498 over
+     * T1557. The basis is cited — NIST SP 1800-36 and the Wi-Fi P2P
+     * spec, see research/papers/nist-sp1800-36-onboarding.md — it is
+     * simply not an ATT&CK technique. Whether agents/AGENTS.md should
+     * widen its "" exemption to cover observed-device exposure is a
+     * question for the owner, not something this rule decides. */
+    case ALERT_TYPE_OPEN_SETUP_AP:          return "";            /* exposure, not adversary technique (#80) */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_COUNT:                  break;
     }
@@ -298,7 +312,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
     N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);         N(ALERT_TYPE_FRAG_PN_GAP);
     N(ALERT_TYPE_FRAG_EAPOL_RELAY);    N(ALERT_TYPE_SA_QUERY_FLOOD);
-    N(ALERT_TYPE_MFP_UNPROTECTED);
+    N(ALERT_TYPE_MFP_UNPROTECTED);     N(ALERT_TYPE_OPEN_SETUP_AP);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -2126,6 +2140,166 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── Open device-onboarding SoftAP (#80) ──────────────────
+ *
+ * An unconfigured consumer/IoT device brings up an *open* SoftAP so a
+ * phone can reach its setup surface. Everyone else in RF range can
+ * reach that surface too: provision the device onto a network of their
+ * choosing, read or rewrite its configuration, or stand up the same
+ * SSID and collect the WLAN passphrase the owner types into it.
+ *
+ * What it is detected *from* — NIST SP 1800-36 (Nov 2025), Volume A:
+ * "Wi-Fi is sometimes used to provide credentials over an open (i.e.,
+ * unencrypted) network, but this onboarding method risks credential
+ * disclosure." The Wi-Fi Easy Connect / DPP programme exists to
+ * replace exactly this shape. See
+ * research/papers/nist-sp1800-36-onboarding.md.
+ *
+ * WARN, not CRIT: the observable is an exposure sitting in the open,
+ * not an attack under way. Nobody gets paged for a printer.
+ *
+ * The rule under-flags on purpose. A curated prefix table gated behind
+ * a hotspot allowlist will miss vendor SSIDs nobody has written down;
+ * the alternative — matching anything that looks setup-shaped — fires
+ * on every café in a city and teaches the operator to ignore the type.
+ */
+
+static int ascii_lower(int c) {
+    return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
+}
+
+/* Case-insensitive ASCII compares, local rather than strcasecmp /
+ * strncasecmp: those are POSIX <strings.h> and this file also builds
+ * on the embedded and BSD targets. SSIDs are bytes, not text, so
+ * locale-aware folding would be wrong here anyway. */
+static int ascii_ieq(const char *a, const char *b) {
+    int i = 0;
+    for (; a[i] && b[i]; i++)
+        if (ascii_lower((unsigned char)a[i]) != ascii_lower((unsigned char)b[i]))
+            return 0;
+    return a[i] == b[i];
+}
+
+/* Stops at the first mismatch, so a `hay` shorter than `prefix` hits
+ * its NUL and returns 0 without reading past it. */
+static int ascii_iprefix(const char *hay, const char *prefix) {
+    for (int i = 0; prefix[i]; i++)
+        if (ascii_lower((unsigned char)hay[i]) !=
+            ascii_lower((unsigned char)prefix[i])) return 0;
+    return 1;
+}
+
+static int ascii_icontains(const char *hay, const char *needle) {
+    for (int i = 0; hay[i]; i++)
+        if (ascii_iprefix(hay + i, needle)) return 1;
+    return 0;
+}
+
+/* Open by design, and not a device management surface: carrier / ISP
+ * roaming SSIDs, venue hotspots, guest VLANs. Prefix-matched because
+ * these ship with per-site suffixes ("CoxWiFi_5G", "@Reyee-1234").
+ *
+ * This list is the guardrail, and it is checked *before* the pattern
+ * table so a hotspot can never reach it. */
+static const char *const g_open_hotspot_ssids[] = {
+    "xfinitywifi",      /* Comcast's public roaming SSID */
+    "XFINITY",          /* and its authenticated sibling */
+    "attwifi",          /* AT&T Wi-Fi hotspots */
+    "CoxWiFi",          /* Cox */
+    "Cox Mobile",
+    "CableWiFi",        /* the cable operators' shared roaming SSID */
+    "optimumwifi",      /* Optimum / Altice */
+    "SpectrumWiFi",     /* Charter */
+    "Google Starbucks", /* venue hotspot */
+    "Boingo",           /* airport / venue aggregator */
+    "@Reyee",           /* Reyee / Ruijie mesh guest SSID */
+};
+
+static int ssid_is_public_hotspot(const char *ssid) {
+    for (size_t i = 0;
+         i < sizeof(g_open_hotspot_ssids) / sizeof(g_open_hotspot_ssids[0]);
+         i++)
+        if (ascii_iprefix(ssid, g_open_hotspot_ssids[i])) return 1;
+    /* Guest networks are deliberately open on a great many sites, and
+     * they name themselves. A "guest" token anywhere in the SSID is
+     * enough to stay quiet — under-flagging is the stated preference. */
+    return ascii_icontains(ssid, "guest");
+}
+
+/* Onboarding SSID patterns. Small and evidence-based: each row says
+ * what the name means and the entry exists because that claim is
+ * checkable, not because the shape looked plausible. */
+typedef struct {
+    const char *prefix;
+    const char *what;      /* rendered into the alert detail */
+} setup_ssid_pat_t;
+
+static const setup_ssid_pat_t g_setup_ssid_pats[] = {
+    /* Generic consumer onboarding SSID — "SETUP-" and a serial
+     * fragment. Observed in range on the passive run that motivated
+     * #80, alongside the printer and DIRECT- names below. */
+    { "SETUP-",           "device setup SSID" },
+    /* HP printers advertise "HP-Setup>xx-<model>" until they are joined
+     * to a WLAN; HP's own support threads show it listed as unsecured. */
+    { "HP-Setup",         "HP printer setup" },
+    /* Same family, the print / Wi-Fi Direct SoftAP. */
+    { "HP-Print-",        "HP print SoftAP" },
+    /* Wi-Fi P2P Technical Specification v1.5 §3.2.1 requires every P2P
+     * Group SSID to begin with "DIRECT-" *and* requires WPA2-PSK on the
+     * group. An OPEN one is therefore a device operating outside the
+     * protection its own spec mandates — which is the finding. */
+    { "DIRECT-",          "Wi-Fi Direct group, unprotected" },
+    /* Robot vacuum in provisioning mode. */
+    { "roborock-vacuum-", "robot vacuum provisioning" },
+    /* Range extender that has never been configured. */
+    { "NETGEAR_EXT",      "range extender unconfigured" },
+};
+
+static void rule_open_setup_ap(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+
+        /* Hidden / broadcast SSID — no name to match, and nothing an
+         * operator could go find in the room. */
+        if (!a->ssid[0]) continue;
+
+        /* Unencrypted, or nothing parsed. The beacon parser always
+         * fills enc, so empty means the row came from a path that did
+         * not decide — the same treatment rule_evil_twin and twins.c
+         * already give it. Compared case-insensitively because the
+         * managed-scan path renders the value "Open", not "OPEN"
+         * (src/platform/linux_wifi.c). */
+        if (a->enc[0] && !ascii_ieq(a->enc, "OPEN")) continue;
+
+        /* Guardrail ahead of the pattern match, always. */
+        if (ssid_is_public_hotspot(a->ssid)) continue;
+
+        const char *what = NULL;
+        for (size_t p = 0;
+             p < sizeof(g_setup_ssid_pats) / sizeof(g_setup_ssid_pats[0]);
+             p++)
+            if (ascii_iprefix(a->ssid, g_setup_ssid_pats[p].prefix)) {
+                what = g_setup_ssid_pats[p].what;
+                break;
+            }
+        if (!what) continue;
+
+        char bssid_str[20];
+        mac_to_str(a->bssid, bssid_str, sizeof(bssid_str));
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        /* Per BSSID: a device left in setup mode for an hour is one
+         * alert with a rising count, not one per poll. */
+        snprintf(key, sizeof(key), "opensetup:%s", bssid_str);
+        snprintf(detail, sizeof(detail),
+                 "open %s: SSID %.32s BSSID %s ch %d, unauthenticated setup surface",
+                 what, a->ssid, bssid_str, a->channel);
+        fire(ALERT_TYPE_OPEN_SETUP_AP, ALERT_SEV_WARN,
+             "OPEN_SETUP_AP", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -3139,6 +3313,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_proximity(s, now);
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
+    rule_open_setup_ap(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

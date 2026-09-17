@@ -254,6 +254,49 @@ static void test_every_citable_alert_kind_is_cited(void) {
     ASSERT_EQ(cited, citable);
 }
 
+static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
+    /* The coverage guard above keys on alert_technique() being
+     * non-empty, which leaves a hole: a detector that has a real,
+     * citable basis but no *ATT&CK technique* is skipped entirely.
+     *
+     * ALERT_TYPE_OPEN_SETUP_AP (#80) is the first of those. It reports
+     * an observed device's exposure rather than an adversary's
+     * behaviour, so there is no honest technique to assign — but NIST
+     * SP 1800-36 and the Wi-Fi P2P specification are exactly what it
+     * detects from, and agents/AGENTS.md's rule is about the *source*,
+     * not the technique. Named explicitly rather than inferred,
+     * because the whole problem is that nothing else can tell this
+     * case apart from NO_MONITOR_MODE, which genuinely has no source.
+     *
+     * A future detector in the same position belongs on this list. */
+    static const char *const kinds[] = {
+        "ALERT_TYPE_OPEN_SETUP_AP",
+    };
+    sqlite3 *db = open_corpus();
+    ASSERT(db != NULL);
+    if (!db) return;
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        /* Empty technique is the precondition for being on this list —
+         * if one acquires a technique, the coverage guard takes over
+         * and the entry should move off. */
+        int found = 0;
+        for (int t = 0; t < (int)ALERT_TYPE_COUNT; t++) {
+            const char *name = alert_type_name((alert_type_t)t);
+            if (!name || strcmp(name, kinds[i]) != 0) continue;
+            found = 1;
+            const char *tech = alert_technique((alert_type_t)t);
+            ASSERT(tech && !tech[0]);
+            break;
+        }
+        if (!found) printf("    corpus: %s is not an alert kind\n", kinds[i]);
+        ASSERT(found);
+        if (corpus_cites(db, kinds[i]) <= 0)
+            printf("    corpus: %s has no citing document\n", kinds[i]);
+        ASSERT(corpus_cites(db, kinds[i]) > 0);
+    }
+    sqlite3_close(db);
+}
+
 void run_research_corpus_tests(void) {
     TEST_SUITE("research corpus guard (#73)");
     RUN_TEST(test_corpus_is_present_and_readable);
@@ -261,4 +304,5 @@ void run_research_corpus_tests(void) {
     RUN_TEST(test_every_row_carries_provenance);
     RUN_TEST(test_coverage_query_is_exact_not_fts_match);
     RUN_TEST(test_every_citable_alert_kind_is_cited);
+    RUN_TEST(test_uncitable_kinds_with_a_real_basis_are_still_cited);
 }

@@ -4906,6 +4906,135 @@ static void test_weak_strong_twin_also_names_the_steerer(void) {
     }
 }
 
+/* ── Open device-onboarding SoftAP (#80) ──────────────────
+ *
+ * Hand-built beacon_ap rows, no pcap fixtures (agents/AGENTS.md).
+ * The four cases the issue's acceptance criteria name, plus the
+ * dedup-key and detail shape. */
+
+static void test_open_setup_ap_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x02,0x0a,0x0b,0x0c,0x0d,0x0e};
+    add_beacon(&s, "SETUP-A1B2", b, "OPEN");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        /* Stable per BSSID, so a device left in setup mode for an hour
+         * is one alert with a rising count, not one per poll. */
+        ASSERT(strcmp(s.alerts[i].key, "opensetup:02:0a:0b:0c:0d:0e") == 0);
+        /* The operator has to be able to find the thing in the room:
+         * the SSID is the only handle most of these devices have. */
+        ASSERT(strstr(s.alerts[i].detail, "SETUP-A1B2") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "02:0a:0b:0c:0d:0e") != NULL);
+        /* Exposure, not adversary behaviour — see alert_technique(). */
+        ASSERT_EQ((int)s.alerts[i].technique[0], 0);
+    }
+}
+
+static void test_open_setup_ap_covers_the_pattern_table(void) {
+    /* One row per table entry. A deleted or mistyped pattern drops an
+     * assertion here rather than going quiet on the air. */
+    static const char *ssids[] = {
+        "SETUP-7F3A",              /* consumer onboarding SSID */
+        "HP-Setup>46-M277 Laser",  /* HP printer initial setup */
+        "HP-Print-A2-Officejet",   /* HP print/Wi-Fi Direct SoftAP */
+        "DIRECT-xy-BRAVIA",        /* Wi-Fi Direct group, unprotected */
+        "roborock-vacuum-a01s",    /* robot vacuum in provisioning */
+        "NETGEAR_EXT",             /* range extender, unconfigured */
+    };
+    for (size_t k = 0; k < sizeof(ssids) / sizeof(ssids[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x02,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, ssids[k], b, "OPEN");
+        alerts_update(&s);
+        if (find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP) < 0)
+            printf("    open-setup: no fire for %s\n", ssids[k]);
+        ASSERT(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP) >= 0);
+    }
+}
+
+static void test_open_setup_ap_quiet_on_public_hotspots(void) {
+    /* Open by design, and not a device management surface. These are
+     * the SSIDs a travelling operator is surrounded by; firing on them
+     * is how the rule becomes noise the operator filters out. */
+    static const char *ssids[] = {
+        "xfinitywifi", "attwifi", "CoxWiFi", "Cox Mobile",
+        "Google Starbucks", "CableWiFi", "optimumwifi",
+        "SpectrumWiFi", "@Reyee-1234", "Acme Corp_Guest",
+    };
+    for (size_t k = 0; k < sizeof(ssids) / sizeof(ssids[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x06,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, ssids[k], b, "OPEN");
+        alerts_update(&s);
+        if (find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP) >= 0)
+            printf("    open-setup: false positive on %s\n", ssids[k]);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP), -1);
+    }
+}
+
+static void test_open_setup_ap_quiet_when_encrypted(void) {
+    /* A setup-shaped SSID behind WPA2/WPA3 is a configured device or a
+     * protected Wi-Fi Direct group. There is no unauthenticated surface
+     * to reach, which is the entire finding. */
+    static const char *encs[] = { "WPA", "WPA2", "WPA3", "WEP" };
+    for (size_t k = 0; k < sizeof(encs) / sizeof(encs[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x0a,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, "SETUP-A1B2", b, encs[k]);
+        alerts_update(&s);
+        if (find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP) >= 0)
+            printf("    open-setup: fired on %s\n", encs[k]);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP), -1);
+    }
+}
+
+static void test_open_setup_ap_quiet_on_empty_ssid(void) {
+    /* Hidden/broadcast SSID — nothing to match, and a zero-length SSID
+     * must not fall through a prefix test into a fire. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x0e,0x00,0x00,0x00,0x00,0x01};
+    add_beacon(&s, "", b, "OPEN");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP), -1);
+}
+
+static void test_open_setup_ap_quiet_on_ordinary_open_ssid(void) {
+    /* The default answer is silence: an open network whose name says
+     * nothing about onboarding is not this rule's business. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x0e,0x00,0x00,0x00,0x00,0x02};
+    add_beacon(&s, "Airport-Free", b, "OPEN");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP), -1);
+}
+
+static void test_open_setup_ap_fires_once_per_bssid(void) {
+    /* Two polls, one alert, count 2 — the dedup key has to be stable
+     * across ticks or a device left in setup mode floods the ring. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x02,0x0a,0x0b,0x0c,0x0d,0x11};
+    add_beacon(&s, "SETUP-A1B2", b, "OPEN");
+    alerts_update(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, 2);
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_OPEN_SETUP_AP) seen++;
+    ASSERT_EQ(seen, 1);
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -5200,4 +5329,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_steer_window_expires);
     RUN_TEST(test_cleartext_cred_ipv6_distinct_users_not_coalesced);
     RUN_TEST(test_weak_strong_twin_also_names_the_steerer);
+
+    TEST_SUITE("alerts: open device-onboarding SoftAP (#80)");
+    RUN_TEST(test_open_setup_ap_fires);
+    RUN_TEST(test_open_setup_ap_covers_the_pattern_table);
+    RUN_TEST(test_open_setup_ap_quiet_on_public_hotspots);
+    RUN_TEST(test_open_setup_ap_quiet_when_encrypted);
+    RUN_TEST(test_open_setup_ap_quiet_on_empty_ssid);
+    RUN_TEST(test_open_setup_ap_quiet_on_ordinary_open_ssid);
+    RUN_TEST(test_open_setup_ap_fires_once_per_bssid);
 }
