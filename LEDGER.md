@@ -122,3 +122,4 @@
 | 874f6b9 | 2026-09-15T18:55:17Z | claude-opus-5 | 248 | 142966 | 18184135 | 468819 | 17.3556 | #77 slice: beacon IE-ordering fingerprint (ie_order_hash/ie_order_count) |
 | 1f108a8 | 2026-09-15T19:05:11Z | claude-opus-5 | 164 | 49894 | 6464450 | 113072 | 5.6111 | fix(jsonl): clamp builder appends, LINEBUF 8192 — hostile-SSID stack overflow |
 | c5d59a5 | 2026-09-17T23:25:41Z | claude-opus-5 | 276 | 100111 | 17946395 | 382273 | 15.3001 | #80 open device-onboarding SoftAP detector (ALERT_TYPE_OPEN_SETUP_AP) |
+| a56903a | 2026-09-18T11:31:25Z | claude-opus-5 | 236 | 109078 | 15143303 | 341848 | 13.7183 | #77 — beacon TBTT jitter observable (TSF-based), JSONL-only |
