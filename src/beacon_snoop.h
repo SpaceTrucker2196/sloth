@@ -104,6 +104,26 @@ typedef struct {
      * the capture path decides whether to observe it. 0 = absent. */
     const uint8_t *mle_body;
     int  mle_len;
+    /* Beacon body Timestamp field (#77): the AP's own TSF timer value
+     * at transmission, bytes 24..31 of the frame, little-endian (IEEE
+     * 802.11-2020 §9.3.3.2 beacon frame body order 1; field
+     * §9.4.1.10). Feeds the per-BSSID TBTT-jitter accumulator.
+     *
+     * `has_tsf` exists because 0 is a legal timestamp — a just-booted
+     * AP emits it — and because beacon_parse_ies is also the
+     * managed-mode nl80211 path, which is handed an IE blob with no
+     * frame around it and therefore has no timestamp to report. Set by
+     * beacon_parse *after* the IE walk, so that path correctly leaves
+     * all three fields zero.
+     *
+     * The interval is carried here in TU rather than reusing the
+     * caller's `beacon_ms`: that value is rounded to whole
+     * milliseconds, and a 400 µs rounding error per TBTT accumulates
+     * to more than a beacon interval over a gap of a few thousand
+     * beacons — which would corrupt the very residual being measured. */
+    uint64_t tsf;
+    int      has_tsf;
+    uint16_t tsf_bi_tu;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151
@@ -209,6 +229,20 @@ int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
  * beacon on file" as "MFP is off" fires on every network it has not
  * tuned to yet. Callers must distinguish. */
 int  beacon_find_mfp(const uint8_t bssid[6]);
+
+/* Derive the beacon TBTT jitter figures from an accumulator (#77).
+ *
+ * `stddev_us` is the population standard deviation of the per-beacon
+ * TBTT residual in microseconds — the AP's medium-access deferral
+ * spread. `mean_us` is the mean residual; it is offset by the unknown
+ * deferral of whichever beacon happened to establish the baseline, so
+ * it is diagnostic only and is not the published quantity.
+ *
+ * Returns 1 when at least TBTT_JITTER_MIN_SAMPLES residuals have been
+ * accumulated, 0 otherwise (outputs zeroed). Either pointer may be
+ * NULL. Reads a caller-owned snapshot struct, so it takes no lock. */
+int beacon_tbtt_jitter(const ap_beacon_timing_t *t,
+                       uint32_t *stddev_us, int64_t *mean_us);
 
 /* Clear the internal AP table. */
 void beacon_clear(void);

@@ -372,3 +372,32 @@ not — it needs captures from each stack, the same wall
 `tool_fingerprint.c` documents. Shipped the hash as a plain observable;
 no signature field, no verdict. It also gives the "vendor-IE consistency
 drift" follow-up something to compare.
+
+---
+
+## 2026-09-18 — Beacon TBTT jitter observable (#77 slice)
+
+**Source**: issue #77, bullet 2 ("Beacon interval jitter") — the
+observable half. `src/beacon_snoop.{c,h}`, `include/sloth.h`,
+`src/jsonl.c`.
+
+**Doc updates**: [`docs/views/beacons.md`](../views/beacons.md) gained a
+"Beacon TBTT jitter (#77)" section. [[jsonl-schema]]'s `beacon` row
+gained `tbtt_jitter_us` / `tbtt_jitter_samples` / `tbtt_jitter_resets`.
+
+**Why**: the bullet asks for a rolling stddev of beacon inter-arrival
+per BSSID. Measured from the receiver it would be worthless here — no
+radiotap TSFT is guaranteed, the radio hops, and frames are lost. The
+beacon body already carries the answer: IEEE 802.11-2020 §11.1.3
+schedules TBTTs at whole multiples of the Beacon Interval and
+§9.3.3.2 order 1 / §9.4.1.10 puts the transmitter's own TSF in every
+beacon, so the residual against the nearest multiple is the AP's own
+medium-access deferral on the AP's clock. The timestamp field was
+previously not parsed at all — `beacon_parse` skipped bytes 24-31.
+
+Shipped as measurement only. The issue's "8-40 TU = Marauder" figure
+has no source that could be verified here, and `agents/AGENTS.md`
+requires detectors to cite theirs; the measurement is spec-grounded,
+the attribution is not. No alert rule, no TUI row, no signature row in
+`tool_fingerprint.c`, and no `--db` column (a schema bump invalidates
+every prior database file — the `phy_confirmed`/#60f precedent).

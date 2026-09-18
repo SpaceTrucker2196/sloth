@@ -300,6 +300,50 @@ static void test_emit_beacon_ie_order_fields(void) {
     ASSERT(contains(body, "\"ie_order_count\":8"));
 }
 
+/* Beacon record carries the TBTT-jitter observable (#77) — the derived
+ * stddev in µs plus the sample and reset counts, so a consumer can tell
+ * "no jitter" from "not enough beacons to say". Accumulator: 2 samples
+ * of ±1500 µs about a zero mean -> stddev 1500. */
+static void test_emit_beacon_tbtt_jitter_fields(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    snprintf(b->ssid, sizeof(b->ssid), "Lab");
+    b->tbtt.samples  = 2;
+    b->tbtt.sum_us   = 0;
+    b->tbtt.sumsq_us = 2ull * 1500ull * 1500ull;
+    b->tbtt.resets   = 3;
+
+    jsonl_emit_beacons(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"tbtt_jitter_us\":1500"));
+    ASSERT(contains(body, "\"tbtt_jitter_samples\":2"));
+    ASSERT(contains(body, "\"tbtt_jitter_resets\":3"));
+}
+
+/* A BSSID heard once has a baseline but no residual. The stddev field
+ * must read 0 with a sample count of 0 beside it — the pair is what
+ * keeps 0 from being read as "this AP is perfectly scheduled". */
+static void test_emit_beacon_tbtt_jitter_absent_is_zero(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    snprintf(b->ssid, sizeof(b->ssid), "Lab");
+    b->tbtt.have_last = 1;
+    b->tbtt.last_tsf  = 12345678ull;
+
+    jsonl_emit_beacons(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"tbtt_jitter_us\":0"));
+    ASSERT(contains(body, "\"tbtt_jitter_samples\":0"));
+}
+
 /* Hostile-AP worst case: every attacker-controlled string field filled
  * to capacity with a byte json_escape expands 6x (\u0001). The record
  * used to overrun LINEBUF — snprintf's would-be length pushed `off`
@@ -861,6 +905,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_twin_episode_full_fields);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_beacon_ie_order_fields);
+    RUN_TEST(test_emit_beacon_tbtt_jitter_fields);
+    RUN_TEST(test_emit_beacon_tbtt_jitter_absent_is_zero);
     RUN_TEST(test_emit_beacon_worst_case_escaping_fits);
     RUN_TEST(test_emit_pnl_worst_case_escaping_fits);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);

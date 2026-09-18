@@ -86,6 +86,71 @@ Additive JSONL fields on the `beacon` record: `ie_order_hash`,
 not shown in the TUI and not persisted to `--db` — the same placement
 as `vendor_ies_hash`.
 
+## Beacon TBTT jitter (#77)
+
+How tightly an AP holds its own beacon schedule, measured on the AP's
+clock rather than on ours.
+
+Per IEEE 802.11-2020 §11.1.3 an AP schedules beacons at TBTTs that are
+exact multiples of its Beacon Interval (in TU, §9.4.1.3; 1 TU = 1024
+µs), and sets the beacon body's Timestamp field to its own TSF timer
+value at transmission (frame body order 1, §9.3.3.2; field §9.4.1.10).
+So for two beacons from one BSSID, the residual between the observed
+TSF delta and the nearest whole multiple of the beacon interval is the
+AP's medium-access deferral — how long it had to wait for a clear
+medium past its scheduled TBTT.
+
+Measuring from the transmitter's timestamp rather than from our
+receive time is the whole point: the figure survives a receiver with no
+radiotap TSFT, a hopping radio that hears the BSSID in bursts, and
+dropped frames. A receive-clock jitter measure survives none of those.
+
+- **First beacon from a BSSID** establishes the baseline and is not a
+  sample; a residual needs two timestamps.
+- **A delta that is an exact multiple** of the interval is a real
+  sample with residual 0, not a frame to skip. A well-behaved AP on an
+  idle channel genuinely does read 0.
+- **Two frames landing on the same TBTT** (a retransmission, the same
+  beacon captured twice) mean no interval elapsed — no sample, and the
+  baseline is not moved by the duplicate.
+- **No beacon interval** (absent or 0) means nothing to normalise
+  against, so no sample.
+- **The baseline is discarded** when the TSF runs backwards, when the
+  AP changes its Beacon Interval, or when the delta implies an absence
+  longer than `BEACON_AGE_SECS` (300 s). All three say the timer
+  changed rather than the schedule — an AP reboot, or another radio
+  adopting the BSSID — and samples taken against the old timer describe
+  a different clock. `tbtt_jitter_resets` counts these; it is itself a
+  signal, since a BSSID whose TSF keeps restarting is not one AP.
+- **The accumulator decays** rather than saturating: at 1024 samples
+  the count and both sums halve, which leaves the mean and mean-square
+  intact while bounding the sums, so a long-lived AP reports a rolling
+  figure instead of freezing on its first 1024 beacons.
+
+The published quantity is the standard deviation. The mean residual is
+offset by the unknown deferral of whichever beacon happened to
+establish the baseline, so it is diagnostic only — the offset cancels
+in the stddev, which is what makes the stddev meaningful at all.
+
+**No threshold ships with this.** The issue quotes "real APs hold ±2
+TU, Marauder-class firmware jitters 8-40 TU"; no source for those
+numbers could be verified here, and `agents/AGENTS.md` requires a
+detector to cite what it detects from. The measurement is
+spec-grounded, the attribution is not, so only the measurement lands —
+no alert rule, no TUI row, no signature table. What it supports today
+is comparison: an AP whose jitter changes mid-session, or a BSSID whose
+scheduling discipline does not match the gear it claims to be.
+
+Additive JSONL fields on the `beacon` record: `tbtt_jitter_us`
+(stddev in µs, 0 when fewer than 2 samples), `tbtt_jitter_samples`,
+`tbtt_jitter_resets`. The sample count is what keeps a `0` stddev from
+reading as "perfectly scheduled" when it really means "not enough
+beacons yet". Monitor-mode only — the managed-mode nl80211 path is
+handed an IE blob with no frame and so has no timestamp — not shown in
+the TUI, and not persisted to `--db` for the same reason as the WPS
+strings above: a new column bumps the schema and invalidates every
+prior database file.
+
 ## View
 
 ```

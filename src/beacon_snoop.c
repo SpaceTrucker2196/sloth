@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 #include <pthread.h>
 #include "sloth.h"
 #include "beacon_snoop.h"
@@ -739,8 +740,24 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     int      privacy = (cap >> 4) & 1;
 
     (void)signal;
-    return beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
-                            ssid_out, channel_out, enc_out, rsn_out);
+    int ok = beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
+                              ssid_out, channel_out, enc_out, rsn_out);
+
+    /* Timestamp at bytes 24-31, little-endian: the AP's TSF timer value
+     * when it transmitted this beacon (#77). Set after the IE walk
+     * because beacon_parse_ies zeroes rsn_out on entry — and because
+     * that function is also the managed-mode nl80211 entry point, which
+     * sees an IE blob and no frame, so leaving has_tsf at 0 there is
+     * exactly right. */
+    if (ok && rsn_out) {
+        uint64_t tsf = 0;
+        for (int b = 7; b >= 0; b--)
+            tsf = (tsf << 8) | (uint64_t)dot11[24 + b];
+        rsn_out->tsf       = tsf;
+        rsn_out->has_tsf   = 1;
+        rsn_out->tsf_bi_tu = (uint16_t)bi_tu;
+    }
+    return ok;
 }
 
 /* ── AP table ────────────────────────────────────────────── */
@@ -769,6 +786,135 @@ static void rssi_ring_push(beacon_ap_t *ap, int8_t signal, time_t now) {
     }
     ap->rssi_min_60s = init ? lo : 0;
     ap->rssi_max_60s = init ? hi : 0;
+}
+
+/* ── Beacon TBTT jitter (#77) ─────────────────────────────────
+ *
+ * See ap_beacon_timing_t in sloth.h for the derivation. In short: the
+ * AP beacons at TBTTs that are whole multiples of its Beacon Interval
+ * and stamps each beacon with its own TSF, so the residual between the
+ * observed TSF delta and the nearest multiple is the AP's own
+ * medium-access deferral, on the AP's clock.
+ *
+ * This is the observable only — no threshold, no verdict, no signature
+ * row. The "8-40 TU means Marauder" figure in the issue has no source
+ * that could be verified here, and agents/AGENTS.md requires detectors
+ * to cite theirs. The measurement is spec-grounded; the attribution is
+ * not, so only the measurement ships. */
+
+/* Throw away the accumulated residuals and start a fresh baseline at
+ * `tsf`. Called when the evidence says the timer itself changed rather
+ * than the beacon schedule: samples taken against the old timer
+ * describe a different clock, and keeping them would blend two APs (or
+ * two boots of one AP) into a single figure. */
+static void tbtt_rebase(ap_beacon_timing_t *t, uint64_t tsf, uint16_t bi_tu)
+{
+    t->resets++;
+    t->last_tsf  = tsf;
+    t->bi_tu     = bi_tu;
+    t->have_last = 1;
+    t->samples   = 0;
+    t->sum_us    = 0;
+    t->sumsq_us  = 0;
+}
+
+/* Fold one beacon's timestamp into a BSSID's jitter accumulator. */
+static void tbtt_push(ap_beacon_timing_t *t, const beacon_rsn_t *rsn)
+{
+    /* No timestamp (managed-mode path), or no beacon interval to
+     * normalise against: nothing measurable, and nothing recorded. An
+     * interval of 0 is not a divisor and 802.11 does not define one. */
+    if (!rsn || !rsn->has_tsf || rsn->tsf_bi_tu == 0) return;
+
+    const uint64_t bi_us = (uint64_t)rsn->tsf_bi_tu * 1024ull;  /* 1 TU = 1024 µs */
+
+    /* First beacon from this BSSID establishes the baseline and is not
+     * itself a sample — a residual needs two timestamps. */
+    if (!t->have_last) {
+        t->last_tsf  = rsn->tsf;
+        t->bi_tu     = rsn->tsf_bi_tu;
+        t->have_last = 1;
+        return;
+    }
+    /* A changed Beacon Interval changes what "the nearest TBTT" means;
+     * residuals either side of it are not the same measurement. */
+    if (t->bi_tu != rsn->tsf_bi_tu) {
+        tbtt_rebase(t, rsn->tsf, rsn->tsf_bi_tu);
+        return;
+    }
+    /* TSF running backwards is a new timer, not a new beacon: an AP
+     * reboot, or another radio adopting this BSSID. Unsigned subtraction
+     * would wrap it into an enormous forward delta. */
+    if (rsn->tsf < t->last_tsf) {
+        tbtt_rebase(t, rsn->tsf, rsn->tsf_bi_tu);
+        return;
+    }
+
+    uint64_t delta = rsn->tsf - t->last_tsf;
+
+    /* Implausible gap — flagged judgement call (§4.2). The cap is
+     * BEACON_AGE_SECS (300 s), the window after which this table drops
+     * the BSSID outright. A delta longer than the entry's own maximum
+     * lifetime cannot have come from an entry we tracked continuously,
+     * so it is a reset or adopted timer rather than a long absence, and
+     * rounding it to a TBTT count would manufacture a residual out of
+     * an unrelated clock. Anchoring to an existing in-tree constant
+     * beats inventing a number: there is no published bound on how long
+     * an AP may go unheard, and a cap the table itself already enforces
+     * is at least not arbitrary. */
+    if (delta > (uint64_t)BEACON_AGE_SECS * 1000000ull) {
+        tbtt_rebase(t, rsn->tsf, rsn->tsf_bi_tu);
+        return;
+    }
+
+    /* Whole TBTTs elapsed, rounded to nearest. 0 means both frames fall
+     * on the same TBTT — a retransmission, or the same beacon captured
+     * twice. No interval elapsed, so there is nothing to measure; the
+     * baseline stands rather than being moved by a duplicate. */
+    uint64_t n = (delta + bi_us / 2) / bi_us;
+    if (n == 0) return;
+
+    /* delta is capped at 300 s and n*bi_us at delta + bi_us/2, so both
+     * are far inside int64_t; |resid| <= bi_us/2 <= ~33.6 ms, whose
+     * square is ~1.1e15 — 1024 of those still fit a uint64. Nothing
+     * here can overflow or sign-flip on a hostile timestamp. */
+    int64_t resid = (int64_t)delta - (int64_t)(n * bi_us);
+
+    /* Decay instead of saturating at the cap: halving all three keeps
+     * Σx/n and Σx²/n intact while bounding the sums, so a long-lived AP
+     * reports a *rolling* figure rather than freezing on whatever its
+     * first 1024 beacons said. */
+    if (t->samples >= TBTT_JITTER_MAX_SAMPLES) {
+        t->samples  /= 2;
+        t->sum_us   /= 2;
+        t->sumsq_us /= 2;
+    }
+    t->last_tsf  = rsn->tsf;
+    t->samples  += 1;
+    t->sum_us   += resid;
+    t->sumsq_us += (uint64_t)(resid * resid);
+}
+
+int beacon_tbtt_jitter(const ap_beacon_timing_t *t,
+                       uint32_t *stddev_us, int64_t *mean_us)
+{
+    if (stddev_us) *stddev_us = 0;
+    if (mean_us)   *mean_us   = 0;
+    if (!t || t->samples < TBTT_JITTER_MIN_SAMPLES) return 0;
+
+    double n    = (double)t->samples;
+    double mean = (double)t->sum_us / n;
+    /* Population variance via Σx²/n − mean². The accumulator cannot
+     * answer the two-pass form without keeping every sample, and the
+     * cancellation this form is known for needs mean² to dominate the
+     * variance — residuals here are small and centred near zero, so it
+     * does not. A tiny negative from rounding clamps to 0. */
+    double var  = (double)t->sumsq_us / n - mean * mean;
+    if (var < 0.0) var = 0.0;
+
+    if (stddev_us) *stddev_us = (uint32_t)(sqrt(var) + 0.5);
+    if (mean_us)   *mean_us   = (int64_t)(mean < 0.0 ? mean - 0.5 : mean + 0.5);
+    return 1;
 }
 
 /* Compact FNV-1a fingerprint of a beacon's security/IE posture — the
@@ -932,6 +1078,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 }
                 if (rsn->fp.beacon_interval_ms)
                     g_aps[i].fp.beacon_interval_ms = rsn->fp.beacon_interval_ms;
+                /* TBTT jitter (#77) — one residual per beacon that
+                 * carried a timestamp. NOP on the managed-mode path. */
+                tbtt_push(&g_aps[i].tbtt, rsn);
             }
             pthread_mutex_unlock(&g_mu);
             return;
@@ -1027,6 +1176,9 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                (size_t)nc * sizeof(ap_neighbor_t));
         g_aps[slot].neighbor_count = nc;
         g_aps[slot].fp = rsn->fp;
+        /* Establishes the jitter baseline; the first beacon from a
+         * BSSID is never itself a sample (#77). */
+        tbtt_push(&g_aps[slot].tbtt, rsn);
     }
     /* fp.oui mirrors bssid[0..2] — set unconditionally (independent
      * of whether the parser populated rsn). */

@@ -2209,6 +2209,388 @@ static void test_record_ie_order_from_parsed_frame(void) {
     ASSERT_EQ(s.beacon_aps[0].fp.ie_order_count, 8);
 }
 
+/* ── Beacon TBTT jitter (#77) ─────────────────────────────
+ *
+ * The residual between the TSF delta across two beacons and the nearest
+ * whole multiple of the Beacon Interval is the AP's own medium-access
+ * deferral, on the AP's clock (IEEE 802.11-2020 §11.1.3 schedules TBTTs
+ * at whole multiples of the interval; §9.3.3.2 order 1 / §9.4.1.10 puts
+ * the transmitter's TSF in the beacon body). Everything below is built
+ * from that definition, never from the parser's own output.
+ *
+ * BI 100 TU = 102400 µs throughout, so a residual stays well inside the
+ * ±BI/2 window where rounding to the nearest TBTT is unambiguous. */
+#define TBTT_BI_TU 100
+#define TBTT_BI_US 102400ull
+
+/* Write a little-endian 64-bit TSF into a frame built by fill_hdr. */
+static void put_tsf(uint8_t *f, uint64_t tsf) {
+    for (int b = 0; b < 8; b++) f[24 + b] = (uint8_t)(tsf >> (8 * b));
+}
+
+/* A bare rsn carrier holding only what the accumulator reads — the same
+ * shape beacon_parse hands beacon_record. */
+static beacon_rsn_t tsf_rsn(uint64_t tsf, uint16_t bi_tu) {
+    beacon_rsn_t r;
+    memset(&r, 0, sizeof(r));
+    r.has_tsf   = 1;
+    r.tsf       = tsf;
+    r.tsf_bi_tu = bi_tu;
+    return r;
+}
+
+static void rec_tsf(const uint8_t *bssid, uint64_t tsf, uint16_t bi_tu) {
+    beacon_rsn_t r = tsf_rsn(tsf, bi_tu);
+    beacon_record(bssid, "Net", -60, 6, "WPA2",
+                  (uint16_t)(((uint32_t)bi_tu * 1024u) / 1000u), &r);
+}
+
+/* Snapshot the table and copy out the first AP's accumulator. */
+static ap_beacon_timing_t tbtt_of_first(void) {
+    static sloth_state_t s;      /* static: sloth_state_t is large */
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    return s.beacon_aps[0].tbtt;
+}
+
+/* Timestamp is bytes 24-31, little-endian, and is carried out of the
+ * parser alongside the interval it must be normalised against. */
+static void test_parse_tsf_little_endian(void) {
+    uint8_t f[BEACON_HDR_LEN + 2];
+    fill_hdr(f, BSSID_A, TBTT_BI_TU, 0x0010);
+    put_tsf(f, 0x0123456789abcdefull);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;   /* SSID */
+
+    char ssid[33]; uint8_t bssid[6]; int ch = 0; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, sizeof(f), -40, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_tsf, 1);
+    ASSERT(rsn.tsf == 0x0123456789abcdefull);
+    ASSERT_EQ(rsn.tsf_bi_tu, TBTT_BI_TU);
+}
+
+/* A just-booted AP really does beacon with TSF 0. "No timestamp
+ * observed" and "timestamp is zero" must not be the same state. */
+static void test_parse_tsf_zero_is_still_present(void) {
+    uint8_t f[BEACON_HDR_LEN + 2];
+    fill_hdr(f, BSSID_A, TBTT_BI_TU, 0x0010);   /* fill_hdr zeroes the TSF */
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+
+    char ssid[33]; uint8_t bssid[6]; int ch = 0; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, sizeof(f), -40, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_tsf, 1);
+    ASSERT(rsn.tsf == 0ull);
+}
+
+/* The shared nl80211 managed-mode path is handed an IE blob with no
+ * frame around it, so it has no timestamp to report and must say so. */
+static void test_ies_path_reports_no_tsf(void) {
+    uint8_t ies[256];
+    int n = build_ordered_ies(ies, "Lab", 6, 0);
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    ASSERT_EQ(rsn.has_tsf, 0);
+    ASSERT_EQ(rsn.tsf_bi_tu, 0);
+}
+
+/* One beacon establishes the baseline and is not itself a sample —
+ * a residual needs two timestamps. */
+static void test_tbtt_first_beacon_is_baseline_only(void) {
+    beacon_clear();
+    rec_tsf(BSSID_A, 1000000ull, TBTT_BI_TU);
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.have_last, 1);
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  0u);
+    uint32_t sd = 7; int64_t mean = 7;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 0);
+    ASSERT_EQ(sd, 0u);
+    ASSERT(mean == 0);
+}
+
+/* A delta that is an exact multiple of the interval is a legitimate
+ * zero residual, not a frame to skip: a perfectly-scheduled AP has
+ * zero jitter, and that is a measurement. */
+static void test_tbtt_exact_multiple_is_a_zero_sample(void) {
+    beacon_clear();
+    uint64_t t0 = 5000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US,     TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US * 2, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US * 5, TBTT_BI_TU);   /* 3 TBTTs missed */
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 3u);
+    ASSERT_EQ(t.resets,  0u);
+    ASSERT(t.sum_us == 0);
+    uint32_t sd = 7; int64_t mean = 7;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 1);
+    ASSERT_EQ(sd, 0u);
+    ASSERT(mean == 0);
+}
+
+/* Known answer, computed from the definition rather than from the code:
+ * residuals +200, -100, +500, -200 µs.
+ *   mean = 400/4 = 100
+ *   E[x²] = (40000+10000+250000+40000)/4 = 85000
+ *   var = 85000 - 100² = 75000 ; sqrt = 273.86 -> 274 */
+static void test_tbtt_jitter_known_answer(void) {
+    beacon_clear();
+    static const int64_t resid[] = { 200, -100, 500, -200 };
+    uint64_t tsf = 9000000ull;
+    rec_tsf(BSSID_A, tsf, TBTT_BI_TU);
+    for (size_t i = 0; i < sizeof(resid) / sizeof(resid[0]); i++) {
+        tsf = (uint64_t)((int64_t)(tsf + TBTT_BI_US) + resid[i]);
+        rec_tsf(BSSID_A, tsf, TBTT_BI_TU);
+    }
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 4u);
+    ASSERT(t.sum_us   == 400);
+    ASSERT(t.sumsq_us == 340000ull);
+    uint32_t sd = 0; int64_t mean = 0;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 1);
+    ASSERT_EQ(sd, 274u);
+    ASSERT(mean == 100);
+}
+
+/* No interval means nothing to normalise against — and 0 is not a
+ * divisor. The beacon is recorded, the residual is not. */
+static void test_tbtt_zero_interval_records_no_sample(void) {
+    beacon_clear();
+    rec_tsf(BSSID_A, 1000000ull, 0);
+    rec_tsf(BSSID_A, 1102400ull, 0);
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.have_last, 0);
+    ASSERT_EQ(t.samples,   0u);
+    ASSERT_EQ(t.resets,    0u);
+}
+
+/* A carrier with no timestamp (the managed-mode path) contributes
+ * nothing and does not disturb an existing baseline. has_tsf is what
+ * gates this, not tsf == 0: the carrier below names an interval and a
+ * zero timestamp, exactly the shape that would be read as "this AP's
+ * TSF just reset to 0" if the two states were conflated. */
+static void test_tbtt_absent_tsf_records_no_sample(void) {
+    beacon_clear();
+    rec_tsf(BSSID_A, 1000000ull, TBTT_BI_TU);
+    beacon_rsn_t bare = tsf_rsn(0ull, TBTT_BI_TU);
+    bare.has_tsf = 0;
+    beacon_record(BSSID_A, "Net", -60, 6, "WPA2", 102, &bare);
+    rec_tsf(BSSID_A, 1000000ull + TBTT_BI_US, TBTT_BI_TU);
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 1u);
+    ASSERT_EQ(t.resets,  0u);
+    ASSERT(t.sum_us == 0);
+}
+
+/* TSF running backwards is a new timer, not a new beacon — an AP
+ * reboot, or another radio adopting the BSSID. Samples taken against
+ * the old timer describe a different clock and are discarded. */
+static void test_tbtt_backwards_tsf_rebases(void) {
+    beacon_clear();
+    uint64_t t0 = 800000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US + 300, TBTT_BI_TU);
+    ASSERT_EQ(tbtt_of_first().samples, 1u);
+
+    rec_tsf(BSSID_A, 4000ull, TBTT_BI_TU);        /* TSF reset to near zero */
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  1u);
+    ASSERT(t.last_tsf == 4000ull);
+    ASSERT(t.sumsq_us == 0ull);
+}
+
+/* An absence longer than BEACON_AGE_SECS cannot have come from an entry
+ * this table tracked continuously — it ages BSSIDs out at that bound —
+ * so it is a reset timer, not a long hop away. Exactly at the cap is
+ * still a measurement; past it is a rebase. */
+static void test_tbtt_gap_at_age_cap_still_samples(void) {
+    beacon_clear();
+    uint64_t t0 = 1000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    /* 300 s = 2929.69 TBTTs -> nearest 2930 -> residual -32000 µs. */
+    rec_tsf(BSSID_A, t0 + (uint64_t)BEACON_AGE_SECS * 1000000ull, TBTT_BI_TU);
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 1u);
+    ASSERT_EQ(t.resets,  0u);
+    ASSERT(t.sum_us == -32000);
+}
+
+static void test_tbtt_gap_past_age_cap_rebases(void) {
+    beacon_clear();
+    uint64_t t0 = 1000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + (uint64_t)BEACON_AGE_SECS * 1000000ull + 1ull, TBTT_BI_TU);
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  1u);
+}
+
+/* Two frames on the same TBTT — a retransmission, or the same beacon
+ * captured twice — mean no interval elapsed. Rounding would put them
+ * 0 TBTTs apart, and a residual against 0 TBTTs is not a deferral. The
+ * baseline must stand rather than being dragged by the duplicate. */
+static void test_tbtt_same_tbtt_is_not_a_sample(void) {
+    beacon_clear();
+    uint64_t t0 = 2000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);                  /* identical timestamp */
+    rec_tsf(BSSID_A, t0 + 900, TBTT_BI_TU);            /* < BI/2 later */
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  0u);
+    ASSERT(t.last_tsf == t0);
+    /* The next real TBTT is still measured from the original baseline. */
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US + 700, TBTT_BI_TU);
+    t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 1u);
+    ASSERT(t.sum_us == 700);
+}
+
+/* Changing the Beacon Interval changes what "the nearest TBTT" means;
+ * residuals either side of the change are not the same measurement. */
+static void test_tbtt_interval_change_rebases(void) {
+    beacon_clear();
+    uint64_t t0 = 3000000ull;
+    rec_tsf(BSSID_A, t0, TBTT_BI_TU);
+    rec_tsf(BSSID_A, t0 + TBTT_BI_US + 400, TBTT_BI_TU);
+    ASSERT_EQ(tbtt_of_first().samples, 1u);
+
+    uint64_t t2 = t0 + TBTT_BI_US * 3;
+    rec_tsf(BSSID_A, t2, 200);                    /* AP moved to 200 TU */
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  1u);
+    ASSERT_EQ(t.bi_tu,   200);
+}
+
+/* A garbage or hostile timestamp must not overflow, sign-flip, or wrap
+ * a delta into a plausible-looking residual. Both directions of the
+ * 64-bit extreme land on a rebase and leave the accumulator empty. */
+static void test_tbtt_hostile_tsf_cannot_overflow(void) {
+    beacon_clear();
+    rec_tsf(BSSID_A, 1000000ull, TBTT_BI_TU);
+    rec_tsf(BSSID_A, 1000000ull + TBTT_BI_US, TBTT_BI_TU);
+    ASSERT_EQ(tbtt_of_first().samples, 1u);
+
+    rec_tsf(BSSID_A, 0xffffffffffffffffull, TBTT_BI_TU);   /* forward extreme */
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  1u);
+
+    rec_tsf(BSSID_A, 0ull, TBTT_BI_TU);                    /* wraps backwards */
+    t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 0u);
+    ASSERT_EQ(t.resets,  2u);
+
+    /* Still usable afterwards: the accumulator was rebased, not wedged. */
+    rec_tsf(BSSID_A, TBTT_BI_US, TBTT_BI_TU);
+    ASSERT_EQ(tbtt_of_first().samples, 1u);
+}
+
+/* The accumulator decays at its cap instead of saturating, so a
+ * long-lived AP keeps reporting a rolling figure and the sums stay
+ * bounded. A constant-magnitude alternating residual has a stddev that
+ * survives the halving exactly. */
+static void test_tbtt_accumulator_decays_at_cap(void) {
+    beacon_clear();
+    uint64_t tsf = 10000000ull;
+    rec_tsf(BSSID_A, tsf, TBTT_BI_TU);
+    for (int i = 0; i < TBTT_JITTER_MAX_SAMPLES * 2 + 3; i++) {
+        tsf = (uint64_t)((int64_t)(tsf + TBTT_BI_US) + ((i & 1) ? -1000 : 1000));
+        rec_tsf(BSSID_A, tsf, TBTT_BI_TU);
+    }
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.resets, 0u);
+    ASSERT(t.samples <= (uint32_t)TBTT_JITTER_MAX_SAMPLES);
+    ASSERT_GE(t.samples, (uint32_t)(TBTT_JITTER_MAX_SAMPLES / 2));
+    uint32_t sd = 0; int64_t mean = 0;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 1);
+    ASSERT_NEAR((int)sd, 1000, 2);
+}
+
+/* Two BSSIDs are measured independently — the accumulator is per-AP,
+ * not global. */
+static void test_tbtt_is_per_bssid(void) {
+    beacon_clear();
+    uint64_t a = 400000ull, b = 77777777ull;
+    rec_tsf(BSSID_A, a, TBTT_BI_TU);
+    rec_tsf(BSSID_B, b, TBTT_BI_TU);
+    rec_tsf(BSSID_A, a + TBTT_BI_US + 250, TBTT_BI_TU);
+    rec_tsf(BSSID_A, a + TBTT_BI_US * 2 - 250, TBTT_BI_TU);
+
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 2);
+    for (int i = 0; i < 2; i++) {
+        int is_a = memcmp(s.beacon_aps[i].bssid, BSSID_A, 6) == 0;
+        ASSERT_EQ(s.beacon_aps[i].tbtt.samples, is_a ? 2u : 0u);
+    }
+}
+
+/* beacon_tbtt_jitter is the read API: below the minimum sample count,
+ * and on a NULL accumulator, it reports "no figure" and zeroes its
+ * outputs rather than returning a number built from one sample. */
+static void test_tbtt_jitter_needs_two_samples(void) {
+    ap_beacon_timing_t t;
+    memset(&t, 0, sizeof(t));
+    uint32_t sd = 9; int64_t mean = 9;
+    ASSERT_EQ(beacon_tbtt_jitter(NULL, &sd, &mean), 0);
+    ASSERT_EQ(sd, 0u);
+    ASSERT(mean == 0);
+
+    t.samples = 1; t.sum_us = 5000; t.sumsq_us = 25000000ull;
+    sd = 9; mean = 9;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 0);
+    ASSERT_EQ(sd, 0u);
+    ASSERT(mean == 0);
+
+    t.samples = 2; t.sum_us = 0; t.sumsq_us = 2 * 1000ull * 1000ull;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 1);
+    ASSERT_EQ(sd, 1000u);
+}
+
+/* End to end through real frames, so the monitor-mode path
+ * (beacon_parse -> beacon_record -> snapshot) is proven to carry the
+ * timestamp all the way to a jitter figure. Residuals +600 and -600
+ * about a zero mean give a stddev of exactly 600. */
+static void test_tbtt_end_to_end_from_parsed_frames(void) {
+    uint8_t ies[256];
+    int n = build_ordered_ies(ies, "Lab", 6, 0);
+    uint64_t t0 = 123456789ull;
+    /* Residuals are measured between *consecutive* beacons: the second
+     * defers 600 µs past its TBTT, the third lands back exactly on
+     * schedule, so its residual against the second is -600. */
+    const uint64_t stamps[3] = {
+        t0,
+        t0 + TBTT_BI_US + 600,
+        t0 + TBTT_BI_US * 2
+    };
+    beacon_clear();
+    for (int i = 0; i < 3; i++) {
+        uint8_t f[BEACON_HDR_LEN + 256];
+        fill_hdr(f, BSSID_B, TBTT_BI_TU, 0x0010);
+        put_tsf(f, stamps[i]);
+        memcpy(f + BEACON_HDR_LEN, ies, (size_t)n);
+        char ssid[33]; uint8_t bssid[6]; int ch = 0; char enc[10]; uint16_t bms;
+        beacon_rsn_t rsn;
+        ASSERT_EQ(beacon_parse(f, BEACON_HDR_LEN + n, -50,
+                               ssid, bssid, &ch, enc, &bms, &rsn), 1);
+        beacon_record(bssid, ssid, -50, ch, enc, bms, &rsn);
+    }
+    ap_beacon_timing_t t = tbtt_of_first();
+    ASSERT_EQ(t.samples, 2u);
+    ASSERT(t.sum_us == 0);
+    uint32_t sd = 0; int64_t mean = 0;
+    ASSERT_EQ(beacon_tbtt_jitter(&t, &sd, &mean), 1);
+    ASSERT_EQ(sd, 600u);
+    ASSERT(mean == 0);
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -2336,4 +2718,24 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_ie_order_zero_when_no_elements);
     RUN_TEST(test_record_ie_order_latest_nonzero_wins);
     RUN_TEST(test_record_ie_order_from_parsed_frame);
+
+    TEST_SUITE("beacon: TBTT jitter (#77)");
+    RUN_TEST(test_parse_tsf_little_endian);
+    RUN_TEST(test_parse_tsf_zero_is_still_present);
+    RUN_TEST(test_ies_path_reports_no_tsf);
+    RUN_TEST(test_tbtt_first_beacon_is_baseline_only);
+    RUN_TEST(test_tbtt_exact_multiple_is_a_zero_sample);
+    RUN_TEST(test_tbtt_jitter_known_answer);
+    RUN_TEST(test_tbtt_zero_interval_records_no_sample);
+    RUN_TEST(test_tbtt_absent_tsf_records_no_sample);
+    RUN_TEST(test_tbtt_backwards_tsf_rebases);
+    RUN_TEST(test_tbtt_gap_at_age_cap_still_samples);
+    RUN_TEST(test_tbtt_gap_past_age_cap_rebases);
+    RUN_TEST(test_tbtt_same_tbtt_is_not_a_sample);
+    RUN_TEST(test_tbtt_interval_change_rebases);
+    RUN_TEST(test_tbtt_hostile_tsf_cannot_overflow);
+    RUN_TEST(test_tbtt_accumulator_decays_at_cap);
+    RUN_TEST(test_tbtt_is_per_bssid);
+    RUN_TEST(test_tbtt_jitter_needs_two_samples);
+    RUN_TEST(test_tbtt_end_to_end_from_parsed_frames);
 }

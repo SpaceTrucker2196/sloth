@@ -4,6 +4,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "beacon_snoop.h"
 #include "captive_portal.h"
 #include "sensors.h"
 #include "bandwidth.h"
@@ -646,6 +647,15 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         /* Additive (#77): IE-ordering fingerprint; 0 = not decoded. */
         kv_int(buf, LINEBUF, &off, "ie_order_hash",  (long long)e->fp.ie_order_hash);
         kv_int(buf, LINEBUF, &off, "ie_order_count", e->fp.ie_order_count);
+        /* Additive (#77): beacon TBTT jitter — stddev of the AP's own
+         * medium-access deferral, in µs on the AP's clock. 0 samples
+         * means the BSSID was heard once, or on the managed-mode path
+         * that carries no timestamp; the sample count says which. */
+        uint32_t tbtt_sd = 0;
+        (void)beacon_tbtt_jitter(&e->tbtt, &tbtt_sd, NULL);
+        kv_int(buf, LINEBUF, &off, "tbtt_jitter_us",      (long long)tbtt_sd);
+        kv_int(buf, LINEBUF, &off, "tbtt_jitter_samples", (long long)e->tbtt.samples);
+        kv_int(buf, LINEBUF, &off, "tbtt_jitter_resets",  (long long)e->tbtt.resets);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
         /* QBSS Load — AP self-reported occupancy (omitted when the IE

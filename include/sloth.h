@@ -956,6 +956,42 @@ typedef struct {
     int     count;                 /* entries populated (≤ SAMPLES) */
 } rssi_ring_t;
 
+/* ── Beacon TBTT jitter accumulator (#77) ────────────────────
+ *
+ * Rolling variance, per BSSID, of the residual between the TSF delta
+ * observed across two beacons and the nearest whole multiple of the
+ * beacon interval.
+ *
+ * An AP schedules its beacons at TBTTs that are exact multiples of the
+ * Beacon Interval (IEEE 802.11-2020 §11.1.3; Beacon Interval is in TU,
+ * §9.4.1.3, 1 TU = 1024 µs) and stamps each beacon body with its own
+ * TSF timer value at transmission (beacon frame body order 1,
+ * §9.3.3.2; field §9.4.1.10). The residual is therefore the AP's own
+ * medium-access deferral, measured on the *transmitter's* clock — it
+ * survives a receiver with no radiotap TSFT, a hopping radio, and lost
+ * frames, none of which a receive-timestamp measure does.
+ *
+ * The sums are signed because the residual is. The baseline beacon
+ * carried its own unknown deferral d0, so every later residual is
+ * (d_n − d0); that constant offset cancels in the standard deviation,
+ * which is why the stddev is the quantity worth publishing and the
+ * mean is not.
+ *
+ * No verdict lives here. This is the measurement only — see
+ * docs/views/beacons.md for why no threshold ships with it. */
+#define TBTT_JITTER_MIN_SAMPLES 2
+#define TBTT_JITTER_MAX_SAMPLES 1024
+
+typedef struct {
+    uint64_t last_tsf;     /* baseline the next residual is measured from */
+    uint16_t bi_tu;        /* beacon interval the baseline was taken at */
+    uint8_t  have_last;    /* baseline on file — last_tsf == 0 is legal */
+    uint32_t samples;
+    int64_t  sum_us;       /* Σ residual */
+    uint64_t sumsq_us;     /* Σ residual²  */
+    uint32_t resets;       /* baselines discarded: TSF reset / gap / new BI */
+} ap_beacon_timing_t;
+
 /* ── Research-corpus coverage (#73 slice 3) ──────────────────
  *
  * One row per alert kind that has fired this session, with what the
@@ -1124,6 +1160,10 @@ typedef struct {
     int8_t   rssi_min_60s;     /* lowest signal seen in last 60s (dBm, 0 = unseen) */
     int8_t   rssi_max_60s;     /* highest signal seen in last 60s (dBm, 0 = unseen) */
     rssi_ring_t rssi_ring;     /* raw samples feeding rssi_min/max_60s */
+    /* Beacon TBTT jitter (#77) — fed from the beacon body's Timestamp
+     * field, so it only ever populates on the monitor-mode path. Read
+     * it through beacon_tbtt_jitter(); the raw sums are not a figure. */
+    ap_beacon_timing_t tbtt;
     /* QBSS Load IE (tag 11) — AP self-reported occupancy. A free
      * congestion metric: no math, just what the AP advertises.
      * has_qbss=0 = IE absent. */
