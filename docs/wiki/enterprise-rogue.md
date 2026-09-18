@@ -1,5 +1,13 @@
 # Rogue enterprise APs — the two halves of the problem
 
+**Summary**: The two distinct WPA-Enterprise failure modes sloth surfaces: a rogue AP relaying or harvesting EAP, and a client that completed PEAP without validating the server certificate.
+
+**Sources**: `src/eap_track.c`, `src/alerts.c`, `src/views/rogue_radius.c`, `docs/views/rogue-radius.md`, `docs/views/alerts.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issues:** [#31](https://github.com/SpaceTrucker2196/sloth/issues/31),
 [#65](https://github.com/SpaceTrucker2196/sloth/issues/65) ·
 **Alerts:** `ROGUE_RADIUS`, `PEAP_NO_SERVER_CERT` ·
@@ -164,7 +172,7 @@ enterprise AP, which is the population the CVE actually affects.
   EAP-TLS packet format, the Flags octet and fragmentation.
 - IEEE 802.1X-2020 — the exchange sequence this rule observes.
 
-## See also
+## Related pages
 
 - [`docs/views/rogue-radius.md`](../views/rogue-radius.md) — the view.
 - [`docs/views/alerts.md`](../views/alerts.md) — the rule table.

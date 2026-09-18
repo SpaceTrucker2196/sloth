@@ -6,6 +6,14 @@ type: feature
 
 # MQTT observability
 
+**Summary**: How sloth parses MQTT CONNECT / CONNACK traffic on TCP/1883, what it retains from each broker handshake, and when repeated failures become a brute-force signal.
+
+**Sources**: `src/mqtt_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 MQTT is the dominant IoT pub/sub protocol. Brokers default to
 TCP/1883 cleartext; the TLS variant TCP/8883 is opaque past the
 handshake. v3.1.1 is the most-deployed version; v3.1 lingers on

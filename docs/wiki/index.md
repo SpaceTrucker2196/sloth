@@ -1,5 +1,13 @@
 # Wiki index
 
+**Summary**: Table of contents for the repo-side sloth wiki, organized by concept so the GitHub wiki can be populated from the canonical documentation kept in-tree.
+
+**Sources**: `docs/wiki/*.md`, `docs/views/*.md`, `docs/CLAUDE.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 Table of contents for the sloth wiki. Pages are concept-oriented; raw
 per-view documentation lives in `../views/` and is treated as immutable
 source material.
@@ -78,6 +86,8 @@ source material.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 - [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
   retention tiers, MISSION §2 guardrails, query recipes.
+- [[posture-report]] — `--report` / `--report-json` shutdown summaries and their privacy boundary.
+- [[cleartext-cred-guardrail]] — why credential surfaces record exposure facts, never password material.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.
 
 ## Factory infrastructure

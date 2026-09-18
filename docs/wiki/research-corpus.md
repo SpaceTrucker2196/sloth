@@ -1,5 +1,13 @@
 # The research corpus
 
+**Summary**: How sloth turns detector citations into a committed SQLite FTS corpus, why the query layer uses exact alert-kind matching instead of FTS for alert lookups, and how the guard tests enforce coverage.
+
+**Sources**: `research/`, `research/query.c`, `tests/test_research_corpus.c`, `README.md`, `docs/views/research.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
@@ -349,3 +357,9 @@ network's gets this treatment automatically, by having no technique.
 The view key is **`[f]`**, not the `[q]` the issue proposed: `q` is the
 quit key, checked before the view switch as an absolute global. `c` and
 `f` are the only free letters.
+
+## Related pages
+
+- [[alerts]] — the detector catalogue that consumes these citations.
+- [[jsonl-schema]] — the emitted records the corpus can help explain after the fact.
+- [[docs-drift-judge]] — the documentation-side sibling that checks prose stays aligned with source.

@@ -5,6 +5,14 @@ description: --report / --report-json write a session summary at exit
 
 # Posture report export
 
+**Summary**: What the shutdown-time posture report exports, how its Markdown and JSON variants differ from the live sinks, and which privacy guardrails constrain the artifact.
+
+**Sources**: `src/posture.c`, `src/main.c`, `README.md`, `RELEASE_v1.5.0.md`, `docs/views/alerts.md`, `docs/views/devices.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Skill**: post-hoc summary of everything sloth observed during a
 session. Not a live view — one file at shutdown.
 
@@ -49,4 +57,5 @@ sign-off document."
 
 - [[alerts]] — where the ATT&CK tag on each alert comes from.
 - [[jsonl-schema]] — the streaming event log the report summarises.
+- [[sqlite-schema]] — the retained state the report can compare across survey sessions.
 - [[cleartext-cred-guardrail]] — the "no password field, ever" rule.

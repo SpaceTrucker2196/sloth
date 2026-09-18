@@ -6,6 +6,14 @@ type: feature
 
 # SSH observability
 
+**Summary**: How sloth uses the cleartext SSH banner exchange as a passive connection-count signal and why repeated banners are enough to detect brute-force tooling on TCP/22.
+
+**Sources**: `src/ssh_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 SSH runs on TCP/22 and is the universal remote-shell substrate.
 The wire protocol begins with a cleartext banner exchange
 (RFC 4253 §4.2) before any key exchange happens — that's the
@@ -116,7 +124,7 @@ surprise-free for noisy laptops behind NAT.
   direction.
 - **Tunnelled-protocol detection.** Some C2 frameworks tunnel
   over SSH. The connection-byte-cadence + beacon detection
-  ([[beaconing]]) catches that pattern at the higher layer;
+  ([[beacon-detection]]) catches that pattern at the higher layer;
   SSH-specific tunnel detection isn't planned.
 
 ## References

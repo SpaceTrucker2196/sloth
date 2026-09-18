@@ -6,6 +6,14 @@ type: feature
 
 # SMB observability
 
+**Summary**: How sloth reads the SMB negotiate handshake on ports 139/445, distinguishes SMB1 from SMB2+, and surfaces any SMB1 use as a high-confidence legacy-risk alert.
+
+**Sources**: `src/smb_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 SMB (Server Message Block) is the Windows file-share, named-pipe,
 and printer protocol. It lives on TCP/445 (direct, no NetBIOS
 framing) and TCP/139 (with the NetBIOS Session Service framing

@@ -14,6 +14,8 @@ file.
 
 **Sources**: `src/updater.c`, `examples/updater/check-latest.sh`.
 
+**Last updated**: 2026-09-18.
+
 ---
 
 ## Schema

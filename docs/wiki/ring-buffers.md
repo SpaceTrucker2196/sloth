@@ -6,6 +6,14 @@ type: architecture
 
 # Ring-buffer architecture
 
+**Summary**: The bounded-history data structure pattern shared across sloth's protocol logs, event logs, and synthetic detector tables, and the invariants each implementation is expected to preserve.
+
+**Sources**: `include/sloth.h`, `src/dns_log.c`, `src/tls_log.c`, `src/quic_log.c`, `src/http_log.c`, `src/ntp_log.c`, `src/icmp_log.c`, `src/eapol_log.c`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 The per-protocol log files
 (`src/dns_log.c`, `src/tls_log.c`, `src/quic_log.c`,
 `src/http_log.c`, `src/ntp_log.c`, `src/icmp_log.c`) and the more

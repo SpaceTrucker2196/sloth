@@ -6,6 +6,14 @@ type: feature
 
 # BGP observability
 
+**Summary**: How sloth passively tracks BGP OPEN / KEEPALIVE / UPDATE / NOTIFICATION traffic on TCP/179 and turns bursty NOTIFICATIONs into a routing-instability alert.
+
+**Sources**: `src/bgp_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 BGP-4 (RFC 4271) is the inter-domain routing protocol that wires
 the internet together — and, increasingly, the protocol large
 enterprises run inside the data centre to glue together top-of-rack

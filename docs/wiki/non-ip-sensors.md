@@ -12,13 +12,15 @@ decision framework, not a commitment: it exists so future "add BLE" / "add
 ADS-B" requests are judged consistently instead of arriving as unrelated
 one-offs.
 
+**Sources**: `MISSION.md`, `ROADMAP.md`, `README.md`, `docs/wiki/wifi-sigint.md`.
+
 **Depends on**: [[architecture]] and the sensor abstraction (issue #28). No
 family below should be bolted directly onto the Wi-Fi or IP capture paths —
 each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-07-04.
+**Last updated**: 2026-09-18.
 
 ---
 

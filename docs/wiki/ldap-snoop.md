@@ -6,6 +6,14 @@ type: feature
 
 # LDAP observability
 
+**Summary**: How sloth observes LDAP bind and search traffic, normalizes request/response direction, and spots the search floods typical of Active Directory reconnaissance tools.
+
+**Sources**: `src/ldap_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 LDAP is the directory protocol Active Directory speaks. Domain
 controllers expose it on TCP/389 (default) and TCP/3268 (Global
 Catalog). Sloth's first pass at LDAP visibility is narrow: detect

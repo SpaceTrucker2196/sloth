@@ -1,5 +1,13 @@
 # Action frames and the MFP era
 
+**Summary**: Why action-frame telemetry matters after PMF, what sloth decodes from the category space, and how the SA-Query, BTM, CSA, and RRM detectors fit together.
+
+**Sources**: `src/action_snoop.c`, `src/alerts.c`, `docs/views/deauth.md`, `docs/views/alerts.md`, `research/ieee/802.11-2020-9.6.14.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issue:** [#76](https://github.com/SpaceTrucker2196/sloth/issues/76) ·
 **Code:** [`src/action_snoop.c`](../../src/action_snoop.c) ·
 **Surfaces in:** `SA_QUERY_FLOOD`, `MFP_UNPROTECTED`, and the four
@@ -169,7 +177,7 @@ never heard beacon, a Public Action frame, a group-addressed frame, and
 a legitimate three-frame SA-Query exchange. A capture from a lab rig
 running `mdk4` would exercise none of them.
 
-## See also
+## Related pages
 
 - [[btm-abuse]] — the 802.11v steering detector this sits beside
 - [[fragattacks]] — the other family that lives on this surface

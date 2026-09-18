@@ -1,5 +1,13 @@
 # Captive-portal interception
 
+**Summary**: How sloth detects captive-portal interception by comparing known connectivity-check probes and responses against the exact byte patterns modern operating systems expect.
+
+**Sources**: `src/captive_portal.c`, `src/http_log.c`, `src/alerts.c`, `docs/views/http.md`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issue:** [#69](https://github.com/SpaceTrucker2196/sloth/issues/69) ·
 **Alert:** `ALERT_TYPE_CAPTIVE_PORTAL` · **Surfaces in:** `[h]` HTTP,
 `[v]` Alerts
@@ -133,7 +141,7 @@ eleven-step addition.
 - [CISA — Securing Wireless Networks](https://www.cisa.gov/news-events/news/securing-wireless-networks)
   — rogue-AP guidance calling out portal capture.
 
-## See also
+## Related pages
 
 - [`docs/views/http.md`](../views/http.md) — the `[h]` view.
 - [`docs/wiki/btm-abuse.md`](btm-abuse.md) — one way a client gets moved

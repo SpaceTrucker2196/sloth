@@ -1,5 +1,13 @@
 # Wiki log
 
+**Summary**: Append-only maintenance log for repo-side wiki operations, recording what pages were added or updated and what source material each change drew from.
+
+**Sources**: `docs/CLAUDE.md`, `docs/wiki/index.md`, `docs/wiki/*.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 Append-only record of wiki operations. Newest entries at the bottom.
 
 ---
@@ -401,3 +409,26 @@ requires detectors to cite theirs; the measurement is spec-grounded,
 the attribution is not. No alert rule, no TUI row, no signature row in
 `tool_fingerprint.c`, and no `--db` column (a schema bump invalidates
 every prior database file — the `phy_confirmed`/#60f precedent).
+
+---
+
+## 2026-09-18 — Wiki population pass
+
+**Source**: `docs/wiki/*.md`, `docs/CLAUDE.md`, `README.md`, `RELEASE_v1.5.0.md`, `MISSION.md`.
+
+**Doc updates**: standardized `**Summary**` / `**Sources**` /
+`**Last updated**` blocks across the remaining wiki pages, renamed the
+older `## See also` sections to `## Related pages`, fixed broken
+cross-links (`[[beacon-detection]]`, the Connections view link), expanded
+[[posture-report]], and added [[cleartext-cred-guardrail]] to cover the
+"username yes, password never" boundary already enforced in code.
+
+**Index updates**: [[index]] now lists [[posture-report]] and
+[[cleartext-cred-guardrail]] under "UI and infrastructure".
+
+**Why**: the repo-side wiki had the content, but not consistently in its
+own declared shape. Several newer pages were missing the source/summary
+metadata the maintenance guide requires, one important reporting page was
+not in the table of contents, and the posture-report page linked to a
+guardrail page that did not exist. This pass makes `docs/wiki/` a
+cleaner source for populating the actual GitHub wiki.

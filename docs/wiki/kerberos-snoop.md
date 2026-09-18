@@ -6,6 +6,14 @@ type: feature
 
 # Kerberos observability
 
+**Summary**: How sloth reads Kerberos message types on TCP/UDP 88, aggregates pre-authentication failures, and flags the burst shape associated with password spraying against a KDC.
+
+**Sources**: `src/kerb_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 Kerberos is the authentication protocol behind every Active
 Directory environment. Clients exchange messages with a Key
 Distribution Center (KDC, typically the domain controller) on

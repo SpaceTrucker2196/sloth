@@ -1,5 +1,13 @@
 # FragAttacks
 
+**Summary**: Why the FragAttacks family maps to several separate passive detectors in sloth, what each one can and cannot prove from monitor-mode traffic, and where the alert thresholds come from.
+
+**Sources**: `src/fragattack.c`, `src/alerts.c`, `src/views/fragattack.c`, `docs/views/fragattack.md`, `docs/views/alerts.md`, `research/papers/fragattacks-usenix2021.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 Mathy Vanhoef, *Fragment and Forge: Breaking Wi-Fi Through Frame
 Aggregation and Fragmentation*, USENIX Security 2021.
 [Paper](https://papers.mathyvanhoef.com/usenix2021.pdf) ·
@@ -433,7 +441,7 @@ against the specification, not against what the tool actually puts on
 the air. The `needs-pcap-fixture` label on #75 means exactly that —
 wanted as follow-up validation, not blocking.
 
-## See also
+## Related pages
 
 - [[captive-portal]] — the other detector whose false-positive story is the whole design
 - `docs/views/alerts.md` — the rule table rows

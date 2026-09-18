@@ -6,6 +6,14 @@ type: feature
 
 # RDP observability
 
+**Summary**: How sloth passively fingerprints the cleartext RDP connection setup, counts repeated X.224 connection requests, and turns them into an RDP brute-force alert.
+
+**Sources**: `src/rdp_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 RDP runs on TCP/3389 and is the Windows lateral-movement and
 remote-administration substrate. The connection setup is cleartext
 even when CredSSP/NLA is negotiated — the TPKT envelope (RFC 1006),

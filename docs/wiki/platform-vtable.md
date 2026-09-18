@@ -29,8 +29,8 @@ type: reference
 - rtnetlink — interface enumeration, MAC, MTU, link state.
 - nl80211 — WiFi station info, RSSI, channel.
 - `/proc/net/{tcp,tcp6,udp,udp6}` — socket table.
-- `/proc/<pid>/fd/*` — inode → PID mapping (so [[connections]] can show
-  process names).
+- `/proc/<pid>/fd/*` — inode → PID mapping (so the
+  [Connections view](../views/connections.md) can show process names).
 - `INET_DIAG` netlink — per-socket RTT and retransmits.
 - sysfs — interface counters used by the bandwidth smoother.
 

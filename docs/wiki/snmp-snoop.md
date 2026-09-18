@@ -6,6 +6,14 @@ type: feature
 
 # SNMP observability
 
+**Summary**: How sloth decodes the outer SNMP BER envelope, tracks distinct community strings per source/destination pair, and treats rapid community rotation as brute-force behavior.
+
+**Sources**: `src/snmp_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 SNMP runs on UDP/161 (agent queries) and UDP/162 (traps). v1
 (RFC 1157) and v2c (RFC 1901-1908) carry the community string —
 the SNMP analogue of a password — in cleartext ASN.1 BER. v3
@@ -127,7 +135,7 @@ community / admin` — five hits trips immediately.
 - **Reflective amplification source.** UDP/161 is a classic
   reflective DDoS amplifier (GetBulk responses can be 100×
   the request size). The connection-cadence detector for that
-  belongs to the [[beaconing]] / amplification side, not the
+  belongs to the [[beacon-detection]] / amplification side, not the
   SNMP observable per se.
 
 ## References

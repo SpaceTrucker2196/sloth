@@ -1,5 +1,13 @@
 # Tool fingerprints — the mechanism, and two unverified rows
 
+**Summary**: The AP-signature matcher behind KARMA alert enrichment, why provenance matters as much as field matches, and how sloth marks unverified rows without pretending they are ground truth.
+
+**Sources**: `src/tool_fingerprint.c`, `src/alerts.c`, `docs/views/alerts.md`, `docs/views/karma.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issue:** [#68](https://github.com/SpaceTrucker2196/sloth/issues/68) ·
 **Code:** [`src/tool_fingerprint.c`](../../src/tool_fingerprint.c) ·
 **Surfaces in:** `ALERT_TYPE_KARMA_AP`
@@ -255,7 +263,7 @@ looked like coverage and been inert. A single-flag row also cannot tell
 tested through `tool_fingerprint_match_table()` with a synthetic
 two-flag row.
 
-## See also
+## Related pages
 
 - [`docs/views/karma.md`](../views/karma.md) — the `[y]` view.
 - [`docs/views/alerts.md`](../views/alerts.md) — `KARMA_AP`.

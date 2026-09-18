@@ -6,6 +6,14 @@ type: feature
 
 # IPv6 NDP — rogue RA detection
 
+**Summary**: How sloth tracks IPv6 Router Advertisements, what state it retains from each RA, and why multiple non-zero-lifetime routers on one segment are treated as a critical finding.
+
+**Sources**: `src/ndp_snoop.c`, `src/alerts.c`, `docs/views/alerts.md`, `README.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 The Neighbor Discovery Protocol (RFC 4861) replaces ARP, ICMP Router
 Discovery, and ICMP Redirect for IPv6. It's the LAN-side control
 plane: hosts use it to find routers, find each other, and detect

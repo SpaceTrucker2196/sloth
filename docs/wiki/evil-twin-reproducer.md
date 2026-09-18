@@ -1,5 +1,13 @@
 # Evil-twin reproducer
 
+**Summary**: A live-fire scapy harness for replaying each evil-twin detection layer against a running sloth instance without turning those captures into unit-test fixtures.
+
+**Sources**: `docs/views/twins.md`, `docs/views/deauth.md`, `docs/views/eapol.md`, `docs/wiki/btm-abuse.md`, `docs/wiki/enterprise-rogue.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 scapy snippets for replaying each detection layer against a running
 sloth instance. **Live testing only** — none of this is wired into the
 unit test suite (sloth's parser tests are hand-crafted byte arrays per
@@ -122,7 +130,7 @@ sendp(beacon(real, "Home-Wifi"), iface="wlan1mon", inter=1.0, count=10)
 Expected: no `EVIL_TWIN*` alerts, no rows in `[x] Twins`. If anything
 fires here, that's a regression in one of the rules.
 
-## See also
+## Related pages
 
 - [twins](../views/twins.md) — the materialised episode view.
 - [beacons](../views/beacons.md) — flag glyphs (`!@#*~`) on twin-cluster

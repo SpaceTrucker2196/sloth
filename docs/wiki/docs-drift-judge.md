@@ -6,6 +6,14 @@ type: factory
 
 # docs-drift judge
 
+**Summary**: The advisory GitHub Action that asks an LLM to compare per-view docs with their source files and report likely drift without blocking CI.
+
+**Sources**: `.github/workflows/docs-drift.yml`, `.github/scripts/docs_drift.py`, `.github/scripts/docs_drift_prompt.md`, `docs/views/README.md`, `docs/CLAUDE.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 A GitHub Action that asks an LLM judge whether each
 `(src/views/X.c, docs/views/X.md)` pair is still in sync. Advisory
 only — the action never fails the build.

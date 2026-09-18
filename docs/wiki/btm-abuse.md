@@ -1,5 +1,13 @@
 # BTM abuse — the forced roam that leaves no deauth
 
+**Summary**: How 802.11v BSS Transition Management can force a roam without a deauth frame, and the threshold sloth uses to distinguish abusive steering from ordinary controller behavior.
+
+**Sources**: `src/action_snoop.c`, `src/alerts.c`, `src/posture.c`, `docs/views/deauth.md`, `docs/views/alerts.md`, `research/ieee/802.11-2020-9.6.14.md`, `research/mitre/T1498.md`.
+
+**Last updated**: 2026-09-18.
+
+---
+
 **Issue:** [#59](https://github.com/SpaceTrucker2196/sloth/issues/59) ·
 **Alert:** `ALERT_TYPE_BTM_ABUSE` · **View:** `[a]` Deauth ·
 **MITRE:** [T1498](https://attack.mitre.org/techniques/T1498/)
@@ -192,7 +200,7 @@ does **not** help when:
   carries no beacon interval. Comparing addr2 against addr3 would be the
   meaningful forged-TA check and is proposed as a follow-up.
 
-## See also
+## Related pages
 
 - [`docs/views/deauth.md`](../views/deauth.md) — the view.
 - [`docs/views/alerts.md`](../views/alerts.md) — the rule table.
