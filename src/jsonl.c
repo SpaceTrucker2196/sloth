@@ -630,6 +630,12 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "has_wps",    e->has_wps ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "wps_state",  e->wps_state);
         kv_int(buf, LINEBUF, &off, "wps_locked", e->wps_locked);
+        /* Additive (#82): Config Methods bitmap / Device Password ID.
+         * 0 = not observed for both; 0x0004 on the latter means the AP
+         * is advertising an active WPS Push-Button session right now.
+         * Not sticky — reflects the most recent beacon only. */
+        kv_int(buf, LINEBUF, &off, "wps_config_methods", e->wps_config_methods);
+        kv_int(buf, LINEBUF, &off, "wps_device_pwd_id",  e->wps_device_pwd_id);
         /* Additive (#77): WPS Manufacturer / Model Name / Model Number /
          * Serial Number, when the beacon's WPS IE leaks them. "" when
          * absent, same convention as `vendor` above. */

@@ -602,6 +602,15 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                             for (int z = 0; z < 16; z++)
                                 if (adata[z] != 0) { all_zero = 0; break; }
                             if (all_zero) uuid_e_zero_seen = 1;
+                        } else if (aid == 0x1008 && alen >= 2) {
+                            /* Config Methods bitmap */
+                            rsn_out->wps_config_methods =
+                                (uint16_t)((adata[0] << 8) | adata[1]);
+                        } else if (aid == 0x1012 && alen >= 2) {
+                            /* Device Password ID. 0x0004 = Push Button
+                             * (PBC) — see the struct comment. */
+                            rsn_out->wps_device_pwd_id =
+                                (uint16_t)((adata[0] << 8) | adata[1]);
                         } else if (aid == 0x1021 && alen >= 1) {
                             /* Manufacturer */
                             wps_attr_str(rsn_out->wps_manufacturer,
@@ -1014,6 +1023,10 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 if (rsn->has_wps) g_aps[i].has_wps = 1;
                 if (rsn->wps_state)  g_aps[i].wps_state  = rsn->wps_state;
                 if (rsn->wps_locked) g_aps[i].wps_locked = rsn->wps_locked;
+                /* Not sticky, unlike the rest of this block: a live
+                 * session flag must be able to clear (#82). */
+                g_aps[i].wps_config_methods = rsn->wps_config_methods;
+                g_aps[i].wps_device_pwd_id  = rsn->wps_device_pwd_id;
                 if (rsn->wps_manufacturer[0])
                     snprintf(g_aps[i].wps_manufacturer,
                              sizeof(g_aps[i].wps_manufacturer),
@@ -1150,6 +1163,8 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].has_wps    = rsn->has_wps;
         g_aps[slot].wps_state  = rsn->wps_state;
         g_aps[slot].wps_locked = rsn->wps_locked;
+        g_aps[slot].wps_config_methods = rsn->wps_config_methods;
+        g_aps[slot].wps_device_pwd_id  = rsn->wps_device_pwd_id;
         snprintf(g_aps[slot].wps_manufacturer,
                  sizeof(g_aps[slot].wps_manufacturer),
                  "%s", rsn->wps_manufacturer);

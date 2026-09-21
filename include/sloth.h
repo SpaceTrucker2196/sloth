@@ -1122,6 +1122,13 @@ typedef struct {
      * candidate; locked -> attempts will be refused. */
     int      wps_state;
     int      wps_locked;
+    /* Config Methods bitmap / Device Password ID (#82) — see
+     * beacon_snoop.h::beacon_rsn_t for the attribute IDs and why 0
+     * means "not observed" for both. Device Password ID 0x0004 means
+     * the AP is advertising an active WPS Push-Button session right
+     * now; not sticky, so it clears once the beacon stops carrying it. */
+    uint16_t wps_config_methods;
+    uint16_t wps_device_pwd_id;
     /* WPS vendor-string leakage (#77) — see beacon_snoop.h::beacon_rsn_t
      * for the rationale. Monitor-mode only: like neighbors[] above, this
      * is not mirrored onto wifi_ap_t (the managed-mode scan struct). */

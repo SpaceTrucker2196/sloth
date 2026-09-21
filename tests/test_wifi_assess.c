@@ -50,6 +50,24 @@ static void test_wps_flagged_clean_mfp(void) {
     int n = wifi_assess(&s, f, 16);
     ASSERT(has_title(f, n, "WPS enabled"));
     ASSERT(!has_title(f, n, "Management frames unprotected"));
+    ASSERT(!has_title(f, n, "PBC session active"));   /* idle, no attribute set */
+}
+
+/* Device Password ID 0x0004 (#82) is a live pairing-window signal, not
+ * a standing posture — it gets its own HIGH finding distinct from the
+ * general MED "WPS enabled" line above. */
+static void test_wps_pbc_active_flagged_high(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    set_ap(&s, 0, "Home", "WPA2", "PSK", 2, 1);
+    s.beacon_aps[0].wps_device_pwd_id = 0x0004;
+    s.beacon_count = 1;
+    wifi_finding_t f[16];
+    int n = wifi_assess(&s, f, 16);
+    ASSERT(has_title(f, n, "WPS enabled"));
+    ASSERT(has_title(f, n, "PBC session active"));
+    for (int i = 0; i < n; i++)
+        if (strstr(f[i].title, "PBC"))
+            ASSERT_STR(f[i].severity, "HIGH");
 }
 
 static void test_clean_ap_no_findings(void) {
@@ -65,5 +83,6 @@ void run_wifi_assess_tests(void) {
     RUN_TEST(test_open_and_wep_flagged_high);
     RUN_TEST(test_mfp_off_and_transition);
     RUN_TEST(test_wps_flagged_clean_mfp);
+    RUN_TEST(test_wps_pbc_active_flagged_high);
     RUN_TEST(test_clean_ap_no_findings);
 }

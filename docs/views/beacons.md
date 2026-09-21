@@ -49,6 +49,41 @@ a new field on an existing SQLite table needs a schema version bump that
 invalidates every prior database file, and that cost isn't worth paying
 for a display/forensic nuance already visible in the JSONL log.
 
+## WPS Config Methods / Device Password ID — PBC session (#82)
+
+The WPS IE's Config Methods bitmap and Device Password ID attributes
+(WFA WPS 2.0 §12, IDs `0x1008`/`0x1012`) are present on nearly every
+hostapd-class beacon, not just during an active pairing session: at
+rest, Device Password ID reads `0x0000` (Default/PIN); while the AP is
+in an active WPS **Push-Button Configuration** session, it changes to
+`0x0004`. That transition is the useful part — it names a real,
+unauthenticated, physical-proximity pairing window that any device in
+range can join, open right now rather than a standing posture.
+
+The detail screen shows `[PBC ACTIVE — open pairing window]` on the
+`WPS:` line while the most recent beacon still carries `0x0004`. Unlike
+the vendor-string attributes above, this is **not sticky**: it tracks
+the live state of the beacon and clears the moment the AP stops
+advertising it, the same way `pending_csa_channel` clears when a
+Channel Switch Announcement stops repeating. A latched indicator that
+never turns off after one real pairing window would be worse than no
+indicator. `wifi_assess()` raises a separate HIGH "WPS PBC session
+active" finding distinct from the general MED "WPS enabled" line.
+
+Additive JSONL fields on the `beacon` record: `wps_config_methods`
+(raw bitmap) and `wps_device_pwd_id` (raw value; `0x0004` = PBC). Both
+`0` means "not observed" — a beacon that omits the attribute and one
+that sends the literal idle/Default value are indistinguishable, and
+read the same way: no active exposure evidenced. Not persisted to
+`--db`, same reasoning as the vendor strings above.
+
+Left open (needs a lab AP or real capture, per `agents/AGENTS.md`'s "no
+pcap fixtures" rule for anything beyond spec-defined TLV parsing):
+lockout-cycling and PBC-overlap/flood thresholds, and any curated
+vendor-RNG watchlist — none of those have a citable numeric basis this
+environment can verify, so no alert rule or threshold ships with this
+slice, only the measurement.
+
 ## IE-ordering fingerprint (#77)
 
 Every beacon's element list is hashed by *identity and order*: the

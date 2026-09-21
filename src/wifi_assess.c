@@ -128,6 +128,14 @@ int wifi_assess(const sloth_state_t *s, wifi_finding_t *out, int max) {
             add(out, &n, max, "MED", "WPS enabled", ssid, bss,
                 a->wps_locked == 2 ? "WPS present (locked)"
                                    : "WPS PIN brute-force surface");
+        /* Device Password ID 0x0004 = Push Button (#82): an open,
+         * unauthenticated pairing window, live right now rather than
+         * a standing posture — worth a separate, higher-severity line
+         * from the general "WPS enabled" finding above. */
+        if (a->wps_device_pwd_id == 0x0004)
+            add(out, &n, max, "HIGH", "WPS PBC session active", ssid, bss,
+                "AP is advertising an active Push-Button pairing "
+                "window — any device in range can join it now");
     }
     return n;
 }

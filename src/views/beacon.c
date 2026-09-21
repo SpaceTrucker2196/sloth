@@ -127,6 +127,13 @@ static void draw_beacon_detail(const sloth_state_t *s) {
             tui_heat(1.0);
             TPRINT("  [UNLOCKED — PixieDust / WPS-PIN candidate]");
         }
+        /* Device Password ID 0x0004 = Push Button (#82). Live, not
+         * sticky — only shown while the current beacon still carries
+         * it, i.e. the pairing window is open right now. */
+        if (ap->wps_device_pwd_id == 0x0004) {
+            tui_heat(1.0);
+            TPRINT("  [PBC ACTIVE — open pairing window]");
+        }
     } else {
         tui_normal(); TPRINT("-");
     }

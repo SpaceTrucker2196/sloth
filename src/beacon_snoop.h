@@ -23,6 +23,23 @@ typedef struct {
     int  has_wps;       /* Wi-Fi Protected Setup IE present */
     int  wps_state;     /* 0=unknown 1=NotConfigured 2=Configured */
     int  wps_locked;    /* 0=unknown 1=unlocked       2=locked    */
+    /* Config Methods bitmap and Device Password ID (#82, WFA WPS 2.0
+     * §12, attribute IDs 0x1008 / 0x1012 — same TLV table as the
+     * Manufacturer/Model/Serial attributes below). hostapd-class
+     * beacons carry Device Password ID on every beacon, not just
+     * during an active session: 0x0000 (Default/PIN) at rest, 0x0004
+     * (Push Button) for the walk-time window a real WPS PBC pairing
+     * is in progress. That one value is the reason to track this at
+     * all — it names a live, unauthenticated physical-proximity
+     * pairing window, the same air pattern `mdk4 w` abuses by forcing
+     * it open continuously. 0 for both fields means "not observed":
+     * a beacon that omits the attribute and one that sends the
+     * literal Default/empty value are indistinguishable, and read the
+     * same way — no active exposure evidenced. Unlike the vendor
+     * strings below, not sticky: overwritten every beacon so the flag
+     * clears when the session ends. */
+    uint16_t wps_config_methods;
+    uint16_t wps_device_pwd_id;
     /* WPS vendor-string leakage (#77): Manufacturer / Model Name / Model
      * Number / Serial Number attributes inside the WPS IE (WFA WPS 2.0
      * §12, attribute IDs 0x1021/0x1023/0x1024/0x1042). Many SOHO routers

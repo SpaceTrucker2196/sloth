@@ -931,6 +931,109 @@ static void test_record_wps_vendor_strings_preserved_on_bare_rerecord(void) {
     ASSERT_STR(s.beacon_aps[0].wps_manufacturer, "Netgear");
 }
 
+/* Config Methods (0x1008) and Device Password ID (0x1012) — #82, same
+ * WFA WPS 2.0 §12 attribute table as the vendor strings above. Both are
+ * 2-byte big-endian fields. Device Password ID 0x0004 is Push Button. */
+static void test_parse_wps_config_methods_and_pwd_id(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 16,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x08, 0x00, 0x02, 0x00, 0x80, /* Config Methods: PushButton bit */
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x04, /* Device Password ID: PBC */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_EQ(rsn.wps_config_methods, 0x0080);
+    ASSERT_EQ(rsn.wps_device_pwd_id,  0x0004);
+}
+
+/* WPS present but neither attribute sent — the resting state most
+ * beacons are in outside an active session. Must read as 0, the same
+ * "not observed" sentinel as an idle Default/PIN password ID, per the
+ * struct comment. */
+static void test_parse_wps_config_methods_and_pwd_id_absent(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 0x0e,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x44, 0x00, 0x01, 0x02,
+        0x10, 0x57, 0x00, 0x01, 0x01,
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_EQ(rsn.wps_config_methods, 0);
+    ASSERT_EQ(rsn.wps_device_pwd_id,  0);
+}
+
+/* Device Password ID's own attribute is 2 bytes (WFA WPS 2.0 §12); a
+ * length of 1 is malformed and must be skipped by the `alen >= 2`
+ * guard, not read as a truncated value — the walk still has to advance
+ * past it correctly to reach nothing else in this IE. */
+static void test_parse_wps_pwd_id_short_length_ignored(void) {
+    static const uint8_t wps_ie[] = {
+        0xdd, 9,
+        0x00, 0x50, 0xf2, 0x04,
+        0x10, 0x12, 0x00, 0x01, 0x04,   /* claims 1 byte, not 2 */
+    };
+    uint8_t f[BEACON_HDR_LEN + 2 + sizeof(wps_ie)];
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[BEACON_HDR_LEN + 0] = 0x00; f[BEACON_HDR_LEN + 1] = 0;
+    memcpy(f + BEACON_HDR_LEN + 2, wps_ie, sizeof(wps_ie));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_EQ(rsn.wps_device_pwd_id, 0);
+}
+
+/* Device Password ID is a *live* session flag, not an identity string:
+ * unlike wps_manufacturer et al. (sticky — preserved across a bare
+ * re-record), it must update on every beacon and clear back to 0 once
+ * the AP's beacon stops carrying an active session, or the [PBC ACTIVE]
+ * indicator would latch on forever after one real pairing window. */
+static void test_record_wps_device_pwd_id_live_not_sticky(void) {
+    beacon_clear();
+    beacon_rsn_t rsn = {0};
+    rsn.has_wps = 1;
+    rsn.wps_config_methods = 0x0080;
+    rsn.wps_device_pwd_id  = 0x0004;   /* PBC session active */
+    beacon_record(BSSID_A, "Net", -55, 6, "WPA2", 102, &rsn);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].wps_config_methods, 0x0080);
+    ASSERT_EQ(s.beacon_aps[0].wps_device_pwd_id,  0x0004);
+
+    /* Session ends: the next beacon's WPS IE reverts to idle/Default
+     * and changes its advertised Config Methods too. */
+    beacon_rsn_t rsn2 = {0};
+    rsn2.has_wps = 1;
+    rsn2.wps_config_methods = 0x0100;
+    rsn2.wps_device_pwd_id  = 0;
+    beacon_record(BSSID_A, "Net", -55, 6, "WPA2", 102, &rsn2);
+
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].wps_config_methods, 0x0100);
+    ASSERT_EQ(s.beacon_aps[0].wps_device_pwd_id,  0);
+}
+
 static void test_record_tracks_ssid_history(void) {
     beacon_clear();
     /* Same BSSID, four different SSIDs over time. */
@@ -2660,6 +2763,10 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_wps_vendor_string_truncates_oversized);
     RUN_TEST(test_record_persists_wps_vendor_strings);
     RUN_TEST(test_record_wps_vendor_strings_preserved_on_bare_rerecord);
+    RUN_TEST(test_parse_wps_config_methods_and_pwd_id);
+    RUN_TEST(test_parse_wps_config_methods_and_pwd_id_absent);
+    RUN_TEST(test_parse_wps_pwd_id_short_length_ignored);
+    RUN_TEST(test_record_wps_device_pwd_id_live_not_sticky);
     RUN_TEST(test_record_tracks_ssid_history);
     RUN_TEST(test_record_ssid_history_fingerprints);
     RUN_TEST(test_record_persists_neighbors);
