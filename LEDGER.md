@@ -124,3 +124,4 @@
 | c5d59a5 | 2026-09-17T23:25:41Z | claude-opus-5 | 276 | 100111 | 17946395 | 382273 | 15.3001 | #80 open device-onboarding SoftAP detector (ALERT_TYPE_OPEN_SETUP_AP) |
 | a56903a | 2026-09-18T11:31:25Z | claude-opus-5 | 236 | 109078 | 15143303 | 341848 | 13.7183 | #77 — beacon TBTT jitter observable (TSF-based), JSONL-only |
 | 3f854ec | 2026-09-21T13:03:24Z | claude-opus-4-8,claude-opus-5 | 194 | 58368 | 10440826 | 2225439 | 28.9350 | release v1.8.1 |
+| 89e8ff0 | 2026-09-21T20:05:31Z | claude-opus-5 | 152 | 98481 | 7223961 | 310753 | 9.1823 | #83 F01 EAPOL-Key parser heap over-read (declared-span bounds) |
