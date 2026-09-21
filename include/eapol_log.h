@@ -45,6 +45,20 @@ void eapol_set_output_dir(const char *dir);
 /* Test introspection. */
 int  eapol_event_count(void);
 
+/* EAPOL-Key frames dropped because their lengths don't hold together
+ * (#83). Rejected frames produce no event, association or export —
+ * only this count, for capture-health stats.
+ *   TRUNCATED: the body length (EAPOL header bytes 2..3) claims more
+ *              bytes than were captured.
+ *   MALFORMED: the declared body is too short for the 95-byte key
+ *              descriptor, or Key Data Length overruns the body. */
+typedef enum {
+    EAPOL_REJECT_TRUNCATED = 0,
+    EAPOL_REJECT_MALFORMED,
+    EAPOL_REJECT_COUNT
+} eapol_reject_t;
+int  eapol_reject_count(eapol_reject_t why);
+
 /* PTK generation for (bssid, sta): the number of times sloth has
  * witnessed an M3 (key install) carrying a new ANonce for this pair,
  * distinguishing a rekey from a retransmitted M3 — see the comment at

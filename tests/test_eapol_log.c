@@ -7,6 +7,7 @@
 #include "sloth.h"
 #include "eapol_log.h"
 #include "alerts.h"
+#include "assoc_track.h"
 
 /* Build a synthetic 802.11 data frame (FromDS=1) carrying an EAPOL-Key
  * frame. We construct the lot from byte arrays — no parser feeding its
@@ -477,6 +478,333 @@ static void test_generation_not_bumped_by_m1_or_m2(void) {
     ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
 }
 
+/* ── EAPOL-Key bounds, #83 ─────────────────────────────────────────── */
+
+/* Every frame in this section is fed from an EXACT-sized heap block:
+ * malloc(dot11 hdr + LLC + n), nothing more. An oversized backing
+ * array with a shorter logical length would hide an over-read from
+ * ASan — the bytes past the span would be ours, not the allocator's
+ * redzone. */
+#define DOT11_LLC_LEN 32   /* 24-byte data header + 8-byte LLC/SNAP */
+
+static int feed_exact(const uint8_t *eapol, int n, int from_ds) {
+    uint8_t *frame = malloc((size_t)(DOT11_LLC_LEN + n));
+    if (!frame) return -1;
+    int fn = build_frame(frame, eapol, n, from_ds);
+    int r = eapol_observe_dot11(frame, fn, -50, 6);
+    free(frame);
+    return r;
+}
+
+static void set_body_len(uint8_t *eapol, int body) {
+    eapol[2] = (uint8_t)(body >> 8);
+    eapol[3] = (uint8_t)(body & 0xff);
+}
+
+static void set_kdl(uint8_t *eapol, int kdl) {
+    eapol[97] = (uint8_t)(kdl >> 8);
+    eapol[98] = (uint8_t)(kdl & 0xff);
+}
+
+#define KI_M1 ((1 << 7) | (1 << 3) | 0x02)
+#define KI_M2 ((1 << 8) | (1 << 3) | 0x02)
+
+static char g_bounds_dir[64];
+
+static void bounds_path(char *out, size_t sz, const char *leaf) {
+    snprintf(out, sz, "%s/%s", g_bounds_dir, leaf);
+}
+
+static void bounds_reset(void) {
+    char p[160];
+    bounds_path(p, sizeof(p), "eapol.22000");
+    unlink(p);
+    bounds_path(p, sizeof(p), "00aabbccddee_102030405060.pcap");
+    unlink(p);
+    eapol_clear();
+    assoc_clear();
+}
+
+static int bounds_file_exists(const char *leaf) {
+    char p[160];
+    bounds_path(p, sizeof(p), leaf);
+    struct stat st;
+    return stat(p, &st) == 0;
+}
+
+static void bounds_setup(void) {
+    snprintf(g_bounds_dir, sizeof(g_bounds_dir),
+             "/tmp/sloth_test_eapol83_%d", (int)getpid());
+    mkdir(g_bounds_dir, 0755);
+    eapol_set_output_dir(g_bounds_dir);
+}
+
+static void bounds_teardown(void) {
+    bounds_reset();
+    eapol_set_output_dir(NULL);
+    rmdir(g_bounds_dir);
+}
+
+/* Seed a valid M1 (no PMKID, so no export on its own), then feed the
+ * candidate M2 from an exact allocation. Returns 1 iff the M2 had any
+ * observable effect: a second event, an association, or a hashcat /
+ * pcap export. */
+static int m2_side_effects(const uint8_t *m2, int n) {
+    bounds_reset();
+    uint8_t m1[128];
+    int m1n = build_eapol_key(m1, KI_M1, ANONCE, NULL, NULL);
+    feed_exact(m1, m1n, /*from_ds=*/1);
+    if (eapol_event_count() != 1 || assoc_count() != 0) return -1;
+
+    feed_exact(m2, n, /*from_ds=*/0);
+    return eapol_event_count() != 1
+        || assoc_count() != 0
+        || bounds_file_exists("eapol.22000")
+        || bounds_file_exists("00aabbccddee_102030405060.pcap");
+}
+
+/* The issue's table: 95..98 passed the old `len < 95` guard and read
+ * the MIC tail / Key Data Length past the span. Sweep 0..100 with the
+ * declared body left at the full-frame value (a capture cut short). */
+static void test_key_lengths_0_to_100_truncated_capture(void) {
+    bounds_setup();
+    uint8_t full[100];
+    int fulln = build_eapol_key(full, KI_M2, SNONCE, M2_MIC, NULL);
+    ASSERT_EQ(fulln, 99);
+    full[99] = 0x00;   /* one trailing byte for n == 100 */
+
+    int bad = 0;
+    for (int n = 0; n <= 100; n++) {
+        uint8_t *m2 = malloc((size_t)(n ? n : 1));
+        memcpy(m2, full, (size_t)n);
+        int fx = m2_side_effects(m2, n);
+        int want = n >= 99;
+        /* Every short capture is an EAPOL-Key the dispatcher hands
+         * over (n >= 4) whose body claims 95 bytes it doesn't have. */
+        int want_trunc = n >= 4 && n < 99;
+        if (fx != want
+            || eapol_reject_count(EAPOL_REJECT_TRUNCATED) != want_trunc
+            || eapol_reject_count(EAPOL_REJECT_MALFORMED) != 0) {
+            fprintf(stderr, "    len %d: side effects %d, want %d\n",
+                    n, fx, want);
+            bad++;
+        }
+        free(m2);
+    }
+    ASSERT_EQ(bad, 0);
+    bounds_teardown();
+}
+
+/* Same sweep, but the declared body length agrees with the capture —
+ * a self-consistent frame too short to hold the fixed key header. */
+static void test_key_lengths_0_to_100_consistent_short_body(void) {
+    bounds_setup();
+    uint8_t full[100];
+    build_eapol_key(full, KI_M2, SNONCE, M2_MIC, NULL);
+    full[99] = 0x00;
+
+    int bad = 0;
+    for (int n = 0; n <= 100; n++) {
+        uint8_t *m2 = malloc((size_t)(n ? n : 1));
+        memcpy(m2, full, (size_t)n);
+        if (n >= 4) set_body_len(m2, n - 4);
+        int fx = m2_side_effects(m2, n);
+        int want = n >= 99;
+        int want_bad = n >= 4 && n < 99;
+        if (fx != want
+            || eapol_reject_count(EAPOL_REJECT_MALFORMED) != want_bad
+            || eapol_reject_count(EAPOL_REJECT_TRUNCATED) != 0) {
+            fprintf(stderr, "    len %d: side effects %d, want %d\n",
+                    n, fx, want);
+            bad++;
+        }
+        free(m2);
+    }
+    ASSERT_EQ(bad, 0);
+    bounds_teardown();
+}
+
+/* A valid 99-byte fixed header parses: M2 completes the handshake,
+ * lands the association, and exports. */
+static void test_key_exact_99_byte_header_parses(void) {
+    bounds_setup();
+    uint8_t m2[99];
+    int n = build_eapol_key(m2, KI_M2, SNONCE, M2_MIC, NULL);
+    ASSERT_EQ(n, 99);
+    ASSERT_EQ(m2_side_effects(m2, n), 1);
+    ASSERT_EQ(eapol_event_count(), 2);
+    ASSERT_EQ(assoc_count(), 1);
+    ASSERT(bounds_file_exists("eapol.22000"));
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 0);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(memcmp(s.eapol_events[0].mic, M2_MIC, 16), 0);
+    bounds_teardown();
+}
+
+/* Declared body says the frame is longer than what was captured. */
+static void test_key_declared_body_exceeds_capture_rejected(void) {
+    bounds_setup();
+    uint8_t m2[99];
+    build_eapol_key(m2, KI_M2, SNONCE, M2_MIC, NULL);
+    set_body_len(m2, 96);
+    ASSERT_EQ(m2_side_effects(m2, 99), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 1);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 0);
+    set_body_len(m2, 0xffff);
+    ASSERT_EQ(m2_side_effects(m2, 99), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 1);
+    bounds_teardown();
+}
+
+/* Declared body too short to hold the 95-byte key descriptor, even
+ * though enough bytes were captured. The extra captured bytes are
+ * padding, not EAPOL. */
+static void test_key_declared_body_short_of_header_rejected(void) {
+    bounds_setup();
+    uint8_t m2[104];
+    build_eapol_key(m2, KI_M2, SNONCE, M2_MIC, NULL);
+    memset(m2 + 99, 0, 5);
+    set_body_len(m2, 94);
+    ASSERT_EQ(m2_side_effects(m2, 99), 0);
+    ASSERT_EQ(m2_side_effects(m2, 104), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 1);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 0);
+    set_body_len(m2, 0);
+    ASSERT_EQ(m2_side_effects(m2, 104), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 1);
+    bounds_teardown();
+}
+
+/* Key Data Length larger than the declared body leaves room for.
+ * The old parser treated this as "no key data" and kept the frame. */
+static void test_key_data_len_exceeds_declared_body_rejected(void) {
+    bounds_setup();
+    uint8_t m1[128];
+    int n = build_eapol_key(m1, KI_M1, ANONCE, NULL, PMKID);
+    ASSERT_EQ(n, 121);
+    set_kdl(m1, 23);
+    bounds_reset();
+    ASSERT_EQ(feed_exact(m1, n, 1), 0);
+    ASSERT_EQ(eapol_event_count(), 0);
+    set_kdl(m1, 0xffff);
+    ASSERT_EQ(feed_exact(m1, n, 1), 0);
+    ASSERT_EQ(eapol_event_count(), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 2);
+    ASSERT(!bounds_file_exists("eapol.22000"));
+    bounds_teardown();
+}
+
+/* Key Data fits the capture but not the declared body: the PMKID sits
+ * in bytes the frame itself says are not EAPOL. Must not be extracted
+ * — the whole frame is inconsistent and is dropped. */
+static void test_key_data_beyond_declared_body_not_parsed(void) {
+    bounds_setup();
+    uint8_t m1[128];
+    int n = build_eapol_key(m1, KI_M1, ANONCE, NULL, PMKID);
+    set_body_len(m1, 95 + 10);   /* declares 10 bytes of key data, kdl says 22 */
+    bounds_reset();
+    ASSERT_EQ(feed_exact(m1, n, 1), 0);
+    ASSERT_EQ(eapol_event_count(), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 1);
+    ASSERT(!bounds_file_exists("eapol.22000"));
+    bounds_teardown();
+}
+
+/* Key Data Length smaller than the declared body: the tail of the body
+ * is unparsed but inside the frame's own span. Tolerated — the fixed
+ * fields are sound — but nothing past kdl is read as a KDE. */
+static void test_key_data_len_short_of_body_tolerated(void) {
+    eapol_clear();
+    uint8_t m1[128];
+    int n = build_eapol_key(m1, KI_M1, ANONCE, NULL, PMKID);
+    set_kdl(m1, 0);
+    ASSERT_EQ(feed_exact(m1, n, 1), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].has_pmkid, 0);
+}
+
+/* A KDE whose own length overruns Key Data stops the walk: the frame
+ * is kept (ANonce is sound) but no PMKID is invented from it. */
+static void test_kde_len_overrun_extracts_nothing(void) {
+    eapol_clear();
+    uint8_t m1[128];
+    int n = build_eapol_key(m1, KI_M1, ANONCE, NULL, PMKID);
+    m1[100] = 0x30;   /* KDE length 48 inside 22 bytes of key data */
+    ASSERT_EQ(feed_exact(m1, n, 1), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].has_pmkid, 0);
+}
+
+/* Trailing capture bytes (FCS, padding) after the declared EAPOL span
+ * are not EAPOL content: the hashcat MP=02 EAPOL field is exactly the
+ * declared frame, 99 bytes = 198 hex chars. */
+static void test_key_trailing_bytes_not_exported(void) {
+    bounds_setup();
+    bounds_reset();
+    uint8_t m1[128];
+    int m1n = build_eapol_key(m1, KI_M1, ANONCE, NULL, NULL);
+    feed_exact(m1, m1n, 1);
+    uint8_t m2[103];
+    build_eapol_key(m2, KI_M2, SNONCE, M2_MIC, NULL);
+    m2[99] = 0xde; m2[100] = 0xad; m2[101] = 0xbe; m2[102] = 0xef;
+    ASSERT_EQ(feed_exact(m2, 103, 0), 1);
+    ASSERT_EQ(eapol_event_count(), 2);
+
+    char body[4096], p[160];
+    bounds_path(p, sizeof(p), "eapol.22000");
+    ASSERT(slurp_file(p, body, sizeof(body)) > 0);
+    ASSERT(strstr(body, "WPA*02*") != NULL);
+    ASSERT(strstr(body, "deadbeef") == NULL);
+    /* Fields: WPA*02*mic*bssid*sta*essid*anonce*eapol*02 — take the
+     * 8th '*'-separated field and measure it. */
+    char *f = body;
+    for (int i = 0; i < 7 && f; i++) {
+        f = strchr(f, '*');
+        if (f) f++;
+    }
+    ASSERT(f != NULL);
+    if (f) {
+        char *end = strchr(f, '*');
+        ASSERT(end != NULL);
+        if (end) ASSERT_EQ((int)(end - f), 198);
+    }
+    bounds_teardown();
+}
+
+/* The health counts cover only EAPOL-Key frames we would otherwise
+ * parse: a short frame with a descriptor we don't handle (legacy RC4,
+ * type 1) is not "malformed", just not ours. eapol_clear() zeroes. */
+static void test_key_reject_counts_scoped_and_cleared(void) {
+    eapol_clear();
+    uint8_t k[99];
+    build_eapol_key(k, KI_M2, SNONCE, M2_MIC, NULL);
+    k[4] = 0x01;              /* RC4 descriptor */
+    set_body_len(k, 44);
+    ASSERT_EQ(feed_exact(k, 48, 0), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 0);
+
+    k[4] = 0x02;
+    ASSERT_EQ(feed_exact(k, 48, 0), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 1);
+    set_body_len(k, 95);
+    ASSERT_EQ(feed_exact(k, 98, 0), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 1);
+    ASSERT_EQ(eapol_event_count(), 0);
+
+    eapol_clear();
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 0);
+    ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_COUNT), 0);
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -498,4 +826,17 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_generation_is_per_pair);
     RUN_TEST(test_generation_cleared);
     RUN_TEST(test_generation_not_bumped_by_m1_or_m2);
+
+    TEST_SUITE("eapol_log: EAPOL-Key bounds (#83)");
+    RUN_TEST(test_key_lengths_0_to_100_truncated_capture);
+    RUN_TEST(test_key_lengths_0_to_100_consistent_short_body);
+    RUN_TEST(test_key_exact_99_byte_header_parses);
+    RUN_TEST(test_key_declared_body_exceeds_capture_rejected);
+    RUN_TEST(test_key_declared_body_short_of_header_rejected);
+    RUN_TEST(test_key_data_len_exceeds_declared_body_rejected);
+    RUN_TEST(test_key_data_beyond_declared_body_not_parsed);
+    RUN_TEST(test_key_data_len_short_of_body_tolerated);
+    RUN_TEST(test_kde_len_overrun_extracts_nothing);
+    RUN_TEST(test_key_trailing_bytes_not_exported);
+    RUN_TEST(test_key_reject_counts_scoped_and_cleared);
 }

@@ -203,23 +203,47 @@ static void write_handshake_pcap(const pending_t *p) {
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
 
+/* EAPOL header (version, type, body length) is 4 bytes; the RSN/WPA
+ * key descriptor is 95 bytes up to and including Key Data Length. */
+#define EAPOL_HDR_LEN        4
+#define EAPOL_KEY_FIXED_LEN 99
+
+/* Parser rejects, as negative returns. -(1 + eapol_reject_t). */
+#define PARSE_TRUNCATED (-1 - EAPOL_REJECT_TRUNCATED)
+#define PARSE_MALFORMED (-1 - EAPOL_REJECT_MALFORMED)
+
+static int g_rejects[EAPOL_REJECT_COUNT];
+
 /* Recognise an EAPOL-Key frame and decide which message number it is.
- * Returns 0 if not an EAPOL-Key frame; 1..4 for valid messages.
- * Outputs ANonce/SNonce/MIC/PMKID as appropriate.
+ * Returns 0 if not an EAPOL-Key frame we handle; 1..4 for valid
+ * messages; PARSE_TRUNCATED / PARSE_MALFORMED for an EAPOL-Key frame
+ * whose lengths don't hold together (#83). A rejected frame has no
+ * outputs worth reading.
+ * Outputs ANonce/SNonce/MIC/PMKID as appropriate, and *out_span = the
+ * EAPOL frame length the frame itself declares (4 + body length) —
+ * the only bytes that are EAPOL. Capture padding / FCS past it are not.
  *
- * keydata points at the start of the EAPOL frame (version byte). */
-static int parse_eapol_key(const uint8_t *p, int len,
+ * p points at the start of the EAPOL frame (version byte); len is the
+ * number of captured bytes from there. */
+static int parse_eapol_key(const uint8_t *p, size_t len, size_t *out_span,
                             uint8_t out_nonce[32], uint8_t out_mic[16],
                             int *out_has_pmkid, uint8_t out_pmkid[16])
 {
     *out_has_pmkid = 0;
-    if (len < 95) return 0;       /* EAPOL hdr 4 + key body up through MIC */
+    *out_span = 0;
+    if (len < EAPOL_HDR_LEN) return 0;
     /* EAPOL header. */
     /* p[0] version, p[1] type. type 3 = EAPOL-Key. */
     if (p[1] != 3) return 0;
+    /* p[2..3] body length, big-endian. Everything below is bounded by
+     * the declared span, and the declared span by the capture. */
+    size_t span = EAPOL_HDR_LEN + (size_t)((p[2] << 8) | p[3]);
+    if (span > len) return PARSE_TRUNCATED;
+    if (span <= EAPOL_HDR_LEN) return PARSE_MALFORMED;   /* no descriptor */
     /* p[4] Descriptor Type: 2 = RSN (802.11), 254 = WPA. */
     uint8_t desc = p[4];
     if (desc != 2 && desc != 254) return 0;
+    if (span < EAPOL_KEY_FIXED_LEN) return PARSE_MALFORMED;
     /* p[5..6] Key Information, big-endian. */
     uint16_t ki = (uint16_t)((p[5] << 8) | p[6]);
     int key_type    = (ki >> 3) & 1;
@@ -235,9 +259,13 @@ static int parse_eapol_key(const uint8_t *p, int len,
     /* MIC: bytes 81..96. */
     memcpy(out_mic, p + 81, 16);
 
-    /* Key Data Length: bytes 97..98 (big-endian). */
-    int kdl = (p[97] << 8) | p[98];
-    if (kdl < 0 || 99 + kdl > len) kdl = 0;
+    /* Key Data Length: bytes 97..98 (big-endian). Key Data must fit in
+     * what the declared body leaves after the fixed descriptor; a
+     * longer claim is a malformed frame, not "no key data". A shorter
+     * one leaves unparsed bytes inside the frame's own span —
+     * tolerated, and never walked as KDEs. */
+    size_t kdl = (size_t)((p[97] << 8) | p[98]);
+    if (kdl > span - EAPOL_KEY_FIXED_LEN) return PARSE_MALFORMED;
 
     /* Classify (RFC 8.5.3 / 802.11-2016 §12.7.6): *
      *   M1: KeyACK=1, MIC=0, Install=0, Secure=0
@@ -255,12 +283,12 @@ static int parse_eapol_key(const uint8_t *p, int len,
      *   Type (1B) = 0xDD, Length (1B), then OUI(3B)+DataType(1B)+Data.
      *   PMKID KDE: OUI 00:0F:AC, DataType 0x04, 16-byte PMKID. */
     if (msg == 1 && kdl >= 6 && !encrypted_d) {
-        const uint8_t *kd = p + 99;
-        int rem = kdl;
+        const uint8_t *kd = p + EAPOL_KEY_FIXED_LEN;
+        size_t rem = kdl;
         while (rem >= 2) {
             uint8_t t = kd[0];
             uint8_t l = kd[1];
-            if (2 + l > rem) break;
+            if (2 + (size_t)l > rem) break;
             if (t == 0xDD && l == 20 &&
                 kd[2] == 0x00 && kd[3] == 0x0f && kd[4] == 0xac &&
                 kd[5] == 0x04) {
@@ -268,10 +296,11 @@ static int parse_eapol_key(const uint8_t *p, int len,
                 *out_has_pmkid = 1;
                 break;
             }
-            kd  += 2 + l;
-            rem -= 2 + l;
+            kd  += 2 + (size_t)l;
+            rem -= 2 + (size_t)l;
         }
     }
+    *out_span = span;
     return msg;
 }
 
@@ -337,8 +366,16 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     }
     uint8_t nonce[32], mic[16], pmkid[16];
     int has_pmkid = 0;
-    int msg = parse_eapol_key(eapol, elen, nonce, mic,
+    size_t span = 0;
+    int msg = parse_eapol_key(eapol, (size_t)elen, &span, nonce, mic,
                               &has_pmkid, pmkid);
+    if (msg < 0) {
+        /* Truncated / inconsistent EAPOL-Key: counted, nothing else. */
+        pthread_mutex_lock(&g_mu);
+        g_rejects[-1 - msg]++;
+        pthread_mutex_unlock(&g_mu);
+        return 0;
+    }
     if (msg == 0) return 0;
 
     /* ── Update state machine + log ────────────────────── */
@@ -438,8 +475,10 @@ int eapol_observe_dot11(const uint8_t *d, int len,
             hex_bytes(ev.anonce,  32, anonce_hex);
             /* EAPOL field: the M2 frame with MIC zeroed. We only have
              * the EAPOL portion here; copy + zero MIC bytes (81..96
-             * from EAPOL start) before hex. */
-            int eapol_room = elen;
+             * from EAPOL start) before hex. The declared span, not
+             * the captured length — trailing FCS / padding isn't
+             * EAPOL, and hashcat would recompute the MIC over it. */
+            int eapol_room = (int)span;
             if (eapol_room > (int)sizeof(eapol_hex)/2 - 1)
                 eapol_room = (int)sizeof(eapol_hex)/2 - 1;
             uint8_t scratch[512];
@@ -507,6 +546,7 @@ void eapol_clear(void)
     pthread_mutex_lock(&g_mu);
     g_head = g_count = 0;
     g_pending_n = 0;
+    memset(g_rejects, 0, sizeof(g_rejects));
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -522,6 +562,14 @@ void eapol_set_output_dir(const char *dir) {
 int eapol_event_count(void) {
     pthread_mutex_lock(&g_mu);
     int n = g_count;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+int eapol_reject_count(eapol_reject_t why) {
+    if ((int)why < 0 || why >= EAPOL_REJECT_COUNT) return 0;
+    pthread_mutex_lock(&g_mu);
+    int n = g_rejects[why];
     pthread_mutex_unlock(&g_mu);
     return n;
 }
