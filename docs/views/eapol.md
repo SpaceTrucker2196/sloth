@@ -53,6 +53,35 @@ wordlist.txt -e <SSID> <file>.pcap` or openable in Wireshark / tshark
 for inspection. Re-completions overwrite the prior file with the
 freshest capture for that (BSSID, STA) pair.
 
+### Frame validation (#83)
+
+EAPOL-Key frames arrive off the air, so their length fields are
+attacker-controlled and are not trusted. The parser works from the
+span the frame *declares* — `4 + body length` (EAPOL header bytes
+2..3) — not from the number of bytes captured, and rejects anything
+whose lengths don't hold together:
+
+| Condition | Outcome |
+|---|---|
+| declared span exceeds the captured bytes | **truncated** |
+| declared span leaves no descriptor, or is under the 99-byte fixed key header | **malformed** |
+| Key Data Length exceeds what the declared body leaves after that header | **malformed** |
+
+A rejected frame produces **nothing**: no event, no M1→M2 pairing, no
+`eapol.22000` line, no pcap. The only trace is a counter, so a radio
+sitting in noise doesn't quietly manufacture handshake records. A Key
+Data Length *shorter* than the body is tolerated — those bytes are
+simply never walked as KDEs.
+
+Because export is bounded by the declared span, **capture padding and
+FCS bytes are never written into the 22000 record**. Trailing bytes in
+the EAPOL field would otherwise break hashcat's MIC verification.
+
+Earlier builds accepted frames from 95 bytes and read past the
+supplied buffer to reach the MIC and Key Data Length (a heap
+over-read, confirmed under ASan); a malformed Key Data Length was also
+silently treated as "no key data".
+
 ## View
 
 ```
