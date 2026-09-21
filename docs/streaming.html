@@ -82,10 +82,15 @@
     </table>
 
     <p class="footnote">
-      <strong>Backpressure.</strong> The socket writer is non-blocking.
-      A slow client that fills its kernel send buffer <em>loses lines</em>
-      for the duration of the stall (it does not get queued). A broken
-      pipe closes the client fd; reconnect to resume.
+      <strong>Backpressure.</strong> The socket writer is non-blocking and
+      delivers whole records or none. A slow client gets a bounded queue
+      (512&nbsp;KiB) of complete lines; a record that has started is always
+      finished before the next. On overflow sloth drops whole incoming
+      records and sends a <code>socket_gap</code> record (<code>seq</code>,
+      <code>dropped</code>, <code>dropped_total</code>) before the next line
+      it delivers. A client that accepts no bytes for 30&nbsp;s, or whose
+      pipe breaks, is disconnected; reconnect to resume. Discard any
+      unterminated bytes before EOF.
     </p>
   </div>
 </section>

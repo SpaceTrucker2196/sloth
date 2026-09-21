@@ -101,11 +101,16 @@ alongside.
 
 ## Backpressure
 
-The socket writer in sloth is non-blocking. If your consumer falls
-behind and fills the kernel send buffer, **sloth drops the line for
-your connection** (only — other consumers still receive it) and the
-broken-pipe path eventually reaps your fd. A few principles to stay
-healthy:
+The socket writer in sloth is non-blocking and delivers **whole
+records or none** (#93). If your consumer falls behind, sloth queues up
+to 512 KiB of complete lines for your connection (only — other
+consumers are unaffected). Past that it drops whole incoming records
+and, before the next line you do receive, sends a
+`{"type":"socket_gap","seq":…,"dropped":…,"dropped_total":…}` record
+so you know how many you missed. If your connection accepts no bytes
+for 30 s, sloth closes it. Bytes after the last `\n` at EOF are an
+unfinished record — `stream_lines()` already discards them. A few
+principles to stay healthy:
 
 1. Keep the read loop tight — don't do heavy work inline. Hand the
    parsed record to a queue and process elsewhere.

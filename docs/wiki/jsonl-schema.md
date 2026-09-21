@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`.
 
-**Last updated**: 2026-07-18.
+**Last updated**: 2026-09-21.
 
 ---
 
@@ -34,15 +34,47 @@ client. The protocol is one-way; there is no handshake, no auth, no
 verbs. Access control is the caller's job (bind address, file
 permissions on the UNIX socket, Tailscale ACLs).
 
-**Backpressure.** The socket writer is non-blocking. A slow client
-that fills its kernel send buffer **loses lines** for the duration of
-the stall (it does not get queued). A broken pipe closes the client
-fd; reconnect to resume.
+**Delivery: whole records or none (#93).** The socket writer never
+blocks sloth. Each client has its own queue of *complete* encoded
+records (payload + `\n`, up to 512 KiB of unsent bytes on top of the
+kernel send buffer), written from a saved byte offset. A record that
+has started going out is always finished before the next one starts,
+so a slow client receives late records, not glued or truncated ones.
+When that client falls far enough behind:
+
+| Condition | What sloth does | What the consumer sees |
+|-----------|-----------------|------------------------|
+| queue would exceed 512 KiB | drops the **incoming** record whole and counts it; a record already on the wire is never dropped | a `socket_gap` record before the next record it does receive (below) |
+| no byte accepted for 30 s while bytes are queued | closes the connection | EOF, possibly after an unterminated fragment |
+| `send()` error other than `EAGAIN`/`EINTR`, or `0` | closes the connection | EOF, possibly after an unterminated fragment |
+
+The 30 s stall timer restarts on every byte the kernel takes, so a
+client that is slow but draining stays connected (and sees gaps); only
+one that has stopped reading is cut. It exists because a peer that
+stops reading can hold a TCP window shut indefinitely without ever
+producing `EPIPE`. Idle clients — nothing queued — are never timed out.
+
+**Detecting loss.** A per-client sequence number counts every record
+offered to that connection, delivered or dropped. It is carried by the
+socket-only [`socket_gap`](#socket_gap-socket-only) record, which sloth
+queues directly ahead of the first record delivered after a drop. For
+every marker, *records received on this connection before it* +
+*sum of `dropped` over all markers so far* = its `seq`. A connection
+that never overflows never sees a marker, so the record types it
+receives are unchanged by #93. The process-wide count is
+`data_socket_dropped_total()`.
+
+Reconnect to resume after a disconnect: a new connection starts on a
+record boundary with `seq` 0, and gets a fresh baseline of snapshot
+rows (#47). Records emitted while disconnected are gone — pair the
+socket with `-o FILE` if you need them.
 
 **Framing.** Newline-delimited JSON (NDJSON / JSONL). Every line is
 one complete JSON object terminated by exactly one `\n`. There is no
 record separator beyond the newline; consumers split on `\n` and
-parse each line.
+parse each line. Bytes after the last `\n` when the socket reaches EOF
+are the head of a record sloth could not finish — discard them, never
+parse them as a record.
 
 ## Output format
 
@@ -395,6 +427,29 @@ no explicit "closed" record.
 ~50 connections, ~20 devices, etc., emits on the order of 1 KB/s. The
 forwarder's `--type` filter lets consumers subscribe to only the
 record types they need.
+
+## `socket_gap` (socket-only)
+
+```json
+{"type":"socket_gap","ts":1700000000,"seq":600,"dropped":77,"dropped_total":77}
+```
+
+Written only on `--data-socket`, only to the one connection that lost
+records, never to `-o FILE` (the file sink has no queue and never
+drops). Added in #93; purely additive — consumers that ignore unknown
+`type` values keep working, and a connection that never overflows never
+receives one.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ts` | int | wall-clock time the marker was queued |
+| `seq` | int | records offered to this connection before the marker (delivered + dropped); starts at 0 per connection |
+| `dropped` | int | records dropped since the previous marker on this connection |
+| `dropped_total` | int | records dropped over the life of this connection |
+
+The marker is a record like any other: under `--out-format cef` or
+`syslog` it is emitted in that format (`socket_gap` is its CEF
+signature / syslog MSGID), and it does not count towards `seq` itself.
 
 ## Versioning
 

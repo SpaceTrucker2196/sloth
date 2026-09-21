@@ -401,3 +401,38 @@ requires detectors to cite theirs; the measurement is spec-grounded,
 the attribution is not. No alert rule, no TUI row, no signature row in
 `tool_fingerprint.c`, and no `--db` column (a schema bump invalidates
 every prior database file — the `phy_confirmed`/#60f precedent).
+
+## 2026-09-21 — Data-socket record framing under backpressure (#93)
+
+**Source**: issue #93 (external CISO/GRC review, finding F11).
+`src/data_socket.{c,h}`, `tests/test_data_socket.c`.
+
+**Doc updates**: [[jsonl-schema]] "Backpressure" became "Delivery:
+whole records or none", with the overflow / stall / error table, the
+loss-detection rule, and the EOF-fragment rule under "Framing"; new
+`socket_gap` (socket-only) record section. README `--data-socket`
+bullet, `docs/streaming.html`, `examples/consumer/README.md` and the
+`sloth-stream.py` docstring said a slow client "loses lines"; they now
+describe the queue.
+
+**Index updates**: none (no new page).
+
+**Why**: the writer sent the payload and its `\n` as two `send()`
+calls and kept no state between them. An `EAGAIN` on the delimiter
+left the client connected with no record of the missing byte, so the
+next record was glued on — `{"a":1}{"b":2}\n`, which no JSONL parser
+accepts. It also read `errno` after a *positive* short write, where
+errno is stale, and could keep a client with half a record on the wire.
+Each client now owns a queue of complete `payload\n` spans written from
+a byte offset; short writes and `EINTR` retry, `EAGAIN` waits for the
+next emit or tick, anything else closes. Overflow (512 KiB) drops only
+whole records not yet started, and a client that accepts no bytes for
+30 s is closed — a reader that stops can hold a TCP window shut without
+ever producing `EPIPE`, so waiting for one is not a policy.
+
+The loss signal is a new record type rather than a field on every
+record: a per-connection `seq` on each line would give each client a
+different byte stream and add a field that has no meaning in `-o FILE`.
+`socket_gap` appears only after an actual drop, only on that
+connection, so the schema change is additive and a healthy consumer
+never sees it.

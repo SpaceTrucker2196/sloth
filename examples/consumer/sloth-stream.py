@@ -40,9 +40,12 @@ docs/wiki/jsonl-schema.md. Highlights:
   - One JSON object per line, terminated by exactly one `\n`.
   - Sloth never reads from us. The socket is one-way; access control
     is the operator's job (bind address, UNIX perms, Tailscale ACLs).
-  - A slow consumer that fills the kernel send buffer *loses lines*
-    for the duration of the stall. Reconnect to resume; lines emitted
-    during the disconnect window are gone.
+  - Whole records or none. A slow consumer gets a bounded queue;
+    on overflow sloth drops whole records and reports them with a
+    socket-only {"type":"socket_gap",...} record. A consumer that
+    accepts nothing for 30 s is disconnected. Reconnect to resume;
+    lines emitted during the disconnect window are gone, and bytes
+    after the last newline at EOF are never a record.
   - Fields are append-only. Consumers ignore unknown keys and unknown
     `type` values gracefully.
 """

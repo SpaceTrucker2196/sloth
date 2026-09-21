@@ -3,7 +3,12 @@
  * Locking: a single mutex protects the listening fd, the client array,
  * and the bookkeeping path. Callers (the main poll loop's tick, the
  * jsonl.c emit_line path) are short and never block inside the
- * critical section — all socket I/O is non-blocking. */
+ * critical section — all socket I/O is non-blocking.
+ *
+ * Framing (#93): a record reaches the wire only as one contiguous
+ * `payload\n` span in the client's queue, and the queue is written from
+ * a saved offset. The old writer sent the delimiter as a second send()
+ * and forgot it on EAGAIN, so the next record was glued onto the last. */
 
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +17,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -19,20 +25,42 @@
 
 #include "data_socket.h"
 #include "jsonl.h"
+#include "formatter.h"
 
 #define MAX_CLIENTS  16
 
+/* Per-client queue of complete records. buf[off..len) is unsent; the
+ * record at `off` may be partly on the wire, everything after it is
+ * untouched and so is the only thing that may be dropped. */
+typedef struct {
+    int                fd;
+    char              *buf;
+    size_t             cap, len, off;
+    unsigned long long seq;           /* records offered (sent + dropped) */
+    unsigned long long gap;           /* dropped since the last marker */
+    unsigned long long dropped;       /* dropped over the connection */
+    time_t             progress;      /* last time bytes moved, or queued */
+} ds_client_t;
+
 static int             g_listen_fd = -1;
-static int             g_clients[MAX_CLIENTS];
+static ds_client_t     g_clients[MAX_CLIENTS];
 static int             g_client_n  = 0;
+static unsigned long long g_dropped_total = 0;
 static char            g_unix_path[256];     /* for cleanup unlink */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static time_t mono_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec;
+}
 
 /* Syscall indirection. Default to the real libc functions; tests can
  * swap in fakes via data_socket_test_set_*_fn. One predictable branch
  * per call in production. */
 static data_socket_send_fn   g_send_fn   = send;
 static data_socket_accept_fn g_accept_fn = accept;
+static data_socket_clock_fn  g_clock_fn  = mono_now;
 
 void data_socket_test_set_send_fn(data_socket_send_fn fn) {
     pthread_mutex_lock(&g_mu);
@@ -44,6 +72,19 @@ void data_socket_test_set_accept_fn(data_socket_accept_fn fn) {
     pthread_mutex_lock(&g_mu);
     g_accept_fn = fn ? fn : accept;
     pthread_mutex_unlock(&g_mu);
+}
+
+void data_socket_test_set_clock_fn(data_socket_clock_fn fn) {
+    pthread_mutex_lock(&g_mu);
+    g_clock_fn = fn ? fn : mono_now;
+    pthread_mutex_unlock(&g_mu);
+}
+
+unsigned long long data_socket_dropped_total(void) {
+    pthread_mutex_lock(&g_mu);
+    unsigned long long n = g_dropped_total;
+    pthread_mutex_unlock(&g_mu);
+    return n;
 }
 
 static int set_nonblock(int fd) {
@@ -171,10 +212,106 @@ int data_socket_init(const char *spec) {
     return -1;
 }
 
+/* Close client i and compact (swap-with-last). Caller holds g_mu.
+ * Whatever is still queued is lost with the connection — including the
+ * tail of a started record, which the consumer sees as an unterminated
+ * fragment before EOF and must discard. */
+static void drop_client(int i) {
+    close(g_clients[i].fd);
+    free(g_clients[i].buf);
+    g_clients[i] = g_clients[--g_client_n];
+}
+
+/* Write as much of client i's queue as the kernel takes. Returns 0 to
+ * keep the client, -1 if it was closed. Caller holds g_mu. */
+static int flush_client(int i, time_t now) {
+    ds_client_t *c = &g_clients[i];
+    while (c->off < c->len) {
+        /* MSG_NOSIGNAL: a closed peer is EPIPE here, not SIGPIPE. */
+        ssize_t n = g_send_fn(c->fd, c->buf + c->off, c->len - c->off,
+                              MSG_NOSIGNAL);
+        if (n > 0) {                 /* short writes just loop; errno is
+                                      * meaningless on a positive return */
+            c->off += (size_t)n;
+            c->progress = now;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return 0;                /* wait for writability */
+        drop_client(i);              /* 0 or a real error: terminal */
+        return -1;
+    }
+    c->off = c->len = 0;
+    return 0;
+}
+
+/* Append `s` + '\n' to client c's queue if the whole thing fits under
+ * DATA_SOCKET_QUEUE_MAX. Returns 0, or -1 with the queue unchanged. */
+static int enqueue(ds_client_t *c, const char *s, size_t n, time_t now) {
+    size_t need = n + 1;
+    if ((c->len - c->off) + need > DATA_SOCKET_QUEUE_MAX) return -1;
+    if (c->len + need > c->cap && c->off > 0) {
+        memmove(c->buf, c->buf + c->off, c->len - c->off);
+        c->len -= c->off;
+        c->off  = 0;
+    }
+    if (c->len + need > c->cap) {
+        size_t cap = c->cap ? c->cap : 16384;
+        while (cap < c->len + need) cap *= 2;
+        if (cap > DATA_SOCKET_QUEUE_MAX) cap = DATA_SOCKET_QUEUE_MAX;
+        char *nb = realloc(c->buf, cap);
+        if (!nb) return -1;
+        c->buf = nb;
+        c->cap = cap;
+    }
+    if (c->off == c->len) c->progress = now;   /* stall clock starts now */
+    memcpy(c->buf + c->len, s, n);
+    c->buf[c->len + n] = '\n';
+    c->len += need;
+    return 0;
+}
+
+/* Queue one record for client c, preceded by a socket_gap marker if
+ * records were dropped since the last one. Marker and record go in
+ * together or not at all, so the marker always sits directly before
+ * the first record after the gap. Caller holds g_mu. */
+static void offer(ds_client_t *c, const char *line, size_t len, time_t now) {
+    if (c->gap) {
+        char js[160], out[512];
+        const char *m = js;
+        snprintf(js, sizeof(js),
+                 "{\"type\":\"socket_gap\",\"ts\":%lld,\"seq\":%llu,"
+                 "\"dropped\":%llu,\"dropped_total\":%llu}",
+                 (long long)time(NULL), c->seq, c->gap, c->dropped);
+        if (formatter_get() != OUT_FMT_JSONL &&
+            formatter_transform(js, out, (int)sizeof(out)) >= 0)
+            m = out;
+        size_t mlen = strlen(m);
+        if ((c->len - c->off) + mlen + 1 + len + 1 <= DATA_SOCKET_QUEUE_MAX &&
+            enqueue(c, m, mlen, now) == 0) {
+            if (enqueue(c, line, len, now) == 0) {
+                c->gap = 0;
+                c->seq++;
+                return;
+            }
+            c->len -= mlen + 1;                /* unwind the marker */
+        }
+    } else if (enqueue(c, line, len, now) == 0) {
+        c->seq++;
+        return;
+    }
+    c->seq++;
+    c->gap++;
+    c->dropped++;
+    g_dropped_total++;
+}
+
 void data_socket_tick(void) {
     if (g_listen_fd < 0) return;
     int accepted = 0;
     pthread_mutex_lock(&g_mu);
+    time_t now = g_clock_fn();
     while (g_client_n < MAX_CLIENTS) {
         int c = g_accept_fn(g_listen_fd, NULL, NULL);
         if (c < 0) break;       /* EAGAIN or real error — stop draining */
@@ -184,8 +321,27 @@ void data_socket_tick(void) {
          * but ignores it for AF_UNIX). */
         int one = 1;
         setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
-        g_clients[g_client_n++] = c;
+        memset(&g_clients[g_client_n], 0, sizeof(g_clients[0]));
+        g_clients[g_client_n].fd       = c;
+        g_clients[g_client_n].progress = now;
+        g_client_n++;
         accepted++;
+    }
+
+    /* Queued bytes also drain here, so a quiet stream still finishes
+     * the records it started. A client holding bytes the kernel has
+     * refused for DATA_SOCKET_STALL_SECS is closed: a peer that stops
+     * reading can hold a TCP window at zero indefinitely without ever
+     * producing EPIPE, and its queue would sit full forever. */
+    int i = 0;
+    while (i < g_client_n) {
+        if (flush_client(i, now) < 0) continue;
+        ds_client_t *c = &g_clients[i];
+        if (c->off < c->len && now - c->progress >= DATA_SOCKET_STALL_SECS) {
+            drop_client(i);
+            continue;
+        }
+        i++;
     }
     pthread_mutex_unlock(&g_mu);
 
@@ -208,31 +364,14 @@ void data_socket_emit(const char *line) {
     if (len == 0) return;
 
     pthread_mutex_lock(&g_mu);
+    time_t now = g_clock_fn();
     int i = 0;
     while (i < g_client_n) {
-        /* Write the line + a trailing '\n'. MSG_NOSIGNAL prevents
-         * SIGPIPE if the peer has closed; we detect that as EPIPE
-         * from send() instead. */
-        ssize_t n1 = g_send_fn(g_clients[i], line, len, MSG_NOSIGNAL);
-        int ok = (n1 == (ssize_t)len);
-        if (ok) {
-            ssize_t n2 = g_send_fn(g_clients[i], "\n", 1, MSG_NOSIGNAL);
-            ok = (n2 == 1);
-        }
-        if (!ok) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* Slow client — drop this line for them. The next
-                 * emit retries; if they're chronically slow they'll
-                 * eventually get their connection reset by EPIPE. */
-                i++;
-                continue;
-            }
-            /* Broken pipe, reset, or any other unrecoverable: close
-             * and compact. Swap-with-last to avoid a memmove. */
-            close(g_clients[i]);
-            g_clients[i] = g_clients[--g_client_n];
-            continue;
-        }
+        /* Flush first: space freed now is space the new record can use
+         * instead of being dropped. */
+        if (flush_client(i, now) < 0) continue;
+        offer(&g_clients[i], line, len, now);
+        if (flush_client(i, now) < 0) continue;
         i++;
     }
     pthread_mutex_unlock(&g_mu);
@@ -248,8 +387,7 @@ int data_socket_has_clients(void) {
 
 void data_socket_cleanup(void) {
     pthread_mutex_lock(&g_mu);
-    for (int i = 0; i < g_client_n; i++) close(g_clients[i]);
-    g_client_n = 0;
+    while (g_client_n > 0) drop_client(g_client_n - 1);
     if (g_listen_fd >= 0) {
         close(g_listen_fd);
         g_listen_fd = -1;

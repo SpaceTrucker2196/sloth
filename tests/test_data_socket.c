@@ -9,6 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -16,6 +18,9 @@
 #include "data_socket.h"
 #include "sloth.h"
 #include "jsonl.h"
+#include "formatter.h"
+
+static void ds_seed_pnl(sloth_state_t *s);
 
 static const char *sock_path(void) {
     static char path[64];
@@ -184,10 +189,347 @@ static ssize_t fake_send(int fd, const void *buf, size_t len, int flags) {
     }
 }
 
-/* Kills the EAGAIN/EWOULDBLOCK slow-client branch (line 190):
- * `if (errno == EAGAIN || errno == EWOULDBLOCK) { i++; continue; }`.
- * If the `||` mutated to `&&`, EAGAIN (without EWOULDBLOCK) would
- * fall through to the close-and-compact path; client_n would drop. */
+/* Drain everything sloth will write to `c`, ticking between reads so
+ * queued bytes get flushed as the socket buffer empties. Stops after a
+ * few rounds with no new bytes. Returns bytes read; buf is NUL-ended. */
+static size_t drain_client(int c, char *buf, size_t cap) {
+    int fl = fcntl(c, F_GETFL, 0);
+    fcntl(c, F_SETFL, fl | O_NONBLOCK);
+    size_t got = 0;
+    int idle = 0;
+    while (idle < 3 && got + 1 < cap) {
+        ssize_t n = read(c, buf + got, cap - 1 - got);
+        if (n > 0) { got += (size_t)n; idle = 0; continue; }
+        if (n == 0) break;                       /* EOF — sloth closed us */
+        data_socket_tick();
+        idle++;
+    }
+    buf[got] = '\0';
+    fcntl(c, F_SETFL, fl);
+    return got;
+}
+
+static int count_prefix_lines(const char *buf, const char *prefix) {
+    int n = 0;
+    size_t pl = strlen(prefix);
+    for (const char *p = buf; *p; ) {
+        if (strncmp(p, prefix, pl) == 0) n++;
+        const char *nl = strchr(p, '\n');
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return n;
+}
+
+/* ── #93: framing under backpressure ──────────────────────────
+ *
+ * A pass-through fake that really writes to the client socket but lets
+ * the test cap how much gets through: a byte budget (then `io_block`
+ * errno), a per-call chunk size, and an errno value planted on every
+ * *successful* return so a writer that reads errno after a positive
+ * short write sees a stale value. */
+static long io_budget     = -1;        /* bytes still allowed; -1 = no cap */
+static size_t io_chunk    = 0;         /* max bytes per call; 0 = no cap */
+static int  io_block      = EAGAIN;    /* errno once the budget is spent */
+static int  io_stale      = 0;         /* errno planted on success */
+static int  io_calls      = 0;
+static int  io_eintr      = 0;         /* next N calls fail with EINTR */
+
+static void io_reset(void) {
+    io_budget = -1; io_chunk = 0; io_block = EAGAIN; io_stale = 0; io_calls = 0;
+    io_eintr = 0;
+}
+
+static ssize_t io_send(int fd, const void *buf, size_t len, int flags) {
+    io_calls++;
+    if (io_eintr > 0) { io_eintr--; errno = EINTR; return -1; }
+    size_t n = len;
+    if (io_chunk && n > io_chunk) n = io_chunk;
+    if (io_budget >= 0) {
+        if (io_budget == 0) { errno = io_block; return -1; }
+        if ((long)n > io_budget) n = (size_t)io_budget;
+    }
+    ssize_t r = send(fd, buf, n, flags);
+    if (r > 0) {
+        if (io_budget >= 0) io_budget -= r;
+        errno = io_stale;
+    }
+    return r;
+}
+
+static time_t io_now = 1000;
+static time_t io_clock(void) { return io_now; }
+
+static int ds_open_one(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    if (data_socket_init(spec) != 0) return -1;
+    int c = connect_client(path);
+    data_socket_tick();
+    return c;
+}
+
+static void ds_close_one(int c) {
+    data_socket_test_set_send_fn(NULL);
+    data_socket_test_set_clock_fn(NULL);
+    io_reset();
+    if (c >= 0) close(c);
+    data_socket_cleanup();
+}
+
+/* The issue's exact sequence: record A's payload is accepted, its
+ * delimiter hits EAGAIN, record B arrives. The old writer sent "\n" as
+ * its own send() and forgot it, so the consumer saw `AB\n`. */
+static void test_delimiter_eagain_then_next_record(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_send_fn(io_send);
+
+    io_budget = (long)strlen("{\"a\":1}");     /* payload fits, '\n' blocks */
+    data_socket_emit("{\"a\":1}");
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    io_budget = -1;                            /* client drains again */
+    data_socket_emit("{\"b\":2}");
+
+    char buf[64];
+    drain_client(c, buf, sizeof(buf));
+    ASSERT_STR(buf, "{\"a\":1}\n{\"b\":2}\n");
+    ds_close_one(c);
+}
+
+/* A positive short write leaves errno untouched. A writer that tests
+ * errno without checking for a negative return sees whatever was there
+ * — here a planted EAGAIN — and abandons a half-written record. */
+static void test_short_write_with_stale_errno(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_send_fn(io_send);
+
+    io_chunk = 3;
+    io_stale = EAGAIN;
+    data_socket_emit("long-payload");
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    data_socket_emit("next");
+
+    char buf[64];
+    drain_client(c, buf, sizeof(buf));
+    ASSERT_STR(buf, "long-payload\nnext\n");
+    ds_close_one(c);
+}
+
+/* EINTR is a signal landing mid-call, not a verdict on the peer:
+ * retry at once, keep the client, deliver the record intact. */
+static void test_eintr_is_retried(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_send_fn(io_send);
+
+    io_eintr = 2;
+    data_socket_emit("{\"sig\":1}");
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    ASSERT_EQ(io_calls, 3);
+
+    char buf[32];
+    drain_client(c, buf, sizeof(buf));
+    ASSERT_STR(buf, "{\"sig\":1}\n");
+    ds_close_one(c);
+}
+
+/* A record that has started and then hits a terminal error cannot be
+ * completed: the client is closed, and nothing else is written after
+ * the prefix — the consumer sees an unterminated tail, then EOF. */
+static void test_terminal_error_mid_record_disconnects(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_send_fn(io_send);
+
+    io_budget = 4;
+    io_block  = EPIPE;
+    data_socket_emit("abcdefgh");
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    data_socket_emit("never");
+
+    char buf[64];
+    drain_client(c, buf, sizeof(buf));
+    ASSERT_STR(buf, "abcd");
+    ds_close_one(c);
+}
+
+/* A client that drops mid-record leaves nothing behind: the next client
+ * starts on a record boundary, and (#47) gets the baseline again. */
+static void test_reconnect_gets_clean_baseline(void) {
+    io_reset();
+    int a = ds_open_one();
+    ASSERT(a >= 0);
+    sloth_state_t s; ds_seed_pnl(&s);
+    jsonl_emit_pnl_clients(&s);                /* A sees it; cache primed */
+    char buf[4096];
+    drain_client(a, buf, sizeof(buf));
+    ASSERT_EQ(count_prefix_lines(buf, "{\"type\":\"pnl_client\""), 1);
+
+    data_socket_test_set_send_fn(io_send);
+    io_budget = 5;
+    data_socket_emit("{\"half\":\"record\"}");  /* A stuck mid-record */
+    close(a);                                  /* ...and gives up */
+    io_budget = -1;
+    data_socket_emit("{\"reap\":1}");          /* EPIPE reaps A */
+    ASSERT_EQ(data_socket_has_clients(), 0);
+
+    int b = connect_client(sock_path());
+    ASSERT(b >= 0);
+    data_socket_tick();                        /* accept → cache reset */
+    jsonl_emit_pnl_clients(&s);                /* unchanged, but new sink */
+    drain_client(b, buf, sizeof(buf));
+    ASSERT(strncmp(buf, "{\"type\":\"pnl_client\"", 20) == 0);
+    ASSERT_EQ(count_prefix_lines(buf, "{\"type\":\"pnl_client\""), 1);
+    ASSERT(strstr(buf, "half") == NULL);
+    ASSERT(strstr(buf, "socket_gap") == NULL);
+    ASSERT(buf[strlen(buf) - 1] == '\n');
+    ds_close_one(b);
+}
+
+/* Queue full: only whole, not-yet-started records are dropped, the
+ * drop is counted, and the next delivered record is preceded by a
+ * socket_gap marker whose `seq` reconciles received + dropped. */
+#define OVF_REC   1000u                         /* payload bytes */
+#define OVF_N     600
+static char *overflow_then_drain(int c, unsigned long long *dropped) {
+    static char rec[OVF_REC + 1];
+    unsigned long long before = data_socket_dropped_total();
+    data_socket_test_set_send_fn(io_send);
+    io_budget = 0;                             /* peer never drains */
+    for (int i = 0; i < OVF_N; i++) {
+        int k = snprintf(rec, sizeof(rec), "{\"n\":%d,\"pad\":\"", i);
+        memset(rec + k, 'x', OVF_REC - (size_t)k - 2);
+        memcpy(rec + OVF_REC - 2, "\"}", 3);
+        data_socket_emit(rec);
+    }
+    *dropped = data_socket_dropped_total() - before;
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    io_budget = -1;                            /* peer drains again */
+    data_socket_emit("{\"tail\":1}");
+    size_t cap = 2u * DATA_SOCKET_QUEUE_MAX;
+    char *buf = malloc(cap);
+    if (buf) drain_client(c, buf, cap);
+    return buf;
+}
+
+static void test_queue_overflow_counts_drops(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    unsigned long long dropped = 0;
+    char *buf = overflow_then_drain(c, &dropped);
+    ASSERT(buf != NULL);
+    if (!buf) { ds_close_one(c); return; }
+
+    int fit = (int)(DATA_SOCKET_QUEUE_MAX / (OVF_REC + 1));
+    ASSERT_EQ((long long)dropped, (long long)(OVF_N - fit));
+    ASSERT_EQ(count_prefix_lines(buf, "{\"n\":"), fit);
+    ASSERT_EQ(count_prefix_lines(buf, "{\"type\":\"socket_gap\""), 1);
+
+    /* Every line is a whole record: no line holds two, none is cut. */
+    int bad = 0;
+    for (char *p = buf; *p; ) {
+        char *nl = strchr(p, '\n');
+        if (!nl) { bad++; break; }
+        if (*p != '{' || nl[-1] != '}') bad++;
+        if (strstr(p, "}{") && strstr(p, "}{") < nl) bad++;
+        p = nl + 1;
+    }
+    ASSERT_EQ(bad, 0);
+
+    char want[128];
+    snprintf(want, sizeof(want), "\"seq\":%d,\"dropped\":%d,\"dropped_total\":%d}",
+             OVF_N, OVF_N - fit, OVF_N - fit);
+    char *gap = strstr(buf, "{\"type\":\"socket_gap\"");
+    ASSERT(gap != NULL);
+    ASSERT(gap && strstr(gap, want) != NULL);
+    /* Marker comes after the last delivered record, before the tail. */
+    ASSERT(gap && strstr(gap, "{\"tail\":1}\n") != NULL);
+    ASSERT(gap && strstr(gap, "{\"n\":") == NULL);
+    free(buf);
+    ds_close_one(c);
+}
+
+/* The marker is a record like any other: in --out-format cef it is
+ * CEF too, so a CEF consumer never sees a stray JSON line. */
+static void test_gap_marker_follows_out_format(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    formatter_set(OUT_FMT_CEF);
+    unsigned long long dropped = 0;
+    char *buf = overflow_then_drain(c, &dropped);
+    formatter_set(OUT_FMT_JSONL);
+    ASSERT(buf != NULL);
+    if (!buf) { ds_close_one(c); return; }
+    ASSERT(dropped > 0);
+    ASSERT_EQ(count_prefix_lines(buf, "CEF:0|sloth-net|sloth|1|socket_gap|"), 1);
+    ASSERT(strstr(buf, "{\"type\":\"socket_gap\"") == NULL);
+    free(buf);
+    ds_close_one(c);
+}
+
+/* A peer that stops reading is not guaranteed to ever EPIPE. Once it
+ * has accepted nothing for DATA_SOCKET_STALL_SECS it is closed. */
+static void test_stalled_client_is_disconnected(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_clock_fn(io_clock);
+    data_socket_test_set_send_fn(io_send);
+
+    io_now = 1000;
+    data_socket_tick();
+    io_now = 1000 + 10 * DATA_SOCKET_STALL_SECS;   /* idle, nothing queued */
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    io_budget = 0;
+    data_socket_emit("{\"stuck\":1}");           /* queued at t0 */
+    time_t t0 = io_now;
+    io_now = t0 + DATA_SOCKET_STALL_SECS - 1;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = t0 + DATA_SOCKET_STALL_SECS;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_close_one(c);
+}
+
+/* A slow client that is still making progress keeps its connection:
+ * the stall clock restarts on every byte the kernel accepts. */
+static void test_slow_client_progress_resets_stall(void) {
+    io_reset();
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    data_socket_test_set_clock_fn(io_clock);
+    data_socket_test_set_send_fn(io_send);
+
+    io_now = 5000;
+    io_budget = 0;
+    data_socket_emit("{\"slow\":1}");
+    io_now = 5000 + DATA_SOCKET_STALL_SECS - 5;
+    io_budget = 2;                                /* two bytes get through */
+    data_socket_tick();
+    io_now = 5000 + DATA_SOCKET_STALL_SECS + 5;   /* 30+ since queued ... */
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);      /* ... but not since progress */
+    io_now = 5000 + 2 * DATA_SOCKET_STALL_SECS - 5;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_close_one(c);
+}
+
+/* An EAGAIN on an untouched record keeps the client and queues the
+ * record whole. Only one send() for payload + delimiter together. */
 static void test_send_eagain_keeps_client(void) {
     const char *path = sock_path();
     char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
@@ -201,31 +543,31 @@ static void test_send_eagain_keeps_client(void) {
     g_fake_send_calls = 0;
     data_socket_test_set_send_fn(fake_send);
 
-    data_socket_emit("dropped");      /* fake send fails with EAGAIN */
+    data_socket_emit("queued");       /* fake send fails with EAGAIN */
 
     /* Slow-client branch: client kept, no close, no compact. */
     ASSERT_EQ(data_socket_has_clients(), 1);
-    /* Just one send call (the first `n1`); the second `\n` send is
-     * gated by the success of the first. */
+    /* One send() for payload and delimiter together: a second call for
+     * the '\n' is exactly the split #93 removed. */
     ASSERT_EQ(g_fake_send_calls, 1);
 
-    /* Restore and confirm the client is still usable. */
+    /* Restore: the queued record goes out first, whole, then the new
+     * one — nothing lost, nothing glued together. */
     data_socket_test_set_send_fn(NULL);
     data_socket_emit("ok");
-    char buf[16] = {0};
-    ssize_t n = read(c, buf, sizeof(buf) - 1);
-    ASSERT(n > 0);
-    buf[n] = '\0';
-    ASSERT_STR(buf, "ok\n");
+    char buf[32];
+    drain_client(c, buf, sizeof(buf));
+    ASSERT_STR(buf, "queued\nok\n");
 
     close(c);
     data_socket_cleanup();
 }
 
-/* Kills the partial-send check (line 184: `int ok = (n1 == len);`):
- * a fake that returns fewer bytes than asked must trigger the
- * close-and-compact branch — the client is broken from our side. */
-static void test_send_partial_harvests_client(void) {
+/* A positive short send() is progress, not failure: the writer loops
+ * from the new offset until the record is out. 13 bytes ("long-payload"
+ * + '\n') at 3 per call is exactly 5 calls; fewer means a tail was
+ * abandoned, more means bytes were re-sent. */
+static void test_send_partial_is_resumed(void) {
     const char *path = sock_path();
     char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
@@ -237,15 +579,20 @@ static void test_send_partial_harvests_client(void) {
     g_fake_send_mode  = 2;          /* return 3 bytes for any size */
     g_fake_partial_n  = 3;
     g_fake_send_calls = 0;
-    errno = 0;                       /* not EAGAIN — force the harvest path */
     data_socket_test_set_send_fn(fake_send);
 
-    data_socket_emit("long-payload"); /* len=12, fake returns 3 */
+    data_socket_emit("long-payload");
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    ASSERT_EQ(g_fake_send_calls, 5);
 
-    /* Partial send → ok=false → not EAGAIN → close + compact. */
+    /* send() returning 0 for a non-empty buffer is not progress and
+     * would spin forever: terminal, client closed. */
+    g_fake_send_mode = 3;
+    data_socket_emit("gone");
     ASSERT_EQ(data_socket_has_clients(), 0);
 
     data_socket_test_set_send_fn(NULL);
+    g_fake_send_mode = 0;
     close(c);
     data_socket_cleanup();
 }
@@ -292,7 +639,7 @@ static void test_tick_caps_at_max_clients(void) {
 }
 
 /* When a client in the MIDDLE of the array disconnects, the emit
- * loop must compact via swap-with-last (line 200:
+ * loop must compact via swap-with-last (drop_client():
  * `g_clients[i] = g_clients[--g_client_n]`) so the surviving
  * client at the end keeps receiving. Without compaction, either
  * (a) the disconnected fd stays in the array and breaks all
@@ -480,8 +827,19 @@ void run_data_socket_tests(void) {
 
     TEST_SUITE("data socket (fault injection)");
     RUN_TEST(test_send_eagain_keeps_client);
-    RUN_TEST(test_send_partial_harvests_client);
+    RUN_TEST(test_send_partial_is_resumed);
     RUN_TEST(test_tick_caps_at_max_clients);
+
+    TEST_SUITE("data socket (record framing under backpressure, #93)");
+    RUN_TEST(test_delimiter_eagain_then_next_record);
+    RUN_TEST(test_short_write_with_stale_errno);
+    RUN_TEST(test_eintr_is_retried);
+    RUN_TEST(test_terminal_error_mid_record_disconnects);
+    RUN_TEST(test_reconnect_gets_clean_baseline);
+    RUN_TEST(test_queue_overflow_counts_drops);
+    RUN_TEST(test_gap_marker_follows_out_format);
+    RUN_TEST(test_stalled_client_is_disconnected);
+    RUN_TEST(test_slow_client_progress_resets_stall);
 
     TEST_SUITE("data socket (accept → baseline re-emit, #47)");
     RUN_TEST(test_accept_reemits_baseline);
