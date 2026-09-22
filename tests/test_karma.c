@@ -147,10 +147,10 @@ static void test_deauth_chain(void) {
     uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
     const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
     add_multi_ssid_ap(&s, lure, many, 3);
-    deauth_event_t *e = &s.deauth_events[s.deauth_count++];
-    memset(e, 0, sizeof(*e));
-    e->flood = 1;
-    e->last_seen = time(NULL);
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count++];
+    memset(v, 0, sizeof(*v));
+    v->flood      = 1;
+    v->flood_last = time(NULL);
     karma_update(&s);
     ASSERT_EQ(s.karma_aps[0].deauth_chain, 1);
     ASSERT_EQ(s.karma_aps[0].score, 1 + 3);   /* base + deauth chain */

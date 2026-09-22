@@ -18,7 +18,8 @@ observed RSSI on each side, the twin's RSSI swing in the last 60 s,
 and three flags:
 
 - **attack_in_progress** — the chain rule has tainted the twin BSSID
-  (a recent `DEAUTH_FLOOD` targeted the real half within 5 s).
+  (a `DEAUTH_FLOOD` against the real half met its threshold within the
+  last 5 s).
 - **attacker_oui** — the twin's OUI matches the Hak5 (Pineapple /
   Alfa) or Espressif (ESP32 / ESP8266) tables in
   `src/wifi_oui_attacker.c`.

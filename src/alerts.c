@@ -337,24 +337,40 @@ static void rule_port_scan(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Deauth/disassoc flood (#88). Fires per (BSSID, victim) impact
+ * aggregate while its sliding window is flooded: at least
+ * DEAUTH_FLOOD_THRESH distinct frames inside some DEAUTH_FLOOD_WIN_SECS
+ * window that closed within the last DEAUTH_FLOOD_HOLD_SECS.
+ *
+ * The detail reports what was observed and stops there. The transmitter
+ * address is whatever the frame claims, so it never names the sender;
+ * and a passive receiver cannot see whether any station acted on the
+ * frames (a PMF-associated one drops unprotected ones). */
 static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->deauth_count; i++) {
-        const deauth_event_t *e = &s->deauth_events[i];
-        if (!e->flood) continue;
+    for (int i = 0; i < s->deauth_victim_count; i++) {
+        const deauth_victim_t *v = &s->deauth_victims[i];
+        if (!v->flood) continue;
         char tgt[20];
-        mac_to_str(e->dst, tgt, sizeof(tgt));
+        mac_to_str(v->victim, tgt, sizeof(tgt));
         char bss[20];
-        mac_to_str(e->bssid, bss, sizeof(bss));
+        mac_to_str(v->bssid, bss, sizeof(bss));
+        char rsn[16];
+        if (v->reason_valid) snprintf(rsn, sizeof(rsn), "%u", v->reason);
+        else                 snprintf(rsn, sizeof(rsn), "%s",
+                                      v->protected_count ? "encrypted" : "unknown");
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         /* A flood aimed at a network the operator designated as theirs
          * is not the same event as one aimed at the cafe next door
          * (#52). Same detector, higher stakes. */
-        int mine = ownership_is_my_bssid(e->bssid);
-        snprintf(key,    sizeof(key),    "deauth:%s", tgt);
+        int mine = ownership_is_my_bssid(v->bssid);
+        snprintf(key,    sizeof(key),    "deauth:%s@%s", tgt, bss);
         snprintf(detail, sizeof(detail),
-                 "target=%s bssid=%s reason=%u count=%d%s",
-                 tgt, bss, e->reason, e->count,
+                 "victim=%s bssid=%s observed %d frames, peak %d in %ds, "
+                 "reason=%s, %d stream%s%s; sender unverified, "
+                 "disruption not confirmed",
+                 tgt, bss, v->frames, v->peak_win, DEAUTH_FLOOD_WIN_SECS,
+                 rsn, v->streams, v->streams == 1 ? "" : "s",
                  mine ? " - YOUR network" : "");
         fire(ALERT_TYPE_DEAUTH_FLOOD,
              mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
@@ -1650,22 +1666,26 @@ static void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
  *   - misbehaving / stuck devices DoS themselves with probe loops
  *   - KARMA-baiting attackers may walk a PNL by probing each entry
  *
- * Threshold: >= 30 frames sustained over >= 5 seconds = >= 6 probes/s.
- * Normal clients emit 1-2 probes per scan cycle and pause between
- * scans, so 6+/s sustained is solidly anomalous. */
-#define PROBE_FLOOD_FRAMES    30
-#define PROBE_FLOOD_WINDOW_S  5
+ * Threshold (#88): PROBE_FLOOD_FRAMES (30) requests inside one sliding
+ * PROBE_FLOOD_WIN_SECS (5 s) window — a rate of >= 6/s across the
+ * whole window. Normal clients emit a few probes per channel per scan
+ * and pause between scans, so 6+/s for 5 s is solidly anomalous. The
+ * lifetime frame_count / first_seen / last_seen say nothing about rate:
+ * 30 probes over 300 s and 30 over 5 s look identical through them. */
+#define PROBE_FLOOD_MIN_RATE ((double)PROBE_FLOOD_FRAMES / PROBE_FLOOD_WIN_SECS)
 
 static void rule_probe_flood(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->probe_count; i++) {
         const probe_client_t *p = &s->probe_clients[i];
-        if (p->frame_count < PROBE_FLOOD_FRAMES)        continue;
-        long elapsed = (long)(p->last_seen - p->first_seen);
-        if (elapsed < PROBE_FLOOD_WINDOW_S)             continue;
-        /* rate >= PROBE_FLOOD_FRAMES / elapsed; we passed both gates
-         * so by construction the rate is acceptable. Render the rate
-         * for the operator. */
-        double rate = (double)p->frame_count / (double)elapsed;
+        if (!p->flood) continue;                        /* decayed / never */
+        /* The rate predicate itself, on the window's evidence: the
+         * frames that met the threshold, averaged over the full window
+         * they had to fit in. */
+        double win_rate = (double)p->burst_frames / PROBE_FLOOD_WIN_SECS;
+        if (win_rate < PROBE_FLOOD_MIN_RATE)            continue;
+        if (p->burst_span_ms >= PROBE_FLOOD_WIN_SECS * 1000u) continue;
+        double span_s = p->burst_span_ms / 1000.0;
+        double rate   = p->burst_frames / (span_s > 0.001 ? span_s : 0.001);
         char mac_buf[20];
         snprintf(mac_buf, sizeof(mac_buf),
                  "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -1675,8 +1695,10 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
         char detail[ALERT_DETAIL_LEN];
         snprintf(key,    sizeof(key),    "probe_flood:%s", mac_buf);
         snprintf(detail, sizeof(detail),
-                 "%s sent %d probes in %lds (%.1f/s) - active recon / stuck client",
-                 mac_buf, p->frame_count, elapsed, rate);
+                 "%s sent %d probes in %.1fs (%.1f/s, >= %.0f/s over %ds)"
+                 " - active recon / stuck client",
+                 mac_buf, p->burst_frames, span_s, rate,
+                 PROBE_FLOOD_MIN_RATE, PROBE_FLOOD_WIN_SECS);
         /* LOW: a probe-happy client is recon noise — same tier as
          * port-scan. Real harm is in PNL leakage, not the probing. */
         fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_LOW,
@@ -2063,9 +2085,12 @@ static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
 #define KARMA_DEAUTH_WIN_SECS 60
 
 static int karma_deauth_active(const sloth_state_t *s, time_t now) {
-    for (int k = 0; k < s->deauth_count; k++) {
-        const deauth_event_t *e = &s->deauth_events[k];
-        if (e->flood && now - e->last_seen <= KARMA_DEAUTH_WIN_SECS) return 1;
+    /* flood_last, not last_seen: a trickle of frames after a flood
+     * ended must not keep the flood "recent" (#88). */
+    for (int k = 0; k < s->deauth_victim_count; k++) {
+        const deauth_victim_t *v = &s->deauth_victims[k];
+        if (v->flood_last && now - v->flood_last <= KARMA_DEAUTH_WIN_SECS)
+            return 1;
     }
     return 0;
 }
@@ -2741,11 +2766,11 @@ static void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
         if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) continue;
         /* Is BSSID `a` currently being deauth-flooded? */
         int deauthed = 0;
-        for (int k = 0; k < s->deauth_count; k++) {
-            const deauth_event_t *e = &s->deauth_events[k];
-            if (!e->flood) continue;
-            if (memcmp(e->bssid, a->bssid, 6) != 0) continue;
-            if (now - e->last_seen > DEAUTH_TWIN_WIN_SECS) continue;
+        for (int k = 0; k < s->deauth_victim_count; k++) {
+            const deauth_victim_t *v = &s->deauth_victims[k];
+            if (!v->flood || !v->flood_last) continue;
+            if (memcmp(v->bssid, a->bssid, 6) != 0) continue;
+            if (now - v->flood_last > DEAUTH_TWIN_WIN_SECS) continue;
             deauthed = 1;
             break;
         }

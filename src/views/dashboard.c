@@ -420,10 +420,13 @@ void view_dashboard_draw(const sloth_state_t *s) {
     }
     for (int i = 0; i < s->deauth_count && i < 3; i++) {
         const deauth_event_t *e = &s->deauth_events[i];
-        TPRINT("  Deauth dst=%02x:%02x:%02x:%02x:%02x:%02x rsn=%u %s\n",
+        char rsn[8];
+        if (e->reason_valid) snprintf(rsn, sizeof(rsn), "%u", (unsigned)e->reason);
+        else                 snprintf(rsn, sizeof(rsn), "?");
+        TPRINT("  Deauth dst=%02x:%02x:%02x:%02x:%02x:%02x rsn=%s %s\n",
                e->dst[0], e->dst[1], e->dst[2],
                e->dst[3], e->dst[4], e->dst[5],
-               (unsigned)e->reason, e->flood ? "FLOOD" : "");
+               rsn, e->flood ? "FLOOD" : "");
     }
     TPRINT("  Summary: ifaces=%d aps=%d conns=%d devices=%d alerts=%d\n",
            s->iface_count, s->ap_count, s->conn_count,

@@ -13,6 +13,7 @@
 #include "rf_quality.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
+#include "flood_window.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "fragattack.h"
@@ -166,7 +167,8 @@ static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
 
 static void record_probe(const uint8_t *mac, const char *ssid,
                          int8_t signal, int channel) {
-    time_t now = time(NULL);
+    time_t   now    = flood_wall();
+    uint64_t now_ms = flood_mono_ms();
 
     /* find existing entry */
     for (int i = 0; i < g_count; i++) {
@@ -176,6 +178,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
             g_clients[i].last_seen   = now;
             g_clients[i].frame_count++;
             client_rssi_push(&g_clients[i], signal, now);
+            probe_flood_note(&g_clients[i], now_ms, now);
             if (ssid[0])   /* prefer named probe over wildcard */
                 snprintf(g_clients[i].ssid, sizeof(g_clients[i].ssid),
                          "%s", ssid);
@@ -207,6 +210,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
     g_clients[slot].last_seen   = now;
     g_clients[slot].frame_count = 1;
     client_rssi_push(&g_clients[slot], signal, now);
+    probe_flood_note(&g_clients[slot], now_ms, now);
 }
 
 /* ── pcap callback ───────────────────────────────────────── */
@@ -361,9 +365,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
 
     if (sub == 10 || sub == 12) {
         /* Disassoc (10) or Deauth (12) */
-        uint8_t src[6], dst[6], bssid[6]; uint16_t reason; uint8_t st;
-        if (deauth_parse(dot11, dot11_len, signal, src, dst, bssid, &reason, &st))
-            deauth_record(src, dst, bssid, reason, st);
+        deauth_frame_t df;
+        if (deauth_parse(dot11, dot11_len, &df))
+            deauth_record(&df);
         /* Drop the association for this (BSSID, STA) — either side
          * could be initiating, so try both directions. */
         if (dot11_len >= 22) {
@@ -520,7 +524,8 @@ void probe_stop(void) {
 }
 
 void probe_snapshot(sloth_state_t *s) {
-    time_t now = time(NULL);
+    time_t   now    = flood_wall();
+    uint64_t now_ms = flood_mono_ms();
     pthread_mutex_lock(&g_mu);
 
     /* age out stale entries in-place */
@@ -532,6 +537,9 @@ void probe_snapshot(sloth_state_t *s) {
             i++;
         }
     }
+
+    /* Flood status decays with time, not with the next frame (#88). */
+    for (i = 0; i < g_count; i++) probe_flood_refresh(&g_clients[i], now_ms);
 
     /* sort by last_seen descending (insertion sort — table is small) */
     for (int a = 1; a < g_count; a++) {

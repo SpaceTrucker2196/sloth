@@ -871,11 +871,36 @@ typedef struct {
     time_t   ts;
 } cleartext_cred_t;
 
+/* ── Sliding flood window (#88) ─────────────────────────── */
+/* The most recent counted frame times, on the monotonic clock. K frames
+ * in any W-second window needs only the last K times, so the cap is the
+ * largest threshold any detector uses (PROBE_FLOOD_FRAMES = 30). See
+ * src/flood_window.h. */
+#define FLOOD_WIN_CAP 32
+typedef struct {
+    uint64_t ts_ms[FLOOD_WIN_CAP];  /* ring, monotonic ms */
+    uint8_t  head;                  /* next write slot */
+    uint8_t  n;                     /* valid slots */
+    uint8_t  tripped;               /* threshold met at least once */
+    uint64_t trip_ms;               /* monotonic ms it was last met */
+} flood_window_t;
+
 /* ── Deauth / Disassoc events ───────────────────────────── */
 #define MAX_DEAUTH_ENTRIES    128
-#define DEAUTH_AGE_SECS        60   /* drop events older than this */
-#define DEAUTH_FLOOD_THRESH     5   /* frames per burst to raise flood flag */
-#define DEAUTH_FLOOD_WIN_SECS   5   /* burst window in seconds */
+#define MAX_DEAUTH_VICTIMS    128
+#define DEAUTH_AGE_SECS        60   /* drop rows idle this long (monotonic) */
+/* Flood = at least DEAUTH_FLOOD_THRESH distinct frames inside any
+ * DEAUTH_FLOOD_WIN_SECS-second sliding window (#88). Retransmissions
+ * (Retry=1 repeating the previous sequence number) are not distinct:
+ * the receiver's duplicate filter discards them (IEEE 802.11-2020
+ * 10.3.2.14), so they cannot add impact. */
+#define DEAUTH_FLOOD_THRESH     5
+#define DEAUTH_FLOOD_WIN_SECS   5
+/* Flood status decays this long after the threshold was last met,
+ * whether or not another frame arrives. Longer than the window so a
+ * 1 s poll tick cannot miss a short burst, short enough that a flood
+ * which stopped stops being reported as current. */
+#define DEAUTH_FLOOD_HOLD_SECS 10
 /* Beacon-flood (mdk3/mdk4): a legit RF neighbourhood gains new APs slowly;
  * a flood injects dozens of brand-new BSSIDs in seconds. */
 #define BEACON_FLOOD_THRESH    40   /* distinct new BSSIDs in the window */
@@ -899,17 +924,57 @@ typedef struct {
 #define BTM_ABUSE_THRESH        4
 #define BTM_ABUSE_WIN_SECS     60
 
+/* One observation stream: frames keyed (BSSID, transmitter address,
+ * receiver address, subtype). The addresses are what the frame claims —
+ * a transmitter address is trivially spoofed and never establishes who
+ * actually sent it. */
 typedef struct {
-    uint8_t  src[6];
-    uint8_t  dst[6];     /* ff:ff:ff:ff:ff:ff = broadcast deauth */
-    uint8_t  bssid[6];
-    uint16_t reason;     /* 802.11 reason code */
+    uint8_t  src[6];     /* Address 2 (TA) as claimed */
+    uint8_t  dst[6];     /* Address 1 (RA); ff:ff:ff:ff:ff:ff = broadcast */
+    uint8_t  bssid[6];   /* Address 3 */
+    uint16_t reason;     /* 802.11 reason code; meaningful only if reason_valid */
     uint8_t  subtype;    /* 10=disassoc 12=deauth */
+    time_t   first_seen; /* wall clock, evidence only */
+    time_t   last_seen;
+    int      count;      /* frames observed, retransmissions included */
+    int      flood;      /* this stream alone met the window threshold,
+                            within DEAUTH_FLOOD_HOLD_SECS (decays) */
+    /* #88 additions */
+    uint8_t  fc_flags;       /* Frame Control byte 1 of the latest frame */
+    uint8_t  reason_valid;   /* 1 = latest reason decoded from a cleartext body */
+    int      retries;        /* of count: Retry=1 repeats of the previous seq */
+    int      protected_count;/* of count: Protected Frame bit set (PMF) */
+    int      truncated_count;/* of count: body too short to hold a reason */
+    int      win_count;      /* distinct frames in the trailing window, at snapshot */
+    time_t   flood_last;     /* wall time the threshold was last met; 0 = never */
+} deauth_event_t;
+
+/* Impact aggregate (#88): every distinct deauth/disassoc frame naming
+ * one victim inside one BSS, whatever transmitter address it claims and
+ * whichever direction it travels. A spoofing tool alternates AP→STA and
+ * STA→AP; a per-stream count splits that attack in half, this one does
+ * not. The victim is Address 1 unless Address 1 is the BSSID (a frame
+ * "from" the station to its AP), in which case it is Address 2. A group
+ * Address 1 stays as-is: it names every station of the BSS.
+ *
+ * This is an observed-frame count. Whether any station accepted the
+ * frames — a PMF-associated station drops unprotected ones — is not
+ * something a passive receiver sees. */
+typedef struct {
+    uint8_t  bssid[6];
+    uint8_t  victim[6];
     time_t   first_seen;
     time_t   last_seen;
-    int      count;
-    int      flood;      /* count exceeded DEAUTH_FLOOD_THRESH in window */
-} deauth_event_t;
+    int      frames;         /* distinct frames observed (retransmissions excluded) */
+    int      streams;        /* observation rows feeding this aggregate, at snapshot */
+    uint16_t reason;         /* latest decoded reason; valid only if reason_valid */
+    uint8_t  reason_valid;
+    int      protected_count;
+    int      win_count;      /* distinct frames in the trailing window, at snapshot */
+    int      peak_win;       /* most distinct frames seen inside one window */
+    int      flood;          /* threshold met within DEAUTH_FLOOD_HOLD_SECS (decays) */
+    time_t   flood_last;     /* wall time the threshold was last met; 0 = never */
+} deauth_victim_t;
 
 /* ── Beacon APs (passively observed 802.11 access points) ── */
 #define MAX_BEACON_APS  256
@@ -1285,12 +1350,30 @@ typedef struct {
     int     channel;
     time_t  first_seen;   /* set when the MAC is first observed */
     time_t  last_seen;
-    int     frame_count;
+    int     frame_count;  /* lifetime total; says nothing about rate */
     /* RSSI history for presence classification (#53). Dwell alone
      * cannot separate a resident device from one driving past — the
      * trajectory shape can. See src/presence.h. */
     rssi_ring_t rssi_ring;
+    /* Probe-flood window (#88). burst_* describe the densest window at
+     * the moment the threshold was last met: burst_frames probe
+     * requests whose first and last were burst_span_ms apart. */
+    flood_window_t burst_win;
+    int      burst_frames;
+    uint32_t burst_span_ms;
+    int      flood;       /* threshold met within PROBE_FLOOD_HOLD_SECS (decays) */
+    time_t   flood_last;  /* wall time it was last met; 0 = never */
 } probe_client_t;
+
+/* Probe-request flood (#88): at least PROBE_FLOOD_FRAMES requests from
+ * one transmitter address inside any PROBE_FLOOD_WIN_SECS-second sliding
+ * window — a rate of >= 6/s held across the whole window. A normal
+ * client scans in bursts of a few requests per channel per scan and
+ * pauses between scans, and a monitor on one channel hears only its
+ * share of each scan. */
+#define PROBE_FLOOD_FRAMES     30
+#define PROBE_FLOOD_WIN_SECS    5
+#define PROBE_FLOOD_HOLD_SECS  10
 
 /* ── PNL: per-MAC Preferred Network List ─────────────────── *
  * Aggregated probe-request targets. Each unique MAC carries the
@@ -1984,7 +2067,9 @@ typedef struct {
     deauth_event_t deauth_events[MAX_DEAUTH_ENTRIES];
     int            deauth_count;
     int            deauth_sel;
-    int            deauth_flood_active;  /* any entry currently flooded */
+    int            deauth_flood_active;  /* any victim aggregate currently flooded */
+    deauth_victim_t deauth_victims[MAX_DEAUTH_VICTIMS];   /* (BSSID, victim) impact (#88) */
+    int             deauth_victim_count;
 
     /* ── Beacon APs (passive 802.11 beacon sniff) ──────────── */
     beacon_ap_t beacon_aps[MAX_BEACON_APS];

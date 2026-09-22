@@ -292,8 +292,11 @@ void draw_deauth_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
                  e->dst[3], e->dst[4], e->dst[5]);
         if (e->flood) attrset(COLOR_PAIR(CP_HEAT_PEAK));
         else          attrset(COLOR_PAIR(CP_NORMAL));
-        clipline(y0 + 2 + i, x, w, "  %-17s %5u %s",
-                 dst, (unsigned)e->reason, e->flood ? "FLOOD" : "");
+        char rsn[8];
+        if (e->reason_valid) snprintf(rsn, sizeof(rsn), "%u", (unsigned)e->reason);
+        else                 snprintf(rsn, sizeof(rsn), "?");
+        clipline(y0 + 2 + i, x, w, "  %-17s %5s %s",
+                 dst, rsn, e->flood ? "FLOOD" : "");
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }

@@ -1389,10 +1389,16 @@ static void write_events(const sloth_state_t *s, time_t now) {
         bind_txt(st, 3, bssid);
         sqlite3_bind_int64(st, 4, (sqlite3_int64)(d->first_seen ? d->first_seen : now));
         sqlite3_bind_int64(st, 5, (sqlite3_int64)(d->last_seen  ? d->last_seen  : now));
-        sqlite3_bind_int(st, 6, (int)d->reason);
+        /* No reason is stored when none was decoded — a PMF body is
+         * ciphertext, a truncated one has no field (#88). The column
+         * has always been nullable. */
+        if (d->reason_valid) sqlite3_bind_int(st, 6, (int)d->reason);
+        else                 sqlite3_bind_null(st, 6);
         sqlite3_bind_int(st, 7, (int)d->subtype);
         sqlite3_bind_int(st, 8, d->count);
-        sqlite3_bind_int(st, 9, d->flood ? 1 : 0);
+        /* flood_last too: the threshold may have been met and decayed
+         * between two ticks. */
+        sqlite3_bind_int(st, 9, (d->flood || d->flood_last) ? 1 : 0);
         step_reset(ST_DEAUTH);
     }
 

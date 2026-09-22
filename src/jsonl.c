@@ -743,6 +743,15 @@ void jsonl_emit_deauths(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "last_seen",  (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "count",      (long long)e->count);
         kv_int(buf, LINEBUF, &off, "flood",      e->flood ? 1 : 0);
+        /* #88, additive: "reason" is 0 and meaningless unless
+         * reason_valid; retries/protected/truncated are subsets of
+         * count; flood_last is when the window threshold was last met
+         * (0 = never). */
+        kv_int(buf, LINEBUF, &off, "reason_valid", e->reason_valid ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "retries",      (long long)e->retries);
+        kv_int(buf, LINEBUF, &off, "protected",    (long long)e->protected_count);
+        kv_int(buf, LINEBUF, &off, "truncated",    (long long)e->truncated_count);
+        kv_int(buf, LINEBUF, &off, "flood_last",   (long long)e->flood_last);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -762,6 +771,11 @@ void jsonl_emit_probe_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        /* #88, additive: probe-flood window evidence. */
+        kv_int(buf, LINEBUF, &off, "flood",         e->flood ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "flood_last",    (long long)e->flood_last);
+        kv_int(buf, LINEBUF, &off, "burst_frames",  (long long)e->burst_frames);
+        kv_int(buf, LINEBUF, &off, "burst_span_ms", (long long)e->burst_span_ms);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

@@ -551,6 +551,7 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     /* deauth */
     s.deauth_events[0].bssid[0] = 0xcc;
     s.deauth_events[0].flood = 1;
+    s.deauth_events[0].protected_count = 1;   /* PMF: reason undecoded (#88) */
     s.deauth_count = 1;
 
     /* probe_client */
@@ -649,7 +650,10 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     ASSERT(contains(body, "\"ssid\":\"Cafe\""));
     ASSERT(contains(body, "\"type\":\"deauth\""));
     ASSERT(contains(body, "\"flood\":1"));
+    ASSERT(contains(body, "\"reason_valid\":0"));
+    ASSERT(contains(body, "\"protected\":1"));
     ASSERT(contains(body, "\"type\":\"probe_client\""));
+    ASSERT(contains(body, "\"burst_frames\":0"));
     ASSERT(contains(body, "\"type\":\"pnl_client\""));
     ASSERT(contains(body, "\"ssids\":[\"MyNet\"]"));
     ASSERT(contains(body, "\"type\":\"seqnum_client\""));

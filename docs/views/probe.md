@@ -19,7 +19,8 @@ verbatim.
 ## What sloth captures
 
 Per client: MAC, last probed SSID, signal (dBm), channel, last-seen
-timestamp, frame count.
+timestamp, frame count (lifetime — it says nothing about rate), and the
+probe-flood window below.
 
 ## View
 
@@ -53,6 +54,43 @@ timestamp, frame count.
 - **Constant unchanged MAC** in an area where everyone else's
   randomises — old device, or someone deliberately not randomising
   (uncommon).
+- **Probe flood** → `PROBE_FLOOD` (LOW). See below.
+
+## Probe-request flood
+
+`PROBE_FLOOD` fires for one transmitter address that sends **at least
+30 probe requests inside some 5-second sliding window**
+(`PROBE_FLOOD_FRAMES`, `PROBE_FLOOD_WIN_SECS`) — a rate of ≥ 6/s held
+across the whole window. The window is half-open, `(t − 5 s, t]`:
+30 requests whose first and last are 4.999 s apart fire, 5.000 s apart
+do not.
+
+- **It is a rate, not a total.** 30 probes over 300 s do not fire;
+  30 over 3 s do. Until #88 the rule gated on the lifetime
+  `frame_count ≥ 30` and `last_seen − first_seen ≥ 5 s` and never
+  compared the rate it computed, so both fired alike — and a burst
+  shorter than 5 s could never fire at all. A long slow history also
+  no longer dilutes a later burst.
+- The rule re-checks the rate on the window's own evidence
+  (`burst_frames / 5 s ≥ 6/s`, span under 5 s) rather than trusting
+  the flag alone. The detail reports the burst actually seen:
+  `02:12:34:56:78:9a sent 30 probes in 3.0s (10.0/s, >= 6/s over 5s)`.
+- **Durations run on the monotonic clock**; a wall-clock step inside a
+  burst changes nothing. Wall time is kept as evidence (`flood_last`).
+- **Flood status decays by itself** `PROBE_FLOOD_HOLD_SECS` = 10 s after
+  the threshold was last met, with no further frame needed.
+- JSONL `probe_client` carries `flood`, `flood_last`, `burst_frames`,
+  `burst_span_ms`.
+
+Why 6/s: a client scans in bursts — a few requests per channel per
+scan, then a pause — and a monitor parked on one channel hears only its
+share of each scan. Six per second from one address, sustained for five
+seconds on one channel, is scanning tools (`hcxdumptool`, `wifite`),
+PNL-walking, or a stuck client looping.
+
+What it is not: evidence of *who* is probing. The source address is
+what the frame claims — randomised on modern phones, and trivially
+set by a tool — so the alert names an address, not a device.
 
 ## Operational tips
 

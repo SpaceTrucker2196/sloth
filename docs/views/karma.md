@@ -8,7 +8,8 @@ network a client probes for" lure. See issue #30.
 
 Built passively each poll by `karma_update()` from `s->beacon_aps[]`
 (distinct-SSID history per BSSID), the client PNLs in
-`s->pnl_clients[]`, and the deauth ring `s->deauth_events[]`. No new
+`s->pnl_clients[]`, and the deauth impact aggregates
+`s->deauth_victims[]`. No new
 radio traffic — every input is already captured by the beacon snooper,
 the probe/PNL tracker, and the deauth tracker. The view reads only
 `s->karma_aps[]`.
@@ -33,8 +34,11 @@ Per candidate:
   IE fingerprint (encryption / cipher / AKM / MFP + vendor-IE hash). A
   legit multi-VAP AP varies these per VAP; a single spoofing radio does
   not, so uniformity is a KARMA signal (adds +1 to the score).
-- **chain** — a deauth flood is active within 60 s (`deauth-then-lure`:
-  knock clients off, then answer their reconnection probes).
+- **chain** — a deauth flood's window threshold was last met within
+  60 s (`deauth-then-lure`: knock clients off, then answer their
+  reconnection probes). Measured from when the flood was last *met*,
+  not from the last deauth frame, so a trickle of frames after a flood
+  ends does not keep it "concurrent" (#88).
 - **score** — `1 + (PNL>0 ? 2 : 0) + (chain ? 3 : 0)`, ranked
   strongest-first.
 

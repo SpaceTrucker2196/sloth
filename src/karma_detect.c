@@ -77,9 +77,12 @@ static int ie_uniform(const beacon_ap_t *a) {
 
 /* Is a deauth flood active within the correlation window? */
 static int deauth_active(const sloth_state_t *s, time_t now) {
-    for (int k = 0; k < s->deauth_count; k++) {
-        const deauth_event_t *e = &s->deauth_events[k];
-        if (e->flood && now - e->last_seen <= KARMA_DEAUTH_WIN_SECS) return 1;
+    /* When the threshold was last met, not when the last frame came
+     * (#88): trailing frames after a flood do not extend it. */
+    for (int k = 0; k < s->deauth_victim_count; k++) {
+        const deauth_victim_t *v = &s->deauth_victims[k];
+        if (v->flood_last && now - v->flood_last <= KARMA_DEAUTH_WIN_SECS)
+            return 1;
     }
     return 0;
 }

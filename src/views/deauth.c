@@ -79,26 +79,26 @@ void view_deauth_draw(const sloth_state_t *s) {
         TPRINT("  iface: %s", s->probe_iface);
     TPRINT("\n");
 
-    /* flood alert banner */
+    /* Flood banner, from the (BSSID, victim) impact aggregates (#88).
+     * "Observed": the frames were seen on the air; who sent them and
+     * whether any station acted on them are not visible from here. */
     if (s->deauth_flood_active) {
         tui_heat(1.0);
-        TPRINT(" !! DEAUTH FLOOD DETECTED");
-        for (int i = 0; i < s->deauth_count; i++) {
-            const deauth_event_t *e = &s->deauth_events[i];
-            if (!e->flood) continue;
-            char flood_buf[80];
-            if (is_broadcast(e->dst))
-                snprintf(flood_buf, sizeof(flood_buf),
-                         " -- %s → BROADCAST (%d frames)",
-                         mac_str(e->src), e->count);
-            else
-                snprintf(flood_buf, sizeof(flood_buf),
-                         " -- %s → %s (%d frames)",
-                         mac_str(e->src), mac_str(e->dst), e->count);
-            TPRINT("%s", flood_buf);
-            break;  /* show first flooder only */
+        TPRINT(" !! DEAUTH FLOOD OBSERVED");
+        for (int i = 0; i < s->deauth_victim_count; i++) {
+            const deauth_victim_t *v = &s->deauth_victims[i];
+            if (!v->flood) continue;
+            char vic[18], bss[18];
+            mac_fmt(vic, v->victim);
+            mac_fmt(bss, v->bssid);
+            TPRINT(" -- %s in %s: %d frames, peak %d/%ds",
+                   is_broadcast(v->victim) ? "BROADCAST" : vic, bss,
+                   v->frames, v->peak_win, DEAUTH_FLOOD_WIN_SECS);
+            break;  /* show first flooded victim only */
         }
         TPRINT("\n");
+        tui_dim();
+        TPRINT("    sender addresses unverified; disruption not confirmed\n");
         tui_normal();
     }
 
@@ -137,7 +137,12 @@ void view_deauth_draw(const sloth_state_t *s) {
 
         char rsn_buf[16];
         const char *rs = reason_str(e->reason);
-        if (rs)
+        /* A protected (PMF) body is ciphertext and a truncated one has
+         * no reason field: say so rather than name a code (#88). */
+        if (!e->reason_valid)
+            snprintf(rsn_buf, sizeof(rsn_buf), "%s",
+                     (e->fc_flags & 0x40) ? "encrypted" : "none");
+        else if (rs)
             snprintf(rsn_buf, sizeof(rsn_buf), "%s", rs);
         else
             snprintf(rsn_buf, sizeof(rsn_buf), "code-%u", e->reason);
@@ -273,8 +278,9 @@ void view_deauth_key(sloth_state_t *s, int key) {
         break;
     case 'c': case 'C':
         deauth_clear();
-        s->deauth_count       = 0;
-        s->deauth_sel         = 0;
+        s->deauth_count        = 0;
+        s->deauth_victim_count = 0;
+        s->deauth_sel          = 0;
         s->deauth_flood_active = 0;
         break;
     default:

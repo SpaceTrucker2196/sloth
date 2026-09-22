@@ -925,6 +925,36 @@ static void test_deauth_flood_flag_latches(void) {
     unlink(db_path);
 }
 
+/* #88: a reason that was not decoded (PMF ciphertext, truncated body)
+ * is stored as NULL, not 0 — reason 0 is a code, "Reserved". A flood
+ * that met the threshold and decayed between ticks still latches, via
+ * flood_last. */
+static void test_deauth_undecoded_reason_is_null(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    deauth_event_t *d = &s.deauth_events[s.deauth_count++];
+    memset(d, 0, sizeof(*d));
+    d->src[0] = 0xaa; d->dst[0] = 0xbb; d->bssid[0] = 0xcc;
+    d->subtype = 12;
+    d->count = 6;
+    d->protected_count = 6;
+    d->flood = 0;
+    d->flood_last = 1700000003;
+    d->first_seen = 1700000000;
+    d->last_seen  = 1700000005;
+    db_tick(&s, 1700000010);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM deauth_events WHERE reason IS NULL"), 1);
+    ASSERT_EQ(q_int("SELECT flood FROM deauth_events"), 1);
+
+    s.deauth_events[0].reason_valid = 1;
+    s.deauth_events[0].reason = 7;
+    s.deauth_events[0].first_seen = 1700000100;
+    db_tick(&s, 1700000110);
+    ASSERT_EQ(q_int("SELECT reason FROM deauth_events WHERE first_seen = 1700000100"), 7);
+    db_close();
+    unlink(db_path);
+}
+
 /* Twin evidence flags latch for the same reason: a twin caught
  * mid-attack once was caught mid-attack. */
 static void test_twin_evidence_flags_latch(void) {
@@ -2252,6 +2282,7 @@ void run_db_tests(void) {
     RUN_TEST(test_alert_second_episode_is_new_row);
     RUN_TEST(test_alert_severity_tracks_latest);
     RUN_TEST(test_deauth_flood_flag_latches);
+    RUN_TEST(test_deauth_undecoded_reason_is_null);
     RUN_TEST(test_twin_evidence_flags_latch);
     RUN_TEST(test_scan_entries_flagged_only);
     RUN_TEST(test_scan_entry_clamps_port_count);

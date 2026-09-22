@@ -38,6 +38,7 @@ void run_quic_snoop_tests(void);
 void run_ssdp_snoop_tests(void);
 void run_beacon_snoop_tests(void);
 void run_deauth_snoop_tests(void);
+void run_flood_window_tests(void);
 void run_http_log_tests(void);
 void run_tls_log_tests(void);
 void run_quic_log_tests(void);
@@ -157,6 +158,7 @@ int main(void) {
     run_ssdp_snoop_tests();
     run_beacon_snoop_tests();
     run_deauth_snoop_tests();
+    run_flood_window_tests();
     run_http_log_tests();
     run_tls_log_tests();
     run_quic_log_tests();

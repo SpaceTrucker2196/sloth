@@ -268,7 +268,7 @@ Six rules feed `VIEW_ALERTS`. New keys also append to the JSONL stream and (if `
 | Rule | Severity | Trigger | match_ip / port |
 |------|----------|---------|-----------------|
 | `PORT_SCAN`      | CRIT | scanner's IP touched ≥ 8 distinct local ports | scanner IP / 0  |
-| `DEAUTH_FLOOD`   | WARN | ≥ 5 deauth/disassoc frames in 5 s to one target | — (L2 only)    |
+| `DEAUTH_FLOOD`   | WARN | ≥ 5 distinct deauth/disassoc frames in any 5 s sliding window at one (BSSID, victim); observed frames, not confirmed disruption | — (L2 only)    |
 | `NXDOMAIN_BURST` | WARN | ≥ 10 NXDOMAIN replies to one src in 60 s        | src / 53        |
 | `THREAT_DOMAIN`  | CRIT | DNS qname matches embedded IOC list             | src / 53        |
 | `THREAT_IP`      | CRIT | conn remote IP matches embedded IOC list        | remote IP / port |

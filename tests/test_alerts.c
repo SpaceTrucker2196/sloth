@@ -18,6 +18,7 @@
 #include "ownership.h"
 #include "transit.h"
 #include "rf_quality.h"
+#include "flood_window.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -34,28 +35,46 @@ static void add_scan(sloth_state_t *s, const char *ip, int ports, int flagged) {
     e->last_seen  = time(NULL);
 }
 
-static void add_deauth_flood(sloth_state_t *s, const uint8_t dst_mac[6]) {
-    deauth_event_t *e = &s->deauth_events[s->deauth_count++];
-    memset(e, 0, sizeof(*e));
-    memcpy(e->dst, dst_mac, 6);
-    e->reason = 7;
-    e->count  = 20;
-    e->flood  = 1;
-}
-
-/* Variant for tests that need to assert detail/key content — caller
- * supplies both dst and bssid so the formatted MACs are predictable. */
+/* A flood as the rule sees it (#88): a (BSSID, victim) impact aggregate
+ * whose window threshold was met just now, plus the observation row
+ * that fed it. */
 static void add_deauth_flood_full(sloth_state_t *s,
                                    const uint8_t dst_mac[6],
                                    const uint8_t bssid[6],
                                    uint16_t reason, int count) {
+    time_t now = time(NULL);
     deauth_event_t *e = &s->deauth_events[s->deauth_count++];
     memset(e, 0, sizeof(*e));
     memcpy(e->dst,   dst_mac, 6);
+    memcpy(e->src,   bssid,   6);
     memcpy(e->bssid, bssid,   6);
-    e->reason = reason;
-    e->count  = count;
-    e->flood  = 1;
+    e->reason       = reason;
+    e->reason_valid = 1;
+    e->subtype      = 12;
+    e->count        = count;
+    e->flood        = 1;
+    e->first_seen   = now;
+    e->last_seen    = now;
+    e->flood_last   = now;
+
+    deauth_victim_t *v = &s->deauth_victims[s->deauth_victim_count++];
+    memset(v, 0, sizeof(*v));
+    memcpy(v->victim, dst_mac, 6);
+    memcpy(v->bssid,  bssid,   6);
+    v->reason       = reason;
+    v->reason_valid = 1;
+    v->frames       = count;
+    v->peak_win     = count < FLOOD_WIN_CAP ? count : FLOOD_WIN_CAP;
+    v->streams      = 1;
+    v->flood        = 1;
+    v->first_seen   = now;
+    v->last_seen    = now;
+    v->flood_last   = now;
+}
+
+static void add_deauth_flood(sloth_state_t *s, const uint8_t dst_mac[6]) {
+    static const uint8_t bssid[6] = {0x00,0x00,0x5e,0x00,0x53,0x01};
+    add_deauth_flood_full(s, dst_mac, bssid, 7, 20);
 }
 
 static void add_dns_nxdomain(sloth_state_t *s, const char *src,
@@ -201,9 +220,15 @@ static void test_deauth_flood_detail_content(void) {
     ASSERT(strstr(d, "12:34:56:78:9a:bc") != NULL);
     ASSERT(strstr(d, "de:ad:be:ef:00:42") != NULL);
     ASSERT(strstr(d, "reason=7")  != NULL);
-    ASSERT(strstr(d, "count=25")  != NULL);
-    /* Dedup key is "deauth:<dst>" — keep the same client at one alert. */
-    ASSERT(strstr(s.alerts[idx].key, "deauth:12:34:56:78:9a:bc") != NULL);
+    ASSERT(strstr(d, "observed 25 frames") != NULL);
+    ASSERT(strstr(d, "peak 25 in 5s") != NULL);
+    /* Observed frames, not established disruption (#88). */
+    ASSERT(strstr(d, "sender unverified") != NULL);
+    ASSERT(strstr(d, "disruption not confirmed") != NULL);
+    /* Dedup key is "deauth:<victim>@<bssid>" (#88): one alert per
+     * station per BSS, so two APs' broadcast deauths stay apart. */
+    ASSERT(strstr(s.alerts[idx].key,
+                  "deauth:12:34:56:78:9a:bc@de:ad:be:ef:00:42") != NULL);
 }
 
 static void test_nxdomain_burst_fires_at_threshold(void) {
@@ -1424,7 +1449,7 @@ static void test_evil_twin_attack_chain_fires_crit(void) {
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, real, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL);  /* inside the 5s window */
+    s.deauth_victims[0].flood_last = time(NULL);  /* inside the 5s window */
 
     alerts_update(&s);
 
@@ -1458,7 +1483,8 @@ static void test_evil_twin_attack_chain_stale_deauth_no_fire(void) {
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, real, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL) - 60;  /* well outside 5s */
+    s.deauth_victims[0].flood = 0;
+    s.deauth_victims[0].flood_last = time(NULL) - 60;  /* well outside 5s */
 
     alerts_update(&s);
 
@@ -1477,7 +1503,7 @@ static void test_evil_twin_attack_chain_no_twin_no_fire(void) {
     add_beacon(&s, "Solo-Net", solo, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, solo, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL);
+    s.deauth_victims[0].flood_last = time(NULL);
 
     alerts_update(&s);
     for (int k = 0; k < s.alert_count; k++) {
@@ -1497,8 +1523,8 @@ static void test_evil_twin_attack_chain_no_flood_no_fire(void) {
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, real, 7, 20);
-    s.deauth_events[0].flood     = 0;             /* below threshold */
-    s.deauth_events[0].last_seen = time(NULL);
+    s.deauth_victims[0].flood      = 0;           /* never met threshold */
+    s.deauth_victims[0].flood_last = 0;
 
     alerts_update(&s);
     for (int k = 0; k < s.alert_count; k++) {
@@ -1520,7 +1546,7 @@ static void test_evil_twin_attack_chain_reverse_direction(void) {
      * makes `twin` the "real" half being defended and `real` the rogue. */
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, twin, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL);
+    s.deauth_victims[0].flood_last = time(NULL);
 
     alerts_update(&s);
     ASSERT_EQ(evil_twin_bssid_is_tainted(real), 1);
@@ -1541,7 +1567,7 @@ static void test_evil_twin_taint_clear_drops_entries(void) {
     add_beacon(&s, "Cafe-Net", twin, "WPA2");
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, real, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL);
+    s.deauth_victims[0].flood_last = time(NULL);
     alerts_update(&s);
     ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
 
@@ -1584,7 +1610,7 @@ static void test_e2e_full_attack_chain(void) {
     /* Phase 4: deauth flood on the real BSSID inside the 5s window. */
     uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
     add_deauth_flood_full(&s, client, real, 7, 20);
-    s.deauth_events[0].last_seen = time(NULL);
+    s.deauth_victims[0].flood_last = time(NULL);
 
     alerts_update(&s);
     twins_snapshot(&s);
@@ -2048,21 +2074,42 @@ static void test_attack_tool_ua_normal_browser_no_fire(void) {
 
 /* ── Probe flood ─────────────────────────────────────────── */
 
+/* Probe clients are driven through the same window code the capture
+ * path runs (#88): `frames` requests evenly spread so the first and
+ * last are `elapsed_s` apart, on an injected clock. The rule reads the
+ * window, not the lifetime frame_count / first_seen / last_seen. */
+static uint64_t g_pf_mono;
+static time_t   g_pf_wall;
+static uint64_t pf_mono(void) { return g_pf_mono; }
+static time_t   pf_wall(void) { return g_pf_wall; }
+
 static void seed_probe_client(sloth_state_t *s, const uint8_t mac[6],
                                 int frames, long elapsed_s) {
     if (s->probe_count >= MAX_PROBE_CLIENTS) return;
     probe_client_t *p = &s->probe_clients[s->probe_count++];
     memset(p, 0, sizeof(*p));
     memcpy(p->mac, mac, 6);
-    p->frame_count = frames;
-    p->last_seen   = time(NULL);
-    p->first_seen  = p->last_seen - elapsed_s;
     p->signal_dbm  = -55;
     p->channel     = 6;
+    g_pf_mono = 7000000;
+    g_pf_wall = time(NULL) - elapsed_s;
+    flood_test_set_clock(pf_mono, pf_wall);
+    uint64_t span = (uint64_t)elapsed_s * 1000u;
+    uint64_t t0 = g_pf_mono;
+    for (int i = 0; i < frames; i++) {
+        g_pf_mono = t0 + (frames > 1 ? span * (uint64_t)i / (uint64_t)(frames - 1) : 0);
+        g_pf_wall = time(NULL) - elapsed_s + (time_t)((g_pf_mono - t0) / 1000);
+        if (i == 0) p->first_seen = g_pf_wall;
+        p->last_seen = g_pf_wall;
+        p->frame_count++;
+        probe_flood_note(p, g_pf_mono, g_pf_wall);
+    }
+    probe_flood_refresh(p, g_pf_mono);
+    flood_test_set_clock(NULL, NULL);
 }
 
 static void test_probe_flood_fires_on_high_rate(void) {
-    /* 40 probes in 5 s = 8/s — above threshold. */
+    /* 40 probes in 5 s = 8/s: some 5 s window holds 30. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
@@ -2084,25 +2131,27 @@ static void test_probe_flood_low_total_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
 }
 
-static void test_probe_flood_too_brief_no_fire(void) {
-    /* 40 probes in 1s — elapsed below 5s window, suspect single
-     * burst rather than sustained scan. Stay silent. */
+/* #88 inverted this one. It used to assert silence for 40 probes in
+ * 1 s ("suspect single burst rather than sustained scan"), which is
+ * why a burst could never fire. The issue's regression list requires a
+ * burst (30 over 3 s) to fire; 40 in 1 s is a denser version of it. */
+static void test_probe_flood_short_burst_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
     seed_probe_client(&s, mac, 40, 1);
     alerts_update(&s);
-    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+    ASSERT(find_alert(&s, ALERT_TYPE_PROBE_FLOOD) >= 0);
 }
 
-/* Kills the `frame_count < PROBE_FLOOD_FRAMES` threshold mutation
- * (`<` → `<=`): the rule fires *at* the threshold, not one above. */
+/* Kills the frame-threshold `<` → `<=` mutation: the rule fires *at*
+ * PROBE_FLOOD_FRAMES inside the window, not one above. (30 spanning
+ * exactly 5 s is outside the half-open window — see test_flood_window.) */
 static void test_probe_flood_exactly_at_frame_threshold_fires(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
-    /* PROBE_FLOOD_FRAMES = 30, PROBE_FLOOD_WINDOW_S = 5. */
-    seed_probe_client(&s, mac, 30, 5);
+    seed_probe_client(&s, mac, PROBE_FLOOD_FRAMES, 4);
     alerts_update(&s);
     ASSERT(find_alert(&s, ALERT_TYPE_PROBE_FLOOD) >= 0);
 }
@@ -2112,7 +2161,7 @@ static void test_probe_flood_one_below_frame_threshold_no_fire(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
-    seed_probe_client(&s, mac, 29, 5);
+    seed_probe_client(&s, mac, PROBE_FLOOD_FRAMES - 1, 4);
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
 }
@@ -2251,7 +2300,7 @@ static void test_karma_deauth_then_lure_in_detail(void) {
     seed_karma_ap(&s, bssid, ssids, 3);
     uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
     add_deauth_flood(&s, victim);
-    s.deauth_events[0].last_seen = time(NULL);   /* live flood */
+    s.deauth_victims[0].flood_last = time(NULL);   /* live flood */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
@@ -2267,7 +2316,8 @@ static void test_karma_stale_deauth_no_chain_note(void) {
     seed_karma_ap(&s, bssid, ssids, 3);
     uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
     add_deauth_flood(&s, victim);
-    s.deauth_events[0].last_seen = time(NULL) - 300;   /* stale */
+    s.deauth_victims[0].flood = 0;
+    s.deauth_victims[0].flood_last = time(NULL) - 300;   /* stale */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
@@ -5255,7 +5305,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_probe_flood_exactly_at_frame_threshold_fires);
     RUN_TEST(test_probe_flood_one_below_frame_threshold_no_fire);
     RUN_TEST(test_probe_flood_detail_contains_mac);
-    RUN_TEST(test_probe_flood_too_brief_no_fire);
+    RUN_TEST(test_probe_flood_short_burst_fires);
     RUN_TEST(test_attack_tool_ua_sqlmap_fires);
     RUN_TEST(test_attack_tool_ua_nmap_case_insensitive);
     RUN_TEST(test_attack_tool_ua_normal_browser_no_fire);

@@ -161,12 +161,14 @@ static void test_twins_taint_overrides_rssi_assignment(void) {
      * tainted, the closer one b is "real" and a (the tainted) is twin. */
     add_beacon(&s, "Cafe-Net", a, "WPA2", -80);
     add_beacon(&s, "Cafe-Net", b, "WPA2", -45);
-    /* Seed a deauth flood targeting `b` so the chain rule taints `a`. */
-    deauth_event_t *e = &s.deauth_events[s.deauth_count++];
-    memset(e, 0, sizeof(*e));
-    memcpy(e->bssid, b, 6);
-    e->flood     = 1;
-    e->last_seen = time(NULL);
+    /* Seed a deauth flood targeting `b` so the chain rule taints `a`.
+     * The chain reads the (BSSID, victim) aggregate (#88). */
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count++];
+    memset(v, 0, sizeof(*v));
+    memcpy(v->bssid, b, 6);
+    memset(v->victim, 0xff, 6);
+    v->flood      = 1;
+    v->flood_last = time(NULL);
     alerts_update(&s);
     ASSERT_EQ(evil_twin_bssid_is_tainted(a), 1);
 
