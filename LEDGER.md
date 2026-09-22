@@ -126,3 +126,4 @@
 | 3f854ec | 2026-09-21T13:03:24Z | claude-opus-4-8,claude-opus-5 | 194 | 58368 | 10440826 | 2225439 | 28.9350 | release v1.8.1 |
 | 89e8ff0 | 2026-09-21T20:05:31Z | claude-opus-5 | 152 | 98481 | 7223961 | 310753 | 9.1823 | #83 F01 EAPOL-Key parser heap over-read (declared-span bounds) |
 | aecf2ae | 2026-09-21T20:41:40Z | claude-opus-5 | 170 | 103822 | 9421994 | 277861 | 10.0860 | #93 F11 data-socket whole-record framing + gap accounting |
+| cda85c5 | 2026-09-22T11:14:18Z | claude-opus-5 | 142 | 88752 | 7152543 | 277600 | 8.5718 | #85 F03 capture-scope fail-closed (filter, startup refusal, open/run ordering) |
