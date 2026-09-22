@@ -128,3 +128,4 @@
 | aecf2ae | 2026-09-21T20:41:40Z | claude-opus-5 | 170 | 103822 | 9421994 | 277861 | 10.0860 | #93 F11 data-socket whole-record framing + gap accounting |
 | cda85c5 | 2026-09-22T11:14:18Z | claude-opus-5 | 142 | 88752 | 7152543 | 277600 | 8.5718 | #85 F03 capture-scope fail-closed (filter, startup refusal, open/run ordering) |
 | dd6ed49 | 2026-09-22T11:38:33Z | claude-opus-5 | 282 | 185791 | 21890533 | 447455 | 20.0660 | #87 F05 private export artifacts (0700/0600, validated paths, reported failures) |
+| aebb594 | 2026-09-22T12:33:57Z | claude-opus-5 | 298 | 223936 | 26001495 | 468966 | 23.2903 | #88 F06 true sliding flood windows + evidence honesty |
