@@ -8,10 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sqlite3.h>
 
 #include "ownership.h"
 #include "presence.h"
+#include "secure_file.h"
 
 #define DB_DEFAULT_INTERVAL_S 1
 /* Maintenance is hourly: pruning is a scan over every table, and the
@@ -674,9 +677,39 @@ static int check_version(void) {
 
 /* ── open / close ────────────────────────────────────────── */
 
+/* SQLite creates a new database 0644 & ~umask, and gives -wal / -shm
+ * the main file's mode. So the main file is created (or validated)
+ * 0600 here first, by descriptor, and the side files SQLite may find
+ * already on disk are checked too: a permissive or symlinked one is
+ * refused, never repaired (#87). */
+static int db_prepare_private(const char *path) {
+    char err[SFILE_ERR_MAX];
+    int fd = sfile_open(AT_FDCWD, path, SFILE_APPEND, err, sizeof(err));
+    if (fd < 0) {
+        fprintf(stderr, "sloth: could not open db %s\n", err);
+        return 0;
+    }
+    close(fd);
+    static const char *const side[] = { "-wal", "-shm", "-journal" };
+    for (size_t i = 0; i < sizeof(side) / sizeof(side[0]); i++) {
+        char p[4096];
+        snprintf(p, sizeof(p), "%s%s", path, side[i]);
+        if (sfile_check_existing(p, err, sizeof(err)) != 0) {
+            fprintf(stderr, "sloth: could not open db %s\n", err);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int db_open(const char *path) {
     if (!path || !path[0]) return 0;
-    if (sqlite3_open(path, &g_db) != SQLITE_OK) {
+    if (!db_prepare_private(path)) return 0;
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+#ifdef SQLITE_OPEN_NOFOLLOW
+    flags |= SQLITE_OPEN_NOFOLLOW;
+#endif
+    if (sqlite3_open_v2(path, &g_db, flags, NULL) != SQLITE_OK) {
         fprintf(stderr, "sloth: could not open db %s: %s\n", path,
                 g_db ? sqlite3_errmsg(g_db) : "?");
         sqlite3_close(g_db);

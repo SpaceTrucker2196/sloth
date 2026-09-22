@@ -436,3 +436,38 @@ different byte stream and add a field that has no meaning in `-o FILE`.
 `socket_gap` appears only after an actual drop, only on that
 connection, so the schema change is additive and a healthy consumer
 never sees it.
+
+## 2026-09-22 — Private export files and reported write failures (#87)
+
+**Source**: issue #87 (external CISO/GRC review, finding F05).
+`src/secure_file.{c,h}` (new), `src/eapol_log.c`, `src/alert_pcap.c`,
+`src/jsonl.c`, `src/db.c`, `src/pcap_write.c`, `src/main.c`,
+`src/views/eapol.c`; tests in `test_eapol_log.c`, `test_alert_pcap.c`,
+`test_jsonl.c`, `test_db.c`, `test_pcap_write.c`.
+
+**Doc updates**: [[pcap-export]] gained "Permissions and failures" and
+lost two stale claims (per-alert hits never appended to one file, and
+`pcap_write.c` never handled all three paths). [[jsonl-schema]],
+[[sqlite-schema]] and [[posture-report]] state the 0600 rule and the
+refusal behaviour. `docs/views/eapol.md` gained "Export handling"; the
+README Output section a file-permissions paragraph, and the `--db`
+example now reads the 0600 file with `sudo`.
+
+**Index updates**: none (no new page).
+
+**Why**: the EAPOL directory was `mkdir(…, 0755)` and every file a plain
+`fopen()`, so under the usual 022 umask a fresh PMKID export was
+world-readable; SQLite likewise creates `0644 & ~umask` and copies that
+to the WAL. Directory creation and most write errors were ignored. Now
+dirs are 0700 and files 0600 by descriptor (`O_NOFOLLOW|O_CLOEXEC`,
+relative to a directory fd validated once at startup), and an existing
+path is validated and refused — never `chmod`ed — when it is a symlink,
+foreign-owned, multiply linked, or group/other accessible. Each artifact
+has a deliberate create mode: `eapol.22000` and `-o` append; handshake
+pcaps are atomically replaced; alert and Packets-view pcaps are
+exclusive with a numeric suffix; reports are validated then truncated.
+Failures print once to stderr and are counted (EAPOL view shows it).
+
+**Not done here** (owner decision): a separate opt-in for collecting
+crackable material with a short default retention, and an explicit
+group-sharing policy. Today a group bit is simply refused.

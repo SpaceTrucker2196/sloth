@@ -50,8 +50,54 @@ Sloth additionally writes a per-handshake **`DIR/<bssid>_<sta>.pcap`**
 containing the raw 802.11 EAPOL-Key frames (M1..M4 as captured, no
 radiotap, DLT 105). The file is replayable through `aircrack-ng -w
 wordlist.txt -e <SSID> <file>.pcap` or openable in Wireshark / tshark
-for inspection. Re-completions overwrite the prior file with the
+for inspection. Re-completions replace the prior file with the
 freshest capture for that (BSSID, STA) pair.
+
+### Export handling (#87)
+
+**Everything under `--eapol-dir` is crackable material.** A PMKID or a
+4-way handshake supports offline password guessing against the network
+it came from; treat the directory like a password file. sloth enforces
+that on disk, independent of the process umask:
+
+| Artifact | Mode | How it is written |
+|---|---|---|
+| `DIR/` | **0700** | created by sloth if absent |
+| `DIR/eapol.22000` | **0600** | **append** — the run-spanning file hashcat reads whole; every earlier line stays a valid target. A failed write is rolled back to the previous length, so a full disk leaves no half line. |
+| `DIR/<bssid>_<sta>.pcap` | **0600** | **atomic replace** — written to an exclusive temp file in `DIR`, renamed over the old name only once complete. A failed write leaves the previous capture intact. |
+
+An existing path is **validated, never repaired**. `DIR` must be a real
+directory owned by sloth's effective uid with no group/other permission
+bits; `eapol.22000` must be a private regular file with a single link.
+Anything else — a `0755` directory, a `0644` file, another user's
+directory, a **symlink** at either path — is refused with a reason.
+sloth does not `chmod` a path you gave it: fix the path (or pick a new
+one) yourself. A refused `DIR` stops startup:
+
+```
+sloth: --eapol-dir /srv/caps: mode 0755 is group/other accessible — refusing (sloth will not chmod it; make it private or pick a new path)
+```
+
+The directory is opened once at startup and every file is created
+relative to that descriptor, so renaming or re-pointing `DIR` mid-run
+cannot redirect the export. Only the final path component is checked
+for a symlink; choose a parent you trust.
+
+**Failures are reported, not dropped.** A refused or unwritable file, a
+short write or a failed rename prints one `sloth: eapol export failed:
+…` line to stderr (the journal under `--headless`) and every failure is
+counted. The view header then shows the count and latest reason:
+
+```
+ EAPOL events: 5 (2 PMKID / 1 full handshake)  [up/dn] navigate  [c] clear
+ --eapol-dir export failing (3): eapol.22000: write failed: No space left on device
+```
+
+Capture carries on either way, and export keeps retrying — a full disk
+may drain.
+
+Running under `sudo`, the files belong to root. Read them with `sudo`,
+or copy them out deliberately; there is no group-sharing mode.
 
 ### Frame validation (#83)
 

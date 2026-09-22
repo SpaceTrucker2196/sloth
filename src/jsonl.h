@@ -8,7 +8,15 @@
  * Disabled until jsonl_open() is called. All emit functions are no-ops
  * when the file isn't open, so log modules can call them unconditionally. */
 
+/* Opened append-only, created 0600; an existing file must be a regular
+ * file owned by the effective uid with no group/other bits and a single
+ * link, and a symlink is refused (#87). Returns 0 on failure, reason in
+ * jsonl_error(). */
 int  jsonl_open  (const char *path);     /* returns 0 on failure */
+const char *jsonl_error(void);
+/* Records that failed to reach the file since jsonl_open(). The first
+ * failure is also printed to stderr. */
+int  jsonl_write_failures(void);
 void jsonl_close (void);
 int  jsonl_is_open(void);
 

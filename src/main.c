@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #include <time.h>
 #include "sloth.h"
@@ -53,6 +54,7 @@
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "secure_file.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
@@ -468,7 +470,9 @@ static void print_usage(const char *argv0) {
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
-            "                     events to FILE (created if it doesn't exist)\n"
+            "                     events to FILE (created 0600 if it doesn't\n"
+            "                     exist; an existing FILE must already be\n"
+            "                     private and owned by you, never a symlink)\n"
             "  --pcap-dir DIR     when a critical alert fires with a known\n"
             "                     flow, write the matching packets to a fresh\n"
             "                     pcap file under DIR\n"
@@ -476,7 +480,11 @@ static void print_usage(const char *argv0) {
             "                     handshakes to DIR/eapol.22000 in hashcat\n"
             "                     mixed format (22000), AND write a\n"
             "                     per-handshake DIR/<bssid>_<sta>.pcap for\n"
-            "                     replay with aircrack-ng / Wireshark\n"
+            "                     replay with aircrack-ng / Wireshark.\n"
+            "                     CRACKABLE MATERIAL: both dirs are created\n"
+            "                     0700, files 0600; an existing dir that is\n"
+            "                     group/other accessible, not yours, or a\n"
+            "                     symlink is refused, never chmod'ed\n"
             "  --data-socket [SPEC]\n"
             "                     stream the same records over a read-only\n"
             "                     socket. SPEC is one of:\n"
@@ -829,9 +837,23 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
 
+    /* Export directories first: a refused one is a startup error, and
+     * failing here — before the DB records a session — leaves nothing
+     * half-begun. Both hold capture material (#87): created 0700, and
+     * an existing permissive, foreign-owned or symlinked directory is
+     * refused rather than chmod'ed or silently written into. */
+    if (pcap_dir && alert_pcap_set_dir(pcap_dir) != 0) {
+        fprintf(stderr, "sloth: --pcap-dir %s\n", alert_pcap_error());
+        return 1;
+    }
+    if (eapol_dir && eapol_set_output_dir(eapol_dir) != 0) {
+        fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
+        return 1;
+    }
     if (jsonl_path) {
         if (!jsonl_open(jsonl_path)) {
-            fprintf(stderr, "could not open jsonl output %s\n", jsonl_path);
+            fprintf(stderr, "sloth: could not open jsonl output %s\n",
+                    jsonl_error());
             return 1;
         }
     }
@@ -853,12 +875,6 @@ int main(int argc, char **argv) {
         if (db_previous_session_end() > 0)
             fprintf(stderr, "sloth: previous visit ended %ld\n",
                     (long)db_previous_session_end());
-    }
-    if (pcap_dir) {
-        alert_pcap_set_dir(pcap_dir);
-    }
-    if (eapol_dir) {
-        eapol_set_output_dir(eapol_dir);
     }
     if (data_socket) {
         if (data_socket_init(data_socket) != 0) {
@@ -947,28 +963,38 @@ int main(int argc, char **argv) {
      * ATT&CK technique, cleartext exposures, and high-risk devices.
      * Written once at shutdown so the artifact represents a signed-off
      * session record — not a partial mid-run snapshot. */
+    /* Reports name exposed credentials and high-risk devices: written
+     * 0600, and an existing report must already be private — it is
+     * validated before truncation, so a refused one is left as it was
+     * (#87). A failed write is reported, not announced as written. */
     if (report_md) {
-        FILE *fp = fopen(report_md, "w");
+        char err[SFILE_ERR_MAX];
+        FILE *fp = sfile_fopen(AT_FDCWD, report_md, SFILE_TRUNC,
+                               err, sizeof(err));
         if (fp) {
             posture_render_md(fp, &g_state, session_start, g_research);
-            fclose(fp);
-            fprintf(stderr, "sloth: posture report -> %s\n", report_md);
+            if (sfile_fclose(fp, report_md, err, sizeof(err)) == 0)
+                fprintf(stderr, "sloth: posture report -> %s\n", report_md);
+            else
+                fprintf(stderr, "sloth: --report %s\n", err);
         } else {
-            fprintf(stderr,
-                    "sloth: could not open --report %s (report skipped)\n",
-                    report_md);
+            fprintf(stderr, "sloth: could not open --report %s "
+                            "(report skipped)\n", err);
         }
     }
     if (report_json) {
-        FILE *fp = fopen(report_json, "w");
+        char err[SFILE_ERR_MAX];
+        FILE *fp = sfile_fopen(AT_FDCWD, report_json, SFILE_TRUNC,
+                               err, sizeof(err));
         if (fp) {
             posture_render_json(fp, &g_state, session_start);
-            fclose(fp);
-            fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
+            if (sfile_fclose(fp, report_json, err, sizeof(err)) == 0)
+                fprintf(stderr, "sloth: posture-json -> %s\n", report_json);
+            else
+                fprintf(stderr, "sloth: --report-json %s\n", err);
         } else {
-            fprintf(stderr,
-                    "sloth: could not open --report-json %s (report skipped)\n",
-                    report_json);
+            fprintf(stderr, "sloth: could not open --report-json %s "
+                            "(report skipped)\n", err);
         }
     }
 

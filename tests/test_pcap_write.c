@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "runner.h"
 #include "sloth.h"
 #include "pcap_write.h"
@@ -168,12 +170,34 @@ static void test_w_key_sets_export_msg(void) {
     if (arrow) remove(arrow + 3);
 }
 
+/* ── permissions, #87 ───────────────────────────────────── */
+
+/* The ring holds raw packets. The export is 0600 whatever the umask,
+ * and a second export in the same second does not overwrite the first. */
+static void test_export_private_and_exclusive(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    char p1[128] = "", p2[128] = "";
+    mode_t old = umask(022);
+    ASSERT_EQ(pcap_export(&s, p1, sizeof(p1)), 0);
+    ASSERT_EQ(pcap_export(&s, p2, sizeof(p2)), 0);
+    umask(old);
+    struct stat st;
+    ASSERT_EQ(stat(p1, &st), 0);
+    ASSERT_EQ((int)(st.st_mode & 07777), 0600);
+    ASSERT(strcmp(p1, p2) != 0);
+    ASSERT_EQ(stat(p2, &st), 0);
+    remove(p1);
+    remove(p2);
+}
+
 void run_pcap_write_tests(void) {
     TEST_SUITE("pcap_export/header");
     RUN_TEST(test_export_empty_ring);
     RUN_TEST(test_export_magic);
     RUN_TEST(test_export_default_dlt);
     RUN_TEST(test_export_custom_dlt);
+    RUN_TEST(test_export_private_and_exclusive);
 
     TEST_SUITE("pcap_export/packets");
     RUN_TEST(test_export_skips_no_raw);

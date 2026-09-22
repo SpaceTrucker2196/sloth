@@ -1,9 +1,12 @@
+#include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "secure_file.h"
 #include "beacon_snoop.h"
 #include "captive_portal.h"
 #include "sensors.h"
@@ -13,6 +16,8 @@
 #include "views/procs.h"
 
 static FILE           *g_fp;
+/* Open refusal reason and write-failure count (#87), under g_mu. */
+static sfile_fail_t    g_fail;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* True if either the file sink or the data-socket sink has a consumer.
@@ -96,11 +101,24 @@ int jsonl_open(const char *path) {
     if (!path || !path[0]) return 0;
     pthread_mutex_lock(&g_mu);
     if (g_fp) { fclose(g_fp); g_fp = NULL; }
-    g_fp = fopen(path, "a");
+    sfile_fail_reset(&g_fail);
+    /* Append: the forensic log accumulates across runs. Created 0600;
+     * an existing file must already be private (#87). */
+    g_fp = sfile_fopen(AT_FDCWD, path, SFILE_APPEND,
+                       g_fail.last, sizeof(g_fail.last));
     int ok = g_fp != NULL;
     pthread_mutex_unlock(&g_mu);
     if (ok) jsonl_dedup_reset();   /* fresh sink → full baseline snapshot */
     return ok;
+}
+
+const char *jsonl_error(void) { return g_fail.last; }
+
+int jsonl_write_failures(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_fail.failures;
+    pthread_mutex_unlock(&g_mu);
+    return n;
 }
 
 void jsonl_close(void) {
@@ -185,9 +203,15 @@ static void emit_line(const char *line) {
     }
     pthread_mutex_lock(&g_mu);
     if (g_fp) {
-        fputs(to_emit, g_fp);
-        fputc('\n', g_fp);
-        fflush(g_fp);
+        int bad = fputs(to_emit, g_fp) == EOF ||
+                  fputc('\n', g_fp)    == EOF ||
+                  fflush(g_fp)         != 0;
+        if (bad || ferror(g_fp)) {
+            char err[SFILE_ERR_MAX];
+            snprintf(err, sizeof(err), "-o: write failed: %s", strerror(errno));
+            sfile_fail(&g_fail, "jsonl", err);
+            clearerr(g_fp);   /* keep trying: a full disk may drain */
+        }
     }
     pthread_mutex_unlock(&g_mu);
     data_socket_emit(to_emit);

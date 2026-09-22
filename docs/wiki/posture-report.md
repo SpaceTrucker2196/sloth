@@ -15,6 +15,14 @@ session. Not a live view — one file at shutdown.
 
 Both can be set at the same time.
 
+The report names credential exposures and high-risk devices, so it is
+written **0600** whatever the umask (#87). An existing file at the path
+is validated *before* it is truncated: a symlink, another user's file,
+a multiply-linked file or one with any group/other bit is refused and
+left untouched (`could not open --report …: … refusing (report
+skipped)`). A write that fails at close is reported instead of
+announced as written.
+
 ## What's in it
 
 - Session start / end timestamps and duration.

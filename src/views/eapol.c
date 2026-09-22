@@ -41,6 +41,12 @@ void view_eapol_draw(const sloth_state_t *s) {
     if (hs_complete > 0) { tui_heat(1.0); TPRINT("%d full handshake", hs_complete); }
     else                 { tui_dim();      TPRINT("0 full handshake"); }
     tui_dim();    TPRINT(")  [up/dn] navigate  [c] clear\n");
+    if (s->eapol_export_failures > 0) {
+        tui_heat(1.0);
+        TPRINT(" --eapol-dir export failing (%d): %s\n",
+               s->eapol_export_failures, s->eapol_export_err);
+        tui_normal();
+    }
 
     tui_dim();
     TPRINT(" %-8s  %-3s  %-17s  %-20s  %-17s  %3s  %4s  %s\n",

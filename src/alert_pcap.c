@@ -3,7 +3,9 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <unistd.h>
 #include "alert_pcap.h"
+#include "secure_file.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
  * match_port), dump every packet currently in the s->packets[] ring whose
@@ -14,12 +16,26 @@
 #define PCAP_MINOR   4
 #define PCAP_SNAPLEN 65535
 
-static char g_dir[256];
+/* g_dirfd pins the directory validated at set time (#87); files are
+ * created relative to it. g_dir is kept to build the reported path. */
+static char         g_dir[256];
+static int          g_dirfd = -1;
+static sfile_fail_t g_fail;
 
-void alert_pcap_set_dir(const char *dir) {
-    if (!dir || !dir[0]) { g_dir[0] = '\0'; return; }
+int alert_pcap_set_dir(const char *dir) {
+    if (g_dirfd >= 0) { close(g_dirfd); g_dirfd = -1; }
+    g_dir[0] = '\0';
+    sfile_fail_reset(&g_fail);
+    if (!dir || !dir[0]) return 0;
+    int fd = sfile_private_dir(dir, g_fail.last, sizeof(g_fail.last));
+    if (fd < 0) return -1;
+    g_dirfd = fd;
     snprintf(g_dir, sizeof(g_dir), "%s", dir);
+    return 0;
 }
+
+int alert_pcap_failures(void) { return g_fail.failures; }
+const char *alert_pcap_error(void) { return g_fail.last; }
 
 int alert_pcap_enabled(void) {
     return g_dir[0] != '\0';
@@ -68,12 +84,11 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
 
     char slug[24]; slugify(a->title, slug, sizeof(slug));
 
-    char path[512];
+    char stem[64], name[80], err[SFILE_ERR_MAX];
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    snprintf(path, sizeof(path),
-             "%s/alert_%04d%02d%02d_%02d%02d%02d_%s.pcap",
-             g_dir,
+    snprintf(stem, sizeof(stem),
+             "alert_%04d%02d%02d_%02d%02d%02d_%s",
              t ? t->tm_year + 1900 : 1970,
              t ? t->tm_mon + 1     : 1,
              t ? t->tm_mday        : 1,
@@ -82,8 +97,13 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
              t ? t->tm_sec         : 0,
              slug);
 
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
+    /* Exclusive create: each dump is a new artifact. Two dumps for one
+     * alert in the same second used to share a name and overwrite; a
+     * suffix keeps both, and nothing already at the name is followed
+     * or reused. */
+    FILE *f = sfile_fopen_unique(g_dirfd, stem, ".pcap", name, sizeof(name),
+                                 err, sizeof(err));
+    if (!f) { sfile_fail(&g_fail, "alert pcap", err); return -1; }
 
     int dlt = s->pkt_linktype ? s->pkt_linktype : 1; /* DLT_EN10MB default */
     write_u32le(f, PCAP_MAGIC);
@@ -109,15 +129,19 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         fwrite(p->raw, 1, p->raw_len, f);
         written++;
     }
-    fclose(f);
+    if (sfile_fclose(f, name, err, sizeof(err)) != 0) {
+        unlinkat(g_dirfd, name, 0);     /* no truncated pcap left behind */
+        sfile_fail(&g_fail, "alert pcap", err);
+        return -1;
+    }
 
     if (written == 0) {
         /* Empty pcap is noise — remove it. */
-        remove(path);
+        unlinkat(g_dirfd, name, 0);
         return 0;
     }
 
     if (out_path && out_sz > 0)
-        snprintf(out_path, (size_t)out_sz, "%s", path);
+        snprintf(out_path, (size_t)out_sz, "%s/%s", g_dir, name);
     return written;
 }

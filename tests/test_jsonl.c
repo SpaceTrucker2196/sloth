@@ -2,6 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/resource.h>
 #include "runner.h"
 #include "sloth.h"
 #include "jsonl.h"
@@ -20,8 +24,10 @@ static void open_fresh(void) {
     int fd = mkstemp(tmp_path);
     if (fd >= 0) close(fd);
     jsonl_close();
-    /* truncate any previous content */
-    FILE *fp = fopen(tmp_path, "w"); if (fp) fclose(fp);
+    /* Drop any previous content. jsonl_open recreates the file 0600; a
+     * fopen("w") here would recreate it umask-dependent and have it
+     * refused (#87). */
+    unlink(tmp_path);
     ASSERT(jsonl_open(tmp_path));
 }
 
@@ -886,11 +892,114 @@ static void test_btm_steer_empty_emits_nothing(void) {
     unlink(tmp_path);
 }
 
+/* ── file permissions, #87 ───────────────────────────────── */
+
+/* The JSONL stream carries cleartext-credential alerts, probe PNLs and
+ * device MACs. Created private whatever the umask; an existing file
+ * that is not private, or a symlink, is refused and left untouched. */
+
+static void j87_path(char *out, size_t sz) {
+    snprintf(out, sz, "/tmp/sloth_test_jsonl87_%d.jsonl", (int)getpid());
+}
+
+static int j87_mode(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (int)(st.st_mode & 07777);
+}
+
+static long j87_size(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (long)st.st_size;
+}
+
+static void j87_emit(void) {
+    dns_log_entry_t e; memset(&e, 0, sizeof(e));
+    e.ts = 1700000000;
+    snprintf(e.src,   sizeof(e.src),   "192.168.1.5");
+    snprintf(e.qname, sizeof(e.qname), "example.com");
+    snprintf(e.qtype, sizeof(e.qtype), "A");
+    jsonl_emit_dns(&e);
+}
+
+static void test_open_creates_private_under_permissive_umask(void) {
+    char p[96]; j87_path(p, sizeof(p));
+    unlink(p);
+    jsonl_close();
+    mode_t old = umask(022);
+    ASSERT(jsonl_open(p));
+    umask(old);
+    ASSERT_EQ(j87_mode(p), 0600);
+    jsonl_close();
+    unlink(p);
+}
+
+static void test_open_refuses_permissive_existing_file(void) {
+    char p[96]; j87_path(p, sizeof(p));
+    unlink(p);
+    jsonl_close();
+    FILE *f = fopen(p, "w");
+    if (f) { fputs("prior\n", f); fclose(f); }
+    chmod(p, 0644);
+    ASSERT(!jsonl_open(p));
+    ASSERT(!jsonl_is_open());
+    ASSERT(strstr(jsonl_error(), "0644") != NULL);
+    ASSERT_EQ(j87_mode(p), 0644);                   /* not chmod'ed */
+    ASSERT_EQ(j87_size(p), 6);                      /* not truncated */
+    unlink(p);
+}
+
+static void test_open_refuses_symlink(void) {
+    char p[96], victim[112];
+    j87_path(p, sizeof(p));
+    snprintf(victim, sizeof(victim), "%s.victim", p);
+    unlink(p);
+    jsonl_close();
+    int fd = open(victim, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) close(fd);
+    ASSERT_EQ(symlink(victim, p), 0);
+    ASSERT(!jsonl_open(p));
+    ASSERT(strstr(jsonl_error(), "symbolic link") != NULL);
+    j87_emit();
+    ASSERT_EQ(j87_size(victim), 0);
+    unlink(p);
+    unlink(victim);
+}
+
+/* A record that cannot be written is counted — RLIMIT_FSIZE stands in
+ * for a full disk. */
+static void test_write_failure_counted(void) {
+    char p[96]; j87_path(p, sizeof(p));
+    unlink(p);
+    jsonl_close();
+    ASSERT(jsonl_open(p));
+    ASSERT_EQ(jsonl_write_failures(), 0);
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    j87_emit();
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    ASSERT_GE(jsonl_write_failures(), 1);
+    jsonl_close();
+    unlink(p);
+}
+
 void run_jsonl_tests(void) {
     TEST_SUITE("jsonl open/close");
     RUN_TEST(test_open_close);
     RUN_TEST(test_emit_without_open_is_noop);
     RUN_TEST(test_open_invalid_path_fails);
+    RUN_TEST(test_open_creates_private_under_permissive_umask);
+    RUN_TEST(test_open_refuses_permissive_existing_file);
+    RUN_TEST(test_open_refuses_symlink);
+    RUN_TEST(test_write_failure_counted);
 
     TEST_SUITE("jsonl emit");
     RUN_TEST(test_emit_dns_writes_fields);

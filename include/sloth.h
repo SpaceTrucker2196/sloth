@@ -2045,6 +2045,11 @@ typedef struct {
     eapol_event_t  eapol_events[MAX_EAPOL_EVENTS];
     int            eapol_count;
     int            eapol_sel;
+    /* --eapol-dir write failures (#87): count + latest reason, so a
+     * failing handshake export is visible in the TUI, not only in a
+     * one-line stderr notice the screen may have painted over. */
+    int            eapol_export_failures;
+    char           eapol_export_err[160];
 
     /* ── Sequence-number tracking snapshot ────────────────── */
     seqnum_client_t      seqnum_clients[MAX_SEQNUM_CLIENTS];

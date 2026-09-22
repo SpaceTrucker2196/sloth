@@ -39,8 +39,21 @@ void eapol_snapshot(sloth_state_t *s);
 /* Clear all events + pending handshake state. */
 void eapol_clear(void);
 
-/* Configure where eapol.22000 output is written. NULL disables writing. */
-void eapol_set_output_dir(const char *dir);
+/* Configure where eapol.22000 and the per-handshake pcaps are written.
+ * NULL or "" disables writing. The directory is created 0700 if absent;
+ * an existing one must be a real directory owned by the effective uid
+ * with no group/other bits, and is refused otherwise — never chmod'ed
+ * (#87). Returns 0 on success, -1 on refusal/failure with export
+ * disabled and the reason in eapol_export_error(). */
+int  eapol_set_output_dir(const char *dir);
+
+/* Export failures since the last eapol_set_output_dir(): a refused or
+ * unopenable file, a short write, a failed rename. The first is also
+ * printed to stderr; the count and latest reason are snapshotted into
+ * the EAPOL view. eapol_export_error() also carries the reason a
+ * refused eapol_set_output_dir() returned -1. */
+int         eapol_export_failures(void);
+const char *eapol_export_error(void);
 
 /* Test introspection. */
 int  eapol_event_count(void);

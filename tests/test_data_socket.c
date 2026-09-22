@@ -702,7 +702,7 @@ static void ds_open_jsonl(void) {
     int fd = mkstemp(ds_jsonl_path);
     if (fd >= 0) close(fd);
     jsonl_close();
-    FILE *fp = fopen(ds_jsonl_path, "w"); if (fp) fclose(fp);
+    unlink(ds_jsonl_path);   /* jsonl_open recreates it 0600 (#87) */
     ASSERT(jsonl_open(ds_jsonl_path));
 }
 

@@ -115,6 +115,7 @@ SRCS = src/main.c          \
        src/views/help.c      \
        src/filter.c          \
        src/alert_pcap.c      \
+       src/secure_file.c     \
        src/ip_owner.c        \
        src/ip_color.c        \
        src/top_hosts.c       \
@@ -466,6 +467,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_filter.c            \
             src/alert_pcap.c               \
             tests/test_alert_pcap.c        \
+            src/secure_file.c              \
             src/ip_owner.c                 \
             tests/test_ip_owner.c          \
             src/ip_color.c                 \

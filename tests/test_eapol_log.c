@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
+#include <dirent.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include "runner.h"
 #include "sloth.h"
 #include "eapol_log.h"
@@ -248,7 +251,7 @@ static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
              "%s/00aabbccddee_102030405060.pcap", dir);
     unlink(pcap_path);
     rmdir(dir);
-    mkdir(dir, 0755);
+    mkdir(dir, 0700);   /* private: a permissive dir is refused (#87) */
     eapol_set_output_dir(dir);
 
     /* Feed M1 with PMKID (same as test_m1_with_pmkid_extracted). */
@@ -314,7 +317,7 @@ static void drive_pmkid_m1(char *out_buf, int out_sz,
     unlink(pcap_path);
     unlink(txt_path);
     rmdir(dir_out);
-    mkdir(dir_out, 0755);
+    mkdir(dir_out, 0700);
     eapol_set_output_dir(dir_out);
 
     uint8_t eapol[128];
@@ -535,7 +538,7 @@ static int bounds_file_exists(const char *leaf) {
 static void bounds_setup(void) {
     snprintf(g_bounds_dir, sizeof(g_bounds_dir),
              "/tmp/sloth_test_eapol83_%d", (int)getpid());
-    mkdir(g_bounds_dir, 0755);
+    mkdir(g_bounds_dir, 0700);
     eapol_set_output_dir(g_bounds_dir);
 }
 
@@ -805,6 +808,237 @@ static void test_key_reject_counts_scoped_and_cleared(void) {
     ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_COUNT), 0);
 }
 
+
+/* ── Export file permissions, #87 ──────────────────────────────────── */
+
+/* A PMKID or a 4-way handshake is offline-crackable material. Its
+ * export must be private whatever the umask, and anything odd already
+ * at the path — permissive, symlinked, foreign — is refused and
+ * reported, never silently used or chmod'ed. Tests that depend on the
+ * umask set it and restore the runner's afterwards. */
+
+#define HS_PCAP "00aabbccddee_102030405060.pcap"
+
+static char g_perm_dir[80];
+
+static void perm_path(char *out, size_t sz, const char *leaf) {
+    snprintf(out, sz, "%s/%s", g_perm_dir, leaf);
+}
+
+/* Remove everything the tests below may leave, then the dir itself. */
+static void perm_cleanup(void) {
+    eapol_set_output_dir(NULL);
+    DIR *d = opendir(g_perm_dir);
+    if (d) {
+        struct dirent *e;
+        char p[400];
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof(p), "%s/%s", g_perm_dir, e->d_name);
+            unlink(p);
+        }
+        closedir(d);
+    }
+    unlink(g_perm_dir);          /* in case the test left a symlink here */
+    rmdir(g_perm_dir);
+    eapol_clear();
+}
+
+static void perm_setup(void) {
+    snprintf(g_perm_dir, sizeof(g_perm_dir),
+             "/tmp/sloth_test_eapol87_%d", (int)getpid());
+    perm_cleanup();
+}
+
+static void drive_pmkid(void) {
+    uint8_t eapol[128];
+    int en = build_eapol_key(eapol, KI_M1, ANONCE, NULL, PMKID);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    eapol_observe_dot11(frame, fn, -50, 6);
+}
+
+static int mode_of(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (int)(st.st_mode & 07777);
+}
+
+static long size_of(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (long)st.st_size;
+}
+
+static int dir_entries(const char *path) {
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+    closedir(d);
+    return n;
+}
+
+/* Under a 022 umask the old code produced a 0755 dir and 0644 files. */
+static void test_export_private_under_permissive_umask(void) {
+    perm_setup();
+    mode_t old = umask(022);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    ASSERT_EQ(mode_of(g_perm_dir), 0700);
+    drive_pmkid();
+    char p[160];
+    perm_path(p, sizeof(p), "eapol.22000");
+    ASSERT_EQ(mode_of(p), 0600);
+    ASSERT_GT(size_of(p), 0);
+    perm_path(p, sizeof(p), HS_PCAP);
+    ASSERT_EQ(mode_of(p), 0600);
+    ASSERT_GT(size_of(p), 0);
+    ASSERT_EQ(eapol_export_failures(), 0);
+    umask(old);
+    perm_cleanup();
+}
+
+/* An existing group/world-readable dir is refused, not tightened. */
+static void test_export_refuses_permissive_existing_dir(void) {
+    perm_setup();
+    mkdir(g_perm_dir, 0700);
+    chmod(g_perm_dir, 0755);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), -1);
+    ASSERT(strstr(eapol_export_error(), "0755") != NULL);
+    ASSERT_EQ(mode_of(g_perm_dir), 0755);          /* not chmod'ed */
+    drive_pmkid();
+    ASSERT_EQ(dir_entries(g_perm_dir), 0);         /* nothing written */
+    perm_cleanup();
+}
+
+/* A symlink at the export path is refused even when it points at a
+ * perfectly private directory — the link itself is the problem. */
+static void test_export_refuses_symlinked_dir(void) {
+    perm_setup();
+    char target[120];
+    snprintf(target, sizeof(target), "%s_target", g_perm_dir);
+    rmdir(target);
+    mkdir(target, 0700);
+    ASSERT_EQ(symlink(target, g_perm_dir), 0);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), -1);
+    ASSERT(strstr(eapol_export_error(), "symbolic link") != NULL);
+    drive_pmkid();
+    ASSERT_EQ(dir_entries(target), 0);
+    rmdir(target);
+    perm_cleanup();
+}
+
+/* A dir that cannot be created is reported, not ignored. */
+static void test_export_dir_creation_failure_reported(void) {
+    char bad[120];
+    snprintf(bad, sizeof(bad), "/tmp/sloth_no_parent_%d/eapol", (int)getpid());
+    ASSERT_EQ(eapol_set_output_dir(bad), -1);
+    ASSERT(strstr(eapol_export_error(), "could not create") != NULL);
+    eapol_set_output_dir(NULL);
+}
+
+/* A pre-existing permissive eapol.22000 is not appended to (nor
+ * chmod'ed); the refusal is counted and its reason kept. */
+static void test_export_refuses_permissive_existing_22000(void) {
+    perm_setup();
+    mkdir(g_perm_dir, 0700);
+    char p[160];
+    perm_path(p, sizeof(p), "eapol.22000");
+    FILE *f = fopen(p, "w");
+    if (f) fclose(f);
+    chmod(p, 0644);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    ASSERT_EQ(size_of(p), 0);
+    ASSERT_EQ(mode_of(p), 0644);
+    ASSERT_GE(eapol_export_failures(), 1);
+    ASSERT(strstr(eapol_export_error(), "eapol.22000") != NULL);
+    perm_cleanup();
+}
+
+/* A symlink planted as eapol.22000 is not written through. */
+static void test_export_refuses_symlinked_22000(void) {
+    perm_setup();
+    mkdir(g_perm_dir, 0700);
+    char victim[120], p[160];
+    snprintf(victim, sizeof(victim), "%s_victim", g_perm_dir);
+    FILE *f = fopen(victim, "w");
+    if (f) fclose(f);
+    perm_path(p, sizeof(p), "eapol.22000");
+    ASSERT_EQ(symlink(victim, p), 0);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    ASSERT_EQ(size_of(victim), 0);
+    ASSERT_GE(eapol_export_failures(), 1);
+    unlink(victim);
+    perm_cleanup();
+}
+
+/* The per-handshake pcap is replaced atomically: a symlink at its name
+ * is replaced by a private regular file, and the link's target is
+ * never written. */
+static void test_export_pcap_replace_does_not_follow_symlink(void) {
+    perm_setup();
+    mkdir(g_perm_dir, 0700);
+    char victim[120], p[160];
+    snprintf(victim, sizeof(victim), "%s_victim", g_perm_dir);
+    FILE *f = fopen(victim, "w");
+    if (f) fclose(f);
+    perm_path(p, sizeof(p), HS_PCAP);
+    ASSERT_EQ(symlink(victim, p), 0);
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    ASSERT_EQ(size_of(victim), 0);
+    struct stat st;
+    ASSERT_EQ(lstat(p, &st), 0);
+    ASSERT(S_ISREG(st.st_mode));
+    ASSERT_EQ((int)(st.st_mode & 07777), 0600);
+    unlink(victim);
+    perm_cleanup();
+}
+
+/* A write that fails (RLIMIT_FSIZE here, standing in for a full disk
+ * without needing one) is counted and reported, and the previous
+ * per-handshake pcap survives intact — no truncated replacement, no
+ * leftover temp file. */
+static void test_export_write_failure_visible(void) {
+    perm_setup();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    char pcap[160], log22[160];
+    perm_path(pcap, sizeof(pcap), HS_PCAP);
+    perm_path(log22, sizeof(log22), "eapol.22000");
+    long pcap_before = size_of(pcap), log_before = size_of(log22);
+    ASSERT_GT(pcap_before, 0);
+    ASSERT_EQ(eapol_export_failures(), 0);
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    eapol_clear();
+    setrlimit(RLIMIT_FSIZE, &lim);
+    drive_pmkid();
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    ASSERT_GE(eapol_export_failures(), 2);   /* 22000 append + pcap */
+    ASSERT(strstr(eapol_export_error(), "write failed") != NULL);
+    /* ... and reaches the view's state, not only stderr. */
+    static sloth_state_t st;
+    memset(&st, 0, sizeof(st));
+    eapol_snapshot(&st);
+    ASSERT_GE(st.eapol_export_failures, 2);
+    ASSERT(strstr(st.eapol_export_err, "write failed") != NULL);
+    ASSERT_EQ(size_of(pcap), pcap_before);
+    ASSERT_EQ(size_of(log22), log_before);
+    ASSERT_EQ(dir_entries(g_perm_dir), 2);
+    perm_cleanup();
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -839,4 +1073,14 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_kde_len_overrun_extracts_nothing);
     RUN_TEST(test_key_trailing_bytes_not_exported);
     RUN_TEST(test_key_reject_counts_scoped_and_cleared);
+
+    /* #87 export permissions + failure reporting */
+    RUN_TEST(test_export_private_under_permissive_umask);
+    RUN_TEST(test_export_refuses_permissive_existing_dir);
+    RUN_TEST(test_export_refuses_symlinked_dir);
+    RUN_TEST(test_export_dir_creation_failure_reported);
+    RUN_TEST(test_export_refuses_permissive_existing_22000);
+    RUN_TEST(test_export_refuses_symlinked_22000);
+    RUN_TEST(test_export_pcap_replace_does_not_follow_symlink);
+    RUN_TEST(test_export_write_failure_visible);
 }

@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
 
 #include "runner.h"
@@ -2095,6 +2097,94 @@ static void test_akm_regression_is_silent_without_a_file(void) {
     ASSERT_EQ(db_akm_regressions(r, 0), 0);
 }
 
+/* ── file permissions, #87 ───────────────────────────────── */
+
+/* The DB is the retained artifact: devices, probe PNLs, credential
+ * exposures. SQLite creates its file 0644 & ~umask and gives -wal /
+ * -shm the main file's mode, so sloth pre-creates the file 0600 itself
+ * and refuses anything already there that is not private. */
+
+static void d87_path(char *out, size_t sz, const char *suffix) {
+    snprintf(out, sz, "/tmp/sloth_test_db87_%d.db%s", (int)getpid(), suffix);
+}
+
+static int d87_mode(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (int)(st.st_mode & 07777);
+}
+
+static void d87_unlink_all(void) {
+    static const char *sfx[] = { "", "-wal", "-shm", "-journal" };
+    char p[128];
+    for (int i = 0; i < 4; i++) { d87_path(p, sizeof(p), sfx[i]); unlink(p); }
+}
+
+static void test_open_creates_db_and_wal_private_under_permissive_umask(void) {
+    db_close();
+    d87_unlink_all();
+    char p[128], wal[128], shm[128];
+    d87_path(p, sizeof(p), "");
+    d87_path(wal, sizeof(wal), "-wal");
+    d87_path(shm, sizeof(shm), "-shm");
+    mode_t old = umask(022);
+    ASSERT_EQ(db_open(p), 1);
+    umask(old);
+    ASSERT_EQ(d87_mode(p), 0600);
+    ASSERT_EQ(d87_mode(wal), 0600);    /* schema writes create the WAL */
+    ASSERT_EQ(d87_mode(shm), 0600);
+    db_close();
+    d87_unlink_all();
+}
+
+static void test_open_refuses_permissive_existing_db(void) {
+    db_close();
+    d87_unlink_all();
+    char p[128];
+    d87_path(p, sizeof(p), "");
+    ASSERT_EQ(db_open(p), 1);          /* a real, valid DB ... */
+    db_close();
+    chmod(p, 0644);                    /* ... made world-readable */
+    ASSERT_EQ(db_open(p), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    ASSERT_EQ(d87_mode(p), 0644);      /* not chmod'ed */
+    d87_unlink_all();
+}
+
+static void test_open_refuses_permissive_existing_wal(void) {
+    db_close();
+    d87_unlink_all();
+    char p[128], wal[128];
+    d87_path(p, sizeof(p), "");
+    d87_path(wal, sizeof(wal), "-wal");
+    int fd = open(wal, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) close(fd);
+    chmod(wal, 0644);
+    ASSERT_EQ(db_open(p), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    ASSERT_EQ(d87_mode(wal), 0644);
+    d87_unlink_all();
+}
+
+static void test_open_refuses_symlinked_db(void) {
+    db_close();
+    d87_unlink_all();
+    char p[128], victim[140];
+    d87_path(p, sizeof(p), "");
+    snprintf(victim, sizeof(victim), "%s.victim", p);
+    unlink(victim);
+    int fd = open(victim, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) close(fd);
+    ASSERT_EQ(symlink(victim, p), 0);
+    ASSERT_EQ(db_open(p), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    struct stat st;
+    ASSERT_EQ(stat(victim, &st), 0);
+    ASSERT_EQ((long)st.st_size, 0L);   /* never written through */
+    unlink(victim);
+    d87_unlink_all();
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -2107,6 +2197,10 @@ void run_db_tests(void) {
     RUN_TEST(test_reopen_is_idempotent);
     RUN_TEST(test_open_refuses_foreign_schema_version);
     RUN_TEST(test_open_bad_path_fails_cleanly);
+    RUN_TEST(test_open_creates_db_and_wal_private_under_permissive_umask);
+    RUN_TEST(test_open_refuses_permissive_existing_db);
+    RUN_TEST(test_open_refuses_permissive_existing_wal);
+    RUN_TEST(test_open_refuses_symlinked_db);
     RUN_TEST(test_calls_without_open_are_safe);
     RUN_TEST(test_tick_null_state_is_safe);
 

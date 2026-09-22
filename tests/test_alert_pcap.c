@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <dirent.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
@@ -54,7 +57,9 @@ static long file_size(const char *path) {
 /* ── Tests ───────────────────────────────────────────────── */
 
 static void test_set_dir_enables_disables(void) {
-    alert_pcap_set_dir("/tmp");
+    /* A private dir of our own — a shared one like /tmp is refused
+     * (#87, test_set_dir_refuses_shared_tmp). */
+    ensure_tmp_dir();
     ASSERT(alert_pcap_enabled());
     alert_pcap_set_dir(NULL);
     ASSERT(!alert_pcap_enabled());
@@ -136,6 +141,145 @@ static void test_dump_skips_alert_without_match_ip(void) {
     ASSERT_EQ(alert_pcap_dump(&s, &a, NULL, 0), 0);
 }
 
+/* ── Export permissions, #87 ────────────────────────────── */
+
+/* Per-alert pcaps hold raw packets — cleartext credentials among them
+ * when a CLEARTEXT_CREDS flow matches. They get the same private-dir /
+ * private-file guarantee as the handshake export. */
+
+static char g_ap87[80];
+
+static int ap87_mode(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    return (int)(st.st_mode & 07777);
+}
+
+static int ap87_entries(void) {
+    DIR *d = opendir(g_ap87);
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+    closedir(d);
+    return n;
+}
+
+static void ap87_cleanup(void) {
+    alert_pcap_set_dir(NULL);
+    DIR *d = opendir(g_ap87);
+    if (d) {
+        struct dirent *e;
+        char p[400];
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof(p), "%s/%s", g_ap87, e->d_name);
+            unlink(p);
+        }
+        closedir(d);
+    }
+    unlink(g_ap87);
+    rmdir(g_ap87);
+}
+
+static void ap87_setup(void) {
+    snprintf(g_ap87, sizeof(g_ap87), "/tmp/sloth_test_ap87_%d", (int)getpid());
+    ap87_cleanup();
+}
+
+static void ap87_alert(sloth_state_t *s, alert_t *a) {
+    memset(s, 0, sizeof(*s));
+    seed_packet(s, "192.168.1.5", "203.0.113.7", 33445, 443, 1700000000);
+    memset(a, 0, sizeof(*a));
+    snprintf(a->title,    sizeof(a->title),    "THREAT_IP");
+    snprintf(a->match_ip, sizeof(a->match_ip), "203.0.113.7");
+}
+
+/* A world-writable shared directory is refused outright. */
+static void test_set_dir_refuses_shared_tmp(void) {
+    ASSERT_EQ(alert_pcap_set_dir("/tmp"), -1);
+    ASSERT(!alert_pcap_enabled());
+    ASSERT(alert_pcap_error()[0] != '\0');
+}
+
+static void test_set_dir_creates_private_under_permissive_umask(void) {
+    ap87_setup();
+    mode_t old = umask(022);
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    ASSERT_EQ(ap87_mode(g_ap87), 0700);
+    sloth_state_t s; alert_t a;
+    ap87_alert(&s, &a);
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, sizeof(path)), 1);
+    ASSERT_EQ(ap87_mode(path), 0600);
+    umask(old);
+    ap87_cleanup();
+}
+
+static void test_set_dir_refuses_permissive_existing(void) {
+    ap87_setup();
+    mkdir(g_ap87, 0700);
+    chmod(g_ap87, 0755);
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), -1);
+    ASSERT(!alert_pcap_enabled());
+    ASSERT_EQ(ap87_mode(g_ap87), 0755);            /* not chmod'ed */
+    ap87_cleanup();
+}
+
+static void test_set_dir_refuses_symlink(void) {
+    ap87_setup();
+    char target[120];
+    snprintf(target, sizeof(target), "%s_target", g_ap87);
+    rmdir(target);
+    mkdir(target, 0700);
+    ASSERT_EQ(symlink(target, g_ap87), 0);
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), -1);
+    ASSERT(!alert_pcap_enabled());
+    rmdir(target);
+    ap87_cleanup();
+}
+
+/* Two dumps for the same alert in the same second used to share a
+ * name, the second overwriting the first. Exclusive create keeps both. */
+static void test_dump_same_name_does_not_overwrite(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    sloth_state_t s; alert_t a;
+    ap87_alert(&s, &a);
+    char p1[512], p2[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, p1, sizeof(p1)), 1);
+    ASSERT_EQ(alert_pcap_dump(&s, &a, p2, sizeof(p2)), 1);
+    ASSERT(strcmp(p1, p2) != 0);
+    ASSERT_EQ(ap87_entries(), 2);
+    ap87_cleanup();
+}
+
+/* A failed write is returned, counted, and leaves no partial pcap. */
+static void test_dump_write_failure_visible(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    ASSERT_EQ(alert_pcap_failures(), 0);
+    sloth_state_t s; alert_t a;
+    ap87_alert(&s, &a);
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    int n = alert_pcap_dump(&s, &a, NULL, 0);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    ASSERT_EQ(n, -1);
+    ASSERT_EQ(alert_pcap_failures(), 1);
+    ASSERT(strstr(alert_pcap_error(), "write failed") != NULL);
+    ASSERT_EQ(ap87_entries(), 0);
+    ap87_cleanup();
+}
+
 /* ── Integration: rule fires populate match_ip ──────────── */
 
 static void test_threat_ip_rule_sets_match_fields(void) {
@@ -170,6 +314,14 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_dump_port_zero_matches_any);
     RUN_TEST(test_dump_noop_when_dir_disabled);
     RUN_TEST(test_dump_skips_alert_without_match_ip);
+
+    TEST_SUITE("alert_pcap export permissions (#87)");
+    RUN_TEST(test_set_dir_refuses_shared_tmp);
+    RUN_TEST(test_set_dir_creates_private_under_permissive_umask);
+    RUN_TEST(test_set_dir_refuses_permissive_existing);
+    RUN_TEST(test_set_dir_refuses_symlink);
+    RUN_TEST(test_dump_same_name_does_not_overwrite);
+    RUN_TEST(test_dump_write_failure_visible);
 
     TEST_SUITE("alert_pcap match-criteria integration");
     RUN_TEST(test_threat_ip_rule_sets_match_fields);

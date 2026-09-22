@@ -1,9 +1,13 @@
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include "eapol_log.h"
+#include "secure_file.h"
 #include "eap_track.h"
 #include "beacon_snoop.h"
 #include "assoc_track.h"
@@ -56,7 +60,13 @@ typedef struct {
 static pending_t g_pending[MAX_PENDING];
 static int       g_pending_n = 0;
 
-static char g_out_dir[256];
+/* Export target (#87). g_out_fd pins the directory validated by
+ * eapol_set_output_dir(): every file is opened relative to it, so a
+ * later rename or symlink swap of the path cannot redirect crackable
+ * material. g_out_dir is kept for messages and as the enabled flag. */
+static char         g_out_dir[256];
+static int          g_out_fd = -1;
+static sfile_fail_t g_fail;
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -124,26 +134,62 @@ static void hex_str(const char *s, char *out) {
     out[i*2] = '\0';
 }
 
+static int write_all(int fd, const char *buf, size_t n) {
+    while (n > 0) {
+        ssize_t w = write(fd, buf, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        buf += w;
+        n   -= (size_t)w;
+    }
+    return 0;
+}
+
 /* Append a hashcat-22000 line. If the BSSID was marked tainted by
  * rule_evil_twin_attack_chain, prepend a comment line ('#' is ignored
  * by hashcat's parser) carrying the provenance + BSSID so a forensic
- * reviewer can trace the capture back to the chain alert. */
+ * reviewer can trace the capture back to the chain alert.
+ *
+ * Append, not replace: eapol.22000 is the run-spanning file hashcat
+ * reads whole, and every earlier line is still a valid target. A
+ * failed write is rolled back to the previous length so a full disk
+ * leaves no half line, and is reported. */
 static void append_22000_line_for_bssid(const char *line,
                                         const uint8_t bssid[6]) {
-    if (!g_out_dir[0]) return;
-    char path[512];
-    snprintf(path, sizeof(path), "%s/eapol.22000", g_out_dir);
-    FILE *f = fopen(path, "a");
-    if (!f) return;
+    if (g_out_fd < 0) return;
+    char err[SFILE_ERR_MAX];
+    int fd = sfile_open(g_out_fd, "eapol.22000", SFILE_APPEND,
+                        err, sizeof(err));
+    if (fd < 0) { sfile_fail(&g_fail, "eapol", err); return; }
+    struct stat st;
+    off_t before = fstat(fd, &st) == 0 ? st.st_size : -1;
+
+    char note[96];
+    int  nn = 0;
     if (evil_twin_bssid_is_tainted(bssid)) {
-        fprintf(f, "# provenance=tainted-evil-twin "
-                   "bssid=%02x:%02x:%02x:%02x:%02x:%02x\n",
-                bssid[0], bssid[1], bssid[2],
-                bssid[3], bssid[4], bssid[5]);
+        nn = snprintf(note, sizeof(note), "# provenance=tainted-evil-twin "
+                      "bssid=%02x:%02x:%02x:%02x:%02x:%02x\n",
+                      bssid[0], bssid[1], bssid[2],
+                      bssid[3], bssid[4], bssid[5]);
     }
-    fputs(line, f);
-    fputc('\n', f);
-    fclose(f);
+    int bad = (nn > 0 && write_all(fd, note, (size_t)nn) != 0) ||
+              write_all(fd, line, strlen(line)) != 0 ||
+              write_all(fd, "\n", 1) != 0;
+    if (bad) {
+        snprintf(err, sizeof(err), "eapol.22000: write failed: %s",
+                 strerror(errno));
+        /* Best effort: the write failure is what gets reported; a
+         * rollback that also fails cannot be made any more visible. */
+        if (before >= 0 && ftruncate(fd, before) != 0) { }
+        sfile_fail(&g_fail, "eapol", err);
+    }
+    if (close(fd) != 0 && !bad) {
+        snprintf(err, sizeof(err), "eapol.22000: write failed: %s",
+                 strerror(errno));
+        sfile_fail(&g_fail, "eapol", err);
+    }
 }
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
@@ -151,6 +197,8 @@ static void append_22000_line_for_bssid(const char *line,
 #define PCAP_MAGIC          0xa1b2c3d4u
 #define DLT_IEEE802_11      105   /* raw 802.11 without radiotap */
 
+/* Short writes are not checked per call: they set the stream's error
+ * flag, which sfile_fclose() reports once for the whole file. */
 static void w_u32le(FILE *f, uint32_t v) {
     uint8_t b[4] = { v & 0xff, (v>>8)&0xff, (v>>16)&0xff, (v>>24)&0xff };
     fwrite(b, 1, 4, f);
@@ -164,19 +212,27 @@ static void w_u16le(FILE *f, uint16_t v) {
  * Frames are stored as raw IEEE 802.11 (DLT 105). Aircrack-ng + tshark
  * read this fine; pass -e <SSID> to aircrack if no beacon was bundled.
  *
- * Re-writes overwrite — a fresher capture supersedes the older one. */
+ * Atomic replace: a fresher capture supersedes the older one, so the
+ * file is rewritten — but into an exclusive temp file in the same
+ * private dir, renamed over the old name only once completely written.
+ * A failed write (full disk) leaves the previous capture intact, and
+ * rename() replaces whatever sits at the name — a planted symlink
+ * included — rather than writing through it. */
 static void write_handshake_pcap(const pending_t *p) {
-    if (!g_out_dir[0]) return;
-    char path[640];
-    snprintf(path, sizeof(path),
-             "%s/%02x%02x%02x%02x%02x%02x_%02x%02x%02x%02x%02x%02x.pcap",
-             g_out_dir,
+    if (g_out_fd < 0) return;
+    char name[64], tmp[80], err[SFILE_ERR_MAX];
+    snprintf(name, sizeof(name),
+             "%02x%02x%02x%02x%02x%02x_%02x%02x%02x%02x%02x%02x.pcap",
              p->bssid[0], p->bssid[1], p->bssid[2],
              p->bssid[3], p->bssid[4], p->bssid[5],
              p->sta[0],   p->sta[1],   p->sta[2],
              p->sta[3],   p->sta[4],   p->sta[5]);
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
+    snprintf(tmp, sizeof(tmp), ".%s.tmp", name);
+    /* Only sloth writes this private dir; a temp file here is our own,
+     * left by a crash mid-write. */
+    unlinkat(g_out_fd, tmp, 0);
+    FILE *f = sfile_fopen(g_out_fd, tmp, SFILE_EXCL, err, sizeof(err));
+    if (!f) { sfile_fail(&g_fail, "eapol", err); return; }
 
     /* Global header */
     w_u32le(f, PCAP_MAGIC);
@@ -198,7 +254,17 @@ static void write_handshake_pcap(const pending_t *p) {
         w_u32le(f, cap);
         fwrite(p->m_frames[i], 1, cap, f);
     }
-    fclose(f);
+    if (sfile_fclose(f, name, err, sizeof(err)) != 0) {
+        unlinkat(g_out_fd, tmp, 0);
+        sfile_fail(&g_fail, "eapol", err);
+        return;
+    }
+    if (renameat(g_out_fd, tmp, g_out_fd, name) != 0) {
+        snprintf(err, sizeof(err), "%s: rename failed: %s",
+                 name, strerror(errno));
+        unlinkat(g_out_fd, tmp, 0);
+        sfile_fail(&g_fail, "eapol", err);
+    }
 }
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
@@ -538,6 +604,13 @@ void eapol_snapshot(sloth_state_t *s)
     }
     s->eapol_count = n;
     if (s->eapol_sel >= n && n > 0) s->eapol_sel = n - 1;
+    s->eapol_export_failures = g_fail.failures;
+    /* The view line is width-bound anyway; keep the head of the reason. */
+    size_t el = g_fail.failures ? strlen(g_fail.last) : 0;
+    if (el > sizeof(s->eapol_export_err) - 1)
+        el = sizeof(s->eapol_export_err) - 1;
+    memcpy(s->eapol_export_err, g_fail.last, el);
+    s->eapol_export_err[el] = '\0';
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -550,13 +623,38 @@ void eapol_clear(void)
     pthread_mutex_unlock(&g_mu);
 }
 
-void eapol_set_output_dir(const char *dir) {
-    if (!dir || !dir[0]) { g_out_dir[0] = '\0'; return; }
-    snprintf(g_out_dir, sizeof(g_out_dir), "%s", dir);
-    /* Try to create the directory. Quietly ignore failures — if it
-     * doesn't exist when we go to write, fopen() will fail and we
-     * just skip that line. */
-    mkdir(g_out_dir, 0755);
+int eapol_set_output_dir(const char *dir) {
+    pthread_mutex_lock(&g_mu);
+    if (g_out_fd >= 0) { close(g_out_fd); g_out_fd = -1; }
+    g_out_dir[0] = '\0';
+    sfile_fail_reset(&g_fail);
+    int rc = 0;
+    if (dir && dir[0]) {
+        /* A refusal leaves export disabled; the caller reports it. The
+         * reason is kept where eapol_export_error() finds it. */
+        int fd = sfile_private_dir(dir, g_fail.last, sizeof(g_fail.last));
+        if (fd < 0) {
+            rc = -1;
+        } else {
+            g_out_fd = fd;
+            snprintf(g_out_dir, sizeof(g_out_dir), "%s", dir);
+        }
+    }
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
+int eapol_export_failures(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_fail.failures;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+/* Returned pointer is stable storage; tests and main read it on the
+ * thread that drove the export, so no copy is taken. */
+const char *eapol_export_error(void) {
+    return g_fail.last;
 }
 
 int eapol_event_count(void) {

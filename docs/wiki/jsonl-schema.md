@@ -29,6 +29,19 @@ scripts) code against.
 Both `-o` and `--data-socket` can be set at the same time. Each record
 is broadcast to every active sink — same line, same encoding.
 
+**`-o FILE` is private (#87).** The stream carries cleartext-credential
+alerts, probe lists and device MACs. The file is opened append-only and
+created **0600** regardless of umask. If it already exists it must be a
+regular file owned by sloth's effective uid, with no group/other
+permission bits and a single link; a symlink at the path is refused.
+sloth does not `chmod` it — a `0640` log from an older run is refused at
+startup (`sloth: could not open jsonl output …: mode 0640 is
+group/other accessible — refusing`). Make it private or pick a new
+path. Devices and FIFOs (`/dev/stdout`, a named pipe) are not accepted;
+use `--data-socket` for a live consumer. A record that fails to reach
+the file (full disk) is counted and the first failure is printed to
+stderr; writing continues.
+
 **Read-only on the socket.** Sloth never reads from a connected
 client. The protocol is one-way; there is no handshake, no auth, no
 verbs. Access control is the caller's job (bind address, file

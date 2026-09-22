@@ -2,8 +2,11 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "pcap_write.h"
+#include "secure_file.h"
 
 /* pcap global header */
 #define PCAP_MAGIC   0xa1b2c3d4u
@@ -22,15 +25,19 @@ static void write_u16le(FILE *f, uint16_t v) {
 }
 
 int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
-    char path[128];
+    char stem[64], path[96], err[SFILE_ERR_MAX];
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    snprintf(path, sizeof(path),
-             "ntop_%04d%02d%02d_%02d%02d%02d.pcap",
+    snprintf(stem, sizeof(stem),
+             "ntop_%04d%02d%02d_%02d%02d%02d",
              t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
              t->tm_hour,        t->tm_min,      t->tm_sec);
 
-    FILE *f = fopen(path, "wb");
+    /* Raw packets: exclusive-create 0600 in the working directory
+     * (#87). Never follows or reuses whatever is already at the name;
+     * a second export in the same second gets a suffix. */
+    FILE *f = sfile_fopen_unique(AT_FDCWD, stem, ".pcap", path, sizeof(path),
+                                 err, sizeof(err));
     if (!f) return -1;
 
     /* global header */
@@ -61,7 +68,10 @@ int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
         written++;
     }
 
-    fclose(f);
+    if (sfile_fclose(f, path, err, sizeof(err)) != 0) {
+        unlink(path);          /* no truncated capture left behind */
+        return -1;             /* the packets view shows "export failed" */
+    }
 
     if (path_out && path_sz > 0)
         snprintf(path_out, path_sz, "%s", path);

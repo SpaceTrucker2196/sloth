@@ -79,6 +79,16 @@ would silently write an empty database. Routing through
 300-second heartbeat, coupling durable state to a wire-format
 optimisation.
 
+- **Private files (#87).** SQLite would create the database `0644 &
+  ~umask` and gives `-wal` / `-shm` the main file's mode, so sloth
+  creates the database file itself at **0600** first (by descriptor,
+  `O_NOFOLLOW`) and opens it with `SQLITE_OPEN_NOFOLLOW`; the WAL and
+  shared-memory files inherit 0600. An existing database, `-wal`, `-shm`
+  or `-journal` that is a symlink, belongs to another user, has more
+  than one link or carries any group/other bit is **refused** — `db_open`
+  fails and startup stops. sloth never `chmod`s it. A database written
+  by an older build is typically `0644`; before upgrading, `chmod 600
+  FILE FILE-wal FILE-shm` (as the owning user) once.
 - **WAL** so a reader (your `sqlite3` session) never blocks the writer.
 - **`synchronous=NORMAL`** — fsync at checkpoint, not per commit. At
   1 Hz on an SD card the difference is the card's lifetime; the exposure

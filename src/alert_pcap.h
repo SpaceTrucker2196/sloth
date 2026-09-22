@@ -5,9 +5,18 @@
 
 /* Configure the directory where per-alert pcap snapshots are written.
  *   - NULL or empty: disable export (alert_pcap_dump becomes a no-op).
- *   - Otherwise: pcap files are created under this directory (the caller
- *     must ensure the directory exists). */
-void alert_pcap_set_dir(const char *dir);
+ *   - Otherwise: created 0700 if absent; an existing directory must be
+ *     owned by the effective uid with no group/other bits and not be a
+ *     symlink, else it is refused (never chmod'ed) and export stays
+ *     disabled (#87).
+ * Returns 0 on success, -1 on refusal with the reason in
+ * alert_pcap_error(). */
+int  alert_pcap_set_dir(const char *dir);
+
+/* Dump failures since the last alert_pcap_set_dir(); the first is also
+ * printed to stderr. */
+int         alert_pcap_failures(void);
+const char *alert_pcap_error(void);
 
 /* Returns 1 if a dir was configured. */
 int  alert_pcap_enabled(void);
