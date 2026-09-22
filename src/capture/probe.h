@@ -5,11 +5,22 @@
 
 #ifdef WITH_PCAP
 
-/* Find a monitor-mode interface and start capturing probe requests.
-   Silently does nothing if no monitor interface exists or pcap fails. */
+/* Find a monitor-mode interface and open it, setting s->probe_iface
+   synchronously, WITHOUT starting the probe thread — so startup can
+   resolve --monitor-only and decide capture scope before any worker
+   runs (#85). Silently does nothing if no monitor interface exists or
+   pcap fails. */
+void probe_open(sloth_state_t *s);
+
+/* Start the probe thread on the handle probe_open() made; no-op without
+   one. */
+void probe_run(void);
+
+/* probe_open() + probe_run(). */
 void probe_start(sloth_state_t *s);
 
-/* Signal the probe thread to stop and block until it exits. */
+/* Signal the probe thread to stop and block until it exits; closes a
+   handle that was opened but never run. */
 void probe_stop(void);
 
 /* Copy the current probe client table into s->probe_clients[],
@@ -33,6 +44,8 @@ void probe_set_iface(sloth_state_t *s, const char *iface);
 
 #else
 
+static inline void probe_open(sloth_state_t *s)                         { (void)s; }
+static inline void probe_run(void)                                      {}
 static inline void probe_start(sloth_state_t *s)                        { (void)s; }
 static inline void probe_stop(void)                                     {}
 static inline void probe_snapshot(sloth_state_t *s)                     { (void)s; }

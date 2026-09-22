@@ -1,3 +1,5 @@
+#include <string.h>
+#include <stdint.h>
 #include "capture/capture.h"
 #include "captive_portal.h"
 #include "dot11_data.h"
@@ -24,6 +26,106 @@ int capture_activate_failed(int rc) {
 /* Also outside the guard, and for the same reason. See capture.h. */
 int capture_dlt_has_ifindex(int dlt) {
     return dlt == MY_DLT_LINUX_SLL2;
+}
+
+/* ── Fail-closed capture scope (#85) ───────────────────────────
+ * Outside the guard for the same reason again: the test build drives
+ * these with hand-built SLL2 headers and a seeded resolver. Contract in
+ * capture.h. */
+#define SLL2_HDRLEN 20
+
+#define IFINDEX_CACHE_MAX 16
+typedef struct { uint32_t idx; char name[16]; } ifname_cache_t;
+static ifname_cache_t g_ifname_cache[IFINDEX_CACHE_MAX];
+static int            g_ifname_cache_n;
+static int            g_ifname_cache_next;   /* round-robin victim */
+
+void capture_ifname_cache_reset(void) {
+    g_ifname_cache_n    = 0;
+    g_ifname_cache_next = 0;
+}
+
+const char *capture_ifname_lookup(uint32_t idx, capture_ifname_fn resolve) {
+    for (int i = 0; i < g_ifname_cache_n; i++)
+        if (g_ifname_cache[i].idx == idx) return g_ifname_cache[i].name;
+    char name[16];
+    memset(name, 0, sizeof(name));
+    /* A miss is not an answer: an index that failed to resolve now is
+     * asked again next packet, and never lands in the cache. The old
+     * cache stored "" and every later frame on that index bypassed the
+     * allow-list. */
+    if (!resolve || !resolve(idx, name)) return NULL;
+    name[sizeof(name) - 1] = '\0';
+    if (!name[0]) return NULL;
+    ifname_cache_t *e;
+    if (g_ifname_cache_n < IFINDEX_CACHE_MAX) {
+        e = &g_ifname_cache[g_ifname_cache_n++];
+    } else {
+        e = &g_ifname_cache[g_ifname_cache_next];
+        g_ifname_cache_next = (g_ifname_cache_next + 1) % IFINDEX_CACHE_MAX;
+    }
+    e->idx = idx;
+    memcpy(e->name, name, sizeof(e->name));
+    return e->name;
+}
+
+int capture_frame_in_scope(const sloth_state_t *s, int dlt,
+                           const uint8_t *frame, int caplen,
+                           capture_ifname_fn resolve) {
+    if (!s) return 0;
+    int restricted = s->iface_allowed_count > 0;
+    if (!capture_dlt_has_ifindex(dlt) || !frame || caplen < SLL2_HDRLEN)
+        return !restricted;
+    /* Nothing filters: skip the lookup so the hot path stays syscall-free. */
+    if (!restricted && s->iface_deselected_count == 0) return 1;
+    uint32_t ifi = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16)
+                 | ((uint32_t)frame[6] <<  8) |  (uint32_t)frame[7];
+    const char *name = capture_ifname_lookup(ifi, resolve);
+    if (!name) return !restricted;
+    return !iface_is_deselected(s, name) && iface_is_allowed(s, name);
+}
+
+capture_scope_t capture_scope_verdict(int iface_args, int monitor_only,
+                                      const char *monitor_iface,
+                                      int allowed_count, int capture_open,
+                                      int linktype) {
+    if (iface_args <= 0 && !monitor_only) return CAPTURE_SCOPE_NONE;
+    if (monitor_only && (!monitor_iface || !monitor_iface[0]))
+        return CAPTURE_SCOPE_REFUSE_NO_MONITOR;
+    /* An empty list reads as "unrestricted" everywhere downstream. */
+    if (allowed_count <= 0)          return CAPTURE_SCOPE_REFUSE_EMPTY;
+    if (!capture_open)               return CAPTURE_SCOPE_NO_CAPTURE;
+    if (!capture_dlt_has_ifindex(linktype))
+        return CAPTURE_SCOPE_REFUSE_DATALINK;
+    return CAPTURE_SCOPE_ENFORCED;
+}
+
+int capture_scope_refuses(capture_scope_t v) {
+    return v == CAPTURE_SCOPE_REFUSE_NO_MONITOR
+        || v == CAPTURE_SCOPE_REFUSE_EMPTY
+        || v == CAPTURE_SCOPE_REFUSE_DATALINK;
+}
+
+const char *capture_scope_reason(capture_scope_t v) {
+    switch (v) {
+    case CAPTURE_SCOPE_REFUSE_NO_MONITOR:
+        return "--monitor-only requested but no monitor-mode interface was "
+               "found; refusing to capture an unrestricted stream";
+    case CAPTURE_SCOPE_REFUSE_EMPTY:
+        return "--iface requested but no usable interface name was given; "
+               "refusing to capture an unrestricted stream";
+    case CAPTURE_SCOPE_REFUSE_DATALINK:
+        return "--iface/--monitor-only requested but the capture datalink "
+               "carries no ingress interface (needs SLL2/276); refusing to "
+               "capture an unrestricted stream";
+    case CAPTURE_SCOPE_NO_CAPTURE:
+        return "--iface/--monitor-only requested but packet capture is "
+               "disabled; no data stream is collected";
+    case CAPTURE_SCOPE_NONE:
+    case CAPTURE_SCOPE_ENFORCED:
+        break;
+    }
+    return "";
 }
 
 #ifdef WITH_PCAP
@@ -564,8 +666,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
  *   11 halen      (1)
  *   12 addr       (8)
  *   20 payload
- * Payload starts at offset 20; ethertype lives at offset 0.       */
-#define SLL2_HDRLEN 20
+ * Payload starts at offset 20; ethertype lives at offset 0.
+ * SLL2_HDRLEN is defined above the WITH_PCAP guard (#85). */
 
 static int decode_frame(const uint8_t *data, int caplen, int dlt,
                         packet_info_t *pkt) {
@@ -628,22 +730,10 @@ static int decode_frame(const uint8_t *data, int caplen, int dlt,
 
 /* ── pcap callback ────────────────────────────────────────── */
 
-/* Small ifindex → name cache for the SLL2 data-stream filter (#17).
- * if_indextoname() is a syscall; caching it keeps the hot path free
- * of per-packet lookups. Cache is flushed with capture_stop(). */
-#define IFINDEX_CACHE_MAX 16
-typedef struct { uint32_t idx; char name[16]; } ifname_cache_t;
-static ifname_cache_t g_ifname_cache[IFINDEX_CACHE_MAX];
-static int            g_ifname_cache_n;
-
-static const char *ifindex_lookup(uint32_t idx) {
-    for (int i = 0; i < g_ifname_cache_n; i++)
-        if (g_ifname_cache[i].idx == idx) return g_ifname_cache[i].name;
-    if (g_ifname_cache_n >= IFINDEX_CACHE_MAX) g_ifname_cache_n = 0;
-    ifname_cache_t *e = &g_ifname_cache[g_ifname_cache_n++];
-    e->idx = idx;
-    if (!if_indextoname(idx, e->name)) e->name[0] = '\0';
-    return e->name;
+/* if_indextoname() adapter for capture_ifname_lookup(), whose cache
+ * keeps the hot path free of per-packet syscalls (#17, #85). */
+static int sys_ifname(uint32_t idx, char name[16]) {
+    return if_indextoname(idx, name) != NULL;
 }
 
 static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
@@ -651,20 +741,15 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     (void)user;
     int dlt = pcap_datalink(g_handle);
 
-    /* Data-stream election (#17 + #35): on SLL2 we can attribute the
-     * frame to an ingress interface and drop before decode when either
-     * election rejects it — runtime deselect ([y]) or launch-time
-     * allow-list (--iface / --monitor-only). On SLL v1 / EN10MB the
-     * header carries no ifindex, so both become UI-only markers. */
-    if (dlt == MY_DLT_LINUX_SLL2 && hdr->caplen >= SLL2_HDRLEN) {
-        uint32_t ifi = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16)
-                     | ((uint32_t)data[6] <<  8) |  (uint32_t)data[7];
-        const char *name = ifindex_lookup(ifi);
-        if (name && name[0] && g_state
-            && (iface_is_deselected(g_state, name)
-                || !iface_is_allowed(g_state, name)))
-            return;
-    }
+    /* Data-stream election (#17 + #35), fail-closed since #85: drop
+     * before decode when the runtime deselect ([y]) or the launch-time
+     * allow-list (--iface / --monitor-only) rejects the ingress iface,
+     * and — whenever an allow-list is active — when the frame cannot be
+     * attributed to an allowed iface at all. The allow-list was complete
+     * before this thread was created and is never written again. */
+    if (!capture_frame_in_scope(g_state, dlt, data, (int)hdr->caplen,
+                                sys_ifname))
+        return;
 
     packet_info_t pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -699,12 +784,12 @@ static void *capture_thread(void *arg) {
 
 /* ── Public API ───────────────────────────────────────────── */
 
-void capture_start(sloth_state_t *s) {
+void capture_open(sloth_state_t *s) {
     char errbuf[PCAP_ERRBUF_SIZE];
     g_state  = s;
     /* Reset the ifindex cache — a re-start on the same handle would
      * otherwise carry stale ifindex → name mappings. */
-    g_ifname_cache_n = 0;
+    capture_ifname_cache_reset();
 
     /* Prefer pcap_create + activate so we can request DLT_LINUX_SLL2
      * (276) as the datalink. SLL2 is what gives the pcap callback
@@ -746,15 +831,33 @@ void capture_start(sloth_state_t *s) {
     if (!g_handle) return;  /* silently disabled — show live hint in view */
 
     s->pkt_linktype = pcap_datalink(g_handle);
+}
+
+int capture_is_open(void) {
+    return g_handle != NULL;
+}
+
+void capture_run(void) {
+    if (!g_handle || g_running) return;
+    /* pthread_create() synchronises memory with the new thread (POSIX
+     * XBD 4.12), so every allow-list write main() made before this call
+     * is visible to on_packet() from its first frame. */
     g_running = 1;
-    pthread_create(&g_thread, NULL, capture_thread, NULL);
+    if (pthread_create(&g_thread, NULL, capture_thread, NULL) != 0)
+        g_running = 0;
+}
+
+void capture_start(sloth_state_t *s) {
+    capture_open(s);
+    capture_run();
 }
 
 void capture_stop(void) {
-    if (!g_running) return;
-    g_running = 0;
-    if (g_handle) pcap_breakloop(g_handle);
-    pthread_join(g_thread, NULL);
+    if (g_running) {
+        g_running = 0;
+        if (g_handle) pcap_breakloop(g_handle);
+        pthread_join(g_thread, NULL);
+    }
     if (g_handle) { pcap_close(g_handle); g_handle = NULL; }
 }
 

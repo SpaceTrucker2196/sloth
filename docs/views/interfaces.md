@@ -112,7 +112,8 @@ falls back to `DLT_LINUX_SLL` v1 or `DLT_EN10MB` — capture still
 works, but the header doesn't identify an ingress iface, so the
 data-stream toggle becomes a UI-only marker with no filter effect.
 The iface view still shows the marker for consistency across
-platforms.
+platforms. A launch-time `--iface` / `--monitor-only` scope on such a
+datalink is refused at startup instead (#85, below).
 
 **Scope.** Applies to the IP/TCP capture path only. The 802.11
 monitor capture is a separate pcap handle bound to a specific
@@ -136,10 +137,30 @@ sloth --monitor-only --hop --data-socket unix:/var/run/sloth.sock
   `y`-deselect set at launch.
 - `--monitor-only` — sugar for `--iface <monitor radio>`: resolves
   the monitor-mode Wi-Fi interface sloth discovers at startup and
-  allow-lists it. **Fail-open**: if no monitor interface is present
-  (e.g. the radio lost the boot race), the stream stays unrestricted
-  and a warning goes to stderr — a headless sensor is never blinded.
-  `Restart=always` re-resolves on the next start.
+  allow-lists it.
+
+**Fail-closed (#85).** Capture scope is an authorisation boundary, so
+a scope sloth cannot enforce is a startup error, not a warning. sloth
+prints the reason to stderr and exits 1 — before opening any JSONL,
+DB, data socket or mDNS record — when:
+
+- `--monitor-only` is given and no monitor-mode interface is present
+  (e.g. the radio lost the boot race; `Restart=` re-resolves on the
+  next start);
+- `--iface` was given but no usable name was installed (`--iface ""`);
+- the data-stream datalink cannot attribute frames to an interface
+  (anything but SLL2/276 — older libpcap, the `open_live` fallback).
+
+If packet capture could not be opened at all (no root, no devices)
+the run continues with a warning: no data stream means nothing out of
+scope is collected. There is no unrestricted fallback flag — omit
+`--iface`/`--monitor-only` to capture everything.
+
+The policy is installed before the capture thread is created and
+never written afterwards. In the callback, with an allow-list active,
+a frame whose ingress index does not resolve to a name
+(`if_indextoname()` failed, interface gone) is dropped before decode,
+and the failure is not cached.
 
 **Excluded marker.** Interfaces present on the box but absent from a
 non-empty allow-list carry an `x` prefix and a dim `(excluded)`
@@ -154,9 +175,10 @@ The allow-list and the runtime deselect list are independent
 elections; the callback drops a frame when *either* rejects its
 ingress iface. Both are purely logical — OS interface state
 (up/down, monitor mode, addresses) is never touched — and both
-require SLL2 ingress attribution (see above); without it they are
-markers with no filter effect. The 802.11 monitor handle is
-unaffected.
+require SLL2 ingress attribution (see above). Without it the `y`
+deselect is a marker with no filter effect, while a launch-time
+allow-list refuses to start (fail-closed, above). The 802.11 monitor
+handle is unaffected.
 
 ## See also
 

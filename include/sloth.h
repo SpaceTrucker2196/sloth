@@ -1847,8 +1847,11 @@ typedef struct {
     /* Launch-time data-stream allow-list (#35): when non-empty, only
      * these interfaces feed the capture pipeline — the headless
      * complement to the interactive deselect election above. Filled
-     * once at startup (--iface / --monitor-only), never mutated at
-     * runtime. Empty list = unrestricted. */
+     * once at startup (--iface / --monitor-only) before the capture
+     * thread is created, never mutated afterwards — thread creation is
+     * what publishes it to the callback (#85). Empty list =
+     * unrestricted; startup refuses a requested scope that would leave
+     * it empty or unenforceable. */
     char          iface_allowed[MAX_IFACES][16];
     int           iface_allowed_count;
 
@@ -2178,7 +2181,9 @@ int iface_is_deselected(const sloth_state_t *s, const char *name);
 /* ── Launch-time allow-list (--iface / --monitor-only, issue #35) ──
  * Empty list = unrestricted (everything passes). Non-empty = whitelist.
  * The capture callback drops a frame when EITHER election rejects its
- * ingress iface: deselected, or absent from a non-empty allow-list.
+ * ingress iface: deselected, or absent from a non-empty allow-list —
+ * and, with a non-empty list, when the ingress iface cannot be
+ * resolved at all (capture_frame_in_scope(), #85).
  * Purely logical — OS interface state is never touched.
  * iface_allow_add() dedupes, ignores NULL/empty names, and is bounded
  * at MAX_IFACES; returns 1 iff the name is in the list afterwards. */

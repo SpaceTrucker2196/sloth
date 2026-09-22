@@ -515,10 +515,11 @@ static void print_usage(const char *argv0) {
             "                     logical — OS interface state is untouched.\n"
             "  --monitor-only     shorthand: restrict the data stream to the\n"
             "                     monitor-mode Wi-Fi interface sloth discovers\n"
-            "                     at startup. Fail-open: if no monitor\n"
-            "                     interface is found the stream stays\n"
-            "                     unrestricted and a warning is printed, so a\n"
-            "                     headless sensor is never blinded.\n"
+            "                     at startup. Fail-closed: if no monitor\n"
+            "                     interface is found, or --iface/--monitor-only\n"
+            "                     cannot be enforced on the capture datalink,\n"
+            "                     sloth exits non-zero rather than capture an\n"
+            "                     unrestricted stream.\n"
             "  --no-discovery     suppress the mDNS advertisement of the data\n"
             "                     socket. By default, when --data-socket is bound\n"
             "                     to a routable (non-loopback) TCP address, sloth\n"
@@ -767,6 +768,67 @@ int main(int argc, char **argv) {
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);
 
+    memset(&g_state, 0, sizeof(g_state));
+    g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
+    g_state.active_view = VIEW_DASH;
+
+    /* Capture scope is an authorisation boundary (#35, #85). The policy
+     * is built and checked before any sink is opened and before the
+     * data-stream worker exists:
+     *   1. seed the explicit --iface entries;
+     *   2. open (not run) the data-stream handle, fixing pkt_linktype;
+     *   3. open (not run) the monitor radio; resolve --monitor-only;
+     *   4. refuse to start if the request cannot be enforced;
+     *   5. capture_run() / probe_run() — below, once the sinks are open,
+     *      where capture_start() / probe_start() used to sit.
+     * The allow-list is complete before the capture thread is created
+     * and never written afterwards; thread creation is the
+     * synchronisation point that publishes it to on_packet(). Refusing
+     * here leaves no JSONL, DB session, socket or mDNS record behind. */
+    for (int i = 0; i < allow_iface_count; i++)
+        iface_allow_add(&g_state, allow_ifaces[i]);
+
+    g_platform.init();
+    dns_init();
+#ifdef WITH_PCAP
+    capture_open(&g_state);
+    probe_open(&g_state);
+    /* First-launch UX (#25): when a monitor interface is present, open on
+     * the RF-aware dashboard rather than the interface list. */
+    if (g_state.probe_iface[0])
+        g_state.active_view = VIEW_DASH;
+#endif
+    /* probe_iface is set synchronously by probe_open(). */
+    if (monitor_only && g_state.probe_iface[0])
+        iface_allow_add(&g_state, g_state.probe_iface);
+    {
+        /* #57 tests the datalink end state, not the routes to it (an
+         * older libpcap refusing SLL2, the open_live fallback, ...).
+         * #85: a scope that cannot be enforced is a refusal, not a
+         * warning — the old fallback captured everything. A sensor that
+         * lost the boot race exits non-zero and Restart= re-resolves. */
+        capture_scope_t v = capture_scope_verdict(
+            allow_iface_count, monitor_only, g_state.probe_iface,
+            g_state.iface_allowed_count, capture_is_open(),
+            g_state.pkt_linktype);
+        if (capture_scope_refuses(v)) {
+            if (v == CAPTURE_SCOPE_REFUSE_DATALINK)
+                fprintf(stderr, "sloth: %s (datalink is %d)\n",
+                        capture_scope_reason(v), g_state.pkt_linktype);
+            else
+                fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
+#ifdef WITH_PCAP
+            probe_stop();
+            capture_stop();
+#endif
+            dns_cleanup();
+            g_platform.cleanup();
+            return 1;
+        }
+        if (v == CAPTURE_SCOPE_NO_CAPTURE)
+            fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
+    }
+
     if (jsonl_path) {
         if (!jsonl_open(jsonl_path)) {
             fprintf(stderr, "could not open jsonl output %s\n", jsonl_path);
@@ -814,57 +876,13 @@ int main(int argc, char **argv) {
             discovery_publish(data_socket, NULL);
     }
 
-    memset(&g_state, 0, sizeof(g_state));
-    g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
-    g_state.active_view = VIEW_DASH;
-
-    /* Headless data-stream scoping (#35): seed the launch-time
-     * allow-list before the capture thread starts so no packet is ever
-     * seen outside it. */
-    for (int i = 0; i < allow_iface_count; i++)
-        iface_allow_add(&g_state, allow_ifaces[i]);
-
-    g_platform.init();
-    dns_init();
 #ifdef WITH_PCAP
-    capture_start(&g_state);
-    probe_start(&g_state);
-    /* First-launch UX (#25): when a monitor interface is present, open on
-     * the RF-aware dashboard rather than the interface list. */
-    if (g_state.probe_iface[0])
-        g_state.active_view = VIEW_DASH;
+    /* #85: both workers start here, after the scope policy was sealed
+     * and every sink is open; nothing above this point can have decoded
+     * a packet. */
+    capture_run();
+    probe_run();
 #endif
-    /* #35: resolve --monitor-only after probe_start() has discovered
-     * the monitor radio (probe_iface is set synchronously). Fail-open:
-     * a sensor that lost the boot race keeps an unrestricted stream
-     * rather than going blind; Restart=always re-resolves next start.
-     * The entry lands after capture starts — same benign main-thread
-     * write the [y] deselect already performs (#17). */
-    if (monitor_only) {
-        if (g_state.probe_iface[0])
-            iface_allow_add(&g_state, g_state.probe_iface);
-        else
-            fprintf(stderr, "sloth: --monitor-only: no monitor-mode "
-                    "interface found; data stream left unrestricted\n");
-    }
-    /* #57: the allow-list only bites on SLL2, the one datalink carrying an
-     * ingress ifindex. Several routes land elsewhere — pcap_set_datalink()
-     * refused by an older libpcap, the open_live fallback, capture failing
-     * outright — and every one of them leaves scoping inert while capture
-     * looks healthy. Test the end state, not the routes. Ordering matters:
-     * capture_start() has set pkt_linktype and both allow-list sources have
-     * been seeded, and tui_init() has not yet taken the terminal. */
-    if (g_state.iface_allowed_count > 0
-        && !capture_dlt_has_ifindex(g_state.pkt_linktype)) {
-        if (g_state.pkt_linktype == 0)
-            fprintf(stderr, "sloth: --iface/--monitor-only requested but "
-                    "packet capture is disabled; scope is INACTIVE\n");
-        else
-            fprintf(stderr, "sloth: --iface/--monitor-only requested but "
-                    "capture datalink is %d (not SLL2/276); per-interface "
-                    "scope is INACTIVE — all traffic is captured\n",
-                    g_state.pkt_linktype);
-    }
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {

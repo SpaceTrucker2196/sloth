@@ -371,7 +371,8 @@ void test_allow_dedupe(void) {
 
 void test_allow_null_empty_ignored(void) {
     /* A failed --monitor-only resolve passes "" / NULL; the list must
-     * stay empty so the stream stays unrestricted (fail-open). */
+     * not grow a bogus entry. Startup then refuses the run rather than
+     * capture unrestricted (#85, capture_scope_verdict()). */
     sloth_state_t s = make_state_with_ifaces(2);
     ASSERT_EQ(iface_allow_add(&s, NULL), 0);
     ASSERT_EQ(iface_allow_add(&s, ""),   0);

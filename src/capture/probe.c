@@ -468,7 +468,7 @@ static void *probe_thread(void *arg) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
-void probe_start(sloth_state_t *s) {
+void probe_open(sloth_state_t *s) {
     g_state = s;
     s->probe_err[0] = '\0';
 
@@ -496,15 +496,26 @@ void probe_start(sloth_state_t *s) {
     }
 
     snprintf(s->probe_iface, sizeof(s->probe_iface), "%s", iface);
+}
+
+void probe_run(void) {
+    if (!g_ph || g_running) return;
     g_running = 1;
-    pthread_create(&g_thread, NULL, probe_thread, NULL);
+    if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
+        g_running = 0;
+}
+
+void probe_start(sloth_state_t *s) {
+    probe_open(s);
+    probe_run();
 }
 
 void probe_stop(void) {
-    if (!g_running) return;
-    g_running = 0;
-    if (g_ph) pcap_breakloop(g_ph);
-    pthread_join(g_thread, NULL);
+    if (g_running) {
+        g_running = 0;
+        if (g_ph) pcap_breakloop(g_ph);
+        pthread_join(g_thread, NULL);
+    }
     if (g_ph) { pcap_close(g_ph); g_ph = NULL; }
 }
 
@@ -554,7 +565,7 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     /* already scanning on this exact interface */
     if (g_running && strcmp(s->probe_iface, iface) == 0) return;
 
-    if (g_running) probe_stop();
+    probe_stop();   /* also closes a handle opened but never run */
 
     s->probe_err[0] = '\0';
     g_state = s;
