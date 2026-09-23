@@ -8,6 +8,8 @@
 
 #define WIFI_PAGE 20
 
+#ifdef WITH_WIFI
+
 /* Phosphor intensity based on signal strength. */
 static void phos_signal(int dbm) {
     if      (dbm > -50) tui_bright();
@@ -162,6 +164,8 @@ static void fmt_akm_mfp(const wifi_ap_t *ap, char *out, int sz) {
     if (ap->akm[0]) snprintf(out, (size_t)sz, "%.6s%s", ap->akm, mfp);
     else            snprintf(out, (size_t)sz, "%s", mfp[0] ? mfp : "-");
 }
+
+#endif /* WITH_WIFI — the helpers above have no caller without the scan path */
 
 void view_wifi_draw(const sloth_state_t *s) {
 #ifndef WITH_WIFI

@@ -40,8 +40,13 @@ Single binary `sloth`. Test binary `sloth_test`.
 ## Discipline
 
 - **Tests must pass.** `make test` returns 0. Never commit a red test.
-- **Builds must be warning-clean.** `make` produces no warnings. Treat
-  any new warning as a failed build.
+- **Builds must be warning-clean — the whole matrix, not just `make`.**
+  `make`, `make WITH_NCURSES=0`, `make WITH_PCAP=0`, `make WITH_WIFI=0`,
+  `make WITH_SQLITE=0` and `make embedded` each produce no warnings.
+  Treat any new warning as a failed build. Checking only the default
+  build is how #99 happened: two helpers in `src/views/wifi.c` sat
+  outside the `WITH_WIFI` guard and warned for an unknown number of
+  releases, because no gate ever compiled that variant.
 - **VIEW_COUNT must be kept in sync** across `include/sloth.h`,
   `tests/test_state.c`, and `tests/test_arp.c` whenever a view is added
   or removed.
