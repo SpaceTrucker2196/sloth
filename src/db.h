@@ -124,15 +124,18 @@ int  db_interval(void);
 void db_set_retain_days(int days);
 int  db_retain_days(void);
 
-/* Hard size ceiling in megabytes (--db-max-mb). 0 = unlimited.
+/* Size target in megabytes (--db-max-mb). 0 = unlimited.
  *
- * On breach the oldest observation rows go first, in batches, until
+ * A pruning trigger, not a hard cap. On breach the oldest observation
+ * rows go first, in batches and in a bounded number of rounds, until
  * the file is back under. Entity, alert and credential rows are NEVER
  * dropped by this guard — a sensor that fills its disk should lose
  * telemetry, not the findings the operator is keeping the disk for. If
- * pruning every eligible row still leaves the file over the ceiling,
- * that is reported once and the file is allowed to exceed it, because
- * the alternative is discarding evidence to satisfy a number. */
+ * pruning every eligible row still leaves the file over target, that is
+ * reported once and the file is allowed to exceed it, because the
+ * alternative is discarding evidence to satisfy a number. Measured
+ * against the main file's page count only; -wal/-shm are not counted.
+ * docs/wiki/retention.md is the operator-facing statement of all this. */
 void db_set_max_mb(int mb);
 int  db_max_mb(void);
 

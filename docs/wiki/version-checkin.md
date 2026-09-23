@@ -23,7 +23,8 @@ latest source and building it.
 ## Current state
 
 - The running version is compile-time state only:
-  `#define SLOTH_VERSION "1.4.0"` in `include/sloth.h`.
+  `#define SLOTH_VERSION` in `include/sloth.h`. (This section describes
+  the state when #18 was designed; the literal was 1.4.0 then.)
 - The current upgrade story is manual. `RELEASE_v1.4.0.md` documents:
   `git pull` then `make`.
 - `src/main.c` runs a tight poll/render/key loop. Blocking network I/O in

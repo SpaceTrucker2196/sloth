@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="Makefile"><img src="https://img.shields.io/badge/tests-2122%20passing-brightgreen" alt="2122 test assertions passing"></a>
+  <a href="Makefile"><img src="https://img.shields.io/badge/tests-9152%20passing-brightgreen" alt="9152 test assertions passing"></a>
   <a href="docs/wiki/mutation-testing.md"><img src="https://img.shields.io/badge/mutation%20kill%20rate-51.0%25%20of%20considered-yellow" alt="Mutation testing: 51.0% of considered mutants killed across 18 files"></a>
   <a href=".github/scripts/mutate.py"><img src="https://img.shields.io/badge/make%20mutate-active-blue" alt="make mutate harness available in-tree"></a>
 </p>
@@ -18,8 +18,8 @@
 
 A terminal-based passive network monitor for Linux, written in C99. Sloth never
 injects packets, never scans, and never modifies kernel state — it observes what
-your host already sees and turns it into dozens of live views, a suite of passive
-alert rules, an embedded
+your host already sees and turns it into **35 live views** and **61 passive
+alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, seqnum-based MAC-randomisation deanonymisation),
 and an optional JSONL forensic log.
@@ -87,6 +87,13 @@ for in normal vs anomalous traffic.
 | [**Devices**](docs/views/devices.md)     | One record per MAC, joined from ARP/DHCP/Beacons/Probe/Stations with OUI vendor |
 | [**Dashboard**](docs/views/dashboard.md) | Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories all tiled to fill the terminal |
 | [**OSI stack**](docs/views/osi.md)       | Seven-layer synthesis grid: every count sloth observes mapped onto its OSI layer (L7 application protocols, L6 TLS-version histogram, L5 sessions, L4 transport split, L3 host count, L2 ifaces/APs/STAs, L1 probe iface) — the "where is my traffic happening" cheat sheet |
+| [**Twins**](docs/views/twins.md)         | Evil-twin episode table — each SSID seen from a BSSID that doesn't match the one it was learned from, with the cipher/AKM mismatch that gave it away |
+| [**KARMA**](docs/views/karma.md)         | KARMA / PineAP candidate table — APs answering probes for SSIDs they never beacon, scored on PNL overlap, IE uniformity and deauth chaining (#30) |
+| [**RADIUS**](docs/views/rogue-radius.md) | 802.1X EAP method inventory and identity leaks — the hostapd-wpe / eaphammer surface (#31, #38) |
+| [**FragAttacks**](docs/views/fragattack.md) | Per-BSSID counters for the FragAttacks rules (CVE-2020-24586/24587/24588, CVE-2020-261xx) (#75) |
+| [**Research**](docs/views/research.md)   | The cited source behind each alert that actually fired — CVE, advisory, IEEE clause or paper (#73) |
+| [**Channel**](docs/views/channel.md)     | Per-channel 802.11 activity histogram: APs beaconing and STAs associated on each channel |
+| **Help** `[?]`                            | Keybindings, running version, and the embedded-data disclosures |
 
 ### WiFi SIGINT (v1.1)
 
@@ -139,9 +146,11 @@ for in normal vs anomalous traffic.
 
   `--db-interval-secs N` sets the write cadence (default 1).
 
-  **Retention is tiered**, because not all rows are worth the same on a disk that is filling up. `--db-retain-days N` (default 30) sets the window for observation rows; entities keep **3×** that and alerts plus credential exposures keep **12×**. The order reflects what an investigator reaches for months later: *what fired* outlives *who was here*, which outlives *the individual observations*.
+  **Retention is tiered**, because not all rows are worth the same on a disk that is filling up. `--db-retain-days N` (default 30) sets the window for observation rows; entities keep **3×** that and alerts plus credential exposures keep **12×**. The order reflects what an investigator reaches for months later: *what fired* outlives *who was here*, which outlives *the individual observations*. Age is measured from a row's `last_seen`, so something still being observed is never aged out, and the pass runs at most hourly and only while sloth is running.
 
-  `--db-max-mb N` (default 512, 0 = unlimited) is a hard ceiling. On breach the oldest observation rows go first — **entity, alert and credential rows are never dropped by this guard**. A sensor that fills its disk should lose telemetry, not the findings the disk was being kept for. If pruning every eligible row still leaves the file over the ceiling, that is reported once and the file is allowed to exceed it, because the alternative is discarding evidence to satisfy a number.
+  `--db-max-mb N` (default 512, 0 = unlimited) is a **pruning trigger, not a cap**. On breach the oldest observation rows go first, in bounded rounds — **entity, alert and credential rows are never dropped by this guard**. A sensor that fills its disk should lose telemetry, not the findings the disk was being kept for. The file is therefore allowed to exceed the target: if pruning every eligible row leaves it over, that is reported once and accepted, because the alternative is discarding evidence to satisfy a number. The guard also measures only the main database file, not its `-wal`/`-shm` sidecars.
+
+  **This is an investigative tradeoff, not a deletion promise.** Nothing outside the database is retained at all — `-o` JSONL, `--pcap-dir`, `--eapol-dir` and `--report` outputs grow until you remove them — and row deletion is logical, not secure erasure. Full behaviour and the artifact classes it does and does not cover: [`docs/wiki/retention.md`](docs/wiki/retention.md).
 
   Schema-level guardrails from [MISSION.md §2](MISSION.md) are enforced by the test suite: no password column on credential exposures, no PMKID / nonce / MIC columns anywhere — crackable material stays in the `--eapol-dir` file the operator explicitly asked for.
 
@@ -212,7 +221,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 2122 assertions (no root, no terminal, no network)
+make test                     # 9152 assertions (no root, no terminal, no network)
 make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
@@ -263,7 +272,9 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-Six rules feed `VIEW_ALERTS`. New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98) — see [`docs/views/alerts.md`](docs/views/alerts.md).
+**61 rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` in [`include/sloth.h`](include/sloth.h), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+
+Six of them, as a sample of the shape:
 
 | Rule | Severity | Trigger | match_ip / port |
 |------|----------|---------|-----------------|
@@ -274,7 +285,7 @@ Six rules feed `VIEW_ALERTS`. New keys also append to the JSONL stream and (if `
 | `THREAT_IP`      | CRIT | conn remote IP matches embedded IOC list        | remote IP / port |
 | `BEACONING`      | WARN | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote IP / port |
 
-The IOC lists in `src/threat_intel.c` are intentionally synthetic (RFC 5737 doc IPs, `.testing` / `.example` sentinel domains). They exist so the alerts pipeline can be exercised in tests — replace them with your own feed for production use.
+> ⚠️ **`THREAT_DOMAIN` and `THREAT_IP` ship with no threat feed.** The IOC lists in `src/threat_intel.c` are **synthetic demo data** — four RFC 5737 documentation IPs and six obviously-fake sentinel domains — so both rules detect **nothing** until you replace them. They exist to exercise the alerts pipeline in tests and to show the shape of your own list. Sloth ships no feed and fetches none; a fetch is a network write, which [MISSION.md §2](MISSION.md) forbids. The alert row says `demo IOC` and the help view (`[?]` → *Embedded data*) says so too. Details: [`docs/wiki/threat-intel.md`](docs/wiki/threat-intel.md).
 
 ## JSONL schema
 
@@ -287,7 +298,7 @@ Each line is one JSON object. `ts` is a Unix timestamp; strings are RFC 8259 esc
 {"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html"}
 {"type":"ntp","ts":1700000004,"src":"10.0.0.1","dst":"192.168.1.5","mode":"server","version":4,"stratum":1,"ref":"GPS"}
 {"type":"icmp","ts":1700000005,"src":"192.168.1.5","dst":"8.8.8.8","desc":"Echo Req","ty":8,"code":0,"seq":42,"v6":0}
-{"type":"alert","ts":1700000006,"title":"THREAT_DOMAIN","detail":"192.168.1.5 queried malware.testing.com (IOC malware.testing.com)","key":"threat-d:malware.testing.com","sev":2,"ty":3,"count":1,"incident_id":"9f2c41ab77e30d58"}
+{"type":"alert","ts":1700000006,"title":"THREAT_DOMAIN","detail":"192.168.1.5 queried malware.testing.com (demo IOC malware.testing.com)","key":"threat-d:malware.testing.com","sev":2,"ty":3,"count":1,"incident_id":"9f2c41ab77e30d58"}
 {"type":"alert.escalate","ts":1700000041,"event_id":"9f2c41ab77e30d58-0002","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"…","sev":2,"ty":31,"prev_sev":1,"observations":2,"evaluations":36,"count":36}
 ```
 
@@ -445,7 +456,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 2122 assertions, no root, no terminal, no network
+make test    # 9152 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -483,7 +494,7 @@ the top.
 
 ## Status
 
-Code: ~18k lines of C99 across 88 source files. Tests: 2122 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
+Code: ~50k lines of C99 across 153 `.c` files (295 counting headers). Tests: 9152 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
 

@@ -261,16 +261,26 @@ missing emitter.
 Everything does eventually age out. Findings keep twelve times longer,
 not forever.
 
-`--db-max-mb N` (default 512, 0 = unlimited) is a hard ceiling. On
-breach the **oldest observation rows go first** — entity, alert,
-credential and detector-evidence rows are never dropped by this guard. A
-sensor that fills its disk should lose telemetry, not the findings the
-disk was being kept for. If pruning every eligible row still leaves the
-file over the ceiling, that is reported once and the file is allowed to
-exceed it: discarding evidence to satisfy a number is the worse failure.
+`--db-max-mb N` (default 512, 0 = unlimited) is a **pruning trigger, not
+a cap**. On breach the **oldest observation rows go first** — entity,
+alert, credential and detector-evidence rows are never dropped by this
+guard. A sensor that fills its disk should lose telemetry, not the
+findings the disk was being kept for. If pruning every eligible row
+still leaves the file over target, that is reported once and the file is
+allowed to exceed it: discarding evidence to satisfy a number is the
+worse failure. The guard is also bounded at 64 pruning rounds per pass
+and measures only the main database file, not `-wal`/`-shm`.
 
 Maintenance runs hourly, after the write, so a pruning stall never
-delays the observation that triggered it.
+delays the observation that triggered it — which also means it runs
+only while sloth is running, and the first pass is an hour after the
+first write. Age-out is `last_seen < cutoff`, so a row that keeps being
+refreshed never expires.
+
+> Retention is an **investigative tradeoff, not a deletion guarantee**,
+> it covers nothing outside this file, and row deletion is not secure
+> erasure. [[retention]] states exactly what is and is not covered —
+> read that before citing sloth in a data-handling document.
 
 > **`auto_vacuum` caveat.** `PRAGMA auto_vacuum=INCREMENTAL` is
 > requested at open, but SQLite only honours it on a **newly created**

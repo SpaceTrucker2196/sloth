@@ -3351,8 +3351,12 @@ static void rule_threat_domain(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key,    sizeof(key),    "threat-d:%s", ioc);
+        /* "demo IOC", not "IOC": the embedded list is synthetic (RFC 5737
+         * addresses, .testing/.example names) and the alert row is the
+         * only place an operator ever learns that. A doc saying so does
+         * not reach someone reading the Alerts view at 02:00. */
         snprintf(detail, sizeof(detail),
-                 "%.30s queried %.30s (IOC %.16s)",
+                 "%.30s queried %.30s (demo IOC %.16s)",
                  e->src[0] ? e->src : "?", e->qname, ioc);
         fire(ALERT_TYPE_THREAT_DOMAIN, ALERT_SEV_CRIT,
              "THREAT_DOMAIN", detail, key, e->src, 53, now);
@@ -3368,8 +3372,10 @@ static void rule_threat_ip(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key,    sizeof(key),    "threat-i:%s", ioc);
+        /* See rule_threat_domain: the list is demo data, and this string
+         * is where the operator finds out. */
         snprintf(detail, sizeof(detail),
-                 "connection to %s:%u (IOC %s)",
+                 "connection to %s:%u (demo IOC %s)",
                  c->remote_addr, c->remote_port, ioc);
         fire(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT,
              "THREAT_IP", detail, key, c->remote_addr, c->remote_port, now);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>27 views — sloth</title>
+<title>35 views — sloth</title>
 <meta name="description" content="Every sloth view: what it shows, what to watch for. 20 observation views, 4 synthesis views, 5 WiFi SIGINT views, tab-cycle or jump by keybind.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
     </a>
     <div class="nav-links">
       <a href="index.html#what">What it sees</a>
-      <a href="views.html">27 views</a>
+      <a href="views.html">35 views</a>
       <a href="philosophy.html">Philosophy</a>
       <a href="streaming.html">Stream</a>
       <a href="quickstart.html">Quickstart</a>
@@ -36,12 +36,15 @@
   <div class="page-header-inner">
     <a class="back-link" href="index.html">← Home</a>
     <p class="page-eyebrow">The catalog</p>
-    <h1 class="page-title">Twenty-seven views.</h1>
+    <h1 class="page-title">Thirty-five views.</h1>
     <p class="page-lede">
       Each view is its own keybinding, its own ring buffer, its own
       protocol or synthesis. Press <kbd>Tab</kbd> to cycle. Press
       <kbd>o</kbd> for the composite dashboard, <kbd>l</kbd> for the
       OSI grid. Press <kbd>/</kbd> in any list view to filter.
+      Twenty observation views, nine synthesis views, five WiFi-SIGINT
+      views and the help card &mdash; <code>VIEW_COUNT</code> in
+      <code>include/sloth.h</code> is the source of truth.
     </p>
   </div>
 </section>
@@ -95,7 +98,7 @@
     <p class="page-eyebrow">
       <span class="pill pill-magenta">Synthesis</span> derived from observation
     </p>
-    <h2>Four derived views.</h2>
+    <h2>Nine derived views.</h2>
     <p class="section-lede">
       Rule outputs, joined records, and at-a-glance composites.
       Synthesis views read snapshot state and produce a different
@@ -111,6 +114,11 @@
         <tr><td class="col-key"><kbd>g</kbd></td><td class="col-name">Devices</td><td class="col-desc">One record per MAC, joined from ARP / DHCP / Beacons / Probe / Stations with OUI vendor.</td></tr>
         <tr><td class="col-key"><kbd>o</kbd></td><td class="col-name">Dashboard</td><td class="col-desc">Composite at-a-glance view: interfaces, conns + top hosts, packets, and seven side-panel categories tiled to fill the terminal.</td></tr>
         <tr><td class="col-key"><kbd>l</kbd></td><td class="col-name">OSI stack</td><td class="col-desc">Seven-layer grid: every count sloth observes mapped onto its OSI layer &mdash; L7 application protocols, L6 TLS-version histogram, L5 sessions, L4 transport split, L3 host count, L2 ifaces / APs / STAs, L1 probe iface.</td></tr>
+        <tr><td class="col-key"><kbd>x</kbd></td><td class="col-name">Twins</td><td class="col-desc">Evil-twin episode table &mdash; each SSID advertised by a BSSID that does not match the one sloth learned it from, with the cipher / AKM mismatch that gave it away.</td></tr>
+        <tr><td class="col-key"><kbd>y</kbd></td><td class="col-name">KARMA</td><td class="col-desc">KARMA / PineAP candidate table: APs answering probes for SSIDs they never beacon, scored on PNL overlap, IE uniformity and deauth chaining.</td></tr>
+        <tr><td class="col-key"><kbd>z</kbd></td><td class="col-name">RADIUS</td><td class="col-desc">802.1X EAP method inventory and identity leaks &mdash; the hostapd-wpe / eaphammer surface: weak inner methods, EAP identities in the clear, TLS-in-EAP success with no server certificate.</td></tr>
+        <tr><td class="col-key"><kbd>c</kbd></td><td class="col-name">FragAttacks</td><td class="col-desc">Per-BSSID counters for the FragAttacks family (CVE-2020-24586/24587/24588 and CVE-2020-261xx) &mdash; plaintext frames after key install, cross-association reassembly, mixed-key fragments.</td></tr>
+        <tr><td class="col-key"><kbd>f</kbd></td><td class="col-name">Research</td><td class="col-desc">The cited source behind each alert that actually fired &mdash; CVE, advisory, IEEE clause or paper, read from the research corpus.</td></tr>
       </tbody>
     </table>
   </div>
@@ -184,7 +192,7 @@
       <h5>Navigate</h5>
       <ul>
         <li><a href="index.html">Home</a></li>
-        <li><a href="views.html">27 views</a></li>
+        <li><a href="views.html">35 views</a></li>
         <li><a href="philosophy.html">Philosophy</a></li>
         <li><a href="streaming.html">Stream</a></li>
         <li><a href="quickstart.html">Quickstart</a></li>
@@ -194,8 +202,8 @@
     <div class="footer-col footer-about">
       <h5>About</h5>
       <p>
-        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
-        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        Passive, white-hat SIGINT for IP and 802.11. Thirty-five
+        live views, 61 passive alert rules, a WiFi-SIGINT toolkit, and a
         JSONL stream you can pipe into any SIEM. Built in C99 for
         Linux, with a small reference consumer + forwarder in
         Python.

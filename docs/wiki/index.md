@@ -8,14 +8,15 @@ source material.
 
 - [[sloth]] — what sloth is, what it explicitly never does.
 - [[architecture]] — code-tree layout and the seams between layers.
-- [[views-catalog]] — keybinding-to-view map for all 24 views.
+- [[views-catalog]] — keybinding-to-view map for all 35 views.
 - [[dashboard]] — the seven-band composite view.
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the six rules.
+- [[alerts]] — alert engine internals and the 61 rules.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
-- [[threat-intel]] — embedded IOC matcher.
+- [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
+- [[retention]] — what `--db` actually deletes, and what nothing deletes.
 - [[ja3-fingerprinting]] — TLS ClientHello fingerprinting.
 
 ## WiFi SIGINT

@@ -62,6 +62,8 @@ State, sort key, filter:
 - **Connection to threat-intel IP** — fires
   [`ALERT_THREAT_IP`](alerts.md#threat_ip) CRIT, and the per-alert
   pcap export (if `--pcap-dir` is set) dumps the matching packets.
+  **The shipped IOC list is synthetic demo data** (RFC 5737 addresses);
+  this rule detects nothing until you replace it ([[threat-intel]]).
 - **Sustained high retransmit rate** — congested link, bad MTU, or
   flaky cable. Rarely security-relevant but worth noting.
 

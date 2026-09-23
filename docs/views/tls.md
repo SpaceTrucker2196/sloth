@@ -85,6 +85,8 @@ Both fingerprints emit alongside each other in the JSONL log
   custom TLS library whose JA3 doesn't match Chrome/Firefox even when
   the UA says it's a browser.
 - **Threat-intel domain in SNI**: triggers `ALERT_THREAT_DOMAIN` CRIT.
+  The shipped IOC list is synthetic demo data — replace it before this
+  means anything ([[threat-intel]]).
 - **Mass-flush of clienthellos** to many distinct SNIs in seconds:
   scanning behaviour, or browser cache rebuild.
 

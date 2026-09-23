@@ -11,9 +11,10 @@ dropped.
 A terminal-based **passive** network monitor for Linux, written in C99.
 It never injects packets, never scans, never modifies kernel state. It
 reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
-pcap stream, then surfaces what it sees through 24 ncurses views, six
-alert rules, an embedded threat-intel matcher, optional per-alert pcap
-dumps, and an optional JSONL forensic log.
+pcap stream, then surfaces what it sees through 35 ncurses views
+(`VIEW_COUNT`), 61 alert rules (one per `ALERT_TYPE_*`), an embedded
+threat-intel matcher whose shipped IOC list is **synthetic demo data**,
+optional per-alert pcap dumps, and an optional JSONL forensic log.
 
 Single binary `sloth`. Test binary `sloth_test`.
 
@@ -34,7 +35,7 @@ Single binary `sloth`. Test binary `sloth_test`.
 - `src/views/*.c` — one file per VIEW_*. The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
-- `tests/` — unit tests, fake platform, scenarios. ~1664 assertions.
+- `tests/` — unit tests, fake platform, scenarios. 9152 assertions.
 - `docs/views/*.md` — per-view deep dives. Linked from README tables.
 
 ## Discipline

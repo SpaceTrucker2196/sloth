@@ -1,6 +1,6 @@
 ---
 name: views-catalog
-description: All 24 sloth views indexed by keybinding, grouped into observation / synthesis / WiFi SIGINT
+description: All 35 sloth views indexed by keybinding, grouped into observation / synthesis / WiFi SIGINT
 type: reference
 ---
 
@@ -8,9 +8,14 @@ type: reference
 
 **Summary**: Full keybinding-to-view map, with one-line descriptions and links to the per-view source docs in `docs/views/`.
 
-**Sources**: `docs/views/README.md` and all `docs/views/*.md`.
+**Sources**: `view_labels[]` in `src/view_labels.c` (the one table the
+tab bar and the help card both render from), `VIEW_COUNT` in
+`include/sloth.h`, `docs/views/README.md` and all `docs/views/*.md`.
 
-**Last updated**: 2026-05-25.
+**Count**: `VIEW_COUNT` = **35**. Every key below is a row of
+`view_labels[]`; if the two disagree, `view_labels[]` is right.
+
+**Last updated**: 2026-09-23 (#96 — eight views were missing here).
 
 ---
 
@@ -38,6 +43,7 @@ type: reference
 | `r` | DNS         | [dns.md](../views/dns.md) | every Q/R on UDP/53 |
 | `p` | NTP         | [ntp.md](../views/ntp.md) | NTP traffic |
 | `i` | ICMP        | [icmp.md](../views/icmp.md) | ICMP log |
+| `m` | Channel     | [channel.md](../views/channel.md) | per-channel 802.11 activity histogram |
 
 ## Synthesis — derived from observation
 
@@ -46,6 +52,13 @@ type: reference
 | `v` | Alerts    | [alerts.md](../views/alerts.md) | rule-derived events — see [[alerts]] |
 | `g` | Devices   | [devices.md](../views/devices.md) | join of ARP + DHCP + beacons + probes + stations |
 | `o` | Dashboard | [dashboard.md](../views/dashboard.md) | seven-band composite — see [[dashboard]] |
+| `l` | OSI stack | [osi.md](../views/osi.md) | every observed count mapped onto its OSI layer |
+| `x` | Twins     | [twins.md](../views/twins.md) | evil-twin episode table |
+| `y` | KARMA     | [karma.md](../views/karma.md) | KARMA / PineAP candidate table (#30) |
+| `z` | RADIUS    | [rogue-radius.md](../views/rogue-radius.md) | 802.1X EAP method / identity-leak table (#31, #38) — see [[enterprise-rogue]] |
+| `c` | FragAttacks | [fragattack.md](../views/fragattack.md) | per-BSSID FragAttacks counters (#75) — see [[fragattacks]] |
+| `f` | Research  | [research.md](../views/research.md) | the cited source behind each alert that fired (#73) — see [[research-corpus]] |
+| `?` | Help      | — | keybindings, version, and the embedded-data disclosures |
 
 ## WiFi SIGINT (v1.1)
 

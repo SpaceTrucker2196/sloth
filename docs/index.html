@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>sloth — the calm, observant network monitor</title>
-<meta name="description" content="A passive network SIGINT console for Linux. 27 views, six alert rules, embedded WiFi SIGINT toolkit. Never injects, never scans, never modifies kernel state. White-hat only.">
+<meta name="description" content="A passive network SIGINT console for Linux. 35 views, 61 alert rules, embedded WiFi SIGINT toolkit. Never injects, never scans, never modifies kernel state. White-hat only.">
 <meta property="og:title" content="sloth — the calm, observant network monitor">
 <meta property="og:description" content="Passive network SIGINT for Linux. Eyes, not hands.">
 <meta property="og:image" content="assets/sloth.png">
@@ -146,7 +146,7 @@
     </a>
     <div class="nav-links">
       <a href="#what">What it sees</a>
-      <a href="views.html">27 views</a>
+      <a href="views.html">35 views</a>
       <a href="philosophy.html">Philosophy</a>
       <a href="streaming.html">Stream</a>
       <a href="quickstart.html">Quickstart</a>
@@ -162,7 +162,7 @@
       <p class="eyebrow">A passive SIGINT console</p>
       <h1>The calm, observant<br/>network monitor.</h1>
       <p class="lede">
-        27 live views. Six alert rules. An embedded WiFi-SIGINT toolkit.
+        35 live views. 61 alert rules. An embedded WiFi-SIGINT toolkit.
         A JSONL stream you can plug into Splunk, Elastic, or syslog in
         five minutes. <strong>Never injects. Never scans. Never modifies kernel state.</strong>
         Sloth is the eyes, not the hands.
@@ -173,7 +173,7 @@
       </div>
       <p class="hero-meta">
         <span class="badge badge-green">C99 · Linux · libpcap</span>
-        <span class="badge badge-gold">2,122 test assertions</span>
+        <span class="badge badge-gold">9,152 test assertions</span>
         <span class="badge badge-clay">White-hat only</span>
       </p>
     </div>
@@ -257,10 +257,10 @@
   </svg>
 </div>
 
-<!-- ── 27 views ───────────────────────────────────────────────────── -->
+<!-- ── 35 views ───────────────────────────────────────────────────── -->
 <section id="views" class="section section-canopy">
   <div class="section-inner">
-    <h2>Twenty-seven live views,<br/>tiled into the terminal.</h2>
+    <h2>Thirty-five live views,<br/>tiled into the terminal.</h2>
     <p class="section-lede pale">
       Each view is a complete protocol or synthesis — its own keybinding,
       its own ring buffer, its own per-view documentation. Tab to cycle.
@@ -461,7 +461,7 @@
       <div class="qs-card">
         <h4>2. Build</h4>
 <pre class="code-block">cd sloth
-make test    # 2,122 assertions, no root needed
+make test    # 9,152 assertions, no root needed
 make         # builds ./sloth</pre>
       </div>
 
@@ -502,7 +502,7 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
       <h5>Navigate</h5>
       <ul>
         <li><a href="#top">Top</a></li>
-        <li><a href="views.html">27 views</a></li>
+        <li><a href="views.html">35 views</a></li>
         <li><a href="philosophy.html">Philosophy</a></li>
         <li><a href="streaming.html">Stream</a></li>
         <li><a href="quickstart.html">Quickstart</a></li>
@@ -512,8 +512,8 @@ sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
     <div class="footer-col footer-about">
       <h5>About</h5>
       <p>
-        Passive, white-hat SIGINT for IP and 802.11. Twenty-seven
-        live views, six alert rules, a WiFi-SIGINT toolkit, and a
+        Passive, white-hat SIGINT for IP and 802.11. Thirty-five
+        live views, 61 passive alert rules, a WiFi-SIGINT toolkit, and a
         JSONL stream you can pipe into any SIEM. Built in C99 for
         Linux, with a small reference consumer + forwarder in
         Python.

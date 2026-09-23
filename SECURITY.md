@@ -2,24 +2,45 @@
 
 ## Supported versions
 
-sloth follows semver. Security fixes are applied to the current minor
-release line only; older minors are archived at their last tag and do
-not receive further updates.
+**Current release: `1.8.1`** — the value of `#define SLOTH_VERSION` in
+[`include/sloth.h`](include/sloth.h), which is the single source of
+truth for what a build calls itself. If this file and that `#define`
+ever disagree, the `#define` is right and this file is stale; please
+report it.
 
-| Version | Supported |
-|---------|-----------|
-| 1.4.x   | ✅ current |
-| 1.3.x   | ❌ archived |
-| 1.2.x   | ❌ archived |
-| 1.1.x   | ❌ archived |
-| 1.0.x   | ❌ archived |
-| < 1.0   | ❌ pre-release |
+sloth is developed and released from **one branch** (`main`). There are
+no maintenance branches, no LTS line, and no backports. Concretely:
 
-If you're pinned to an older release, treat it as end-of-life: no
-CVEs will be backported. The upgrade cost between minors is
-deliberately kept small — the JSONL schema is additive, the CLI
-grows flags but doesn't remove them, and each release ships a
-`RELEASE_v*.md` note describing what moved.
+| What | Status |
+|------|--------|
+| `main` | ✅ where every fix lands, security or otherwise |
+| the newest tag (`v1.8.1`) | ✅ supported — "supported" means the next fix ships in the next tag cut from `main` |
+| every older tag (`v1.8.0` and below) | ❌ archived at that commit; receives nothing |
+
+There is **no patch SLA and no support window** — this is a
+single-maintainer project and promising either would be a promise we
+cannot keep. See "Reporting a vulnerability" below for the response
+behaviour we will actually stand behind, which is a best-effort
+acknowledgement target, not a remediation deadline.
+
+If you are pinned to an older tag, treat it as end-of-life: no CVE will
+be backported to it, and the upgrade path is to move to the newest tag.
+That upgrade cost is deliberately kept small — the JSONL schema is
+additive, the CLI grows flags but doesn't remove them, and each release
+ships a `RELEASE_v*.md` note describing what moved.
+
+Versioning follows semver *for the external contracts* (the CLI flags
+and the JSONL schema); a minor bump is feature work, not an
+API break.
+
+### What an operator should take from this
+
+An organisation evaluating sloth should plan to track `main` or the
+newest tag, not to pin a version and receive patches for it. If your
+change-control process requires a fixed, supported version with a
+defined maintenance window, sloth does not offer one today, and you
+should say so in your own risk write-up rather than infer one from this
+file.
 
 ## Version awareness
 
@@ -50,10 +71,34 @@ Please include:
 - what a fix would look like from your perspective (this is optional
   but usually accelerates triage)
 
-Expect an acknowledgement within a week. Fixes for confirmed issues
-land on `main` with a `RELEASE_v*.md` note calling out the CVE
-identifier if one is assigned. Coordinated disclosure timing is
-negotiated per-report.
+Acknowledgement is **best-effort, typically within a week** — a target,
+not a contractual SLA. Fixes for confirmed issues land on `main` with a
+`RELEASE_v*.md` note calling out the CVE identifier if one is assigned.
+Coordinated disclosure timing is negotiated per-report.
+
+## Embedded threat-intelligence data
+
+The IOC lists compiled into the binary (`src/threat_intel.c`) are
+**synthetic demo data**, not a threat feed. They are four RFC 5737
+documentation addresses and six obviously-fake sentinel domains. Their
+only job is to let the alert pipeline be exercised in tests and to show
+the shape an operator's own list would take.
+
+`THREAT_DOMAIN` and `THREAT_IP` therefore detect **nothing in
+production** until the lists are replaced. Sloth ships no feed, fetches
+no feed, and has no feed-update mechanism — fetching one would be a
+network write, which [`MISSION.md`](MISSION.md) §2 forbids. See
+[`docs/wiki/threat-intel.md`](docs/wiki/threat-intel.md).
+
+## Data retention
+
+`--db` retains observations, entity inventory and findings on tiered
+windows; `-o` JSONL, `--pcap-dir`, `--eapol-dir` and the `--report`
+outputs have **no retention mechanism at all**. Row deletion in the
+database is logical, not secure erasure. The exact behaviour, and the
+list of artifact classes retention does and does not cover, is in
+[`docs/wiki/retention.md`](docs/wiki/retention.md). Read it before
+citing sloth in a data-handling or evidence-lifecycle document.
 
 ## Passive-only guarantee
 

@@ -104,6 +104,18 @@ void view_help_draw(const sloth_state_t *s) {
         TPRINT("    latest:  (no --check-manifest; see docs/wiki/version-checkin.md)\n");
     }
 
+    /* The operator reads this screen, not SECURITY.md. The embedded IOC
+     * list is demo data and every surface that could imply otherwise --
+     * the alert detail line and this screen -- has to say so (#96). */
+    section("Embedded data");
+    tui_dim();
+    TPRINT("    Threat intel: SYNTHETIC DEMO LIST. The built-in IOCs are\n");
+    TPRINT("    RFC 5737 doc addresses and .testing/.example names; they\n");
+    TPRINT("    match no real traffic. THREAT_DOMAIN / THREAT_IP detect\n");
+    TPRINT("    nothing until you replace them. Sloth ships no feed and\n");
+    TPRINT("    fetches none -- see docs/wiki/threat-intel.md.\n");
+    tui_normal();
+
     section("About");
     tui_dim();
     TPRINT("    sloth is a passive network monitor for Linux. Run it on the\n");

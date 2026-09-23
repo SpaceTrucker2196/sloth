@@ -236,7 +236,7 @@ the actual tree:
 | Recipes              | [`CLAUDE.md`](../CLAUDE.md) "How to add a new view" / "How to add an alert rule" |
 | Per-feature docs     | [`docs/views/*.md`](../docs/views/) — one per view, common template in [`docs/views/README.md`](../docs/views/README.md) |
 | Cross-cutting docs   | [`docs/wiki/*.md`](../docs/wiki/) — architecture, alerts catalogue, IP palette, attack map, etc. |
-| Tests as oracle      | `tests/` — ~1950 assertions, fake platform in `tests/fake_platform.c` |
+| Tests as oracle      | `tests/` — 9152 assertions, fake platform in `tests/fake_platform.c` |
 | Autonomy contract    | this file, §4 |
 | Cold-start procedure | [`MISSION.md`](../MISSION.md) §5 |
 

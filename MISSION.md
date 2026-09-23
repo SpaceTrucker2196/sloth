@@ -22,8 +22,9 @@ per-view depth live in [`docs/views/`](docs/views/) and
 Sloth is a terminal-based **passive signals-intelligence (SIGINT)
 console** for IP and 802.11 networks. It turns what a host already
 sees — `/proc`, `/sys`, netlink, and a libpcap stream — into a live
-operator view: 27 panels, six alert rules, embedded threat-intel, a
-WiFi-SIGINT toolkit, and an optional JSONL forensic log.
+operator view: 35 panels, 61 alert rules, an embedded (synthetic)
+threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
+forensic log.
 
 The goal is not to *do* things on the network. The goal is to *see*
 what is happening on the network, surface what is anomalous, and hand
@@ -122,13 +123,15 @@ segment. Lose that and the tool is just another aircrack fork.
 
 ## 3. Where the project is right now
 
-As of v1.1 ("WiFi SIGINT"):
+As of v1.8.1 (`SLOTH_VERSION` in `include/sloth.h` is the source of
+truth for this number; if the two disagree, the `#define` is right):
 
-- **27 views**, keyed `[1]…[0]`, `[a]…[w]`, indexed in the README.
-- **Six alert rules** in `src/alerts.c` (port scan, beacon flood,
-  ARP spoof, evil twin, rogue DHCP, DGA/DNS-tunnel, weak TLS,
-  attack-path HTTP, deauth flood, probe flood) — each with a row in
-  [`docs/views/alerts.md`](docs/views/alerts.md).
+- **35 views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, indexed in
+  the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
+- **61 alert rules** in `src/alerts.c` — one per `ALERT_TYPE_*`, each
+  with a row in [`docs/views/alerts.md`](docs/views/alerts.md) and a
+  cited basis in `research/` (enforced by
+  `tests/test_research_corpus.c`).
 - **WiFi SIGINT layer**: PNL aggregation, RSN/AKM/MFP inventory,
   EAPOL / PMKID / 4-way handshake capture with hashcat-22000 export,
   hidden-SSID reveal, sequence-number MAC-randomisation
@@ -136,10 +139,12 @@ As of v1.1 ("WiFi SIGINT"):
   per-AP fingerprinting (PHY tier, vendor IEs, WPS state, 802.11k
   neighbour reports, RNR for 6 GHz).
 - **Threat intel** matcher in `src/threat_intel.c` against an embedded
-  IOC list.
+  IOC list that is **synthetic demo data, not a feed** — so
+  `THREAT_DOMAIN` / `THREAT_IP` detect nothing until an operator
+  replaces it. Sloth ships no feed and cannot fetch one (§2).
 - **Forensic log** (`-o file.jsonl`) and per-alert pcap export
   (`--pcap-dir DIR`).
-- **~1950 test assertions**, `make test` green; `make` warning-clean.
+- **9152 test assertions**, `make test` green; `make` warning-clean.
 
 Platforms: primary target is Linux (rtnetlink, nl80211, INET_DIAG,
 `/proc`). Darwin builds the binary and the test suite cleanly via the

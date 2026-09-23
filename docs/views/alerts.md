@@ -112,6 +112,7 @@ omitted.
 | `DEAUTH_FLOOD` | WARN | T1498.001 | ≥ 5 distinct deauth/disassoc frames inside any 5 s sliding window at one **(BSSID, victim)** — whichever transmitter address they claim, in either direction (#88). Retransmissions (Retry + repeated sequence number) are not distinct. Monotonic clock; status decays 10 s after the threshold was last met. Key `deauth:<victim>@<bssid>`, so two APs' broadcast deauths are two alerts. **Observed frames only**: the detail says `sender unverified, disruption not confirmed` — a spoofable source address does not name the sender, and a passive receiver cannot see whether any station acted on the frames. Reason is `encrypted` on PMF-protected frames, never decoded. **CRIT** when the BSSID is `--my-bssid` designated (#52). See [deauth.md](deauth.md#flood-the-window) | — (L2 only) |
 | `BEACON_FLOOD` | WARN | T1498.001 | ≥ 40 distinct new BSSIDs first-seen in 10 s (mdk3/mdk4-style fake-AP flood) | — (L2 only) |
 | `AUTH_FLOOD` | WARN | T1499     | ≥ 30 802.11 auth frames to one BSSID in 5 s (association-table exhaustion DoS). **CRIT** when the BSSID is `--my-bssid` designated (#52) | — (L2 only) |
+| `ASSOC_FLOOD` | WARN | T1498.001 | ≥ 21 association requests to one BSSID in 60 s (`ASSOC_FLOOD_THRESH` / `ASSOC_FLOOD_WIN_SECS` in `include/sloth.h`) — the missing member of the flood set alongside beacon, deauth, probe and auth. Rate is **per-BSSID**, so a busy AP with many ordinary clients does not trip it; only an outlier does. The distinct-STA count shapes the message rather than gating the alert: few STAs at high rate reads `(few sources)` — a targeted or broken client — and more than three reads `(spoofed-MAC flood)`, which is what the common tooling emits. Gating on either number would blind the rule to the other attack. **CRIT** when the BSSID is `--my-bssid` designated (#52) | — (L2 only) |
 | `BEACONING` | WARN | T1071     | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
 | `DGA_DOMAIN` | WARN | T1568.002 | DNS qname matches DGA entropy heuristic | src / 53 |
 | `WEAK_TLS` | WARN | T1600     | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
@@ -187,8 +188,8 @@ own feed for production.
 ```
  ── Alerts: 2 crit 1 warn 2 low 5 total ────────────────────────
  Time      Sev   Title            n    Detail
- 22:01:01  CRIT  THREAT_IP        1    connection to 192.0.2.66:443 (IOC 192.0.2.66)
- 22:01:01  CRIT  THREAT_DOMAIN    4    192.168.1.5 queried malware.testing.com (IOC ...)
+ 22:01:01  CRIT  THREAT_IP        1    connection to 192.0.2.66:443 (demo IOC 192.0.2.66)
+ 22:01:01  CRIT  THREAT_DOMAIN    4    192.168.1.5 queried malware.testing.com (demo IOC ...)
  22:00:55  WARN  BEACONING        12   203.0.113.7:443 every 60s (jitter=1.2s, n=12)
  22:00:30  LOW   PORT_SCAN        1    10.0.0.99 scanned 18 distinct ports
  22:00:15  LOW   NXDOMAIN_BURST   3    192.168.1.50 saw 15 NXDOMAIN responses in 60s

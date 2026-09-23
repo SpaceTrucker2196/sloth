@@ -56,8 +56,10 @@ NXDOMAIN: heat orange. AAAA: cool teal.
 - **Long TXT queries**: TXT records carrying base64 are a tunnel
   signature ([iodine](https://github.com/yarrick/iodine),
   [dnscat2](https://github.com/iagox86/dnscat2)).
-- **Threat-intel hits**: qname matches the embedded IOC list →
-  `ALERT_THREAT_DOMAIN` fires CRIT.
+- **Threat-intel hits**: qname matches the IOC list →
+  `ALERT_THREAT_DOMAIN` fires CRIT. **The shipped list is synthetic
+  demo data** — it matches nothing real, so this fires only once you
+  replace it with your own feed. See [[threat-intel]].
 - **Resolver redirection**: queries going to an IP that isn't your
   configured resolver may indicate DNS hijack (router compromise, ARP
   spoof + transparent proxy).
@@ -67,4 +69,5 @@ NXDOMAIN: heat orange. AAAA: cool teal.
 - The brand colouriser highlights `google` letter-by-letter (Google
   logo colours), and `firefox` / `cloudflare` / `example.org` in their
   brand colours.
-- Threat intel list lives in [`src/threat_intel.c`](../../src/threat_intel.c).
+- Threat intel list lives in [`src/threat_intel.c`](../../src/threat_intel.c) —
+  synthetic demo data, not a feed ([[threat-intel]]).

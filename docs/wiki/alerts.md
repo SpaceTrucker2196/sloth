@@ -85,8 +85,10 @@ the TTL window.
 - DNS rules read `s->dns_log[]` (see [`dns.md`](../views/dns.md)).
 - Connection rules read `s->conns[]` (see [`connections.md`](../views/connections.md)).
 - Deauth rule reads the `(BSSID, victim)` aggregates `s->deauth_victims[]`, not the per-stream rows `s->deauth_events[]` (#88; see [`deauth.md`](../views/deauth.md)).
-- Threat-intel matching uses the embedded lists in `src/threat_intel.c` —
-  see [[threat-intel]].
+- Threat-intel matching uses the embedded lists in `src/threat_intel.c`.
+  Those lists are **synthetic demo data, not a threat feed**, so
+  `THREAT_DOMAIN` / `THREAT_IP` fire on nothing real until an operator
+  replaces them — see [[threat-intel]].
 - Beaconing math lives in `src/beacon_detect.c` — see [[beacon-detection]].
 
 ## Adding a rule

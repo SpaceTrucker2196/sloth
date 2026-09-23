@@ -280,6 +280,9 @@ static void test_threat_domain_fires_on_ioc(void) {
     int idx = find_alert(&s, ALERT_TYPE_THREAT_DOMAIN);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    /* The embedded list is synthetic. The operator reads this row, not
+     * the docs, so the row is where it has to say "demo" (#96). */
+    ASSERT(strstr(s.alerts[idx].detail, "demo IOC") != NULL);
 }
 
 static void test_threat_domain_clean_no_fire(void) {
@@ -298,6 +301,7 @@ static void test_threat_ip_fires(void) {
     int idx = find_alert(&s, ALERT_TYPE_THREAT_IP);
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "demo IOC") != NULL);
 }
 
 static void seed_arp(sloth_state_t *s, const char *ip,

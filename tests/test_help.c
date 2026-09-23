@@ -40,6 +40,17 @@ static void test_help_lists_every_view(void) {
     }
 }
 
+/* The embedded IOC list is synthetic demo data. The help card is the
+ * operator-facing place that has to say so — a docs-only disclosure does
+ * not reach someone reading the TUI (#96). */
+static void test_help_labels_threat_intel_as_demo(void) {
+    char buf[8192];
+    capture_help(buf, sizeof(buf));
+    ASSERT(strstr(buf, "SYNTHETIC DEMO LIST") != NULL);
+    ASSERT(strstr(buf, "THREAT_DOMAIN")       != NULL);
+    ASSERT(strstr(buf, "THREAT_IP")           != NULL);
+}
+
 /* view_label() is well-formed for every view and safe out of range. */
 static void test_view_label_bounds(void) {
     for (int v = 0; v < VIEW_COUNT; v++) {
@@ -54,5 +65,6 @@ static void test_view_label_bounds(void) {
 void run_help_tests(void) {
     TEST_SUITE("help card / view_label sync (#39)");
     RUN_TEST(test_help_lists_every_view);
+    RUN_TEST(test_help_labels_threat_intel_as_demo);
     RUN_TEST(test_view_label_bounds);
 }

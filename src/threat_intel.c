@@ -2,12 +2,24 @@
 #include <strings.h>
 #include "threat_intel.h"
 
-/* Embedded IOC list.
+/* Embedded IOC list — SYNTHETIC DEMO DATA, NOT A THREAT FEED.
  *
- * These are all synthetic/test indicators (RFC 5737 documentation IPs and
- * .testing/.example sentinel names). They exist so that the alerts pipeline
- * can be exercised in unit tests and so users have a clear template to
- * extend — they are NOT meant as a real threat feed. */
+ * Every entry is a sentinel chosen so it cannot plausibly appear in real
+ * traffic: the IPs are RFC 5737 documentation addresses, the domains are
+ * obvious fakes (two under the RFC 2606 reserved TLDs .example / .test,
+ * the rest under testing.com / example-bad.com labels). They exist so
+ * the alerts pipeline can be exercised in unit tests and so an operator
+ * has a template to extend. In practice they match nothing, which means
+ * THREAT_DOMAIN and THREAT_IP detect nothing in production until this
+ * list is replaced.
+ *
+ * Sloth ships no feed and fetches none — fetching one would be a network
+ * write, which MISSION.md §2 forbids. The synthetic status is stated in
+ * three operator-visible places and all three must stay in sync (#96):
+ * this comment, the "demo IOC" marker in the alert detail written by
+ * rule_threat_domain / rule_threat_ip in src/alerts.c, and the
+ * "Embedded data" section of the help view (src/views/help.c). Docs:
+ * docs/wiki/threat-intel.md. */
 
 static const char *bad_domains[] = {
     "malware.testing.com",

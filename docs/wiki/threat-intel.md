@@ -1,28 +1,73 @@
 ---
 name: threat-intel
-description: Embedded IOC matcher — domain + IP lists, suffix-aware matching, how to swap in your own feed
+description: Embedded IOC matcher — SYNTHETIC DEMO DATA, domain + IP lists, suffix-aware matching, how to swap in your own feed
 type: reference
 ---
 
 # Threat intelligence
 
-**Summary**: Sloth ships with embedded synthetic IOC lists in `src/threat_intel.c`. They exist so the alerts pipeline can be exercised in tests. Swap them for your own feed in production.
+> ## ⚠️ The shipped IOC list is synthetic demo data
+>
+> It is **not** a threat feed, and sloth does not have one. Until you
+> replace the lists, `THREAT_DOMAIN` and `THREAT_IP` **detect nothing** —
+> they are a working pipeline with no data in it. Do not present sloth's
+> threat-intel matching as a detection capability in a deployment,
+> tender or compliance document without saying which feed you loaded.
 
-**Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`.
+**Summary**: Sloth ships with embedded **synthetic** IOC lists in
+`src/threat_intel.c`. They exist so the alerts pipeline can be exercised
+in tests and so an operator has a template to extend. Swap them for your
+own feed before production.
 
-**Last updated**: 2026-05-25.
+**Sources**: `src/threat_intel.c`, `src/alerts.c`
+(`rule_threat_domain`, `rule_threat_ip`), `src/views/help.c`,
+`docs/views/alerts.md`, `docs/views/dns.md`,
+`docs/views/connections.md`, issue #96.
+
+**Last updated**: 2026-09-23 (#96 — synthetic status labelled in code,
+UI and docs).
 
 ---
 
 ## What ships
 
-- `bad_domains[]` — synthetic, intentionally non-routable sentinels
-  (`.testing`, `.example`).
-- `bad_ips[]` — RFC 5737 documentation prefixes (`192.0.2.0/24`,
-  `198.51.100.0/24`, `203.0.113.0/24`).
+- `bad_domains[]` — 6 sentinel names: `malware.testing.com`,
+  `phishing.testing.com`, `drive-by.testing.com`, `c2.example-bad.com`,
+  `evilcorp.example`, `badactor.test`.
+- `bad_ips[]` — 4 addresses from the RFC 5737 documentation prefixes:
+  `192.0.2.66`, `192.0.2.99`, `198.51.100.7`, `203.0.113.13`.
 
-These are placeholders. They will never match real traffic, which is
-the point — production deployments swap them for a real feed.
+These are placeholders, and in practice they match nothing — which is
+the point. Production deployments swap them for a real feed.
+
+One caveat worth stating rather than glossing: only `evilcorp.example`
+and `badactor.test` sit under RFC 2606 **reserved** TLDs. The other four
+are under `testing.com` / `example-bad.com`, which are ordinary
+registrable `.com` names picked to look obviously fake. The IP entries
+are genuinely non-routable by RFC 5737. So the domain list is
+*implausible*, not *impossible*, and a host that really resolved
+`malware.testing.com` would raise a CRIT that means nothing.
+
+### How the operator is told
+
+Three surfaces say so, and they are kept in sync deliberately:
+
+| Surface | What it says |
+|---------|--------------|
+| Alert row (Alerts view, JSONL, `--report`) | the detail line reads `(demo IOC …)`, not `(IOC …)` — pinned by `tests/test_alerts.c` |
+| Help view `[?]`, "Embedded data" section | `Threat intel: SYNTHETIC DEMO LIST` — pinned by `tests/test_help.c` |
+| `src/threat_intel.c` / `.h` header comments | full statement, including why no feed ships |
+
+A docs-only disclosure was judged insufficient in #96: the operator
+reads the TUI, not the wiki.
+
+## Why no feed ships
+
+Sloth cannot fetch one. Retrieving a feed over the network is a network
+write, which [`MISSION.md`](../../MISSION.md) §2 forbids — the passive
+guarantee is the product. A future runtime loader that reads a file the
+*operator* fetched out-of-band would be in scope; the fetch itself never
+is.
 
 ## Matching semantics
 
