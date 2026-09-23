@@ -27,7 +27,7 @@ src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
      top_hosts,ip_color,ip_owner}.c     -- synthesis + export
 src/views/*.c              -- one file per VIEW_*
 src/md5.c                  -- embedded MD5 for JA3 (RFC 1321 vectors verified)
-tests/                     -- unit tests, fake platform, scenarios (9152 assertions)
+tests/                     -- unit tests, fake platform, scenarios (9304 assertions)
 docs/views/*.md            -- per-view deep dives
 ```
 

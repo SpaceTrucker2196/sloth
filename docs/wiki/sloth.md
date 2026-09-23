@@ -31,7 +31,7 @@ type: reference
 ## Binaries
 
 - `sloth` — main binary.
-- `sloth_test` — test binary, 9152 assertions, must always be green.
+- `sloth_test` — test binary, 9304 assertions, must always be green.
 
 ## Architecture entry points
 

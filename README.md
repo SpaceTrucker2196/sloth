@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="Makefile"><img src="https://img.shields.io/badge/tests-9152%20passing-brightgreen" alt="9152 test assertions passing"></a>
+  <a href="Makefile"><img src="https://img.shields.io/badge/tests-9304%20passing-brightgreen" alt="9304 test assertions passing"></a>
   <a href="docs/wiki/mutation-testing.md"><img src="https://img.shields.io/badge/mutation%20kill%20rate-51.0%25%20of%20considered-yellow" alt="Mutation testing: 51.0% of considered mutants killed across 18 files"></a>
   <a href=".github/scripts/mutate.py"><img src="https://img.shields.io/badge/make%20mutate-active-blue" alt="make mutate harness available in-tree"></a>
 </p>
@@ -221,7 +221,7 @@ make                          # full build (ncurses + pcap + nl80211)
 make WITH_PCAP=0              # no capture, no probe view
 make WITH_NCURSES=0           # headless / embedded
 make embedded                 # shortcut: no ncurses, no pcap
-make test                     # 9152 assertions (no root, no terminal, no network)
+make test                     # 9304 assertions (no root, no terminal, no network)
 make mutate                   # mutation-test the suite itself (verify the verifier)
 ```
 
@@ -456,7 +456,7 @@ tests/                     unit tests, fake platform, scenarios
 ## Testing
 
 ```sh
-make test    # 9152 assertions, no root, no terminal, no network
+make test    # 9304 assertions, no root, no terminal, no network
 ```
 
 Every real-data path is replaced by a controllable fake:
@@ -494,7 +494,7 @@ the top.
 
 ## Status
 
-Code: ~50k lines of C99 across 153 `.c` files (295 counting headers). Tests: 9152 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
+Code: ~48.6k lines of C99 across 147 `.c` files (285 counting headers). Tests: 9304 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
 
 Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
 

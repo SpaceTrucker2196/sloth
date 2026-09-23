@@ -35,7 +35,7 @@ Single binary `sloth`. Test binary `sloth_test`.
 - `src/views/*.c` — one file per VIEW_*. The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
-- `tests/` — unit tests, fake platform, scenarios. 9152 assertions.
+- `tests/` — unit tests, fake platform, scenarios. 9304 assertions.
 - `docs/views/*.md` — per-view deep dives. Linked from README tables.
 
 ## Discipline

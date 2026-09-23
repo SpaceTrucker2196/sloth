@@ -144,7 +144,7 @@ truth for this number; if the two disagree, the `#define` is right):
   replaces it. Sloth ships no feed and cannot fetch one (§2).
 - **Forensic log** (`-o file.jsonl`) and per-alert pcap export
   (`--pcap-dir DIR`).
-- **9152 test assertions**, `make test` green; `make` warning-clean.
+- **9304 test assertions**, `make test` green; `make` warning-clean.
 
 Platforms: primary target is Linux (rtnetlink, nl80211, INET_DIAG,
 `/proc`). Darwin builds the binary and the test suite cleanly via the
