@@ -30,6 +30,18 @@ void jsonl_emit_icmp (const icmp_log_entry_t *e);
 void jsonl_emit_alert(const alert_t          *a);
 void jsonl_emit_cleartext_cred(const cleartext_cred_t *r);
 
+/* Incident-lifecycle event (#98). `event` is the record type — one of
+ * "alert.create", "alert.update", "alert.escalate", "alert.resolve".
+ * `ts` is the wall-clock time of the transition (not necessarily
+ * a->last_evaluated: a resolve is decided after the last evaluation).
+ * `prev_sev` is the severity before the transition, or -1 when there
+ * was none. `reason` is the resolve cause ("expired", "evicted",
+ * "cleared"); NULL on every other event. Additive: these are new record
+ * types, and the legacy `alert` record is still emitted unchanged on
+ * every create. */
+void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
+                            int prev_sev, const char *reason);
+
 /* Snapshot emitter — one line per active flow in s->conns. Driven by the
  * poll loop (≈1 Hz), not by an event ring. Consumers rebuild their table
  * from the latest snapshot keyed by (src, dst, proto). */

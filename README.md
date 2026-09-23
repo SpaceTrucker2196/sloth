@@ -99,7 +99,7 @@ for in normal vs anomalous traffic.
 
 ### Output
 
-- **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record and every newly-fired alert. See [JSONL schema](#jsonl-schema) below.
+- **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record, every newly-fired alert, and every alert-incident lifecycle event (create / update / escalate / resolve, #98). See [JSONL schema](#jsonl-schema) below.
 - **`sloth --data-socket [SPEC]`** — same JSONL records, served over a **read-only stream socket** (`unix:/path` or `tcp:HOST:PORT`) for live consumers. Bare `--data-socket` with no SPEC defaults to `tcp:127.0.0.1:8765` (loopback only). `tail -f`-style with no filesystem polling. Read-only by design — nothing flows back from the wire (see [MISSION.md §4](MISSION.md)). Multi-client (up to 16). Backpressure is per-client and whole-record: a slow consumer gets a bounded queue (512 KiB), never a glued or truncated line; on overflow whole records are dropped and a `socket_gap` record reports how many, and a consumer that accepts nothing for 30 s is disconnected. Healthy clients are unaffected. Full schema and consumer notes in [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md). When the socket is bound to a **routable** address, sloth advertises it over mDNS (`_sloth._tcp`) so the sloth-ios client can discover it by name — via an Avahi service file (sloth transmits nothing; `avahi-daemon` announces). Loopback/UNIX sockets never advertise; disable entirely with `--no-discovery`. This is the sole opt-out carve-out in [MISSION.md §2](MISSION.md).
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark. **This is crackable material** — see below.
@@ -263,7 +263,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-Six rules feed `VIEW_ALERTS`. New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump.
+Six rules feed `VIEW_ALERTS`. New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98) — see [`docs/views/alerts.md`](docs/views/alerts.md).
 
 | Rule | Severity | Trigger | match_ip / port |
 |------|----------|---------|-----------------|
@@ -287,8 +287,18 @@ Each line is one JSON object. `ts` is a Unix timestamp; strings are RFC 8259 esc
 {"type":"http","ts":1700000003,"src":"10.0.0.5","host":"example.com","method":"GET","path":"/index.html"}
 {"type":"ntp","ts":1700000004,"src":"10.0.0.1","dst":"192.168.1.5","mode":"server","version":4,"stratum":1,"ref":"GPS"}
 {"type":"icmp","ts":1700000005,"src":"192.168.1.5","dst":"8.8.8.8","desc":"Echo Req","ty":8,"code":0,"seq":42,"v6":0}
-{"type":"alert","ts":1700000006,"title":"THREAT_DOMAIN","detail":"192.168.1.5 queried malware.testing.com (IOC malware.testing.com)","key":"threat-d:malware.testing.com","sev":2,"ty":3,"count":1}
+{"type":"alert","ts":1700000006,"title":"THREAT_DOMAIN","detail":"192.168.1.5 queried malware.testing.com (IOC malware.testing.com)","key":"threat-d:malware.testing.com","sev":2,"ty":3,"count":1,"incident_id":"9f2c41ab77e30d58"}
+{"type":"alert.escalate","ts":1700000041,"event_id":"9f2c41ab77e30d58-0002","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"…","sev":2,"ty":31,"prev_sev":1,"observations":2,"evaluations":36,"count":36}
 ```
+
+**`alert` is written only when a dedup key is new.** Everything that
+happens afterwards — a WARN→CRIT escalation, changed evidence, expiry —
+rides the `alert.create` / `alert.update` / `alert.escalate` /
+`alert.resolve` lifecycle records (#98), joined by `incident_id`, so a
+pipeline that pages on CRIT must read `alert.escalate`. `count` and
+`evaluations` are rule ticks, not packets; `observations` only moves
+when the evidence does. Full field tables in
+[`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md).
 
 ## Streaming and SIEM forwarding
 

@@ -373,6 +373,50 @@ void jsonl_emit_alert(const alert_t *a) {
      * NO_MONITOR_MODE. Schema is additive per docs/wiki/jsonl-schema.md. */
     if (a->technique[0])
         kv_str(buf, LINEBUF, &off, "technique", a->technique);
+    /* Join key into the lifecycle stream (#98), additive. A consumer
+     * that only knows `alert` sees exactly the record it always saw
+     * plus one field it can ignore. */
+    if (a->incident_id[0])
+        kv_str(buf, LINEBUF, &off, "incident_id", a->incident_id);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
+                            int prev_sev, const char *reason) {
+    if (!any_sink() || !a || !event) return;
+    char  buf[LINEBUF]; int off = 0;
+    char  event_id[ALERT_EVENT_ID_LEN];
+    snprintf(event_id, sizeof(event_id), "%s-%04u",
+             a->incident_id, a->event_seq % 10000u);
+
+    start_obj(buf, LINEBUF, &off, event, ts);
+    kv_str(buf, LINEBUF, &off, "event_id",    event_id);
+    kv_str(buf, LINEBUF, &off, "incident_id", a->incident_id);
+    kv_str(buf, LINEBUF, &off, "key",         a->key);
+    kv_str(buf, LINEBUF, &off, "title",       a->title);
+    kv_str(buf, LINEBUF, &off, "detail",      a->detail);
+    kv_int(buf, LINEBUF, &off, "sev",   (int)a->sev);
+    kv_int(buf, LINEBUF, &off, "ty",    (int)a->type);
+    if (prev_sev >= 0)
+        kv_int(buf, LINEBUF, &off, "prev_sev", prev_sev);
+    kv_int(buf, LINEBUF, &off, "observations", a->observations);
+    kv_int(buf, LINEBUF, &off, "evaluations",  a->evaluations);
+    /* Same number as the legacy record's `count`, carried so a
+     * lifecycle-only consumer never has to read both families. */
+    kv_int(buf, LINEBUF, &off, "count",        a->count);
+    kv_int(buf, LINEBUF, &off, "first_detected", (long long)a->first_detected);
+    kv_int(buf, LINEBUF, &off, "last_evaluated", (long long)a->last_evaluated);
+    kv_int(buf, LINEBUF, &off, "first_observed", (long long)a->first_observed);
+    kv_int(buf, LINEBUF, &off, "last_observed",  (long long)a->last_observed);
+    if (a->technique[0])
+        kv_str(buf, LINEBUF, &off, "technique", a->technique);
+    if (a->match_ip[0]) {
+        kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
+        kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
+    }
+    if (reason && reason[0])
+        kv_str(buf, LINEBUF, &off, "reason", reason);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

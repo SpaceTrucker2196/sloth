@@ -1,8 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
 #include "runner.h"
+#include "jsonl.h"
 #include "fragattack.h"
 #include "eapol_log.h"
 #include "db.h"
@@ -5085,6 +5087,364 @@ static void test_open_setup_ap_fires_once_per_bssid(void) {
     ASSERT_EQ(seen, 1);
 }
 
+/* ── Incident lifecycle (#98) ─────────────────────────────────
+ *
+ * These drive the engine through a JSONL file sink and read the stream
+ * back, because the whole point of #98 is what a *remote consumer*
+ * sees — asserting on s->alerts alone would pass on the very bug the
+ * issue reports. Both clocks are the #88 seam, so nothing sleeps and
+ * nothing is wall-clock dependent. */
+
+static uint64_t g_lc_mono;
+static time_t   g_lc_wall;
+static uint64_t lc_mono(void) { return g_lc_mono; }
+static time_t   lc_wall(void) { return g_lc_wall; }
+
+static char lc_path[] = "/tmp/sloth_lifecycle_XXXXXX";
+
+/* Fresh sink + frozen clocks. Wall starts at a fixed epoch so record
+ * timestamps are reproducible. */
+static void lc_begin(void) {
+    /* Drop the sink *before* clearing: a clear resolves whatever the
+     * previous test left in the engine, and those events belong to that
+     * test's stream, not this one. */
+    jsonl_close();
+    alerts_clear();
+    int fd = mkstemp(lc_path);
+    if (fd >= 0) close(fd);
+    unlink(lc_path);              /* jsonl_open recreates it 0600 (#87) */
+    ASSERT(jsonl_open(lc_path));
+    g_lc_mono = 1000000;
+    g_lc_wall = 1700000000;
+    flood_test_set_clock(lc_mono, lc_wall);
+}
+
+static void lc_end(void) {
+    jsonl_close();
+    unlink(lc_path);
+    lc_path[strlen(lc_path) - 6] = '\0';
+    strcat(lc_path, "XXXXXX");    /* mkstemp needs the template back */
+    flood_test_set_clock(NULL, NULL);
+}
+
+/* Advance both clocks together — evidence and duration stay consistent. */
+static void lc_advance(long secs) {
+    g_lc_mono += (uint64_t)secs * 1000u;
+    g_lc_wall += (time_t)secs;
+}
+
+/* Whole stream so far. Static buffer: the lifecycle tests emit tens of
+ * records, not thousands. */
+static const char *lc_stream(void) {
+    static char buf[65536];
+    buf[0] = '\0';
+    FILE *fp = fopen(lc_path, "r");
+    if (!fp) return buf;
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    buf[n] = '\0';
+    fclose(fp);
+    return buf;
+}
+
+static int lc_count(const char *needle) {
+    const char *p = lc_stream();
+    int n = 0;
+    for (const char *q = strstr(p, needle); q; q = strstr(q + 1, needle)) n++;
+    return n;
+}
+
+/* Value of a string field on the first record whose type is `type`.
+ * Returns "" when absent. */
+static const char *lc_field(const char *type, const char *field) {
+    static char out[128];
+    static char tbuf[64];
+    out[0] = '\0';
+    snprintf(tbuf, sizeof(tbuf), "\"type\":\"%s\"", type);
+    const char *rec = strstr(lc_stream(), tbuf);
+    if (!rec) return out;
+    const char *end = strchr(rec, '\n');
+    char fbuf[64];
+    snprintf(fbuf, sizeof(fbuf), "\"%s\":\"", field);
+    const char *f = strstr(rec, fbuf);
+    if (!f || (end && f > end)) return out;
+    f += strlen(fbuf);
+    size_t i = 0;
+    while (*f && *f != '"' && i < sizeof(out) - 1) out[i++] = *f++;
+    out[i] = '\0';
+    return out;
+}
+
+/* Seed a fuzzing AP at `score` malformed IEs: 3 = WARN, 5 = CRIT under
+ * one dedup key (`mgmtfuzz:<bssid>`), which is the cheapest honest
+ * WARN→CRIT escalation the engine has. */
+static void lc_seed_fuzz(sloth_state_t *s, const uint8_t bssid[6], int score) {
+    seed_state(s);
+    add_fuzz_beacon(s, bssid, score, 0, 0);
+}
+
+static void test_lifecycle_create_emits_a_create_event(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x01};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+
+    /* Legacy record still goes out on a new key — unchanged for
+     * consumers that only know `alert`. */
+    ASSERT_EQ(lc_count("\"type\":\"alert\""), 1);
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 1);
+    ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 0);
+
+    const char *iid = lc_field("alert.create", "incident_id");
+    ASSERT_EQ((int)strlen(iid), 16);
+    /* The legacy record carries the same id, so a consumer can join. */
+    ASSERT_STR(lc_field("alert", "incident_id"), iid);
+
+    char want[64];
+    snprintf(want, sizeof(want), "\"event_id\":\"%s-0001\"", iid);
+    ASSERT(strstr(lc_stream(), want) != NULL);
+    ASSERT(strstr(lc_stream(), "\"observations\":1") != NULL);
+    ASSERT(strstr(lc_stream(), "\"evaluations\":1") != NULL);
+    lc_end();
+}
+
+static void test_lifecycle_escalation_emits_an_escalate_event(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x02};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    const char *iid = lc_field("alert.create", "incident_id");
+
+    /* Same BSSID, more malformed IEs — same key, WARN → CRIT. */
+    lc_advance(1);
+    lc_seed_fuzz(&s, b, 5);
+    alerts_update(&s);
+
+    ASSERT_EQ(lc_count("\"type\":\"alert.escalate\""), 1);
+    ASSERT(strstr(lc_stream(), "\"prev_sev\":1") != NULL);
+    ASSERT_STR(lc_field("alert.escalate", "incident_id"), iid);
+    idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    /* An escalation is not a second alert. */
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 1);
+    lc_end();
+}
+
+static void test_lifecycle_unchanged_condition_100_ticks_is_silent(void) {
+    /* The counter half of #98: a retained condition re-evaluated for
+     * 100 polls is one observation, not 101, and emits nothing. */
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x03};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    int events_after_create = lc_count("\"type\":\"alert.");
+    ASSERT_EQ(events_after_create, 1);
+
+    for (int i = 0; i < 100; i++) {
+        lc_advance(1);
+        alerts_update(&s);
+    }
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].observations, 1);
+    ASSERT_EQ((int)s.alerts[idx].evaluations, 101);
+    /* `count` keeps its old value so existing consumers see no change. */
+    ASSERT_EQ(s.alerts[idx].count, 101);
+    ASSERT_EQ(lc_count("\"type\":\"alert."), 1);
+    ASSERT_EQ(lc_count("\"type\":\"alert\""), 1);
+    lc_end();
+}
+
+static void test_lifecycle_resolve_fires_once_and_only_once(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x04};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    const char *iid = lc_field("alert.create", "incident_id");
+    char iid_copy[32];
+    snprintf(iid_copy, sizeof(iid_copy), "%s", iid);
+
+    /* Condition gone: the rule stops asserting it. Just under the
+     * quiet period, nothing has resolved. */
+    sloth_state_t empty; seed_state(&empty);
+    lc_advance(ALERT_RESOLVE_AFTER_S - 1);
+    alerts_update(&empty);
+    ASSERT_EQ(lc_count("\"type\":\"alert.resolve\""), 0);
+
+    lc_advance(2);
+    alerts_update(&empty);
+    ASSERT_EQ(lc_count("\"type\":\"alert.resolve\""), 1);
+    ASSERT(strstr(lc_stream(), "\"reason\":\"expired\"") != NULL);
+    ASSERT_STR(lc_field("alert.resolve", "incident_id"), iid_copy);
+
+    /* Further sweeps must not re-resolve it. */
+    for (int i = 0; i < 5; i++) {
+        lc_advance(ALERT_RESOLVE_AFTER_S);
+        alerts_update(&empty);
+    }
+    ASSERT_EQ(lc_count("\"type\":\"alert.resolve\""), 1);
+
+    /* The operator's history is untouched — a resolved incident stays
+     * in the view. */
+    ASSERT(find_alert(&empty, ALERT_TYPE_MGMT_FUZZ) >= 0);
+    lc_end();
+}
+
+static void test_lifecycle_recurrence_after_resolve_is_a_new_incident(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x05};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    char first[32];
+    snprintf(first, sizeof(first), "%s", lc_field("alert.create", "incident_id"));
+
+    sloth_state_t empty; seed_state(&empty);
+    lc_advance(ALERT_RESOLVE_AFTER_S + 1);
+    alerts_update(&empty);
+    ASSERT_EQ(lc_count("\"type\":\"alert.resolve\""), 1);
+
+    /* Same key fires again — a new incident, not a resurrection. */
+    lc_advance(1);
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 2);
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT(strcmp(s.alerts[idx].incident_id, first) != 0);
+    ASSERT_EQ((int)s.alerts[idx].evaluations, 1);
+    ASSERT_EQ((int)s.alerts[idx].observations, 1);
+    /* One engine slot per key, still. */
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_MGMT_FUZZ) seen++;
+    ASSERT_EQ(seen, 1);
+    lc_end();
+}
+
+static void test_lifecycle_event_ids_are_unique_and_ordered(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x06};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    char iid[32];
+    snprintf(iid, sizeof(iid), "%s", lc_field("alert.create", "incident_id"));
+
+    lc_advance(1);
+    lc_seed_fuzz(&s, b, 5);
+    alerts_update(&s);                      /* escalate */
+
+    sloth_state_t empty; seed_state(&empty);
+    lc_advance(ALERT_RESOLVE_AFTER_S + 1);
+    alerts_update(&empty);                  /* resolve */
+
+    /* Per-incident sequence: create 0001, escalate 0002, resolve 0003 —
+     * unique, and in emission order. */
+    char want[64];
+    for (int n = 1; n <= 3; n++) {
+        snprintf(want, sizeof(want), "\"event_id\":\"%s-%04d\"", iid, n);
+        ASSERT_EQ(lc_count(want), 1);
+    }
+    snprintf(want, sizeof(want), "\"event_id\":\"%s-0004\"", iid);
+    ASSERT_EQ(lc_count(want), 0);
+    /* incident_id is stable across the whole lifecycle. */
+    snprintf(want, sizeof(want), "\"incident_id\":\"%s\"", iid);
+    ASSERT_EQ(lc_count(want), 4);   /* legacy alert + create + escalate + resolve */
+    lc_end();
+}
+
+static void test_lifecycle_update_is_throttled_not_per_poll(void) {
+    /* A detail that re-renders every poll must not become an event
+     * every poll. The floor is ALERT_UPDATE_MIN_S. */
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x07};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+
+    /* 30 polls, evidence changing each time, all inside one floor. */
+    for (int i = 0; i < 30; i++) {
+        lc_advance(1);
+        lc_seed_fuzz(&s, b, 3 + (i % 2));   /* detail flips, sev stays WARN */
+        alerts_update(&s);
+    }
+    ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 0);
+
+    /* Past the floor, exactly one update carries the current evidence. */
+    lc_advance(ALERT_UPDATE_MIN_S);
+    lc_seed_fuzz(&s, b, 4);
+    alerts_update(&s);
+    ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 1);
+    ASSERT_EQ(lc_count("\"type\":\"alert.escalate\""), 0);
+    /* Observations counted the changes the throttle suppressed. */
+    int idx = find_alert(&s, ALERT_TYPE_MGMT_FUZZ);
+    ASSERT(idx >= 0);
+    ASSERT(s.alerts[idx].observations > 1);
+    lc_end();
+}
+
+static void test_lifecycle_distinct_keys_are_distinct_incidents(void) {
+    /* Two fuzzing BSSIDs — two keys, two incidents, two ids. The
+     * lifecycle layer never merges across keys, which is what makes it
+     * correct the moment #89 re-keys the twin rules. */
+    lc_begin();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b1[6] = {0x02,0x98,0x00,0x00,0x00,0x08};
+    uint8_t b2[6] = {0x02,0x98,0x00,0x00,0x00,0x09};
+    add_fuzz_beacon(&s, b1, 3, 0, 0);
+    add_fuzz_beacon(&s, b2, 3, 0, 0);
+    alerts_update(&s);
+
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 2);
+    int n = 0;
+    const char *a = NULL, *bb = NULL;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_MGMT_FUZZ) continue;
+        if (n == 0) a = s.alerts[k].incident_id;
+        else        bb = s.alerts[k].incident_id;
+        n++;
+    }
+    ASSERT_EQ(n, 2);
+    ASSERT(a && bb && strcmp(a, bb) != 0);
+    lc_end();
+}
+
+static void test_lifecycle_two_twin_pairs_one_ssid_still_merge_see_89(void) {
+    /* #98's third regression asks for two incidents when two distinct
+     * twin pairs share one SSID. It is NOT satisfiable today: the
+     * evil-twin rule keys on `twin:<ssid>` alone, so both pairs land on
+     * one key before the lifecycle layer ever sees them. Re-keying is
+     * F07 / issue #89, deliberately not done here — this test pins the
+     * current behaviour so #89 flips the assertion on purpose rather
+     * than by accident. The lifecycle half of the requirement is
+     * covered by test_lifecycle_distinct_keys_are_distinct_incidents. */
+    lc_begin();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real1[6]  = {0x02,0x99,0x00,0x00,0x00,0x01};
+    uint8_t rogue1[6] = {0x02,0x99,0x00,0x00,0x00,0x02};
+    uint8_t real2[6]  = {0x02,0x99,0x00,0x00,0x00,0x03};
+    uint8_t rogue2[6] = {0x02,0x99,0x00,0x00,0x00,0x04};
+    add_beacon(&s, "TWINNED", real1,  "WPA2");
+    add_beacon(&s, "TWINNED", rogue1, "OPEN");
+    add_beacon(&s, "TWINNED", real2,  "WPA2");
+    add_beacon(&s, "TWINNED", rogue2, "OPEN");
+    alerts_update(&s);
+
+    int twins = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_EVIL_TWIN) twins++;
+    ASSERT_EQ(twins, 1);              /* blocked on #89 — should be 2 */
+    lc_end();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -5388,4 +5748,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_open_setup_ap_quiet_on_empty_ssid);
     RUN_TEST(test_open_setup_ap_quiet_on_ordinary_open_ssid);
     RUN_TEST(test_open_setup_ap_fires_once_per_bssid);
+
+    TEST_SUITE("alerts: incident lifecycle (#98)");
+    RUN_TEST(test_lifecycle_create_emits_a_create_event);
+    RUN_TEST(test_lifecycle_escalation_emits_an_escalate_event);
+    RUN_TEST(test_lifecycle_unchanged_condition_100_ticks_is_silent);
+    RUN_TEST(test_lifecycle_resolve_fires_once_and_only_once);
+    RUN_TEST(test_lifecycle_recurrence_after_resolve_is_a_new_incident);
+    RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
+    RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
+    RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
+    RUN_TEST(test_lifecycle_two_twin_pairs_one_ssid_still_merge_see_89);
 }

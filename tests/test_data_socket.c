@@ -18,6 +18,7 @@
 #include "data_socket.h"
 #include "sloth.h"
 #include "jsonl.h"
+#include "alerts.h"
 #include "formatter.h"
 
 static void ds_seed_pnl(sloth_state_t *s);
@@ -815,6 +816,56 @@ static void test_second_client_also_reemits(void) {
     data_socket_cleanup();
 }
 
+/* ── Alert escalation reaches the socket (#98) ────────────────
+ *
+ * The regression the issue names first: before #98 a WARN→CRIT
+ * transition updated the engine in place and emitted nothing, so a
+ * consumer paging on CRIT never saw it. This drives the real engine
+ * through the real socket and reads the bytes off the wire. */
+static void test_alert_escalation_reaches_a_socket_consumer(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    alerts_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+
+    /* A fuzzing AP at score 3 is WARN; at 5 it is CRIT, under the same
+     * `mgmtfuzz:<bssid>` key. */
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+    memset(b, 0, sizeof(*b));
+    snprintf(b->ssid, sizeof(b->ssid), "NetGear");
+    static const uint8_t bssid[6] = {0x02,0x93,0x98,0x00,0x00,0x01};
+    memcpy(b->bssid, bssid, 6);
+    snprintf(b->enc, sizeof(b->enc), "WPA2");
+    b->last_seen = time(NULL);
+    b->fuzz_ie_overruns = 3;
+    alerts_update(&s);
+
+    b->fuzz_ie_overruns = 5;
+    alerts_update(&s);
+
+    char buf[8192];
+    ssize_t n = read(c, buf, sizeof(buf) - 1);
+    ASSERT(n > 0);
+    if (n > 0) buf[n] = '\0'; else buf[0] = '\0';
+    ASSERT(strstr(buf, "\"type\":\"alert.create\"")   != NULL);
+    ASSERT(strstr(buf, "\"type\":\"alert.escalate\"") != NULL);
+    ASSERT(strstr(buf, "\"prev_sev\":1")              != NULL);
+    ASSERT(strstr(buf, "\"sev\":2")                   != NULL);
+    /* Every line is whole (#93) — the last byte read is a delimiter. */
+    ASSERT_EQ(buf[n - 1], '\n');
+
+    close(c);
+    alerts_clear();
+    data_socket_cleanup();
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -845,4 +896,7 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_accept_reemits_baseline);
     RUN_TEST(test_tick_without_accept_keeps_cache);
     RUN_TEST(test_second_client_also_reemits);
+
+    TEST_SUITE("data socket (alert lifecycle, #98)");
+    RUN_TEST(test_alert_escalation_reaches_a_socket_consumer);
 }

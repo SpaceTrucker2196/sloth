@@ -49,8 +49,12 @@ emits, one line per record.
 ## Filters
 
 ```sh
-# Only alerts
+# Only alerts — note this is FIRST SIGHTINGS ONLY (see below)
 python3 sloth-stream.py unix:/tmp/sloth.sock --type alert
+
+# The full alert lifecycle, including WARN -> CRIT escalations (#98)
+python3 sloth-stream.py unix:/tmp/sloth.sock \
+    --type alert.create,alert.update,alert.escalate,alert.resolve
 
 # Multiple types (comma-separated)
 python3 sloth-stream.py unix:/tmp/sloth.sock --type dns,tls,quic
@@ -119,6 +123,30 @@ principles to stay healthy:
    a file for archival and using the socket only for the hot path).
 3. Treat reconnects as normal — every consumer will see them; design
    for at-least-once-with-gaps semantics, not exactly-once.
+
+---
+
+## Alerts: `--type alert` is not enough (#98)
+
+`{"type":"alert",...}` is written **only when a dedup key is new**. An
+alert created at WARN that later becomes CRIT produces no second
+`alert` record, so a pipeline that pages on CRIT and filters
+`--type alert` will never fire. Everything after creation rides the
+lifecycle family:
+
+| Record | Meaning |
+|--------|---------|
+| `alert.create` | new incident, alongside the legacy `alert` record |
+| `alert.escalate` | severity went up (`prev_sev` → `sev`). **This is the paging signal.** |
+| `alert.update` | severity went down, or the evidence changed (floored at one per 60 s) |
+| `alert.resolve` | incident closed (`reason`: `expired` after 300 s with no rule re-asserting the key, `evicted`, or `cleared`) |
+
+Join them with `incident_id`, which is stable from create to resolve;
+`event_id` is unique per event. Counters: `count` and `evaluations` are
+rule ticks (every rule re-evaluates once per poll, so a persistent
+condition reaches four figures without anything new happening);
+`observations` only moves when the evidence does. Full field table in
+`docs/wiki/jsonl-schema.md`.
 
 ---
 

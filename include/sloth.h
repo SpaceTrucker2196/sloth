@@ -648,6 +648,28 @@ const char *device_risk_label(device_risk_level_t l);
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
 #define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
 
+/* ── Incident lifecycle (#98) ────────────────────────────────
+ * Both durations run on CLOCK_MONOTONIC (the #88 seam in
+ * flood_window.h); an NTP step must not resolve a live incident or
+ * hold a dead one open. Wall clock is evidence only. */
+#define ALERT_RESOLVE_AFTER_S   300
+/* Quiet period after which a key that no rule re-asserted is declared
+ * resolved. 300 s because every rule re-evaluates from retained state
+ * once per poll (~1 Hz), so five minutes of silence means the evidence
+ * itself aged out of the source ring — and it matches
+ * JSONL_HEARTBEAT_SECS, so "is this incident still live?" has the same
+ * horizon as every other entity in the stream. */
+#define ALERT_UPDATE_MIN_S       60
+/* Floor between two `alert.update` events on one incident. A rule whose
+ * detail carries a live counter re-renders it every poll; without a
+ * floor that is one event per tick, which is the thing #98 exists to
+ * stop. Severity transitions are never throttled — that is what
+ * consumers page on. */
+#define ALERT_RESOLVE_AFTER_MS  ((uint64_t)ALERT_RESOLVE_AFTER_S * 1000u)
+#define ALERT_UPDATE_MIN_MS     ((uint64_t)ALERT_UPDATE_MIN_S    * 1000u)
+#define ALERT_INCIDENT_ID_LEN    17   /* 16 hex chars + NUL */
+#define ALERT_EVENT_ID_LEN       23   /* "<incident>-<4-digit seq>" + NUL */
+
 /* Three-tier alert severity. Numeric values are stable and consumed by
  * the JSONL `sev` field — never change them. Render colour:
  *   LOW  → yellow  — reconnaissance / suspicious-but-passive
@@ -732,9 +754,12 @@ typedef struct {
     char         title[ALERT_TITLE_LEN];
     char         detail[ALERT_DETAIL_LEN];
     char         key[ALERT_KEY_LEN];      /* dedup id (type:identifier) */
-    int          count;                   /* observations under this key */
-    time_t       first_seen;
-    time_t       last_seen;
+    int          count;                   /* alias of `evaluations` (#98) —
+                                           * rule ticks, not incidents. Kept
+                                           * because the TUI, the --db `alerts`
+                                           * table and JSONL consumers read it. */
+    time_t       first_seen;              /* == first_detected */
+    time_t       last_seen;               /* == last_evaluated */
     /* Optional pcap export criteria — set by rules that have a concrete
      * (ip[, port]) the alert is *about*. Empty for rules where the alert
      * is broader than a single flow. */
@@ -746,6 +771,29 @@ typedef struct {
      * describe operator/host posture rather than an adversary
      * technique (e.g. NO_MONITOR_MODE). */
     char         technique[16];
+
+    /* ── Incident lifecycle (#98) ────────────────────────────
+     * One *incident* is one continuous run of a dedup key: it opens on
+     * the first fire, carries an `incident_id` through every
+     * create/update/escalate event, and closes with exactly one
+     * resolve. A key that fires again after its resolve opens a new
+     * incident with a new id — the engine slot is reused, the identity
+     * is not. */
+    char         incident_id[ALERT_INCIDENT_ID_LEN];
+    uint32_t     event_seq;        /* events emitted for this incident */
+    uint32_t     evaluations;      /* fire() calls — rule ticks */
+    uint32_t     observations;     /* fire() calls whose evidence differed
+                                    * from the previous one. A retained
+                                    * condition re-evaluated unchanged does
+                                    * not move this. */
+    time_t       first_detected;   /* incident opened (wall) */
+    time_t       last_evaluated;   /* most recent rule tick (wall) */
+    time_t       first_observed;   /* first counted observation (wall) */
+    time_t       last_observed;    /* most recent counted observation (wall) */
+    uint64_t     last_eval_ms;     /* CLOCK_MONOTONIC — drives expiry */
+    uint64_t     last_event_ms;    /* CLOCK_MONOTONIC — drives the update floor */
+    uint64_t     detail_sig;       /* FNV-1a of the last emitted detail */
+    int          resolved;         /* 1 once alert.resolve has been emitted */
 } alert_t;
 
 /* Canonical MITRE ATT&CK technique for a given alert type. Returns

@@ -6,11 +6,11 @@ type: reference
 
 # Alerts
 
-**Summary**: A small dedup-by-key ring runs every poll. Each rule scans current state, builds a stable key, and either bumps an existing alert's hit count or appends a fresh one. New keys also get a JSONL log line and (when `--pcap-dir` is set) a per-alert pcap dump.
+**Summary**: A small dedup-by-key ring runs every poll. Each rule scans current state, builds a stable key, and either bumps an existing alert or appends a fresh one. New keys get a JSONL `alert` line and (when `--pcap-dir` is set) a per-alert pcap dump. Everything that happens to an alert *after* creation — escalation, changed evidence, expiry — rides the `alert.*` incident-lifecycle records added in #98.
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-09-23.
 
 ---
 
@@ -18,9 +18,36 @@ type: reference
 
 - File: `src/alerts.c`.
 - Dedup key examples: `scan:<ip>`, `threat-d:<domain>`, `threat-ip:<ip>:<port>`.
-- New-key path: JSONL line + (optional) pcap dump of the matching
-  packets via `src/alert_pcap.c`. See [[pcap-export]].
+- New-key path: JSONL `alert` line + `alert.create` + (optional) pcap
+  dump of the matching packets via `src/alert_pcap.c`. See
+  [[pcap-export]].
 - `c` clears all alerts and resets dedup state; future hits re-arm.
+  Every open incident is resolved with `reason: "cleared"` first.
+
+## Incident lifecycle (#98)
+
+One continuous run of a dedup key is an **incident**: it opens with
+`alert.create`, carries one `incident_id` through every
+`alert.escalate` / `alert.update`, and closes with exactly one
+`alert.resolve`. Before #98 only the create was visible downstream — a
+WARN→CRIT escalation updated the ring in place and emitted nothing.
+
+- **Material change only.** Any severity move emits (never throttled);
+  a changed `detail` emits at most once per `ALERT_UPDATE_MIN_S` (60 s).
+  An evaluation that re-renders identical evidence emits nothing, so a
+  retained condition held across 100 polls is one create and silence.
+- **Resolve** after `ALERT_RESOLVE_AFTER_S` (300 s) in which no rule
+  re-asserted the key — the last *evaluation*, not the last
+  observation. Reasons: `expired`, `evicted`, `cleared`. A key that
+  fires again afterwards opens a new incident with a new id.
+- **Counters.** `count` / `evaluations` are rule ticks;
+  `observations` only moves when the evidence does. Timestamps split
+  the same way (`first_detected` / `last_evaluated` vs
+  `first_observed` / `last_observed`).
+- Durations run on `CLOCK_MONOTONIC` via the #88 seam in
+  `src/flood_window.c`; exported timestamps stay wall clock.
+
+Wire format and the full field table: [[jsonl-schema]].
 
 ## Severity tiers
 

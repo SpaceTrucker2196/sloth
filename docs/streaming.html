@@ -186,15 +186,48 @@
  "title":"THREAT_DOMAIN",
  "detail":"192.168.1.5 queried …",
  "key":"threat-d:malware.testing.com",
- "sev":2,"ty":3,"count":1}</pre>
+ "sev":2,"ty":3,"count":1,
+ "incident_id":"9f2c41ab77e30d58"}</pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <span class="code-title">alert.escalate</span>
+        </div>
+<pre class="code-block">{"type":"alert.escalate","ts":1700000041,
+ "event_id":"9f2c41ab77e30d58-0002",
+ "incident_id":"9f2c41ab77e30d58",
+ "key":"mgmtfuzz:ba:ad:f0:0d:00:01",
+ "title":"MGMT_FUZZ","detail":"…",
+ "sev":2,"ty":31,"prev_sev":1,
+ "observations":2,"evaluations":36,"count":36}</pre>
       </div>
     </div>
 
     <p class="footnote pale">
       <strong>sev</strong> is the severity tier: 0 = LOW (yellow), 1 = WARN
       (orange), 2 = CRIT (red). The enum is stable. <strong>ts</strong> on alerts
-      is the <em>last_seen</em> time of the dedup key, not the first
+      is the <em>last_evaluated</em> time of the dedup key, not the first
       observation.
+    </p>
+
+    <p class="footnote pale">
+      <strong>The <code>alert</code> record is written only when a dedup
+      key is new.</strong> Everything that happens to an alert afterwards
+      &mdash; a WARN&nbsp;&rarr;&nbsp;CRIT escalation, changed evidence,
+      expiry &mdash; rides the <code>alert.create</code> /
+      <code>alert.update</code> / <code>alert.escalate</code> /
+      <code>alert.resolve</code> lifecycle records added in&nbsp;#98, so a
+      pipeline that pages on CRIT must read <code>alert.escalate</code>.
+      They join on <code>incident_id</code>, which is stable from create to
+      resolve. An incident resolves after 300&nbsp;s in which no rule
+      re-asserted its key (monotonic clock), and nothing is emitted for an
+      evaluation that re-renders identical evidence &mdash; a retained
+      condition held across 100 polls is one create and silence.
+      <strong>count</strong> and <strong>evaluations</strong> are rule
+      ticks, not packets or incidents; <strong>observations</strong> only
+      moves when the evidence does.
     </p>
   </div>
 </section>
@@ -224,10 +257,12 @@
       <div class="code-card">
         <div class="code-header">
           <span class="code-lang">sh</span>
-          <span class="code-title">Only alerts, over Tailscale</span>
+          <span class="code-title">Alert lifecycle, over Tailscale</span>
         </div>
 <pre class="code-block">python3 examples/consumer/sloth-stream.py \
-    tcp:100.64.0.5:8765 --type alert</pre>
+    tcp:100.64.0.5:8765 \
+    --type alert.create,alert.escalate,\
+alert.update,alert.resolve</pre>
       </div>
 
       <div class="code-card">

@@ -511,3 +511,69 @@ confirming a known-key fixture cracks. There is no owned capture on the
 build host and MISSION §2.2 forbids sloth running a cracker, so the
 bit values are asserted against hashcat's published table and the
 offline lab validation stays open on #97.
+
+## 2026-09-23 — Alert incident lifecycle (#98)
+
+**Source**: issue #98 (external CISO/GRC review, technical appendix
+T14). `src/alerts.c`, `src/jsonl.{c,h}`, `include/sloth.h`; tests in
+`test_alerts.c` and `test_data_socket.c`.
+
+**Doc updates**: [[jsonl-schema]] gained the `alert.create` /
+`alert.update` / `alert.escalate` / `alert.resolve` section (field
+table, the material-change predicate, the resolve rule and its
+reasons), `incident_id` on the `alert` record, and a plain statement of
+what `count` measures; the common-envelope `type` row and the
+versioning section were updated. `docs/views/alerts.md` gained an
+"Incident lifecycle" section and a counter/timestamp table, and the
+lines describing the engine, the `n` column and the `c` key were
+corrected — they described emit-on-new-key-only behaviour.
+`docs/streaming.html` gained an `alert.escalate` card and the "the
+`alert` record is written only when the key is new" note.
+`examples/consumer/README.md` and `sloth-stream.py` gained a lifecycle
+section, a formatter for the four new types, and the warning that
+`--type alert` alone never sees an escalation.
+
+**Index updates**: none (no new page).
+
+**Why**: `fire()` bumped `count`, refreshed the timestamp, replaced
+detail and severity, then returned early when the key already existed —
+and `jsonl_emit_alert()` ran only for new keys. A WARN→CRIT escalation
+therefore changed sloth's engine and emitted nothing, so a consumer
+paging on CRIT only ever held the WARN record written when the key was
+created. `count` had the matching problem in the other direction: it
+incremented on every evaluation tick of a retained condition, measuring
+rule polls while being presented as an occurrence count.
+
+An incident — one continuous run of a dedup key — now opens with
+`alert.create`, carries one `incident_id` through every escalate and
+update, and closes with exactly one `alert.resolve`. What is emitted is
+a *material* change: any severity move (never throttled, in either
+direction), or a changed `detail` at most once per 60 s. An evaluation
+that re-renders identical evidence emits nothing, so a condition held
+across 100 polls is one create and silence — and `observations` counts
+only the evaluations whose evidence moved, beside `evaluations` (and
+the unchanged `count`) for the rule ticks.
+
+Resolve keys on `last_evaluated`, not `last_observed`, after 300 s: a
+rule that stops firing is one whose evidence aged out of the source
+ring, whereas a standing condition re-renders the same detail forever
+and keying on observation would resolve and immediately re-create it
+every five minutes. 300 s matches `JSONL_HEARTBEAT_SECS`. Durations run
+on `CLOCK_MONOTONIC` through the #88 seam in `src/flood_window.c`;
+every exported timestamp stays wall clock, because those are evidence.
+A resolved incident stays in the TUI — the operator's history is not
+the stream's business — but is evicted first under `MAX_ALERTS`
+pressure, and an evicted live incident is resolved on the way out.
+
+Everything is additive: four new record types, one new field on
+`alert`, no field removed or repurposed. The `--db` `alerts` table is
+untouched and `DB_SCHEMA_VERSION` stays 4.
+
+**Not done here**: the issue's fourth Fix bullet ("revisit dedup keys
+per F06/F07") and its third regression ("two distinct twin pairs under
+one SSID: two incidents"). F06 was already done in #88; F07 is issue
+#89 and still open, and `rule_evil_twin` still keys on `twin:<ssid>`,
+so the two pairs merge before the lifecycle layer sees them. The layer
+never merges across keys and will report two incidents the moment the
+key distinguishes them; `test_lifecycle_two_twin_pairs_one_ssid_still_merge_see_89`
+pins the current behaviour so #89 flips it deliberately.

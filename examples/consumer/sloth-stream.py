@@ -20,6 +20,10 @@ USAGE
     sloth-stream unix:/tmp/sloth.sock --type alert
     sloth-stream unix:/tmp/sloth.sock --type dns,tls,quic
 
+    # the alert lifecycle (#98) — escalations, not just first sightings
+    sloth-stream unix:/tmp/sloth.sock \
+        --type alert.create,alert.escalate,alert.update,alert.resolve
+
     # filter by `src` field substring (any record with a `src`)
     sloth-stream unix:/tmp/sloth.sock --src 10.0.0.5
 
@@ -48,6 +52,16 @@ docs/wiki/jsonl-schema.md. Highlights:
     after the last newline at EOF are never a record.
   - Fields are append-only. Consumers ignore unknown keys and unknown
     `type` values gracefully.
+  - `{"type":"alert",...}` is written only when a dedup key is *new*.
+    Everything that happens to an alert afterwards rides the
+    `alert.create` / `alert.update` / `alert.escalate` /
+    `alert.resolve` lifecycle records (#98). A consumer that pages on
+    CRIT must read `alert.escalate` — an alert created at WARN that
+    becomes CRIT never produces a second `alert` record.
+  - `count` on an alert is **rule evaluations**, not packets or
+    incidents; every rule re-evaluates once per poll. `observations`
+    on the lifecycle records is the count that only moves when the
+    evidence does.
 """
 
 from __future__ import annotations
@@ -196,6 +210,35 @@ def fmt_alert(r, c):
     return out
 
 
+SEV_NAME = {0: "LOW", 1: "WARN", 2: "CRIT"}
+
+
+def fmt_alert_event(r, c):
+    """Lifecycle record (#98).
+
+    The escalate case is the one worth copying into a real consumer:
+    an alert that was created at WARN and became CRIT produces no
+    second `alert` record, only this.
+    """
+    sev = r.get("sev", 0)
+    sev_c = {2: c["red"], 1: c["orn"], 0: c["yel"]}.get(sev, "")
+    kind = r.get("type", "")[len("alert."):]
+    transition = SEV_NAME.get(sev, "?")
+    if "prev_sev" in r:
+        transition = f"{SEV_NAME.get(r['prev_sev'], '?')}->{transition}"
+    out = (f"{sev_c}alert.{kind:<8} {transition:<11}"
+           f"{r.get('title', ''):<18}{c['reset']} "
+           f"{r.get('detail', '')}")
+    tail = [f"inc={r.get('incident_id', '?')[:8]}"]
+    if r.get("reason"):
+        tail.append(f"reason={r['reason']}")
+    # obs/eval is the #98 counter split: the first only moves when the
+    # evidence does, the second is one per rule tick.
+    tail.append(f"obs={r.get('observations', '?')}/"
+                f"eval={r.get('evaluations', '?')}")
+    return out + f" {c['dim']}({' '.join(tail)}){c['reset']}"
+
+
 FORMATTERS = {
     "dns":   fmt_dns,
     "tls":   fmt_tls,
@@ -204,6 +247,10 @@ FORMATTERS = {
     "ntp":   fmt_ntp,
     "icmp":  fmt_icmp,
     "alert": fmt_alert,
+    "alert.create":   fmt_alert_event,
+    "alert.update":   fmt_alert_event,
+    "alert.escalate": fmt_alert_event,
+    "alert.resolve":  fmt_alert_event,
 }
 
 
@@ -240,7 +287,8 @@ def main() -> int:
     parser.add_argument(
         "--type", default=None,
         help="comma-separated record types to keep "
-             "(dns,tls,quic,http,ntp,icmp,alert)",
+             "(dns,tls,quic,http,ntp,icmp,alert, and the #98 lifecycle "
+             "records alert.create/update/escalate/resolve)",
     )
     parser.add_argument(
         "--src", default=None,

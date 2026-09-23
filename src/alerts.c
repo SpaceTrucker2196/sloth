@@ -23,16 +23,86 @@
 #include "transit.h"
 #include "rf_quality.h"
 #include "event_wake.h"
+#include "flood_window.h"
 
 /* Engine state: deduped alert ring.
  *
  * Each alerts_update() call walks the trigger sources (scan/deauth/dns_log
  * /conns), and for each condition produces a stable dedup key. Existing
  * alerts under that key get count++ and last_seen=now; new keys append.
- * On overflow the oldest entry (lowest last_seen) is evicted. */
+ * On overflow the oldest entry (lowest last_seen) is evicted.
+ *
+ * Incident lifecycle (#98). A run of one dedup key is an *incident*:
+ * it opens with `alert.create`, carries one `incident_id` through every
+ * `alert.update` / `alert.escalate`, and closes with exactly one
+ * `alert.resolve`. Before #98 only the create was visible downstream —
+ * a WARN→CRIT escalation changed the engine in place and emitted
+ * nothing, so a consumer paging on CRIT never saw it.
+ *
+ * What is emitted is a *material* change, never a poll:
+ *   - severity moved              → escalate (up) / update (down), always
+ *   - the rendered evidence moved → update, at most once per
+ *                                   ALERT_UPDATE_MIN_S
+ *   - no rule re-asserted the key for ALERT_RESOLVE_AFTER_S → resolve
+ * A resolved entry stays in the view (the operator's history is not
+ * the stream's business) but is evicted first under pressure, and a key
+ * that fires again after its resolve opens a *new* incident.
+ *
+ * Durations run on CLOCK_MONOTONIC through the #88 seam in
+ * flood_window.h; wall clock is evidence only. An NTP step must not
+ * resolve a live incident or hold a dead one open. */
 
 static alert_t engine[MAX_ALERTS];
 static int     engine_count;
+
+/* Monotonically increasing across the process, never reset — it is what
+ * keeps two incidents on one key in one second distinguishable. */
+static uint64_t g_incident_seq;
+
+#define ALERT_FNV64_OFFSET  0xcbf29ce484222325ULL
+#define ALERT_FNV64_PRIME   0x100000001b3ULL
+
+static uint64_t alert_fnv1a(const void *data, size_t n, uint64_t h) {
+    const unsigned char *p = (const unsigned char *)data;
+    for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= ALERT_FNV64_PRIME; }
+    return h;
+}
+
+/* Signature of the evidence a rule rendered this tick. Two fire() calls
+ * with the same detail describe the same observation; a different
+ * detail is a different one. This is the only handle the engine has —
+ * fire() is called from 50-odd rules and none of them tells it whether
+ * a frame arrived or a retained row was simply re-read. */
+static uint64_t alert_detail_sig(const char *detail) {
+    return alert_fnv1a(detail, strlen(detail), ALERT_FNV64_OFFSET);
+}
+
+/* Opaque, collision-resistant, stable for the incident's life. Not a
+ * UUID and not claimed to be one: the counter makes construction
+ * collisions impossible, leaving only a 64-bit hash collision. */
+static void incident_id_make(alert_t *a, time_t when) {
+    uint64_t h = alert_fnv1a(a->key, strlen(a->key), ALERT_FNV64_OFFSET);
+    uint64_t t = (uint64_t)when;
+    uint64_t n = ++g_incident_seq;
+    h = alert_fnv1a(&t, sizeof(t), h);
+    h = alert_fnv1a(&n, sizeof(n), h);
+    snprintf(a->incident_id, sizeof(a->incident_id), "%016llx",
+             (unsigned long long)h);
+}
+
+/* Monotonic time never runs backwards, but a zeroed entry (or a caller
+ * mixing clocks) must not turn that into a huge unsigned age. */
+static uint64_t alert_age_ms(uint64_t now_ms, uint64_t then_ms) {
+    return now_ms > then_ms ? now_ms - then_ms : 0;
+}
+
+/* Close an incident: one resolve, once. `reason` is why. */
+static void alert_resolve(alert_t *a, time_t now, const char *reason) {
+    if (a->resolved || !a->incident_id[0]) return;
+    a->resolved = 1;
+    a->event_seq++;
+    jsonl_emit_alert_event(a, "alert.resolve", now, -1, reason);
+}
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
 
@@ -105,15 +175,31 @@ static int find_by_key(const char *key) {
     return -1;
 }
 
-/* Evict the oldest entry (lowest last_seen) and return its slot. */
-static int evict_oldest(void) {
-    int slot = 0;
-    time_t oldest = engine[0].last_seen;
-    for (int i = 1; i < engine_count; i++) {
-        if (engine[i].last_seen < oldest) {
+/* Evict an entry and return its slot. Resolved incidents go first —
+ * their stream lifecycle is already complete, so dropping one costs a
+ * consumer nothing, while dropping a live one would strand an incident
+ * with no resolve. Within each class, lowest last_seen. An evicted live
+ * incident is resolved on the way out so the stream stays closed (#98). */
+static int evict_oldest(time_t now) {
+    int slot = -1;
+    time_t oldest = 0;
+    for (int i = 0; i < engine_count; i++) {
+        if (!engine[i].resolved) continue;
+        if (slot < 0 || engine[i].last_seen < oldest) {
             oldest = engine[i].last_seen;
             slot   = i;
         }
+    }
+    if (slot < 0) {
+        slot   = 0;
+        oldest = engine[0].last_seen;
+        for (int i = 1; i < engine_count; i++) {
+            if (engine[i].last_seen < oldest) {
+                oldest = engine[i].last_seen;
+                slot   = i;
+            }
+        }
+        alert_resolve(&engine[slot], now, "evicted");
     }
     return slot;
 }
@@ -127,20 +213,64 @@ static void fire(alert_type_t type, alert_sev_t sev,
                  const char *key,
                  const char *match_ip, uint16_t match_port,
                  time_t now) {
+    uint64_t mono = flood_mono_ms();
+    uint64_t sig  = alert_detail_sig(detail);
     int idx = find_by_key(key);
-    if (idx >= 0) {
-        engine[idx].count++;
-        engine[idx].last_seen = now;
-        engine[idx].sev = sev;
-        snprintf(engine[idx].detail, sizeof(engine[idx].detail), "%s", detail);
+    if (idx >= 0 && !engine[idx].resolved) {
+        alert_t    *a    = &engine[idx];
+        alert_sev_t prev = a->sev;
+
+        a->evaluations++;
+        a->count          = (int)a->evaluations;   /* compat alias */
+        a->last_seen      = now;
+        a->last_evaluated = now;
+        a->last_eval_ms   = mono;
+
+        /* An evaluation is an observation only when the evidence moved.
+         * This is what makes a retained condition cost nothing: 100
+         * polls of an unchanged row render one detail and count once. */
+        if (sig != a->detail_sig || sev != prev) {
+            a->observations++;
+            a->last_observed = now;
+        }
+        a->sev = sev;
+        snprintf(a->detail, sizeof(a->detail), "%s", detail);
+
+        if (sev != prev) {
+            /* Severity is what a consumer pages on — never throttled,
+             * in either direction. */
+            a->detail_sig    = sig;
+            a->last_event_ms = mono;
+            a->event_seq++;
+            jsonl_emit_alert_event(a,
+                                   sev > prev ? "alert.escalate"
+                                              : "alert.update",
+                                   now, (int)prev, NULL);
+            if (sev > prev) event_wake_signal();
+        } else if (sig != a->detail_sig &&
+                   alert_age_ms(mono, a->last_event_ms) >= ALERT_UPDATE_MIN_MS) {
+            /* Evidence moved and the floor has passed. The event carries
+             * the *current* detail, so the renderings the floor
+             * suppressed are summarised, not lost. `detail_sig` is left
+             * alone while throttled, so the next change past the floor
+             * still fires. */
+            a->detail_sig    = sig;
+            a->last_event_ms = mono;
+            a->event_seq++;
+            jsonl_emit_alert_event(a, "alert.update", now, -1, NULL);
+        }
         return;
     }
 
     int slot;
-    if (engine_count < MAX_ALERTS) {
+    if (idx >= 0) {
+        /* Resolved entry under this key: the slot is reused, the
+         * identity is not — this is a new incident. */
+        slot = idx;
+    } else if (engine_count < MAX_ALERTS) {
         slot = engine_count++;
     } else {
-        slot = evict_oldest();
+        slot = evict_oldest(now);
     }
     alert_t *a = &engine[slot];
     memset(a, 0, sizeof(*a));
@@ -149,6 +279,15 @@ static void fire(alert_type_t type, alert_sev_t sev,
     a->count      = 1;
     a->first_seen = now;
     a->last_seen  = now;
+    a->evaluations    = 1;
+    a->observations   = 1;
+    a->first_detected = now;
+    a->last_evaluated = now;
+    a->first_observed = now;
+    a->last_observed  = now;
+    a->last_eval_ms   = mono;
+    a->last_event_ms  = mono;
+    a->detail_sig     = sig;
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
@@ -156,11 +295,18 @@ static void fire(alert_type_t type, alert_sev_t sev,
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
     snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
+    incident_id_make(a, now);
+    a->event_seq = 1;
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately
      * instead of on the next tick. event_wake_signal is a no-op
-     * when the wake pipe wasn't initialised (e.g. unit tests). */
+     * when the wake pipe wasn't initialised (e.g. unit tests).
+     *
+     * Both records go out: `alert` is the legacy shape every existing
+     * consumer codes against and is unchanged bar the additive
+     * `incident_id`; `alert.create` opens the lifecycle stream (#98). */
     jsonl_emit_alert(a);
+    jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
     event_wake_signal();
 }
 
@@ -3312,9 +3458,30 @@ static void dump_new_alert_pcaps(const sloth_state_t *s) {
     }
 }
 
+/* Close every incident no rule has re-asserted for the quiet period.
+ *
+ * The test is `last_evaluated`, not `last_observed`: rules re-derive
+ * their conditions from retained state every poll, so a key that stops
+ * being *evaluated* is a key whose evidence aged out of the source ring
+ * — the condition is gone. Keying on last_observed instead would
+ * resolve a standing condition that is still true (NO_MONITOR_MODE
+ * renders the same detail forever) and then immediately re-create it,
+ * which is a resolve/create pair every five minutes for nothing. */
+static void expire_incidents(time_t now, uint64_t mono) {
+    for (int i = 0; i < engine_count; i++) {
+        alert_t *a = &engine[i];
+        if (a->resolved) continue;
+        if (alert_age_ms(mono, a->last_eval_ms) < ALERT_RESOLVE_AFTER_MS)
+            continue;
+        alert_resolve(a, now, "expired");
+    }
+}
+
 void alerts_update(sloth_state_t *s) {
     if (!s) return;
-    time_t now = time(NULL);
+    /* Evidence clock — the #88 seam, so the whole engine can be driven
+     * deterministically from tests without sleeping. */
+    time_t now = flood_wall();
     /* Derive posture before any rule reads it (#62). */
     wifi_downgrade_update(s);
     rule_port_scan(s, now);
@@ -3371,11 +3538,19 @@ void alerts_update(sloth_state_t *s) {
     rule_cleartext_cred(s, now);
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
+    expire_incidents(now, flood_mono_ms());
     dump_new_alert_pcaps(s);
     snapshot(s);
 }
 
 void alerts_clear(void) {
+    /* The operator dropping their view is still the end of every open
+     * incident as far as the stream is concerned — leaving them open
+     * would strand a consumer waiting for a resolve that can never
+     * come (#98). */
+    time_t now = flood_wall();
+    for (int i = 0; i < engine_count; i++)
+        alert_resolve(&engine[i], now, "cleared");
     engine_count = 0;
     memset(engine, 0, sizeof(engine));
     /* Reset per-rule history too so tests (and the user pressing 'c')

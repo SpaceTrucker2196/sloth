@@ -7,9 +7,82 @@ threat-intel hits, periodic beaconing.
 
 A small dedup-by-key ring (`src/alerts.c`) — each rule scans the
 current state every poll, builds a stable key (e.g. `scan:<ip>`,
-`threat-d:<domain>`), and either bumps an existing alert's hit count
-or appends a fresh one. New keys also get a JSONL log line and (if
-`--pcap-dir` is set) a per-alert pcap dump of the matching packets.
+`threat-d:<domain>`), and either bumps an existing alert or appends a
+fresh one. New keys also get a JSONL `alert` line and (if `--pcap-dir`
+is set) a per-alert pcap dump of the matching packets.
+
+## Incident lifecycle (#98)
+
+A run of one dedup key is an **incident**. Until #98 the only thing a
+downstream consumer ever saw of one was the `alert` record written when
+the key was created: an escalation from WARN to CRIT updated the engine
+in place and emitted nothing, so a SIEM paging on CRIT never learned
+that the alert it had recorded at WARN had become one. The engine now
+emits four lifecycle records beside the legacy one — see
+[[jsonl-schema]] for the wire format.
+
+| Event | Fires when |
+|-------|-----------|
+| `alert.create` | a key not currently open fires. Once per incident, alongside the legacy `alert` record |
+| `alert.escalate` | severity **increased** on an open incident. Never throttled |
+| `alert.update` | severity **decreased**, or the rendered `detail` changed. Evidence-only updates are floored at one per `ALERT_UPDATE_MIN_S` (60 s) per incident |
+| `alert.resolve` | the incident closed — `expired`, `evicted` or `cleared`. Once per incident |
+
+Every event carries an `event_id` (unique) and an `incident_id` (stable
+for the incident's life, so create → escalate → resolve join). A key
+that fires again after its resolve opens a **new incident with a new
+id**: the ring slot is reused, the identity is not.
+
+**Material change only, never a poll.** Rules re-derive their
+conditions from retained state once per poll, so most `fire()` calls
+re-render evidence sloth already reported. An evaluation that produces
+an identical `detail` at an unchanged severity emits nothing — a
+retained condition held across 100 polls is one `alert.create` and
+silence.
+
+**Expiry.** An incident resolves after `ALERT_RESOLVE_AFTER_S` (300 s)
+in which **no rule re-asserted its key**. The test is the last
+*evaluation*, not the last observation: a rule that stops firing is one
+whose evidence aged out of the source ring, whereas a standing
+condition (`NO_MONITOR_MODE`) re-renders the same detail forever and
+would otherwise resolve and re-create every five minutes for nothing.
+Durations run on `CLOCK_MONOTONIC` through the `src/flood_window.c`
+seam (#88) so an NTP step cannot resolve a live incident or hold a dead
+one open; every exported *timestamp* stays wall clock, because those
+are evidence.
+
+A resolved incident **stays in the view** — the operator's history is
+not the stream's business — but it is the first thing evicted when the
+ring hits `MAX_ALERTS`, so a live incident is now dropped only when all
+128 are live. An eviction that does hit a live incident emits its
+resolve on the way out, and `c` (clear) resolves every open incident,
+so a consumer is never left waiting for a resolve that cannot come.
+
+### Counters and timestamps
+
+| Field | Counts |
+|-------|--------|
+| `count` | **rule evaluations.** Unchanged from before #98 and deliberately so — the TUI's `n` column, the `--db` `alerts` table and existing JSONL consumers all read it. It is not a packet count, an attack count, or an incident count |
+| `evaluations` | identical to `count`, named for what it is |
+| `observations` | evaluations whose rendered evidence differed from the previous one. A retained condition re-evaluated unchanged does not move it |
+
+`observations` is the honest counter, with an honest limit: sloth's
+rules read retained state, not frames, so it counts *distinct
+observations as the rule rendered them* — a lower bound on incidents,
+never inflated by polling. If you want packets, read the per-entity
+records (`deauth`, `probe_client`, …) or the per-alert pcap.
+
+Timestamps split the same way: `first_detected` / `last_evaluated`
+bracket the rule ticks (`last_evaluated` is the old `last_seen`, and
+still what `ts` carries), `first_observed` / `last_observed` bracket the
+counted observations.
+
+**Known gap — #89.** Two distinct evil-twin pairs advertising one SSID
+still collapse into one incident: `rule_evil_twin` keys on
+`twin:<ssid>` alone, so they are merged before the lifecycle layer sees
+them. The layer never merges across keys and will report two incidents
+the moment the key distinguishes them; re-keying the twin rules is F07
+/ issue #89.
 
 ## Severity tiers
 
@@ -125,7 +198,9 @@ own feed for production.
 
 Row colours match the severity tier: LOW = yellow, WARN = orange,
 CRIT = red. The Count column heat-colours on ≥ 2 hits to flag
-sustained conditions.
+sustained conditions — it shows `count`, i.e. rule evaluations, so a
+long-lived condition reaches four figures without anything new having
+happened (see "Counters and timestamps" above).
 
 The footer below the table shows enrichment for the selected alert:
 RIR region (from the `/8` table) and embedded hosting-org lookup.
@@ -133,7 +208,9 @@ RIR region (from the `/8` table) and embedded hosting-org lookup.
 ## Keybindings
 
 `↑`/`↓` navigate. `c` clears all alerts and their pcap-dumped state
-(future hits of the same key re-arm).
+(future hits of the same key re-arm). Every open incident is resolved
+with `reason: "cleared"` first, so stream consumers see the close
+rather than an incident that simply stops (#98).
 
 ## Threat-intel
 

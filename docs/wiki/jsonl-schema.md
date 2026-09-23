@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`.
 
-**Last updated**: 2026-09-21.
+**Last updated**: 2026-09-23.
 
 ---
 
@@ -145,8 +145,8 @@ Every record has:
 
 | Field | Type   | Notes |
 |-------|--------|-------|
-| `type` | string | record class (`dns`, `tls`, `quic`, `http`, `ntp`, `icmp`, `alert`) |
-| `ts`   | int    | Unix timestamp in seconds. Per-record meaning: observation time for protocol logs, last-seen time for alerts |
+| `type` | string | record class (`dns`, `tls`, `quic`, `http`, `ntp`, `icmp`, `alert`, and the `alert.create` / `alert.update` / `alert.escalate` / `alert.resolve` lifecycle family added in #98) |
+| `ts`   | int    | Unix timestamp in seconds. Per-record meaning: observation time for protocol logs, last-evaluated time for alerts, transition time for alert lifecycle events |
 
 String fields are JSON-escaped per RFC 8259: `"`, `\`, control bytes
 under 0x20, plus the `\n` / `\r` / `\t` shorthand. Bytes ≥ 0x80 pass
@@ -264,11 +264,124 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `key`   | string | dedup key (`type:identifier`) |
 | `sev`   | int    | severity: **0=LOW (yellow), 1=WARN (orange), 2=CRIT (red)**. See [[alerts]] for the tier semantics. |
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
-| `count` | int    | number of observations under this dedup key |
+| `count` | int    | **rule evaluations** under this dedup key — see the note below. Always `1` on this record, which is emitted only when the key is new |
 | `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
+| `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
+
+**This record is emitted only when the dedup key is new.** That has
+always been true and #98 did not change it: everything that happens to
+an alert *after* it is created — escalation, changed evidence,
+expiry — is carried by the `alert.*` lifecycle records below. A
+consumer that reads only `alert` sees exactly what it saw before #98,
+plus the additive `incident_id`.
+
+**What `count` means.** It counts **rule evaluations**, not packets,
+not attacks, and not independent incidents. Every rule re-derives its
+condition from retained state once per poll (~1 Hz), so a single
+condition that stays true for an hour reaches `count` in the
+thousands. #98 named this rather than changing it, because the TUI,
+the `--db` `alerts` table and existing consumers all read the field.
+Use `observations` on the lifecycle records when you want "how many
+times did the evidence actually move".
+
+### `alert.create` / `alert.update` / `alert.escalate` / `alert.resolve`
+
+Added in #98; purely additive — four new record types, no change to any
+existing field. A consumer that ignores unknown `type` values keeps
+working unchanged.
+
+```json
+{"type":"alert.create","ts":1700000006,"event_id":"9f2c41ab77e30d58-0001","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"BSSID ba:ad:f0:0d:00:01 malformed IEs: 3 overrun / 0 oversize-SSID / 0 truncated-RSN - 802.11 mgmt fuzzing","sev":1,"ty":31,"observations":1,"evaluations":1,"count":1,"first_detected":1700000006,"last_evaluated":1700000006,"first_observed":1700000006,"last_observed":1700000006,"technique":"T1499"}
+{"type":"alert.escalate","ts":1700000041,"event_id":"9f2c41ab77e30d58-0002","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"...5 overrun...","sev":2,"ty":31,"prev_sev":1,"observations":2,"evaluations":36,"count":36,"first_detected":1700000006,"last_evaluated":1700000041,"first_observed":1700000006,"last_observed":1700000041,"technique":"T1499"}
+{"type":"alert.resolve","ts":1700000341,"event_id":"9f2c41ab77e30d58-0003","incident_id":"9f2c41ab77e30d58","key":"mgmtfuzz:ba:ad:f0:0d:00:01","title":"MGMT_FUZZ","detail":"...","sev":2,"ty":31,"observations":2,"evaluations":36,"count":36,"first_detected":1700000006,"last_evaluated":1700000041,"first_observed":1700000006,"last_observed":1700000041,"technique":"T1499","reason":"expired"}
+```
+
+**Why they exist.** Before #98 a WARN→CRIT transition updated sloth's
+engine in place and emitted nothing. A consumer paging on CRIT never
+saw the escalation — the only record it ever got for that alert was
+the `alert` line written when the key was first created, at WARN.
+
+**An incident** is one continuous run of a dedup key. It opens with
+exactly one `alert.create`, carries one `incident_id` through every
+`alert.update` and `alert.escalate`, and closes with exactly one
+`alert.resolve`. A key that fires again after its resolve opens a
+**new incident with a new `incident_id`** — the engine slot is reused,
+the identity is not.
+
+| Record | Fires when |
+|--------|-----------|
+| `alert.create` | a dedup key not currently open fires. Once per incident. Accompanied by the legacy `alert` record |
+| `alert.escalate` | severity **increased** on an open incident (e.g. WARN→CRIT). Never throttled |
+| `alert.update` | severity **decreased**, or the rendered evidence (`detail`) changed. Evidence-only updates are rate-limited to **one per 60 s** per incident |
+| `alert.resolve` | the incident closed. Once per incident, never repeated |
+
+**Material change, never a poll.** An evaluation that re-renders
+identical evidence emits nothing, however long the condition persists:
+a retained condition re-evaluated across 100 polls produces one
+`alert.create` and nothing else. When a rule's detail does carry a live
+counter, the 60 s floor bounds the update rate; the event that does
+fire carries the *current* detail, so suppressed intermediate
+renderings are summarised rather than lost. Severity transitions are
+never throttled, in either direction — severity is what consumers page
+on.
+
+**The resolve rule.** An incident resolves when **no rule re-asserted
+its key for 300 s** (`ALERT_RESOLVE_AFTER_S`). The test is
+`last_evaluated`, not `last_observed`: rules re-derive their conditions
+from retained state every poll, so a key that stops being *evaluated*
+is one whose evidence aged out of the source ring — the condition is
+gone. Keying on `last_observed` instead would resolve a standing
+condition that is still true (`NO_MONITOR_MODE` renders the same detail
+forever) and immediately re-create it, producing a resolve/create pair
+every five minutes for nothing. 300 s matches
+`JSONL_HEARTBEAT_SECS`, so "is this incident still live?" has the same
+horizon as every other entity in the stream. The clock is
+**CLOCK_MONOTONIC** (the #88 seam in `src/flood_window.c`): an NTP step
+or a manual `date` must neither resolve a live incident nor hold a dead
+one open. Every *timestamp* in these records is wall clock — evidence,
+not duration.
+
+`reason` appears only on `alert.resolve`:
+
+| `reason` | Meaning |
+|----------|---------|
+| `expired` | no rule re-asserted the key for 300 s |
+| `evicted` | the engine hit `MAX_ALERTS` (128) and reclaimed this slot. Resolved incidents are evicted first, so a live one is dropped only when all 128 are live |
+| `cleared` | the operator pressed `c` in the TUI. Every open incident closes — leaving them open would strand a consumer waiting for a resolve that can never come |
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `event_id` | string | unique per event: `<incident_id>-<4-digit per-incident sequence>`, starting at `0001` and increasing in emission order |
+| `incident_id` | string | 16 hex chars, stable for the whole incident. Opaque — FNV-1a over the dedup key, the detection time and a process-wide counter. Collision-resistant, not a UUID, and not stable across sloth restarts |
+| `key` | string | the dedup key, same value as on the `alert` record |
+| `title`, `detail`, `sev`, `ty`, `technique`, `match_ip`, `match_port` | | same meaning as on the `alert` record; `detail` and `sev` are the **current** values at the moment of the event. `match_ip`/`match_port` are omitted when the rule has no single flow |
+| `prev_sev` | int | severity before the transition. Present on `alert.escalate` and on severity-decrease `alert.update` only |
+| `observations` | int | evaluations whose rendered evidence differed from the previous one. A retained condition re-evaluated unchanged does **not** move this. It is the honest answer to "how many distinct observations", which `count` never was — but it is not a packet count either: sloth's rules read retained state, not frames |
+| `evaluations` | int | rule ticks under this key, i.e. what `count` has always counted |
+| `count` | int | identical to `evaluations`, carried so a lifecycle-only consumer never has to read both record families |
+| `first_detected` | int | wall clock when the incident opened |
+| `last_evaluated` | int | wall clock of the most recent rule tick. Same value as `last_seen`/`ts` on the legacy record |
+| `first_observed` | int | wall clock of the first counted observation (== `first_detected`) |
+| `last_observed` | int | wall clock of the most recent counted observation |
+| `reason` | string | resolve cause; `alert.resolve` only |
+
+These are ordinary records: they go to `-o FILE` and every
+`--data-socket` client alike, and under `--out-format cef` or `syslog`
+each type is its own CEF signature / syslog MSGID (`alert.escalate`,
+…), with `sev` mapped to CEF severity exactly as on `alert`.
+
+**Not in `--db`.** The lifecycle is a stream contract; the `alerts`
+table is unchanged and `DB_SCHEMA_VERSION` is still 4. An existing
+database file stays readable.
+
+**Known gap (#89).** Two distinct evil-twin pairs advertising one SSID
+still collapse into one incident, because `rule_evil_twin` keys on
+`twin:<ssid>` alone. The lifecycle layer never merges across keys — it
+will produce two incidents the moment the key does — but re-keying the
+twin rules is F07 / issue #89 and was deliberately not done in #98.
 
 ### `cleartext_cred`
 
@@ -467,7 +580,9 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
 ## Versioning
 
 - **No version field.** Fields are append-only; existing names and
-  semantics don't change.
+  semantics don't change. `count` on `alert` is the standing example:
+  #98 documented what it had always measured (rule evaluations) and
+  added `observations` beside it rather than redefining it.
 - New record types may appear; consumers should ignore unknown
   `type` values gracefully.
 - New optional fields may appear on existing records; consumers
