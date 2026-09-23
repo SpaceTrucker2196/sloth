@@ -9,7 +9,9 @@
  * Each (BSSID, STA) pair we see explicit evidence for becomes a row.
  * Evidence sources, strongest first:
  *
- *   ASSOC_SRC_EAPOL    — completed 4-way handshake (definitive)
+ *   ASSOC_SRC_EAPOL    — the AP installed a pairwise key for this STA
+ *                        (EAPOL-Key M3). Strongest source here; an
+ *                        M1+M2 pair is deliberately NOT one (#97)
  *   ASSOC_SRC_ASSOC    — observed association-response with status=0
  *   ASSOC_SRC_REASSOC  — observed reassociation-response with status=0
  *

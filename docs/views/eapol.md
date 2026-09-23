@@ -36,15 +36,78 @@ Per observed EAPOL-Key frame:
 - Message number (1-4)
 - ANonce / SNonce / MIC fields
 - PMKID (if M1 carried one)
-- `handshake_complete` set on M2 if its matching M1 was already seen
-
-Per (BSSID, STA) pair the state machine tracks pending M1 → M2 chains;
-when both arrive, the M2 event is flagged `handshake_complete=1`.
+- `handshake_complete`, `handshake_progress`, `assoc_evidence` — see
+  "Attempts, not flags" below
 
 `--eapol-dir DIR` appends each captured PMKID and full handshake to
 `DIR/eapol.22000` in hashcat 22000 mixed format
 (`WPA*01*...` for PMKIDs, `WPA*02*...` for 4-way handshakes with MIC
 field zeroed per spec).
+
+### Attempts, not flags (#97)
+
+A (BSSID, STA) record holds at most one **live handshake attempt**, and
+two frames only pair when they belong to the same one:
+
+| Test | Why |
+|---|---|
+| equal Key Replay Counters | M2 echoes M1's counter verbatim (IEEE 802.11-2020 §12.7.2). Different counters are different attempts. |
+| M2 within `EAPOL_PAIR_WINDOW_S` (10 s) of the M1 | §12.7.6.6 gives the authenticator `dot11RSNAConfigPairwiseUpdateCount` retries `…UpdateTimeOut` apart (3 × 100 ms default; hostapd 4 × 1 s), so a real pair is a second or two apart. The window runs from the most recent M1, retransmission included — a retry is the AP re-offering the same ANonce. |
+| direction agrees with the role | M1/M3 are the AP's, M2/M4 the station's. A frame claiming a role it didn't travel in is recorded and otherwise inert. |
+
+A **new M1** — different ANonce or different replay counter — starts a
+new attempt and discards everything that depended on the old one: the
+M2, the PMKID that M1 advertised, the buffered frames, the export flag.
+A verbatim retransmission continues the attempt in flight. Each attempt
+exports at most one `WPA*02` line.
+
+The three things an observation can claim are separate fields, because
+they are separate claims:
+
+- **`handshake_complete`** — *candidate message pair*. The only state
+  exported as a 22000 EAPOL record.
+- **`handshake_progress`** (0-4) — *observed protocol progression*
+  within the attempt. Reporting only.
+- **`assoc_evidence`** — the AP installed a pairwise key for this STA
+  (M3). That is the first point the authenticator commits to the client,
+  and it is what promotes the pair in the [Assoc](assoc.md) view.
+  M1+M2 does **not**: an M1 goes to whoever asks and an M2 can be
+  replayed by anyone who heard one. M4 does not promote on its own
+  either — it is station-sent and exactly as replayable.
+
+None of this is cryptographic verification. Sloth does not check the
+MIC, so even a full M1..M4 is observed progression, not proof.
+
+Before #97 the record was a bare `m1_seen` / `m2_seen` pair with no
+replay counter and no age bound, so a cached M1 paired with any later
+M2 — across associations, across rekeys — and that half-exchange was
+promoted to association evidence.
+
+### Message-pair byte
+
+The trailing field of a `WPA*02` line tells hashcat what the record is
+and what the tool verified building it. Bits 2..0 name the pair; bit 7
+says the replay counter went *unchecked*:
+
+| Value | Meaning |
+|---|---|
+| `000` | M1+M2, EAPOL from M2 (challenge) — **what sloth builds** |
+| `001` | M1+M4, EAPOL from M4 |
+| `010` | M2+M3, EAPOL from M2 |
+| `011` | M2+M3, EAPOL from M3 |
+| `100` | M3+M4, EAPOL from M3 |
+| `101` | M3+M4, EAPOL from M4 |
+| bit 4 | ap-less attack |
+| bit 5 / 6 | LE / BE router detected |
+| bit 7 | not replaycount checked — nonce-error-corrections mandatory |
+
+Source: "Explanation of the MESSAGEPAIR fields",
+<https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2>.
+
+Sloth's record is M1's ANonce plus M2's SNonce and MIC, so it emits
+`00`. It used to write a literal `02`, telling hashcat the line was an
+M2+M3 pair — a different category. Because the two replay counters are
+now genuinely compared before pairing, bit 7 stays clear.
 
 Sloth additionally writes a per-handshake **`DIR/<bssid>_<sta>.pcap`**
 containing the raw 802.11 EAPOL-Key frames (M1..M4 as captured, no

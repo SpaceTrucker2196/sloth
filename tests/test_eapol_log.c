@@ -627,8 +627,15 @@ static void test_key_lengths_0_to_100_consistent_short_body(void) {
     bounds_teardown();
 }
 
-/* A valid 99-byte fixed header parses: M2 completes the handshake,
- * lands the association, and exports. */
+/* A valid 99-byte fixed header parses: M2 completes the candidate
+ * message pair and exports.
+ *
+ * The association assertion here used to read `1` — this test asserted
+ * the T12 defect, that an M1+M2 pair is association evidence. #97 says
+ * it is not (an M1 goes to whoever asks, an M2 can be replayed), so the
+ * promotion moved to M3 and the expectation moved with it. Not a
+ * weakened assertion: it is the same assertion against the corrected
+ * behaviour, and test_m3_is_association_evidence covers the other side. */
 static void test_key_exact_99_byte_header_parses(void) {
     bounds_setup();
     uint8_t m2[99];
@@ -636,7 +643,7 @@ static void test_key_exact_99_byte_header_parses(void) {
     ASSERT_EQ(n, 99);
     ASSERT_EQ(m2_side_effects(m2, n), 1);
     ASSERT_EQ(eapol_event_count(), 2);
-    ASSERT_EQ(assoc_count(), 1);
+    ASSERT_EQ(assoc_count(), 0);
     ASSERT(bounds_file_exists("eapol.22000"));
     ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_TRUNCATED), 0);
     ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_MALFORMED), 0);
@@ -808,6 +815,430 @@ static void test_key_reject_counts_scoped_and_cleared(void) {
     ASSERT_EQ(eapol_reject_count(EAPOL_REJECT_COUNT), 0);
 }
 
+
+/* ── Handshake attempt pairing + 22000 message pair, #97 ───────────── *
+ *
+ * T12: the old state machine kept one (BSSID, STA) record with m1_seen /
+ * m2_seen, no replay counter and no age bound, so a cached M1 paired
+ * with any later M2 — and the resulting half-exchange was promoted to
+ * association evidence.
+ *
+ * T13: the export then labelled that pair with a literal 02, which in
+ * hashcat's message-pair table is M2+M3 (authorized), not the M1+M2
+ * challenge sloth actually built.
+ *
+ * Every frame here is a hand-built EAPOL-Key body per IEEE 802.11-2020
+ * §12.7.2 / §12.7.6 — no captures, no parser output fed back in. Clocks
+ * are supplied, not read, so the pairing window is exercised exactly.  */
+
+/* M3: KeyACK=1, MIC=1, Install=1. M4: MIC=1, Secure=1 (Table 12-8). */
+#define KI_M3 ((1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02)
+#define KI_M4 ((1 << 9) | (1 << 8) | (1 << 3) | 0x02)
+
+/* An arbitrary fixed wall clock. Only differences matter. */
+#define T0 ((time_t)1700000000)
+
+/* Per-handshake pcap name for the fixture BSSID/STA. */
+#define HS_PCAP_97 "00aabbccddee_102030405060.pcap"
+
+static const uint8_t ANONCE_B[32] = {
+    0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,
+    0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,
+    0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,
+    0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,
+};
+static const uint8_t SNONCE_B[32] = {
+    0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,
+    0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,
+    0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,
+    0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,
+};
+
+/* Key Replay Counter: 8 bytes big-endian at EAPOL offset 9 (§12.7.2). */
+static void set_rc(uint8_t *eapol, uint64_t rc) {
+    for (int i = 0; i < 8; i++)
+        eapol[9 + i] = (uint8_t)(rc >> (56 - 8 * i));
+}
+
+static int feed_msg(uint16_t ki, uint64_t rc, const uint8_t *nonce,
+                    const uint8_t *mic, const uint8_t *pmkid,
+                    int from_ds, time_t now) {
+    uint8_t eapol[128];
+    int en = build_eapol_key(eapol, ki, nonce, mic, pmkid);
+    set_rc(eapol, rc);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, from_ds);
+    return eapol_observe_dot11_at(frame, fn, -50, 6, now);
+}
+
+static int feed_m1(uint64_t rc, const uint8_t *anonce,
+                   const uint8_t *pmkid, time_t now) {
+    return feed_msg(KI_M1, rc, anonce, NULL, pmkid, /*from_ds=*/1, now);
+}
+static int feed_m2(uint64_t rc, const uint8_t *snonce, time_t now) {
+    return feed_msg(KI_M2, rc, snonce, M2_MIC, NULL, /*from_ds=*/0, now);
+}
+static int feed_m3(uint64_t rc, const uint8_t *anonce, time_t now) {
+    return feed_msg(KI_M3, rc, anonce, M2_MIC, NULL, /*from_ds=*/1, now);
+}
+static int feed_m4(uint64_t rc, time_t now) {
+    return feed_msg(KI_M4, rc, NULL, M2_MIC, NULL, /*from_ds=*/0, now);
+}
+
+static char g_pair_dir[64];
+
+static void pair_path(char *out, size_t sz, const char *leaf) {
+    snprintf(out, sz, "%s/%s", g_pair_dir, leaf);
+}
+
+static void pair_setup(void) {
+    snprintf(g_pair_dir, sizeof(g_pair_dir),
+             "/tmp/sloth_test_eapol97_%d", (int)getpid());
+    mkdir(g_pair_dir, 0700);
+    char p[160];
+    pair_path(p, sizeof(p), "eapol.22000");           unlink(p);
+    pair_path(p, sizeof(p), HS_PCAP_97);              unlink(p);
+    eapol_set_output_dir(g_pair_dir);
+    eapol_clear();
+    assoc_clear();
+}
+
+static void pair_teardown(void) {
+    char p[160];
+    eapol_set_output_dir(NULL);
+    pair_path(p, sizeof(p), "eapol.22000");           unlink(p);
+    pair_path(p, sizeof(p), HS_PCAP_97);              unlink(p);
+    rmdir(g_pair_dir);
+    eapol_clear();
+    assoc_clear();
+}
+
+/* Message-pair field (the text after the final '*') of every WPA*02
+ * line in the export, in write order. Returns how many were found. */
+static int export_mp_fields(char mps[][8], int max) {
+    char body[8192], p[160];
+    pair_path(p, sizeof(p), "eapol.22000");
+    if (slurp_file(p, body, sizeof(body)) <= 0) return 0;
+    int n = 0;
+    char *save = NULL;
+    for (char *ln = strtok_r(body, "\n", &save); ln && n < max;
+         ln = strtok_r(NULL, "\n", &save)) {
+        if (strncmp(ln, "WPA*02*", 7) != 0) continue;
+        char *last = strrchr(ln, '*');
+        if (!last) continue;
+        snprintf(mps[n++], 8, "%s", last + 1);
+    }
+    return n;
+}
+
+static int export_wpa02_count(void) {
+    char mps[8][8];
+    return export_mp_fields(mps, 8);
+}
+
+/* Newest-first snapshot; index 0 is the most recent event. */
+static void snap(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    eapol_snapshot(s);
+}
+
+/* T13. The byte is the hashcat wiki's table, not sloth's opinion:
+ * bits 2..0 name the pair, bit 7 says the replay counter went
+ * unchecked. Source: "Explanation of the MESSAGEPAIR fields",
+ * https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2 */
+static void test_message_pair_byte_follows_hashcat_table(void) {
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M1M2_E2, 1), 0x00);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M1M4_E4, 1), 0x01);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M2M3_E2, 1), 0x02);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M2M3_E3, 1), 0x03);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M3M4_E3, 1), 0x04);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M3M4_E4, 1), 0x05);
+    /* Bit 7 is additive, not a replacement for the pair bits. */
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M1M2_E2, 0), 0x80);
+    ASSERT_EQ(eapol_message_pair(EAPOL_MP_M2M3_E2, 0), 0x82);
+    /* The record sloth builds is the challenge pair. The literal the
+     * old exporter wrote is a different category in the same table. */
+    ASSERT(eapol_message_pair(EAPOL_MP_M1M2_E2, 1) !=
+           eapol_message_pair(EAPOL_MP_M2M3_E2, 1));
+}
+
+/* T13 end to end: an M1+M2 record is labelled 00, and because the two
+ * replay counters were actually compared, bit 7 stays clear. */
+static void test_m1_m2_export_is_labelled_challenge_pair(void) {
+    pair_setup();
+    ASSERT_EQ(feed_m1(7, ANONCE, NULL, T0), 1);
+    ASSERT_EQ(feed_m2(7, SNONCE, T0 + 1), 1);
+    char mps[8][8];
+    ASSERT_EQ(export_mp_fields(mps, 8), 1);
+    ASSERT_EQ(strcmp(mps[0], "00"), 0);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(s.eapol_events[0].replay_counter_ok, 1);
+    pair_teardown();
+}
+
+/* T12, old M1 / new M2: past the pairing window the M1 is spent. The
+ * M2 is still logged — it was observed — but it pairs with nothing,
+ * exports nothing and promotes nothing. */
+static void test_stale_m1_does_not_pair_with_a_later_m2(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    ASSERT_EQ(feed_m2(7, SNONCE, T0 + EAPOL_PAIR_WINDOW_S + 1), 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_count, 2);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 2);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 0);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 0);
+    ASSERT_EQ(export_wpa02_count(), 0);
+    ASSERT_EQ(assoc_count(), 0);
+    pair_teardown();
+}
+
+/* The boundary belongs to the live side: an M2 landing exactly at the
+ * window edge still answers its M1. */
+static void test_m2_at_the_window_edge_still_pairs(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    feed_m2(7, SNONCE, T0 + EAPOL_PAIR_WINDOW_S);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(export_wpa02_count(), 1);
+    pair_teardown();
+}
+
+/* T12, mismatched replay counters: two frames from two different
+ * attempts, close enough in time to slip through an age check alone. */
+static void test_mismatched_replay_counters_do_not_pair(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    ASSERT_EQ(feed_m2(8, SNONCE, T0 + 1), 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 0);
+    ASSERT_EQ(s.eapol_events[0].replay_counter_ok, 0);
+    ASSERT_EQ(export_wpa02_count(), 0);
+    ASSERT_EQ(assoc_count(), 0);
+    pair_teardown();
+}
+
+/* T12, retransmitted M1: an AP resends M1 verbatim when M2 is lost.
+ * That continues the attempt in flight — it must not restart it, and
+ * the M2 that finally arrives must still pair, exactly once. */
+static void test_retransmitted_m1_continues_the_attempt(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    feed_m1(7, ANONCE, NULL, T0 + 1);
+    feed_m1(7, ANONCE, NULL, T0 + 2);
+    feed_m2(7, SNONCE, T0 + 3);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_count, 4);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 2);
+    ASSERT_EQ(export_wpa02_count(), 1);
+    pair_teardown();
+}
+
+/* The window runs from the most recent M1, not the first. A retry is
+ * the AP re-offering the same ANonce under the same replay counter, so
+ * an M2 answering the retry answers a live offer — and refusing it
+ * would drop a genuine handshake. Keeping an attempt alive this way
+ * cannot mix material: nothing about it changed. */
+static void test_retransmitted_m1_keeps_the_attempt_alive(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    feed_m1(7, ANONCE, NULL, T0 + EAPOL_PAIR_WINDOW_S);
+    feed_m2(7, SNONCE, T0 + EAPOL_PAIR_WINDOW_S + 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(export_wpa02_count(), 1);
+    pair_teardown();
+}
+
+/* The bound is still a bound: a retry ages out on its own clock. */
+static void test_a_retransmitted_m1_still_expires(void) {
+    pair_setup();
+    feed_m1(7, ANONCE, NULL, T0);
+    feed_m1(7, ANONCE, NULL, T0 + 5);
+    feed_m2(7, SNONCE, T0 + 5 + EAPOL_PAIR_WINDOW_S + 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 0);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 0);
+    ASSERT_EQ(export_wpa02_count(), 0);
+    pair_teardown();
+}
+
+/* T12, out of order: an M2 seen before any M1 must not be waiting in
+ * the record for the next M1 to claim it. */
+static void test_a_new_m1_discards_an_earlier_orphan_m2(void) {
+    pair_setup();
+    ASSERT_EQ(feed_m2(9, SNONCE, T0), 1);
+    feed_m1(9, ANONCE, NULL, T0 + 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_count, 2);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 1);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 1);
+    ASSERT_EQ(export_wpa02_count(), 0);
+    ASSERT_EQ(assoc_count(), 0);
+    /* The M1 needs its own M2; the orphan does not count as one. */
+    feed_m2(9, SNONCE_B, T0 + 2);
+    snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(export_wpa02_count(), 1);
+    pair_teardown();
+}
+
+/* T12, new M1 after an older PMKID: the PMKID belonged to the ANonce
+ * that has just been superseded. Carrying it into the next attempt's
+ * event would attribute one attempt's crackable material to another. */
+static void test_a_new_m1_discards_the_previous_pmkid(void) {
+    pair_setup();
+    feed_m1(1, ANONCE, PMKID, T0);
+    feed_m1(2, ANONCE_B, NULL, T0 + 1);
+    feed_m2(2, SNONCE, T0 + 2);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 2);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(s.eapol_events[0].has_pmkid, 0);
+    /* And the pair it did export is built on the second ANonce. */
+    ASSERT_EQ(memcmp(s.eapol_events[0].anonce, ANONCE_B, 32), 0);
+    pair_teardown();
+}
+
+/* T12, two consecutive attempts by the same pair: each is a genuinely
+ * different handshake, so each exports once — and never crosswise. */
+static void test_two_consecutive_attempts_export_once_each(void) {
+    pair_setup();
+    feed_m1(1, ANONCE, NULL, T0);
+    feed_m2(1, SNONCE, T0 + 1);
+    feed_m1(2, ANONCE_B, NULL, T0 + 30);
+    feed_m2(2, SNONCE_B, T0 + 31);
+    char mps[8][8];
+    ASSERT_EQ(export_mp_fields(mps, 8), 2);
+    ASSERT_EQ(strcmp(mps[0], "00"), 0);
+    ASSERT_EQ(strcmp(mps[1], "00"), 0);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(memcmp(s.eapol_events[0].anonce, ANONCE_B, 32), 0);
+    ASSERT_EQ(memcmp(s.eapol_events[0].snonce, SNONCE_B, 32), 0);
+    /* The second attempt's M2 must not pair against the first M1 —
+     * and must not inherit the earlier pair's verdict either: a
+     * per-attempt replay_counter_ok would report 1 for a comparison
+     * this event failed. */
+    feed_m2(1, SNONCE, T0 + 32);
+    snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 0);
+    ASSERT_EQ(s.eapol_events[0].replay_counter_ok, 0);
+    ASSERT_EQ(export_wpa02_count(), 2);
+    pair_teardown();
+}
+
+/* A retransmitted M2 is the same material over the same ANonce: one
+ * target, one line. */
+static void test_retransmitted_m2_exports_once(void) {
+    pair_setup();
+    feed_m1(4, ANONCE, NULL, T0);
+    feed_m2(4, SNONCE, T0 + 1);
+    feed_m2(4, SNONCE, T0 + 2);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(export_wpa02_count(), 1);
+    pair_teardown();
+}
+
+/* T12, the association split. An M1 is sent to whoever asks and an M2
+ * can be replayed by anyone who heard one, so the pair is a candidate
+ * message pair and nothing more. */
+static void test_m1_m2_is_not_association_evidence(void) {
+    pair_setup();
+    feed_m1(3, ANONCE, NULL, T0);
+    feed_m2(3, SNONCE, T0 + 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(s.eapol_events[0].assoc_evidence, 0);
+    ASSERT_EQ(assoc_count(), 0);
+    pair_teardown();
+}
+
+/* M3 is the authenticator installing a pairwise key for this STA —
+ * the first point at which the AP commits to the client. That is the
+ * promotion, and it is protocol progression, not a MIC check. */
+static void test_m3_is_association_evidence(void) {
+    pair_setup();
+    feed_m1(3, ANONCE, NULL, T0);
+    feed_m2(3, SNONCE, T0 + 1);
+    ASSERT_EQ(assoc_count(), 0);
+    ASSERT_EQ(feed_m3(4, ANONCE, T0 + 2), 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 3);
+    ASSERT_EQ(s.eapol_events[0].assoc_evidence, 1);
+    ASSERT_EQ(assoc_count(), 1);
+    pair_teardown();
+}
+
+/* M4 is supplicant-sent and exactly as replayable as the M2 that no
+ * longer promotes; the M3 it answers is what did the promoting. */
+static void test_m4_alone_is_not_association_evidence(void) {
+    pair_setup();
+    ASSERT_EQ(feed_m4(4, T0), 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 4);
+    ASSERT_EQ(s.eapol_events[0].assoc_evidence, 0);
+    ASSERT_EQ(assoc_count(), 0);
+    pair_teardown();
+}
+
+/* observed_handshake_progress walks M1..M4 while the replay counters
+ * line up: M2 echoes M1's, M3 uses M1's + 1, M4 echoes M3's. */
+static void test_progress_advances_with_the_replay_counters(void) {
+    pair_setup();
+    sloth_state_t s;
+    feed_m1(10, ANONCE, NULL, T0);
+    snap(&s); ASSERT_EQ(s.eapol_events[0].handshake_progress, 1);
+    feed_m2(10, SNONCE, T0 + 1);
+    snap(&s); ASSERT_EQ(s.eapol_events[0].handshake_progress, 2);
+    feed_m3(11, ANONCE, T0 + 2);
+    snap(&s); ASSERT_EQ(s.eapol_events[0].handshake_progress, 3);
+    feed_m4(11, T0 + 3);
+    snap(&s); ASSERT_EQ(s.eapol_events[0].handshake_progress, 4);
+    pair_teardown();
+}
+
+/* An M3 that is not M1's successor belongs to some other exchange: it
+ * still promotes association (the AP did install a key for this STA)
+ * but it does not advance the attempt sloth is tracking. */
+static void test_m3_with_a_foreign_replay_counter_does_not_advance(void) {
+    pair_setup();
+    feed_m1(10, ANONCE, NULL, T0);
+    feed_m2(10, SNONCE, T0 + 1);
+    feed_m3(99, ANONCE, T0 + 2);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 2);
+    ASSERT_EQ(assoc_count(), 1);
+    pair_teardown();
+}
+
+/* Direction is part of the message's identity: M1/M3 are the AP's,
+ * M2/M4 the station's. A frame carrying an AP role but travelling
+ * station→AP is recorded as seen and does nothing else — no attempt
+ * update, no pairing, no key-install accounting, no association. */
+static void test_direction_mismatched_frames_are_inert(void) {
+    pair_setup();
+    /* "M3" from the station. */
+    ASSERT_EQ(feed_msg(KI_M3, 4, ANONCE, M2_MIC, NULL, /*from_ds=*/0, T0), 1);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 3);
+    ASSERT_EQ(s.eapol_events[0].assoc_evidence, 0);
+    ASSERT_EQ(assoc_count(), 0);
+    ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
+
+    /* "M2" from the AP must not answer a genuine M1 either. */
+    feed_m1(4, ANONCE, NULL, T0 + 1);
+    ASSERT_EQ(feed_msg(KI_M2, 4, SNONCE, M2_MIC, NULL, /*from_ds=*/1,
+                       T0 + 2), 1);
+    snap(&s);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 0);
+    ASSERT_EQ(export_wpa02_count(), 0);
+    pair_teardown();
+}
 
 /* ── Export file permissions, #87 ──────────────────────────────────── */
 
@@ -1073,6 +1504,26 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_kde_len_overrun_extracts_nothing);
     RUN_TEST(test_key_trailing_bytes_not_exported);
     RUN_TEST(test_key_reject_counts_scoped_and_cleared);
+
+    TEST_SUITE("eapol_log: attempt pairing + 22000 message pair (#97)");
+    RUN_TEST(test_message_pair_byte_follows_hashcat_table);
+    RUN_TEST(test_m1_m2_export_is_labelled_challenge_pair);
+    RUN_TEST(test_stale_m1_does_not_pair_with_a_later_m2);
+    RUN_TEST(test_m2_at_the_window_edge_still_pairs);
+    RUN_TEST(test_mismatched_replay_counters_do_not_pair);
+    RUN_TEST(test_retransmitted_m1_continues_the_attempt);
+    RUN_TEST(test_retransmitted_m1_keeps_the_attempt_alive);
+    RUN_TEST(test_a_retransmitted_m1_still_expires);
+    RUN_TEST(test_a_new_m1_discards_an_earlier_orphan_m2);
+    RUN_TEST(test_a_new_m1_discards_the_previous_pmkid);
+    RUN_TEST(test_two_consecutive_attempts_export_once_each);
+    RUN_TEST(test_retransmitted_m2_exports_once);
+    RUN_TEST(test_m1_m2_is_not_association_evidence);
+    RUN_TEST(test_m3_is_association_evidence);
+    RUN_TEST(test_m4_alone_is_not_association_evidence);
+    RUN_TEST(test_progress_advances_with_the_replay_counters);
+    RUN_TEST(test_m3_with_a_foreign_replay_counter_does_not_advance);
+    RUN_TEST(test_direction_mismatched_frames_are_inert);
 
     /* #87 export permissions + failure reporting */
     RUN_TEST(test_export_private_under_permissive_umask);

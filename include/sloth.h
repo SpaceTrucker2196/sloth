@@ -1491,7 +1491,7 @@ typedef struct {
 /* Evidence source — strongest (definitive) first. */
 enum {
     ASSOC_SRC_UNKNOWN = 0,
-    ASSOC_SRC_EAPOL   = 1,   /* completed 4-way handshake */
+    ASSOC_SRC_EAPOL   = 1,   /* AP installed a pairwise key (M3) — #97 */
     ASSOC_SRC_ASSOC   = 2,   /* assoc-response status=0    */
     ASSOC_SRC_REASSOC = 3,   /* reassoc-response status=0  */
 };
@@ -1801,8 +1801,25 @@ typedef struct {
 } btm_steer_t;
 
 /* ── EAPOL handshake event (WPA 4-way / PMKID) ────────────── *
- * One per observed EAPOL-Key frame. M2 events carry the M1+M2
- * combined info (handshake_complete=1) when their M1 was seen. */
+ * One per observed EAPOL-Key frame.
+ *
+ * The three things a 4-way observation can tell you are deliberately
+ * separate fields, because they are separate claims (#97 / T12):
+ *
+ *   handshake_complete  — candidate_message_pair. This M2 and a live M1
+ *       belong to the SAME attempt: equal Key Replay Counters, M2 inside
+ *       EAPOL_PAIR_WINDOW_S of the M1, that M1 not yet superseded. The
+ *       only state from which a hashcat 22000 EAPOL record is exported.
+ *   handshake_progress  — observed_handshake_progress: how far M1..M4
+ *       got within that attempt, 0..4. Reporting only.
+ *   assoc_evidence      — association_evidence: the AP installed a key
+ *       for this STA (M3, AP→STA). Still protocol progression, not
+ *       cryptographic verification — sloth never checks the MIC.
+ *
+ * replay_counter_ok records that THIS event's counter comparison
+ * succeeded — on an M2, that it answers its M1; on an M3/M4, that the
+ * attempt it belongs to has a counter-verified pair. It is what clears
+ * hashcat's "not replaycount checked" bit on export. */
 #define MAX_EAPOL_EVENTS  256
 
 typedef struct {
@@ -1817,6 +1834,9 @@ typedef struct {
     uint8_t  snonce[32];
     uint8_t  mic[16];
     int      handshake_complete;
+    int      handshake_progress;
+    int      replay_counter_ok;
+    int      assoc_evidence;
     int8_t   signal_dbm;
     int      channel;
 } eapol_event_t;

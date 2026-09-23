@@ -471,3 +471,43 @@ Failures print once to stderr and are counted (EAPOL view shows it).
 **Not done here** (owner decision): a separate opt-in for collecting
 crackable material with a short default retention, and an explicit
 group-sharing policy. Today a group bit is simply refused.
+
+## 2026-09-23 — EAPOL handshake attempts and the 22000 message pair (#97)
+
+**Source**: issue #97 (external CISO/GRC review, technical appendix T12
+and T13). `include/eapol_log.h`, `include/sloth.h`,
+`include/assoc_track.h`, `src/eapol_log.c`, `src/jsonl.c`; tests in
+`test_eapol_log.c`.
+
+**Doc updates**: [[jsonl-schema]] `eapol` record gained three additive
+fields — `handshake_progress`, `replay_counter_ok`, `assoc_evidence` —
+and the row now says what `handshake_complete` does and does not mean.
+`docs/views/eapol.md` gained "Attempts, not flags" and "Message-pair
+byte"; `docs/views/assoc.md`'s evidence table now names M3 rather than
+"M2 with prior M1" as the EAPOL source.
+
+**Index updates**: none (no new page).
+
+**Why**: the pending record was keyed `(BSSID, STA)` with `m1_seen` /
+`m2_seen`, no replay counter and no age bound, so a cached M1 paired
+with any later M2 — across associations and across rekeys — and a new
+M1 left the previous attempt's M2 and PMKID underneath it. That pair
+was then handed to `assoc_observe(ASSOC_SRC_EAPOL, …)`, calling a
+half-exchange an association. The record now holds one bounded
+*attempt*: M1 and M2 pair only on equal Key Replay Counters
+(802.11-2020 §12.7.2) within `EAPOL_PAIR_WINDOW_S`, a new M1 discards
+everything that depended on the old ANonce, message role must agree
+with frame direction, and association promotion moved to M3 — the AP
+installing a key, which is the first point the authenticator commits.
+
+The export's trailing message-pair byte was the literal `02`, which is
+hashcat's M2+M3 category; sloth builds M1+M2 with the EAPOL blob from
+M2, which is `00`. It is now derived by `eapol_message_pair()` from the
+pair kind plus whether the replay counters were actually compared, so
+bit 7 ("not replaycount checked") reflects what the tool did.
+
+**Not done here**: validating the export against `hcxpcapngtool` and
+confirming a known-key fixture cracks. There is no owned capture on the
+build host and MISSION §2.2 forbids sloth running a cracker, so the
+bit values are asserted against hashcat's published table and the
+offline lab validation stays open on #97.

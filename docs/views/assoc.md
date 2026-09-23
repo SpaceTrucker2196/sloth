@@ -10,9 +10,17 @@ BSSID:
 
 | Signal              | 802.11 subtype | Strength |
 |---------------------|----------------|----------|
-| EAPOL 4-way handshake completed | M2 with prior M1 | **Definitive** |
+| EAPOL key install (M3, AP → STA) | EAPOL-Key, Install=1 | **Strongest** |
 | Association Response, status=0  | subtype 1        | Strong    |
 | Reassociation Response, status=0 | subtype 3       | Strong    |
+
+The EAPOL row is **M3**, not M2 (#97). M3 is the authenticator
+installing a pairwise key for this client, which it only does having
+accepted the client's M2 — the first point the AP commits. An M1+M2
+pair is not: an M1 goes to whoever asks and an M2 can be replayed by
+anyone who heard one, so promoting that pair called a half-exchange an
+association. Sloth does not verify the MIC, so even this is observed
+protocol progression rather than cryptographic proof.
 
 Conversely, disassociation (subtype 10) and deauth (subtype 12) tear
 the relationship down.
@@ -102,9 +110,9 @@ definitive evidence.
 - **Same STA appearing on multiple BSSIDs over a short window** —
   roaming, but also indicates a portable device tracking through a
   multi-AP environment. The age column lets you see the order.
-- **A randomised STA's association source = EAPOL** — you have a full
-  handshake against a known device on a known SSID. Pair with
-  [EAPOL](eapol.md).
+- **A randomised STA's association source = EAPOL** — the AP installed
+  a key for this device on a known SSID. Pair with [EAPOL](eapol.md) to
+  see whether a crackable M1+M2 pair came with it.
 - **A burned-in STA MAC associated to a non-employer SSID at an
   employer location** — possible BYOD / shadow-IT (defensive) or
   personal-device deanonymisation (offensive).

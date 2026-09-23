@@ -1108,6 +1108,15 @@ void jsonl_emit_eapol_events(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "has_pmkid",  e->has_pmkid ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "handshake_complete",
                                                  e->handshake_complete ? 1 : 0);
+        /* Added #97: handshake_complete on its own says "a candidate
+         * message pair", which a consumer used to have to read as
+         * "associated". These three keep the claims apart. */
+        kv_int(buf, LINEBUF, &off, "handshake_progress",
+                                                 e->handshake_progress);
+        kv_int(buf, LINEBUF, &off, "replay_counter_ok",
+                                                 e->replay_counter_ok ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "assoc_evidence",
+                                                 e->assoc_evidence ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "signal_dbm", e->signal_dbm);
         kv_int(buf, LINEBUF, &off, "channel",    e->channel);
         end_obj(buf, LINEBUF, &off);
