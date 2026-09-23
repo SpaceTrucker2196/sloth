@@ -150,9 +150,53 @@ condition reaches four figures without anything new happening);
 
 ---
 
+## Is the sensor actually collecting? `sensor_health` (#91)
+
+Every other record answers "what did sloth see". `sensor_health` answers
+"was sloth able to see", and it is **the one record type a silent sensor
+still emits** — which is the point, because a well-placed sensor on a
+quiet segment is *supposed* to produce nothing else.
+
+It is the stream's only singleton: one line per tick about the
+collector, not one per row of a table. Change-only with a 300 s
+heartbeat, so a healthy sensor costs you a line every five minutes and a
+degrading one tells you the moment it degrades.
+
+What a real consumer should alert on:
+
+| Condition | Meaning |
+|-----------|---------|
+| `capture_open`/`monitor_open` 1 with `_running` 0 | **the capture thread died behind a still-open handle.** Tables stop growing and nothing else in the stream says so |
+| `capture_exit`/`monitor_exit` other than `none` or `stopped` | `iface_gone` (adapter unplugged / link down), `perm_lost` (capability revoked), `not_activated`, or `error` |
+| `chan_confirmed_ok` 0 | `--hop` asked the radio for `chan_requested` and the platform refused; the radio is still on `chan_confirmed` |
+| `capture_drop_delta` / `monitor_drop_delta` non-zero | libpcap's buffer is overflowing right now — the lifetime `_drop` alone can't tell you that |
+| `*_ifdrop_delta` non-zero | the NIC is dropping before libpcap sees it |
+| `evictions` climbing | a bounded table is full and discarding observations |
+
+Read `*_exit_detail` beside `*_exit`: `error` is the honest bucket for
+libpcap wording sloth does not recognise, and the raw string is right
+there rather than being guessed into a category.
+
+Two gotchas worth knowing before you build on it:
+
+- `*_recv`/`*_drop`/`*_ifdrop` are **sloth's** monotonic totals, not
+  libpcap's raw 32-bit counters, so differencing two samples never
+  yields a negative rate even across a handle restart.
+- `evictions` is loss on the *instrumented* tables (alerts, top hosts,
+  PNL clients, per-client PNL SSIDs, DHCP events, EAP sessions, devices).
+  The probe-client, beacon, seqnum, assoc and per-protocol flow rings are
+  not counted yet. Full list and field table in
+  `docs/wiki/jsonl-schema.md`.
+
+```sh
+python3 sloth-stream.py unix:/tmp/sloth.sock --type sensor_health
+```
+
+---
+
 ## Source as a template
 
-The script is deliberately small (~270 lines, single file) and avoids
+The script is deliberately small (~440 lines, single file) and avoids
 clever abstractions. The structure is the textbook one:
 
 ```

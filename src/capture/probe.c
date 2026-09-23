@@ -9,6 +9,7 @@
 
 #include "sloth.h"
 #include "capture/probe.h"
+#include "capture/capture.h"   /* capture_classify_exit / stats accounting (#91) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -461,13 +462,45 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
 
 /* ── Capture thread ──────────────────────────────────────── */
 
+/* Why the monitor worker left its loop (#91 slice 2). Same publication
+ * pattern as the data-stream worker in capture.c — see the note there.
+ * This is the stream where confusing "quiet channel" with "dead thread"
+ * costs most: on a hopping radio an empty dwell is normal. */
+static int  g_exit_reason = CAPTURE_EXIT_NONE;
+static char g_exit_detail[80];
+
 static void *probe_thread(void *arg) {
     (void)arg;
+    int r = 0;
     while (g_running) {
-        int r = pcap_dispatch(g_ph, 32, on_probe_frame, NULL);
+        r = pcap_dispatch(g_ph, 32, on_probe_frame, NULL);
         if (r < 0) break;
     }
+    const char *err = (r < 0 && g_ph) ? pcap_geterr(g_ph) : "";
+    /* Published under the client-table mutex, as in capture.c: a torn
+     * read of the error string is worse than no string at all. */
+    pthread_mutex_lock(&g_mu);
+    snprintf(g_exit_detail, sizeof(g_exit_detail), "%s", err ? err : "");
+    g_exit_reason = (int)capture_classify_exit(r, !g_running, g_exit_detail);
+    pthread_mutex_unlock(&g_mu);
     return NULL;
+}
+
+void probe_health_poll(capture_health_t *h) {
+    if (!h) return;
+    h->open = g_ph != NULL;
+    pthread_mutex_lock(&g_mu);
+    h->exit_reason = g_exit_reason;
+    snprintf(h->exit_detail, sizeof(h->exit_detail), "%s", g_exit_detail);
+    int reason = g_exit_reason;
+    pthread_mutex_unlock(&g_mu);
+    h->running = g_running && reason == CAPTURE_EXIT_NONE;
+    if (!g_ph) return;
+    struct pcap_stat ps;
+    memset(&ps, 0, sizeof(ps));
+    if (pcap_stats(g_ph, &ps) == 0)
+        capture_stats_accumulate(h, (uint32_t)ps.ps_recv, (uint32_t)ps.ps_drop,
+                                 (uint32_t)ps.ps_ifdrop);
 }
 
 /* ── Public API ──────────────────────────────────────────── */
@@ -504,6 +537,11 @@ void probe_open(sloth_state_t *s) {
 
 void probe_run(void) {
     if (!g_ph || g_running) return;
+    /* A restart clears the previous run's verdict (#91 slice 2). */
+    pthread_mutex_lock(&g_mu);
+    g_exit_reason    = CAPTURE_EXIT_NONE;
+    g_exit_detail[0] = '\0';
+    pthread_mutex_unlock(&g_mu);
     g_running = 1;
     if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
         g_running = 0;
@@ -596,6 +634,12 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     }
 
     snprintf(s->probe_iface, sizeof(s->probe_iface), "%s", iface);
+    /* Same reset as probe_run(): [m] retargets the radio, and the new
+     * worker must not inherit the old one's exit reason (#91 slice 2). */
+    pthread_mutex_lock(&g_mu);
+    g_exit_reason    = CAPTURE_EXIT_NONE;
+    g_exit_detail[0] = '\0';
+    pthread_mutex_unlock(&g_mu);
     g_running = 1;
     pthread_create(&g_thread, NULL, probe_thread, NULL);
 }

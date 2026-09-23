@@ -99,6 +99,23 @@ void jsonl_emit_rdp_flows     (const sloth_state_t *s);
 void jsonl_emit_snmp_flows    (const sloth_state_t *s);
 void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
 
+/* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
+ * SINGLETON, not one line per table row: "healthy with no detections"
+ * and "not observing" were indistinguishable precisely because an idle
+ * sensor emitted nothing, so this record has to exist when no other does.
+ *
+ * Carries the monitor radio's requested vs confirmed channel and lifetime
+ * retune failures (#91 slice 1), both capture workers' liveness plus the
+ * classified reason a dead one ended and libpcap's own text for it, the
+ * wrap-safe pcap_stats() totals and this tick's deltas (#91 slice 2), and
+ * the table-overflow tally.
+ *
+ * Additive: a new record type; no existing record, field or name changes
+ * (MISSION §4.3). Change-only on the shared snapshot cache — see
+ * jsonl.c for which fields are in the signature and why the raw packet
+ * counters deliberately are not. */
+void jsonl_emit_sensor_health (const sloth_state_t *s);
+
 /* Umbrella — calls every per-view snapshot emitter. Driven once per
  * poll from main.c after the underlying tables have been refreshed.
  * Connections and twin_episode are emitted separately because they

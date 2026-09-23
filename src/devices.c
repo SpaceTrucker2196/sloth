@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "devices.h"
+#include "sensor_health.h"
 #include "oui.h"
 
 /* ── MAC helpers ─────────────────────────────────────────── */
@@ -34,7 +35,10 @@ static device_t *upsert(device_t *dev, int *n, const uint8_t mac[6]) {
     for (int i = 0; i < *n; i++) {
         if (mac_eq(dev[i].mac, mac)) return &dev[i];
     }
-    if (*n >= MAX_DEVICES) return NULL;
+    /* Drop-on-full rather than LRU: a NEW device is refused. Different
+     * mechanism from the tables above, same sensor-health meaning — an
+     * observation did not make it in (#91 slice 3). */
+    if (*n >= MAX_DEVICES) { sh_evict_note(SH_EVICT_DEVICE); return NULL; }
     device_t *d = &dev[(*n)++];
     memset(d, 0, sizeof(*d));
     memcpy(d->mac, mac, 6);

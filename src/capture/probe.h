@@ -42,6 +42,13 @@ void probe_clear(void);
    Silently does nothing if iface is not radiotap or pcap fails. */
 void probe_set_iface(sloth_state_t *s, const char *iface);
 
+/* Refresh `h` from the monitor-radio handle — liveness, the worker's
+   exit classification once it has ended, and one pcap_stats() sample
+   (#91 slice 2). The mirror of capture_health_poll() for the radio;
+   this is the stream where "quiet channel" and "dead thread" were most
+   expensive to confuse. Called once per poll from main(). */
+void probe_health_poll(capture_health_t *h);
+
 #else
 
 static inline void probe_open(sloth_state_t *s)                         { (void)s; }
@@ -53,6 +60,8 @@ static inline void mon_frame_snapshot(sloth_state_t *s)                 { (void)
 static inline uint64_t mon_frame_total(void)                            { return 0; }
 static inline void probe_clear(void)                                    {}
 static inline void probe_set_iface(sloth_state_t *s, const char *iface) { (void)s; (void)iface; }
+static inline void probe_health_poll(capture_health_t *h)
+    { if (h) { h->open = 0; h->running = 0; } }
 
 #endif /* WITH_PCAP */
 

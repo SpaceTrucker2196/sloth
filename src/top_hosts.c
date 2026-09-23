@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "top_hosts.h"
+#include "sensor_health.h"
 #include "dns.h"
 #include "ip_owner.h"
 #include "geo.h"
@@ -70,6 +71,7 @@ static top_host_t *upsert(const char *ip, time_t now) {
         slot = g_count++;
     } else {
         slot = evict_oldest_or_quietest(now);
+        sh_evict_note(SH_EVICT_TOP_HOST);   /* #91 slice 3 */
     }
     memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
     snprintf(g_tbl[slot].ip, sizeof(g_tbl[slot].ip), "%s", ip);

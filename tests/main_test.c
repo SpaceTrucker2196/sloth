@@ -95,6 +95,7 @@ void run_wifi_snapshot_tests(void);
 void run_wifi_assess_tests(void);
 void run_wifi_baseline_tests(void);
 void run_sensors_tests(void);
+void run_sensor_health_tests(void);
 void run_wifi_merge_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
@@ -215,6 +216,7 @@ int main(void) {
     run_wifi_assess_tests();
     run_wifi_baseline_tests();
     run_sensors_tests();
+    run_sensor_health_tests();
     run_wifi_merge_tests();
     run_twins_tests();
     run_karma_tests();

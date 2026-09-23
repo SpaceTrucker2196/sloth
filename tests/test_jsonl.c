@@ -9,6 +9,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 #include "tls_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -34,7 +35,10 @@ static void open_fresh(void) {
 static char *slurp(const char *path) {
     FILE *fp = fopen(path, "r");
     if (!fp) return NULL;
-    static char buf[4096];
+    /* 16 KiB: the full-coverage snapshot stream passed 4 KiB once the
+     * sensor_health record joined it (#91 slice 3), and a short read
+     * silently turns a `contains()` assertion into a truncation test. */
+    static char buf[16384];
     size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
     buf[n] = '\0';
     fclose(fp);
@@ -43,6 +47,12 @@ static char *slurp(const char *path) {
 
 static int contains(const char *hay, const char *needle) {
     return strstr(hay, needle) != NULL;
+}
+
+static int count_lines(const char *body) {
+    int n = 0;
+    for (const char *p = body; *p; p++) if (*p == '\n') n++;
+    return n;
 }
 
 /* ── open / close ────────────────────────────────────────── */
@@ -695,6 +705,196 @@ static void test_emit_state_snapshots_empty_writes_nothing(void) {
     ASSERT(!contains(body, "\"type\":\"device\""));
 }
 
+/* ── sensor_health record — issue #91 slice 3 ──────────────
+ *
+ * The additive record that carries what slices 1 and 2 collect. A
+ * singleton, not a per-entity snapshot: a sensor with empty tables is
+ * exactly the case a consumer cannot currently read, so the record has
+ * to exist when nothing else does. */
+
+static void seed_health(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    snprintf(s->pkt_iface,   sizeof(s->pkt_iface),   "any");
+    snprintf(s->probe_iface, sizeof(s->probe_iface), "alfa0");
+    s->cap_health.open = 1; s->cap_health.running = 1;
+    s->cap_health.exit_reason = CAPTURE_EXIT_NONE;
+    s->mon_health.open = 1; s->mon_health.running = 1;
+    s->mon_health.exit_reason = CAPTURE_EXIT_NONE;
+}
+
+static void test_emit_sensor_health_on_empty_state(void) {
+    /* The "healthy with no detections vs. not observing" case: nothing
+     * in any table, and the stream must still say what the sensor is
+     * doing. */
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"sensor_health\""));
+    ASSERT(contains(body, "\"capture_open\":0"));
+    ASSERT(contains(body, "\"monitor_open\":0"));
+    ASSERT(contains(body, "\"capture_exit\":\"none\""));
+}
+
+static void test_emit_sensor_health_channel_fields(void) {
+    /* Slice 1's requested-vs-confirmed pair reaching a consumer: the
+     * record must carry the CONFIRMED (old) channel and a failure count,
+     * which is the issue's stated regression criterion. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested       = 11;
+    s.chan_confirmed       = 6;
+    s.chan_retune_failures = 4;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"monitor_iface\":\"alfa0\""));
+    ASSERT(contains(body, "\"chan_requested\":11"));
+    ASSERT(contains(body, "\"chan_confirmed\":6"));
+    ASSERT(contains(body, "\"chan_retune_failures\":4"));
+    ASSERT(contains(body, "\"chan_confirmed_ok\":0"));
+}
+
+static void test_emit_sensor_health_confirmed_channel_is_ok(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested = 11;
+    s.chan_confirmed = 11;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"chan_confirmed_ok\":1"));
+}
+
+static void test_emit_sensor_health_worker_exit_and_drops(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.mon_health.running     = 0;
+    s.mon_health.exit_reason = CAPTURE_EXIT_IFACE_GONE;
+    snprintf(s.mon_health.exit_detail, sizeof(s.mon_health.exit_detail),
+             "The interface went down");
+    s.cap_health.stats_valid = 1;
+    s.cap_health.ps_recv  = 100000; s.cap_health.d_recv  = 900;
+    s.cap_health.ps_drop  = 42;     s.cap_health.d_drop  = 7;
+    s.cap_health.ps_ifdrop = 3;     s.cap_health.d_ifdrop = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"monitor_running\":0"));
+    ASSERT(contains(body, "\"monitor_exit\":\"iface_gone\""));
+    ASSERT(contains(body, "\"monitor_exit_detail\":\"The interface went down\""));
+    ASSERT(contains(body, "\"capture_recv\":100000"));
+    ASSERT(contains(body, "\"capture_drop\":42"));
+    ASSERT(contains(body, "\"capture_ifdrop\":3"));
+    ASSERT(contains(body, "\"capture_recv_delta\":900"));
+    ASSERT(contains(body, "\"capture_drop_delta\":7"));
+    ASSERT(contains(body, "\"capture_ifdrop_delta\":1"));
+}
+
+static void test_emit_sensor_health_eviction_tally(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_evict_note(SH_EVICT_ALERT);
+    sh_evict_note(SH_EVICT_PNL_SSID);
+    sh_evict_note(SH_EVICT_PNL_SSID);
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"evictions\":3"));
+    ASSERT(contains(body, "\"evict_alert\":1"));
+    ASSERT(contains(body, "\"evict_pnl_ssid\":2"));
+    ASSERT(contains(body, "\"evict_device\":0"));
+    sh_evict_reset();
+}
+
+static void test_sensor_health_unchanged_is_suppressed(void) {
+    /* One line per second forever would drown the stream. The record is
+     * change-only on the same cache as the entity snapshots. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 1);
+}
+
+static void test_sensor_health_degradation_emits_immediately(void) {
+    /* Suppression must never hide a transition. A worker dying, a drop
+     * counter moving, or a retune failing is the whole signal. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    s.mon_health.running     = 0;
+    s.mon_health.exit_reason = CAPTURE_EXIT_ERROR;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 2);
+    ASSERT(contains(body, "\"monitor_exit\":\"error\""));
+}
+
+static void test_sensor_health_traffic_alone_does_not_re_emit(void) {
+    /* ps_recv climbs on every tick of a live sensor. Signing over it
+     * would defeat the suppression entirely, so only faults and the
+     * cumulative drop counters are in the signature. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.cap_health.stats_valid = 1;
+    s.cap_health.ps_recv = 1000; s.cap_health.d_recv = 1000;
+    jsonl_emit_sensor_health(&s);
+    s.cap_health.ps_recv = 2000; s.cap_health.d_recv = 1000;
+    jsonl_emit_sensor_health(&s);
+    s.cap_health.ps_recv = 3000; s.cap_health.d_recv = 1000;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 1);
+}
+
+static void test_sensor_health_new_drop_re_emits(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.cap_health.stats_valid = 1;
+    s.cap_health.ps_recv = 1000;
+    jsonl_emit_sensor_health(&s);
+    s.cap_health.ps_recv = 2000;
+    s.cap_health.ps_drop = 1;        /* first drop ever seen */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 2);
+}
+
+static void test_sensor_health_null_state_is_safe(void) {
+    open_fresh();
+    jsonl_emit_sensor_health(NULL);
+    jsonl_close();
+    ASSERT(1);
+}
+
+static void test_state_snapshots_include_sensor_health(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_state_snapshots(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"sensor_health\""));
+}
+
 /* ── packet once-only emission (issue #20 regression) ─────── */
 
 static void push_pkt(sloth_state_t *s, const char *src) {
@@ -1024,6 +1224,20 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_pnl_worst_case_escaping_fits);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
+
+    TEST_SUITE("jsonl sensor_health record (#91 slice 3)");
+    RUN_TEST(test_emit_sensor_health_on_empty_state);
+    RUN_TEST(test_emit_sensor_health_channel_fields);
+    RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
+    RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
+    RUN_TEST(test_emit_sensor_health_eviction_tally);
+    RUN_TEST(test_sensor_health_unchanged_is_suppressed);
+    RUN_TEST(test_sensor_health_degradation_emits_immediately);
+    RUN_TEST(test_sensor_health_traffic_alone_does_not_re_emit);
+    RUN_TEST(test_sensor_health_new_drop_re_emits);
+    RUN_TEST(test_sensor_health_null_state_is_safe);
+    RUN_TEST(test_state_snapshots_include_sensor_health);
+
     RUN_TEST(test_emit_packets_once_only);
     RUN_TEST(test_dedup_suppresses_unchanged_pnl);
     RUN_TEST(test_dedup_emits_on_change_pnl);

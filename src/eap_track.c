@@ -1,5 +1,6 @@
 #include "eap_track.h"
 #include "eap_parse.h"
+#include "sensor_health.h"
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
@@ -63,6 +64,10 @@ static eap_session_t *session_for(const uint8_t *bssid, const uint8_t *sta,
         if (g_sess[i].last_seen < g_sess[oldest].last_seen) oldest = i;
     }
     int slot = free_slot >= 0 ? free_slot : oldest;
+    /* No free slot: an unresolved conversation is dropped to make room
+     * (#91 slice 3). This is the bucket an attacker spraying half-
+     * finished handshakes fills, so it is worth surfacing. */
+    if (free_slot < 0) sh_evict_note(SH_EVICT_EAP_SESSION);
     memset(&g_sess[slot], 0, sizeof(g_sess[slot]));
     memcpy(g_sess[slot].bssid, bssid, 6);
     memcpy(g_sess[slot].sta,   sta,   6);

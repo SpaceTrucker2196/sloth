@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
@@ -7,6 +8,8 @@
 #include "oui.h"
 #include "views/iface.h"
 #include "capture/probe.h"
+#include "capture/capture.h"   /* capture_exit_name() for the health strip */
+#include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
 
 /* 4-char mode label — MON/WIFI/ETH highlight what a WiFi-SIGINT
  * operator cares about at a glance. UNKNOWN renders as "?". */
@@ -364,6 +367,67 @@ void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
                         s->scan_chans[i]);
 }
 
+/* Bounded append — snprintf returns the length it *would* have written,
+ * so a bare `off +=` walks past the end and the next `sz - off` wraps.
+ * Same clamp jsonl.c's appendf uses, for the same reason. */
+static void strip_addf(char *buf, int sz, int *off, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+static void strip_addf(char *buf, int sz, int *off, const char *fmt, ...) {
+    if (sz <= 0 || *off >= sz - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, (size_t)(sz - *off), fmt, ap);
+    va_end(ap);
+    if (n < 0) { buf[*off] = '\0'; return; }
+    *off += n;
+    if (*off > sz - 1) *off = sz - 1;
+}
+
+/* "up" / "off" / "down (reason)" for one capture stream. "off" (no
+ * handle) and "down" (worker ended) are deliberately different words:
+ * capture that was never opened and capture that died need different
+ * operator responses, and #91 exists because they looked alike. */
+static void stream_state(const capture_health_t *h, char *buf, int sz) {
+    if (!h->open)   { snprintf(buf, (size_t)sz, "off"); return; }
+    if (h->running) { snprintf(buf, (size_t)sz, "up");  return; }
+    snprintf(buf, (size_t)sz, "down (%s)",
+             capture_exit_name((capture_exit_t)h->exit_reason));
+}
+
+/* Contract in sloth.h. Structural, not colour-coded, so it reads the
+ * same on an inverted row and in the ANSI build — the same choice the
+ * scan bar's `?` marker made in slice 1. */
+void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
+    if (sz <= 0) return;
+    buf[0] = '\0';
+    int off = 0;
+    char cap[32], mon[32];
+    stream_state(&s->cap_health, cap, (int)sizeof(cap));
+    stream_state(&s->mon_health, mon, (int)sizeof(mon));
+    strip_addf(buf, sz, &off, "  health: cap %s  mon %s", cap, mon);
+
+    /* Everything past this point is a fault. Printing "drop 0" every
+     * second trains the operator to stop reading the line, so a healthy
+     * sensor shows only the two words above. */
+    if (s->cap_health.ps_drop)
+        strip_addf(buf, sz, &off, "  cap drop %llu",
+                   (unsigned long long)s->cap_health.ps_drop);
+    if (s->cap_health.ps_ifdrop)
+        strip_addf(buf, sz, &off, "  cap ifdrop %llu",
+                   (unsigned long long)s->cap_health.ps_ifdrop);
+    if (s->mon_health.ps_drop)
+        strip_addf(buf, sz, &off, "  mon drop %llu",
+                   (unsigned long long)s->mon_health.ps_drop);
+    if (s->mon_health.ps_ifdrop)
+        strip_addf(buf, sz, &off, "  mon ifdrop %llu",
+                   (unsigned long long)s->mon_health.ps_ifdrop);
+    if (s->chan_retune_failures)
+        strip_addf(buf, sz, &off, "  retune-fail %d", s->chan_retune_failures);
+    uint64_t ev = sh_evict_total();
+    if (ev)
+        strip_addf(buf, sz, &off, "  evict %llu", (unsigned long long)ev);
+}
+
 /* SSID of the network the managed radio is joined to ("" = none).
  * nl80211 scan results flag the associated BSS; with one managed
  * station the attribution to the IFACE_MODE_WIFI row is unambiguous. */
@@ -475,6 +539,15 @@ void view_iface_draw(const sloth_state_t *s) {
         tui_dim(); printw("  (no interfaces found)\n"); tui_normal();
     }
 
+    /* Sensor health (#91 slice 3) — under the rows, above the key hints,
+     * because it describes the capture behind every row rather than any
+     * one interface. */
+    {
+        char hbuf[160];
+        iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
+        tui_dim(); printw("%s\n", hbuf); tui_normal();
+    }
+
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
              " ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s",
@@ -562,6 +635,12 @@ void view_iface_draw(const sloth_state_t *s) {
 
     if (s->iface_count == 0) {
         tui_dim(); printf("  (no interfaces found)\n"); tui_normal();
+    }
+
+    {
+        char hbuf[160];
+        iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
+        tui_dim(); printf("%s\n", hbuf); tui_normal();
     }
 
     tui_dim();

@@ -6,6 +6,7 @@
 
 #include "sloth.h"
 #include "dhcp_snoop.h"
+#include "sensor_health.h"
 #include "dns.h"
 
 /* ── Internal table ──────────────────────────────────────── */
@@ -52,6 +53,7 @@ static dhcp_event_t *find_or_create(const char *mac) {
                 oldest = i;
         memset(&g_events[oldest], 0, sizeof(g_events[oldest]));
         snprintf(g_events[oldest].mac, sizeof(g_events[oldest].mac), "%s", mac);
+        sh_evict_note(SH_EVICT_DHCP_EVENT);   /* #91 slice 3 */
         return &g_events[oldest];
     }
     dhcp_event_t *e = &g_events[g_count++];

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "alerts.h"
+#include "sensor_health.h"
 #include "threat_intel.h"
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
@@ -201,6 +202,10 @@ static int evict_oldest(time_t now) {
         }
         alert_resolve(&engine[slot], now, "evicted");
     }
+    /* Counted whichever class was picked: a resolved incident dropped
+     * early is still an observation the consumer will not see again
+     * (#91 slice 3). */
+    sh_evict_note(SH_EVICT_ALERT);
     return slot;
 }
 

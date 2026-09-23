@@ -577,3 +577,110 @@ so the two pairs merge before the lifecycle layer sees them. The layer
 never merges across keys and will report two incidents the moment the
 key distinguishes them; `test_lifecycle_two_twin_pairs_one_ssid_still_merge_see_89`
 pins the current behaviour so #89 flips it deliberately.
+
+## 2026-09-23 — Sensor health: capture-worker exits, pcap drops, table evictions (#91 slices 2-3)
+
+**Source**: issue #91 (external CISO/GRC review, F09), slices 2 and 3 of
+a 4-slice plan; slice 1 (requested-vs-confirmed channel) shipped in
+`509fa71`. `src/capture/capture.{c,h}`, `src/capture/probe.{c,h}`,
+`src/sensor_health.{c,h}` (new), `src/jsonl.{c,h}`, `src/views/iface.c`,
+`src/main.c`, `include/sloth.h`; tests in `test_capture.c`,
+`test_sensor_health.c` (new), `test_state.c` and `test_jsonl.c`.
+
+**Doc updates**: [[jsonl-schema]] gained the `sensor_health` record —
+table row, full field list, the per-stream block, the monotonic-total
+rule, the change-only signature and an explicit statement of which
+tables the eviction tally does and does not cover.
+`docs/views/interfaces.md` gained a "Sensor health strip" section with
+the three liveness words, the exit-reason table, and the same coverage
+caveat; the slice-1 section's forward reference to slices 2-4 was
+replaced by it. `examples/consumer/README.md` and `sloth-stream.py`
+gained a `sensor_health` section, a formatter, and the note that it is
+the one record type a *silent* sensor still emits.
+
+**Index updates**: none (no new page).
+
+**Why**: "healthy with no detections" and "not observing" were the same
+observation. Three separate paths produced it. Both capture workers loop
+on `pcap_dispatch()` and `break` on a negative return, then simply
+returned — the pcap handle stayed open, `capture_is_open()` kept saying
+yes, and the tables stopped growing. On a channel-hopping radio an empty
+dwell is *normal*, so a dead monitor thread was indistinguishable from a
+quiet channel indefinitely. `pcap_stats()` was never called at all, so
+NIC and libpcap buffer drops were invisible. And every bounded table
+discards observations when full, silently, so a sensor at max occupancy
+and a sensor on an empty segment produced the same empty delta.
+
+Each worker now classifies why it stopped — `stopped` (requested),
+`iface_gone`, `perm_lost`, `not_activated`, `error` — and publishes the
+verdict with libpcap's raw text beside it. The classification is pure
+(`capture_classify_exit()`, above the `WITH_PCAP` guard like
+`capture_activate_failed()` before it), so it is unit-tested from
+hand-written return codes and error strings with no handle and no radio.
+A requested stop wins over any error text, because `pcap_breakloop()`
+makes the pending dispatch fail and reporting that as a fault would cry
+wolf on every clean shutdown. `PCAP_ERROR` is split by case-insensitive
+substring on libpcap's wording, which is not a kernel contract — an
+unrecognised message degrades to `error` rather than being guessed into
+a bucket, and `_exit_detail` carries the raw string so a consumer is
+never left with only sloth's classification.
+
+Liveness is `run_flag && exit_reason == none`, deliberately a
+conjunction: a dead worker leaves the run flag *set*, because it broke
+out of its loop rather than being asked to stop. `_open` 1 with
+`_running` 0 is exactly the failure that used to be invisible.
+
+`pcap_stats()` is polled once per tick. Sloth accumulates its own
+lifetime totals from the per-tick deltas rather than echoing libpcap's
+32-bit counters: a sample below the previous one is read as a counter
+reset (the new value becomes the delta), so the exported total is
+monotonic and a consumer differencing two samples never sees a negative
+rate. A true 2^32 wrap would under-count by one wrap period — the
+deliberate trade for keeping the common case exact. The first sample is
+taken as both total and first delta rather than discarded as a baseline,
+because the startup window is where an undersized buffer drops hardest.
+
+`sensor_health` is the stream's only singleton record: one line per tick
+about the collector, not one per table row. It has to be, since the
+whole point is to say something when no other record exists. It is
+change-only on the shared snapshot cache, but the signature covers
+liveness, exit reasons, the channel pair, retune failures, the
+cumulative drop counters and the eviction total — and deliberately not
+`recv` or any delta. `recv` climbs every tick on a working sensor, so
+signing over it would mean a line per second forever and the suppression
+would be decorative. A drop counter moving is news; a packet counter
+moving is not. Healthy sensors emit one line per 300 s heartbeat.
+
+The TUI strip in the interface view follows the same rule in the other
+direction: everything after the two liveness words is a fault and
+appears only when non-zero, so a healthy sensor renders exactly
+`health: cap up  mon up`. A strip that printed `drop 0  evict 0` every
+second would train the operator to stop reading it.
+
+Everything is additive — one new record type, no existing record, field
+or name touched, `DB_SCHEMA_VERSION` unchanged (MISSION §4.3).
+
+**Scope decision, flagged**: the eviction tally covers alerts, top
+hosts, PNL clients, per-client PNL SSIDs, DHCP events, 802.1X EAP
+sessions and the device table (which refuses a new entry rather than
+evicting an old one — different mechanism, same meaning). It does
+**not** cover the probe-client, beacon, seqnum, assoc or per-protocol
+flow rings. The counted set is the one whose modules are in `TEST_SRCS`,
+so every wired call site has a test that drives the real table past its
+cap; the probe-client ring's eviction site lives in `src/capture/probe.c`,
+which is compiled only under `WITH_PCAP` and is not in the test build, so
+instrumenting it would have shipped untested wiring. Which tables are
+covered is stated in both docs rather than left implicit, because a
+tally that silently omits a table reads as "no loss" when it means "not
+measured".
+
+**Not done here**: slice 4 (benchmarking sequence correlation and
+PNL-union at max occupancy) is out of scope for this change. The
+issue's remaining hardware-dependent items stay open and are not
+faked — the measured adapter/driver/kernel/band/width support matrix,
+and comparing hopping against an independent reference receiver, both
+need a radio this build host does not have. The dwell-servicing gap
+(configured dwell != measured dwell, since dwell is only serviced when
+the poll loop runs) and the monitor-specific frame counter tied to the
+confirmed frequency are also untouched; the RF dwell heuristic still
+attributes activity via `s->pkt_total`, the general capture counter.

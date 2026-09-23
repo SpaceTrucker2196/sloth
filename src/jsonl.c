@@ -14,6 +14,8 @@
 #include "data_socket.h"
 #include "formatter.h"
 #include "views/procs.h"
+#include "sensor_health.h"
+#include "capture/capture.h"
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -62,7 +64,7 @@ typedef struct {
 static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 
 /* Snapshot event "kinds" — one per deduped emitter. */
-enum { JD_PNL = 1, JD_SEQNUM };
+enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -1554,6 +1556,112 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
     }
 }
 
+/* ── sensor_health (#91 slice 3) ─────────────────────────────
+ *
+ * One singleton record per tick, carrying what slices 1 and 2 collect.
+ * Additive — a new record type; nothing existing is renamed or reshaped
+ * (MISSION §4.3).
+ *
+ * Emitted through the same change-only cache as the entity snapshots,
+ * but the signature is chosen carefully. `ps_recv` climbs on every tick
+ * of a working sensor, so signing over it would mean a line per second
+ * forever and the suppression would be decorative. The signature is
+ * therefore the *qualitative* health — liveness, exit reasons, the
+ * channel pair, retune failures — plus the cumulative drop/ifdrop
+ * counters and the eviction tally, all of which moving is genuinely
+ * news. A healthy sensor emits one line per JSONL_HEARTBEAT_SECS; a
+ * degrading one emits the moment it degrades. */
+static void health_kv(char *buf, int *off, const char *prefix,
+                      const capture_health_t *h) {
+    char key[40];
+    snprintf(key, sizeof(key), "%s_open", prefix);
+    kv_int(buf, LINEBUF, off, key, h->open);
+    snprintf(key, sizeof(key), "%s_running", prefix);
+    kv_int(buf, LINEBUF, off, key, h->running);
+    snprintf(key, sizeof(key), "%s_exit", prefix);
+    kv_str(buf, LINEBUF, off, key,
+           capture_exit_name((capture_exit_t)h->exit_reason));
+    snprintf(key, sizeof(key), "%s_exit_detail", prefix);
+    kv_str(buf, LINEBUF, off, key, h->exit_detail);
+    snprintf(key, sizeof(key), "%s_stats_valid", prefix);
+    kv_int(buf, LINEBUF, off, key, h->stats_valid);
+    snprintf(key, sizeof(key), "%s_recv", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->ps_recv);
+    snprintf(key, sizeof(key), "%s_drop", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->ps_drop);
+    snprintf(key, sizeof(key), "%s_ifdrop", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->ps_ifdrop);
+    snprintf(key, sizeof(key), "%s_recv_delta", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->d_recv);
+    snprintf(key, sizeof(key), "%s_drop_delta", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->d_drop);
+    snprintf(key, sizeof(key), "%s_ifdrop_delta", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->d_ifdrop);
+}
+
+void jsonl_emit_sensor_health(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+
+    /* chan_requested == 0 means the hopper has never ticked, which is not
+     * a failure — only a request that was never confirmed is. */
+    int chan_ok = s->chan_requested == 0 ||
+                  s->chan_requested == s->chan_confirmed;
+
+    uint64_t evict_total = sh_evict_total();
+
+    /* See the note above on what is deliberately NOT in the signature. */
+    struct {
+        int      cap_open, cap_run, cap_exit;
+        int      mon_open, mon_run, mon_exit;
+        int      chan_req, chan_conf, retune_fail, chan_ok;
+        uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
+    } sig;
+    memset(&sig, 0, sizeof(sig));
+    sig.cap_open    = s->cap_health.open;
+    sig.cap_run     = s->cap_health.running;
+    sig.cap_exit    = s->cap_health.exit_reason;
+    sig.mon_open    = s->mon_health.open;
+    sig.mon_run     = s->mon_health.running;
+    sig.mon_exit    = s->mon_health.exit_reason;
+    sig.chan_req    = s->chan_requested;
+    sig.chan_conf   = s->chan_confirmed;
+    sig.retune_fail = s->chan_retune_failures;
+    sig.chan_ok     = chan_ok;
+    sig.cap_drop    = s->cap_health.ps_drop;
+    sig.cap_ifdrop  = s->cap_health.ps_ifdrop;
+    sig.mon_drop    = s->mon_health.ps_drop;
+    sig.mon_ifdrop  = s->mon_health.ps_ifdrop;
+    sig.evicted     = evict_total;
+
+    /* Singleton: one fixed key, so the slot is this record's alone. */
+    static const char health_key[] = "sensor";
+    if (!jsonl_changed(JD_SENSOR_HEALTH, health_key, sizeof(health_key) - 1,
+                       fnv1a(&sig, sizeof(sig), FNV64_OFFSET), now))
+        return;
+
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "sensor_health", now);
+    kv_str(buf, LINEBUF, &off, "capture_iface",        s->pkt_iface);
+    kv_str(buf, LINEBUF, &off, "monitor_iface",        s->probe_iface);
+    kv_str(buf, LINEBUF, &off, "monitor_err",          s->probe_err);
+    kv_int(buf, LINEBUF, &off, "chan_requested",       s->chan_requested);
+    kv_int(buf, LINEBUF, &off, "chan_confirmed",       s->chan_confirmed);
+    kv_int(buf, LINEBUF, &off, "chan_confirmed_ok",    chan_ok);
+    kv_int(buf, LINEBUF, &off, "chan_retune_failures", s->chan_retune_failures);
+    health_kv(buf, &off, "capture", &s->cap_health);
+    health_kv(buf, &off, "monitor", &s->mon_health);
+    kv_int(buf, LINEBUF, &off, "evictions", (long long)evict_total);
+    for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) {
+        char key[40];
+        snprintf(key, sizeof(key), "evict_%s", sh_evict_name((sh_evict_t)k));
+        kv_int(buf, LINEBUF, &off, key,
+               (long long)sh_evict_count((sh_evict_t)k));
+    }
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -1597,4 +1705,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_rdp_flows         (s);
     jsonl_emit_snmp_flows        (s);
     jsonl_emit_mqtt_flows        (s);
+    /* Last: the sensor's self-report about this tick, after every
+     * observation in it has been emitted (#91 slice 3). */
+    jsonl_emit_sensor_health     (s);
 }

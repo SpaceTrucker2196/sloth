@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "history.h"
+#include "sensor_health.h"
 
 /* Tests for sloth_state_t logic — view switching, ring buffer, etc. */
 
@@ -513,6 +514,118 @@ void test_scan_bar_before_first_confirmation_is_unmarked(void) {
     ASSERT_STR(buf, "  ch:[1]");
 }
 
+/* ── sensor health strip — issue #91 slice 3 ──────────────────
+ * Slices 1 and 2 collect requested-vs-confirmed channel, retune
+ * failures, capture-worker liveness, pcap drops and table evictions.
+ * This is where the operator actually sees them. Faults are additive:
+ * a healthy sensor shows only the two liveness words, so anything past
+ * them is news. */
+
+static sloth_state_t make_healthy_sensor_state(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    s.cap_health.open = 1; s.cap_health.running = 1;
+    s.cap_health.exit_reason = CAPTURE_EXIT_NONE;
+    s.mon_health.open = 1; s.mon_health.running = 1;
+    s.mon_health.exit_reason = CAPTURE_EXIT_NONE;
+    return s;
+}
+
+void test_health_strip_healthy_is_quiet(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+}
+
+void test_health_strip_no_handle_reads_off_not_down(void) {
+    /* "capture was never opened" and "capture died" are different
+     * operator problems; the original bug was that they looked alike. */
+    sloth_state_t s = make_state_with_ifaces(1);
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap off  mon off");
+}
+
+void test_health_strip_dead_worker_names_the_reason(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.mon_health.running     = 0;
+    s.mon_health.exit_reason = CAPTURE_EXIT_IFACE_GONE;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon down (iface_gone)");
+}
+
+void test_health_strip_open_handle_with_dead_worker_is_down(void) {
+    /* The exact regression #91 opens with: the handle is still open and
+     * the tables simply stop growing. */
+    sloth_state_t s = make_healthy_sensor_state();
+    s.cap_health.running     = 0;
+    s.cap_health.exit_reason = CAPTURE_EXIT_PERM_LOST;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap down (perm_lost)  mon up");
+}
+
+void test_health_strip_reports_drops_per_stream(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.cap_health.stats_valid = 1;
+    s.cap_health.ps_drop     = 12;
+    s.mon_health.stats_valid = 1;
+    s.mon_health.ps_ifdrop   = 5;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  cap drop 12  mon ifdrop 5");
+}
+
+void test_health_strip_zero_drops_are_not_shown(void) {
+    /* Everything past the liveness words is a fault. Printing "drop 0"
+     * every second trains the operator to stop reading the line. */
+    sloth_state_t s = make_healthy_sensor_state();
+    s.cap_health.stats_valid = 1;
+    s.cap_health.ps_recv     = 1000000;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+}
+
+void test_health_strip_reports_retune_failures(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.chan_retune_failures = 3;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  retune-fail 3");
+}
+
+void test_health_strip_reports_evictions(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    sh_evict_reset();
+    sh_evict_note(SH_EVICT_PNL_SSID);
+    sh_evict_note(SH_EVICT_ALERT);
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  evict 2");
+    sh_evict_reset();
+}
+
+void test_health_strip_truncates_without_overrunning(void) {
+    /* Every fault at once into a buffer far too small — the formatter
+     * must truncate, not walk off the end. */
+    sloth_state_t s = make_healthy_sensor_state();
+    s.cap_health.running = 0; s.cap_health.exit_reason = CAPTURE_EXIT_ERROR;
+    s.mon_health.running = 0; s.mon_health.exit_reason = CAPTURE_EXIT_IFACE_GONE;
+    s.cap_health.stats_valid = 1; s.cap_health.ps_drop = 999999;
+    s.mon_health.stats_valid = 1; s.mon_health.ps_ifdrop = 888888;
+    s.chan_retune_failures = 77;
+    sh_evict_reset();
+    sh_evict_note(SH_EVICT_DEVICE);
+    char buf[24];
+    memset(buf, 'X', sizeof(buf));
+    iface_fmt_health_strip(&s, buf, (int)sizeof(buf));
+    ASSERT(strlen(buf) < sizeof(buf));
+    ASSERT(strncmp(buf, "  health:", 9) == 0);
+    sh_evict_reset();
+}
+
 void test_excluded_render_smoke(void) {
     /* Exercise the draw path with an exclusion present — must not
      * crash and must leave state untouched (draw is const). */
@@ -653,4 +766,15 @@ void run_state_tests(void) {
     RUN_TEST(test_scan_bar_confirmed_channel_has_no_marker);
     RUN_TEST(test_scan_bar_unconfirmed_retune_marks_current_channel);
     RUN_TEST(test_scan_bar_before_first_confirmation_is_unmarked);
+
+    TEST_SUITE("iface sensor-health strip — #91 slice 3");
+    RUN_TEST(test_health_strip_healthy_is_quiet);
+    RUN_TEST(test_health_strip_no_handle_reads_off_not_down);
+    RUN_TEST(test_health_strip_dead_worker_names_the_reason);
+    RUN_TEST(test_health_strip_open_handle_with_dead_worker_is_down);
+    RUN_TEST(test_health_strip_reports_drops_per_stream);
+    RUN_TEST(test_health_strip_zero_drops_are_not_shown);
+    RUN_TEST(test_health_strip_reports_retune_failures);
+    RUN_TEST(test_health_strip_reports_evictions);
+    RUN_TEST(test_health_strip_truncates_without_overrunning);
 }

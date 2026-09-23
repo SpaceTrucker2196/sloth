@@ -183,6 +183,13 @@ static void poll_data(sloth_state_t *s) {
     history_update(s);
     conn_rebuild_idx(s);
     bw_update(s);
+    /* #91 slice 2: refresh both capture workers' liveness and pcap_stats()
+     * before anything emits. Both calls self-stub without WITH_PCAP, where
+     * "off" is the honest health state rather than a missing one. Ahead of
+     * the snapshot emitters so the sensor_health record reports this tick,
+     * not the previous one. */
+    capture_health_poll(&s->cap_health);
+    probe_health_poll(&s->mon_health);
     jsonl_emit_connections(s);
     twins_snapshot(s);
     jsonl_emit_twin_episodes(s);

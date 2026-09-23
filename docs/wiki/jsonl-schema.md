@@ -539,6 +539,83 @@ pattern as they are converted.
 | `mqtt_flow`          | `(src_ip, dst_ip)` | `src_ip` (MQTT client — flipped on CONNACK so the conversation stays attributed to the client), `dst_ip` (broker), `connect_count` (CONNECT packets observed), `connack_fail_count` (CONNACK reason codes that mean bad-auth / not-authorised), `subscribe_count`, `publish_count`, `proto_level` (3 / 4 / 5 from the most recent CONNECT), `last_username` (Username field from the most recent CONNECT — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `MQTT_BROKER_BRUTE` alert via dual thresholds (`connect_count ≥ 10` OR `connack_fail_count ≥ 5`). See `docs/wiki/mqtt-snoop.md`. |
 | `sensor`             | `kind`+`iface`    | `kind` (`wifi`/`ble`/`zigbee`/`sdr`/`gps`/`adsb`/`meshtastic`/`can`), `state` (`present`/`active`/`hidden`/`error`), `name`, `iface`, `observed` (cumulative observation count), `first_seen`, `last_seen`. The passive sensor registry — one record per detected observation source. See `docs/wiki/non-ip-sensors.md`. |
 | `wifi_merged`        | `key`             | `key` (observed entity — AP BSSID or STA MAC), `seen_by` (distinct radios that heard it), `sensor_mask` (bitmask, bit *i* = sensor id *i*), `best_rssi` (strongest signal in dBm across radios; 0 = none sampled), `best_sensor` (radio id that heard it strongest; -1 = none), `channel`, `freq_mhz`, `observations` (total merged hits), `first_seen`, `last_seen`. Multi-radio merged 802.11 world model — folds several monitor adapters into one entity-keyed view while retaining observer metadata. See `docs/wiki/wifi-sigint.md`. |
+| `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; and the bounded-table eviction tally. `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
+
+### `sensor_health` — the sensor's self-report (#91)
+
+Every record above answers "what did sloth see". This one answers "was
+sloth able to see". It is the only **singleton** record in the stream:
+one line per tick describing the collector itself, not one line per row
+of a table.
+
+It exists because "healthy with no detections" and "not observing" were
+indistinguishable to a consumer. A capture thread that died left its
+pcap handle open and its tables static; a `--hop` retune that failed
+left the UI on the intended channel; NIC and libpcap drops were never
+read at all. All three look exactly like a quiet segment, and a quiet
+segment is the normal state of a well-placed sensor — so the absence of
+records carried no information either way.
+
+**Additive.** A new record type. No existing record, field or field name
+changes, so nothing downstream breaks (MISSION §4.3). A consumer that
+does not know the type ignores it, as it would any other.
+
+| Field | Meaning |
+|-------|---------|
+| `capture_iface` | device the IP data-stream handle is bound to (`any`, or a fallback device name); `""` = capture never opened |
+| `monitor_iface` | the 802.11 monitor radio; `""` = none found |
+| `monitor_err` | last monitor open/retarget error, `""` = none |
+| `chan_requested` | channel `--hop` last asked the radio for; `0` = the hopper has never ticked |
+| `chan_confirmed` | channel the platform last **acknowledged** — where the radio actually is |
+| `chan_confirmed_ok` | `1` when those agree (or nothing has been requested yet), `0` on a live unconfirmed retune |
+| `chan_retune_failures` | lifetime failed `set_channel()` calls; never reset, so a flapping radio stays visible |
+| `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
+| `evictions` | total observations discarded by a full bounded table, lifetime |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device` | the same total broken out per table |
+
+Per-stream block, with `<s>` being `capture` or `monitor`:
+
+| Field | Meaning |
+|-------|---------|
+| `<s>_open` | a pcap handle exists |
+| `<s>_running` | the worker thread is dispatching. **`_open` 1 with `_running` 0 is the failure mode this record was added for** — an open handle behind a dead thread |
+| `<s>_exit` | why the worker ended: `none` (still running), `stopped` (clean shutdown), `iface_gone`, `perm_lost`, `not_activated`, `error` |
+| `<s>_exit_detail` | libpcap's own error text at exit, verbatim, `""` = none. Always read this beside `_exit`: `error` is the honest bucket for wording sloth does not recognise, not a claim that nothing more is known |
+| `<s>_stats_valid` | at least one `pcap_stats()` sample has landed; `0` means the counters below are not yet meaningful |
+| `<s>_recv`, `<s>_drop`, `<s>_ifdrop` | lifetime packets received, dropped by libpcap's buffer, and dropped by the NIC |
+| `<s>_recv_delta`, `<s>_drop_delta`, `<s>_ifdrop_delta` | the same three over the **last tick only** |
+
+The lifetime totals are accumulated by sloth from the per-tick deltas
+rather than copied from libpcap. libpcap's counters are 32-bit and a
+handle restart zeroes them; a sample lower than the previous one is read
+as a reset (the new value becomes that tick's delta) so the exported
+total is monotonic and a consumer differencing two samples never sees a
+negative rate. A true 2^32 wrap on one handle would under-count by one
+wrap period — ~4.3 G packets — and is the deliberate trade for keeping
+the common case exact.
+
+**Cadence.** Change-only, on the same cache as the entity snapshots: a
+healthy sensor emits one line per 300 s heartbeat, and any degradation
+emits immediately. The signature covers liveness, exit reasons, the
+channel pair, retune failures, the cumulative drop/ifdrop counters and
+the eviction total — deliberately **not** `recv` or any of the deltas.
+`recv` climbs every tick on a working sensor, so including it would mean
+one line per second forever and the suppression would be decorative. A
+drop counter moving is genuinely news; a packet counter moving is not.
+
+```json
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":5,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0}
+```
+
+**What the eviction tally does and does not cover.** Counted: alerts,
+top hosts, PNL clients, per-client PNL SSIDs, DHCP events, 802.1X EAP
+sessions, and the device table (which refuses a new entry rather than
+evicting an old one — different mechanism, same meaning). **Not** yet
+counted: the probe-client, beacon, seqnum, assoc and per-protocol flow
+rings. Treat `evictions` as "loss on the instrumented tables", not "all
+loss" — that distinction is stated rather than papered over, because a
+tally that silently omitted a table would read as "no loss" when it
+means "not measured".
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are

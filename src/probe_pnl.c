@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "probe_pnl.h"
+#include "sensor_health.h"
 
 static pnl_client_t    g_tbl[MAX_PNL_CLIENTS];
 static int             g_n   = 0;
@@ -141,6 +142,7 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
             for (int i = 1; i < g_n; i++)
                 if (g_tbl[i].last_seen < g_tbl[idx].last_seen) idx = i;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));
+            sh_evict_note(SH_EVICT_PNL_CLIENT);   /* #91 slice 3 */
         } else {
             idx = g_n++;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));
@@ -174,6 +176,7 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
         for (int j = 1; j < MAX_PNL_SSIDS_PER_CLI; j++)
             memcpy(g_tbl[idx].ssids[j - 1], g_tbl[idx].ssids[j], 33);
         g_tbl[idx].ssid_count = MAX_PNL_SSIDS_PER_CLI - 1;
+        sh_evict_note(SH_EVICT_PNL_SSID);   /* #91 slice 3 */
     }
     int s = g_tbl[idx].ssid_count++;
     snprintf(g_tbl[idx].ssids[s], 33, "%s", ssid);

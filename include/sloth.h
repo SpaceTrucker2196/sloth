@@ -1977,6 +1977,48 @@ typedef struct {
     uint64_t      dropped;    /* observations discarded (table full / bad sensor id) */
 } wifi_merge_t;
 
+/* ── Capture-worker health (#91 slice 2) ─────────────────
+ *
+ * Both capture workers used to `break` out of their dispatch loop on a
+ * negative pcap_dispatch() and return without publishing anything, so a
+ * thread that died was indistinguishable from a quiet channel: the
+ * handle stayed open, the tables stopped growing, and nothing said why.
+ *
+ * capture_exit_t is the classification of *why* a worker stopped.
+ * NONE means it is still in its loop. The names are part of the JSONL
+ * contract (`capture_exit` / `monitor_exit`) — see capture_exit_name().
+ *
+ * EOF is deliberately absent: sloth opens no savefiles, so an offline
+ * end-of-capture state cannot be reached and a branch for it would be
+ * untestable dead code. */
+typedef enum {
+    CAPTURE_EXIT_NONE = 0,       /* worker is still dispatching */
+    CAPTURE_EXIT_STOPPED,        /* pcap_breakloop() after a stop request */
+    CAPTURE_EXIT_IFACE_GONE,     /* the device the handle was bound to went away */
+    CAPTURE_EXIT_PERM_LOST,      /* capability/permission revoked under us */
+    CAPTURE_EXIT_NOT_ACTIVATED,  /* dispatch on a handle that was never activated */
+    CAPTURE_EXIT_ERROR           /* any other PCAP_ERROR */
+} capture_exit_t;
+
+/* Liveness + drop accounting for one pcap handle. Refreshed once per
+ * poll from the owning module (capture_health_poll / probe_health_poll).
+ *
+ * ps_* are lifetime totals accumulated from the per-tick deltas rather
+ * than copied from libpcap, so a 32-bit counter that wraps or is reset
+ * cannot make the exported total run backwards. d_* are that tick's
+ * deltas — "am I dropping right now" is the operator question, and a
+ * lifetime total answers it only by differencing two samples. */
+typedef struct {
+    int      open;              /* a pcap handle exists */
+    int      running;           /* worker started and has not exited */
+    int      exit_reason;       /* capture_exit_t */
+    char     exit_detail[80];   /* pcap_geterr() text at exit, "" = none */
+    int      stats_valid;       /* at least one pcap_stats() has landed */
+    uint64_t ps_recv, ps_drop, ps_ifdrop;        /* lifetime, wrap-safe */
+    uint32_t d_recv, d_drop, d_ifdrop;           /* delta over the last tick */
+    uint32_t last_recv, last_drop, last_ifdrop;  /* previous raw sample */
+} capture_health_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -2198,6 +2240,14 @@ typedef struct {
     int            chan_retune_failures; /* lifetime count of failed set_channel() calls */
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
+    /* Capture-worker liveness and drop accounting (#91 slice 2).
+     * cap_health is the data-stream handle ("any"), mon_health the
+     * monitor radio. Refreshed once per poll; exported by the
+     * `sensor_health` JSONL record and the interface view's health
+     * strip (#91 slice 3). */
+    capture_health_t cap_health;
+    capture_health_t mon_health;
+
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];
     int            pnl_count;
@@ -2374,6 +2424,18 @@ char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan);
  * parked on the previous channel. scan_chan_count == 0 renders
  * "  [scanning]" (no live hop list). */
 void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz);
+
+/* Format the one-line sensor-health strip the interface view renders
+ * under its rows (issue #91 slice 3). Always names both capture
+ * streams — "cap" (the IP data stream) and "mon" (the monitor radio) —
+ * as `off` (no handle), `up` (worker dispatching) or
+ * `down (<reason>)` (worker exited; reason from capture_exit_name()).
+ * Everything after that is a fault and appears only when non-zero:
+ * per-stream `drop` / `ifdrop`, `retune-fail` from the #91 slice 1
+ * counter, and `evict` from the table-overflow tally. A fully healthy
+ * sensor therefore renders exactly "  health: cap up  mon up", which
+ * is the line an operator learns to glance past. */
+void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz);
 
 /* ── Merged packet timeline (shared by packets view + dashboard band) ──
  * One chronological sequence over BOTH capture streams: the IP packet

@@ -1,3 +1,4 @@
+#include <string.h>
 #include "runner.h"
 #include "capture/capture.h"
 
@@ -333,6 +334,165 @@ static void test_verdict_reasons_are_distinct(void) {
     ASSERT(strstr(a, "--monitor-only") != NULL);
 }
 
+/* ── worker exit classification (#91 slice 2) ───────────────
+ * A capture thread that dies used to be indistinguishable from a quiet
+ * channel: it broke out of its dispatch loop, returned, and published
+ * nothing. capture_classify_exit() is the pure logic pulled out of both
+ * workers so the classification can be driven from hand-written return
+ * codes and libpcap error strings with no handle and no radio — the
+ * same treatment capture_activate_failed() gets above. */
+
+static void test_exit_healthy_loop_is_not_an_exit(void) {
+    /* pcap_dispatch() returning a packet count (or 0 on timeout) with the
+     * run flag still set means the worker is mid-loop, not finished. */
+    ASSERT_EQ(capture_classify_exit(32, 0, ""), CAPTURE_EXIT_NONE);
+    ASSERT_EQ(capture_classify_exit(0,  0, ""), CAPTURE_EXIT_NONE);
+}
+
+static void test_exit_stop_request_is_clean(void) {
+    /* capture_stop() clears the flag then calls pcap_breakloop(), so the
+     * pending dispatch fails with PCAP_ERROR_BREAK. Reporting shutdown as
+     * an error would cry wolf on every clean exit. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR_BREAK, 1, ""), CAPTURE_EXIT_STOPPED);
+    ASSERT_EQ(capture_classify_exit(0, 1, ""),             CAPTURE_EXIT_STOPPED);
+}
+
+static void test_exit_stop_request_wins_over_error_text(void) {
+    /* Tearing down a handle can race a real error. Shutdown is still the
+     * honest report — the operator asked for it. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 1, "The interface went down"),
+              CAPTURE_EXIT_STOPPED);
+}
+
+static void test_exit_unrequested_break_is_still_stopped(void) {
+    /* pcap_breakloop() is only ever called from the stop paths, which set
+     * the flag first. A -2 without it is a lost race on the flag, not a
+     * fault: classifying it as an error would report a phantom failure on
+     * every shutdown that interleaves badly. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR_BREAK, 0, ""), CAPTURE_EXIT_STOPPED);
+}
+
+static void test_exit_not_activated_is_its_own_reason(void) {
+    ASSERT_EQ(capture_classify_exit(P_ERROR_NOT_ACTIVATED, 0, ""),
+              CAPTURE_EXIT_NOT_ACTIVATED);
+}
+
+static void test_exit_interface_gone_recognised(void) {
+    /* The adapter-unplug case the issue's regression list names. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "No such device exists"),
+              CAPTURE_EXIT_IFACE_GONE);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "The interface went down"),
+              CAPTURE_EXIT_IFACE_GONE);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "wlan1: device is not up"),
+              CAPTURE_EXIT_IFACE_GONE);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "recvfrom: Network is down"),
+              CAPTURE_EXIT_IFACE_GONE);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "the interface disappeared"),
+              CAPTURE_EXIT_IFACE_GONE);
+}
+
+static void test_exit_permission_loss_recognised(void) {
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "socket: Operation not permitted"),
+              CAPTURE_EXIT_PERM_LOST);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "Permission denied"),
+              CAPTURE_EXIT_PERM_LOST);
+}
+
+static void test_exit_classification_is_case_insensitive(void) {
+    /* libpcap's wording is not a kernel contract and capitalisation
+     * varies between the strerror() tail and libpcap's own prefix. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "NO SUCH DEVICE"),
+              CAPTURE_EXIT_IFACE_GONE);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "PERMISSION DENIED"),
+              CAPTURE_EXIT_PERM_LOST);
+}
+
+static void test_exit_unmatched_error_text_stays_generic(void) {
+    /* Degrading to ERROR rather than guessing — exit_detail still carries
+     * the raw string, so a consumer is never left with only our bucket. */
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, "some libpcap wording we never saw"),
+              CAPTURE_EXIT_ERROR);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, ""),   CAPTURE_EXIT_ERROR);
+    ASSERT_EQ(capture_classify_exit(P_ERROR, 0, NULL), CAPTURE_EXIT_ERROR);
+}
+
+static void test_exit_other_negative_codes_are_errors(void) {
+    ASSERT_EQ(capture_classify_exit(P_ERROR_NO_SUCH_DEVICE, 0, ""), CAPTURE_EXIT_ERROR);
+    ASSERT_EQ(capture_classify_exit(P_ERROR_PERM_DENIED,    0, ""), CAPTURE_EXIT_ERROR);
+}
+
+static void test_exit_names_are_stable_and_distinct(void) {
+    /* These strings are the JSONL contract (`capture_exit`). */
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_NONE),          "none");
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_STOPPED),       "stopped");
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_IFACE_GONE),    "iface_gone");
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_PERM_LOST),     "perm_lost");
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_NOT_ACTIVATED), "not_activated");
+    ASSERT_STR(capture_exit_name(CAPTURE_EXIT_ERROR),         "error");
+    ASSERT_STR(capture_exit_name((capture_exit_t)99),         "error");
+}
+
+/* ── pcap_stats() delta accounting (#91 slice 2) ────────────
+ * Lifetime totals alone cannot answer "am I dropping right now"; the
+ * deltas are the live signal. Pure bookkeeping over raw samples, so no
+ * handle is needed to pin it. */
+
+static void test_stats_first_sample_is_not_discarded_as_baseline(void) {
+    /* libpcap's counters start at zero with the handle, so the first
+     * sample IS the total so far. Treating it as a baseline to difference
+     * from would silently lose every drop before the first poll — which
+     * is exactly the startup window where a misconfigured buffer drops
+     * hardest. */
+    capture_health_t h; memset(&h, 0, sizeof(h));
+    capture_stats_accumulate(&h, 1000, 7, 3);
+    ASSERT_EQ(h.stats_valid, 1);
+    ASSERT_EQ((int)h.ps_recv,   1000);
+    ASSERT_EQ((int)h.ps_drop,   7);
+    ASSERT_EQ((int)h.ps_ifdrop, 3);
+    ASSERT_EQ((int)h.d_recv,    1000);
+    ASSERT_EQ((int)h.d_drop,    7);
+    ASSERT_EQ((int)h.d_ifdrop,  3);
+}
+
+static void test_stats_second_sample_yields_deltas(void) {
+    capture_health_t h; memset(&h, 0, sizeof(h));
+    capture_stats_accumulate(&h, 1000, 7, 3);
+    capture_stats_accumulate(&h, 1500, 9, 3);
+    ASSERT_EQ((int)h.ps_recv,   1500);
+    ASSERT_EQ((int)h.ps_drop,   9);
+    ASSERT_EQ((int)h.ps_ifdrop, 3);
+    ASSERT_EQ((int)h.d_recv,    500);
+    ASSERT_EQ((int)h.d_drop,    2);
+    ASSERT_EQ((int)h.d_ifdrop,  0);   /* quiet this tick, 3 lifetime */
+}
+
+static void test_stats_idle_tick_reports_zero_delta(void) {
+    capture_health_t h; memset(&h, 0, sizeof(h));
+    capture_stats_accumulate(&h, 100, 0, 0);
+    capture_stats_accumulate(&h, 100, 0, 0);
+    ASSERT_EQ((int)h.d_recv,  0);
+    ASSERT_EQ((int)h.ps_recv, 100);
+}
+
+static void test_stats_counter_reset_does_not_run_totals_backwards(void) {
+    /* A sample below the previous one means the counter restarted. The
+     * exported lifetime must keep climbing — a total that goes backwards
+     * breaks any consumer differencing two samples. */
+    capture_health_t h; memset(&h, 0, sizeof(h));
+    capture_stats_accumulate(&h, 5000, 40, 10);
+    capture_stats_accumulate(&h,  120,  2,  1);
+    ASSERT_EQ((int)h.ps_recv,   5120);
+    ASSERT_EQ((int)h.ps_drop,   42);
+    ASSERT_EQ((int)h.ps_ifdrop, 11);
+    ASSERT_EQ((int)h.d_recv,    120);
+    ASSERT_EQ((int)h.d_drop,    2);
+}
+
+static void test_stats_null_health_does_not_crash(void) {
+    capture_stats_accumulate(NULL, 1, 2, 3);
+    ASSERT(1);
+}
+
 void run_capture_tests(void) {
     TEST_SUITE("capture pcap_activate classification");
     RUN_TEST(test_activate_success_is_not_failure);
@@ -368,4 +528,24 @@ void run_capture_tests(void) {
     RUN_TEST(test_verdict_empty_policy_refuses);
     RUN_TEST(test_verdict_capture_off_is_not_refused);
     RUN_TEST(test_verdict_reasons_are_distinct);
+
+    TEST_SUITE("capture worker exit classification (#91 slice 2)");
+    RUN_TEST(test_exit_healthy_loop_is_not_an_exit);
+    RUN_TEST(test_exit_stop_request_is_clean);
+    RUN_TEST(test_exit_stop_request_wins_over_error_text);
+    RUN_TEST(test_exit_unrequested_break_is_still_stopped);
+    RUN_TEST(test_exit_not_activated_is_its_own_reason);
+    RUN_TEST(test_exit_interface_gone_recognised);
+    RUN_TEST(test_exit_permission_loss_recognised);
+    RUN_TEST(test_exit_classification_is_case_insensitive);
+    RUN_TEST(test_exit_unmatched_error_text_stays_generic);
+    RUN_TEST(test_exit_other_negative_codes_are_errors);
+    RUN_TEST(test_exit_names_are_stable_and_distinct);
+
+    TEST_SUITE("capture pcap_stats() delta accounting (#91 slice 2)");
+    RUN_TEST(test_stats_first_sample_is_not_discarded_as_baseline);
+    RUN_TEST(test_stats_second_sample_yields_deltas);
+    RUN_TEST(test_stats_idle_tick_reports_zero_delta);
+    RUN_TEST(test_stats_counter_reset_does_not_run_totals_backwards);
+    RUN_TEST(test_stats_null_health_does_not_crash);
 }

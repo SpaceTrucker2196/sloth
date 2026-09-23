@@ -138,10 +138,102 @@ parked on whatever channel was last confirmed. `chan_requested`,
 `sloth_state_t` for anything else that wants to consume the same
 signal (see `src/wifi_chanhop.c :: chanhop_record_retune()` for the
 pure bookkeeping, kept hardware-free and unit-tested the same way as
-the rest of the scheduler). A `sensor_health` JSONL record and a
-dedicated TUI health strip covering this plus capture-thread liveness
-and `pcap_stats()` drops are tracked separately (issue #91, slices
-2-4) — this slice only stops the existing bar from lying.
+the rest of the scheduler).
+
+## Sensor health strip — issue #91 slices 2-3
+
+Under the interface rows, above the key hints, sits one line describing
+the *capture behind* every row rather than any single interface:
+
+```
+  health: cap up  mon down (iface_gone)  mon drop 12  retune-fail 2  evict 5
+```
+
+A fully healthy sensor renders exactly:
+
+```
+  health: cap up  mon up
+```
+
+**Everything after the two liveness words is a fault**, and appears only
+when its counter is non-zero. That is deliberate: a strip that prints
+`drop 0  ifdrop 0  evict 0` every second trains the operator to stop
+reading it, and then it is worse than nothing. The line is structural
+rather than colour-coded, so it reads the same on an inverted row and in
+the ANSI build — the same choice the scan bar's `?` marker made.
+
+### The two streams
+
+`cap` is the IP data-stream handle (the `any` device); `mon` is the
+802.11 monitor radio. Each reads one of three ways:
+
+| Word | Meaning |
+|------|---------|
+| `off` | no pcap handle — capture was never opened, or the build has no libpcap |
+| `up` | the handle exists and its worker thread is dispatching |
+| `down (<reason>)` | the handle exists but the worker has ended |
+
+`off` and `down` are different words on purpose. Capture that was never
+opened and capture that *died* need different operator responses, and
+issue #91 exists because they looked identical from outside.
+
+### Why "down" was previously invisible
+
+Both workers loop on `pcap_dispatch()` and `break` on a negative return.
+Until this slice they then simply returned: the handle stayed open,
+`capture_is_open()` kept saying yes, and the tables stopped growing. On a
+channel-hopping radio an empty dwell is *normal*, so a dead monitor
+thread and a quiet channel produced the same picture indefinitely.
+
+Each worker now classifies why it stopped and publishes the verdict plus
+libpcap's own error text. The classification
+(`src/capture/capture.c :: capture_classify_exit()`) is pure — no handle,
+no radio — so it is unit-tested from hand-written return codes and error
+strings, the same treatment `capture_activate_failed()` gets:
+
+| `<reason>` | Cause |
+|------------|-------|
+| `stopped` | shutdown was requested — a clean exit, not a fault |
+| `iface_gone` | the adapter went away (unplug, `ip link set down`) |
+| `perm_lost` | `CAP_NET_RAW` / `CAP_NET_ADMIN` revoked under a running capture |
+| `not_activated` | dispatch on a handle that was never activated |
+| `error` | any other `PCAP_ERROR` — the raw libpcap text still travels in the JSONL record |
+
+`error` is the honest fallback, not a gap: libpcap's wording is not a
+kernel contract, so an unrecognised message is reported as-is rather
+than guessed into a specific bucket.
+
+### Drops and evictions
+
+`cap drop` / `mon drop` are libpcap's buffer drops and `cap ifdrop` /
+`mon ifdrop` the NIC's, polled with `pcap_stats()` once per tick. The
+strip shows lifetime totals; the JSONL record carries per-tick deltas
+beside them, because "am I dropping *now*" is the operator question and a
+lifetime total only answers it by differencing two samples. Sloth
+accumulates its own totals from those deltas rather than echoing
+libpcap's 32-bit counters, so a counter that resets cannot make the
+exported total run backwards.
+
+`retune-fail` is the lifetime `chan_retune_failures` from slice 1 above.
+
+`evict` is the total over every instrumented bounded table — an
+observation that did not make it in because the table was full. The
+counted tables are **alerts, top hosts, PNL clients, per-client PNL
+SSIDs, DHCP events, 802.1X EAP sessions, and the device table**; the
+device table refuses a *new* entry rather than evicting an old one,
+which is a different mechanism with the same meaning. Listing them is
+the point: the probe-client, beacon, seqnum, assoc and per-protocol flow
+rings are **not** instrumented yet, and a tally that silently omitted a
+table would read as "no loss" when it means "not measured". The JSONL
+record breaks the total out per table.
+
+The same state feeds the `sensor_health` JSONL record — see
+[`../wiki/jsonl-schema.md`](../wiki/jsonl-schema.md).
+
+**Still hardware-dependent, still open on #91:** the measured
+adapter/driver/kernel/band/width support matrix, and comparing hopping
+against an independent reference receiver. Neither can be produced from
+a dev box with no radio, and neither is faked here.
 
 ## Headless scoping (`--iface` / `--monitor-only`) — issue #35
 

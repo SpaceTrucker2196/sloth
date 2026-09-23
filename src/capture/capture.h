@@ -92,6 +92,64 @@ int             capture_scope_refuses(capture_scope_t v);
 /* One-line operator-facing reason for a non-NONE/ENFORCED verdict. */
 const char     *capture_scope_reason(capture_scope_t v);
 
+/* ── Capture-worker exit classification (#91 slice 2) ─────────────
+ *
+ * Both workers used to `break` on a negative pcap_dispatch() and return
+ * silently. "The channel is quiet" and "the thread is dead" then looked
+ * identical from outside: same open handle, same empty tables.
+ *
+ * Inputs are what a worker has in hand at the moment it leaves its loop:
+ *   dispatch_rc    — the last pcap_dispatch() return value
+ *   stop_requested — the run flag had been cleared (capture_stop /
+ *                    probe_stop asked for shutdown)
+ *   err            — pcap_geterr() text, or NULL/"" when there is none
+ *
+ * A requested stop wins over everything: pcap_breakloop() makes the
+ * pending dispatch fail, and reporting shutdown as an error would cry
+ * wolf on every clean exit. A non-negative rc with no stop request means
+ * the worker is still healthy (CAPTURE_EXIT_NONE) — the loop only leaves
+ * on a negative rc or a cleared flag.
+ *
+ * PCAP_ERROR (-1) is then split by libpcap's message text, because the
+ * return code alone cannot tell a revoked capability from a vanished
+ * adapter and those need different operator responses. Matching is
+ * case-insensitive substring: "no such device", "device is not up",
+ * "went down", "disappeared", "network is down", "not found" →
+ * IFACE_GONE; "permission denied", "not permitted", "operation not
+ * permitted" → PERM_LOST; anything else → ERROR. The text is libpcap's,
+ * not a kernel contract, so an unmatched message degrades to ERROR
+ * rather than being guessed at — and exit_detail carries the raw string
+ * so a consumer is never left with only sloth's bucket.
+ *
+ * Pure: no libpcap call, no handle, no radio. Compiled outside the
+ * WITH_PCAP guard so the test build drives it with hand-written return
+ * codes and error strings, the same way capture_activate_failed() is. */
+capture_exit_t capture_classify_exit(int dispatch_rc, int stop_requested,
+                                     const char *err);
+
+/* Stable lower-case name for a capture_exit_t: "none", "stopped",
+ * "iface_gone", "perm_lost", "not_activated", "error". Part of the JSONL
+ * contract — consumers switch on these. Unknown values read "error". */
+const char *capture_exit_name(capture_exit_t r);
+
+/* Fold one raw pcap_stats() sample into `h`, computing this tick's
+ * deltas and accumulating the wrap-safe lifetime totals (#91 slice 2).
+ *
+ * libpcap's counters are 32-bit and start at zero when the handle opens,
+ * so the first sample *is* the total so far — it is taken as both the
+ * lifetime value and the first delta rather than being thrown away as a
+ * baseline, which would silently lose every drop that happened before
+ * the first poll.
+ *
+ * A sample lower than the previous one is read as a counter reset (delta
+ * = the new value), not as a wrap. On Linux libpcap accumulates these in
+ * user space per handle, so a decrease means the counter restarted; a
+ * true 2^32 wrap would need ~4.3 G packets on one handle and would then
+ * under-count by exactly one wrap period. Choosing reset semantics keeps
+ * the common case exact. NULL `h` is a no-op. */
+void capture_stats_accumulate(capture_health_t *h,
+                              uint32_t recv, uint32_t drop, uint32_t ifdrop);
+
 #ifdef WITH_PCAP
 
 /* Open the data-stream pcap handle and record s->pkt_linktype, WITHOUT
@@ -120,6 +178,12 @@ void capture_stop(void);
    with a message written into errbuf (may be NULL). */
 int capture_set_filter(const char *expr, char *errbuf, int errsz);
 
+/* Refresh `h` from the live data-stream handle: liveness, the worker's
+   exit classification if it has ended, and one pcap_stats() sample
+   folded through capture_stats_accumulate(). Called once per poll from
+   main(); safe before capture_open() (reports open=0, running=0). */
+void capture_health_poll(capture_health_t *h);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }
@@ -129,6 +193,10 @@ static inline void capture_start(sloth_state_t *s)  { (void)s; }
 static inline void capture_stop(void)               {}
 static inline int  capture_set_filter(const char *e, char *b, int n)
     { (void)e; (void)b; (void)n; return 0; }
+/* No capture compiled in: "off" is the honest health state, not an
+   error, so the record still emits and says the stream is absent. */
+static inline void capture_health_poll(capture_health_t *h)
+    { if (h) { h->open = 0; h->running = 0; } }
 
 #endif /* WITH_PCAP */
 

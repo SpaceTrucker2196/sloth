@@ -239,6 +239,64 @@ def fmt_alert_event(r, c):
     return out + f" {c['dim']}({' '.join(tail)}){c['reset']}"
 
 
+def _stream_state(r, prefix):
+    """One capture stream's liveness, as the TUI health strip words it.
+
+    `_open` true with `_running` false is the case `sensor_health`
+    exists for: the pcap handle is still there, the worker thread is
+    not, and the tables simply stop growing.
+    """
+    if not r.get(f"{prefix}_open"):
+        return "off"
+    if r.get(f"{prefix}_running"):
+        return "up"
+    return f"down({r.get(f'{prefix}_exit', '?')})"
+
+
+def fmt_sensor_health(r, c):
+    """The sensor's self-report (#91).
+
+    The one record type a SILENT sensor still emits, which is what
+    makes "healthy with no detections" separable from "not observing".
+    A real consumer should alert on: a stream going `down` with an
+    `_exit` other than `stopped`, `chan_confirmed_ok` dropping to 0,
+    or any drop/eviction counter moving.
+    """
+    cap = _stream_state(r, "capture")
+    mon = _stream_state(r, "monitor")
+    bad = (cap.startswith("down") or mon.startswith("down")
+           or not r.get("chan_confirmed_ok", 1))
+    head_c = c["red"] if bad else c["dim"]
+    out = f"{head_c}sensor_health{c['reset']}  cap={cap} mon={mon}"
+
+    # Faults only — a healthy sensor should be one quiet line.
+    tail = []
+    for pfx in ("capture", "monitor"):
+        for fld in ("drop", "ifdrop"):
+            n = r.get(f"{pfx}_{fld}", 0)
+            if n:
+                tail.append(f"{pfx[:3]}_{fld}={n}"
+                            f"(+{r.get(f'{pfx}_{fld}_delta', 0)})")
+        detail = r.get(f"{pfx}_exit_detail", "")
+        if detail:
+            # Always read this beside `_exit`: "error" is the honest
+            # bucket for libpcap wording sloth does not recognise.
+            tail.append(f"{pfx[:3]}_err={detail!r}")
+    if not r.get("chan_confirmed_ok", 1):
+        tail.append(f"chan req={r.get('chan_requested')} "
+                    f"confirmed={r.get('chan_confirmed')}")
+    if r.get("chan_retune_failures"):
+        tail.append(f"retune_fail={r['chan_retune_failures']}")
+    if r.get("evictions"):
+        per = " ".join(f"{k[len('evict_'):]}={v}"
+                       for k, v in sorted(r.items())
+                       if k.startswith("evict_") and v)
+        tail.append(f"evict={r['evictions']} [{per}]")
+    if tail:
+        out += "  " + " ".join(tail)
+    return out
+
+
 FORMATTERS = {
     "dns":   fmt_dns,
     "tls":   fmt_tls,
@@ -251,6 +309,7 @@ FORMATTERS = {
     "alert.update":   fmt_alert_event,
     "alert.escalate": fmt_alert_event,
     "alert.resolve":  fmt_alert_event,
+    "sensor_health":  fmt_sensor_health,
 }
 
 
@@ -287,8 +346,9 @@ def main() -> int:
     parser.add_argument(
         "--type", default=None,
         help="comma-separated record types to keep "
-             "(dns,tls,quic,http,ntp,icmp,alert, and the #98 lifecycle "
-             "records alert.create/update/escalate/resolve)",
+             "(dns,tls,quic,http,ntp,icmp,alert, the #98 lifecycle "
+             "records alert.create/update/escalate/resolve, and the "
+             "#91 sensor_health self-report)",
     )
     parser.add_argument(
         "--src", default=None,

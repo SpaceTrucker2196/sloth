@@ -106,6 +106,113 @@ int capture_scope_refuses(capture_scope_t v) {
         || v == CAPTURE_SCOPE_REFUSE_DATALINK;
 }
 
+/* ── Capture-worker exit classification (#91 slice 2) ──────────
+ * Contract and rationale in capture.h. Kept above the WITH_PCAP guard
+ * for the same reason capture_activate_failed() is: it is pure logic
+ * over libpcap's documented return contract, so the test build can pin
+ * it without linking libpcap or touching a radio. */
+
+/* pcap_dispatch()'s error codes, written out rather than #included:
+ * the test build has no <pcap.h>, and these have been stable since
+ * libpcap 1.0. */
+#define CAP_PCAP_ERROR               (-1)
+#define CAP_PCAP_ERROR_BREAK         (-2)
+#define CAP_PCAP_ERROR_NOT_ACTIVATED (-3)
+
+/* Case-insensitive substring search. strcasestr() is a GNU extension and
+ * this file is C99 with no gating, so it is spelled out. */
+static int err_has(const char *hay, const char *needle) {
+    if (!hay || !needle || !*needle) return 0;
+    for (const char *h = hay; *h; h++) {
+        const char *a = h, *b = needle;
+        while (*a && *b) {
+            char ca = *a, cb = *b;
+            if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+            if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}
+
+capture_exit_t capture_classify_exit(int dispatch_rc, int stop_requested,
+                                     const char *err) {
+    /* A requested stop wins over everything else: pcap_breakloop() makes
+     * the pending dispatch fail, so reporting an error here would flag a
+     * fault on every clean shutdown. */
+    if (stop_requested)                       return CAPTURE_EXIT_STOPPED;
+    if (dispatch_rc >= 0)                     return CAPTURE_EXIT_NONE;
+    /* breakloop() is only ever called from the stop paths, which clear
+     * the run flag first; a -2 without the flag is a lost race on it,
+     * not a fault. */
+    if (dispatch_rc == CAP_PCAP_ERROR_BREAK)  return CAPTURE_EXIT_STOPPED;
+    if (dispatch_rc == CAP_PCAP_ERROR_NOT_ACTIVATED)
+        return CAPTURE_EXIT_NOT_ACTIVATED;
+    if (dispatch_rc != CAP_PCAP_ERROR)        return CAPTURE_EXIT_ERROR;
+
+    /* PCAP_ERROR only: the code cannot separate a revoked capability
+     * from a vanished adapter, and those need different responses. The
+     * text is libpcap's wording, not a kernel contract, so an unmatched
+     * message degrades to ERROR rather than being guessed at — the raw
+     * string travels alongside in exit_detail either way. */
+    if (err_has(err, "no such device")     ||
+        err_has(err, "device is not up")   ||
+        err_has(err, "went down")          ||
+        err_has(err, "disappeared")        ||
+        err_has(err, "network is down")    ||
+        err_has(err, "not found"))
+        return CAPTURE_EXIT_IFACE_GONE;
+    if (err_has(err, "permission denied")  ||
+        err_has(err, "not permitted"))
+        return CAPTURE_EXIT_PERM_LOST;
+    return CAPTURE_EXIT_ERROR;
+}
+
+const char *capture_exit_name(capture_exit_t r) {
+    switch (r) {
+    case CAPTURE_EXIT_NONE:          return "none";
+    case CAPTURE_EXIT_STOPPED:       return "stopped";
+    case CAPTURE_EXIT_IFACE_GONE:    return "iface_gone";
+    case CAPTURE_EXIT_PERM_LOST:     return "perm_lost";
+    case CAPTURE_EXIT_NOT_ACTIVATED: return "not_activated";
+    case CAPTURE_EXIT_ERROR:         break;
+    }
+    return "error";
+}
+
+void capture_stats_accumulate(capture_health_t *h,
+                              uint32_t recv, uint32_t drop, uint32_t ifdrop) {
+    if (!h) return;
+    uint32_t d_recv, d_drop, d_ifdrop;
+    if (!h->stats_valid) {
+        /* libpcap's counters start at zero with the handle, so the first
+         * sample IS the total so far. Discarding it as a baseline would
+         * lose every drop before the first poll — the startup window
+         * where an undersized buffer drops hardest. */
+        d_recv = recv; d_drop = drop; d_ifdrop = ifdrop;
+        h->stats_valid = 1;
+    } else {
+        /* A sample below the previous one is a counter reset, not a wrap:
+         * on Linux libpcap accumulates these in user space per handle, so
+         * a decrease means it restarted. Taking the new value keeps the
+         * exported lifetime monotonic either way. */
+        d_recv   = recv   >= h->last_recv   ? recv   - h->last_recv   : recv;
+        d_drop   = drop   >= h->last_drop   ? drop   - h->last_drop   : drop;
+        d_ifdrop = ifdrop >= h->last_ifdrop ? ifdrop - h->last_ifdrop : ifdrop;
+    }
+    h->last_recv   = recv;
+    h->last_drop   = drop;
+    h->last_ifdrop = ifdrop;
+    h->d_recv      = d_recv;
+    h->d_drop      = d_drop;
+    h->d_ifdrop    = d_ifdrop;
+    h->ps_recv    += d_recv;
+    h->ps_drop    += d_drop;
+    h->ps_ifdrop  += d_ifdrop;
+}
+
 const char *capture_scope_reason(capture_scope_t v) {
     switch (v) {
     case CAPTURE_SCOPE_REFUSE_NO_MONITOR:
@@ -773,13 +880,53 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
 
 /* ── Capture thread ───────────────────────────────────────── */
 
+/* Why the worker left its loop, published for the poll loop to read
+ * (#91 slice 2). Written once by the dying thread, read once per tick by
+ * main(). The pair goes under the module's existing g_mu rather than
+ * being bare volatiles: exit_detail is a string, and a torn read would
+ * hand the operator a truncated or interleaved error message at exactly
+ * the moment they need it. The lock is cold — once at thread death,
+ * once per poll. */
+static int  g_exit_reason = CAPTURE_EXIT_NONE;
+static char g_exit_detail[80];
+
 static void *capture_thread(void *arg) {
     (void)arg;
+    int r = 0;
     while (g_running) {
-        int r = pcap_dispatch(g_handle, 32, on_packet, NULL);
+        r = pcap_dispatch(g_handle, 32, on_packet, NULL);
         if (r < 0) break;   /* PCAP_ERROR or PCAP_ERROR_BREAK */
     }
+    /* The gap #91 opens with: this used to `return NULL` and leave an
+     * open handle with no packets behind it, which reads exactly like a
+     * quiet segment. */
+    const char *err = (r < 0 && g_handle) ? pcap_geterr(g_handle) : "";
+    pthread_mutex_lock(&g_mu);
+    snprintf(g_exit_detail, sizeof(g_exit_detail), "%s", err ? err : "");
+    g_exit_reason = (int)capture_classify_exit(r, !g_running, g_exit_detail);
+    pthread_mutex_unlock(&g_mu);
     return NULL;
+}
+
+void capture_health_poll(capture_health_t *h) {
+    if (!h) return;
+    h->open = g_handle != NULL;
+    pthread_mutex_lock(&g_mu);
+    h->exit_reason = g_exit_reason;
+    snprintf(h->exit_detail, sizeof(h->exit_detail), "%s", g_exit_detail);
+    int reason = g_exit_reason;
+    pthread_mutex_unlock(&g_mu);
+    /* A dead worker leaves g_running set — it broke out of the loop
+     * rather than being asked to stop — so liveness is the run flag AND
+     * the absence of a terminal reason. That conjunction is the whole
+     * point: the handle staying open is what made the failure invisible. */
+    h->running = g_running && reason == CAPTURE_EXIT_NONE;
+    if (!g_handle) return;
+    struct pcap_stat ps;
+    memset(&ps, 0, sizeof(ps));
+    if (pcap_stats(g_handle, &ps) == 0)
+        capture_stats_accumulate(h, (uint32_t)ps.ps_recv, (uint32_t)ps.ps_drop,
+                                 (uint32_t)ps.ps_ifdrop);
 }
 
 /* ── Public API ───────────────────────────────────────────── */
@@ -842,6 +989,12 @@ void capture_run(void) {
     /* pthread_create() synchronises memory with the new thread (POSIX
      * XBD 4.12), so every allow-list write main() made before this call
      * is visible to on_packet() from its first frame. */
+    /* A restart clears the previous run's verdict — otherwise a fresh
+     * worker would report the reason the last one died (#91 slice 2). */
+    pthread_mutex_lock(&g_mu);
+    g_exit_reason    = CAPTURE_EXIT_NONE;
+    g_exit_detail[0] = '\0';
+    pthread_mutex_unlock(&g_mu);
     g_running = 1;
     if (pthread_create(&g_thread, NULL, capture_thread, NULL) != 0)
         g_running = 0;
