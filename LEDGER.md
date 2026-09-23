@@ -133,3 +133,4 @@
 | 54568c8 | 2026-09-23T11:56:00Z | claude-opus-5 | 332 | 131212 | 28579834 | 409416 | 21.6660 | #98 T14 alert create/update/escalate/resolve lifecycle events |
 | 741e6f1 | 2026-09-23T14:51:09Z | claude-opus-5 | 196 | 75895 | 7572381 | 500628 | 10.6908 | #99 WITH_WIFI guard + AGENTS.md gate; window also covers this session's #98 inte |
 | a079de4 | 2026-09-23T15:19:54Z | claude-opus-5 | 454 | 188089 | 47941142 | 669707 | 35.3721 | #91 slices 2-3: capture-worker exit classification, pcap_stats() polling, sensor |
+| dd71a06 | 2026-09-23T15:19:58Z | claude-opus-5 | 354 | 93553 | 25794791 | 417169 | 19.4097 | #96: SECURITY.md support model, synthetic-IOC disclosure in 3 surfaces, docs/wik |
