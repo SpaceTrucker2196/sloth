@@ -130,3 +130,4 @@
 | dd6ed49 | 2026-09-22T11:38:33Z | claude-opus-5 | 282 | 185791 | 21890533 | 447455 | 20.0660 | #87 F05 private export artifacts (0700/0600, validated paths, reported failures) |
 | aebb594 | 2026-09-22T12:33:57Z | claude-opus-5 | 298 | 223936 | 26001495 | 468966 | 23.2903 | #88 F06 true sliding flood windows + evidence honesty |
 | ff96a71 | 2026-09-23T11:26:35Z | claude-opus-5 | 288 | 173917 | 21858812 | 506760 | 20.3464 | #97 — EAPOL handshake attempt pairing (replay counter + window) and derived hash |
+| 54568c8 | 2026-09-23T11:56:00Z | claude-opus-5 | 332 | 131212 | 28579834 | 409416 | 21.6660 | #98 T14 alert create/update/escalate/resolve lifecycle events |
