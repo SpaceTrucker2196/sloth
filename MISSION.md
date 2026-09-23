@@ -123,7 +123,7 @@ segment. Lose that and the tool is just another aircrack fork.
 
 ## 3. Where the project is right now
 
-As of v1.8.1 (`SLOTH_VERSION` in `include/sloth.h` is the source of
+As of v1.8.2 (`SLOTH_VERSION` in `include/sloth.h` is the source of
 truth for this number; if the two disagree, the `#define` is right):
 
 - **35 views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, indexed in

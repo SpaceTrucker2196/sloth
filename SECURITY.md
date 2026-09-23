@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-**Current release: `1.8.1`** — the value of `#define SLOTH_VERSION` in
+**Current release: `1.8.2`** — the value of `#define SLOTH_VERSION` in
 [`include/sloth.h`](include/sloth.h), which is the single source of
 truth for what a build calls itself. If this file and that `#define`
 ever disagree, the `#define` is right and this file is stale; please
@@ -14,7 +14,7 @@ no maintenance branches, no LTS line, and no backports. Concretely:
 | What | Status |
 |------|--------|
 | `main` | ✅ where every fix lands, security or otherwise |
-| the newest tag (`v1.8.1`) | ✅ supported — "supported" means the next fix ships in the next tag cut from `main` |
+| the newest tag (`v1.8.2`) | ✅ supported — "supported" means the next fix ships in the next tag cut from `main` |
 | every older tag (`v1.8.0` and below) | ❌ archived at that commit; receives nothing |
 
 There is **no patch SLA and no support window** — this is a

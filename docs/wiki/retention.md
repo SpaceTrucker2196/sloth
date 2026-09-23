@@ -18,7 +18,7 @@ erasure.
 (`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`), `src/db_schema.c`,
 `tests/test_db.c`, issue #96.
 
-**Last updated**: 2026-09-23 (sloth 1.8.1).
+**Last updated**: 2026-09-23 (sloth 1.8.2).
 
 ---
 
@@ -177,7 +177,7 @@ Recorded here rather than implied away:
   before writing, and there is no "cannot persist" error surfaced to the
   operator when the volume fills — the write simply fails and the sink
   disables itself with one stderr line. Tracked as remaining work on
-  issue #96; not implemented as of 1.8.1.
+  issue #96; not implemented as of 1.8.2.
 - **The size guard measures the wrong number for a disk budget** — the
   main database file only, excluding `-wal`/`-shm` — and gives up for
   the hour after 64 pruning rounds (§3).

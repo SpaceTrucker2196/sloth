@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#define SLOTH_VERSION "1.8.1"
+#define SLOTH_VERSION "1.8.2"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
