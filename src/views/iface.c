@@ -345,16 +345,22 @@ char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan) {
  * the currently-scanned channel bracketed, e.g. " ch: 1  6 [11] 36 44".
  * Falls back to "  [scanning]" when there's no live hop list (radio parked
  * on one channel). Structural (brackets, not colour) so it reads the same
- * on selected/inverted rows and in the ANSI build. */
-static void fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
+ * on selected/inverted rows and in the ANSI build. Declared in sloth.h so
+ * tests can assert on it directly (issue #91 slice 1). */
+void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
     if (s->scan_chan_count <= 0) {
         snprintf(buf, sz, "  [scanning]");
         return;
     }
+    /* Both non-zero and unequal: the last retune sloth asked for has not
+     * been confirmed by the platform, so the radio may still be sitting
+     * on the previous channel — surface that instead of pretending the
+     * bracketed channel is live. */
+    int unconfirmed = s->chan_requested != 0 && s->chan_requested != s->chan_confirmed;
     int off = snprintf(buf, sz, "  ch:");
     for (int i = 0; i < s->scan_chan_count && off < sz - 8; i++)
         off += snprintf(buf + off, sz - off,
-                        i == s->scan_cur_idx ? "[%d]" : " %d ",
+                        i == s->scan_cur_idx ? (unconfirmed ? "[%d?]" : "[%d]") : " %d ",
                         s->scan_chans[i]);
 }
 
@@ -401,7 +407,7 @@ void view_iface_draw(const sloth_state_t *s) {
         int excluded   = iface_is_excluded(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
-        if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
+        if (is_scan) iface_fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
         char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);
         const char *vendor = iface_vendor(f);
@@ -493,7 +499,7 @@ void view_iface_draw(const sloth_state_t *s) {
         int excluded   = iface_is_excluded(s, f->name);
         int is_scan = (s->probe_iface[0] && strncmp(s->probe_iface, f->name, 16) == 0);
         char scanbuf[128];
-        if (is_scan) fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
+        if (is_scan) iface_fmt_scan_bar(s, scanbuf, sizeof(scanbuf));
         int sel     = (i == s->iface_sel);
         char pfx    = iface_row_prefix(s, f->name, is_scan);
         const char *mode   = mode_label(f->mode);

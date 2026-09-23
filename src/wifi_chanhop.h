@@ -70,4 +70,20 @@ int chanhop_current_freq(const chanhop_t *h);
  * none). For the UI scan bar. */
 int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx);
 
+/* Record the outcome of a retune the caller issued after chanhop_tick()
+ * returned 1 (issue #91 slice 1: "healthy, no detections" and "not
+ * observing" were indistinguishable because the caller never looked at
+ * set_channel()'s return code). Pure bookkeeping, no hardware — testable
+ * without a live radio, matching the rest of this module.
+ *
+ * *requested_out always takes requested_channel. *confirmed_out only
+ * advances when retune_ok is true, so a failed retune leaves it pointing
+ * at the last channel the platform actually acknowledged rather than the
+ * one sloth merely asked for; *failures_out counts every failure seen
+ * (lifetime, never reset — a flapping radio should stay visible). Any of
+ * the three output pointers may be NULL. */
+void chanhop_record_retune(int requested_channel, int retune_ok,
+                            int *requested_out, int *confirmed_out,
+                            int *failures_out);
+
 #endif /* WIFI_CHANHOP_H */

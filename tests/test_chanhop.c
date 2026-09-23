@@ -122,6 +122,52 @@ static void test_export(void) {
     ASSERT_EQ(cur, 1);
 }
 
+/* ── retune result bookkeeping (issue #91 slice 1) ──────────
+ * chanhop_drive() used to call set_channel() and discard the return
+ * code, so a failed retune was indistinguishable from a healthy quiet
+ * radio. chanhop_record_retune() is the pure logic pulled out of that
+ * caller so it's testable without a live radio or main.c's g_platform. */
+
+static void test_retune_success_confirms_channel(void) {
+    int requested = 0, confirmed = 0, failures = 0;
+    chanhop_record_retune(11, 1, &requested, &confirmed, &failures);
+    ASSERT_EQ(requested, 11);
+    ASSERT_EQ(confirmed, 11);
+    ASSERT_EQ(failures, 0);
+}
+
+static void test_retune_failure_leaves_confirmed_behind(void) {
+    /* Radio was last confirmed on channel 6; a failed request to move to
+     * 11 must record the request but NOT advance confirmed — the radio
+     * may still be sitting on 6. */
+    int requested = 6, confirmed = 6, failures = 0;
+    chanhop_record_retune(11, 0, &requested, &confirmed, &failures);
+    ASSERT_EQ(requested, 11);
+    ASSERT_EQ(confirmed, 6);      /* unchanged */
+    ASSERT_EQ(failures, 1);
+}
+
+static void test_retune_failures_accumulate_across_successes(void) {
+    /* The failure counter is a lifetime tally (issue #91: sensor health
+     * should stay visible), so a later success must not reset it. */
+    int requested = 0, confirmed = 0, failures = 0;
+    chanhop_record_retune(1, 0, &requested, &confirmed, &failures);
+    chanhop_record_retune(6, 0, &requested, &confirmed, &failures);
+    ASSERT_EQ(failures, 2);
+    ASSERT_EQ(confirmed, 0);      /* never confirmed yet */
+    chanhop_record_retune(11, 1, &requested, &confirmed, &failures);
+    ASSERT_EQ(failures, 2);       /* success doesn't clear prior failures */
+    ASSERT_EQ(confirmed, 11);
+    chanhop_record_retune(36, 0, &requested, &confirmed, &failures);
+    ASSERT_EQ(failures, 3);       /* keeps counting after a success too */
+    ASSERT_EQ(confirmed, 11);     /* still the last confirmed channel */
+}
+
+static void test_retune_null_outputs_do_not_crash(void) {
+    chanhop_record_retune(11, 1, NULL, NULL, NULL);
+    chanhop_record_retune(11, 0, NULL, NULL, NULL);
+}
+
 void run_chanhop_tests(void) {
     TEST_SUITE("wifi channel hopper");
     RUN_TEST(test_export);
@@ -132,4 +178,8 @@ void run_chanhop_tests(void) {
     RUN_TEST(test_rotation_revisits_all);
     RUN_TEST(test_activity_lengthens_dwell);
     RUN_TEST(test_activity_decays);
+    RUN_TEST(test_retune_success_confirms_channel);
+    RUN_TEST(test_retune_failure_leaves_confirmed_behind);
+    RUN_TEST(test_retune_failures_accumulate_across_successes);
+    RUN_TEST(test_retune_null_outputs_do_not_crash);
 }

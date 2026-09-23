@@ -120,6 +120,29 @@ monitor capture is a separate pcap handle bound to a specific
 monitor interface — WiFi SIGINT views are already governed by the
 `m` (monitor-iface) selection.
 
+## Channel scan bar retune confirmation — issue #91
+
+With `--hop`, the monitor radio's row carries a scan bar — `ch: 1 6
+[11] 36 44` — showing the hop list and the channel currently dwelt on.
+Advancing that bracket used to mean only "sloth asked the radio to
+retune here", not "the radio is actually here": `chanhop_drive()` threw
+away `set_channel()`'s return code, so a retune that failed (no
+`CAP_NET_ADMIN`, `EBUSY`, an unsupported frequency) left the UI
+indistinguishable from a healthy, quiet channel.
+
+The bracket now distinguishes the two: `[11]` means the platform
+acknowledged the retune to channel 11; `[11?]` means sloth requested 11
+but the last `set_channel()` call failed, so the radio may still be
+parked on whatever channel was last confirmed. `chan_requested`,
+`chan_confirmed`, and a lifetime `chan_retune_failures` count live on
+`sloth_state_t` for anything else that wants to consume the same
+signal (see `src/wifi_chanhop.c :: chanhop_record_retune()` for the
+pure bookkeeping, kept hardware-free and unit-tested the same way as
+the rest of the scheduler). A `sensor_health` JSONL record and a
+dedicated TUI health strip covering this plus capture-thread liveness
+and `pcap_stats()` drops are tracked separately (issue #91, slices
+2-4) — this slice only stops the existing bar from lying.
+
 ## Headless scoping (`--iface` / `--monitor-only`) — issue #35
 
 The launch-time complement to `y`, for deployments where no operator

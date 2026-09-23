@@ -463,6 +463,56 @@ void test_excluded_prefix_precedence(void) {
     ASSERT_EQ(iface_row_prefix(&s, "eth0", 0), 'x');
 }
 
+/* ── scan bar retune-confirmation marker — issue #91 slice 1 ──
+ * chanhop_drive() now records requested vs confirmed channel instead of
+ * discarding set_channel()'s return code; iface_fmt_scan_bar() is where
+ * that state actually becomes visible to the operator. */
+
+void test_scan_bar_no_hop_list_shows_scanning(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    char buf[128];
+    iface_fmt_scan_bar(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  [scanning]");
+}
+
+void test_scan_bar_confirmed_channel_has_no_marker(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    s.scan_chans[0] = 1; s.scan_chans[1] = 6; s.scan_chans[2] = 11;
+    s.scan_chan_count = 3;
+    s.scan_cur_idx = 2;
+    s.chan_requested = 11;
+    s.chan_confirmed = 11;         /* platform acked the retune */
+    char buf[128];
+    iface_fmt_scan_bar(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  ch: 1  6 [11]");
+}
+
+void test_scan_bar_unconfirmed_retune_marks_current_channel(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    s.scan_chans[0] = 1; s.scan_chans[1] = 6; s.scan_chans[2] = 11;
+    s.scan_chan_count = 3;
+    s.scan_cur_idx = 2;
+    s.chan_requested = 11;
+    s.chan_confirmed = 6;          /* set_channel() failed; radio still on 6 */
+    char buf[128];
+    iface_fmt_scan_bar(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  ch: 1  6 [11?]");
+}
+
+void test_scan_bar_before_first_confirmation_is_unmarked(void) {
+    /* chan_requested == 0 means chanhop hasn't ticked yet at all — not
+     * the same as "requested and failed", so no marker. */
+    sloth_state_t s = make_state_with_ifaces(1);
+    s.scan_chans[0] = 1;
+    s.scan_chan_count = 1;
+    s.scan_cur_idx = 0;
+    ASSERT_EQ(s.chan_requested, 0);
+    ASSERT_EQ(s.chan_confirmed, 0);
+    char buf[128];
+    iface_fmt_scan_bar(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  ch:[1]");
+}
+
 void test_excluded_render_smoke(void) {
     /* Exercise the draw path with an exclusion present — must not
      * crash and must leave state untouched (draw is const). */
@@ -597,4 +647,10 @@ void run_state_tests(void) {
     RUN_TEST(test_excluded_marks_unlisted_only);
     RUN_TEST(test_excluded_prefix_precedence);
     RUN_TEST(test_excluded_render_smoke);
+
+    TEST_SUITE("iface scan bar retune marker — #91 slice 1");
+    RUN_TEST(test_scan_bar_no_hop_list_shows_scanning);
+    RUN_TEST(test_scan_bar_confirmed_channel_has_no_marker);
+    RUN_TEST(test_scan_bar_unconfirmed_retune_marks_current_channel);
+    RUN_TEST(test_scan_bar_before_first_confirmation_is_unmarked);
 }

@@ -135,8 +135,17 @@ static void chanhop_drive(sloth_state_t *s) {
     uint64_t now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
     chanhop_observe(&g_chanhop, (uint32_t)(s->pkt_total - last_total));
     last_total = s->pkt_total;
-    if (chanhop_tick(&g_chanhop, now_ms))
-        g_platform.set_channel(s->probe_iface, chanhop_current_freq(&g_chanhop));
+    if (chanhop_tick(&g_chanhop, now_ms)) {
+        /* #91 slice 1: consume the retune result instead of discarding it —
+         * a failed set_channel() used to leave the UI showing the intended
+         * channel with no way to tell "healthy, quiet" from "not actually
+         * listening there". */
+        int requested = chanhop_current_channel(&g_chanhop);
+        int ok = g_platform.set_channel(s->probe_iface,
+                                        chanhop_current_freq(&g_chanhop)) == 0;
+        chanhop_record_retune(requested, ok, &s->chan_requested,
+                              &s->chan_confirmed, &s->chan_retune_failures);
+    }
     /* Surface the scan state for the interface view's channel bar. */
     s->scan_chan_count = chanhop_export(&g_chanhop, s->scan_chans,
                                         (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),

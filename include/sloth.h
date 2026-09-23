@@ -2139,6 +2139,15 @@ typedef struct {
     int            scan_chans[32];
     int            scan_chan_count;
     int            scan_cur_idx;    /* index of the current channel, -1 = none */
+    /* Requested vs confirmed monitor-radio channel (#91 slice 1):
+     * chanhop_drive() used to call set_channel() without consuming its
+     * return code, so the UI showed the intended channel even when the
+     * retune silently failed. chan_confirmed only advances on a
+     * successful set_channel(); chan_confirmed != chan_requested (both
+     * non-zero) is a live, observable retune failure. */
+    int            chan_requested;       /* channel last requested, 0 = none yet */
+    int            chan_confirmed;       /* channel the platform actually confirmed, 0 = none yet */
+    int            chan_retune_failures; /* lifetime count of failed set_channel() calls */
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
@@ -2308,6 +2317,15 @@ int iface_allow_add(sloth_state_t *s, const char *name);
  * hidden 'h' > deselected 'd' > excluded 'x' > scanning 's' > ' '. */
 int iface_is_excluded(const sloth_state_t *s, const char *name);
 char iface_row_prefix(const sloth_state_t *s, const char *name, int is_scan);
+
+/* Format the monitor radio's --hop scan state into buf[sz]: the channel
+ * list with the currently-dwelt channel bracketed, e.g.
+ * "  ch: 1  6 [11] 36 44". A '?' inside the bracket (issue #91 slice 1)
+ * means the last retune sloth requested has not been confirmed by the
+ * platform (chan_confirmed != chan_requested) — the radio may still be
+ * parked on the previous channel. scan_chan_count == 0 renders
+ * "  [scanning]" (no live hop list). */
+void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz);
 
 /* ── Merged packet timeline (shared by packets view + dashboard band) ──
  * One chronological sequence over BOTH capture streams: the IP packet

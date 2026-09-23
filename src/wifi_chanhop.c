@@ -96,3 +96,14 @@ int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx) {
     if (cur_idx && h->started && h->cur < n) *cur_idx = h->cur;
     return n;
 }
+
+void chanhop_record_retune(int requested_channel, int retune_ok,
+                            int *requested_out, int *confirmed_out,
+                            int *failures_out) {
+    if (requested_out) *requested_out = requested_channel;
+    if (retune_ok) {
+        if (confirmed_out) *confirmed_out = requested_channel;
+    } else if (failures_out) {
+        (*failures_out)++;
+    }
+}
