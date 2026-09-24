@@ -129,7 +129,7 @@ static void test_response_calls_dns_resolved(void) {
     char info[64] = "";
     nbns_snoop(buf, len, info, sizeof(info));
     /* dns cache should resolve this IP to the name */
-    const char *resolved = dns_lookup("172.16.0.3");
+    const char *resolved = dns_lookup_cached("172.16.0.3");
     ASSERT(resolved != NULL && strcmp(resolved, "WINBOX") == 0);
 }
 

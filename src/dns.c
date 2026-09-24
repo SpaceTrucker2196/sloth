@@ -46,6 +46,15 @@ static pthread_mutex_t g_mu  = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_cv  = PTHREAD_COND_INITIALIZER;
 static volatile int    g_running = 0;
 
+/* ── Resolver policy + observability (#84) ───────────────── */
+
+/* On by default: slice 1 builds the choke point without changing what
+ * flows through it. See dns.h. */
+static int g_resolver_enabled = 1;
+
+/* Guarded by g_mu, including the worker-thread increment. */
+static dns_resolver_stats_t g_stats;
+
 /* ── Internal helpers ────────────────────────────────────── */
 
 /* Find cache slot for ip. Returns index or -1. Caller holds g_mu. */
@@ -80,13 +89,26 @@ static int cache_evict(void) {
     return oldest;
 }
 
-/* Queue ip for async resolution. Caller holds g_mu. */
+/* Cache-only probe. Returns the hostname of a fresh RESOLVED entry, or
+   NULL when nothing usable is known. Never mutates. Caller holds g_mu. */
+static const char *cache_peek(const char *ip, time_t now) {
+    int idx = cache_find(ip);
+    if (idx < 0) return NULL;
+    const dns_entry_t *e = &g_cache[idx];
+    if (e->state != DNS_RESOLVED)      return NULL;
+    if (now - e->ts >= DNS_TTL_SEC)    return NULL;
+    return e->host;
+}
+
+/* Queue ip for async resolution. Caller holds g_mu.
+   Reached only from dns_resolve() — the single choke point (#84). */
 static void enqueue(const char *ip) {
     if (g_queue_len >= DNS_QUEUE_SIZE) return;  /* drop if full */
     int tail = (g_queue_head + g_queue_len) % DNS_QUEUE_SIZE;
     strncpy(g_queue[tail], ip, 45);
     g_queue[tail][45] = '\0';
     g_queue_len++;
+    g_stats.resolve_enqueued++;
     pthread_cond_signal(&g_cv);
 }
 
@@ -110,6 +132,13 @@ static void resolve_ip(const char *ip, char *host, int hostsz) {
     } else {
         return;
     }
+
+    /* Counted here rather than at the enqueue site so the number means
+     * "resolver work that actually left this function", not "work that
+     * was intended" — #84 asks for proof of the former. */
+    pthread_mutex_lock(&g_mu);
+    g_stats.getnameinfo_calls++;
+    pthread_mutex_unlock(&g_mu);
 
     getnameinfo((struct sockaddr *)&ss, slen,
                 host, (socklen_t)hostsz, NULL, 0,
@@ -191,28 +220,86 @@ void dns_set_resolved(const char *ip, const char *host) {
     pthread_mutex_unlock(&g_mu);
 }
 
-const char *dns_lookup(const char *ip) {
-    static char result[256];
+void dns_resolver_set_enabled(int enabled) {
+    pthread_mutex_lock(&g_mu);
+    g_resolver_enabled = enabled ? 1 : 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
+int dns_resolver_enabled(void) {
+    pthread_mutex_lock(&g_mu);
+    int e = g_resolver_enabled;
+    pthread_mutex_unlock(&g_mu);
+    return e;
+}
+
+void dns_resolver_stats(dns_resolver_stats_t *out) {
+    if (!out) return;
+    pthread_mutex_lock(&g_mu);
+    *out = g_stats;
+    pthread_mutex_unlock(&g_mu);
+}
+
+void dns_resolver_stats_reset(void) {
+    pthread_mutex_lock(&g_mu);
+    memset(&g_stats, 0, sizeof(g_stats));
+    pthread_mutex_unlock(&g_mu);
+}
+
+/* The returned pointer is shared by both halves of the API; see dns.h. */
+static char g_result[256];
+
+const char *dns_lookup_cached(const char *ip) {
     time_t now = time(NULL);
 
     pthread_mutex_lock(&g_mu);
+    g_stats.cached_lookups++;
+    const char *host = cache_peek(ip, now);
+    if (host) {
+        strncpy(g_result, host, sizeof(g_result) - 1);
+        g_result[sizeof(g_result) - 1] = '\0';
+        pthread_mutex_unlock(&g_mu);
+        return g_result;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return ip;   /* nothing observed — no slot claimed, nothing queued */
+}
+
+const char *dns_resolve(const char *ip) {
+    time_t now = time(NULL);
+
+    pthread_mutex_lock(&g_mu);
+    g_stats.resolve_requests++;
     int idx = cache_find(ip);
 
     if (idx >= 0) {
         dns_entry_t *e = &g_cache[idx];
         if (e->state == DNS_RESOLVED) {
             if (now - e->ts < DNS_TTL_SEC) {
-                strncpy(result, e->host, sizeof(result) - 1);
-                result[sizeof(result) - 1] = '\0';
+                strncpy(g_result, e->host, sizeof(g_result) - 1);
+                g_result[sizeof(g_result) - 1] = '\0';
                 pthread_mutex_unlock(&g_mu);
-                return result;
+                return g_result;
             }
             /* TTL expired — re-queue */
-            e->state = DNS_PENDING;
-            e->ts    = now;
-            enqueue(ip);
+            if (g_resolver_enabled) {
+                e->state = DNS_PENDING;
+                e->ts    = now;
+                enqueue(ip);
+            } else {
+                g_stats.resolve_suppressed++;
+            }
         }
         /* PENDING or FAILED: return raw IP */
+        pthread_mutex_unlock(&g_mu);
+        return ip;
+    }
+
+    if (!g_resolver_enabled) {
+        /* Deliberately no slot claimed: a refused request must leave the
+         * cache indistinguishable from one that was never made, or the
+         * PENDING entry alone would tell a later caller work is coming. */
+        g_stats.resolve_suppressed++;
         pthread_mutex_unlock(&g_mu);
         return ip;
     }
@@ -230,8 +317,12 @@ const char *dns_lookup(const char *ip) {
     return ip;
 }
 
+const char *dns_lookup(const char *ip) {
+    return dns_resolve(ip);
+}
+
 void dns_fmt_addr(const char *ip, uint16_t port, char *buf, int sz) {
-    const char *host = dns_lookup(ip);
+    const char *host = dns_resolve(ip);
     const char *svc  = svc_name(port);
     if (svc)
         snprintf(buf, sz, "%s:%s", host, svc);

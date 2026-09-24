@@ -194,8 +194,8 @@ static void test_snoop_a_record_cache(void) {
     dns_reset();
     char info[64];
     dns_snoop(pkt_a, (int)sizeof(pkt_a), info, sizeof(info));
-    /* dns_lookup should now return the snooped hostname */
-    const char *host = dns_lookup("1.2.3.4");
+    /* the passive cache should now return the snooped hostname */
+    const char *host = dns_lookup_cached("1.2.3.4");
     ASSERT_STR(host, "example.com");
 }
 
@@ -203,8 +203,8 @@ static void test_snoop_a_multi_both_cached(void) {
     dns_reset();
     char info[64];
     dns_snoop(pkt_a_multi, (int)sizeof(pkt_a_multi), info, sizeof(info));
-    ASSERT_STR(dns_lookup("1.2.3.4"), "example.com");
-    ASSERT_STR(dns_lookup("5.6.7.8"), "example.com");
+    ASSERT_STR(dns_lookup_cached("1.2.3.4"), "example.com");
+    ASSERT_STR(dns_lookup_cached("5.6.7.8"), "example.com");
 }
 
 static void test_snoop_a_multi_info_shows_plus(void) {
@@ -227,7 +227,7 @@ static void test_snoop_aaaa_record_cache(void) {
     dns_reset();
     char info[64];
     dns_snoop(pkt_aaaa, (int)sizeof(pkt_aaaa), info, sizeof(info));
-    const char *host = dns_lookup("2001:db8::1");
+    const char *host = dns_lookup_cached("2001:db8::1");
     ASSERT_STR(host, "ipv6.example.com");
 }
 
@@ -239,7 +239,7 @@ static void test_snoop_query_no_inject(void) {
     /* info should say "qry" */
     ASSERT(strstr(info, "qry") != NULL);
     /* nothing injected into cache */
-    const char *host = dns_lookup("1.2.3.4");
+    const char *host = dns_lookup_cached("1.2.3.4");
     /* still returns the raw IP (not resolved) */
     ASSERT_STR(host, "1.2.3.4");
 }
@@ -275,7 +275,7 @@ static void test_snoop_inline_name_answer(void) {
     char info[64];
     int r = dns_snoop(pkt_inline_name, (int)sizeof(pkt_inline_name), info, sizeof(info));
     ASSERT_EQ(r, 1);
-    ASSERT_STR(dns_lookup("10.0.0.1"), "foo.bar");
+    ASSERT_STR(dns_lookup_cached("10.0.0.1"), "foo.bar");
 }
 
 static void test_snoop_too_short_header(void) {
@@ -401,9 +401,9 @@ static void test_snoop_non_a_record_with_rdlen_4_not_injected(void) {
     /* No "→ 1.2.3.4" suffix — info should contain just the qname. */
     ASSERT(strstr(info, "1.2.3.4") == NULL);
     /* And the DNS cache must not have learnt example.com → 1.2.3.4.
-     * (dns_lookup returns the resolved host when RESOLVED, or the
-     * IP string itself when PENDING/FAILED, or NULL when no entry.) */
-    const char *got = dns_lookup("1.2.3.4");
+     * (dns_lookup_cached returns the resolved host when RESOLVED, or
+     * the IP string itself otherwise — and never queues a resolve.) */
+    const char *got = dns_lookup_cached("1.2.3.4");
     /* Either NULL (no entry) or the IP itself (pending state from
      * elsewhere); the resolved hostname "example.com" must not appear. */
     ASSERT(got == NULL || strcmp(got, "example.com") != 0);

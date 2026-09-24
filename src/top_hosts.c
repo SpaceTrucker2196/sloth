@@ -90,7 +90,11 @@ static void reset_counters(void) {
 
 static void resolve_one(top_host_t *h) {
     if (h->hostname[0] == '\0') {
-        const char *name = dns_lookup(h->ip);
+        /* #84: the active half, named explicitly. Like the UDP/443
+         * decoder this runs regardless of the UI dns_enabled toggle, so
+         * it is a standing source of reverse-DNS egress. Preserved as-is
+         * in slice 1; see dns.h for the passive alternative. */
+        const char *name = dns_resolve(h->ip);
         if (name && name[0] && strcmp(name, h->ip) != 0)
             snprintf(h->hostname, sizeof(h->hostname), "%s", name);
     }
@@ -159,7 +163,7 @@ void top_hosts_update(sloth_state_t *s) {
     }
 
     /* (4) Resolve hostname + owner for any entry that's still missing one.
-     *     dns_lookup is non-blocking — it kicks the async resolver and
+     *     dns_resolve is non-blocking — it kicks the async resolver and
      *     returns "" or the IP back; we only cache real names. */
     for (int i = 0; i < g_count; i++) resolve_one(&g_tbl[i]);
 

@@ -598,7 +598,13 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            const char *host   = dns_lookup(remote);
+            /* #84: named explicitly so the egress is visible in the
+             * source. This decoder runs on every UDP/443 packet and
+             * consults no UI toggle, so a cold cache turns capture into
+             * reverse-DNS traffic. Slice 1 preserves that behaviour;
+             * whether it should become dns_lookup_cached() is the
+             * default-policy question deferred to slice 2. */
+            const char *host   = dns_resolve(remote);
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {
@@ -722,7 +728,13 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            const char *host   = dns_lookup(remote);
+            /* #84: named explicitly so the egress is visible in the
+             * source. This decoder runs on every UDP/443 packet and
+             * consults no UI toggle, so a cold cache turns capture into
+             * reverse-DNS traffic. Slice 1 preserves that behaviour;
+             * whether it should become dns_lookup_cached() is the
+             * default-policy question deferred to slice 2. */
+            const char *host   = dns_resolve(remote);
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {

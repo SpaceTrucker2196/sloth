@@ -68,13 +68,13 @@ static void draw_detail(const sloth_state_t *s) {
         if (s->dns_enabled) dns_fmt_addr(p->src, p->src_port, src, sizeof(src));
         else svc_fmt_addr(src, sizeof(src), p->src, p->src_port);
     } else {
-        snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_lookup(p->src) : p->src);
+        snprintf(src, sizeof(src), "%s", s->dns_enabled ? dns_resolve(p->src) : p->src);
     }
     if (p->dst_port) {
         if (s->dns_enabled) dns_fmt_addr(p->dst, p->dst_port, dst, sizeof(dst));
         else svc_fmt_addr(dst, sizeof(dst), p->dst, p->dst_port);
     } else {
-        snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_lookup(p->dst) : p->dst);
+        snprintf(dst, sizeof(dst), "%s", s->dns_enabled ? dns_resolve(p->dst) : p->dst);
     }
 
     tui_dim(); TPRINT(" \xe2\x94\x80\xe2\x94\x80 PACKET DETAIL \xe2\x94\x80\xe2\x94\x80\n");

@@ -112,7 +112,7 @@ static void test_ack_populates_dns_cache(void) {
     uint8_t buf[300]; char info[64];
     dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
-    const char *resolved = dns_lookup("10.0.0.5");
+    const char *resolved = dns_lookup_cached("10.0.0.5");
     ASSERT(resolved != NULL && strcmp(resolved, "devbox") == 0);
 }
 
@@ -144,9 +144,20 @@ static void test_discover_no_dns_cache(void) {
     };
     uint8_t buf[300]; char info[64];
     dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+
+    /* This suite is one of two that start the real resolver thread via
+     * dns_init(), so a miss taken through the active half would put a
+     * genuine PTR query on the wire from `make test`. Assert the
+     * assertion itself stays passive (#84). */
+    dns_resolver_stats_reset();
     /* no IP resolved for "phantom" */
-    ASSERT(dns_lookup("0.0.0.0") == NULL ||
-           strcmp(dns_lookup("0.0.0.0"), "phantom") != 0);
+    ASSERT(dns_lookup_cached("0.0.0.0") == NULL ||
+           strcmp(dns_lookup_cached("0.0.0.0"), "phantom") != 0);
+
+    dns_resolver_stats_t st;
+    dns_resolver_stats(&st);
+    ASSERT_EQ(0, (int)st.resolve_requests);
+    ASSERT_EQ(0, (int)st.resolve_enqueued);
 }
 
 static void test_request_uses_ciaddr(void) {
