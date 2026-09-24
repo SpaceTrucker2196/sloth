@@ -136,3 +136,4 @@
 | dd71a06 | 2026-09-23T15:19:58Z | claude-opus-5 | 354 | 93553 | 25794791 | 417169 | 19.4097 | #96: SECURITY.md support model, synthetic-IOC disclosure in 3 surfaces, docs/wik |
 | 2d4eaaa | 2026-09-23T15:22:18Z | claude-opus-5 | 32 | 6234 | 1483292 | 19021 | 1.0879 | Correct assertion/file/LOC counts after integrating #91 and #96 |
 | 58a030d | 2026-09-23T15:33:19Z | claude-opus-5 | 274 | 82728 | 15319407 | 376063 | 13.4899 | release v1.8.2 — version bump, release notes, tag, GitHub release; window also c |
+| 4315676 | 2026-09-24T11:19:19Z | claude-opus-5 | 156 | 77054 | 7810991 | 322958 | 9.0622 | #84 — slice 1: split DNS into passive lookup + gated resolver choke point |
