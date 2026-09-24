@@ -19,6 +19,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -87,10 +88,24 @@ unsigned long long data_socket_dropped_total(void) {
     return n;
 }
 
-static int set_nonblock(int fd) {
+static int set_nonblock_real(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+/* Indirected so tests can force a failure (EBADF, EMFILE-class errors)
+ * that a real, freshly-opened fd won't produce on its own. */
+static data_socket_nonblock_fn g_nonblock_fn = set_nonblock_real;
+
+static int set_nonblock(int fd) {
+    return g_nonblock_fn(fd);
+}
+
+void data_socket_test_set_nonblock_fn(data_socket_nonblock_fn fn) {
+    pthread_mutex_lock(&g_mu);
+    g_nonblock_fn = fn ? fn : set_nonblock_real;
+    pthread_mutex_unlock(&g_mu);
 }
 
 /* Internal: replace the current listener (if any) with a new fd.
@@ -104,8 +119,59 @@ static void install_listener(int fd, const char *unix_path) {
         g_unix_path[0] = '\0';
 }
 
-/* Bind a UNIX-domain stream socket at `path`. Unlinks any stale entry
- * at the same path first (a fresh start always wins). */
+/* Is `path` safe to unlink and replace with our own listener? Uses
+ * lstat (never follows a symlink — a planted symlink at the socket
+ * path must not cause us to unlink whatever it points at) plus a
+ * connect() probe (a mode/mtime check can't tell "stale" from "another
+ * instance is live right now"). Returns 1 if the path may be removed
+ * (absent, or a socket we own with nobody listening), 0 if it must be
+ * left alone — with the reason on stderr either way. */
+static int unix_path_removable(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return 1;         /* ENOENT or unreadable — nothing to protect */
+
+    if (!S_ISSOCK(st.st_mode)) {
+        fprintf(stderr,
+                "data-socket: refusing to replace %s: not a socket\n", path);
+        return 0;
+    }
+    if (st.st_uid != geteuid()) {
+        fprintf(stderr,
+                "data-socket: refusing to replace %s: owned by uid %d\n",
+                path, (int)st.st_uid);
+        return 0;
+    }
+
+    int probe = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (probe < 0) {
+        fprintf(stderr,
+                "data-socket: cannot verify %s is stale (socket: %s); refusing\n",
+                path, strerror(errno));
+        return 0;
+    }
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    int rc  = connect(probe, (struct sockaddr *)&addr, sizeof(addr));
+    int err = errno;
+    close(probe);
+    if (rc == 0) {
+        fprintf(stderr,
+                "data-socket: refusing to replace %s: another instance is listening\n",
+                path);
+        return 0;
+    }
+    if (err == ECONNREFUSED) return 1;           /* our socket, nobody home */
+    fprintf(stderr,
+            "data-socket: cannot verify %s is stale (connect: %s); refusing\n",
+            path, strerror(err));
+    return 0;
+}
+
+/* Bind a UNIX-domain stream socket at `path`. Replaces a stale entry
+ * at the same path (a fresh start wins over a dead one); refuses to
+ * touch anything that isn't provably a dead socket of ours. */
 static int init_unix(const char *path) {
     if (!path || !path[0]) {
         fprintf(stderr, "data-socket: empty unix path\n");
@@ -116,10 +182,12 @@ static int init_unix(const char *path) {
         fprintf(stderr, "data-socket: unix path too long\n");
         return -1;
     }
+    if (!unix_path_removable(path)) return -1;
+
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { perror("data-socket: socket"); return -1; }
 
-    unlink(path);   /* clean any stale entry — fresh start each run */
+    unlink(path);   /* checked above: absent, or a dead socket we own */
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -137,7 +205,12 @@ static int init_unix(const char *path) {
         unlink(path);
         return -1;
     }
-    set_nonblock(fd);
+    if (set_nonblock(fd) != 0) {
+        perror("data-socket: set_nonblock");
+        close(fd);
+        unlink(path);
+        return -1;
+    }
 
     pthread_mutex_lock(&g_mu);
     install_listener(fd, path);
@@ -164,9 +237,13 @@ static int init_tcp(const char *host_port) {
     memcpy(host, host_port, hlen);
     host[hlen] = '\0';
 
-    long port = strtol(colon + 1, NULL, 10);
-    if (port < 1 || port > 65535) {
-        fprintf(stderr, "data-socket: bad port %ld\n", port);
+    const char *port_str = colon + 1;
+    char *endptr = NULL;
+    errno = 0;
+    long port = strtol(port_str, &endptr, 10);
+    if (port_str[0] == '\0' || *endptr != '\0' || errno == ERANGE ||
+        port < 1 || port > 65535) {
+        fprintf(stderr, "data-socket: bad port %s\n", port_str);
         return -1;
     }
 
@@ -195,7 +272,11 @@ static int init_tcp(const char *host_port) {
         close(fd);
         return -1;
     }
-    set_nonblock(fd);
+    if (set_nonblock(fd) != 0) {
+        perror("data-socket: set_nonblock");
+        close(fd);
+        return -1;
+    }
 
     pthread_mutex_lock(&g_mu);
     install_listener(fd, NULL);
@@ -315,7 +396,12 @@ void data_socket_tick(void) {
     while (g_client_n < MAX_CLIENTS) {
         int c = g_accept_fn(g_listen_fd, NULL, NULL);
         if (c < 0) break;       /* EAGAIN or real error — stop draining */
-        set_nonblock(c);
+        if (set_nonblock(c) != 0) {
+            /* A blocking client fd is a hazard under g_mu: accept()/send()
+             * could stall the whole listener. Drop it rather than keep it. */
+            close(c);
+            continue;
+        }
         /* Keepalive helps the kernel reap iOS clients that vanish when
          * the device sleeps. No-op on UNIX-domain (setsockopt accepts
          * but ignores it for AF_UNIX). */

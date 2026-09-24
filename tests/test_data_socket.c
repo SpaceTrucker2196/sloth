@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 
 #include "runner.h"
@@ -866,6 +867,185 @@ static void test_alert_escalation_reaches_a_socket_consumer(void) {
     data_socket_cleanup();
 }
 
+/* ── Listener lifecycle hardening (#86) ────────────────────────
+ *
+ * init_unix() used to unlink(path) unconditionally before bind — any
+ * file at that path, symlink included, was gone the moment sloth
+ * started. These pin the replacement policy: remove only a socket we
+ * provably own with nobody listening; refuse and leave everything else
+ * untouched. */
+
+static void unlink_quiet(const char *path) { unlink(path); }
+
+/* A regular file at the socket path is never a stale socket — refuse,
+ * and the file must survive byte-for-byte. */
+static void test_refuses_to_replace_regular_file(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    FILE *fp = fopen(path, "w");
+    ASSERT(fp != NULL);
+    fputs("not a socket", fp);
+    fclose(fp);
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT(data_socket_init(spec) != 0);
+
+    fp = fopen(path, "r");
+    ASSERT(fp != NULL);
+    char buf[32] = {0};
+    ASSERT(fgets(buf, sizeof(buf), fp) != NULL);
+    fclose(fp);
+    ASSERT_STR(buf, "not a socket");
+
+    unlink_quiet(path);
+}
+
+/* A symlink at the socket path must not be followed — refusing it on
+ * type (S_ISSOCK fails on a dangling or redirecting link, per lstat)
+ * means the target is never touched, planted-symlink or not. */
+static void test_refuses_to_replace_symlink(void) {
+    const char *path = sock_path();
+    char target[80];
+    snprintf(target, sizeof(target), "%s.target", path);
+    unlink_quiet(path);
+    unlink_quiet(target);
+
+    FILE *fp = fopen(target, "w");
+    ASSERT(fp != NULL);
+    fputs("do not delete me", fp);
+    fclose(fp);
+    ASSERT_EQ(symlink(target, path), 0);
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT(data_socket_init(spec) != 0);
+
+    /* The symlink itself must still be there (lstat, not stat/access —
+     * an access() would follow it and pass even if the link vanished). */
+    struct stat st;
+    ASSERT_EQ(lstat(path, &st), 0);
+    ASSERT(S_ISLNK(st.st_mode));
+    fp = fopen(target, "r");
+    ASSERT(fp != NULL);
+    char buf[32] = {0};
+    ASSERT(fgets(buf, sizeof(buf), fp) != NULL);
+    fclose(fp);
+    ASSERT_STR(buf, "do not delete me");
+
+    unlink_quiet(path);
+    unlink_quiet(target);
+}
+
+/* A socket with a live listener at the path — simulating another sloth
+ * instance already running — must be left alone: refuse, and the
+ * original listener must still be reachable afterwards. */
+static void test_refuses_to_replace_live_socket(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+
+    int live = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT(live >= 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    ASSERT_EQ(bind(live, (struct sockaddr *)&addr, sizeof(addr)), 0);
+    ASSERT_EQ(listen(live, 4), 0);
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT(data_socket_init(spec) != 0);
+
+    /* The pre-existing listener must still accept — proof nothing about
+     * it (fd, path) was disturbed. */
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    if (c >= 0) close(c);
+
+    close(live);
+    unlink_quiet(path);
+}
+
+/* A socket file with nobody listening (the owning process died without
+ * cleanup) is exactly the case #86 asks us to still replace — refusing
+ * every removal would turn a crash into a permanent outage. */
+static void test_replaces_stale_socket(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+
+    int dead = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT(dead >= 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    ASSERT_EQ(bind(dead, (struct sockaddr *)&addr, sizeof(addr)), 0);
+    ASSERT_EQ(listen(dead, 4), 0);
+    close(dead);            /* orphaned file, nothing behind it */
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    if (c >= 0) close(c);
+    data_socket_cleanup();
+}
+
+/* strtol() alone accepts a numeric prefix and silently ignores whatever
+ * follows it ("8080garbage" -> 8080). The port must be the whole
+ * string or the spec is rejected. */
+static void test_tcp_port_rejects_trailing_garbage(void) {
+    ASSERT(data_socket_init("tcp:127.0.0.1:8080x")   != 0);
+    ASSERT(data_socket_init("tcp:127.0.0.1: 8080")   != 0 ||
+           data_socket_init("tcp:127.0.0.1:8080 ")   != 0);
+    ASSERT(data_socket_init("tcp:127.0.0.1:")        != 0);   /* empty port */
+}
+
+static int fail_nonblock(int fd) { (void)fd; errno = EBADF; return -1; }
+
+/* set_nonblock() failing on the listener fd itself must abort init
+ * outright — a blocking listener fd risks stalling accept() under
+ * g_mu — and must not leave a socket file behind for the next start
+ * to trip over. */
+static void test_nonblock_failure_on_listener_aborts_init(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+
+    data_socket_test_set_nonblock_fn(fail_nonblock);
+    ASSERT(data_socket_init(spec) != 0);
+    data_socket_test_set_nonblock_fn(NULL);
+
+    ASSERT(access(path, F_OK) != 0);   /* no orphaned socket file */
+
+    /* A normal init afterwards must succeed — nothing left broken. */
+    ASSERT_EQ(data_socket_init(spec), 0);
+    data_socket_cleanup();
+}
+
+/* set_nonblock() failing on a freshly accepted client fd must drop that
+ * client rather than hand a blocking fd to send()/accept() under the
+ * shared mutex. */
+static void test_nonblock_failure_on_accept_drops_client(void) {
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);   /* listener set up normally */
+
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+
+    data_socket_test_set_nonblock_fn(fail_nonblock);
+    data_socket_tick();
+    data_socket_test_set_nonblock_fn(NULL);
+
+    ASSERT_EQ(data_socket_has_clients(), 0);
+
+    if (c >= 0) close(c);
+    data_socket_cleanup();
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -899,4 +1079,13 @@ void run_data_socket_tests(void) {
 
     TEST_SUITE("data socket (alert lifecycle, #98)");
     RUN_TEST(test_alert_escalation_reaches_a_socket_consumer);
+
+    TEST_SUITE("data socket (listener lifecycle hardening, #86)");
+    RUN_TEST(test_refuses_to_replace_regular_file);
+    RUN_TEST(test_refuses_to_replace_symlink);
+    RUN_TEST(test_refuses_to_replace_live_socket);
+    RUN_TEST(test_replaces_stale_socket);
+    RUN_TEST(test_tcp_port_rejects_trailing_garbage);
+    RUN_TEST(test_nonblock_failure_on_listener_aborts_init);
+    RUN_TEST(test_nonblock_failure_on_accept_drops_client);
 }

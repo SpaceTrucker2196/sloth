@@ -93,9 +93,12 @@ void data_socket_cleanup(void);
 typedef ssize_t (*data_socket_send_fn)(int, const void *, size_t, int);
 typedef int     (*data_socket_accept_fn)(int, struct sockaddr *, socklen_t *);
 typedef time_t  (*data_socket_clock_fn)(void);
+typedef int     (*data_socket_nonblock_fn)(int);
 void data_socket_test_set_send_fn  (data_socket_send_fn   fn);
 void data_socket_test_set_accept_fn(data_socket_accept_fn fn);
 /* Monotonic seconds for the stall policy; NULL restores the real one. */
 void data_socket_test_set_clock_fn (data_socket_clock_fn  fn);
+/* fcntl(F_SETFL, O_NONBLOCK) indirection; NULL restores the real one. */
+void data_socket_test_set_nonblock_fn(data_socket_nonblock_fn fn);
 
 #endif /* SLOTH_DATA_SOCKET_H */
