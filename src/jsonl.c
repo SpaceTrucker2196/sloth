@@ -375,6 +375,14 @@ void jsonl_emit_alert(const alert_t *a) {
      * NO_MONITOR_MODE. Schema is additive per docs/wiki/jsonl-schema.md. */
     if (a->technique[0])
         kv_str(buf, LINEBUF, &off, "technique", a->technique);
+    /* Severity and confidence are separate axes (#89): `sev` is how bad
+     * the finding is if true, `confidence` is how likely it is to be
+     * true. Omitted when the rule reported none — most rules assert a
+     * condition they observed directly and have nothing to qualify, and
+     * emitting 0 would read as "certainly false". Additive per
+     * docs/wiki/jsonl-schema.md. */
+    if (a->confidence)
+        kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -413,6 +421,11 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     kv_int(buf, LINEBUF, &off, "last_observed",  (long long)a->last_observed);
     if (a->technique[0])
         kv_str(buf, LINEBUF, &off, "technique", a->technique);
+    /* Same separate axis as the legacy record (#89) — a consumer paging
+     * on severity can weight by how sure sloth is without a second
+     * lookup. */
+    if (a->confidence)
+        kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
@@ -485,6 +498,13 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "attack_in_progress",  e->attack_in_progress ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "attacker_oui",        e->attacker_oui       ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "hash_mismatch",       e->hash_mismatch      ? 1 : 0);
+        /* Additive (#89). `attributed` 0 means `real_bssid`/`twin_bssid`
+         * hold the pair in canonical BSSID order and nothing has
+         * established which half is the impostor — a consumer must not
+         * read `twin_bssid` as an accusation. RSSI used to decide this
+         * and RSSI is not ownership. */
+        kv_int(buf, LINEBUF, &off, "attributed",           e->attributed ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "confidence",           (long long)e->confidence);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

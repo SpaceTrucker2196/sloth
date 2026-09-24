@@ -6,34 +6,62 @@
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
 
-/* Decide which half of a (a, b) twin pair is the "real" AP:
- *   1. If alerts marked one BSSID tainted, the *other* is real.
- *   2. Otherwise default to the lower-RSSI side — a real AP usually
- *      reaches us from further away than a freshly-placed rogue.
- *      Falls back to insertion order if both RSSIs are unknown. */
-static void choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
-                         const beacon_ap_t **real_out,
-                         const beacon_ap_t **twin_out) {
-    /* An operator-designated BSSID is never the impostor (#52). This
-     * outranks the taint tracker and the RSSI heuristic below because
-     * it is asserted, not inferred — and the RSSI rule would otherwise
-     * often get it backwards: the operator's own AP is usually the
-     * *closest* one, which is exactly what rule 2 reads as the rogue. */
+/* Decide which half of a (a, b) twin pair is the "real" AP, and say
+ * honestly when we cannot. Returns 1 when the assignment is attributed
+ * to evidence, 0 when the pair is merely ordered.
+ *
+ * Ranked by what the signal actually establishes:
+ *   1. An operator-designated BSSID is never the impostor (#52) —
+ *      asserted by a human, so it outranks everything inferred.
+ *   2. A BSSID the deauth chain tainted is the impostor — observed
+ *      behaviour tied to that BSSID.
+ *   3. An OUI in the Hak5 / Espressif attacker tables is the impostor —
+ *      an observed device identity.
+ *   4. Otherwise UNATTRIBUTED: canonical BSSID order, no verdict.
+ *
+ * What is deliberately gone (#89) is rule 4's predecessor, "the
+ * stronger signal is the impostor". RSSI is not ownership: it is a fact
+ * about distance and antennas, and in the commonest case it is exactly
+ * backwards, because the operator's own AP is the closest radio in the
+ * room. Naming a culprit from it made the view assert something it had
+ * no basis for. Canonical ordering also stabilises the pair's identity —
+ * the `twin_episodes` primary key used to swap, and so duplicate, the
+ * moment two RSSIs crossed. */
+static int choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
+                        const beacon_ap_t **real_out,
+                        const beacon_ap_t **twin_out) {
     int a_mine = ownership_is_my_bssid(a->bssid);
     int b_mine = ownership_is_my_bssid(b->bssid);
-    if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return; }
-    if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return; }
+    if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return 1; }
+    if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return 1; }
 
     int a_tainted = evil_twin_bssid_is_tainted(a->bssid);
     int b_tainted = evil_twin_bssid_is_tainted(b->bssid);
-    if (a_tainted && !b_tainted) { *real_out = b; *twin_out = a; return; }
-    if (b_tainted && !a_tainted) { *real_out = a; *twin_out = b; return; }
+    if (a_tainted && !b_tainted) { *real_out = b; *twin_out = a; return 1; }
+    if (b_tainted && !a_tainted) { *real_out = a; *twin_out = b; return 1; }
 
-    int a_sig = a->signal_dbm;
-    int b_sig = b->signal_dbm;
-    if (a_sig == 0 && b_sig == 0) { *real_out = a; *twin_out = b; return; }
-    if (a_sig <= b_sig)           { *real_out = a; *twin_out = b; }
-    else                          { *real_out = b; *twin_out = a; }
+    int a_tool = oui_is_hak5(a->fp.oui) || oui_is_espressif(a->fp.oui);
+    int b_tool = oui_is_hak5(b->fp.oui) || oui_is_espressif(b->fp.oui);
+    if (a_tool && !b_tool) { *real_out = b; *twin_out = a; return 1; }
+    if (b_tool && !a_tool) { *real_out = a; *twin_out = b; return 1; }
+
+    twin_pair_order(a, b, real_out, twin_out);
+    return 0;
+}
+
+/* Largest 60s RSSI swing across the halves given (NULL skips a half).
+ * A side whose bounds are both the 0-sentinel has no window yet. */
+static int ap_swing(const beacon_ap_t *ap) {
+    if (!ap || !ap->rssi_min_60s || !ap->rssi_max_60s) return 0;
+    int swing = ap->rssi_max_60s - ap->rssi_min_60s;
+    if (swing < 0)   swing = 0;
+    if (swing > 255) swing = 255;
+    return swing;
+}
+
+static int pair_swing(const beacon_ap_t *x, const beacon_ap_t *y) {
+    int sx = ap_swing(x), sy = ap_swing(y);
+    return sx > sy ? sx : sy;
 }
 
 static int already_recorded(const sloth_state_t *s,
@@ -59,17 +87,19 @@ void twins_snapshot(sloth_state_t *s) {
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
-            if (memcmp(a->bssid, b->bssid, 3) == 0) continue; /* same OUI */
-            /* Same reasoning as the evil-twin rule (#51): co-operating
-             * infrastructure that happens to be cross-vendor is not a
-             * twin pair. Kept in step with alerts.c so the [x] Twins
-             * view and the alert never disagree about the same pair. */
-            if (ap_infrastructure_peers(a, b)) continue;
+            /* One scorer, shared with rule_evil_twin (#89), so the [x]
+             * Twins view and the alert cannot disagree about a pair.
+             * Neither a matching OUI nor an 802.11k neighbour claim
+             * removes a candidate any more — both are confidence
+             * deductions inside the score. What gates the episode is the
+             * presence of positive impersonation evidence. */
+            twin_evidence_t ev;
+            if (!twin_evidence_score(s, a, b, now, &ev)) continue;
             if (already_recorded(s, a->bssid, b->bssid)) continue;
             if (s->twin_episode_count >= MAX_TWIN_EPISODES) return;
 
             const beacon_ap_t *real, *twin;
-            choose_sides(a, b, &real, &twin);
+            int attributed = choose_sides(a, b, &real, &twin);
 
             twin_episode_t *e = &s->twin_episodes[s->twin_episode_count++];
             memset(e, 0, sizeof(*e));
@@ -77,26 +107,25 @@ void twins_snapshot(sloth_state_t *s) {
             memcpy(e->real_bssid, real->bssid, 6);
             memcpy(e->twin_bssid, twin->bssid, 6);
             snprintf(e->enc, sizeof(e->enc), "%s", a->enc);
-            e->real_rssi = real->signal_dbm;
-            e->twin_rssi = twin->signal_dbm;
-            /* RSSI swing — characterise the *twin* side (the suspected
-             * rogue): a swing here is the proximity signal that drove
-             * Phase 3. Skip if either bound is the 0-sentinel. */
-            if (twin->rssi_min_60s && twin->rssi_max_60s) {
-                int swing = twin->rssi_max_60s - twin->rssi_min_60s;
-                if (swing < 0) swing = 0;
-                if (swing > 255) swing = 255;
-                e->rssi_swing_dbm = (uint8_t)swing;
-            }
-            e->attack_in_progress = evil_twin_bssid_is_tainted(twin->bssid)
-                                  ? 1 : 0;
-            e->attacker_oui = (oui_is_hak5(twin->fp.oui) ||
-                               oui_is_espressif(twin->fp.oui))
-                              ? 1 : 0;
-            e->hash_mismatch = (a->fp.vendor_ies_hash &&
-                                b->fp.vendor_ies_hash &&
-                                a->fp.vendor_ies_hash != b->fp.vendor_ies_hash)
-                               ? 1 : 0;
+            e->real_rssi   = real->signal_dbm;
+            e->twin_rssi   = twin->signal_dbm;
+            e->attributed  = attributed ? 1 : 0;
+            e->confidence  = (uint8_t)ev.confidence;
+            /* RSSI swing — the proximity signal that drove Phase 3.
+             * Attributed to the twin side when we know which one that
+             * is; on an unattributed pair the worse of the two, because
+             * picking the half that sorted higher would be arbitrary.
+             * Skip a side whose bounds are the 0-sentinel. */
+            e->rssi_swing_dbm = (uint8_t)pair_swing(twin,
+                                    attributed ? NULL : real);
+            /* Flags characterise the pair, not "the rogue", whenever the
+             * pair is unattributed — there is no rogue half to name. */
+            e->attack_in_progress =
+                (evil_twin_bssid_is_tainted(twin->bssid) ||
+                 (!attributed && evil_twin_bssid_is_tainted(real->bssid)))
+                ? 1 : 0;
+            e->attacker_oui  = ev.attacker_oui  ? 1 : 0;
+            e->hash_mismatch = ev.hashes_differ ? 1 : 0;
             e->last_seen = now;
         }
     }

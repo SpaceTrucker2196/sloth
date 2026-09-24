@@ -307,22 +307,35 @@ void view_beacon_draw(const sloth_state_t *s) {
         /* Look up twin-cluster membership: '!' = chain-tainted twin
          * (attack-in-progress), '#' = vendor-IE hash mismatch detected,
          * '@' = OUI on the Hak5/Espressif attacker list, '~' = appears
-         * in a twin pair as the legit "real" side. Glyphs are ASCII
-         * to match the Twins view legend. */
+         * in a twin pair as the legit "real" side, '?' = in an
+         * unattributed pair (#89) where neither half is accused.
+         * Glyphs are ASCII to match the Twins view legend.
+         *
+         * '~' is only reachable on an attributed episode. On an
+         * unattributed one `real_bssid` is just the half that sorted
+         * lower, so calling it the legit side would have printed a
+         * clean bill of health derived from a memcmp. */
         char twin_glyph[4] = "";
         for (int t = 0; t < s->twin_episode_count; t++) {
             const twin_episode_t *e = &s->twin_episodes[t];
-            if (memcmp(e->twin_bssid, ap->bssid, 6) == 0) {
+            int is_twin = memcmp(e->twin_bssid, ap->bssid, 6) == 0;
+            int is_real = memcmp(e->real_bssid, ap->bssid, 6) == 0;
+            if (!is_twin && !is_real) continue;
+            if (!e->attributed) {
+                if      (e->attack_in_progress) twin_glyph[0] = '!';
+                else if (e->attacker_oui)       twin_glyph[0] = '@';
+                else                            twin_glyph[0] = '?';
+                break;
+            }
+            if (is_twin) {
                 if      (e->attack_in_progress) twin_glyph[0] = '!';
                 else if (e->attacker_oui)       twin_glyph[0] = '@';
                 else if (e->hash_mismatch)      twin_glyph[0] = '#';
                 else                            twin_glyph[0] = '*';
-                break;
-            }
-            if (memcmp(e->real_bssid, ap->bssid, 6) == 0) {
+            } else {
                 twin_glyph[0] = '~';
-                break;
             }
+            break;
         }
         const char *gsuffix = twin_glyph[0] ? twin_glyph : "";
 

@@ -1,8 +1,11 @@
 # Twins  `[x]`
 
-Materialised view of detected evil-twin episodes. One row per
-same-SSID + same-cipher + diff-OUI pair, with the Phase 2/3/4 signal
-sources merged in.
+Materialised view of evil-twin **candidate** pairs. One row per
+same-SSID + same-cipher pair that carries positive impersonation
+evidence, with the Phase 2/3/4 signal sources merged in.
+
+Reads the same `twin_evidence_score()` the `EVIL_TWIN` rule does, so the
+view and the alert cannot disagree about a pair.
 
 ## Protocol / data source
 
@@ -13,9 +16,9 @@ or the EAPOL log.
 
 ## What sloth captures
 
-Per episode: SSID, real BSSID, twin BSSID, shared encryption, last
-observed RSSI on each side, the twin's RSSI swing in the last 60 s,
-and three flags:
+Per episode: SSID, the two BSSIDs, shared encryption, a confidence
+percentage, last observed RSSI on each side, the RSSI swing in the last
+60 s, and four flags:
 
 - **attack_in_progress** — the chain rule has tainted the twin BSSID
   (a `DEAUTH_FLOOD` against the real half met its threshold within the
@@ -25,31 +28,76 @@ and three flags:
   `src/wifi_oui_attacker.c`.
 - **hash_mismatch** — the two APs' vendor-IE fingerprint hashes (FNV-1a
   over non-Microsoft tag-221 IEs) disagree.
+- **unattributed** (`?`) — nothing has established which half is the
+  impostor. The two BSSID columns are the pair in canonical byte order,
+  not an accusation.
 
-"Real" / "twin" assignment defaults to the lower-RSSI side being real
-(a distant legit AP overshadowed by a close rogue). When the chain
-rule has tainted a BSSID, that override pins the assignment.
+`confidence` is how likely the pair is an impersonation. It is a
+**separate number from the alert's severity**, which is how bad it would
+be if true (#89). A row at 5 % is still a row: the operator gets to see
+the weak candidate and decide, rather than having the detector decide
+silently on their behalf.
+
+## Which half is the impostor
+
+Ranked by what the signal actually establishes:
+
+1. An **operator-designated BSSID** (`--my-bssid`, #52) is never the
+   impostor. Asserted by a human, so it outranks everything inferred.
+2. A BSSID the **deauth chain tainted** is the impostor — behaviour
+   observed against that BSSID.
+3. An **attacker-tool OUI** (Hak5 / Espressif) is the impostor — an
+   observed device identity.
+4. Otherwise **unattributed**: canonical BSSID order, `?` flag, no
+   verdict.
+
+Rule 4 replaced "the stronger signal is the impostor" in #89. **RSSI is
+not ownership.** It is a fact about distance and antennas, and in the
+commonest case it gets the answer backwards, because the operator's own
+AP is usually the closest radio in the room — which the old rule read as
+the rogue. Canonical ordering also stabilises the `twin_episodes`
+primary key `(ssid, real_bssid, twin_bssid)`, which used to swap, and so
+insert a duplicate row, whenever two RSSIs crossed.
+
+Slice 3 of #89 will separate *over-the-air impersonator* from
+*neighbouring AP* from *unauthorized AP attached to the wired network*.
+RF alone cannot establish wired attachment and this view does not
+pretend otherwise; `attributed` is the field that hook builds on.
 
 ## View
 
 ```
  ── Twins ────────────────────────────────────────────────────────
  Evil-twin episodes: 1 / max 64  attack-in-progress: 1
- SSID                Real BSSID         Twin BSSID         Cipher  Swing  Flags   Last
- ------------------  -----------------  -----------------  ------  -----  ------  ----
- Cafe-Net            aa:bb:cc:01:02:03  11:22:33:44:55:66  WPA2    18dB   !@#     3s
+ SSID                BSSID A            BSSID B            Cipher  Conf  Swing  Flags   Last
+ ------------------  -----------------  -----------------  ------  ----  -----  ------  ----
+ Cafe-Net            aa:bb:cc:01:02:03  11:22:33:44:55:66  WPA2    60%   18dB   !*#     3s
+ CorpWiFi            11:22:33:44:55:66  99:88:77:66:55:44  WPA2    5%    -      ?       9s
  flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch
+        ? sides unattributed - candidate pair, neither half accused
 ```
 
-The twin column is bright (the suspected rogue gets the operator's
-attention); the real column dim.
+On an **attributed** row the B column is bright — that really is the
+suspected rogue, and it gets the operator's attention. On a `?` row both
+columns are dim: colouring one of them would accuse whichever BSSID
+sorted higher.
+
+The columns are headed "BSSID A / B" rather than "Real / Twin" for the
+same reason. The old headings stated a verdict on every row, including
+the rows where sloth had none.
 
 ## What's normal
 
-- Zero rows. Most networks do not host a same-SSID pair with
-  different vendor OUIs.
-- A single row with all flags off, low RSSI swing, no taint: usually
-  a multi-vendor mesh deployment. Worth a glance; not an attack.
+- Zero rows. Most networks do not host a same-SSID pair carrying any
+  positive impersonation evidence. A single-vendor multi-BSSID
+  deployment with nothing else going on produces none — because there
+  is no evidence to report, not because a matching OUI vouched for it.
+- A `?` row at low confidence, flags otherwise off, low RSSI swing, no
+  taint: usually a multi-vendor mesh or a range extender. Worth a
+  glance; not an attack. This is the row that used to be suppressed
+  entirely when either AP advertised the other as an 802.11k neighbour —
+  which also meant an attacker could suppress it by advertising its
+  target.
 
 ## What's suspicious
 

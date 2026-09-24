@@ -265,6 +265,8 @@ static void test_emit_twin_episode_full_fields(void) {
     e->attack_in_progress = 1;
     e->attacker_oui       = 1;
     e->hash_mismatch      = 1;
+    e->attributed         = 1;
+    e->confidence         = 60;
     e->last_seen          = 1700000000;
 
     jsonl_emit_twin_episodes(&s);
@@ -283,6 +285,35 @@ static void test_emit_twin_episode_full_fields(void) {
     ASSERT(contains(body, "\"attack_in_progress\":1"));
     ASSERT(contains(body, "\"attacker_oui\":1"));
     ASSERT(contains(body, "\"hash_mismatch\":1"));
+    ASSERT(contains(body, "\"attributed\":1"));
+    ASSERT(contains(body, "\"confidence\":60"));
+}
+
+/* #89: an unattributed pair says so, and it does not claim certainty.
+ * A consumer that reads `twin_bssid` as an accusation must be able to
+ * tell that sloth only sorted the pair. */
+static void test_emit_twin_episode_unattributed_is_explicit(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    twin_episode_t *e = &s.twin_episodes[s.twin_episode_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->ssid, sizeof(e->ssid), "Cafe-Net");
+    uint8_t lo[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t hi[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    memcpy(e->real_bssid, lo, 6);
+    memcpy(e->twin_bssid, hi, 6);
+    snprintf(e->enc, sizeof(e->enc), "WPA2");
+    e->attributed = 0;
+    e->confidence = 20;
+    e->last_seen  = 1700000000;
+
+    jsonl_emit_twin_episodes(&s);
+    jsonl_close();
+
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"attributed\":0"));
+    ASSERT(contains(body, "\"confidence\":20"));
 }
 
 /* No episodes → no output. */
@@ -480,6 +511,37 @@ static void test_emit_alert_writes_count(void) {
     ASSERT(contains(body, "\"title\":\"THREAT_DOMAIN\""));
     ASSERT(contains(body, "\"count\":7"));
     ASSERT(contains(body, "\"detail\":\"saw malware.testing.com\""));
+    /* No confidence reported by this rule -> the key is absent, not 0.
+     * A literal 0 would read as "certainly false" (#89). */
+    ASSERT(!contains(body, "confidence"));
+}
+
+/* #89: severity and confidence travel as separate fields, on both the
+ * legacy `alert` record and the #98 lifecycle event, so a consumer can
+ * weight a CRIT by how sure sloth is without a second lookup. */
+static void test_emit_alert_carries_confidence_when_reported(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen  = 1700000004;
+    a.sev        = ALERT_SEV_CRIT;
+    a.type       = ALERT_TYPE_EVIL_TWIN;
+    a.count      = 1;
+    a.confidence = 35;
+    a.event_seq  = 1;
+    snprintf(a.title,       sizeof(a.title),       "EVIL_TWIN");
+    snprintf(a.detail,      sizeof(a.detail),      "suspected impersonation");
+    snprintf(a.key,         sizeof(a.key),         "twin-fp:a:b::WPA2/WPA2");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"alert\""));
+    ASSERT(contains(body, "\"type\":\"alert.create\""));
+    /* Once on each record, and the severity is still its own field. */
+    ASSERT(contains(body, "\"sev\":2"));
+    ASSERT(contains(body, "\"confidence\":35"));
 }
 
 /* ── escaping ────────────────────────────────────────────── */
@@ -1212,10 +1274,12 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_icmp_writes_seq);
     RUN_TEST(test_emit_icmp_v6_true_writes_one);
     RUN_TEST(test_emit_alert_writes_count);
+    RUN_TEST(test_emit_alert_carries_confidence_when_reported);
     RUN_TEST(test_emit_connections_tcp_and_udp);
     RUN_TEST(test_emit_connections_v6_brackets_address);
     RUN_TEST(test_emit_connections_omits_zero_rtt);
     RUN_TEST(test_emit_twin_episode_full_fields);
+    RUN_TEST(test_emit_twin_episode_unattributed_is_explicit);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_beacon_ie_order_fields);
     RUN_TEST(test_emit_beacon_tbtt_jitter_fields);

@@ -67,6 +67,9 @@ static void test_twins_same_cipher_diff_oui_produces_episode(void) {
     ASSERT(strcmp(s.twin_episodes[0].enc,  "WPA2")     == 0);
 }
 
+/* Same OUI and no other signal — no positive impersonation evidence, so
+ * no episode. Not because a matching OUI vouches for the pair (#89): add
+ * one positive signal and the same pair materialises, see below. */
 static void test_twins_same_oui_no_episode(void) {
     alerts_clear();
     sloth_state_t s; seed(&s);
@@ -76,6 +79,22 @@ static void test_twins_same_oui_no_episode(void) {
     add_beacon(&s, "Mesh", b, "WPA2", -50);
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 0);
+}
+
+/* #89: a same-OUI clone whose vendor-IE fingerprint contradicts its
+ * twin does materialise, so the view and the alert agree about it. */
+static void test_twins_same_oui_clone_with_ie_mismatch_produces_episode(void) {
+    alerts_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t b[6] = {0xaa,0xbb,0xcc,0x99,0x99,0x99};  /* copied OUI */
+    add_beacon(&s, "Mesh", a, "WPA2", -70);
+    add_beacon(&s, "Mesh", b, "WPA2", -50);
+    s.beacon_aps[0].fp.vendor_ies_hash = 0x1111u;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0x2222u;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(s.twin_episodes[0].hash_mismatch, 1);
 }
 
 static void test_twins_open_no_episode(void) {
@@ -89,20 +108,57 @@ static void test_twins_open_no_episode(void) {
     ASSERT_EQ(s.twin_episode_count, 0);
 }
 
-/* Lower-RSSI = "real" (background AP), higher-RSSI = "twin" (closer
- * suspected rogue). This is the default assignment when no taint
- * override exists. */
-static void test_twins_lower_rssi_is_real(void) {
-    alerts_clear();
+/* #89: RSSI is not ownership and no longer picks the impostor.
+ *
+ * The old rule called the stronger-signal AP the twin, on the theory
+ * that a freshly-placed rogue is closer than the real AP. That is a
+ * guess about furniture, not evidence about identity — and it is wrong
+ * in the most common case, where the operator's own AP is the closest
+ * thing in the room. With no ownership, taint or attacker-tool signal
+ * the pair is left UNATTRIBUTED and ordered canonically, so the view
+ * shows two candidates instead of naming a culprit it cannot identify.
+ *
+ * Flipping the signals must not change which BSSID lands in which
+ * field: that is what "RSSI no longer decides" means. */
+static void test_twins_rssi_does_not_decide_sides(void) {
+    alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t weaker[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* -80 */
-    uint8_t closer[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* -45 */
-    add_beacon(&s, "Cafe-Net", weaker, "WPA2", -80);
-    add_beacon(&s, "Cafe-Net", closer, "WPA2", -45);
+    uint8_t lo[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t hi[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    add_beacon(&s, "Cafe-Net", hi, "WPA2", -80);
+    add_beacon(&s, "Cafe-Net", lo, "WPA2", -45);
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
-    ASSERT(memcmp(s.twin_episodes[0].real_bssid, weaker, 6) == 0);
-    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, closer, 6) == 0);
+    ASSERT_EQ(s.twin_episodes[0].attributed, 0);
+    /* Canonical order: lower BSSID first. */
+    ASSERT(memcmp(s.twin_episodes[0].real_bssid, lo, 6) == 0);
+    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, hi, 6) == 0);
+
+    /* Invert the RSSIs — identical assignment. */
+    alerts_clear();
+    sloth_state_t t; seed(&t);
+    add_beacon(&t, "Cafe-Net", hi, "WPA2", -45);
+    add_beacon(&t, "Cafe-Net", lo, "WPA2", -80);
+    twins_snapshot(&t);
+    ASSERT_EQ(t.twin_episode_count, 1);
+    ASSERT_EQ(t.twin_episodes[0].attributed, 0);
+    ASSERT(memcmp(t.twin_episodes[0].real_bssid, lo, 6) == 0);
+    ASSERT(memcmp(t.twin_episodes[0].twin_bssid, hi, 6) == 0);
+}
+
+/* An unattributed episode carries the same confidence the alert does,
+ * so the [x] Twins view can show how sure sloth is without the operator
+ * reading it as a verdict. */
+static void test_twins_episode_carries_confidence(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
+    add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ((int)s.twin_episodes[0].confidence, TWIN_W_DIFF_OUI);
 }
 
 /* Hash mismatch flag — both sides have non-zero hashes that differ. */
@@ -120,19 +176,25 @@ static void test_twins_hash_mismatch_flag(void) {
     ASSERT_EQ(s.twin_episodes[0].hash_mismatch, 1);
 }
 
-/* Attacker OUI flag — when the twin side's OUI is Hak5 / Espressif. */
-static void test_twins_attacker_oui_flag(void) {
-    alerts_clear();
+/* Attacker OUI flag — and it is now what *attributes* the pair. An OUI
+ * in the Hak5 / Espressif tables is an observed device identity, not a
+ * signal-strength guess, so it can name the impostor where RSSI cannot.
+ * Note the Hak5 BSSID is the numerically LOWER one here: canonical
+ * ordering would have put it in real_bssid, and the attribution
+ * overrides that. */
+static void test_twins_attacker_oui_attributes_the_impostor(void) {
+    alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
     uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t pin[6]   = {0x00,0x13,0x37,0x44,0x55,0x66};  /* Hak5 OUI */
     add_beacon(&s, "Cafe-Net", legit, "WPA2", -75);
-    add_beacon(&s, "Cafe-Net", pin,   "WPA2", -40);      /* closer = twin */
+    add_beacon(&s, "Cafe-Net", pin,   "WPA2", -40);
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
     ASSERT_EQ(s.twin_episodes[0].attacker_oui, 1);
-    /* Twin is the Hak5-OUI AP. */
-    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, pin, 6) == 0);
+    ASSERT_EQ(s.twin_episodes[0].attributed,   1);
+    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, pin,   6) == 0);
+    ASSERT(memcmp(s.twin_episodes[0].real_bssid, legit, 6) == 0);
 }
 
 /* RSSI swing is taken from the twin side's 60s window. */
@@ -150,33 +212,37 @@ static void test_twins_rssi_swing_from_twin_side(void) {
     ASSERT_EQ((int)s.twin_episodes[0].rssi_swing_dbm, 30);
 }
 
-/* Taint marker — when the chain rule has tainted a BSSID, the
- * other half becomes the "real" side regardless of RSSI. */
+/* Taint marker — when the chain rule has tainted a BSSID, that BSSID is
+ * the twin and the pair is attributed.
+ *
+ * The tainted BSSID here is the numerically *lower* one, so canonical
+ * pair ordering alone would have put it in `real_bssid`. The assertion
+ * therefore proves the attribution is doing the work, not the ordering
+ * (#89) — and taint is observed behaviour, not a signal-strength guess. */
 static void test_twins_taint_overrides_rssi_assignment(void) {
-    alerts_clear();
+    alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
-    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* tainted, weaker */
-    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* clean,    closer */
-    /* Without taint, the closer BSSID b would be the twin. With a
-     * tainted, the closer one b is "real" and a (the tainted) is twin. */
-    add_beacon(&s, "Cafe-Net", a, "WPA2", -80);
-    add_beacon(&s, "Cafe-Net", b, "WPA2", -45);
-    /* Seed a deauth flood targeting `b` so the chain rule taints `a`.
-     * The chain reads the (BSSID, victim) aggregate (#88). */
+    uint8_t rogue[6] = {0x11,0x22,0x33,0x44,0x55,0x66};  /* tainted, lower */
+    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x01,0x02,0x03};  /* clean,   higher */
+    add_beacon(&s, "Cafe-Net", rogue, "WPA2", -80);
+    add_beacon(&s, "Cafe-Net", real,  "WPA2", -45);
+    /* Seed a deauth flood targeting `real` so the chain rule taints the
+     * other half. The chain reads the (BSSID, victim) aggregate (#88). */
     deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count++];
     memset(v, 0, sizeof(*v));
-    memcpy(v->bssid, b, 6);
+    memcpy(v->bssid, real, 6);
     memset(v->victim, 0xff, 6);
     v->flood      = 1;
     v->flood_last = time(NULL);
     alerts_update(&s);
-    ASSERT_EQ(evil_twin_bssid_is_tainted(a), 1);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 1);
 
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
-    ASSERT(memcmp(s.twin_episodes[0].real_bssid, b, 6) == 0);
-    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, a, 6) == 0);
+    ASSERT(memcmp(s.twin_episodes[0].real_bssid, real,  6) == 0);
+    ASSERT(memcmp(s.twin_episodes[0].twin_bssid, rogue, 6) == 0);
     ASSERT_EQ(s.twin_episodes[0].attack_in_progress, 1);
+    ASSERT_EQ(s.twin_episodes[0].attributed, 1);
 }
 
 /* Snapshot is idempotent — calling twice produces the same count
@@ -244,11 +310,12 @@ static void test_view_twins_key_navigation(void) {
     ASSERT_EQ(s.twin_episode_sel, 0);  /* clamp at 0 */
 }
 
-/* #51: cross-vendor infrastructure produces no episode, so the view and
- * the alert agree. Without this the [x] Twins view would keep listing a
- * range extender the alert engine has already exonerated. */
-static void test_twins_infrastructure_peers_no_episode(void) {
-    alerts_clear();
+/* #51 as amended by #89: a mutual 802.11k claim no longer removes the
+ * episode — it lowers its confidence. The view and the alert still
+ * agree, because both read twin_evidence_score(); what changed is that
+ * neither of them lets an unauthenticated frame erase a candidate. */
+static void test_twins_infrastructure_peers_lower_confidence_not_erased(void) {
+    alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
     uint8_t router[6]   = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t extender[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
@@ -257,7 +324,9 @@ static void test_twins_infrastructure_peers_no_episode(void) {
     add_neighbor(&s, router,   extender);
     add_neighbor(&s, extender, router);
     twins_snapshot(&s);
-    ASSERT_EQ(s.twin_episode_count, 0);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ((int)s.twin_episodes[0].confidence, TWIN_CONF_MIN);
+    ASSERT_EQ(s.twin_episodes[0].attributed, 0);
 }
 
 /* ...and an unrelated cross-vendor pair still produces one. */
@@ -296,10 +365,10 @@ static void test_twins_designated_bssid_is_always_real(void) {
     ownership_clear();
 }
 
-/* Control: same geometry, no designation -> the RSSI heuristic applies
- * and picks the *weaker* side as real, i.e. the opposite assignment.
- * This is what makes the test above meaningful. */
-static void test_twins_without_designation_rssi_decides(void) {
+/* Control: same geometry, no designation -> the pair is unattributed.
+ * This is what makes the test above meaningful — the designation is the
+ * only thing that produced a verdict. */
+static void test_twins_without_designation_pair_is_unattributed(void) {
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed(&s);
     uint8_t strong[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
@@ -308,8 +377,7 @@ static void test_twins_without_designation_rssi_decides(void) {
     add_beacon(&s, "CorpWiFi", weak,   "WPA2", -75);
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
-    ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, weak,   6), 0);
-    ASSERT_EQ(memcmp(s.twin_episodes[0].twin_bssid, strong, 6), 0);
+    ASSERT_EQ(s.twin_episodes[0].attributed, 0);
 }
 
 /* Both designated -> no basis to pick between them; fall through to the
@@ -325,7 +393,9 @@ static void test_twins_both_designated_falls_through(void) {
     ownership_add_bssid("11:22:33:44:55:66");
     twins_snapshot(&s);
     ASSERT_EQ(s.twin_episode_count, 1);
-    /* Same outcome as the no-designation control. */
+    /* Same outcome as the no-designation control: unattributed, in
+     * canonical order. */
+    ASSERT_EQ(s.twin_episodes[0].attributed, 0);
     ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, b, 6), 0);
     ownership_clear();
 }
@@ -335,17 +405,19 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_empty_state_no_episodes);
     RUN_TEST(test_twins_same_cipher_diff_oui_produces_episode);
     RUN_TEST(test_twins_same_oui_no_episode);
+    RUN_TEST(test_twins_same_oui_clone_with_ie_mismatch_produces_episode);
     RUN_TEST(test_twins_open_no_episode);
-    RUN_TEST(test_twins_lower_rssi_is_real);
+    RUN_TEST(test_twins_rssi_does_not_decide_sides);
+    RUN_TEST(test_twins_episode_carries_confidence);
     RUN_TEST(test_twins_hash_mismatch_flag);
-    RUN_TEST(test_twins_attacker_oui_flag);
+    RUN_TEST(test_twins_attacker_oui_attributes_the_impostor);
     RUN_TEST(test_twins_rssi_swing_from_twin_side);
     RUN_TEST(test_twins_taint_overrides_rssi_assignment);
     RUN_TEST(test_twins_snapshot_idempotent);
-    RUN_TEST(test_twins_infrastructure_peers_no_episode);
+    RUN_TEST(test_twins_infrastructure_peers_lower_confidence_not_erased);
     RUN_TEST(test_twins_unrelated_neighbors_still_episode);
     RUN_TEST(test_twins_designated_bssid_is_always_real);
-    RUN_TEST(test_twins_without_designation_rssi_decides);
+    RUN_TEST(test_twins_without_designation_pair_is_unattributed);
     RUN_TEST(test_twins_both_designated_falls_through);
 
     TEST_SUITE("twins view");

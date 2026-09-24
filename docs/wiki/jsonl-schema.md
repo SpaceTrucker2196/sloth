@@ -266,10 +266,33 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
 | `count` | int    | **rule evaluations** under this dedup key — see the note below. Always `1` on this record, which is emitted only when the key is new |
 | `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
+| `confidence` | int | additive, #89 — how likely the finding is to be **true**, in percent (5..95). A separate axis from `sev`, which is how **bad** it would be if true. **Omitted** when the rule reported none: most rules assert a condition they observed directly and have nothing to qualify, and a literal `0` would read as "certainly false". Emitted today by the `EVIL_TWIN` family |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
+
+**`sev` and `confidence` are two axes, not one scale** (#89). Severity
+is the consequence if the finding is real; confidence is the likelihood
+that it is. A CRIT at 20 % and a WARN at 25 % are both meaningful and
+neither dominates the other — an operator triaging needs the pair.
+Collapsing them is what let an uncorroborated same-SSID RF coincidence
+page at the same volume as an observed attack. Rules that infer from
+circumstantial evidence report both; rules that assert what they
+directly saw omit `confidence` entirely.
+
+**Dedup keys for paired findings are canonical** (#89). Where a finding
+is about a *pair* of BSSIDs rather than one host, the key is
+`<rule_id>:<bssid_lo>:<bssid_hi>:<site>:<security_profile>` with the two
+BSSIDs in byte order, so `(A,B)` and `(B,A)` are one incident. The
+`EVIL_TWIN` keys `twin:` and `twin-fp:` took this shape in #89; they
+previously ended in the SSID, which collapsed every BSSID pair under one
+name into a single record. `site` is an operator inventory label and is
+**empty** until that inventory ships — it is never derived from an
+observed SSID or BSSID, because a trust input taken from unauthenticated
+over-the-air data is the defect #89 exists to remove. A consumer that
+treated the old key as opaque is unaffected; one that parsed the SSID
+out of it must read `detail` or the `beacon` records instead.
 
 **This record is emitted only when the dedup key is new.** That has
 always been true and #98 did not change it: everything that happens to
@@ -439,14 +462,14 @@ sees for a given `(src, dst, proto)` tuple.
 ### `twin_episode`
 
 ```json
-{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1}
+{"type":"twin_episode","ts":1700000007,"ssid":"Cafe-Net","real_bssid":"aa:bb:cc:01:02:03","twin_bssid":"11:22:33:44:55:66","enc":"WPA2","real_rssi":-70,"twin_rssi":-45,"rssi_swing_dbm":25,"attack_in_progress":1,"attacker_oui":1,"hash_mismatch":1,"attributed":1,"confidence":60}
 ```
 
 | Field                | Type   | Meaning |
 |----------------------|--------|---------|
 | `ssid`               | string | shared SSID |
-| `real_bssid`         | string | legit AP's BSSID (lowercase hex) |
-| `twin_bssid`         | string | rogue / suspected-rogue AP's BSSID |
+| `real_bssid`         | string | when `attributed` is 1, the legit AP's BSSID (lowercase hex); when 0, simply the lower of the two BSSIDs |
+| `twin_bssid`         | string | when `attributed` is 1, the suspected-rogue AP's BSSID; when 0, simply the higher of the two — **not an accusation** |
 | `enc`                | string | shared encryption mode (`WPA2`, `WPA3`, …) |
 | `real_rssi`          | int    | last observed signal of the real AP (dBm; 0 = unseen) |
 | `twin_rssi`          | int    | last observed signal of the twin AP |
@@ -454,6 +477,8 @@ sees for a given `(src, dst, proto)` tuple.
 | `attack_in_progress` | int    | 1 if the chain rule tainted `twin_bssid` (DEAUTH_FLOOD seen within 5 s) |
 | `attacker_oui`       | int    | 1 if `twin_bssid`'s OUI is Hak5 or Espressif |
 | `hash_mismatch`      | int    | 1 if the vendor-IE fingerprint hashes disagree |
+| `attributed`         | int    | additive, #89 — 1 when something other than radio physics established which half is the impostor (an operator-designated BSSID, a tainted BSSID from the deauth chain, or an attacker-tool OUI). **0 means unattributed**: the pair is a candidate and the two BSSID fields are only in canonical byte order |
+| `confidence`         | int    | additive, #89 — same percentage the pair's `EVIL_TWIN` alert carries |
 
 **Cadence**: snapshot — one record per detected pair per poll (≈1 Hz).
 The consumer rebuilds its table from the latest snapshot keyed by
@@ -461,10 +486,21 @@ The consumer rebuilds its table from the latest snapshot keyed by
 RF, its records simply stop arriving — there's no explicit "closed"
 record.
 
-**"Real" vs "twin" assignment** defaults to the lower-RSSI side being
-real (typical for a distant legit AP overshadowed by a close rogue).
-When `rule_evil_twin_attack_chain` has tainted a BSSID, that override
-pins the assignment regardless of signal strength.
+**"Real" vs "twin" assignment.** Ranked by what the signal actually
+establishes: an operator-designated BSSID (#52) is never the impostor;
+then a BSSID `rule_evil_twin_attack_chain` has tainted; then an OUI in
+the Hak5 / Espressif attacker tables. Any of those sets
+`attributed: 1`. With none of them the pair is **unattributed**
+(`attributed: 0`) and the two BSSID fields hold it in canonical byte
+order — a stable identity for the pair, not a verdict on either half.
+
+Before #89 the fallback was "the stronger signal is the impostor". RSSI
+is not ownership: it is a fact about distance and antennas, and in the
+commonest case it is backwards, because the operator's own AP is the
+closest radio in the room. A consumer that read `twin_bssid` as an
+accusation must now gate on `attributed`. The canonical order is also
+why the `(ssid, real_bssid, twin_bssid)` key is now stable — it used to
+swap, and so duplicate, whenever the two RSSIs crossed.
 
 ## State snapshot record types
 

@@ -684,3 +684,66 @@ need a radio this build host does not have. The dwell-servicing gap
 the poll loop runs) and the monitor-specific frame counter tied to the
 confirmed frequency are also untouched; the RF dwell heuristic still
 attributes activity via `s->pkt_total`, the general capture counter.
+
+---
+
+## 2026-09-24 — #89 slice 1: evil-twin trust anchors removed
+
+**Source**: issue #89 (external CISO/GRC review, F07), slice 1 of 3 per
+the Captain's answers recorded on the issue 2026-09-24. Code:
+`src/alerts.{c,h}`, `src/twins.c`, `src/views/{twins,beacon}.c`,
+`src/jsonl.c`, `include/sloth.h`.
+
+**Updated pages**:
+
+- [alerts.md](alerts.md) — new "Severity vs confidence (#89)" section:
+  the two axes, why most rules omit confidence, the two removed trust
+  anchors, and the canonical pair-key shape.
+- [jsonl-schema.md](jsonl-schema.md) — additive `confidence` on `alert`
+  and the `alert.*` lifecycle records; additive `attributed` +
+  `confidence` on `twin_episode`; the `real_bssid` / `twin_bssid`
+  meanings now depend on `attributed`; canonical dedup-key note.
+- [../views/alerts.md](../views/alerts.md) — `EVIL_TWIN` rule-table row.
+- [../views/twins.md](../views/twins.md) — "Which half is the impostor"
+  ranking, `?` glyph, Conf column, A/B headings.
+
+**What changed in the detector**:
+
+Three things, all removals of something the code treated as proof:
+
+1. **An 802.11k neighbour report is no longer a suppressor.** It was an
+   unauthenticated frame with veto power: an attacker advertising the AP
+   it impersonated erased the finding. Now a confidence deduction that
+   can demote a soft-signal severity and nothing more — a hard signal
+   (attacker-tool OUI, BTM steer) is immune, so the attacker gets no
+   severity lever.
+2. **A matching vendor OUI is no longer a suppressor.** Three bytes the
+   attacker writes. A same-OUI pair whose vendor-IE fingerprints
+   contradict each other now fires; a same-OUI pair with no other signal
+   stays quiet because it carries no evidence, which is a different fact
+   from being trusted.
+3. **RSSI no longer names the impostor.** It is a fact about distance,
+   and in the commonest case it is backwards — the operator's own AP is
+   the closest radio in the room. Unattributed pairs are ordered
+   canonically and flagged `?`.
+
+Plus: severity split from confidence (5..95 %, never 100), and the
+canonical pair key so two candidate pairs under one SSID both survive.
+The key shares #98's dedup/incident machinery rather than forking a
+second scheme — it flips #98's own
+`test_lifecycle_two_twin_pairs_one_ssid_*` assertion, which that issue
+left pinned to the broken count with a note naming #89.
+
+**Out of scope, deliberately**: the JSON inventory file, the
+`--my-ssid`/`--my-bssid` flag merge and the inventory content hash are
+slice 2; the UI separation of over-the-air impersonator vs neighbouring
+AP vs wired-attached rogue is slice 3. `site` is left empty rather than
+derived from an observed SSID or BSSID — the Captain's constraint on the
+issue, and the exact defect class this slice removes.
+
+**Not done here**: `attributed` and `confidence` are not persisted to the
+`--db` `twin_episodes` table. That needs a `DB_SCHEMA_VERSION` bump and
+a migration, which is more than this slice warrants; the canonical
+BSSID ordering does however fix a real defect in that table's primary
+key `(ssid, real_bssid, twin_bssid)`, which previously swapped — and so
+inserted a duplicate row — whenever the pair's two RSSIs crossed.

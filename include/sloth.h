@@ -772,6 +772,17 @@ typedef struct {
      * technique (e.g. NO_MONITOR_MODE). */
     char         technique[16];
 
+    /* How sure sloth is that the finding is real, in percent. Zero
+     * means the rule reported no confidence — most rules assert a
+     * condition they observed directly and have nothing to qualify.
+     *
+     * This is a *separate axis from `sev`* (#89). Severity is how bad
+     * the finding would be if it were true; confidence is how likely it
+     * is to be true. Collapsing them is what let an evil-twin rule
+     * report an uncorroborated RF coincidence at the same volume as an
+     * observed attack. An operator triaging needs both numbers. */
+    uint8_t      confidence;
+
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on
      * the first fire, carries an `incident_id` through every
@@ -1337,6 +1348,23 @@ typedef struct {
     uint8_t  attack_in_progress;     /* set when chain rule tainted twin BSSID */
     uint8_t  attacker_oui;           /* twin OUI in Hak5 / Espressif tables */
     uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
+    /* Do we actually know which half is the impostor? (#89)
+     *
+     * 1 only when something other than radio physics said so: an
+     * operator-designated BSSID, a tainted BSSID from the deauth chain,
+     * or an attacker-tool OUI. 0 means UNATTRIBUTED — the pair is a
+     * candidate and `real_bssid`/`twin_bssid` hold it in canonical
+     * BSSID order, which is a stable identity for the pair and not a
+     * verdict about either half.
+     *
+     * Before #89 the fallback was "the stronger signal is the impostor",
+     * which reads furniture as ownership and gets it backwards in the
+     * common case: the operator's own AP is usually the closest radio in
+     * the room. Canonical ordering also stabilises the `twin_episodes`
+     * primary key, which used to flip — and so insert a second row —
+     * whenever the two RSSIs crossed. */
+    uint8_t  attributed;
+    uint8_t  confidence;             /* percent, matches the alert's (#89) */
     time_t   last_seen;
 } twin_episode_t;
 

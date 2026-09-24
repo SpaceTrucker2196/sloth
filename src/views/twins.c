@@ -34,22 +34,30 @@ void view_twins_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
-    /* Column headers — fixed widths: SSID 18 | real 17 | twin 17 |
-     * enc 6 | swing 5 | flags 6 | last */
+    /* Column headers — fixed widths: SSID 18 | A 17 | B 17 |
+     * enc 6 | conf 4 | swing 5 | flags 6 | last
+     *
+     * "BSSID A / B" rather than "Real / Twin" (#89). On a `?`-flagged
+     * row nothing has established which half is the impostor and the
+     * two columns are only the pair in canonical order — heading them
+     * "Real" and "Twin" made the table state a verdict sloth does not
+     * have. An attributed row says so by *not* carrying the `?`. */
     tui_dim();
-    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-5s  %-6s  %s\n",
-           "SSID", "Real BSSID", "Twin BSSID", "Cipher", "Swing", "Flags", "Last");
-    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-5s  %-6s  %s\n",
+    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-4s  %-5s  %-6s  %s\n",
+           "SSID", "BSSID A", "BSSID B", "Cipher", "Conf", "Swing",
+           "Flags", "Last");
+    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-4s  %-5s  %-6s  %s\n",
            "------------------",
            "-----------------",
            "-----------------",
-           "------", "-----", "------", "----");
+           "------", "----", "-----", "------", "----");
     tui_normal();
 
     if (s->twin_episode_count == 0) {
         tui_dim();
         TPRINT("  (no twin pairs observed — sloth needs at least two same-SSID,\n"
-               "   same-cipher beacons with different vendor OUIs to detect one.)\n");
+               "   same-cipher beacons plus some positive impersonation\n"
+               "   evidence to record one.)\n");
         tui_normal();
         return;
     }
@@ -62,19 +70,25 @@ void view_twins_draw(const sloth_state_t *s) {
 
     for (int row = top; row < end; row++) {
         const twin_episode_t *e = &s->twin_episodes[row];
-        char real_mac[20], twin_mac[20], swing[8], flags[8];
+        char real_mac[20], twin_mac[20], swing[8], flags[8], conf[8];
         fmt_mac(e->real_bssid, real_mac, sizeof(real_mac));
         fmt_mac(e->twin_bssid, twin_mac, sizeof(twin_mac));
         if (e->rssi_swing_dbm) snprintf(swing, sizeof(swing), "%udB", e->rssi_swing_dbm);
         else                   snprintf(swing, sizeof(swing), "-");
+        /* Confidence, not severity (#89) — how likely the pair is an
+         * impersonation, which the alert row's colour does not tell you. */
+        if (e->confidence) snprintf(conf, sizeof(conf), "%u%%", e->confidence);
+        else               snprintf(conf, sizeof(conf), "-");
         /* Flag glyphs (ASCII for portability):
          *   ! = attack-in-progress (deauth-fed chain CRIT)
          *   * = attacker-tool OUI (Hak5 / Espressif)
-         *   # = vendor-IE hash mismatch */
+         *   # = vendor-IE hash mismatch
+         *   ? = unattributed — candidate pair, neither half accused */
         int  fi = 0;
         if (e->attack_in_progress) flags[fi++] = '!';
         if (e->attacker_oui)       flags[fi++] = '*';
         if (e->hash_mismatch)      flags[fi++] = '#';
+        if (!e->attributed)        flags[fi++] = '?';
         flags[fi] = '\0';
         if (!flags[0]) snprintf(flags, sizeof(flags), "-");
 
@@ -86,17 +100,21 @@ void view_twins_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->twin_episode_sel) {
             tui_sel();
-            printw(" %-18.18s  %-17s  %-17s  %-6.6s  %-5s  %-6s  %s\n",
-                   e->ssid, real_mac, twin_mac, e->enc, swing, flags, age);
+            printw(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-5s  %-6s  %s\n",
+                   e->ssid, real_mac, twin_mac, e->enc, conf, swing, flags, age);
             tui_reset();
         } else {
             tui_bright(); printw(" %-18.18s", e->ssid);
             tui_dim();    printw("  %-17s", real_mac);
-            /* Twin BSSID is the suspected rogue — render bright to draw
-             * the operator's eye. */
-            tui_bright(); printw("  %-17s", twin_mac);
+            /* Bright on the B column only when the pair is attributed —
+             * there it really is the suspected rogue. On an
+             * unattributed pair the two halves are peers and colouring
+             * one of them would accuse whichever BSSID sorted higher. */
+            if (e->attributed) tui_bright(); else tui_dim();
+            printw("  %-17s", twin_mac);
             tui_dim();    printw("  %-6.6s", e->enc);
-            tui_normal(); printw("  %-5s", swing);
+            tui_normal(); printw("  %-4s", conf);
+            printw("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
             printw("  %-6s", flags);
             tui_dim();    printw("  %s\n", age);
@@ -105,15 +123,17 @@ void view_twins_draw(const sloth_state_t *s) {
 #else
         if (row == s->twin_episode_sel) {
             tui_sel();
-            printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-5s  %-6s  %s",
-                   e->ssid, real_mac, twin_mac, e->enc, swing, flags, age);
+            printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-5s  %-6s  %s",
+                   e->ssid, real_mac, twin_mac, e->enc, conf, swing, flags, age);
             tui_reset(); printf("\n");
         } else {
             tui_bright(); printf(" %-18.18s", e->ssid);
             tui_dim();    printf("  %-17s", real_mac);
-            tui_bright(); printf("  %-17s", twin_mac);
+            if (e->attributed) tui_bright(); else tui_dim();
+            printf("  %-17s", twin_mac);
             tui_dim();    printf("  %-6.6s", e->enc);
-            tui_normal(); printf("  %-5s", swing);
+            tui_normal(); printf("  %-4s", conf);
+            printf("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
             printf("  %-6s", flags);
             tui_dim();    printf("  %s\n", age);
@@ -126,6 +146,7 @@ void view_twins_draw(const sloth_state_t *s) {
     /* Legend */
     tui_dim();
     TPRINT(" flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch\n");
+    TPRINT("        ? sides unattributed - candidate pair, neither half accused\n");
     tui_normal();
 }
 

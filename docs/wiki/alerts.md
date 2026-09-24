@@ -49,6 +49,63 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
 
 Wire format and the full field table: [[jsonl-schema]].
 
+## Severity vs confidence (#89)
+
+Severity answers *how bad is this if it is real*. **Confidence** answers
+*how likely is it to be real*. They are separate fields on the alert and
+they move independently: a CRIT at 20 % and a WARN at 25 % are both
+meaningful findings and neither one dominates the other.
+
+Most rules omit confidence. They assert a condition they observed
+directly — a flood counted, a cleartext credential seen — and have
+nothing to qualify. Rules that *infer* from circumstantial RF report
+both numbers; `EVIL_TWIN` is the first, reported as **suspected
+impersonation** with a percentage rather than as an established fact.
+
+Collapsing the two axes is what let an uncorroborated same-SSID
+coincidence page at the same volume as an observed attack, and it pushed
+the detector toward suppressing weak candidates outright to keep the
+noise down. Splitting them means a weak candidate can be *shown as
+weak* instead of being hidden.
+
+### Nothing observed over the air is a trust anchor
+
+`EVIL_TWIN`'s same-security branch used to drop a pair outright on two
+grounds, and #89 removed both:
+
+- **A matching vendor OUI.** Three bytes of a frame the attacker writes.
+  Every rogue-AP tool can set them to the target's prefix.
+- **An 802.11k neighbour report from either side.** An unauthenticated
+  management frame. An attacker advertises the AP it is impersonating
+  and the finding disappeared — the suppression handed the adversary an
+  off switch.
+
+Both are now weighted context that lowers confidence, and a neighbour
+claim may demote a severity resting only on soft signals — never one
+backed by a hard signal (attacker-tool OUI, a BTM steer at the pair), or
+naming your target becomes a severity lever.
+
+What replaces them is a requirement for **positive evidence**: with none,
+the rule is silent. A legitimate single-vendor multi-BSSID deployment
+stays quiet because there is nothing to report, not because an observed
+value was read as proof of ownership. The same reasoning removed RSSI as
+the tie-breaker for *which* half of a pair is the impostor — see
+[`docs/views/twins.md`](../views/twins.md).
+
+### Canonical pair keys
+
+A finding about a *pair* keys on the pair, not on the SSID:
+`<rule_id>:<bssid_lo>:<bssid_hi>:<site>:<security_profile>`, BSSIDs in
+byte order so `(A,B)` and `(B,A)` are one incident. `twin:<ssid>` and
+`twin-fp:<ssid>` collapsed every pair under one name into a single
+engine record, and later evaluations overwrote the earlier pair's
+detail — two rogues on one SSID read as one.
+
+`site` is an operator inventory label, **empty** until that inventory
+ships. It is never derived from an observed SSID or BSSID: deriving
+identity from unauthenticated over-the-air data and then letting it key
+a finding would be the neighbour-report hole again in a different hat.
+
 ## Severity tiers
 
 Three tiers, yellow → orange → red, with cross-panel coloring (see

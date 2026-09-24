@@ -213,11 +213,11 @@ static int evict_oldest(time_t now) {
  * `detail` may be regenerated each tick — we always overwrite it so the
  * latest observation wins. `match_ip`/`match_port` are set only on new
  * alerts (so the criteria represent the first time we saw this key). */
-static void fire(alert_type_t type, alert_sev_t sev,
-                 const char *title, const char *detail,
-                 const char *key,
-                 const char *match_ip, uint16_t match_port,
-                 time_t now) {
+static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
+                      const char *title, const char *detail,
+                      const char *key,
+                      const char *match_ip, uint16_t match_port,
+                      time_t now) {
     uint64_t mono = flood_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     int idx = find_by_key(key);
@@ -238,7 +238,8 @@ static void fire(alert_type_t type, alert_sev_t sev,
             a->observations++;
             a->last_observed = now;
         }
-        a->sev = sev;
+        a->sev        = sev;
+        a->confidence = (uint8_t)confidence;
         snprintf(a->detail, sizeof(a->detail), "%s", detail);
 
         if (sev != prev) {
@@ -281,6 +282,7 @@ static void fire(alert_type_t type, alert_sev_t sev,
     memset(a, 0, sizeof(*a));
     a->type       = type;
     a->sev        = sev;
+    a->confidence = (uint8_t)confidence;
     a->count      = 1;
     a->first_seen = now;
     a->last_seen  = now;
@@ -313,6 +315,20 @@ static void fire(alert_type_t type, alert_sev_t sev,
     jsonl_emit_alert(a);
     jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
     event_wake_signal();
+}
+
+/* Confidence 0 — "the rule did not qualify this finding". Most rules
+ * assert a condition they observed directly (a flood counted, a
+ * cleartext credential seen) and have nothing to be unsure about, so
+ * they keep this signature. Rules whose finding is an *inference* from
+ * circumstantial RF — the evil-twin family (#89) — call fire_conf and
+ * report how sure they are separately from how bad it would be. */
+static void fire(alert_type_t type, alert_sev_t sev,
+                 const char *title, const char *detail,
+                 const char *key,
+                 const char *match_ip, uint16_t match_port,
+                 time_t now) {
+    fire_conf(type, sev, 0, title, detail, key, match_ip, match_port, now);
 }
 
 /* ── MITRE ATT&CK technique lookup ──────────────────────
@@ -666,9 +682,114 @@ static int btm_steered_to(const sloth_state_t *s, const uint8_t bssid[6],
 
 static int btm_candidate_is_twin(const sloth_state_t *s,
                                  const uint8_t bssid[6]) {
-    for (int i = 0; i < s->twin_episode_count; i++)
-        if (memcmp(s->twin_episodes[i].twin_bssid, bssid, 6) == 0) return 1;
+    for (int i = 0; i < s->twin_episode_count; i++) {
+        const twin_episode_t *e = &s->twin_episodes[i];
+        if (memcmp(e->twin_bssid, bssid, 6) == 0) return 1;
+        /* An unattributed pair has no impostor half to single out (#89):
+         * `real_bssid`/`twin_bssid` are just the pair in canonical
+         * order. Steering a client at *either* half of a live candidate
+         * pair is the thing worth escalating, and picking one of them
+         * because it sorted higher would be arbitrary. */
+        if (!e->attributed && memcmp(e->real_bssid, bssid, 6) == 0) return 1;
+    }
     return 0;
+}
+
+/* ── Canonical pair key + weighted twin evidence (#89) ─────────
+ * Contract, weights and the reasoning behind each one: src/alerts.h. */
+
+void twin_pair_order(const beacon_ap_t *a, const beacon_ap_t *b,
+                     const beacon_ap_t **lo, const beacon_ap_t **hi) {
+    if (!a || !b || !lo || !hi) return;
+    if (memcmp(a->bssid, b->bssid, 6) <= 0) { *lo = a; *hi = b; }
+    else                                    { *lo = b; *hi = a; }
+}
+
+void alert_pair_key(char *out, size_t n, const char *rule_id,
+                    const uint8_t bssid_a[6], const uint8_t bssid_b[6],
+                    const char *site, const char *security_profile) {
+    if (!out || n == 0) return;
+    out[0] = '\0';
+    if (!rule_id || !bssid_a || !bssid_b) return;
+
+    const uint8_t *lo = bssid_a, *hi = bssid_b;
+    if (memcmp(bssid_a, bssid_b, 6) > 0) { lo = bssid_b; hi = bssid_a; }
+
+    char lo_s[20], hi_s[20];
+    mac_to_str(lo, lo_s, sizeof(lo_s));
+    mac_to_str(hi, hi_s, sizeof(hi_s));
+    /* Fixed-width BSSIDs keep the field boundaries unambiguous even
+     * when site is empty, which it is until #89 slice 2 lands. */
+    snprintf(out, n, "%.16s:%s:%s:%.32s:%.24s", rule_id, lo_s, hi_s,
+             site ? site : "", security_profile ? security_profile : "");
+}
+
+/* The pair's shared security posture, ordered with the BSSIDs so the
+ * key is stable. Two BSSIDs disagreeing about security under one SSID
+ * is a different finding from two agreeing, which is why it is part of
+ * the identity and not just the detail. */
+static void twin_profile(char *out, size_t n,
+                         const beacon_ap_t *lo, const beacon_ap_t *hi) {
+    snprintf(out, n, "%.9s/%.9s",
+             lo->enc[0] ? lo->enc : "?", hi->enc[0] ? hi->enc : "?");
+}
+
+static int clamp_conf(int v) {
+    if (v < TWIN_CONF_MIN) return TWIN_CONF_MIN;
+    if (v > TWIN_CONF_MAX) return TWIN_CONF_MAX;
+    return v;
+}
+
+int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
+                        const beacon_ap_t *b, time_t now,
+                        twin_evidence_t *out) {
+    twin_evidence_t ev;
+    memset(&ev, 0, sizeof(ev));
+    if (!a || !b) { if (out) *out = ev; return 0; }
+
+    ev.diff_oui = memcmp(a->bssid, b->bssid, 3) != 0;
+    ev.same_oui = !ev.diff_oui;
+
+    /* Both sides emitted a usable vendor hash and they disagree →
+     * firmware mismatch. Works on a same-OUI pair too, which is the
+     * point: a clone that copied the OUI cannot also reproduce the
+     * victim's vendor IEs byte for byte. */
+    ev.hashes_differ = a->fp.vendor_ies_hash && b->fp.vendor_ies_hash &&
+                       a->fp.vendor_ies_hash != b->fp.vendor_ies_hash;
+
+    ev.attacker_oui = oui_is_hak5     (a->fp.oui) || oui_is_hak5     (b->fp.oui) ||
+                      oui_is_espressif(a->fp.oui) || oui_is_espressif(b->fp.oui);
+
+    if (s) ev.steered = btm_steered_to(s, a->bssid, now) >= 0 ||
+                        btm_steered_to(s, b->bssid, now) >= 0;
+
+    ev.nbr_claim = ap_infrastructure_peers(a, b);
+
+    if (ev.diff_oui)      ev.positive += TWIN_W_DIFF_OUI;
+    if (ev.hashes_differ) ev.positive += TWIN_W_IE_HASH;
+    if (ev.attacker_oui) { ev.positive += TWIN_W_ATTACKER_OUI; ev.hard = 1; }
+    if (ev.steered)      { ev.positive += TWIN_W_BTM_STEER;    ev.hard = 1; }
+
+    if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
+    if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
+
+    ev.confidence = clamp_conf(ev.positive - ev.context);
+    if (out) *out = ev;
+    /* No positive evidence is not the same as an exoneration — it means
+     * there is nothing to report. That distinction is the whole of #89:
+     * silence here comes from an empty evidence set, never from
+     * treating an observed OUI or a neighbour claim as proof. */
+    return ev.positive > 0;
+}
+
+/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 256
+ * and the SSID + two BSSIDs + cipher already take ~60 of it. The BTM
+ * steer is not here: it gets its own note naming the steering AP, which
+ * is the actionable half. */
+static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
+    snprintf(out, n, "%s%s",
+             ev->same_oui  ? " +same-vendor-OUI"            : "",
+             ev->nbr_claim ? " +802.11k claim (unverified)" : "");
 }
 
 /* BTM forcing (#59) — the 802.11v deauth-equivalent.
@@ -2532,28 +2653,66 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                     snprintf(steer_note, sizeof(steer_note),
                              " +btm-steered by %.17s", steerer);
                 }
-                snprintf(key, sizeof(key), "twin:%.40s", a->ssid);
+                /* Canonical pair key (#89): before this, every pair
+                 * under one SSID collapsed onto `twin:<ssid>`, so a
+                 * second OPEN clone of one protected name overwrote the
+                 * first one's detail instead of standing beside it. */
+                const beacon_ap_t *lo = NULL, *hi = NULL;
+                twin_pair_order(a, b, &lo, &hi);
+                char profile[24];
+                twin_profile(profile, sizeof(profile), lo, hi);
+                alert_pair_key(key, sizeof(key), "twin", a->bssid, b->bssid,
+                               TWIN_SITE_UNSET, profile);
+
+                /* An OPEN/WEP clone of a protected SSID has no
+                 * vendor-diversity explanation, so this branch starts
+                 * from a high base — but it is still an inference from
+                 * beacons, so it is reported as suspected with a
+                 * confidence, not as established fact. */
+                twin_evidence_t ev;
+                twin_evidence_score(s, a, b, now, &ev);
+                int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
+                                      ev.context);
+                char note[48];
+                twin_evidence_note(note, sizeof(note), &ev);
+
                 snprintf(detail, sizeof(detail),
-                         "'%.16s' on %s[%.6s] AND %s[%.6s] - twin%s",
+                         "'%.16s' on %s[%.6s] AND %s[%.6s]"
+                         " - suspected impersonation, conf %d%%%s%s",
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
-                         steer_note);
-                fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
-                     "EVIL_TWIN", detail, key, NULL, 0, now);
+                         conf, note, steer_note);
+                fire_conf(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, conf,
+                          "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
         }
 
-        /* WARN branch — same SSID, same cipher, different vendor OUI
-         * (first 3 bytes of BSSID). Catches the modern Pineapple /
-         * ESP32 evil-twin pattern where the attacker mirrors the
-         * legit AP's security to defeat the weak/strong mismatch
-         * check above. Walks both halves of the pair, with a stable
-         * dedup key so iteration order doesn't change the alert.
+        /* Same-security branch — same SSID, same cipher, weighted
+         * evidence. Catches the modern Pineapple / ESP32 evil-twin
+         * pattern where the attacker mirrors the legit AP's security to
+         * defeat the weak/strong mismatch check above.
          *
-         * Phase 2 escalation: WARN climbs to CRIT when the two APs'
-         * vendor-IE fingerprint hashes differ (firmware-level mismatch
-         * is a hard signal — legit dual-vendor mesh is rare), or when
-         * one half's OUI matches the Hak5 / Espressif attacker tables.
+         * #89 removed the two sole suppressors this branch used to open
+         * with, and that is the substance of the change:
+         *
+         *   - A matching vendor OUI used to `continue` before any other
+         *     evidence was read. An OUI is three bytes of a frame the
+         *     attacker writes; every rogue-AP tool can set them. The
+         *     pair is now scored, and a same-OUI pair whose vendor-IE
+         *     fingerprints contradict each other fires.
+         *   - An 802.11k neighbour report from *either* side used to
+         *     `continue` as well, on the reading that the deployment was
+         *     asserting membership (#51). Nothing authenticates that
+         *     assertion: an attacker advertises the AP it is
+         *     impersonating and the finding disappeared. It is now a
+         *     confidence deduction that can demote a soft-signal
+         *     severity and nothing more.
+         *
+         * What replaces them is a requirement for *positive* evidence
+         * (twin_evidence_score returns 0 without it), so a legitimate
+         * single-vendor multi-BSSID deployment stays quiet because there
+         * is nothing to report — not because any observed value was
+         * taken as proof of ownership.
          *
          * Skip OPEN — legit OPEN networks at airports / cafes routinely
          * present same-SSID-different-OUI siblings (multi-vendor hotspot
@@ -2565,39 +2724,29 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
-            if (memcmp(a->bssid, b->bssid, 3) == 0) continue; /* same OUI = same vendor */
-            /* Cross-vendor is not the same as unrelated. A range
-             * extender behind a different-vendor router is same-SSID,
-             * same-cipher, different-OUI *and* has a differing vendor-IE
-             * hash — so without this it lands on the CRIT branch below
-             * and we report a rogue AP on the operator's own hardware
-             * (#51). 802.11k neighbor advertisement is the deployment
-             * asserting membership; trust it over the OUI heuristic. */
-            if (ap_infrastructure_peers(a, b)) continue;
+
+            twin_evidence_t ev;
+            if (!twin_evidence_score(s, a, b, now, &ev)) continue;
 
             char a_bssid[20], b_bssid[20];
             fmt_bssid(a_bssid, a->bssid);
             fmt_bssid(b_bssid, b->bssid);
 
             alert_sev_t sev = ALERT_SEV_WARN;
-            const char *reason = "vendor OUI differs";
+            const char *reason = ev.diff_oui ? "vendor OUI differs"
+                                             : "same vendor OUI";
             /* Both sides emitted a usable vendor hash and they disagree
              * → firmware mismatch. Legit dual-vendor co-located mesh is
-             * vanishingly rare; raise to CRIT. */
-            int hashes_differ =
-                a->fp.vendor_ies_hash &&
-                b->fp.vendor_ies_hash &&
-                a->fp.vendor_ies_hash != b->fp.vendor_ies_hash;
-            if (hashes_differ) {
+             * vanishingly rare; raise to CRIT. Soft: forgeable in
+             * principle, so a neighbour claim may demote it below. */
+            if (ev.hashes_differ) {
                 sev    = ALERT_SEV_CRIT;
                 reason = "vendor-IE fingerprint differs";
             }
             /* Attacker-OUI bump — one tier higher. WARN→CRIT; CRIT
-             * stays at CRIT. */
-            int attacker_oui =
-                oui_is_hak5     (a->fp.oui) || oui_is_hak5     (b->fp.oui) ||
-                oui_is_espressif(a->fp.oui) || oui_is_espressif(b->fp.oui);
-            if (attacker_oui) {
+             * stays at CRIT. Hard: an attacker does not get to advertise
+             * its way out of having been identified as a rogue-AP tool. */
+            if (ev.attacker_oui) {
                 if (sev < ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
                 reason = "attacker-tool OUI present";
             }
@@ -2621,17 +2770,36 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 if (sev < ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
             }
 
+            /* A neighbour claim is one unauthenticated frame. It lowers
+             * confidence always (already folded into ev.confidence), and
+             * it demotes a severity resting only on soft signals — but
+             * never one backed by a hard signal, or advertising your
+             * target becomes a severity lever for the attacker. */
+            if (ev.nbr_claim && !ev.hard && sev > ALERT_SEV_WARN)
+                sev = ALERT_SEV_WARN;
+
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            /* Distinct dedup key — coexists with the CRIT "twin:" key
-             * if the weak/strong rule also fires for some other pair
-             * under the same SSID. */
-            snprintf(key, sizeof(key), "twin-fp:%.40s", a->ssid);
+            char note[48];
+            /* Canonical pair key (#89). `twin-fp` stays the rule id so
+             * the CRIT `twin` key for the same pair still coexists, but
+             * the identity is now the ordered BSSID pair rather than the
+             * SSID — two candidate pairs under one name both survive
+             * instead of overwriting each other in one engine slot. */
+            const beacon_ap_t *lo = NULL, *hi = NULL;
+            twin_pair_order(a, b, &lo, &hi);
+            char profile[24];
+            twin_profile(profile, sizeof(profile), lo, hi);
+            alert_pair_key(key, sizeof(key), "twin-fp", a->bssid, b->bssid,
+                           TWIN_SITE_UNSET, profile);
+            twin_evidence_note(note, sizeof(note), &ev);
             snprintf(detail, sizeof(detail),
-                     "'%.16s' on %s AND %s [%.6s] - %s%s",
-                     a->ssid, a_bssid, b_bssid, a->enc, reason, steer_note);
-            fire(ALERT_TYPE_EVIL_TWIN, sev,
-                 "EVIL_TWIN", detail, key, NULL, 0, now);
+                     "'%.16s' on %s AND %s [%.6s]"
+                     " - suspected impersonation, conf %d%% - %s%s%s",
+                     a->ssid, a_bssid, b_bssid, a->enc,
+                     ev.confidence, reason, note, steer_note);
+            fire_conf(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
+                      "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
     }
