@@ -2349,24 +2349,25 @@ static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
     return hits;
 }
 
-/* Is a deauth flood active in the recent window? The classic KARMA
- * attack chain knocks clients off their real AP with a deauth flood,
- * then answers their reconnection probes from the lure — so a KARMA
- * candidate coinciding with a live deauth flood is "deauth-then-lure"
- * in progress. The issue's ±60s correlation window. */
-#define KARMA_DEAUTH_WIN_SECS 60
-
-static int karma_deauth_active(const sloth_state_t *s, time_t now) {
-    /* flood_last, not last_seen: a trickle of frames after a flood
-     * ended must not keep the flood "recent" (#88). */
-    for (int k = 0; k < s->deauth_victim_count; k++) {
-        const deauth_victim_t *v = &s->deauth_victims[k];
-        if (v->flood_last && now - v->flood_last <= KARMA_DEAUTH_WIN_SECS)
-            return 1;
-    }
-    return 0;
-}
-
+/* KARMA_AP severity and confidence (#90). A bare SSID-count crossing
+ * KARMA_SSID_THRESH is a *candidate* signal, not a finding on its own:
+ * a long-lived AP that legitimately renamed itself a few times over a
+ * session racks up the same count as an active PineAP lure. Severity
+ * escalates to CRIT only when something ties the pattern to *this*
+ * candidate specifically, rather than coincidental global activity:
+ *
+ *   - the beacon answers what a nearby client already asked for (PNL
+ *     overlap — the actual PineAP Beacon-Response mechanism, not a
+ *     side effect of it), or
+ *   - a shared-victim deauth-then-lure chain (karma_deauth_lure_victim,
+ *     #90 — ties the flood to a station this candidate can be shown to
+ *     be luring, not any unrelated flood in range), or
+ *   - a verified (capture-backed) tool signature match.
+ *
+ * An UNVERIFIED tool guess and an unattributed PMKID are informational:
+ * neither corroborates on its own — the tool guess has no capture
+ * behind it, and PMKID harvesting is normal in legitimate
+ * 802.11r/PMK-caching roaming, not a third-party-listener tell. */
 static void rule_karma_ap(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -2378,13 +2379,15 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  a->bssid[0], a->bssid[1], a->bssid[2],
                  a->bssid[3], a->bssid[4], a->bssid[5]);
         int overlap = karma_pnl_overlap(s, a);
-        int deauth  = karma_deauth_active(s, now);
+        int deauth  = karma_deauth_lure_victim(s, a, now, NULL);
 
         /* Has a PMKID been harvested from this BSSID (#68)? Unlike a
          * tool's beacon quirks, this is a *protocol* observable — an AP
          * that solicits PMKIDs is doing something hcxdumptool-shaped
          * regardless of which binary is doing it — so it needs no
-         * signature table and ships working. */
+         * signature table and ships working. It stays informational
+         * (#90): a legitimate 802.11r/PMK-caching exchange produces one
+         * too, and a passive listener never reveals itself by doing so. */
         int pmkid = 0;
         for (int e = 0; e < s->eapol_count; e++)
             if (s->eapol_events[e].has_pmkid &&
@@ -2407,12 +2410,29 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         obs.pmkid_seen         = pmkid;
         sloth_tool_conf_t conf = TOOL_CONF_NONE;
         const char *tool_lbl   = "";
-        tool_fingerprint_match(&obs, &conf, &tool_lbl);
+        int tool_unverified    = 0;
+        sloth_tool_id_t tool = tool_fingerprint_match(&obs, &conf, &tool_lbl,
+                                                       &tool_unverified);
+        int tool_verified = tool != SLOTH_TOOL_UNKNOWN && !tool_unverified;
+
+        alert_sev_t sev = ALERT_SEV_WARN;
+        if (overlap > 0 || deauth || tool_verified) sev = ALERT_SEV_CRIT;
+
+        int confidence = KARMA_W_SSID_THRESH;
+        if (overlap > 0) confidence += KARMA_W_PNL_OVERLAP;
+        if (deauth)      confidence += KARMA_W_DEAUTH_VICTIM;
+        if (tool != SLOTH_TOOL_UNKNOWN)
+            confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
+                                          : KARMA_W_TOOL_VERIFIED;
+        if (pmkid) confidence += KARMA_W_PMKID;
+        if (confidence < KARMA_CONF_MIN) confidence = KARMA_CONF_MIN;
+        if (confidence > KARMA_CONF_MAX) confidence = KARMA_CONF_MAX;
+
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         char pnl_note[32]   = "";
         char chain_note[24] = "";
-        char tool_note[40]  = "";
+        char tool_note[48]  = "";
         char pmkid_note[16] = "";
         if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
@@ -2423,17 +2443,21 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         if (pmkid)
             snprintf(pmkid_note, sizeof(pmkid_note), " +PMKID");
         if (tool_lbl[0])
-            snprintf(tool_note, sizeof(tool_note), " [%.20s/%s]",
-                     tool_lbl, tool_confidence_name(conf));
-        snprintf(key,    sizeof(key),    "karma:%s", bssid_str);
-        /* Compact: ALERT_DETAIL_LEN is 96, so the PNL + attack-chain
-         * notes must stay short or the tail (the deauth marker) is cut. */
+            /* A trailing "?" flags an UNVERIFIED signature — same
+             * convention as the interface view's unconfirmed-retune
+             * marker (#91): a provisional identification, not one the
+             * operator can act on unchecked. */
+            snprintf(tool_note, sizeof(tool_note), " [%.20s/%s%s]",
+                     tool_lbl, tool_confidence_name(conf),
+                     tool_unverified ? "?" : "");
+        snprintf(key, sizeof(key), "karma:%s", bssid_str);
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s%s%s",
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s, conf %d%%%s",
                  bssid_str, a->ssid_history_n, pnl_note, chain_note,
-                 pmkid_note, tool_note);
-        fire(ALERT_TYPE_KARMA_AP, ALERT_SEV_CRIT,
-             "KARMA_AP", detail, key, NULL, 0, now);
+                 pmkid_note, tool_note, confidence,
+                 sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
+        fire_conf(ALERT_TYPE_KARMA_AP, sev, confidence,
+                 "KARMA_AP", detail, key, NULL, 0, now);
     }
 }
 

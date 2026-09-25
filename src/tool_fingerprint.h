@@ -111,13 +111,18 @@ typedef struct {
 
 /* Match `obs` against the signature table. Returns the tool, or
  * SLOTH_TOOL_UNKNOWN. *conf receives the confidence; *label a short
- * human name ("" when unknown). Either output may be NULL.
+ * human name ("" when unknown). *unverified receives whether the
+ * winning row carries no capture behind it (#90) — distinct from a
+ * low field count: a thin row compared little of the beacon, an
+ * unverified one compared it against values nobody confirmed. Every
+ * output may be NULL.
  *
  * Best match wins, measured by how many non-wildcard fields agreed —
  * a row that pins three characteristics beats one that pins one. */
 sloth_tool_id_t tool_fingerprint_match(const sloth_tool_obs_t *obs,
                                        sloth_tool_conf_t *conf,
-                                       const char **label);
+                                       const char **label,
+                                       int *unverified);
 
 /* The same matcher against a caller-supplied table.
  *
@@ -134,7 +139,8 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
                                              int n_sigs,
                                              const sloth_tool_obs_t *obs,
                                              sloth_tool_conf_t *conf,
-                                             const char **label);
+                                             const char **label,
+                                             int *unverified);
 
 /* Rows currently compiled in. Callers should say "no signature
  * database" rather than "no tool detected" when this is 0. */

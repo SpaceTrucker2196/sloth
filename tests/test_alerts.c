@@ -2589,6 +2589,10 @@ static void seed_karma_ap(sloth_state_t *s, const uint8_t bssid[6],
 }
 
 static void test_karma_three_ssids_fires(void) {
+    /* A bare SSID-count candidate with no corroboration is a WARN, not
+     * a CRIT (#90) — a long-lived AP that legitimately renamed itself a
+     * few times over a session racks up the same count as an active
+     * PineAP lure, and the two must not read the same to the operator. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -2597,7 +2601,8 @@ static void test_karma_three_ssids_fires(void) {
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
-    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") != NULL);
 }
 
 static void test_karma_names_the_tool_from_fingerprint_flags(void) {
@@ -2616,7 +2621,15 @@ static void test_karma_names_the_tool_from_fingerprint_flags(void) {
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
-    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "ESP32 Marauder") != NULL);
+    if (idx >= 0) {
+        ASSERT(strstr(s.alerts[idx].detail, "ESP32 Marauder") != NULL);
+        /* The row has no capture behind it (#74) — the alert must say
+         * so rather than let a confidence label speak for it (#90).
+         * With nothing else corroborating, an UNVERIFIED guess alone
+         * must not escalate severity either. */
+        ASSERT(strstr(s.alerts[idx].detail, "Marauder/med?") != NULL);
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    }
 
     /* The same AP negotiating HT is an IoT device, and the alert must
      * stop naming a tool rather than name the wrong one. */
@@ -2677,21 +2690,48 @@ static void test_karma_pnl_overlap_in_detail(void) {
     ASSERT(strstr(s.alerts[idx].detail, "2 in client PNLs") != NULL);
 }
 
-/* Deauth-then-lure: a KARMA candidate coinciding with a live deauth
- * flood is flagged as an attack chain in progress (#30). */
-static void test_karma_deauth_then_lure_in_detail(void) {
+/* Deauth-then-lure requires a *shared victim* (#90): someone deauthed
+ * off a different BSSID who this candidate can independently be shown
+ * to be luring, not any unrelated flood elsewhere in range — that was
+ * the false-positive the issue reported ("does not establish a shared
+ * victim or BSSID with this candidate"). A benign SSID-cycling AP plus
+ * an unrelated deauth flood must not produce a chain alert. */
+static void test_karma_unrelated_deauth_flood_no_chain(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
     const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
     seed_karma_ap(&s, bssid, ssids, 3);
     uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
-    add_deauth_flood(&s, victim);
+    add_deauth_flood(&s, victim);          /* different BSSID, no link to candidate */
     s.deauth_victims[0].flood_last = time(NULL);   /* live flood */
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "deauth-then-lure") == NULL);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+/* A real chain: the deauthed victim has since associated with the
+ * candidate — the lure worked. Uses assoc evidence rather than PNL
+ * overlap so this test isolates the deauth-chain signal from the
+ * PNL-overlap signal covered by test_karma_pnl_overlap_in_detail. */
+static void test_karma_deauth_then_lure_shared_victim_in_detail(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "netA", "netB", "netC" };   /* nobody's PNL */
+    seed_karma_ap(&s, bssid, ssids, 3);
+    uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_deauth_flood(&s, victim);          /* deauthed off a different BSSID */
+    s.deauth_victims[0].flood_last = time(NULL) - 10;
+    add_assoc_entry(&s, victim, bssid, "netA");   /* now sitting on the candidate */
+    s.assocs[0].last_seen = time(NULL);            /* after the flood */
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
     ASSERT(strstr(s.alerts[idx].detail, "deauth-then-lure") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
 }
 
 static void test_karma_stale_deauth_no_chain_note(void) {
@@ -6071,7 +6111,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
     RUN_TEST(test_karma_pnl_overlap_in_detail);
-    RUN_TEST(test_karma_deauth_then_lure_in_detail);
+    RUN_TEST(test_karma_unrelated_deauth_flood_no_chain);
+    RUN_TEST(test_karma_deauth_then_lure_shared_victim_in_detail);
     RUN_TEST(test_karma_stale_deauth_no_chain_note);
     RUN_TEST(test_ssid_confusion_wpa3_to_wpa2_fires);
     RUN_TEST(test_ssid_confusion_identical_posture_no_fire);

@@ -119,4 +119,25 @@ int  twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 void twin_pair_order(const beacon_ap_t *a, const beacon_ap_t *b,
                      const beacon_ap_t **lo, const beacon_ap_t **hi);
 
+/* ── KARMA_AP confidence (#90) ──────────────────────────────
+ *
+ * A bare SSID count crossing KARMA_SSID_THRESH is a candidate signal,
+ * not a finding: a long-lived AP that legitimately renamed itself a
+ * few times over a session accumulates the same count as an active
+ * PineAP lure. Severity therefore escalates to CRIT only when
+ * something ties the pattern to this *specific* candidate rather than
+ * coincidence — see rule_karma_ap() in alerts.c for which signals
+ * qualify. `confidence` is the separate, non-gating number: how sure
+ * sloth is, not how bad it would be if true. */
+#define KARMA_W_SSID_THRESH   20   /* base: SSID count met the threshold */
+#define KARMA_W_PNL_OVERLAP   25   /* advertised SSID answers a nearby PNL */
+#define KARMA_W_DEAUTH_VICTIM 30   /* shared-victim deauth-then-lure chain */
+#define KARMA_W_TOOL_VERIFIED 30   /* a capture-backed tool signature match */
+#define KARMA_W_TOOL_UNVERIF  10   /* an UNVERIFIED signature guess only */
+#define KARMA_W_PMKID         10   /* PMKID observed — informational, not
+                                    * an attack implication: legitimate
+                                    * 802.11r/PMK-caching also produces one */
+#define KARMA_CONF_MIN         5
+#define KARMA_CONF_MAX        95
+
 #endif /* ALERTS_H */

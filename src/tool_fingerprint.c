@@ -140,18 +140,21 @@ const char *tool_confidence_name(sloth_tool_conf_t c) {
 
 sloth_tool_id_t tool_fingerprint_match(const sloth_tool_obs_t *obs,
                                        sloth_tool_conf_t *conf,
-                                       const char **label) {
+                                       const char **label,
+                                       int *unverified) {
     return tool_fingerprint_match_table(TOOL_SIGNATURES, SIG_ROWS,
-                                        obs, conf, label);
+                                        obs, conf, label, unverified);
 }
 
 sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
                                              int n_sigs,
                                              const sloth_tool_obs_t *obs,
                                              sloth_tool_conf_t *conf,
-                                             const char **label) {
-    if (conf)  *conf  = TOOL_CONF_NONE;
-    if (label) *label = "";
+                                             const char **label,
+                                             int *unverified) {
+    if (conf)       *conf       = TOOL_CONF_NONE;
+    if (label)      *label      = "";
+    if (unverified) *unverified = 0;
     if (!obs || !sigs) return SLOTH_TOOL_UNKNOWN;
 
     sloth_tool_id_t best      = SLOTH_TOOL_UNKNOWN;
@@ -232,6 +235,7 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
          * and an operator reading "high" would reasonably assume both. */
         if (best_unv && *conf > TOOL_CONF_MED) *conf = TOOL_CONF_MED;
     }
-    if (label) *label = best_lbl;
+    if (label)      *label      = best_lbl;
+    if (unverified) *unverified = best_unv;
     return best;
 }

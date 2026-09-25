@@ -69,9 +69,15 @@ static void test_unverified_rows_cannot_report_high(void) {
     obs.beacon_interval_ms = 102;
     obs.fp_flags           = AP_FP_FLAG_ESPRESSIF_OUI;
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
-    ASSERT_EQ((int)tool_fingerprint_match_table(verified, 1, &obs, &conf, NULL),
+    int unverified_out = 1;
+    ASSERT_EQ((int)tool_fingerprint_match_table(verified, 1, &obs, &conf,
+                                                NULL, &unverified_out),
               (int)SLOTH_TOOL_HOSTAPD_MANA);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_HIGH);
+    /* A capture-backed row must report itself as such — this is the
+     * gap #90 closes: the cap on `conf` alone left a caller unable to
+     * tell a genuinely thin match from one silently capped. */
+    ASSERT_EQ(unverified_out, 0);
 
     /* Same three fields, marked unverified. */
     static const sloth_tool_sig_t unverified[] = {
@@ -79,19 +85,23 @@ static void test_unverified_rows_cannot_report_high(void) {
           AP_FP_FLAG_ESPRESSIF_OUI, 0, 0, 0, 1,
           "unverified-three", "UNVERIFIED - synthetic, test only" },
     };
+    unverified_out = 0;
     ASSERT_EQ((int)tool_fingerprint_match_table(unverified, 1, &obs, &conf,
-                                                NULL),
+                                                NULL, &unverified_out),
               (int)SLOTH_TOOL_HOSTAPD_MANA);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_MED);
+    ASSERT_EQ(unverified_out, 1);
 
     /* The cap is a ceiling, not an assignment: a one-field unverified
      * row still reports LOW, not MED. */
     memset(&obs, 0, sizeof(obs));
     obs.fp_flags   = AP_FP_FLAG_HAK5_OUI;
     obs.karma_echo = 1;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+    unverified_out = 0;
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL, &unverified_out),
               (int)SLOTH_TOOL_PINEAPPLE_MK7);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_LOW);
+    ASSERT_EQ(unverified_out, 1);
 }
 
 static void test_no_row_depends_on_an_unpopulated_flag(void) {
@@ -119,7 +129,7 @@ static void test_pineapple_row_is_the_hak5_oui(void) {
     obs.karma_echo = 1;
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
     const char *label = "";
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_PINEAPPLE_MK7);
     ASSERT_STR(label, "Pineapple MK7");
     ASSERT_EQ((int)conf, (int)TOOL_CONF_LOW);
@@ -128,7 +138,7 @@ static void test_pineapple_row_is_the_hak5_oui(void) {
      * finding. A Hak5 OUI alone is somebody carrying a Pineapple, which
      * is not the same as running one. */
     obs.karma_echo = 0;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 }
 
@@ -143,11 +153,11 @@ static void test_the_two_rows_do_not_collide(void) {
     obs.beacon_interval_ms = 102;
     obs.fp_flags           = AP_FP_FLAG_HAK5_OUI;
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_PINEAPPLE_MK7);
 
     obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_ESP32_MARAUDER);
     /* Three fields agree on the Marauder row, which the field-count
      * model calls HIGH — but the row has no capture behind it, so the
@@ -172,18 +182,18 @@ static void test_require_flags_needs_every_bit(void) {
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
 
     obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI;          /* one of two */
-    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
     obs.fp_flags = AP_FP_FLAG_WPS_UUID_ZERO;          /* the other  */
-    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
     obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_WPS_UUID_ZERO;
-    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_WIFI_DUCK);
     /* Extra unrelated flags must not block it — require is a subset
      * test, not equality. */
     obs.fp_flags |= AP_FP_FLAG_HE_PRESENT;
-    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 1, &obs, &conf, NULL, NULL),
               (int)SLOTH_TOOL_WIFI_DUCK);
 }
 
@@ -200,25 +210,25 @@ static void test_marauder_row_needs_all_three_signals(void) {
     obs.karma_echo         = 1;
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
     const char *label = "";
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_ESP32_MARAUDER);
     ASSERT_STR(label, "ESP32 Marauder");
 
     /* An Espressif AP that *does* negotiate HT is an IoT device, not a
      * rogue: a 2026 access point with no HT is the discriminating part. */
     obs.fp_flags = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_HT_PRESENT;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 
     /* Not Espressif at all. */
     obs.fp_flags = 0;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 
     /* A non-default beacon interval. */
     obs.fp_flags           = AP_FP_FLAG_ESPRESSIF_OUI;
     obs.beacon_interval_ms = 300;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 
     /* And without a KARMA echo it stays silent. The row is an
@@ -226,7 +236,7 @@ static void test_marauder_row_needs_all_three_signals(void) {
      * that gate is what makes an unverified row safe to ship. */
     obs.beacon_interval_ms = 102;
     obs.karma_echo         = 0;
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 }
 
@@ -241,7 +251,7 @@ static void test_unmatched_observation_is_unknown(void) {
 
     sloth_tool_conf_t conf = TOOL_CONF_HIGH;
     const char *label = "wrong";
-    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(&obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_NONE);
     ASSERT_STR(label, "");
@@ -250,12 +260,12 @@ static void test_unmatched_observation_is_unknown(void) {
 static void test_null_observation_is_safe(void) {
     sloth_tool_conf_t conf = TOOL_CONF_HIGH;
     const char *label = "wrong";
-    ASSERT_EQ((int)tool_fingerprint_match(NULL, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match(NULL, &conf, &label, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_NONE);
     ASSERT_STR(label, "");
     /* NULL outputs must not crash either — the alert path passes them. */
-    ASSERT_EQ((int)tool_fingerprint_match(NULL, NULL, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match(NULL, NULL, NULL, NULL),
               (int)SLOTH_TOOL_UNKNOWN);
 }
 
@@ -293,7 +303,7 @@ static void test_confidence_names(void) {
 static int match_one(const sloth_tool_sig_t *sig,
                      const sloth_tool_obs_t *obs,
                      sloth_tool_conf_t *conf) {
-    return tool_fingerprint_match_table(sig, 1, obs, conf, NULL)
+    return tool_fingerprint_match_table(sig, 1, obs, conf, NULL, NULL)
            != SLOTH_TOOL_UNKNOWN;
 }
 
@@ -377,14 +387,14 @@ static void test_more_pinned_fields_beats_fewer(void) {
     sloth_tool_sig_t table[2] = { narrow, broad };
     sloth_tool_conf_t conf = TOOL_CONF_NONE;
     const char *label = "";
-    ASSERT_EQ((int)tool_fingerprint_match_table(table, 2, &obs, &conf, &label),
+    ASSERT_EQ((int)tool_fingerprint_match_table(table, 2, &obs, &conf, &label, NULL),
               (int)SLOTH_TOOL_WIFI_DUCK);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_HIGH);    /* three fields agreed */
     ASSERT_STR(label, "Wi-Fi Duck");
 
     /* Order must not decide it. */
     sloth_tool_sig_t rev[2] = { broad, narrow };
-    ASSERT_EQ((int)tool_fingerprint_match_table(rev, 2, &obs, NULL, NULL),
+    ASSERT_EQ((int)tool_fingerprint_match_table(rev, 2, &obs, NULL, NULL, NULL),
               (int)SLOTH_TOOL_WIFI_DUCK);
 }
 

@@ -141,19 +141,53 @@ static void test_ie_unknown_fp_not_uniform(void) {
     ASSERT_EQ(s.karma_aps[0].ie_uniform, 0);
 }
 
-/* A concurrent deauth flood sets the chain flag and adds to the score. */
+/* A deauth flood only sets the chain flag when it names a *shared
+ * victim* of this candidate (#90) — someone deauthed off a different
+ * BSSID whose PNL already asks for one of the candidate's advertised
+ * SSIDs. An unrelated flood elsewhere in range must not credit every
+ * KARMA candidate with someone else's bad luck. */
 static void test_deauth_chain(void) {
     sloth_state_t s; seed(&s);
-    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t lure[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t real[6]  = {0x99,0x88,0x77,0x66,0x55,0x44};   /* different BSSID */
     const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
     add_multi_ssid_ap(&s, lure, many, 3);
+    uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
     deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count++];
     memset(v, 0, sizeof(*v));
+    memcpy(v->victim, victim, 6);
+    memcpy(v->bssid,  real,   6);
     v->flood      = 1;
     v->flood_last = time(NULL);
+    /* The victim's PNL already asks for one of the lure's SSIDs — the
+     * PineAP Beacon-Response setup. */
+    add_pnl_client(&s, victim, many, 1);
     karma_update(&s);
     ASSERT_EQ(s.karma_aps[0].deauth_chain, 1);
-    ASSERT_EQ(s.karma_aps[0].score, 1 + 3);   /* base + deauth chain */
+    /* Score picks up both the PNL overlap this victim's PNL produces
+     * and the deauth chain — base + overlap(2) + deauth chain(3). */
+    ASSERT_EQ(s.karma_aps[0].score, 1 + 2 + 3);
+}
+
+/* An unrelated deauth flood — no shared victim — must not set the
+ * chain flag, even though a flood is concurrently active somewhere. */
+static void test_deauth_chain_unrelated_victim_no_credit(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    uint8_t real[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    add_multi_ssid_ap(&s, lure, many, 3);
+    uint8_t victim[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count++];
+    memset(v, 0, sizeof(*v));
+    memcpy(v->victim, victim, 6);
+    memcpy(v->bssid,  real,   6);
+    v->flood      = 1;
+    v->flood_last = time(NULL);
+    /* No PNL entry and no association tying this victim to the lure. */
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].deauth_chain, 0);
+    ASSERT_EQ(s.karma_aps[0].score, 1);   /* base only */
 }
 
 /* Candidates are ranked strongest-first. */
@@ -206,6 +240,7 @@ void run_karma_tests(void) {
     RUN_TEST(test_ie_varied_not_uniform);
     RUN_TEST(test_ie_unknown_fp_not_uniform);
     RUN_TEST(test_deauth_chain);
+    RUN_TEST(test_deauth_chain_unrelated_victim_no_credit);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
 }

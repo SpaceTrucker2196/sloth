@@ -3,10 +3,6 @@
 #include <string.h>
 #include <time.h>
 
-/* Correlation window for the deauth-then-lure chain — matches the
- * KARMA_AP alert rule (issue #30). */
-#define KARMA_DEAUTH_WIN_SECS 60
-
 /* Distinct advertised SSIDs from this BSSID that appear in the union of
  * nearby clients' preferred-network lists. PineAP Beacon Response answers
  * exactly what clients probe for, so a high overlap separates an active
@@ -75,21 +71,61 @@ static int ie_uniform(const beacon_ap_t *a) {
     return 1;
 }
 
-/* Is a deauth flood active within the correlation window? */
-static int deauth_active(const sloth_state_t *s, time_t now) {
-    /* When the threshold was last met, not when the last frame came
-     * (#88): trailing frames after a flood do not extend it. */
+/* Deauth-then-lure with a shared victim (#90) — see the declaration in
+ * karma_detect.h for why a global "some flood happened recently" check
+ * was replaced. */
+int karma_deauth_lure_victim(const sloth_state_t *s,
+                             const beacon_ap_t *candidate, time_t now,
+                             uint8_t victim_out[6]) {
+    if (!s || !candidate) return 0;
+
     for (int k = 0; k < s->deauth_victim_count; k++) {
         const deauth_victim_t *v = &s->deauth_victims[k];
-        if (v->flood_last && now - v->flood_last <= KARMA_DEAUTH_WIN_SECS)
-            return 1;
+        /* When the threshold was last met, not when the last frame came
+         * (#88): trailing frames after a flood do not extend it. */
+        if (!v->flood_last || now - v->flood_last > KARMA_DEAUTH_WIN_SECS)
+            continue;
+        /* Deauthed from the candidate itself isn't a lure — a rogue
+         * flooding its own clients isn't luring them to itself. */
+        if (memcmp(v->bssid, candidate->bssid, 6) == 0) continue;
+
+        int interest = 0;
+        for (int c = 0; c < s->pnl_count && !interest; c++) {
+            const pnl_client_t *cli = &s->pnl_clients[c];
+            if (memcmp(cli->mac, v->victim, 6) != 0) continue;
+            for (int h = 0; h < candidate->ssid_history_n &&
+                            h < MAX_AP_SSID_HISTORY && !interest; h++) {
+                const char *name = candidate->ssid_history[h];
+                if (!name[0]) continue;
+                for (int p = 0; p < cli->ssid_count &&
+                                p < MAX_PNL_SSIDS_PER_CLI; p++)
+                    if (strcmp(name, cli->ssids[p]) == 0) { interest = 1; break; }
+            }
+        }
+        if (!interest) {
+            /* Or the lure already worked and the victim is sitting on
+             * the candidate, seen no earlier than the flood that
+             * knocked it off its real AP. */
+            for (int as = 0; as < s->assoc_count; as++) {
+                const assoc_t *as_e = &s->assocs[as];
+                if (memcmp(as_e->bssid, candidate->bssid, 6) == 0 &&
+                    memcmp(as_e->sta_mac, v->victim, 6) == 0 &&
+                    as_e->last_seen >= v->flood_last) {
+                    interest = 1;
+                    break;
+                }
+            }
+        }
+        if (!interest) continue;
+
+        if (victim_out) memcpy(victim_out, v->victim, 6);
+        return 1;
     }
     return 0;
 }
 
 void karma_update(sloth_state_t *s) {
     time_t now = time(NULL);
-    int chain = deauth_active(s, now);
     int b_count = pnl_union_size(s);   /* |PNL union| — same for every BSSID */
     s->karma_count = 0;
 
@@ -105,9 +141,10 @@ void karma_update(sloth_state_t *s) {
         k->pnl_overlap  = pnl_overlap(s, a);
         k->pnl_jaccard_ppm = jaccard_ppm(k->ssid_count, b_count, k->pnl_overlap);
         k->ie_uniform   = ie_uniform(a);
-        k->deauth_chain = chain;
+        k->deauth_chain = karma_deauth_lure_victim(s, a, now, NULL);
         k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0)
-                            + (k->ie_uniform ? 1 : 0) + (chain ? 3 : 0);
+                            + (k->ie_uniform ? 1 : 0)
+                            + (k->deauth_chain ? 3 : 0);
         k->last_seen    = a->last_seen;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  a->ssid[0] ? a->ssid : a->ssid_history[0]);

@@ -104,7 +104,12 @@ old or not really an access point.
 And the row sets `requires_karma_echo`, so it only ever names a tool
 alongside a finding that already fired. That gate is what makes an
 unverified row safe to ship: it enriches a `KARMA_AP` alert, it never
-raises one.
+raises one — and since #90, `tool_fingerprint_match()`'s `unverified`
+output means it never escalates one to CRIT either. The alert detail
+marks a match from an UNVERIFIED row with a trailing `?` (`[ESP32
+Marauder/med?]`), the same convention the interface view uses for an
+unconfirmed channel retune (#91): a provisional identification, not
+one the operator can act on unchecked.
 
 ### The Pineapple MK7 row
 

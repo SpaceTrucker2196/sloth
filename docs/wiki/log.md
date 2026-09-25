@@ -747,3 +747,40 @@ a migration, which is more than this slice warrants; the canonical
 BSSID ordering does however fix a real defect in that table's primary
 key `(ssid, real_bssid, twin_bssid)`, which previously swapped — and so
 inserted a duplicate row — whenever the pair's two RSSIs crossed.
+
+---
+
+## 2026-09-25 — `KARMA_AP` severity/confidence split (#90)
+
+**Updated pages**: [alerts.md](alerts.md), [tool-fingerprints.md](tool-fingerprints.md).
+
+`KARMA_AP` fired CRIT unconditionally once one BSSID beaconed ≥3
+distinct SSIDs — a long-lived AP that legitimately renamed itself a
+few times over a session scored the same as an active PineAP lure.
+Applied the same severity/confidence split #89 gave `EVIL_TWIN`:
+
+- Bare SSID count is now a WARN candidate (`- candidate,
+  uncorroborated` in the detail); CRIT requires PNL overlap (the
+  actual PineAP Beacon-Response mechanism), a shared-victim
+  deauth-then-lure chain, or a verified tool signature match.
+- **Deauth-then-lure now requires a shared victim.** The prior check
+  (`karma_deauth_active()`, both in `src/alerts.c` and duplicated in
+  `src/karma_detect.c`) fired on *any* recent flood anywhere in range,
+  crediting every KARMA candidate with an unrelated victim's bad luck.
+  `karma_deauth_lure_victim()` (`src/karma_detect.c`, shared by both
+  callers) now requires a station deauthed off a *different* BSSID
+  whose PNL asks for one of this candidate's SSIDs, or who has since
+  associated with it.
+- `tool_fingerprint_match()` gained an `unverified` out-param so a
+  caller can tell a genuinely thin match from one the existing
+  confidence cap was silently capping. The alert detail marks an
+  UNVERIFIED match with a trailing `?`, matching the `[11?]`
+  unconfirmed-retune convention #91 introduced in the interface view.
+- PMKID observation stays informational only — it never escalated
+  severity, and the fix makes that explicit in code comments: a
+  legitimate 802.11r/PMK-caching exchange also produces one.
+
+Additive-only: `confidence` reuses #89's `fire_conf()` engine plumbing
+and JSONL field; no alert type id renamed, no `DB_SCHEMA_VERSION` bump
+(`karma_candidates.score` keeps its column, just a corrected input to
+the same formula).

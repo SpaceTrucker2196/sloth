@@ -34,16 +34,26 @@ Per candidate:
   IE fingerprint (encryption / cipher / AKM / MFP + vendor-IE hash). A
   legit multi-VAP AP varies these per VAP; a single spoofing radio does
   not, so uniformity is a KARMA signal (adds +1 to the score).
-- **chain** — a deauth flood's window threshold was last met within
-  60 s (`deauth-then-lure`: knock clients off, then answer their
-  reconnection probes). Measured from when the flood was last *met*,
-  not from the last deauth frame, so a trickle of frames after a flood
-  ends does not keep it "concurrent" (#88).
-- **score** — `1 + (PNL>0 ? 2 : 0) + (chain ? 3 : 0)`, ranked
-  strongest-first.
+- **chain** — a **shared-victim** deauth-then-lure chain (#90): a
+  station deauthed off a *different* BSSID within the 60 s window
+  (measured from when the flood's threshold was last *met*, not the
+  last deauth frame, so a trickle after a flood ends doesn't keep it
+  "concurrent" — #88) that this candidate can independently be shown
+  to be luring — either the victim's PNL already asks for one of the
+  candidate's advertised SSIDs, or the victim has since associated
+  with the candidate. An unrelated flood elsewhere in range, with no
+  link to this candidate's own victims, no longer counts
+  (`karma_deauth_lure_victim()`, `src/karma_detect.c`) — crediting
+  every candidate in range with any concurrent flood was the false
+  positive issue #90 reported.
+- **score** — `1 + (PNL>0 ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0)`,
+  ranked strongest-first.
 
-The same signals drive the `KARMA_AP` CRIT alert in `[v] Alerts`; this
-view is the ranked, browsable surface for them.
+The same signals drive the `KARMA_AP` alert in `[v] Alerts`, which adds
+a `confidence` percentage and escalates WARN→CRIT only when PNL
+overlap, the deauth chain, or a verified tool match corroborates the
+bare SSID count (#90) — this view is the ranked, browsable surface for
+the same underlying signals, not a mirror of the alert's severity.
 
 ## View
 
@@ -72,9 +82,11 @@ operator's eye.
 - **PNL overlap > 0** — the AP is beaconing the exact networks nearby
   clients are looking for. That is the PineAP / KARMA beacon-response
   fingerprint.
-- **chain = YES** — a deauth flood is running alongside the lure: the
-  classic deauth-then-lure sequence
-  ([T1557.004](https://attack.mitre.org/techniques/T1557/004/)).
+- **chain = YES** — a station this candidate can be tied to was
+  deauthed off a different AP moments ago: the classic
+  deauth-then-lure sequence
+  ([T1557.004](https://attack.mitre.org/techniques/T1557/004/)), not
+  just a flood happening somewhere nearby.
 - **score ≥ 5** — multiple signals stacked; treat as an active lure. A
   BSSID at this score is also badged deep-red with a `!` on the
   dashboard's Beacons panel, the same way `THREAT_IP` flags a hostile

@@ -59,8 +59,12 @@ meaningful findings and neither one dominates the other.
 Most rules omit confidence. They assert a condition they observed
 directly — a flood counted, a cleartext credential seen — and have
 nothing to qualify. Rules that *infer* from circumstantial RF report
-both numbers; `EVIL_TWIN` is the first, reported as **suspected
-impersonation** with a percentage rather than as an established fact.
+both numbers: `EVIL_TWIN` is the first, reported as **suspected
+impersonation** with a percentage rather than as an established fact;
+`KARMA_AP` is the second (#90) — a bare SSID-count candidate is WARN,
+uncorroborated, and escalates to CRIT only when PNL overlap, a
+shared-victim deauth-then-lure chain, or a verified tool signature
+match ties the pattern to that specific BSSID rather than coincidence.
 
 Collapsing the two axes is what let an uncorroborated same-SSID
 coincidence page at the same volume as an observed attack, and it pushed
