@@ -138,3 +138,4 @@
 | 58a030d | 2026-09-23T15:33:19Z | claude-opus-5 | 274 | 82728 | 15319407 | 376063 | 13.4899 | release v1.8.2 — version bump, release notes, tag, GitHub release; window also c |
 | 4315676 | 2026-09-24T11:19:19Z | claude-opus-5 | 156 | 77054 | 7810991 | 322958 | 9.0622 | #84 — slice 1: split DNS into passive lookup + gated resolver choke point |
 | f2bf0b5 | 2026-09-24T13:18:41Z | claude-opus-5 | 92 | 35032 | 5799678 | 410225 | 7.8783 | #86 F04 socket lifecycle slice; window also covers parent triage + #84 integrati |
+| 09f7e2d | 2026-09-25T11:06:58Z | claude-opus-5 | 332 | 174083 | 30012798 | 534552 | 24.7057 | #89 slice 1 — evil-twin trust anchors (OUI/RSSI/neighbour-report removed, severi |
