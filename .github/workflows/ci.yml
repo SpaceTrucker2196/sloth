@@ -4,6 +4,21 @@ on:
   push:
   pull_request:
 
+# agents/AGENTS.md requires every advertised build configuration to be
+# warning-clean. Two things made that a promise rather than a fact:
+#
+#   1. CI built four of the six configurations. WITH_PCAP=0 and WITH_WIFI=0
+#      were verified only by whoever remembered to run them locally. That is
+#      how #99 reached main and sat there — two unused statics in
+#      src/views/wifi.c that only WITH_WIFI=0 ever compiled.
+#   2. Nothing here failed on a warning. Every step below checked that the
+#      code *compiles*, which is a weaker claim than the one the contract
+#      makes. EXTRA_CFLAGS=-Werror closes that; it is appended to CFLAGS in
+#      the Makefile rather than replacing it, because CFLAGS uses ?= and
+#      overriding it wholesale would silently drop -Wall -Wextra -std=c99.
+env:
+  EXTRA_CFLAGS: -Werror
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -26,6 +41,16 @@ jobs:
       # inspection step for it.
       - name: Build without ncurses
         run: make clean && make WITH_NCURSES=0
+
+      # Capture is optional; the packets and probe views render a disabled
+      # message without it.
+      - name: Build without pcap
+        run: make clean && make WITH_PCAP=0
+
+      # Drops the nl80211 source. #99 lived here: the wifi view's helpers
+      # sat outside the guard that removes their only callers.
+      - name: Build without wifi
+        run: make clean && make WITH_WIFI=0
 
       - name: Build embedded (no ncurses, no pcap, no sqlite)
         run: make clean && make embedded

@@ -214,6 +214,12 @@ ifeq ($(WITH_WIFI),1)
     CFLAGS += -DWITH_WIFI
 endif
 
+# Appended last so a caller can tighten the build without restating CFLAGS.
+# CFLAGS uses ?=, so overriding it wholesale silently drops -Wall -Wextra -std=c99;
+# CI passes EXTRA_CFLAGS=-Werror instead. Propagates into `embedded` through
+# MAKEFLAGS like any other command-line variable.
+CFLAGS += $(EXTRA_CFLAGS)
+
 OBJS   = $(SRCS:.c=.o)
 TARGET = sloth
 
@@ -239,6 +245,7 @@ TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI -DWITH
 ifeq ($(UNAME),Linux)
     TEST_CFLAGS += -DPLATFORM_LINUX
 endif
+TEST_CFLAGS += $(EXTRA_CFLAGS)
 # No WITH_NCURSES: TPRINT expands to printf in view files
 # No WITH_PCAP:    packets view shows disabled message
 

@@ -48,6 +48,10 @@ Single binary `sloth`. Test binary `sloth_test`.
   build is how #99 happened: two helpers in `src/views/wifi.c` sat
   outside the `WITH_WIFI` guard and warned for an unknown number of
   releases, because no gate ever compiled that variant.
+  **CI enforces this** (`.github/workflows/ci.yml`): it builds all six
+  with `EXTRA_CFLAGS=-Werror`, so a warning fails the run rather than
+  depending on someone remembering to look. Run them locally anyway —
+  finding it after the push is slower, not safer.
 - **VIEW_COUNT must be kept in sync** across `include/sloth.h`,
   `tests/test_state.c`, and `tests/test_arp.c` whenever a view is added
   or removed.
