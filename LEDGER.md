@@ -144,3 +144,4 @@
 | 4374ff1 | 2026-09-25T18:43:00Z | claude-opus-5 | 400 | 122021 | 32219753 | 474132 | 23.9037 | #84 slice 2 — strict observation by default, resolver worker gated, --allow-acti |
 | 1d19bc8 | 2026-09-25T18:52:00Z | claude-opus-5 | 312 | 134102 | 23489949 | 476594 | 19.8650 | #86 — explicit opt-in to bind the data socket remotely; unix socket actually 060 |
 | 618f300 | 2026-09-25T20:12:04Z | claude-opus-5 | 234 | 76863 | 14808706 | 301643 | 12.3435 | #94 — correlation evidence honesty: scored seqnum pairs with expiry, MY_NET_RECO |
+| b9aa686 | 2026-09-25T20:58:50Z | claude-opus-5 | 142 | 51532 | 6473665 | 278211 | 7.3080 | #84 slice 3: gate nl80211 scan trigger + discovery on strict observation, per-in |
