@@ -139,7 +139,9 @@ inherited from a default.
 > advertisement carve-out ([`MISSION.md`](../../MISSION.md) §2): sloth
 > drops an Avahi service file so the sloth-ios client can find the
 > socket. Loopback and `unix:` sockets never advertise. Suppress it
-> entirely with `--no-discovery`.
+> entirely with `--no-discovery` — or with `--strict`, which refuses it
+> for the whole run along with every other path that can put the host on
+> the network (#84).
 
 ---
 

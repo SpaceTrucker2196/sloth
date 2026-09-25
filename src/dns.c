@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 
 #include "dns.h"
+#include "observe.h"
 #include "services.h"
 
 /* ── Tunables ────────────────────────────────────────────── */
@@ -50,9 +51,14 @@ static volatile int    g_running = 0;
 
 /* Off by default (#84 slice 2): strict observation is what an operator
  * gets without asking for it. --allow-active turns this on; --strict
- * sets g_strict_locked and refuses every later attempt. See dns.h. */
+ * locks it off for the run. See dns.h.
+ *
+ * The lock itself moved to src/observe.c in slice 3 — the scan trigger
+ * and the discovery carve-out have to consult the same lock, and neither
+ * can depend on this module. What stays here is the resolver's own
+ * enable bit, so a test can pin the resolver without also speaking for
+ * the nl80211 layer. */
 static int g_resolver_enabled = DNS_RESOLVER_DEFAULT_ENABLED;
-static int g_strict_locked    = 0;
 
 /* Guarded by g_mu, including the worker-thread increment. */
 static dns_resolver_stats_t g_stats;
@@ -239,11 +245,15 @@ void dns_set_resolved(const char *ip, const char *host) {
 }
 
 void dns_resolver_set_enabled(int enabled) {
+    /* Read the lock before taking g_mu: observe has its own mutex and
+     * nothing in observe ever calls back into dns, so the order is
+     * one-way and cannot cycle. */
+    int locked = observe_strict_locked();
     pthread_mutex_lock(&g_mu);
     /* A locked run refuses the enable outright rather than honouring it
      * and reporting later. Disabling is always allowed — tightening
      * never needs permission. */
-    if (!(g_strict_locked && enabled))
+    if (!(locked && enabled))
         g_resolver_enabled = enabled ? 1 : 0;
     pthread_mutex_unlock(&g_mu);
 }
@@ -256,17 +266,14 @@ int dns_resolver_enabled(void) {
 }
 
 void dns_resolver_lock_strict(void) {
+    observe_lock_strict();
     pthread_mutex_lock(&g_mu);
-    g_strict_locked    = 1;
     g_resolver_enabled = 0;
     pthread_mutex_unlock(&g_mu);
 }
 
 int dns_resolver_strict_locked(void) {
-    pthread_mutex_lock(&g_mu);
-    int l = g_strict_locked;
-    pthread_mutex_unlock(&g_mu);
-    return l;
+    return observe_strict_locked();
 }
 
 int dns_resolver_worker_running(void) {
@@ -277,8 +284,8 @@ int dns_resolver_worker_running(void) {
 }
 
 void dns_resolver_reset_policy(void) {
+    observe_reset_policy();
     pthread_mutex_lock(&g_mu);
-    g_strict_locked    = 0;
     g_resolver_enabled = DNS_RESOLVER_DEFAULT_ENABLED;
     pthread_mutex_unlock(&g_mu);
 }

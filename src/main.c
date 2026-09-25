@@ -107,6 +107,7 @@
 #include "db.h"
 #include "discovery.h"
 #include "dns.h"
+#include "observe.h"
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
 #include "capture/capture.h"   /* likewise — and #57's scope check needs it
@@ -550,20 +551,29 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
-            "  --strict           explicit no-op: strict observation is already\n"
-            "                     the default. What it adds is a LOCK — any\n"
-            "                     later attempt to enable active behaviour in\n"
-            "                     this run is refused, so --strict --allow-active\n"
-            "                     exits non-zero instead of quietly resolving in\n"
-            "                     favour of one of them. Worth passing because it\n"
-            "                     puts the operator's intent where ps(1) and an\n"
-            "                     audit log can see it.\n"
-            "  --allow-active     opt in to active reverse-DNS resolution: on a\n"
-            "                     cache miss sloth may send a PTR query for an\n"
-            "                     address it observed. OFF by default — without\n"
-            "                     this flag the resolver worker is never started\n"
-            "                     and names come only from traffic sloth already\n"
-            "                     saw (DNS/mDNS/NBNS/DHCP/SNI snooping). Prints\n"
+            "  --strict           near-no-op: strict observation is already the\n"
+            "                     default. What it adds is a LOCK — any later\n"
+            "                     attempt to enable active behaviour in this run\n"
+            "                     is refused, so --strict --allow-active exits\n"
+            "                     non-zero instead of quietly resolving in favour\n"
+            "                     of one of them. It also suppresses the mDNS\n"
+            "                     advertisement (see --no-discovery), the one\n"
+            "                     thing the default profile still permits. Worth\n"
+            "                     passing because it puts the operator's intent\n"
+            "                     where ps(1) and an audit log can see it.\n"
+            "  --allow-active     opt in to the two active behaviours sloth has:\n"
+            "                     (1) reverse-DNS resolution — on a cache miss\n"
+            "                     sloth may send a PTR query for an address it\n"
+            "                     observed; (2) nl80211 scan triggers, a kernel\n"
+            "                     scan kicked on each wireless interface so the\n"
+            "                     cached AP list stays fresh (passive scan, no\n"
+            "                     SSID list, so no probe request is transmitted).\n"
+            "                     Both OFF by default — without this flag the\n"
+            "                     resolver worker is never started, no TRIGGER_SCAN\n"
+            "                     request is ever built, names come only from\n"
+            "                     traffic sloth already saw (DNS/mDNS/NBNS/DHCP/\n"
+            "                     SNI snooping) and the AP list comes only from\n"
+            "                     whatever the kernel already had cached. Prints\n"
             "                     one line on stderr naming what it enabled; it\n"
             "                     is never silent. Does not re-enable per-packet\n"
             "                     lookups on the capture thread, which stay\n"
@@ -906,10 +916,14 @@ int main(int argc, char **argv) {
      * construction: it names a guarantee, so a command line carrying
      * both flags is a contradiction and is refused either way round
      * rather than silently resolved in favour of one of them. */
-    if (strict_lock) dns_resolver_lock_strict();
+    if (strict_lock) {
+        observe_lock_strict();       /* scan trigger + discovery (slice 3) */
+        dns_resolver_lock_strict();  /* resolver                (slice 2) */
+    }
     if (allow_active) {
+        observe_set_active_allowed(1);
         dns_resolver_set_enabled(1);
-        if (!dns_resolver_enabled()) {
+        if (!dns_resolver_enabled() || !observe_active_allowed()) {
             fprintf(stderr, "sloth: --allow-active refused: --strict locks "
                             "strict observation for this run\n");
             return 2;
@@ -919,7 +933,8 @@ int main(int argc, char **argv) {
          * exactly what it turned on — one line, on stderr, before any
          * of it can happen. */
         fprintf(stderr, "sloth: --allow-active enabled active reverse-DNS "
-                        "resolution (PTR queries for observed addresses); "
+                        "resolution (PTR queries for observed addresses) and "
+                        "nl80211 scan triggers on wireless interfaces; "
                         "everything else stays passive\n");
     }
 

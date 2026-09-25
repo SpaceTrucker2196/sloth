@@ -1,4 +1,5 @@
 #include "discovery.h"
+#include "observe.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -94,6 +95,18 @@ int discovery_routable_tcp_port(const char *spec) {
 int discovery_publish(const char *spec, const char *path) {
     int port = discovery_routable_tcp_port(spec);
     if (port < 0) return -1;
+
+    /* --strict suppresses the carve-out (#84). sloth still transmits
+     * nothing itself, but avahi-daemon announcing on its behalf is the
+     * host's presence on the wire, and an operator who locked strict
+     * observation for the run asked for none of it. Enforced here rather
+     * than at the call site so the gate sits on the function that writes
+     * the file, not on whoever remembers to check first. */
+    if (!observe_discovery_allowed()) {
+        fprintf(stderr, "sloth: --strict: not advertising _sloth._tcp "
+                        "(discovery suppressed for this run)\n");
+        return -1;
+    }
 
     const char *out = path ? path : DISCOVERY_DEFAULT_PATH;
 

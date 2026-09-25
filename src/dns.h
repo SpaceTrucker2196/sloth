@@ -58,8 +58,12 @@ const char *dns_resolve(const char *ip);
  * stderr. --strict calls dns_resolver_lock_strict(), which turns the
  * resolver off and refuses every later enable for the lifetime of the
  * process — so the guarantee holds for the whole run, not until the
- * next call. The lock lives here rather than in the argv parser so it
- * is a cross-module invariant that no future caller can route around.
+ * next call.
+ *
+ * The lock itself lives in src/observe.h (slice 3), not here and not in
+ * the argv parser: the nl80211 scan trigger and the discovery carve-out
+ * have to honour the same lock, and neither can depend on this module.
+ * The functions below are the resolver's view of that one policy.
  */
 #define DNS_RESOLVER_DEFAULT_ENABLED 0
 

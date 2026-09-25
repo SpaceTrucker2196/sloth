@@ -1036,3 +1036,66 @@ default: **human-readable text changed, type ids kept**. `MY_NET_RECON`
 and every other id is untouched, because renaming one is a non-additive
 schema break under MISSION §4.3 and would reach the sloth-ios consumer.
 Everything new is an added field. No `DB_SCHEMA_VERSION` bump.
+
+---
+
+## 2026-09-25 — #84 slice 3: scan trigger, discovery and the positioning rewrite
+
+**Source**: issue #84 (external CISO/GRC review, Todd Luther, 2026-09),
+slice 3 of 3. Slices 1–2 built the passive/active split in the resolver
+and made strict observation the default.
+
+**What changed.**
+
+- **`src/observe.{c,h}`** is new and small: one owner for the run's
+  observation policy. The strict lock moved out of `src/dns.c`, which
+  held it in slice 2 when the resolver was the only active path worth
+  gating. The nl80211 scan trigger and the Avahi carve-out both have to
+  honour the same lock and neither can depend on the DNS module, so the
+  policy is now its own object every subsystem asks. `dns.c` keeps only
+  the resolver's own enable bit and delegates the lock.
+- **The nl80211 scan trigger is gated and instrumented.**
+  `trigger_scan_async()` used to fire `NL80211_CMD_TRIGGER_SCAN` from the
+  ordinary poll loop, unconditionally. The decision, the rate limiter and
+  the message construction are now split into
+  `linux_wifi_prepare_scan_trigger()`, which returns 0 when policy or the
+  limiter refuses. Under the default profile — and, locked, under
+  `--strict` — **zero requests are built**, and no socket is opened
+  either. Counting at the builder rather than at `sendto(2)` is the
+  point: a request that was built and then dropped is still a request the
+  code was willing to make.
+- **The scan-trigger rate limiter is genuinely per-interface.** It was a
+  single function-static `time_t` shared by every interface behind a
+  comment claiming per-interface limiting, so the first radio
+  `find_wlan_ifaces()` enumerated consumed the whole budget and the rest
+  were triggered only when it happened to be quiet. Fixed rather than
+  documented as global: the enumeration order is fixed, so "global" does
+  not mean fair, it means one radio is preferred and the others starve —
+  and a monitor radio alongside an uplink is the deployment sloth
+  targets. `find_wlan_ifaces()` caps at 8, so an 8-slot table gives every
+  enumerated radio its own slot with no allocation.
+- **`--strict` suppresses mDNS discovery**, enforced inside
+  `discovery_publish()` rather than at the call site. sloth still
+  transmits nothing itself, but avahi-daemon announcing on its behalf is
+  the host's presence on the wire.
+- **README positioning rewritten**, which the issue sequences last. The
+  old headline claim — "never injects packets, never scans, never
+  modifies kernel state" — was the thing under review and is gone. What
+  replaces it says only what the code enforces, names the two active
+  behaviours in a table, and states plainly what has *not* been proven
+  (over-the-air validation with an independent receiver).
+
+**Deliberate asymmetry, flagged.** The scan trigger is off by *default*;
+discovery is suppressed only under the explicit `--strict` lock. The
+Captain's written decision of 2026-09-25 names the resolver and the scan
+trigger, not discovery, and the carve-out already requires a routable
+`--data-socket` bind plus `--data-socket-allow-remote` — two explicit
+operator acts — so it cannot fire on a default run at all. Silently
+dropping it would break sloth-ios discovery for a deployment that asked
+for it.
+
+**Not touched.** `MISSION.md` §2/§3 and `agents/AGENTS.md` still carry
+the older "never scans, never modifies kernel state" phrasing. The
+charter is the Captain's to author (§4.3) and `agents/` is a high-signal
+surface, so the inconsistency is surfaced on the issue rather than
+edited here.

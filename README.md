@@ -16,9 +16,16 @@
 
 # sloth
 
-A terminal-based passive network monitor for Linux, written in C99. Sloth never
-injects packets, never scans, and never modifies kernel state — it observes what
-your host already sees and turns it into **35 live views** and **61 passive
+A terminal-based passive network monitor for Linux, written in C99. Sloth does not
+inject attack traffic — no probe requests, no deauth frames, no port scans, nothing
+written to the monitored segment. Its shipped default is **strict observation**, and
+that is enforced in code rather than promised in prose: the reverse-DNS resolver
+worker is never started and no `NL80211_CMD_TRIGGER_SCAN` request is ever built, so a
+default run originates no network traffic at all. Both of those are opt-in behind
+`--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
+`--data-socket`) carries observations to a consumer you configured, over a path you
+configured, never to the segment being watched. It observes what your host already
+sees and turns it into **35 live views** and **61 passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -107,7 +114,7 @@ for in normal vs anomalous traffic.
 ### Output
 
 - **`sloth -o FILE`** — append a JSONL line for every DNS/TLS/QUIC/HTTP/NTP/ICMP record, every newly-fired alert, and every alert-incident lifecycle event (create / update / escalate / resolve, #98). See [JSONL schema](#jsonl-schema) below.
-- **`sloth --data-socket [SPEC]`** — same JSONL records, served over a **read-only stream socket** (`unix:/path` or `tcp:HOST:PORT`) for live consumers. Bare `--data-socket` with no SPEC defaults to `tcp:127.0.0.1:8765` (loopback only). `tail -f`-style with no filesystem polling. Read-only by design — nothing flows back from the wire (see [MISSION.md §4](MISSION.md)). Read-only is a statement about *commands*, not data: the stream carries no authentication and no encryption, so **reachability is the access control**. A `unix:` socket is created **0600**, which makes the kernel's peer-credential check the authentication — no keys, nothing to rotate or expire — and is the recommended deployment. Binding any address outside `127.0.0.0/8` (including the `0.0.0.0` wildcard) is **refused** unless `--data-socket-allow-remote` is also passed, and prints a warning naming the exposed address. To reach the socket from another host, tunnel it instead: `ssh -L 8765:127.0.0.1:8765 user@sensor`, [`examples/stunnel/`](examples/stunnel/), or push outbound with [`examples/forwarder/`](examples/forwarder/). Full trust boundary in [`docs/wiki/data-socket-exposure.md`](docs/wiki/data-socket-exposure.md). Multi-client (up to 16). Backpressure is per-client and whole-record: a slow consumer gets a bounded queue (512 KiB), never a glued or truncated line; on overflow whole records are dropped and a `socket_gap` record reports how many, and a consumer that accepts nothing for 30 s is disconnected. Healthy clients are unaffected. Full schema and consumer notes in [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md). When the socket is bound to a **routable** address, sloth advertises it over mDNS (`_sloth._tcp`) so the sloth-ios client can discover it by name — via an Avahi service file (sloth transmits nothing; `avahi-daemon` announces). Loopback/UNIX sockets never advertise; disable entirely with `--no-discovery`. This is the sole opt-out carve-out in [MISSION.md §2](MISSION.md).
+- **`sloth --data-socket [SPEC]`** — same JSONL records, served over a **read-only stream socket** (`unix:/path` or `tcp:HOST:PORT`) for live consumers. Bare `--data-socket` with no SPEC defaults to `tcp:127.0.0.1:8765` (loopback only). `tail -f`-style with no filesystem polling. Read-only by design — nothing flows back from the wire (see [MISSION.md §4](MISSION.md)). Read-only is a statement about *commands*, not data: the stream carries no authentication and no encryption, so **reachability is the access control**. A `unix:` socket is created **0600**, which makes the kernel's peer-credential check the authentication — no keys, nothing to rotate or expire — and is the recommended deployment. Binding any address outside `127.0.0.0/8` (including the `0.0.0.0` wildcard) is **refused** unless `--data-socket-allow-remote` is also passed, and prints a warning naming the exposed address. To reach the socket from another host, tunnel it instead: `ssh -L 8765:127.0.0.1:8765 user@sensor`, [`examples/stunnel/`](examples/stunnel/), or push outbound with [`examples/forwarder/`](examples/forwarder/). Full trust boundary in [`docs/wiki/data-socket-exposure.md`](docs/wiki/data-socket-exposure.md). Multi-client (up to 16). Backpressure is per-client and whole-record: a slow consumer gets a bounded queue (512 KiB), never a glued or truncated line; on overflow whole records are dropped and a `socket_gap` record reports how many, and a consumer that accepts nothing for 30 s is disconnected. Healthy clients are unaffected. Full schema and consumer notes in [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md). When the socket is bound to a **routable** address, sloth advertises it over mDNS (`_sloth._tcp`) so the sloth-ios client can discover it by name — via an Avahi service file (sloth transmits nothing; `avahi-daemon` announces). Loopback/UNIX sockets never advertise; disable entirely with `--no-discovery`, or with `--strict`, which suppresses it along with every other way a run can put the host on the wire. This is the sole opt-out carve-out in [MISSION.md §2](MISSION.md).
 - **`sloth --pcap-dir DIR`** — when a rule fires with a known flow identifier (THREAT_IP, BEACONING, PORT_SCAN, NXDOMAIN_BURST, THREAT_DOMAIN), the matching packets are written to a per-alert pcap file under `DIR`.
 - **`sloth --eapol-dir DIR`** — append each captured PMKID and 4-way handshake to `DIR/eapol.22000` in [hashcat mixed format](https://hashcat.net/wiki/doku.php?id=cracking_wpawpa2). Crack directly with `hashcat -m 22000 eapol.22000 wordlist.txt`. Sloth also writes a per-handshake `DIR/<bssid>_<sta>.pcap` (raw 802.11, DLT 105) so each capture can be replayed through `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap` or opened in Wireshark. **This is crackable material** — see below.
 
@@ -117,11 +124,20 @@ for in normal vs anomalous traffic.
 
 Sloth originates **no network traffic of its own** unless you ask it to. That is the shipped default, not a mode you enable.
 
-- **`sloth`** (no flag) — strict. The reverse-DNS resolver worker is never started, so sloth cannot emit a PTR query even by accident. Hostnames still appear: they come from traffic sloth already watched go past (DNS answers, mDNS, NBNS, DHCP and TLS SNI), which is what [MISSION.md §2](MISSION.md) means by *never resolves hosts it didn't already see*.
-- **`sloth --allow-active`** — opt in to active reverse-DNS resolution. On a cache miss sloth may send a PTR query for an address it observed. It prints **one line on stderr** naming exactly what it turned on; a passive tool that quietly becomes active is the failure this exists to prevent, so the opt-in is never silent. Note the per-packet lookup in the UDP/443 QUIC decoder is **not** restored by this flag — that path stays passive unconditionally, because it runs on the capture thread where no operator toggle can reach it.
-- **`sloth --strict`** — changes nothing by itself, and that is the point. It *locks* strict observation for the run, so any later attempt to enable active behaviour is refused rather than honoured; `--strict --allow-active` exits non-zero (in either order) instead of quietly picking a winner. Pass it when you want the operator's intent visible in `ps` and in an audit log — in a deployment somebody has to attest to, that is worth more than it costs.
+Sloth has exactly **two** behaviours that are not pure observation, and both are off by default:
+
+| | What it would do | Default | Opt in | Locked off by |
+|---|---|---|---|---|
+| Reverse-DNS resolution | PTR query for an observed address on a cache miss | off | `--allow-active` | `--strict` |
+| nl80211 scan trigger | `NL80211_CMD_TRIGGER_SCAN` on each wireless interface, so the kernel's cached AP list stays fresh | off | `--allow-active` | `--strict` |
+
+- **`sloth`** (no flag) — strict. The reverse-DNS resolver worker is never started, so sloth cannot emit a PTR query even by accident. No `TRIGGER_SCAN` request is built either — not built and dropped, *not built*, which is what [`tests/test_wifi_scan_trigger.c`](tests/test_wifi_scan_trigger.c) asserts by counting requests at the message builder rather than at the socket. Hostnames still appear: they come from traffic sloth already watched go past (DNS answers, mDNS, NBNS, DHCP and TLS SNI), which is what [MISSION.md §2](MISSION.md) means by *never resolves hosts it didn't already see*. The WiFi view still lists APs — it reads whatever the kernel already had cached, it just stops asking the kernel to go and look.
+- **`sloth --allow-active`** — opt in to both rows of that table. On a cache miss sloth may send a PTR query for an address it observed, and it may ask the kernel to scan. The scan request carries no `NL80211_ATTR_SCAN_SSIDS`, so Linux runs it as a *passive* scan and no probe request is transmitted; what it changes is kernel state on your own radio, not the monitored segment. It prints **one line on stderr** naming exactly what it turned on; a passive tool that quietly becomes active is the failure this exists to prevent, so the opt-in is never silent. Note the per-packet lookup in the UDP/443 QUIC decoder is **not** restored by this flag — that path stays passive unconditionally, because it runs on the capture thread where no operator toggle can reach it.
+- **`sloth --strict`** — changes nothing by itself against the default, and that is mostly the point. It *locks* strict observation for the run, so any later attempt to enable active behaviour is refused rather than honoured; `--strict --allow-active` exits non-zero (in either order) instead of quietly picking a winner. It does add one thing: it suppresses the mDNS advertisement (see `--no-discovery`), the last path by which a sloth run can cause the host to say anything on the network. Pass it when you want the operator's intent visible in `ps` and in an audit log — in a deployment somebody has to attest to, that is worth more than it costs.
 
 The in-TUI `[n]` names/numeric toggle now gates resolution as well as display: with names off, the Top Hosts panel reads the cache and never resolves. Both gates compose — the toggle says whether you want names, the profile says whether sloth may go and get them.
+
+**What this does not claim.** Passive channel-hopping (`--hop`, off by default) retunes sloth's own monitor interface, which is a kernel-state write on a receiver you dedicated to sloth — see [MISSION.md §2](MISSION.md)'s first carve-out. The JSONL log and the data socket exist to move observations off the host, and a routable `--data-socket` is a listener that transmits to whoever connects. Those are telemetry over a path you configured, not traffic on the segment you are watching, and the distinction is the operator's to enforce with routing. Over-the-air confirmation with an independent receiver — the only way to prove a driver does not transmit something sloth never asked for — has not been done; the guarantees above are what the code and the test suite enforce.
 
 ### Headless operation
 
@@ -223,10 +239,16 @@ The in-TUI `[n]` names/numeric toggle now gates resolution as well as display: w
 
 ## WiFi SIGINT usage
 
-Sloth is fully passive — it never injects probe requests, never sends
+Sloth transmits nothing over the air — it never injects probe requests, never sends
 deauth frames, never associates with anything. All wireless data is
 sniffed by a monitor-mode interface that's been put into monitor mode
 by an external tool (`iw`, `airmon-ng`, etc.) before sloth starts.
+
+Two kernel-state writes exist and both are opt-in, because "monitor mode" is not by
+itself a transmit interlock and it would be dishonest to imply otherwise: `--hop`
+retunes sloth's own monitor interface, and `--allow-active` lets sloth ask the kernel
+to run a (passive, SSID-less) scan on a wireless interface. Neither is on by default;
+`--strict` refuses both for the whole run.
 
 ```sh
 # 1. Set an adapter to monitor mode (external — sloth never touches link state).
@@ -535,7 +557,7 @@ the top.
 
 Code: ~48.6k lines of C99 across 147 `.c` files (285 counting headers). Tests: 9304 assertions plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
 
-Sloth was built as a passive monitor. It will not scan, fuzz, attack, or attempt to deauth or de-associate anything. If that's what you need, use a different tool.
+Sloth was built as a passive monitor. It will not fuzz, attack, or attempt to deauth or de-associate anything, and it puts no frame of its own on the air. The one thing it can be asked to do that resembles scanning is `--allow-active`'s kernel scan trigger — a passive, SSID-less nl80211 scan on your own radio, off unless you ask for it. If active reconnaissance is what you need, use a different tool.
 
 ## License
 

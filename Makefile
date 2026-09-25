@@ -115,6 +115,7 @@ SRCS = src/main.c          \
        src/formatter.c       \
        src/data_socket.c     \
        src/discovery.c       \
+       src/observe.c         \
        src/views/help.c      \
        src/filter.c          \
        src/alert_pcap.c      \
@@ -478,6 +479,9 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_data_socket.c       \
             src/discovery.c                \
             tests/test_discovery.c         \
+            src/observe.c                  \
+            tests/test_observe.c           \
+            tests/test_wifi_scan_trigger.c \
             src/views/help.c               \
             src/filter.c                   \
             tests/test_filter.c            \

@@ -102,6 +102,8 @@ void run_karma_tests(void);
 void run_rogue_radius_tests(void);
 void run_help_tests(void);
 void run_discovery_tests(void);
+void run_observe_tests(void);
+void run_wifi_scan_trigger_tests(void);
 void run_eap_parse_tests(void);
 void run_eap_track_tests(void);
 void run_formatter_tests(void);
@@ -224,6 +226,8 @@ int main(void) {
     run_rogue_radius_tests();
     run_help_tests();
     run_discovery_tests();
+    run_observe_tests();
+    run_wifi_scan_trigger_tests();
     run_eap_parse_tests();
     run_eap_track_tests();
     run_formatter_tests();

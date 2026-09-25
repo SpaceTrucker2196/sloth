@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "discovery.h"
+#include "observe.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -90,6 +91,34 @@ static void test_publish_skips_loopback(void) {
     discovery_unpublish();   /* safe no-op */
 }
 
+/* ── Strict observation suppresses the carve-out (#84) ───── */
+
+static void test_strict_suppresses_publish(void) {
+    char path[] = "/tmp/sloth_disc_strict_XXXXXX";
+    int fd = mkstemp(path);
+    ASSERT(fd >= 0);
+    close(fd);
+    unlink(path);   /* start absent */
+
+    observe_reset_policy();
+    observe_lock_strict();
+
+    /* A routable bind that would otherwise publish: under --strict no
+     * service file is written, so avahi-daemon never announces on
+     * sloth's behalf. */
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), -1);
+    ASSERT(access(path, F_OK) != 0);
+
+    /* Same spec, same path, lock cleared → it does publish, so the -1
+     * above is the lock and not some unrelated failure. */
+    observe_reset_policy();
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), 0);
+    ASSERT_EQ(access(path, F_OK), 0);
+
+    discovery_unpublish();
+    ASSERT(access(path, F_OK) != 0);
+}
+
 void run_discovery_tests(void) {
     TEST_SUITE("mDNS discovery advertisement (#29)");
     RUN_TEST(test_routable_tcp_port);
@@ -100,4 +129,5 @@ void run_discovery_tests(void) {
     RUN_TEST(test_xml_rejects_bad_args);
     RUN_TEST(test_publish_writes_and_unpublish_removes);
     RUN_TEST(test_publish_skips_loopback);
+    RUN_TEST(test_strict_suppresses_publish);
 }

@@ -17,6 +17,7 @@
 
 #include "sloth.h"
 #include "beacon_snoop.h"
+#include "observe.h"
 #include "platform/linux_wifi.h"
 
 /* ── Netlink attribute helpers ───────────────────────────── */
@@ -255,24 +256,75 @@ static int ap_cmp(const void *a, const void *b) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
-/* Fire NL80211_CMD_TRIGGER_SCAN on a disposable fd and close immediately.
-   Rate-limited to once per 5 s per interface.  Errors (EBUSY = scan already
-   in progress, EPERM = no CAP_NET_ADMIN) are silently discarded — the
-   GET_SCAN below will return whatever cached results the kernel holds. */
-static void trigger_scan_async(int family, unsigned ifidx) {
-    static time_t g_last_trigger = 0;
-    time_t now = time(NULL);
-    if (now - g_last_trigger < 5) return;
+/* ── Scan-trigger policy, limiter and instrumentation (#84) ── */
 
-    int tfd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
-    if (tfd < 0) return;
+/* The old comment here promised per-interface rate limiting and the code
+ * delivered one function-static timestamp shared by every interface, so
+ * on a multi-radio sensor the first radio find_wlan_ifaces() enumerated
+ * consumed the whole budget and the others were triggered only when it
+ * happened to be quiet. Made genuinely per-interface rather than
+ * documented as global: the interfaces are enumerated in a fixed order,
+ * so "global" does not mean "fair", it means one radio is preferred and
+ * the rest are starved — and a WiFi sensor with a dedicated monitor
+ * radio alongside an uplink is the deployment this tool targets.
+ * find_wlan_ifaces() caps at WIFI_SCAN_TRIGGER_MAX_IFACES, so a fixed
+ * table of that size gives every enumerated radio a slot with no
+ * allocation and no unbounded growth. */
+static struct {
+    unsigned ifidx;   /* 0 = free; if_nametoindex() never returns 0 */
+    time_t   last;
+} g_trigger_slots[WIFI_SCAN_TRIGGER_MAX_IFACES];
 
+static wifi_scan_trigger_stats_t g_trigger_stats;
+
+/* Is `ifidx` due for a trigger at `now`? Marks the slot when it is. */
+static int trigger_slot_due(unsigned ifidx, time_t now) {
+    int free_slot = -1, oldest = 0;
+
+    for (int i = 0; i < WIFI_SCAN_TRIGGER_MAX_IFACES; i++) {
+        if (g_trigger_slots[i].ifidx == ifidx) {
+            if (now - g_trigger_slots[i].last
+                    < WIFI_SCAN_TRIGGER_MIN_INTERVAL_SEC)
+                return 0;
+            g_trigger_slots[i].last = now;
+            return 1;
+        }
+        if (free_slot < 0 && g_trigger_slots[i].ifidx == 0) free_slot = i;
+        if (g_trigger_slots[i].last < g_trigger_slots[oldest].last) oldest = i;
+    }
+
+    /* Unknown interface: take a free slot, else evict the least recently
+     * triggered one. Unreachable while the enumerator caps at the table
+     * size, but a silently wrong limiter is what this fix is about. */
+    int idx = free_slot >= 0 ? free_slot : oldest;
+    g_trigger_slots[idx].ifidx = ifidx;
+    g_trigger_slots[idx].last  = now;
+    return 1;
+}
+
+size_t linux_wifi_prepare_scan_trigger(uint8_t *buf, size_t sz, int family,
+                                       unsigned ifidx, time_t now) {
     const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN
                         + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
-    uint8_t sbuf[64];
-    memset(sbuf, 0, sizeof(sbuf));
 
-    struct nlmsghdr  *nlh = (struct nlmsghdr *)sbuf;
+    if (!buf || sz < msg_sz || ifidx == 0 || family < 0) return 0;
+
+    g_trigger_stats.considered++;
+
+    /* Strict observation refuses the request before it exists. */
+    if (!observe_active_allowed()) {
+        g_trigger_stats.suppressed_policy++;
+        return 0;
+    }
+
+    if (!trigger_slot_due(ifidx, now)) {
+        g_trigger_stats.suppressed_rate++;
+        return 0;
+    }
+
+    memset(buf, 0, msg_sz);
+
+    struct nlmsghdr  *nlh = (struct nlmsghdr *)buf;
     struct genlmsghdr *gh = (struct genlmsghdr *)NLMSG_DATA(nlh);
     struct nlattr     *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
 
@@ -281,17 +333,46 @@ static void trigger_scan_async(int family, unsigned ifidx) {
     nlh->nlmsg_flags = NLM_F_REQUEST;   /* no ACK: success is silent */
     nlh->nlmsg_seq   = 99;
     gh->cmd          = NL80211_CMD_TRIGGER_SCAN;
+    /* IFINDEX and nothing else. Omitting NL80211_ATTR_SCAN_SSIDS is what
+     * keeps this a passive scan: with an SSID list the kernel transmits
+     * directed probe requests, which MISSION §2 forbids outright. */
     na->nla_type     = NL80211_ATTR_IFINDEX;
     na->nla_len      = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
     *(uint32_t *)NA_DATA(na) = ifidx;
+
+    g_trigger_stats.requests_built++;
+    return msg_sz;
+}
+
+void linux_wifi_scan_trigger_stats(wifi_scan_trigger_stats_t *out) {
+    if (out) *out = g_trigger_stats;
+}
+
+void linux_wifi_scan_trigger_reset(void) {
+    memset(g_trigger_slots, 0, sizeof(g_trigger_slots));
+    memset(&g_trigger_stats, 0, sizeof(g_trigger_stats));
+}
+
+/* Fire NL80211_CMD_TRIGGER_SCAN on a disposable fd and close immediately.
+   Rate-limited to once per WIFI_SCAN_TRIGGER_MIN_INTERVAL_SEC per interface,
+   and suppressed entirely unless --allow-active permitted it.  Errors
+   (EBUSY = scan already in progress, EPERM = no CAP_NET_ADMIN) are silently
+   discarded — the GET_SCAN below returns whatever cached results the kernel
+   holds either way, which is also what a strict run relies on. */
+static void trigger_scan_async(int family, unsigned ifidx) {
+    uint8_t sbuf[64];
+    size_t msg_sz = linux_wifi_prepare_scan_trigger(sbuf, sizeof(sbuf),
+                                                    family, ifidx, time(NULL));
+    if (msg_sz == 0) return;   /* no socket is opened when nothing was built */
+
+    int tfd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    if (tfd < 0) return;
 
     struct sockaddr_nl sa;
     memset(&sa, 0, sizeof(sa));
     sa.nl_family = AF_NETLINK;
     sendto(tfd, sbuf, msg_sz, 0, (struct sockaddr *)&sa, sizeof(sa));
     close(tfd);
-
-    g_last_trigger = now;
 }
 
 int linux_wifi_scan(wifi_ap_t *out, int max) {

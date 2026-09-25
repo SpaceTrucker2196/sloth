@@ -11,6 +11,17 @@ netlink interface to ask the kernel for its current scan results — no
 monitor mode required. (Compare to `[b] Beacons`, which uses pcap +
 monitor mode to capture raw beacon frames live.)
 
+Reading those results (`NL80211_CMD_GET_SCAN`) is pure observation and
+always happens. *Asking the kernel to refresh them*
+(`NL80211_CMD_TRIGGER_SCAN`) is a kernel-state change, so since #84 it is
+off unless the operator passes `--allow-active`, and `--strict` refuses
+it for the whole run. By default this view therefore shows whatever the
+kernel already had cached — which on a host with a managed-mode uplink is
+usually current, and on a dedicated sensor may be stale until something
+else on the host scans. The trigger request carries no
+`NL80211_ATTR_SCAN_SSIDS` even when enabled, so Linux runs it as a
+passive scan and no probe request is transmitted.
+
 ## What sloth captures
 
 Per AP: SSID, BSSID (string form), signal (dBm), channel,
