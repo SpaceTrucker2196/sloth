@@ -141,3 +141,5 @@
 | 09f7e2d | 2026-09-25T11:06:58Z | claude-opus-5 | 332 | 174083 | 30012798 | 534552 | 24.7057 | #89 slice 1 — evil-twin trust anchors (OUI/RSSI/neighbour-report removed, severi |
 | 8cd38ef | 2026-09-25T18:16:55Z | claude-opus-5 | 380 | 142892 | 22466091 | 1383964 | 28.6469 | CI six-variant -Werror gate + EXTRA_CFLAGS hook; window also covers this session |
 | 0e00373 | 2026-09-25T18:25:00Z | claude-opus-5 | 430 | 237238 | 45302042 | 600990 | 34.5940 | #89 slice 2 — approved-inventory trust anchor (JSON loader, flag merge, content  |
+| 4374ff1 | 2026-09-25T18:43:00Z | claude-opus-5 | 400 | 122021 | 32219753 | 474132 | 23.9037 | #84 slice 2 — strict observation by default, resolver worker gated, --allow-acti |
+| 1d19bc8 | 2026-09-25T18:52:00Z | claude-opus-5 | 312 | 134102 | 23489949 | 476594 | 19.8650 | #86 — explicit opt-in to bind the data socket remotely; unix socket actually 060 |
