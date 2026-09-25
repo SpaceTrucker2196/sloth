@@ -45,10 +45,14 @@ void evil_twin_taint_mark_for_test(const uint8_t bssid[6]);
  * the engine's dedup/incident keying from #98 — there is one keying
  * scheme in this file, not two.
  *
- * `site` is the operator's inventory label and is empty until the JSON
- * inventory lands (#89 slice 2). It must NEVER be derived from an
- * observed SSID or BSSID: a trust input taken from unauthenticated
- * over-the-air data is the whole bug class #89 exists to remove. */
+ * `site` is the operator's label for where this sensor is. Since #89
+ * slice 2 it comes from `--site` or the inventory file's `site` field —
+ * inventory_site() — and from NOTHING else. It must NEVER be derived
+ * from an observed SSID, a BSSID or the uplink association: a trust
+ * input taken from unauthenticated over-the-air data is the whole bug
+ * class #89 exists to remove, and a site that re-keyed on every roam
+ * would fragment one physical impersonator into several incidents.
+ * Unset is still the empty string and the key shape does not change. */
 #define TWIN_SITE_UNSET ""
 
 void alert_pair_key(char *out, size_t n, const char *rule_id,
@@ -77,6 +81,29 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  * demote one backed by a hard signal, or advertising your target
  * becomes a severity lever.
  *
+ * ── The one exception: the approved inventory (#89 slice 2) ──
+ *
+ * `inv_mismatch` and `inv_approved` are the only inputs here that did
+ * not come off the air, and they are the only ones allowed to settle a
+ * pair outright. An operator wrote them in a file, out-of-band; an
+ * attacker cannot beacon its way into one. So:
+ *
+ *   - `inv_mismatch` (a half is not approved for an SSID the file
+ *     declares) is positive evidence AND `hard` — which is what makes a
+ *     spoofed neighbour claim unable to erase it.
+ *   - `inv_approved` (both halves approved) makes the pair a
+ *     non-candidate: twin_evidence_score returns 0 whatever else is
+ *     set. This is the mixed-vendor-infrastructure case, where the
+ *     strongest observed signals in this file — differing OUI,
+ *     contradicting vendor-IE hashes — are both simply wrong about a
+ *     deployment the operator has told sloth about.
+ *
+ * That last one is a sole suppressor, deliberately, and it is not the
+ * pre-#89 behaviour wearing a new name: what #89 removed were
+ * suppressors sourced from *frames the attacker writes*. The test is
+ * not "does anything suppress" but "can the adversary reach the input".
+ * Here they cannot.
+ *
  * `confidence` is how sure sloth is, in percent, clamped to
  * [TWIN_CONF_MIN, TWIN_CONF_MAX]. It is never 100 and it is *not* the
  * severity: severity is how bad the finding is if true, confidence is
@@ -88,6 +115,8 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
 #define TWIN_W_BTM_STEER     25   /* 802.11v steer aimed at the pair */
 #define TWIN_W_WEAK_CLONE    85   /* OPEN/WEP beside strong under one SSID —
                                    * no vendor-diversity explanation exists */
+#define TWIN_W_INV_MISMATCH  50   /* a half is not in the approved inventory —
+                                   * operator-supplied, so not forgeable */
 #define TWIN_C_NBR_CLAIM     30   /* 802.11k neighbour claim — unauthenticated */
 #define TWIN_C_SAME_OUI      15   /* same vendor, or a copied OUI */
 #define TWIN_CONF_MIN         5
@@ -100,6 +129,8 @@ typedef struct {
     int attacker_oui;
     int steered;
     int nbr_claim;       /* either side advertises the other (802.11k) */
+    int inv_mismatch;    /* a half is not approved for an inventoried SSID */
+    int inv_approved;    /* both halves approved for an inventoried SSID */
     int positive;        /* summed impersonation evidence */
     int context;         /* summed benign explanation */
     int hard;            /* a signal an attacker cannot advertise away */

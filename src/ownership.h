@@ -44,6 +44,17 @@ int ownership_add_ssid(const char *ssid);
  * case). Rejects anything that isn't six hex octets. */
 int ownership_add_bssid(const char *str);
 
+/* The shared strictness behind every operator-supplied MAC: exactly six
+ * hex octets, ':' or '-' separated, either case. Returns 1 and fills
+ * `out` on success, 0 otherwise; writes nothing on failure.
+ *
+ * Exported so the JSON inventory (#89 slice 2) validates addresses the
+ * same way the flags and the roster do rather than carrying a second
+ * copy that could drift. Deliberately strict everywhere: a typo'd
+ * address designates nothing, and the operator concludes their own AP
+ * is not being recognised. */
+int ownership_parse_mac(const char *str, uint8_t out[6]);
+
 /* Membership tests. Both are false when nothing has been designated,
  * so every caller degrades to today's behaviour automatically. SSID
  * comparison is exact and case-sensitive: 802.11 SSIDs are opaque

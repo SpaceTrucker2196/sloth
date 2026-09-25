@@ -21,6 +21,7 @@
 #include "dga.h"
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
+#include "inventory.h"
 #include "transit.h"
 #include "rf_quality.h"
 #include "event_wake.h"
@@ -213,11 +214,12 @@ static int evict_oldest(time_t now) {
  * `detail` may be regenerated each tick — we always overwrite it so the
  * latest observation wins. `match_ip`/`match_port` are set only on new
  * alerts (so the criteria represent the first time we saw this key). */
-static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
-                      const char *title, const char *detail,
-                      const char *key,
-                      const char *match_ip, uint16_t match_port,
-                      time_t now) {
+static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
+                     const char *inv_hash,
+                     const char *title, const char *detail,
+                     const char *key,
+                     const char *match_ip, uint16_t match_port,
+                     time_t now) {
     uint64_t mono = flood_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     int idx = find_by_key(key);
@@ -241,6 +243,13 @@ static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
         a->sev        = sev;
         a->confidence = (uint8_t)confidence;
         snprintf(a->detail, sizeof(a->detail), "%s", detail);
+        /* Refreshed with the detail: the inventory cannot change under
+         * a running process (there is no reload path, deliberately), so
+         * this only ever rewrites the same value — but an incident that
+         * began before a rule started consulting the anchor should not
+         * keep claiming it never did. */
+        snprintf(a->inventory, sizeof(a->inventory), "%s",
+                 inv_hash ? inv_hash : "");
 
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
@@ -298,6 +307,8 @@ static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
+    if (inv_hash && inv_hash[0])
+        snprintf(a->inventory, sizeof(a->inventory), "%s", inv_hash);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
@@ -315,6 +326,18 @@ static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
     jsonl_emit_alert(a);
     jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
     event_wake_signal();
+}
+
+/* No inventory consulted. Only the rules that actually read the
+ * approved inventory stamp its hash (#89 slice 2); a blanket stamp
+ * would claim the anchor backed findings it never touched. */
+static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
+                      const char *title, const char *detail,
+                      const char *key,
+                      const char *match_ip, uint16_t match_port,
+                      time_t now) {
+    fire_inv(type, sev, confidence, NULL, title, detail, key,
+             match_ip, match_port, now);
 }
 
 /* Confidence 0 — "the rule did not qualify this finding". Most rules
@@ -765,16 +788,39 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
 
     ev.nbr_claim = ap_infrastructure_peers(a, b);
 
+    /* The approved inventory (#89 slice 2) — the one input here the
+     * attacker cannot reach, because a human wrote it out-of-band.
+     * Reasoning for why this is allowed to settle a pair either way,
+     * when an OUI and a neighbour report are not, is in alerts.h. */
+    inv_verdict_t va = inventory_verdict(a->ssid, a->bssid);
+    inv_verdict_t vb = inventory_verdict(b->ssid, b->bssid);
+    ev.inv_mismatch = (va == INV_MISMATCH || vb == INV_MISMATCH);
+    ev.inv_approved = (va == INV_APPROVED && vb == INV_APPROVED);
+
     if (ev.diff_oui)      ev.positive += TWIN_W_DIFF_OUI;
     if (ev.hashes_differ) ev.positive += TWIN_W_IE_HASH;
     if (ev.attacker_oui) { ev.positive += TWIN_W_ATTACKER_OUI; ev.hard = 1; }
     if (ev.steered)      { ev.positive += TWIN_W_BTM_STEER;    ev.hard = 1; }
+    /* Hard: an operator's written statement that this radio is not one
+     * of theirs. An attacker can advertise a neighbour report or copy
+     * an OUI; it cannot edit the file. This is what keeps a spoofed
+     * neighbour claim from erasing an inventory mismatch. */
+    if (ev.inv_mismatch) { ev.positive += TWIN_W_INV_MISMATCH; ev.hard = 1; }
 
     if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
     if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
 
     ev.confidence = clamp_conf(ev.positive - ev.context);
     if (out) *out = ev;
+    /* Both halves declared by the operator: legitimate infrastructure,
+     * whatever the radios look like to each other. This is the
+     * mixed-vendor case the issue names — differing OUIs and
+     * contradicting vendor-IE hashes are the strongest observed signals
+     * in this file and both are simply wrong about a deployment sloth
+     * has been told about. Caller keeps the filled `ev` so the CRIT
+     * weak/strong branch, which does not gate on this return, can still
+     * read `inv_approved`. */
+    if (ev.inv_approved) return 0;
     /* No positive evidence is not the same as an exoneration — it means
      * there is nothing to report. That distinction is the whole of #89:
      * silence here comes from an empty evidence set, never from
@@ -787,9 +833,10 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
  * steer is not here: it gets its own note naming the steering AP, which
  * is the actionable half. */
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s",
-             ev->same_oui  ? " +same-vendor-OUI"            : "",
-             ev->nbr_claim ? " +802.11k claim (unverified)" : "");
+    snprintf(out, n, "%s%s%s",
+             ev->inv_mismatch ? " +not in inventory"           : "",
+             ev->same_oui     ? " +same-vendor-OUI"            : "",
+             ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }
 
 /* BTM forcing (#59) — the 802.11v deauth-equivalent.
@@ -2686,7 +2733,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 char profile[24];
                 twin_profile(profile, sizeof(profile), lo, hi);
                 alert_pair_key(key, sizeof(key), "twin", a->bssid, b->bssid,
-                               TWIN_SITE_UNSET, profile);
+                               inventory_site(), profile);
 
                 /* An OPEN/WEP clone of a protected SSID has no
                  * vendor-diversity explanation, so this branch starts
@@ -2697,16 +2744,31 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 twin_evidence_score(s, a, b, now, &ev);
                 int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
                                       ev.context);
-                char note[48];
+                char note[64];
                 twin_evidence_note(note, sizeof(note), &ev);
 
+                /* Both radios declared by the operator (#89 slice 2).
+                 * That is not an impersonation — but unlike the
+                 * same-security branch it is not nothing either: an
+                 * OPEN BSS beside a protected one under a single name
+                 * is a downgrade lane whoever owns it. So the finding
+                 * is demoted and relabelled rather than withdrawn. The
+                 * inventory answers "whose radio is that", never "is
+                 * that configuration safe". */
+                alert_sev_t sev = ALERT_SEV_CRIT;
+                const char *verdict = "suspected impersonation";
+                if (ev.inv_approved) {
+                    sev     = ALERT_SEV_WARN;
+                    verdict = "inventory-approved pair, weak/strong split";
+                }
                 snprintf(detail, sizeof(detail),
                          "'%.16s' on %s[%.6s] AND %s[%.6s]"
-                         " - suspected impersonation, conf %d%%%s%s",
+                         " - %s, conf %d%%%s%s",
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
-                         conf, note, steer_note);
-                fire_conf(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, conf,
-                          "EVIL_TWIN", detail, key, NULL, 0, now);
+                         verdict, conf, note, steer_note);
+                fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
+                         inventory_hash(),
+                         "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
         }
@@ -2774,6 +2836,16 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 if (sev < ALERT_SEV_CRIT) sev = ALERT_SEV_CRIT;
                 reason = "attacker-tool OUI present";
             }
+            /* The approved inventory outranks every observed signal as
+             * the stated reason, because it is the only one the
+             * operator can be held to. It is also the only way the
+             * same-OUI clone in this issue's regression list is
+             * visible at all: three matching bytes and nothing else is
+             * an empty evidence set, not an accusation. */
+            if (ev.inv_mismatch) {
+                sev    = ALERT_SEV_CRIT;
+                reason = "BSSID not in the approved inventory";
+            }
 
             /* #76's chain, as a marker. A twin a BTM Request actively
              * steered a client toward under Disassociation Imminent is
@@ -2804,7 +2876,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
 
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            char note[48];
+            char note[64];
             /* Canonical pair key (#89). `twin-fp` stays the rule id so
              * the CRIT `twin` key for the same pair still coexists, but
              * the identity is now the ordered BSSID pair rather than the
@@ -2815,15 +2887,16 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
             char profile[24];
             twin_profile(profile, sizeof(profile), lo, hi);
             alert_pair_key(key, sizeof(key), "twin-fp", a->bssid, b->bssid,
-                           TWIN_SITE_UNSET, profile);
+                           inventory_site(), profile);
             twin_evidence_note(note, sizeof(note), &ev);
             snprintf(detail, sizeof(detail),
                      "'%.16s' on %s AND %s [%.6s]"
                      " - suspected impersonation, conf %d%% - %s%s%s",
                      a->ssid, a_bssid, b_bssid, a->enc,
                      ev.confidence, reason, note, steer_note);
-            fire_conf(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
-                      "EVIL_TWIN", detail, key, NULL, 0, now);
+            fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
+                     inventory_hash(),
+                     "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
     }

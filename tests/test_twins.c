@@ -1,12 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "twins.h"
 #include "alerts.h"
 #include "views/twins.h"
 #include "ownership.h"
+#include "inventory.h"
 
 /* Tests are state-driven only — twins_snapshot reads beacon_ap_t and
  * the taint tracker. add_beacon mirrors the helper from test_alerts.c. */
@@ -365,6 +368,85 @@ static void test_twins_designated_bssid_is_always_real(void) {
     ownership_clear();
 }
 
+/* ── the approved inventory attributes the pair (#89 slice 2) ──
+ *
+ * An inventory entry is the same kind of statement as --my-bssid: a
+ * human asserting ownership out-of-band. So it settles the same
+ * question, and it settles it against the RSSI the old rule used — the
+ * declared radio here is the closer one, which the pre-#89 view would
+ * have called the rogue. */
+static void test_twins_inventory_approved_bssid_is_never_the_impostor(void) {
+    static char tmp[] = "/tmp/sloth_twins_inv_XXXXXX";
+    static int  made;
+    alerts_clear(); ownership_clear(); inventory_clear();
+    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    FILE *f = fopen(tmp, "w");
+    ASSERT(f != NULL);
+    if (!f) return;
+    const char *body =
+        "{\"networks\":[{\"ssid\":\"CorpWiFi\","
+        "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}";
+    fwrite(body, 1, strlen(body), f);
+    fclose(f);
+    ASSERT_EQ(inventory_load(tmp, NULL, 0), 1);
+
+    sloth_state_t s; seed(&s);
+    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t rogue[6]    = {0x11,0x22,0x33,0x44,0x55,0x66};
+    /* The declared radio is the STRONGER signal — the pre-#89 rule
+     * would have named it the twin. */
+    add_beacon(&s, "CorpWiFi", declared, "WPA2", -40);
+    add_beacon(&s, "CorpWiFi", rogue,    "WPA2", -75);
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(s.twin_episodes[0].attributed, 1);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].real_bssid, declared, 6), 0);
+    ASSERT_EQ(memcmp(s.twin_episodes[0].twin_bssid, rogue,    6), 0);
+
+    /* Inverting the RSSIs does not move the assignment. */
+    sloth_state_t t; seed(&t);
+    add_beacon(&t, "CorpWiFi", declared, "WPA2", -75);
+    add_beacon(&t, "CorpWiFi", rogue,    "WPA2", -40);
+    twins_snapshot(&t);
+    ASSERT_EQ(t.twin_episode_count, 1);
+    ASSERT_EQ(memcmp(t.twin_episodes[0].real_bssid, declared, 6), 0);
+
+    inventory_clear();
+    unlink(tmp);
+}
+
+/* Both halves declared: legitimate infrastructure, so there is no
+ * candidate pair left to materialise. The [x] Twins view and the alert
+ * share one scorer and must agree about that. */
+static void test_twins_both_inventory_approved_no_episode(void) {
+    static char tmp[] = "/tmp/sloth_twins_inv2_XXXXXX";
+    static int  made;
+    alerts_clear(); ownership_clear(); inventory_clear();
+    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    FILE *f = fopen(tmp, "w");
+    ASSERT(f != NULL);
+    if (!f) return;
+    const char *body =
+        "{\"networks\":[{\"ssid\":\"CorpWiFi\","
+        "\"bssids\":[\"aa:bb:cc:01:02:03\",\"11:22:33:44:55:66\"]}]}";
+    fwrite(body, 1, strlen(body), f);
+    fclose(f);
+    ASSERT_EQ(inventory_load(tmp, NULL, 0), 1);
+
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", a, "WPA2", -40);
+    add_beacon(&s, "CorpWiFi", b, "WPA2", -75);
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xA11CE;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xB0B;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 0);
+
+    inventory_clear();
+    unlink(tmp);
+}
+
 /* Control: same geometry, no designation -> the pair is unattributed.
  * This is what makes the test above meaningful — the designation is the
  * only thing that produced a verdict. */
@@ -419,6 +501,8 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_designated_bssid_is_always_real);
     RUN_TEST(test_twins_without_designation_pair_is_unattributed);
     RUN_TEST(test_twins_both_designated_falls_through);
+    RUN_TEST(test_twins_inventory_approved_bssid_is_never_the_impostor);
+    RUN_TEST(test_twins_both_inventory_approved_no_episode);
 
     TEST_SUITE("twins view");
     RUN_TEST(test_view_twins_empty_does_not_crash);

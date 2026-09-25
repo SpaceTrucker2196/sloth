@@ -5,14 +5,17 @@
 #include "alerts.h"
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
+#include "inventory.h"
 
 /* Decide which half of a (a, b) twin pair is the "real" AP, and say
  * honestly when we cannot. Returns 1 when the assignment is attributed
  * to evidence, 0 when the pair is merely ordered.
  *
  * Ranked by what the signal actually establishes:
- *   1. An operator-designated BSSID is never the impostor (#52) —
- *      asserted by a human, so it outranks everything inferred.
+ *   1. An operator-designated BSSID is never the impostor (#52), and
+ *      neither is one the approved inventory declares for this SSID
+ *      (#89 slice 2) — both are a human asserting ownership
+ *      out-of-band, so they outrank everything inferred from the air.
  *   2. A BSSID the deauth chain tainted is the impostor — observed
  *      behaviour tied to that BSSID.
  *   3. An OUI in the Hak5 / Espressif attacker tables is the impostor —
@@ -30,8 +33,13 @@
 static int choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
                         const beacon_ap_t **real_out,
                         const beacon_ap_t **twin_out) {
-    int a_mine = ownership_is_my_bssid(a->bssid);
-    int b_mine = ownership_is_my_bssid(b->bssid);
+    /* inventory_verdict already unions --my-bssid into the approved
+     * set, so the two operator statements are read together here
+     * rather than ranked against each other. */
+    int a_mine = ownership_is_my_bssid(a->bssid) ||
+                 inventory_verdict(a->ssid, a->bssid) == INV_APPROVED;
+    int b_mine = ownership_is_my_bssid(b->bssid) ||
+                 inventory_verdict(b->ssid, b->bssid) == INV_APPROVED;
     if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return 1; }
     if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return 1; }
 

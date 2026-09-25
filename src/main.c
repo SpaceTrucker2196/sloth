@@ -98,6 +98,7 @@
 #include "alert_pcap.h"
 #include "data_socket.h"
 #include "ownership.h"
+#include "inventory.h"
 #include "transit.h"
 #include "rf_quality.h"
 #include "presence.h"
@@ -480,6 +481,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
+            "       [--inventory FILE] [--site TEXT]\n"
             "       [--known-mac MAC] [--known-macs FILE]\n"
             "       [--headless] [--no-color] [--version]\n"
             "       [--with-research research.db]\n"
@@ -619,6 +621,25 @@ static void print_usage(const char *argv0) {
             "                     escalate WARN -> CRIT, and a designated\n"
             "                     BSSID is never named the impostor half of an\n"
             "                     evil-twin pair.\n"
+            "  --inventory FILE   load the approved-inventory JSON: which\n"
+            "                     BSSIDs are authorised for which SSID (#89).\n"
+            "                     The only evil-twin trust input that does not\n"
+            "                     come off the air, so it is the only one that\n"
+            "                     can clear a pair: a same-OUI clone of a listed\n"
+            "                     SSID raises EVIL_TWIN, and a declared\n"
+            "                     mixed-vendor deployment stops raising it.\n"
+            "                     Unioned with --my-ssid/--my-bssid, never\n"
+            "                     intersected. All-or-nothing: a malformed file\n"
+            "                     is refused with a reason and sloth exits,\n"
+            "                     rather than loading half an anchor. Read once\n"
+            "                     at startup, never re-read. Format:\n"
+            "                     docs/wiki/inventory.md.\n"
+            "  --site TEXT        operator label for where this sensor is,\n"
+            "                     part of the evil-twin dedup key. Overrides\n"
+            "                     the inventory file's \"site\". Configuration\n"
+            "                     only — never derived from the uplink or any\n"
+            "                     observed SSID. Distinct from --site-label,\n"
+            "                     which names the --snapshot-out report.\n"
             "  --snapshot-out FILE\n"
             "                     on exit, write a passive AP-inventory snapshot\n"
             "                     (BSSID/SSID/security/channel/vendor) for repeat\n"
@@ -767,6 +788,25 @@ int main(int argc, char **argv) {
             if (!ownership_add_ssid(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--my-bssid") && i + 1 < argc) {
             if (!ownership_add_bssid(argv[++i])) return 2;
+        } else if (!strcmp(argv[i], "--inventory") && i + 1 < argc) {
+            /* Hard failure, like --known-macs. An operator who believes
+             * their APs are approved while the file silently failed to
+             * load would read every one of their own radios as a
+             * rogue — or miss the one that is (#89 slice 2). */
+            char inv_err[INV_ERR_MAX];
+            if (!inventory_load(argv[++i], inv_err, sizeof(inv_err))) {
+                fprintf(stderr, "sloth: inventory %s\n", inv_err);
+                return 2;
+            }
+            fprintf(stderr,
+                    "sloth: inventory %s: %d networks, %d BSSIDs"
+                    " (version %s, hash %s)\n",
+                    argv[i], inventory_network_count(),
+                    inventory_bssid_count(),
+                    inventory_version()[0] ? inventory_version() : "-",
+                    inventory_hash());
+        } else if (!strcmp(argv[i], "--site") && i + 1 < argc) {
+            if (!inventory_set_site(argv[++i])) return 2;
         } else if (!strcmp(argv[i], "--snapshot-out") && i + 1 < argc) {
             snapshot_out = argv[++i];
         } else if (!strcmp(argv[i], "--baseline-in") && i + 1 < argc) {

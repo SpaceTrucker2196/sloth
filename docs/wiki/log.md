@@ -784,3 +784,62 @@ Additive-only: `confidence` reuses #89's `fire_conf()` engine plumbing
 and JSONL field; no alert type id renamed, no `DB_SCHEMA_VERSION` bump
 (`karma_candidates.score` keeps its column, just a corrected input to
 the same formula).
+
+---
+
+## 2026-09-25 — approved-inventory trust anchor (#89 slice 2)
+
+**Created page**: [inventory.md](inventory.md).
+**Updated pages**: [index.md](index.md), [alerts.md](alerts.md),
+[jsonl-schema.md](jsonl-schema.md),
+[../views/alerts.md](../views/alerts.md),
+[../views/twins.md](../views/twins.md).
+
+Slice 1 removed three false trust anchors from the evil-twin rules and
+left the detector with none at all: it could say "these two radios
+disagree" and never "that one is not mine". This slice adds the anchor —
+the operator's own `--inventory` JSON, the only trust input in the
+family that does not arrive over the air.
+
+- **Loader** (`src/inventory.c`): hand-rolled recursive descent, no new
+  dependency. The tree had no JSON *parser* — `jsonl.c`/`formatter.c`
+  only write and `updater.c`'s `scan_str_field` is a flat key scanner
+  that cannot express `networks[].bssids[]` and would match `"ssid"`
+  inside a string value. **All-or-nothing**: malformed JSON, wrong
+  types, over-size, duplicate SSIDs/BSSIDs, bad MACs, control bytes,
+  a NUL, deep nesting and `\u` each fail with a reason and a byte
+  offset, loading nothing; a failed load leaves a previously valid
+  inventory in force. `--inventory` exits non-zero rather than starting
+  without the anchor the operator asked for.
+- **Detection**: `INV_MISMATCH` is `+50` positive evidence and **hard**,
+  so a spoofed 802.11k neighbour claim cannot erase it and a same-OUI
+  clone becomes visible. `INV_APPROVED` on both halves makes the pair a
+  non-candidate — a sole suppressor, deliberately: what #89 removed were
+  suppressors sourced from frames the attacker writes, and the test is
+  whether the adversary can reach the input. The weak/strong branch
+  demotes an approved pair to WARN instead of silencing it, because a
+  downgrade lane under one SSID is a finding whoever owns the radios.
+- **Unconfigured is unchanged.** Pinned by
+  `test_no_inventory_keeps_slice1_behaviour` — an operator who never
+  writes a file must not silently lose detection.
+- **Flag merge**: `--my-ssid` / `--my-bssid` (#52) are **unioned** with
+  the file, never intersected. Adding a flag must not be able to
+  manufacture a rogue out of the operator's own AP.
+- **`site` is configuration only** (owner decision, 2026-09-25): `--site`
+  or the file's `site` field, nothing else, flag wins, order-independent.
+  No `site_source` field — there is no second source. A site derived
+  from the uplink would re-key the canonical pair key on every roam and
+  fragment one impersonator into several incidents.
+- **Identity is the content hash**: 16 hex chars of SHA-256 over the
+  file's bytes, stamped into every alert and export that consulted it as
+  the additive `inventory` JSONL field. Emitted only by rules that
+  actually read it. The `version` string is a label — two files may both
+  claim one.
+- `security_profile` is parsed, validated and displayed but **not**
+  matched against the observed cipher: that needs a normalisation table
+  between operator vocabulary and beacon-derived `enc` strings, and a
+  wrong row in it alerts on the operator's own APs.
+
+Additive JSONL only; no `DB_SCHEMA_VERSION` bump. Slice 3 (UI separation
+of impersonator / neighbour / wired-attached, plus the controller
+correlation hook) remains open.

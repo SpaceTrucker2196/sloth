@@ -267,6 +267,7 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `count` | int    | **rule evaluations** under this dedup key — see the note below. Always `1` on this record, which is emitted only when the key is new |
 | `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
 | `confidence` | int | additive, #89 — how likely the finding is to be **true**, in percent (5..95). A separate axis from `sev`, which is how **bad** it would be if true. **Omitted** when the rule reported none: most rules assert a condition they observed directly and have nothing to qualify, and a literal `0` would read as "certainly false". Emitted today by the `EVIL_TWIN` family |
+| `inventory` | string | additive, #89 slice 2 — 16 hex chars, the content hash of the approved inventory this finding consulted (`--inventory`, see [[inventory]]). **Omitted** when the rule consulted none; stamping every record would assert the anchor backed findings it never touched. Present on the `EVIL_TWIN` family when an inventory is loaded |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
@@ -281,18 +282,32 @@ page at the same volume as an observed attack. Rules that infer from
 circumstantial evidence report both; rules that assert what they
 directly saw omit `confidence` entirely.
 
+**`inventory` makes a finding reproducible** (#89 slice 2). The approved
+inventory is the one evil-twin trust input that does not arrive over the
+air, so a record that was shaped by it has to say *which* file that was.
+The hash is over the file's bytes, which means a whitespace-only edit is
+a different inventory — the question the field answers is "which file
+did sloth read", not "were the semantics equivalent". The human-readable
+`version` string inside the file cannot serve as this identity, because
+nothing stops two files from both claiming `2026-09-24.1`; it is printed
+at startup beside the hash and is a label only. Full semantics:
+[[inventory]].
+
 **Dedup keys for paired findings are canonical** (#89). Where a finding
 is about a *pair* of BSSIDs rather than one host, the key is
 `<rule_id>:<bssid_lo>:<bssid_hi>:<site>:<security_profile>` with the two
 BSSIDs in byte order, so `(A,B)` and `(B,A)` are one incident. The
 `EVIL_TWIN` keys `twin:` and `twin-fp:` took this shape in #89; they
 previously ended in the SSID, which collapsed every BSSID pair under one
-name into a single record. `site` is an operator inventory label and is
-**empty** until that inventory ships — it is never derived from an
-observed SSID or BSSID, because a trust input taken from unauthenticated
-over-the-air data is the defect #89 exists to remove. A consumer that
-treated the old key as opaque is unaffected; one that parsed the SSID
-out of it must read `detail` or the `beacon` records instead.
+name into a single record. `site` is the operator's label for where the
+sensor is; since #89 slice 2 it is populated from `--site` or the
+inventory file's `site` field, and stays **empty** when neither is
+given. It is never derived from an observed SSID, a BSSID or the uplink
+association — a trust input taken from unauthenticated over-the-air data
+is the defect #89 exists to remove, and a site that re-keyed on every
+roam would split one impersonator across several incidents. A consumer
+that treated the old key as opaque is unaffected; one that parsed the
+SSID out of it must read `detail` or the `beacon` records instead.
 
 **This record is emitted only when the dedup key is new.** That has
 always been true and #98 did not change it: everything that happens to
@@ -340,6 +355,11 @@ the identity is not.
 | `alert.escalate` | severity **increased** on an open incident (e.g. WARN→CRIT). Never throttled |
 | `alert.update` | severity **decreased**, or the rendered evidence (`detail`) changed. Evidence-only updates are rate-limited to **one per 60 s** per incident |
 | `alert.resolve` | the incident closed. Once per incident, never repeated |
+
+The lifecycle records carry `confidence` and `inventory` on the same
+terms as the legacy `alert` record: both are additive, both are omitted
+when the rule reported none, so a lifecycle-only consumer never has to
+read both families to get them.
 
 **Material change, never a poll.** An evaluation that re-renders
 identical evidence emits nothing, however long the condition persists:

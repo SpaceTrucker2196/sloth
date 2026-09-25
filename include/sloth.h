@@ -783,6 +783,21 @@ typedef struct {
      * observed attack. An operator triaging needs both numbers. */
     uint8_t      confidence;
 
+    /* Content hash of the approved inventory this finding consulted,
+     * or empty (#89 slice 2). 16 hex characters; the width is
+     * INV_HASH_LEN in src/inventory.h, and
+     * tests/test_alerts.c :: test_inventory_hash_stamped_on_consulting_alerts
+     * pins the two together — sloth.h is the shared header and does not
+     * include module headers from src/.
+     *
+     * Set only by the rules that actually read the inventory. Stamping
+     * every alert would claim the anchor backed findings it never
+     * touched, which is the opposite of the traceability this field
+     * exists for: a finding in an archive must name the exact file that
+     * produced it, and the human-readable `version` label cannot do
+     * that because two files may both claim one. */
+    char         inventory[17];
+
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on
      * the first fire, carries an `incident_id` through every

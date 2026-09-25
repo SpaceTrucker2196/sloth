@@ -43,7 +43,13 @@ silently on their behalf.
 Ranked by what the signal actually establishes:
 
 1. An **operator-designated BSSID** (`--my-bssid`, #52) is never the
-   impostor. Asserted by a human, so it outranks everything inferred.
+   impostor, and neither is one the **approved inventory** declares for
+   this SSID (`--inventory`, #89 slice 2 — see
+   [`docs/wiki/inventory.md`](../wiki/inventory.md)). Both are a human
+   asserting ownership out-of-band, so they outrank everything inferred
+   from the air, and the two are read together rather than ranked
+   against each other: `inventory_verdict()` already unions
+   `--my-bssid` into the approved set.
 2. A BSSID the **deauth chain tainted** is the impostor — behaviour
    observed against that BSSID.
 3. An **attacker-tool OUI** (Hak5 / Espressif) is the impostor — an
@@ -58,6 +64,11 @@ AP is usually the closest radio in the room — which the old rule read as
 the rogue. Canonical ordering also stabilises the `twin_episodes`
 primary key `(ssid, real_bssid, twin_bssid)`, which used to swap, and so
 insert a duplicate row, whenever two RSSIs crossed.
+
+A pair whose **both** halves are inventory-approved produces no episode
+at all — the view and the alert share one scorer, so they cannot
+disagree about whether a declared mixed-vendor deployment is a
+candidate.
 
 Slice 3 of #89 will separate *over-the-air impersonator* from
 *neighbouring AP* from *unauthorized AP attached to the wired network*.

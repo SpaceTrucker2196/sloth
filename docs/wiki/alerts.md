@@ -96,6 +96,31 @@ value was read as proof of ownership. The same reasoning removed RSSI as
 the tie-breaker for *which* half of a pair is the impostor — see
 [`docs/views/twins.md`](../views/twins.md).
 
+### ...except the one the operator wrote down
+
+Slice 2 of #89 added the anchor that leaves: the **approved inventory**
+(`--inventory`, full page at [[inventory]]). It is the only trust input
+in this family that does not arrive over the air, so it is the only one
+allowed to settle a pair either way:
+
+- a BSSID that is **not** approved for an SSID the file declares is
+  `+50` positive evidence and **hard** — which is what keeps a spoofed
+  neighbour claim from erasing it, and what makes the same-OUI clone in
+  this issue's regression list visible at all;
+- a pair whose **both** halves are approved is not a candidate, whatever
+  the radios look like to each other. That is the mixed-vendor
+  deployment case, where a differing OUI and contradicting vendor-IE
+  hashes are the strongest observed signals here and both are simply
+  wrong.
+
+That second one is a sole suppressor, deliberately. It is not the
+pre-#89 behaviour renamed: what #89 removed were suppressors sourced
+from *frames the attacker writes*. The test is not "does anything
+suppress" but "can the adversary reach the input". With no inventory
+configured nothing above applies and the heuristics are exactly as
+slice 1 left them — an operator who never writes a file must not
+silently lose detection.
+
 ### Canonical pair keys
 
 A finding about a *pair* keys on the pair, not on the SSID:
@@ -105,10 +130,15 @@ byte order so `(A,B)` and `(B,A)` are one incident. `twin:<ssid>` and
 engine record, and later evaluations overwrote the earlier pair's
 detail — two rogues on one SSID read as one.
 
-`site` is an operator inventory label, **empty** until that inventory
-ships. It is never derived from an observed SSID or BSSID: deriving
-identity from unauthenticated over-the-air data and then letting it key
-a finding would be the neighbour-report hole again in a different hat.
+`site` is the operator's label for where the sensor is. Since #89
+slice 2 it comes from `--site` or the inventory file's `site` field and
+from **nothing else** — never from the uplink association, an observed
+SSID, or any captured frame. Two reasons: unauthenticated RF must not
+become a trust input, and a site derived from the uplink would re-key on
+every roam, fragmenting one physical impersonator into several incidents
+and opening a fresh `alert.create` for each instead of escalating the
+one already open. Unset stays the empty string and the key shape does
+not change. See [[inventory]].
 
 ## Severity tiers
 

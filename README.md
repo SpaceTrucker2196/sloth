@@ -168,6 +168,33 @@ for in normal vs anomalous traffic.
 
   With nothing designated every check is inert and behaviour is unchanged.
 
+### Approved inventory
+
+- **`sloth --inventory FILE`** / **`sloth --site TEXT`** — tell sloth which BSSIDs are *authorised* for which SSID. Slice 1 of #89 removed three things the evil-twin rules had been treating as proof of ownership — a matching vendor OUI, an 802.11k neighbour report and RSSI — because all three are values an attacker writes into a frame. This is what replaces them, and it is the only trust input in that family that does not arrive over the air.
+
+  ```json
+  { "version": "2026-09-24.1",
+    "site": "hq-3f",
+    "networks": [
+      { "ssid": "CorpWiFi",
+        "security_profile": "wpa2-enterprise",
+        "bssids": ["aa:bb:cc:00:11:22", "aa:bb:cc:00:11:23"] } ] }
+  ```
+
+  ```sh
+  sudo ./sloth --hop --inventory /etc/sloth/inventory.json --site hq-3f
+  ```
+
+  A BSSID that is **not** approved for an SSID the file declares is hard evidence of impersonation: it makes a same-OUI clone visible (three matching bytes and nothing else is an empty evidence set, which is why it is otherwise silent) and a spoofed neighbour report cannot erase it. A pair whose **both** halves are approved stops alerting, which is how a declared mixed-vendor deployment goes quiet. An SSID the file does not mention gets no verdict at all — silence is not approval — and **with no inventory configured, nothing above applies and every heuristic behaves exactly as before**.
+
+  The file is treated as hostile data: malformed JSON, wrong types, over-size, duplicate SSIDs or BSSIDs, bad addresses and control bytes each fail with a reason and a byte offset, and **the load is all-or-nothing** — sloth exits rather than start with half an anchor you believe is whole. It is read once at startup and never re-read.
+
+  `--my-ssid` / `--my-bssid` keep working and are **unioned** into the approved set, never intersected: a radio the file has not caught up with can be waved through with a flag.
+
+  `--site` is the operator's label for *where this sensor is* and is part of the evil-twin dedup key. It comes from `--site` or the file's `site` field and from nothing else — never from the uplink, which would both make an unauthenticated SSID a trust input and re-key the incident on every roam. (Distinct from `--site-label`, which titles a `--snapshot-out` report.)
+
+  Every alert that consulted the inventory carries its **content hash**, so a finding in an archive names the exact file that produced it. Format and full semantics: [`docs/wiki/inventory.md`](docs/wiki/inventory.md).
+
 ### Known-device roster
 
 - **`sloth --known-mac MAC`** / **`sloth --known-macs FILE`** — tell sloth which devices you already recognise. The file is one MAC per line with `#` comments; malformed lines are reported with their line number and skipped, so one typo does not discard a roster of 200 good entries.

@@ -544,6 +544,56 @@ static void test_emit_alert_carries_confidence_when_reported(void) {
     ASSERT(contains(body, "\"confidence\":35"));
 }
 
+/* #89 slice 2: an alert that consulted the approved inventory carries
+ * its content hash, on both the legacy record and the lifecycle event,
+ * so a finding in an archive is traceable to the exact file that
+ * produced it. Omitted when the rule consulted no inventory — stamping
+ * every record would claim the anchor backed findings it never
+ * touched. Additive per docs/wiki/jsonl-schema.md. */
+static void test_emit_alert_carries_inventory_hash(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen  = 1700000004;
+    a.sev        = ALERT_SEV_CRIT;
+    a.type       = ALERT_TYPE_EVIL_TWIN;
+    a.count      = 1;
+    a.confidence = 70;
+    a.event_seq  = 1;
+    snprintf(a.title,       sizeof(a.title),       "EVIL_TWIN");
+    snprintf(a.detail,      sizeof(a.detail),      "suspected impersonation");
+    snprintf(a.key,         sizeof(a.key),         "twin-fp:a:b:hq-3f:WPA2/WPA2");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    snprintf(a.inventory,   sizeof(a.inventory),   "0123456789abcdef");
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"type\":\"alert\""));
+    ASSERT(contains(body, "\"type\":\"alert.create\""));
+    ASSERT(contains(body, "\"inventory\":\"0123456789abcdef\""));
+}
+
+static void test_emit_alert_omits_inventory_when_unconsulted(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen = 1700000004;
+    a.sev       = ALERT_SEV_WARN;
+    a.type      = ALERT_TYPE_ARP_SPOOF;
+    a.count     = 1;
+    a.event_seq = 1;
+    snprintf(a.title,       sizeof(a.title),       "ARP_SPOOF");
+    snprintf(a.detail,      sizeof(a.detail),      "10.0.0.1 moved");
+    snprintf(a.key,         sizeof(a.key),         "arp:10.0.0.1");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(!contains(body, "inventory"));
+}
+
 /* ── escaping ────────────────────────────────────────────── */
 
 static void test_json_escapes_quotes_and_backslash(void) {
@@ -1275,6 +1325,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_icmp_v6_true_writes_one);
     RUN_TEST(test_emit_alert_writes_count);
     RUN_TEST(test_emit_alert_carries_confidence_when_reported);
+    RUN_TEST(test_emit_alert_carries_inventory_hash);
+    RUN_TEST(test_emit_alert_omits_inventory_when_unconsulted);
     RUN_TEST(test_emit_connections_tcp_and_udp);
     RUN_TEST(test_emit_connections_v6_brackets_address);
     RUN_TEST(test_emit_connections_omits_zero_rtt);

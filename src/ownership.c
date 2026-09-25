@@ -43,9 +43,14 @@ static int hexval(char c) {
 
 /* Strict "xx:xx:xx:xx:xx:xx" (or '-' separated). Deliberately strict:
  * a typo'd BSSID would silently designate nothing, and the operator
- * would conclude their own AP wasn't being recognised. */
-static int parse_mac(const char *str, uint8_t out[6]) {
-    if (!str) return 0;
+ * would conclude their own AP wasn't being recognised.
+ *
+ * Written into a scratch address first so a rejected string leaves the
+ * caller's buffer untouched — the JSON inventory (#89) parses into a
+ * staging entry it may still discard. */
+int ownership_parse_mac(const char *str, uint8_t out[6]) {
+    uint8_t mac[6];
+    if (!str || !out) return 0;
     if (strlen(str) != 17) return 0;
     for (int i = 0; i < 6; i++) {
         int hi = hexval(str[i * 3]);
@@ -55,9 +60,14 @@ static int parse_mac(const char *str, uint8_t out[6]) {
             char sep = str[i * 3 + 2];
             if (sep != ':' && sep != '-') return 0;
         }
-        out[i] = (uint8_t)((hi << 4) | lo);
+        mac[i] = (uint8_t)((hi << 4) | lo);
     }
+    memcpy(out, mac, 6);
     return 1;
+}
+
+static int parse_mac(const char *str, uint8_t out[6]) {
+    return ownership_parse_mac(str, out);
 }
 
 int ownership_add_bssid(const char *str) {

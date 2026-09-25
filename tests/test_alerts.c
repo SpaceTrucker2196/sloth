@@ -18,6 +18,7 @@
 #include "beacon_snoop.h"
 #include "auth_track.h"
 #include "ownership.h"
+#include "inventory.h"
 #include "transit.h"
 #include "rf_quality.h"
 #include "flood_window.h"
@@ -771,6 +772,357 @@ static void test_infrastructure_peers_clamps_neighbor_count(void) {
     add_beacon(&s, "N", b, "WPA2");
     s.beacon_aps[0].neighbor_count = MAX_AP_NEIGHBORS + 99;
     ASSERT_EQ(ap_advertises_neighbor(&s.beacon_aps[0], b), 0);
+}
+
+/* ── approved inventory as the trust anchor (#89 slice 2) ────
+ *
+ * The inventory is the only input in this family that did not come off
+ * the air, so it is the only one allowed to settle a pair either way.
+ * These tests are paired on purpose: each asserts what the inventory
+ * changes AND that the identical geometry without one behaves exactly
+ * as slice 1 left it. An operator who never writes an inventory must
+ * not silently lose detection, and one who writes a wrong one must not
+ * silently gain it.
+ *
+ * Every entry is process-wide state, so each test clears both the
+ * inventory and the #52 designations first. */
+
+static const char *INV_CORP =
+    "{\"version\":\"2026-09-25.1\",\"site\":\"hq-3f\","
+    "\"networks\":[{\"ssid\":\"CorpWiFi\","
+    "\"security_profile\":\"wpa2-enterprise\","
+    "\"bssids\":[\"aa:bb:cc:00:11:22\",\"11:22:33:44:55:66\"]}]}";
+
+static char inv_tmp[] = "/tmp/sloth_alert_inv_XXXXXX";
+static int  inv_tmp_made;
+
+/* Load `body` as the active inventory. Returns 1 on success. */
+static int use_inventory(const char *body) {
+    inventory_clear();
+    ownership_clear();
+    if (!inv_tmp_made) {
+        int fd = mkstemp(inv_tmp);
+        if (fd >= 0) close(fd);
+        inv_tmp_made = 1;
+    }
+    FILE *f = fopen(inv_tmp, "w");
+    if (!f) return 0;
+    fwrite(body, 1, strlen(body), f);
+    fclose(f);
+    return inventory_load(inv_tmp, NULL, 0);
+}
+
+static void no_inventory(void) {
+    inventory_clear();
+    ownership_clear();
+}
+
+/* The regression case the issue names: a same-OUI clone. Slice 1
+ * cannot see it — three matching bytes and nothing else is an empty
+ * evidence set, which is why a legitimate multi-BSSID deployment stays
+ * quiet. The inventory is what turns "no evidence" into "that radio is
+ * not one of mine", and it is a hard signal because a human asserted
+ * it out-of-band rather than an AP beaconing it. */
+static void test_inventory_same_oui_clone_fires(void) {
+    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};   /* in the file */
+    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};   /* same OUI, not */
+
+    /* Without an inventory: silent, exactly as slice 1 left it. */
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", clone, "WPA2");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_EVIL_TWIN), -1);
+
+    /* With it: CRIT, and the detail says which fact decided. */
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", real,  "WPA2");
+    add_beacon(&t, "CorpWiFi", clone, "WPA2");
+    alerts_update(&t);
+    int idx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)t.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(t.alerts[idx].detail, "not in inventory") != NULL);
+    no_inventory();
+}
+
+/* The regression case stated in the task: a spoofed neighbour
+ * declaration must NOT erase an inventory mismatch. The mismatch is a
+ * hard signal, so the unauthenticated claim cannot demote it — it only
+ * costs confidence, which is what a claim is actually worth. */
+static void test_inventory_mismatch_survives_spoofed_neighbour(void) {
+    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", real,  "WPA2");
+    add_beacon(&s, "CorpWiFi", clone, "WPA2");
+    /* The attacker names its victim, and the victim names it back —
+     * the most favourable reading the attacker can manufacture. */
+    add_neighbor(&s, clone, real);
+    add_neighbor(&s, real,  clone);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "not in inventory") != NULL);
+    ASSERT(s.alerts[idx].confidence < TWIN_CONF_MAX);
+    no_inventory();
+}
+
+/* The other regression case: mixed-vendor infrastructure that IS in the
+ * inventory must not alert. Different OUIs and contradicting vendor-IE
+ * fingerprints are slice 1's strongest same-security signals and fire
+ * CRIT on their own — the operator's own statement is what withdraws
+ * them, and nothing observed over the air can do the same. */
+static void test_inventory_approved_mixed_vendor_is_silent(void) {
+    uint8_t ruckus[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t aruba[6]  = {0x11,0x22,0x33,0x44,0x55,0x66};
+
+    /* Without an inventory this pair is a CRIT — slice 1, unchanged. */
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", ruckus, "WPA2");
+    add_beacon(&s, "CorpWiFi", aruba,  "WPA2");
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xA11CE;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xB0B;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+
+    /* Both radios declared: silent. */
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", ruckus, "WPA2");
+    add_beacon(&t, "CorpWiFi", aruba,  "WPA2");
+    t.beacon_aps[0].fp.vendor_ies_hash = 0xA11CE;
+    t.beacon_aps[1].fp.vendor_ies_hash = 0xB0B;
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+    no_inventory();
+}
+
+/* An inventory that says nothing about this SSID says nothing at all.
+ * Treating silence as approval is how a trust anchor becomes a blind
+ * spot, so a network the operator never declared keeps its slice-1
+ * heuristics exactly. */
+static void test_inventory_silence_about_an_ssid_is_not_approval(void) {
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);   /* declares CorpWiFi only */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "GuestWiFi", a, "WPA2");
+    add_beacon(&s, "GuestWiFi", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    /* Unchanged from slice 1: diff-OUI only, nothing deducted. */
+    ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_DIFF_OUI);
+    ASSERT(strstr(s.alerts[idx].detail, "inventory") == NULL);
+    no_inventory();
+}
+
+/* Item 5 of the slice, pinned: with no inventory configured, behaviour
+ * is bit-for-bit slice 1. Severity, confidence and the "suspected"
+ * wording all stand, and no inventory field appears anywhere. */
+static void test_no_inventory_keeps_slice1_behaviour(void) {
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "CorpWiFi", a, "WPA2");
+    add_beacon(&s, "CorpWiFi", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ(s.alerts[idx].confidence, TWIN_W_DIFF_OUI);
+    ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") != NULL);
+    ASSERT_STR(s.alerts[idx].inventory, "");
+    /* The pair key still carries an empty site — the shape does not
+     * change when the field is unset. */
+    ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
+                                     "aa:bb:cc:01:02:03::WPA2/WPA2") != NULL);
+    /* The weak/strong branch is unchanged too. */
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", a, "OPEN");
+    add_beacon(&t, "CorpWiFi", b, "WPA2");
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_STR(t.alerts[jdx].inventory, "");
+}
+
+/* The content hash is the identity of the anchor: a finding is
+ * traceable to the exact file that produced it, and the human-readable
+ * `version` is a label that two different files may both claim. Only
+ * alerts that actually consulted the inventory carry it. */
+static void test_inventory_hash_stamped_on_consulting_alerts(void) {
+    uint8_t real[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t clone[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x77};
+    uint8_t other_a[6] = {0x99,0x88,0x77,0x01,0x02,0x03};
+    uint8_t other_b[6] = {0x66,0x55,0x44,0x01,0x02,0x03};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    /* The field is exactly the hash buffer's width — the test that
+     * keeps include/sloth.h and src/inventory.h from drifting. */
+    ASSERT_EQ((int)sizeof(((alert_t *)0)->inventory), INV_HASH_LEN);
+
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi",  real,    "WPA2");
+    add_beacon(&s, "CorpWiFi",  clone,   "WPA2");
+    add_beacon(&s, "GuestWiFi", other_a, "WPA2");
+    add_beacon(&s, "GuestWiFi", other_b, "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_STR(s.alerts[idx].inventory, inventory_hash());
+    ASSERT_EQ((int)strlen(s.alerts[idx].inventory), INV_HASH_LEN - 1);
+
+    /* Both pairs carry it, including GuestWiFi — an SSID the file does
+     * not declare. "Consulted" means the rule read the inventory, not
+     * that the inventory had an opinion: a different file might have
+     * declared GuestWiFi and produced a different finding, so which one
+     * was in force is exactly what makes this record reproducible.
+     * The verdict for an undeclared SSID is still NO_INVENTORY, which
+     * is why the severity is untouched (asserted separately). */
+    int corp = 0, guest = 0;
+    for (int q = 0; q < s.alert_count; q++) {
+        if (s.alerts[q].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strstr(s.alerts[q].detail, "CorpWiFi"))  corp  = 1;
+        if (strstr(s.alerts[q].detail, "GuestWiFi")) guest = 1;
+        ASSERT_STR(s.alerts[q].inventory, inventory_hash());
+    }
+    ASSERT_EQ(corp,  1);
+    ASSERT_EQ(guest, 1);
+
+    /* A rule that never consults it carries nothing — a blanket stamp
+     * would claim the inventory backed findings it never touched. */
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    seed_arp(&t, "10.0.0.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    alerts_update(&t);
+    t.arp_count = 0;                 /* second poll, same IP, new MAC */
+    /* Unicast on purpose — rule_arp_spoof skips an entry whose first
+     * octet has the group bit set, which the kernel cache does list. */
+    seed_arp(&t, "10.0.0.1", 0x22, 0x33, 0x44, 0x55, 0x66, 0x77);
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_ARP_SPOOF);
+    ASSERT(jdx >= 0);
+    ASSERT_STR(t.alerts[jdx].inventory, "");
+    no_inventory();
+}
+
+/* `site` is part of the canonical pair key, so a configured site
+ * re-keys the finding — and because it can only come from
+ * configuration, that key is stable for as long as the sensor sits
+ * where the operator said it does. */
+static void test_site_lands_in_the_pair_key(void) {
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+
+    /* From the file. */
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "GuestWiFi", a, "WPA2");
+    add_beacon(&s, "GuestWiFi", b, "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].key, "twin-fp:11:22:33:44:55:66:"
+                                     "aa:bb:cc:01:02:03:hq-3f:WPA2/WPA2")
+           != NULL);
+
+    /* ...and --site wins over it. */
+    ASSERT_EQ(inventory_set_site("dc-1"), 1);
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "GuestWiFi", a, "WPA2");
+    add_beacon(&t, "GuestWiFi", b, "WPA2");
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT(strstr(t.alerts[jdx].key, "twin-fp:11:22:33:44:55:66:"
+                                     "aa:bb:cc:01:02:03:dc-1:WPA2/WPA2")
+           != NULL);
+    no_inventory();
+}
+
+/* Two BSSIDs the operator declared, one of them advertising OPEN under
+ * a protected name. This is not an impersonation — both radios are
+ * theirs — but it is still a downgrade lane under one SSID, so the
+ * finding is demoted and relabelled rather than withdrawn. The
+ * inventory answers "whose radio is that", never "is that
+ * configuration safe". */
+static void test_inventory_approved_weak_pair_demotes_not_silences(void) {
+    uint8_t strong[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t open_ap[6]= {0x11,0x22,0x33,0x44,0x55,0x66};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);   /* lists both */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", open_ap, "OPEN");
+    add_beacon(&s, "CorpWiFi", strong,  "WPA2");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "inventory-approved") != NULL);
+
+    /* An undeclared OPEN clone of the same protected name stays CRIT. */
+    uint8_t rogue[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", rogue,  "OPEN");
+    add_beacon(&t, "CorpWiFi", strong, "WPA2");
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_CRIT);
+    no_inventory();
+}
+
+/* The flag merge, end to end: --my-bssid is unioned into the approved
+ * set, so designating a radio the file has not caught up with silences
+ * the pair instead of adding a second way to accuse it. */
+static void test_my_bssid_flag_unions_into_the_anchor(void) {
+    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t new_ap[6]   = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", declared, "WPA2");
+    add_beacon(&s, "CorpWiFi", new_ap,   "WPA2");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_EVIL_TWIN) >= 0);   /* mismatch */
+
+    ASSERT_EQ(ownership_add_bssid("99:88:77:66:55:44"), 1);
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", declared, "WPA2");
+    add_beacon(&t, "CorpWiFi", new_ap,   "WPA2");
+    alerts_update(&t);
+    ASSERT_EQ(find_alert(&t, ALERT_TYPE_EVIL_TWIN), -1);
+    no_inventory();
 }
 
 
@@ -6030,6 +6382,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_no_neighbor_reports_still_fires);
     RUN_TEST(test_evil_twin_neighbors_do_not_excuse_open_clone);
     RUN_TEST(test_infrastructure_peers_predicate);
+    RUN_TEST(test_inventory_same_oui_clone_fires);
+    RUN_TEST(test_inventory_mismatch_survives_spoofed_neighbour);
+    RUN_TEST(test_inventory_approved_mixed_vendor_is_silent);
+    RUN_TEST(test_inventory_silence_about_an_ssid_is_not_approval);
+    RUN_TEST(test_no_inventory_keeps_slice1_behaviour);
+    RUN_TEST(test_inventory_hash_stamped_on_consulting_alerts);
+    RUN_TEST(test_site_lands_in_the_pair_key);
+    RUN_TEST(test_inventory_approved_weak_pair_demotes_not_silences);
+    RUN_TEST(test_my_bssid_flag_unions_into_the_anchor);
 
     TEST_SUITE("evil twin: trust anchors removed (#89)");
     RUN_TEST(test_evil_twin_same_oui_clone_with_ie_mismatch_fires);

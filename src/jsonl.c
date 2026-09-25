@@ -383,6 +383,15 @@ void jsonl_emit_alert(const alert_t *a) {
      * docs/wiki/jsonl-schema.md. */
     if (a->confidence)
         kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
+    /* Content hash of the approved inventory this finding consulted
+     * (#89 slice 2), so a record in an archive names the exact file
+     * that produced it — the human-readable `version` label cannot,
+     * because two files may both claim one. Omitted when the rule
+     * consulted no inventory: stamping every record would assert the
+     * anchor backed findings it never touched. Additive per
+     * docs/wiki/jsonl-schema.md. */
+    if (a->inventory[0])
+        kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -426,6 +435,10 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
      * lookup. */
     if (a->confidence)
         kv_int(buf, LINEBUF, &off, "confidence", (int)a->confidence);
+    /* Same field as the legacy record (#89 slice 2) — a lifecycle-only
+     * consumer never has to read both families. */
+    if (a->inventory[0])
+        kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);

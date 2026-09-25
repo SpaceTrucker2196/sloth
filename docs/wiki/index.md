@@ -17,6 +17,10 @@ source material.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
+- [[inventory]] — the approved-inventory trust anchor (#89): the only
+  evil-twin trust input that does not arrive over the air, its JSON
+  format, how it merges with `--my-ssid`/`--my-bssid`, and why `site`
+  is configuration-only.
 - [[ja3-fingerprinting]] — TLS ClientHello fingerprinting.
 
 ## WiFi SIGINT
