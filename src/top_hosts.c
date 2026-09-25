@@ -88,13 +88,19 @@ static void reset_counters(void) {
     }
 }
 
-static void resolve_one(top_host_t *h) {
+/* `names_on` is the operator's own [n] names/numeric toggle. Until #84
+ * slice 2 this panel resolved on every poll regardless of it, so an
+ * operator who had deliberately switched the display to numeric still
+ * generated reverse-DNS egress from here — the second half of the
+ * issue's first bullet. Now the two gates compose: the toggle says
+ * whether the operator wants names at all, and dns_resolve() enforces
+ * the strict-by-default policy underneath. With names off (or under
+ * strict) a passively observed name is still shown, because reading the
+ * cache costs nothing on the wire. */
+static void resolve_one(top_host_t *h, int names_on) {
     if (h->hostname[0] == '\0') {
-        /* #84: the active half, named explicitly. Like the UDP/443
-         * decoder this runs regardless of the UI dns_enabled toggle, so
-         * it is a standing source of reverse-DNS egress. Preserved as-is
-         * in slice 1; see dns.h for the passive alternative. */
-        const char *name = dns_resolve(h->ip);
+        const char *name = names_on ? dns_resolve(h->ip)
+                                    : dns_lookup_cached(h->ip);
         if (name && name[0] && strcmp(name, h->ip) != 0)
             snprintf(h->hostname, sizeof(h->hostname), "%s", name);
     }
@@ -162,10 +168,12 @@ void top_hosts_update(sloth_state_t *s) {
         }
     }
 
-    /* (4) Resolve hostname + owner for any entry that's still missing one.
-     *     dns_resolve is non-blocking — it kicks the async resolver and
-     *     returns "" or the IP back; we only cache real names. */
-    for (int i = 0; i < g_count; i++) resolve_one(&g_tbl[i]);
+    /* (4) Fill in hostname + owner for any entry that's still missing
+     *     one. Both halves are non-blocking: dns_resolve() kicks the
+     *     async resolver (when the operator opted in) and returns the IP
+     *     meanwhile; dns_lookup_cached() only reads. We keep real names. */
+    for (int i = 0; i < g_count; i++)
+        resolve_one(&g_tbl[i], s->dns_enabled);
 
     /* (5) Sort g_tbl[] descending by activity; selection sort is fine
      *     for <=64 entries and keeps top-N at the front. */

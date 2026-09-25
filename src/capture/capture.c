@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "capture/capture.h"
 #include "captive_portal.h"
+#include "dns.h"
 #include "dot11_data.h"
 #include "radiotap.h"
 
@@ -26,6 +27,12 @@ int capture_activate_failed(int rc) {
 /* Also outside the guard, and for the same reason. See capture.h. */
 int capture_dlt_has_ifindex(int dlt) {
     return dlt == MY_DLT_LINUX_SLL2;
+}
+
+/* Outside the guard again so the test build can pin it (#84 slice 2).
+   Rationale and the defect it removes are in capture.h. */
+const char *capture_quic_hostname(const char *remote_ip) {
+    return dns_lookup_cached(remote_ip);
 }
 
 /* ── Fail-closed capture scope (#85) ───────────────────────────
@@ -276,7 +283,6 @@ const char *capture_scope_reason(capture_scope_t v) {
 #include "cleartext_creds.h"
 #include "http_log.h"
 #include "tls_log.h"
-#include "dns.h"
 
 /* ── Thread state ─────────────────────────────────────────── */
 
@@ -598,13 +604,7 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            /* #84: named explicitly so the egress is visible in the
-             * source. This decoder runs on every UDP/443 packet and
-             * consults no UI toggle, so a cold cache turns capture into
-             * reverse-DNS traffic. Slice 1 preserves that behaviour;
-             * whether it should become dns_lookup_cached() is the
-             * default-policy question deferred to slice 2. */
-            const char *host   = dns_resolve(remote);
+            const char *host   = capture_quic_hostname(remote);
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {
@@ -728,13 +728,7 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            /* #84: named explicitly so the egress is visible in the
-             * source. This decoder runs on every UDP/443 packet and
-             * consults no UI toggle, so a cold cache turns capture into
-             * reverse-DNS traffic. Slice 1 preserves that behaviour;
-             * whether it should become dns_lookup_cached() is the
-             * default-policy question deferred to slice 2. */
-            const char *host   = dns_resolve(remote);
+            const char *host   = capture_quic_hostname(remote);
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {

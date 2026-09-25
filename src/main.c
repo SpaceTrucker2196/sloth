@@ -478,7 +478,7 @@ static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
             "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
-            "       [--refresh-ms N] [--hop]\n"
+            "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
@@ -533,6 +533,24 @@ static void print_usage(const char *argv0) {
             "                     only kernel-state write sloth performs; off by\n"
             "                     default. Needs monitor mode + CAP_NET_ADMIN\n"
             "                     (Linux). No frame is transmitted.\n"
+            "  --strict           explicit no-op: strict observation is already\n"
+            "                     the default. What it adds is a LOCK — any\n"
+            "                     later attempt to enable active behaviour in\n"
+            "                     this run is refused, so --strict --allow-active\n"
+            "                     exits non-zero instead of quietly resolving in\n"
+            "                     favour of one of them. Worth passing because it\n"
+            "                     puts the operator's intent where ps(1) and an\n"
+            "                     audit log can see it.\n"
+            "  --allow-active     opt in to active reverse-DNS resolution: on a\n"
+            "                     cache miss sloth may send a PTR query for an\n"
+            "                     address it observed. OFF by default — without\n"
+            "                     this flag the resolver worker is never started\n"
+            "                     and names come only from traffic sloth already\n"
+            "                     saw (DNS/mDNS/NBNS/DHCP/SNI snooping). Prints\n"
+            "                     one line on stderr naming what it enabled; it\n"
+            "                     is never silent. Does not re-enable per-packet\n"
+            "                     lookups on the capture thread, which stay\n"
+            "                     passive unconditionally.\n"
             "  --iface NAME       restrict the data stream to NAME (repeatable).\n"
             "                     Launch-time form of the interface view's [y]\n"
             "                     deselect, for headless deployments: frames\n"
@@ -683,6 +701,8 @@ int main(int argc, char **argv) {
     const char *site_label     = NULL; /* --site-label   TEXT  (#27) */
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
+    int         allow_active = 0;        /* --allow-active (#84) */
+    int         strict_lock  = 0;        /* --strict       (#84) */
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
@@ -740,6 +760,10 @@ int main(int argc, char **argv) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--allow-active")) {
+            allow_active = 1;
+        } else if (!strcmp(argv[i], "--strict")) {
+            strict_lock = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
@@ -830,6 +854,29 @@ int main(int argc, char **argv) {
             print_usage(argv[0]);
             return 2;
         }
+    }
+
+    /* Observation profile (#84). Resolved after the whole argv is read,
+     * not as each flag arrives, so the outcome cannot depend on the
+     * order the operator typed them in. --strict is applied first by
+     * construction: it names a guarantee, so a command line carrying
+     * both flags is a contradiction and is refused either way round
+     * rather than silently resolved in favour of one of them. */
+    if (strict_lock) dns_resolver_lock_strict();
+    if (allow_active) {
+        dns_resolver_set_enabled(1);
+        if (!dns_resolver_enabled()) {
+            fprintf(stderr, "sloth: --allow-active refused: --strict locks "
+                            "strict observation for this run\n");
+            return 2;
+        }
+        /* Never silent. A passive tool that quietly becomes active is
+         * the failure mode #84 exists to prevent, so the opt-in names
+         * exactly what it turned on — one line, on stderr, before any
+         * of it can happen. */
+        fprintf(stderr, "sloth: --allow-active enabled active reverse-DNS "
+                        "resolution (PTR queries for observed addresses); "
+                        "everything else stays passive\n");
     }
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);

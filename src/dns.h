@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 
-/* Start/stop the background resolver thread. */
+/* Start/stop the background resolver thread.
+
+   dns_init() starts the worker only when active resolution is enabled
+   (#84 slice 2), so a strict run never creates the one thread in sloth
+   that can call getnameinfo(3). Set the policy — normally from the CLI
+   flags — before calling this. Calling it twice does not start a second
+   worker; the cache is reset either way. */
 void dns_init(void);
 void dns_cleanup(void);
 
@@ -11,8 +17,9 @@ void dns_cleanup(void);
    string if resolution is pending/failed. Safe to call only from the
    main thread. The returned pointer is valid until the next dns_lookup call.
 
-   Retained as the pre-#84 spelling of dns_resolve(); it requests active
-   resolution on a cache miss. New code should name the half it means. */
+   Retained as the pre-#84 spelling of dns_resolve(): it *requests*
+   active resolution on a cache miss, which since slice 2 is granted
+   only under --allow-active. New code should name the half it means. */
 const char *dns_lookup(const char *ip);
 
 /* ── Passive lookup vs. active resolution (#84) ──────────────────────
@@ -39,12 +46,38 @@ const char *dns_lookup(const char *ip);
 const char *dns_lookup_cached(const char *ip);
 const char *dns_resolve(const char *ip);
 
-/* Resolver policy. Enabled by default, which preserves the behaviour
-   sloth has shipped since the resolver was added — #84 slice 1 builds
-   the choke point, it does not decide what flows through it. Whether
-   the shipped default flips (and under which flag) is #84 slice 2. */
+/* ── Resolver policy (#84 slice 2) ───────────────────────────────────
+ *
+ * Strict observation is the DEFAULT. Without an explicit opt-in sloth
+ * originates no reverse-DNS traffic: dns_resolve() suppresses every
+ * request and dns_init() never creates the worker. That makes
+ * MISSION.md §2.1 ("never resolves hosts it didn't already see") a
+ * property of the shipped binary rather than of how it is invoked.
+ *
+ * --allow-active calls dns_resolver_set_enabled(1) and says so on
+ * stderr. --strict calls dns_resolver_lock_strict(), which turns the
+ * resolver off and refuses every later enable for the lifetime of the
+ * process — so the guarantee holds for the whole run, not until the
+ * next call. The lock lives here rather than in the argv parser so it
+ * is a cross-module invariant that no future caller can route around.
+ */
+#define DNS_RESOLVER_DEFAULT_ENABLED 0
+
 void dns_resolver_set_enabled(int enabled);
 int  dns_resolver_enabled(void);
+
+/* Lock strict observation for the run: disables the resolver now and
+   makes dns_resolver_set_enabled(1) a refused no-op from here on. */
+void dns_resolver_lock_strict(void);
+int  dns_resolver_strict_locked(void);
+
+/* Is the resolver worker thread alive? The observable half of the
+   worker gate — "the DNS worker was never started" is what #84 asks
+   for, and this is how a test proves it. */
+int  dns_resolver_worker_running(void);
+
+/* Restore the shipped default and clear the strict lock (for testing). */
+void dns_resolver_reset_policy(void);
 
 /* Observability seam for #84's regression requirement ("assert zero
    resolver work"). Counting here rather than in the caller means a

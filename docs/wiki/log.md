@@ -843,3 +843,46 @@ family that does not arrive over the air.
 Additive JSONL only; no `DB_SCHEMA_VERSION` bump. Slice 3 (UI separation
 of impersonator / neighbour / wired-attached, plus the controller
 correlation hook) remains open.
+## 2026-09-25 — Strict observation becomes the default (#84 slice 2)
+
+**Updated pages**: [dashboard.md](dashboard.md), plus
+[`docs/views/dns.md`](../views/dns.md),
+[`docs/views/dashboard.md`](../views/dashboard.md) and the README.
+
+Slice 1 built the seam — `dns_lookup_cached()` for names sloth already
+observed, `dns_resolve()` as the single choke point for active reverse
+resolution — and deliberately changed nothing that flowed through it.
+This slice decides the policy, on the Captain's written instruction
+recorded on the issue: **strict observation is the default.**
+
+- `dns_resolver_set_enabled()` defaults **off**
+  (`DNS_RESOLVER_DEFAULT_ENABLED`). `test_resolver_enabled_by_default`
+  inverted to `test_resolver_disabled_by_default`; that assertion
+  existed precisely to make this flip arrive as a deliberate edit
+  rather than as drift, and this is that edit.
+- **The worker thread is gated.** `dns_init()` no longer creates the
+  resolver thread unconditionally. Since the worker owns the only
+  `getnameinfo(3)` call in the tree, a strict run cannot resolve even by
+  accident — "the DNS worker is never started" is now a property of the
+  process, not a branch taken per lookup. It also no longer starts a
+  *second* worker when called twice, which two test suites do.
+- **The two remaining ungated callers are routed.** The UDP/443 QUIC
+  decoder (v4 and v6) called `dns_resolve()` on the capture thread for
+  every packet, consulting no toggle — a cold cache turned capture
+  itself into a reverse-DNS generator. It now calls
+  `capture_quic_hostname()`, which is passive unconditionally.
+  `top_hosts_update()` resolved on every poll regardless of the `[n]`
+  names/numeric toggle; it now follows it, so the two gates compose.
+- **Flags.** `--allow-active` opts in and prints exactly one stderr line
+  naming what it enabled. `--strict` is an accepted no-op that *locks*
+  the guarantee for the run; the lock lives in `src/dns.c`, not in the
+  argv parser, so it is a cross-module invariant. A command line
+  carrying both is refused in either order rather than silently
+  resolved in favour of one.
+
+**Not done here**: the nl80211 scan-trigger limiter and the
+telemetry/Avahi profile are slice 3, and the README positioning rewrite
+is sequenced after the profile is verified on real hardware. Both halves
+of the DNS lookup API still return a shared static buffer documented
+main-thread-only while the capture thread reaches the decoder path —
+that race predates #84 and was not touched inside a behaviour flip.

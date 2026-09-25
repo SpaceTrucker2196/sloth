@@ -147,6 +147,95 @@ static void test_hostname_picked_up_when_cached(void) {
     ASSERT_STR(s.top_hosts[idx].hostname, "dns.google");
 }
 
+/* ── Resolver routing (#84 slice 2) ──────────────────────── */
+
+/* Every test below runs with the resolver *enabled*, so what it
+ * measures is the routing decision this panel makes and not the strict
+ * default doing the work for it.
+ *
+ * Addresses are RFC 2544 benchmarking space (198.18.0.0/15) rather than
+ * the RFC 5737 TEST-NET used elsewhere in the suite: skip_ip() drops
+ * every address geo.c marks reserved, and all three TEST-NET ranges are
+ * in that list, so a TEST-NET address never reaches resolve_one() at
+ * all and the test would pass while asserting nothing. 198.18/15 is
+ * equally non-routable — nothing here can leave the host — but is not
+ * in geo.c's reserved set, so it exercises the real path. Each test
+ * ends with the queue cleared, so no address outlives it. */
+static void seed_one_public(sloth_state_t *s, const char *ip) {
+    memset(s, 0, sizeof(*s));
+    top_hosts_clear();
+    dns_reset();
+    dns_resolver_reset_policy();
+    dns_resolver_set_enabled(1);
+    dns_resolver_stats_reset();
+    seed_conn(s, ip, 443);
+}
+
+static dns_resolver_stats_t th_snap(void) {
+    dns_resolver_stats_t st;
+    dns_resolver_stats(&st);
+    return st;
+}
+
+/* The defect #84 names in top_hosts_update(): it resolved on every poll
+ * regardless of the operator's own names/numeric toggle, so an operator
+ * who had switched the display to numeric still generated reverse-DNS
+ * egress from this panel. */
+static void test_names_off_does_no_resolver_work(void) {
+    sloth_state_t s;
+    seed_one_public(&s, "198.18.0.30");
+    s.dns_enabled = 0;
+    top_hosts_update(&s);
+
+    dns_resolver_stats_t st = th_snap();
+    ASSERT_EQ(0, (int)st.resolve_requests);
+    ASSERT_EQ(0, (int)st.resolve_enqueued);
+    ASSERT_EQ(0, (int)st.getnameinfo_calls);
+    ASSERT(st.cached_lookups > 0);   /* still asks what it already knows */
+}
+
+/* Names off must not mean names blank: a name sloth snooped passively
+ * is still shown, because displaying it costs nothing on the wire. */
+static void test_names_off_still_shows_observed_name(void) {
+    sloth_state_t s;
+    seed_one_public(&s, "198.18.0.31");
+    dns_set_resolved("198.18.0.31", "snooped.example");
+    s.dns_enabled = 0;
+    top_hosts_update(&s);
+
+    int idx = find_host(&s, "198.18.0.31");
+    ASSERT(idx >= 0);
+    ASSERT_STR(s.top_hosts[idx].hostname, "snooped.example");
+    ASSERT_EQ(0, (int)th_snap().resolve_enqueued);
+}
+
+/* With names on AND the resolver opted in, the panel still resolves —
+ * the routing consults the toggle, it does not remove the capability. */
+static void test_names_on_with_active_resolver_resolves(void) {
+    sloth_state_t s;
+    seed_one_public(&s, "198.18.0.32");
+    s.dns_enabled = 1;
+    top_hosts_update(&s);
+
+    dns_resolver_stats_t st = th_snap();
+    ASSERT_EQ(1, (int)st.resolve_requests);
+    ASSERT_EQ(1, (int)st.resolve_enqueued);
+}
+
+/* Both gates are real: the UI toggle alone cannot defeat strict. */
+static void test_names_on_under_strict_default_stays_silent(void) {
+    sloth_state_t s;
+    seed_one_public(&s, "198.18.0.33");
+    dns_resolver_reset_policy();       /* back to the shipped default */
+    s.dns_enabled = 1;
+    top_hosts_update(&s);
+
+    dns_resolver_stats_t st = th_snap();
+    ASSERT_EQ(0, (int)st.resolve_enqueued);
+    ASSERT_EQ(0, (int)st.getnameinfo_calls);
+    ASSERT_EQ(1, (int)st.resolve_suppressed);
+}
+
 /* ── Sorting ─────────────────────────────────────────────── */
 
 static void test_top_entries_sorted_by_activity(void) {
@@ -176,6 +265,15 @@ void run_top_hosts_tests(void) {
     RUN_TEST(test_owner_resolved_for_known_prefix);
     RUN_TEST(test_owner_unknown_left_blank);
     RUN_TEST(test_hostname_picked_up_when_cached);
+
+    TEST_SUITE("top_hosts resolver routing (#84 slice 2)");
+    RUN_TEST(test_names_off_does_no_resolver_work);
+    RUN_TEST(test_names_off_still_shows_observed_name);
+    RUN_TEST(test_names_on_with_active_resolver_resolves);
+    RUN_TEST(test_names_on_under_strict_default_stays_silent);
+    /* Leave nothing queued and the shipped policy in place. */
+    dns_reset();
+    dns_resolver_reset_policy();
 
     TEST_SUITE("top_hosts sorting");
     RUN_TEST(test_top_entries_sorted_by_activity);

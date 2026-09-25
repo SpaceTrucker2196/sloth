@@ -48,9 +48,11 @@ static volatile int    g_running = 0;
 
 /* ── Resolver policy + observability (#84) ───────────────── */
 
-/* On by default: slice 1 builds the choke point without changing what
- * flows through it. See dns.h. */
-static int g_resolver_enabled = 1;
+/* Off by default (#84 slice 2): strict observation is what an operator
+ * gets without asking for it. --allow-active turns this on; --strict
+ * sets g_strict_locked and refuses every later attempt. See dns.h. */
+static int g_resolver_enabled = DNS_RESOLVER_DEFAULT_ENABLED;
+static int g_strict_locked    = 0;
 
 /* Guarded by g_mu, including the worker-thread increment. */
 static dns_resolver_stats_t g_stats;
@@ -183,11 +185,27 @@ static void *dns_worker(void *arg) {
 /* ── Public API ──────────────────────────────────────────── */
 
 void dns_init(void) {
+    pthread_mutex_lock(&g_mu);
     memset(g_cache, 0, sizeof(g_cache));
     g_queue_head = 0;
     g_queue_len  = 0;
-    g_running    = 1;
-    pthread_create(&g_thread, NULL, dns_worker, NULL);
+    /* The worker owns the only getnameinfo(3) call in the tree, so under
+     * strict observation it is never created at all — #84 asks for "the
+     * DNS worker is never started", which is a stronger claim than "no
+     * lookup takes the active branch". Policy is set from the CLI before
+     * this runs. Starting twice would overwrite g_thread and leak the
+     * first worker; two test suites call dns_init() once per test. */
+    int start = g_resolver_enabled && !g_running;
+    if (start) g_running = 1;
+    pthread_mutex_unlock(&g_mu);
+
+    /* A failed create must clear the flag again, or dns_cleanup() would
+     * join a pthread_t that was never initialised. */
+    if (start && pthread_create(&g_thread, NULL, dns_worker, NULL) != 0) {
+        pthread_mutex_lock(&g_mu);
+        g_running = 0;
+        pthread_mutex_unlock(&g_mu);
+    }
 }
 
 void dns_cleanup(void) {
@@ -222,7 +240,11 @@ void dns_set_resolved(const char *ip, const char *host) {
 
 void dns_resolver_set_enabled(int enabled) {
     pthread_mutex_lock(&g_mu);
-    g_resolver_enabled = enabled ? 1 : 0;
+    /* A locked run refuses the enable outright rather than honouring it
+     * and reporting later. Disabling is always allowed — tightening
+     * never needs permission. */
+    if (!(g_strict_locked && enabled))
+        g_resolver_enabled = enabled ? 1 : 0;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -231,6 +253,34 @@ int dns_resolver_enabled(void) {
     int e = g_resolver_enabled;
     pthread_mutex_unlock(&g_mu);
     return e;
+}
+
+void dns_resolver_lock_strict(void) {
+    pthread_mutex_lock(&g_mu);
+    g_strict_locked    = 1;
+    g_resolver_enabled = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
+int dns_resolver_strict_locked(void) {
+    pthread_mutex_lock(&g_mu);
+    int l = g_strict_locked;
+    pthread_mutex_unlock(&g_mu);
+    return l;
+}
+
+int dns_resolver_worker_running(void) {
+    pthread_mutex_lock(&g_mu);
+    int r = g_running;
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+
+void dns_resolver_reset_policy(void) {
+    pthread_mutex_lock(&g_mu);
+    g_strict_locked    = 0;
+    g_resolver_enabled = DNS_RESOLVER_DEFAULT_ENABLED;
+    pthread_mutex_unlock(&g_mu);
 }
 
 void dns_resolver_stats(dns_resolver_stats_t *out) {

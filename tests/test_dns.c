@@ -73,7 +73,15 @@ static void test_multiple_distinct_ips(void) {
  * counter assertion measures only what that test did. */
 static void cold(void) {
     dns_reset();
+    dns_resolver_reset_policy();   /* clears any --strict lock a test set */
     dns_resolver_set_enabled(1);
+    dns_resolver_stats_reset();
+}
+
+/* Cold cache under the *shipped* policy rather than an enabled one. */
+static void cold_default(void) {
+    dns_reset();
+    dns_resolver_reset_policy();
     dns_resolver_stats_reset();
 }
 
@@ -183,12 +191,120 @@ static void test_disabled_resolver_still_serves_cache(void) {
     dns_resolver_set_enabled(1);
 }
 
-/* Slice 1 is behaviour-preserving: the shipped default stays on.
- * Flipping it is a deliberate decision for #84 slice 2, and this
- * assertion is what will make that flip visible when it happens. */
-static void test_resolver_enabled_by_default(void) {
+/* Slice 2 flips the shipped default: strict observation is what an
+ * operator gets without asking. This assertion is the inverted twin of
+ * slice 1's test_resolver_enabled_by_default — that one existed to make
+ * exactly this flip visible as a deliberate edit rather than drift, and
+ * this is that edit. Nothing here is weakened: the shape is identical
+ * and only the pinned value moved. */
+static void test_resolver_disabled_by_default(void) {
+    ASSERT_EQ(0, DNS_RESOLVER_DEFAULT_ENABLED);
+    dns_resolver_reset_policy();
+    ASSERT_EQ(0, dns_resolver_enabled());
+}
+
+/* The default stated as behaviour rather than as a flag read: a cold
+ * start that sees an address must produce no resolver work at all. */
+static void test_default_policy_enqueues_nothing(void) {
+    cold_default();
+    ASSERT_STR(dns_resolve("203.0.113.19"), "203.0.113.19");
+
+    dns_resolver_stats_t st = snap();
+    ASSERT_EQ(1, (int)st.resolve_requests);
+    ASSERT_EQ(0, (int)st.resolve_enqueued);
+    ASSERT_EQ(1, (int)st.resolve_suppressed);
+    ASSERT_EQ(0, (int)st.getnameinfo_calls);
+}
+
+/* ── Worker-thread gate (#84 slice 2) ────────────────────── */
+
+/* "The DNS worker is never started" is the property #84 asks for, and
+ * it is a property of the *process*, not a branch taken per lookup: the
+ * worker is the only code in sloth that can call getnameinfo(3), so a
+ * strict run that never creates it cannot resolve even by accident. */
+static void test_init_starts_no_worker_under_strict(void) {
+    dns_cleanup();
+    cold_default();
+    dns_init();
+    ASSERT_EQ(0, dns_resolver_worker_running());
+    dns_cleanup();               /* must be safe with no thread to join */
+    ASSERT_EQ(0, dns_resolver_worker_running());
+}
+
+/* The opt-in half: --allow-active must actually produce a worker, or
+ * the flag would be a silent no-op. Nothing is enqueued here, so the
+ * thread parks on the condvar and never touches the network. */
+static void test_init_starts_worker_when_active(void) {
+    dns_cleanup();
+    cold();
+    dns_init();
+    ASSERT_EQ(1, dns_resolver_worker_running());
+    dns_cleanup();
+    ASSERT_EQ(0, dns_resolver_worker_running());
+}
+
+/* Two suites call dns_init() once per test. Without this guard each
+ * call overwrote g_thread with a fresh pthread, so every earlier worker
+ * became unjoinable. */
+static void test_repeated_init_starts_one_worker(void) {
+    dns_cleanup();
+    cold();
+    dns_init();
+    dns_init();
+    ASSERT_EQ(1, dns_resolver_worker_running());
+    dns_cleanup();
+    ASSERT_EQ(0, dns_resolver_worker_running());
+}
+
+/* ── --strict lock (#84 slice 2) ─────────────────────────── */
+
+/* --strict changes nothing by itself; its value is that it refuses a
+ * later enable, so the guarantee holds for the whole run rather than
+ * until the next call. Enforced in dns.c so it is a cross-module
+ * invariant and not an argv-parsing convention. */
+static void test_strict_lock_refuses_later_enable(void) {
+    cold_default();
+    dns_resolver_lock_strict();
+    ASSERT_EQ(1, dns_resolver_strict_locked());
+
+    dns_resolver_set_enabled(1);
+    ASSERT_EQ(0, dns_resolver_enabled());
+
+    ASSERT_STR(dns_resolve("203.0.113.20"), "203.0.113.20");
+    ASSERT_EQ(0, (int)snap().resolve_enqueued);
+    dns_resolver_reset_policy();
+}
+
+/* Locking an already-active resolver must turn it off, not merely
+ * freeze it: --strict names a guarantee, not a preference. */
+static void test_strict_lock_disables_an_active_resolver(void) {
+    cold();
+    ASSERT_EQ(1, dns_resolver_enabled());
+    dns_resolver_lock_strict();
+    ASSERT_EQ(0, dns_resolver_enabled());
+    dns_resolver_reset_policy();
+}
+
+/* A locked run must not start a worker either, whatever order the
+ * calls arrive in. */
+static void test_strict_lock_keeps_the_worker_unstarted(void) {
+    dns_cleanup();
+    cold();
+    dns_resolver_lock_strict();
+    dns_init();
+    ASSERT_EQ(0, dns_resolver_worker_running());
+    dns_cleanup();
+    dns_resolver_reset_policy();
+}
+
+static void test_reset_policy_clears_the_lock(void) {
+    cold_default();
+    dns_resolver_lock_strict();
+    dns_resolver_reset_policy();
+    ASSERT_EQ(0, dns_resolver_strict_locked());
     dns_resolver_set_enabled(1);
     ASSERT_EQ(1, dns_resolver_enabled());
+    dns_resolver_reset_policy();
 }
 
 /* The compatibility spelling must keep resolving, or slice 1 has
@@ -274,11 +390,29 @@ void run_dns_tests(void) {
     RUN_TEST(test_resolve_hit_does_not_enqueue);
     RUN_TEST(test_disabled_resolver_enqueues_nothing);
     RUN_TEST(test_disabled_resolver_still_serves_cache);
-    RUN_TEST(test_resolver_enabled_by_default);
+    RUN_TEST(test_resolver_disabled_by_default);
+    RUN_TEST(test_default_policy_enqueues_nothing);
     RUN_TEST(test_dns_lookup_routes_through_resolver);
     RUN_TEST(test_fmt_addr_routes_through_resolver);
     RUN_TEST(test_getnameinfo_counter_tracks_the_worker);
     RUN_TEST(test_stats_reset_zeroes_counters);
     RUN_TEST(test_dns_reset_preserves_counters);
     RUN_TEST(test_stats_null_out_is_safe);
+
+    TEST_SUITE("DNS resolver worker gate (#84 slice 2)");
+    RUN_TEST(test_init_starts_no_worker_under_strict);
+    RUN_TEST(test_init_starts_worker_when_active);
+    RUN_TEST(test_repeated_init_starts_one_worker);
+
+    TEST_SUITE("DNS --strict lock (#84 slice 2)");
+    RUN_TEST(test_strict_lock_refuses_later_enable);
+    RUN_TEST(test_strict_lock_disables_an_active_resolver);
+    RUN_TEST(test_strict_lock_keeps_the_worker_unstarted);
+    RUN_TEST(test_reset_policy_clears_the_lock);
+
+    /* Leave the shipped default in place for every suite that follows.
+     * test_dhcp_snoop.c and test_nbns_snoop.c call dns_init() per test;
+     * handing them an enabled resolver would start a real worker and
+     * put `make test` one cache miss away from a genuine PTR query. */
+    dns_resolver_reset_policy();
 }

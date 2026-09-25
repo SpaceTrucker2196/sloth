@@ -37,8 +37,14 @@ Built by `src/top_hosts.c`:
 1. Aggregate `s->conns` + `s->conn_bw` by **remote IP** each poll.
 2. Skip RFC1918 / loopback / link-local / multicast / IPv6 link-local
    (this panel is about external traffic).
-3. Hostname comes from the async DNS resolver (`src/dns.c`); owner
-   from the embedded CDN / cloud prefix table in `src/ip_owner.c`.
+3. Hostname follows the `[n]` names/numeric toggle (#84 slice 2): with
+   names **on** it goes through the async resolver `dns_resolve()`,
+   which is itself strict-by-default and only reaches the network under
+   `--allow-active`; with names **off** it reads the passive
+   `dns_lookup_cached()`, which returns only what sloth already
+   observed. The panel used to resolve on every poll regardless of the
+   toggle, so numeric display still generated reverse-DNS egress. Owner
+   comes from the embedded CDN / cloud prefix table in `src/ip_owner.c`.
 4. `first_seen` is sticky across polls — the **age** column shows how
    long this destination has been around.
 5. Sort by `rx_rate + tx_rate + conn_count`, snapshot top 32.

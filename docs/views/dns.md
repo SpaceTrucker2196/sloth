@@ -11,6 +11,13 @@ for large responses + zone transfers). Sloth parses the header (12 bytes),
 the question section, and the first answer record — it does **not** call
 out to a resolver; only what's already crossing the wire.
 
+This view was always passive. What changed in #84 slice 2 is the rest of
+sloth: the *reverse*-DNS resolver behind the hostname columns elsewhere
+in the TUI is now **off by default**, its worker thread is never started
+without `--allow-active`, and `--strict` locks that for the run. So the
+names sloth shows come from this snooped traffic unless an operator
+explicitly opted into asking.
+
 ## What sloth captures
 
 Per entry: source IP, qname (query name), qtype (`A`, `AAAA`, `PTR`, `MX`,

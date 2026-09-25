@@ -61,6 +61,28 @@ int         capture_frame_in_scope(const sloth_state_t *s, int dlt,
                                    const uint8_t *frame, int caplen,
                                    capture_ifname_fn resolve);
 
+/* Name annotation for a UDP/443 QUIC record (#84 slice 2).
+
+   The IPv4 and IPv6 decoders used to call dns_resolve() here, on the
+   capture thread, on every UDP/443 packet, consulting no toggle — so a
+   cold cache turned capture itself into a reverse-DNS generator, one
+   PTR query per unseen QUIC peer. That is the first bullet of #84 and,
+   read plainly, a MISSION.md §2.1 violation.
+
+   It is passive by construction now: the name comes only from what
+   sloth already observed (dns_lookup_cached() — the DNS/mDNS/NBNS/DHCP
+   /SNI snoopers, or a resolve that already completed), and the raw IP
+   when nothing is known, which is what the decoders already displayed
+   on a miss. --allow-active deliberately does NOT restore resolution
+   here: it enables the resolver for paths the operator drives, not an
+   ungated per-packet lookup on the capture thread that no UI toggle can
+   reach.
+
+   Factored out of the static decoders and compiled without WITH_PCAP
+   for the same reason capture_dlt_has_ifindex() is — so the test build
+   can pin the behaviour without linking libpcap. */
+const char *capture_quic_hostname(const char *remote_ip);
+
 /* Startup decision: can the requested scope be enforced? (#85)
 
    Inputs are the end state after the allow-list has been seeded and

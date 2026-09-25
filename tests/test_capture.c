@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "capture/capture.h"
+#include "dns.h"
 
 /* pcap_activate() return codes, written out from libpcap's documented
    contract rather than #included from <pcap.h> — the test build links no
@@ -493,6 +494,70 @@ static void test_stats_null_health_does_not_crash(void) {
     ASSERT(1);
 }
 
+/* ── UDP/443 QUIC host annotation (#84 slice 2) ────────────────────
+ *
+ * decode_ipv4/decode_ipv6 are static and live inside the WITH_PCAP
+ * guard, so the decision they make about name resolution is factored
+ * out into capture_quic_hostname() — compiled unconditionally for the
+ * same reason capture_dlt_has_ifindex() is, so the test build can pin
+ * it without linking libpcap. Both decoders call it.
+ *
+ * The resolver is enabled in every test below: what is being asserted
+ * is that this path is passive by construction, not that the strict
+ * default happens to be covering it. RFC 5737 TEST-NET addresses. */
+static void quic_cold(void) {
+    dns_reset();
+    dns_resolver_reset_policy();
+    dns_resolver_set_enabled(1);
+    dns_resolver_stats_reset();
+}
+
+static dns_resolver_stats_t quic_snap(void) {
+    dns_resolver_stats_t st;
+    dns_resolver_stats(&st);
+    return st;
+}
+
+/* The defect: this decoder runs on every UDP/443 packet, on the capture
+ * thread, consulting no toggle. A cold cache turned capture itself into
+ * a reverse-DNS generator — one PTR query per unseen QUIC peer. */
+static void test_quic_hostname_does_no_resolver_work(void) {
+    quic_cold();
+    ASSERT_STR(capture_quic_hostname("203.0.113.40"), "203.0.113.40");
+
+    dns_resolver_stats_t st = quic_snap();
+    ASSERT_EQ(0, (int)st.resolve_requests);
+    ASSERT_EQ(0, (int)st.resolve_enqueued);
+    ASSERT_EQ(0, (int)st.getnameinfo_calls);
+}
+
+/* A miss must also leave no PENDING slot, or the next caller inherits
+ * queued work it never asked for — the same egress one call later. */
+static void test_quic_hostname_miss_leaves_no_pending_slot(void) {
+    quic_cold();
+    capture_quic_hostname("203.0.113.41");
+    capture_quic_hostname("203.0.113.41");
+    ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
+}
+
+/* Passive does not mean nameless: sloth's own DNS/mDNS/SNI snoopers
+ * populate the cache, and a QUIC record still gets the name when one
+ * was actually observed. That is the whole point of the split. */
+static void test_quic_hostname_returns_observed_name(void) {
+    quic_cold();
+    dns_set_resolved("203.0.113.42", "quic.example");
+    ASSERT_STR(capture_quic_hostname("203.0.113.42"), "quic.example");
+    ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
+}
+
+static void test_quic_hostname_ipv6_is_passive_too(void) {
+    quic_cold();
+    ASSERT_STR(capture_quic_hostname("2001:db8::40"), "2001:db8::40");
+    dns_set_resolved("2001:db8::40", "v6.quic.example");
+    ASSERT_STR(capture_quic_hostname("2001:db8::40"), "v6.quic.example");
+    ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
+}
+
 void run_capture_tests(void) {
     TEST_SUITE("capture pcap_activate classification");
     RUN_TEST(test_activate_success_is_not_failure);
@@ -548,4 +613,11 @@ void run_capture_tests(void) {
     RUN_TEST(test_stats_idle_tick_reports_zero_delta);
     RUN_TEST(test_stats_counter_reset_does_not_run_totals_backwards);
     RUN_TEST(test_stats_null_health_does_not_crash);
+
+    TEST_SUITE("capture UDP/443 QUIC host annotation (#84 slice 2)");
+    RUN_TEST(test_quic_hostname_does_no_resolver_work);
+    RUN_TEST(test_quic_hostname_miss_leaves_no_pending_slot);
+    RUN_TEST(test_quic_hostname_returns_observed_name);
+    RUN_TEST(test_quic_hostname_ipv6_is_passive_too);
+    dns_resolver_reset_policy();
 }

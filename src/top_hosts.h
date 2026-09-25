@@ -8,9 +8,13 @@
  * resolved hostname/owner stick), then snapshot the top MAX_TOP_HOSTS
  * by combined RX+TX rate into s->top_hosts.
  *
- * Hostname comes from dns_resolve() (non-blocking — async resolver), and
- * owner from ip_owner_lookup_str() (embedded prefix table). Private,
- * loopback, link-local and multicast addresses are ignored. */
+ * Hostname follows the operator's names/numeric toggle (#84 slice 2):
+ * with names on it goes through dns_resolve() (non-blocking — async
+ * resolver, and itself strict-by-default), with names off through the
+ * passive dns_lookup_cached(), which reads only what sloth already
+ * observed. Owner comes from ip_owner_lookup_str() (embedded prefix
+ * table). Private, loopback, link-local and multicast addresses are
+ * ignored. */
 void top_hosts_update(sloth_state_t *s);
 
 /* Drop the internal table — useful for tests. */
