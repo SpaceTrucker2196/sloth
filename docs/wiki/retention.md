@@ -130,6 +130,39 @@ created by an older build the pages are reused rather than returned, so
 the file stops growing but never shrinks. One offline `VACUUM;` fixes
 that.
 
+## 3b. In-memory retention: device correlation (#94)
+
+One in-memory table has retention of its own, and it is here because it
+is the one whose contents can be personal data rather than telemetry.
+
+`src/seqnum_track.c` holds a per-MAC sequence-counter trail and links
+addresses across MAC rotations. Two horizons apply, both while sloth is
+running and independent of `--db`:
+
+| Knob | Default | What it bounds |
+|------|---------|----------------|
+| `--correlate-retain SECS` | **300** | Evidence window for a correlation. A pair is reported only while **both** addresses have been heard inside it, counted from now. |
+| `SEQNUM_CLIENT_RETAIN_S` | **3600** | Per-MAC trails, dropped on snapshot once this stale. Effective value is `max(3600, --correlate-retain)`. |
+
+`--no-correlate` switches the linkage off entirely: trails still render,
+no pair is linked, exported, or written to `seqnum_correlations`.
+
+Before #94 neither horizon existed — the only way out of the table was
+eviction once it hit 256 entries, so a quiet sensor retained every
+address it had ever heard for the life of the process, and stale trails
+kept producing *current* correlations. Two things follow that are worth
+stating for a risk register:
+
+- **Stated purpose.** Correlation exists so device counts, alert dedup
+  and transit passes are not inflated by MAC rotation. The five-minute
+  evidence default is set for that purpose, not for building a movement
+  history.
+- **Not a deletion guarantee, same caveat as §1.** Expiry runs on
+  snapshot while sloth is running. Anything already exported to JSONL,
+  the data socket, or `--db seqnum_correlations` is governed by those
+  sinks' retention (the observation tier, 1×, for the DB) and not by
+  these horizons.
+
 ## 4. What retention does *not* cover
 
 Nothing outside the SQLite file is managed. These grow until the

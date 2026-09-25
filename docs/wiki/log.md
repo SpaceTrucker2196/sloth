@@ -843,6 +843,9 @@ family that does not arrive over the air.
 Additive JSONL only; no `DB_SCHEMA_VERSION` bump. Slice 3 (UI separation
 of impersonator / neighbour / wired-attached, plus the controller
 correlation hook) remains open.
+
+---
+
 ## 2026-09-25 — Strict observation becomes the default (#84 slice 2)
 
 **Updated pages**: [dashboard.md](dashboard.md), plus
@@ -938,3 +941,98 @@ and writes down the boundary that replaces the crypto.
 The page is explicit about the one thing sloth cannot assert about
 itself: whether this closes an external reviewer's "remotely exposed"
 finding is the reviewer's sign-off. The auth/TLS half of #86 stays open.
+
+---
+
+## 2026-09-25 — Correlation honesty: what the evidence supports (#94)
+
+**Source**: external CISO/GRC review (Todd Luther, 2026-09), issue #94.
+The finding is not a missing feature — it is that two outputs stated
+conclusions their evidence does not support, and both produce records
+that could be quoted in a personnel investigation or used to point at a
+person in a room.
+
+**Doc updates**: [mac-randomisation.md](mac-randomisation.md) rewritten
+around the limits on use, the seven acceptance requirements, the measured
+false-pair rate, and the configuration; `alerts.md` gained
+*Corroboration before intent* and *Records are not conclusions about
+people*; `jsonl-schema.md` documents the seven additive
+`seqnum_correlation` fields; `retention.md` gained §3b for the two
+in-memory correlation horizons; `docs/views/seqnum.md` and the
+`MY_NET_RECON` row in `docs/views/alerts.md` rewritten.
+
+**Sequence correlation.** The pre-#94 rule minimised **absolute** modular
+distance over the cross product of two 8-entry trails and accepted any
+pair inside a flat 64-seqnum / 30-second window, with nothing expiring
+anywhere, then labelled the result `LIKELY SAME DEVICE`. Five checks now
+gate a pair, and each removes a class of false pair rather than tuning a
+threshold:
+
+- **freshness** — both addresses heard within `--correlate-retain`
+  (default 300 s) of *now*. Without it two trails that were once close
+  kept producing current suggestions for the life of the process.
+- **ordering + exclusivity** — the earlier address must be finished
+  before the later one starts. One radio holds one address at a time, so
+  interleaved transmissions are two radios however close their counters
+  sit. This is the check that does most of the work in a dense room.
+- **direction** — the counter advanced *forward* by 1…64. Absolute
+  distance cannot separate +5 from −5, and only one of those is a
+  rotation. Zero is excluded: a repeated value is a duplicate, and
+  duplicates are the commonest coincidence there is.
+- **continuity** — each trail runs forward on its own before it is
+  extrapolated across the seam.
+- **a score above the floor**, replacing the categorical verdict.
+
+**Measured, not estimated.** The issue offered scale intuition —
+129/4096 differences inside modular distance 64, ≈ 3.15 % per comparison
+for two independent uniform 12-bit values. That is an estimate about a
+model; real trails are dependent. `test_dense_environment_false_pair_rate`
+builds 64 independent radios over only 512 counter positions, each in its
+own non-overlapping slot, and prints the rate on every `make test`:
+**472/2016 = 23.413 % before, 59/2016 = 2.927 % after**, top score 80 %.
+The test asserts a bound set *from* the measurement (< 4 %), so it fails
+if the rule is ever loosened, and does not encode the estimate.
+
+**The score is a ranking, not a probability.** Stated plainly in the
+docs because it is the one thing a reader will get wrong: how often a
+reported pair is really one radio depends on the base rate of rotations,
+which sloth cannot observe. In a room of sixty randomising handsets and
+no rotations, every accepted pair is wrong whatever it scores. This is
+also why the heat-red "possible rotation" row is **structural** as well
+as numeric — it requires exactly one randomised address, the shape
+rotation actually produces, because coincidences reach the same numeric
+band and no number derived from the same evidence can separate them.
+
+**`MY_NET_RECON`.** Uncorroborated it is now LOW at 25 % confidence and
+says `probed for designated network … uncorroborated`; the word
+*reconnaissance* requires positive corroboration (sustained probing, or a
+PNL naming two or more designated networks). A randomised MAC does not
+corroborate — it describes the handset population — and neither does the
+*absence* of an observed association, because an incomplete capture is
+the benign case the rule exists to respect. Three exonerations:
+designated association, the `--known-mac` roster, and association by a
+seqnum-correlated sibling address — which closes the randomised-probe /
+real-association case where exact-MAC matching accused a device that was
+on the network the whole time.
+
+**Deliberate test change.** `test_my_net_recon_fires_for_unassociated_client`
+pinned `ALERT_SEV_WARN` for the bare observation while the rule's own
+comment conceded "a former guest's phone produces it honestly". That
+assertion was pinning the over-claim, not guarding a regression, so it
+was rewritten as
+`test_my_net_recon_uncorroborated_is_low_and_unqualified` rather than
+worked around.
+
+**Configurable, with a stated purpose.** `--no-correlate` and
+`--correlate-retain SECS`, announced at startup so an operator does not
+have to read the source to learn the capability is on. Purpose: keep
+device counts, alert dedup and transit passes from being inflated by MAC
+rotation — not to build a movement history.
+
+**Flagged decision (taken on a default, not an answer).** Triage asked
+whether "rename outputs" meant display text only or also the JSONL alert
+type ids, and the question was never answered. Proceeded on the stated
+default: **human-readable text changed, type ids kept**. `MY_NET_RECON`
+and every other id is untouched, because renaming one is a non-additive
+schema break under MISSION §4.3 and would reach the sloth-ios consumer.
+Everything new is an added field. No `DB_SCHEMA_VERSION` bump.

@@ -1545,6 +1545,43 @@ typedef struct {
     long     dt_ms;
     int      a_count;
     int      b_count;
+
+    /* ── Evidence, not verdict (#94) ──────────────────────────
+     * The pre-#94 record carried only `gap` and `dt_ms`, and the view
+     * turned a small gap into "LIKELY SAME DEVICE". A shared counter
+     * position is circumstantial: two independent radios in a dense
+     * room land inside any fixed window often enough that an
+     * any-pair match needs a score, not a verdict. These fields are
+     * what a consumer needs to judge one, and every one of them is
+     * additive — no existing field changed meaning. */
+
+    /* Forward modular distance from the earlier MAC's newest seqnum to
+     * the later MAC's oldest one. Unlike `gap` (absolute distance) this
+     * has a direction: a counter that went *backwards* across the
+     * transition is not one radio's counter. */
+    int      fwd_gap;
+
+    /* How likely the same-radio hypothesis is, in percent. Capped below
+     * 100 by SEQNUM_CORR_CONF_MAX — sloth never observes identity, only
+     * a counter that is consistent with it. Same axis as alert_t.confidence
+     * (#89): this is "how likely", never "how bad". */
+    int      confidence;
+
+    /* The observation window the pair was decided on: earliest and
+     * latest frame timestamp across both histories. A consumer reading
+     * a correlation out of an archive needs to know it rests on four
+     * frames inside six seconds, not on a day of traffic. */
+    time_t   window_start;
+    time_t   window_end;
+
+    /* Evidence depth per side — history entries actually compared. */
+    int      a_hist_n;
+    int      b_hist_n;
+
+    /* 1 when the earlier side of the transition is `mac_a`. The pair
+     * itself is unordered (either MAC may be seen first); the
+     * *transition* has a direction and the score depends on it. */
+    int      a_is_earlier;
 } seqnum_correlation_t;
 
 /* ── Channel activity summary (derived from beacons + assoc) ─ */

@@ -31,9 +31,13 @@ type: project
 - **EAPOL (e)** — exports `eapol.22000` in hashcat mixed format plus
   per-handshake pcaps replayable in aircrack-ng / Wireshark. PMKID
   rows are offline-crackable with no client interaction.
-- **Seqnum (j)** — pairs randomised MACs that emit frames on the same
-  monotonic 12-bit sequence counter. See [[mac-randomisation]] for the
-  full explanation.
+- **Seqnum (j)** — reports address pairs whose frames fall on the same
+  forward-running 12-bit sequence counter, with a calibrated score and
+  the evidence window. A hypothesis about a radio, never an
+  identification of a person, and not on its own grounds for personnel
+  action or physical identification (#94). `--no-correlate` switches the
+  linkage off. See [[mac-randomisation]] for the full explanation and the
+  limits on use.
 - **Assoc (w)** — answers "who is on which AP, right now" with
   graded evidence (EAPOL is definitive, AssocResp / ReassocResp are
   strong).

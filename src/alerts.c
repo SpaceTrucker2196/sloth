@@ -2025,25 +2025,53 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Recon against an operator-designated network (#52).
+/* Probing for an operator-designated network (#52, honesty pass #94).
  *
  * A client's PNL is the list of networks it remembers and probes for by
  * name. When one of those is a network the operator designated as
- * theirs, and the client is *not* associated to it, the device is
- * carrying credentials-of-interest for a network it is not currently
- * using — the on-air signature of someone who has connected before, or
- * who is asking whether the network is here.
+ * theirs, and the client is *not* associated to it, sloth has observed
+ * one thing: **this radio asked for your network by name and is not on
+ * it.** That is the whole observation, and #94 is about not reporting
+ * more than it.
  *
- * Association is the exoneration, and it is evidence we already grade:
- * a laptop sitting on the network legitimately remembers it. We check
- * the assoc table by designated BSSID *or* by SSID, so --my-ssid alone
- * is enough — the operator does not have to enumerate every BSSID of
- * their own multi-AP deployment to avoid alerting on their own users.
+ * The bare observation has at least four innocent explanations, all of
+ * which satisfy it exactly: a returning employee whose phone still
+ * remembers the SSID, a device roaming between the operator's own APs,
+ * a capture that simply did not see the association, and a handset
+ * probing with a rotating address while associated under its per-network
+ * one. Calling that "reconnaissance" names an intent the evidence does
+ * not carry, and these records are the kind that get quoted in a
+ * personnel file. So:
  *
- * Deliberately NOT escalated on a randomised MAC. Probe-request MAC
+ *   - uncorroborated it is LOW with a low confidence, and the detail
+ *     says what was seen ("probed for") rather than what it means;
+ *   - the reconnaissance framing requires **positive corroboration** —
+ *     the same doctrine #89 applied to the evil-twin family: with no
+ *     positive evidence, no claim.
+ *
+ * Association is the exoneration, checked by designated BSSID *or* SSID
+ * so --my-ssid alone is enough — the operator does not have to enumerate
+ * every BSSID of their own multi-AP deployment. #94 adds the two
+ * exonerations that were missing: a correlated sibling address that *is*
+ * associated, and the operator's own roster.
+ *
+ * Deliberately NOT corroborated by a randomised MAC. Probe-request MAC
  * randomisation is default behaviour on current iOS and Android, so it
- * describes the phone population, not the adversary; treating it as a
- * signal here would fire on every handset that ever joined. */
+ * describes the phone population, not the adversary. */
+
+/* How long a device must keep asking before repetition is evidence of
+ * anything. A passer-by's phone probes in a burst as it crosses the
+ * area; a device that is still asking ten minutes later is doing
+ * something else. */
+#define RECON_SUSTAIN_S      600
+#define RECON_SUSTAIN_PROBES 20
+
+/* Confidence terms. The ceiling stays well under 100 — every input here
+ * is circumstantial and the operator is the one who decides. */
+#define RECON_CONF_BASE      25
+#define RECON_CONF_SUSTAINED 30
+#define RECON_CONF_MULTI     25
+
 static int sta_is_associated_to_designated(const sloth_state_t *s,
                                            const uint8_t mac[6]) {
     for (int i = 0; i < s->assoc_count; i++) {
@@ -2055,33 +2083,96 @@ static int sta_is_associated_to_designated(const sloth_state_t *s,
     return 0;
 }
 
+/* The randomised-probe / real-association case. A handset scans with a
+ * rotating address and joins with the stable per-SSID one, so matching
+ * the exact MAC accused a device that was sitting on the network the
+ * whole time. Any reported correlation counts here: for an exoneration
+ * the safe error is to stay quiet, so this does not wait for a strong
+ * score the way a positive claim would. */
+static int correlated_sibling_is_associated(const sloth_state_t *s,
+                                            const uint8_t mac[6]) {
+    for (int i = 0; i < s->seqnum_correlation_count; i++) {
+        const seqnum_correlation_t *c = &s->seqnum_correlations[i];
+        const uint8_t *sibling = NULL;
+        if      (memcmp(c->mac_a, mac, 6) == 0) sibling = c->mac_b;
+        else if (memcmp(c->mac_b, mac, 6) == 0) sibling = c->mac_a;
+        if (!sibling) continue;
+        if (sta_is_associated_to_designated(s, sibling)) return 1;
+    }
+    return 0;
+}
+
 static void rule_my_network_recon(const sloth_state_t *s, time_t now) {
     if (!ownership_any()) return;      /* nothing designated — no work */
     for (int i = 0; i < s->pnl_count; i++) {
         const pnl_client_t *p = &s->pnl_clients[i];
 
         const char *hit = NULL;
+        int designated_hits = 0;
         int n = p->ssid_count;
         if (n > MAX_PNL_SSIDS_PER_CLI) n = MAX_PNL_SSIDS_PER_CLI;
         for (int k = 0; k < n; k++) {
-            if (ownership_is_my_ssid(p->ssids[k])) { hit = p->ssids[k]; break; }
+            if (!ownership_is_my_ssid(p->ssids[k])) continue;
+            if (!hit) hit = p->ssids[k];
+            designated_hits++;
         }
         if (!hit) continue;
-        if (sta_is_associated_to_designated(s, p->mac)) continue;
+        if (sta_is_associated_to_designated(s, p->mac))  continue;
+        if (correlated_sibling_is_associated(s, p->mac)) continue;
+        /* The operator wrote this one down as theirs. That is the answer
+         * to "returning employee" and it outranks every inference. */
+        if (ownership_is_known_device(p->mac))           continue;
+
+        /* Corroborators. Both are positive observations; absence of
+         * evidence is never one of them — an incomplete capture is the
+         * benign explanation this rule exists to respect, so "no
+         * association seen anywhere" deliberately does not count. */
+        long span = (p->last_seen > p->first_seen)
+                  ? (long)(p->last_seen - p->first_seen) : 0;
+        int sustained = (span >= RECON_SUSTAIN_S &&
+                         p->probe_count >= RECON_SUSTAIN_PROBES);
+        int multi     = (designated_hits >= 2);
+
+        int conf = RECON_CONF_BASE;
+        if (sustained) conf += RECON_CONF_SUSTAINED;
+        if (multi)     conf += RECON_CONF_MULTI;
 
         char mac_buf[20];
         mac_to_str(p->mac, mac_buf, sizeof(mac_buf));
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key,    sizeof(key),    "myrecon:%s", mac_buf);
-        snprintf(detail, sizeof(detail),
-                 "%s remembers '%.32s' but is not associated - %d probes",
-                 mac_buf, hit, p->probe_count);
-        /* WARN, not LOW: PROBE_FLOOD is LOW because generic probing is
-         * noise. This is not generic — it names the operator's network.
-         * Not CRIT either: a former guest's phone produces it honestly. */
-        fire(ALERT_TYPE_MY_NETWORK_RECON, ALERT_SEV_WARN,
-             "MY_NET_RECON", detail, key, NULL, 0, now);
+        snprintf(key, sizeof(key), "myrecon:%s", mac_buf);
+
+        if (sustained || multi) {
+            /* Corroborated: the reconnaissance reading is now supported
+             * by something observed, and the detail names which one so
+             * the operator can weigh it instead of trusting the label.
+             * Still "possible" — corroboration is not proof of intent. */
+            snprintf(detail, sizeof(detail),
+                     "%s probed for designated network '%.32s' without "
+                     "associating - %d probes over %lds - possible recon"
+                     "naissance: %s%s%s",
+                     mac_buf, hit, p->probe_count, span,
+                     sustained ? "sustained probing" : "",
+                     (sustained && multi) ? ", " : "",
+                     multi ? "names 2+ designated networks" : "");
+            /* WARN, not CRIT: a former guest's phone left on a desk in
+             * the car park produces this honestly too. */
+            fire_conf(ALERT_TYPE_MY_NETWORK_RECON, ALERT_SEV_WARN, conf,
+                      "MY_NET_RECON", detail, key, NULL, 0, now);
+        } else {
+            snprintf(detail, sizeof(detail),
+                     "%s probed for designated network '%.32s' without "
+                     "associating - %d probes - uncorroborated, benign "
+                     "explanations include a returning device or an "
+                     "unobserved association",
+                     mac_buf, hit, p->probe_count);
+            /* LOW: same tier as PROBE_FLOOD. It names the operator's
+             * network, which is why it is reported at all, but on its own
+             * it is a lead and not a finding. */
+            fire_conf(ALERT_TYPE_MY_NETWORK_RECON, ALERT_SEV_LOW, conf,
+                      "MY_NET_RECON", detail, key, NULL, 0, now);
+        }
     }
 }
 

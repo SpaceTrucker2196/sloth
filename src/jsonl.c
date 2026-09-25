@@ -952,6 +952,18 @@ void jsonl_emit_seqnum_correlations(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "dt_ms",        (long long)e->dt_ms);
         kv_int(buf, LINEBUF, &off, "a_count",      (long long)e->a_count);
         kv_int(buf, LINEBUF, &off, "b_count",      (long long)e->b_count);
+        /* Additive (#94). A consumer that stored `gap` alone could not
+         * tell a forward transition from a coincidence nearby, nor how
+         * much evidence the pair rested on — so it had no way to avoid
+         * treating every row as an identification. Existing fields keep
+         * their meaning exactly; no rename, no removal, no schema bump. */
+        kv_int(buf, LINEBUF, &off, "fwd_gap",      e->fwd_gap);
+        kv_int(buf, LINEBUF, &off, "confidence",   e->confidence);
+        kv_int(buf, LINEBUF, &off, "window_start", (long long)e->window_start);
+        kv_int(buf, LINEBUF, &off, "window_end",   (long long)e->window_end);
+        kv_int(buf, LINEBUF, &off, "a_hist_n",     e->a_hist_n);
+        kv_int(buf, LINEBUF, &off, "b_hist_n",     e->b_hist_n);
+        kv_int(buf, LINEBUF, &off, "a_is_earlier", e->a_is_earlier ? 1 : 0);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

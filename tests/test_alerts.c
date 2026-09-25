@@ -1153,8 +1153,17 @@ static void add_assoc_entry(sloth_state_t *s, const uint8_t sta[6],
 }
 
 /* The headline case: a device out there remembers the operator's
- * network by name and is not on it. */
-static void test_my_net_recon_fires_for_unassociated_client(void) {
+ * network by name and is not on it.
+ *
+ * #94 changed what this asserts, deliberately. The version before it
+ * pinned ALERT_SEV_WARN for a bare "remembers the name" observation and
+ * the rule's own comment already conceded that "a former guest's phone
+ * produces it honestly" — so the assertion was pinning the over-claim,
+ * not guarding against a regression. A returning employee, a roaming
+ * device and an incomplete capture all satisfy the same precondition.
+ * Uncorroborated it is now LOW with a low confidence, and the detail
+ * describes the observation ("probed for") instead of naming an intent. */
+static void test_my_net_recon_uncorroborated_is_low_and_unqualified(void) {
     alerts_clear(); ownership_clear();
     ownership_add_ssid("CorpWiFi");
     sloth_state_t s; seed_state(&s);
@@ -1163,10 +1172,170 @@ static void test_my_net_recon_fires_for_unassociated_client(void) {
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
     ASSERT(idx >= 0);
-    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
     ASSERT(strstr(s.alerts[idx].detail, "02:aa:bb:cc:dd:ee") != NULL);
     ASSERT(strstr(s.alerts[idx].detail, "CorpWiFi") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "probed for") != NULL);
+    /* No corroboration, so nothing here may be called reconnaissance. */
+    ASSERT(strstr(s.alerts[idx].detail, "recon") == NULL);
+    ASSERT(s.alerts[idx].confidence > 0);
+    ASSERT_LT(s.alerts[idx].confidence, 50);
+    /* The type id and the dedup key are part of the external contract
+     * and do not move with the wording (MISSION §4.3). */
+    ASSERT_STR(s.alerts[idx].title, "MY_NET_RECON");
     ASSERT(strstr(s.alerts[idx].key, "myrecon:02:aa:bb:cc:dd:ee") != NULL);
+}
+
+/* Corroboration is a positive observation, and sustained repeated
+ * probing is one: a device that keeps asking for the network by name
+ * over ten minutes is doing something a passer-by does not. */
+static void test_my_net_recon_sustained_probing_is_corroborated(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    add_pnl(&s, mac, "CorpWiFi");
+    time_t now = time(NULL);
+    s.pnl_clients[0].first_seen  = now - 900;
+    s.pnl_clients[0].last_seen   = now;
+    s.pnl_clients[0].probe_count = 60;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "recon") != NULL);
+    ASSERT_GT(s.alerts[idx].confidence, 40);
+    /* Still a hypothesis about a radio — never about a person, and
+     * never certain. */
+    ASSERT_LT(s.alerts[idx].confidence, 100);
+    ASSERT(strstr(s.alerts[idx].detail, "person") == NULL);
+}
+
+/* A device naming more than one designated network is the second
+ * corroborator: knowing two of the operator's SSIDs is not what a
+ * passing stranger's phone carries. */
+static void test_my_net_recon_multiple_designated_ssids_corroborate(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_ssid("CorpGuest");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    pnl_client_t *c = &s.pnl_clients[s.pnl_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac, mac, 6);
+    snprintf(c->ssids[0], 33, "CorpWiFi");
+    snprintf(c->ssids[1], 33, "CorpGuest");
+    c->ssid_count  = 2;
+    c->probe_count = 4;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "recon") != NULL);
+}
+
+/* A randomised MAC is default behaviour on every current handset, so it
+ * describes the phone population and not an adversary. On its own it
+ * must not corroborate anything. */
+static void test_my_net_recon_random_mac_alone_does_not_corroborate(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};   /* locally administered */
+    add_pnl(&s, mac, "CorpWiFi");
+    s.pnl_clients[0].mac_random = 1;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+}
+
+/* Regression from #94: the probing MAC and the associating MAC are the
+ * same radio. A handset probes with a rotating address and associates
+ * with its per-network one; matching on the exact MAC missed that and
+ * accused the operator's own associated device. The correlation the
+ * seqnum tracker already publishes is the link. */
+static void test_my_net_recon_randomised_probe_with_real_assoc_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t probe_mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t real_mac[6]  = {0xa0,0xb1,0xc2,0xd3,0xe4,0xf5};
+    uint8_t bssid[6]     = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_pnl(&s, probe_mac, "CorpWiFi");
+    s.pnl_clients[0].first_seen  = time(NULL) - 900;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 60;
+    /* The real address is on the designated network. */
+    add_assoc_entry(&s, real_mac, bssid, "CorpWiFi");
+    /* ...and the correlator ties the two addresses to one radio. */
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, probe_mac, 6);
+    memcpy(c->mac_b, real_mac,  6);
+    c->mac_a_random = 1;
+    c->gap = 2; c->fwd_gap = 2; c->confidence = 70;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* Same case, correlation stored the other way round — the pair is
+ * unordered and the exoneration must not depend on which slot won. */
+static void test_my_net_recon_correlated_assoc_either_slot(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t probe_mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t real_mac[6]  = {0xa0,0xb1,0xc2,0xd3,0xe4,0xf5};
+    uint8_t bssid[6]     = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    add_pnl(&s, probe_mac, "CorpWiFi");
+    add_assoc_entry(&s, real_mac, bssid, "CorpWiFi");
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, real_mac,  6);
+    memcpy(c->mac_b, probe_mac, 6);
+    c->gap = 2; c->fwd_gap = 2; c->confidence = 70;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* A correlation to a MAC that is associated to *somebody else's*
+ * network exonerates nothing. */
+static void test_my_net_recon_correlated_foreign_assoc_still_fires(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    sloth_state_t s; seed_state(&s);
+    uint8_t probe_mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t real_mac[6]  = {0xa0,0xb1,0xc2,0xd3,0xe4,0xf5};
+    uint8_t foreign[6]   = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_pnl(&s, probe_mac, "CorpWiFi");
+    add_assoc_entry(&s, real_mac, foreign, "Cafe-Net");
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, probe_mac, 6);
+    memcpy(c->mac_b, real_mac,  6);
+    c->gap = 2; c->fwd_gap = 2; c->confidence = 70;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON) >= 0);
+}
+
+/* The operator's roster is the answer to "returning employee". A device
+ * the operator wrote down as theirs is not reconnoitring them. */
+static void test_my_net_recon_rostered_device_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CorpWiFi");
+    ownership_add_known_mac("a0:b1:c2:d3:e4:f5");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0xa0,0xb1,0xc2,0xd3,0xe4,0xf5};
+    add_pnl(&s, mac, "CorpWiFi");
+    s.pnl_clients[0].first_seen  = time(NULL) - 900;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 60;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
 }
 
 /* Association is the exoneration — the operator's own users all
@@ -6409,7 +6578,14 @@ void run_alerts_tests(void) {
     RUN_TEST(test_infrastructure_peers_clamps_neighbor_count);
 
     TEST_SUITE("alerts: operator-designated networks (#52)");
-    RUN_TEST(test_my_net_recon_fires_for_unassociated_client);
+    RUN_TEST(test_my_net_recon_uncorroborated_is_low_and_unqualified);
+    RUN_TEST(test_my_net_recon_sustained_probing_is_corroborated);
+    RUN_TEST(test_my_net_recon_multiple_designated_ssids_corroborate);
+    RUN_TEST(test_my_net_recon_random_mac_alone_does_not_corroborate);
+    RUN_TEST(test_my_net_recon_randomised_probe_with_real_assoc_no_fire);
+    RUN_TEST(test_my_net_recon_correlated_assoc_either_slot);
+    RUN_TEST(test_my_net_recon_correlated_foreign_assoc_still_fires);
+    RUN_TEST(test_my_net_recon_rostered_device_no_fire);
     RUN_TEST(test_my_net_recon_associated_client_no_fire);
     RUN_TEST(test_my_net_recon_assoc_by_designated_bssid_no_fire);
     RUN_TEST(test_my_net_recon_unrelated_assoc_still_fires);

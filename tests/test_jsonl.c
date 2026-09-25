@@ -1147,6 +1147,47 @@ static void test_dedup_seqnum_suppress_then_change(void) {
     ASSERT(line_count(slurp(tmp_path)) == 2);
 }
 
+/* A seqnum_correlation row must carry the evidence, not just the verdict
+ * (#94). Every field below is additive: the pre-#94 names keep their
+ * meaning and their values, so a consumer coded against the old shape
+ * still reads it, and DB_SCHEMA_VERSION does not move. */
+static void test_seqnum_correlation_emits_evidence_fields(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_correlation_t *c = &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    c->mac_a[0] = 0xa0; c->mac_b[0] = 0x02;
+    c->mac_b_random = 1;
+    c->gap          = 3;
+    c->dt_ms        = 2000;
+    c->a_count      = 40;
+    c->b_count      = 12;
+    c->fwd_gap      = 3;
+    c->confidence   = 74;
+    c->window_start = 1700000000;
+    c->window_end   = 1700000006;
+    c->a_hist_n     = 8;
+    c->b_hist_n     = 6;
+    c->a_is_earlier = 1;
+
+    open_fresh();
+    jsonl_emit_seqnum_correlations(&s);
+    jsonl_close();
+    const char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* Pre-#94 fields, unchanged. */
+    ASSERT(contains(body, "\"gap\":3"));
+    ASSERT(contains(body, "\"dt_ms\":2000"));
+    ASSERT(contains(body, "\"a_count\":40"));
+    /* Additive. */
+    ASSERT(contains(body, "\"fwd_gap\":3"));
+    ASSERT(contains(body, "\"confidence\":74"));
+    ASSERT(contains(body, "\"window_start\":1700000000"));
+    ASSERT(contains(body, "\"window_end\":1700000006"));
+    ASSERT(contains(body, "\"a_hist_n\":8"));
+    ASSERT(contains(body, "\"b_hist_n\":6"));
+    ASSERT(contains(body, "\"a_is_earlier\":1"));
+}
+
 /* ── per-record() integration (a parallel write through the log API) ── */
 
 static void test_dns_log_record_writes_jsonl(void) {
@@ -1361,6 +1402,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_dedup_distinct_macs_independent);
     RUN_TEST(test_dedup_reset_reemits_baseline);
     RUN_TEST(test_dedup_seqnum_suppress_then_change);
+    RUN_TEST(test_seqnum_correlation_emits_evidence_fields);
 
     TEST_SUITE("jsonl escaping");
     RUN_TEST(test_json_escapes_quotes_and_backslash);

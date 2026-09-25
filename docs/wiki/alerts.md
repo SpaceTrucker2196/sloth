@@ -121,6 +121,58 @@ configured nothing above applies and the heuristics are exactly as
 slice 1 left them — an operator who never writes a file must not
 silently lose detection.
 
+### Corroboration before intent (#94)
+
+The same doctrine reaches the rules whose *finding is about a person's
+behaviour* rather than a protocol state. `MY_NET_RECON` is the case an
+external CISO/GRC review raised: it fires when a client's PNL names a
+designated SSID and no association to that network was observed, and
+that precondition is satisfied by at least four innocent situations —
+a returning employee, a device roaming the operator's own APs, a capture
+that never saw the association, and a handset probing with a rotating
+address while associated under its per-network one.
+
+Calling that *reconnaissance* names an intent the evidence does not
+carry. Since #94:
+
+- **Uncorroborated it is LOW at 25 % confidence**, and the detail
+  reports the observation (`probed for designated network …
+  uncorroborated, benign explanations include a returning device or an
+  unobserved association`). The word *reconnaissance* does not appear.
+- **WARN and the reconnaissance framing require positive
+  corroboration** — sustained probing (≥ 600 s span and ≥ 20 probes) or
+  a PNL naming two or more designated networks. The detail names which
+  corroborator fired, so the operator weighs the evidence rather than
+  the label.
+- Two things deliberately **do not** corroborate. A randomised MAC is
+  default behaviour on every current handset, so it describes the phone
+  population. And the *absence* of an observed association is not
+  evidence of anything — an incomplete capture is precisely the benign
+  case this rule has to respect. Absence of evidence never corroborates.
+- Three exonerations: association to a designated BSSID/SSID, the
+  operator's `--known-mac` roster, and association by a
+  **seqnum-correlated sibling address**. The last one closes the
+  randomised-probe / real-association case, where matching on the exact
+  MAC accused a device that had been sitting on the network all along.
+  For an *exoneration* any reported correlation counts — the safe error
+  is to stay quiet, so it does not wait for the strong score a positive
+  claim would need.
+
+### Records are not conclusions about people
+
+Two families here produce records that can be read as identifying an
+individual, and both are bounded in writing rather than left to the
+reader: `MY_NET_RECON` above, and the seqnum correlation that feeds it
+([[mac-randomisation]]).
+
+For both: a MAC address can qualify as **personal data** (UK ICO
+guidance on Wi-Fi location analytics), and **hashing a MAC does not make
+longitudinal tracking anonymous**. **These records alone must not be
+used for personnel action, physical identification of an individual, or
+automated containment.** Sloth is the eyes, not the hands — MISSION §2.5
+puts the consequences on the operator, which only works if sloth is
+honest about what it actually saw.
+
 ### Canonical pair keys
 
 A finding about a *pair* keys on the pair, not on the SSID:

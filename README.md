@@ -21,7 +21,7 @@ injects packets, never scans, and never modifies kernel state — it observes wh
 your host already sees and turns it into **35 live views** and **61 passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
-capture, hidden-SSID reveal, seqnum-based MAC-randomisation deanonymisation),
+capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
 and an optional JSONL forensic log.
 
 📖 **Per-view deep dives live under [`docs/views/`](docs/views/)** — each
@@ -33,7 +33,7 @@ for in normal vs anomalous traffic.
 > client MAC, RSN / cipher / AKM / MFP inventory from beacons,
 > [EAPOL / PMKID / 4-way handshake capture](docs/views/eapol.md) with
 > hashcat-22000 export, hidden-SSID reveal, MAC-randomisation
-> [sequence-number deanonymisation](docs/views/seqnum.md), and a
+> [sequence-number correlation](docs/views/seqnum.md), and a
 > dashboard alert-hot IP override that paints any IP appearing in a
 > CRIT alert deep-red across every panel for 1 h. See the v1.1
 > [release notes](https://github.com/SpaceTrucker2196/sloth/releases/tag/v1.1.0)
@@ -101,7 +101,7 @@ for in normal vs anomalous traffic.
 |------|---------------|
 | [**PNL**](docs/views/pnl.md)         | Per-MAC Preferred Network List — every directed probe-request's source MAC aggregated with the unique set of SSIDs it has probed for. Randomised MACs are flagged so randomised vs burned-in is one glance. A device's PNL fingerprints its owner. |
 | [**EAPOL**](docs/views/eapol.md)     | Captured EAPOL-Key frames + 4-way handshake state machine. M1 with a PMKID KDE = one-frame offline-crack vector. M1+M2 together = full handshake. `--eapol-dir DIR` writes captures in hashcat 22000 format. |
-| [**Seqnum**](docs/views/seqnum.md)   | Sequence-number-based MAC-randomisation deanonymisation. Pairs of MACs whose seqnum trails overlap within 64 seqnums / 30 s are the same physical radio across a MAC rotation. |
+| [**Seqnum**](docs/views/seqnum.md)   | Sequence-number correlation across MAC rotations. Reports pairs of addresses whose counters are *consistent with* one physical radio, with a calibrated score and the evidence window behind it — a hypothesis about a radio, never an identification of a person. `--no-correlate` switches it off. |
 | [**Assoc**](docs/views/assoc.md)     | Client ↔ AP association inventory. Each row is a (BSSID, STA) pair we've observed confirmation for: EAPOL handshake completed, assoc-response status=0, or reassoc-response status=0. Disassoc / deauth removes the entry. |
 
 ### Output
@@ -168,7 +168,9 @@ The in-TUI `[n]` names/numeric toggle now gates resolution as well as display: w
 
 - **`sloth --my-ssid SSID`** / **`sloth --my-bssid BSSID`** (both repeatable, max 16 each) — tell sloth which networks are *yours*. This is a labelling input only: nothing about capture changes and nothing is transmitted, so the passive guarantee in [MISSION.md §2](MISSION.md) is untouched.
 
-  It answers the question sloth previously could not be asked — *is anyone reconnoitring my network?* A client whose Preferred Network List names a designated SSID while it is **not associated** to that network raises `MY_NET_RECON`. Association is the exoneration, checked by designated BSSID *or* SSID, so your own users never trip it and you do not have to enumerate every BSSID of a multi-AP deployment.
+  It answers the question sloth previously could not be asked — *is anyone reconnoitring my network?* A client whose Preferred Network List names a designated SSID while it is **not associated** to that network raises `MY_NET_RECON`. Association is the exoneration, checked by designated BSSID *or* SSID, so your own users never trip it and you do not have to enumerate every BSSID of a multi-AP deployment. A correlated sibling address counts too — a handset that probes with a rotating MAC and associates with its per-network one is not reconnoitring you — and so does the `--known-mac` roster.
+
+  The alert is **LOW until something corroborates it** (#94). A returning employee, a roaming device and a capture that simply missed the association all satisfy the bare observation, so uncorroborated it reports what was seen — *probed for* your network — and does not call it reconnaissance. Sustained probing, or a PNL naming two or more of your networks, escalates it to WARN and says which corroborator fired. **These records alone are not grounds for personnel action or physical identification**; see [docs/wiki/alerts.md](docs/wiki/alerts.md).
 
   Designations also sharpen two existing detectors: deauth and auth floods aimed at a designated BSSID escalate WARN → CRIT, and a designated BSSID is never named the impostor half of an evil-twin pair (which the RSSI heuristic would otherwise often get backwards, since your own AP is usually the closest one).
 

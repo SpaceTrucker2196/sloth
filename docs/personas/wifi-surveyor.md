@@ -261,8 +261,19 @@ enumerate every BSSID of a multi-AP site.
 It fires unattended, which was the actual requirement — the overnight
 Pi run now answers this question without him awake for it. Note the
 benign trigger, which he will need to explain in the report: a former
-guest's phone honestly remembers the network. The alert is WARN, not
-CRIT, for exactly that reason.
+guest's phone honestly remembers the network.
+
+**Rescored again 2026-09-25 after #94** — still `PASS`, but the answer
+is now graded, which is what a report he signs actually needs. The bare
+observation is **LOW** and worded as *probed for* his network, because a
+returning employee, a device roaming his own APs and a capture that
+missed the association all produce it identically. It reaches **WARN**
+and the reconnaissance framing only with corroboration: sustained
+probing, or a PNL naming two or more of his networks. A rotating probe
+address correlated with an associated real one, and anything on his
+roster, are exonerated outright. He must also read the standing limit —
+these records alone are not grounds for personnel action or for pointing
+at a person in a room.
 
 #### S4.2 Someone is attacking my AP specifically (L)
 

@@ -480,6 +480,7 @@ static void print_usage(const char *argv0) {
             "[--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
+            "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
@@ -567,6 +568,20 @@ static void print_usage(const char *argv0) {
             "                     is never silent. Does not re-enable per-packet\n"
             "                     lookups on the capture thread, which stay\n"
             "                     passive unconditionally.\n"
+            "  --no-correlate     disable longitudinal device correlation: the\n"
+            "                     [j] seqnum view keeps showing each MAC's own\n"
+            "                     counter trail, but no pair of addresses is\n"
+            "                     linked across a rotation and no\n"
+            "                     seqnum_correlation record is exported or\n"
+            "                     stored. Linking addresses over time is a\n"
+            "                     different purpose from observing the air, so\n"
+            "                     it is switched separately. On by default.\n"
+            "  --correlate-retain SECS\n"
+            "                     evidence retention for correlation (default\n"
+            "                     300). A pair is only reported while BOTH\n"
+            "                     addresses have been heard inside this window,\n"
+            "                     counted from now — nothing is inferred from\n"
+            "                     two trails that were close an hour ago.\n"
             "  --iface NAME       restrict the data stream to NAME (repeatable).\n"
             "                     Launch-time form of the interface view's [y]\n"
             "                     deselect, for headless deployments: frames\n"
@@ -783,6 +798,16 @@ int main(int argc, char **argv) {
             strict_lock = 1;
         } else if (!strcmp(argv[i], "--data-socket-allow-remote")) {
             ds_allow_remote = 1;
+        } else if (!strcmp(argv[i], "--no-correlate")) {
+            seqnum_corr_set_enabled(0);
+        } else if (!strcmp(argv[i], "--correlate-retain") && i + 1 < argc) {
+            int secs = atoi(argv[++i]);
+            if (secs < 1) {
+                fprintf(stderr, "sloth: --correlate-retain needs a positive "
+                                "number of seconds\n");
+                return 2;
+            }
+            seqnum_corr_set_retain_secs(secs);
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
@@ -1015,6 +1040,19 @@ int main(int argc, char **argv) {
         if (!no_discovery)
             discovery_publish(data_socket, NULL);
     }
+
+    /* Say out loud whether addresses are being linked over time, and for
+     * how long the evidence is kept (#94). An operator who has to read
+     * the source to find out that a capability is on cannot answer for
+     * it, and this is the one capability in sloth whose output can be
+     * mistaken for an identification. */
+    if (seqnum_corr_enabled())
+        fprintf(stderr, "sloth: device correlation ON (seqnum trails across "
+                        "MAC rotations, evidence retained %ds; hypothesis "
+                        "only — not identification)\n",
+                seqnum_corr_retain_secs());
+    else
+        fprintf(stderr, "sloth: device correlation OFF (--no-correlate)\n");
 
 #ifdef WITH_PCAP
     /* #85: both workers start here, after the scope policy was sealed

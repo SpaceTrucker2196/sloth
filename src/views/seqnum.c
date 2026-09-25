@@ -7,12 +7,15 @@
 #include "seqnum_track.h"
 #include "views/seqnum.h"
 
-/* VIEW_SEQNUM — sequence-number-based deanonymisation.
+/* VIEW_SEQNUM — sequence-number correlation across MAC rotations.
  *
- * Top half: correlated MAC pairs (sorted by smallest seqnum gap = most
- * likely match). When at least one MAC is randomised and the gap is
- * tiny, this is strong evidence that the "two" MACs are the same
- * physical radio.
+ * Top half: possible device correlations, sorted by descending
+ * confidence, each shown with the score and the observation window it
+ * rests on. The wording is deliberate (#94): a shared forward counter is
+ * *consistent with* one radio rotating its address, and independent
+ * radios in a dense room produce the same pattern at a rate this panel's
+ * score is calibrated against. The panel offers a hypothesis about a
+ * radio — never an identification of a person.
  *
  * Bottom half: raw per-MAC seqnum trail for forensic context. */
 
@@ -39,21 +42,30 @@ void view_seqnum_draw(const sloth_state_t *s) {
 
     /* ── Correlations ───────────────────────────────────── */
     tui_dim();
-    TPRINT(" Likely-same-device pairs (sorted by smallest seqnum gap)\n");
-    TPRINT(" %-17s %-3s   %-17s %-3s   %4s  %6s  %s\n",
-           "MAC A", "rnd", "MAC B", "rnd", "gap", "dt", "verdict");
-    TPRINT(" %-17s %-3s   %-17s %-3s   %4s  %6s  %s\n",
+    if (!seqnum_corr_enabled()) {
+        TPRINT(" Possible device correlation: OFF (--no-correlate)\n");
+    } else {
+        TPRINT(" Possible device correlation — same-radio hypothesis, "
+               "not identification (retain %ds)\n", seqnum_corr_retain_secs());
+    }
+    TPRINT(" %-17s %-3s   %-17s %-3s   %4s  %6s  %-11s  %s\n",
+           "MAC A", "rnd", "MAC B", "rnd", "fwd", "dt", "window", "support");
+    TPRINT(" %-17s %-3s   %-17s %-3s   %4s  %6s  %-11s  %s\n",
            "-----------------", "---", "-----------------", "---",
-           "----", "------", "--------------------------------");
+           "----", "------", "-----------", "--------------------------");
     tui_normal();
 
     if (s->seqnum_correlation_count == 0) {
         tui_dim();
-        TPRINT("  (no correlations yet — needs >=2 MACs with overlapping seqnum trails)\n");
-        if (s->probe_iface[0]) {
-            TPRINT("  Monitoring on ");
-            tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
-            TPRINT(" — wait for randomised devices to probe across MAC rotations.\n");
+        if (!seqnum_corr_enabled()) {
+            TPRINT("  (longitudinal correlation disabled — per-MAC trails below are unaffected)\n");
+        } else {
+            TPRINT("  (no correlations — needs 2 MACs whose counters continue forward across a rotation)\n");
+            if (s->probe_iface[0]) {
+                TPRINT("  Monitoring on ");
+                tui_bright(); TPRINT("%s", s->probe_iface); tui_dim();
+                TPRINT(" — wait for a randomised device to probe across a MAC rotation.\n");
+            }
         }
         tui_normal();
     } else {
@@ -63,9 +75,12 @@ void view_seqnum_draw(const sloth_state_t *s) {
             fmt_mac(c->mac_a, a, sizeof(a));
             fmt_mac(c->mac_b, b, sizeof(b));
 
-            /* Heat the row when at least one MAC is randomised AND
-             * the gap is small — that's the strongest signal. */
-            int strong = (c->mac_a_random || c->mac_b_random) && c->gap <= 8;
+            /* Heat is reserved for the one shape that distinguishes a
+             * rotation from a coincidence — see seqnum_corr_is_strong().
+             * A high score alone no longer earns it: the dense fixture in
+             * tests/test_seqnum_track.c measures coincidences that score
+             * into the same band. */
+            int strong = seqnum_corr_is_strong(c);
 
             if (i == s->seqnum_corr_sel) tui_sel();
             else if (strong)              tui_heat(1.0);
@@ -86,14 +101,30 @@ void view_seqnum_draw(const sloth_state_t *s) {
             if (i == s->seqnum_corr_sel) tui_sel();
             else if (strong)              tui_heat(1.0);
             else                          tui_normal();
-            TPRINT("   %4d  %4lds  ", c->gap, c->dt_ms / 1000);
+            TPRINT("   %4d  %4lds  ", c->fwd_gap, c->dt_ms / 1000);
 
-            if (strong)              { tui_heat(1.0); TPRINT("LIKELY SAME DEVICE"); }
-            else if (c->gap <= 32)   { tui_normal();   TPRINT("possible"); }
-            else                     { tui_dim();      TPRINT("weak"); }
+            /* The window the pair was decided on, so a score is never
+             * read without the evidence behind it. */
+            tui_dim();
+            {
+                long win = (long)(c->window_end - c->window_start);
+                if (win < 0) win = 0;
+                TPRINT("%2dv%-2d/%-4lds  ", c->a_hist_n, c->b_hist_n, win);
+            }
+
+            /* Wording: a score and a qualifier. Never a verdict, and
+             * never "same device" — let alone "same person". */
+            if (strong)                  { tui_heat(1.0); TPRINT("%d%% possible rotation", c->confidence); }
+            else if (c->confidence >= 45) { tui_normal();  TPRINT("%d%% moderate", c->confidence); }
+            else                          { tui_dim();     TPRINT("%d%% weak", c->confidence); }
             tui_reset();
             TPRINT("\n");
         }
+        tui_dim();
+        TPRINT("  A correlation is evidence about a radio. Not an identification of a "
+               "person, and not\n  grounds on its own for personnel action, physical "
+               "location, or automated containment.\n");
+        tui_normal();
     }
 
     /* ── Per-MAC table ──────────────────────────────────── */

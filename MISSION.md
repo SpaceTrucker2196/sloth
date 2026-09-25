@@ -134,8 +134,9 @@ truth for this number; if the two disagree, the `#define` is right):
   `tests/test_research_corpus.c`).
 - **WiFi SIGINT layer**: PNL aggregation, RSN/AKM/MFP inventory,
   EAPOL / PMKID / 4-way handshake capture with hashcat-22000 export,
-  hidden-SSID reveal, sequence-number MAC-randomisation
-  deanonymisation, KARMA / evil-twin / Pineapple detection,
+  hidden-SSID reveal, scored sequence-number correlation across
+  MAC rotations (a hypothesis about a radio, never an identification
+  of a person — #94), KARMA / evil-twin / Pineapple detection,
   per-AP fingerprinting (PHY tier, vendor IEs, WPS state, 802.11k
   neighbour reports, RNR for 6 GHz).
 - **Threat intel** matcher in `src/threat_intel.c` against an embedded
