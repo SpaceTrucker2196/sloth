@@ -477,7 +477,8 @@ static void handle_key(sloth_state_t *s, int key) {
 static void print_usage(const char *argv0) {
     fprintf(stderr,
             "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--no-discovery] [--out-format FORMAT]\n"
+            "[--data-socket SPEC] [--data-socket-allow-remote]\n"
+            "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
@@ -511,7 +512,22 @@ static void print_usage(const char *argv0) {
             "                     If SPEC is omitted, defaults to\n"
             "                     tcp:127.0.0.1:8765 (loopback only).\n"
             "                     Read-only: nothing is ever read from the\n"
-            "                     socket. Caller picks the bind address.\n"
+            "                     socket. The stream carries no authentication\n"
+            "                     and no encryption, so a non-loopback bind is\n"
+            "                     refused unless --data-socket-allow-remote is\n"
+            "                     also given. unix: sockets are created 0600 —\n"
+            "                     the kernel checks the peer's credentials, so\n"
+            "                     that is the recommended deployment.\n"
+            "  --data-socket-allow-remote\n"
+            "                     permit --data-socket to bind an address\n"
+            "                     outside 127.0.0.0/8 (including the 0.0.0.0\n"
+            "                     wildcard). Off by default. Every observation\n"
+            "                     sloth makes — SSIDs, MACs, hostnames,\n"
+            "                     captured credentials — becomes readable by\n"
+            "                     anyone who can reach the port. Prefer a\n"
+            "                     tunnel: ssh -L 8765:127.0.0.1:8765 user@host,\n"
+            "                     stunnel, or examples/forwarder/. See\n"
+            "                     docs/wiki/data-socket-exposure.md.\n"
             "  --out-format FORMAT\n"
             "                     output format for -o FILE and --data-socket.\n"
             "                     One of: jsonl (default), cef, syslog.\n"
@@ -703,6 +719,7 @@ int main(int argc, char **argv) {
     int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
     int         allow_active = 0;        /* --allow-active (#84) */
     int         strict_lock  = 0;        /* --strict       (#84) */
+    int         ds_allow_remote = 0;     /* --data-socket-allow-remote (#86) */
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
@@ -764,6 +781,8 @@ int main(int argc, char **argv) {
             allow_active = 1;
         } else if (!strcmp(argv[i], "--strict")) {
             strict_lock = 1;
+        } else if (!strcmp(argv[i], "--data-socket-allow-remote")) {
+            ds_allow_remote = 1;
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
@@ -982,8 +1001,8 @@ int main(int argc, char **argv) {
                     (long)db_previous_session_end());
     }
     if (data_socket) {
-        if (data_socket_init(data_socket) != 0) {
-            /* error already printed by data_socket_init */
+        if (data_socket_init_ex(data_socket, ds_allow_remote) != 0) {
+            /* error already printed by data_socket_init_ex */
             return 1;
         }
         fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);

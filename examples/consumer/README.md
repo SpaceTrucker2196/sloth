@@ -31,8 +31,15 @@ or localhost only):
 ```sh
 sudo ./sloth --data-socket unix:/tmp/sloth.sock
 sudo ./sloth --data-socket tcp:127.0.0.1:8765
-sudo ./sloth --data-socket tcp:100.64.0.5:8765       # e.g. a Tailscale IP
+sudo ./sloth --data-socket tcp:100.64.0.5:8765 --data-socket-allow-remote
 ```
+
+A non-loopback bind is refused without `--data-socket-allow-remote`:
+the stream is unauthenticated and unencrypted, so anyone who can reach
+the port reads every observation. Prefer keeping sloth on loopback and
+tunnelling — `ssh -N -L 8765:127.0.0.1:8765 user@sensor` — then point
+this script at `tcp:127.0.0.1:8765` on your own machine. See
+[`docs/wiki/data-socket-exposure.md`](../../docs/wiki/data-socket-exposure.md).
 
 Then point this script at the same spec:
 

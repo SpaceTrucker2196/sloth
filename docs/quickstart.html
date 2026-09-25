@@ -214,7 +214,7 @@ make mutate           # verify-the-verifier campaign</pre>
 sudo ./sloth -i eth0                               # pin capture iface
 sudo ./sloth -o /var/log/sloth.jsonl               # forensic stream
 sudo ./sloth --data-socket unix:/tmp/sloth.sock    # live stream
-sudo ./sloth --data-socket tcp:100.64.0.5:8765     # over Tailscale
+sudo ./sloth --data-socket tcp:100.64.0.5:8765 --data-socket-allow-remote  # over Tailscale; no auth, no TLS
 sudo ./sloth --pcap-dir   /var/sloth/pcap          # per-alert pcap
 sudo ./sloth --eapol-dir  /tmp/sloth-eapol         # hashcat export</pre>
           </div>

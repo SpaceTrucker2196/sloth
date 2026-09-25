@@ -5,19 +5,48 @@
  *
  * Supports two transports:
  *   "unix:/var/run/sloth.sock"  — UNIX-domain stream, for local SIEMs.
+ *                                 Created 0600: the kernel checks the
+ *                                 peer's credentials on connect, so
+ *                                 filesystem permissions *are* the
+ *                                 authentication. This is the
+ *                                 recommended deployment.
  *   "tcp:HOST:PORT"             — TCP listen on the literal HOST:PORT.
- *                                 Caller picks the bind address (e.g.
- *                                 the host's Tailscale IP). No magic
- *                                 wildcards — pass 0.0.0.0 explicitly
- *                                 if you really mean it. */
+ *                                 Loopback (127.0.0.0/8) binds freely.
+ *                                 Anything else — including the 0.0.0.0
+ *                                 wildcard — is refused unless the
+ *                                 operator passes the explicit opt-in
+ *                                 (see data_socket_init_ex), because
+ *                                 the stream carries no authentication
+ *                                 and no encryption (#86). */
 
 #ifndef SLOTH_DATA_SOCKET_H
 #define SLOTH_DATA_SOCKET_H
 
-/* Parse `spec` and start listening. Returns 0 on success, -1 on error
+/* Parse `spec` and start listening, local transports only. Equivalent
+ * to data_socket_init_ex(spec, 0). Returns 0 on success, -1 on error
  * (with a one-line diagnostic on stderr). Idempotent if called twice
  * with the same arg — the second call replaces the first. */
 int  data_socket_init(const char *spec);
+
+/* As data_socket_init, but `allow_remote` non-zero carries the
+ * operator's explicit consent to bind a non-loopback address. Without
+ * it a routable spec is refused *before any socket is created*, and the
+ * diagnostic names the flag that would permit it. With it, the bind
+ * proceeds and a warning naming the exposed address and port is printed
+ * — the guard is a speed bump on a deliberate choice, not a veto.
+ *
+ * Nothing about `unix:` or loopback TCP depends on this argument. */
+int  data_socket_init_ex(const char *spec, int allow_remote);
+
+/* Would `spec` put the stream on an address something other than this
+ * host can reach? 1 = yes (routable literal, or the 0.0.0.0 wildcard),
+ * 0 = no (127.0.0.0/8, or a `unix:` path, which never reaches the
+ * wire), -1 = the spec is malformed and would be rejected anyway.
+ *
+ * Fails closed by construction: a caller gating on `== 0` treats
+ * anything it cannot parse as unsafe. Exported so the policy can be
+ * tested directly against addresses a test is not permitted to bind. */
+int  data_socket_spec_is_remote(const char *spec);
 
 /* Call from the main poll loop. Accepts any pending connections,
  * flushes queued bytes to clients that have become writable, and

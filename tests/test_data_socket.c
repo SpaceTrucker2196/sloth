@@ -1046,6 +1046,154 @@ static void test_nonblock_failure_on_accept_drops_client(void) {
     data_socket_cleanup();
 }
 
+/* ── Remote-bind guard (#86) ──────────────────────────────────
+ *
+ * The classifier is the whole policy, so it is tested directly and
+ * exhaustively: no socket is created, so these cases cost nothing and
+ * can cover addresses a test is not allowed to bind. Binding a routable
+ * listener is forbidden here (MISSION §2 / the repo's test rules), so
+ * the init-level tests only ever assert the *refusal* path for routable
+ * specs — that path returns before socket() is ever called. */
+
+/* The loopback net is 127.0.0.0/8, not the single address 127.0.0.1.
+ * An operator already bound to 127.0.0.2 is just as unreachable from
+ * off-host and must not start needing a new flag. */
+static void test_spec_is_remote_accepts_whole_loopback_net(void) {
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:8765"),       0);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.2:8765"),       0);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.1.2.3:1"),          0);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.255.255.254:65535"), 0);
+    /* A filesystem socket never reaches the wire at all. */
+    ASSERT_EQ(data_socket_spec_is_remote("unix:/var/run/sloth.sock"), 0);
+    ASSERT_EQ(data_socket_spec_is_remote("unix:/tmp/x"),              0);
+}
+
+/* Everything outside 127/8 is reachable by somebody else. 0.0.0.0 is
+ * the worst case, not an exception: it binds every interface. */
+static void test_spec_is_remote_flags_routable_and_wildcard(void) {
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:0.0.0.0:8765"),         1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:192.168.1.10:8765"),    1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:10.0.0.1:1"),           1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:100.64.0.5:8765"),      1);  /* Tailscale CGNAT */
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:8.8.8.8:53"),           1);
+    /* Boundaries of the loopback /8 — one below and one above. */
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:126.255.255.255:1"),    1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:128.0.0.1:1"),          1);
+}
+
+/* A spec the binder would reject must not be classified as "safe" —
+ * the guard has to fail closed, not silently pass malformed input. */
+static void test_spec_is_remote_rejects_malformed(void) {
+    ASSERT_EQ(data_socket_spec_is_remote(NULL),                   -1);
+    ASSERT_EQ(data_socket_spec_is_remote(""),                     -1);
+    ASSERT_EQ(data_socket_spec_is_remote("garbage"),              -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:"),                 -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:nohost"),           -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:999.1.1.1:80"),     -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:0"),      -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:99999"),  -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:8080x"),  -1);
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:"),       -1);
+}
+
+/* The foot-gun this slice exists to guard: a routable bind with no
+ * opt-in must refuse, and must refuse *without* opening the listener.
+ * TEST-NET-1 (RFC 5737) and the wildcard are used because the refusal
+ * happens before socket(), so nothing here can bind even if it broke. */
+static void test_routable_bind_refused_without_optin(void) {
+    ASSERT(data_socket_init("tcp:192.0.2.1:8765")           != 0);
+    ASSERT(data_socket_init_ex("tcp:192.0.2.1:8765", 0)     != 0);
+    ASSERT(data_socket_init("tcp:0.0.0.0:8765")             != 0);
+    ASSERT(data_socket_init_ex("tcp:0.0.0.0:8765", 0)       != 0);
+    /* Refused means no listener: emit and tick stay no-ops. */
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    data_socket_emit("{\"type\":\"test\"}");
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+}
+
+/* The other half of the guard: the opt-in must actually *permit* the
+ * bind, not merely exist. Proving that without opening a routable
+ * listener turns on picking an address the kernel will always refuse:
+ * 192.0.2.1 is TEST-NET-1 (RFC 5737), reserved for documentation and
+ * never assigned to an interface, so bind() returns EADDRNOTAVAIL.
+ *
+ * That errno is the evidence. Refused-by-policy returns before socket()
+ * is ever called, so seeing the kernel's own "cannot assign requested
+ * address" proves the spec got past the guard and all the way to bind.
+ * If a host ever did have this address configured the init would
+ * succeed, the first assertion would fail loudly, and the cleanup below
+ * closes the listener immediately — the pathological case is noisy,
+ * never a silent exposure. */
+static void test_optin_lets_the_bind_reach_the_kernel(void) {
+    errno = 0;
+    int rc = data_socket_init_ex("tcp:192.0.2.1:28765", 1);
+    int err = errno;
+
+    ASSERT(rc != 0);                     /* the kernel refused the address */
+    ASSERT_EQ(err, EADDRNOTAVAIL);       /* ...at bind, i.e. past the guard */
+    ASSERT_EQ(data_socket_has_clients(), 0);
+
+    data_socket_cleanup();
+}
+
+/* The no-regression assertion that matters most: the shipped default
+ * spec is a loopback TCP bind, and it must keep working untouched with
+ * no new flag. Loopback only — never a routable listener. The port is
+ * pid-derived so parallel CI jobs don't collide. */
+static void test_loopback_tcp_bind_needs_no_optin(void) {
+    char spec[64];
+    snprintf(spec, sizeof(spec), "tcp:127.0.0.1:%d",
+             20000 + ((int)getpid() % 10000));
+
+    ASSERT_EQ(data_socket_init(spec), 0);          /* no flag, still binds */
+    data_socket_cleanup();
+
+    ASSERT_EQ(data_socket_init_ex(spec, 1), 0);    /* opt-in changes nothing */
+    data_socket_cleanup();
+}
+
+/* Same guarantee for the recommended deployment: a UNIX socket is
+ * unaffected by the guard in either direction. */
+static void test_unix_bind_unaffected_by_guard(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+
+    ASSERT_EQ(data_socket_init(spec), 0);
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    if (c >= 0) close(c);
+    data_socket_cleanup();
+
+    ASSERT_EQ(data_socket_init_ex(spec, 1), 0);
+    data_socket_cleanup();
+}
+
+/* The docs tell operators that a UNIX socket is kernel-enforced peer
+ * authentication. That is only true if the socket file is actually
+ * private: bind() creates it at the process umask, which on a default
+ * 0022 host is 0755 — world-connectable. Mode must be forced, not
+ * inherited. */
+static void test_unix_socket_is_created_private(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+
+    mode_t old = umask(0);            /* worst case: a permissive umask */
+    int rc = data_socket_init(spec);
+    umask(old);
+    ASSERT_EQ(rc, 0);
+
+    struct stat st;
+    ASSERT_EQ(stat(path, &st), 0);
+    ASSERT_EQ((int)(st.st_mode & 07777), 0600);
+
+    data_socket_cleanup();
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -1088,4 +1236,14 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_tcp_port_rejects_trailing_garbage);
     RUN_TEST(test_nonblock_failure_on_listener_aborts_init);
     RUN_TEST(test_nonblock_failure_on_accept_drops_client);
+
+    TEST_SUITE("data socket (remote-bind guard, #86)");
+    RUN_TEST(test_spec_is_remote_accepts_whole_loopback_net);
+    RUN_TEST(test_spec_is_remote_flags_routable_and_wildcard);
+    RUN_TEST(test_spec_is_remote_rejects_malformed);
+    RUN_TEST(test_routable_bind_refused_without_optin);
+    RUN_TEST(test_optin_lets_the_bind_reach_the_kernel);
+    RUN_TEST(test_loopback_tcp_bind_needs_no_optin);
+    RUN_TEST(test_unix_bind_unaffected_by_guard);
+    RUN_TEST(test_unix_socket_is_created_private);
 }

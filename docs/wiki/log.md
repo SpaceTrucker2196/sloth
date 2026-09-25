@@ -886,3 +886,55 @@ is sequenced after the profile is verified on real hardware. Both halves
 of the DNS lookup API still return a shared static buffer documented
 main-thread-only while the capture thread reaches the decoder path —
 that race predates #84 and was not touched inside a behaviour flip.
+
+---
+
+## 2026-09-25 — data-socket exposure guard (#86, transport half)
+
+**Created page**: [data-socket-exposure.md](data-socket-exposure.md).
+**Updated pages**: [index.md](index.md), [../streaming.html](../streaming.html),
+[../../README.md](../../README.md), [../../examples/README.md](../../examples/README.md).
+
+The Captain's decision on #86 (2026-09-25) was **no crypto in sloth** —
+in-process TLS/mTLS and bearer tokens are rejected, the design is parked
+in #100, and the transport stays local. This slice makes "no remote
+exposure by default" technically true rather than merely conventional,
+and writes down the boundary that replaces the crypto.
+
+- **Remote-bind guard.** A `tcp:` spec outside `127.0.0.0/8` — including
+  the `0.0.0.0` wildcard — is refused unless
+  `--data-socket-allow-remote` is passed; the refusal names the flag and
+  offers the `ssh -L` one-liner. With the flag, the bind proceeds and
+  warns, naming address, port, and the fact that the stream is
+  unauthenticated and unencrypted. The check runs **before `socket()`**,
+  so a bind nobody opted into never reaches the kernel.
+- **Loopback is the whole `/8`, not `127.0.0.1`.** `127.0.0.2` is
+  equally unreachable off-host and an operator using one must not start
+  needing a flag. Classification is done on the address `inet_pton()`
+  parsed, not on the string, and `unix:` is unaffected in both
+  directions. No working configuration changed.
+- **`unix:` sockets are now created 0600.** They were created at the
+  process umask — `0755` on a default `0022` host, i.e.
+  world-connectable. The page states that 0600 plus the uid-ownership
+  check from `f2bf0b5` is kernel-enforced peer authentication, which was
+  not true until this commit: the mode is now forced with `umask` across
+  the `bind()` (not `chmod()` after it, which leaves the socket
+  listening at the looser mode first). This is the recommended
+  deployment and the page says so plainly rather than burying it.
+- **The three supported remote paths, with commands that run**:
+  `ssh -N -L 8765:127.0.0.1:8765 user@sensor`; the new mutual-TLS
+  stunnel templates; and `examples/forwarder/sloth-forward.py`, which
+  connects as a *local* client and pushes outbound to HEC / syslog /
+  Elasticsearch / Loki / Datadog / webhook — so nothing listens remotely
+  on the sensor at all.
+- **`examples/stunnel/`** ships sensor- and reader-side configs with
+  `verify = 2` on both ends, because one-sided TLS protects this stream
+  from a passive listener and not at all from an active one. The README
+  leads with the `accept`/`connect` swap, the one error that fails open.
+  **No systemd unit ships** — `FACTORY.md` §7 keeps deployment under
+  operator control, so the unit is an inline example on the wiki page
+  instead, matching the forwarder README's precedent.
+
+The page is explicit about the one thing sloth cannot assert about
+itself: whether this closes an external reviewer's "remotely exposed"
+finding is the reviewer's sign-off. The auth/TLS half of #86 stays open.

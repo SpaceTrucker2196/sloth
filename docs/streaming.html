@@ -42,8 +42,11 @@
       records on every sink &mdash; file
       (<code>-o FILE</code>), UNIX-domain socket, or TCP
       (<code>--data-socket SPEC</code>). <strong>Read-only by design</strong>:
-      sloth never reads from a connected client. Access control is
-      the operator's job (bind address, UNIX perms, Tailscale ACLs).
+      sloth never reads from a connected client. Read-only is a statement
+      about <em>commands</em>, not data &mdash; the stream carries no
+      authentication and no encryption, so <strong>reachability is the
+      access control</strong>. It stays local unless you explicitly say
+      otherwise.
     </p>
   </div>
 </section>
@@ -69,17 +72,37 @@
           <td class="col-desc">log forwarder pulls / <code>tail -f</code> pipelines</td>
         </tr>
         <tr>
-          <td class="col-name">UNIX-domain</td>
+          <td class="col-name">UNIX-domain <strong>(recommended)</strong></td>
           <td><code>--data-socket unix:/var/run/sloth.sock</code></td>
-          <td class="col-desc">local consumer on the same host</td>
+          <td class="col-desc">local consumer on the same host. Created <code>0600</code>: the kernel checks the peer's credentials on <code>connect()</code>, so filesystem permissions <em>are</em> the authentication &mdash; no keys, nothing to rotate or expire</td>
         </tr>
         <tr>
-          <td class="col-name">TCP</td>
-          <td><code>--data-socket tcp:HOST:PORT</code></td>
-          <td class="col-desc">remote consumer over a trusted transport (Tailscale, private VPN, localhost only)</td>
+          <td class="col-name">TCP (loopback)</td>
+          <td><code>--data-socket tcp:127.0.0.1:8765</code></td>
+          <td class="col-desc">the default. Any local user on the host can read it; nothing off-host can</td>
+        </tr>
+        <tr>
+          <td class="col-name">TCP (routable)</td>
+          <td><code>--data-socket tcp:HOST:PORT --data-socket-allow-remote</code></td>
+          <td class="col-desc">opt-in only. Refused without the flag, and warns when used &mdash; anyone who can reach the port reads every observation. Prefer a tunnel</td>
         </tr>
       </tbody>
     </table>
+
+    <p class="footnote">
+      <strong>Exposure guard.</strong> Binding any address outside
+      <code>127.0.0.0/8</code> &mdash; including the <code>0.0.0.0</code>
+      wildcard &mdash; is refused unless
+      <code>--data-socket-allow-remote</code> is passed, and the refusal
+      names what to add. The whole loopback <code>/8</code> binds freely,
+      and <code>unix:</code> paths are unaffected, so no working
+      configuration changed. To reach the socket from another host, keep
+      sloth on loopback and move the bytes with something built for it:
+      <code>ssh -N -L 8765:127.0.0.1:8765 user@sensor</code>, the mutual-TLS
+      stunnel templates in <code>examples/stunnel/</code>, or push outbound
+      to a SIEM with <code>examples/forwarder/</code>. Full trust boundary:
+      <code>docs/wiki/data-socket-exposure.md</code>.
+    </p>
 
     <p class="footnote">
       <strong>Backpressure.</strong> The socket writer is non-blocking and

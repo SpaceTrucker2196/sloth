@@ -34,7 +34,9 @@ Then open <http://localhost:3000>:
 The `producer` is **not** the real sloth — it's a tiny Python script
 (`mock-sloth.py`) that emits one record per record-type per second
 over TCP. The wire format matches what real sloth produces under
-`sloth --data-socket tcp:0.0.0.0:8765`, so swapping the producer for a
+`sloth --data-socket tcp:0.0.0.0:8765 --data-socket-allow-remote` (the
+wildcard bind needs the opt-in flag, and inside a compose network is
+about the only place it is reasonable), so swapping the producer for a
 real sloth instance is a single line change in `docker-compose.yml`:
 
 ```yaml

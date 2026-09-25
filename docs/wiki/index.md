@@ -81,6 +81,9 @@ source material.
 - [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
+- [[data-socket-exposure]] — who can read the data socket, the
+  `unix:` trust boundary, the remote-bind guard, and the three
+  supported ways to reach it from another host.
 - [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
   retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.

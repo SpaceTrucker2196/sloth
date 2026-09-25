@@ -169,6 +169,65 @@ static int unix_path_removable(const char *path) {
     return 0;
 }
 
+/* Split "HOST:PORT" into its parts. Port is taken after the LAST colon
+ * and must be the entire remaining string — strtol alone accepts a
+ * numeric prefix and drops the rest ("8080x" -> 8080). Returns 0 on
+ * success, -1 with a diagnostic on stderr when `noisy`.
+ *
+ * Shared by the binder and the exposure classifier on purpose: two
+ * parsers would be two chances to disagree about what an operator
+ * typed, and the one that matters is the one the guard consults. */
+static int parse_host_port(const char *host_port, char *host, size_t hsz,
+                           long *port, int noisy) {
+    const char *colon = host_port ? strrchr(host_port, ':') : NULL;
+    if (!colon || colon == host_port) {
+        if (noisy) fprintf(stderr, "data-socket: tcp spec needs HOST:PORT\n");
+        return -1;
+    }
+    size_t hlen = (size_t)(colon - host_port);
+    if (hlen >= hsz) {
+        if (noisy) fprintf(stderr, "data-socket: tcp host too long\n");
+        return -1;
+    }
+    memcpy(host, host_port, hlen);
+    host[hlen] = '\0';
+
+    const char *port_str = colon + 1;
+    char *endptr = NULL;
+    errno = 0;
+    long p = strtol(port_str, &endptr, 10);
+    if (port_str[0] == '\0' || *endptr != '\0' || errno == ERANGE ||
+        p < 1 || p > 65535) {
+        if (noisy) fprintf(stderr, "data-socket: bad port %s\n", port_str);
+        return -1;
+    }
+    *port = p;
+    return 0;
+}
+
+/* Loopback is the whole 127.0.0.0/8, not just 127.0.0.1 — 127.0.0.2 is
+ * equally unreachable from off-host, and an operator already using one
+ * must not suddenly need a flag. 0.0.0.0 lands here as remote, which is
+ * the point: the wildcard binds every interface the host has. */
+static int addr_is_remote(const struct in_addr *a) {
+    return (ntohl(a->s_addr) >> 24) != 127u;
+}
+
+int data_socket_spec_is_remote(const char *spec) {
+    if (!spec || !spec[0]) return -1;
+    /* A filesystem socket has no address to be reachable at. */
+    if (strncmp(spec, "unix:", 5) == 0) return spec[5] ? 0 : -1;
+    if (strncmp(spec, "tcp:", 4) != 0) return -1;
+
+    char host[64];
+    long port = 0;
+    if (parse_host_port(spec + 4, host, sizeof(host), &port, 0) != 0) return -1;
+
+    struct in_addr a;
+    if (inet_pton(AF_INET, host, &a) != 1) return -1;
+    return addr_is_remote(&a);
+}
+
 /* Bind a UNIX-domain stream socket at `path`. Replaces a stale entry
  * at the same path (a fresh start wins over a dead one); refuses to
  * touch anything that isn't provably a dead socket of ours. */
@@ -194,7 +253,22 @@ static int init_unix(const char *path) {
     addr.sun_family = AF_UNIX;
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    /* bind() creates the socket file at the process umask — 0755 on a
+     * default 0022 host, i.e. world-connectable. The UNIX transport's
+     * whole security claim is that the kernel checks the peer's
+     * credentials, so the mode has to be forced rather than inherited.
+     *
+     * umask rather than a chmod() after bind: chmod leaves a window in
+     * which the socket is already listening at the inherited mode, and
+     * fchmod() on an AF_UNIX fd does not affect the filesystem entry.
+     * umask is process-global, but this runs at startup before any
+     * worker thread exists, and it is restored immediately. */
+    mode_t old_umask = umask(0177);                  /* 0777 & ~0177 = 0600 */
+    int bind_rc  = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    int bind_err = errno;
+    umask(old_umask);
+    if (bind_rc < 0) {
+        errno = bind_err;
         perror("data-socket: bind");
         close(fd);
         return -1;
@@ -220,31 +294,49 @@ static int init_unix(const char *path) {
 
 /* Bind a TCP listener at HOST:PORT. HOST must be a literal IPv4 address
  * (no DNS resolution — keeps the contract trivial and avoids surprise
- * lookups at startup). 0.0.0.0 is allowed but only if the operator
- * passes it explicitly. */
-static int init_tcp(const char *host_port) {
-    const char *colon = strrchr(host_port, ':');
-    if (!colon || colon == host_port) {
-        fprintf(stderr, "data-socket: tcp spec needs HOST:PORT\n");
-        return -1;
-    }
+ * lookups at startup).
+ *
+ * The address is parsed and vetted *before* socket() is called, so a
+ * bind the operator did not opt into never reaches the kernel at all. */
+static int init_tcp(const char *host_port, int allow_remote) {
     char host[64];
-    size_t hlen = (size_t)(colon - host_port);
-    if (hlen >= sizeof(host)) {
-        fprintf(stderr, "data-socket: tcp host too long\n");
+    long port = 0;
+    if (parse_host_port(host_port, host, sizeof(host), &port, 1) != 0)
+        return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((unsigned short)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        fprintf(stderr, "data-socket: bad host %s\n", host);
         return -1;
     }
-    memcpy(host, host_port, hlen);
-    host[hlen] = '\0';
 
-    const char *port_str = colon + 1;
-    char *endptr = NULL;
-    errno = 0;
-    long port = strtol(port_str, &endptr, 10);
-    if (port_str[0] == '\0' || *endptr != '\0' || errno == ERANGE ||
-        port < 1 || port > 65535) {
-        fprintf(stderr, "data-socket: bad port %s\n", port_str);
-        return -1;
+    /* #86: the stream is unauthenticated and unencrypted. Loopback
+     * keeps that a local matter; a routable bind hands every
+     * observation to whoever can reach the port. Refuse by default,
+     * and name the flag rather than making the operator guess. */
+    if (addr_is_remote(&addr.sin_addr)) {
+        if (!allow_remote) {
+            fprintf(stderr,
+                "data-socket: refusing to bind %s:%ld — not a loopback address.\n"
+                "  The JSONL stream is unauthenticated and unencrypted: anyone who\n"
+                "  can reach that port reads every observation sloth makes.\n"
+                "  Keep it local (--data-socket unix:/run/sloth.sock, or the default\n"
+                "  tcp:127.0.0.1:8765) and forward it yourself:\n"
+                "      ssh -L %ld:127.0.0.1:%ld user@this-host\n"
+                "  To expose it anyway, add --data-socket-allow-remote.\n",
+                host, port, port, port);
+            return -1;
+        }
+        fprintf(stderr,
+            "sloth: WARNING: data-socket is bound to %s:%ld, which is not a\n"
+            "  loopback address. The stream is UNAUTHENTICATED and UNENCRYPTED —\n"
+            "  every host that can reach %s:%ld can read every observation,\n"
+            "  including SSIDs, MAC addresses, hostnames and captured credentials.\n"
+            "  Authorised by --data-socket-allow-remote.\n",
+            host, port, host, port);
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -253,18 +345,14 @@ static int init_tcp(const char *host_port) {
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons((unsigned short)port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
-        fprintf(stderr, "data-socket: bad host %s\n", host);
-        close(fd);
-        return -1;
-    }
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int err = errno;
         perror("data-socket: bind");
         close(fd);
+        /* Leave the kernel's reason visible to the caller: "refused by
+         * policy" and "the kernel would not give us this address" are
+         * different failures and only errno tells them apart. */
+        errno = err;
         return -1;
     }
     if (listen(fd, 4) < 0) {
@@ -284,13 +372,19 @@ static int init_tcp(const char *host_port) {
     return 0;
 }
 
-int data_socket_init(const char *spec) {
+int data_socket_init_ex(const char *spec, int allow_remote) {
     if (!spec || !spec[0]) return -1;
+    /* allow_remote is meaningless for a filesystem socket — it has no
+     * address to be reachable at — so it is not threaded into init_unix. */
     if (strncmp(spec, "unix:", 5) == 0) return init_unix(spec + 5);
-    if (strncmp(spec, "tcp:",  4) == 0) return init_tcp (spec + 4);
+    if (strncmp(spec, "tcp:",  4) == 0) return init_tcp (spec + 4, allow_remote);
     fprintf(stderr,
             "data-socket: spec must be 'unix:/path' or 'tcp:HOST:PORT'\n");
     return -1;
+}
+
+int data_socket_init(const char *spec) {
+    return data_socket_init_ex(spec, 0);
 }
 
 /* Close client i and compact (swap-with-last). Caller holds g_mu.

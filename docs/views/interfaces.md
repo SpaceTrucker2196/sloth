@@ -242,7 +242,7 @@ is present to work the interactive controls (systemd units, `script`
 ptys, appliance sensors):
 
 ```sh
-sloth --iface wlan1 --hop --data-socket tcp:100.64.0.5:8765
+sloth --iface wlan1 --hop --data-socket tcp:100.64.0.5:8765 --data-socket-allow-remote
 sloth --monitor-only --hop --data-socket unix:/var/run/sloth.sock
 ```
 

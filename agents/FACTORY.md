@@ -167,7 +167,10 @@ sudo setcap cap_net_raw,cap_net_admin=eip ./sloth
 ./sloth --pcap-dir /var/sloth/pcap       # per-alert pcap dumps
 ./sloth --eapol-dir /var/sloth/eapol     # PMKID + handshake export (hashcat 22000)
 ./sloth --data-socket unix:/var/run/sloth.sock   # local read-only JSONL stream
-./sloth --data-socket tcp:100.64.0.5:8765        # JSONL over TCP (bind to a Tailscale IP, etc.)
+./sloth --data-socket tcp:100.64.0.5:8765 --data-socket-allow-remote
+                                         # JSONL over TCP. A non-loopback bind is
+                                         # refused without the opt-in flag (#86);
+                                         # the stream has no auth and no TLS.
 ```
 
 Flags compose. The JSONL schema is documented in [`README.md`](../README.md#jsonl-schema)
