@@ -140,3 +140,4 @@
 | f2bf0b5 | 2026-09-24T13:18:41Z | claude-opus-5 | 92 | 35032 | 5799678 | 410225 | 7.8783 | #86 F04 socket lifecycle slice; window also covers parent triage + #84 integrati |
 | 09f7e2d | 2026-09-25T11:06:58Z | claude-opus-5 | 332 | 174083 | 30012798 | 534552 | 24.7057 | #89 slice 1 — evil-twin trust anchors (OUI/RSSI/neighbour-report removed, severi |
 | 8cd38ef | 2026-09-25T18:16:55Z | claude-opus-5 | 380 | 142892 | 22466091 | 1383964 | 28.6469 | CI six-variant -Werror gate + EXTRA_CFLAGS hook; window also covers this session |
+| 0e00373 | 2026-09-25T18:25:00Z | claude-opus-5 | 430 | 237238 | 45302042 | 600990 | 34.5940 | #89 slice 2 — approved-inventory trust anchor (JSON loader, flag merge, content  |
