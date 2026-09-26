@@ -269,6 +269,8 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
 | `confidence` | int | additive, #89 — how likely the finding is to be **true**, in percent (5..95). A separate axis from `sev`, which is how **bad** it would be if true. **Omitted** when the rule reported none: most rules assert a condition they observed directly and have nothing to qualify, and a literal `0` would read as "certainly false". Emitted today by the `EVIL_TWIN` family |
 | `inventory` | string | additive, #89 slice 2 — 16 hex chars, the content hash of the approved inventory this finding consulted (`--inventory`, see [[inventory]]). **Omitted** when the rule consulted none; stamping every record would assert the anchor backed findings it never touched. Present on the `EVIL_TWIN` family when an inventory is loaded |
+| `ap_class` | string | additive, #89 slice 3 — what kind of AP a *paired* finding is about: `impostor` (over-the-air impersonator), `neighbor` (outside the operator's declared estate), `declared` (both halves in the approved inventory). **Omitted** when nothing established a class, and on every rule that is not about an AP pair. Emitted today by the `EVIL_TWIN` family |
+| `wired_attachment` | string | additive, #89 slice 3 — `yes` or `no`, whether the accused AP is attached to the wired network. **Omitted when not established, which is always today**: nothing in-tree can see the wire. See the note below — absence is *not* a negative answer |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
@@ -293,6 +295,24 @@ did sloth read", not "were the semantics equivalent". The human-readable
 nothing stops two files from both claiming `2026-09-24.1`; it is printed
 at startup beside the hash and is a label only. Full semantics:
 [[inventory]].
+
+**`ap_class` and `wired_attachment` are two axes with different
+evidence requirements** (#89 slice 3), and a consumer must not collapse
+them. `ap_class` is decidable from RF plus the approved inventory:
+impersonation is an over-the-air behaviour, so RF can evidence it.
+Wired attachment is not decidable from RF at all — a Pineapple on an
+LTE uplink and a rogue bridged onto the access VLAN emit
+indistinguishable beacons — so it gets its own field, and no rule in
+`src/alerts.c` can set it. The only writer is a correlator registered
+through `src/wired_attach.h` (a switch CAM reader, a controller export,
+a DHCP correlator), and nothing in-tree registers one yet.
+
+**A missing `wired_attachment` means "not established", never "not
+attached".** A consumer that renders absence as "off the wire" is
+asserting a negative sloth never checked; render it as unknown. The
+`EVIL_TWIN` detail string carries a literal `wired=?` for the same
+reason — a human reading "impostor" with no attachment field will fill
+the gap themselves, usually with the alarming reading.
 
 **Dedup keys for paired findings are canonical** (#89). Where a finding
 is about a *pair* of BSSIDs rather than one host, the key is
@@ -500,6 +520,8 @@ sees for a given `(src, dst, proto)` tuple.
 | `hash_mismatch`      | int    | 1 if the vendor-IE fingerprint hashes disagree |
 | `attributed`         | int    | additive, #89 — 1 when something other than radio physics established which half is the impostor (an operator-designated BSSID, a tainted BSSID from the deauth chain, or an attacker-tool OUI). **0 means unattributed**: the pair is a candidate and the two BSSID fields are only in canonical byte order |
 | `confidence`         | int    | additive, #89 — same percentage the pair's `EVIL_TWIN` alert carries |
+| `ap_class`           | string | additive, #89 slice 3 — `impostor`, `neighbor` or `declared`. **Omitted** when nothing established a class, which is every pair until an inventory is loaded. Same values and same meaning as on the alert records |
+| `wired_attachment`   | string | additive, #89 slice 3 — `yes` or `no`, from a registered wired correlator. **Omitted when not established, which is always today.** Absence means *nobody looked*, never *not attached* |
 
 **Cadence**: snapshot — one record per detected pair per poll (≈1 Hz).
 The consumer rebuilds its table from the latest snapshot keyed by

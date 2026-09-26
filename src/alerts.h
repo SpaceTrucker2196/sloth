@@ -131,6 +131,11 @@ typedef struct {
     int nbr_claim;       /* either side advertises the other (802.11k) */
     int inv_mismatch;    /* a half is not approved for an inventoried SSID */
     int inv_approved;    /* both halves approved for an inventoried SSID */
+    int inv_consulted;   /* an inventory file was loaded at all (#89 slice 3) —
+                          * distinguishes "the operator declared an estate and
+                          * this SSID is not in it" from "there is no estate to
+                          * compare against", which are different facts and
+                          * support different claims about the pair */
     int positive;        /* summed impersonation evidence */
     int context;         /* summed benign explanation */
     int hard;            /* a signal an attacker cannot advertise away */
@@ -149,6 +154,84 @@ int  twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
  * order a pair the same way. */
 void twin_pair_order(const beacon_ap_t *a, const beacon_ap_t *b,
                      const beacon_ap_t **lo, const beacon_ap_t **hi);
+
+/* Which half of a pair is the impostor, and whether that is known at
+ * all. Returns 1 when the assignment rests on evidence, 0 when the pair
+ * is merely ordered (`*real_out` / `*twin_out` then hold it in
+ * canonical BSSID order and neither half is accused).
+ *
+ * Ranked by what the signal actually establishes:
+ *   1. An operator-designated BSSID (--my-bssid, #52) is never the
+ *      impostor, and neither is one the approved inventory declares for
+ *      this SSID (#89 slice 2). Both are a human asserting ownership
+ *      out-of-band, so they outrank anything inferred from the air.
+ *   2. A BSSID the deauth chain tainted is the impostor.
+ *   3. An OUI in the Hak5 / Espressif attacker tables is the impostor.
+ *   4. Otherwise unattributed.
+ *
+ * What is deliberately absent is rule 4's pre-#89 predecessor, "the
+ * stronger signal is the impostor". RSSI is a fact about distance and
+ * antennas, and in the commonest case it is backwards, because the
+ * operator's own AP is the closest radio in the room.
+ *
+ * Lives here rather than in twins.c (#89 slice 3) so the rule and the
+ * [x] Twins view read one implementation — they already share
+ * twin_evidence_score, and a second copy of the attribution ladder is
+ * how the alert and the view start disagreeing about which half of a
+ * pair is accused. */
+int  twin_choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
+                       const beacon_ap_t **real_out,
+                       const beacon_ap_t **twin_out);
+
+/* ── What kind of AP is this? (#89 slice 3) ────────────────────
+ *
+ * The issue's last fix bullet asks the UI to distinguish an
+ * over-the-air impersonator from a neighbouring AP from an unauthorized
+ * AP attached to the wired network. Two of those three are decidable
+ * from RF plus the approved inventory. The third is not decidable from
+ * RF at all, so it is not in this enum: wired attachment is a separate
+ * axis carried by wired_attach_t (src/wired_attach.h), it defaults to
+ * UNKNOWN, and nothing in this file can set it. Folding "rogue on the
+ * wire" in here as a fourth class would make an RF-only detector able
+ * to assert the one claim RF cannot support — precisely the
+ * overstatement #89 exists to remove.
+ *
+ * This is a *label*, never a gate. It does not suppress a pair, change
+ * a severity, or move a confidence: an operator with no inventory sees
+ * exactly the findings they saw before slice 3, with one more column
+ * that reads `?`. Classification that could silence a finding would be
+ * a new sole suppressor, which is the bug this issue opened on. */
+typedef enum {
+    /* No basis to place the pair. The default, and what every pair
+     * reports when no inventory file is loaded — with nothing declared,
+     * "not yours" is not a statement sloth can make. */
+    TWIN_CLASS_UNKNOWN = 0,
+    /* Over-the-air impersonator. Either the inventory declares this
+     * SSID and one half is not an approved BSSID for it, or the pair
+     * carries a hard RF signal (an attacker-tool OUI, a BTM steer aimed
+     * at the pair). Hard RF signals are admissible *here* and not on
+     * the wired axis because impersonation is an over-the-air
+     * behaviour: it is the thing RF observes. */
+    TWIN_CLASS_IMPERSONATOR = 1,
+    /* An AP outside the declared estate. Requires a loaded inventory
+     * that does not list this SSID, and no hard signal. The claim is
+     * "this is somebody else's network", which is a real and useful
+     * answer to the noise half of this issue — a mixed-vendor cafe
+     * deployment two floors down is not an attack on anything. */
+    TWIN_CLASS_NEIGHBOR = 2,
+    /* Both halves declared by the operator: their own infrastructure.
+     * Reachable only from the weak/strong branch, which still reports a
+     * downgrade lane under a single SSID whoever owns it — the
+     * inventory answers "whose radio is that", never "is that
+     * configuration safe". */
+    TWIN_CLASS_DECLARED = 3,
+} twin_class_t;
+
+/* Classify a scored pair. `ev` may be NULL (→ UNKNOWN). */
+twin_class_t twin_classify(const twin_evidence_t *ev);
+
+/* Column/export label: "?", "impostor", "neighbor", "declared". */
+const char  *twin_class_label(twin_class_t c);
 
 /* ── KARMA_AP confidence (#90) ──────────────────────────────
  *

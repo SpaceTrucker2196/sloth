@@ -22,6 +22,7 @@
 #include "wifi_oui_attacker.h"
 #include "ownership.h"
 #include "inventory.h"
+#include "wired_attach.h"
 #include "transit.h"
 #include "rf_quality.h"
 #include "event_wake.h"
@@ -214,8 +215,15 @@ static int evict_oldest(time_t now) {
  * `detail` may be regenerated each tick — we always overwrite it so the
  * latest observation wins. `match_ip`/`match_port` are set only on new
  * alerts (so the criteria represent the first time we saw this key). */
+/* `ap_class` / `wired` are the #89 slice 3 pair axes — twin_class_t and
+ * wired_attach_t, passed as ints so this signature does not pull the
+ * enums in ahead of their headers. Zero on every rule that is not about
+ * an AP pair. They are stamped inside fire_inv rather than by the
+ * caller afterwards because the lifecycle events (`alert.create`,
+ * `alert.escalate`) are emitted from in here — a post-hoc stamp would
+ * send the first event with the fields still zero. */
 static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
-                     const char *inv_hash,
+                     const char *inv_hash, int ap_class, int wired,
                      const char *title, const char *detail,
                      const char *key,
                      const char *match_ip, uint16_t match_port,
@@ -250,6 +258,13 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * keep claiming it never did. */
         snprintf(a->inventory, sizeof(a->inventory), "%s",
                  inv_hash ? inv_hash : "");
+        /* Refreshed for the same reason, and because both can legitimately
+         * move inside one incident: an operator's inventory cannot change
+         * under a running process, but a correlator registering mid-run
+         * turns `wired` from UNKNOWN into an answer, and that is exactly
+         * the transition the hook exists to deliver. */
+        a->ap_class     = (uint8_t)ap_class;
+        a->wired_attach = (uint8_t)wired;
 
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
@@ -309,6 +324,8 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     snprintf(a->key,    sizeof(a->key),    "%s", key);
     if (inv_hash && inv_hash[0])
         snprintf(a->inventory, sizeof(a->inventory), "%s", inv_hash);
+    a->ap_class     = (uint8_t)ap_class;
+    a->wired_attach = (uint8_t)wired;
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
@@ -328,16 +345,20 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     event_wake_signal();
 }
 
-/* No inventory consulted. Only the rules that actually read the
- * approved inventory stamp its hash (#89 slice 2); a blanket stamp
- * would claim the anchor backed findings it never touched. */
+/* No inventory consulted, and not a finding about an AP pair. Only the
+ * rules that actually read the approved inventory stamp its hash (#89
+ * slice 2) and only the twin family classifies a pair (#89 slice 3); a
+ * blanket stamp would claim the anchor backed findings it never
+ * touched, and a blanket class would label rules that are not about an
+ * AP at all. */
 static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                       const char *title, const char *detail,
                       const char *key,
                       const char *match_ip, uint16_t match_port,
                       time_t now) {
-    fire_inv(type, sev, confidence, NULL, title, detail, key,
-             match_ip, match_port, now);
+    fire_inv(type, sev, confidence, NULL,
+             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN,
+             title, detail, key, match_ip, match_port, now);
 }
 
 /* Confidence 0 — "the rule did not qualify this finding". Most rules
@@ -728,6 +749,74 @@ void twin_pair_order(const beacon_ap_t *a, const beacon_ap_t *b,
     else                                    { *lo = b; *hi = a; }
 }
 
+/* Attribution ladder — contract and ranking rationale in alerts.h.
+ * Moved here from twins.c in #89 slice 3 so the rule and the view share
+ * one implementation rather than two copies that can drift. */
+int twin_choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
+                      const beacon_ap_t **real_out,
+                      const beacon_ap_t **twin_out) {
+    if (!a || !b || !real_out || !twin_out) return 0;
+
+    /* inventory_verdict already unions --my-bssid into the approved
+     * set, so the two operator statements are read together here
+     * rather than ranked against each other. */
+    int a_mine = ownership_is_my_bssid(a->bssid) ||
+                 inventory_verdict(a->ssid, a->bssid) == INV_APPROVED;
+    int b_mine = ownership_is_my_bssid(b->bssid) ||
+                 inventory_verdict(b->ssid, b->bssid) == INV_APPROVED;
+    if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return 1; }
+    if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return 1; }
+
+    int a_tainted = evil_twin_bssid_is_tainted(a->bssid);
+    int b_tainted = evil_twin_bssid_is_tainted(b->bssid);
+    if (a_tainted && !b_tainted) { *real_out = b; *twin_out = a; return 1; }
+    if (b_tainted && !a_tainted) { *real_out = a; *twin_out = b; return 1; }
+
+    int a_tool = oui_is_hak5(a->fp.oui) || oui_is_espressif(a->fp.oui);
+    int b_tool = oui_is_hak5(b->fp.oui) || oui_is_espressif(b->fp.oui);
+    if (a_tool && !b_tool) { *real_out = b; *twin_out = a; return 1; }
+    if (b_tool && !a_tool) { *real_out = a; *twin_out = b; return 1; }
+
+    twin_pair_order(a, b, real_out, twin_out);
+    return 0;
+}
+
+/* ── Pair classification (#89 slice 3) ─────────────────────────
+ * Why "unauthorized AP on the wired network" is deliberately not one of
+ * these values: alerts.h, and src/wired_attach.h at length. */
+
+twin_class_t twin_classify(const twin_evidence_t *ev) {
+    if (!ev) return TWIN_CLASS_UNKNOWN;
+    /* Checked first: two declared radios are the operator's own
+     * infrastructure whatever else the air says about them, which is
+     * the mixed-vendor case the issue lists as a false positive. */
+    if (ev->inv_approved)  return TWIN_CLASS_DECLARED;
+    /* A written statement that this radio is not approved for a name
+     * the operator does declare. The strongest impersonation evidence
+     * available, and the only one an attacker cannot reach. */
+    if (ev->inv_mismatch)  return TWIN_CLASS_IMPERSONATOR;
+    /* Hard RF evidence — an attacker-tool OUI, a BTM steer aimed at the
+     * pair. These establish an over-the-air behaviour, which is what
+     * this axis is about, so they carry it without an inventory. */
+    if (ev->hard)          return TWIN_CLASS_IMPERSONATOR;
+    /* An inventory was consulted, it declares an estate, and this SSID
+     * is not in it — somebody else's network. Without a loaded
+     * inventory there is no estate to be outside of, so the same pair
+     * stays UNKNOWN rather than being called a neighbour on no basis. */
+    if (ev->inv_consulted) return TWIN_CLASS_NEIGHBOR;
+    return TWIN_CLASS_UNKNOWN;
+}
+
+const char *twin_class_label(twin_class_t c) {
+    switch (c) {
+    case TWIN_CLASS_IMPERSONATOR: return "impostor";
+    case TWIN_CLASS_NEIGHBOR:     return "neighbor";
+    case TWIN_CLASS_DECLARED:     return "declared";
+    case TWIN_CLASS_UNKNOWN:
+    default:                      return "?";
+    }
+}
+
 void alert_pair_key(char *out, size_t n, const char *rule_id,
                     const uint8_t bssid_a[6], const uint8_t bssid_b[6],
                     const char *site, const char *security_profile) {
@@ -796,6 +885,11 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     inv_verdict_t vb = inventory_verdict(b->ssid, b->bssid);
     ev.inv_mismatch = (va == INV_MISMATCH || vb == INV_MISMATCH);
     ev.inv_approved = (va == INV_APPROVED && vb == INV_APPROVED);
+    /* Not an evidence weight — it never touches `positive` or
+     * `context`. It records whether there was an estate to compare
+     * against at all, which twin_classify needs to tell "outside the
+     * declared estate" from "nothing declared" (#89 slice 3). */
+    ev.inv_consulted = inventory_loaded();
 
     if (ev.diff_oui)      ev.positive += TWIN_W_DIFF_OUI;
     if (ev.hashes_differ) ev.positive += TWIN_W_IE_HASH;
@@ -837,6 +931,37 @@ static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
              ev->inv_mismatch ? " +not in inventory"           : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
+}
+
+/* Wired-attachment state of the half something has actually accused
+ * (#89 slice 3), or UNKNOWN when nothing has.
+ *
+ * Asking about an unattributed pair would attach a wired verdict to
+ * whichever BSSID sorted higher, which is the shape of mistake slice 1
+ * removed when it stopped letting RSSI name the impostor. And with no
+ * correlator registered this is UNKNOWN for every pair, attributed or
+ * not — RF cannot see a switch port. */
+static wired_attach_t twin_accused_wired(const beacon_ap_t *a,
+                                         const beacon_ap_t *b) {
+    const beacon_ap_t *real = NULL, *twin = NULL;
+    if (!twin_choose_sides(a, b, &real, &twin) || !twin)
+        return WIRED_ATTACH_UNKNOWN;
+    return wired_attach_lookup(twin->bssid);
+}
+
+/* The two pair axes, rendered for the alert detail.
+ *
+ * `wired=?` is printed on every row it applies to rather than omitted,
+ * and that is the point of the whole slice: a reader who sees
+ * "impostor" and no attachment field will fill the gap in themselves,
+ * usually with the worst reading ("rogue on our LAN"), and act on it.
+ * Saying `wired=?` out loud costs eight characters and is the
+ * difference between a detector that does not know and one that has
+ * been understood to have answered. */
+static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
+                                wired_attach_t wired) {
+    snprintf(out, n, " [class=%s wired=%s]",
+             twin_class_label(cls), wired_attach_label(wired));
 }
 
 /* BTM forcing (#59) — the 802.11v deauth-equivalent.
@@ -2852,13 +2977,21 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                     sev     = ALERT_SEV_WARN;
                     verdict = "inventory-approved pair, weak/strong split";
                 }
+                /* The two pair axes (#89 slice 3). `wired` is asked
+                 * only of the half something has accused, and is
+                 * UNKNOWN for every row until a correlator that can see
+                 * the wire is registered — RF cannot establish it. */
+                twin_class_t   cls   = twin_classify(&ev);
+                wired_attach_t wired = twin_accused_wired(a, b);
+                char cls_note[28];
+                twin_pair_axes_note(cls_note, sizeof(cls_note), cls, wired);
                 snprintf(detail, sizeof(detail),
                          "'%.16s' on %s[%.6s] AND %s[%.6s]"
-                         " - %s, conf %d%%%s%s",
+                         " - %s, conf %d%%%s%s%s",
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
-                         verdict, conf, note, steer_note);
+                         verdict, conf, note, steer_note, cls_note);
                 fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
-                         inventory_hash(),
+                         inventory_hash(), (int)cls, (int)wired,
                          "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
@@ -2980,13 +3113,20 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
             alert_pair_key(key, sizeof(key), "twin-fp", a->bssid, b->bssid,
                            inventory_site(), profile);
             twin_evidence_note(note, sizeof(note), &ev);
+            /* The two pair axes (#89 slice 3) — see the weak/strong
+             * branch above. `wired` stays UNKNOWN here too until
+             * something that can see the wire answers. */
+            twin_class_t   cls   = twin_classify(&ev);
+            wired_attach_t wired = twin_accused_wired(a, b);
+            char cls_note[28];
+            twin_pair_axes_note(cls_note, sizeof(cls_note), cls, wired);
             snprintf(detail, sizeof(detail),
                      "'%.16s' on %s AND %s [%.6s]"
-                     " - suspected impersonation, conf %d%% - %s%s%s",
+                     " - suspected impersonation, conf %d%% - %s%s%s%s",
                      a->ssid, a_bssid, b_bssid, a->enc,
-                     ev.confidence, reason, note, steer_note);
+                     ev.confidence, reason, note, steer_note, cls_note);
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
-                     inventory_hash(),
+                     inventory_hash(), (int)cls, (int)wired,
                      "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }

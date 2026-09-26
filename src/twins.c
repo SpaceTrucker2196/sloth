@@ -3,59 +3,13 @@
 #include <time.h>
 #include "twins.h"
 #include "alerts.h"
-#include "wifi_oui_attacker.h"
-#include "ownership.h"
-#include "inventory.h"
+#include "wired_attach.h"
 
-/* Decide which half of a (a, b) twin pair is the "real" AP, and say
- * honestly when we cannot. Returns 1 when the assignment is attributed
- * to evidence, 0 when the pair is merely ordered.
- *
- * Ranked by what the signal actually establishes:
- *   1. An operator-designated BSSID is never the impostor (#52), and
- *      neither is one the approved inventory declares for this SSID
- *      (#89 slice 2) — both are a human asserting ownership
- *      out-of-band, so they outrank everything inferred from the air.
- *   2. A BSSID the deauth chain tainted is the impostor — observed
- *      behaviour tied to that BSSID.
- *   3. An OUI in the Hak5 / Espressif attacker tables is the impostor —
- *      an observed device identity.
- *   4. Otherwise UNATTRIBUTED: canonical BSSID order, no verdict.
- *
- * What is deliberately gone (#89) is rule 4's predecessor, "the
- * stronger signal is the impostor". RSSI is not ownership: it is a fact
- * about distance and antennas, and in the commonest case it is exactly
- * backwards, because the operator's own AP is the closest radio in the
- * room. Naming a culprit from it made the view assert something it had
- * no basis for. Canonical ordering also stabilises the pair's identity —
- * the `twin_episodes` primary key used to swap, and so duplicate, the
- * moment two RSSIs crossed. */
-static int choose_sides(const beacon_ap_t *a, const beacon_ap_t *b,
-                        const beacon_ap_t **real_out,
-                        const beacon_ap_t **twin_out) {
-    /* inventory_verdict already unions --my-bssid into the approved
-     * set, so the two operator statements are read together here
-     * rather than ranked against each other. */
-    int a_mine = ownership_is_my_bssid(a->bssid) ||
-                 inventory_verdict(a->ssid, a->bssid) == INV_APPROVED;
-    int b_mine = ownership_is_my_bssid(b->bssid) ||
-                 inventory_verdict(b->ssid, b->bssid) == INV_APPROVED;
-    if (a_mine && !b_mine) { *real_out = a; *twin_out = b; return 1; }
-    if (b_mine && !a_mine) { *real_out = b; *twin_out = a; return 1; }
-
-    int a_tainted = evil_twin_bssid_is_tainted(a->bssid);
-    int b_tainted = evil_twin_bssid_is_tainted(b->bssid);
-    if (a_tainted && !b_tainted) { *real_out = b; *twin_out = a; return 1; }
-    if (b_tainted && !a_tainted) { *real_out = a; *twin_out = b; return 1; }
-
-    int a_tool = oui_is_hak5(a->fp.oui) || oui_is_espressif(a->fp.oui);
-    int b_tool = oui_is_hak5(b->fp.oui) || oui_is_espressif(b->fp.oui);
-    if (a_tool && !b_tool) { *real_out = b; *twin_out = a; return 1; }
-    if (b_tool && !a_tool) { *real_out = a; *twin_out = b; return 1; }
-
-    twin_pair_order(a, b, real_out, twin_out);
-    return 0;
-}
+/* The attribution ladder that used to live here as choose_sides() moved
+ * to src/alerts.c as twin_choose_sides() in #89 slice 3 — the rule and
+ * this view already share twin_evidence_score, and keeping a second
+ * copy of "which half is accused" is how the alert and the view start
+ * disagreeing about a pair. Ranking and rationale: src/alerts.h. */
 
 /* Largest 60s RSSI swing across the halves given (NULL skips a half).
  * A side whose bounds are both the 0-sentinel has no window yet. */
@@ -107,7 +61,7 @@ void twins_snapshot(sloth_state_t *s) {
             if (s->twin_episode_count >= MAX_TWIN_EPISODES) return;
 
             const beacon_ap_t *real, *twin;
-            int attributed = choose_sides(a, b, &real, &twin);
+            int attributed = twin_choose_sides(a, b, &real, &twin);
 
             twin_episode_t *e = &s->twin_episodes[s->twin_episode_count++];
             memset(e, 0, sizeof(*e));
@@ -134,6 +88,21 @@ void twins_snapshot(sloth_state_t *s) {
                 ? 1 : 0;
             e->attacker_oui  = ev.attacker_oui  ? 1 : 0;
             e->hash_mismatch = ev.hashes_differ ? 1 : 0;
+            /* What kind of AP this is, on the axis RF can speak to
+             * (#89 slice 3). A label for the operator, never a gate —
+             * the episode was already materialised above and no class
+             * removes it. */
+            e->ap_class = (uint8_t)twin_classify(&ev);
+            /* And the axis RF cannot speak to. Asked only of the half
+             * something has actually accused: on an unattributed pair
+             * `real_bssid`/`twin_bssid` are just canonical order, so
+             * asking about `twin` would attach a wired verdict to
+             * whichever BSSID happened to sort higher. UNKNOWN there is
+             * the honest answer, and with no correlator registered it
+             * is the answer everywhere. */
+            e->wired_attach = attributed
+                ? (uint8_t)wired_attach_lookup(twin->bssid)
+                : (uint8_t)WIRED_ATTACH_UNKNOWN;
             e->last_seen = now;
         }
     }

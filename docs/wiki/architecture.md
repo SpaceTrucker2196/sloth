@@ -41,6 +41,13 @@ docs/views/*.md            -- per-view deep dives
   ARP, LLC, and unknown ethertypes are filtered before the ring buffer.
 - **Alert engine** — `src/alerts.c` runs each rule every poll, dedupes by
   stable key, fires JSONL + per-alert pcap. See [[alerts]].
+- **Correlation seams** — modules that answer a question sloth's own
+  sensors cannot. `src/inventory.c` reads the operator's approved-BSSID
+  file ([[inventory]]); `src/wired_attach.c` is a one-slot in-process
+  registration point for a future switch/controller/DHCP correlator, so
+  the twin surfaces can render "is this AP on the wire" without any of
+  them pretending RF answers it (#89 slice 3). Both are read-only,
+  in-process, and neither is a control surface or a plugin loader.
 
 ## State
 

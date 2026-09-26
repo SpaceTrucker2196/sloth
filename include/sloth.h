@@ -642,7 +642,22 @@ const char *device_risk_label(device_risk_level_t l);
 /* ── Alerts ─────────────────────────────────────────────── */
 #define MAX_ALERTS         128
 #define ALERT_TITLE_LEN     20
-#define ALERT_DETAIL_LEN   256   /* holds the longest rule detail incl. two IPv6 addrs */
+/* Holds the longest rule detail incl. two IPv6 addrs. Raised 256 → 320
+ * in #89 slice 3: the same-security evil-twin detail was calibrated to
+ * land at exactly 255 bytes worst case (SSID + two BSSIDs + cipher +
+ * confidence + the longest `reason` + all three evidence notes + a BTM
+ * steer note), so adding the ` [class=… wired=…]` axes pushed it over
+ * and gcc's -Wformat-truncation caught it.
+ *
+ * Grown rather than trading a field away, because the field that would
+ * have been dropped is the one slice 3 exists to add — and truncating
+ * the tail of a twin detail silently removes `wired=?`, which is the
+ * single statement that stops a reader assuming sloth checked the wire.
+ * Cost is 64 bytes × MAX_ALERTS in the engine and the same again in the
+ * snapshot, ~16 KB. `detail` is a variable-length string everywhere it
+ * is exported (JSONL, the `--db` TEXT column), so no consumer contract
+ * moves with it. */
+#define ALERT_DETAIL_LEN   320
 #define ALERT_KEY_LEN      192   /* dedup id; worst case is rule_cleartext_cred:
                                   * two 45-char IPv6 + port + proto + 63-char user = 184 */
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
@@ -797,6 +812,23 @@ typedef struct {
      * produced it, and the human-readable `version` label cannot do
      * that because two files may both claim one. */
     char         inventory[17];
+
+    /* What kind of AP a paired finding is about, and whether it is
+     * attached to the wired network (#89 slice 3). Zero on every rule
+     * that is not about an AP pair — the `EVIL_TWIN` family is the only
+     * producer today, and both fields are omitted from the exports when
+     * zero, the same way `confidence` and `inventory` are.
+     *
+     * `ap_class` is a twin_class_t (src/alerts.h). `wired_attach` is a
+     * wired_attach_t (src/wired_attach.h) and stays UNKNOWN unless a
+     * correlator that can see the wire is registered: RF cannot
+     * establish wired attachment, so it gets its own axis rather than a
+     * fourth class value, and no rule in src/alerts.c can set it.
+     *
+     * Plain uint8_t for the same reason as `inventory` above — sloth.h
+     * does not include module headers from src/. */
+    uint8_t      ap_class;
+    uint8_t      wired_attach;
 
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on
@@ -1380,6 +1412,26 @@ typedef struct {
      * whenever the two RSSIs crossed. */
     uint8_t  attributed;
     uint8_t  confidence;             /* percent, matches the alert's (#89) */
+    /* What kind of AP this pair is, and whether it is on the wire —
+     * two separate axes, deliberately (#89 slice 3).
+     *
+     * `ap_class` is a twin_class_t (src/alerts.h): impostor / neighbor /
+     * declared / unknown. Decidable from RF plus the approved
+     * inventory, and a *label* — it never suppresses an episode or
+     * moves a confidence.
+     *
+     * `wired_attach` is a wired_attach_t (src/wired_attach.h) and is
+     * UNKNOWN unless a correlator that can see the wire has been
+     * registered. RF cannot establish wired attachment: a Pineapple on
+     * an LTE uplink and a rogue bridged onto the access VLAN beacon
+     * identically. It is a separate field rather than a fourth
+     * `ap_class` value precisely so no RF signal can ever set it.
+     *
+     * Stored as plain uint8_t because sloth.h is the shared header and
+     * does not include module headers from src/; the enum values are
+     * pinned by tests/test_wired_attach.c and tests/test_twins.c. */
+    uint8_t  ap_class;
+    uint8_t  wired_attach;
     time_t   last_seen;
 } twin_episode_t;
 

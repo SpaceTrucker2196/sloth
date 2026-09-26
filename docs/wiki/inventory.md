@@ -218,6 +218,17 @@ reload would be an inbound-configuration surface, which
 [`MISSION.md`](../../MISSION.md) §4 puts out of scope, and it would let
 the trust anchor change underneath a live incident.
 
+## What it does not answer
+
+The inventory says **whose radio a BSSID is**. It does not say what that
+radio is plugged into, and no file the operator writes about their APs
+could — a rogue is by definition not in it. Wired attachment is a
+separate axis (#89 slice 3) answered only by a correlator that can see
+the wire, registered through `src/wired_attach.h`; until one exists,
+every twin reports `wired=?`. See
+[`docs/views/twins.md`](../views/twins.md) for why that stays unknown
+rather than being inferred.
+
 ## See also
 
 - [[alerts]] — severity vs confidence, canonical pair keys, what #89

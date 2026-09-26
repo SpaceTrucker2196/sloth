@@ -19,6 +19,7 @@
 #include "auth_track.h"
 #include "ownership.h"
 #include "inventory.h"
+#include "wired_attach.h"
 #include "transit.h"
 #include "rf_quality.h"
 #include "flood_window.h"
@@ -1125,6 +1126,222 @@ static void test_my_bssid_flag_unions_into_the_anchor(void) {
     no_inventory();
 }
 
+
+/* ── #89 slice 3: impersonator / neighbour / wired ──────────
+ *
+ * The issue's last fix bullet: distinguish an over-the-air impersonator
+ * from a neighbouring AP from an unauthorized AP attached to the wired
+ * network — and do not pretend RF can establish the third. These pin
+ * the alert side; tests/test_twins.c pins the same axes on the
+ * materialised episode and the [x] Twins view. */
+
+/* An inventory mismatch is the strongest impersonation claim available,
+ * and it still says nothing about the wire. The alert carries the class
+ * structurally *and* prints `wired=?` in the detail a human reads,
+ * because the reader who sees "impostor" with no attachment field will
+ * fill the gap themselves — usually with "rogue on our LAN". */
+static void test_twin_alert_carries_class_and_unknown_wired(void) {
+    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t rogue[6]    = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    wired_attach_clear();
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", declared, "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue,    "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_IMPERSONATOR);
+    ASSERT_EQ((int)s.alerts[idx].wired_attach, (int)WIRED_ATTACH_UNKNOWN);
+    ASSERT(strstr(s.alerts[idx].detail, "class=impostor") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "wired=?")        != NULL);
+    /* Nothing anywhere claims attachment. `wired=yes` must be
+     * unreachable from RF evidence alone, and this is the assertion
+     * that fails the day a heuristic tries to infer it. */
+    ASSERT(strstr(s.alerts[idx].detail, "wired=yes") == NULL);
+    no_inventory();
+}
+
+/* Day-one operator, no inventory file: the finding, its severity and
+ * its confidence are exactly what they were before slice 3, and the
+ * class is UNKNOWN rather than a label guessed from RF. Nothing an
+ * operator already sees may disappear behind a new classification. */
+static void test_twin_alert_without_inventory_is_unchanged(void) {
+    uint8_t a[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    wired_attach_clear();
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ((int)s.alerts[idx].confidence, TWIN_W_DIFF_OUI);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_UNKNOWN);
+    ASSERT_EQ((int)s.alerts[idx].wired_attach, (int)WIRED_ATTACH_UNKNOWN);
+    ASSERT(strstr(s.alerts[idx].detail, "class=?")  != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "wired=?")  != NULL);
+    /* And the inventory hash is still absent — no file was consulted. */
+    ASSERT_EQ((int)s.alerts[idx].inventory[0], 0);
+}
+
+/* An SSID outside the declared estate reads as a neighbouring AP, which
+ * is the answer to the *noise* half of this issue — and it is a label,
+ * not a mute. The alert still fires at the same severity. */
+static void test_twin_alert_outside_estate_is_neighbor_not_silenced(void) {
+    uint8_t a[6] = {0x02,0x22,0x33,0x44,0x55,0x66};
+    uint8_t b[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    wired_attach_clear();
+    ASSERT_EQ(use_inventory(INV_CORP), 1);   /* declares CorpWiFi only */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Cafe-Net", a, "WPA2");
+    add_beacon(&s, "Cafe-Net", b, "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_NEIGHBOR);
+    ASSERT(strstr(s.alerts[idx].detail, "class=neighbor") != NULL);
+    no_inventory();
+}
+
+/* The weak/strong CRIT branch classifies too, and an approved pair
+ * reads `declared` — the operator's own downgrade lane, not an
+ * impersonation. It is still reported (slice 2's demote-don't-silence),
+ * now with the class saying why it was demoted. */
+static void test_weak_strong_approved_pair_is_declared_class(void) {
+    uint8_t strong[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t open_ap[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+
+    wired_attach_clear();
+    ASSERT_EQ(use_inventory(INV_CORP), 1);   /* lists both */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", open_ap, "OPEN");
+    add_beacon(&s, "CorpWiFi", strong,  "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_DECLARED);
+    ASSERT(strstr(s.alerts[idx].detail, "class=declared") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "wired=?")        != NULL);
+
+    /* The undeclared OPEN clone of the same name is an impersonator. */
+    uint8_t rogue[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_beacon(&t, "CorpWiFi", rogue,  "OPEN");
+    add_beacon(&t, "CorpWiFi", strong, "WPA2");
+    alerts_update(&t);
+    int jdx = find_alert(&t, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(jdx >= 0);
+    ASSERT_EQ((int)t.alerts[jdx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT_EQ((int)t.alerts[jdx].ap_class, (int)TWIN_CLASS_IMPERSONATOR);
+    no_inventory();
+}
+
+/* The weak/strong CRIT branch with no inventory stays UNKNOWN rather
+ * than claiming `impostor`, and that is deliberate (#89 slice 3).
+ *
+ * An OPEN BSS beside a protected one under a single SSID is a strong
+ * *inference* — it is why the branch is CRIT at ~85 % confidence and
+ * why the detail says "suspected impersonation". It is not a
+ * categorical answer to "whose radio is that": a hotel running
+ * `Hotel-WiFi` open in the lobby and WPA2 in the rooms produces the
+ * same two beacons, and with nothing declared sloth cannot tell that
+ * from an evil twin. The severity, the confidence and the wording are
+ * all unchanged — only the categorical label is withheld, which is the
+ * direction this issue asks the detector to err in. */
+static void test_weak_strong_without_inventory_class_stays_unknown(void) {
+    uint8_t strong[6]  = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t open_ap[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    wired_attach_clear();
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "Cafe-Net", open_ap, "OPEN");
+    add_beacon(&s, "Cafe-Net", strong,  "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[idx].detail, "suspected impersonation") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_UNKNOWN);
+    ASSERT(strstr(s.alerts[idx].detail, "class=?") != NULL);
+}
+
+static wired_attach_t alert_wire_says_attached(const uint8_t bssid[6],
+                                               void *ctx) {
+    (void)bssid; (void)ctx;
+    return WIRED_ATTACH_ATTACHED;
+}
+
+/* The hook reaching the alert: register a correlator and the accused
+ * half's wired state lands on the record and in the detail a human
+ * reads. This is the seam the issue asked to be left open, exercised
+ * end to end — and the only route by which `wired=yes` can ever
+ * appear. */
+static void test_twin_alert_correlator_supplies_wired_state(void) {
+    uint8_t declared[6] = {0xaa,0xbb,0xcc,0x00,0x11,0x22};
+    uint8_t rogue[6]    = {0x99,0x88,0x77,0x66,0x55,0x44};
+
+    wired_attach_clear();
+    ASSERT_EQ(use_inventory(INV_CORP), 1);
+    wired_attach_register(alert_wire_says_attached, NULL);
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_beacon(&s, "CorpWiFi", declared, "WPA2");
+    add_beacon(&s, "CorpWiFi", rogue,    "WPA2");
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].wired_attach, (int)WIRED_ATTACH_ATTACHED);
+    ASSERT(strstr(s.alerts[idx].detail, "wired=yes") != NULL);
+    /* Separate axes: knowing it is on the wire did not move the class,
+     * the severity or the confidence. */
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_IMPERSONATOR);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+
+    wired_attach_clear();
+    no_inventory();
+}
+
+/* Rules that are not about an AP pair carry neither axis. A blanket
+ * class would label 60 rules that classified nothing, the same reason
+ * `confidence` and `inventory` are omitted rather than zeroed. */
+static void test_non_pair_rules_carry_no_pair_axes(void) {
+    wired_attach_clear();
+    no_inventory();
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    seed_arp(&s, "10.0.0.1", 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01);
+    /* 0x12, not 0x11: the low bit of the first octet is the I/G bit, and
+     * rule_arp_spoof correctly ignores a group-addressed sender. */
+    seed_arp(&s, "10.0.0.1", 0x12, 0x22, 0x33, 0x44, 0x55, 0x02);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ARP_SPOOF);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].ap_class, (int)TWIN_CLASS_UNKNOWN);
+    ASSERT_EQ((int)s.alerts[idx].wired_attach, (int)WIRED_ATTACH_UNKNOWN);
+    ASSERT(strstr(s.alerts[idx].detail, "class=") == NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "wired=") == NULL);
+}
 
 /* ── operator-designated networks (#52) ─────────────────────
  *
@@ -6560,6 +6777,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_site_lands_in_the_pair_key);
     RUN_TEST(test_inventory_approved_weak_pair_demotes_not_silences);
     RUN_TEST(test_my_bssid_flag_unions_into_the_anchor);
+
+    TEST_SUITE("evil twin: impersonator / neighbour / wired (#89 slice 3)");
+    RUN_TEST(test_twin_alert_carries_class_and_unknown_wired);
+    RUN_TEST(test_twin_alert_without_inventory_is_unchanged);
+    RUN_TEST(test_twin_alert_outside_estate_is_neighbor_not_silenced);
+    RUN_TEST(test_weak_strong_approved_pair_is_declared_class);
+    RUN_TEST(test_weak_strong_without_inventory_class_stays_unknown);
+    RUN_TEST(test_twin_alert_correlator_supplies_wired_state);
+    RUN_TEST(test_non_pair_rules_carry_no_pair_axes);
 
     TEST_SUITE("evil twin: trust anchors removed (#89)");
     RUN_TEST(test_evil_twin_same_oui_clone_with_ie_mismatch_fires);

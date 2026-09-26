@@ -6,6 +6,8 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "alerts.h"
+#include "wired_attach.h"
 #include "secure_file.h"
 #include "beacon_snoop.h"
 #include "captive_portal.h"
@@ -360,6 +362,31 @@ void jsonl_emit_icmp(const icmp_log_entry_t *e) {
     emit_line(buf);
 }
 
+/* The two AP-pair axes (#89 slice 3), additive per
+ * docs/wiki/jsonl-schema.md and shared by the legacy `alert` record and
+ * the `alert.*` lifecycle stream so a consumer never has to read both
+ * families to get them.
+ *
+ * `ap_class` is omitted when UNKNOWN and on every rule that is not
+ * about an AP pair — same rule as `confidence` and `inventory`, and for
+ * the same reason: a field present on all 61 rules would assert
+ * something about the 60 that never classified anything.
+ *
+ * `wired_attachment` is omitted when UNKNOWN, which today is always,
+ * because nothing in-tree can see the wire. **Absence means "not
+ * established", never "not attached"** — the schema doc says so
+ * explicitly, and it is the one inference a consumer must not draw from
+ * a missing field here. The `EVIL_TWIN` detail string carries a literal
+ * `wired=?` for the human reading the alert. */
+static void emit_pair_axes(char *buf, int *off, const alert_t *a) {
+    if (a->ap_class != (uint8_t)TWIN_CLASS_UNKNOWN)
+        kv_str(buf, LINEBUF, off, "ap_class",
+               twin_class_label((twin_class_t)a->ap_class));
+    if (a->wired_attach != (uint8_t)WIRED_ATTACH_UNKNOWN)
+        kv_str(buf, LINEBUF, off, "wired_attachment",
+               wired_attach_label((wired_attach_t)a->wired_attach));
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -392,6 +419,7 @@ void jsonl_emit_alert(const alert_t *a) {
      * docs/wiki/jsonl-schema.md. */
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
+    emit_pair_axes(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -439,6 +467,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
      * consumer never has to read both families. */
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
+    emit_pair_axes(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
@@ -518,6 +547,16 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s) {
          * and RSSI is not ownership. */
         kv_int(buf, LINEBUF, &off, "attributed",           e->attributed ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "confidence",           (long long)e->confidence);
+        /* The two pair axes (#89 slice 3), same shape and same omission
+         * rule as on the alert records. `wired_attachment` absent means
+         * nothing that can see the wire has answered — not that the AP
+         * is off the wire. */
+        if (e->ap_class != (uint8_t)TWIN_CLASS_UNKNOWN)
+            kv_str(buf, LINEBUF, &off, "ap_class",
+                   twin_class_label((twin_class_t)e->ap_class));
+        if (e->wired_attach != (uint8_t)WIRED_ATTACH_UNKNOWN)
+            kv_str(buf, LINEBUF, &off, "wired_attachment",
+                   wired_attach_label((wired_attach_t)e->wired_attach));
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

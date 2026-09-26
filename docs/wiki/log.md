@@ -1099,3 +1099,52 @@ the older "never scans, never modifies kernel state" phrasing. The
 charter is the Captain's to author (§4.3) and `agents/` is a high-signal
 surface, so the inconsistency is surfaced on the issue rather than
 edited here.
+
+---
+
+## 2026-09-26 — #89 slice 3: impersonator / neighbour / wired separation
+
+**Source**: issue #89 fix list, final bullet — *"Distinguish in the UI:
+over-the-air impersonator vs. neighboring AP vs. unauthorized AP
+attached to the wired network. RF alone cannot establish wired
+attachment; leave a hook for controller/switch/DHCP correlation."*
+
+**Updated pages**:
+
+- [jsonl-schema.md](jsonl-schema.md) — additive `ap_class` and
+  `wired_attachment` on the `alert`, `alert.*` and `twin_episode`
+  records, plus a note on why they are two axes and why a missing
+  `wired_attachment` must be rendered as unknown rather than as "not
+  attached".
+- [../views/twins.md](../views/twins.md) — the category table, the new
+  `Class` / `Wired` columns and legend, and the reasoning for keeping
+  wired attachment off the class enum entirely.
+
+**Notes**:
+
+- **Two of the three categories are decidable, one is not, and that
+  asymmetry is the whole slice.** `ap_class` (`impostor` / `neighbor` /
+  `declared` / unknown) comes from RF plus the approved inventory,
+  because impersonation is an over-the-air behaviour. Wired attachment
+  is not observable from any frame — a Pineapple on an LTE uplink and a
+  rogue bridged onto the access VLAN beacon identically — so it is a
+  separate field that no rule in `src/alerts.c` can set, defaulting to
+  unknown and rendering as `?`.
+- **The hook** is `src/wired_attach.h`: one in-process registration
+  slot for a future switch CAM / controller / DHCP correlator. Not a
+  plugin loader (no dlopen, no path), not a control surface (nothing
+  reaches it from the network or the CLI), and registering a correlator
+  grants it no permission to transmit — MISSION §2 applies to it like
+  anything else. One slot, no stacking: two correlators disagreeing is
+  an unresolved question, not a vote.
+- **Classification is a label, never a gate.** No class suppresses an
+  episode, moves a severity or changes a confidence; with no inventory
+  configured an operator sees exactly what they saw before, plus two
+  columns reading `?`. A classifier that could silence a finding would
+  be a new sole suppressor — the bug class #89 exists to remove.
+- **`ALERT_DETAIL_LEN` 256 → 320.** The same-security twin detail was
+  calibrated to land at exactly 255 bytes worst case, so appending
+  ` [class=… wired=…]` pushed it over and `-Wformat-truncation` caught
+  it. Grown rather than trading a field away, because the field that
+  would have been truncated is `wired=?` — the one statement that stops
+  a reader assuming sloth checked the wire.

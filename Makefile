@@ -16,6 +16,7 @@ SRCS = src/main.c          \
        src/tui_palette.c   \
        src/ownership.c     \
        src/inventory.c     \
+       src/wired_attach.c  \
        src/presence.c      \
        src/transit.c       \
        src/radiotap.c      \
@@ -311,6 +312,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_ownership.c     \
             src/inventory.c            \
             tests/test_inventory.c     \
+            src/wired_attach.c         \
+            tests/test_wired_attach.c  \
             src/presence.c             \
             tests/test_presence.c      \
             src/transit.c              \
