@@ -145,3 +145,4 @@
 | 1d19bc8 | 2026-09-25T18:52:00Z | claude-opus-5 | 312 | 134102 | 23489949 | 476594 | 19.8650 | #86 — explicit opt-in to bind the data socket remotely; unix socket actually 060 |
 | 618f300 | 2026-09-25T20:12:04Z | claude-opus-5 | 234 | 76863 | 14808706 | 301643 | 12.3435 | #94 — correlation evidence honesty: scored seqnum pairs with expiry, MY_NET_RECO |
 | b9aa686 | 2026-09-25T20:58:50Z | claude-opus-5 | 142 | 51532 | 6473665 | 278211 | 7.3080 | #84 slice 3: gate nl80211 scan trigger + discovery on strict observation, per-in |
+| 722cd00 | 2026-09-26T11:30:43Z | claude-opus-5 | 380 | 159698 | 31605735 | 498329 | 24.7805 | #89 slice 3 — twin ap_class / wired_attach separation, RF cannot assert wired at |
