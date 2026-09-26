@@ -9,6 +9,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "eapol_log.h"
+#include "jsonl.h"
 #include "alerts.h"
 #include "assoc_track.h"
 
@@ -1470,6 +1471,49 @@ static void test_export_write_failure_visible(void) {
     perm_cleanup();
 }
 
+/* #92: the same failure counted above must reach a machine-readable
+ * consumer too, not just stderr and the view header — via the
+ * sensor_health record's storage_eapol_failures field. */
+static void test_export_failure_reaches_sensor_health(void) {
+    perm_setup();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    ASSERT_EQ(eapol_export_failures(), 0);
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    eapol_clear();
+    setrlimit(RLIMIT_FSIZE, &lim);
+    drive_pmkid();
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+    ASSERT_GE(eapol_export_failures(), 1);
+
+    char jpath[] = "/tmp/sloth_eapol_sh_XXXXXX";
+    int jfd = mkstemp(jpath);
+    ASSERT(jfd >= 0);
+    if (jfd >= 0) close(jfd);
+    unlink(jpath);
+    ASSERT(jsonl_open(jpath));
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    jsonl_emit_sensor_health(&st);
+    jsonl_close();
+
+    FILE *fp = fopen(jpath, "r");
+    ASSERT(fp != NULL);
+    char body[4096]; size_t n = fp ? fread(body, 1, sizeof(body) - 1, fp) : 0;
+    body[n] = '\0';
+    if (fp) fclose(fp);
+    unlink(jpath);
+
+    ASSERT(strstr(body, "\"storage_eapol_failures\":") != NULL);
+    ASSERT(strstr(body, "\"storage_eapol_failures\":0") == NULL);
+    perm_cleanup();
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -1534,4 +1578,5 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_export_refuses_symlinked_22000);
     RUN_TEST(test_export_pcap_replace_does_not_follow_symlink);
     RUN_TEST(test_export_write_failure_visible);
+    RUN_TEST(test_export_failure_reaches_sensor_health);
 }

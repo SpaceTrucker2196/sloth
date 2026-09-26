@@ -3953,14 +3953,26 @@ static void snapshot(sloth_state_t *s) {
 }
 
 /* For any engine entry that has match_ip set and hasn't yet had its
- * packets dumped, walk s->packets[] and write a per-alert pcap. */
+ * packets dumped, walk s->packets[] and write a per-alert pcap.
+ *
+ * A failed write (-1) does NOT set pcap_dumped (#92): the export
+ * keeps retrying on the next tick, the same "a full disk may drain"
+ * philosophy jsonl.c's emit_line() already applies, rather than
+ * permanently losing this incident's evidence to one transient error.
+ * Zero packets matched (0, no failure) IS terminal — the ring already
+ * doesn't hold anything for this alert and never will retroactively. */
 static void dump_new_alert_pcaps(const sloth_state_t *s) {
     if (!alert_pcap_enabled()) return;
     for (int i = 0; i < engine_count; i++) {
         alert_t *a = &engine[i];
         if (a->pcap_dumped) continue;
         if (!a->match_ip[0]) continue;
-        alert_pcap_dump(s, a, NULL, 0);
+        int written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+        if (written < 0) {
+            a->pcap_write_failures++;
+            a->pcap_path[0] = '\0';
+            continue;
+        }
         a->pcap_dumped = 1;
     }
 }

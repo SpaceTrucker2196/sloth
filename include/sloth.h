@@ -780,7 +780,16 @@ typedef struct {
      * is broader than a single flow. */
     char         match_ip[46];
     uint16_t     match_port;              /* 0 = any port */
-    int          pcap_dumped;             /* engine-internal flag */
+    /* pcap_dumped is set only once export has nothing left to do for
+     * this incident — it wrote evidence, or genuinely no packet in the
+     * ring ever matched. It is deliberately NOT set on a failed write
+     * (#92): a disk-full or permission error is transient the same way
+     * jsonl.c's is, so dump_new_alert_pcaps() retries next tick instead
+     * of losing the evidence for good. pcap_write_failures counts those
+     * attempts; pcap_path is the exported file once one exists. */
+    int          pcap_dumped;
+    int          pcap_write_failures;
+    char         pcap_path[80];
     /* MITRE ATT&CK technique ID (e.g. "T1110.001") — populated from a
      * fixed lookup on alert_type by fire(). Empty for alerts that
      * describe operator/host posture rather than an adversary

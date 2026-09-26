@@ -304,6 +304,94 @@ static void test_threat_ip_rule_sets_match_fields(void) {
     ASSERT_EQ((int)s.alerts[found].match_port, 443);
 }
 
+/* ── #92: a failed export retries instead of being lost forever ── */
+
+static int find_threat_ip(const sloth_state_t *s) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_THREAT_IP) return i;
+    return -1;
+}
+
+/* Before #92, alerts_update()'s dump_new_alert_pcaps() set pcap_dumped
+ * unconditionally, so a transient write failure (disk full, permission
+ * lost) permanently lost that incident's evidence: pcap_dumped stayed 1
+ * and the export was never attempted again. This drives the real engine
+ * through alerts_update() (not alert_pcap_dump() directly) so the
+ * regression is pinned at the call site that had the bug. */
+static void test_dump_retries_after_transient_failure(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear();
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    conn_t *c = &s.conns[s.conn_count++];
+    snprintf(c->local_addr,  sizeof(c->local_addr),  "192.168.1.5");
+    snprintf(c->remote_addr, sizeof(c->remote_addr), "192.0.2.66");
+    c->local_port  = 33445;
+    c->remote_port = 443;
+    c->proto       = PROTO_TCP;
+    seed_packet(&s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    alerts_update(&s);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    int idx = find_threat_ip(&s);
+    ASSERT(idx >= 0);
+    ASSERT_EQ(s.alerts[idx].pcap_dumped, 0);
+    ASSERT_EQ(s.alerts[idx].pcap_write_failures, 1);
+    ASSERT_STR(s.alerts[idx].pcap_path, "");
+    ASSERT_EQ(ap87_entries(), 0);   /* no partial pcap left behind */
+
+    /* Next tick, with room to write: the same incident (same engine
+     * slot — the dedup key hasn't changed) gets a real export. */
+    alerts_update(&s);
+    idx = find_threat_ip(&s);
+    ASSERT(idx >= 0);
+    ASSERT_EQ(s.alerts[idx].pcap_dumped, 1);
+    ASSERT_EQ(s.alerts[idx].pcap_write_failures, 1);   /* not reset by success */
+    ASSERT(s.alerts[idx].pcap_path[0] != '\0');
+    ASSERT_EQ(ap87_entries(), 1);
+
+    alerts_clear();
+    ap87_cleanup();
+}
+
+/* A clean export on the first attempt records the path and never
+ * retries — the write-failure count stays at 0. */
+static void test_dump_records_path_on_success(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear();
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    conn_t *c = &s.conns[s.conn_count++];
+    snprintf(c->local_addr,  sizeof(c->local_addr),  "192.168.1.5");
+    snprintf(c->remote_addr, sizeof(c->remote_addr), "192.0.2.66");
+    c->local_port  = 33445;
+    c->remote_port = 443;
+    c->proto       = PROTO_TCP;
+    seed_packet(&s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
+
+    alerts_update(&s);
+    int idx = find_threat_ip(&s);
+    ASSERT(idx >= 0);
+    ASSERT_EQ(s.alerts[idx].pcap_dumped, 1);
+    ASSERT_EQ(s.alerts[idx].pcap_write_failures, 0);
+    ASSERT(s.alerts[idx].pcap_path[0] != '\0');
+    ASSERT(strstr(s.alerts[idx].pcap_path, g_ap87) != NULL);
+    ASSERT_EQ(ap87_entries(), 1);
+
+    alerts_clear();
+    ap87_cleanup();
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -325,4 +413,8 @@ void run_alert_pcap_tests(void) {
 
     TEST_SUITE("alert_pcap match-criteria integration");
     RUN_TEST(test_threat_ip_rule_sets_match_fields);
+
+    TEST_SUITE("alert_pcap export outcome recorded on the alert (#92)");
+    RUN_TEST(test_dump_retries_after_transient_failure);
+    RUN_TEST(test_dump_records_path_on_success);
 }

@@ -236,6 +236,13 @@ def fmt_alert_event(r, c):
     # evidence does, the second is one per rule tick.
     tail.append(f"obs={r.get('observations', '?')}/"
                 f"eval={r.get('evaluations', '?')}")
+    # Per-export outcome (#92) — present only for rules with a single
+    # flow (match_ip). pcap_write_failures can be non-zero with no
+    # pcap_path yet: export retries every tick rather than giving up.
+    if r.get("pcap_path"):
+        tail.append(f"pcap={r['pcap_path']}")
+    if r.get("pcap_write_failures"):
+        tail.append(f"pcap_fail={r['pcap_write_failures']}")
     return out + f" {c['dim']}({' '.join(tail)}){c['reset']}"
 
 
@@ -260,12 +267,16 @@ def fmt_sensor_health(r, c):
     makes "healthy with no detections" separable from "not observing".
     A real consumer should alert on: a stream going `down` with an
     `_exit` other than `stopped`, `chan_confirmed_ok` dropping to 0,
-    or any drop/eviction counter moving.
+    any drop/eviction counter moving, or `storage_failures` moving —
+    the last one means sloth detected something it could not persist
+    (#92), which stderr-only visibility would leave this consumer
+    unaware of entirely.
     """
     cap = _stream_state(r, "capture")
     mon = _stream_state(r, "monitor")
     bad = (cap.startswith("down") or mon.startswith("down")
-           or not r.get("chan_confirmed_ok", 1))
+           or not r.get("chan_confirmed_ok", 1)
+           or r.get("storage_failures", 0))
     head_c = c["red"] if bad else c["dim"]
     out = f"{head_c}sensor_health{c['reset']}  cap={cap} mon={mon}"
 
@@ -292,6 +303,12 @@ def fmt_sensor_health(r, c):
                        for k, v in sorted(r.items())
                        if k.startswith("evict_") and v)
         tail.append(f"evict={r['evictions']} [{per}]")
+    if r.get("storage_failures"):
+        per = " ".join(f"{k[len('storage_'):-len('_failures')]}={v}"
+                       for k, v in sorted(r.items())
+                       if k.startswith("storage_") and k.endswith("_failures")
+                       and k != "storage_failures" and v)
+        tail.append(f"storage_fail={r['storage_failures']} [{per}]")
     if tail:
         out += "  " + " ".join(tail)
     return out

@@ -18,6 +18,8 @@
 #include "views/procs.h"
 #include "sensor_health.h"
 #include "capture/capture.h"
+#include "alert_pcap.h"
+#include "eapol_log.h"
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -471,6 +473,16 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
+        /* Per-export outcome (#92) — meaningless without a match_ip,
+         * since that's the only case alert_pcap_dump() ever runs for.
+         * pcap_path omitted until export actually writes a file;
+         * pcap_write_failures omitted at 0 so a clean export doesn't
+         * grow the line for nothing. */
+        if (a->pcap_path[0])
+            kv_str(buf, LINEBUF, &off, "pcap_path", a->pcap_path);
+        if (a->pcap_write_failures)
+            kv_int(buf, LINEBUF, &off, "pcap_write_failures",
+                   a->pcap_write_failures);
     }
     if (reason && reason[0])
         kv_str(buf, LINEBUF, &off, "reason", reason);
@@ -1694,12 +1706,27 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
 
     uint64_t evict_total = sh_evict_total();
 
+    /* Storage write failures (#92) — sensor_health is the sensor's own
+     * self-report, and "I could not write the evidence I detected" is
+     * exactly that kind of fact. Each sink already counted its own
+     * failures (stderr-only, or a view header); this just gives a JSONL/
+     * socket consumer the same visibility a console operator always had.
+     * Read from each module's own accessor rather than from
+     * s->eapol_export_failures — that field is synced by eapol_snapshot()
+     * later in the same tick's poll loop, so reading it here would report
+     * last tick's count instead of this one's. */
+    int jsonl_fail  = jsonl_write_failures();
+    int pcap_fail   = alert_pcap_failures();
+    int eapol_fail  = eapol_export_failures();
+    int storage_fail = jsonl_fail + pcap_fail + eapol_fail;
+
     /* See the note above on what is deliberately NOT in the signature. */
     struct {
         int      cap_open, cap_run, cap_exit;
         int      mon_open, mon_run, mon_exit;
         int      chan_req, chan_conf, retune_fail, chan_ok;
         uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
+        int      storage_fail;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1717,6 +1744,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.mon_drop    = s->mon_health.ps_drop;
     sig.mon_ifdrop  = s->mon_health.ps_ifdrop;
     sig.evicted     = evict_total;
+    sig.storage_fail = storage_fail;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1742,6 +1770,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, key,
                (long long)sh_evict_count((sh_evict_t)k));
     }
+    kv_int(buf, LINEBUF, &off, "storage_failures",       storage_fail);
+    kv_int(buf, LINEBUF, &off, "storage_jsonl_failures", jsonl_fail);
+    kv_int(buf, LINEBUF, &off, "storage_pcap_failures",  pcap_fail);
+    kv_int(buf, LINEBUF, &off, "storage_eapol_failures", eapol_fail);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

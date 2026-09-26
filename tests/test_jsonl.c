@@ -10,6 +10,7 @@
 #include "sloth.h"
 #include "jsonl.h"
 #include "sensor_health.h"
+#include "alert_pcap.h"
 #include "tls_log.h"
 #include "dns_log.h"
 #include "ntp_log.h"
@@ -594,6 +595,83 @@ static void test_emit_alert_omits_inventory_when_unconsulted(void) {
     ASSERT(!contains(body, "inventory"));
 }
 
+/* #92: per-export outcome rides the lifecycle event, alongside
+ * match_ip/match_port — omitted until export has something to say,
+ * so a rule with no match_ip (most of them) never grows a pcap_path
+ * key it can't fill. */
+static void test_emit_alert_event_carries_pcap_path(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen = 1700000004;
+    a.sev       = ALERT_SEV_CRIT;
+    a.type      = ALERT_TYPE_THREAT_IP;
+    a.count     = 1;
+    a.event_seq = 1;
+    snprintf(a.title,       sizeof(a.title),       "THREAT_IP");
+    snprintf(a.detail,      sizeof(a.detail),      "saw 203.0.113.7");
+    snprintf(a.key,         sizeof(a.key),         "threat-ip:203.0.113.7");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    snprintf(a.match_ip,    sizeof(a.match_ip),    "203.0.113.7");
+    a.match_port = 443;
+    snprintf(a.pcap_path, sizeof(a.pcap_path),
+             "/var/lib/sloth/pcaps/alert_20260101_000000_THREAT_IP.pcap");
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body,
+        "\"pcap_path\":\"/var/lib/sloth/pcaps/alert_20260101_000000_THREAT_IP.pcap\""));
+    ASSERT(!contains(body, "pcap_write_failures"));
+}
+
+static void test_emit_alert_event_carries_pcap_write_failures(void) {
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen = 1700000004;
+    a.sev       = ALERT_SEV_CRIT;
+    a.type      = ALERT_TYPE_THREAT_IP;
+    a.count     = 1;
+    a.event_seq = 1;
+    snprintf(a.title,       sizeof(a.title),       "THREAT_IP");
+    snprintf(a.detail,      sizeof(a.detail),      "saw 203.0.113.7");
+    snprintf(a.key,         sizeof(a.key),         "threat-ip:203.0.113.7");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    snprintf(a.match_ip,    sizeof(a.match_ip),    "203.0.113.7");
+    a.match_port = 443;
+    a.pcap_write_failures = 2;   /* export still retrying, no path yet */
+    jsonl_emit_alert_event(&a, "alert.update", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"pcap_write_failures\":2"));
+    ASSERT(!contains(body, "pcap_path"));
+}
+
+static void test_emit_alert_event_omits_pcap_fields_without_match_ip(void) {
+    /* Most rules have no single flow. pcap export never runs for them
+     * (dump_new_alert_pcaps skips a bare match_ip), so neither field
+     * should appear even if somehow left non-empty on the struct. */
+    open_fresh();
+    alert_t a; memset(&a, 0, sizeof(a));
+    a.last_seen = 1700000004;
+    a.sev       = ALERT_SEV_WARN;
+    a.type      = ALERT_TYPE_ARP_SPOOF;
+    a.count     = 1;
+    a.event_seq = 1;
+    snprintf(a.title,       sizeof(a.title),       "ARP_SPOOF");
+    snprintf(a.detail,      sizeof(a.detail),      "10.0.0.1 moved");
+    snprintf(a.key,         sizeof(a.key),         "arp:10.0.0.1");
+    snprintf(a.incident_id, sizeof(a.incident_id), "deadbeefdeadbeef");
+    snprintf(a.pcap_path, sizeof(a.pcap_path), "should-not-appear.pcap");
+    a.pcap_write_failures = 5;
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(!contains(body, "pcap_path"));
+    ASSERT(!contains(body, "pcap_write_failures"));
+}
+
 /* ── escaping ────────────────────────────────────────────── */
 
 static void test_json_escapes_quotes_and_backslash(void) {
@@ -924,6 +1002,90 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"evict_pnl_ssid\":2"));
     ASSERT(contains(body, "\"evict_device\":0"));
     sh_evict_reset();
+}
+
+/* ── storage-error visibility (#92) ─────────────────────────
+ *
+ * A write failure was already counted per sink (stderr, or a view
+ * header for EAPOL) but never reached a machine-readable consumer —
+ * a SOC piping the JSONL/socket stream had no way to know sloth
+ * silently failed to write evidence to disk. sensor_health is already
+ * the sensor's self-report, so the three sinks' existing counters ride
+ * it rather than a new record type (additive, MISSION §4.3). */
+
+/* eapol export failures reaching sensor_health are covered by
+ * test_export_failure_reaches_sensor_health in test_eapol_log.c —
+ * that file already has the machinery (drive_pmkid(), perm_setup())
+ * to force a real failure through eapol_log.c's own export path
+ * rather than through s->eapol_export_failures, which jsonl.c
+ * deliberately does NOT read (see the comment in
+ * jsonl_emit_sensor_health(): that field is a per-tick copy synced
+ * later in the poll loop by eapol_snapshot(), so reading it here
+ * would report last tick's count instead of this one's). */
+
+static void test_emit_sensor_health_reports_pcap_export_failures(void) {
+    char dir[] = "/tmp/sloth_sh_pcap_XXXXXX";
+    char *d = mkdtemp(dir);
+    ASSERT(d != NULL);
+    if (!d) return;
+    ASSERT_EQ(alert_pcap_set_dir(dir), 0);
+
+    sloth_state_t ps; memset(&ps, 0, sizeof(ps));
+    packet_info_t *p = &ps.packets[ps.pkt_head];
+    snprintf(p->src, sizeof(p->src), "192.168.1.5");
+    snprintf(p->dst, sizeof(p->dst), "203.0.113.7");
+    p->src_port = 1; p->dst_port = 2;
+    p->len = 64; p->raw_len = 32;
+    ps.pkt_head = 1; ps.pkt_count = 1;
+
+    alert_t a; memset(&a, 0, sizeof(a));
+    snprintf(a.match_ip, sizeof(a.match_ip), "203.0.113.7");
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old; lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    int n = alert_pcap_dump(&ps, &a, NULL, 0);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+    ASSERT_EQ(n, -1);
+    ASSERT_EQ(alert_pcap_failures(), 1);
+
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"storage_pcap_failures\":1"));
+
+    alert_pcap_set_dir(NULL);   /* reset the global counter (#87 idiom) */
+    rmdir(dir);
+}
+
+static void test_emit_sensor_health_reports_jsonl_write_failures(void) {
+    open_fresh();   /* fresh sink: jsonl's own failure counter resets to 0 */
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old; lim.rlim_cur = 4;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    dns_log_entry_t e; memset(&e, 0, sizeof(e));
+    snprintf(e.src, sizeof(e.src), "1.2.3.4");
+    snprintf(e.qname, sizeof(e.qname), "example.com");
+    jsonl_emit_dns(&e);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+    ASSERT_EQ(jsonl_write_failures(), 1);
+
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"storage_jsonl_failures\":1"));
 }
 
 static void test_sensor_health_unchanged_is_suppressed(void) {
@@ -1368,6 +1530,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_confidence_when_reported);
     RUN_TEST(test_emit_alert_carries_inventory_hash);
     RUN_TEST(test_emit_alert_omits_inventory_when_unconsulted);
+    RUN_TEST(test_emit_alert_event_carries_pcap_path);
+    RUN_TEST(test_emit_alert_event_carries_pcap_write_failures);
+    RUN_TEST(test_emit_alert_event_omits_pcap_fields_without_match_ip);
     RUN_TEST(test_emit_connections_tcp_and_udp);
     RUN_TEST(test_emit_connections_v6_brackets_address);
     RUN_TEST(test_emit_connections_omits_zero_rtt);
@@ -1388,6 +1553,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
     RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
     RUN_TEST(test_emit_sensor_health_eviction_tally);
+    RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
+    RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);
     RUN_TEST(test_sensor_health_unchanged_is_suppressed);
     RUN_TEST(test_sensor_health_degradation_emits_immediately);
     RUN_TEST(test_sensor_health_traffic_alone_does_not_re_emit);
