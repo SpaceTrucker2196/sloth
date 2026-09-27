@@ -48,6 +48,14 @@ int  data_socket_init_ex(const char *spec, int allow_remote);
  * tested directly against addresses a test is not permitted to bind. */
 int  data_socket_spec_is_remote(const char *spec);
 
+/* The port of a well-formed `tcp:HOST:PORT` spec, parsed by the same
+ * full-string rule the binder uses (1..65535, no trailing bytes — so
+ * "8765x" is malformed, not 8765). -1 for a `unix:` spec, a non-literal
+ * host, or anything the binder would reject. Exported so a consumer of
+ * the spec (mDNS discovery) cannot read a different port out of it than
+ * the one actually bound. */
+int  data_socket_spec_tcp_port(const char *spec);
+
 /* Call from the main poll loop. Accepts any pending connections,
  * flushes queued bytes to clients that have become writable, and
  * disconnects clients stalled past DATA_SOCKET_STALL_SECS. Cheap when

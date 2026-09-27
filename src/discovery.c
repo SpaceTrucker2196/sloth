@@ -1,5 +1,6 @@
 #include "discovery.h"
 #include "observe.h"
+#include "data_socket.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -55,41 +56,15 @@ int discovery_service_xml(char *buf, size_t sz, const char *instance, int port) 
     return n;
 }
 
-/* Case-insensitive exact match. */
-static int ieq(const char *a, const char *b) {
-    for (; *a && *b; a++, b++) {
-        char ca = *a, cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
-        if (ca != cb) return 0;
-    }
-    return *a == *b;
-}
-
-static int is_loopback_host(const char *host) {
-    return ieq(host, "127.0.0.1") || ieq(host, "localhost") ||
-           ieq(host, "::1") || ieq(host, "[::1]") || host[0] == '\0';
-}
-
+/* Delegates both decisions to data_socket.c rather than re-deriving
+ * them. A private copy here had drifted: it named only 127.0.0.1 as
+ * loopback, so 127.0.0.2 (unreachable off-host, and bound without
+ * --data-socket-allow-remote) was advertised over mDNS, and it read the
+ * port with atoi, so "8765x" advertised 8765. One classifier means the
+ * advertisement can only ever describe what the exposure guard allowed. */
 int discovery_routable_tcp_port(const char *spec) {
-    if (!spec) return -1;
-    if (strncmp(spec, "tcp:", 4) != 0) return -1;   /* unix / other */
-    const char *rest = spec + 4;
-    /* Port is after the LAST colon; the host is everything before it.
-     * (Bare IPv6 literals without brackets are ambiguous here and treated
-     * as non-routable-if-loopback via the ::1 check; the documented spec
-     * form is tcp:HOST:PORT with a plain host.) */
-    const char *colon = strrchr(rest, ':');
-    if (!colon || colon == rest) return -1;
-    char host[128];
-    size_t hlen = (size_t)(colon - rest);
-    if (hlen >= sizeof(host)) return -1;
-    memcpy(host, rest, hlen);
-    host[hlen] = '\0';
-    if (is_loopback_host(host)) return -1;
-    int port = atoi(colon + 1);
-    if (port <= 0 || port > 65535) return -1;
-    return port;
+    if (data_socket_spec_is_remote(spec) != 1) return -1;
+    return data_socket_spec_tcp_port(spec);
 }
 
 int discovery_publish(const char *spec, const char *path) {

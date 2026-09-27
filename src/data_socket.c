@@ -228,6 +228,16 @@ int data_socket_spec_is_remote(const char *spec) {
     return addr_is_remote(&a);
 }
 
+int data_socket_spec_tcp_port(const char *spec) {
+    if (!spec || strncmp(spec, "tcp:", 4) != 0) return -1;
+    char host[64];
+    long port = 0;
+    if (parse_host_port(spec + 4, host, sizeof(host), &port, 0) != 0) return -1;
+    struct in_addr a;
+    if (inet_pton(AF_INET, host, &a) != 1) return -1;
+    return (int)port;
+}
+
 /* Bind a UNIX-domain stream socket at `path`. Replaces a stale entry
  * at the same path (a fresh start wins over a dead one); refuses to
  * touch anything that isn't provably a dead socket of ours. */

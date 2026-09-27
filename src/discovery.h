@@ -22,10 +22,12 @@
  * testable core. */
 int discovery_service_xml(char *buf, size_t sz, const char *instance, int port);
 
-/* If `data_socket_spec` is a TCP bind on a non-loopback host, return its
- * port (> 0); otherwise (unix socket, loopback, or malformed) return -1.
- * "Routable" here just means not 127.0.0.1 / ::1 / localhost — sloth
- * doesn't announce a socket only reachable from the same host. */
+/* If `data_socket_spec` is a TCP bind reachable from off-host, return
+ * its port (> 0); otherwise (unix socket, anywhere in 127.0.0.0/8, or
+ * malformed) return -1. "Routable" is exactly data_socket_spec_is_remote()
+ * == 1 — the 0.0.0.0 wildcard included — and the port is the binder's
+ * strict full-string parse, so what is advertised is what was bound.
+ * sloth doesn't announce a socket only reachable from the same host. */
 int discovery_routable_tcp_port(const char *data_socket_spec);
 
 /* Publish a service file for `data_socket_spec` at `path` (NULL =

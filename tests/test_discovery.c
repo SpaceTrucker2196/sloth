@@ -27,6 +27,55 @@ static void test_unix_and_malformed_not_routable(void) {
     ASSERT_EQ(discovery_routable_tcp_port(NULL), -1);
 }
 
+/* #86: the whole 127.0.0.0/8 is loopback, not just 127.0.0.1. The
+ * data-socket guard binds 127.0.0.2 without --data-socket-allow-remote
+ * because nothing off-host can reach it; advertising it over mDNS would
+ * announce a service no client can connect to. */
+static void test_whole_loopback_net_not_routable(void) {
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:127.0.0.2:8765"),       -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:127.1.2.3:8765"),       -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:127.255.255.254:8765"), -1);
+    /* One past the /8 on either side is routable. */
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:126.255.255.255:8765"), 8765);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:128.0.0.1:8765"),       8765);
+}
+
+/* The wildcard binds every interface, so it is the most reachable bind
+ * there is — the guard classifies it remote and discovery must agree. */
+static void test_wildcard_is_routable(void) {
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:0.0.0.0:8765"), 8765);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:0.0.0.0:1"),    1);
+}
+
+/* #86: atoi accepted a numeric prefix, so "8765x" advertised 8765 even
+ * though the binder rejects the spec outright. Every port shape the
+ * binder refuses must also be refused here. */
+static void test_port_parse_is_full_string(void) {
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:8765x"),  -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:8765 "),  -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:"),       -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:65536"),  -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:-1"),     -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:99999999999999999999"), -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:192.168.1.5:65535"),  65535);
+}
+
+/* A filesystem socket has no address to advertise, whatever its path —
+ * including one whose text happens to look like host:port. */
+static void test_unix_specs_never_routable(void) {
+    ASSERT_EQ(discovery_routable_tcp_port("unix:/run/sloth.sock"),      -1);
+    ASSERT_EQ(discovery_routable_tcp_port("unix:/tmp/10.0.0.1:8765"),   -1);
+    ASSERT_EQ(discovery_routable_tcp_port("unix:"),                     -1);
+    ASSERT_EQ(discovery_routable_tcp_port(""),                          -1);
+}
+
+/* Discovery must never advertise a spec the binder would not bind: a
+ * hostname is not a literal the binder accepts (inet_pton only). */
+static void test_non_literal_host_not_routable(void) {
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:sensor.lan:8765"), -1);
+    ASSERT_EQ(discovery_routable_tcp_port("tcp:999.1.1.1:8765"),  -1);
+}
+
 /* ── Service XML ─────────────────────────────────────────── */
 
 static void test_xml_contains_service_and_port(void) {
@@ -124,6 +173,11 @@ void run_discovery_tests(void) {
     RUN_TEST(test_routable_tcp_port);
     RUN_TEST(test_loopback_not_routable);
     RUN_TEST(test_unix_and_malformed_not_routable);
+    RUN_TEST(test_whole_loopback_net_not_routable);
+    RUN_TEST(test_wildcard_is_routable);
+    RUN_TEST(test_port_parse_is_full_string);
+    RUN_TEST(test_unix_specs_never_routable);
+    RUN_TEST(test_non_literal_host_not_routable);
     RUN_TEST(test_xml_contains_service_and_port);
     RUN_TEST(test_xml_escapes_instance);
     RUN_TEST(test_xml_rejects_bad_args);
