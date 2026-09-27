@@ -140,8 +140,15 @@ inherited from a default.
 > drops an Avahi service file so the sloth-ios client can find the
 > socket. Loopback and `unix:` sockets never advertise. Suppress it
 > entirely with `--no-discovery` — or with `--strict`, which refuses it
-> for the whole run along with every other path that can put the host on
-> the network (#84).
+> for the whole run (#84).
+>
+> `--strict` does **not** refuse the routable bind itself. `--strict
+> --data-socket tcp:<routable>:PORT --data-socket-allow-remote` still
+> opens a listener that transmits every observation to whoever connects;
+> only the advertisement is suppressed. Under `--strict` an opted-in
+> routable data socket is therefore a remaining path by which a sloth run
+> puts the host on the network. Whether `--strict` should refuse it too
+> is an open owner decision (#84).
 
 ---
 
