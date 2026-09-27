@@ -149,3 +149,4 @@
 | 6d5b024 | 2026-09-27T04:55:12Z | claude-opus-5-5 | 58 | 31494 | 2730610 | 122396 | 2.1554 | #86 slice 3: unix socket doc examples /tmp -> /run |
 | 8931549 | 2026-09-27T04:58:51Z | claude-opus-5-5 | 10 | 4674 | 761561 | 6346 | 0.2966 | #96 docs-consistency test: README/SECURITY/help vs SLOTH_VERSION, VIEW_COUNT, ALERT_TYPE_COUNT |
 | 41ddbca | 2026-09-27T05:51:00Z | claude-opus-5-5 | 12 | 3048 | 986540 | 16022 | 0.3865 | Fix ASan CI build: bound scenario BSSID octets (#95) |
+| 6c33228 | 2026-09-27T11:26:07Z | claude-opus-5 | 156 | 68691 | 7781154 | 337598 | 8.9846 | #84 — help-text honesty: --hop and --strict claims corrected in print_usage() |
