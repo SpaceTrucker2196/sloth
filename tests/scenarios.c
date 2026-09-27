@@ -161,7 +161,10 @@ void scenario_wifi_crowded(void) {
 
     for (int i = 0; i < nap; i++) {
         char bssid[18];
-        snprintf(bssid, sizeof(bssid), "AA:BB:CC:DD:%02X:%02X", i / 16, i % 16);
+        /* unsigned char bounds each octet to two hex digits; under ASan
+         * gcc loses the range of i and flags -Wformat-truncation. */
+        snprintf(bssid, sizeof(bssid), "AA:BB:CC:DD:%02X:%02X",
+                 (unsigned char)(i / 16), (unsigned char)(i % 16));
         g_fake_net.aps[i] = make_ap(aps[i].ssid, bssid,
                                      aps[i].dbm, aps[i].ch, aps[i].enc);
     }
