@@ -12,7 +12,13 @@
  * The number is the observation; the operator supplies the context.
  *
  * Deliberately no clock of its own — every timestamp is a parameter,
- * so windowing is testable without waiting. */
+ * so windowing is testable without waiting.
+ *
+ * Thread safety (#95): every function here may be called from any
+ * thread. rf_quality_observe() runs on the probe thread while
+ * rf_quality_snapshot() runs on the poll loop; one mutex private to
+ * rf_quality.c serialises them all. It is a leaf — never held across a
+ * call out of the module — so callers may hold their own locks. */
 
 #ifndef SLOTH_RF_QUALITY_H
 #define SLOTH_RF_QUALITY_H

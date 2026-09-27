@@ -3,6 +3,8 @@
  * Every timestamp is supplied, so windowing is exercised across minutes
  * without waiting for any. */
 
+#include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include "runner.h"
 #include "sloth.h"
@@ -183,6 +185,105 @@ static void test_clear_empties_everything(void) {
     ASSERT_EQ(rf_quality_retry_pct(6, T0), -1);
 }
 
+/* ── concurrency (#95) ───────────────────────────────────── */
+
+/* The probe thread observes while the poll loop snapshots and clears.
+ * Every frame on an even channel carries both the retry bit and a bad
+ * FCS; every frame on an odd channel carries neither. So any coherent
+ * read of a channel is -1, or exactly 100% (even) / 0% (odd), and the
+ * two ratios agree. Anything else — 99% from a frame counted before its
+ * retry, a snapshot row whose ratios disagree, a ratio with fewer than
+ * RF_MIN_FRAMES behind it — is a torn read. One observer holds a stable
+ * hop list; the other churns more channels than the table holds, so
+ * slots are evicted under the reader. The clock advances past
+ * RF_WINDOW_SECS so windows roll too. Unlocked, this is a TSan-reported
+ * race; without TSan the tear checks trip by chance. Assertions stay on
+ * this thread: the runner's counters are not thread-safe. */
+#define RF_RACE_ITERS 20000
+
+typedef struct {
+    int id;
+    int torn;   /* reader: incoherent reads seen */
+    int ops;
+} rf_race_arg_t;
+
+static int rf_race_expected(int ch) { return (ch % 2 == 0) ? 100 : 0; }
+
+static void *rf_race_observer(void *p) {
+    rf_race_arg_t *a = p;
+    for (int i = 0; i < RF_RACE_ITERS; i++) {
+        int ch = a->id == 0 ? 1 + (i % 8)                       /* 1..8 */
+                            : 100 + (i % (MAX_RF_CHANNELS + 32));
+        int bad = (ch % 2 == 0);
+        rf_quality_observe(ch, bad, bad, (time_t)(T0 + i / 64));
+        a->ops++;
+    }
+    return NULL;
+}
+
+static void *rf_race_reader(void *p) {
+    rf_race_arg_t *a = p;
+    sloth_state_t *s = calloc(1, sizeof(*s));
+    if (!s) return NULL;
+    static const int rows[] = { 1, 2, 3, 4, 5, 6, 7, 8, 100, 101, 102, 103 };
+    int nrows = (int)(sizeof(rows) / sizeof(rows[0]));
+    for (int i = 0; i < nrows; i++) s->channels[i].channel = rows[i];
+    s->channel_count = nrows;
+
+    for (int i = 0; i < RF_RACE_ITERS; i++) {
+        time_t now = (time_t)(T0 + i / 64);
+        rf_quality_snapshot(s, now);
+        for (int r = 0; r < nrows; r++) {
+            const channel_summary_t *row = &s->channels[r];
+            if (row->retry_pct == -1) {
+                if (row->badfcs_pct != -1) a->torn++;
+                continue;
+            }
+            if (row->retry_pct != rf_race_expected(row->channel) ||
+                row->badfcs_pct != row->retry_pct ||
+                row->frames < RF_MIN_FRAMES)
+                a->torn++;
+        }
+        int ch  = rows[i % nrows];
+        int pct = rf_quality_retry_pct(ch, now);
+        if (pct != -1 && pct != rf_race_expected(ch)) a->torn++;
+        int deg = rf_quality_is_degraded(ch, now);
+        if (deg && rf_race_expected(ch) == 0) a->torn++;
+        if (i % 4096 == 4095) rf_quality_clear();
+        a->ops++;
+    }
+    free(s);
+    return NULL;
+}
+
+static void test_concurrent_observe_snapshot(void) {
+    rf_quality_clear();
+    pthread_t th[3];
+    rf_race_arg_t args[3];
+    memset(args, 0, sizeof(args));
+    for (int i = 0; i < 3; i++) {
+        args[i].id = i;
+        ASSERT_EQ(pthread_create(&th[i], NULL,
+                                 i < 2 ? rf_race_observer : rf_race_reader,
+                                 &args[i]), 0);
+    }
+    for (int i = 0; i < 3; i++) ASSERT_EQ(pthread_join(th[i], NULL), 0);
+    for (int i = 0; i < 3; i++) ASSERT_EQ(args[i].ops, RF_RACE_ITERS);
+    ASSERT_EQ(args[2].torn, 0);
+
+    /* The table is still coherent afterwards: a full table evicts the
+     * stalest channel and keeps counting the new one. */
+    rf_quality_clear();
+    for (int ch = 1; ch <= MAX_RF_CHANNELS; ch++)
+        feed(ch, RF_MIN_FRAMES, RF_MIN_FRAMES, 0, T0 + ch);
+    feed(MAX_RF_CHANNELS + 1, RF_MIN_FRAMES, 0, 0, T0 + MAX_RF_CHANNELS + 1);
+    ASSERT_EQ(rf_quality_retry_pct(1, T0 + MAX_RF_CHANNELS + 1), -1);
+    ASSERT_EQ(rf_quality_retry_pct(2, T0 + MAX_RF_CHANNELS + 1), 100);
+    ASSERT_EQ(rf_quality_retry_pct(MAX_RF_CHANNELS + 1,
+                                   T0 + MAX_RF_CHANNELS + 1), 0);
+    rf_quality_clear();
+}
+
 void run_rf_quality_tests(void) {
     TEST_SUITE("rf quality: ratios");
     RUN_TEST(test_retry_ratio);
@@ -209,4 +310,7 @@ void run_rf_quality_tests(void) {
     RUN_TEST(test_snapshot_creates_no_rows);
     RUN_TEST(test_snapshot_null_state_is_safe);
     RUN_TEST(test_clear_empties_everything);
+
+    TEST_SUITE("rf quality: concurrency");
+    RUN_TEST(test_concurrent_observe_snapshot);
 }
