@@ -1269,3 +1269,28 @@ copy of "is this spec routable" and had drifted from the bind guard in
 - **Limits.** `data_socket_spec_tcp_port()` has no direct tests in
   `tests/test_data_socket.c`, and duplicates the parse sequence in
   `data_socket_spec_is_remote()`. Both are follow-ups.
+
+## 2026-09-26 — #95: evil-twin taint table locked against the probe thread
+
+**Source**: issue #95 — `g_taint` in `src/alerts.c` was written on the
+main loop and read from the probe thread (via `eapol_log.c` writing a
+.22000 line) with nothing ordering the accesses.
+
+**Updated pages**:
+
+- `src/alerts.c` — `g_taint_mu` guards mark, query and clear; eviction
+  body is `taint_mark_locked()`.
+- `src/alerts.h` — thread-safety contract documented;
+  `EVIL_TWIN_TAINT_MAX` exported.
+- `tests/test_alerts.c` — concurrent mark/query test, 16 assertions.
+
+**Notes**:
+
+- **Leaf lock.** Nothing but memcmp/memcpy runs under `g_taint_mu` and
+  `time()` is read before locking, so taking it under `eapol_log.c`'s
+  `g_mu` cannot deadlock.
+- **Red signal is TSan.** With the locks stubbed a TSan run reports 2
+  races; without TSan the new test only catches the race by chance.
+  CI gains a reliable signal when the #95 TSan slice lands.
+- **Limits.** The post-join capacity check runs on a cleared table, and
+  the leaf-lock invariant is documented, not mechanically enforced.
