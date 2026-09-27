@@ -387,7 +387,7 @@
           <span class="code-title">Splunk HEC</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink hec \
     --hec-url       https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN</pre>
@@ -399,7 +399,7 @@
           <span class="code-title">Elasticsearch (rolled daily)</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink elastic \
     --es-url       https://elastic.example.com:9200 \
     --es-index     'sloth-events-%Y.%m.%d' \
@@ -412,7 +412,7 @@
           <span class="code-title">RFC 5424 syslog (UDP)</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink syslog \
     --syslog-host siem.example.com \
     --syslog-port 514</pre>
@@ -470,7 +470,7 @@ make         # builds ./sloth</pre>
 <pre class="code-block">sudo ./sloth                              # TUI on default iface
 sudo ./sloth -i eth0                      # pin capture iface
 sudo ./sloth -o /var/log/sloth.jsonl      # forensic stream
-sudo ./sloth --data-socket unix:/tmp/sloth.sock
+sudo ./sloth --data-socket unix:/run/sloth.sock
 sudo ./sloth --eapol-dir /tmp/sloth-eapol # WiFi handshake export</pre>
       </div>
 
