@@ -1601,3 +1601,44 @@ is research-derived and has never been validated against a capture.
   page budget (`LINES - 5`), so a full list clips it.
 - **Open.** The explicit PMKID_OBSERVED /
   BEHAVIOR_CONSISTENT_WITH_ACTIVE_COLLECTION / CONFIRMED_ATTACK states.
+
+## 2026-09-27 — #85: capture allow-list pinned by ifindex, scope state reported
+
+**Source**: commit `7da4b15`, issue #85.
+
+`--iface` and `--monitor-only` were enforced by matching interface
+names through a cache. A rename, delete or ifindex reuse could make a
+stale name authorise traffic from the wrong interface, and nothing told
+the operator when the requested scope was no longer being observed.
+
+**Changes**:
+
+- `src/capture/capture.{c,h}`: `capture_policy_pin()` pins the
+  allow-list to (ifindex, name) pairs before the worker starts. A frame
+  is admitted only when its SLL2 ingress index matches a valid pin.
+  `capture_scope_poll()` revalidates each pin every tick. On delete,
+  rename, reuse or lookup failure it clears the pin (sticky) and bumps
+  a generation counter under `g_mu`. `capture_scope_state()` returns
+  none, enforced, no_capture or degraded.
+- `src/jsonl.c`: sensor_health appends `scope`, `scope_not_enforced`,
+  `scope_requested`, `scope_enforced` and `scope_generation`, all in
+  the change-only signature. Additive.
+- `src/views/iface.c`: the health strip shows `scope degraded N/M` or
+  `scope no-capture` only when something is wrong.
+- Docs: `jsonl-schema.md`, `docs/views/interfaces.md`;
+  `examples/consumer/sloth-stream.py`.
+- Tests (+101 assertions), using a seeded interface table that changes
+  between ticks and hand-built SLL2 headers.
+
+**Notes**:
+
+- **Owner question.** When an adapter is unplugged and returns under
+  the same name with a new ifindex, should it stay failed closed until
+  restart (what ships), or be re-pinned by name mid-run?
+- **Open.** A transient `if_indextoname()` failure also fails a pin
+  closed for the rest of the run. It shows as `scope degraded`.
+- **Open.** An ifindex reused between two ticks is admitted until the
+  next revalidation (documented). A dead worker with a live handle
+  reads `enforced`. [m] can still retarget the probe radio under
+  `--monitor-only`.
+- **Deferred.** The `out_of_scope_dropped` counter (wave 8).
