@@ -1642,3 +1642,41 @@ the operator when the requested scope was no longer being observed.
   reads `enforced`. [m] can still retarget the probe radio under
   `--monitor-only`.
 - **Deferred.** The `out_of_scope_dropped` counter (wave 8).
+
+## 2026-09-27 — #95: blocking cppcheck job, and the bug its first pass found
+
+**Source**: commit `154079c`, issue #95.
+
+The sanitizer jobs only see code the suite executes. A static pass over
+all of `src/` and `research/` catches defects on paths no test drives.
+
+**Changes**:
+
+- `.github/workflows/ci.yml`: new `cppcheck` job on ubuntu-24.04. A
+  guard step fails unless the binary is exactly 2.13.0. Default Linux
+  configuration only (the -D set mirrors `make`); warning, portability,
+  performance and information classes plus errors; any unlisted finding
+  fails the run.
+- `tests/cppcheck.supp`: 23 `id:file` entries, each with its reason.
+  An entry that stops matching an analysed file fails the job
+  (unmatchedSuppression).
+- `src/views/alerts.c`: the alert detail panel printed last_seen as
+  "First seen": two `localtime()` results shared one static struct tm.
+  Now `localtime_r` into stack storage. New test in
+  `tests/test_alerts.c` (+6 assertions), red before the fix.
+- `src/capture/capture.c`: `%u` → `%d` for an int protocol number.
+- `src/http_log.c`: dropped a redundant `e &&` guard that the next
+  statement contradicted.
+
+**Notes**:
+
+- **Owner question.** Convert the 10 main-thread `localtime()`/`gmtime()`
+  sites to `localtime_r()` and drop their suppressions?
+- **Owner question.** Add a second cppcheck pass for the embedded
+  configuration, so WITH_*=0 paths are analysed?
+- **Open.** An `id:file` entry hides a new same-id finding in the same
+  file; an entry for a renamed or deleted file is not reported stale.
+  Both are stated in the list header.
+- **Open.** `src/pcap_write.c:30` dereferences a `localtime()` result
+  without a NULL check (pre-existing; cppcheck does not flag it).
+- **Not done.** clang-tidy.
