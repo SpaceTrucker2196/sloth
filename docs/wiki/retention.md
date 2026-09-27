@@ -16,9 +16,9 @@ erasure.
 **Sources**: `src/db.c` (`db_maintain`, `prune_tier`,
 `prune_oldest_observations`, `db_size_bytes`), `src/db.h`
 (`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`), `src/db_schema.c`,
-`tests/test_db.c`, issue #96.
+`tests/test_db.c`, issue #96; `src/secure_file.c` for §4.1 (#87).
 
-**Last updated**: 2026-09-23 (sloth 1.8.2).
+**Last updated**: 2026-09-27 (sloth 1.8.2).
 
 ---
 
@@ -176,6 +176,7 @@ operator deletes them:
 | Per-handshake pcaps | `--eapol-dir DIR` | **none** |
 | Posture reports | `--report`, `--report-json` | **none** — overwritten per run at the path you name, never aged |
 | Packets-view manual export | `w` key | **none** |
+| Wi-Fi AP snapshot | `--snapshot-out FILE` | **none** — overwritten per run at the path you name |
 | SQLite WAL / SHM | `--db` | not measured by the size guard; checkpointed by SQLite, not by sloth |
 | Filesystem copies, backups, snapshots | — | outside sloth entirely |
 
@@ -183,6 +184,67 @@ If your data-handling policy needs those bounded, bound them outside
 sloth — logrotate, a tmpfiles.d rule, a systemd timer. Sloth
 deliberately ships no deletion logic for artifacts the operator asked
 for by name.
+
+### 4.1 File permissions on those artifacts (current behaviour)
+
+Retention does not bound these files; their permissions at creation are
+enforced. This subsection describes what the code does as of 1.8.2
+(`src/secure_file.c`, #87). It records behaviour, not a policy.
+
+- **Created private, independent of the umask.** Files are opened with
+  `openat(…, O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600)`. A directory sloth
+  creates (`--eapol-dir`, `--pcap-dir`) is made with `mkdir(…, 0700)` and
+  then opened `O_DIRECTORY | O_NOFOLLOW`. A umask can only clear bits
+  from those modes.
+- **What is checked, and how.** For files and directories sloth opens
+  itself, every check below is an `fstat` of the opened descriptor, not
+  a second lookup of the path. The SQLite side files (`-wal`, `-shm`,
+  `-journal`) are the exception: sloth does not open them, so an
+  existing one is checked by `lstat` of the path before SQLite opens it
+  by path. That check is not pinned to a descriptor, and a swap between
+  the check and SQLite's open is not detected.
+- **An existing path is refused, not repaired — for append and truncate
+  targets and for directories.** That covers `--eapol-dir` and
+  `--pcap-dir`, `DIR/eapol.22000`, `-o FILE`, `--db FILE` and its side
+  files, `--report` and `--report-json`. sloth refuses such a path, with
+  a reason on stderr, when it is the wrong type, is owned by a uid other
+  than sloth's effective uid, has any group or other permission bit
+  (`mode & 077`), is a file with more than one hard link, or is a
+  symlink as the final component. It never `chmod`s or `chown`s the
+  path. The owning gid is not checked. Parent directories of an
+  operator-named file are neither created nor checked.
+- **Exclusive-create artifacts never open an existing name.** Per-alert
+  pcaps and the packets-view `w` export are created `O_EXCL`; an
+  existing file at the name is left untouched and sloth moves to the
+  next suffix (`_2` … `_99`).
+- **The per-handshake pcap is replaced, not inspected.** It is written
+  to an exclusive temp file `DIR/.<name>.tmp` and `rename`d over
+  `DIR/<bssid>_<sta>.pcap`. Whatever sits at that name — any owner,
+  mode or type, a symlink included — is replaced without being checked
+  or written through. A stale temp file of that name is unlinked first,
+  on the basis that only sloth writes the private directory.
+- **No group mode exists for the artifacts in the table below.** No
+  flag or setting makes sloth create one of them group-readable or
+  accept a group-accessible existing one. Whether a group mode should
+  exist is an open question on #87; nothing here answers it. The table
+  also lists one export that does not go through these checks at all
+  (`--snapshot-out`).
+
+| Artifact | Created as | Write | If refused |
+|----------|------------|-------|------------|
+| `--eapol-dir DIR`, `--pcap-dir DIR` | directory 0700 | — | startup stops |
+| `DIR/eapol.22000` | 0600 | append; a failed write is truncated back to the previous length | counted, shown in the EAPOL view header; later exports still attempted |
+| `DIR/<bssid>_<sta>.pcap` | 0600 | exclusive temp file in `DIR`, renamed over the old name | a temp-file create, write or rename failure is counted and shown in the EAPOL view header; the previous capture stays |
+| Per-alert pcaps in `--pcap-dir` | 0600 | exclusive create, `_2` … `_99` on a same-second name clash | counted, retried next tick |
+| Packets-view `w` export | 0600 | exclusive create in the working directory, same suffixing | export fails |
+| `-o FILE` JSONL | 0600 | append | startup stops |
+| `--db FILE` | 0600, created before SQLite opens it (`SQLITE_OPEN_NOFOLLOW` where available) | SQLite | startup stops |
+| `FILE-wal`, `FILE-shm`, `FILE-journal` | by SQLite, mode copied from the main file | SQLite | an existing one failing the checks stops startup |
+| `--report`, `--report-json` | 0600 | validated, then truncated and rewritten | report skipped; the old file is left as it was |
+| `--snapshot-out FILE` | **not covered** — plain `fopen(path, "w")`: mode is `0666 & ~umask` (0644 under the usual 022, so group- and world-readable), follows a symlink, existing file not validated | truncated and rewritten | write fails with one stderr line |
+
+Detail for the EAPOL export, including the refusal message, is in
+[`docs/views/eapol.md`](../views/eapol.md#export-handling-87).
 
 ## 5. Deletion is logical, not secure erasure
 
@@ -215,6 +277,9 @@ Recorded here rather than implied away:
   main database file only, excluding `-wal`/`-shm` — and gives up for
   the hour after 64 pruning rounds (§3).
 - **Retention is process-local.** It runs only while sloth runs.
+- **`--snapshot-out` bypasses the #87 file checks.** It is written with
+  plain `fopen`, so its mode follows the umask and a symlink at the path
+  is followed (§4.1). Not fixed as of 1.8.2; a #87 follow-up.
 
 ## Related pages
 

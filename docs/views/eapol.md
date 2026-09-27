@@ -159,8 +159,15 @@ counted. The view header then shows the count and latest reason:
 Capture carries on either way, and export keeps retrying — a full disk
 may drain.
 
-Running under `sudo`, the files belong to root. Read them with `sudo`,
-or copy them out deliberately; there is no group-sharing mode.
+**Group access — what the code does today.** There is no group mode:
+no flag or setting makes sloth create a group-readable export, and the
+modes above are fixed. Under `sudo` the directory and files are owned
+by root and carry no group or other bits. An existing `DIR` or
+`eapol.22000` that grants any group permission bit is refused like any
+other permissive path and left as it is; sloth does not change its
+mode. Only the permission bits and the owning uid are checked — the
+owning gid is not. This paragraph records current behaviour; it is not
+a statement of group-sharing policy, which is still open on #87.
 
 ### Frame validation (#83)
 
