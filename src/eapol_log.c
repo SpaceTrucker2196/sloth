@@ -67,6 +67,7 @@ typedef struct {
     uint8_t  m_frames[4][EAPOL_FRAME_MAX];
     int      m_frame_lens[4];
     time_t   m_frame_ts[4];
+    uint32_t m_frame_usec[4];
 
     /* ── Pair-level, survives attempt_reset() ────────────── */
     /* PTK generation (#75 slice 4, CVE-2020-24587). Bumped when an M3
@@ -174,6 +175,7 @@ static void attempt_reset(pending_t *p) {
     memset(p->m_frames,     0, sizeof(p->m_frames));
     memset(p->m_frame_lens, 0, sizeof(p->m_frame_lens));
     memset(p->m_frame_ts,   0, sizeof(p->m_frame_ts));
+    memset(p->m_frame_usec, 0, sizeof(p->m_frame_usec));
 }
 
 /* Bounded lifetime: an M1 older than EAPOL_PAIR_WINDOW_S can no longer
@@ -329,10 +331,10 @@ static void write_handshake_pcap(const pending_t *p) {
     /* Walk M1..M4 in order. Skip empty slots. */
     for (int i = 0; i < 4; i++) {
         if (p->m_frame_lens[i] == 0) continue;
-        time_t   ts  = p->m_frame_ts[i];
         uint16_t cap = (uint16_t)p->m_frame_lens[i];
-        w_u32le(f, (uint32_t)ts);
-        w_u32le(f, 0);                /* usec — second-level resolution */
+        /* The frame's own capture time (#92), not when it was written. */
+        w_u32le(f, (uint32_t)p->m_frame_ts[i]);
+        w_u32le(f, p->m_frame_usec[i]);
         w_u32le(f, cap);
         w_u32le(f, cap);
         fwrite(p->m_frames[i], 1, cap, f);
@@ -460,14 +462,14 @@ static int parse_eapol_key(const uint8_t *p, size_t len, size_t *out_span,
 /* ── 802.11 frame walker ─────────────────────────────────── */
 
 int eapol_observe_dot11(const uint8_t *d, int len,
-                         int8_t signal, int channel)
+                         int8_t signal, int channel,
+                         time_t now, long ts_usec)
 {
-    return eapol_observe_dot11_at(d, len, signal, channel, time(NULL));
-}
-
-int eapol_observe_dot11_at(const uint8_t *d, int len,
-                            int8_t signal, int channel, time_t now)
-{
+    /* The timestamp is caller input and ends up in an exported pcap
+     * record header, where ts_usec must be below 1000000; anything
+     * else is not a timestamp, so it is not written through. */
+    uint32_t usec = (ts_usec >= 0 && ts_usec <= 999999)
+                  ? (uint32_t)ts_usec : 0;
     if (len < 32) return 0;
     uint8_t fc0   = d[0];
     uint8_t fc1   = d[1];
@@ -595,6 +597,7 @@ int eapol_observe_dot11_at(const uint8_t *d, int len,
         memcpy(p->m_frames[msg - 1], d, (size_t)copy);
         p->m_frame_lens[msg - 1] = copy;
         p->m_frame_ts[msg - 1]   = now;
+        p->m_frame_usec[msg - 1] = usec;
     }
 
     if (msg == 1) {

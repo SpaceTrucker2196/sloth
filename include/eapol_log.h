@@ -35,17 +35,21 @@
 /* Feed a raw 802.11 frame that may contain an EAPOL payload.
  * dot11 points at the FC byte; len is the length from FC through end
  * of frame (excluding radiotap). signal/channel come from radiotap.
+ *
+ * ts_sec/ts_usec are when the frame was captured: the pcap record
+ * header's timestamp, passed through from the capture callback (#92).
+ * They are what the per-handshake pcap's record headers carry, what the
+ * event is stamped with, and what the pairing window below is measured
+ * in. Reading the clock here instead recorded when sloth got round to
+ * processing the frame — a backlog shifted it, and every frame of a
+ * handshake landed on a whole second, so M1..M4 were indistinguishable
+ * in time. Tests pass explicit values, which is also what lets them
+ * exercise the window. ts_usec outside 0..999999 is stored as 0.
+ *
  * Returns 1 if the frame was an EAPOL-Key frame (handled), 0 otherwise. */
 int  eapol_observe_dot11(const uint8_t *dot11, int len,
-                          int8_t signal, int channel);
-
-/* Same, with the observation time supplied by the caller rather than
- * read from the clock. The pairing window below is a time bound, and a
- * test that cannot say when a frame arrived cannot exercise it; this is
- * the same seam eap_track_observe() already uses. eapol_observe_dot11()
- * is this with now = time(NULL). */
-int  eapol_observe_dot11_at(const uint8_t *dot11, int len,
-                             int8_t signal, int channel, time_t now);
+                          int8_t signal, int channel,
+                          time_t ts_sec, long ts_usec);
 
 /* How long after its M1 a handshake attempt may still be paired with an
  * M2 (#97 / T12).

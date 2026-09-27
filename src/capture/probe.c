@@ -281,7 +281,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * FragAttacks family is about frames on a protected network — so it
      * runs on every data frame, before any payload check. */
     if (type == 2) {
-        eapol_observe_dot11(dot11, dot11_len, signal, channel);
+        /* Capture time, not processing time: the handshake pcap's
+         * record headers carry it (#92). */
+        eapol_observe_dot11(dot11, dot11_len, signal, channel,
+                            (time_t)hdr->ts.tv_sec, (long)hdr->ts.tv_usec);
         frag_observe(dot11, dot11_len, time(NULL));
         return;
     }

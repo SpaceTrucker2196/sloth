@@ -135,7 +135,7 @@ static void test_non_eapol_data_frame_ignored(void) {
     frame[p++] = 0xAA; frame[p++] = 0xAA; frame[p++] = 0x03;
     frame[p++] = 0x00; frame[p++] = 0x00; frame[p++] = 0x00;
     frame[p++] = 0x08; frame[p++] = 0x00;
-    int r = eapol_observe_dot11(frame, p, -60, 6);
+    int r = eapol_observe_dot11(frame, p, -60, 6, time(NULL), 0);
     ASSERT_EQ(r, 0);
     ASSERT_EQ(eapol_event_count(), 0);
 }
@@ -149,7 +149,7 @@ static void test_m1_with_pmkid_extracted(void) {
     int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    int r = eapol_observe_dot11(frame, fn, -50, 6);
+    int r = eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
     ASSERT_EQ(r, 1);
     ASSERT_EQ(eapol_event_count(), 1);
 
@@ -169,7 +169,7 @@ static void test_m1_without_pmkid(void) {
     int en = build_eapol_key(eapol, ki, ANONCE, NULL, NULL);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -55, 11);
+    eapol_observe_dot11(frame, fn, -55, 11, time(NULL), 0);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     eapol_snapshot(&s);
@@ -187,7 +187,7 @@ static void test_full_handshake_m1_then_m2(void) {
         int en = build_eapol_key(eapol, ki, ANONCE, NULL, NULL);
         uint8_t frame[256];
         int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-        eapol_observe_dot11(frame, fn, -45, 6);
+        eapol_observe_dot11(frame, fn, -45, 6, time(NULL), 0);
     }
     /* M2: KeyACK=0, MIC=1 (bit 8), Install=0, Secure=0. */
     {
@@ -196,7 +196,7 @@ static void test_full_handshake_m1_then_m2(void) {
         int en = build_eapol_key(eapol, ki, SNONCE, M2_MIC, NULL);
         uint8_t frame[256];
         int fn = build_frame(frame, eapol, en, /*from_ds=*/0);
-        eapol_observe_dot11(frame, fn, -45, 6);
+        eapol_observe_dot11(frame, fn, -45, 6, time(NULL), 0);
     }
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
@@ -217,7 +217,7 @@ static void test_m2_without_m1_is_not_complete(void) {
     int en = build_eapol_key(eapol, ki, SNONCE, M2_MIC, NULL);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/0);
-    eapol_observe_dot11(frame, fn, -55, 6);
+    eapol_observe_dot11(frame, fn, -55, 6, time(NULL), 0);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     eapol_snapshot(&s);
@@ -233,7 +233,7 @@ static void test_clear_resets_state(void) {
     int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -50, 6);
+    eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
     ASSERT_EQ(eapol_event_count(), 1);
     eapol_clear();
     ASSERT_EQ(eapol_event_count(), 0);
@@ -261,7 +261,7 @@ static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
     int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -50, 6);
+    eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
 
     /* pcap file exists and has the magic header. */
     FILE *f = fopen(pcap_path, "rb");
@@ -326,7 +326,7 @@ static void drive_pmkid_m1(char *out_buf, int out_sz,
     int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -50, 6);
+    eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
 
     slurp_file(txt_path, out_buf, out_sz);
     eapol_set_output_dir(NULL);
@@ -399,7 +399,7 @@ static int drive_m3(const uint8_t *anonce) {
     int en = build_eapol_key(eapol, ki, anonce, M2_MIC, NULL);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    return eapol_observe_dot11(frame, fn, -50, 6);
+    return eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
 }
 
 static void test_generation_zero_for_unknown_pair(void) {
@@ -472,12 +472,12 @@ static void test_generation_not_bumped_by_m1_or_m2(void) {
     int en = build_eapol_key(eapol, ki1, ANONCE, NULL, NULL);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -45, 6);
+    eapol_observe_dot11(frame, fn, -45, 6, time(NULL), 0);
 
     uint16_t ki2 = (1 << 8) | (1 << 3) | 0x02;
     en = build_eapol_key(eapol, ki2, SNONCE, M2_MIC, NULL);
     fn = build_frame(frame, eapol, en, /*from_ds=*/0);
-    eapol_observe_dot11(frame, fn, -45, 6);
+    eapol_observe_dot11(frame, fn, -45, 6, time(NULL), 0);
 
     ASSERT_EQ(eapol_key_generation(GEN_BSSID, GEN_STA), 0);
 }
@@ -495,7 +495,7 @@ static int feed_exact(const uint8_t *eapol, int n, int from_ds) {
     uint8_t *frame = malloc((size_t)(DOT11_LLC_LEN + n));
     if (!frame) return -1;
     int fn = build_frame(frame, eapol, n, from_ds);
-    int r = eapol_observe_dot11(frame, fn, -50, 6);
+    int r = eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
     free(frame);
     return r;
 }
@@ -861,15 +861,21 @@ static void set_rc(uint8_t *eapol, uint64_t rc) {
         eapol[9 + i] = (uint8_t)(rc >> (56 - 8 * i));
 }
 
-static int feed_msg(uint16_t ki, uint64_t rc, const uint8_t *nonce,
-                    const uint8_t *mic, const uint8_t *pmkid,
-                    int from_ds, time_t now) {
+static int feed_msg_us(uint16_t ki, uint64_t rc, const uint8_t *nonce,
+                       const uint8_t *mic, const uint8_t *pmkid,
+                       int from_ds, time_t now, long usec) {
     uint8_t eapol[128];
     int en = build_eapol_key(eapol, ki, nonce, mic, pmkid);
     set_rc(eapol, rc);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, from_ds);
-    return eapol_observe_dot11_at(frame, fn, -50, 6, now);
+    return eapol_observe_dot11(frame, fn, -50, 6, now, usec);
+}
+
+static int feed_msg(uint16_t ki, uint64_t rc, const uint8_t *nonce,
+                    const uint8_t *mic, const uint8_t *pmkid,
+                    int from_ds, time_t now) {
+    return feed_msg_us(ki, rc, nonce, mic, pmkid, from_ds, now, 0);
 }
 
 static int feed_m1(uint64_t rc, const uint8_t *anonce,
@@ -941,6 +947,95 @@ static int export_wpa02_count(void) {
 static void snap(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
     eapol_snapshot(s);
+}
+
+/* ── #92: handshake pcap carries capture time ───────────── */
+
+static uint32_t rd_u32le(const uint8_t *b) {
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8)
+         | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+/* Per-record (ts_sec, ts_usec) of the fixture's handshake pcap, walked
+ * per the libpcap file format: 24-byte global header, then 16-byte
+ * record headers (ts_sec, ts_usec, incl_len, orig_len) each followed by
+ * incl_len bytes. Returns the record count, or -1 if the file is short
+ * or malformed. */
+static int hs_pcap_times(uint32_t sec[], uint32_t usec[], int max) {
+    char p[160];
+    pair_path(p, sizeof(p), HS_PCAP_97);
+    FILE *f = fopen(p, "rb");
+    if (!f) return -1;
+    uint8_t b[2048];
+    size_t n = fread(b, 1, sizeof(b), f);
+    fclose(f);
+    if (n < 24 || rd_u32le(b) != 0xa1b2c3d4u) return -1;
+    size_t off = 24;
+    int k = 0;
+    while (off < n && k < max) {
+        if (off + 16 > n) return -1;
+        uint32_t incl = rd_u32le(b + off + 8);
+        sec[k]  = rd_u32le(b + off);
+        usec[k] = rd_u32le(b + off + 4);
+        k++;
+        off += 16 + incl;
+        if (off > n) return -1;
+    }
+    return k;
+}
+
+/* The record headers carry each frame's own capture timestamp, to the
+ * microsecond. M1 and M2 here share a second, as a real exchange does;
+ * the old writer stamped both with time(NULL) at processing and a zero
+ * usec, so they were indistinguishable and neither was the capture
+ * time. T0 is years from the wall clock, so a clock read cannot pass. */
+static void test_handshake_pcap_records_carry_capture_timestamps(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_us(KI_M1, 7, ANONCE, NULL, NULL, 1, T0, 123456), 1);
+    ASSERT_EQ(feed_msg_us(KI_M2, 7, SNONCE, M2_MIC, NULL, 0, T0, 987654), 1);
+    uint32_t sec[4], usec[4];
+    ASSERT_EQ(hs_pcap_times(sec, usec, 4), 2);
+    ASSERT_EQ(sec[0], (uint32_t)T0);
+    ASSERT_EQ(usec[0], 123456u);
+    ASSERT_EQ(sec[1], (uint32_t)T0);
+    ASSERT_EQ(usec[1], 987654u);
+    /* The event is stamped with the same capture second. */
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.eapol_events[0].ts, T0);
+    ASSERT_EQ(s.eapol_events[1].ts, T0);
+    pair_teardown();
+}
+
+/* A microsecond field outside 0..999999 is not a timestamp a pcap
+ * reader accepts; it is stored as 0 rather than written through. */
+static void test_handshake_pcap_out_of_range_usec_stored_as_zero(void) {
+    pair_setup();
+    feed_msg_us(KI_M1, 7, ANONCE, NULL, NULL, 1, T0, 1000000);
+    feed_msg_us(KI_M2, 7, SNONCE, M2_MIC, NULL, 0, T0 + 1, -1);
+    uint32_t sec[4], usec[4];
+    ASSERT_EQ(hs_pcap_times(sec, usec, 4), 2);
+    ASSERT_EQ(sec[0], (uint32_t)T0);
+    ASSERT_EQ(usec[0], 0u);
+    ASSERT_EQ(sec[1], (uint32_t)(T0 + 1));
+    ASSERT_EQ(usec[1], 0u);
+    pair_teardown();
+}
+
+/* A second attempt's pcap carries that attempt's own capture times,
+ * not the first attempt's. */
+static void test_handshake_pcap_new_attempt_carries_its_own_times(void) {
+    pair_setup();
+    feed_msg_us(KI_M1, 7, ANONCE, NULL, NULL, 1, T0, 111111);
+    feed_msg_us(KI_M2, 7, SNONCE, M2_MIC, NULL, 0, T0, 222222);
+    feed_msg_us(KI_M1, 9, ANONCE_B, NULL, NULL, 1, T0 + 30, 333333);
+    feed_msg_us(KI_M2, 9, SNONCE_B, M2_MIC, NULL, 0, T0 + 30, 444444);
+    uint32_t sec[4], usec[4];
+    ASSERT_EQ(hs_pcap_times(sec, usec, 4), 2);
+    ASSERT_EQ(sec[0], (uint32_t)(T0 + 30));
+    ASSERT_EQ(usec[0], 333333u);
+    ASSERT_EQ(sec[1], (uint32_t)(T0 + 30));
+    ASSERT_EQ(usec[1], 444444u);
+    pair_teardown();
 }
 
 /* T13. The byte is the hashcat wiki's table, not sloth's opinion:
@@ -1287,7 +1382,7 @@ static void drive_pmkid(void) {
     int en = build_eapol_key(eapol, KI_M1, ANONCE, NULL, PMKID);
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
-    eapol_observe_dot11(frame, fn, -50, 6);
+    eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
 }
 
 static int mode_of(const char *path) {
@@ -1568,6 +1663,11 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_progress_advances_with_the_replay_counters);
     RUN_TEST(test_m3_with_a_foreign_replay_counter_does_not_advance);
     RUN_TEST(test_direction_mismatched_frames_are_inert);
+
+    TEST_SUITE("eapol_log: handshake pcap capture timestamps (#92)");
+    RUN_TEST(test_handshake_pcap_records_carry_capture_timestamps);
+    RUN_TEST(test_handshake_pcap_out_of_range_usec_stored_as_zero);
+    RUN_TEST(test_handshake_pcap_new_attempt_carries_its_own_times);
 
     /* #87 export permissions + failure reporting */
     RUN_TEST(test_export_private_under_permissive_umask);

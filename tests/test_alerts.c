@@ -5645,7 +5645,7 @@ static void frag_drive_m3(const uint8_t *bssid, const uint8_t *sta,
     f[24] = 0xaa; f[25] = 0xaa; f[26] = 0x03;
     f[30] = 0x88; f[31] = 0x8E;
     memcpy(f + 32, body, sizeof(body));
-    eapol_observe_dot11(f, 32 + (int)sizeof(body), -50, 6);
+    eapol_observe_dot11(f, 32 + (int)sizeof(body), -50, 6, time(NULL), 0);
 }
 
 static void test_frag_mixkey_fires(void) {
