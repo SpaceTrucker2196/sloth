@@ -1516,3 +1516,41 @@ JSONL stream.
   README.md, docs/streaming.html, docs/wiki/jsonl-schema.md and
   examples/{consumer,forwarder}/README.md. Authenticated remote
   delivery is tracked in #100.
+
+## 2026-09-27 — #95: worker stop flags behind a mutex (C99)
+
+**Source**: commit `9bfb808`, issue #95.
+
+The capture, probe and DNS workers were stopped through a plain `int`
+flag. It was written on one thread and read on another with no
+synchronisation, which is a data race in C99. Stop paths also checked
+the flag and cleared it in two separate steps, so two stoppers running
+at once could both `pthread_join` the same thread, which is undefined
+behaviour.
+
+**Changes**:
+
+- `src/capture/capture.{c,h}`: new `capture_run_flag_t` (a mutex plus
+  an int) with `get`, `set` and `take`. `take()` clears the flag and
+  returns its old value atomically. It is defined outside `WITH_PCAP`
+  so the tests can run it under TSan without libpcap.
+- `src/capture/probe.c`: uses the same helper. `probe_set_iface()` now
+  clears the flag when `pthread_create` fails.
+- `src/dns.c`: the flag stays under `g_mu`, because the condvar needs
+  it. The worker reads it only while holding the lock, and
+  `dns_cleanup` checks and clears it in one step.
+- `src/main.c`: `g_quit` is `volatile sig_atomic_t`.
+- Tests (+16 assertions): the flag contract, a polling worker stopped
+  mid-loop, concurrent `take()`, and concurrent `dns_cleanup()`.
+
+**Notes**:
+
+- **Open.** SIGINT and SIGTERM can be delivered to worker threads, so
+  the C99 guarantee for `g_quit` formally covers only a handler on the
+  same thread. Blocking them with `pthread_sigmask` is a follow-up.
+- **Open.** Start and stop are not safe to run concurrently, because
+  the flag is set before `pthread_create`. Only the main thread starts
+  and stops workers today.
+- **Coverage gap.** The exclusivity test catches a `take()` written as
+  a get followed by a set only by chance. The new spin loops have no
+  timeout. The pcap worker loops themselves are not tested.
