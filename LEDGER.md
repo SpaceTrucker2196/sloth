@@ -148,3 +148,4 @@
 | 722cd00 | 2026-09-26T11:30:43Z | claude-opus-5 | 380 | 159698 | 31605735 | 498329 | 24.7805 | #89 slice 3 — twin ap_class / wired_attach separation, RF cannot assert wired at |
 | 6d5b024 | 2026-09-27T04:55:12Z | claude-opus-5-5 | 58 | 31494 | 2730610 | 122396 | 2.1554 | #86 slice 3: unix socket doc examples /tmp -> /run |
 | 8931549 | 2026-09-27T04:58:51Z | claude-opus-5-5 | 10 | 4674 | 761561 | 6346 | 0.2966 | #96 docs-consistency test: README/SECURITY/help vs SLOTH_VERSION, VIEW_COUNT, ALERT_TYPE_COUNT |
+| 41ddbca | 2026-09-27T05:51:00Z | claude-opus-5-5 | 12 | 3048 | 986540 | 16022 | 0.3865 | Fix ASan CI build: bound scenario BSSID octets (#95) |
