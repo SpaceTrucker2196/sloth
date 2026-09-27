@@ -1478,3 +1478,41 @@ closes the race the #84 entry above left under "Not done here".
   a regression depends on the TSan CI slice.
 - **Open.** `dns_fmt_addr` is not covered by the "any thread" note in
   `dns.h`; it is main-thread only today.
+
+## 2026-09-27 — #86: data-socket listener and client fds are close-on-exec
+
+**Source**: commit `d3170da`, issue #86 (last item on the fix list).
+
+sloth keeps the data socket open for its whole life. Without
+`FD_CLOEXEC`, any child it exec()s inherits the listener and every live
+client, so that child can `accept()` on, or read, the unauthenticated
+JSONL stream.
+
+**Updated pages**:
+
+- `src/data_socket.c`: on Linux the listener comes from
+  `ds_socket()` with `SOCK_CLOEXEC|SOCK_NONBLOCK`, and clients come
+  from `accept_cloexec()` (`accept4()` with the same flags), so the
+  flag is set atomically. `_GNU_SOURCE` is defined for this file only,
+  and only under `__linux__`. Other targets set `fcntl(F_SETFD,
+  FD_CLOEXEC)` after the call, check it, and close the fd if it fails.
+- `src/data_socket.h`: one test-hook comment. Passing NULL to
+  `data_socket_test_set_accept_fn()` now restores the close-on-exec
+  wrapper, not plain `accept`.
+- `tests/test_data_socket.c`: three tests (+12 assertions) check
+  `fcntl(F_GETFD) & FD_CLOEXEC` on the UNIX listener, the loopback TCP
+  listener and two accepted clients.
+
+**Notes**:
+
+- **Coverage gap.** Reverting only the static `g_accept_fn` initializer
+  to `accept` stays green, because earlier tests pass NULL first. The
+  initial default has no coverage that is independent of test order.
+- **Open.** The liveness-probe socket in `unix_path_removable()` is
+  still not close-on-exec. It is short-lived and closed before init
+  returns. The "every fd this module owns" comment therefore over-claims
+  slightly.
+- **Open.** A docs sweep for `unix:/tmp/sloth.sock` is outstanding in
+  README.md, docs/streaming.html, docs/wiki/jsonl-schema.md and
+  examples/{consumer,forwarder}/README.md. Authenticated remote
+  delivery is tracked in #100.
