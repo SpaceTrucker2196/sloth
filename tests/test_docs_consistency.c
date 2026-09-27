@@ -337,6 +337,193 @@ static void test_usage_text_agrees_with_build(void) {
     free(t);
 }
 
+/*
+ * Usage-text honesty — issue #84.
+ *
+ * print_usage() does not only carry counts; it makes claims about what
+ * sloth writes and what it can put on the wire, and two of them were
+ * false against the code:
+ *
+ *   - --hop was "the only kernel-state write sloth performs". It is not:
+ *     linux_wifi_prepare_scan_trigger() builds an NL80211_CMD_TRIGGER_SCAN
+ *     whenever observe_active_allowed() (--allow-active), which is a
+ *     second kernel-state write on a second opt-in.
+ *   - --strict's mDNS suppression was "the one thing the default profile
+ *     still permits". It is not: main() gates nothing but the observation
+ *     policy on --strict, so an opted-in routable --data-socket still
+ *     reaches data_socket_init_ex() and serves, and --hop still retunes.
+ *
+ * Asserting the corrected sentence verbatim would pass on any reword, so
+ * each check pins both halves inside the option's own block: the
+ * superlative must be ABSENT and the qualifying cross-reference must be
+ * PRESENT. Dropping the qualification fails even if the old words are
+ * never typed again.
+ */
+
+/* Unescape a C string-literal body, appending at *o. \n and \t collapse
+ * to a space; \\ and \" yield the bare character. */
+static void dc_unescape(const char *in, size_t len, char *out, size_t sz,
+                        size_t *o) {
+    for (size_t i = 0; i < len && *o + 1 < sz; i++) {
+        char c = in[i];
+        if (c == '\\' && i + 1 < len) {
+            char e = in[++i];
+            c = (e == 'n' || e == 't') ? ' ' : e;
+        }
+        out[(*o)++] = c;
+    }
+    out[*o] = '\0';
+}
+
+/* Collect one option's block out of print_usage() and whitespace-collapse
+ * it, so a phrase that wrapped across two string literals reads as one
+ * run of words. Blocks are delimited by the file's own layout: an entry
+ * is a literal whose text starts at column 2 with "--"; every
+ * continuation line is indented past that, so it can never open a block.
+ * Returns 1 when `flag` has a block, 0 otherwise. */
+static int usage_option_block_from(const char *csrc, const char *flag,
+                                   char *out, size_t sz) {
+    out[0] = '\0';
+    char *t = malloc(strlen(csrc) + 1);
+    if (!t) return 0;
+    strcpy(t, csrc);
+
+    char *start = strstr(t, "static void print_usage(");
+    char *end   = start ? strstr(start, "\n}\n") : NULL;
+    if (!start || !end) { free(t); return 0; }
+    end[1] = '\0';
+
+    char   raw[4096];
+    size_t o = 0, flen = strlen(flag);
+    int    in_block = 0, found = 0;
+    raw[0] = '\0';
+
+    for (char *line = start; line && *line; ) {
+        char  *nl   = strchr(line, '\n');
+        size_t llen = nl ? (size_t)(nl - line) : strlen(line);
+
+        /* The literal body is between the first and the last quote on the
+         * line — argv0 and the trailing `);` sit outside both. */
+        char *q1 = memchr(line, '"', llen), *q2 = NULL;
+        for (size_t i = llen; q1 && i > (size_t)(q1 - line) + 1; i--)
+            if (line[i - 1] == '"') { q2 = line + i - 1; break; }
+
+        if (q1 && q2 && q2 > q1) {
+            char   body[512];
+            size_t bo = 0;
+            dc_unescape(q1 + 1, (size_t)(q2 - q1 - 1), body, sizeof(body), &bo);
+
+            if (bo >= 4 && body[0] == ' ' && body[1] == ' ' &&
+                body[2] == '-' && body[3] == '-') {
+                if (in_block) break;            /* next entry ends ours */
+                in_block = !strncmp(body + 2, flag, flen) &&
+                           (body[2 + flen] == ' ' || body[2 + flen] == '\0');
+                if (in_block) found = 1;
+            }
+            if (in_block && o + bo + 1 < sizeof(raw)) {
+                memcpy(raw + o, body, bo);
+                o += bo;
+                raw[o] = '\0';
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    free(t);
+    if (!found) return 0;
+
+    size_t w = 0;
+    int    sp = 1;
+    for (size_t i = 0; i < o && w + 1 < sz; i++) {
+        unsigned char c = (unsigned char)raw[i];
+        if (isspace(c)) { if (!sp) { out[w++] = ' '; sp = 1; } }
+        else            { out[w++] = (char)c;        sp = 0; }
+    }
+    while (w > 0 && out[w - 1] == ' ') w--;
+    out[w] = '\0';
+    return 1;
+}
+
+static int usage_option_block(const char *flag, char *out, size_t sz) {
+    out[0] = '\0';
+    char *t = slurp("src/main.c");
+    if (!t) return 0;
+    int rc = usage_option_block_from(t, flag, out, sz);
+    free(t);
+    return rc;
+}
+
+/* Case-insensitive substring — the usage text capitalises for emphasis
+ * ("LOCK", "NOT"), which must not decide whether a claim is found. */
+static int has_ci(const char *hay, const char *needle) {
+    size_t nl = strlen(needle);
+    if (nl == 0) return 1;
+    for (size_t i = 0; hay[i]; i++) {
+        size_t j = 0;
+        while (j < nl && hay[i + j] &&
+               tolower((unsigned char)hay[i + j]) ==
+               tolower((unsigned char)needle[j])) j++;
+        if (j == nl) return 1;
+    }
+    return 0;
+}
+
+static void test_usage_block_extractor(void) {
+    static const char src[] =
+        "static void print_usage(const char *argv0) {\n"
+        "    fprintf(stderr,\n"
+        "            \"usage: %s [--hop]\\n\"\n"
+        "            \"  --hop              retune sloth's own\\n\"\n"
+        "            \"                     monitor interface. One of\\n\"\n"
+        "            \"                     two writes.\\n\"\n"
+        "            \"  --strict           locks \\\"it\\\"\\n\",\n"
+        "            argv0);\n"
+        "}\n";
+    char b[256];
+    ASSERT_EQ(usage_option_block_from(src, "--hop", b, sizeof(b)), 1);
+    ASSERT_STR(b, "--hop retune sloth's own monitor interface. "
+                  "One of two writes.");
+    ASSERT_EQ(usage_option_block_from(src, "--strict", b, sizeof(b)), 1);
+    ASSERT_STR(b, "--strict locks \"it\"");
+    /* The synopsis line mentions --hop too, and must not be mistaken for
+     * an entry; an absent flag reports absent rather than empty-and-true. */
+    ASSERT_EQ(usage_option_block_from(src, "--allow-active", b, sizeof(b)), 0);
+}
+
+static void test_has_ci(void) {
+    ASSERT(has_ci("It does NOT close every path", "not close"));
+    ASSERT(!has_ci("It does NOT close every path", "not opened"));
+    ASSERT(has_ci("abc", ""));
+}
+
+/* --hop is one of two kernel-state writes, not the only one. */
+static void test_usage_hop_claims_no_sole_kernel_state_write(void) {
+    char b[2048];
+    ASSERT_EQ(usage_option_block("--hop", b, sizeof(b)), 1);
+    ASSERT(!has_ci(b, "only kernel-state write"));
+    ASSERT(!has_ci(b, "only kernel state write"));
+    ASSERT(!has_ci(b, "the only kernel-state"));
+    ASSERT(!has_ci(b, "only write"));
+    /* The qualification: the block names the other write's opt-in, so a
+     * reword that quietly drops it is red as well. */
+    ASSERT(has_ci(b, "--allow-active"));
+    ASSERT(has_ci(b, "kernel-state"));
+}
+
+/* --strict suppresses the advertisement only; it closes neither an
+ * opted-in routable data socket nor --hop. */
+static void test_usage_strict_claims_no_total_coverage(void) {
+    char b[2048];
+    ASSERT_EQ(usage_option_block("--strict", b, sizeof(b)), 1);
+    ASSERT(!has_ci(b, "the one thing"));
+    ASSERT(!has_ci(b, "one thing the default profile"));
+    ASSERT(!has_ci(b, "default profile still permits"));
+    /* The qualification: the remaining paths are named where the operator
+     * reads about the lock, not only in README. */
+    ASSERT(has_ci(b, "--data-socket"));
+    ASSERT(has_ci(b, "--hop"));
+    ASSERT(has_ci(b, "--no-discovery"));
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -346,4 +533,9 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);
+    TEST_SUITE("usage-text honesty (#84)");
+    RUN_TEST(test_usage_block_extractor);
+    RUN_TEST(test_has_ci);
+    RUN_TEST(test_usage_hop_claims_no_sole_kernel_state_write);
+    RUN_TEST(test_usage_strict_claims_no_total_coverage);
 }
