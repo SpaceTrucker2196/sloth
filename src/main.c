@@ -114,7 +114,11 @@
                                   in the no-pcap build too */
 
 static sloth_state_t g_state;
-static volatile int g_quit = 0;
+/* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
+ * handler to store to: volatile sig_atomic_t. Not a mutex — locking is
+ * not async-signal-safe, and a handler interrupting the main thread while
+ * it held the lock would deadlock (#95). Only the main thread reads it. */
+static volatile sig_atomic_t g_quit = 0;
 
 /* Passive channel-hop scheduler (issue #22). Off unless --hop is passed.
  * Drives platform set_channel from sloth's own observed activity — the

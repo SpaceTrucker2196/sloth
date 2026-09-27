@@ -107,7 +107,7 @@ void mon_frame_snapshot(sloth_state_t *s) {
 
 /* ── Thread state ────────────────────────────────────────── */
 
-static volatile int  g_running = 0;
+static capture_run_flag_t g_running = CAPTURE_RUN_FLAG_INIT;   /* #95 */
 static pthread_t     g_thread;
 static pcap_t       *g_ph      = NULL;
 static sloth_state_t *g_state   = NULL;
@@ -475,16 +475,18 @@ static char g_exit_detail[80];
 static void *probe_thread(void *arg) {
     (void)arg;
     int r = 0;
-    while (g_running) {
+    while (capture_run_flag_get(&g_running)) {
         r = pcap_dispatch(g_ph, 32, on_probe_frame, NULL);
         if (r < 0) break;
     }
     const char *err = (r < 0 && g_ph) ? pcap_geterr(g_ph) : "";
+    /* The run-flag mutex is a leaf: read it before taking g_mu. */
+    int stop_requested = !capture_run_flag_get(&g_running);
     /* Published under the client-table mutex, as in capture.c: a torn
      * read of the error string is worse than no string at all. */
     pthread_mutex_lock(&g_mu);
     snprintf(g_exit_detail, sizeof(g_exit_detail), "%s", err ? err : "");
-    g_exit_reason = (int)capture_classify_exit(r, !g_running, g_exit_detail);
+    g_exit_reason = (int)capture_classify_exit(r, stop_requested, g_exit_detail);
     pthread_mutex_unlock(&g_mu);
     return NULL;
 }
@@ -497,7 +499,7 @@ void probe_health_poll(capture_health_t *h) {
     snprintf(h->exit_detail, sizeof(h->exit_detail), "%s", g_exit_detail);
     int reason = g_exit_reason;
     pthread_mutex_unlock(&g_mu);
-    h->running = g_running && reason == CAPTURE_EXIT_NONE;
+    h->running = capture_run_flag_get(&g_running) && reason == CAPTURE_EXIT_NONE;
     if (!g_ph) return;
     struct pcap_stat ps;
     memset(&ps, 0, sizeof(ps));
@@ -539,15 +541,15 @@ void probe_open(sloth_state_t *s) {
 }
 
 void probe_run(void) {
-    if (!g_ph || g_running) return;
+    if (!g_ph || capture_run_flag_get(&g_running)) return;
     /* A restart clears the previous run's verdict (#91 slice 2). */
     pthread_mutex_lock(&g_mu);
     g_exit_reason    = CAPTURE_EXIT_NONE;
     g_exit_detail[0] = '\0';
     pthread_mutex_unlock(&g_mu);
-    g_running = 1;
+    capture_run_flag_set(&g_running, 1);
     if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
-        g_running = 0;
+        capture_run_flag_set(&g_running, 0);
 }
 
 void probe_start(sloth_state_t *s) {
@@ -556,8 +558,8 @@ void probe_start(sloth_state_t *s) {
 }
 
 void probe_stop(void) {
-    if (g_running) {
-        g_running = 0;
+    /* Clear-then-break, as in capture_stop(). */
+    if (capture_run_flag_take(&g_running)) {
         if (g_ph) pcap_breakloop(g_ph);
         pthread_join(g_thread, NULL);
     }
@@ -612,7 +614,8 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     if (!iface || iface[0] == '\0') return;
 
     /* already scanning on this exact interface */
-    if (g_running && strcmp(s->probe_iface, iface) == 0) return;
+    if (capture_run_flag_get(&g_running) && strcmp(s->probe_iface, iface) == 0)
+        return;
 
     probe_stop();   /* also closes a handle opened but never run */
 
@@ -643,8 +646,11 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     g_exit_reason    = CAPTURE_EXIT_NONE;
     g_exit_detail[0] = '\0';
     pthread_mutex_unlock(&g_mu);
-    g_running = 1;
-    pthread_create(&g_thread, NULL, probe_thread, NULL);
+    /* A failed create must clear the flag, or probe_stop() would join a
+     * pthread_t that was never initialised — same guard as probe_run(). */
+    capture_run_flag_set(&g_running, 1);
+    if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
+        capture_run_flag_set(&g_running, 0);
 }
 
 #endif /* WITH_PCAP */

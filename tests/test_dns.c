@@ -495,6 +495,43 @@ static void test_concurrent_lookup_and_resolve_never_tear(void) {
     ASSERT_EQ(0, (int)st.resolve_enqueued);
 }
 
+/* ── Stop flag (#95) ─────────────────────────────────────── */
+
+/* dns_cleanup() read the run flag outside g_mu and cleared it in a
+ * second step, so two callers could both pass the check and both
+ * pthread_join() the same worker — undefined behaviour — and each check
+ * was a data race against the other's locked write. The worker is
+ * started with nothing queued, so it parks on the condvar and never
+ * reaches getnameinfo(3). */
+#define DNS_STOP_ROUNDS 200
+
+static void *dns_cleanup_thread(void *p) {
+    (void)p;
+    dns_cleanup();
+    return NULL;
+}
+
+static void test_concurrent_cleanup_joins_worker_once(void) {
+    dns_cleanup();
+    int started = 0, stopped = 0, created = 0;
+    for (int r = 0; r < DNS_STOP_ROUNDS; r++) {
+        cold();
+        dns_init();
+        started += dns_resolver_worker_running();
+        pthread_t th[2];
+        int ok = 0;
+        for (int i = 0; i < 2; i++)
+            if (pthread_create(&th[i], NULL, dns_cleanup_thread, NULL) == 0) ok++;
+        for (int i = 0; i < ok; i++) pthread_join(th[i], NULL);
+        if (ok == 2) created++;
+        dns_cleanup();   /* reaps the worker if a create failed */
+        stopped += !dns_resolver_worker_running();
+    }
+    ASSERT_EQ(DNS_STOP_ROUNDS, started);
+    ASSERT_EQ(DNS_STOP_ROUNDS, created);
+    ASSERT_EQ(DNS_STOP_ROUNDS, stopped);
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_dns_tests(void) {
@@ -545,6 +582,9 @@ void run_dns_tests(void) {
     RUN_TEST(test_short_buffer_truncates_and_terminates);
     RUN_TEST(test_no_buffer_returns_ip_and_writes_nothing);
     RUN_TEST(test_concurrent_lookup_and_resolve_never_tear);
+
+    TEST_SUITE("DNS worker stop flag (#95)");
+    RUN_TEST(test_concurrent_cleanup_joins_worker_once);
 
     /* Leave the shipped default in place for every suite that follows.
      * test_dhcp_snoop.c and test_nbns_snoop.c call dns_init() per test;

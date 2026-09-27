@@ -243,6 +243,28 @@ const char *capture_scope_reason(capture_scope_t v) {
     return "";
 }
 
+/* Run flag (#95). Contract in capture.h. */
+int capture_run_flag_get(capture_run_flag_t *f) {
+    pthread_mutex_lock(&f->mu);
+    int v = f->v;
+    pthread_mutex_unlock(&f->mu);
+    return v;
+}
+
+void capture_run_flag_set(capture_run_flag_t *f, int v) {
+    pthread_mutex_lock(&f->mu);
+    f->v = v;
+    pthread_mutex_unlock(&f->mu);
+}
+
+int capture_run_flag_take(capture_run_flag_t *f) {
+    pthread_mutex_lock(&f->mu);
+    int v = f->v;
+    f->v = 0;
+    pthread_mutex_unlock(&f->mu);
+    return v;
+}
+
 #ifdef WITH_PCAP
 
 #include <stdio.h>
@@ -287,7 +309,7 @@ const char *capture_scope_reason(capture_scope_t v) {
 
 /* ── Thread state ─────────────────────────────────────────── */
 
-static volatile int    g_running = 0;
+static capture_run_flag_t g_running = CAPTURE_RUN_FLAG_INIT;
 static pthread_t       g_thread;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
 static sloth_state_t   *g_state;
@@ -902,7 +924,7 @@ static char g_exit_detail[80];
 static void *capture_thread(void *arg) {
     (void)arg;
     int r = 0;
-    while (g_running) {
+    while (capture_run_flag_get(&g_running)) {
         r = pcap_dispatch(g_handle, 32, on_packet, NULL);
         if (r < 0) break;   /* PCAP_ERROR or PCAP_ERROR_BREAK */
     }
@@ -910,9 +932,12 @@ static void *capture_thread(void *arg) {
      * open handle with no packets behind it, which reads exactly like a
      * quiet segment. */
     const char *err = (r < 0 && g_handle) ? pcap_geterr(g_handle) : "";
+    /* Read before g_mu: the run-flag mutex is a leaf and is never taken
+     * under another lock. */
+    int stop_requested = !capture_run_flag_get(&g_running);
     pthread_mutex_lock(&g_mu);
     snprintf(g_exit_detail, sizeof(g_exit_detail), "%s", err ? err : "");
-    g_exit_reason = (int)capture_classify_exit(r, !g_running, g_exit_detail);
+    g_exit_reason = (int)capture_classify_exit(r, stop_requested, g_exit_detail);
     pthread_mutex_unlock(&g_mu);
     return NULL;
 }
@@ -929,7 +954,7 @@ void capture_health_poll(capture_health_t *h) {
      * rather than being asked to stop — so liveness is the run flag AND
      * the absence of a terminal reason. That conjunction is the whole
      * point: the handle staying open is what made the failure invisible. */
-    h->running = g_running && reason == CAPTURE_EXIT_NONE;
+    h->running = capture_run_flag_get(&g_running) && reason == CAPTURE_EXIT_NONE;
     if (!g_handle) return;
     struct pcap_stat ps;
     memset(&ps, 0, sizeof(ps));
@@ -994,7 +1019,7 @@ int capture_is_open(void) {
 }
 
 void capture_run(void) {
-    if (!g_handle || g_running) return;
+    if (!g_handle || capture_run_flag_get(&g_running)) return;
     /* pthread_create() synchronises memory with the new thread (POSIX
      * XBD 4.12), so every allow-list write main() made before this call
      * is visible to on_packet() from its first frame. */
@@ -1004,9 +1029,9 @@ void capture_run(void) {
     g_exit_reason    = CAPTURE_EXIT_NONE;
     g_exit_detail[0] = '\0';
     pthread_mutex_unlock(&g_mu);
-    g_running = 1;
+    capture_run_flag_set(&g_running, 1);
     if (pthread_create(&g_thread, NULL, capture_thread, NULL) != 0)
-        g_running = 0;
+        capture_run_flag_set(&g_running, 0);
 }
 
 void capture_start(sloth_state_t *s) {
@@ -1015,8 +1040,9 @@ void capture_start(sloth_state_t *s) {
 }
 
 void capture_stop(void) {
-    if (g_running) {
-        g_running = 0;
+    /* Clear-then-break: the worker re-checks the flag when breakloop
+     * forces pcap_dispatch() to return, so it must already read 0. */
+    if (capture_run_flag_take(&g_running)) {
         if (g_handle) pcap_breakloop(g_handle);
         pthread_join(g_thread, NULL);
     }

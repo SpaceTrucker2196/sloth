@@ -1,4 +1,5 @@
 #include <string.h>
+#include <pthread.h>
 #include "runner.h"
 #include "capture/capture.h"
 #include "dns.h"
@@ -561,6 +562,102 @@ static void test_quic_hostname_ipv6_is_passive_too(void) {
     ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
 }
 
+/* ── Worker run flag (#95) ────────────────────────────────── */
+
+/* The flag the data-stream and monitor workers poll between
+ * pcap_dispatch() batches. It was a bare volatile int — a data race on
+ * every read under C99 — and capture_stop()/probe_stop() tested and
+ * cleared it in two steps, so two stoppers could both join the thread.
+ * These drive the accessor the workers now use, without libpcap. Under
+ * the CI tsan job an unlocked accessor is a reported race; here the
+ * assertions pin the contract. Worker threads only count; the main
+ * thread asserts after join (the runner's counters are not atomic). */
+
+static void test_run_flag_starts_clear(void) {
+    capture_run_flag_t f = CAPTURE_RUN_FLAG_INIT;
+    ASSERT_EQ(0, capture_run_flag_get(&f));
+    ASSERT_EQ(0, capture_run_flag_take(&f));
+    ASSERT_EQ(0, capture_run_flag_get(&f));
+}
+
+static void test_run_flag_take_returns_and_clears(void) {
+    capture_run_flag_t f = CAPTURE_RUN_FLAG_INIT;
+    capture_run_flag_set(&f, 1);
+    ASSERT_EQ(1, capture_run_flag_get(&f));
+    ASSERT_EQ(1, capture_run_flag_take(&f));
+    ASSERT_EQ(0, capture_run_flag_get(&f));
+    /* A second stopper finds nothing to join. */
+    ASSERT_EQ(0, capture_run_flag_take(&f));
+}
+
+typedef struct {
+    capture_run_flag_t *run;
+    capture_run_flag_t *started;
+    long                spins;
+} rf_worker_arg_t;
+
+/* Shape of capture_thread()/probe_thread(): loop while the flag holds. */
+static void *rf_worker(void *p) {
+    rf_worker_arg_t *a = p;
+    capture_run_flag_set(a->started, 1);
+    while (capture_run_flag_get(a->run)) a->spins++;
+    return NULL;
+}
+
+static void test_run_flag_stop_reaches_polling_worker(void) {
+    capture_run_flag_t run     = CAPTURE_RUN_FLAG_INIT;
+    capture_run_flag_t started = CAPTURE_RUN_FLAG_INIT;
+    rf_worker_arg_t a = { &run, &started, 0 };
+    capture_run_flag_set(&run, 1);
+    pthread_t th;
+    ASSERT_EQ(0, pthread_create(&th, NULL, rf_worker, &a));
+    /* Stop only once the worker is inside its loop, so the clear races a
+     * live reader rather than landing before the thread exists. */
+    while (!capture_run_flag_get(&started)) { }
+    ASSERT_EQ(1, capture_run_flag_take(&run));
+    ASSERT_EQ(0, pthread_join(th, NULL));   /* returns: the stop was seen */
+    ASSERT_EQ(0, capture_run_flag_get(&run));
+}
+
+#define RF_TAKE_ROUNDS 500
+
+typedef struct {
+    capture_run_flag_t *run;
+    capture_run_flag_t *go;
+    int                 got;
+} rf_taker_arg_t;
+
+static void *rf_taker(void *p) {
+    rf_taker_arg_t *a = p;
+    while (!capture_run_flag_get(a->go)) { }
+    a->got = capture_run_flag_take(a->run);
+    return NULL;
+}
+
+/* Two concurrent stoppers: exactly one may see the running worker, or
+ * both would pthread_join() the same thread — undefined behaviour. */
+static void test_run_flag_take_is_exclusive(void) {
+    int bad = 0, created = 0;
+    for (int r = 0; r < RF_TAKE_ROUNDS; r++) {
+        capture_run_flag_t run = CAPTURE_RUN_FLAG_INIT;
+        capture_run_flag_t go  = CAPTURE_RUN_FLAG_INIT;
+        capture_run_flag_set(&run, 1);
+        rf_taker_arg_t a[2] = { { &run, &go, -1 }, { &run, &go, -1 } };
+        pthread_t th[2];
+        int ok = 0;
+        for (int i = 0; i < 2; i++)
+            if (pthread_create(&th[i], NULL, rf_taker, &a[i]) == 0) ok++;
+        capture_run_flag_set(&go, 1);
+        for (int i = 0; i < ok; i++) pthread_join(th[i], NULL);
+        if (ok != 2) continue;   /* counted as lost via `created` */
+        created++;
+        if (a[0].got + a[1].got != 1) bad++;
+        if (capture_run_flag_get(&run) != 0) bad++;
+    }
+    ASSERT_EQ(RF_TAKE_ROUNDS, created);
+    ASSERT_EQ(0, bad);
+}
+
 void run_capture_tests(void) {
     TEST_SUITE("capture pcap_activate classification");
     RUN_TEST(test_activate_success_is_not_failure);
@@ -622,5 +719,11 @@ void run_capture_tests(void) {
     RUN_TEST(test_quic_hostname_miss_leaves_no_pending_slot);
     RUN_TEST(test_quic_hostname_returns_observed_name);
     RUN_TEST(test_quic_hostname_ipv6_is_passive_too);
+
+    TEST_SUITE("capture worker run flag (#95)");
+    RUN_TEST(test_run_flag_starts_clear);
+    RUN_TEST(test_run_flag_take_returns_and_clears);
+    RUN_TEST(test_run_flag_stop_reaches_polling_worker);
+    RUN_TEST(test_run_flag_take_is_exclusive);
     dns_resolver_reset_policy();
 }

@@ -2,6 +2,7 @@
 #define CAPTURE_H
 
 #include <stddef.h>
+#include <pthread.h>
 #include "sloth.h"
 
 /* Classify a pcap_activate() return code.
@@ -155,6 +156,38 @@ const char     *capture_scope_reason(capture_scope_t v);
  * codes and error strings, the same way capture_activate_failed() is. */
 capture_exit_t capture_classify_exit(int dispatch_rc, int stop_requested,
                                      const char *err);
+
+/* Worker run flag shared by the data-stream (capture.c) and monitor
+ * (probe.c) workers (#95).
+ *
+ * The flag is written by the thread that stops the worker and read by
+ * the worker between pcap_dispatch() batches and by the poll loop's
+ * health check. It used to be a bare `volatile int`, which C99 does not
+ * make a synchronisation primitive: volatile stops the compiler caching
+ * the value, but gives no ordering and no atomicity between threads, so
+ * every such read is a data race. The C99 answer is a mutex; C11
+ * <stdatomic.h> would change the language contract in AGENTS.md.
+ *
+ * pcap_breakloop() stays the wake mechanism — this flag only makes the
+ * stop request itself race-free; breakloop is what gets a worker out of
+ * a blocked pcap_dispatch() promptly.
+ *
+ * capture_run_flag_take() clears the flag and returns what it held, in
+ * one critical section, so of two concurrent stoppers exactly one sees
+ * the 1 and joins the thread. Joining a pthread_t twice is undefined.
+ *
+ * The mutex is a strict leaf: nothing is called while it is held.
+ * Compiled outside the WITH_PCAP guard so the test build exercises it
+ * under TSan without linking libpcap. */
+typedef struct {
+    pthread_mutex_t mu;
+    int             v;
+} capture_run_flag_t;
+#define CAPTURE_RUN_FLAG_INIT { PTHREAD_MUTEX_INITIALIZER, 0 }
+
+int  capture_run_flag_get(capture_run_flag_t *f);
+void capture_run_flag_set(capture_run_flag_t *f, int v);
+int  capture_run_flag_take(capture_run_flag_t *f);
 
 /* Stable lower-case name for a capture_exit_t: "none", "stopped",
  * "iface_gone", "perm_lost", "not_activated", "error". Part of the JSONL

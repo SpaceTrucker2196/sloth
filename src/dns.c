@@ -45,7 +45,11 @@ static int  g_queue_len  = 0;
 static pthread_t       g_thread;
 static pthread_mutex_t g_mu  = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_cv  = PTHREAD_COND_INITIALIZER;
-static volatile int    g_running = 0;
+/* Guarded by g_mu like everything else here (#95). It was a bare
+ * volatile read outside the lock at the top of the worker loop and in
+ * dns_cleanup(); C99 volatile is not a synchronisation primitive, so
+ * each of those reads raced the locked write that stops the worker. */
+static int             g_running = 0;
 
 /* ── Resolver policy + observability (#84) ───────────────── */
 
@@ -156,7 +160,7 @@ static void resolve_ip(const char *ip, char *host, int hostsz) {
 
 static void *dns_worker(void *arg) {
     (void)arg;
-    while (g_running) {
+    for (;;) {
         pthread_mutex_lock(&g_mu);
         while (g_queue_len == 0 && g_running)
             pthread_cond_wait(&g_cv, &g_mu);
@@ -215,12 +219,15 @@ void dns_init(void) {
 }
 
 void dns_cleanup(void) {
-    if (!g_running) return;
+    /* Test-and-clear in one critical section: of two concurrent callers
+     * exactly one sees the worker running and joins it. Joining the same
+     * pthread_t twice is undefined. */
     pthread_mutex_lock(&g_mu);
+    int was_running = g_running;
     g_running = 0;
-    pthread_cond_signal(&g_cv);
+    if (was_running) pthread_cond_signal(&g_cv);
     pthread_mutex_unlock(&g_mu);
-    pthread_join(g_thread, NULL);
+    if (was_running) pthread_join(g_thread, NULL);
 }
 
 void dns_reset(void) {
