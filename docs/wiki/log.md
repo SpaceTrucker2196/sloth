@@ -1439,3 +1439,42 @@ second.
 - **Open.** `frag_observe()` still takes `time(NULL)` for the same
   frame. That is left for a later #92 slice or the wave-4 stop-flags
   edit of probe.c.
+
+---
+
+## 2026-09-26 — #95: DNS lookups return into a caller-owned buffer
+
+**Source**: issue #95. `dns_lookup_cached()` and `dns_resolve()`
+returned a pointer into one static `g_result`. The capture thread
+(`capture_quic_hostname()`) read it while the main thread
+(`dns_resolve()` for top_hosts and the packet detail pane) could be
+overwriting it, so a QUIC log record could carry a torn hostname. This
+closes the race the #84 entry above left under "Not done here".
+
+**Updated pages**:
+
+- `src/dns.c`, `src/dns.h` — all three lookups take `(ip, buf, sz)`;
+  the name, or a copy of ip on a miss, is copied under `g_mu`,
+  truncated and NUL-terminated. `g_result` removed. `DNS_NAME_MAX`
+  (256) added and used for the cache host field.
+- `src/top_hosts.c`, `src/views/packets.c`, `src/capture/capture.[ch]`
+  — callers pass their own buffer; `capture_quic_hostname()` gains
+  `(buf, sz)`.
+- `tests/test_dns.c` — held-at-once, miss, truncation, NULL/0 buffer
+  and a two-thread lookup-vs-resolve test (+35 assertions with
+  `tests/test_top_hosts.c`). Snoop and capture tests moved to the new
+  signature.
+
+**Notes**:
+
+- **Contract.** NULL buf or `sz == 0` returns ip and writes nothing;
+  every other path returns buf. `dns_lookup()` is kept on the same
+  signature so the compatibility spelling cannot bring back a static
+  buffer.
+- **top_hosts** resolves into a `hostname[64]`-sized temporary, keeping
+  the old 63-character truncation.
+- **Race gate.** The two-thread test is probabilistic; the
+  held-at-once test is the deterministic proof. Reliable detection of
+  a regression depends on the TSan CI slice.
+- **Open.** `dns_fmt_addr` is not covered by the "any thread" note in
+  `dns.h`; it is main-thread only today.
