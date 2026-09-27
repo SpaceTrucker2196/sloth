@@ -1377,3 +1377,34 @@ accesses.
   on clean channels. `rf_quality_snapshot()` still writes
   `s->channels[]` unlocked, so callers must own `sloth_state_t` (true
   today: poll loop only).
+
+## 2026-09-26 — #82: EAP-WSC decoder (WPS M1–M8 inside EAP Expanded Type)
+
+**Source**: issue #82. Its PIN-brute and Pixie-Dust asks were declined in
+triage because sloth had no EAP-WSC decode path. This slice adds that
+path as a stateless parser.
+
+**Updated pages**:
+
+- `src/eap_parse.c`, `src/eap_parse.h` — `eap_wsc_parse()` and
+  `wsc_msg_name()`: RFC 3748 §5.7 Expanded Type 254 gated on WFA SMI
+  0x00372A / vendor-type 1 (WSC 2.0 §7.7); Op-Code, MF/LF flags,
+  Message Length; §12 TLV walk for Message Type 0x1022, UUID-E 0x1047,
+  MAC 0x1020, bounded by EAP Length. `eap_type_name(254)` now returns
+  "Expanded".
+- `tests/test_eap_parse.c` — 9 hand-built-frame tests (+155
+  assertions).
+
+**Notes**:
+
+- **Fragments.** Middle fragments are skipped because their body starts
+  mid-value. A final fragment (MF and LF clear) looks the same as an
+  unfragmented message, so it is walked. Its msg_type is untrusted
+  until the session layer reassembles.
+- **Tolerance.** Fixed-size attributes with the wrong length are
+  ignored. Duplicate TLVs resolve last-wins. Op-Code and Message Type
+  are not cross-checked. Each is a job for the session layer.
+- **Naming.** 0x1020 is the generic MAC Address attribute and is the
+  Enrollee MAC only in M1, so the field is `mac`.
+- **Not yet wired.** Nothing calls it at runtime. The wave-7 WPS session
+  table is the first caller, and wave-11 fuzzing targets it.
