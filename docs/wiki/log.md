@@ -1178,3 +1178,35 @@ another local user controls.
   and a 0600 socket that root creates refuses any other uid. This was
   true before with `/tmp` too, and `data-socket-exposure.md` §5 has the
   same shape. It needs a sudo or group note in a later pass.
+
+---
+
+## 2026-09-26 — #96: docs-consistency test for version and counts
+
+**Source**: issue #96 — README, SECURITY and help text state the
+version, view count and alert-rule count, and each has drifted from the
+build before.
+
+**Updated pages**:
+
+- `../../SECURITY.md` — the archived row of the supported-versions
+  table reads "every tag before the newest" (was "v1.8.0 and below",
+  which left v1.8.1 in no row once it was tagged).
+- `tests/test_docs_consistency.c` (new) — compares claims in
+  `README.md`, `SECURITY.md`, the help card and `print_usage()` with
+  `SLOTH_VERSION`, `VIEW_COUNT` and `ALERT_TYPE_COUNT`.
+
+**Notes**:
+
+- **Fixed grammar, no model.** Counts come from a closed word pattern:
+  `<N> [live|passive|ncurses|alert]* views|rules`. README must yield
+  its known claims, so a reword that slips past the grammar fails
+  instead of passing silently.
+- **Coupling.** SECURITY.md may name only `SLOTH_VERSION`. The commit
+  that bumps the version must edit SECURITY.md in the same commit.
+- **Limits.** Counts written as words ("six alert rules") are not
+  read. The help-card check only catches a count or version later
+  hard-coded into `help.c`.
+- **Out of scope.** `MISSION.md` and `agents/` are not checked. The
+  "9304 assertions" figure in `agents/AGENTS.md` and README is stale
+  (10712 now) and is left for the owner.
