@@ -146,3 +146,4 @@
 | 618f300 | 2026-09-25T20:12:04Z | claude-opus-5 | 234 | 76863 | 14808706 | 301643 | 12.3435 | #94 — correlation evidence honesty: scored seqnum pairs with expiry, MY_NET_RECO |
 | b9aa686 | 2026-09-25T20:58:50Z | claude-opus-5 | 142 | 51532 | 6473665 | 278211 | 7.3080 | #84 slice 3: gate nl80211 scan trigger + discovery on strict observation, per-in |
 | 722cd00 | 2026-09-26T11:30:43Z | claude-opus-5 | 380 | 159698 | 31605735 | 498329 | 24.7805 | #89 slice 3 — twin ap_class / wired_attach separation, RF cannot assert wired at |
+| 6d5b024 | 2026-09-27T04:55:12Z | claude-opus-5-5 | 58 | 31494 | 2730610 | 122396 | 2.1554 | #86 slice 3: unix socket doc examples /tmp -> /run |
