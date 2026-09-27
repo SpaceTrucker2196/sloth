@@ -1347,3 +1347,33 @@ line read like guidance on group access while triage Q3 is still open.
   `--snapshot-out` ignores write errors after open. §6 still says a
   failed write disables the sink, which #87/#92 changed to
   count-and-retry.
+
+## 2026-09-26 — #95: RF quality counters locked against the probe thread
+
+**Source**: issue #95 — `g_ch`/`g_n` in `src/rf_quality.c` were written
+by `rf_quality_observe()` on the probe thread for every monitor-mode
+frame and read by the poll loop's snapshot with nothing ordering the
+accesses.
+
+**Updated pages**:
+
+- `src/rf_quality.c` — `g_mu` guards observe, retry/badFCS pct,
+  is_degraded, snapshot and clear; `roll_if_stale()` runs only under
+  it; pct body is `pct_locked()`.
+- `src/rf_quality.h` — thread-safety contract documented.
+- `tests/test_rf_quality.c` — concurrent observe/snapshot test, 13
+  assertions.
+
+**Notes**:
+
+- **Leaf lock, table-wide.** Eviction rewrites a slot's identity, so
+  per-slot locks would still need a table lock; critical sections are
+  at most a 64-entry scan. Snapshot holds the lock for the whole pass
+  so each row is self-consistent.
+- **Red signal is TSan.** With the locks stubbed TSan reports races
+  (exit 66); a plain build caught the tear 1 of 3 runs. CI gains a
+  reliable signal when the #95 TSan slice lands.
+- **Limits.** The reader checks `is_degraded` only for false positives
+  on clean channels. `rf_quality_snapshot()` still writes
+  `s->channels[]` unlocked, so callers must own `sloth_state_t` (true
+  today: poll loop only).
