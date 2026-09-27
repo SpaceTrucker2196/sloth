@@ -1177,6 +1177,82 @@ static void test_emit_sensor_health_reports_jsonl_write_failures(void) {
     ASSERT(contains(body, "\"storage_jsonl_failures\":1"));
 }
 
+/* ── capture scope on sensor_health (#85 slice 2) ─────────── */
+
+static void test_emit_sensor_health_scope_unrequested(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"scope\":\"none\""));
+    ASSERT(contains(body, "\"scope_not_enforced\":0"));
+    ASSERT(contains(body, "\"scope_requested\":0"));
+}
+
+static void test_emit_sensor_health_scope_degraded(void) {
+    /* A replugged --iface adapter: fail-closed drops its traffic, and
+       this is the machine-readable half of never letting that be
+       silent. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.scope_health.state      = CAPTURE_SCOPE_STATE_DEGRADED;
+    s.scope_health.requested  = 2;
+    s.scope_health.enforced   = 1;
+    s.scope_health.generation = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"scope\":\"degraded\""));
+    ASSERT(contains(body, "\"scope_not_enforced\":1"));
+    ASSERT(contains(body, "\"scope_requested\":2"));
+    ASSERT(contains(body, "\"scope_enforced\":1"));
+    ASSERT(contains(body, "\"scope_generation\":1"));
+    /* Additive: the fields that were already there are still there. */
+    ASSERT(contains(body, "\"storage_eapol_failures\":0"));
+}
+
+static void test_emit_sensor_health_scope_no_capture(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.scope_health.state     = CAPTURE_SCOPE_STATE_NO_CAPTURE;
+    s.scope_health.requested = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"scope\":\"no_capture\""));
+    ASSERT(contains(body, "\"scope_not_enforced\":1"));
+}
+
+static void test_sensor_health_scope_failure_emits_immediately(void) {
+    /* Enforced -> degraded is a transition, not heartbeat news. And a
+       second pin failing moves generation even if a consumer could not
+       tell from the state word alone. */
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.scope_health.state     = CAPTURE_SCOPE_STATE_ENFORCED;
+    s.scope_health.requested = 2;
+    s.scope_health.enforced  = 2;
+    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health(&s);
+    s.scope_health.state      = CAPTURE_SCOPE_STATE_DEGRADED;
+    s.scope_health.enforced   = 1;
+    s.scope_health.generation = 1;
+    jsonl_emit_sensor_health(&s);
+    s.scope_health.enforced   = 0;
+    s.scope_health.generation = 2;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 3);
+    ASSERT(contains(body, "\"scope\":\"enforced\""));
+    ASSERT(contains(body, "\"scope_generation\":2"));
+}
+
 static void test_sensor_health_unchanged_is_suppressed(void) {
     /* One line per second forever would drown the stream. The record is
      * change-only on the same cache as the entity snapshots. */
@@ -1647,6 +1723,10 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_eviction_tally);
     RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
     RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);
+    RUN_TEST(test_emit_sensor_health_scope_unrequested);
+    RUN_TEST(test_emit_sensor_health_scope_degraded);
+    RUN_TEST(test_emit_sensor_health_scope_no_capture);
+    RUN_TEST(test_sensor_health_scope_failure_emits_immediately);
     RUN_TEST(test_sensor_health_unchanged_is_suppressed);
     RUN_TEST(test_sensor_health_degradation_emits_immediately);
     RUN_TEST(test_sensor_health_traffic_alone_does_not_re_emit);

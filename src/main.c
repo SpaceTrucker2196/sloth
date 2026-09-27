@@ -196,6 +196,9 @@ static void poll_data(sloth_state_t *s) {
      * not the previous one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
+    /* #85: re-check each pinned ifindex still names its interface; a
+     * replugged, renamed or reused one fails closed and reads DEGRADED. */
+    capture_scope_poll(s);
     jsonl_emit_connections(s);
     twins_snapshot(s);
     jsonl_emit_twin_episodes(s);
@@ -967,8 +970,9 @@ int main(int argc, char **argv) {
      *   5. capture_run() / probe_run() — below, once the sinks are open,
      *      where capture_start() / probe_start() used to sit.
      * The allow-list is complete before the capture thread is created
-     * and never written afterwards; thread creation is the
-     * synchronisation point that publishes it to on_packet(). Refusing
+     * and never written afterwards; capture_run() pins it to (ifindex,
+     * name) pairs and thread creation publishes those to on_packet().
+     * poll_data() revalidates the pins each tick (#85 slice 2). Refusing
      * here leaves no JSONL, DB session, socket or mDNS record behind. */
     for (int i = 0; i < allow_iface_count; i++)
         iface_allow_add(&g_state, allow_ifaces[i]);

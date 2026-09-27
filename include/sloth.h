@@ -2182,6 +2182,34 @@ typedef struct {
     uint32_t last_recv, last_drop, last_ifdrop;  /* previous raw sample */
 } capture_health_t;
 
+/* ── Capture-scope state (#85) ───────────────────────────
+ *
+ * Whether the launch-time allow-list (--iface / --monitor-only) is being
+ * served as requested. The data-stream callback admits a frame only when
+ * its SLL2 ingress index is in the (ifindex, name) set pinned before the
+ * worker started; the poll loop re-checks each pin every tick and fails
+ * one closed, for the rest of the run, the moment its index stops naming
+ * the same interface (unplug, rename, index reuse, lookup failure).
+ *
+ * Fail-closed means nothing outside the scope is collected in any state.
+ * What NO_CAPTURE and DEGRADED report is the other direction: part or
+ * all of what the operator asked for is not being observed. Names are
+ * part of the JSONL contract — see capture_scope_state_name(). */
+typedef enum {
+    CAPTURE_SCOPE_STATE_NONE = 0,   /* no restriction requested */
+    CAPTURE_SCOPE_STATE_ENFORCED,   /* every requested iface pinned and still valid */
+    CAPTURE_SCOPE_STATE_NO_CAPTURE, /* restriction requested, no data-stream handle */
+    CAPTURE_SCOPE_STATE_DEGRADED    /* >=1 requested iface failed closed */
+} capture_scope_state_t;
+
+/* Refreshed once per poll by capture_scope_poll(). */
+typedef struct {
+    int      state;       /* capture_scope_state_t */
+    int      requested;   /* allow-list entries */
+    int      enforced;    /* pins still admitting frames */
+    uint32_t generation;  /* bumps each time a pin fails closed */
+} capture_scope_health_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -2204,8 +2232,9 @@ typedef struct {
      * these interfaces feed the capture pipeline — the headless
      * complement to the interactive deselect election above. Filled
      * once at startup (--iface / --monitor-only) before the capture
-     * thread is created, never mutated afterwards — thread creation is
-     * what publishes it to the callback (#85). Empty list =
+     * thread is created, never mutated afterwards. The callback does not
+     * read these names: capture_run() pins them to (ifindex, name) pairs
+     * and that set is the authority (#85). Empty list =
      * unrestricted; startup refuses a requested scope that would leave
      * it empty or unenforceable. */
     char          iface_allowed[MAX_IFACES][16];
@@ -2410,6 +2439,8 @@ typedef struct {
      * strip (#91 slice 3). */
     capture_health_t cap_health;
     capture_health_t mon_health;
+    /* Launch-time scope enforcement (#85); same record, same strip. */
+    capture_scope_health_t scope_health;
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];
@@ -2595,7 +2626,9 @@ void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz);
  * `down (<reason>)` (worker exited; reason from capture_exit_name()).
  * Everything after that is a fault and appears only when non-zero:
  * per-stream `drop` / `ifdrop`, `retune-fail` from the #91 slice 1
- * counter, and `evict` from the table-overflow tally. A fully healthy
+ * counter, `evict` from the table-overflow tally, and `scope degraded
+ * <enforced>/<requested>` or `scope no-capture` when a requested
+ * --iface/--monitor-only scope is not being served (#85). A fully healthy
  * sensor therefore renders exactly "  health: cap up  mon up", which
  * is the line an operator learns to glance past. */
 void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz);

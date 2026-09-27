@@ -426,6 +426,15 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     uint64_t ev = sh_evict_total();
     if (ev)
         strip_addf(buf, sz, &off, "  evict %llu", (unsigned long long)ev);
+    /* #85: a requested scope that is not being served. Fail-closed keeps
+     * out-of-scope traffic out either way; this is what stops a replugged
+     * adapter from going quiet with no explanation. */
+    const capture_scope_health_t *sc = &s->scope_health;
+    if (sc->state == CAPTURE_SCOPE_STATE_DEGRADED)
+        strip_addf(buf, sz, &off, "  scope degraded %d/%d",
+                   sc->enforced, sc->requested);
+    else if (sc->state == CAPTURE_SCOPE_STATE_NO_CAPTURE)
+        strip_addf(buf, sz, &off, "  scope no-capture");
 }
 
 /* SSID of the network the managed radio is joined to ("" = none).

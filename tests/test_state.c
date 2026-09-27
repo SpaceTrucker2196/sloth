@@ -607,6 +607,39 @@ void test_health_strip_reports_evictions(void) {
     sh_evict_reset();
 }
 
+/* #85 slice 2: a requested scope that is enforced adds nothing; one
+ * that is not is a fault and says so, so a fail-closed replug is never
+ * just a quiet interface. */
+void test_health_strip_enforced_scope_is_quiet(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.scope_health.state     = CAPTURE_SCOPE_STATE_ENFORCED;
+    s.scope_health.requested = 1;
+    s.scope_health.enforced  = 1;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+}
+
+void test_health_strip_reports_degraded_scope(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.scope_health.state      = CAPTURE_SCOPE_STATE_DEGRADED;
+    s.scope_health.requested  = 2;
+    s.scope_health.enforced   = 1;
+    s.scope_health.generation = 1;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  scope degraded 1/2");
+}
+
+void test_health_strip_reports_scope_without_capture(void) {
+    sloth_state_t s = make_state_with_ifaces(1);
+    s.scope_health.state     = CAPTURE_SCOPE_STATE_NO_CAPTURE;
+    s.scope_health.requested = 1;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap off  mon off  scope no-capture");
+}
+
 void test_health_strip_truncates_without_overrunning(void) {
     /* Every fault at once into a buffer far too small — the formatter
      * must truncate, not walk off the end. */
@@ -776,5 +809,8 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_zero_drops_are_not_shown);
     RUN_TEST(test_health_strip_reports_retune_failures);
     RUN_TEST(test_health_strip_reports_evictions);
+    RUN_TEST(test_health_strip_enforced_scope_is_quiet);
+    RUN_TEST(test_health_strip_reports_degraded_scope);
+    RUN_TEST(test_health_strip_reports_scope_without_capture);
     RUN_TEST(test_health_strip_truncates_without_overrunning);
 }

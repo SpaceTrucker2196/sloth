@@ -227,6 +227,14 @@ rings are **not** instrumented yet, and a tally that silently omitted a
 table would read as "no loss" when it means "not measured". The JSONL
 record breaks the total out per table.
 
+`scope degraded 1/2` means a launch-time `--iface`/`--monitor-only`
+scope is not being fully served: one of the two requested interfaces
+was absent at start or has failed closed since (unplug, rename, index
+reuse; see *Headless scoping* below). `scope no-capture` means a scope
+was requested but no data-stream handle exists. Neither ever means
+out-of-scope traffic is being collected. Both mean in-scope traffic is
+not. An enforced scope and an unscoped run add nothing to the line.
+
 The same state feeds the `sensor_health` JSONL record — see
 [`../wiki/jsonl-schema.md`](../wiki/jsonl-schema.md).
 
@@ -271,11 +279,32 @@ the run continues with a warning: no data stream means nothing out of
 scope is collected. There is no unrestricted fallback flag — omit
 `--iface`/`--monitor-only` to capture everything.
 
-The policy is installed before the capture thread is created and
-never written afterwards. In the callback, with an allow-list active,
-a frame whose ingress index does not resolve to a name
-(`if_indextoname()` failed, interface gone) is dropped before decode,
-and the failure is not cached.
+**Pinned by index (#85 slice 2).** Immediately before the capture
+thread is created, each allow-listed name is resolved once
+(`if_nametoindex()`) and pinned as an `(ifindex, name)` pair. With an
+allow-list active the callback admits a frame only when its SLL2
+ingress index is a pinned, still-valid one. A name that resolves to
+something else later, or an index the name cache remembers, does not
+count. The name cache no longer grants anything.
+
+Once per tick the main thread asks what each pinned index names now
+(`if_indextoname()`). If the lookup fails, or it returns any other
+name, the pin **fails closed for the rest of the run**. That covers
+unplug, rename, a different device reusing the index, and a lookup
+error. A replugged adapter comes back on a new index, and sloth does
+not follow it; restart to re-pin. A name that did not resolve at start
+(adapter not present yet) is never pinned. Neither case is silent:
+the health strip shows `scope degraded <enforced>/<requested>` and
+`sensor_health` carries `scope`/`scope_not_enforced` (see above and
+the JSONL schema).
+
+The one window this leaves is between an index being reused and the
+next tick. Linux hands out interface indices in increasing order, so
+closing it within one poll interval would need the counter to wrap.
+
+Staying failed closed after a replug is deliberate but reversible.
+Following a replugged adapter is a policy choice for the owner: the
+alternative re-pins by name mid-run.
 
 **Excluded marker.** Interfaces present on the box but absent from a
 non-empty allow-list carry an `x` prefix and a dim `(excluded)`

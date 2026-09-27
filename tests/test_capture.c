@@ -155,26 +155,79 @@ static int eth_resolve(uint32_t idx, char name[16]) {
     return 1;
 }
 
-static sloth_state_t g_scope_state;
+/* Seeded interface table standing in for the kernel's: tests edit it
+   between calls to model unplug, rename, index reuse and replug, and
+   g_tbl_fail makes every lookup fail the way a transient netlink/ioctl
+   error would. Both directions read the same table, the way
+   if_nametoindex()/if_indextoname() read the same kernel list. */
+typedef struct { uint32_t idx; char name[16]; } tbl_row_t;
+static tbl_row_t g_tbl[8];
+static int       g_tbl_n;
+static int       g_tbl_fail;
 
-static sloth_state_t *scope_state(const char *allow) {
+static void tbl_reset(void) {
+    g_tbl_n = 0; g_tbl_fail = 0;
+    memset(g_tbl, 0, sizeof(g_tbl));
+}
+static void tbl_set(uint32_t idx, const char *name) {
+    for (int i = 0; i < g_tbl_n; i++)
+        if (g_tbl[i].idx == idx) { snprintf(g_tbl[i].name, 16, "%s", name); return; }
+    if (g_tbl_n >= 8) return;
+    g_tbl[g_tbl_n].idx = idx;
+    snprintf(g_tbl[g_tbl_n].name, 16, "%s", name);
+    g_tbl_n++;
+}
+static void tbl_del(uint32_t idx) {
+    for (int i = 0; i < g_tbl_n; i++)
+        if (g_tbl[i].idx == idx) { g_tbl[i] = g_tbl[--g_tbl_n]; return; }
+}
+static uint32_t tbl_index(const char *name) {
+    if (g_tbl_fail || !name) return 0;
+    for (int i = 0; i < g_tbl_n; i++)
+        if (strcmp(g_tbl[i].name, name) == 0) return g_tbl[i].idx;
+    return 0;
+}
+static int tbl_name(uint32_t idx, char name[16]) {
+    g_resolve_calls++;
+    if (g_tbl_fail) return 0;
+    for (int i = 0; i < g_tbl_n; i++)
+        if (g_tbl[i].idx == idx) { memcpy(name, g_tbl[i].name, 16); return 1; }
+    return 0;
+}
+
+static sloth_state_t    g_scope_state;
+static capture_policy_t g_scope_policy;
+
+/* Allow-list of up to two names, pinned against the seeded table
+   (eth0 = 2, wlan1 = 3 — the same answers fake_resolve gives). */
+static sloth_state_t *scope_state2(const char *a, const char *b) {
     memset(&g_scope_state, 0, sizeof(g_scope_state));
-    if (allow) iface_allow_add(&g_scope_state, allow);
+    if (a) iface_allow_add(&g_scope_state, a);
+    if (b) iface_allow_add(&g_scope_state, b);
+    tbl_reset();
+    tbl_set(2, "eth0");
+    tbl_set(3, "wlan1");
+    capture_policy_pin(&g_scope_policy, &g_scope_state, tbl_index, NULL);
     capture_ifname_cache_reset();
     g_resolve_calls = 0;
     return &g_scope_state;
 }
+static sloth_state_t *scope_state(const char *allow) {
+    return scope_state2(allow, NULL);
+}
+#define IN_SCOPE(s, dlt, f, n, r) \
+    capture_frame_in_scope((s), &g_scope_policy, (dlt), (f), (n), (r))
 
 static void test_scope_allowed_iface_admitted(void) {
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 3);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
 }
 
 static void test_scope_other_iface_rejected(void) {
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 2);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
 }
 
 static void test_scope_unresolvable_ifindex_rejected(void) {
@@ -183,22 +236,22 @@ static void test_scope_unresolvable_ifindex_rejected(void) {
        cannot be named cannot be authorised. */
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 99);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
     /* ...and not just once: the second packet must still be refused. */
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
 }
 
 static void test_scope_empty_name_rejected(void) {
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 4);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
 }
 
 static void test_scope_short_sll2_rejected_when_restricted(void) {
     /* A truncated header carries no trustworthy ifindex. */
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; sll2_frame(f, 3);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, 7, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, 7, fake_resolve), 0);
 }
 
 static void test_scope_non_sll2_rejected_when_restricted(void) {
@@ -206,14 +259,14 @@ static void test_scope_non_sll2_rejected_when_restricted(void) {
        callback holds the same line rather than trusting that it did. */
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 3);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL, f, n, fake_resolve), 0);
-    ASSERT_EQ(capture_frame_in_scope(s, D_EN10MB,    f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_EN10MB,    f, n, fake_resolve), 0);
 }
 
 static void test_scope_null_state_rejected(void) {
     uint8_t f[64]; int n = sll2_frame(f, 3);
     capture_ifname_cache_reset();
-    ASSERT_EQ(capture_frame_in_scope(NULL, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(NULL, D_LINUX_SLL2, f, n, fake_resolve), 0);
 }
 
 static void test_scope_unrestricted_passes_everything(void) {
@@ -221,9 +274,9 @@ static void test_scope_unrestricted_passes_everything(void) {
        index cannot be resolved and for datalinks without one. */
     sloth_state_t *s = scope_state(NULL);
     uint8_t f[64]; int n = sll2_frame(f, 99);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL,  f, n, fake_resolve), 1);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, 7, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL,  f, n, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, 7, fake_resolve), 1);
     /* The hot path skips the name lookup entirely when nothing filters. */
     ASSERT_EQ(g_resolve_calls, 0);
 }
@@ -234,9 +287,9 @@ static void test_scope_deselect_still_applies(void) {
     memcpy(s->iface_deselected[0], "eth0", 5);
     s->iface_deselected_count = 1;
     uint8_t f[64]; int n = sll2_frame(f, 2);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
     n = sll2_frame(f, 3);
-    ASSERT_EQ(capture_frame_in_scope(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
 }
 
 static void test_ifname_failure_not_cached(void) {
@@ -266,6 +319,228 @@ static void test_ifname_success_cached(void) {
     ASSERT_STR(capture_ifname_lookup(3, fake_resolve), "wlan1");
     ASSERT_STR(capture_ifname_lookup(3, fake_resolve), "wlan1");
     ASSERT_EQ(g_resolve_calls, 1);
+}
+
+/* ── pinned ifindex policy (#85 slice 2) ──────────────────── */
+
+static int frame_on(uint32_t ifindex) {
+    uint8_t f[64]; int n = sll2_frame(f, ifindex);
+    return IN_SCOPE(&g_scope_state, D_LINUX_SLL2, f, n, tbl_name);
+}
+
+static int scope_now(void) {
+    return (int)capture_scope_state(g_scope_state.iface_allowed_count, 1,
+                                    capture_policy_valid_count(&g_scope_policy));
+}
+
+static void test_policy_pins_names_to_indices(void) {
+    scope_state2("wlan1", "eth0");
+    ASSERT_EQ(g_scope_policy.count, 2);
+    ASSERT_EQ(capture_policy_valid_count(&g_scope_policy), 2);
+    ASSERT(capture_policy_match(&g_scope_policy, 3) != NULL);
+    ASSERT_STR(capture_policy_match(&g_scope_policy, 3)->name, "wlan1");
+    ASSERT_STR(capture_policy_match(&g_scope_policy, 2)->name, "eth0");
+    ASSERT(capture_policy_match(&g_scope_policy, 9) == NULL);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_ENFORCED);
+}
+
+static void test_policy_healthy_revalidation_changes_nothing(void) {
+    scope_state("wlan1");
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 0);
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 0);
+    ASSERT_EQ((int)g_scope_policy.generation, 0);
+    ASSERT_EQ(frame_on(3), 1);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_ENFORCED);
+}
+
+static void test_policy_absent_at_start_is_degraded_not_silent(void) {
+    /* --iface names an adapter that is not there yet (late discovery).
+       Nothing is pinned for it, so nothing is admitted — and the scope
+       says so instead of looking like an idle interface. */
+    scope_state("wlan9");
+    ASSERT_EQ(g_scope_policy.count, 0);
+    tbl_set(7, "wlan9");                 /* it appears after start */
+    ASSERT_EQ(frame_on(7), 0);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_DEGRADED);
+}
+
+static void test_policy_ifindex_reuse_fails_closed(void) {
+    /* wlan1 leaves; a different device is handed index 3. The index is
+       pinned, the name is not what it was: out. */
+    scope_state("wlan1");
+    tbl_del(3);
+    tbl_set(3, "eth5");
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    ASSERT_EQ(frame_on(3), 0);
+    ASSERT_EQ((int)g_scope_policy.generation, 1);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_DEGRADED);
+}
+
+static void test_policy_rename_fails_closed(void) {
+    scope_state("wlan1");
+    tbl_set(3, "wlan1old");
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    ASSERT_EQ(frame_on(3), 0);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_DEGRADED);
+}
+
+static void test_policy_delete_fails_closed(void) {
+    scope_state2("wlan1", "eth0");
+    tbl_del(3);
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    ASSERT_EQ(frame_on(3), 0);
+    /* The untouched pin keeps working: one failure is not a blackout. */
+    ASSERT_EQ(frame_on(2), 1);
+    ASSERT_EQ(capture_policy_valid_count(&g_scope_policy), 1);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_DEGRADED);
+}
+
+static void test_policy_lookup_failure_fails_closed_and_stays_closed(void) {
+    /* A lookup that fails cannot confirm the index still names the
+       pinned iface. It fails closed, and a later success does not
+       reinstate it: that would make a transient answer an authority. */
+    scope_state("wlan1");
+    g_tbl_fail = 1;
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    ASSERT_EQ(frame_on(3), 0);
+    g_tbl_fail = 0;
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 0);
+    ASSERT_EQ(frame_on(3), 0);
+    ASSERT_EQ((int)g_scope_policy.generation, 1);
+}
+
+static void test_policy_replug_stays_closed_until_restart(void) {
+    /* Unplug, then the same adapter returns under the same name on a
+       new index. Neither index is admitted for the rest of the run;
+       re-pinning (a restart) is what picks up the new one. */
+    scope_state("wlan1");
+    tbl_del(3);
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    tbl_set(8, "wlan1");
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 0);
+    ASSERT_EQ(frame_on(3), 0);
+    ASSERT_EQ(frame_on(8), 0);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_DEGRADED);
+    /* Restart: pinning again resolves the name to its new index. */
+    capture_policy_pin(&g_scope_policy, &g_scope_state, tbl_index, NULL);
+    ASSERT_EQ(frame_on(8), 1);
+    ASSERT_EQ(scope_now(), CAPTURE_SCOPE_STATE_ENFORCED);
+}
+
+static void test_policy_name_cache_is_not_an_authority(void) {
+    /* The name cache still says index 9 is "wlan1" (it was, once). The
+       pinned policy says wlan1 is index 3. Under the old check a cached
+       name was enough to admit the frame. */
+    scope_state("wlan1");
+    tbl_set(9, "wlan1");
+    ASSERT_STR(capture_ifname_lookup(9, tbl_name), "wlan1");
+    tbl_del(9);
+    ASSERT_EQ(frame_on(9), 0);
+    ASSERT_EQ(frame_on(3), 1);
+}
+
+static void test_policy_deselect_uses_pinned_name(void) {
+    scope_state2("wlan1", "eth0");
+    memcpy(g_scope_state.iface_deselected[0], "wlan1", 6);
+    g_scope_state.iface_deselected_count = 1;
+    ASSERT_EQ(frame_on(3), 0);
+    ASSERT_EQ(frame_on(2), 1);
+}
+
+static void test_policy_null_under_allow_list_admits_nothing(void) {
+    sloth_state_t *s = scope_state("wlan1");
+    uint8_t f[64]; int n = sll2_frame(f, 3);
+    ASSERT_EQ(capture_frame_in_scope(s, NULL, D_LINUX_SLL2, f, n, tbl_name), 0);
+}
+
+static void test_policy_pin_resets_previous_run(void) {
+    scope_state("wlan1");
+    tbl_del(3);
+    capture_policy_revalidate(&g_scope_policy, tbl_name);
+    ASSERT_EQ((int)g_scope_policy.generation, 1);
+    memset(&g_scope_state, 0, sizeof(g_scope_state));
+    ASSERT_EQ(capture_policy_pin(&g_scope_policy, &g_scope_state,
+                                 tbl_index, NULL), 0);
+    ASSERT_EQ(g_scope_policy.count, 0);
+    ASSERT_EQ((int)g_scope_policy.generation, 0);
+    ASSERT_EQ(capture_policy_pin(NULL, &g_scope_state, tbl_index, NULL), 0);
+    ASSERT_EQ(capture_policy_revalidate(NULL, tbl_name), 0);
+    ASSERT_EQ(capture_policy_valid_count(NULL), 0);
+    ASSERT(capture_policy_match(NULL, 3) == NULL);
+}
+
+/* The worker reads `valid` per packet while the main thread clears it;
+   both sides go through the policy's mutex. Run under the TSan job. */
+typedef struct {
+    capture_policy_t   *p;
+    capture_run_flag_t *stop;
+    int                 admitted_after;  /* matches seen once closed */
+    capture_run_flag_t *closed;
+} pol_reader_arg_t;
+
+static void *pol_reader(void *v) {
+    pol_reader_arg_t *a = v;
+    while (!capture_run_flag_get(a->stop)) {
+        int was_closed = capture_run_flag_get(a->closed);
+        if (capture_policy_match(a->p, 3) && was_closed) a->admitted_after++;
+    }
+    return NULL;
+}
+
+static void test_policy_invalidation_is_seen_by_worker(void) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    scope_state("wlan1");
+    capture_policy_pin(&g_scope_policy, &g_scope_state, tbl_index, &mu);
+    capture_run_flag_t stop   = CAPTURE_RUN_FLAG_INIT;
+    capture_run_flag_t closed = CAPTURE_RUN_FLAG_INIT;
+    pol_reader_arg_t a = { &g_scope_policy, &stop, 0, &closed };
+    pthread_t th;
+    int ok = pthread_create(&th, NULL, pol_reader, &a) == 0;
+    ASSERT(ok);
+    if (!ok) return;
+    tbl_del(3);
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    capture_run_flag_set(&closed, 1);
+    for (volatile int spin = 0; spin < 100000; spin++) { }
+    capture_run_flag_set(&stop, 1);
+    pthread_join(th, NULL);
+    ASSERT_EQ(a.admitted_after, 0);
+    ASSERT(capture_policy_match(&g_scope_policy, 3) == NULL);
+    g_scope_policy.mu = NULL;
+}
+
+static void test_scope_state_truth_table(void) {
+    ASSERT_EQ(capture_scope_state(0, 1, 0), CAPTURE_SCOPE_STATE_NONE);
+    ASSERT_EQ(capture_scope_state(0, 0, 0), CAPTURE_SCOPE_STATE_NONE);
+    ASSERT_EQ(capture_scope_state(2, 1, 2), CAPTURE_SCOPE_STATE_ENFORCED);
+    ASSERT_EQ(capture_scope_state(2, 1, 1), CAPTURE_SCOPE_STATE_DEGRADED);
+    ASSERT_EQ(capture_scope_state(1, 1, 0), CAPTURE_SCOPE_STATE_DEGRADED);
+    ASSERT_EQ(capture_scope_state(1, 0, 0), CAPTURE_SCOPE_STATE_NO_CAPTURE);
+    ASSERT_EQ(capture_scope_state(1, 0, 1), CAPTURE_SCOPE_STATE_NO_CAPTURE);
+}
+
+static void test_scope_state_names_and_not_enforced(void) {
+    ASSERT_STR(capture_scope_state_name(CAPTURE_SCOPE_STATE_NONE), "none");
+    ASSERT_STR(capture_scope_state_name(CAPTURE_SCOPE_STATE_ENFORCED), "enforced");
+    ASSERT_STR(capture_scope_state_name(CAPTURE_SCOPE_STATE_NO_CAPTURE), "no_capture");
+    ASSERT_STR(capture_scope_state_name(CAPTURE_SCOPE_STATE_DEGRADED), "degraded");
+    ASSERT_STR(capture_scope_state_name((capture_scope_state_t)99), "degraded");
+    ASSERT_EQ(capture_scope_not_enforced(CAPTURE_SCOPE_STATE_NONE), 0);
+    ASSERT_EQ(capture_scope_not_enforced(CAPTURE_SCOPE_STATE_ENFORCED), 0);
+    ASSERT_EQ(capture_scope_not_enforced(CAPTURE_SCOPE_STATE_NO_CAPTURE), 1);
+    ASSERT_EQ(capture_scope_not_enforced(CAPTURE_SCOPE_STATE_DEGRADED), 1);
+}
+
+static void test_scope_poll_stub_reports_no_capture(void) {
+    /* Test build has no WITH_PCAP: a requested scope reads no_capture,
+       an unrequested one none — never enforced. */
+    sloth_state_t *s = scope_state("wlan1");
+    capture_scope_poll(s);
+    ASSERT_EQ(s->scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);
+    ASSERT_EQ(s->scope_health.requested, 1);
+    s = scope_state(NULL);
+    capture_scope_poll(s);
+    ASSERT_EQ(s->scope_health.state, CAPTURE_SCOPE_STATE_NONE);
 }
 
 /* ── startup scope verdict (#85) ──────────────────────────── */
@@ -684,6 +959,24 @@ void run_capture_tests(void) {
     RUN_TEST(test_ifname_failure_not_cached);
     RUN_TEST(test_ifname_empty_not_cached);
     RUN_TEST(test_ifname_success_cached);
+
+    TEST_SUITE("capture pinned ifindex policy (#85 slice 2)");
+    RUN_TEST(test_policy_pins_names_to_indices);
+    RUN_TEST(test_policy_healthy_revalidation_changes_nothing);
+    RUN_TEST(test_policy_absent_at_start_is_degraded_not_silent);
+    RUN_TEST(test_policy_ifindex_reuse_fails_closed);
+    RUN_TEST(test_policy_rename_fails_closed);
+    RUN_TEST(test_policy_delete_fails_closed);
+    RUN_TEST(test_policy_lookup_failure_fails_closed_and_stays_closed);
+    RUN_TEST(test_policy_replug_stays_closed_until_restart);
+    RUN_TEST(test_policy_name_cache_is_not_an_authority);
+    RUN_TEST(test_policy_deselect_uses_pinned_name);
+    RUN_TEST(test_policy_null_under_allow_list_admits_nothing);
+    RUN_TEST(test_policy_pin_resets_previous_run);
+    RUN_TEST(test_policy_invalidation_is_seen_by_worker);
+    RUN_TEST(test_scope_state_truth_table);
+    RUN_TEST(test_scope_state_names_and_not_enforced);
+    RUN_TEST(test_scope_poll_stub_reports_no_capture);
 
     TEST_SUITE("capture startup scope verdict (#85)");
     RUN_TEST(test_verdict_no_restriction);

@@ -629,7 +629,7 @@ pattern as they are converted.
 | `mqtt_flow`          | `(src_ip, dst_ip)` | `src_ip` (MQTT client — flipped on CONNACK so the conversation stays attributed to the client), `dst_ip` (broker), `connect_count` (CONNECT packets observed), `connack_fail_count` (CONNACK reason codes that mean bad-auth / not-authorised), `subscribe_count`, `publish_count`, `proto_level` (3 / 4 / 5 from the most recent CONNECT), `last_username` (Username field from the most recent CONNECT — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `MQTT_BROKER_BRUTE` alert via dual thresholds (`connect_count ≥ 10` OR `connack_fail_count ≥ 5`). See `docs/wiki/mqtt-snoop.md`. |
 | `sensor`             | `kind`+`iface`    | `kind` (`wifi`/`ble`/`zigbee`/`sdr`/`gps`/`adsb`/`meshtastic`/`can`), `state` (`present`/`active`/`hidden`/`error`), `name`, `iface`, `observed` (cumulative observation count), `first_seen`, `last_seen`. The passive sensor registry — one record per detected observation source. See `docs/wiki/non-ip-sensors.md`. |
 | `wifi_merged`        | `key`             | `key` (observed entity — AP BSSID or STA MAC), `seen_by` (distinct radios that heard it), `sensor_mask` (bitmask, bit *i* = sensor id *i*), `best_rssi` (strongest signal in dBm across radios; 0 = none sampled), `best_sensor` (radio id that heard it strongest; -1 = none), `channel`, `freq_mhz`, `observations` (total merged hits), `first_seen`, `last_seen`. Multi-radio merged 802.11 world model — folds several monitor adapters into one entity-keyed view while retaining observer metadata. See `docs/wiki/wifi-sigint.md`. |
-| `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; the bounded-table eviction tally; and lifetime write-failure counts across every on-disk sink (#92). `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
+| `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; the bounded-table eviction tally; and lifetime write-failure counts across every on-disk sink (#92); whether a launch-time `--iface`/`--monitor-only` scope is enforced or has failed closed (`scope`, `scope_not_enforced`, #85). `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
 
 ### `sensor_health` — the sensor's self-report (#91)
 
@@ -664,6 +664,11 @@ does not know the type ignores it, as it would any other.
 | `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device` | the same total broken out per table |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export |
+| `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no data-stream handle), `degraded` (at least one requested interface failed closed) |
+| `scope_not_enforced` | `1` when a scope was requested and `scope` is not `enforced`. Out-of-scope traffic is never collected in any state. This flag means in-scope traffic is not being observed |
+| `scope_requested` | allow-list entries (`--iface` names plus the `--monitor-only` radio) |
+| `scope_enforced` | of those, how many are still admitting frames |
+| `scope_generation` | bumps each time a pinned interface fails closed; a consumer can tell a second failure from a repeat of the first |
 
 Per-stream block, with `<s>` being `capture` or `monitor`:
 
@@ -690,14 +695,24 @@ the common case exact.
 healthy sensor emits one line per 300 s heartbeat, and any degradation
 emits immediately. The signature covers liveness, exit reasons, the
 channel pair, retune failures, the cumulative drop/ifdrop counters and
-the eviction total — deliberately **not** `recv` or any of the deltas.
+the eviction total and the four `scope*` state fields — deliberately **not** `recv` or any of the deltas.
 `recv` climbs every tick on a working sensor, so including it would mean
 one line per second forever and the suppression would be decorative. A
 drop counter moving is genuinely news; a packet counter moving is not.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":5,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":5,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1}
 ```
+
+**Capture scope (#85).** The `scope*` fields were appended later; every
+earlier field keeps its name and position. Under `--iface` /
+`--monitor-only` each name is pinned to its interface index before the
+capture thread starts, and frames are admitted by index. Once per tick
+sloth checks that each pinned index still names the same interface. On
+unplug, rename, index reuse or a failed lookup, that pin fails closed
+for the rest of the run and `scope` goes to `degraded` on the same
+tick. A replugged adapter is not followed: restart to re-pin. A
+consumer should alert on `scope_not_enforced` becoming `1`.
 
 **What the eviction tally does and does not cover.** Counted: alerts,
 top hosts, PNL clients, per-client PNL SSIDs, DHCP events, 802.1X EAP

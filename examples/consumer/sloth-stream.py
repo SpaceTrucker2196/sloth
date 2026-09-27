@@ -271,12 +271,15 @@ def fmt_sensor_health(r, c):
     the last one means sloth detected something it could not persist
     (#92), which stderr-only visibility would leave this consumer
     unaware of entirely.
+    `scope_not_enforced` going to 1 means a --iface/--monitor-only
+    interface failed closed (#85).
     """
     cap = _stream_state(r, "capture")
     mon = _stream_state(r, "monitor")
     bad = (cap.startswith("down") or mon.startswith("down")
            or not r.get("chan_confirmed_ok", 1)
-           or r.get("storage_failures", 0))
+           or r.get("storage_failures", 0)
+           or r.get("scope_not_enforced", 0))
     head_c = c["red"] if bad else c["dim"]
     out = f"{head_c}sensor_health{c['reset']}  cap={cap} mon={mon}"
 
@@ -309,6 +312,12 @@ def fmt_sensor_health(r, c):
                        if k.startswith("storage_") and k.endswith("_failures")
                        and k != "storage_failures" and v)
         tail.append(f"storage_fail={r['storage_failures']} [{per}]")
+    if r.get("scope_not_enforced"):
+        # #85: fail-closed means nothing out of scope was collected; this
+        # says requested interfaces are NOT being observed (unplug,
+        # rename, index reuse, or never present). Restart re-pins.
+        tail.append(f"scope={r.get('scope')} "
+                    f"{r.get('scope_enforced', 0)}/{r.get('scope_requested', 0)}")
     if tail:
         out += "  " + " ".join(tail)
     return out

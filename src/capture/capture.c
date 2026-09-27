@@ -77,8 +77,72 @@ const char *capture_ifname_lookup(uint32_t idx, capture_ifname_fn resolve) {
     return e->name;
 }
 
-int capture_frame_in_scope(const sloth_state_t *s, int dlt,
-                           const uint8_t *frame, int caplen,
+int capture_policy_pin(capture_policy_t *p, const sloth_state_t *s,
+                       capture_ifindex_fn resolve, pthread_mutex_t *mu) {
+    if (!p) return 0;
+    memset(p, 0, sizeof(*p));
+    p->mu = mu;
+    if (!s || !resolve) return 0;
+    for (int i = 0; i < s->iface_allowed_count && p->count < MAX_IFACES; i++) {
+        uint32_t idx = resolve(s->iface_allowed[i]);
+        /* Absent at start: not pinned, so never admitted. The scope then
+         * reads DEGRADED, which is what makes this visible. */
+        if (idx == 0) continue;
+        capture_pin_t *pin = &p->pins[p->count++];
+        pin->ifindex = idx;
+        memcpy(pin->name, s->iface_allowed[i], sizeof(pin->name));
+        pin->name[sizeof(pin->name) - 1] = '\0';
+        pin->valid = 1;
+    }
+    return p->count;
+}
+
+const capture_pin_t *capture_policy_match(const capture_policy_t *p,
+                                          uint32_t ifindex) {
+    if (!p) return NULL;
+    for (int i = 0; i < p->count; i++) {
+        if (p->pins[i].ifindex != ifindex) continue;
+        int ok;
+        if (p->mu) pthread_mutex_lock(p->mu);
+        ok = p->pins[i].valid;
+        if (p->mu) pthread_mutex_unlock(p->mu);
+        return ok ? &p->pins[i] : NULL;
+    }
+    return NULL;
+}
+
+int capture_policy_revalidate(capture_policy_t *p, capture_ifname_fn resolve) {
+    if (!p) return 0;
+    int failed = 0;
+    for (int i = 0; i < p->count; i++) {
+        /* Unlocked read: this thread is the only writer of `valid`. */
+        if (!p->pins[i].valid) continue;   /* sticky until restart */
+        char name[16];
+        memset(name, 0, sizeof(name));
+        /* The resolver runs outside the lock — the callback takes it per
+         * packet and should never wait on an ioctl. */
+        int same = resolve && resolve(p->pins[i].ifindex, name);
+        name[sizeof(name) - 1] = '\0';
+        if (same) same = strcmp(name, p->pins[i].name) == 0;
+        if (same) continue;
+        if (p->mu) pthread_mutex_lock(p->mu);
+        p->pins[i].valid = 0;
+        p->generation++;
+        if (p->mu) pthread_mutex_unlock(p->mu);
+        failed++;
+    }
+    return failed;
+}
+
+int capture_policy_valid_count(const capture_policy_t *p) {
+    if (!p) return 0;
+    int n = 0;
+    for (int i = 0; i < p->count; i++) n += p->pins[i].valid != 0;
+    return n;
+}
+
+int capture_frame_in_scope(const sloth_state_t *s, const capture_policy_t *p,
+                           int dlt, const uint8_t *frame, int caplen,
                            capture_ifname_fn resolve) {
     if (!s) return 0;
     int restricted = s->iface_allowed_count > 0;
@@ -88,9 +152,37 @@ int capture_frame_in_scope(const sloth_state_t *s, int dlt,
     if (!restricted && s->iface_deselected_count == 0) return 1;
     uint32_t ifi = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16)
                  | ((uint32_t)frame[6] <<  8) |  (uint32_t)frame[7];
+    if (restricted) {
+        /* The pinned set is the authority, not whatever name the index
+         * resolves to today. */
+        const capture_pin_t *pin = capture_policy_match(p, ifi);
+        return pin && !iface_is_deselected(s, pin->name);
+    }
     const char *name = capture_ifname_lookup(ifi, resolve);
-    if (!name) return !restricted;
-    return !iface_is_deselected(s, name) && iface_is_allowed(s, name);
+    if (!name) return 1;
+    return !iface_is_deselected(s, name);
+}
+
+capture_scope_state_t capture_scope_state(int requested, int capture_open,
+                                          int enforced) {
+    if (requested <= 0)        return CAPTURE_SCOPE_STATE_NONE;
+    if (!capture_open)         return CAPTURE_SCOPE_STATE_NO_CAPTURE;
+    if (enforced < requested)  return CAPTURE_SCOPE_STATE_DEGRADED;
+    return CAPTURE_SCOPE_STATE_ENFORCED;
+}
+
+const char *capture_scope_state_name(capture_scope_state_t st) {
+    switch (st) {
+    case CAPTURE_SCOPE_STATE_NONE:       return "none";
+    case CAPTURE_SCOPE_STATE_ENFORCED:   return "enforced";
+    case CAPTURE_SCOPE_STATE_NO_CAPTURE: return "no_capture";
+    case CAPTURE_SCOPE_STATE_DEGRADED:   break;
+    }
+    return "degraded";
+}
+
+int capture_scope_not_enforced(capture_scope_state_t st) {
+    return st != CAPTURE_SCOPE_STATE_NONE && st != CAPTURE_SCOPE_STATE_ENFORCED;
 }
 
 capture_scope_t capture_scope_verdict(int iface_args, int monitor_only,
@@ -314,6 +406,9 @@ static pthread_t       g_thread;
 static pthread_mutex_t g_mu      = PTHREAD_MUTEX_INITIALIZER;
 static sloth_state_t   *g_state;
 static pcap_t         *g_handle;
+/* Pinned allow-list (#85 slice 2). Identities fixed before the worker
+ * exists; valid bits and generation written under g_mu thereafter. */
+static capture_policy_t g_policy;
 
 /* ── Byte helpers ─────────────────────────────────────────── */
 
@@ -874,6 +969,11 @@ static int sys_ifname(uint32_t idx, char name[16]) {
     return if_indextoname(idx, name) != NULL;
 }
 
+/* if_nametoindex() adapter for capture_policy_pin(); 0 = no such iface. */
+static uint32_t sys_ifindex(const char *name) {
+    return (uint32_t)if_nametoindex(name);
+}
+
 static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
                       const u_char *data) {
     (void)user;
@@ -883,10 +983,11 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
      * before decode when the runtime deselect ([y]) or the launch-time
      * allow-list (--iface / --monitor-only) rejects the ingress iface,
      * and — whenever an allow-list is active — when the frame cannot be
-     * attributed to an allowed iface at all. The allow-list was complete
-     * before this thread was created and is never written again. */
-    if (!capture_frame_in_scope(g_state, dlt, data, (int)hdr->caplen,
-                                sys_ifname))
+     * attributed to a pinned, still-valid iface at all. The pins were
+     * fixed before this thread was created; the main thread only ever
+     * clears their valid bits, under g_mu (#85 slice 2). */
+    if (!capture_frame_in_scope(g_state, &g_policy, dlt, data,
+                                (int)hdr->caplen, sys_ifname))
         return;
 
     packet_info_t pkt;
@@ -963,6 +1064,18 @@ void capture_health_poll(capture_health_t *h) {
                                  (uint32_t)ps.ps_ifdrop);
 }
 
+void capture_scope_poll(sloth_state_t *s) {
+    if (!s) return;
+    capture_policy_revalidate(&g_policy, sys_ifname);
+    capture_scope_health_t *h = &s->scope_health;
+    h->requested = s->iface_allowed_count;
+    h->enforced  = capture_policy_valid_count(&g_policy);
+    /* Main thread is the only writer of generation; no lock to read. */
+    h->generation = g_policy.generation;
+    h->state = (int)capture_scope_state(h->requested, g_handle != NULL,
+                                        h->enforced);
+}
+
 /* ── Public API ───────────────────────────────────────────── */
 
 void capture_open(sloth_state_t *s) {
@@ -1020,9 +1133,11 @@ int capture_is_open(void) {
 
 void capture_run(void) {
     if (!g_handle || capture_run_flag_get(&g_running)) return;
-    /* pthread_create() synchronises memory with the new thread (POSIX
-     * XBD 4.12), so every allow-list write main() made before this call
-     * is visible to on_packet() from its first frame. */
+    /* Pin the allow-list to (ifindex, name) pairs now, while no worker
+     * exists. pthread_create() synchronises memory with the new thread
+     * (POSIX XBD 4.12), so the pins are visible to on_packet() from its
+     * first frame; after this only their valid bits change (#85). */
+    capture_policy_pin(&g_policy, g_state, sys_ifindex, &g_mu);
     /* A restart clears the previous run's verdict — otherwise a fresh
      * worker would report the reason the last one died (#91 slice 2). */
     pthread_mutex_lock(&g_mu);

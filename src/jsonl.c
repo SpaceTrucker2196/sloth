@@ -1748,6 +1748,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      chan_req, chan_conf, retune_fail, chan_ok;
         uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
         int      storage_fail;
+        int      scope_state, scope_req, scope_enf;
+        uint32_t scope_gen;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1766,6 +1768,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.mon_ifdrop  = s->mon_health.ps_ifdrop;
     sig.evicted     = evict_total;
     sig.storage_fail = storage_fail;
+    /* #85: a pin failing closed is a transition, never a heartbeat's
+     * worth of news — generation moves even if the counts coincide. */
+    sig.scope_state = s->scope_health.state;
+    sig.scope_req   = s->scope_health.requested;
+    sig.scope_enf   = s->scope_health.enforced;
+    sig.scope_gen   = s->scope_health.generation;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1795,6 +1803,16 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_int(buf, LINEBUF, &off, "storage_jsonl_failures", jsonl_fail);
     kv_int(buf, LINEBUF, &off, "storage_pcap_failures",  pcap_fail);
     kv_int(buf, LINEBUF, &off, "storage_eapol_failures", eapol_fail);
+    /* Capture scope (#85 slice 2). Appended, so every existing field
+     * keeps its name and position. */
+    capture_scope_state_t sst = (capture_scope_state_t)s->scope_health.state;
+    kv_str(buf, LINEBUF, &off, "scope", capture_scope_state_name(sst));
+    kv_int(buf, LINEBUF, &off, "scope_not_enforced",
+           capture_scope_not_enforced(sst));
+    kv_int(buf, LINEBUF, &off, "scope_requested",  s->scope_health.requested);
+    kv_int(buf, LINEBUF, &off, "scope_enforced",   s->scope_health.enforced);
+    kv_int(buf, LINEBUF, &off, "scope_generation",
+           (long long)s->scope_health.generation);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

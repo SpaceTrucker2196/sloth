@@ -47,21 +47,92 @@ int capture_dlt_has_ifindex(int dlt);
    The resolver returns 1 and fills name[16] on success. The cache is
    touched only by the capture thread (and reset before it starts).
 
+   The name cache is NOT an authorisation source. It serves only the
+   runtime [y] deselect on an unrestricted stream. Under an allow-list,
+   membership is decided by the pinned policy below.
+
+   ── Pinned ifindex policy (#85 slice 2) ──
+
+   capture_policy_pin() turns the allow-list names into (ifindex, name)
+   pairs once, before the worker thread is created (capture_run()). A
+   name that does not resolve then is not pinned: it is failed closed,
+   and the scope reports DEGRADED rather than silently admitting nothing.
+   After pthread_create the pins' ifindex/name/count never change; only
+   each pin's `valid` bit and the policy `generation` do, and only under
+   `mu` (the capture module's existing g_mu; NULL in single-threaded
+   tests). No <stdatomic.h> — C99.
+
+   capture_policy_match() is the per-packet membership test: the pin for
+   `ifindex` if it exists and is still valid, else NULL. The returned
+   pointer is immutable pin storage, safe to read after the lock drops.
+
+   capture_policy_revalidate() runs on the main thread each tick. For
+   each still-valid pin it asks the resolver what the index names now;
+   an index that fails to resolve, or resolves to any other name
+   (delete, rename, reuse by another device), clears the pin's valid bit
+   and bumps `generation`. The clear is sticky for the rest of the run:
+   a replugged adapter comes back on a new index, and trusting a name
+   again mid-run is exactly the stale-cache authorisation #85 removes.
+   Returns the number of pins failed closed by this call. The one window
+   it cannot close is between a reuse and the next tick; Linux allocates
+   ifindex values upward, so reuse inside one poll interval needs the
+   counter to wrap.
+
    capture_frame_in_scope() is the per-packet election the pcap callback
    runs before decode. With a non-empty allow-list it admits a frame only
-   when it is SLL2, long enough to carry the index, the index resolves
-   to a non-empty name, and that name is allowed and not deselected.
-   With no allow-list it applies the runtime [y] deselect as before and
-   passes anything it cannot attribute. NULL state admits nothing.
+   when it is SLL2, long enough to carry the index, the index matches a
+   valid pin, and the pinned name is not deselected. A NULL policy under
+   an allow-list admits nothing. With no allow-list it applies the
+   runtime [y] deselect through the name cache as before and passes
+   anything it cannot attribute. NULL state admits nothing.
 
-   All three are compiled without WITH_PCAP so the test build can drive
-   them with hand-built SLL2 headers and a seeded resolver. */
-typedef int (*capture_ifname_fn)(uint32_t ifindex, char name[16]);
+   All of these are compiled without WITH_PCAP so the test build can
+   drive them with hand-built SLL2 headers and a seeded resolver whose
+   answers change. */
+typedef int      (*capture_ifname_fn)(uint32_t ifindex, char name[16]);
+typedef uint32_t (*capture_ifindex_fn)(const char *name);   /* 0 = none */
+
+typedef struct {
+    uint32_t ifindex;
+    char     name[16];
+    int      valid;       /* written under mu after pthread_create */
+} capture_pin_t;
+
+typedef struct {
+    capture_pin_t    pins[MAX_IFACES];
+    int              count;       /* pinned entries */
+    uint32_t         generation;  /* written under mu */
+    pthread_mutex_t *mu;          /* NULL = single-threaded */
+} capture_policy_t;
+
 void        capture_ifname_cache_reset(void);
 const char *capture_ifname_lookup(uint32_t ifindex, capture_ifname_fn resolve);
-int         capture_frame_in_scope(const sloth_state_t *s, int dlt,
+int         capture_policy_pin(capture_policy_t *p, const sloth_state_t *s,
+                               capture_ifindex_fn resolve,
+                               pthread_mutex_t *mu);
+const capture_pin_t *capture_policy_match(const capture_policy_t *p,
+                                          uint32_t ifindex);
+int         capture_policy_revalidate(capture_policy_t *p,
+                                      capture_ifname_fn resolve);
+/* Pins still valid. Main thread only (it is the sole writer). */
+int         capture_policy_valid_count(const capture_policy_t *p);
+int         capture_frame_in_scope(const sloth_state_t *s,
+                                   const capture_policy_t *p, int dlt,
                                    const uint8_t *frame, int caplen,
                                    capture_ifname_fn resolve);
+
+/* Runtime scope state from the policy's end state (#85 slice 2):
+   no request → NONE; no data-stream handle → NO_CAPTURE; fewer valid
+   pins than requested names → DEGRADED; else ENFORCED. Pure. */
+capture_scope_state_t capture_scope_state(int requested, int capture_open,
+                                          int enforced);
+/* "none", "enforced", "no_capture", "degraded". JSONL contract.
+   Unknown values read "degraded" — an unrecognised state is not a
+   claim that scope holds. */
+const char *capture_scope_state_name(capture_scope_state_t st);
+/* Requested but not in the enforced state. Fail-closed still holds in
+   every state; this says the requested coverage is not being served. */
+int         capture_scope_not_enforced(capture_scope_state_t st);
 
 /* Name annotation for a UDP/443 QUIC record (#84 slice 2).
 
@@ -223,9 +294,11 @@ void capture_open(sloth_state_t *s);
 int capture_is_open(void);
 
 /* Start the capture thread on the handle capture_open() made. The scope
-   policy (s->iface_allowed) must be complete before this call: the
-   thread's creation is the synchronisation point that publishes it, and
-   the allow-list is never written again (#85). No-op without a handle. */
+   policy (s->iface_allowed) must be complete before this call: it is
+   pinned here to (ifindex, name) pairs, the thread's creation is the
+   synchronisation point that publishes the pins, and neither the list
+   nor the pins' identities are written again (#85). No-op without a
+   handle. */
 void capture_run(void);
 
 /* capture_open() + capture_run(), for callers with no scope to install. */
@@ -246,6 +319,10 @@ int capture_set_filter(const char *expr, char *errbuf, int errsz);
    main(); safe before capture_open() (reports open=0, running=0). */
 void capture_health_poll(capture_health_t *h);
 
+/* Revalidate the pinned policy against the live ifindex table and
+   refresh s->scope_health (#85 slice 2). Main thread, once per poll. */
+void capture_scope_poll(sloth_state_t *s);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }
@@ -259,6 +336,16 @@ static inline int  capture_set_filter(const char *e, char *b, int n)
    error, so the record still emits and says the stream is absent. */
 static inline void capture_health_poll(capture_health_t *h)
     { if (h) { h->open = 0; h->running = 0; } }
+/* A requested scope with no capture compiled in is NO_CAPTURE: nothing
+   out of scope is collected, and nothing in scope is either. */
+static inline void capture_scope_poll(sloth_state_t *s) {
+    if (!s) return;
+    s->scope_health.requested  = s->iface_allowed_count;
+    s->scope_health.enforced   = 0;
+    s->scope_health.generation = 0;
+    s->scope_health.state = (int)capture_scope_state(s->iface_allowed_count,
+                                                     0, 0);
+}
 
 #endif /* WITH_PCAP */
 
