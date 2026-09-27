@@ -93,3 +93,34 @@ jobs:
 
       - name: Test under ASan + UBSan
         run: make test
+
+  # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
+  # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer
+  # (#95/d28d19b) each shipped a concurrency test that only fails *by
+  # chance* without TSan instrumentation — every one of those PRs said so
+  # explicitly. This job is what turns "fails by chance" into "fails
+  # every run": a real leaf-lock removed from rf_quality.c was confirmed
+  # to turn this exact job red (data race at rf_quality.c:28, the
+  # unlocked g_n) before this job existed, then reverted.
+  #
+  # A separate job, not a step added to `sanitize`: TSan and ASan share
+  # instrumentation of the same memory operations and are not composable
+  # in one binary (a TSan+ASan build is a runtime error, not merely slow).
+  #
+  # Blocking by design, same as `sanitize`: -fno-sanitize-recover=all plus
+  # no continue-on-error. halt_on_error=1 stops at the first race instead
+  # of the report ballooning across every worker thread hitting the same
+  # unlocked memory.
+  tsan:
+    runs-on: ubuntu-latest
+    env:
+      EXTRA_CFLAGS: -Werror -fsanitize=thread -fno-omit-frame-pointer -fno-sanitize-recover=all
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+
+      - name: Test under ThreadSanitizer
+        run: make test
