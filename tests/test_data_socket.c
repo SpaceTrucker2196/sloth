@@ -1046,6 +1046,84 @@ static void test_nonblock_failure_on_accept_drops_client(void) {
     data_socket_cleanup();
 }
 
+/* ── Close-on-exec (#86) ──────────────────────────────────────
+ *
+ * Every fd the module owns must carry FD_CLOEXEC, or a child sloth
+ * exec()s inherits the listener and live clients and can read the
+ * unauthenticated stream. The nonblock seam is the observation point:
+ * data_socket.c hands it the listener during init and each accepted fd
+ * during tick, so the recorder sees exactly the fds the module keeps,
+ * with no test-only accessor. It still performs the real O_NONBLOCK
+ * set so the module behaves as in production. */
+static int cloexec_seen_n;
+static int cloexec_seen_ok;
+
+static int record_cloexec_nonblock(int fd) {
+    int fdfl = fcntl(fd, F_GETFD);
+    cloexec_seen_n++;
+    if (fdfl >= 0 && (fdfl & FD_CLOEXEC)) cloexec_seen_ok++;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0) return -1;
+    return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static void test_unix_listener_is_cloexec(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+
+    cloexec_seen_n = cloexec_seen_ok = 0;
+    data_socket_test_set_nonblock_fn(record_cloexec_nonblock);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    data_socket_test_set_nonblock_fn(NULL);
+
+    ASSERT_EQ(cloexec_seen_n, 1);      /* the listener, and only it */
+    ASSERT_EQ(cloexec_seen_ok, 1);
+    data_socket_cleanup();
+}
+
+static void test_tcp_listener_is_cloexec(void) {
+    char spec[64];
+    snprintf(spec, sizeof(spec), "tcp:127.0.0.1:%d",
+             20000 + ((int)getpid() % 10000));
+
+    cloexec_seen_n = cloexec_seen_ok = 0;
+    data_socket_test_set_nonblock_fn(record_cloexec_nonblock);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    data_socket_test_set_nonblock_fn(NULL);
+
+    ASSERT_EQ(cloexec_seen_n, 1);
+    ASSERT_EQ(cloexec_seen_ok, 1);
+    data_socket_cleanup();
+}
+
+/* Through the default accept path (no accept seam installed): each
+ * accepted client is close-on-exec and still kept. */
+static void test_accepted_clients_are_cloexec(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int c1 = connect_client(path);
+    int c2 = connect_client(path);
+    ASSERT(c1 >= 0);
+    ASSERT(c2 >= 0);
+
+    cloexec_seen_n = cloexec_seen_ok = 0;
+    data_socket_test_set_nonblock_fn(record_cloexec_nonblock);
+    data_socket_tick();
+    data_socket_test_set_nonblock_fn(NULL);
+
+    ASSERT_EQ(cloexec_seen_n, 2);
+    ASSERT_EQ(cloexec_seen_ok, 2);
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    if (c1 >= 0) close(c1);
+    if (c2 >= 0) close(c2);
+    data_socket_cleanup();
+}
+
 /* ── Remote-bind guard (#86) ──────────────────────────────────
  *
  * The classifier is the whole policy, so it is tested directly and
@@ -1236,6 +1314,9 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_tcp_port_rejects_trailing_garbage);
     RUN_TEST(test_nonblock_failure_on_listener_aborts_init);
     RUN_TEST(test_nonblock_failure_on_accept_drops_client);
+    RUN_TEST(test_unix_listener_is_cloexec);
+    RUN_TEST(test_tcp_listener_is_cloexec);
+    RUN_TEST(test_accepted_clients_are_cloexec);
 
     TEST_SUITE("data socket (remote-bind guard, #86)");
     RUN_TEST(test_spec_is_remote_accepts_whole_loopback_net);

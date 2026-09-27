@@ -123,7 +123,8 @@ void data_socket_cleanup(void);
  * Internal indirection lets unit tests force send/accept failures
  * (EAGAIN, partial send, EMFILE) that real-socket fixtures can't
  * reliably trigger. Pass NULL to either setter to restore the real
- * libc function. Production code must not call these. */
+ * libc function (for accept, the default close-on-exec wrapper around
+ * it). Production code must not call these. */
 #include <sys/types.h>           /* ssize_t, socklen_t */
 #include <sys/socket.h>          /* struct sockaddr    */
 #include <time.h>                /* time_t             */

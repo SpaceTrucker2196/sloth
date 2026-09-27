@@ -10,6 +10,15 @@
  * a saved offset. The old writer sent the delimiter as a second send()
  * and forgot it on EAGAIN, so the next record was glued onto the last. */
 
+/* accept4() is a GNU/Linux extension: glibc declares it only under
+ * _GNU_SOURCE, which -std=c99 -D_DEFAULT_SOURCE does not imply. It is
+ * requested for this file alone and only on Linux, where accept4 has
+ * existed since 2.6.28; every other target takes the portable
+ * accept() + fcntl(FD_CLOEXEC) path below. Must precede every include. */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -56,11 +65,67 @@ static time_t mono_now(void) {
     return ts.tv_sec;
 }
 
+/* Every fd this module owns is close-on-exec (#86). sloth holds the
+ * data socket for its whole life; without FD_CLOEXEC any child it
+ * exec()s — a helper, a hook, a shell a library spawns — inherits the
+ * listener and every live client, and can accept() or read the
+ * unauthenticated JSONL stream after sloth itself has moved on.
+ *
+ * Linux sets the flag atomically at creation (SOCK_CLOEXEC on socket(),
+ * accept4()), which closes the window between creation and a later
+ * fcntl() in which a concurrent fork+exec would still leak the fd.
+ * SOCK_NONBLOCK rides along for the same reason; the checked
+ * set_nonblock() calls stay as the fallback and are idempotent here. */
+#if defined(__linux__) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
+#define DS_ATOMIC_SOCK_FLAGS 1
+#define DS_SOCK_FLAGS (SOCK_CLOEXEC | SOCK_NONBLOCK)
+#else
+#define DS_SOCK_FLAGS 0
+#endif
+
+#ifndef DS_ATOMIC_SOCK_FLAGS
+static int set_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags < 0) return -1;
+    return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+#endif
+
+static int ds_socket(int domain) {
+    int fd = socket(domain, SOCK_STREAM | DS_SOCK_FLAGS, 0);
+#ifndef DS_ATOMIC_SOCK_FLAGS
+    if (fd >= 0 && set_cloexec(fd) != 0) {
+        int err = errno;
+        close(fd);
+        errno = err;
+        return -1;
+    }
+#endif
+    return fd;
+}
+
+/* Default accept for data_socket_tick(); the test seam replaces it
+ * whole, so the signature stays accept()'s. */
+static int accept_cloexec(int fd, struct sockaddr *addr, socklen_t *len) {
+#ifdef DS_ATOMIC_SOCK_FLAGS
+    return accept4(fd, addr, len, DS_SOCK_FLAGS);
+#else
+    int c = accept(fd, addr, len);
+    if (c >= 0 && set_cloexec(c) != 0) {
+        int err = errno;
+        close(c);
+        errno = err;
+        return -1;
+    }
+    return c;
+#endif
+}
+
 /* Syscall indirection. Default to the real libc functions; tests can
  * swap in fakes via data_socket_test_set_*_fn. One predictable branch
  * per call in production. */
 static data_socket_send_fn   g_send_fn   = send;
-static data_socket_accept_fn g_accept_fn = accept;
+static data_socket_accept_fn g_accept_fn = accept_cloexec;
 static data_socket_clock_fn  g_clock_fn  = mono_now;
 
 void data_socket_test_set_send_fn(data_socket_send_fn fn) {
@@ -71,7 +136,7 @@ void data_socket_test_set_send_fn(data_socket_send_fn fn) {
 
 void data_socket_test_set_accept_fn(data_socket_accept_fn fn) {
     pthread_mutex_lock(&g_mu);
-    g_accept_fn = fn ? fn : accept;
+    g_accept_fn = fn ? fn : accept_cloexec;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -253,7 +318,7 @@ static int init_unix(const char *path) {
     }
     if (!unix_path_removable(path)) return -1;
 
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = ds_socket(AF_UNIX);
     if (fd < 0) { perror("data-socket: socket"); return -1; }
 
     unlink(path);   /* checked above: absent, or a dead socket we own */
@@ -349,7 +414,7 @@ static int init_tcp(const char *host_port, int allow_remote) {
             host, port, host, port);
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = ds_socket(AF_INET);
     if (fd < 0) { perror("data-socket: socket"); return -1; }
 
     int one = 1;
