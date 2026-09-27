@@ -79,4 +79,81 @@ int eap_type_is_weak(int type);
 /* Short human-readable method name ("MD5", "PEAP", ...); "?" if unknown. */
 const char *eap_type_name(int type);
 
+/* ── EAP-WSC (Wi-Fi Simple Configuration / WPS) — issue #82 ──────────
+ *
+ * WPS registration (M1..M8) rides inside EAP as an Expanded Type
+ * (RFC 3748 §5.7): Type 254, then a 3-byte Vendor-Id and a 4-byte
+ * Vendor-Type. WSC uses the WFA SMI 0x00372A with Vendor-Type 1
+ * (WSC 2.0 §7.7). After that come Op-Code(1), Flags(1), an optional
+ * 2-byte Message Length (Flags.LF), then the WSC message body — a run
+ * of big-endian Type(2) Length(2) Value TLVs (WSC 2.0 §12).
+ *
+ * This decoder is parse-only and holds no state: it names the message
+ * and pulls the attributes a PIN-brute / Pixie-Dust detector keys on.
+ * Sequencing M-messages into sessions is a later layer's job. */
+
+#define EAP_TYPE_EXPANDED        254       /* RFC 3748 §5.7 */
+#define EAP_WSC_VENDOR_ID        0x00372Au /* WFA SMI */
+#define EAP_WSC_VENDOR_TYPE      1u        /* SimpleConfig */
+
+/* WSC 2.0 §7.7.1 Op-Code. */
+#define WSC_OP_START     0x01
+#define WSC_OP_ACK       0x02
+#define WSC_OP_NACK      0x03
+#define WSC_OP_MSG       0x04
+#define WSC_OP_DONE      0x05
+#define WSC_OP_FRAG_ACK  0x06
+
+/* WSC 2.0 §7.7.1 Flags. */
+#define WSC_FLAG_MF      0x01   /* more fragments follow            */
+#define WSC_FLAG_LF      0x02   /* 2-byte Message Length is present */
+
+/* WSC 2.0 §12 attribute types this decoder extracts. */
+#define WSC_ATTR_MAC_ADDRESS   0x1020   /* Enrollee MAC in M1, 6 bytes */
+#define WSC_ATTR_MESSAGE_TYPE  0x1022   /* 1 byte, WSC_MSG_*           */
+#define WSC_ATTR_UUID_E        0x1047   /* 16 bytes                    */
+
+/* WSC 2.0 §12 Message Type values (attribute 0x1022). */
+#define WSC_MSG_M1    0x04
+#define WSC_MSG_M2    0x05
+#define WSC_MSG_M2D   0x06
+#define WSC_MSG_M3    0x07
+#define WSC_MSG_M4    0x08
+#define WSC_MSG_M5    0x09
+#define WSC_MSG_M6    0x0A
+#define WSC_MSG_M7    0x0B
+#define WSC_MSG_M8    0x0C
+#define WSC_MSG_ACK   0x0D
+#define WSC_MSG_NACK  0x0E
+#define WSC_MSG_DONE  0x0F
+
+typedef struct {
+    int     op_code;          /* WSC_OP_*                                  */
+    int     flags;            /* raw Flags octet                           */
+    int     more_fragments;   /* Flags.MF                                  */
+    int     msg_length;       /* declared Message Length; -1 when no LF    */
+    int     tlvs_walked;      /* 1 when the body was read as TLVs          */
+    int     truncated;        /* a TLV header or value ran past the frame  */
+    int     msg_type;         /* WSC_MSG_*; -1 when absent                 */
+    int     has_uuid_e;
+    uint8_t uuid_e[16];
+    int     has_mac;
+    uint8_t mac[6];
+} eap_wsc_info_t;
+
+/* Parse an EAP packet starting at its Code byte as EAP-WSC. Returns 1
+ * when it is a Request/Response of Expanded Type 254 carrying the WFA
+ * vendor id and SimpleConfig vendor type with Op-Code and Flags present
+ * (out populated), 0 otherwise — including a Type-254 frame for some
+ * other vendor, which is simply not WSC.
+ *
+ * A fragment with MF set and LF clear is a middle fragment: its body
+ * starts mid-message, so it is not walked (tlvs_walked stays 0) rather
+ * than inventing attributes out of value bytes. A truncated TLV stops
+ * the walk and sets `truncated`; attributes before it are kept. */
+int eap_wsc_parse(const uint8_t *p, int len, eap_wsc_info_t *out);
+
+/* "M1".."M8", "M2D", "ACK", "NACK", "Done"; "?" if unknown. */
+const char *wsc_msg_name(int msg_type);
+
 #endif /* EAP_PARSE_H */
