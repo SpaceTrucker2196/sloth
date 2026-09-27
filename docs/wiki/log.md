@@ -1408,3 +1408,34 @@ path as a stateless parser.
   Enrollee MAC only in M1, so the field is `mac`.
 - **Not yet wired.** Nothing calls it at runtime. The wave-7 WPS session
   table is the first caller, and wave-11 fuzzing targets it.
+
+## 2026-09-26 — #92: EAPOL handshake pcap carries original capture timestamps
+
+**Source**: issue #92. The per-handshake pcap stamped every record with
+the processing time (`time(NULL)`) and a zero `ts_usec`, so a capture
+backlog shifted it and M1..M4 of one exchange collapsed into the same
+second.
+
+**Updated pages**:
+
+- `include/eapol_log.h`, `src/eapol_log.c` — `eapol_observe_dot11()`
+  takes `(ts_sec, ts_usec)` from the pcap header; `pending_t` stores
+  per-message usec; `write_handshake_pcap()` writes both. The
+  `eapol_observe_dot11_at()` seam from #97 is folded in and removed.
+- `src/capture/probe.c` — `on_probe_frame` passes `hdr->ts` through.
+- `tests/test_eapol_log.c` — 3 hand-built-frame tests that read back the
+  written record headers (+19 assertions). `tests/test_alerts.c` and
+  `tests/test_fragattack.c` get one-line signature updates.
+
+**Notes**:
+
+- **One clock for EAPOL.** The pairing window, event ts, LRU
+  `last_seen` and the `eap_track` rogue-RADIUS session stamps now use
+  capture time. Live capture is the same wall-clock domain, so no
+  comparison crosses domains.
+- **Clamp.** A `ts_usec` outside 0..999999 is stored as 0. Probe never
+  enables nanosecond precision; if it ever does, the pcap magic must
+  change to 0xa1b23c4d and the clamp revisited.
+- **Open.** `frag_observe()` still takes `time(NULL)` for the same
+  frame. That is left for a later #92 slice or the wave-4 stop-flags
+  edit of probe.c.
