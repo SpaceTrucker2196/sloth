@@ -1210,3 +1210,31 @@ build before.
 - **Out of scope.** `MISSION.md` and `agents/` are not checked. The
   "9304 assertions" figure in `agents/AGENTS.md` and README is stale
   (10712 now) and is left for the owner.
+
+## 2026-09-26 — #95: test suite under ASan and UBSan in CI
+
+**Source**: issue #95 — parsers read bytes off the air and the wire; a
+unit test that passes while reading past its buffer is a false green.
+#83's EAPOL-Key over-read was only confirmed by a manual ASan run.
+
+**Updated pages**:
+
+- `.github/workflows/ci.yml` — new blocking `sanitize` job runs
+  `make test` with `-fsanitize=address,undefined
+  -fno-sanitize-recover=all` and leak detection on.
+- `tests/test_tls_log.c` — the JA4 extension-reorder test swapped two
+  extensions with an overlapping `memcpy`; both copies now read from
+  the pristine fixture. Same bytes, same assertions.
+
+**Notes**:
+
+- **One finding, in a test.** The overlapping `memcpy` was the only
+  sanitizer report across 10712 assertions; nothing in `src/`.
+- **Fix, don't suppress.** Zero leaks, so no `tests/lsan.supp`. A
+  future third-party entry needs a reason per line and never covers
+  sloth's own allocations.
+- **Coverage limit.** Only `sloth_test` is instrumented, and it is
+  built without `WITH_PCAP`/`WITH_NCURSES`: pcap capture paths, ncurses
+  rendering and the `sloth` binary are not sanitized.
+- **Out of scope.** `agents/AGENTS.md` still describes CI as the
+  six-variant `-Werror` build only; left for the owner.
