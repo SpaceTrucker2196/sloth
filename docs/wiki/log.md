@@ -1554,3 +1554,50 @@ behaviour.
 - **Coverage gap.** The exclusivity test catches a `take()` written as
   a get followed by a set only by chance. The new spin loops have no
   timeout. The pcap worker loops themselves are not tested.
+
+## 2026-09-27 — #90: tool-signature provenance exported per alert
+
+**Source**: commit `ef7db0d`, issue #90.
+
+A KARMA_AP alert that named a tool (ESP32 Marauder, WiFi Pineapple)
+said so only in free-text detail. A JSONL consumer could not tell which
+signature row matched, which revision of it, or that every shipped row
+is research-derived and has never been validated against a capture.
+
+**Changes**:
+
+- `src/tool_fingerprint.{c,h}`: each row has a stable `id` and a
+  `version`. The shipped rows are `esp32-marauder-01` and
+  `pineapple-mk7-01`, version `research-2026-09-04`. Ids are never
+  reused or renamed; a capture that replaces a row keeps its id and
+  moves its version. `tool_fingerprint_match_row()` returns the
+  winning row, and the older matchers wrap it.
+- `include/sloth.h`, `src/alerts.c`: `alert_t` carries `sig_id`,
+  `sig_version`, `sig_evidence` and `sig_validated`. They are stamped
+  in `fire_inv` and refreshed on every evaluation, so a match that
+  disappears mid-incident stops being exported.
+- `src/jsonl.c`: alert and lifecycle records emit `signature_id`,
+  `signature_version`, `validated` (JSON boolean) and
+  `signature_evidence`, and omit all four when nothing matched.
+  Additive: no schema-version bump, no CLI change.
+- `src/karma_detect.{c,h}`, `src/views/karma.c`: `karma_tool_match()`
+  builds the observation for both the rule and the [y] view, and
+  `tool_attribution_format()` renders it. An unverified match reads
+  `[ESP32 Marauder/med? provisional]` in both places.
+- Docs: `jsonl-schema.md` (new fields; `confidence` is also emitted by
+  KARMA_AP and MY_NET_RECON), `alerts.md`, `karma.md`,
+  `tool-fingerprints.md`.
+- Tests (+95 assertions), including a data-socket test that pushes
+  every unverified row through the real rule, engine and socket.
+
+**Notes**:
+
+- **Owner questions.** `research-2026-09-04` or the literal
+  `unversioned` for unverified rows? Is a JSON boolean right for
+  `validated`, given the rest of the schema uses 0/1 ints?
+- **Open.** A matched [y] row runs to about 122 columns and wraps on
+  the 100-column minimum terminal; the attribution should be truncated
+  to the remaining width. The second legend line is not counted in the
+  page budget (`LINES - 5`), so a full list clips it.
+- **Open.** The explicit PMKID_OBSERVED /
+  BEHAVIOR_CONSISTENT_WITH_ACTIVE_COLLECTION / CONFIRMED_ATTACK states.
