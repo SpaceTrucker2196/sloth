@@ -1318,3 +1318,32 @@ code gates only `--allow-active` and the mDNS advertisement.
 - **Limits.** `sloth --help` in `src/main.c` still over-claims and
   needs a code slice. The README "exactly two behaviours" paragraph
   predates this change and omits `--hop` and the routable socket.
+
+## 2026-09-26 — #87: export permission contract documented
+
+**Source**: issue #87 — the permission hardening shipped a fixed
+on-disk contract, but only the EAPOL page described it and its closing
+line read like guidance on group access while triage Q3 is still open.
+
+**Updated pages**:
+
+- `docs/wiki/retention.md` — new §4.1: per-artifact creation mode
+  (0600 files, 0700 directories, independent of umask), write strategy
+  and refusal behaviour. `--snapshot-out` added to §4 and to §6 known
+  gaps as not covered (plain fopen).
+- `docs/views/eapol.md` — sudo/group line replaced with current
+  behaviour: no group mode, gid not checked, a group-accessible
+  existing path is refused and left unchanged.
+
+**Notes**:
+
+- **Behaviour, not policy.** Both pages say what the code does and
+  point to #87 Q3; SECURITY.md is untouched.
+- **Scoped claims.** SQLite side files are lstat-checked by path, not
+  pinned to a descriptor. "Refused, not repaired" covers append and
+  truncate targets and directories only; EXCL artifacts step to `_N`
+  and the per-handshake pcap is replaced by rename.
+- **Limits.** The main `--db` is reopened by path after its check.
+  `--snapshot-out` ignores write errors after open. §6 still says a
+  failed write disables the sink, which #87/#92 changed to
+  count-and-retry.
