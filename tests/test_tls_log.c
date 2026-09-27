@@ -333,11 +333,12 @@ static void test_ja4_stable_across_extension_reorder(void) {
     int off_fmt = ext_start + 14;  /* 6 bytes  (0x000b 0x0002 0x01 0x00) */
     int off_ver = ext_start + 20;  /* 7 bytes  (0x002b 0x0003 0x02 0x03 0x04) */
 
-    /* Move supported_versions before ec_point_formats. */
-    uint8_t tmp[64];
-    memcpy(tmp, shuffled + off_fmt, 6);
-    memcpy(shuffled + off_fmt, shuffled + off_ver, 7);
-    memcpy(shuffled + off_fmt + 7, tmp, 6);
+    /* Move supported_versions before ec_point_formats. Both copies read
+     * from the pristine fixture: the two ranges are adjacent, so
+     * copying within `shuffled` overlaps (7-byte move over a 6-byte
+     * gap), which memcpy leaves undefined — ASan flagged it (#95). */
+    memcpy(shuffled + off_fmt, ja3_clienthello + off_ver, 7);
+    memcpy(shuffled + off_fmt + 7, ja3_clienthello + off_fmt, 6);
 
     (void)off_sni; (void)off_grp;   /* not touched — silence -Wunused */
 

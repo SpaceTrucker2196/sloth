@@ -59,3 +59,37 @@ jobs:
       # since the embedded target is not the only WITH_SQLITE=0 config.
       - name: Build without sqlite
         run: make clean && make WITH_SQLITE=0
+
+  # The full suite under AddressSanitizer + UndefinedBehaviorSanitizer
+  # (#95). The parsers read off-the-air and off-the-wire bytes; a unit
+  # test that passes while reading past its buffer is a false green.
+  # #83 (EAPOL-Key over-read) was only CONFIRMED by a manual ASan run —
+  # this makes that run the default for every push.
+  #
+  # Blocking by design: -fno-sanitize-recover=all turns every UBSan
+  # report into an abort, and no step here is continue-on-error. It
+  # landed only after the suite was green under exactly these flags.
+  #
+  # Leak detection is on with no suppression file: the suite has zero
+  # leaks today, so there is nothing to suppress. If a third-party
+  # static allocation (e.g. libsqlite3) ever needs one, it goes in
+  # tests/lsan.supp with a reason per entry, and never an allocation
+  # made by sloth's own code.
+  #
+  # Flags ride on EXTRA_CFLAGS, which the Makefile appends to both
+  # CFLAGS and TEST_CFLAGS — the test link line reuses TEST_CFLAGS, so
+  # the sanitizer runtime is linked without touching the Makefile.
+  sanitize:
+    runs-on: ubuntu-latest
+    env:
+      EXTRA_CFLAGS: -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+      ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+
+      - name: Test under ASan + UBSan
+        run: make test
