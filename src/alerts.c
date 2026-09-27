@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -109,15 +110,19 @@ static void alert_resolve(alert_t *a, time_t now, const char *reason) {
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
 
-#define EVIL_TWIN_TAINT_MAX 32
-
 typedef struct {
     uint8_t bssid[6];
     time_t  marked_at;
 } taint_entry_t;
 
-static taint_entry_t g_taint[EVIL_TWIN_TAINT_MAX];
-static int           g_taint_count;
+/* The alert engine marks from the main loop; eapol_log.c queries from
+ * the probe thread (append_22000_line_for_bssid, under its own g_mu).
+ * g_taint_mu is a leaf: nothing is called out to while it is held, so
+ * taking it under another module's lock cannot close a cycle. Callers
+ * of the static helpers below must hold it. */
+static pthread_mutex_t g_taint_mu = PTHREAD_MUTEX_INITIALIZER;
+static taint_entry_t   g_taint[EVIL_TWIN_TAINT_MAX];
+static int             g_taint_count;
 
 static int taint_find_slot(const uint8_t bssid[6]) {
     for (int i = 0; i < g_taint_count; i++) {
@@ -126,7 +131,7 @@ static int taint_find_slot(const uint8_t bssid[6]) {
     return -1;
 }
 
-static void taint_mark(const uint8_t bssid[6], time_t now) {
+static void taint_mark_locked(const uint8_t bssid[6], time_t now) {
     int slot = taint_find_slot(bssid);
     if (slot >= 0) { g_taint[slot].marked_at = now; return; }
     if (g_taint_count < EVIL_TWIN_TAINT_MAX) {
@@ -146,17 +151,28 @@ static void taint_mark(const uint8_t bssid[6], time_t now) {
     g_taint[slot].marked_at = now;
 }
 
+static void taint_mark(const uint8_t bssid[6], time_t now) {
+    pthread_mutex_lock(&g_taint_mu);
+    taint_mark_locked(bssid, now);
+    pthread_mutex_unlock(&g_taint_mu);
+}
+
 int evil_twin_bssid_is_tainted(const uint8_t bssid[6]) {
-    int slot = taint_find_slot(bssid);
-    if (slot < 0) return 0;
     time_t now = time(NULL);
-    if (now - g_taint[slot].marked_at > EVIL_TWIN_TAINT_TTL_SECS) return 0;
-    return 1;
+    int tainted = 0;
+    pthread_mutex_lock(&g_taint_mu);
+    int slot = taint_find_slot(bssid);
+    if (slot >= 0 && now - g_taint[slot].marked_at <= EVIL_TWIN_TAINT_TTL_SECS)
+        tainted = 1;
+    pthread_mutex_unlock(&g_taint_mu);
+    return tainted;
 }
 
 void evil_twin_taint_clear(void) {
+    pthread_mutex_lock(&g_taint_mu);
     g_taint_count = 0;
     memset(g_taint, 0, sizeof(g_taint));
+    pthread_mutex_unlock(&g_taint_mu);
 }
 
 void evil_twin_taint_mark_for_test(const uint8_t bssid[6]) {

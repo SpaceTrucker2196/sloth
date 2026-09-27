@@ -21,8 +21,15 @@ void alerts_clear(void);
  *
  * Entries expire after EVIL_TWIN_TAINT_TTL_SECS. The tracker is
  * read-only outside alerts.c; the API is exposed here so eapol_log.c
- * can query it without taking a dep on alert internals. */
+ * can query it without taking a dep on alert internals.
+ *
+ * Thread-safe: the table sits behind a leaf mutex private to alerts.c,
+ * because the query runs on the probe thread while the alert engine
+ * marks from the main loop (#95). The lock is never held while calling
+ * out, so these may be called with any other module lock held. */
 #define EVIL_TWIN_TAINT_TTL_SECS 300
+/* Table capacity; the oldest mark is evicted beyond it. */
+#define EVIL_TWIN_TAINT_MAX      32
 
 int  evil_twin_bssid_is_tainted(const uint8_t bssid[6]);
 /* Test-only: drop all tainted entries. */

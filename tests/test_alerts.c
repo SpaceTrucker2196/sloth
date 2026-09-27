@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -2698,6 +2699,90 @@ static void test_evil_twin_taint_clear_drops_entries(void) {
 
     evil_twin_taint_clear();
     ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+}
+
+/* #95: the alert engine marks from the main loop while the probe
+ * thread queries via eapol_log.c. Two markers churn distinct BSSIDs
+ * through the table (forcing eviction, plus an occasional clear) while
+ * two readers query. Every marked BSSID has identical halves; a reader
+ * that asks for a BSSID whose halves differ is asking for something no
+ * one ever marked, so a yes can only come from a torn slot. Under the
+ * sanitize/TSan jobs the unlocked version is also a reported race.
+ * Assertions stay on this thread: the runner's counters are not
+ * thread-safe. */
+#define TAINT_RACE_ITERS 20000
+
+typedef struct {
+    int id;
+    int phantom_hits;   /* reader: never-marked BSSID reported tainted */
+    int ops;
+} taint_race_arg_t;
+
+static void taint_race_bssid(uint8_t out[6], unsigned hi, unsigned lo) {
+    out[0] = 0x02; out[1] = (uint8_t)hi; out[2] = (uint8_t)lo;
+    out[3] = 0x02; out[4] = (uint8_t)hi; out[5] = (uint8_t)lo;
+}
+
+static void *taint_race_marker(void *p) {
+    taint_race_arg_t *a = p;
+    for (int i = 0; i < TAINT_RACE_ITERS; i++) {
+        uint8_t b[6];
+        taint_race_bssid(b, (unsigned)(a->id * 0x40 + (i & 0x3f)),
+                         (unsigned)(i >> 6));
+        evil_twin_taint_mark_for_test(b);
+        if (i % 4096 == 4095) evil_twin_taint_clear();
+        a->ops++;
+    }
+    return NULL;
+}
+
+static void *taint_race_reader(void *p) {
+    taint_race_arg_t *a = p;
+    for (int i = 0; i < TAINT_RACE_ITERS; i++) {
+        uint8_t b[6];
+        unsigned hi = (unsigned)(i & 0x7f), lo = (unsigned)(i >> 7);
+        taint_race_bssid(b, hi, lo);
+        (void)evil_twin_bssid_is_tainted(b);
+        b[4] ^= 0x40;   /* halves now differ: never marked by anyone */
+        if (evil_twin_bssid_is_tainted(b)) a->phantom_hits++;
+        a->ops++;
+    }
+    return NULL;
+}
+
+static void test_evil_twin_taint_concurrent_mark_query(void) {
+    evil_twin_taint_clear();
+    pthread_t th[4];
+    taint_race_arg_t args[4];
+    memset(args, 0, sizeof(args));
+    for (int i = 0; i < 4; i++) {
+        args[i].id = i;
+        ASSERT_EQ(pthread_create(&th[i], NULL,
+                                 i < 2 ? taint_race_marker : taint_race_reader,
+                                 &args[i]), 0);
+    }
+    for (int i = 0; i < 4; i++) ASSERT_EQ(pthread_join(th[i], NULL), 0);
+    for (int i = 0; i < 4; i++) ASSERT_EQ(args[i].ops, TAINT_RACE_ITERS);
+    ASSERT_EQ(args[2].phantom_hits, 0);
+    ASSERT_EQ(args[3].phantom_hits, 0);
+
+    /* The table is still coherent afterwards: exactly MAX entries fit,
+     * and one more evicts exactly one. */
+    evil_twin_taint_clear();
+    uint8_t b[6];
+    for (unsigned i = 0; i <= EVIL_TWIN_TAINT_MAX; i++) {
+        taint_race_bssid(b, 0xf0, i);
+        evil_twin_taint_mark_for_test(b);
+    }
+    int live = 0;
+    for (unsigned i = 0; i <= EVIL_TWIN_TAINT_MAX; i++) {
+        taint_race_bssid(b, 0xf0, i);
+        live += evil_twin_bssid_is_tainted(b);
+    }
+    ASSERT_EQ(live, EVIL_TWIN_TAINT_MAX);
+    taint_race_bssid(b, 0xf0, EVIL_TWIN_TAINT_MAX);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(b), 1);
+    evil_twin_taint_clear();
 }
 
 /* ── Phase 6 end-to-end attack chain ────────────────────── */
@@ -6867,6 +6952,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_attack_chain_no_flood_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_reverse_direction);
     RUN_TEST(test_evil_twin_taint_clear_drops_entries);
+    RUN_TEST(test_evil_twin_taint_concurrent_mark_query);
     RUN_TEST(test_e2e_full_attack_chain);
     RUN_TEST(test_e2e_clean_baseline_no_alerts);
     RUN_TEST(test_karma_three_ssids_fires);
