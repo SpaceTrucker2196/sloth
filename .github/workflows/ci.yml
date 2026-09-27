@@ -124,3 +124,51 @@ jobs:
 
       - name: Test under ThreadSanitizer
         run: make test
+
+  # Static analysis (#95): cppcheck over everything the default build and
+  # the research tools compile. Fails on any finding not listed, with its
+  # reason, in tests/cppcheck.supp — and on any entry there that no longer
+  # matches, because --enable=information reports unmatchedSuppression.
+  # The first pass found a real bug the suite had missed (alert detail
+  # printed last_seen as "First seen"); it was fixed, not listed.
+  #
+  # Pinned to ubuntu-24.04 and cppcheck 2.13.0: each cppcheck release
+  # adds and retires checks, and a runner-image bump must not turn this
+  # job red (or silently green) on code nobody touched. The version guard
+  # fails loudly instead, so moving versions is a reviewed change to this
+  # job and the suppression list together.
+  #
+  # The -D set mirrors the default Linux build (`make`), so cppcheck
+  # checks that one configuration rather than every #ifdef permutation;
+  # the non-Linux platform backends are excluded for the same reason.
+  # Warning, portability and performance classes plus errors; style is
+  # left off — it is taste, not defects.
+  cppcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Check cppcheck version
+        run: |
+          v=$(cppcheck --version)
+          echo "$v"
+          test "$v" = "Cppcheck 2.13.0" || {
+            echo "expected Cppcheck 2.13.0; re-baseline tests/cppcheck.supp before moving versions" >&2
+            exit 1
+          }
+
+      - name: cppcheck
+        run: >-
+          cppcheck -q -j "$(nproc)" --std=c99 --platform=unix64
+          --library=posix
+          --enable=warning,portability,performance,information
+          --error-exitcode=1
+          --suppressions-list=tests/cppcheck.supp
+          -D__linux__ -D__GNUC__ -D_DEFAULT_SOURCE -DPLATFORM_LINUX
+          -DWITH_NCURSES -DWITH_PCAP -DWITH_WIFI -DWITH_SQLITE
+          -Iinclude -Isrc -Iresearch
+          -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c
+          src research

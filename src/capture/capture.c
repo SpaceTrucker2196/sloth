@@ -773,7 +773,7 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 0, &ie))
             icmp_log_record(&ie);
     } else {
-        snprintf(pkt->info, sizeof(pkt->info), "IP proto %u", pkt->proto);
+        snprintf(pkt->info, sizeof(pkt->info), "IP proto %d", pkt->proto);
     }
 }
 
@@ -886,7 +886,7 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             snprintf(pkt->info, sizeof(pkt->info), "NDP RA");
         }
     } else {
-        snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%u", pkt->proto);
+        snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%d", pkt->proto);
     }
 }
 

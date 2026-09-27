@@ -1,0 +1,80 @@
+# cppcheck suppressions for the `cppcheck` CI job (#95).
+
+# Format: one `id:file` per line (cppcheck --suppressions-list). Every
+# entry carries the reason it is not a defect. An entry is scoped to one
+# check in one file, never a check across the tree: a new finding of the
+# same kind in a different file still fails the job. A new finding of the
+# same kind in an already-listed file is hidden by its entry; review
+# changes to a listed file with that in mind.
+
+# The job runs with --enable=information, so an entry that no longer
+# matches anything in a file that is still analysed is itself reported
+# (unmatchedSuppression) and fails the job. An entry naming a file that
+# was renamed or deleted is not reported; drop it in the same change.
+
+# Written against cppcheck 2.13.0, the ubuntu-24.04 apt package the job
+# pins. Other versions find a different set; regenerate against 2.13.0
+# (see the job in .github/workflows/ci.yml for the exact command).
+
+# Real defects are fixed, not listed here. The first pass (#95) found
+# three: the alert detail panel printing last_seen as "First seen"
+# (two localtime() results aliasing one static buffer), %u used for an
+# int protocol number in capture.c, and a NULL check in
+# http_log_record() that the next statement contradicted.
+
+# ── Tool configuration, not findings ────────────────────────────────────
+# System headers are deliberately not on the include path; cppcheck's
+# std/posix library configs model libc instead, which is its documented
+# recommended setup. Emitted once per #include <...>.
+missingIncludeSystem
+# beacon_parse_ies() exceeds the normal-level ValueFlow budget. A one-off
+# --check-level=exhaustive run over the whole tree found nothing the
+# normal level missed, and costs minutes per push, so the job stays at
+# normal. A second over-budget function elsewhere still reports.
+checkLevelNormal:src/beacon_snoop.c
+
+# ── Non-reentrant time functions, main thread only ──────────────────────
+# localtime()/gmtime() return a shared static struct tm. Every call below
+# runs on the main (UI / alerts_update) thread, formats the result before
+# the next call, and no other thread in sloth calls either function.
+# A call moved onto the capture, probe or DNS worker thread must switch
+# to localtime_r()/gmtime_r() and drop its line here.
+localtimeCalled:src/alert_pcap.c
+localtimeCalled:src/pcap_write.c
+gmtimeCalled:src/posture.c
+localtimeCalled:src/views/dashboard_bands.c
+localtimeCalled:src/views/dns_log.c
+localtimeCalled:src/views/http.c
+localtimeCalled:src/views/icmp.c
+localtimeCalled:src/views/ntp.c
+localtimeCalled:src/views/quic.c
+localtimeCalled:src/views/tls.c
+
+# ── readdir() ───────────────────────────────────────────────────────────
+# cppcheck recommends readdir_r(), which glibc deprecated in 2.24 and
+# POSIX.1-2024 marks obsolescent. readdir() is thread-safe when each
+# thread walks its own DIR*, which every caller here does (local opendir).
+readdirCalled:src/capture/probe.c
+readdirCalled:src/platform/linux_pid.c
+readdirCalled:src/platform/linux_dhcp.c
+readdirCalled:research/ingest/main.c
+
+# ── False positives, checked by hand ────────────────────────────────────
+# Bucket arrays filled field-by-field when a slot is claimed; the flagged
+# reads are sizeof() operands and snprintf() destinations of that claim.
+legacyUninitvar:src/alerts.c
+# rows_data[rc].val is the snprintf() destination, written before read.
+legacyUninitvar:src/views/dashboard_grid.c
+# order[0] is read only when top > 0, which implies g_info_n > 0 and the
+# preceding loop initialised it.
+uninitvar:src/views/dashboard_bands.c
+# tmp[] is filled by dfs_append(); cppcheck does not follow the out-param.
+uninitvar:src/views/procs.c
+# qsort() of sorted_exts with count sec_c_next, all of which were written.
+uninitvar:src/tls_log.c
+# fdopen() failure leaves fd open (POSIX), so the close(fd) on that path
+# is the only close, not a second one.
+doubleFree:src/secure_file.c
+# Band heights / panel widths start equal on purpose; each is a separate
+# layout knob so one can be tuned without touching the others.
+duplicateAssignExpression:src/views/dashboard.c

@@ -540,7 +540,7 @@ void http_log_record(const http_log_entry_t *e)
     /* A request opens the pairing window for its flow (#71). Done here
      * rather than in the parser so a caller that parses without
      * recording — the credential scanner does — cannot open one. */
-    if (e && !e->is_response) flow_note_request(e);
+    if (!e->is_response) flow_note_request(e);
 
     pthread_mutex_lock(&g_mu);
     g_log[g_head] = *e;

@@ -97,13 +97,16 @@ static void draw_alert_detail(const sloth_state_t *s) {
     tui_dim();   TPRINT("  Key:        "); tui_normal(); TPRINT("%s\n", a->key);
     tui_dim();   TPRINT("  Hits:       "); tui_bright(); TPRINT("%d\n", a->count);
 
+    /* localtime_r: two localtime() results alias one static struct tm,
+     * so first_seen printed as last_seen (cppcheck, #95). */
     char ts1[32], ts2[32];
-    struct tm *tm1 = localtime(&a->first_seen);
-    struct tm *tm2 = localtime(&a->last_seen);
-    if (tm1) strftime(ts1, sizeof(ts1), "%Y-%m-%d %H:%M:%S", tm1);
-    else     snprintf(ts1, sizeof(ts1), "?");
-    if (tm2) strftime(ts2, sizeof(ts2), "%Y-%m-%d %H:%M:%S", tm2);
-    else     snprintf(ts2, sizeof(ts2), "?");
+    struct tm tm1, tm2;
+    if (localtime_r(&a->first_seen, &tm1))
+        strftime(ts1, sizeof(ts1), "%Y-%m-%d %H:%M:%S", &tm1);
+    else snprintf(ts1, sizeof(ts1), "?");
+    if (localtime_r(&a->last_seen, &tm2))
+        strftime(ts2, sizeof(ts2), "%Y-%m-%d %H:%M:%S", &tm2);
+    else snprintf(ts2, sizeof(ts2), "?");
     tui_dim();   TPRINT("  First seen: "); tui_normal(); TPRINT("%s\n", ts1);
     tui_dim();   TPRINT("  Last seen:  "); tui_normal(); TPRINT("%s\n", ts2);
 
@@ -201,8 +204,9 @@ void view_alerts_draw(const sloth_state_t *s) {
             continue;
 
         char ts_buf[10];
-        struct tm *tm = localtime(&a->last_seen);
-        if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
+        struct tm tm;
+        if (localtime_r(&a->last_seen, &tm))
+            strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", &tm);
         else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 
         if (row == s->alert_sel) {

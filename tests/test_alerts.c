@@ -4487,6 +4487,56 @@ static void test_view_draw_populated(void) {
     view_alerts_draw(&s);
 }
 
+/* The detail panel formats first_seen and last_seen in one statement.
+ * With localtime() both pointers alias the same static struct tm, so the
+ * second call overwrote the first and "First seen" printed the last-seen
+ * time — found by cppcheck (localtimeCalled, #95). Timestamps are days
+ * apart so no timezone can make the two strings coincide. */
+static void test_view_detail_first_seen_is_not_last_seen(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alert_t *a = &s.alerts[0];
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->title, sizeof(a->title), "detail-time");
+    a->first_seen = (time_t)1700000000;
+    a->last_seen  = a->first_seen + 3 * 86400 + 3723;
+    a->count = 2;
+    s.alert_count  = 1;
+    s.alert_sel    = 0;
+    s.alert_detail = 1;
+
+    char want1[32], want2[32];
+    struct tm tm;
+    ASSERT(localtime_r(&a->first_seen, &tm) != NULL);
+    strftime(want1, sizeof(want1), "%Y-%m-%d %H:%M:%S", &tm);
+    ASSERT(localtime_r(&a->last_seen, &tm) != NULL);
+    strftime(want2, sizeof(want2), "%Y-%m-%d %H:%M:%S", &tm);
+    ASSERT(strcmp(want1, want2) != 0);
+
+    char line1[64], line2[64];
+    snprintf(line1, sizeof(line1), "First seen: %s", want1);
+    snprintf(line2, sizeof(line2), "Last seen:  %s", want2);
+
+    static char buf[16384];
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    FILE *tmp = tmpfile();
+    ASSERT(tmp != NULL);
+    if (!tmp) { close(saved); return; }
+    dup2(fileno(tmp), fileno(stdout));
+    view_alerts_draw(&s);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    rewind(tmp);
+    size_t n = fread(buf, 1, sizeof(buf) - 1, tmp);
+    buf[n] = '\0';
+    fclose(tmp);
+
+    ASSERT(strstr(buf, line1) != NULL);
+    ASSERT(strstr(buf, line2) != NULL);
+}
+
 static void test_view_key_nav(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -7050,6 +7100,7 @@ void run_alerts_tests(void) {
     TEST_SUITE("view_alerts");
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
+    RUN_TEST(test_view_detail_first_seen_is_not_last_seen);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
 
