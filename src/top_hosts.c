@@ -99,10 +99,13 @@ static void reset_counters(void) {
  * cache costs nothing on the wire. */
 static void resolve_one(top_host_t *h, int names_on) {
     if (h->hostname[0] == '\0') {
-        const char *name = names_on ? dns_resolve(h->ip)
-                                    : dns_lookup_cached(h->ip);
-        if (name && name[0] && strcmp(name, h->ip) != 0)
-            snprintf(h->hostname, sizeof(h->hostname), "%s", name);
+        /* Sized to the destination: the resolver truncates and
+         * terminates, so the accepted name copies over whole. */
+        char name[sizeof(h->hostname)];
+        if (names_on) dns_resolve(h->ip, name, sizeof(name));
+        else          dns_lookup_cached(h->ip, name, sizeof(name));
+        if (name[0] && strcmp(name, h->ip) != 0)
+            memcpy(h->hostname, name, sizeof(name));
     }
     if (h->owner[0] == '\0') {
         const char *o = ip_owner_lookup_str(h->ip);

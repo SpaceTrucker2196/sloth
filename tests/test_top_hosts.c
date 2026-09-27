@@ -236,6 +236,29 @@ static void test_names_on_under_strict_default_stays_silent(void) {
     ASSERT_EQ(1, (int)st.resolve_suppressed);
 }
 
+/* #95: the resolver now writes into a buffer resolve_one() owns. Two
+ * hosts named in one poll must each keep their own name, through both
+ * the passive half (names off) and the resolving half (names on). */
+static void test_two_hosts_keep_distinct_names(void) {
+    for (int on = 0; on <= 1; on++) {
+        sloth_state_t s;
+        seed_one_public(&s, "198.18.0.34");
+        seed_conn(&s, "198.18.0.35", 443);
+        dns_set_resolved("198.18.0.34", "alpha.example");
+        dns_set_resolved("198.18.0.35", "bravo.example");
+        s.dns_enabled = on;
+        top_hosts_update(&s);
+
+        int a = find_host(&s, "198.18.0.34");
+        int b = find_host(&s, "198.18.0.35");
+        ASSERT(a >= 0 && b >= 0);
+        if (a < 0 || b < 0) continue;
+        ASSERT_STR(s.top_hosts[a].hostname, "alpha.example");
+        ASSERT_STR(s.top_hosts[b].hostname, "bravo.example");
+        ASSERT_EQ(0, (int)th_snap().resolve_enqueued);
+    }
+}
+
 /* ── Sorting ─────────────────────────────────────────────── */
 
 static void test_top_entries_sorted_by_activity(void) {
@@ -271,6 +294,7 @@ void run_top_hosts_tests(void) {
     RUN_TEST(test_names_off_still_shows_observed_name);
     RUN_TEST(test_names_on_with_active_resolver_resolves);
     RUN_TEST(test_names_on_under_strict_default_stays_silent);
+    RUN_TEST(test_two_hosts_keep_distinct_names);
     /* Leave nothing queued and the shipped policy in place. */
     dns_reset();
     dns_resolver_reset_policy();

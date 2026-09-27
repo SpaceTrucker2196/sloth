@@ -27,7 +27,7 @@ typedef enum {
 
 typedef struct {
     char        ip[46];
-    char        host[256];
+    char        host[DNS_NAME_MAX];
     dns_state_t state;
     time_t      ts;
 } dns_entry_t;
@@ -169,7 +169,7 @@ static void *dns_worker(void *arg) {
         pthread_mutex_unlock(&g_mu);
 
         /* Resolve outside the lock — this can block for seconds */
-        char host[256];
+        char host[DNS_NAME_MAX];
         resolve_ip(ip, host, sizeof(host));
 
         pthread_mutex_lock(&g_mu);
@@ -303,26 +303,35 @@ void dns_resolver_stats_reset(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
-/* The returned pointer is shared by both halves of the API; see dns.h. */
-static char g_result[256];
+/* Copy one name into the caller's buffer (#95). Called with g_mu held
+   when src is a cache entry, so the copy is a single consistent read. */
+static void copy_out(char *buf, size_t sz, const char *src) {
+    size_t n = strlen(src);
+    if (n >= sz) n = sz - 1;
+    memcpy(buf, src, n);
+    buf[n] = '\0';
+}
 
-const char *dns_lookup_cached(const char *ip) {
+const char *dns_lookup_cached(const char *ip, char *buf, size_t sz) {
+    if (!buf || sz == 0) return ip;
     time_t now = time(NULL);
 
     pthread_mutex_lock(&g_mu);
     g_stats.cached_lookups++;
     const char *host = cache_peek(ip, now);
     if (host) {
-        strncpy(g_result, host, sizeof(g_result) - 1);
-        g_result[sizeof(g_result) - 1] = '\0';
+        copy_out(buf, sz, host);
         pthread_mutex_unlock(&g_mu);
-        return g_result;
+        return buf;
     }
     pthread_mutex_unlock(&g_mu);
-    return ip;   /* nothing observed — no slot claimed, nothing queued */
+    /* nothing observed — no slot claimed, nothing queued */
+    copy_out(buf, sz, ip);
+    return buf;
 }
 
-const char *dns_resolve(const char *ip) {
+const char *dns_resolve(const char *ip, char *buf, size_t sz) {
+    if (!buf || sz == 0) return ip;
     time_t now = time(NULL);
 
     pthread_mutex_lock(&g_mu);
@@ -333,10 +342,9 @@ const char *dns_resolve(const char *ip) {
         dns_entry_t *e = &g_cache[idx];
         if (e->state == DNS_RESOLVED) {
             if (now - e->ts < DNS_TTL_SEC) {
-                strncpy(g_result, e->host, sizeof(g_result) - 1);
-                g_result[sizeof(g_result) - 1] = '\0';
+                copy_out(buf, sz, e->host);
                 pthread_mutex_unlock(&g_mu);
-                return g_result;
+                return buf;
             }
             /* TTL expired — re-queue */
             if (g_resolver_enabled) {
@@ -349,7 +357,8 @@ const char *dns_resolve(const char *ip) {
         }
         /* PENDING or FAILED: return raw IP */
         pthread_mutex_unlock(&g_mu);
-        return ip;
+        copy_out(buf, sz, ip);
+        return buf;
     }
 
     if (!g_resolver_enabled) {
@@ -358,7 +367,8 @@ const char *dns_resolve(const char *ip) {
          * PENDING entry alone would tell a later caller work is coming. */
         g_stats.resolve_suppressed++;
         pthread_mutex_unlock(&g_mu);
-        return ip;
+        copy_out(buf, sz, ip);
+        return buf;
     }
 
     /* Not in cache: claim a slot and submit */
@@ -371,15 +381,17 @@ const char *dns_resolve(const char *ip) {
     enqueue(ip);
 
     pthread_mutex_unlock(&g_mu);
-    return ip;
+    copy_out(buf, sz, ip);
+    return buf;
 }
 
-const char *dns_lookup(const char *ip) {
-    return dns_resolve(ip);
+const char *dns_lookup(const char *ip, char *buf, size_t sz) {
+    return dns_resolve(ip, buf, sz);
 }
 
 void dns_fmt_addr(const char *ip, uint16_t port, char *buf, int sz) {
-    const char *host = dns_resolve(ip);
+    char host[DNS_NAME_MAX];
+    dns_resolve(ip, host, sizeof(host));
     const char *svc  = svc_name(port);
     if (svc)
         snprintf(buf, sz, "%s:%s", host, svc);

@@ -8,6 +8,9 @@
 #include "views/mdns.h"
 #include "dns.h"
 
+/* Caller-owned result buffer for the dns.h lookups (#95). */
+static char nb_[DNS_NAME_MAX];
+
 /* ── Hand-crafted mDNS packets ───────────────────────────── */
 
 /*
@@ -225,7 +228,7 @@ static void test_a_injects_dns_cache(void) {
     setup();
     mdns_snoop(pkt_a, sizeof(pkt_a));
     /* DNS cache should have hostname for this IP */
-    const char *h = dns_lookup_cached("192.168.1.100");
+    const char *h = dns_lookup_cached("192.168.1.100", nb_, sizeof(nb_));
     ASSERT(h != NULL);
     ASSERT(strstr(h, "mydevice") != NULL);
 }
@@ -244,7 +247,7 @@ static void test_a_fills_service_ip(void) {
 static void test_aaaa_injects_dns_cache(void) {
     setup();
     mdns_snoop(pkt_aaaa, sizeof(pkt_aaaa));
-    const char *h = dns_lookup_cached("fe80::1");
+    const char *h = dns_lookup_cached("fe80::1", nb_, sizeof(nb_));
     ASSERT(h != NULL);
     ASSERT(strstr(h, "mydevice") != NULL);
 }
@@ -324,7 +327,7 @@ static void test_cacheflush_class_bit(void) {
     setup();
     /* cache-flush bit in CLASS should not prevent A record from being processed */
     mdns_snoop(pkt_a_cacheflush, sizeof(pkt_a_cacheflush));
-    const char *h = dns_lookup_cached("192.168.1.101");
+    const char *h = dns_lookup_cached("192.168.1.101", nb_, sizeof(nb_));
     ASSERT(h != NULL);
     ASSERT(strstr(h, "mydevice") != NULL);
 }

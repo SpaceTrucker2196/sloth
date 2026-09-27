@@ -31,8 +31,9 @@ int capture_dlt_has_ifindex(int dlt) {
 
 /* Outside the guard again so the test build can pin it (#84 slice 2).
    Rationale and the defect it removes are in capture.h. */
-const char *capture_quic_hostname(const char *remote_ip) {
-    return dns_lookup_cached(remote_ip);
+const char *capture_quic_hostname(const char *remote_ip,
+                                  char *buf, size_t sz) {
+    return dns_lookup_cached(remote_ip, buf, sz);
 }
 
 /* ── Fail-closed capture scope (#85) ───────────────────────────
@@ -604,7 +605,8 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            const char *host   = capture_quic_hostname(remote);
+            char        hbuf[DNS_NAME_MAX];
+            const char *host   = capture_quic_hostname(remote, hbuf, sizeof(hbuf));
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {
@@ -728,7 +730,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
                 snprintf(pkt->info, sizeof(pkt->info), "DHCP");
         } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
             const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            const char *host   = capture_quic_hostname(remote);
+            char        hbuf[DNS_NAME_MAX];
+            const char *host   = capture_quic_hostname(remote, hbuf, sizeof(hbuf));
             quic_log_entry_t qe;
             if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
                                host && host[0] ? host : NULL, &qe)) {

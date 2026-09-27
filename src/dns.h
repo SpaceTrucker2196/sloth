@@ -1,7 +1,12 @@
 #ifndef DNS_H
 #define DNS_H
 
+#include <stddef.h>
 #include <stdint.h>
+
+/* Longest hostname the cache stores, NUL included. A caller that wants
+   a name back untruncated sizes its buffer with this. */
+#define DNS_NAME_MAX 256
 
 /* Start/stop the background resolver thread.
 
@@ -13,14 +18,11 @@
 void dns_init(void);
 void dns_cleanup(void);
 
-/* Non-blocking lookup. Returns the cached hostname, or the original IP
-   string if resolution is pending/failed. Safe to call only from the
-   main thread. The returned pointer is valid until the next dns_lookup call.
-
-   Retained as the pre-#84 spelling of dns_resolve(): it *requests*
-   active resolution on a cache miss, which since slice 2 is granted
-   only under --allow-active. New code should name the half it means. */
-const char *dns_lookup(const char *ip);
+/* Non-blocking lookup: the pre-#84 spelling of dns_resolve(), with the
+   same caller-owned buffer contract (below). It *requests* active
+   resolution on a cache miss, which since slice 2 is granted only under
+   --allow-active. New code should name the half it means. */
+const char *dns_lookup(const char *ip, char *buf, size_t sz);
 
 /* ── Passive lookup vs. active resolution (#84) ──────────────────────
  *
@@ -39,12 +41,30 @@ const char *dns_lookup(const char *ip);
  *   address to the getnameinfo() worker. Gating it gates all of
  *   sloth's name-resolution egress, which is what #84 slice 2 needs.
  *
- * Both return the hostname when one is known and the ip argument
- * unchanged when it is not. The returned pointer is valid until the
- * next call to either function.
+ * ── Result ownership (#95) ──
+ *
+ * The caller owns the output. Each function writes the hostname when
+ * one is known, or a copy of ip when it is not, into buf (at most sz
+ * bytes, always NUL-terminated, truncated to fit) and returns buf. The
+ * copy out of the cache happens under the cache lock, so what lands in
+ * buf is one entry's name as it stood at one instant — never a mix of
+ * two.
+ *
+ * Until #95 both returned a pointer into one static buffer shared by
+ * every caller. dns_lookup_cached() runs on the capture thread
+ * (capture_quic_hostname()) while the main thread runs dns_resolve()
+ * for top_hosts and the packet detail pane, so the capture thread could
+ * read a name the main thread was overwriting: a torn hostname that
+ * then went into a QUIC log record. A caller-owned buffer has no
+ * second writer.
+ *
+ * buf must not overlap ip. Size it DNS_NAME_MAX for an untruncated
+ * name. A NULL buf or sz == 0 writes nothing and returns ip — the one
+ * case where the return is not buf. All three functions are safe to
+ * call from any thread.
  */
-const char *dns_lookup_cached(const char *ip);
-const char *dns_resolve(const char *ip);
+const char *dns_lookup_cached(const char *ip, char *buf, size_t sz);
+const char *dns_resolve(const char *ip, char *buf, size_t sz);
 
 /* ── Resolver policy (#84 slice 2) ───────────────────────────────────
  *

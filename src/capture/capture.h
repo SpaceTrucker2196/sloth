@@ -1,6 +1,7 @@
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
+#include <stddef.h>
 #include "sloth.h"
 
 /* Classify a pcap_activate() return code.
@@ -80,8 +81,14 @@ int         capture_frame_in_scope(const sloth_state_t *s, int dlt,
 
    Factored out of the static decoders and compiled without WITH_PCAP
    for the same reason capture_dlt_has_ifindex() is — so the test build
-   can pin the behaviour without linking libpcap. */
-const char *capture_quic_hostname(const char *remote_ip);
+   can pin the behaviour without linking libpcap.
+
+   The name is written into the caller's buf (#95); dns.h has the
+   contract. This runs on the capture thread concurrently with the main
+   thread's resolver calls, which is exactly the case the old shared
+   static result buffer tore. */
+const char *capture_quic_hostname(const char *remote_ip,
+                                  char *buf, size_t sz);
 
 /* Startup decision: can the requested scope be enforced? (#85)
 

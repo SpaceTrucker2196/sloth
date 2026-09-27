@@ -3,6 +3,9 @@
 #include "runner.h"
 #include "dhcp_snoop.h"
 #include "dns.h"
+
+/* Caller-owned result buffer for the dns.h lookups (#95). */
+static char nb_[DNS_NAME_MAX];
 #include "views/dhcp_snoop.h"
 
 /* ── Packet builder ──────────────────────────────────────── */
@@ -112,7 +115,7 @@ static void test_ack_populates_dns_cache(void) {
     uint8_t buf[300]; char info[64];
     dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
-    const char *resolved = dns_lookup_cached("10.0.0.5");
+    const char *resolved = dns_lookup_cached("10.0.0.5", nb_, sizeof(nb_));
     ASSERT(resolved != NULL && strcmp(resolved, "devbox") == 0);
 }
 
@@ -151,8 +154,8 @@ static void test_discover_no_dns_cache(void) {
      * assertion itself stays passive (#84). */
     dns_resolver_stats_reset();
     /* no IP resolved for "phantom" */
-    ASSERT(dns_lookup_cached("0.0.0.0") == NULL ||
-           strcmp(dns_lookup_cached("0.0.0.0"), "phantom") != 0);
+    ASSERT(dns_lookup_cached("0.0.0.0", nb_, sizeof(nb_)) == NULL ||
+           strcmp(dns_lookup_cached("0.0.0.0", nb_, sizeof(nb_)), "phantom") != 0);
 
     dns_resolver_stats_t st;
     dns_resolver_stats(&st);

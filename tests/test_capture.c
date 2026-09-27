@@ -3,6 +3,9 @@
 #include "capture/capture.h"
 #include "dns.h"
 
+/* Caller-owned result buffer for the dns.h lookups (#95). */
+static char nb_[DNS_NAME_MAX];
+
 /* pcap_activate() return codes, written out from libpcap's documented
    contract rather than #included from <pcap.h> — the test build links no
    libpcap, and pinning the literals here is what makes this a real
@@ -523,7 +526,7 @@ static dns_resolver_stats_t quic_snap(void) {
  * a reverse-DNS generator — one PTR query per unseen QUIC peer. */
 static void test_quic_hostname_does_no_resolver_work(void) {
     quic_cold();
-    ASSERT_STR(capture_quic_hostname("203.0.113.40"), "203.0.113.40");
+    ASSERT_STR(capture_quic_hostname("203.0.113.40", nb_, sizeof(nb_)), "203.0.113.40");
 
     dns_resolver_stats_t st = quic_snap();
     ASSERT_EQ(0, (int)st.resolve_requests);
@@ -535,8 +538,8 @@ static void test_quic_hostname_does_no_resolver_work(void) {
  * queued work it never asked for — the same egress one call later. */
 static void test_quic_hostname_miss_leaves_no_pending_slot(void) {
     quic_cold();
-    capture_quic_hostname("203.0.113.41");
-    capture_quic_hostname("203.0.113.41");
+    capture_quic_hostname("203.0.113.41", nb_, sizeof(nb_));
+    capture_quic_hostname("203.0.113.41", nb_, sizeof(nb_));
     ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
 }
 
@@ -546,15 +549,15 @@ static void test_quic_hostname_miss_leaves_no_pending_slot(void) {
 static void test_quic_hostname_returns_observed_name(void) {
     quic_cold();
     dns_set_resolved("203.0.113.42", "quic.example");
-    ASSERT_STR(capture_quic_hostname("203.0.113.42"), "quic.example");
+    ASSERT_STR(capture_quic_hostname("203.0.113.42", nb_, sizeof(nb_)), "quic.example");
     ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
 }
 
 static void test_quic_hostname_ipv6_is_passive_too(void) {
     quic_cold();
-    ASSERT_STR(capture_quic_hostname("2001:db8::40"), "2001:db8::40");
+    ASSERT_STR(capture_quic_hostname("2001:db8::40", nb_, sizeof(nb_)), "2001:db8::40");
     dns_set_resolved("2001:db8::40", "v6.quic.example");
-    ASSERT_STR(capture_quic_hostname("2001:db8::40"), "v6.quic.example");
+    ASSERT_STR(capture_quic_hostname("2001:db8::40", nb_, sizeof(nb_)), "v6.quic.example");
     ASSERT_EQ(0, (int)quic_snap().resolve_enqueued);
 }
 

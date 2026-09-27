@@ -3,6 +3,9 @@
 #include "runner.h"
 #include "nbns_snoop.h"
 #include "dns.h"
+
+/* Caller-owned result buffer for the dns.h lookups (#95). */
+static char nb_[DNS_NAME_MAX];
 #include "views/nbns.h"
 
 /* ── Packet builder ──────────────────────────────────────── */
@@ -129,7 +132,7 @@ static void test_response_calls_dns_resolved(void) {
     char info[64] = "";
     nbns_snoop(buf, len, info, sizeof(info));
     /* dns cache should resolve this IP to the name */
-    const char *resolved = dns_lookup_cached("172.16.0.3");
+    const char *resolved = dns_lookup_cached("172.16.0.3", nb_, sizeof(nb_));
     ASSERT(resolved != NULL && strcmp(resolved, "WINBOX") == 0);
 }
 
