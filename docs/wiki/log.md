@@ -1294,3 +1294,27 @@ main loop and read from the probe thread (via `eapol_log.c` writing a
   CI gains a reliable signal when the #95 TSan slice lands.
 - **Limits.** The post-join capacity check runs on a cleared table, and
   the leaf-lock invariant is documented, not mechanically enforced.
+
+## 2026-09-26 — #84: --strict doc claims corrected to match code
+
+**Source**: issue #84 — README and the data-socket exposure page
+claimed `--strict` blocks `--hop` and closes every on-wire path. The
+code gates only `--allow-active` and the mDNS advertisement.
+
+**Updated pages**:
+
+- `README.md` — WiFi SIGINT usage: `--strict` refuses `--allow-active`
+  only; `--hop` is the separate MISSION §2 carve-out. `--strict` and
+  `--data-socket` bullets name a routable data socket as a remaining
+  path.
+- `docs/wiki/data-socket-exposure.md` — `--strict` suppresses the
+  advertisement, not an opted-in routable listener.
+
+**Notes**:
+
+- **Owner decision open.** Whether `--strict` should also refuse
+  `--hop` or a routable socket is left to the owner; the docs describe
+  today's behaviour.
+- **Limits.** `sloth --help` in `src/main.c` still over-claims and
+  needs a code slice. The README "exactly two behaviours" paragraph
+  predates this change and omits `--hop` and the routable socket.
