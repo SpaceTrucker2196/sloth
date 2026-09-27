@@ -48,6 +48,14 @@ Per candidate:
   positive issue #90 reported.
 - **score** — `1 + (PNL>0 ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0)`,
   ranked strongest-first.
+- **tool** — a trailing `[label/conf]` when the tool-signature table
+  names the candidate ([[tool-fingerprints]]). A row with no capture
+  behind it renders as `[ESP32 Marauder/med? provisional]` (#90): a
+  hypothesis sloth is willing to state, not an identification. Same
+  text as the `KARMA_AP` alert detail — both come from
+  `tool_attribution_format()`. Display only: it does not move the
+  score, because an UNVERIFIED guess is not corroboration, and every
+  row shipped today is UNVERIFIED.
 
 The same signals drive the `KARMA_AP` alert in `[v] Alerts`, which adds
 a `confidence` percentage and escalates WARN→CRIT only when PNL
@@ -63,7 +71,9 @@ the same underlying signals, not a mirror of the alert's severity.
  BSSID              SSIDs  PNL   J%    IE  chain  score  Top SSID / last
  -----------------  -----  ----  ----  --  -----  -----  ---------------
  00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
- PNL = advertised SSIDs matching nearby client probe lists; chain = concurrent deauth flood
+ 24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Corp (4s)  [ESP32 Marauder/med? provisional]
+ PNL = advertised SSIDs matching nearby client probe lists; chain = deauth-then-lure on a shared victim
+ [tool/conf? provisional] = UNVERIFIED signature, no capture behind it - a hypothesis, not an identification
 ```
 
 The BSSID is bright; PNL and chain go bright when non-zero to draw the
@@ -75,7 +85,9 @@ operator's eye.
   VAPs) and never trip the threshold.
 - A single row at score 1 (≥3 SSIDs, no PNL overlap, no deauth):
   worth a glance — some captive-portal gear cycles SSIDs — but not by
-  itself an attack.
+  itself an attack. That holds with a `provisional` tool attribution
+  on it too: the signature has never been checked against a capture of
+  the tool it names.
 
 ## What's suspicious
 

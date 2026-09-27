@@ -389,6 +389,25 @@ static void emit_pair_axes(char *buf, int *off, const alert_t *a) {
                wired_attach_label((wired_attach_t)a->wired_attach));
 }
 
+/* Tool-signature provenance (#90), additive, shared by both record
+ * families for the same reason as the pair axes above.
+ *
+ * All four are omitted when no signature matched — present only on
+ * findings a signature shaped, same rule as `inventory`. When present,
+ * `validated` is always emitted, and as a JSON boolean rather than the
+ * 0/1 ints elsewhere in the schema: it is the one field a consumer must
+ * not read past, the issue asks for `validated: bool` by name, and a
+ * `false` literal survives a naive `if record["validated"]` either way.
+ * formatter.c's scanner already accepts true/false. */
+static void emit_signature(char *buf, int *off, const alert_t *a) {
+    if (!a->sig_id[0]) return;
+    kv_str(buf, LINEBUF, off, "signature_id", a->sig_id);
+    kv_str(buf, LINEBUF, off, "signature_version", a->sig_version);
+    appendf(buf, LINEBUF, off, ",\"validated\":%s",
+            a->sig_validated ? "true" : "false");
+    kv_str(buf, LINEBUF, off, "signature_evidence", a->sig_evidence);
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -422,6 +441,7 @@ void jsonl_emit_alert(const alert_t *a) {
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
+    emit_signature(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -470,6 +490,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     if (a->inventory[0])
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
+    emit_signature(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);

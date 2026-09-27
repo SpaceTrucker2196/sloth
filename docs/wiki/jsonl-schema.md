@@ -267,10 +267,14 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
 | `count` | int    | **rule evaluations** under this dedup key — see the note below. Always `1` on this record, which is emitted only when the key is new |
 | `technique` | string | MITRE ATT&CK technique ID (e.g. `T1110.001`). Omitted for host-posture alerts (`NO_MONITOR_MODE`). |
-| `confidence` | int | additive, #89 — how likely the finding is to be **true**, in percent (5..95). A separate axis from `sev`, which is how **bad** it would be if true. **Omitted** when the rule reported none: most rules assert a condition they observed directly and have nothing to qualify, and a literal `0` would read as "certainly false". Emitted today by the `EVIL_TWIN` family |
+| `confidence` | int | additive, #89 — how likely the finding is to be **true**, in percent (5..95). A separate axis from `sev`, which is how **bad** it would be if true. **Omitted** when the rule reported none: most rules assert a condition they observed directly and have nothing to qualify, and a literal `0` would read as "certainly false". Emitted today by the `EVIL_TWIN` family (#89), `KARMA_AP` (#90) and `MY_NET_RECON` (#94) |
 | `inventory` | string | additive, #89 slice 2 — 16 hex chars, the content hash of the approved inventory this finding consulted (`--inventory`, see [[inventory]]). **Omitted** when the rule consulted none; stamping every record would assert the anchor backed findings it never touched. Present on the `EVIL_TWIN` family when an inventory is loaded |
 | `ap_class` | string | additive, #89 slice 3 — what kind of AP a *paired* finding is about: `impostor` (over-the-air impersonator), `neighbor` (outside the operator's declared estate), `declared` (both halves in the approved inventory). **Omitted** when nothing established a class, and on every rule that is not about an AP pair. Emitted today by the `EVIL_TWIN` family |
 | `wired_attachment` | string | additive, #89 slice 3 — `yes` or `no`, whether the accused AP is attached to the wired network. **Omitted when not established, which is always today**: nothing in-tree can see the wire. See the note below — absence is *not* a negative answer |
+| `signature_id` | string | additive, #90 — stable id of the tool-signature row that shaped this finding (e.g. `esp32-marauder-01`, see [[tool-fingerprints]]). Never reused or renamed, so an archive can join on it. **All four `signature_*` / `validated` fields are omitted when no row matched**, and on every rule that does not consult the signature table. Emitted today by `KARMA_AP` only |
+| `signature_version` | string | additive, #90 — which revision of that row's values the finding was matched against. A capture-backed row names its capture; an UNVERIFIED row has no firmware version to name and carries `research-<date>` (the date of the research its values came from), so it is never mistaken for one |
+| `validated` | bool | additive, #90 — `true` only when the row is backed by a capture of the tool; `false` otherwise, which is **every row shipped today**. A JSON boolean, unlike the 0/1 ints elsewhere in this schema: it is the one field a consumer must not read past. Present whenever `signature_id` is |
+| `signature_evidence` | string | additive, #90 — the row's provenance note, verbatim. Starts with `UNVERIFIED` exactly when `validated` is `false` (a test enforces the agreement in source) |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
@@ -377,10 +381,15 @@ the identity is not.
 | `alert.update` | severity **decreased**, or the rendered evidence (`detail`) changed. Evidence-only updates are rate-limited to **one per 60 s** per incident |
 | `alert.resolve` | the incident closed. Once per incident, never repeated |
 
-The lifecycle records carry `confidence` and `inventory` on the same
-terms as the legacy `alert` record: both are additive, both are omitted
-when the rule reported none, so a lifecycle-only consumer never has to
-read both families to get them.
+The lifecycle records carry `confidence`, `inventory` and the #90
+signature provenance (`signature_id`, `signature_version`, `validated`,
+`signature_evidence`) on the same terms as the legacy `alert` record:
+all are additive, all are omitted when the rule reported none, so a
+lifecycle-only consumer never has to read both families to get them.
+The provenance is refreshed on every evaluation, not fixed at
+`alert.create`: if the match vanishes inside one incident (the same AP
+later seen negotiating HT), the next record omits it rather than
+attributing the current evidence to a row it no longer satisfies.
 
 **Material change, never a poll.** An evaluation that re-renders
 identical evidence emits nothing, however long the condition persists:

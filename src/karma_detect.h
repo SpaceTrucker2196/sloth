@@ -2,6 +2,7 @@
 #define KARMA_DETECT_H
 
 #include "sloth.h"
+#include "tool_fingerprint.h"
 
 /* Rebuild s->karma_aps[] from the current beacon table, client PNLs, and
  * deauth ring. One row per BSSID beaconing >= KARMA_SSID_THRESH distinct
@@ -37,5 +38,16 @@ void karma_update(sloth_state_t *s);
 int karma_deauth_lure_victim(const sloth_state_t *s,
                              const beacon_ap_t *candidate, time_t now,
                              uint8_t victim_out[6]);
+
+/* The tool signature this candidate matches, or NULL (#68, #90). One
+ * observation builder shared by the KARMA_AP rule and the [y] view, so
+ * the alert and the table cannot attribute one BSSID to two different
+ * rows. `*conf` gets the match confidence; `*pmkid_out`, when non-NULL,
+ * whether a PMKID was harvested from this BSSID (a precondition some
+ * rows gate on, and the alert's informational `+PMKID` note). */
+const sloth_tool_sig_t *karma_tool_match(const sloth_state_t *s,
+                                         const beacon_ap_t *candidate,
+                                         sloth_tool_conf_t *conf,
+                                         int *pmkid_out);
 
 #endif /* KARMA_DETECT_H */

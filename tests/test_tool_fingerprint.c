@@ -61,7 +61,8 @@ static void test_unverified_rows_cannot_report_high(void) {
     static const sloth_tool_sig_t verified[] = {
         { SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0,
           AP_FP_FLAG_ESPRESSIF_OUI, 0, 0, 0, 0,
-          "verified-three", "synthetic capture, test only" },
+          "verified-three", "synthetic capture, test only",
+          "test-verified-three", "capture-test" },
     };
     sloth_tool_obs_t obs;
     memset(&obs, 0, sizeof(obs));
@@ -83,7 +84,8 @@ static void test_unverified_rows_cannot_report_high(void) {
     static const sloth_tool_sig_t unverified[] = {
         { SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0,
           AP_FP_FLAG_ESPRESSIF_OUI, 0, 0, 0, 1,
-          "unverified-three", "UNVERIFIED - synthetic, test only" },
+          "unverified-three", "UNVERIFIED - synthetic, test only",
+          "test-unverified-three", "research-test" },
     };
     unverified_out = 0;
     ASSERT_EQ((int)tool_fingerprint_match_table(unverified, 1, &obs, &conf,
@@ -102,6 +104,102 @@ static void test_unverified_rows_cannot_report_high(void) {
               (int)SLOTH_TOOL_PINEAPPLE_MK7);
     ASSERT_EQ((int)conf, (int)TOOL_CONF_LOW);
     ASSERT_EQ(unverified_out, 1);
+}
+
+/* #90: every shipped row carries a stable id and a version, and all
+ * three provenance strings fit the alert_t fields they are copied into
+ * — sloth.h cannot include this header, so the widths are pinned here.
+ * A silently truncated id would join an archive to the wrong row. */
+static void test_every_shipped_row_has_a_stable_unique_id(void) {
+    alert_t probe;
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        ASSERT(sig != NULL);
+        if (!sig) continue;
+        ASSERT(sig->id != NULL && sig->id[0] != '\0');
+        ASSERT(sig->version != NULL && sig->version[0] != '\0');
+        if (!sig->id || !sig->version) continue;
+        ASSERT(strlen(sig->id)       < sizeof(probe.sig_id));
+        ASSERT(strlen(sig->version)  < sizeof(probe.sig_version));
+        ASSERT(strlen(sig->evidence) < sizeof(probe.sig_evidence));
+        /* No capture behind the row means no firmware version to name;
+         * the version must say so rather than look like one. */
+        if (sig->unverified)
+            ASSERT_EQ(strncmp(sig->version, "research-", 9), 0);
+        for (int j = 0; j < i; j++) {
+            const sloth_tool_sig_t *o = tool_signature_at(j);
+            if (o && o->id) ASSERT(strcmp(o->id, sig->id) != 0);
+        }
+    }
+}
+
+/* The row-returning matcher hands back the winning row itself, and the
+ * label/unverified wrapper is derived from that same row — one
+ * implementation, so the exported id cannot come from a different row
+ * than the label the operator reads. */
+static void test_match_row_returns_the_winning_row(void) {
+    static const sloth_tool_sig_t sigs[] = {
+        { SLOTH_TOOL_EAPHAMMER, 0, 102, 0, 0, 0, 0, 0, 0,
+          "one-field", "synthetic capture, test only",
+          "test-one-field", "capture-test" },
+        { SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0, 0, 0, 0, 0, 1,
+          "two-field", "UNVERIFIED - synthetic, test only",
+          "test-two-field", "research-test" },
+    };
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.vendor_ie_hash     = 0xabcd1234;
+    obs.beacon_interval_ms = 102;
+    sloth_tool_conf_t conf = TOOL_CONF_NONE;
+    const sloth_tool_sig_t *row =
+        tool_fingerprint_match_row_table(sigs, 2, &obs, &conf);
+    ASSERT(row == &sigs[1]);
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_MED);
+
+    const char *label = NULL;
+    int unv = 0;
+    ASSERT_EQ((int)tool_fingerprint_match_table(sigs, 2, &obs, NULL,
+                                                &label, &unv),
+              (int)SLOTH_TOOL_HOSTAPD_MANA);
+    ASSERT_STR(label, "two-field");
+    ASSERT_EQ(unv, 1);
+
+    obs.vendor_ie_hash = 0;
+    ASSERT(tool_fingerprint_match_row_table(sigs, 2, &obs, &conf) == &sigs[0]);
+    obs.beacon_interval_ms = 100;
+    ASSERT(tool_fingerprint_match_row_table(sigs, 2, &obs, &conf) == NULL);
+    ASSERT_EQ((int)conf, (int)TOOL_CONF_NONE);
+    ASSERT(tool_fingerprint_match_row_table(sigs, 2, NULL, &conf) == NULL);
+}
+
+/* The operator-facing label (#90): an UNVERIFIED row is marked
+ * provisional in words, not only by a "?"; a capture-backed row is
+ * not. Both the KARMA_AP detail and the [y] view render through this. */
+static void test_attribution_labels_unverified_as_provisional(void) {
+    static const sloth_tool_sig_t v = {
+        SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0, 0, 0, 0, 0, 0,
+        "hostapd-mana", "rig capture, test only",
+        "test-v", "capture-test" };
+    static const sloth_tool_sig_t u = {
+        SLOTH_TOOL_HOSTAPD_MANA, 0xabcd1234, 102, 0, 0, 0, 0, 0, 1,
+        "hostapd-mana", "UNVERIFIED - test only",
+        "test-u", "research-test" };
+    char buf[48];
+    tool_attribution_format(buf, sizeof(buf), &v, TOOL_CONF_HIGH);
+    ASSERT_STR(buf, "hostapd-mana/high");
+    tool_attribution_format(buf, sizeof(buf), &u, TOOL_CONF_MED);
+    ASSERT_STR(buf, "hostapd-mana/med? provisional");
+    tool_attribution_format(buf, sizeof(buf), NULL, TOOL_CONF_MED);
+    ASSERT_STR(buf, "");
+
+    /* Every shipped row is unverified today, so every attribution the
+     * shipped table can produce must read provisional. */
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        if (!sig || !sig->unverified) continue;
+        tool_attribution_format(buf, sizeof(buf), sig, TOOL_CONF_MED);
+        ASSERT(strstr(buf, "? provisional") != NULL);
+    }
 }
 
 static void test_no_row_depends_on_an_unpopulated_flag(void) {
@@ -175,7 +273,8 @@ static void test_require_flags_needs_every_bit(void) {
     static const sloth_tool_sig_t sigs[] = {
         { SLOTH_TOOL_WIFI_DUCK, 0, 0, 0,
           AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_WPS_UUID_ZERO, 0, 0, 0, 0,
-          "two-flag", "synthetic, test only" },
+          "two-flag", "synthetic, test only",
+          "test-two-flag", "capture-test" },
     };
     sloth_tool_obs_t obs;
     memset(&obs, 0, sizeof(obs));
@@ -403,6 +502,9 @@ void run_tool_fingerprint_tests(void) {
     RUN_TEST(test_table_has_its_signatures);
     RUN_TEST(test_every_shipped_row_declares_its_provenance);
     RUN_TEST(test_unverified_rows_cannot_report_high);
+    RUN_TEST(test_every_shipped_row_has_a_stable_unique_id);
+    RUN_TEST(test_match_row_returns_the_winning_row);
+    RUN_TEST(test_attribution_labels_unverified_as_provisional);
     RUN_TEST(test_no_row_depends_on_an_unpopulated_flag);
     RUN_TEST(test_pineapple_row_is_the_hak5_oui);
     RUN_TEST(test_the_two_rows_do_not_collide);

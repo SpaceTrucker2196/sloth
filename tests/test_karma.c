@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "karma_detect.h"
@@ -191,6 +192,52 @@ static void test_deauth_chain_unrelated_victim_no_credit(void) {
 }
 
 /* Candidates are ranked strongest-first. */
+/* #90: the [y] view says a tool attribution is provisional in words,
+ * using the same text as the KARMA_AP alert detail. TPRINT is printf in
+ * the test build, so the draw is captured and asserted on. */
+static void capture_karma(const sloth_state_t *s, char *buf, int sz) {
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    FILE *tmp = tmpfile();
+    dup2(fileno(tmp), fileno(stdout));
+    view_karma_draw(s);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    rewind(tmp);
+    int n = (int)fread(buf, 1, sz - 1, tmp);
+    buf[n < 0 ? 0 : n] = '\0';
+    fclose(tmp);
+}
+
+static void test_tool_attribution_marked_provisional(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t esp[6] = {0x24,0x6f,0x28,0x33,0x44,0x55};    /* Espressif */
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    add_multi_ssid_ap(&s, esp, many, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    b->beacon_ms = 102;                        /* 100 TU */
+    b->fp.flags  = AP_FP_FLAG_ESPRESSIF_OUI;   /* and no HT */
+    karma_update(&s);
+    ASSERT_EQ(s.karma_count, 1);
+    ASSERT_STR(s.karma_aps[0].tool, "ESP32 Marauder/med? provisional");
+    /* Display only: an UNVERIFIED guess is not corroboration, so it
+     * must not move the ranking score. */
+    ASSERT_EQ(s.karma_aps[0].score, 1);
+
+    char out[8192];
+    capture_karma(&s, out, sizeof(out));
+    ASSERT(strstr(out, "[ESP32 Marauder/med? provisional]") != NULL);
+    ASSERT(strstr(out, "UNVERIFIED signature") != NULL);
+
+    /* No match, no attribution — and nothing provisional on the row. */
+    b->fp.flags |= AP_FP_FLAG_HT_PRESENT;
+    karma_update(&s);
+    ASSERT_STR(s.karma_aps[0].tool, "");
+    capture_karma(&s, out, sizeof(out));
+    ASSERT(strstr(out, "[ESP32") == NULL);
+}
+
 static void test_ranking(void) {
     sloth_state_t s; seed(&s);
     uint8_t weak[6]   = {0x00,0x11,0x22,0x33,0x44,0x01};
@@ -241,6 +288,7 @@ void run_karma_tests(void) {
     RUN_TEST(test_ie_unknown_fp_not_uniform);
     RUN_TEST(test_deauth_chain);
     RUN_TEST(test_deauth_chain_unrelated_victim_no_credit);
+    RUN_TEST(test_tool_attribution_marked_provisional);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
 }

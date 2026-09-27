@@ -60,7 +60,7 @@ void view_karma_draw(const sloth_state_t *s) {
     time_t now = time(NULL);
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
-        char bssid[20], chain[6], age[12], last[48], jac[16];
+        char bssid[20], chain[6], age[12], last[48], jac[16], tool[56];
         const char *ie = k->ie_uniform ? "Y" : "-";
         fmt_mac(k->bssid, bssid, sizeof(bssid));
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
@@ -68,12 +68,18 @@ void view_karma_draw(const sloth_state_t *s) {
         if (k->last_seen == 0) snprintf(age, sizeof(age), "?");
         else snprintf(age, sizeof(age), "%lds", (long)(now - k->last_seen));
         snprintf(last, sizeof(last), "%.24s (%s)", k->top_ssid, age);
+        /* Same bracketed attribution the KARMA_AP alert detail carries
+         * (#90), including its "? provisional" suffix for a signature
+         * with no capture behind it. */
+        tool[0] = '\0';
+        if (k->tool[0]) snprintf(tool, sizeof(tool), "  [%s]", k->tool);
 
 #ifdef WITH_NCURSES
         if (row == s->karma_sel) {
             tui_sel();
-            printw(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
+            printw(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
+                   last, tool);
             tui_reset();
         } else {
             tui_bright(); printw(" %-17s", bssid);
@@ -87,18 +93,22 @@ void view_karma_draw(const sloth_state_t *s) {
             if (k->deauth_chain) tui_bright(); else tui_dim();
             printw("  %-5s", chain);
             tui_bright(); printw("  %5d", k->score);
-            tui_dim();    printw("  %s\n", last);
+            tui_dim();    printw("  %s", last);
+            if (tool[0]) { tui_bright(); printw("%s", tool); }
+            printw("\n");
             tui_normal();
         }
 #else
         if (row == s->karma_sel) {
             tui_sel();
-            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
+            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
+                   last, tool);
             tui_reset(); printf("\n");
         } else {
-            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score, last);
+            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
+                   last, tool);
         }
 #endif
     }
@@ -107,7 +117,9 @@ void view_karma_draw(const sloth_state_t *s) {
     /* Legend */
     tui_dim();
     TPRINT(" PNL = advertised SSIDs matching nearby client probe lists;"
-           " chain = concurrent deauth flood\n");
+           " chain = deauth-then-lure on a shared victim\n");
+    TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture"
+           " behind it - a hypothesis, not an identification\n");
     tui_normal();
 }
 

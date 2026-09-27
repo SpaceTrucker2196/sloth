@@ -1,6 +1,7 @@
 #ifndef TOOL_FINGERPRINT_H
 #define TOOL_FINGERPRINT_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "sloth.h"
 
@@ -92,6 +93,18 @@ typedef struct {
      * enforces the agreement — the flag drives behaviour, the string is
      * what an operator reads, and they must not drift apart. */
     const char *evidence;
+    /* Stable identity of this row, exported as `signature_id` on every
+     * alert it backs (#90). Never reused and never renamed: an archive
+     * of findings joins on it, and a row whose values are later replaced
+     * with a rig capture keeps its id and moves `version` instead.
+     * Unique across the table — a test enforces that. */
+    const char *id;
+    /* Which revision of the row's values a finding was matched against
+     * (`signature_version`). A capture-backed row names its capture and
+     * tool firmware here; an UNVERIFIED row has neither, so it carries
+     * the date of the research its values came from, prefixed
+     * `research-` so no consumer mistakes it for a firmware version. */
+    const char *version;
 } sloth_tool_sig_t;
 
 /* Observed characteristics of one AP, assembled by the caller. */
@@ -141,6 +154,28 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
                                              sloth_tool_conf_t *conf,
                                              const char **label,
                                              int *unverified);
+
+/* The same matchers, returning the winning row itself (or NULL) so a
+ * caller can export its provenance — `id`, `version`, `unverified`,
+ * `evidence` — rather than only the label (#90). tool_fingerprint_match
+ * and _match_table are wrappers over _match_row_table: one
+ * implementation. `conf` may be NULL. */
+const sloth_tool_sig_t *tool_fingerprint_match_row(const sloth_tool_obs_t *obs,
+                                                   sloth_tool_conf_t *conf);
+const sloth_tool_sig_t *tool_fingerprint_match_row_table(
+        const sloth_tool_sig_t *sigs, int n_sigs,
+        const sloth_tool_obs_t *obs, sloth_tool_conf_t *conf);
+
+/* The operator-facing attribution for a matched row, written to `buf`
+ * without brackets: `ESP32 Marauder/med` for a capture-backed row,
+ * `ESP32 Marauder/med? provisional` for an UNVERIFIED one (#90). The
+ * alert detail and the [y] KARMA view both render through this, so the
+ * two surfaces cannot disagree about whether an identification is
+ * provisional. The label is truncated to 20 characters. Writes "" for
+ * a NULL row. */
+void tool_attribution_format(char *buf, size_t n,
+                             const sloth_tool_sig_t *row,
+                             sloth_tool_conf_t conf);
 
 /* Rows currently compiled in. Callers should say "no signature
  * database" rather than "no tool detected" when this is 0. */

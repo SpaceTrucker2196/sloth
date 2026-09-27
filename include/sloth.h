@@ -839,6 +839,23 @@ typedef struct {
     uint8_t      ap_class;
     uint8_t      wired_attach;
 
+    /* Provenance of the tool signature behind this finding (#90) —
+     * copied from the winning sloth_tool_sig_t row (src/tool_fingerprint.h)
+     * so an export names *which* signature, *which* revision of it, and
+     * whether anyone has ever validated it against a capture. A
+     * "medium confidence" label alone cannot say the last of those.
+     *
+     * `sig_id` empty means no tool matched, and all four are then
+     * omitted from the exports — present only on findings a signature
+     * actually shaped, same rule as `inventory`. `KARMA_AP` is the only
+     * producer today. Plain strings because sloth.h does not include
+     * module headers from src/; the widths fit every shipped row and
+     * tests/test_tool_fingerprint.c pins that. */
+    char         sig_id[24];
+    char         sig_version[24];
+    char         sig_evidence[160];
+    uint8_t      sig_validated;    /* 1 only for a capture-backed row */
+
     /* ── Incident lifecycle (#98) ────────────────────────────
      * One *incident* is one continuous run of a dedup key: it opens on
      * the first fire, carries an `incident_id` through every
@@ -1456,9 +1473,14 @@ typedef struct {
     int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
     int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
     int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
-    int      deauth_chain;  /* 1 = concurrent deauth flood (deauth-then-lure) */
+    int      deauth_chain;  /* 1 = shared-victim deauth-then-lure (#90) */
     int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
     char     top_ssid[33];  /* most recently advertised SSID */
+    /* Tool attribution as the operator reads it — "ESP32 Marauder/med?
+     * provisional" for an UNVERIFIED signature, "" when none matched
+     * (#90). Rendered by tool_attribution_format(), the same helper the
+     * KARMA_AP alert detail uses, so the two cannot disagree. */
+    char     tool[48];
     time_t   last_seen;
 } karma_ap_t;
 

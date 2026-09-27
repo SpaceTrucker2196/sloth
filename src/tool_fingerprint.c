@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdio.h>
 
 #include "tool_fingerprint.h"
 
@@ -17,7 +18,9 @@
  *      supported-rate set.
  *   3. Add one row here, with `evidence` naming the capture and the
  *      tool version — signatures drift as tools update, and a row with
- *      no provenance cannot be re-checked when it stops matching.
+ *      no provenance cannot be re-checked when it stops matching. Give
+ *      it a new `id` (never reuse one) and a `version` naming the
+ *      capture; both are exported on every alert the row backs (#90).
  *   4. Add a test asserting that observation matches that row and does
  *      not match any other.
  *
@@ -66,7 +69,9 @@ static const sloth_tool_sig_t TOOL_SIGNATURES[] = {
         1,                              /* unverified: caps conf at MED */
         "ESP32 Marauder",
         "UNVERIFIED - values from issue #74 research, 2026-09-04; "
-        "no capture. Replace with a rig capture + firmware version." },
+        "no capture. Replace with a rig capture + firmware version.",
+        "esp32-marauder-01",
+        "research-2026-09-04" },
 
     /* Pineapple MK7. Also unverified, also from #74, and a much thinner
      * row than the one above — it pins exactly one characteristic.
@@ -100,9 +105,12 @@ static const sloth_tool_sig_t TOOL_SIGNATURES[] = {
         1,                              /* unverified: caps conf at MED */
         "Pineapple MK7",
         "UNVERIFIED - OUI list from issue #74 research, 2026-09-04; "
-        "no capture. Replace with a rig capture + firmware version." },
+        "no capture. Replace with a rig capture + firmware version.",
+        "pineapple-mk7-01",
+        "research-2026-09-04" },
 
-    { 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL } /* terminator, never matched */
+    /* terminator, never matched */
+    { 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL }
 };
 
 #define SIG_ROWS ((int)(sizeof(TOOL_SIGNATURES) / sizeof(TOOL_SIGNATURES[0])) - 1)
@@ -146,21 +154,52 @@ sloth_tool_id_t tool_fingerprint_match(const sloth_tool_obs_t *obs,
                                         obs, conf, label, unverified);
 }
 
+const sloth_tool_sig_t *tool_fingerprint_match_row(const sloth_tool_obs_t *obs,
+                                                   sloth_tool_conf_t *conf) {
+    return tool_fingerprint_match_row_table(TOOL_SIGNATURES, SIG_ROWS,
+                                            obs, conf);
+}
+
 sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
                                              int n_sigs,
                                              const sloth_tool_obs_t *obs,
                                              sloth_tool_conf_t *conf,
                                              const char **label,
                                              int *unverified) {
-    if (conf)       *conf       = TOOL_CONF_NONE;
-    if (label)      *label      = "";
-    if (unverified) *unverified = 0;
-    if (!obs || !sigs) return SLOTH_TOOL_UNKNOWN;
+    const sloth_tool_sig_t *row =
+        tool_fingerprint_match_row_table(sigs, n_sigs, obs, conf);
+    if (label)
+        *label = !row ? ""
+               : row->human_label ? row->human_label : tool_name(row->tool);
+    if (unverified) *unverified = row ? row->unverified : 0;
+    return row ? row->tool : SLOTH_TOOL_UNKNOWN;
+}
 
-    sloth_tool_id_t best      = SLOTH_TOOL_UNKNOWN;
-    int             best_hits = 0;
-    const char     *best_lbl  = "";
-    int             best_unv  = 0;
+void tool_attribution_format(char *buf, size_t n,
+                             const sloth_tool_sig_t *row,
+                             sloth_tool_conf_t conf) {
+    if (!buf || n == 0) return;
+    buf[0] = '\0';
+    if (!row) return;
+    const char *lbl = row->human_label ? row->human_label
+                                       : tool_name(row->tool);
+    /* The trailing "?" is the same marker convention as the interface
+     * view's unconfirmed-retune indicator (#91); the word after it is
+     * there because a lone "?" is easy to read past, and an operator
+     * acting on an identification nobody has captured is the exact
+     * mistake #90 names. */
+    snprintf(buf, n, "%.20s/%s%s", lbl, tool_confidence_name(conf),
+             row->unverified ? "? provisional" : "");
+}
+
+const sloth_tool_sig_t *tool_fingerprint_match_row_table(
+        const sloth_tool_sig_t *sigs, int n_sigs,
+        const sloth_tool_obs_t *obs, sloth_tool_conf_t *conf) {
+    if (conf) *conf = TOOL_CONF_NONE;
+    if (!obs || !sigs) return NULL;
+
+    const sloth_tool_sig_t *best = NULL;
+    int best_hits = 0;
 
     for (int i = 0; i < n_sigs; i++) {
         const sloth_tool_sig_t *sig = &sigs[i];
@@ -216,14 +255,11 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
          * property is covered where it actually lives. */
         if (hits > best_hits) {
             best_hits = hits;
-            best      = sig->tool;
-            best_unv  = sig->unverified;
-            best_lbl  = sig->human_label ? sig->human_label
-                                         : tool_name(sig->tool);
+            best      = sig;
         }
     }
 
-    if (best == SLOTH_TOOL_UNKNOWN) return SLOTH_TOOL_UNKNOWN;
+    if (!best) return NULL;
     if (conf) {
         *conf = best_hits >= 3 ? TOOL_CONF_HIGH
               : best_hits == 2 ? TOOL_CONF_MED
@@ -233,9 +269,7 @@ sloth_tool_id_t tool_fingerprint_match_table(const sloth_tool_sig_t *sigs,
          * field count says how thorough the comparison was; it says
          * nothing about whether the values compared against are right,
          * and an operator reading "high" would reasonably assume both. */
-        if (best_unv && *conf > TOOL_CONF_MED) *conf = TOOL_CONF_MED;
+        if (best->unverified && *conf > TOOL_CONF_MED) *conf = TOOL_CONF_MED;
     }
-    if (label)      *label      = best_lbl;
-    if (unverified) *unverified = best_unv;
     return best;
 }

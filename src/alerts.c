@@ -237,9 +237,27 @@ static int evict_oldest(time_t now) {
  * an AP pair. They are stamped inside fire_inv rather than by the
  * caller afterwards because the lifecycle events (`alert.create`,
  * `alert.escalate`) are emitted from in here — a post-hoc stamp would
- * send the first event with the fields still zero. */
+ * send the first event with the fields still zero.
+ *
+ * `tool_row` is the signature that shaped the finding (#90), or NULL.
+ * Stamped in here for the same reason: `alert.create` must already
+ * carry `validated`, or the first record a socket consumer sees for an
+ * UNVERIFIED attribution is the one that omits it. */
+static void stamp_signature(alert_t *a, const sloth_tool_sig_t *tool_row) {
+    a->sig_id[0] = a->sig_version[0] = a->sig_evidence[0] = '\0';
+    a->sig_validated = 0;
+    if (!tool_row || !tool_row->id || !tool_row->id[0]) return;
+    snprintf(a->sig_id, sizeof(a->sig_id), "%s", tool_row->id);
+    snprintf(a->sig_version, sizeof(a->sig_version), "%s",
+             tool_row->version ? tool_row->version : "");
+    snprintf(a->sig_evidence, sizeof(a->sig_evidence), "%s",
+             tool_row->evidence ? tool_row->evidence : "");
+    a->sig_validated = tool_row->unverified ? 0 : 1;
+}
+
 static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                      const char *inv_hash, int ap_class, int wired,
+                     const sloth_tool_sig_t *tool_row,
                      const char *title, const char *detail,
                      const char *key,
                      const char *match_ip, uint16_t match_port,
@@ -281,6 +299,12 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * the transition the hook exists to deliver. */
         a->ap_class     = (uint8_t)ap_class;
         a->wired_attach = (uint8_t)wired;
+        /* Refreshed, not sticky: the match can appear or vanish inside
+         * one incident (an AP that later negotiates HT stops matching
+         * the Marauder row), and a stale id would attribute the current
+         * evidence to a signature it no longer satisfies. The tool
+         * note in `detail` moves with it, so the change is emitted. */
+        stamp_signature(a, tool_row);
 
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
@@ -342,6 +366,7 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
         snprintf(a->inventory, sizeof(a->inventory), "%s", inv_hash);
     a->ap_class     = (uint8_t)ap_class;
     a->wired_attach = (uint8_t)wired;
+    stamp_signature(a, tool_row);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
@@ -373,7 +398,7 @@ static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                       const char *match_ip, uint16_t match_port,
                       time_t now) {
     fire_inv(type, sev, confidence, NULL,
-             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN,
+             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, NULL,
              title, detail, key, match_ip, match_port, now);
 }
 
@@ -2666,33 +2691,18 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * regardless of which binary is doing it — so it needs no
          * signature table and ships working. It stays informational
          * (#90): a legitimate 802.11r/PMK-caching exchange produces one
-         * too, and a passive listener never reveals itself by doing so. */
+         * too, and a passive listener never reveals itself by doing so.
+         *
+         * Name the tool when the signature table can. Both shipped rows
+         * are UNVERIFIED research rows (see tool_fingerprint.h), so a
+         * match here is provisional by construction: it is labelled so
+         * in the detail and exported with `validated:false` (#90). */
         int pmkid = 0;
-        for (int e = 0; e < s->eapol_count; e++)
-            if (s->eapol_events[e].has_pmkid &&
-                memcmp(s->eapol_events[e].bssid, a->bssid, 6) == 0) {
-                pmkid = 1;
-                break;
-            }
-
-        /* Name the tool when the signature table can. It is empty today
-         * on purpose (see tool_fingerprint.h), so this adds nothing to
-         * the detail until real signatures land — which is the point:
-         * the mechanism is in and proven, the data is honest about not
-         * existing yet. */
-        sloth_tool_obs_t obs;
-        memset(&obs, 0, sizeof(obs));
-        obs.vendor_ie_hash     = a->fp.vendor_ies_hash;
-        obs.beacon_interval_ms = a->beacon_ms;
-        obs.fp_flags           = a->fp.flags;
-        obs.karma_echo         = 1;
-        obs.pmkid_seen         = pmkid;
         sloth_tool_conf_t conf = TOOL_CONF_NONE;
-        const char *tool_lbl   = "";
-        int tool_unverified    = 0;
-        sloth_tool_id_t tool = tool_fingerprint_match(&obs, &conf, &tool_lbl,
-                                                       &tool_unverified);
-        int tool_verified = tool != SLOTH_TOOL_UNKNOWN && !tool_unverified;
+        const sloth_tool_sig_t *tool_row = karma_tool_match(s, a, &conf,
+                                                            &pmkid);
+        int tool_unverified = tool_row && tool_row->unverified;
+        int tool_verified   = tool_row && !tool_row->unverified;
 
         alert_sev_t sev = ALERT_SEV_WARN;
         if (overlap > 0 || deauth || tool_verified) sev = ALERT_SEV_CRIT;
@@ -2700,7 +2710,7 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int confidence = KARMA_W_SSID_THRESH;
         if (overlap > 0) confidence += KARMA_W_PNL_OVERLAP;
         if (deauth)      confidence += KARMA_W_DEAUTH_VICTIM;
-        if (tool != SLOTH_TOOL_UNKNOWN)
+        if (tool_row)
             confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
                                           : KARMA_W_TOOL_VERIFIED;
         if (pmkid) confidence += KARMA_W_PMKID;
@@ -2711,7 +2721,7 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         char detail[ALERT_DETAIL_LEN];
         char pnl_note[32]   = "";
         char chain_note[24] = "";
-        char tool_note[48]  = "";
+        char tool_note[56]  = "";
         char pmkid_note[16] = "";
         if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
@@ -2721,21 +2731,22 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                      " +deauth-then-lure");
         if (pmkid)
             snprintf(pmkid_note, sizeof(pmkid_note), " +PMKID");
-        if (tool_lbl[0])
-            /* A trailing "?" flags an UNVERIFIED signature — same
-             * convention as the interface view's unconfirmed-retune
-             * marker (#91): a provisional identification, not one the
-             * operator can act on unchecked. */
-            snprintf(tool_note, sizeof(tool_note), " [%.20s/%s%s]",
-                     tool_lbl, tool_confidence_name(conf),
-                     tool_unverified ? "?" : "");
+        if (tool_row) {
+            /* "?" plus the word "provisional" flags an UNVERIFIED
+             * signature (#90) — rendered by the helper the [y] view
+             * uses too, so the two surfaces say the same thing. */
+            char attr[48];
+            tool_attribution_format(attr, sizeof(attr), tool_row, conf);
+            snprintf(tool_note, sizeof(tool_note), " [%s]", attr);
+        }
         snprintf(key, sizeof(key), "karma:%s", bssid_str);
         snprintf(detail, sizeof(detail),
                  "KARMA BSSID %s: %d SSIDs%s%s%s%s, conf %d%%%s",
                  bssid_str, a->ssid_history_n, pnl_note, chain_note,
                  pmkid_note, tool_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
-        fire_conf(ALERT_TYPE_KARMA_AP, sev, confidence,
+        fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
+                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
                  "KARMA_AP", detail, key, NULL, 0, now);
     }
 }
@@ -3007,7 +3018,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
                          verdict, conf, note, steer_note, cls_note);
                 fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
-                         inventory_hash(), (int)cls, (int)wired,
+                         inventory_hash(), (int)cls, (int)wired, NULL,
                          "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
@@ -3142,7 +3153,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                      a->ssid, a_bssid, b_bssid, a->enc,
                      ev.confidence, reason, note, steer_note, cls_note);
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
-                     inventory_hash(), (int)cls, (int)wired,
+                     inventory_hash(), (int)cls, (int)wired, NULL,
                      "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }

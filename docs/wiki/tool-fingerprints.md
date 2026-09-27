@@ -106,10 +106,19 @@ alongside a finding that already fired. That gate is what makes an
 unverified row safe to ship: it enriches a `KARMA_AP` alert, it never
 raises one — and since #90, `tool_fingerprint_match()`'s `unverified`
 output means it never escalates one to CRIT either. The alert detail
-marks a match from an UNVERIFIED row with a trailing `?` (`[ESP32
-Marauder/med?]`), the same convention the interface view uses for an
-unconfirmed channel retune (#91): a provisional identification, not
-one the operator can act on unchecked.
+and the `[y]` KARMA view mark a match from an UNVERIFIED row with a
+trailing `?` and the word `provisional` (`[ESP32 Marauder/med?
+provisional]`) — the `?` is the convention the interface view uses for
+an unconfirmed channel retune (#91), and the word is there because a
+lone `?` is easy to read past. Both surfaces render through one helper,
+`tool_attribution_format()`, so they cannot disagree.
+
+The same provenance leaves sloth as fields, not only prose (#90): every
+`alert` and `alert.*` record a row shaped carries `signature_id`,
+`signature_version`, `validated` (a JSON boolean, `false` for every row
+shipped today) and `signature_evidence` — see [[jsonl-schema]]. A
+"medium confidence" label alone cannot tell a consumer that no
+validating capture exists; `validated:false` can.
 
 ### The Pineapple MK7 row
 
@@ -175,6 +184,8 @@ typedef struct {
     uint8_t  unverified;          /* no capture — caps confidence at med */
     const char *human_label;
     const char *evidence;         /* where the values came from */
+    const char *id;               /* stable, never reused (#90) */
+    const char *version;          /* revision of the values (#90) */
 } sloth_tool_sig_t;
 ```
 
@@ -222,7 +233,12 @@ here rather than catastrophic.
    a row with no provenance cannot be re-checked when it stops matching.
    If it is not from a capture, set `unverified` **and** start the
    evidence with `UNVERIFIED` — a test asserts the two agree — then say
-   where it *did* come from.
+   where it *did* come from. Give it a new `id` (never reuse or rename
+   one: exported findings join on it) and a `version` naming the
+   capture. An unverified row has no firmware version to name, so its
+   `version` is `research-<date>`, which a test enforces. When a
+   capture later replaces an unverified row's values, keep the `id`
+   and move the `version`.
 4. **Add a test** asserting that observation matches your row and does
    not match any other, and one asserting each of its fields is
    load-bearing — a row whose OUI requirement does nothing is a row that

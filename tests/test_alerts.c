@@ -3452,6 +3452,28 @@ static void test_karma_names_the_tool_from_fingerprint_flags(void) {
          * must not escalate severity either. */
         ASSERT(strstr(s.alerts[idx].detail, "Marauder/med?") != NULL);
         ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+        /* The "?" alone is easy to read past — the word is there too,
+         * and the provenance travels as fields, not only prose (#90). */
+        ASSERT(strstr(s.alerts[idx].detail,
+                      "[ESP32 Marauder/med? provisional]") != NULL);
+        ASSERT_STR(s.alerts[idx].sig_id, "esp32-marauder-01");
+        ASSERT_STR(s.alerts[idx].sig_version, "research-2026-09-04");
+        ASSERT_EQ((int)s.alerts[idx].sig_validated, 0);
+        ASSERT_EQ(strncmp(s.alerts[idx].sig_evidence, "UNVERIFIED", 10), 0);
+    }
+
+    /* Inside one incident the match can vanish — the same BSSID later
+     * seen negotiating HT. The provenance must follow the evidence, not
+     * stick to the first tick, or the export attributes the current
+     * finding to a signature it no longer satisfies. */
+    b->fp.flags = AP_FP_FLAG_ESPRESSIF_OUI | AP_FP_FLAG_HT_PRESENT;
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_STR(s.alerts[idx].sig_id, "");
+        ASSERT_STR(s.alerts[idx].sig_evidence, "");
+        ASSERT(strstr(s.alerts[idx].detail, "provisional") == NULL);
     }
 
     /* The same AP negotiating HT is an IoT device, and the alert must
@@ -3465,7 +3487,11 @@ static void test_karma_names_the_tool_from_fingerprint_flags(void) {
     alerts_update(&s);
     idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
-    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "Marauder") == NULL);
+    if (idx >= 0) {
+        ASSERT(strstr(s.alerts[idx].detail, "Marauder") == NULL);
+        /* No tool matched: no provenance to export (#90). */
+        ASSERT_STR(s.alerts[idx].sig_id, "");
+    }
 }
 
 static void test_karma_two_ssids_no_fire(void) {

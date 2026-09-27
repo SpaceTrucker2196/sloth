@@ -21,6 +21,7 @@
 #include "jsonl.h"
 #include "alerts.h"
 #include "formatter.h"
+#include "tool_fingerprint.h"
 
 static void ds_seed_pnl(sloth_state_t *s);
 
@@ -867,6 +868,100 @@ static void test_alert_escalation_reaches_a_socket_consumer(void) {
     data_socket_cleanup();
 }
 
+/* ── Signature provenance reaches the socket (#90) ─────────────
+ *
+ * The issue's own regression: "confirm validated=false reaches a socket
+ * consumer for every fingerprint match marked unverified in source".
+ * Walks the *shipped* table rather than a synthetic row, so a row added
+ * later is covered without editing this test, and drives the real
+ * KARMA_AP rule through the real engine and the real socket — the
+ * bytes asserted on are the ones a consumer reads off the wire. */
+static void test_unverified_signature_reaches_a_socket_consumer(void) {
+    int rows_checked = 0;
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        if (!sig || !sig->unverified) continue;
+
+        const char *path = sock_path();
+        char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+        ASSERT_EQ(data_socket_init(spec), 0);
+        int c = connect_client(path);
+        ASSERT(c >= 0);
+        if (c < 0) { data_socket_cleanup(); continue; }
+        data_socket_tick();
+        char drop[4096];
+        drain_client(c, drop, sizeof(drop));   /* connect baseline */
+
+        alerts_clear();
+        static sloth_state_t s;
+        memset(&s, 0, sizeof(s));
+        /* A KARMA candidate whose beacon satisfies exactly this row. */
+        beacon_ap_t *b = &s.beacon_aps[s.beacon_count++];
+        memset(b, 0, sizeof(*b));
+        static const uint8_t bssid[6] = {0x02,0x90,0x00,0x00,0x00,0x01};
+        memcpy(b->bssid, bssid, 6);
+        snprintf(b->enc, sizeof(b->enc), "OPEN");
+        static const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+        for (int h = 0; h < 3; h++)
+            snprintf(b->ssid_history[h], 33, "%s", ssids[h]);
+        b->ssid_history_n     = 3;
+        snprintf(b->ssid, sizeof(b->ssid), "%s", ssids[2]);
+        b->fp.vendor_ies_hash = sig->vendor_ie_hash;
+        b->beacon_ms          = sig->beacon_interval_ms;
+        b->fp.flags           = sig->require_flags;
+        b->last_seen          = time(NULL);
+        if (sig->requires_pmkid) {
+            eapol_event_t *e = &s.eapol_events[s.eapol_count++];
+            memset(e, 0, sizeof(*e));
+            memcpy(e->bssid, bssid, 6);
+            e->has_pmkid = 1;
+        }
+        alerts_update(&s);
+
+        static char buf[65536];
+        size_t n = drain_client(c, buf, sizeof(buf));
+        ASSERT(n > 0);
+
+        /* Every line naming this row carries validated:false, and both
+         * record families (legacy `alert`, lifecycle `alert.create`)
+         * name it. */
+        char want_id[64];
+        snprintf(want_id, sizeof(want_id), "\"signature_id\":\"%s\"", sig->id);
+        int lines = 0, has_legacy = 0, has_create = 0;
+        for (char *line = buf; line && *line; ) {
+            char *nl = strchr(line, '\n');
+            if (nl) *nl = '\0';
+            if (strstr(line, want_id)) {
+                lines++;
+                ASSERT(strstr(line, "\"validated\":false") != NULL);
+                ASSERT(strstr(line, "\"validated\":true") == NULL);
+                ASSERT(strstr(line, "\"signature_evidence\":\"UNVERIFIED") != NULL);
+                ASSERT(strstr(line, "\"signature_version\":\"") != NULL);
+                if (strstr(line, "\"type\":\"alert\""))        has_legacy = 1;
+                if (strstr(line, "\"type\":\"alert.create\"")) has_create = 1;
+            }
+            line = nl ? nl + 1 : NULL;
+        }
+        ASSERT(lines >= 2);
+        ASSERT_EQ(has_legacy, 1);
+        ASSERT_EQ(has_create, 1);
+        rows_checked++;
+
+        close(c);
+        alerts_clear();
+        data_socket_cleanup();
+    }
+    /* Both shipped rows are UNVERIFIED today; a loop that silently
+     * skipped every row would pass vacuously. */
+    int expect = 0;
+    for (int i = 0; i < tool_signature_count(); i++) {
+        const sloth_tool_sig_t *sig = tool_signature_at(i);
+        if (sig && sig->unverified) expect++;
+    }
+    ASSERT(expect > 0);
+    ASSERT_EQ(rows_checked, expect);
+}
+
 /* ── Listener lifecycle hardening (#86) ────────────────────────
  *
  * init_unix() used to unlink(path) unconditionally before bind — any
@@ -1305,6 +1400,9 @@ void run_data_socket_tests(void) {
 
     TEST_SUITE("data socket (alert lifecycle, #98)");
     RUN_TEST(test_alert_escalation_reaches_a_socket_consumer);
+
+    TEST_SUITE("data socket (signature provenance, #90)");
+    RUN_TEST(test_unverified_signature_reaches_a_socket_consumer);
 
     TEST_SUITE("data socket (listener lifecycle hardening, #86)");
     RUN_TEST(test_refuses_to_replace_regular_file);

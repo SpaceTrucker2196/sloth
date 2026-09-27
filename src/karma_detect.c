@@ -124,6 +124,37 @@ int karma_deauth_lure_victim(const sloth_state_t *s,
     return 0;
 }
 
+const sloth_tool_sig_t *karma_tool_match(const sloth_state_t *s,
+                                         const beacon_ap_t *candidate,
+                                         sloth_tool_conf_t *conf,
+                                         int *pmkid_out) {
+    if (conf)      *conf      = TOOL_CONF_NONE;
+    if (pmkid_out) *pmkid_out = 0;
+    if (!s || !candidate) return NULL;
+
+    /* A protocol observable, unlike a tool's beacon quirks (#68), and
+     * informational only (#90): legitimate 802.11r/PMK-caching roaming
+     * produces one too. */
+    int pmkid = 0;
+    for (int e = 0; e < s->eapol_count; e++)
+        if (s->eapol_events[e].has_pmkid &&
+            memcmp(s->eapol_events[e].bssid, candidate->bssid, 6) == 0) {
+            pmkid = 1;
+            break;
+        }
+    if (pmkid_out) *pmkid_out = pmkid;
+
+    sloth_tool_obs_t obs;
+    memset(&obs, 0, sizeof(obs));
+    obs.vendor_ie_hash     = candidate->fp.vendor_ies_hash;
+    obs.beacon_interval_ms = candidate->beacon_ms;
+    obs.fp_flags           = candidate->fp.flags;
+    /* Every caller asks about a BSSID already over KARMA_SSID_THRESH. */
+    obs.karma_echo         = 1;
+    obs.pmkid_seen         = pmkid;
+    return tool_fingerprint_match_row(&obs, conf);
+}
+
 void karma_update(sloth_state_t *s) {
     time_t now = time(NULL);
     int b_count = pnl_union_size(s);   /* |PNL union| — same for every BSSID */
@@ -146,6 +177,11 @@ void karma_update(sloth_state_t *s) {
                             + (k->ie_uniform ? 1 : 0)
                             + (k->deauth_chain ? 3 : 0);
         k->last_seen    = a->last_seen;
+        /* Display only: the score is left alone, since an UNVERIFIED
+         * row is not corroboration (#90) and none other ships. */
+        sloth_tool_conf_t tconf = TOOL_CONF_NONE;
+        const sloth_tool_sig_t *trow = karma_tool_match(s, a, &tconf, NULL);
+        tool_attribution_format(k->tool, sizeof(k->tool), trow, tconf);
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  a->ssid[0] ? a->ssid : a->ssid_history[0]);
     }

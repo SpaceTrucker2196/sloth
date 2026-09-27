@@ -595,6 +595,95 @@ static void test_emit_alert_omits_inventory_when_unconsulted(void) {
     ASSERT(!contains(body, "inventory"));
 }
 
+/* #90: tool-signature provenance as first-class fields. A KARMA_AP
+ * finding shaped by a signature row names which row (`signature_id`),
+ * which revision of it (`signature_version`), whether anyone ever
+ * validated it against a capture (`validated`), and where its values
+ * came from (`signature_evidence`) — on the legacy record AND the
+ * lifecycle event, so neither family of consumer has to read the other.
+ * `validated` is a JSON boolean, never a 0/1 int. */
+static int count_occ(const char *hay, const char *needle) {
+    int n = 0;
+    for (const char *p = strstr(hay, needle); p; p = strstr(p + 1, needle))
+        n++;
+    return n;
+}
+
+static void fill_karma_alert(alert_t *a) {
+    memset(a, 0, sizeof(*a));
+    a->last_seen = 1700000004;
+    a->sev       = ALERT_SEV_WARN;
+    a->type      = ALERT_TYPE_KARMA_AP;
+    a->count     = 1;
+    a->confidence = 30;
+    a->event_seq = 1;
+    snprintf(a->title,       sizeof(a->title),       "KARMA_AP");
+    snprintf(a->detail,      sizeof(a->detail),      "KARMA BSSID 24:6f:28:33:44:55");
+    snprintf(a->key,         sizeof(a->key),         "karma:24:6f:28:33:44:55");
+    snprintf(a->incident_id, sizeof(a->incident_id), "deadbeefdeadbeef");
+}
+
+static void test_emit_alert_carries_unverified_signature(void) {
+    open_fresh();
+    alert_t a; fill_karma_alert(&a);
+    snprintf(a.sig_id,       sizeof(a.sig_id),       "esp32-marauder-01");
+    snprintf(a.sig_version,  sizeof(a.sig_version),  "research-2026-09-04");
+    snprintf(a.sig_evidence, sizeof(a.sig_evidence), "UNVERIFIED - no capture");
+    a.sig_validated = 0;
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_lines(body), 2);
+    ASSERT_EQ(count_occ(body, "\"signature_id\":\"esp32-marauder-01\""), 2);
+    ASSERT_EQ(count_occ(body,
+              "\"signature_version\":\"research-2026-09-04\""), 2);
+    ASSERT_EQ(count_occ(body, "\"validated\":false"), 2);
+    ASSERT_EQ(count_occ(body,
+              "\"signature_evidence\":\"UNVERIFIED - no capture\""), 2);
+    /* A bool, not the schema's usual 0/1 — the issue asks for it by
+     * type, and a consumer testing truthiness must get false. */
+    ASSERT(!contains(body, "\"validated\":0"));
+}
+
+static void test_emit_alert_carries_validated_signature(void) {
+    open_fresh();
+    alert_t a; fill_karma_alert(&a);
+    snprintf(a.sig_id,       sizeof(a.sig_id),       "test-verified-01");
+    snprintf(a.sig_version,  sizeof(a.sig_version),  "capture-fw1.2");
+    snprintf(a.sig_evidence, sizeof(a.sig_evidence), "rig capture");
+    a.sig_validated = 1;
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_occ(body, "\"validated\":true"), 2);
+    ASSERT(!contains(body, "\"validated\":false"));
+}
+
+/* No signature matched: all four fields absent, not empty. An empty
+ * `signature_id` beside `validated:false` would read as "an unverified
+ * signature matched", which is a claim nothing made. */
+static void test_emit_alert_omits_signature_when_no_tool_matched(void) {
+    open_fresh();
+    alert_t a; fill_karma_alert(&a);
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_lines(body), 2);
+    ASSERT(!contains(body, "signature_id"));
+    ASSERT(!contains(body, "signature_version"));
+    ASSERT(!contains(body, "validated"));
+    ASSERT(!contains(body, "signature_evidence"));
+}
+
 /* #92: per-export outcome rides the lifecycle event, alongside
  * match_ip/match_port — omitted until export has something to say,
  * so a rule with no match_ip (most of them) never grows a pcap_path
@@ -1530,6 +1619,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_confidence_when_reported);
     RUN_TEST(test_emit_alert_carries_inventory_hash);
     RUN_TEST(test_emit_alert_omits_inventory_when_unconsulted);
+    RUN_TEST(test_emit_alert_carries_unverified_signature);
+    RUN_TEST(test_emit_alert_carries_validated_signature);
+    RUN_TEST(test_emit_alert_omits_signature_when_no_tool_matched);
     RUN_TEST(test_emit_alert_event_carries_pcap_path);
     RUN_TEST(test_emit_alert_event_carries_pcap_write_failures);
     RUN_TEST(test_emit_alert_event_omits_pcap_fields_without_match_ip);
