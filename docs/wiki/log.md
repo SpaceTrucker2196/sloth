@@ -1238,3 +1238,34 @@ unit test that passes while reading past its buffer is a false green.
   rendering and the `sloth` binary are not sanitized.
 - **Out of scope.** `agents/AGENTS.md` still describes CI as the
   six-variant `-Werror` build only; left for the owner.
+
+## 2026-09-26 — #86: mDNS discovery uses the data-socket exposure classifier
+
+**Source**: issue #86 — `discovery_routable_tcp_port()` kept its own
+copy of "is this spec routable" and had drifted from the bind guard in
+`src/data_socket.c`.
+
+**Updated pages**:
+
+- `src/discovery.c` — routable now means
+  `data_socket_spec_is_remote() == 1`; the port comes from the new
+  `data_socket_spec_tcp_port()`.
+- `src/data_socket.{c,h}` — `data_socket_spec_tcp_port()` exported,
+  built on the binder's strict `parse_host_port()`.
+- `src/discovery.h` — comment no longer describes a 127.0.0.1-only rule.
+- `tests/test_discovery.c` — 5 tests, 20 assertions.
+
+**Notes**:
+
+- **The bug.** Only 127.0.0.1 counted as loopback, so
+  `tcp:127.0.0.2:8765` bound without `--data-socket-allow-remote` and
+  was then advertised over mDNS as a LAN service. `atoi()` read
+  `8765x` as 8765 where the binder rejects the spec.
+- **One classifier.** The advertisement can now only describe what the
+  exposure guard allowed. #84's `--strict` gate in `discovery_publish()`
+  is unchanged.
+- **Still advertised.** `0.0.0.0` binds every interface and needs
+  `--data-socket-allow-remote`; now pinned by a test.
+- **Limits.** `data_socket_spec_tcp_port()` has no direct tests in
+  `tests/test_data_socket.c`, and duplicates the parse sequence in
+  `data_socket_spec_is_remote()`. Both are follow-ups.
