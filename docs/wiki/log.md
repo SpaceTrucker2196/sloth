@@ -1148,3 +1148,33 @@ attachment; leave a hook for controller/switch/DHCP correlation."*
   it. Grown rather than trading a field away, because the field that
   would have been truncated is `wired=?` — the one statement that stops
   a reader assuming sloth checked the wire.
+
+## 2026-09-26 — #86 slice 3: data-socket examples use /run
+
+**Source**: issue #86 — the documented `unix:` socket examples should
+model the deployment `data-socket-exposure.md` recommends, not a path
+another local user controls.
+
+**Updated pages**:
+
+- [../quickstart.html](../quickstart.html),
+  [../index.html](../index.html) and
+  [../views/interfaces.md](../views/interfaces.md) — `unix:` examples
+  now spell `/run/sloth.sock` (was `/tmp/sloth.sock`, and `/var/run`
+  in the interfaces doc).
+
+**Notes**:
+
+- **Why `/run`.** `/tmp` is world-writable, so anyone can create the
+  path before sloth starts. `init_unix()` already refuses a non-socket
+  or foreign-owned path (f2bf0b5), which turns a plant into a denial
+  of service rather than a hijack, but examples are what people copy.
+  `/run` is root-owned and is what the refusal hint names.
+- **Not done yet.** `README.md`, `docs/streaming.html`,
+  [jsonl-schema.md](jsonl-schema.md) and the `examples/consumer` and
+  `examples/forwarder` READMEs still show `/tmp/sloth.sock`. They are
+  the next sweep. The `RELEASE_v1.*.md` notes are historical and stay.
+- **Known rough edge.** The forwarder examples connect without `sudo`,
+  and a 0600 socket that root creates refuses any other uid. This was
+  true before with `/tmp` too, and `data-socket-exposure.md` §5 has the
+  same shape. It needs a sudo or group note in a later pass.
