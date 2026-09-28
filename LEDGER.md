@@ -151,3 +151,4 @@
 | 41ddbca | 2026-09-27T05:51:00Z | claude-opus-5-5 | 12 | 3048 | 986540 | 16022 | 0.3865 | Fix ASan CI build: bound scenario BSSID octets (#95) |
 | 6c33228 | 2026-09-27T11:26:07Z | claude-opus-5 | 156 | 68691 | 7781154 | 337598 | 8.9846 | #84 — help-text honesty: --hop and --strict claims corrected in print_usage() |
 | d3170da | 2026-09-27T16:12:06Z | claude-opus-5-5 | 6 | 10128 | 400686 | 173038 | 1.6670 | #86 close-on-exec data-socket listener and client fds |
+| 7128e5e | 2026-09-28T11:15:24Z | claude-opus-5 | 98 | 44534 | 3675658 | 253033 | 5.4820 | #95 — guard localtime() result in pcap_export(); localtime_r + NULL check, stem  |
