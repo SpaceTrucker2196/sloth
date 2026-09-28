@@ -152,3 +152,4 @@
 | 6c33228 | 2026-09-27T11:26:07Z | claude-opus-5 | 156 | 68691 | 7781154 | 337598 | 8.9846 | #84 — help-text honesty: --hop and --strict claims corrected in print_usage() |
 | d3170da | 2026-09-27T16:12:06Z | claude-opus-5-5 | 6 | 10128 | 400686 | 173038 | 1.6670 | #86 close-on-exec data-socket listener and client fds |
 | 7128e5e | 2026-09-28T11:15:24Z | claude-opus-5 | 98 | 44534 | 3675658 | 253033 | 5.4820 | #95 — guard localtime() result in pcap_export(); localtime_r + NULL check, stem  |
+| eebcdb5 | 2026-09-28T13:10:55Z | claude-opus-5 | 272 | 105738 | 11352028 | 1022379 | 18.5446 | release v1.8.3 |
