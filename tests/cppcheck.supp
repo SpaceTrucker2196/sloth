@@ -40,7 +40,6 @@ checkLevelNormal:src/beacon_snoop.c
 # A call moved onto the capture, probe or DNS worker thread must switch
 # to localtime_r()/gmtime_r() and drop its line here.
 localtimeCalled:src/alert_pcap.c
-localtimeCalled:src/pcap_write.c
 gmtimeCalled:src/posture.c
 localtimeCalled:src/views/dashboard_bands.c
 localtimeCalled:src/views/dns_log.c

@@ -24,14 +24,29 @@ static void write_u16le(FILE *f, uint16_t v) {
     fwrite(b, 1, 2, f);
 }
 
+void pcap_export_stem(const struct tm *t, char *out, size_t sz) {
+    if (!t) {
+        /* Failing the clock must not cost the operator the capture: the
+         * ring is the only copy of those packets. The epoch stem is
+         * obviously wrong to a human reading the directory, and
+         * sfile_fopen_unique() suffixes a repeat, so nothing collides. */
+        snprintf(out, sz, "ntop_19700101_000000");
+        return;
+    }
+    snprintf(out, sz,
+             "ntop_%04d%02d%02d_%02d%02d%02d",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+             t->tm_hour,        t->tm_min,     t->tm_sec);
+}
+
 int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
     char stem[64], path[96], err[SFILE_ERR_MAX];
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    snprintf(stem, sizeof(stem),
-             "ntop_%04d%02d%02d_%02d%02d%02d",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour,        t->tm_min,      t->tm_sec);
+    /* localtime_r: the shared static struct tm behind localtime() is the
+     * aliasing hazard that mis-stamped the alert panel (#95), and its
+     * result was dereferenced here unchecked. Both go away together. */
+    struct tm tmv;
+    pcap_export_stem(localtime_r(&now, &tmv), stem, sizeof(stem));
 
     /* Raw packets: exclusive-create 0600 in the working directory
      * (#87). Never follows or reuses whatever is already at the name;

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "runner.h"
@@ -156,6 +157,77 @@ static void test_export_mixed_raw(void) {
     ASSERT_EQ((int)sz, 84);
 }
 
+/* ── filename stem, #95 ──────────────────────────────────── */
+
+/* The stem is what names the artifact on disk, so its shape is pinned
+ * here rather than inferred from whatever the clock said that second. */
+static void test_stem_formats_local_time(void) {
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = 126;   /* 2026 */
+    t.tm_mon  = 8;     /* September */
+    t.tm_mday = 28;
+    t.tm_hour = 13;
+    t.tm_min  = 45;
+    t.tm_sec  = 7;
+    char stem[64] = "";
+    pcap_export_stem(&t, stem, sizeof(stem));
+    ASSERT_EQ(strcmp(stem, "ntop_20260928_134507"), 0);
+}
+
+static void test_stem_pads_single_digit_fields(void) {
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = 70;    /* 1970 */
+    t.tm_mon  = 0;
+    t.tm_mday = 1;
+    char stem[64] = "";
+    pcap_export_stem(&t, stem, sizeof(stem));
+    ASSERT_EQ(strcmp(stem, "ntop_19700101_000000"), 0);
+}
+
+/* localtime_r() returns NULL for a time_t whose year does not fit
+ * struct tm. The old code dereferenced it unchecked (#95). The stem
+ * must still come out well-formed so the export names a real file
+ * instead of crashing or writing garbage into the path. */
+static void test_stem_null_tm_falls_back_to_epoch(void) {
+    char stem[64] = "sentinel";
+    pcap_export_stem(NULL, stem, sizeof(stem));
+    ASSERT_EQ(strcmp(stem, "ntop_19700101_000000"), 0);
+    ASSERT_EQ((int)strlen(stem), 20);
+}
+
+/* A short buffer must truncate, not overrun. */
+static void test_stem_truncates_into_short_buffer(void) {
+    struct tm t;
+    memset(&t, 0, sizeof(t));
+    t.tm_year = 126;
+    char stem[10];
+    memset(stem, 'x', sizeof(stem));
+    pcap_export_stem(&t, stem, sizeof(stem));
+    ASSERT_EQ((int)strlen(stem), 9);
+    ASSERT_EQ(strncmp(stem, "ntop_2026", 9), 0);
+}
+
+/* pcap_export() names the file from the current *local* time via the
+ * same helper. Sampling the stem either side of the call tolerates the
+ * export straddling a second boundary. */
+static void test_export_path_carries_local_time_stem(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    struct tm tmv;
+    char before[64] = "", after[64] = "", path[128] = "";
+
+    time_t t0 = time(NULL);
+    pcap_export_stem(localtime_r(&t0, &tmv), before, sizeof(before));
+    pcap_export(&s, path, sizeof(path));
+    time_t t1 = time(NULL);
+    pcap_export_stem(localtime_r(&t1, &tmv), after, sizeof(after));
+
+    remove(path);
+    ASSERT(strstr(path, before) != NULL || strstr(path, after) != NULL);
+}
+
 /* ── Key handler integration ─────────────────────────────── */
 
 static void test_w_key_sets_export_msg(void) {
@@ -203,6 +275,13 @@ void run_pcap_write_tests(void) {
     RUN_TEST(test_export_skips_no_raw);
     RUN_TEST(test_export_counts_and_size);
     RUN_TEST(test_export_mixed_raw);
+
+    TEST_SUITE("pcap_export/stem");
+    RUN_TEST(test_stem_formats_local_time);
+    RUN_TEST(test_stem_pads_single_digit_fields);
+    RUN_TEST(test_stem_null_tm_falls_back_to_epoch);
+    RUN_TEST(test_stem_truncates_into_short_buffer);
+    RUN_TEST(test_export_path_carries_local_time_stem);
 
     TEST_SUITE("pcap_export/misc");
     RUN_TEST(test_export_path_ends_with_pcap);
