@@ -10,6 +10,7 @@
 #include "sloth.h"
 #include "jsonl.h"
 #include "sensor_health.h"
+#include "capture/capture.h"
 #include "alert_pcap.h"
 #include "tls_log.h"
 #include "dns_log.h"
@@ -1227,6 +1228,27 @@ static void test_emit_sensor_health_scope_no_capture(void) {
     ASSERT(contains(body, "\"scope_not_enforced\":1"));
 }
 
+static void test_emit_sensor_health_scope_dropped(void) {
+    /* scope_dropped (#85 wave 8) reads the capture module's own
+       out-of-scope counter, not a sloth_state_t field — same shape as
+       storage_pcap_failures/storage_jsonl_failures a few lines up. */
+    capture_out_of_scope_dropped_reset();
+    sloth_state_t rs; seed_health(&rs);
+    rs.iface_allowed_count = 1;   /* restricted, so an unattributable
+                                     frame below is an authorization
+                                     drop, not an ordinary pass-through */
+    ASSERT_EQ(capture_frame_in_scope(&rs, NULL, 0, NULL, 0, NULL), 0);
+    ASSERT_EQ(capture_frame_in_scope(&rs, NULL, 0, NULL, 0, NULL), 0);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"scope_dropped\":2"));
+    capture_out_of_scope_dropped_reset();
+}
+
 static void test_sensor_health_scope_failure_emits_immediately(void) {
     /* Enforced -> degraded is a transition, not heartbeat news. And a
        second pin failing moves generation even if a consumer could not
@@ -1726,6 +1748,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_scope_unrequested);
     RUN_TEST(test_emit_sensor_health_scope_degraded);
     RUN_TEST(test_emit_sensor_health_scope_no_capture);
+    RUN_TEST(test_emit_sensor_health_scope_dropped);
     RUN_TEST(test_sensor_health_scope_failure_emits_immediately);
     RUN_TEST(test_sensor_health_unchanged_is_suppressed);
     RUN_TEST(test_sensor_health_degradation_emits_immediately);

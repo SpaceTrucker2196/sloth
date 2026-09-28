@@ -141,13 +141,27 @@ int capture_policy_valid_count(const capture_policy_t *p) {
     return n;
 }
 
+/* Lifetime count of frames refused specifically by the launch-time
+ * --iface/--monitor-only allow-list (#85's authorization boundary) — not
+ * the unrelated runtime [y] deselect, which is an operator toggle that
+ * predates #85 and isn't an authorization failure. Bumped inside
+ * capture_frame_in_scope() itself, below, so it's testable with
+ * hand-built frames and needs no live capture. Read by jsonl.c's
+ * sensor_health emitter (#85 wave 8). */
+static uint64_t g_out_of_scope_dropped;
+
+uint64_t capture_out_of_scope_dropped(void) { return g_out_of_scope_dropped; }
+void capture_out_of_scope_dropped_reset(void) { g_out_of_scope_dropped = 0; }
+
 int capture_frame_in_scope(const sloth_state_t *s, const capture_policy_t *p,
                            int dlt, const uint8_t *frame, int caplen,
                            capture_ifname_fn resolve) {
     if (!s) return 0;
     int restricted = s->iface_allowed_count > 0;
-    if (!capture_dlt_has_ifindex(dlt) || !frame || caplen < SLL2_HDRLEN)
+    if (!capture_dlt_has_ifindex(dlt) || !frame || caplen < SLL2_HDRLEN) {
+        if (restricted) g_out_of_scope_dropped++;
         return !restricted;
+    }
     /* Nothing filters: skip the lookup so the hot path stays syscall-free. */
     if (!restricted && s->iface_deselected_count == 0) return 1;
     uint32_t ifi = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16)
@@ -156,7 +170,9 @@ int capture_frame_in_scope(const sloth_state_t *s, const capture_policy_t *p,
         /* The pinned set is the authority, not whatever name the index
          * resolves to today. */
         const capture_pin_t *pin = capture_policy_match(p, ifi);
-        return pin && !iface_is_deselected(s, pin->name);
+        int admit = pin && !iface_is_deselected(s, pin->name);
+        if (!admit) g_out_of_scope_dropped++;
+        return admit;
     }
     const char *name = capture_ifname_lookup(ifi, resolve);
     if (!name) return 1;

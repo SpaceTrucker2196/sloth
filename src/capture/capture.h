@@ -121,6 +121,16 @@ int         capture_frame_in_scope(const sloth_state_t *s,
                                    const uint8_t *frame, int caplen,
                                    capture_ifname_fn resolve);
 
+/* Lifetime count of frames capture_frame_in_scope() refused because an
+   allow-list (--iface / --monitor-only) is active and the frame could not
+   be attributed to a still-valid pinned interface. Distinct from the
+   runtime [y] deselect, which is an operator toggle, not an authorization
+   failure, and does not bump this counter. Read by jsonl.c's
+   sensor_health emitter (#85 wave 8). */
+uint64_t    capture_out_of_scope_dropped(void);
+/* Test-only: zero the counter for isolation between cases. */
+void        capture_out_of_scope_dropped_reset(void);
+
 /* Runtime scope state from the policy's end state (#85 slice 2):
    no request → NONE; no data-stream handle → NO_CAPTURE; fewer valid
    pins than requested names → DEGRADED; else ENFORCED. Pure. */

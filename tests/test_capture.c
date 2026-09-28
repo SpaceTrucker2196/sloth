@@ -210,6 +210,7 @@ static sloth_state_t *scope_state2(const char *a, const char *b) {
     capture_policy_pin(&g_scope_policy, &g_scope_state, tbl_index, NULL);
     capture_ifname_cache_reset();
     g_resolve_calls = 0;
+    capture_out_of_scope_dropped_reset();
     return &g_scope_state;
 }
 static sloth_state_t *scope_state(const char *allow) {
@@ -290,6 +291,70 @@ static void test_scope_deselect_still_applies(void) {
     ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
     n = sll2_frame(f, 3);
     ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+}
+
+/* ── out-of-scope drop counter (#85 wave 8) ───────────────── */
+
+static void test_scope_dropped_counts_rejections_under_allow_list(void) {
+    sloth_state_t *s = scope_state("wlan1");
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+
+    /* Unresolvable ifindex: no pin matches, so it's refused and counted. */
+    uint8_t f[64]; int n = sll2_frame(f, 99);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+
+    /* A pinned index for a *different* allowed iface: still refused. */
+    n = sll2_frame(f, 2);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 2);
+
+    /* A non-SLL2 datalink can't carry an ifindex either — also counted. */
+    n = sll2_frame(f, 3);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 3);
+}
+
+static void test_scope_dropped_ignores_admitted_frames(void) {
+    sloth_state_t *s = scope_state("wlan1");
+    uint8_t f[64]; int n = sll2_frame(f, 3);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
+static void test_scope_dropped_ignores_unrestricted_short_frame(void) {
+    /* With no allow-list active there is no authorization boundary to
+       violate: an unattributable frame is admitted exactly as before
+       (#57/#85), and it must not inflate a counter that only means
+       something once --iface/--monitor-only is in force. */
+    sloth_state_t *s = scope_state(NULL);
+    uint8_t f[64]; sll2_frame(f, 99);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, 7, fake_resolve), 1);
+    ASSERT_EQ(IN_SCOPE(s, D_EN10MB, f, 20, fake_resolve), 1);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
+static void test_scope_dropped_ignores_runtime_deselect(void) {
+    /* The [y] runtime deselect is an operator toggle on an *unrestricted*
+       stream, not the launch-time authorization boundary this counter
+       tracks. A frame it drops must not inflate the count — conflating
+       the two would make an idle deselect look like an authorization
+       violation in the JSONL/socket stream. */
+    sloth_state_t *s = scope_state(NULL);
+    memcpy(s->iface_deselected[0], "eth0", 5);
+    s->iface_deselected_count = 1;
+    uint8_t f[64]; int n = sll2_frame(f, 2);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
+static void test_scope_dropped_reset_zeroes(void) {
+    sloth_state_t *s = scope_state("wlan1");
+    uint8_t f[64]; int n = sll2_frame(f, 99);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+    capture_out_of_scope_dropped_reset();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
 }
 
 static void test_ifname_failure_not_cached(void) {
@@ -956,6 +1021,11 @@ void run_capture_tests(void) {
     RUN_TEST(test_scope_null_state_rejected);
     RUN_TEST(test_scope_unrestricted_passes_everything);
     RUN_TEST(test_scope_deselect_still_applies);
+    RUN_TEST(test_scope_dropped_counts_rejections_under_allow_list);
+    RUN_TEST(test_scope_dropped_ignores_admitted_frames);
+    RUN_TEST(test_scope_dropped_ignores_unrestricted_short_frame);
+    RUN_TEST(test_scope_dropped_ignores_runtime_deselect);
+    RUN_TEST(test_scope_dropped_reset_zeroes);
     RUN_TEST(test_ifname_failure_not_cached);
     RUN_TEST(test_ifname_empty_not_cached);
     RUN_TEST(test_ifname_success_cached);

@@ -318,6 +318,11 @@ def fmt_sensor_health(r, c):
         # rename, index reuse, or never present). Restart re-pins.
         tail.append(f"scope={r.get('scope')} "
                     f"{r.get('scope_enforced', 0)}/{r.get('scope_requested', 0)}")
+    if r.get("scope_dropped"):
+        # #85 wave 8: the scope boundary itself is refusing frames — a
+        # value that keeps climbing on an *enforced* scope means traffic
+        # is arriving on an interface the operator did not authorise.
+        tail.append(f"scope_dropped={r['scope_dropped']}")
     if tail:
         out += "  " + " ".join(tail)
     return out

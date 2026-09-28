@@ -1750,6 +1750,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      storage_fail;
         int      scope_state, scope_req, scope_enf;
         uint32_t scope_gen;
+        uint64_t scope_dropped;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1774,6 +1775,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_req   = s->scope_health.requested;
     sig.scope_enf   = s->scope_health.enforced;
     sig.scope_gen   = s->scope_health.generation;
+    sig.scope_dropped = capture_out_of_scope_dropped();
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1813,6 +1815,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_int(buf, LINEBUF, &off, "scope_enforced",   s->scope_health.enforced);
     kv_int(buf, LINEBUF, &off, "scope_generation",
            (long long)s->scope_health.generation);
+    kv_int(buf, LINEBUF, &off, "scope_dropped",
+           (long long)capture_out_of_scope_dropped());
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

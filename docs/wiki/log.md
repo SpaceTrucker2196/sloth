@@ -1680,3 +1680,41 @@ all of `src/` and `research/` catches defects on paths no test drives.
 - **Open.** `src/pcap_write.c:30` dereferences a `localtime()` result
   without a NULL check (pre-existing; cppcheck does not flag it).
 - **Not done.** clang-tidy.
+
+## 2026-09-28 — #85 wave 8: out-of-scope drop counter
+
+**Source**: issue #85, deferred from the wave-5 slice above.
+
+The scope boundary could fail an individual frame silently: a pin
+rejection or an unattributable frame under an active allow-list left no
+trace beyond the drop itself. `scope`/`scope_enforced`/`scope_generation`
+say whether the boundary is intact, not whether it is being tested.
+
+**Changes**:
+
+- `src/capture/capture.{c,h}`: `capture_frame_in_scope()` now bumps a
+  module-local lifetime counter whenever an active allow-list refuses a
+  frame — an unattributable ifindex, a non-SLL2/short frame that can't
+  carry one, or an ifindex with no valid pin. The unrelated runtime `[y]`
+  deselect (unrestricted stream) does not touch it — that's an operator
+  toggle, not an authorization failure. New accessor
+  `capture_out_of_scope_dropped()` plus a test-only reset.
+- `src/jsonl.c`: sensor_health appends `scope_dropped`, in the
+  change-only signature alongside the other `scope*` fields — a scope
+  boundary starting to refuse frames is exactly the kind of news that
+  heartbeat already treats as urgent. Additive.
+- Docs: `jsonl-schema.md` (field table, sample record, cadence note);
+  `examples/consumer/sloth-stream.py` surfaces it as a fault-only line.
+- Tests (+9 assertions): counts distinct rejection reasons, stays at
+  zero for admitted frames, for unrestricted "can't-tell" frames, and
+  for the runtime deselect; reset zeroes it; the JSONL field reflects
+  the accessor. Three mutations (drop the `restricted` guard on each of
+  the two capture.c increment sites; hardcode the emitted field to 0)
+  each turned one test red, reverted.
+
+**Notes**:
+
+- **Open**, same as the parent slice: the residual window where an
+  ifindex reused between ticks is admitted until the next
+  revalidation — those frames are not scope-boundary refusals and
+  correctly don't count here.
