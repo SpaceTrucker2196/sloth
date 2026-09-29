@@ -153,3 +153,4 @@
 | d3170da | 2026-09-27T16:12:06Z | claude-opus-5-5 | 6 | 10128 | 400686 | 173038 | 1.6670 | #86 close-on-exec data-socket listener and client fds |
 | 7128e5e | 2026-09-28T11:15:24Z | claude-opus-5 | 98 | 44534 | 3675658 | 253033 | 5.4820 | #95 — guard localtime() result in pcap_export(); localtime_r + NULL check, stem  |
 | eebcdb5 | 2026-09-28T13:10:55Z | claude-opus-5 | 272 | 105738 | 11352028 | 1022379 | 18.5446 | release v1.8.3 |
+| cb19f70 | 2026-09-28T13:38:41Z | claude-opus-5 | 84 | 22624 | 5054980 | 494616 | 8.0397 | #85 wave 8 — out-of-scope drop counter |
