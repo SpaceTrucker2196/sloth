@@ -172,3 +172,93 @@ jobs:
           -Iinclude -Isrc -Iresearch
           -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c
           src research
+
+  # Hardened build flags (#95, the wave-6 item the original 2026-09-22
+  # triage on that issue named and every slice since deferred). The
+  # Makefile now always compiles the shipped `sloth`/`embedded` binaries
+  # with -fPIE/-fstack-protector-strong/-D_FORTIFY_SOURCE=3, and links
+  # them with -pie -Wl,-z,relro,-z,now on Linux.
+  #
+  # Both halves below matter for a reason specific to this runner image.
+  # ubuntu-latest's gcc already defaults to PIE, full RELRO, SSP and
+  # FORTIFY=3 on its own — verified while writing this job: deleting the
+  # whole Makefile block still yields a binary with every property the
+  # "Verify the binary" step checks. So that step alone would stay green
+  # even if the Makefile flags were reverted; it is a real sanity check
+  # (it would catch e.g. an LDFLAGS rewrite that drops -pie some other
+  # way) but it cannot prove *this change* did anything on *this* runner.
+  # "Verify the build recipe" is what does that: it greps the actual
+  # compile/link command lines gcc printed, so it goes red the moment the
+  # Makefile block is removed, host defaults notwithstanding — the real
+  # regression guard, proven red against a throwaway revert of the block
+  # before this job was written.
+  #
+  # `sloth_test` is deliberately NOT checked: it is a -O0 -g development
+  # binary the operator never runs, and _FORTIFY_SOURCE needs -O1+ to do
+  # anything at runtime — this job only asserts what the Makefile change
+  # actually claims to cover.
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+
+      - name: Build (capturing the exact compile/link commands)
+        run: make clean && make 2>&1 | tee build.log
+
+      - name: Verify the build recipe requests hardening
+        run: |
+          set -e
+          fail=0
+
+          grep -Eq -- '-fPIE\b' build.log || {
+            echo "FAIL: no -fPIE in any compile command" >&2; fail=1;
+          }
+          grep -Eq -- '-fstack-protector-strong\b' build.log || {
+            echo "FAIL: no -fstack-protector-strong in any compile command" >&2; fail=1;
+          }
+          grep -Eq -- '-D_FORTIFY_SOURCE=3\b' build.log || {
+            echo "FAIL: no -D_FORTIFY_SOURCE=3 in any compile command" >&2; fail=1;
+          }
+          grep -E -- '-o sloth ' build.log | grep -q -- '-pie\b' || {
+            echo "FAIL: the sloth link command has no -pie" >&2; fail=1;
+          }
+          grep -E -- '-o sloth ' build.log | grep -Eq -- '-Wl,-z,relro,-z,now\b' || {
+            echo "FAIL: the sloth link command has no -Wl,-z,relro,-z,now" >&2; fail=1;
+          }
+
+          exit "$fail"
+
+      - name: Verify the binary (defense-in-depth sanity check)
+        run: |
+          set -e
+          fail=0
+
+          readelf -h sloth | grep -q 'Type:.*DYN' || {
+            echo "FAIL: sloth is not a Position-Independent Executable (readelf -h Type != DYN)" >&2
+            fail=1
+          }
+
+          readelf -l sloth | grep -q GNU_RELRO || {
+            echo "FAIL: sloth has no GNU_RELRO program header" >&2
+            fail=1
+          }
+
+          readelf -d sloth | grep -q BIND_NOW || {
+            echo "FAIL: sloth is not eagerly bound (no BIND_NOW dynamic flag) - RELRO is partial, not full" >&2
+            fail=1
+          }
+
+          nm -D sloth | grep -q '__stack_chk_fail' || {
+            echo "FAIL: sloth has no __stack_chk_fail reference - stack protector missing" >&2
+            fail=1
+          }
+
+          nm -D sloth | grep -q '_chk@' || {
+            echo "FAIL: sloth calls no fortified (_chk) libc symbol - _FORTIFY_SOURCE not in effect" >&2
+            fail=1
+          }
+
+          exit "$fail"
