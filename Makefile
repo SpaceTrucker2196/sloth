@@ -66,6 +66,7 @@ SRCS = src/main.c          \
        src/views/dhcp_snoop.c \
        src/ssdp_snoop.c      \
        src/views/ssdp.c      \
+       src/reg_ie.c          \
        src/beacon_snoop.c    \
        src/views/beacon.c    \
        src/deauth_snoop.c    \
@@ -379,6 +380,8 @@ TEST_SRCS = tests/main_test.c          \
             src/ssdp_snoop.c               \
             src/views/ssdp.c               \
             tests/test_ssdp_snoop.c        \
+            src/reg_ie.c                   \
+            tests/test_reg_ie.c            \
             src/beacon_snoop.c             \
             src/views/beacon.c             \
             tests/test_beacon_snoop.c      \

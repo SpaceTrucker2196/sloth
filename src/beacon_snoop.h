@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "sloth.h"
+#include "reg_ie.h"
 
 /* Cipher / AKM / MFP info extracted from the RSN IE of a beacon, plus
  * AP fingerprint info extracted from tag-221 vendor-specific IEs. The
@@ -194,6 +195,13 @@ void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz);
  *
  * `rsn_out` is fully zeroed on entry. Returns 1.
  *
+ * `reg_out` is the regulatory envelope (#101): Country, Power
+ * Constraint and TPC Report. Optional and zeroed on entry on the same
+ * terms as `rsn_out` — every caller that has no use for it passes NULL,
+ * which is all of them until a later slice of #101 stores it. It rides
+ * this seam rather than its own IE walk so the monitor and nl80211
+ * paths cannot diverge on it the way they once did on RSN depth.
+ *
  * Note the output conventions are this file's, not linux_wifi.c's:
  * a hidden SSID is "" (not "<hidden>") and open is "OPEN" (not
  * "Open"). Callers that publish into a format with the other
@@ -201,7 +209,7 @@ void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz);
 int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                      uint16_t beacon_ms,
                      char ssid_out[33], int *channel_out, char enc_out[10],
-                     beacon_rsn_t *rsn_out);
+                     beacon_rsn_t *rsn_out, reg_ie_t *reg_out);
 
 /* Parse a raw 802.11 beacon frame (after radiotap, starting at FC byte).
    Extracts SSID, BSSID, channel, encryption mode, beacon interval, and

@@ -1389,7 +1389,7 @@ static void test_ies_direct_ssid_and_channel(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL), 1);
     ASSERT_STR(ssid, "CorpWiFi");
     ASSERT_EQ(ch, 11);
     /* No RSN, no WPA, privacy clear → open. Note the convention: this
@@ -1405,7 +1405,7 @@ static void test_ies_direct_hidden_ssid_stays_empty(void) {
     int off = ie_put(ies, 0, 0, NULL, 0);
     char ssid[33] = "x"; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ((int)ssid[0], 0);
 }
 
@@ -1416,7 +1416,7 @@ static void test_ies_direct_privacy_bit_is_wep(void) {
     int off = ie_put(ies, 0, 0, (const uint8_t *)"Old", 3);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1 /* privacy */, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1 /* privacy */, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(enc, "WEP");
 }
 
@@ -1438,7 +1438,7 @@ static void test_ies_direct_rsn_depth(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(enc, "WPA2");
     ASSERT_STR(rsn.pairwise, "CCMP");
     ASSERT_STR(rsn.group,    "CCMP");
@@ -1464,7 +1464,7 @@ static void test_ies_direct_mfp_required(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.mfp, 2);                   /* required */
     ASSERT_STR(rsn.akm, "SAE");
     ASSERT_STR(enc, "WPA3");                 /* SAE ⇒ WPA3 */
@@ -1485,7 +1485,7 @@ static void test_ies_direct_mfp_off(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.mfp, 0);
 }
 
@@ -1497,7 +1497,7 @@ static void test_ies_direct_qbss(void) {
     int off = ie_put(ies, 0, 11, qbss, 5);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.has_qbss, 1);
     ASSERT_EQ(rsn.qbss_stations, 42);
     ASSERT_EQ(rsn.qbss_chan_util, 128);
@@ -1512,7 +1512,7 @@ static void test_ies_direct_zeroes_output_on_entry(void) {
     uint8_t ies[32];
     int off = ie_put(ies, 0, 0, (const uint8_t *)"N", 1);
     char ssid[33]; char enc[10]; int ch = 0;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ((int)rsn.pairwise[0], 0);
     ASSERT_EQ((int)rsn.akm[0],      0);
     ASSERT_EQ(rsn.mfp,              0);
@@ -1527,14 +1527,14 @@ static void test_ies_direct_overrun_is_counted(void) {
     uint8_t ies[4] = { 0, 200, 'a', 'b' };   /* claims 200 bytes, has 2 */
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, 4, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, 4, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.ie_overruns, 1);
 }
 
 static void test_ies_direct_empty_blob_is_safe(void) {
     char ssid[33] = "x"; char enc[10] = ""; int ch = 9;
     beacon_rsn_t rsn;
-    ASSERT_EQ(beacon_parse_ies(NULL, 0, 0, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_EQ(beacon_parse_ies(NULL, 0, 0, 0, ssid, &ch, enc, &rsn, NULL), 1);
     ASSERT_EQ((int)ssid[0], 0);
     ASSERT_EQ(ch, 0);
     ASSERT_STR(enc, "OPEN");
@@ -1545,7 +1545,7 @@ static void test_ies_direct_null_rsn_is_safe(void) {
     uint8_t ies[32];
     int off = ie_put(ies, 0, 0, (const uint8_t *)"N", 1);
     char ssid[33]; char enc[10]; int ch = 0;
-    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, NULL), 1);
+    ASSERT_EQ(beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, NULL, NULL), 1);
     ASSERT_STR(ssid, "N");
 }
 
@@ -1772,7 +1772,7 @@ static void test_ies_wpa1_alongside_rsn_flagged(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    ASSERT_EQ(beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn), 1);
+    ASSERT_EQ(beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL), 1);
     ASSERT_EQ(rsn.has_wpa1, 1);
     ASSERT(rsn.akm_bits & RSN_AKM_PSK);
 }
@@ -1784,7 +1784,7 @@ static void test_ies_no_wpa1_when_absent(void) {
     off = put_rsn(ies, off, akm, 1, 0x00c0);      /* MFPC|MFPR */
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.has_wpa1, 0);
     ASSERT_EQ(rsn.owe_trans, 0);
 }
@@ -1800,7 +1800,7 @@ static void test_ies_owe_transition_element_flagged(void) {
     off = ie_put(ies, off, 221, owe, (int)sizeof(owe));
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.owe_trans, 1);
     ASSERT(rsn.akm_bits & RSN_AKM_OWE);
 }
@@ -1817,7 +1817,7 @@ static void test_ies_other_wfa_vendor_types_are_not_owe(void) {
     off = ie_put(ies, off, 221, wfa, (int)sizeof(wfa));
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.owe_trans, 0);
 }
 
@@ -1831,7 +1831,7 @@ static void test_ies_transition_mode_bitmap_has_both_lanes(void) {
     off = put_rsn(ies, off, akm, 2, 0x0080);      /* MFPC only */
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 1, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT(rsn.akm_bits & RSN_AKM_PSK_FAMILY);
     ASSERT(rsn.akm_bits & RSN_AKM_SAE_FAMILY);
     ASSERT_EQ(rsn.mfp, 1);                        /* capable, not required */
@@ -1849,7 +1849,7 @@ static void test_ht_operation_20mhz(void) {
     int off = ie_put(ies, 0, 61, ht, 2);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_20);
     ASSERT_EQ(rsn.oper_primary_channel, 6);
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HT_OPER);
@@ -1861,7 +1861,7 @@ static void test_ht_operation_40mhz_needs_both(void) {
     int off = ie_put(ies, 0, 61, ht, 2);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
     ASSERT_EQ(rsn.oper_secondary_offset, 1);
 }
@@ -1872,7 +1872,7 @@ static void test_vht_operation_80mhz(void) {
     int off = ie_put(ies, 0, 192, vht, 3);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_80);
     ASSERT_EQ(rsn.oper_center_seg0, 42);
 }
@@ -1887,12 +1887,12 @@ static void test_vht_operation_160_vs_80p80(void) {
 
     uint8_t contig[3] = { 1, 50, 58 };    /* gap 8 */
     int off = ie_put(ies, 0, 192, contig, 3);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_160);
 
     uint8_t split[3] = { 1, 42, 155 };    /* far apart */
     off = ie_put(ies, 0, 192, split, 3);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_80P80);
 }
 
@@ -1906,7 +1906,7 @@ static void test_vht_width_zero_defers_to_ht(void) {
     off = ie_put(ies, off, 192, vht, 3);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
 }
 
@@ -1938,7 +1938,7 @@ static void test_he_6ghz_supplies_the_primary_channel(void) {
     int off = put_he_oper(ies, 0, 0, 0, 1, 37, 0x02, 39, 0);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_primary_channel, 37);
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HE_6GHZ);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_80);
@@ -1956,7 +1956,7 @@ static void test_he_optional_field_order_matters(void) {
                           53, 0x01, 55, 0);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_primary_channel, 53);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_40);
 }
@@ -1972,7 +1972,7 @@ static void test_he_operation_channel_beats_ds_param(void) {
     off = ie_put(ies, off, 3, ds, 1);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(ch, 37);
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_HE_6GHZ);
 }
@@ -1983,7 +1983,7 @@ static void test_ds_param_is_the_source_when_alone(void) {
     int off = ie_put(ies, 0, 3, ds, 1);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(ch, 11);
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_DS_PARAM);
 }
@@ -2000,7 +2000,7 @@ static void test_eht_operation_320mhz(void) {
     int off = ie_put(ies, 0, 255, body, b);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_320);
     ASSERT_EQ(rsn.oper_center_seg0, 31);
 }
@@ -2012,7 +2012,7 @@ static void test_no_operation_ie_leaves_width_unknown(void) {
     int off = ie_put(ies, 0, 0, (const uint8_t *)"x", 1);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_UNKNOWN);
 }
@@ -2024,11 +2024,11 @@ static void test_truncated_operation_ies_are_safe(void) {
     beacon_rsn_t rsn;
     uint8_t one[1] = { 6 };
     int off = ie_put(ies, 0, 61, one, 1);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
     uint8_t two[2] = { 1, 42 };
     off = ie_put(ies, 0, 192, two, 2);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.oper_width, CH_WIDTH_UNKNOWN);
 }
 
@@ -2046,21 +2046,21 @@ static void test_phy_tier_ladder(void) {
     beacon_rsn_t rsn;
 
     int off = ie_put(ies, 0, 0, (const uint8_t *)"x", 1);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(rsn.phy, "legacy");
 
     uint8_t none[1] = { 0 };
     off = ie_put(ies, 0, 45, none, 1);                  /* HT Capabilities */
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(rsn.phy, "Wi-Fi 4");
 
     off = ie_put(ies, 0, 191, none, 1);                 /* VHT Capabilities */
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(rsn.phy, "Wi-Fi 5");
 
     uint8_t he[1] = { 35 };                             /* ext 35 = HE Cap */
     off = ie_put(ies, 0, 255, he, 1);
-    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_STR(rsn.phy, "Wi-Fi 6");
 }
 
@@ -2076,7 +2076,7 @@ static void test_phy_tier_wifi7_from_each_eht_element(void) {
     for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
         uint8_t body[1] = { exts[i] };
         int off = ie_put(ies, 0, 255, body, 1);
-        beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn);
+        beacon_parse_ies(ies, off, 0, 0, ssid, &ch, enc, &rsn, NULL);
         ASSERT_STR(rsn.phy, "Wi-Fi 7");
     }
 }
@@ -2135,7 +2135,7 @@ static void test_ie_order_known_answer(void) {
     int n = build_ordered_ies(ies, "Lab", 6, 0);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.fp.ie_order_hash, 0xb6770adeu);
     ASSERT_EQ(rsn.fp.ie_order_count, 8);
 }
@@ -2149,8 +2149,8 @@ static void test_ie_order_ignores_element_bodies(void) {
     int nb = build_ordered_ies(b, "SomethingElseEntirely", 11, 0);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t ra, rb;
-    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra);
-    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb);
+    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra, NULL);
+    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb, NULL);
     ASSERT(ra.fp.ie_order_hash != 0u);
     ASSERT_EQ(ra.fp.ie_order_hash, rb.fp.ie_order_hash);
 }
@@ -2163,8 +2163,8 @@ static void test_ie_order_swap_changes_hash(void) {
     int nb = build_ordered_ies(b, "Lab", 6, 1);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t ra, rb;
-    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra);
-    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb);
+    beacon_parse_ies(a, na, 1, 102, ssid, &ch, enc, &ra, NULL);
+    beacon_parse_ies(b, nb, 1, 102, ssid, &ch, enc, &rb, NULL);
     ASSERT(ra.fp.ie_order_hash != rb.fp.ie_order_hash);
     ASSERT_EQ(rb.fp.ie_order_hash, 0x8aa818f2u);
     ASSERT_EQ(ra.fp.ie_order_count, rb.fp.ie_order_count);
@@ -2178,9 +2178,9 @@ static void test_ie_order_extension_id_is_part_of_identity(void) {
     beacon_rsn_t r35, r36;
     uint8_t he_cap[1] = { 35 }, he_op[1] = { 36 };
     int n = ie_put(ies, 0, 255, he_cap, 1);
-    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r35);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r35, NULL);
     n = ie_put(ies, 0, 255, he_op, 1);
-    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r36);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &r36, NULL);
     ASSERT(r35.fp.ie_order_hash != r36.fp.ie_order_hash);
     /* Tokens ff 23 -> 0x8d1e5197; ff 24 -> 0x8a1e4cde. */
     ASSERT_EQ(r35.fp.ie_order_hash, 0x8d1e5197u);
@@ -2197,9 +2197,9 @@ static void test_ie_order_vendor_oui_type_is_part_of_identity(void) {
     static const uint8_t wmm[] = { 0x00, 0x50, 0xf2, 0x02, 0x00 };
     static const uint8_t wps[] = { 0x00, 0x50, 0xf2, 0x04, 0x00 };
     int n = ie_put(ies, 0, 221, wmm, sizeof(wmm));
-    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rw);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rw, NULL);
     n = ie_put(ies, 0, 221, wps, sizeof(wps));
-    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rp);
+    beacon_parse_ies(ies, n, 0, 0, ssid, &ch, enc, &rp, NULL);
     /* dd 00 50 f2 02 -> 0xd6f5b0d4; dd 00 50 f2 04 -> 0xd4f5adae. */
     ASSERT_EQ(rw.fp.ie_order_hash, 0xd6f5b0d4u);
     ASSERT_EQ(rp.fp.ie_order_hash, 0xd4f5adaeu);
@@ -2227,8 +2227,8 @@ static void test_ie_order_skips_transient_elements(void) {
 
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rb, rx;
-    beacon_parse_ies(base, nb, 1, 102, ssid, &ch, enc, &rb);
-    beacon_parse_ies(busy, n,  1, 102, ssid, &ch, enc, &rx);
+    beacon_parse_ies(base, nb, 1, 102, ssid, &ch, enc, &rb, NULL);
+    beacon_parse_ies(busy, n,  1, 102, ssid, &ch, enc, &rx, NULL);
     ASSERT_EQ(rx.csa_present, 1);             /* the CSA was still parsed */
     ASSERT_EQ(rx.fp.ie_order_hash,  rb.fp.ie_order_hash);
     ASSERT_EQ(rx.fp.ie_order_count, rb.fp.ie_order_count);
@@ -2245,7 +2245,7 @@ static void test_ie_order_zero_on_overrun(void) {
     ies[n++] = 0x0c;
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.ie_overruns, 1);
     ASSERT_EQ(rsn.fp.ie_order_hash, 0u);
     ASSERT_EQ(rsn.fp.ie_order_count, 0);
@@ -2256,7 +2256,7 @@ static void test_ie_order_zero_when_no_elements(void) {
     uint8_t ies[1] = { 0 };
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, 0, 0, 0, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, 0, 0, 0, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.fp.ie_order_hash, 0u);
     ASSERT_EQ(rsn.fp.ie_order_count, 0);
 }
@@ -2394,7 +2394,7 @@ static void test_ies_path_reports_no_tsf(void) {
     int n = build_ordered_ies(ies, "Lab", 6, 0);
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn);
+    beacon_parse_ies(ies, n, 1, 102, ssid, &ch, enc, &rsn, NULL);
     ASSERT_EQ(rsn.has_tsf, 0);
     ASSERT_EQ(rsn.tsf_bi_tu, 0);
 }

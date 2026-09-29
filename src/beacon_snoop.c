@@ -144,7 +144,7 @@ void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz) {
 int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                      uint16_t beacon_ms,
                      char ssid_out[33], int *channel_out, char enc_out[10],
-                     beacon_rsn_t *rsn_out)
+                     beacon_rsn_t *rsn_out, reg_ie_t *reg_out)
 {
     /* One memset rather than a field-by-field reset. The header
      * promises rsn_out is "fully zeroed on entry", but clearing each
@@ -153,6 +153,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
      * and pairwise_bits landed (#60). Zeroing the object makes the
      * documented contract structural. */
     if (rsn_out) memset(rsn_out, 0, sizeof(*rsn_out));
+    reg_ie_reset(reg_out);          /* NULL-safe; same contract as rsn_out */
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
      * body so two same-vendor APs (same firmware, same caps) produce
@@ -221,6 +222,13 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             }
             order_count++;
         }
+
+        /* Regulatory envelope (#101). Offered every element rather than
+         * folded into the chain below: tags 7, 32 and 35 belong to
+         * reg_ie.c, and keeping the dispatch flat means this file does
+         * not have to know which tags those are. Cheap — a switch on a
+         * tag that is almost never one of the three. */
+        if (reg_out) reg_ie_element(reg_out, tag, ie + 2, (int)tln);
 
         if (tag == 0) {
             /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal. */
@@ -750,7 +758,8 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
 
     (void)signal;
     int ok = beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
-                              ssid_out, channel_out, enc_out, rsn_out);
+                              ssid_out, channel_out, enc_out, rsn_out,
+                              NULL /* regulatory envelope is unstored (#101) */);
 
     /* Timestamp at bytes 24-31, little-endian: the AP's TSF timer value
      * when it transmitted this beacon (#77). Set after the IE walk

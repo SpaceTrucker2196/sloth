@@ -125,6 +125,68 @@ reconfigures an adapter it did not create.
 > live N-thread capture path is hardware-gated like the nl80211
 > channel-set path.
 
+## Regulatory elements (issue #101, slice 1)
+
+`src/reg_ie.c` parses the three elements that carry the regulatory
+envelope an AP *claims* to operate in. Until #101 sloth read none of
+them, so the cheapest non-compliance signal there is — a 5 GHz AP that
+names no country at all, the hostapd / OpenWrt stripped-build default —
+was invisible.
+
+| Element | Tag | Clause | Fields taken |
+|---|---|---|---|
+| Country          | 7  | IEEE 802.11-2020 §9.4.2.8 (802.11d-2016) | ISO 3166-1 alpha-2 code, environment octet, triplets |
+| Power Constraint | 32 | §9.4.2.13 | Local Power Constraint, unsigned dB |
+| TPC Report       | 35 | §9.4.2.16 (802.11h) | Transmit Power, signed dBm; Link Margin, signed dB |
+
+Two details in the Country element are where a naive parser goes wrong.
+
+**The third octet of the Country String is not always an environment.**
+§9.4.2.8 gives it five forms: ASCII `' '` (all environments), `'I'`
+(indoor only), `'O'` (outdoor only), `'X'` (non-country entity, with the
+code itself `"XX"`), or the *binary* Annex E Operating Class table
+number — which is what hostapd emits as `0x04` when it advertises global
+operating classes. Anything outside those five is recorded as
+`REG_ENV_UNKNOWN` rather than folded into "any": an AP that emits an
+undefined octet has made no environment claim, and inventing one would
+put a regulatory assertion in the record that never went over the air.
+
+**The triplets are two different structures sharing one shape.** Each is
+three octets, and which three fields they are is decided by the first
+octet, per triplet, not per element: at 201 or above it is an Operating
+Extension Identifier and the triplet is (ext id, operating class,
+coverage class); below it, (first channel, number of channels, maximum
+transmit power). Read the wrong way, an operating triplet for global
+class 81 reports "channel 201, 81 channels, 3 dBm" — plausible enough to
+pass unnoticed. Maximum transmit power is **signed** dBm; sub-1 mW caps
+are real, and an unsigned read turns −2 dBm into 254 dBm.
+
+Both TPC Report fields are signed too. Link Margin is reserved (0) in a
+beacon or probe response and only carries a value in a TPC Report action
+frame; it is parsed regardless, since the element layout is the same.
+
+The parser reaches frames through `beacon_parse_ies()` — the one seam
+both the monitor path and the nl80211 managed path use, so the two
+cannot diverge on regulatory depth the way they once did on RSN depth.
+Its `reg_out` parameter is optional and NULL-safe.
+
+**Slice 1 is inert by design.** It parses and stops: no regulatory
+table, no channel-legality decision, no alert type, no field on
+`probe_ap_t`, no view, no JSONL record, no SQLite column. Reading a
+claim is not the same as judging it, and the judging half needs a
+versioned regulatory table that this half must not pre-empt. Every
+caller passes NULL today.
+
+Malformed elements are counted (`malformed_country`,
+`malformed_power_constraint`, `malformed_tpc`) in the same spirit as
+`beacon_rsn_t`'s `ie_overruns`: a truncated or crafted regulatory
+element is itself a signal, so it is recorded rather than silently
+skipped.
+
+Tests are hand-built byte arrays in `tests/test_reg_ie.c`, per
+`agents/AGENTS.md` — the issue's pcap-fixture test plan is deferred to
+the `needs-pcap-fixture` follow-up layer it belongs to.
+
 ## Related pages
 
 - [[mac-randomisation]] — the seqnum deanonymisation primitive in

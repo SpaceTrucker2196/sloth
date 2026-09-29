@@ -106,7 +106,7 @@ int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     char         enc[10];
     int          channel = 0;
     beacon_parse_ies(ies, ie_len, 0, 0,
-                     out->requested_ssid, &channel, enc, &rsn);
+                     out->requested_ssid, &channel, enc, &rsn, NULL);
 
     out->akm_bits       = rsn.akm_bits;
     out->pairwise_bits  = rsn.pairwise_bits;

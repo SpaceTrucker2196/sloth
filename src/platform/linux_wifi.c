@@ -153,7 +153,7 @@ static void parse_ies(const uint8_t *ies, int len, uint16_t cap,
     int    channel  = 0;
 
     beacon_parse_ies(ies, len, (cap >> 4) & 1, 0,
-                     ssid, &channel, enc, &rsn);
+                     ssid, &channel, enc, &rsn, NULL);
 
     /* Map the beacon parser's conventions onto this path's. */
     if (ssid[0]) snprintf(ap->ssid, sizeof(ap->ssid), "%s", ssid);
