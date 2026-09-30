@@ -155,3 +155,4 @@
 | eebcdb5 | 2026-09-28T13:10:55Z | claude-opus-5 | 272 | 105738 | 11352028 | 1022379 | 18.5446 | release v1.8.3 |
 | cb19f70 | 2026-09-28T13:38:41Z | claude-opus-5 | 84 | 22624 | 5054980 | 494616 | 8.0397 | #85 wave 8 — out-of-scope drop counter |
 | 6ff3385 | 2026-09-29T11:30:55Z | claude-opus-5 | 198 | 112378 | 13081780 | 382555 | 13.1769 | #101 slice 1 — regulatory IE parsers (Country/Power Constraint/TPC), inert |
+| b12f882 | 2026-09-29T13:25:04Z | claude-opus-5 | 72 | 24364 | 5845540 | 524696 | 8.7792 | #95 — hardened build flags: PIE, full RELRO, SSP, FORTIFY_SOURCE |
