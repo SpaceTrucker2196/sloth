@@ -176,6 +176,14 @@ static void chanhop_drive(sloth_state_t *s) {
     s->hop_activity.silent_channels = ha.silent_channels;
     s->hop_activity.cur_visits      = ha.cur_visits;
     s->hop_activity.cur_frames      = ha.cur_frames;
+    chanhop_dwell_t hd;
+    chanhop_dwell(&g_chanhop, &hd);
+    s->hop_dwell.last_planned_ms    = hd.last_planned_ms;
+    s->hop_dwell.last_measured_ms   = hd.last_measured_ms;
+    s->hop_dwell.worst_overshoot_ms = hd.worst_overshoot_ms;
+    s->hop_dwell.completed          = hd.completed;
+    s->hop_dwell.mean_planned_ms    = hd.mean_planned_ms;
+    s->hop_dwell.mean_measured_ms   = hd.mean_measured_ms;
 }
 #endif
 

@@ -1102,6 +1102,8 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"hop_channels\":0"));
     ASSERT(contains(body, "\"hop_visits\":0"));
     ASSERT(contains(body, "\"hop_silent_channels\":0"));
+    ASSERT(contains(body, "\"hop_dwell_planned_ms\":0"));
+    ASSERT(contains(body, "\"hop_dwells_completed\":0"));
     sh_evict_reset();
 }
 

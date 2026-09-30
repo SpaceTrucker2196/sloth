@@ -621,6 +621,36 @@ void test_health_strip_quiet_when_every_hop_channel_hears(void) {
     ASSERT_STR(buf, "  health: cap up  mon up");
 }
 
+void test_health_strip_reports_dwell_divergence(void) {
+    /* #91: the poll loop is servicing a 250ms plan every second, so the
+       radio holds each channel 4x as long as the scheduler believes. */
+    sloth_state_t s = make_healthy_sensor_state();
+    sh_evict_reset();
+    s.hop_dwell.completed        = 40;
+    s.hop_dwell.mean_planned_ms  = 250;
+    s.hop_dwell.mean_measured_ms = 1000;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  hop dwell 1000ms vs 250ms planned");
+}
+
+void test_health_strip_quiet_when_dwell_is_served(void) {
+    /* Serviced close enough to plan: not a fault, so the line stays
+       short. Also covers completed == 0, where the means are 0 and the
+       ratio must not read as divergence. */
+    sloth_state_t s = make_healthy_sensor_state();
+    sh_evict_reset();
+    s.hop_dwell.completed        = 40;
+    s.hop_dwell.mean_planned_ms  = 250;
+    s.hop_dwell.mean_measured_ms = 260;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+    s.hop_dwell.completed = 0;
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+}
+
 void test_health_strip_reports_evictions(void) {
     sloth_state_t s = make_healthy_sensor_state();
     sh_evict_reset();
@@ -835,6 +865,8 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_reports_retune_failures);
     RUN_TEST(test_health_strip_reports_silent_hop_channels);
     RUN_TEST(test_health_strip_quiet_when_every_hop_channel_hears);
+    RUN_TEST(test_health_strip_reports_dwell_divergence);
+    RUN_TEST(test_health_strip_quiet_when_dwell_is_served);
     RUN_TEST(test_health_strip_reports_evictions);
     RUN_TEST(test_health_strip_enforced_scope_is_quiet);
     RUN_TEST(test_health_strip_reports_degraded_scope);

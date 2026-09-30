@@ -433,6 +433,15 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     if (s->hop_activity.silent_channels)
         strip_addf(buf, sz, &off, "  hop silent %d/%d",
                    s->hop_activity.silent_channels, s->hop_activity.channels);
+    /* #91: the radio is holding channels materially longer than the
+     * scheduler planned, so its airtime model is wrong. Judged on the
+     * lifetime means, not the last dwell, so one slow tick doesn't
+     * flap the line; 3/2 is "half again as long" without floats. */
+    if (s->hop_dwell.completed &&
+        s->hop_dwell.mean_measured_ms > s->hop_dwell.mean_planned_ms * 3 / 2)
+        strip_addf(buf, sz, &off, "  hop dwell %ums vs %ums planned",
+                   s->hop_dwell.mean_measured_ms,
+                   s->hop_dwell.mean_planned_ms);
     /* #85: a requested scope that is not being served. Fail-closed keeps
      * out-of-scope traffic out either way; this is what stops a replugged
      * adapter from going quiet with no explanation. */

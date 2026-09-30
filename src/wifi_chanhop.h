@@ -49,6 +49,15 @@ typedef struct {
     uint32_t min_dwell_ms;    /* floor */
     uint32_t max_dwell_ms;    /* cap — one busy channel never starves the rest */
     uint32_t ms_per_obs;      /* extra dwell ms per observation carried in */
+    /* Dwell measurement (#91). Written by chanhop_tick() only. */
+    uint64_t dwell_began_ms;
+    uint32_t dwell_planned_ms;
+    uint32_t last_planned_ms;
+    uint32_t last_measured_ms;
+    uint32_t worst_overshoot_ms;
+    uint64_t dwells_completed;
+    uint64_t planned_total_ms;
+    uint64_t measured_total_ms;
 } chanhop_t;
 
 /* Map an 802.11 channel to its center frequency in MHz (0 if unknown).
@@ -84,6 +93,27 @@ typedef struct {
 } chanhop_activity_t;
 
 void chanhop_activity(const chanhop_t *h, chanhop_activity_t *out);
+
+/* Measured vs configured dwell (#91) — the fifth problem bullet: a
+ * dwell is only ever serviced when the poll loop next runs, so the time
+ * the radio actually spends on a channel is the planned dwell rounded
+ * up to the poll interval. With a 250 ms plan and a 1 s poll the radio
+ * sits four times as long as the scheduler believes, every channel's
+ * airtime is wrong, and nothing in the UI says so.
+ *
+ * Measured spans run start-of-dwell to start-of-next, so the figure
+ * includes the servicing delay rather than hiding it. Means are
+ * lifetime; last_* is the most recent completed dwell. Pure. */
+typedef struct {
+    uint32_t last_planned_ms;
+    uint32_t last_measured_ms;
+    uint32_t worst_overshoot_ms;  /* largest measured-minus-planned seen */
+    uint64_t completed;           /* dwells that have ended */
+    uint32_t mean_planned_ms;     /* 0 until one dwell completes */
+    uint32_t mean_measured_ms;
+} chanhop_dwell_t;
+
+void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out);
 
 /* Advance the dwell clock. Returns 1 when the caller should retune the
  * radio to chanhop_current_freq() (first call, or the dwell elapsed);

@@ -246,6 +246,106 @@ static void test_activity_null_and_empty_are_zero(void) {
     chanhop_activity(&h, NULL);        /* no crash */
 }
 
+/* ââ measured vs configured dwell (#91 wave 7) ââââââââ */
+
+static void test_dwell_measures_exact_service(void) {
+    /* Ticked precisely when each dwell expires: measured == planned and
+       nothing overshoots. The baseline the divergence case is read
+       against. */
+    chanhop_t h;
+    int chans[] = { 1, 6, 11 };
+    chanhop_init(&h, chans, 3);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);                 /* start dwell 1, planned 250 */
+    for (int i = 0; i < 3; i++) { t += 250; chanhop_tick(&h, t); }
+    chanhop_dwell_t d;
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.completed, 3);
+    ASSERT_EQ((long long)d.last_planned_ms, 250);
+    ASSERT_EQ((long long)d.last_measured_ms, 250);
+    ASSERT_EQ((long long)d.mean_planned_ms, 250);
+    ASSERT_EQ((long long)d.mean_measured_ms, 250);
+    ASSERT_EQ((long long)d.worst_overshoot_ms, 0);
+}
+
+static void test_dwell_records_poll_interval_overshoot(void) {
+    /* The bug this slice exists for: a 250 ms plan serviced by a 1 s
+       poll loop means the radio actually sits for 1 s, and the
+       scheduler's airtime model is wrong by 4x with nothing saying so. */
+    chanhop_t h;
+    int chans[] = { 1, 6, 11 };
+    chanhop_init(&h, chans, 3);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);
+    for (int i = 0; i < 3; i++) { t += 1000; chanhop_tick(&h, t); }
+    chanhop_dwell_t d;
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.completed, 3);
+    ASSERT_EQ((long long)d.mean_planned_ms, 250);
+    ASSERT_EQ((long long)d.mean_measured_ms, 1000);
+    ASSERT_EQ((long long)d.worst_overshoot_ms, 750);
+}
+
+static void test_dwell_worst_overshoot_is_a_high_water_mark(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    chanhop_init(&h, chans, 2);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);
+    t += 900;  chanhop_tick(&h, t);      /* overshoot 650 */
+    t += 250;  chanhop_tick(&h, t);      /* on time */
+    chanhop_dwell_t d;
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.last_measured_ms, 250);
+    ASSERT_EQ((long long)d.last_planned_ms, 250);
+    ASSERT_EQ((long long)d.worst_overshoot_ms, 650);   /* not reset */
+}
+
+static void test_dwell_plan_follows_activity(void) {
+    /* A busy channel earns a longer plan, and the measurement follows
+       the plan rather than a fixed base. */
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    chanhop_init(&h, chans, 2);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);                 /* on ch 1, plan 250 */
+    chanhop_observe(&h, 50);
+    t += 250; chanhop_tick(&h, t);       /* -> ch 6, plan 250 */
+    t += 250; chanhop_tick(&h, t);       /* -> ch 1; activity halved to
+                                            25 on departure, so the new
+                                            plan is 250 + 25*8 = 450 */
+    chanhop_dwell_t d;
+    chanhop_dwell(&h, &d);
+    /* last_* describe the dwell that ENDED, so the boosted plan is not
+       visible until the longer dwell itself completes. */
+    ASSERT_EQ((long long)d.last_planned_ms, 250);
+    ASSERT_EQ((long long)d.completed, 2);
+
+    t += 450; chanhop_tick(&h, t);
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.last_planned_ms, 450);
+    ASSERT_EQ((long long)d.last_measured_ms, 450);
+    ASSERT_EQ((long long)d.completed, 3);
+    ASSERT_EQ((long long)d.worst_overshoot_ms, 0);
+}
+
+static void test_dwell_zero_before_first_completion(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    chanhop_init(&h, chans, 2);
+    chanhop_dwell_t d;
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.completed, 0);
+    ASSERT_EQ((long long)d.mean_planned_ms, 0);   /* no division by zero */
+    ASSERT_EQ((long long)d.mean_measured_ms, 0);
+    chanhop_tick(&h, 0);                 /* started, none ended yet */
+    chanhop_dwell(&h, &d);
+    ASSERT_EQ((long long)d.completed, 0);
+    chanhop_dwell(NULL, &d);
+    ASSERT_EQ((long long)d.completed, 0);
+    chanhop_dwell(&h, NULL);             /* no crash */
+}
+
 void run_chanhop_tests(void) {
     TEST_SUITE("wifi channel hopper");
     RUN_TEST(test_export);
@@ -266,4 +366,11 @@ void run_chanhop_tests(void) {
     RUN_TEST(test_activity_frames_survive_decay);
     RUN_TEST(test_activity_flags_silent_visited_channel);
     RUN_TEST(test_activity_null_and_empty_are_zero);
+
+    TEST_SUITE("wifi channel hopper: measured vs configured dwell (#91)");
+    RUN_TEST(test_dwell_measures_exact_service);
+    RUN_TEST(test_dwell_records_poll_interval_overshoot);
+    RUN_TEST(test_dwell_worst_overshoot_is_a_high_water_mark);
+    RUN_TEST(test_dwell_plan_follows_activity);
+    RUN_TEST(test_dwell_zero_before_first_completion);
 }

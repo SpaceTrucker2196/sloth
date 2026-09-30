@@ -2461,6 +2461,19 @@ typedef struct {
         uint32_t cur_visits;
         uint64_t cur_frames;
     } hop_activity;
+    /* Measured vs configured dwell (#91). A dwell is serviced only when
+     * the poll loop next runs, so measured is the plan rounded up to
+     * the poll interval; when the two diverge the scheduler's airtime
+     * model is wrong and nothing else says so. chanhop_dwell_t in
+     * wifi_chanhop.h, mirrored here to keep sloth.h independent. */
+    struct {
+        uint32_t last_planned_ms;
+        uint32_t last_measured_ms;
+        uint32_t worst_overshoot_ms;
+        uint64_t completed;
+        uint32_t mean_planned_ms;
+        uint32_t mean_measured_ms;
+    } hop_dwell;
     /* Requested vs confirmed monitor-radio channel (#91 slice 1):
      * chanhop_drive() used to call set_channel() without consuming its
      * return code, so the UI showed the intended channel even when the

@@ -1807,6 +1807,20 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            (long long)s->hop_activity.cur_visits);
     kv_int(buf, LINEBUF, &off, "hop_cur_frames",
            (long long)s->hop_activity.cur_frames);
+    /* Measured vs configured dwell (#91). Both means are emitted so a
+     * consumer can see the ratio without knowing sloth's poll interval. */
+    kv_int(buf, LINEBUF, &off, "hop_dwell_planned_ms",
+           s->hop_dwell.mean_planned_ms);
+    kv_int(buf, LINEBUF, &off, "hop_dwell_measured_ms",
+           s->hop_dwell.mean_measured_ms);
+    kv_int(buf, LINEBUF, &off, "hop_dwell_last_planned_ms",
+           s->hop_dwell.last_planned_ms);
+    kv_int(buf, LINEBUF, &off, "hop_dwell_last_measured_ms",
+           s->hop_dwell.last_measured_ms);
+    kv_int(buf, LINEBUF, &off, "hop_dwell_worst_overshoot_ms",
+           s->hop_dwell.worst_overshoot_ms);
+    kv_int(buf, LINEBUF, &off, "hop_dwells_completed",
+           (long long)s->hop_dwell.completed);
     health_kv(buf, &off, "capture", &s->cap_health);
     health_kv(buf, &off, "monitor", &s->mon_health);
     kv_int(buf, LINEBUF, &off, "evictions", (long long)evict_total);

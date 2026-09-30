@@ -23,14 +23,12 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
 
 int chanhop_init(chanhop_t *h, const int *channels, int n) {
     if (!h) return 0;
-    /* Zero every slot wholesale, not field by field: this loop used to
-     * name three members and the #91 visit/frame counters were left
-     * holding stack garbage, which is a trap any future slot field
-     * would fall into the same way. */
-    memset(h->slots, 0, sizeof(h->slots));
-    h->count = h->cur = 0;
-    h->dwell_until_ms = 0;
-    h->started = 0;
+    /* Zero the whole scheduler, not field by field. This used to name
+     * the handful of members that existed at the time, and every field
+     * added since (#91's per-slot visit/frame counters, then the dwell
+     * measurements) silently started life as stack garbage. Callers
+     * declare chanhop_t on the stack, so that is the default. */
+    memset(h, 0, sizeof(*h));
     h->base_dwell_ms = 250;
     h->min_dwell_ms  = 100;
     h->max_dwell_ms  = 2000;
@@ -65,7 +63,9 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
         h->started = 1;
         h->cur = 0;
         h->slots[0].visits++;
-        h->dwell_until_ms = now_ms + dwell_for(h, h->slots[0].activity);
+        h->dwell_planned_ms = dwell_for(h, h->slots[0].activity);
+        h->dwell_began_ms   = now_ms;
+        h->dwell_until_ms   = now_ms + h->dwell_planned_ms;
         return 1;   /* first retune: park on the first channel */
     }
 
@@ -76,10 +76,42 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
      * not hold a long dwell forever. */
     h->slots[h->cur].activity >>= 1;
 
+    /* Close out the dwell that just ended before starting the next.
+     * Measured runs start-of-dwell to start-of-next, so the poll-loop
+     * servicing delay lands inside the figure instead of vanishing. */
+    uint32_t measured = (uint32_t)(now_ms - h->dwell_began_ms);
+    h->last_planned_ms   = h->dwell_planned_ms;
+    h->last_measured_ms  = measured;
+    h->planned_total_ms += h->dwell_planned_ms;
+    h->measured_total_ms += measured;
+    h->dwells_completed++;
+    if (measured > h->dwell_planned_ms) {
+        uint32_t over = measured - h->dwell_planned_ms;
+        if (over > h->worst_overshoot_ms) h->worst_overshoot_ms = over;
+    }
+
     h->cur = (h->cur + 1) % h->count;           /* rotation → guaranteed revisit */
     h->slots[h->cur].visits++;
-    h->dwell_until_ms = now_ms + dwell_for(h, h->slots[h->cur].activity);
+    h->dwell_planned_ms = dwell_for(h, h->slots[h->cur].activity);
+    h->dwell_began_ms   = now_ms;
+    h->dwell_until_ms   = now_ms + h->dwell_planned_ms;
     return 1;
+}
+
+void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!h) return;
+    out->last_planned_ms    = h->last_planned_ms;
+    out->last_measured_ms   = h->last_measured_ms;
+    out->worst_overshoot_ms = h->worst_overshoot_ms;
+    out->completed          = h->dwells_completed;
+    if (h->dwells_completed) {
+        out->mean_planned_ms =
+            (uint32_t)(h->planned_total_ms / h->dwells_completed);
+        out->mean_measured_ms =
+            (uint32_t)(h->measured_total_ms / h->dwells_completed);
+    }
 }
 
 void chanhop_activity(const chanhop_t *h, chanhop_activity_t *out) {
