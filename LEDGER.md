@@ -165,3 +165,4 @@
 | 4536839 | 2026-09-30T17:10:37Z | claude-opus-5 | 66 | 19929 | 7991566 | 31960 | 4.8139 | #91 wave 7: hop activity from mon_frame_total |
 | f992676 | 2026-09-30T17:16:19Z | claude-opus-5 | 24 | 14709 | 3209592 | 16355 | 2.1362 | #91 wave 7: measured vs configured dwell |
 | ba87ab6 | 2026-09-30T17:25:23Z | claude-opus-5 | 42 | 30059 | 6221874 | 40725 | 4.2699 | #45 risk-gate calibration + measurement defects |
+| bf5a23b | 2026-09-30T18:11:24Z | claude-fable-5-1,claude-opus-4-8,claude-opus-5-5 | 164 | 82152 | 8692576 | 635434 | 14.9548 | #103 wiki: complete reference (7 pages) + GitHub auto-sync |
