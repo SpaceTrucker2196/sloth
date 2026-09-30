@@ -158,3 +158,4 @@
 | b12f882 | 2026-09-29T13:25:04Z | claude-opus-5 | 72 | 24364 | 5845540 | 524696 | 8.7792 | #95 — hardened build flags: PIE, full RELRO, SSP, FORTIFY_SOURCE |
 | 321c78c | 2026-09-30T11:24:42Z | claude-opus-5 | 158 | 66069 | 8580093 | 369590 | 9.6385 | #95 — pass CFLAGS to the sloth link so sanitizer builds link |
 | 1304fa6 | 2026-09-30T15:51:22Z | claude-fable-5, claude-opus-5-5 | 86 | 42808 | 4349914 | 159751 | 8.9591 | #95 wave 6: deselect snapshot for the capture callback |
+| 0128ac9 | 2026-09-30T15:57:15Z | claude-fable-5 | 54 | 15572 | 4344168 | 28271 | 5.6887 | #96 wave 6: cannot-persist tab-bar badge |
