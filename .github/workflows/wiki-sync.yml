@@ -1,0 +1,40 @@
+name: wiki-sync
+
+# docs/wiki/ is the source of truth; the GitHub wiki is a render of it.
+# Every push to main that touches a wiki page re-publishes the whole
+# set, so the wiki can never drift from the repo by more than one push.
+# See agents/AGENTS.md "Wiki" and .github/scripts/wiki_sync.sh.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/wiki/**'
+      - '.github/scripts/wiki_sync.sh'
+      - '.github/workflows/wiki-sync.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the wiki
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.wiki.git" \
+            /tmp/wiki
+
+      - name: Render and push
+        env:
+          GIT_AUTHOR_NAME: sloth wiki-sync
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: sh .github/scripts/wiki_sync.sh docs/wiki /tmp/wiki

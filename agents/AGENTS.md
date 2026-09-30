@@ -117,6 +117,33 @@ Single binary `sloth`. Test binary `sloth_test`.
 - **`git add` specific files.** **Never** `git add -A` or `git add .`.
   A local `wifi-sigint/` directory must never be staged or pushed.
 
+## Wiki — keep it complete and synced
+
+`docs/wiki/` is the **complete information source for sloth** and the
+single source of truth. The [GitHub wiki](https://github.com/SpaceTrucker2196/sloth/wiki)
+is a render of it, published by `.github/workflows/wiki-sync.yml` on every
+push to `main` that touches `docs/wiki/**` (script:
+`.github/scripts/wiki_sync.sh`). Never hand-edit the GitHub wiki — it is
+overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
+
+- **A behaviour change updates the wiki in the same change**, the same way
+  a code change ships with its test. Concretely:
+  - new or changed CLI flag / keybinding → `docs/wiki/cli-reference.md`;
+  - new view → `docs/wiki/views-catalog.md` (plus the per-view doc the
+    "add a view" checklist already demands);
+  - new alert → `docs/wiki/alerts.md` (plus the `research/` citation
+    enforced by `tests/test_research_corpus.c`);
+  - new Wi-Fi vulnerability class or 802.11 generation →
+    `docs/wiki/wifi-state-of-the-art.md` (the repo's living Wi-Fi radar);
+  - any new concept page → link it from `docs/wiki/index.md` and append a
+    line to `docs/wiki/log.md`.
+- **Page format** (`docs/CLAUDE.md`): `**Summary**`, `**Sources**`,
+  `**Last updated**`, content, then `## Related pages`.
+- Editing anything under `agents/` scores +40 on the risk gate
+  (`agents/FACTORY.md` §10.3). Editing `docs/wiki/` does not — wiki
+  updates are meant to ride along with the change they document, not to
+  be gated.
+
 ## UI conventions
 
 - Terminal **backgrounds are disabled** — rows render on the terminal

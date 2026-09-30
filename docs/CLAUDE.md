@@ -1,15 +1,23 @@
 # sloth docs wiki — maintenance instructions
 
 `docs/wiki/` is a concept-oriented knowledge base about sloth itself
-(architecture, engines, detectors). Based on the LLM-wiki pattern.
+(architecture, engines, detectors) and the **complete information source
+for sloth**. Based on the LLM-wiki pattern.
+
+**Source of truth.** `docs/wiki/` is authoritative. The
+[GitHub wiki](https://github.com/SpaceTrucker2196/sloth/wiki) is a render
+of it, published automatically by `.github/workflows/wiki-sync.yml` on
+every push to `main` that touches `docs/wiki/**`. Never edit the GitHub
+wiki UI — it is overwritten. Full mechanism: `wiki/wiki-maintenance.md`.
 
 ## Structure
 
 ```
-wiki/          -- concept pages, maintained by agents
-wiki/index.md  -- table of contents for the entire wiki
-wiki/log.md    -- append-only record of all operations
-../views/      -- per-view deep dives; immutable source material here
+wiki/                 -- concept pages, maintained by agents
+wiki/index.md         -- table of contents for the entire wiki
+wiki/wiki-maintenance -- how the wiki stays complete and synced
+wiki/log.md           -- append-only record of all operations
+../views/             -- per-view deep dives; immutable source material here
 ```
 
 ## Rules
@@ -23,6 +31,12 @@ wiki/log.md    -- append-only record of all operations
 - After any change: update `wiki/index.md` and append to `wiki/log.md`.
 - Claims cite their source file (`src/...` or `docs/views/...`); flag
   contradictions between pages explicitly.
+- **Keep it complete and current.** A change to sloth's behaviour updates
+  its wiki page in the *same* change: a new/changed flag → `cli-reference.md`;
+  a new view → `views-catalog.md`; a new alert → `alerts.md`; a new Wi-Fi
+  vulnerability or generation → `wifi-state-of-the-art.md`. This is a
+  standing duty on every agent, not a follow-up. See
+  `wiki/wiki-maintenance.md` and `agents/AGENTS.md` "Wiki".
 
 ## Lint (on request)
 

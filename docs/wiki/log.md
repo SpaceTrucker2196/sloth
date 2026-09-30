@@ -1718,3 +1718,37 @@ say whether the boundary is intact, not whether it is being tested.
   ifindex reused between ticks is admitted until the next
   revalidation — those frames are not scope-boundary refusals and
   correctly don't count here.
+
+## 2026-09-30 — Complete-reference build + GitHub wiki sync (#103)
+
+Seven new concept pages turn the wiki into the complete information
+source for sloth:
+
+- `what-sloth-does.md` — one-screen map: surfaces, 35 views, 61 alerts,
+  outputs, the passive line.
+- `how-wifi-works.md` — 802.11 reference: bands/channels, the three frame
+  classes, discover→auth→assoc→key, security generations, roaming, MAC
+  randomisation, each tied to the sloth view that sees it.
+- `monitor-mode.md` — the four NIC modes, what monitor mode gathers that
+  managed/promiscuous cannot, how to enable it (external), the limits.
+- `where-exploits-happen.md` — attack surface mapped to the join sequence
+  and to each `ALERT_TYPE_*` detector.
+- `wifi-sigint-techniques.md` — six passive collection techniques, each
+  mapped to a view, with the tradecraft/policy limits (incl. #94).
+- `cli-reference.md` — authoritative flags/args/keybindings/env/exit
+  codes from `src/main.c` and `src/view_labels.c`.
+- `wifi-state-of-the-art.md` — living Wi-Fi radar (Wi-Fi 7 MLO, Wi-Fi 8 /
+  802.11bn schedule, WPA3/Dragonblood, FragAttacks, SSID confusion),
+  web-sourced items dated and linked.
+- `wiki-maintenance.md` — source-of-truth + sync mechanism + the standing
+  agent duty.
+
+Sync infrastructure so agents keep the wiki updated automatically:
+`.github/scripts/wiki_sync.sh` renders `docs/wiki/` into `sloth.wiki.git`
+(index→Home, strips front matter, rewrites relative links, generates
+`_Sidebar`/`_Footer`, deletes removed pages); `.github/workflows/
+wiki-sync.yml` runs it on every push to main touching `docs/wiki/**`.
+
+Repo instructions updated: `docs/CLAUDE.md`, `agents/AGENTS.md` (new
+"Wiki" duty section), `README.md` (wiki = complete reference). `index.md`
+gained a "Read this first" section linking all seven.

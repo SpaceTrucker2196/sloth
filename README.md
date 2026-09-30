@@ -35,6 +35,13 @@ and an optional JSONL forensic log.
 file explains the protocol, shows a text mockup, and lists what to watch
 for in normal vs anomalous traffic.
 
+📚 **The complete reference is the [wiki](https://github.com/SpaceTrucker2196/sloth/wiki)** —
+how Wi-Fi works, what sloth does, where exploits happen, monitor mode and
+what it gathers, passive Wi-Fi SIGINT techniques, the full CLI reference,
+and a living overview of the state of the art in Wi-Fi tech. The wiki is
+authored in [`docs/wiki/`](docs/wiki/) (source of truth) and mirrored to
+GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
+
 > **v1.1 — WiFi SIGINT** — sloth gained six new wireless capabilities
 > on top of the v1.0 monitor: [PNL aggregation](docs/views/pnl.md) per
 > client MAC, RSN / cipher / AKM / MFP inventory from beacons,

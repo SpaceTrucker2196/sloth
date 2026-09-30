@@ -4,6 +4,24 @@ Table of contents for the sloth wiki. Pages are concept-oriented; raw
 per-view documentation lives in `../views/` and is treated as immutable
 source material.
 
+**This wiki is the complete information source for sloth.** It is
+mirrored to the [GitHub wiki](https://github.com/SpaceTrucker2196/sloth/wiki)
+automatically — `docs/wiki/` is the source of truth, the GitHub wiki is a
+render of it (see [[wiki-maintenance]]). Edit here, never there.
+
+## Read this first — the complete reference
+
+The six pages that make this a from-scratch reference to sloth and to
+the Wi-Fi it watches:
+
+- [[what-sloth-does]] — the whole tool on one screen: surfaces, views, alerts, outputs, and the line it never crosses.
+- [[how-wifi-works]] — 802.11 from the radio up: bands, frames, the join sequence, security generations, roaming, MAC randomisation.
+- [[monitor-mode]] — the capability that unlocks the Wi-Fi frame classes, what it gathers, its limits.
+- [[where-exploits-happen]] — the 802.11 attack surface mapped to the join sequence and to each detector.
+- [[wifi-sigint-techniques]] — common passive Wi-Fi SIGINT techniques, defender-side.
+- [[cli-reference]] — every flag, argument, keybinding, env var and exit code.
+- [[wifi-state-of-the-art]] — living overview of Wi-Fi tech and security research (Wi-Fi 7 / 8).
+
 ## Start here
 
 - [[sloth]] — what sloth is, what it explicitly never does.
@@ -97,6 +115,7 @@ source material.
 ## Reference
 
 - [[attack-map]] — threat class → entry-point view.
+- [[cli-reference]] — the authoritative flag / keybinding / exit-code list.
 - [personas/](../personas/README.md) — operator personas and their
   scenario suites; the inspection step for operator experience, the way
   `make test` is the inspection step for correctness.
@@ -113,6 +132,8 @@ Raw source documents (treat as immutable):
 
 ## Maintenance
 
+- [[wiki-maintenance]] — how the wiki is kept complete and synced to
+  GitHub, and the standing duty on every agent that touches sloth.
 - [log.md](log.md) — append-only record of wiki operations.
 - All page names are lowercase with hyphens (e.g. `mac-randomisation.md`).
 - Cross-link with `[[page-name]]` wherever a concept is referenced.
