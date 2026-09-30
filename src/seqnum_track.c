@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "seqnum_track.h"
+#include "sensor_health.h"
 
 static seqnum_client_t g_tbl[MAX_SEQNUM_CLIENTS];
 static int             g_n   = 0;
@@ -47,6 +48,7 @@ void seqnum_track_observe_at(const uint8_t mac[6], uint16_t seqnum, time_t now)
             for (int i = 1; i < g_n; i++)
                 if (g_tbl[i].last_seen < g_tbl[idx].last_seen) idx = i;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));
+            sh_evict_note(SH_EVICT_SEQNUM_CLIENT);   /* #91 wave 6 */
         } else {
             idx = g_n++;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));

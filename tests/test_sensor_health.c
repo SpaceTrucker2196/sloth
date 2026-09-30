@@ -8,6 +8,9 @@
 #include "alerts.h"
 #include "top_hosts.h"
 #include "devices.h"
+#include "beacon_snoop.h"
+#include "seqnum_track.h"
+#include "assoc_track.h"
 
 /* ── Table-overflow accounting — issue #91 slice 3 ──────────
  *
@@ -66,6 +69,10 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_DHCP_EVENT),  "dhcp_event");
     ASSERT_STR(sh_evict_name(SH_EVICT_EAP_SESSION), "eap_session");
     ASSERT_STR(sh_evict_name(SH_EVICT_DEVICE),      "device");
+    ASSERT_STR(sh_evict_name(SH_EVICT_BEACON_AP),     "beacon_ap");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SEQNUM_CLIENT), "seqnum_client");
+    ASSERT_STR(sh_evict_name(SH_EVICT_ASSOC_PAIR),    "assoc_pair");
+    ASSERT_STR(sh_evict_name(SH_EVICT_ASSOC_REQ),     "assoc_req");
     ASSERT_STR(sh_evict_name((sh_evict_t)SH_EVICT_KIND_COUNT), "");
     /* Every kind must have a name — an unnamed bucket emits "" into the
      * record, which a consumer reads as a missing field. */
@@ -187,6 +194,77 @@ static void test_alert_overflow_is_counted(void) {
     free(s);
 }
 
+/* ââ wiring: beacon / seqnum / assoc tables (#91 wave 6) âââ */
+
+static void test_beacon_table_overflow_is_counted(void) {
+    beacon_clear();
+    sh_evict_reset();
+    uint8_t bssid[6] = {0x02, 0, 0, 0, 0, 0};
+    for (int i = 0; i < MAX_BEACON_APS + 3; i++) {
+        bssid[4] = (uint8_t)(i >> 8);
+        bssid[5] = (uint8_t)i;
+        beacon_record(bssid, "net", -40, 6, "wpa2", 100, NULL);
+    }
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_BEACON_AP), 3);
+    /* Updating a known AP must not evict. */
+    beacon_record(bssid, "net", -40, 6, "wpa2", 100, NULL);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_BEACON_AP), 3);
+    beacon_clear();
+    sh_evict_reset();
+}
+
+static void test_seqnum_table_overflow_is_counted(void) {
+    seqnum_clear();
+    sh_evict_reset();
+    uint8_t mac[6] = {0x02, 1, 0, 0, 0, 0};
+    for (int i = 0; i < MAX_SEQNUM_CLIENTS + 2; i++) {
+        mac[4] = (uint8_t)(i >> 8);
+        mac[5] = (uint8_t)i;
+        seqnum_track_observe_at(mac, (uint16_t)i, (time_t)(1000 + i));
+    }
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_SEQNUM_CLIENT), 2);
+    seqnum_track_observe_at(mac, 9, (time_t)9999);   /* known: no evict */
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_SEQNUM_CLIENT), 2);
+    seqnum_clear();
+    sh_evict_reset();
+}
+
+static void test_assoc_tables_overflow_is_counted(void) {
+    assoc_clear();
+    sh_evict_reset();
+    uint8_t bssid[6] = {0x02, 2, 0, 0, 0, 0};
+    uint8_t sta[6]   = {0x02, 3, 0, 0, 0, 0};
+    for (int i = 0; i < MAX_ASSOC_ENTRIES + 4; i++) {
+        sta[4] = (uint8_t)(i >> 8);
+        sta[5] = (uint8_t)i;
+        assoc_observe(bssid, sta, "net", 0, -40, 6);
+    }
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
+    /* Re-observing a resident pair must not evict. */
+    assoc_observe(bssid, sta, "net", 0, -40, 6);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
+    assoc_clear();
+    sh_evict_reset();
+}
+
+static void test_assoc_request_table_overflow_is_counted(void) {
+    assoc_clear();
+    sh_evict_reset();
+    assoc_req_t req;
+    memset(&req, 0, sizeof(req));
+    req.bssid[0] = 0x02;
+    req.sta[0]   = 0x02;
+    for (int i = 0; i < MAX_ASSOC_ENTRIES + 2; i++) {
+        req.sta[4] = (uint8_t)(i >> 8);
+        req.sta[5] = (uint8_t)i;
+        req.ts     = (time_t)(1000 + i);
+        assoc_request_observe(&req, -40, 6);
+    }
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_REQ), 2);
+    assoc_clear();
+    sh_evict_reset();
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -200,6 +278,10 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_pnl_client_overflow_is_counted);
     RUN_TEST(test_top_host_overflow_is_counted);
     RUN_TEST(test_device_table_refusal_is_counted);
+    RUN_TEST(test_beacon_table_overflow_is_counted);
+    RUN_TEST(test_seqnum_table_overflow_is_counted);
+    RUN_TEST(test_assoc_tables_overflow_is_counted);
+    RUN_TEST(test_assoc_request_table_overflow_is_counted);
     RUN_TEST(test_alert_overflow_is_counted);
 
     sh_evict_reset();   /* leave the tally clean for later suites */

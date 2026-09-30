@@ -1091,6 +1091,11 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"evict_alert\":1"));
     ASSERT(contains(body, "\"evict_pnl_ssid\":2"));
     ASSERT(contains(body, "\"evict_device\":0"));
+    /* #91 wave 6: the beacon/seqnum/assoc kinds ride the same loop. */
+    ASSERT(contains(body, "\"evict_beacon_ap\":0"));
+    ASSERT(contains(body, "\"evict_seqnum_client\":0"));
+    ASSERT(contains(body, "\"evict_assoc_pair\":0"));
+    ASSERT(contains(body, "\"evict_assoc_req\":0"));
     sh_evict_reset();
 }
 

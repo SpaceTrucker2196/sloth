@@ -6,6 +6,7 @@
 #include "probe_pnl.h"
 #include "mle.h"
 #include "beacon_snoop.h"
+#include "sensor_health.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -180,6 +181,7 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
             idx = 0;
             for (int i = 1; i < g_req_n; i++)
                 if (g_req[i].ts < g_req[idx].ts) idx = i;
+            sh_evict_note(SH_EVICT_ASSOC_REQ);   /* #91 wave 6 */
         }
     }
     /* Compare against the ask this one replaces, before overwriting.
@@ -382,6 +384,7 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
             for (int i = 1; i < g_n; i++)
                 if (g_tbl[i].last_seen < g_tbl[idx].last_seen) idx = i;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));
+            sh_evict_note(SH_EVICT_ASSOC_PAIR);   /* #91 wave 6 */
         } else {
             idx = g_n++;
             memset(&g_tbl[idx], 0, sizeof(g_tbl[idx]));

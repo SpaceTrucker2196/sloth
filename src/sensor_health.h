@@ -18,10 +18,11 @@
  * question a consumer asks is "is this sensor losing observations at
  * all", and a monotonic lifetime count answers it from any two samples.
  *
- * Counted tables are exactly the ones listed below. Others (the beacon,
- * seqnum, assoc and per-protocol flow rings) are not instrumented yet —
- * stating which are covered is the point, since a tally that silently
- * omits a table reads as "no loss" when it means "not measured".
+ * Counted tables are exactly the ones listed below. Others (the
+ * per-protocol flow rings) are not instrumented yet — stating which
+ * are covered is the point, since a tally that silently omits a table
+ * reads as "no loss" when it means "not measured". The beacon, seqnum
+ * and assoc tables joined the tally in the #91 wave-6 slice.
  *
  * Thread safety: the probe-side tables are written from the capture
  * threads and the rest from the poll loop, so the tally takes a mutex.
@@ -35,6 +36,10 @@ typedef enum {
     SH_EVICT_DHCP_EVENT,    /* src/dhcp_snoop.c — oldest DHCP client dropped */
     SH_EVICT_EAP_SESSION,   /* src/eap_track.c — oldest 802.1X conversation dropped */
     SH_EVICT_DEVICE,        /* src/devices.c — a NEW device refused (drop-on-full, not LRU) */
+    SH_EVICT_BEACON_AP,     /* src/beacon_snoop.c — oldest AP record dropped */
+    SH_EVICT_SEQNUM_CLIENT, /* src/seqnum_track.c — least-recently-seen client dropped */
+    SH_EVICT_ASSOC_PAIR,    /* src/assoc_track.c — oldest (BSSID,STA) grant pair dropped */
+    SH_EVICT_ASSOC_REQ,     /* src/assoc_track.c — oldest pending assoc request dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -48,7 +53,8 @@ uint64_t sh_evict_total(void);
 
 /* Stable lower-case name, part of the `sensor_health` JSONL contract:
  * "alert", "top_host", "pnl_client", "pnl_ssid", "dhcp_event",
- * "eap_session", "device". Unknown kinds return "". */
+ * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
+ * "assoc_req". Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
 /* Zero every tally. For tests — nothing in the running binary resets

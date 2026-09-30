@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "sloth.h"
 #include "beacon_snoop.h"
+#include "sensor_health.h"
 #include "wifi_oui_attacker.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
@@ -1119,6 +1120,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                 slot   = i;
             }
         }
+        sh_evict_note(SH_EVICT_BEACON_AP);   /* #91 wave 6 */
     }
 
     note_new_bssid(now);   /* beacon-flood rate signal (roadmap B4) */
