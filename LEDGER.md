@@ -160,3 +160,4 @@
 | 1304fa6 | 2026-09-30T15:51:22Z | claude-fable-5, claude-opus-5-5 | 86 | 42808 | 4349914 | 159751 | 8.9591 | #95 wave 6: deselect snapshot for the capture callback |
 | 0128ac9 | 2026-09-30T15:57:15Z | claude-fable-5 | 54 | 15572 | 4344168 | 28271 | 5.6887 | #96 wave 6: cannot-persist tab-bar badge |
 | 4dd0512 | 2026-09-30T16:02:19Z | claude-fable-5 | 38 | 13023 | 3538398 | 22943 | 4.6488 | #91 wave 6: beacon/seqnum/assoc eviction tally |
+| c51a718 | 2026-09-30T16:06:37Z | claude-fable-5 | 24 | 10374 | 2466476 | 15159 | 3.2886 | #82 wave 6: AP-Setup-Locked transition ring |
