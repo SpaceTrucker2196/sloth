@@ -156,3 +156,4 @@
 | cb19f70 | 2026-09-28T13:38:41Z | claude-opus-5 | 84 | 22624 | 5054980 | 494616 | 8.0397 | #85 wave 8 — out-of-scope drop counter |
 | 6ff3385 | 2026-09-29T11:30:55Z | claude-opus-5 | 198 | 112378 | 13081780 | 382555 | 13.1769 | #101 slice 1 — regulatory IE parsers (Country/Power Constraint/TPC), inert |
 | b12f882 | 2026-09-29T13:25:04Z | claude-opus-5 | 72 | 24364 | 5845540 | 524696 | 8.7792 | #95 — hardened build flags: PIE, full RELRO, SSP, FORTIFY_SOURCE |
+| 321c78c | 2026-09-30T11:24:42Z | claude-opus-5 | 158 | 66069 | 8580093 | 369590 | 9.6385 | #95 — pass CFLAGS to the sloth link so sanitizer builds link |
