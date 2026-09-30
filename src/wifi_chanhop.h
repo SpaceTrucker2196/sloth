@@ -28,6 +28,14 @@ typedef struct {
     int      channel;    /* 802.11 channel number */
     int      freq_mhz;   /* center frequency (for nl80211 SET_CHANNEL) */
     uint32_t activity;   /* rolling observation count; decays each cycle */
+    /* Lifetime hop-activity accounting (#91). `activity` above is the
+     * scheduler's own decaying input and answers "where should I spend
+     * airtime"; these never decay and answer the operator's question
+     * instead — "is this radio actually visiting this channel, and does
+     * anything live there". A channel with visits but no frames across
+     * a whole run is the shape of a retune that silently didn't take. */
+    uint32_t visits;     /* dwells begun on this channel */
+    uint64_t frames;     /* monitor frames attributed to those dwells */
 } chanhop_slot_t;
 
 typedef struct {
@@ -54,8 +62,28 @@ int chanhop_init(chanhop_t *h, const int *channels, int n);
 /* Initialise with the built-in safe 2.4/5 GHz list (1,6,11 + common UNII). */
 int chanhop_init_default(chanhop_t *h);
 
-/* Record activity observed on the current channel during this poll. */
+/* Record activity observed on the current channel during this poll.
+ *
+ * The caller must pass frames heard by the MONITOR radio, not the
+ * general capture counter: until #91 this was fed s->pkt_total, so
+ * traffic on a wired management interface lengthened the dwell of
+ * whatever channel the radio happened to be parked on. Feeds both the
+ * decaying scheduler input and the lifetime per-channel tally. */
 void chanhop_observe(chanhop_t *h, uint32_t observations);
+
+/* Hop-activity summary (#91) — enough to tell "hopping normally" from
+ * "stuck" or "tuned but deaf", without exporting a per-channel array.
+ * Pure; safe on a NULL/empty scheduler (all zeroes). */
+typedef struct {
+    int      channels;        /* channels in the rotation */
+    uint32_t visits;          /* dwells begun, all channels, lifetime */
+    uint64_t frames;          /* monitor frames attributed, lifetime */
+    int      silent_channels; /* visited at least once, never heard a frame */
+    uint32_t cur_visits;      /* visits to the channel dwelt on now */
+    uint64_t cur_frames;      /* frames attributed to it */
+} chanhop_activity_t;
+
+void chanhop_activity(const chanhop_t *h, chanhop_activity_t *out);
 
 /* Advance the dwell clock. Returns 1 when the caller should retune the
  * radio to chanhop_current_freq() (first call, or the dwell elapsed);

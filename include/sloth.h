@@ -2448,6 +2448,19 @@ typedef struct {
     int            scan_chans[32];
     int            scan_chan_count;
     int            scan_cur_idx;    /* index of the current channel, -1 = none */
+    /* Hop-activity summary (#91), refreshed by chanhop_drive() each
+     * poll while --hop is on; all zeroes otherwise. Answers whether the
+     * radio is really rotating and whether the channels it visits ever
+     * produce frames. chanhop_activity_t, declared in wifi_chanhop.h —
+     * kept as plain fields here so sloth.h does not depend on it. */
+    struct {
+        int      channels;
+        uint32_t visits;
+        uint64_t frames;
+        int      silent_channels;
+        uint32_t cur_visits;
+        uint64_t cur_frames;
+    } hop_activity;
     /* Requested vs confirmed monitor-radio channel (#91 slice 1):
      * chanhop_drive() used to call set_channel() without consuming its
      * return code, so the UI showed the intended channel even when the

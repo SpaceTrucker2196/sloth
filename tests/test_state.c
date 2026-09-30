@@ -596,6 +596,31 @@ void test_health_strip_reports_retune_failures(void) {
     ASSERT_STR(buf, "  health: cap up  mon up  retune-fail 3");
 }
 
+void test_health_strip_reports_silent_hop_channels(void) {
+    /* #91: a retune that reports success but does not take leaves the
+       scan bar looking normal — the bracket moves either way — and only
+       shows up as a channel that is visited and never hears anything. */
+    sloth_state_t s = make_healthy_sensor_state();
+    sh_evict_reset();
+    s.hop_activity.channels        = 4;
+    s.hop_activity.silent_channels = 2;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  hop silent 2/4");
+}
+
+void test_health_strip_quiet_when_every_hop_channel_hears(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    sh_evict_reset();
+    s.hop_activity.channels        = 4;
+    s.hop_activity.silent_channels = 0;
+    s.hop_activity.visits          = 40;
+    s.hop_activity.frames          = 9001;
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+}
+
 void test_health_strip_reports_evictions(void) {
     sloth_state_t s = make_healthy_sensor_state();
     sh_evict_reset();
@@ -808,6 +833,8 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_reports_drops_per_stream);
     RUN_TEST(test_health_strip_zero_drops_are_not_shown);
     RUN_TEST(test_health_strip_reports_retune_failures);
+    RUN_TEST(test_health_strip_reports_silent_hop_channels);
+    RUN_TEST(test_health_strip_quiet_when_every_hop_channel_hears);
     RUN_TEST(test_health_strip_reports_evictions);
     RUN_TEST(test_health_strip_enforced_scope_is_quiet);
     RUN_TEST(test_health_strip_reports_degraded_scope);

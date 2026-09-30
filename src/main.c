@@ -140,8 +140,14 @@ static void chanhop_drive(sloth_state_t *s) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-    chanhop_observe(&g_chanhop, (uint32_t)(s->pkt_total - last_total));
-    last_total = s->pkt_total;
+    /* #91: the monitor radio's own frame counter, not s->pkt_total.
+     * The general capture counter includes every other interface, so a
+     * busy wired management port used to lengthen the dwell of whatever
+     * channel the radio happened to be parked on — the RF heuristic was
+     * being steered by traffic that never touched the air. */
+    uint64_t mon_total = mon_frame_total();
+    chanhop_observe(&g_chanhop, (uint32_t)(mon_total - last_total));
+    last_total = mon_total;
     if (chanhop_tick(&g_chanhop, now_ms)) {
         /* #91 slice 1: consume the retune result instead of discarding it —
          * a failed set_channel() used to leave the UI showing the intended
@@ -157,6 +163,19 @@ static void chanhop_drive(sloth_state_t *s) {
     s->scan_chan_count = chanhop_export(&g_chanhop, s->scan_chans,
                                         (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),
                                         &s->scan_cur_idx);
+    /* #91: and the hop-activity summary, so "visiting but deaf" is
+     * separable from "not hopping" in the log and the view. Copied
+     * field by field rather than memcpy'd: sloth.h deliberately does
+     * not include wifi_chanhop.h, so the two structs are distinct
+     * types that happen to agree. */
+    chanhop_activity_t ha;
+    chanhop_activity(&g_chanhop, &ha);
+    s->hop_activity.channels        = ha.channels;
+    s->hop_activity.visits          = ha.visits;
+    s->hop_activity.frames          = ha.frames;
+    s->hop_activity.silent_channels = ha.silent_channels;
+    s->hop_activity.cur_visits      = ha.cur_visits;
+    s->hop_activity.cur_frames      = ha.cur_frames;
 }
 #endif
 

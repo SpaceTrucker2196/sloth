@@ -1792,6 +1792,21 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_int(buf, LINEBUF, &off, "chan_confirmed",       s->chan_confirmed);
     kv_int(buf, LINEBUF, &off, "chan_confirmed_ok",    chan_ok);
     kv_int(buf, LINEBUF, &off, "chan_retune_failures", s->chan_retune_failures);
+    /* Hop activity (#91). hop_channels == 0 means --hop is off, which is
+     * why the visit/frame counters are emitted unconditionally rather
+     * than suppressed when zero: absent fields would read as "hopping,
+     * nothing heard" to a consumer that cannot see the flags. */
+    kv_int(buf, LINEBUF, &off, "hop_channels", s->hop_activity.channels);
+    kv_int(buf, LINEBUF, &off, "hop_visits",
+           (long long)s->hop_activity.visits);
+    kv_int(buf, LINEBUF, &off, "hop_frames",
+           (long long)s->hop_activity.frames);
+    kv_int(buf, LINEBUF, &off, "hop_silent_channels",
+           s->hop_activity.silent_channels);
+    kv_int(buf, LINEBUF, &off, "hop_cur_visits",
+           (long long)s->hop_activity.cur_visits);
+    kv_int(buf, LINEBUF, &off, "hop_cur_frames",
+           (long long)s->hop_activity.cur_frames);
     health_kv(buf, &off, "capture", &s->cap_health);
     health_kv(buf, &off, "monitor", &s->mon_health);
     kv_int(buf, LINEBUF, &off, "evictions", (long long)evict_total);

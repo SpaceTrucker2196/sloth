@@ -426,6 +426,13 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     uint64_t ev = sh_evict_total();
     if (ev)
         strip_addf(buf, sz, &off, "  evict %llu", (unsigned long long)ev);
+    /* #91: channels the hopper visits but never hears anything on. A
+     * retune that reports success and does not take leaves exactly this
+     * trace, and it is invisible in the scan bar — the bracket moves
+     * either way. Only ever shown while hopping (channels > 0). */
+    if (s->hop_activity.silent_channels)
+        strip_addf(buf, sz, &off, "  hop silent %d/%d",
+                   s->hop_activity.silent_channels, s->hop_activity.channels);
     /* #85: a requested scope that is not being served. Fail-closed keeps
      * out-of-scope traffic out either way; this is what stops a replugged
      * adapter from going quiet with no explanation. */

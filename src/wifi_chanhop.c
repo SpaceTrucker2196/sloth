@@ -1,4 +1,5 @@
 #include "wifi_chanhop.h"
+#include <string.h>
 
 /* Safe default channel list: the three non-overlapping 2.4 GHz channels
  * plus the common UNII-1 / UNII-3 5 GHz channels. Deliberately conservative
@@ -22,11 +23,11 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
 
 int chanhop_init(chanhop_t *h, const int *channels, int n) {
     if (!h) return 0;
-    /* zero everything, then set tunables */
-    for (int i = 0; i < CHANHOP_MAX; i++) {
-        h->slots[i].channel = h->slots[i].freq_mhz = 0;
-        h->slots[i].activity = 0;
-    }
+    /* Zero every slot wholesale, not field by field: this loop used to
+     * name three members and the #91 visit/frame counters were left
+     * holding stack garbage, which is a trap any future slot field
+     * would fall into the same way. */
+    memset(h->slots, 0, sizeof(h->slots));
     h->count = h->cur = 0;
     h->dwell_until_ms = 0;
     h->started = 0;
@@ -54,6 +55,7 @@ int chanhop_init_default(chanhop_t *h) {
 void chanhop_observe(chanhop_t *h, uint32_t observations) {
     if (!h || h->count == 0) return;
     h->slots[h->cur].activity += observations;
+    h->slots[h->cur].frames   += observations;
 }
 
 int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
@@ -62,6 +64,7 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
     if (!h->started) {
         h->started = 1;
         h->cur = 0;
+        h->slots[0].visits++;
         h->dwell_until_ms = now_ms + dwell_for(h, h->slots[0].activity);
         return 1;   /* first retune: park on the first channel */
     }
@@ -74,8 +77,27 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
     h->slots[h->cur].activity >>= 1;
 
     h->cur = (h->cur + 1) % h->count;           /* rotation → guaranteed revisit */
+    h->slots[h->cur].visits++;
     h->dwell_until_ms = now_ms + dwell_for(h, h->slots[h->cur].activity);
     return 1;
+}
+
+void chanhop_activity(const chanhop_t *h, chanhop_activity_t *out) {
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!h || h->count == 0) return;
+    out->channels = h->count;
+    for (int i = 0; i < h->count; i++) {
+        out->visits += h->slots[i].visits;
+        out->frames += h->slots[i].frames;
+        /* Only a channel that was actually visited can be silent; an
+         * unvisited one is simply not measured yet, and counting it
+         * would make every fresh run look deaf. */
+        if (h->slots[i].visits > 0 && h->slots[i].frames == 0)
+            out->silent_channels++;
+    }
+    out->cur_visits = h->slots[h->cur].visits;
+    out->cur_frames = h->slots[h->cur].frames;
 }
 
 int chanhop_current_channel(const chanhop_t *h) {

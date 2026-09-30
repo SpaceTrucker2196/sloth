@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "wifi_chanhop.h"
+#include <string.h>
 
 /* Channel → frequency mapping across both supported bands. */
 static void test_freq_mapping(void) {
@@ -168,6 +169,83 @@ static void test_retune_null_outputs_do_not_crash(void) {
     chanhop_record_retune(11, 0, NULL, NULL, NULL);
 }
 
+/* ââ hop activity (#91 wave 7) âââââââââââââââââââââ */
+
+static void test_activity_counts_visits_and_frames(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6, 11 };
+    chanhop_init(&h, chans, 3);
+    chanhop_activity_t a;
+
+    /* Before the first tick nothing has been visited. */
+    chanhop_activity(&h, &a);
+    ASSERT_EQ(a.channels, 3);
+    ASSERT_EQ((long long)a.visits, 0);
+    ASSERT_EQ((long long)a.frames, 0);
+    ASSERT_EQ(a.silent_channels, 0);   /* unvisited != silent */
+
+    uint64_t t = 0;
+    chanhop_tick(&h, t);               /* -> ch 1, visit 1 */
+    chanhop_observe(&h, 40);
+    t += 250; chanhop_tick(&h, t);     /* -> ch 6, visit 2 */
+    chanhop_observe(&h, 2);
+    chanhop_activity(&h, &a);
+    ASSERT_EQ((long long)a.visits, 2);
+    ASSERT_EQ((long long)a.frames, 42);
+    ASSERT_EQ((long long)a.cur_visits, 1);
+    ASSERT_EQ((long long)a.cur_frames, 2);
+    ASSERT_EQ(a.silent_channels, 0);
+}
+
+static void test_activity_frames_survive_decay(void) {
+    /* The scheduler's `activity` halves each time it leaves a channel;
+       the lifetime frame tally must not, or the operator's "did this
+       channel ever produce anything" answer would erode on its own. */
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    chanhop_init(&h, chans, 2);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);
+    chanhop_observe(&h, 100);
+    for (int i = 0; i < 4; i++) { t += 2000; chanhop_tick(&h, t); }
+    chanhop_activity_t a;
+    chanhop_activity(&h, &a);
+    ASSERT_EQ((long long)a.frames, 100);
+}
+
+static void test_activity_flags_silent_visited_channel(void) {
+    /* The "tuned but deaf" shape: every channel visited, one of them
+       never producing a frame. */
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    chanhop_init(&h, chans, 2);
+    uint64_t t = 0;
+    chanhop_tick(&h, t);               /* -> ch 1 */
+    chanhop_observe(&h, 7);
+    t += 2000; chanhop_tick(&h, t);    /* -> ch 6, hears nothing */
+    chanhop_activity_t a;
+    chanhop_activity(&h, &a);
+    ASSERT_EQ(a.silent_channels, 1);
+    ASSERT_EQ((long long)a.cur_frames, 0);
+    ASSERT_GT((long long)a.cur_visits, 0);
+    /* Once it hears something it is no longer silent. */
+    chanhop_observe(&h, 1);
+    chanhop_activity(&h, &a);
+    ASSERT_EQ(a.silent_channels, 0);
+}
+
+static void test_activity_null_and_empty_are_zero(void) {
+    chanhop_activity_t a;
+    chanhop_activity(NULL, &a);
+    ASSERT_EQ(a.channels, 0);
+    ASSERT_EQ((long long)a.visits, 0);
+    chanhop_t h;
+    memset(&h, 0, sizeof(h));
+    chanhop_activity(&h, &a);          /* initialised but no channels */
+    ASSERT_EQ(a.channels, 0);
+    chanhop_activity(&h, NULL);        /* no crash */
+}
+
 void run_chanhop_tests(void) {
     TEST_SUITE("wifi channel hopper");
     RUN_TEST(test_export);
@@ -182,4 +260,10 @@ void run_chanhop_tests(void) {
     RUN_TEST(test_retune_failure_leaves_confirmed_behind);
     RUN_TEST(test_retune_failures_accumulate_across_successes);
     RUN_TEST(test_retune_null_outputs_do_not_crash);
+
+    TEST_SUITE("wifi channel hopper: hop activity (#91)");
+    RUN_TEST(test_activity_counts_visits_and_frames);
+    RUN_TEST(test_activity_frames_survive_decay);
+    RUN_TEST(test_activity_flags_silent_visited_channel);
+    RUN_TEST(test_activity_null_and_empty_are_zero);
 }
