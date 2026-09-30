@@ -2694,6 +2694,90 @@ static void test_tbtt_end_to_end_from_parsed_frames(void) {
     ASSERT(mean == 0);
 }
 
+/* ââ AP Setup Locked transition ring (#82, wave 6) âââââââââ */
+
+static void wps_lock_record(const uint8_t *bssid, int locked) {
+    beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));
+    rsn.has_wps    = 1;
+    rsn.wps_state  = 2;
+    rsn.wps_locked = locked;
+    beacon_record(bssid, "WpsNet", -50, 6, "WPA2", 102, &rsn);
+}
+
+static const beacon_ap_t *wps_lock_ap(const uint8_t *bssid) {
+    static sloth_state_t st;
+    beacon_snapshot(&st);
+    for (int i = 0; i < st.beacon_count; i++)
+        if (memcmp(st.beacon_aps[i].bssid, bssid, 6) == 0)
+            return &st.beacon_aps[i];
+    return NULL;
+}
+
+static void test_wps_lock_transitions_recorded(void) {
+    beacon_clear();
+    wps_lock_record(BSSID_A, 1);          /* first sight: baseline, no transition */
+    wps_lock_record(BSSID_A, 2);          /* unlocked -> locked */
+    wps_lock_record(BSSID_A, 2);          /* unchanged: no entry */
+    wps_lock_record(BSSID_A, 1);          /* locked -> unlocked = one cycle */
+    const beacon_ap_t *ap = wps_lock_ap(BSSID_A);
+    ASSERT(ap != NULL);
+    ASSERT_EQ(ap->wps_lock_n, 2);
+    ASSERT_EQ(ap->wps_lock_cycles, 1);
+    ASSERT_EQ(ap->wps_lock_to[0], 2);
+    ASSERT_EQ(ap->wps_lock_to[1], 1);
+    ASSERT(ap->wps_lock_ts[0] != 0);
+    beacon_clear();
+}
+
+static void test_wps_lock_unknown_never_transitions(void) {
+    beacon_clear();
+    /* A beacon omitting the attribute (0) is not a state change, in
+       either direction. */
+    wps_lock_record(BSSID_A, 0);
+    wps_lock_record(BSSID_A, 2);          /* unknown -> locked: baseline only */
+    wps_lock_record(BSSID_A, 0);          /* attribute dropped: nothing */
+    wps_lock_record(BSSID_A, 2);          /* still locked: nothing */
+    const beacon_ap_t *ap = wps_lock_ap(BSSID_A);
+    ASSERT(ap != NULL);
+    ASSERT_EQ(ap->wps_lock_n, 0);
+    ASSERT_EQ(ap->wps_lock_cycles, 0);
+    beacon_clear();
+}
+
+static void test_wps_lock_ring_bounds_and_lifetime_count(void) {
+    beacon_clear();
+    wps_lock_record(BSSID_A, 1);
+    /* 6 full lock/unlock cycles = 12 transitions through an 8-slot
+       ring: the lifetime counters keep counting, the ring wraps. */
+    for (int c = 0; c < 6; c++) {
+        wps_lock_record(BSSID_A, 2);
+        wps_lock_record(BSSID_A, 1);
+    }
+    const beacon_ap_t *ap = wps_lock_ap(BSSID_A);
+    ASSERT(ap != NULL);
+    ASSERT_EQ(ap->wps_lock_n, 12);
+    ASSERT_EQ(ap->wps_lock_cycles, 6);
+    /* Ring holds the last 8; slot for transition #12 is index 11%8=3,
+       and the alternation is preserved in the wrapped window. */
+    ASSERT_EQ(ap->wps_lock_to[3], 1);
+    ASSERT_EQ(ap->wps_lock_to[2], 2);
+    beacon_clear();
+}
+
+static void test_wps_lock_rings_are_per_bssid(void) {
+    beacon_clear();
+    wps_lock_record(BSSID_A, 1);
+    wps_lock_record(BSSID_B, 2);
+    wps_lock_record(BSSID_A, 2);
+    const beacon_ap_t *a = wps_lock_ap(BSSID_A);
+    const beacon_ap_t *b = wps_lock_ap(BSSID_B);
+    ASSERT(a != NULL && b != NULL);
+    ASSERT_EQ(a->wps_lock_n, 1);
+    ASSERT_EQ(b->wps_lock_n, 0);
+    beacon_clear();
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -2845,4 +2929,10 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_tbtt_is_per_bssid);
     RUN_TEST(test_tbtt_jitter_needs_two_samples);
     RUN_TEST(test_tbtt_end_to_end_from_parsed_frames);
+
+    TEST_SUITE("beacon snoop: AP Setup Locked transitions (#82)");
+    RUN_TEST(test_wps_lock_transitions_recorded);
+    RUN_TEST(test_wps_lock_unknown_never_transitions);
+    RUN_TEST(test_wps_lock_ring_bounds_and_lifetime_count);
+    RUN_TEST(test_wps_lock_rings_are_per_bssid);
 }

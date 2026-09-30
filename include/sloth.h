@@ -1110,6 +1110,7 @@ typedef struct {
 
 /* ── Beacon APs (passively observed 802.11 access points) ── */
 #define MAX_BEACON_APS  256
+#define WPS_LOCK_RING   8   /* AP-Setup-Locked transitions kept per AP (#82) */
 #define BEACON_AGE_SECS 300
 
 /* AP fingerprint — auxiliary fields harvested from beacon frames that
@@ -1326,6 +1327,21 @@ typedef struct {
      * now; not sticky, so it clears once the beacon stops carrying it. */
     uint16_t wps_config_methods;
     uint16_t wps_device_pwd_id;
+    /* AP Setup Locked transition history (#82, wave-6 measurement).
+     * Ring of the last WPS_LOCK_RING transitions between *known* lock
+     * states with observation timestamps (wps_lock_to[i] is the state
+     * entered: 1=unlocked, 2=locked; ring index = n % WPS_LOCK_RING),
+     * plus a lifetime completed locked->unlocked cycle count. A
+     * Reaver-style brute force trips AP lockout repeatedly, so the
+     * sawtooth is attack evidence even when the PIN attempts
+     * themselves were missed. Recording only — the
+     * WPS_LOCKOUT_CYCLING rule (owner-accepted threshold 2026-09-30:
+     * >=2 cycles/hr, configurable) is a later slice, and adding the
+     * ALERT_TYPE_* before its research-corpus source would go red. */
+    time_t   wps_lock_ts[WPS_LOCK_RING];
+    uint8_t  wps_lock_to[WPS_LOCK_RING];
+    int      wps_lock_n;        /* lifetime transitions */
+    int      wps_lock_cycles;   /* completed locked->unlocked cycles */
     /* WPS vendor-string leakage (#77) — see beacon_snoop.h::beacon_rsn_t
      * for the rationale. Monitor-mode only: like neighbors[] above, this
      * is not mirrored onto wifi_ap_t (the managed-mode scan struct). */

@@ -956,6 +956,21 @@ static uint32_t ap_ie_fingerprint(const char *enc, const beacon_rsn_t *rsn) {
     return h ? h : 1u;                        /* avoid the "unknown" sentinel */
 }
 
+/* AP Setup Locked transition tracking (#82). A change between *known*
+ * states earns a ring slot; unknown (0) on either side records
+ * nothing, so a beacon that simply omits the attribute is not a
+ * transition. A completed locked->unlocked step is one lockout cycle
+ * -- the sawtooth a Reaver run leaves behind. */
+static void wps_lock_note(beacon_ap_t *ap, int to_locked, time_t now) {
+    int from = ap->wps_locked;
+    if (!to_locked || !from || from == to_locked) return;
+    int i = ap->wps_lock_n % WPS_LOCK_RING;
+    ap->wps_lock_ts[i] = now;
+    ap->wps_lock_to[i] = (uint8_t)to_locked;
+    ap->wps_lock_n++;
+    if (from == 2 && to_locked == 1) ap->wps_lock_cycles++;
+}
+
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,
@@ -1032,6 +1047,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                              "%s", rsn->vendor);
                 if (rsn->has_wps) g_aps[i].has_wps = 1;
                 if (rsn->wps_state)  g_aps[i].wps_state  = rsn->wps_state;
+                wps_lock_note(&g_aps[i], rsn->wps_locked, now);
                 if (rsn->wps_locked) g_aps[i].wps_locked = rsn->wps_locked;
                 /* Not sticky, unlike the rest of this block: a live
                  * session flag must be able to clear (#82). */
