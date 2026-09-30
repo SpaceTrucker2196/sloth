@@ -161,3 +161,4 @@
 | 0128ac9 | 2026-09-30T15:57:15Z | claude-fable-5 | 54 | 15572 | 4344168 | 28271 | 5.6887 | #96 wave 6: cannot-persist tab-bar badge |
 | 4dd0512 | 2026-09-30T16:02:19Z | claude-fable-5 | 38 | 13023 | 3538398 | 22943 | 4.6488 | #91 wave 6: beacon/seqnum/assoc eviction tally |
 | c51a718 | 2026-09-30T16:06:37Z | claude-fable-5 | 24 | 10374 | 2466476 | 15159 | 3.2886 | #82 wave 6: AP-Setup-Locked transition ring |
+| b5a382a | 2026-09-30T16:52:55Z | claude-fable-5, claude-opus-5 | 48 | 21507 | 5250217 | 225595 | 8.3862 | #82 wave 7: WPS session table |
