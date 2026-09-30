@@ -163,3 +163,4 @@
 | c51a718 | 2026-09-30T16:06:37Z | claude-fable-5 | 24 | 10374 | 2466476 | 15159 | 3.2886 | #82 wave 6: AP-Setup-Locked transition ring |
 | b5a382a | 2026-09-30T16:52:55Z | claude-fable-5, claude-opus-5 | 48 | 21507 | 5250217 | 225595 | 8.3862 | #82 wave 7: WPS session table |
 | 4536839 | 2026-09-30T17:10:37Z | claude-opus-5 | 66 | 19929 | 7991566 | 31960 | 4.8139 | #91 wave 7: hop activity from mon_frame_total |
+| f992676 | 2026-09-30T17:16:19Z | claude-opus-5 | 24 | 14709 | 3209592 | 16355 | 2.1362 | #91 wave 7: measured vs configured dwell |
