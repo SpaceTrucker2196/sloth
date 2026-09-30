@@ -86,6 +86,24 @@ int capture_dlt_has_ifindex(int dlt);
    runtime [y] deselect through the name cache as before and passes
    anything it cannot attribute. NULL state admits nothing.
 
+   ── Deselect snapshot (#95) ──
+
+   The runtime [y] deselect list lives on sloth_state_t and is memmoved
+   by the iface view on the main thread. The callback used to walk it
+   live per packet — the last T11 item: a torn read during the memmove
+   could match a half-copied name. The callback now consults only the
+   policy's own snapshot (`desel`/`desel_count`, written under mu), and
+   never touches s->iface_deselected at all.
+
+   capture_policy_sync_deselect() is the main thread's copy-in, called
+   from capture_scope_poll() each tick and from capture_run() before the
+   worker exists. A [y] toggle therefore takes effect on the next poll
+   tick, not the next packet — the same latency the scope health numbers
+   already have, and the price of a race-free callback.
+
+   capture_policy_deselected() is the locked membership test the
+   callback uses. NULL policy means no snapshot: nothing is deselected.
+
    All of these are compiled without WITH_PCAP so the test build can
    drive them with hand-built SLL2 headers and a seeded resolver whose
    answers change. */
@@ -103,6 +121,11 @@ typedef struct {
     int              count;       /* pinned entries */
     uint32_t         generation;  /* written under mu */
     pthread_mutex_t *mu;          /* NULL = single-threaded */
+    /* Runtime [y] deselect snapshot (#95): copied from
+     * s->iface_deselected by the main thread under mu; the capture
+     * callback reads only this, never the live state. */
+    char             desel[MAX_IFACES][16];
+    int              desel_count; /* written under mu */
 } capture_policy_t;
 
 void        capture_ifname_cache_reset(void);
@@ -114,6 +137,16 @@ const capture_pin_t *capture_policy_match(const capture_policy_t *p,
                                           uint32_t ifindex);
 int         capture_policy_revalidate(capture_policy_t *p,
                                       capture_ifname_fn resolve);
+/* Copy the runtime [y] deselect list into the policy snapshot, under
+   mu. Main thread only, once per poll tick (and once before the worker
+   starts). NULL p or s is a no-op. */
+void        capture_policy_sync_deselect(capture_policy_t *p,
+                                         const sloth_state_t *s);
+/* Locked membership test against the snapshot — the only deselect
+   source the capture callback may consult. NULL policy: nothing is
+   deselected. */
+int         capture_policy_deselected(const capture_policy_t *p,
+                                      const char *name);
 /* Pins still valid. Main thread only (it is the sole writer). */
 int         capture_policy_valid_count(const capture_policy_t *p);
 int         capture_frame_in_scope(const sloth_state_t *s,

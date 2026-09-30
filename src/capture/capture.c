@@ -141,6 +141,43 @@ int capture_policy_valid_count(const capture_policy_t *p) {
     return n;
 }
 
+void capture_policy_sync_deselect(capture_policy_t *p,
+                                  const sloth_state_t *s) {
+    if (!p || !s) return;
+    int n = s->iface_deselected_count;
+    if (n < 0) n = 0;
+    if (n > MAX_IFACES) n = MAX_IFACES;
+    if (p->mu) pthread_mutex_lock(p->mu);
+    /* The whole list goes in one critical section so the callback never
+     * sees a count from one toggle and names from another. */
+    memcpy(p->desel, s->iface_deselected, (size_t)n * 16);
+    p->desel_count = n;
+    if (p->mu) pthread_mutex_unlock(p->mu);
+}
+
+/* Locked count read for the callback's fast path: TSan-clean, and a
+ * mutex acquisition per packet is the price capture_policy_match()
+ * already pays in restricted mode. */
+static int policy_desel_count(const capture_policy_t *p) {
+    if (!p) return 0;
+    int n;
+    if (p->mu) pthread_mutex_lock(p->mu);
+    n = p->desel_count;
+    if (p->mu) pthread_mutex_unlock(p->mu);
+    return n;
+}
+
+int capture_policy_deselected(const capture_policy_t *p, const char *name) {
+    if (!p || !name) return 0;
+    int hit = 0;
+    if (p->mu) pthread_mutex_lock(p->mu);
+    for (int i = 0; i < p->desel_count; i++) {
+        if (strncmp(p->desel[i], name, 16) == 0) { hit = 1; break; }
+    }
+    if (p->mu) pthread_mutex_unlock(p->mu);
+    return hit;
+}
+
 /* Lifetime count of frames refused specifically by the launch-time
  * --iface/--monitor-only allow-list (#85's authorization boundary) — not
  * the unrelated runtime [y] deselect, which is an operator toggle that
@@ -162,21 +199,23 @@ int capture_frame_in_scope(const sloth_state_t *s, const capture_policy_t *p,
         if (restricted) g_out_of_scope_dropped++;
         return !restricted;
     }
-    /* Nothing filters: skip the lookup so the hot path stays syscall-free. */
-    if (!restricted && s->iface_deselected_count == 0) return 1;
+    /* Nothing filters: skip the name lookup so the hot path stays
+     * syscall-free. The count comes from the policy snapshot, not the
+     * live state — a toggle lands on the next synced tick (#95). */
+    if (!restricted && policy_desel_count(p) == 0) return 1;
     uint32_t ifi = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16)
                  | ((uint32_t)frame[6] <<  8) |  (uint32_t)frame[7];
     if (restricted) {
         /* The pinned set is the authority, not whatever name the index
          * resolves to today. */
         const capture_pin_t *pin = capture_policy_match(p, ifi);
-        int admit = pin && !iface_is_deselected(s, pin->name);
+        int admit = pin && !capture_policy_deselected(p, pin->name);
         if (!admit) g_out_of_scope_dropped++;
         return admit;
     }
     const char *name = capture_ifname_lookup(ifi, resolve);
     if (!name) return 1;
-    return !iface_is_deselected(s, name);
+    return !capture_policy_deselected(p, name);
 }
 
 capture_scope_state_t capture_scope_state(int requested, int capture_open,
@@ -1083,6 +1122,9 @@ void capture_health_poll(capture_health_t *h) {
 void capture_scope_poll(sloth_state_t *s) {
     if (!s) return;
     capture_policy_revalidate(&g_policy, sys_ifname);
+    /* Copy the runtime [y] list into the callback's snapshot — the
+     * callback never reads s->iface_deselected itself (#95). */
+    capture_policy_sync_deselect(&g_policy, s);
     capture_scope_health_t *h = &s->scope_health;
     h->requested = s->iface_allowed_count;
     h->enforced  = capture_policy_valid_count(&g_policy);
@@ -1154,6 +1196,9 @@ void capture_run(void) {
      * (POSIX XBD 4.12), so the pins are visible to on_packet() from its
      * first frame; after this only their valid bits change (#85). */
     capture_policy_pin(&g_policy, g_state, sys_ifindex, &g_mu);
+    /* Seed the deselect snapshot before the worker exists, same
+     * visibility argument as the pins (#95). */
+    capture_policy_sync_deselect(&g_policy, g_state);
     /* A restart clears the previous run's verdict — otherwise a fresh
      * worker would report the reason the last one died (#91 slice 2). */
     pthread_mutex_lock(&g_mu);

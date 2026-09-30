@@ -287,6 +287,7 @@ static void test_scope_deselect_still_applies(void) {
     sloth_state_t *s = scope_state(NULL);
     memcpy(s->iface_deselected[0], "eth0", 5);
     s->iface_deselected_count = 1;
+    capture_policy_sync_deselect(&g_scope_policy, s);
     uint8_t f[64]; int n = sll2_frame(f, 2);
     ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
     n = sll2_frame(f, 3);
@@ -343,6 +344,7 @@ static void test_scope_dropped_ignores_runtime_deselect(void) {
     sloth_state_t *s = scope_state(NULL);
     memcpy(s->iface_deselected[0], "eth0", 5);
     s->iface_deselected_count = 1;
+    capture_policy_sync_deselect(&g_scope_policy, s);
     uint8_t f[64]; int n = sll2_frame(f, 2);
     ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
     ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
@@ -508,8 +510,51 @@ static void test_policy_deselect_uses_pinned_name(void) {
     scope_state2("wlan1", "eth0");
     memcpy(g_scope_state.iface_deselected[0], "wlan1", 6);
     g_scope_state.iface_deselected_count = 1;
+    capture_policy_sync_deselect(&g_scope_policy, &g_scope_state);
     ASSERT_EQ(frame_on(3), 0);
     ASSERT_EQ(frame_on(2), 1);
+}
+
+/* ââ deselect snapshot (#95) ââââââââââââââââââââââââ */
+
+static void test_desel_snapshot_ignores_unsynced_mutation(void) {
+    /* The race #95 closes: the callback must not see a live mutation of
+       s->iface_deselected. Until the main thread syncs, the old
+       snapshot (empty) governs and the frame is admitted. */
+    sloth_state_t *s = scope_state(NULL);
+    memcpy(s->iface_deselected[0], "eth0", 5);
+    s->iface_deselected_count = 1;      /* toggled, not yet synced */
+    uint8_t f[64]; int n = sll2_frame(f, 2);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+    capture_policy_sync_deselect(&g_scope_policy, s);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+}
+
+static void test_desel_snapshot_survives_state_clear(void) {
+    /* Proof the snapshot is a copy, not a pointer: clearing the live
+       list without a sync leaves the last synced election in force. */
+    sloth_state_t *s = scope_state(NULL);
+    memcpy(s->iface_deselected[0], "eth0", 5);
+    s->iface_deselected_count = 1;
+    capture_policy_sync_deselect(&g_scope_policy, s);
+    s->iface_deselected_count = 0;      /* un-toggled, not yet synced */
+    uint8_t f[64]; int n = sll2_frame(f, 2);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    capture_policy_sync_deselect(&g_scope_policy, s);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 1);
+}
+
+static void test_desel_snapshot_membership_and_bounds(void) {
+    /* NULL policy / NULL name never match; a count beyond MAX_IFACES
+       is clamped rather than read out of bounds. */
+    ASSERT_EQ(capture_policy_deselected(NULL, "eth0"), 0);
+    ASSERT_EQ(capture_policy_deselected(&g_scope_policy, NULL), 0);
+    sloth_state_t *s = scope_state(NULL);
+    s->iface_deselected_count = MAX_IFACES + 7;
+    capture_policy_sync_deselect(&g_scope_policy, s);
+    ASSERT_EQ(g_scope_policy.desel_count, MAX_IFACES);
+    capture_policy_sync_deselect(NULL, s);          /* no-op, no crash */
+    capture_policy_sync_deselect(&g_scope_policy, NULL);
 }
 
 static void test_policy_null_under_allow_list_admits_nothing(void) {
@@ -1041,6 +1086,9 @@ void run_capture_tests(void) {
     RUN_TEST(test_policy_replug_stays_closed_until_restart);
     RUN_TEST(test_policy_name_cache_is_not_an_authority);
     RUN_TEST(test_policy_deselect_uses_pinned_name);
+    RUN_TEST(test_desel_snapshot_ignores_unsynced_mutation);
+    RUN_TEST(test_desel_snapshot_survives_state_clear);
+    RUN_TEST(test_desel_snapshot_membership_and_bounds);
     RUN_TEST(test_policy_null_under_allow_list_admits_nothing);
     RUN_TEST(test_policy_pin_resets_previous_run);
     RUN_TEST(test_policy_invalidation_is_seen_by_worker);
