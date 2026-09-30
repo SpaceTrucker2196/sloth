@@ -2210,6 +2210,17 @@ typedef struct {
     uint32_t generation;  /* bumps each time a pin fails closed */
 } capture_scope_health_t;
 
+/* Cannot-persist state (#96): lifetime write-failure count per export
+ * sink, refreshed once per poll by persist_health_poll(). Zero across
+ * the board means every sink is keeping up; anything else renders the
+ * tab-bar badge and is already summed into the JSONL sensor_health
+ * record's storage failure field. */
+typedef struct {
+    int jsonl;        /* -o / --output stream (src/jsonl.c)      */
+    int alert_pcap;   /* per-alert pcap export (src/alert_pcap.c) */
+    int eapol;        /* --eapol-dir handshake export             */
+} persist_health_t;
+
 /* ── App state ──────────────────────────────────────────── */
 typedef struct {
     view_t        active_view;
@@ -2441,6 +2452,11 @@ typedef struct {
     capture_health_t mon_health;
     /* Launch-time scope enforcement (#85); same record, same strip. */
     capture_scope_health_t scope_health;
+    /* Cannot-persist state (#96): per-sink lifetime write-failure
+     * counts, synced once per tick by persist_health_poll() and
+     * rendered as a tab-bar badge — an export that fails must be
+     * visible from every view, not only its own. */
+    persist_health_t persist_health;
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];

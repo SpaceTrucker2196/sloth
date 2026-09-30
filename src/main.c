@@ -94,6 +94,7 @@
 #include "top_hosts.h"
 #include "beacon_detect.h"
 #include "jsonl.h"
+#include "persist_health.h"
 #include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
@@ -196,6 +197,9 @@ static void poll_data(sloth_state_t *s) {
      * not the previous one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
+    /* #96: sync per-sink write-failure counts so the tab bar can show
+     * a cannot-persist badge from any view. */
+    persist_health_poll(&s->persist_health);
     /* #85: re-check each pinned ifindex still names its interface; a
      * replugged, renamed or reused one fails closed and reads DEGRADED. */
     capture_scope_poll(s);

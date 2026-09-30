@@ -14,6 +14,7 @@
 
 #include "sloth.h"
 #include "tui.h"
+#include "persist_health.h"
 #include "tui_palette.h"
 #include "views/iface.h"
 #include "views/conns.h"
@@ -696,6 +697,16 @@ static int draw_tabbar(const sloth_state_t *s) {
     printw("%s", banner);
     x = banner_w;
 
+    /* #96: a sink that cannot persist is a sensor-level fault, so the
+     * badge lives on the bar every view shares, in the alert grade. */
+    char persist[96];
+    if (persist_badge(&s->persist_health, persist, sizeof(persist)) > 0) {
+        tui_heat(1.0);
+        printw("  %s", persist);
+        x += (int)strlen(persist) + 2;
+        tui_bright();
+    }
+
     for (int i = 0; i < VIEW_COUNT; i++) {
         /* "  [n] Label "  ≈ 2 sep + 2 label-padding + label width */
         int lbl_w = (int)strlen(view_label((view_t)i)) + 4;
@@ -813,6 +824,13 @@ void tui_cleanup(void) {
 
 static void draw_tabbar(const sloth_state_t *s) {
     tui_bright(); printf(" sloth v" SLOTH_VERSION);
+    /* #96: same cannot-persist badge as the ncurses bar. */
+    char persist[96];
+    if (persist_badge(&s->persist_health, persist, sizeof(persist)) > 0) {
+        tui_heat(1.0);
+        printf("  %s", persist);
+        tui_bright();
+    }
     for (int i = 0; i < VIEW_COUNT; i++) {
         tui_dim(); printf("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
