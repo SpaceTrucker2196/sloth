@@ -280,7 +280,8 @@ correct"; the risk score answers "how much should a human look first".
 | Signal | Weight |
 |--------|-------:|
 | Touches `agents/`, `.github/`, `.githooks/` | +40 |
-| External-contract proxy: deletions in `src/jsonl.[ch]` / `src/main.c`, or any touch of `docs/wiki/jsonl-schema.md` | +30 |
+| External-contract **narrowing**: ≥10 deleted lines in `src/jsonl.c` / `src/main.c`, or any deletion in `src/jsonl.h` | +30 |
+| External-contract **widening**: `docs/wiki/jsonl-schema.md` touched with no such source deletions — a documented additive change | +10 |
 | Forensic-output path: `src/jsonl.c`, `src/alert_pcap.c`, `src/pcap_write.c`, `src/eapol_log.c` | +20 |
 | New files | +5 each, cap +20 |
 | Deleted files | +10 each, cap +30 |
@@ -298,6 +299,35 @@ Threshold: `RISK_THRESHOLD` env, default **50**. Modes:
 
 Verification: `sh agents/risk_score.sh --selftest` (canned name-status
 / numstat fixtures — same no-circular-tests rule as the parsers).
+
+> **Calibration note (changed 2026-09-30).** The contract proxy used to
+> score *any* touch of `docs/wiki/jsonl-schema.md`, and *any* deletion in
+> `src/jsonl.[ch]` / `src/main.c`, at +30. Two consequences, both
+> measured against real history:
+>
+> - Adding a JSONL field the documented way means touching `jsonl.c`
+>   (+20 forensic path) **and** the schema doc (+30) — so following the
+>   repo's own discipline summed to exactly the threshold. Four of
+>   fourteen real code commits scored ≥50, all of them routine additive
+>   observability work.
+> - A genuine break (a field removed from the emitter and struck from
+>   the schema) also scored 50. The gate returned the same answer for
+>   "documented a new field" and "deleted a field", which is no answer.
+>
+> §4.3 already draws the line in the right place — it names the
+> stop-and-ask as changing the schema *in a non-additive way* — so the
+> weights now implement that wording. Additive-and-documented scores
+> +10; narrowing keeps +30. The source-deletion proxies also gained a
+> 10-line floor, because `main.c` is a thousand lines of poll loop
+> rather than a flag table and two deleted lines there are not evidence
+> a CLI flag went away. `jsonl.h` is exempt: it is small enough that one
+> deleted line really can be a removed field.
+>
+> Re-scored against the same fourteen commits: **0 now reach the
+> threshold, and the synthetic break still scores 50.** Enforcing mode
+> is therefore a live option in a way it was not before — turning the
+> marker on under the old weights would have halted a quarter of
+> routine work.
 
 > **Scoring note (changed 2026-07-28).** `agents/` was git-crypt
 > encrypted until then, so instruction files appeared as *binary* in

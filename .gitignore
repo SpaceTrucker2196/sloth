@@ -2,6 +2,9 @@ ntop
 ntop_test
 /sloth
 sloth_test
+# Release-binary backups kept beside the tree. Untracked and binary,
+# so risk_score.sh counted them as pending adds until they were ignored.
+sloth.bak-*
 *.o
 *.dSYM/
 __pycache__/
