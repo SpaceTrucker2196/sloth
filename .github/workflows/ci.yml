@@ -94,6 +94,46 @@ jobs:
       - name: Test under ASan + UBSan
         run: make test
 
+      # The shipped binary, not only the suite (#95). Until the link rule
+      # was fixed this step could not have existed: `$(TARGET)` linked with
+      # `$(CC) -o $@ $^ $(LDFLAGS)`, no compiler flags, so every object
+      # compiled instrumented and ld then failed on __asan_init /
+      # __asan_report_*. The consequence is what makes this a gap and not a
+      # curiosity — `src/main.c`, the libpcap capture path and the ncurses
+      # renderer live only in `sloth`, never in `sloth_test`, so the step
+      # above has never covered a line of them. Linking is the whole
+      # assertion: MISSION.md §2 forbids running sloth against an interface,
+      # and CI has none, so nothing here executes the binary.
+      #
+      # `embedded` too, because it reaches the same rule through a
+      # sub-make — the path by which a $(MAKE) recursion could drop flags.
+      #
+      # -Werror is dropped for this step alone (the job-level EXTRA_CFLAGS
+      # is replaced, not extended). Three gcc diagnostics fire only under
+      # ASan instrumentation, which perturbs inlining and value-range
+      # propagation enough that gcc loses the bounds it otherwise proves:
+      #   - -Wstringop-truncation, src/dns_snoop.c:122 and :134 — strncpy
+      #     of sizeof-1 followed by an explicit NUL on the next line
+      #   - -Warray-bounds, memcpy inlined into deauth_parse at
+      #     src/deauth_snoop.c:57 — "bounds [0, 0]" for a uint8_t[6] field,
+      #     behind a len >= 24 guard
+      #   - -Wstringop-overread, the a->enc strcmp at src/wifi_assess.c:112
+      # All three are diagnostic artifacts of the instrumentation, not link
+      # failures, and none appears in any of the six advertised
+      # configurations — every one of those stays -Werror clean in the
+      # `test` job. Making them red here would fail this step for something
+      # it does not assert. Whether they are worth silencing at the source
+      # is a separate question and a separate slice.
+      - name: Build sloth under ASan + UBSan (link check)
+        env:
+          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+        run: make clean && make
+
+      - name: Build embedded under ASan + UBSan (link check)
+        env:
+          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+        run: make clean && make embedded
+
   # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
   # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer
   # (#95/d28d19b) each shipped a concurrency test that only fails *by

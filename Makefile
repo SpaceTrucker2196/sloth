@@ -265,8 +265,21 @@ TARGET = sloth
 
 all: $(TARGET)
 
+# CFLAGS on the *link* line, not just the compile line. Several flags are
+# not compile-only: -fsanitize=... has to reach the driver at link time or
+# the sanitizer runtime is never pulled in, and -fPIE pairs with -pie. Before
+# this, `make EXTRA_CFLAGS=-fsanitize=address,undefined` compiled every
+# object instrumented and then failed at ld with undefined references to
+# __asan_init / __asan_report_* — so the shipped binary had never once been
+# linked under a sanitizer, and main.c, the pcap capture path and the ncurses
+# renderer (none of which `sloth_test` contains) were uninstrumented in every
+# CI job. `sloth_test` was unaffected because its rule already compiles and
+# links in one $(CC) invocation carrying TEST_CFLAGS.
+#
+# Appending $(LDFLAGS) after the objects is deliberate and unchanged: -l
+# libraries must follow the objects that reference them.
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -Iinclude -Isrc -Iresearch -c -o $@ $<
@@ -475,6 +488,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_research_ingest.c   \
             tests/test_research_corpus.c   \
             tests/test_docs_consistency.c  \
+            tests/test_build_recipe.c      \
             research/query.c               \
             tests/test_research_query.c    \
             research/mcp/json.c            \
