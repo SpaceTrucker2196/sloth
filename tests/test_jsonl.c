@@ -1096,6 +1096,7 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"evict_seqnum_client\":0"));
     ASSERT(contains(body, "\"evict_assoc_pair\":0"));
     ASSERT(contains(body, "\"evict_assoc_req\":0"));
+    ASSERT(contains(body, "\"evict_wps_session\":0"));
     sh_evict_reset();
 }
 

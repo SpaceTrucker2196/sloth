@@ -54,6 +54,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_SEQNUM_CLIENT: return "seqnum_client";
     case SH_EVICT_ASSOC_PAIR:    return "assoc_pair";
     case SH_EVICT_ASSOC_REQ:     return "assoc_req";
+    case SH_EVICT_WPS_SESSION:   return "wps_session";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

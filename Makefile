@@ -101,6 +101,7 @@ SRCS = src/main.c          \
        src/sensors.c         \
        src/sensor_health.c   \
        src/persist_health.c  \
+       src/wps_track.c       \
        src/wifi_merge.c      \
        src/twins.c           \
        src/views/twins.c     \
@@ -506,6 +507,8 @@ TEST_SRCS = tests/main_test.c          \
             src/sensor_health.c            \
             src/persist_health.c           \
             tests/test_persist_health.c    \
+            src/wps_track.c                \
+            tests/test_wps_track.c         \
             tests/test_sensor_health.c     \
             src/wifi_merge.c               \
             tests/test_wifi_merge.c        \

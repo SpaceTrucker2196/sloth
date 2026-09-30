@@ -40,6 +40,7 @@ typedef enum {
     SH_EVICT_SEQNUM_CLIENT, /* src/seqnum_track.c — least-recently-seen client dropped */
     SH_EVICT_ASSOC_PAIR,    /* src/assoc_track.c — oldest (BSSID,STA) grant pair dropped */
     SH_EVICT_ASSOC_REQ,     /* src/assoc_track.c — oldest pending assoc request dropped */
+    SH_EVICT_WPS_SESSION,   /* src/wps_track.c — oldest WPS registration session dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -54,7 +55,7 @@ uint64_t sh_evict_total(void);
 /* Stable lower-case name, part of the `sensor_health` JSONL contract:
  * "alert", "top_host", "pnl_client", "pnl_ssid", "dhcp_event",
  * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
- * "assoc_req". Unknown kinds return "". */
+ * "assoc_req", "wps_session". Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
 /* Zero every tally. For tests — nothing in the running binary resets

@@ -9,6 +9,7 @@
 #include "eapol_log.h"
 #include "secure_file.h"
 #include "eap_track.h"
+#include "wps_track.h"
 #include "beacon_snoop.h"
 #include "assoc_track.h"
 #include "alerts.h"
@@ -523,6 +524,9 @@ int eapol_observe_dot11(const uint8_t *d, int len,
          * actually presented rather than merely present in the flow. */
         eap_track_observe(bssid, sta, from_ds ? 1 : 0,
                           eapol + 4, elen - 4, now);
+        /* Same inner EAP packet, WSC lens (#82): sequences M1..M8 /
+         * NACK into per-(BSSID,STA) sessions. Ignores non-WSC frames. */
+        wps_track_observe(bssid, sta, eapol + 4, elen - 4, now);
         return 1;
     }
     uint8_t nonce[32], mic[16], pmkid[16], rc[8];
