@@ -623,6 +623,34 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     if (capture_run_flag_get(&g_running) && strcmp(s->probe_iface, iface) == 0)
         return;
 
+    /* The launch-time allow-list is an authorization boundary, so an
+     * interactive [m] retarget has to clear it too (#85). Enforced here
+     * rather than in view_iface_key() because the monitor stream has no
+     * per-frame scope check of its own: a second caller of this function
+     * would otherwise reopen the hole silently.
+     *
+     * Refusing before probe_stop() is the point — an operator who lands
+     * on an out-of-scope row must not lose the capture that is already
+     * running. iface_is_allowed() returns 1 on an empty list, so an
+     * unrestricted run is unaffected.
+     *
+     * This closes only the interactive half. probe_open() still opens
+     * whatever find_monitor_iface() finds at startup without consulting
+     * the list; narrowing that would silence 802.11 collection for a
+     * plain `--iface eth0` run, which is an owner decision. Until it
+     * ships, an allow-list does not yet mean "no out-of-scope frame is
+     * ever collected". */
+    if (!iface_is_allowed(s, iface)) {
+        /* %.15s, not %s: the name comes in as a const char * that the
+         * compiler cannot bound, and kernel iface names are under 16
+         * bytes anyway (IFNAMSIZ). Bounding it here keeps the suffix
+         * that names the flag inside probe_err rather than letting a
+         * long argument push it out. */
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%.15s not in --iface allow-list", iface);
+        return;
+    }
+
     probe_stop();   /* also closes a handle opened but never run */
 
     s->probe_err[0] = '\0';

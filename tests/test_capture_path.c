@@ -4,6 +4,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "capture/capture.h"
+#include "capture/probe.h"   /* real under WITH_PCAP; the stub would prove nothing */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -458,6 +459,87 @@ static void test_no_allow_list_admits_any_ifindex(void) {
     ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
 }
 
+/* -- [m] retarget vs. the allow-list - issue #85 -------------
+ *
+ * The Interfaces view's [m] key retargets the monitor radio onto the
+ * selected row. probe_set_iface() is the chokepoint, so the refusal is
+ * asserted there rather than through view_iface_key().
+ *
+ * These live in this binary and not tests/test_probe.c because
+ * probe_set_iface() is real only under WITH_PCAP; sloth_test compiles
+ * the inline no-op from probe.h, which would pass either way.
+ *
+ * MISSION.md section 2: nothing here may open a real interface. The
+ * refusal path returns before any pcap call, so it needs no device at
+ * all; the controls deliberately name an interface that cannot exist,
+ * so pcap_open_live() fails rather than capturing. */
+
+#define NO_SUCH_IF "zzz_no_such_if"
+
+static void retarget_setup(const char *allowed, const char *current) {
+    memset(&g_s, 0, sizeof(g_s));
+    if (allowed) {
+        snprintf(g_s.iface_allowed[0], sizeof(g_s.iface_allowed[0]), "%s", allowed);
+        g_s.iface_allowed_count = 1;
+    }
+    snprintf(g_s.probe_iface, sizeof(g_s.probe_iface), "%s", current);
+}
+
+static void test_retarget_outside_the_allow_list_is_refused(void) {
+    retarget_setup("wlan1", NO_SUCH_IF "9");
+    probe_set_iface(&g_s, NO_SUCH_IF "9");
+
+    /* The reason is recorded in s->probe_err. Note where that is and is
+       not visible: src/views/probe.c, dashboard_bands.c and eapol.c
+       render it, and it is exported in sensor_health — but
+       src/views/iface.c does not, so the operator who presses [m] gets
+       no feedback in the view they pressed it in. Surfacing it there is
+       a follow-up, not something this assertion claims. */
+    ASSERT_STR(g_s.probe_err, NO_SUCH_IF "9 not in --iface allow-list");
+    /* The retarget did not take effect — probe_iface is untouched.
+       What this does NOT prove is the ordering against probe_stop():
+       probe_stop() never writes s->probe_iface, so this assertion would
+       hold either way. That a refusal leaves an already-running worker
+       alive needs a live capture thread, which needs a real radio, so
+       it is argued from the code (the check precedes probe_stop()) and
+       left unasserted rather than faked. */
+    ASSERT_STR(g_s.probe_iface, NO_SUCH_IF "9");
+}
+
+static void test_refusal_is_attributable_to_the_allow_list(void) {
+    /* Control: same call, same unopenable device, but the name is ON
+       the list. The error that comes back is pcap's, not the boundary's
+       - which is what makes the refusal above attributable to the
+       allow-list rather than to a failed open. */
+    retarget_setup(NO_SUCH_IF, "");
+    probe_set_iface(&g_s, NO_SUCH_IF);
+
+    ASSERT(g_s.probe_err[0] != '\0');
+    ASSERT(strstr(g_s.probe_err, "allow-list") == NULL);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
+    ASSERT_STR(g_s.probe_iface, "");
+}
+
+static void test_an_empty_allow_list_admits_any_retarget(void) {
+    /* iface_is_allowed() returns 1 on an empty list, so an unrestricted
+       run keeps its pre-#85 behaviour: the retarget proceeds and fails
+       only at the open. */
+    retarget_setup(NULL, "");
+    ASSERT_EQ(g_s.iface_allowed_count, 0);
+    probe_set_iface(&g_s, NO_SUCH_IF);
+
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
+}
+
+static void test_retarget_ignores_an_empty_name(void) {
+    /* Guard ordering: an empty name is rejected before the boundary, so
+       it must not be reported as an allow-list refusal. */
+    retarget_setup("wlan1", "wlan1");
+    probe_set_iface(&g_s, "");
+    ASSERT_STR(g_s.probe_err, "");
+    ASSERT_STR(g_s.probe_iface, "wlan1");
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -481,4 +563,10 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_scope_refuses_a_datalink_without_an_ifindex);
     RUN_TEST(test_scope_refuses_a_deselected_pinned_interface);
     RUN_TEST(test_no_allow_list_admits_any_ifindex);
+
+    TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
+    RUN_TEST(test_retarget_outside_the_allow_list_is_refused);
+    RUN_TEST(test_refusal_is_attributable_to_the_allow_list);
+    RUN_TEST(test_an_empty_allow_list_admits_any_retarget);
+    RUN_TEST(test_retarget_ignores_an_empty_name);
 }

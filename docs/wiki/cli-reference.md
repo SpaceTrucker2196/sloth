@@ -147,7 +147,9 @@ Full map with descriptions: [[views-catalog]].
 |-----|--------|
 | `↑` / `↓` | Navigate rows |
 | `c` | Clear the current log view's ring buffer |
-| `t` | (Interfaces) toggle iface visibility |
+| `t` | (Interfaces) toggle iface visibility (display-only) |
+| `y` | (Interfaces) toggle iface data-stream selection — drops its packets pre-decode |
+| `m` | (Interfaces) retarget the 802.11 monitor radio onto the selected iface; refused, leaving a running radio alone, when a non-empty `--iface` allow-list excludes it — the reason shows as the probe error |
 | `Enter` | (Interfaces / Packets) open detail panel |
 | `f` | (Conns / Packets) cycle filter |
 | `s` | (Conns) cycle sort |

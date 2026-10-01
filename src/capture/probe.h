@@ -39,7 +39,11 @@ uint64_t mon_frame_total(void);
 void probe_clear(void);
 
 /* Stop any running capture and restart on iface.
-   Silently does nothing if iface is not radiotap or pcap fails. */
+   Silently does nothing if iface is not radiotap or pcap fails.
+   Refuses, before stopping anything, when a non-empty launch-time
+   allow-list excludes iface (#85): s->probe_err carries the reason and
+   a running radio is left untouched. An empty allow-list admits
+   everything, so an unrestricted run is unaffected. */
 void probe_set_iface(sloth_state_t *s, const char *iface);
 
 /* Refresh `h` from the monitor-radio handle — liveness, the worker's

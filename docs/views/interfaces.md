@@ -54,7 +54,7 @@ eth.
 |-----|--------|
 | `↑`/`↓` | Navigate |
 | `Enter` | Open detail panel (sparkline graph, errors, drops) |
-| `m`     | Mark this iface as the probe-capture iface |
+| `m`     | Retarget the 802.11 monitor radio onto this iface — refused, with the reason reported as the probe error, when a non-empty allow-list excludes it |
 | `t`     | Toggle iface **visibility** (display-only; data still flows) |
 | `y`     | Toggle iface **data-stream selection** (drops packets pre-decode) |
 
@@ -321,8 +321,25 @@ ingress iface. Both are purely logical — OS interface state
 (up/down, monitor mode, addresses) is never touched — and both
 require SLL2 ingress attribution (see above). Without it the `y`
 deselect is a marker with no filter effect, while a launch-time
-allow-list refuses to start (fail-closed, above). The 802.11 monitor
-handle is unaffected.
+allow-list refuses to start (fail-closed, above).
+
+**`m` honours the allow-list.** The monitor stream has no per-frame
+scope check of its own, so the retarget itself is the boundary: with a
+non-empty allow-list, `m` on an excluded row is refused and the reason
+(`<iface> not in --iface allow-list`) becomes the probe error — read it
+in the Probe view (`7`), the dashboard's monitor band or the EAPOL view,
+and in the `monitor_err` field of the `sensor_health` JSONL record — but
+not in this view, which does not render that field. The refusal happens before the
+old handle is closed, so a radio that is already capturing keeps
+running — landing on an excluded row costs nothing. An empty allow-list
+admits every retarget, as before.
+
+This covers the interactive half only. At startup the monitor handle is
+still opened on whatever monitor-mode interface the kernel offers,
+without consulting the allow-list, because narrowing that would silence
+802.11 collection for a plain `--iface eth0` run. Until that is
+decided, an allow-list does **not** yet mean no out-of-scope frame is
+ever collected.
 
 ## See also
 
