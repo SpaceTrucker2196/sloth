@@ -52,10 +52,16 @@ localtimeCalled:src/views/tls.c
 # ── readdir() ───────────────────────────────────────────────────────────
 # cppcheck recommends readdir_r(), which glibc deprecated in 2.24 and
 # POSIX.1-2024 marks obsolescent. readdir() is thread-safe when each
-# thread walks its own DIR*, which every caller here does (local opendir).
+# thread walks its own DIR*, which every caller here does (a DIR* from a
+# local opendir()/fdopendir(), closed in the same function).
 readdirCalled:src/capture/probe.c
 readdirCalled:src/platform/linux_pid.c
 readdirCalled:src/platform/linux_dhcp.c
+# The #87 retention sweep: sweep_locked() fdopendir()s a dup of the pinned
+# export directory descriptor into a local DIR* and closedir()s it before
+# returning. Reached only from the main thread (startup, then the poll
+# loop via eapol_sweep_due()) and only under the module mutex.
+readdirCalled:src/eapol_log.c
 readdirCalled:research/ingest/main.c
 
 # ── False positives, checked by hand ────────────────────────────────────
