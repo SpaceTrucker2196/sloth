@@ -402,6 +402,16 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
                           const uint8_t *const *frames, const int *lens,
                           const int *orig_lens, int n);
 
+/* Install the allow-list policy snapshot that on_packet() consults, or
+   NULL to clear it. Without this the seam dispatches with an empty
+   policy, which tests the decoders but never the scope boundary #85
+   calls an authorization boundary — its regression list asks for an
+   out-of-scope frame injected "immediately after worker start" with
+   zero decoder, event, persistence and export side effects, and that
+   is only meaningful through the real callback. Pair it with
+   s->iface_allowed_count, which is what makes an allow-list active. */
+void capture_test_set_policy(const capture_policy_t *p);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }

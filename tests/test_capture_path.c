@@ -20,25 +20,12 @@
  * captures, and no .pcap files: capture_test_dispatch() assembles the
  * savefile in memory. The interesting cases are the malformed ones. */
 
-#define ETH_HDR 14
+#define ETH_HDR  14
+#define SLL2_HDR 20
 
-/* Ethernet II + IPv4 + TCP, built field by field. Returns length.
- *
- * Zeroes exactly the frame it goes on to build, not a fixed guess: an
- * earlier `memset(f, 0, 64 + payload_len)` overran every caller holding
- * a 64-byte buffer, and ASan called it on this suite's first
- * instrumented run. Fitting as bugs go — the frame builder was the one
- * thing here reading past the end of a buffer. */
-static int eth_ipv4_tcp(uint8_t *f, int payload_len, int ihl_words,
-                        int ip_total_len_override) {
-    const int frame_len = ETH_HDR + ihl_words * 4 + 20 + payload_len;
-    memset(f, 0, (size_t)frame_len);
-    /* Ethernet: dst, src, ethertype 0x0800 */
-    memcpy(f, "\x02\x00\x00\x00\x00\x01", 6);
-    memcpy(f + 6, "\x02\x00\x00\x00\x00\x02", 6);
-    f[12] = 0x08; f[13] = 0x00;
-
-    uint8_t *ip = f + ETH_HDR;
+/* IPv4 + TCP at `ip`, built field by field. Returns bytes written. */
+static int ipv4_tcp(uint8_t *ip, int payload_len, int ihl_words,
+                    int ip_total_len_override) {
     int ihl = ihl_words * 4;
     ip[0] = (uint8_t)(0x40 | ihl_words);        /* v4, IHL */
     ip[1] = 0;
@@ -56,6 +43,42 @@ static int eth_ipv4_tcp(uint8_t *f, int payload_len, int ihl_words,
     tcp[2] = 0x01; tcp[3] = 0xbb;                /* dport 443   */
     tcp[12] = 0x50;                              /* data offset 5 */
     tcp[13] = 0x18;                              /* PSH|ACK       */
+    return ihl + 20 + payload_len;
+}
+
+/* Ethernet II + IPv4 + TCP. Returns length.
+ *
+ * Zeroes exactly the frame it goes on to build, not a fixed guess: an
+ * earlier `memset(f, 0, 64 + payload_len)` overran every caller holding
+ * a 64-byte buffer, and ASan called it on this suite's first
+ * instrumented run. Fitting as bugs go — the frame builder was the one
+ * thing here reading past the end of a buffer. */
+static int eth_ipv4_tcp(uint8_t *f, int payload_len, int ihl_words,
+                        int ip_total_len_override) {
+    const int frame_len = ETH_HDR + ihl_words * 4 + 20 + payload_len;
+    memset(f, 0, (size_t)frame_len);
+    /* Ethernet: dst, src, ethertype 0x0800 */
+    memcpy(f, "\x02\x00\x00\x00\x00\x01", 6);
+    memcpy(f + 6, "\x02\x00\x00\x00\x00\x02", 6);
+    f[12] = 0x08; f[13] = 0x00;
+    ipv4_tcp(f + ETH_HDR, payload_len, ihl_words, ip_total_len_override);
+    return frame_len;
+}
+
+/* Linux cooked v2 (SLL2) + IPv4 + TCP, per libpcap's linktypes spec:
+   protocol 0..1, reserved 2..3, ifindex 4..7 big-endian, ARPHRD 8..9,
+   packet type 10, lladdr len 11, lladdr 12..19, payload at 20. The
+   ifindex is the field #85 treats as the authorization input. */
+static int sll2_ipv4_tcp(uint8_t *f, uint32_t ifindex, int payload_len) {
+    const int frame_len = SLL2_HDR + 20 + 20 + payload_len;
+    memset(f, 0, (size_t)frame_len);
+    f[0] = 0x08; f[1] = 0x00;                    /* protocol: IPv4 */
+    f[4] = (uint8_t)(ifindex >> 24); f[5] = (uint8_t)(ifindex >> 16);
+    f[6] = (uint8_t)(ifindex >>  8); f[7] = (uint8_t)ifindex;
+    f[8] = 0x00; f[9] = 0x01;                    /* ARPHRD_ETHER */
+    f[10] = 0;                                   /* PACKET_HOST  */
+    f[11] = 6;                                   /* lladdr len   */
+    ipv4_tcp(f + SLL2_HDR, payload_len, 5, -1);
     return frame_len;
 }
 
@@ -245,6 +268,196 @@ static void test_capture_length_shorter_than_original(void) {
     ASSERT(g_s.packets[0].raw_len <= 64);
 }
 
+/* ── Scope as an authorization boundary — issue #85 ──────────
+ *
+ * #85's regression list asks for an out-of-scope packet injected
+ * "immediately after worker start", with zero decoder, event,
+ * persistence and export side effects asserted. Until the #95 seam
+ * existed that could not be written: every scope test calls
+ * capture_frame_in_scope() directly, which proves the predicate and
+ * not the callback that is supposed to consult it. These drive the
+ * real on_packet() with a policy installed, so a frame that should
+ * have been refused would show up as a decoded row.
+ *
+ * `capture_scope_verdict()` — the startup refusal itself — is a pure
+ * function already covered in tests/test_capture.c; what was missing
+ * is the enforcement on the other side of pthread_create(). */
+
+/* An allow-list of one interface, pinned, as capture_run() leaves it
+   just before the worker is created. `valid` 0 models what
+   capture_scope_poll() does on delete, rename or index reuse. */
+static void scope_setup(uint32_t ifindex, const char *name, int valid) {
+    memset(&g_s, 0, sizeof(g_s));
+    memcpy(g_s.iface_allowed[0], name, strlen(name) + 1);
+    g_s.iface_allowed_count = 1;
+
+    capture_policy_t pol;
+    memset(&pol, 0, sizeof(pol));
+    pol.count = 1;
+    pol.pins[0].ifindex = ifindex;
+    memcpy(pol.pins[0].name, name, strlen(name) + 1);
+    pol.pins[0].valid = valid;
+    pol.mu = NULL;                 /* single-threaded harness */
+    capture_test_set_policy(&pol);
+    capture_out_of_scope_dropped_reset();
+}
+
+/* Dispatch without clearing the state scope_setup() just built. */
+static int dispatch(int dlt, const uint8_t *const *f, const int *l, int n) {
+    return capture_test_dispatch(&g_s, dlt, f, l, NULL, n);
+}
+
+/* Nothing decoded, nothing stored, nothing counted for export. */
+static void assert_no_side_effects(void) {
+    ASSERT_EQ((long long)g_s.pkt_total, 0);   /* drives the #20 jsonl emit */
+    ASSERT_EQ(g_s.pkt_count, 0);
+    ASSERT_EQ(g_s.pkt_head, 0);
+    ASSERT_EQ(g_s.packets[0].proto, 0);
+    ASSERT_STR(g_s.packets[0].src, "");
+    ASSERT_STR(g_s.packets[0].dst, "");
+    ASSERT_EQ((long long)g_s.packets[0].len, 0);
+    ASSERT_EQ(g_s.packets[0].raw_len, 0);
+}
+
+static void test_scope_admits_the_pinned_interface(void) {
+    scope_setup(7, "wlan1", 1);
+    uint8_t f[128];
+    int n = sll2_ipv4_tcp(f, 7, 8);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
+    /* The control case: the allow-list is active and this frame really
+       did go all the way through the decoder. */
+    ASSERT_EQ((long long)g_s.pkt_total, 1);
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
+    ASSERT_EQ(g_s.packets[0].dst_port, 443);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
+static void test_scope_refuses_an_unpinned_ifindex(void) {
+    /* #85's regression bullet, through the real callback: a frame from
+       an interface the operator never authorised. */
+    scope_setup(7, "wlan1", 1);
+    uint8_t f[128];
+    int n = sll2_ipv4_tcp(f, 99, 8);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);   /* libpcap delivered it */
+    assert_no_side_effects();                     /* on_packet refused it */
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
+static void test_scope_refuses_the_first_frame_after_start(void) {
+    /* "Immediately after worker start" — the seam is synchronous, so
+       the first frame of the first dispatch *is* that moment. The
+       refusal must also not wedge the stream: the authorised frame
+       behind it still decodes, and it is the only row. */
+    scope_setup(7, "wlan1", 1);
+    uint8_t bad[128], good[128];
+    int bn = sll2_ipv4_tcp(bad, 99, 8);
+    int gn = sll2_ipv4_tcp(good, 7, 8);
+    const uint8_t *fs[2] = { bad, good };
+    int ls[2] = { bn, gn };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 2), 2);
+    ASSERT_EQ((long long)g_s.pkt_total, 1);
+    ASSERT_EQ(g_s.pkt_count, 1);
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
+static void test_scope_refuses_an_invalidated_pin(void) {
+    /* Adapter deleted, renamed, or its index reused — capture_scope_poll()
+       clears the valid bit and never sets it again. The index still
+       matches a pin, so this is the case where matching alone must not
+       be enough. */
+    scope_setup(7, "wlan1", 0);
+    uint8_t f[128];
+    int n = sll2_ipv4_tcp(f, 7, 8);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
+    assert_no_side_effects();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
+static void test_scope_refuses_an_unattributable_frame(void) {
+    /* Too short to hold the SLL2 ifindex at all. Fail-closed: under an
+       allow-list an unattributable frame is refused, not admitted. */
+    scope_setup(7, "wlan1", 1);
+    uint8_t f[128];
+    sll2_ipv4_tcp(f, 7, 8);
+    const uint8_t *fs[2] = { f, f };
+    int ls[2] = { 7, SLL2_HDR - 1 };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 2), 2);
+    assert_no_side_effects();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 2);
+}
+
+static void test_scope_refuses_a_datalink_without_an_ifindex(void) {
+    /* An EN10MB frame carries no ingress index, so under an allow-list
+       it cannot be attributed and is refused — even though the very
+       same bytes decode fine when no allow-list is in force. */
+    scope_setup(7, "wlan1", 1);
+    uint8_t f[128];
+    int n = eth_ipv4_tcp(f, 8, 5, -1);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_EN10MB, fs, ls, 1), 1);
+    assert_no_side_effects();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
+static void test_scope_refuses_a_deselected_pinned_interface(void) {
+    /* A pinned, still-valid interface the operator has since switched
+       off with [y]. The frame is refused, which is correct.
+
+       It also *counts* toward out_of_scope_dropped, which is worth
+       asserting explicitly because the counter's header says the
+       runtime deselect "does not bump this counter". Both are true as
+       written: tests/test_capture.c pins the documented case on an
+       unrestricted stream, where the deselect arm returns without
+       counting; under an allow-list the deselect is folded into the
+       same `admit` test as attribution and does count. Reported on #85
+       — if the counter is meant to mean "authorization failure" only,
+       this frame should not be in it, and this assertion names itself
+       when that changes. */
+    scope_setup(7, "wlan1", 1);
+    capture_policy_t pol;
+    memset(&pol, 0, sizeof(pol));
+    pol.count = 1;
+    pol.pins[0].ifindex = 7;
+    memcpy(pol.pins[0].name, "wlan1", 6);
+    pol.pins[0].valid = 1;
+    memcpy(pol.desel[0], "wlan1", 6);
+    pol.desel_count = 1;
+    capture_test_set_policy(&pol);
+
+    uint8_t f[128];
+    int n = sll2_ipv4_tcp(f, 7, 8);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
+    assert_no_side_effects();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
+static void test_no_allow_list_admits_any_ifindex(void) {
+    /* The counter-control: with no allow-list the same unpinned frame
+       decodes, so the refusals above come from the scope boundary and
+       not from something incidental to the SLL2 path. */
+    memset(&g_s, 0, sizeof(g_s));
+    capture_test_set_policy(NULL);
+    capture_out_of_scope_dropped_reset();
+    uint8_t f[128];
+    int n = sll2_ipv4_tcp(f, 12345, 8);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
+    ASSERT_EQ((long long)g_s.pkt_total, 1);
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -258,4 +471,14 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_sll2_truncated_below_the_ifindex);
     RUN_TEST(test_dispatch_rejects_bad_arguments);
     RUN_TEST(test_capture_length_shorter_than_original);
+
+    TEST_SUITE("capture path: scope is an authorization boundary (#85)");
+    RUN_TEST(test_scope_admits_the_pinned_interface);
+    RUN_TEST(test_scope_refuses_an_unpinned_ifindex);
+    RUN_TEST(test_scope_refuses_the_first_frame_after_start);
+    RUN_TEST(test_scope_refuses_an_invalidated_pin);
+    RUN_TEST(test_scope_refuses_an_unattributable_frame);
+    RUN_TEST(test_scope_refuses_a_datalink_without_an_ifindex);
+    RUN_TEST(test_scope_refuses_a_deselected_pinned_interface);
+    RUN_TEST(test_no_allow_list_admits_any_ifindex);
 }

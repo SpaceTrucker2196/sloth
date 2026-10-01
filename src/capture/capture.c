@@ -1079,6 +1079,19 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
 static void put_u32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
 static void put_u16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
 
+/* Install a policy snapshot for the dispatches that follow, NULL to
+ * clear it. A setter rather than a capture_test_dispatch() parameter
+ * because on_packet() reads the module-static g_policy, and because
+ * that is the shape the other test seams here already take
+ * (data_socket_test_set_*_fn, flood_test_set_clock).
+ *
+ * `mu` is taken from the caller's snapshot: NULL means single-threaded,
+ * which is what this harness is. */
+void capture_test_set_policy(const capture_policy_t *p) {
+    if (p) g_policy = *p;
+    else   memset(&g_policy, 0, sizeof(g_policy));
+}
+
 int capture_test_dispatch(sloth_state_t *s, int dlt,
                           const uint8_t *const *frames, const int *lens,
                           const int *orig_lens, int n) {
