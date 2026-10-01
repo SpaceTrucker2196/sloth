@@ -169,3 +169,4 @@
 | f8fd5e8 | 2026-10-01T11:26:06Z | claude-opus-5 | 310 | 114704 | 24409724 | 474259 | 19.8166 | #87 — gate crackable material behind --collect-handshakes with 7-day retention |
 | a3940b5 | 2026-10-01T16:51:40Z | claude-opus-5 | 94 | 19780 | 4485552 | 99859 | 3.7363 | #95 capture-path suite: real pcap_dispatch -> on_packet under ASan/UBSan/TSan |
 | 2b761fb | 2026-10-01T17:14:16Z | claude-opus-5 | 106 | 40894 | 8256262 | 70375 | 5.8548 | #85 scope enforcement through the real pcap_dispatch callback (8 cases, mutation-verified) |
+| ab1b140 | 2026-10-01T22:48:24Z | claude-opus-5 | 122 | 64386 | 15386741 | 332499 | 12.6286 | wave 1: #85 [m] retarget refusal, #92 pcap origlen, #90 KARMA benign readings (9-agent workflow + adversarial review) |
