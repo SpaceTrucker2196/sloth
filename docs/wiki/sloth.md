@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/README.md`, all `docs/views/*.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-01.
 
 ---
 
@@ -32,6 +32,10 @@ type: reference
 
 - `sloth` — main binary.
 - `sloth_test` — test binary, 9304 assertions, must always be green.
+- `sloth_test_pcap` — capture-path suite (`make test-capture-path`). The
+  only binary built *with* `WITH_PCAP`, so it is the only one where the
+  sanitizers see frames arrive through libpcap's own reader and the real
+  `on_packet()` callback rather than seeded state (#95).
 
 ## Architecture entry points
 

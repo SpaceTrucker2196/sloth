@@ -624,6 +624,44 @@ TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h \
 $(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
 	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
 
+# ── Capture-path test binary (#95) ──────────────────────────────────────────
+# `sloth_test` is built without WITH_PCAP on purpose (the packets view
+# renders a disabled message, and the scope helpers are compiled outside
+# the guard so they stay testable). The cost was that on_packet(),
+# decode_frame() and every protocol parser they reach — the code that
+# consumes attacker-controlled bytes — were absent from every sanitizer
+# run, which is exactly what #95 asks to close.
+#
+# This second binary links libpcap and drives the real pcap_dispatch()
+# callback over an in-memory savefile (see capture_test_dispatch() in
+# src/capture/capture.c). It is deliberately narrow: only the sources
+# the capture path needs, so a failure names the parser rather than the
+# whole suite. Run under the same EXTRA_CFLAGS as everything else, which
+# is how the CI sanitize job reaches it.
+# Reuses TEST_SRCS rather than enumerating capture.c's dependency tree
+# by hand: it pulls in every protocol snooper, and a hand-kept list
+# would rot on the first new one. main_test.c is swapped for a main that
+# runs only this suite, so the other run_*_tests() stay linked but
+# unentered — they assert the no-WITH_PCAP behaviour and would not hold
+# in this build.
+# probe.c joins the list because WITH_PCAP turns probe.h's inline stubs
+# into real declarations — the same source the main build adds.
+CAPTURE_PATH_SRCS = tests/test_capture_path_main.c \
+                    tests/test_capture_path.c      \
+                    src/capture/probe.c            \
+                    $(filter-out tests/main_test.c,$(TEST_SRCS))
+
+CAPTURE_PATH_BIN = sloth_test_pcap
+
+.PHONY: test-capture-path
+test-capture-path: $(CAPTURE_PATH_BIN)
+	./$(CAPTURE_PATH_BIN)
+
+$(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
+	$(CC) $(TEST_CFLAGS) -DWITH_PCAP -Iinclude -Isrc -Itests \
+	      -Iresearch/ingest -Iresearch -Iresearch/mcp \
+	      -o $@ $(CAPTURE_PATH_SRCS) -lm -lpthread -lsqlite3 -lpcap
+
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
 # rebuilds, runs `make test`, and reports surviving mutants. See
@@ -636,7 +674,7 @@ mutate:
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 clean:
-	rm -f $(OBJS) $(TARGET) $(TEST_BIN) research_ingest sloth-research-mcp
+	rm -f $(OBJS) $(TARGET) $(TEST_BIN) $(CAPTURE_PATH_BIN) research_ingest sloth-research-mcp
 
 install: $(TARGET)
 	install -m 755 $(TARGET) $(PREFIX)/bin/$(TARGET)

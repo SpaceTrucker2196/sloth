@@ -127,7 +127,13 @@ static int find_monitor_iface(char *buf, int sz) {
         size_t nlen = strlen(e->d_name);
         if (nlen >= 16) continue;
         char path[128];
-        snprintf(path, sizeof(path), "/sys/class/net/%s/type", e->d_name);
+        /* The %.15s precision restates the nlen guard above at the call
+         * site. The guard alone is enough at -O2, where gcc propagates
+         * it; at -O0 it cannot, and -Wformat-truncation fails the build
+         * — which is how the #95 capture-path target found this. Better
+         * to bound the conversion than to rely on the optimiser seeing
+         * a guard fifteen lines up. */
+        snprintf(path, sizeof(path), "/sys/class/net/%.15s/type", e->d_name);
         FILE *f = fopen(path, "r");
         if (!f) continue;
         int type = 0;

@@ -106,6 +106,7 @@ All targets driven by the root [`Makefile`](../Makefile).
 | `make WITH_WIFI=0`           | drops nl80211 source on Linux |
 | `make embedded`              | shortcut: `WITH_NCURSES=0 WITH_PCAP=0` |
 | `make test`                  | builds `./sloth_test`, runs all assertions |
+| `make test-capture-path`     | builds `./sloth_test_pcap` (WITH_PCAP), drives the real `pcap_dispatch` → `on_packet` path |
 | `make clean`                 | removes objects, `sloth`, `sloth_test` |
 | `make install PREFIX=...`    | installs to `$PREFIX/bin/sloth` (default `/usr/local`) |
 

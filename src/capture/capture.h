@@ -366,6 +366,42 @@ void capture_health_poll(capture_health_t *h);
    refresh s->scope_health (#85 slice 2). Main thread, once per poll. */
 void capture_scope_poll(sloth_state_t *s);
 
+/* ── Capture-path test seam (#95) ──────────────────────────────────
+
+   #95 asks for the sanitizers to run "through the real pcap_dispatch
+   callback path, not only seeded state". Until now they could not:
+   `sloth_test` is built without WITH_PCAP, so on_packet(), the scope
+   election and the whole decode_frame() dispatch — every line that
+   touches attacker-controlled bytes off the air — were absent from
+   every ASan, UBSan and TSan run. Seeding sloth_state_t directly
+   exercises the tables, never the parser that fills them.
+
+   capture_test_dispatch() drives the real libpcap reader and the real
+   on_packet() over caller-supplied frames. It builds a savefile image
+   in memory (libpcap file format, hand-written per the spec) and hands
+   it to pcap_fopen_offline() through fmemopen(), so there is no device
+   and no file — `tests/` stays free of .pcap fixtures, and the frames
+   stay hand-built byte arrays like every other parser test here.
+
+   (The roadmap suggested pcap_open_dead(). That builds a pcap_t with no
+   packet source, which is right for pcap_dump/compile and useless for
+   dispatch: it has nothing to read. The in-memory savefile is the
+   smallest thing that reaches the callback.)
+
+   Single-threaded and synchronous: no worker exists, so the frames are
+   decoded on the calling thread and `s` is fully populated on return.
+   Returns the number of packets libpcap handed to the callback, or -1
+   if the in-memory savefile could not be opened.
+
+   `dlt` is a DLT_* value. Frames are taken as-is: truncated, malformed
+   and oversized ones are the point, so nothing is validated on the way
+   in. caplen is each frame's length; orig_len is reported as caplen
+   unless orig_lens is non-NULL, which is how a "captured short" frame
+   (caplen < len, the SLL2 truncation case) is expressed. */
+int capture_test_dispatch(sloth_state_t *s, int dlt,
+                          const uint8_t *const *frames, const int *lens,
+                          const int *orig_lens, int n);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }

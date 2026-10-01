@@ -34,6 +34,12 @@ jobs:
       - name: Test
         run: make test
 
+      # The capture path is not in `make test`: sloth_test is built
+      # without WITH_PCAP, so on_packet() and every parser it reaches
+      # were untested and unsanitised until #95 added this binary.
+      - name: Test the capture path (real pcap_dispatch)
+        run: make test-capture-path
+
       # The advertised build configurations are only real if something
       # builds them. #48 shipped a WITH_NCURSES=0 break that survived
       # because CI only ever built the default config. A unit test can't
@@ -93,6 +99,14 @@ jobs:
 
       - name: Test under ASan + UBSan
         run: make test
+
+      # The point of #95's "through the real pcap_dispatch callback
+      # path, not only seeded state": this is the one job where ASan and
+      # UBSan see frames arriving the way an attacker sends them —
+      # truncated at every offset, lying about their own lengths — via
+      # libpcap's own reader rather than a seeded struct.
+      - name: Test the capture path under ASan + UBSan
+        run: make test-capture-path
 
       # The shipped binary, not only the suite (#95). Until the link rule
       # was fixed this step could not have existed: `$(TARGET)` linked with
@@ -164,6 +178,9 @@ jobs:
 
       - name: Test under ThreadSanitizer
         run: make test
+
+      - name: Test the capture path under ThreadSanitizer
+        run: make test-capture-path
 
   # Static analysis (#95): cppcheck over everything the default build and
   # the research tools compile. Fails on any finding not listed, with its

@@ -1065,6 +1065,75 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     pthread_mutex_unlock(&g_mu);
 }
 
+/* ── Capture-path test seam (#95) ─────────────────────────── */
+
+/* libpcap savefile layout, written from the format spec rather than
+ * copied off a capture — same first-principles rule the protocol
+ * parsers are tested under. Native byte order throughout: libpcap reads
+ * the magic to decide endianness, so a natively-written magic means a
+ * natively-read file and no swapping on either side. */
+#define PCAP_TEST_MAGIC   0xa1b2c3d4u
+#define PCAP_TEST_GHDR    24
+#define PCAP_TEST_RHDR    16
+
+static void put_u32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
+static void put_u16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
+
+int capture_test_dispatch(sloth_state_t *s, int dlt,
+                          const uint8_t *const *frames, const int *lens,
+                          const int *orig_lens, int n) {
+    if (!s || n < 0) return -1;
+    if (n > 0 && (!frames || !lens)) return -1;
+
+    size_t total = PCAP_TEST_GHDR;
+    for (int i = 0; i < n; i++) {
+        if (lens[i] < 0) return -1;
+        total += PCAP_TEST_RHDR + (size_t)lens[i];
+    }
+    uint8_t *img = malloc(total);
+    if (!img) return -1;
+
+    put_u32(img +  0, PCAP_TEST_MAGIC);
+    put_u16(img +  4, 2);          /* version major */
+    put_u16(img +  6, 4);          /* version minor */
+    put_u32(img +  8, 0);          /* thiszone      */
+    put_u32(img + 12, 0);          /* sigfigs       */
+    put_u32(img + 16, 262144);     /* snaplen       */
+    put_u32(img + 20, (uint32_t)dlt);
+
+    size_t off = PCAP_TEST_GHDR;
+    for (int i = 0; i < n; i++) {
+        uint32_t orig = orig_lens ? (uint32_t)orig_lens[i] : (uint32_t)lens[i];
+        put_u32(img + off +  0, (uint32_t)(1700000000 + i));  /* ts_sec  */
+        put_u32(img + off +  4, (uint32_t)(i * 1000));        /* ts_usec */
+        put_u32(img + off +  8, (uint32_t)lens[i]);           /* incl_len */
+        put_u32(img + off + 12, orig);                        /* orig_len */
+        off += PCAP_TEST_RHDR;
+        if (lens[i] > 0) memcpy(img + off, frames[i], (size_t)lens[i]);
+        off += (size_t)lens[i];
+    }
+
+    FILE *fp = fmemopen(img, total, "rb");
+    if (!fp) { free(img); return -1; }
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *pc = pcap_fopen_offline(fp, errbuf);
+    if (!pc) { fclose(fp); free(img); return -1; }
+
+    /* on_packet() reads both of these; no worker thread exists here, so
+     * swapping them is safe and the dispatch is synchronous. */
+    pcap_t        *saved_handle = g_handle;
+    sloth_state_t *saved_state  = g_state;
+    g_handle = pc;
+    g_state  = s;
+    int got = pcap_dispatch(pc, n > 0 ? n : -1, on_packet, NULL);
+    g_handle = saved_handle;
+    g_state  = saved_state;
+
+    pcap_close(pc);          /* closes the FILE* it took ownership of */
+    free(img);
+    return got;
+}
+
 /* ── Capture thread ───────────────────────────────────────── */
 
 /* Why the worker left its loop, published for the poll loop to read
