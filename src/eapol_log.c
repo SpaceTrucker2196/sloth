@@ -40,7 +40,18 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
  * m_frames[0..3] = M1..M4 raw 802.11 bytes (frame body, no radiotap).
  * Stored as captured so the pcap export reproduces them byte-for-byte
  * for use with aircrack-ng / hcxpcapngtool / Wireshark. They belong to
- * the attempt — a pcap must never splice two attempts together. */
+ * the attempt — a pcap must never splice two attempts together.
+ *
+ * m_frame_lens is what was stored (capped at EAPOL_FRAME_MAX);
+ * m_frame_origlens is the full 802.11 frame length as captured --
+ * radiotap removed, but still libpcap's caplen, not hdr->len (see
+ * on_probe_frame() in src/capture/probe.c). The radio opens at a
+ * 65535 snaplen so the two coincide for any real 802.11 frame, but
+ * this is not the wire length by construction. Both are kept because a pcap
+ * record header carries both (#92): writing the truncated length as the
+ * original too would claim every frame was exactly as short as sloth's
+ * copy, and an analyst could no longer tell a genuinely short frame
+ * from a truncated one. */
 #define MAX_PENDING 64
 #define EAPOL_FRAME_MAX 512
 typedef struct {
@@ -68,6 +79,7 @@ typedef struct {
     int      exported;           /* this attempt's pair already written */
     uint8_t  m_frames[4][EAPOL_FRAME_MAX];
     int      m_frame_lens[4];
+    int      m_frame_origlens[4];
     time_t   m_frame_ts[4];
     uint32_t m_frame_usec[4];
 
@@ -188,6 +200,9 @@ static void attempt_reset(pending_t *p) {
     memset(p->mic,    0, sizeof(p->mic));
     memset(p->m_frames,     0, sizeof(p->m_frames));
     memset(p->m_frame_lens, 0, sizeof(p->m_frame_lens));
+    /* Zeroed with its siblings for consistency; no read path depends
+     * on it today, since observe rewrites len and origlen together. */
+    memset(p->m_frame_origlens, 0, sizeof(p->m_frame_origlens));
     memset(p->m_frame_ts,   0, sizeof(p->m_frame_ts));
     memset(p->m_frame_usec, 0, sizeof(p->m_frame_usec));
 }
@@ -355,7 +370,11 @@ static void write_handshake_pcap(const pending_t *p) {
         w_u32le(f, (uint32_t)p->m_frame_ts[i]);
         w_u32le(f, p->m_frame_usec[i]);
         w_u32le(f, cap);
-        w_u32le(f, cap);
+        /* caplen then origlen. The two differ only for a frame longer
+         * than EAPOL_FRAME_MAX, and caplen <= origlen holds by
+         * construction: both are set from the same observed length at
+         * the single buffering site, one of them min()-ed. */
+        w_u32le(f, (uint32_t)p->m_frame_origlens[i]);
         fwrite(p->m_frames[i], 1, cap, f);
     }
     if (sfile_fclose(f, name, err, sizeof(err)) != 0) {
@@ -618,6 +637,10 @@ int eapol_observe_dot11(const uint8_t *d, int len,
         int copy = len < EAPOL_FRAME_MAX ? len : EAPOL_FRAME_MAX;
         memcpy(p->m_frames[msg - 1], d, (size_t)copy);
         p->m_frame_lens[msg - 1] = copy;
+        /* The observed frame length, kept whether or not the copy was
+         * capped: it is the pcap record's origlen, and the only record
+         * left of how long the frame actually was. */
+        p->m_frame_origlens[msg - 1] = len;
         p->m_frame_ts[msg - 1]   = now;
         p->m_frame_usec[msg - 1] = usec;
     }

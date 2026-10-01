@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`.
 
-**Last updated**: 2026-09-22 (#87 file permissions).
+**Last updated**: 2026-10-01 (#92 handshake pcap record lengths).
 
 ---
 
@@ -47,9 +47,11 @@ type: reference
     (`WPA*01*…` for PMKIDs, `WPA*02*…` for full handshakes with the
     MIC field zeroed per spec).
   - `DIR/<bssid>_<sta>.pcap` containing the raw 802.11 EAPOL-Key
-    frames (M1..M4 as captured, no radiotap, DLT 105). Replayable in
+    frames (M1..M4, no radiotap, DLT 105). Replayable in
     `aircrack-ng -w wordlist.txt -e <SSID> <file>.pcap`, openable in
-    Wireshark / tshark.
+    Wireshark / tshark. At most 512 bytes per frame are stored; each
+    record header reports `caplen` (stored) and `origlen` (as captured)
+    separately, so a truncated frame is visible as one.
 - Re-completion of the same (BSSID, STA) atomically replaces the prior
   `.pcap` with the freshest capture (temp file + rename); the `.22000`
   file appends.

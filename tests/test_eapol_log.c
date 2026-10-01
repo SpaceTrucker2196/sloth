@@ -1045,6 +1045,198 @@ static void test_handshake_pcap_new_attempt_carries_its_own_times(void) {
     pair_teardown();
 }
 
+/* ── #92: pcap record lengths tell truncation from brevity ── */
+
+/* sloth keeps at most EAPOL_FRAME_MAX bytes of each handshake frame.
+ * That constant is private to src/eapol_log.c; mirrored here because
+ * the whole point of these tests is the boundary around it. */
+#define FRAME_CAP 512
+
+/* 24-byte 802.11 data header (no QoS, no HT, 3 addresses) + 8-byte LLC
+ * SNAP header, as build_frame() lays them out. */
+#define DOT11_EAPOL_OVERHEAD 32
+
+/* The shortest frame build_eapol_key() can produce: the 99-byte fixed
+ * key descriptor (§12.7.2) with no Key Data. */
+#define MIN_SIZED_FRAME (DOT11_EAPOL_OVERHEAD + 99)
+
+static uint8_t g_sized_eapol[2048];
+static uint8_t g_sized_frame[2048];
+
+/* Feed one EAPOL-Key message whose total 802.11 frame length is exactly
+ * `want` bytes, grown by padding Key Data with vendor-specific KDEs
+ * (IEEE 802.11-2020 §12.7.2, Figure 12-45: type 0xDD, length, OUI
+ * 00:0F:AC, data type, data). Data type 0xFF is one sloth does not
+ * read, so the padding stays inert — in particular it is never a PMKID
+ * KDE, whose length field is 20.
+ *
+ * A KDE occupies 6..257 bytes (the 1-byte length field caps its data at
+ * 251), so some lengths just above MIN_SIZED_FRAME are unreachable;
+ * those return -1 rather than silently feeding a different size.
+ * Returns the frame length observed. */
+static int feed_msg_sized(uint16_t ki, uint64_t rc, const uint8_t *nonce,
+                          const uint8_t *mic, int from_ds, time_t now,
+                          int want) {
+    int p = build_eapol_key(g_sized_eapol, ki, nonce, mic, NULL);
+    set_rc(g_sized_eapol, rc);
+    int pad = want - DOT11_EAPOL_OVERHEAD - p;
+    if (pad < 0 || (pad > 0 && pad < 6)) return -1;
+    if (want > (int)sizeof(g_sized_frame)) return -1;
+    while (pad > 0) {
+        int chunk = pad > 257 ? 257 : pad;
+        /* Never leave a remainder too small to be a KDE of its own. */
+        if (pad - chunk > 0 && pad - chunk < 6) chunk -= 6;
+        g_sized_eapol[p++] = 0xDD;
+        g_sized_eapol[p++] = (uint8_t)(chunk - 2);
+        g_sized_eapol[p++] = 0x00;
+        g_sized_eapol[p++] = 0x0F;
+        g_sized_eapol[p++] = 0xAC;
+        g_sized_eapol[p++] = 0xFF;
+        memset(g_sized_eapol + p, 0, (size_t)chunk - 6);
+        p   += chunk - 6;
+        pad -= chunk;
+    }
+    /* Key Data Length (bytes 97..98) and the EAPOL body length (2..3)
+     * both have to account for the padding, or the parser rejects the
+     * frame as malformed. */
+    int kdl = p - 99;
+    g_sized_eapol[97] = (uint8_t)(kdl >> 8);
+    g_sized_eapol[98] = (uint8_t)(kdl & 0xff);
+    int body = p - 4;
+    g_sized_eapol[2] = (uint8_t)(body >> 8);
+    g_sized_eapol[3] = (uint8_t)(body & 0xff);
+
+    int fn = build_frame(g_sized_frame, g_sized_eapol, p, from_ds);
+    if (fn != want) return -1;
+    if (eapol_observe_dot11(g_sized_frame, fn, -50, 6, now, 0) != 1) return -1;
+    return fn;
+}
+
+/* Per-record (caplen, origlen) of the fixture's handshake pcap, walked
+ * per the libpcap file format exactly as hs_pcap_times() does: 24-byte
+ * global header, then 16-byte record headers (ts_sec, ts_usec,
+ * incl_len, orig_len) each followed by incl_len bytes. Stepping by the
+ * record's own incl_len is what makes a caplen that does not match the
+ * bytes present fail here rather than pass quietly. */
+static int hs_pcap_lens(uint32_t cap[], uint32_t orig[], int max) {
+    char p[160];
+    pair_path(p, sizeof(p), HS_PCAP_97);
+    FILE *f = fopen(p, "rb");
+    if (!f) return -1;
+    uint8_t b[4096];
+    size_t n = fread(b, 1, sizeof(b), f);
+    fclose(f);
+    if (n < 24 || rd_u32le(b) != 0xa1b2c3d4u) return -1;
+    size_t off = 24;
+    int k = 0;
+    while (off < n && k < max) {
+        if (off + 16 > n) return -1;
+        cap[k]  = rd_u32le(b + off + 8);
+        orig[k] = rd_u32le(b + off + 12);
+        off += 16 + cap[k];
+        k++;
+        if (off > n) return -1;
+    }
+    return off == n ? k : -1;
+}
+
+/* A frame longer than what sloth keeps: caplen is the bytes stored,
+ * origlen the bytes that were on the air. Writing the truncated length
+ * as both — which is what the writer used to do — told an analyst the
+ * radio heard a 512-byte M1, so a truncated frame was indistinguishable
+ * from a genuinely short one. */
+static void test_handshake_pcap_long_frame_carries_the_wire_length(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_sized(KI_M1, 7, ANONCE, NULL, 1, T0, 700), 700);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 7, SNONCE, M2_MIC, 0, T0,
+                             MIN_SIZED_FRAME), MIN_SIZED_FRAME);
+    uint32_t cap[4], orig[4];
+    ASSERT_EQ(hs_pcap_lens(cap, orig, 4), 2);
+    ASSERT_EQ(cap[0], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(orig[0], 700u);
+    /* The short M2 in the same file is untouched by the capping. */
+    ASSERT_EQ(cap[1], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(orig[1], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT(cap[0] <= orig[0]);
+    ASSERT(cap[1] <= orig[1]);
+    pair_teardown();
+}
+
+/* The pre-existing case, pinned so the fix cannot change it: a frame
+ * that fits reports one length twice. */
+static void test_handshake_pcap_short_frames_report_equal_lengths(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_sized(KI_M1, 7, ANONCE, NULL, 1, T0,
+                             MIN_SIZED_FRAME), MIN_SIZED_FRAME);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 7, SNONCE, M2_MIC, 0, T0, 300), 300);
+    uint32_t cap[4], orig[4];
+    ASSERT_EQ(hs_pcap_lens(cap, orig, 4), 2);
+    ASSERT_EQ(cap[0], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(orig[0], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(cap[1], 300u);
+    ASSERT_EQ(orig[1], 300u);
+    pair_teardown();
+}
+
+/* Boundary, both sides. At exactly EAPOL_FRAME_MAX nothing is dropped,
+ * so the lengths still match; one byte more and they must not. */
+static void test_handshake_pcap_at_the_cap_is_not_marked_truncated(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_sized(KI_M1, 7, ANONCE, NULL, 1, T0, FRAME_CAP),
+              FRAME_CAP);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 7, SNONCE, M2_MIC, 0, T0, FRAME_CAP),
+              FRAME_CAP);
+    uint32_t cap[4], orig[4];
+    ASSERT_EQ(hs_pcap_lens(cap, orig, 4), 2);
+    ASSERT_EQ(cap[0], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(orig[0], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(cap[1], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(orig[1], (uint32_t)FRAME_CAP);
+    pair_teardown();
+}
+
+static void test_handshake_pcap_one_byte_over_the_cap_is_truncated(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_sized(KI_M1, 7, ANONCE, NULL, 1, T0, FRAME_CAP + 1),
+              FRAME_CAP + 1);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 7, SNONCE, M2_MIC, 0, T0,
+                             FRAME_CAP + 1), FRAME_CAP + 1);
+    uint32_t cap[4], orig[4];
+    ASSERT_EQ(hs_pcap_lens(cap, orig, 4), 2);
+    ASSERT_EQ(cap[0], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(orig[0], (uint32_t)FRAME_CAP + 1);
+    ASSERT_EQ(cap[1], (uint32_t)FRAME_CAP);
+    ASSERT_EQ(orig[1], (uint32_t)FRAME_CAP + 1);
+    pair_teardown();
+}
+
+/* A second attempt rebuilds the file from its own frames, lengths
+ * included: the truncated M1 of the first attempt must not leave a
+ * 700-byte origlen behind for a short one. */
+/* A second attempt on the same pair must report its own lengths, not
+ * inherit the first attempt's 700-byte origlen. Note what carries this:
+ * the observe path rewrites m_frame_lens and m_frame_origlens together
+ * on every frame, so attempt_reset()'s memset of the origlen array is
+ * consistency with its sibling arrays rather than the thing this test
+ * proves — deleting that memset leaves this green. */
+static void test_handshake_pcap_second_attempt_reports_its_own_lengths(void) {
+    pair_setup();
+    ASSERT_EQ(feed_msg_sized(KI_M1, 7, ANONCE, NULL, 1, T0, 700), 700);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 7, SNONCE, M2_MIC, 0, T0,
+                             MIN_SIZED_FRAME), MIN_SIZED_FRAME);
+    ASSERT_EQ(feed_msg_sized(KI_M1, 9, ANONCE_B, NULL, 1, T0 + 30,
+                             MIN_SIZED_FRAME), MIN_SIZED_FRAME);
+    ASSERT_EQ(feed_msg_sized(KI_M2, 9, SNONCE_B, M2_MIC, 0, T0 + 30,
+                             MIN_SIZED_FRAME), MIN_SIZED_FRAME);
+    uint32_t cap[4], orig[4];
+    ASSERT_EQ(hs_pcap_lens(cap, orig, 4), 2);
+    ASSERT_EQ(cap[0], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(orig[0], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(cap[1], (uint32_t)MIN_SIZED_FRAME);
+    ASSERT_EQ(orig[1], (uint32_t)MIN_SIZED_FRAME);
+    pair_teardown();
+}
+
 /* T13. The byte is the hashcat wiki's table, not sloth's opinion:
  * bits 2..0 name the pair, bit 7 says the replay counter went
  * unchecked. Source: "Explanation of the MESSAGEPAIR fields",
@@ -2052,6 +2244,13 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_handshake_pcap_records_carry_capture_timestamps);
     RUN_TEST(test_handshake_pcap_out_of_range_usec_stored_as_zero);
     RUN_TEST(test_handshake_pcap_new_attempt_carries_its_own_times);
+
+    TEST_SUITE("eapol_log: handshake pcap record lengths (#92)");
+    RUN_TEST(test_handshake_pcap_long_frame_carries_the_wire_length);
+    RUN_TEST(test_handshake_pcap_short_frames_report_equal_lengths);
+    RUN_TEST(test_handshake_pcap_at_the_cap_is_not_marked_truncated);
+    RUN_TEST(test_handshake_pcap_one_byte_over_the_cap_is_truncated);
+    RUN_TEST(test_handshake_pcap_second_attempt_reports_its_own_lengths);
 
     /* #87 export permissions + failure reporting */
     RUN_TEST(test_export_private_under_permissive_umask);

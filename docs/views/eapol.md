@@ -113,11 +113,26 @@ M2+M3 pair — a different category. Because the two replay counters are
 now genuinely compared before pairing, bit 7 stays clear.
 
 Sloth additionally writes a per-handshake **`DIR/<bssid>_<sta>.pcap`**
-containing the raw 802.11 EAPOL-Key frames (M1..M4 as captured, no
-radiotap, DLT 105). The file is replayable through `aircrack-ng -w
-wordlist.txt -e <SSID> <file>.pcap` or openable in Wireshark / tshark
-for inspection. Re-completions replace the prior file with the
-freshest capture for that (BSSID, STA) pair.
+containing the raw 802.11 EAPOL-Key frames (M1..M4, no radiotap, DLT
+105). The file is replayable through `aircrack-ng -w wordlist.txt -e
+<SSID> <file>.pcap` or openable in Wireshark / tshark for inspection.
+Re-completions replace the prior file with the freshest capture for that
+(BSSID, STA) pair.
+
+Each record carries the frame's own capture time, and the record
+header's two lengths mean different things: `caplen` is what sloth
+stored, `origlen` the full 802.11 frame length as captured. Sloth buffers at most **512
+bytes** per frame, so a longer one — an M3 with a large encrypted
+key-data field, say — is stored truncated and declares it: Wireshark
+marks the packet cut short, and a reader sees the length the radio
+captured instead of being told the frame was as short as the copy.
+The caveat is worth stating: `origlen` is libpcap's captured length with
+radiotap removed, not `hdr->len`. The monitor radio opens at a 65535
+snaplen, so the two coincide for any real 802.11 frame, but a frame the
+kernel itself snapped would under-report here.
+For every frame that fits, which is every ordinary M1..M4, the two are
+equal. The lengths are evidence, not bookkeeping — an analyst has to be
+able to tell a truncated frame from a genuinely short one.
 
 ### Export handling (#87)
 
