@@ -88,6 +88,15 @@ operator's eye.
   itself an attack. That holds with a `provisional` tool attribution
   on it too: the signature has never been checked against a capture of
   the tool it names.
+- **The benign range straddles the threshold.** The SSID count above
+  puts legitimate multi-VAP gear at 1–4, and `KARMA_SSID_THRESH` is 3,
+  so a lawful 3- or 4-SSID AP trips the count by design. Other
+  readings that reach ≥3 without an attacker: a single-radio AP
+  carrying several SSIDs on one BSSID, an AP renamed a few times over
+  a long session, and a repeater or mesh node rebroadcasting the
+  networks behind it. This overlap is why the count alone is a
+  candidate signal and why CRIT needs one of the corroborators
+  below — not a defect in the threshold.
 
 ## What's suspicious
 
