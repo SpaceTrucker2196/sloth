@@ -9,16 +9,20 @@ type: reference
 **Summary**: `--db` ages rows out on three tiered windows and prunes
 observation rows when the database file exceeds `--db-max-mb`. That is
 an **investigative tradeoff**, not a deletion guarantee: it is not a
-"30-day deletion" promise, it is not a hard disk cap, it does not touch
-JSONL / pcap / EAPOL / report artifacts, and row deletion is not secure
-erasure.
+"30-day deletion" promise, it is not a hard disk cap, and row deletion is
+not secure erasure. Separately, the one artifact class that is
+offline-crackable — EAPOL / PMKID exports — is opt-in behind
+`--collect-handshakes` and swept on a 7-day default window (§2c). JSONL,
+pcap and report artifacts still have no retention at all.
 
 **Sources**: `src/db.c` (`db_maintain`, `prune_tier`,
 `prune_oldest_observations`, `db_size_bytes`), `src/db.h`
 (`DB_DEFAULT_RETAIN_DAYS`, `DB_DEFAULT_MAX_MB`), `src/db_schema.c`,
-`tests/test_db.c`, issue #96; `src/secure_file.c` for §4.1 (#87).
+`tests/test_db.c`, issue #96; `src/secure_file.c` for §4.1 (#87);
+`src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
+(`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
 
-**Last updated**: 2026-09-27 (sloth 1.8.2).
+**Last updated**: 2026-10-01 (sloth 1.8.2).
 
 ---
 
@@ -30,10 +34,13 @@ If you need one paragraph for a risk register:
 > outside a per-tier window, and prunes the oldest telemetry rows when
 > the database file grows past a configured size. Both run only while
 > sloth is running, at most once an hour. Neither is a guaranteed
-> deletion deadline, a guaranteed size ceiling, or a secure wipe. Every
-> other artifact sloth can write — JSONL, pcap, EAPOL exports, reports
-> — has no retention mechanism whatsoever and grows without bound until
-> the operator removes it.
+> deletion deadline, a guaranteed size ceiling, or a secure wipe.
+> Handshake exports — the only offline-crackable artifact class — are not
+> written at all unless `--collect-handshakes` is given, and are deleted
+> on a 7-day default window swept at startup and daily. Every other
+> artifact sloth can write — JSONL, pcap, reports — has no retention
+> mechanism whatsoever and grows without bound until the operator
+> removes it.
 
 ## 2. What `--db` retention does
 
@@ -91,6 +98,68 @@ The schema has 42 tables; the three tiers cover 40. `sessions` (one row
 per run, with `--site-label`) and `meta` (schema version) are in no
 tier and are **never** deleted by retention or by the size guard.
 `sessions` therefore grows by one row per sloth run, forever.
+
+## 2c. Handshake exports: the opt-in and its sweep
+
+Owner decision, 2026-09-30 (#87). Handshake material is the one artifact
+class where the file itself is the attack: a PMKID or a paired M1+M2
+supports offline password guessing by anyone who gets a copy. It is
+therefore the one class with both an opt-in and a default retention
+window, and both are independent of `--db`.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `--collect-handshakes` | **off** | Required before anything crackable is written. Without it `--eapol-dir` exits `2` and no export directory is created. |
+| `--handshake-retention DAYS` | `7` | Delete exported artifacts last written before the window. `0` = keep forever. Rejected outside `0..36500` rather than coerced. |
+
+**What is swept.** Only the names sloth itself writes, inside the
+directory `--eapol-dir` pinned at startup: `eapol.22000`, the
+per-handshake `<bssid>_<sta>.pcap` files, and `.<name>.tmp` partials left
+by a crash mid-write. A file you put in that directory yourself is not
+touched — the sweep deletes sloth's artifacts, not the directory's
+contents.
+
+**When it runs.** Once at startup, then once per
+`EAPOL_SWEEP_INTERVAL_S` (24 h) from the poll loop. Startup as well as
+daily because a sensor restarted more often than once a day would
+otherwise never age anything out.
+
+**Granularity is the whole artifact, by mtime.** That is exact for the
+per-handshake pcaps — one file per handshake. It is *not* exact for
+`eapol.22000`: that is a single run-spanning file hashcat reads whole, its
+mtime is its last append, and the 22000 format carries no per-line
+timestamp, so there is nothing to expire a line against. Consequence,
+stated plainly: **a collection that is still appending keeps lines older
+than the window**, and the file goes only once nothing has been added for
+the entire window. If per-line expiry matters for your policy, roll the
+file outside sloth (a dated directory per `--eapol-dir`, rotated by a
+systemd timer).
+
+**Nothing is followed, and nothing is silent.** Entries are
+`fstatat(..., AT_SYMLINK_NOFOLLOW)`-ed and only regular files are
+unlinked, so a symlink planted at an artifact name cannot redirect a
+deletion out of the export directory. Such an entry is left exactly as it
+is; it, and any `unlinkat` that fails, is counted and surfaced through the
+same path as an export failure — one stderr line, the running count and
+latest reason in the `[e]` view header, and
+`storage_eapol_failures` in the `sensor_health` record. A sweep that
+cannot honour the window says so.
+
+**What the gate does not do.** It does not blind the detector. With
+`--collect-handshakes` absent, the EAPOL-Key parser, the M1..M4 state
+machine, the replay-counter pairing verdict, the PTK-generation counter
+the FragAttacks rule reads, association evidence from M3, the `[e]` view
+and the JSONL / `--db` `eapol_events` records all behave exactly as with
+the gate open. Only the `.22000` lines and the per-handshake pcaps are
+withheld — the material that is dangerous because it is *on disk*.
+
+**Known limit: retention needs a live collection.** The sweep runs
+against the directory `--eapol-dir` validated at startup. A run without
+`--collect-handshakes` has no such directory, so material left by an
+earlier opted-in run is **not** swept — sloth no longer knows where it
+is. Turning collection off stops new material; it does not clean up old
+material. Delete it yourself, or restart with the flags and let the
+startup sweep do it.
 
 ## 3. What the size guard actually does
 
@@ -165,15 +234,15 @@ stating for a risk register:
 
 ## 4. What retention does *not* cover
 
-Nothing outside the SQLite file is managed. These grow until the
-operator deletes them:
+Apart from the handshake exports in §2c, nothing outside the SQLite file
+is managed. These grow until the operator deletes them:
 
 | Artifact | Flag | Retention |
 |----------|------|-----------|
 | JSONL forensic log | `-o FILE` | **none** — append-only, no rotation, no size cap. A `-o` run writes on the order of tens of GB/day |
 | Per-alert pcaps | `--pcap-dir DIR` | **none** — one file per alert flow, kept forever |
-| EAPOL / PMKID export | `--eapol-dir DIR` | **none** — and this is offline-crackable material |
-| Per-handshake pcaps | `--eapol-dir DIR` | **none** |
+| EAPOL / PMKID export | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default — see §2c. The one managed artifact outside the database, because it is the one that is offline-crackable |
+| Per-handshake pcaps | `--eapol-dir DIR` + `--collect-handshakes` | **7 days** by default (§2c) |
 | Posture reports | `--report`, `--report-json` | **none** — overwritten per run at the path you name, never aged |
 | Packets-view manual export | `w` key | **none** |
 | Wi-Fi AP snapshot | `--snapshot-out FILE` | **none** — overwritten per run at the path you name |
@@ -181,9 +250,9 @@ operator deletes them:
 | Filesystem copies, backups, snapshots | — | outside sloth entirely |
 
 If your data-handling policy needs those bounded, bound them outside
-sloth — logrotate, a tmpfiles.d rule, a systemd timer. Sloth
-deliberately ships no deletion logic for artifacts the operator asked
-for by name.
+sloth — logrotate, a tmpfiles.d rule, a systemd timer. Apart from the
+crackable material in §2c, sloth deliberately ships no deletion logic for
+artifacts the operator asked for by name.
 
 ### 4.1 File permissions on those artifacts (current behaviour)
 
@@ -232,7 +301,7 @@ enforced. This subsection describes what the code does as of 1.8.2
 
 | Artifact | Created as | Write | If refused |
 |----------|------------|-------|------------|
-| `--eapol-dir DIR`, `--pcap-dir DIR` | directory 0700 | — | startup stops |
+| `--eapol-dir DIR`, `--pcap-dir DIR` | directory 0700 | — | startup stops. `--eapol-dir` additionally needs `--collect-handshakes` (§2c), checked before the directory is created |
 | `DIR/eapol.22000` | 0600 | append; a failed write is truncated back to the previous length | counted, shown in the EAPOL view header; later exports still attempted |
 | `DIR/<bssid>_<sta>.pcap` | 0600 | exclusive temp file in `DIR`, renamed over the old name | a temp-file create, write or rename failure is counted and shown in the EAPOL view header; the previous capture stays |
 | Per-alert pcaps in `--pcap-dir` | 0600 | exclusive create, `_2` … `_99` on a same-second name clash | counted, retried next tick |
@@ -276,7 +345,13 @@ Recorded here rather than implied away:
 - **The size guard measures the wrong number for a disk budget** — the
   main database file only, excluding `-wal`/`-shm` — and gives up for
   the hour after 64 pruning rounds (§3).
-- **Retention is process-local.** It runs only while sloth runs.
+- **Retention is process-local.** It runs only while sloth runs. For the
+  handshake sweep that also means it needs a live opted-in collection:
+  material from an earlier run is not swept by a run that omits
+  `--collect-handshakes` (§2c).
+- **`eapol.22000` expires whole-file, not per line.** The format carries
+  no per-line timestamp, so a file still being appended to keeps lines
+  older than the window (§2c).
 - **`--snapshot-out` bypasses the #87 file checks.** It is written with
   plain `fopen`, so its mode follows the umask and a symlink at the path
   is followed (§4.1). Not fixed as of 1.8.2; a #87 follow-up.

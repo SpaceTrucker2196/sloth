@@ -1752,3 +1752,35 @@ wiki-sync.yml` runs it on every push to main touching `docs/wiki/**`.
 Repo instructions updated: `docs/CLAUDE.md`, `agents/AGENTS.md` (new
 "Wiki" duty section), `README.md` (wiki = complete reference). `index.md`
 gained a "Read this first" section linking all seven.
+
+---
+
+## 2026-10-01 — `--collect-handshakes` + `--handshake-retention` (#87)
+
+**Source**: the owner's written decision on issue #87 (2026-09-30):
+crackable material is gated behind an opt-in, off by default, with a
+7-day default retention sweep at startup and daily.
+
+**Updated pages**:
+
+- `cli-reference.md` — the two new flags in the output group,
+  `--eapol-dir` marked as requiring the opt-in, the synopsis group list,
+  and exit code `2` extended with both new refusals.
+- `retention.md` — new **§2c** "Handshake exports: the opt-in and its
+  sweep": what is swept, when, the whole-file-by-mtime granularity limit
+  on `eapol.22000`, the never-follow-a-symlink rule, and the limit that
+  retention needs a live opted-in collection. §4's "no retention"
+  table rows for the EAPOL artifacts corrected to 7 days, §4.1's
+  directory row noting the gate is checked before the directory is
+  created, and two new entries in §6 Known gaps.
+- `what-sloth-does.md`, `pcap-export.md`, `monitor-mode.md`,
+  `evil-twin-reproducer.md` — `--eapol-dir` now names the opt-in, and
+  every runnable command line that would have exited `2` was corrected.
+
+Also outside `docs/wiki/`: `README.md` (output section, DB retention
+paragraph, the quickstart command, the EAPOL view row) and
+`docs/views/eapol.md` (§ Export handling).
+
+**Not changed**: `MISSION.md` §2.2 already frames the 22000 export as
+material the *operator* cracks, never sloth; the gate narrows what
+reaches disk and needed no mission change.

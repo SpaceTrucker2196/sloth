@@ -75,7 +75,7 @@ IOCs**, not a feed ([[threat-intel]]). Which attack maps to which view:
 | `-o FILE` | JSONL / CEF / syslog forensic log | [[jsonl-schema]] |
 | `--data-socket SPEC` | read-only live stream of the same records | [[data-socket-exposure]] |
 | `--pcap-dir DIR` | per-alert packet capture | [[pcap-export]] |
-| `--eapol-dir DIR` | captured PMKID / 4-way handshakes (hashcat 22000 + per-handshake pcap) | [[wifi-sigint]], [[pcap-export]] |
+| `--eapol-dir DIR` (needs `--collect-handshakes`) | captured PMKID / 4-way handshakes (hashcat 22000 + per-handshake pcap). Opt-in, off by default; swept after `--handshake-retention` days (default 7) | [[wifi-sigint]], [[pcap-export]], [[retention]] |
 | `--db FILE` | bounded SQLite entity state | [[sqlite-schema]], [[retention]] |
 | `--report FILE.md` / `--report-json` | posture report on exit | [[posture-report]] |
 | `--snapshot-out` / `--baseline-in` | AP-inventory snapshot + diff | [[posture-report]] |

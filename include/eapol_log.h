@@ -25,9 +25,11 @@
  * and discards everything that depended on the old one (#97 / T12).
  *
  * Events land in a small ring buffer + the per-pair state machine.
- * If sloth was launched with --eapol-dir DIR, each successfully
- * captured PMKID or handshake is appended to <DIR>/eapol.22000 in
- * hashcat-mixed format. */
+ * If sloth was launched with --collect-handshakes AND --eapol-dir DIR,
+ * each successfully captured PMKID or handshake is appended to
+ * <DIR>/eapol.22000 in hashcat-mixed format. Without the opt-in the
+ * state machine, the events, the alerts and the [e] view all still run
+ * — only the write to disk is gated. See eapol_set_collect_enabled(). */
 
 /* eapol_event_t + MAX_EAPOL_EVENTS live in sloth.h alongside the
  * other data types embedded in sloth_state_t. */
@@ -112,12 +114,78 @@ void eapol_snapshot(sloth_state_t *s);
 /* Clear all events + pending handshake state. */
 void eapol_clear(void);
 
+/* ── Crackable-material gate (#87, owner decision 2026-09-30) ──────── *
+ *
+ * A PMKID or a paired M1+M2 supports offline password guessing. Writing
+ * one to disk is therefore a different act from observing it, and needs
+ * its own opt-in: --collect-handshakes, OFF by default.
+ *
+ * The gate covers writing only. With it closed the EAPOL-Key parser,
+ * the per-pair state machine, the PTK-generation counter the FragAttacks
+ * detector reads, assoc_observe(), the event ring and the [e] view all
+ * behave exactly as before — blinding the detector would cost detections
+ * and protect nothing, since nothing crackable leaves the process.
+ *
+ * eapol_set_output_dir() refuses while the gate is closed (and does not
+ * create the directory), and both write paths re-check it, so a caller
+ * cannot route round the refusal. */
+void eapol_set_collect_enabled(int on);
+int  eapol_collect_enabled(void);
+
+/* Retention window for exported crackable material, in days. Default 7;
+ * 0 keeps artifacts until the operator removes them.
+ *
+ * eapol_set_retention_days() returns -1 and changes nothing for a
+ * negative value or one past EAPOL_MAX_RETENTION_DAYS. Rejected, not
+ * coerced: "-1 days" has no reading the operator could have meant, and
+ * silently substituting the default is how a typo becomes a 7-day
+ * window the operator thinks is 70. */
+#define EAPOL_DEFAULT_RETENTION_DAYS 7
+#define EAPOL_MAX_RETENTION_DAYS     36500   /* 100 y — sanity, not policy */
+int  eapol_set_retention_days(int days);
+int  eapol_retention_days(void);
+
+/* Delete exported artifacts last written before the retention window.
+ *
+ * Scope is the export directory pinned by eapol_set_output_dir(), and
+ * within it only the names this module writes: eapol.22000, the
+ * per-handshake <bssid>_<sta>.pcap files, and .<name>.tmp partials left
+ * by a crash mid-write. An operator file that happens to share the
+ * directory is not touched.
+ *
+ * Granularity is the whole artifact, by mtime. Exact for the
+ * per-handshake pcaps (one file per handshake). For eapol.22000 — one
+ * run-spanning file hashcat reads whole — mtime is its last append, so
+ * it goes only once nothing has been added for the entire window; the
+ * 22000 format carries no per-line timestamp, so per-line expiry is not
+ * available. A long-running collection therefore keeps lines older than
+ * the window inside a file that is still being appended to.
+ *
+ * Nothing is followed: entries are fstatat'ed AT_SYMLINK_NOFOLLOW and
+ * only regular files are unlinked, so a symlink planted at an artifact
+ * name cannot redirect a deletion out of the directory. Such an entry,
+ * and any unlink that fails, is counted and reported through
+ * eapol_export_failures() / eapol_export_error() rather than swallowed.
+ *
+ * Returns the number of artifacts removed; 0 when retention is disabled
+ * or no export directory is set. A directory it cannot read returns -1.
+ * Both update the "last swept" clock, so a sweep that fails is retried
+ * on the next window, not on the next poll. */
+int  eapol_sweep(time_t now);
+
+/* Startup-and-daily scheduling for eapol_sweep(). The first call sweeps;
+ * later ones are a time comparison until EAPOL_SWEEP_INTERVAL_S has
+ * passed, so the poll loop can call it every iteration. */
+#define EAPOL_SWEEP_INTERVAL_S 86400
+void eapol_maintain(time_t now);
+
 /* Configure where eapol.22000 and the per-handshake pcaps are written.
- * NULL or "" disables writing. The directory is created 0700 if absent;
- * an existing one must be a real directory owned by the effective uid
- * with no group/other bits, and is refused otherwise — never chmod'ed
- * (#87). Returns 0 on success, -1 on refusal/failure with export
- * disabled and the reason in eapol_export_error(). */
+ * NULL or "" disables writing. Refused outright while the collect gate
+ * is closed. The directory is created 0700 if absent; an existing one
+ * must be a real directory owned by the effective uid with no
+ * group/other bits, and is refused otherwise — never chmod'ed (#87).
+ * Returns 0 on success, -1 on refusal/failure with export disabled and
+ * the reason in eapol_export_error(). */
 int  eapol_set_output_dir(const char *dir);
 
 /* Export failures since the last eapol_set_output_dir(): a refused or

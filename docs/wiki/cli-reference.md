@@ -16,15 +16,15 @@ is a bug ([[docs-drift-judge]], and the wiki-sync duty in `agents/AGENTS.md`).
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
 `src/view_labels.c`, `include/sloth.h`.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-01.
 
 ---
 
 ## Synopsis
 
 ```
-sloth [output] [stream] [wifi] [correlation] [db] [inventory]
-      [posture] [runtime] [--help] [--version]
+sloth [output] [handshakes] [stream] [wifi] [correlation] [db]
+      [inventory] [posture] [runtime] [--help] [--version]
 ```
 
 Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. The
@@ -40,7 +40,9 @@ single mode driven by flags.
 | `-o`, `--out` | `FILE` | off | Append a JSONL forensic log of all observed events. Created `0600`; an existing file must be private, owned by you, not a symlink. → [[jsonl-schema]] |
 | `--out-format` | `FORMAT` | `jsonl` | Format for `-o` **and** `--data-socket`. One of `jsonl`, `cef` (ArcSight CEF), `syslog` (RFC 5424, PRI 134). |
 | `--pcap-dir` | `DIR` | off | On a critical alert with a known flow, write the matching packets to a fresh pcap under `DIR`. Dir `0700`, files `0600`. → [[pcap-export]] |
-| `--eapol-dir` | `DIR` | off | Append captured PMKIDs / 4-way handshakes to `DIR/eapol.22000` (hashcat 22000) **and** a per-handshake `DIR/<bssid>_<sta>.pcap`. **Crackable material** — strict perms, refused not repaired. → [[wifi-sigint]] |
+| `--eapol-dir` | `DIR` | off | Append captured PMKIDs / 4-way handshakes to `DIR/eapol.22000` (hashcat 22000) **and** a per-handshake `DIR/<bssid>_<sta>.pcap`. **Crackable material** — strict perms, refused not repaired. **Requires `--collect-handshakes`**: without it this flag exits `2` and no directory is created. → [[wifi-sigint]] |
+| `--collect-handshakes` | — | **off** | Opt in to writing crackable material to disk. A PMKID or a paired M1+M2 supports offline password guessing, so exporting one is a separate decision from observing one. Gates the `.22000` lines and the per-handshake pcaps **only** — detection, alerting, the `[e]` view and the JSONL/DB records are unaffected. sloth never cracks anything itself (MISSION §2.2). → [[retention]] |
+| `--handshake-retention` | `DAYS` | `7` | Age-out window for the artifacts above. Swept at startup and once a day while running; artifacts last written before the window are deleted. `0` = keep forever. Whole-file granularity by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window. A failed delete is counted and shown in the `[e]` header, never silent. → [[retention]] |
 | `--report` | `FILE.md` | off | On exit, write a Markdown posture report (alerts by severity + MITRE technique, cleartext creds, high-risk devices). → [[posture-report]] |
 | `--report-json` | `FILE.json` | off | Same rollup, structured for SIEM diff. |
 
@@ -165,7 +167,7 @@ A view can *claim* a key the global switch also uses; see
 | Code | Meaning |
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`). |
 
 ## Build variants (Makefile)
 

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include "runner.h"
@@ -253,6 +254,9 @@ static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
     unlink(pcap_path);
     rmdir(dir);
     mkdir(dir, 0700);   /* private: a permissive dir is refused (#87) */
+    /* Export is crackable material and gated on the opt-in (#87); a test
+     * of the export path has to ask for it like an operator does. */
+    eapol_set_collect_enabled(1);
     eapol_set_output_dir(dir);
 
     /* Feed M1 with PMKID (same as test_m1_with_pmkid_extracted). */
@@ -319,6 +323,7 @@ static void drive_pmkid_m1(char *out_buf, int out_sz,
     unlink(txt_path);
     rmdir(dir_out);
     mkdir(dir_out, 0700);
+    eapol_set_collect_enabled(1);
     eapol_set_output_dir(dir_out);
 
     uint8_t eapol[128];
@@ -540,6 +545,7 @@ static void bounds_setup(void) {
     snprintf(g_bounds_dir, sizeof(g_bounds_dir),
              "/tmp/sloth_test_eapol83_%d", (int)getpid());
     mkdir(g_bounds_dir, 0700);
+    eapol_set_collect_enabled(1);
     eapol_set_output_dir(g_bounds_dir);
 }
 
@@ -905,6 +911,7 @@ static void pair_setup(void) {
     char p[160];
     pair_path(p, sizeof(p), "eapol.22000");           unlink(p);
     pair_path(p, sizeof(p), HS_PCAP_97);              unlink(p);
+    eapol_set_collect_enabled(1);
     eapol_set_output_dir(g_pair_dir);
     eapol_clear();
     assoc_clear();
@@ -1375,6 +1382,10 @@ static void perm_setup(void) {
     snprintf(g_perm_dir, sizeof(g_perm_dir),
              "/tmp/sloth_test_eapol87_%d", (int)getpid());
     perm_cleanup();
+    /* These tests are about how the export file is created, so they run
+     * with the collect gate open; the gate itself is tested below. */
+    eapol_set_collect_enabled(1);
+    eapol_set_retention_days(EAPOL_DEFAULT_RETENTION_DAYS);
 }
 
 static void drive_pmkid(void) {
@@ -1461,6 +1472,7 @@ static void test_export_refuses_symlinked_dir(void) {
 static void test_export_dir_creation_failure_reported(void) {
     char bad[120];
     snprintf(bad, sizeof(bad), "/tmp/sloth_no_parent_%d/eapol", (int)getpid());
+    eapol_set_collect_enabled(1);
     ASSERT_EQ(eapol_set_output_dir(bad), -1);
     ASSERT(strstr(eapol_export_error(), "could not create") != NULL);
     eapol_set_output_dir(NULL);
@@ -1609,6 +1621,378 @@ static void test_export_failure_reaches_sensor_health(void) {
     perm_cleanup();
 }
 
+/* ── The crackable-material gate + its retention sweep, #87 ────────── *
+ *
+ * Owner decision 2026-09-30: writing PMKIDs / 4-way handshakes to disk
+ * is behind --collect-handshakes, off by default, with a 7-day default
+ * retention sweep at startup and daily.
+ *
+ * Two separate claims are under test and they pull in opposite
+ * directions. The gate must stop every byte of crackable material from
+ * reaching the filesystem, AND it must not blind the detector: the
+ * events, the pairing verdict and the association evidence are what the
+ * [e] view and the alert rules run on, and none of that leaves the
+ * process. A gate that cost detections would be protecting nothing.
+ *
+ * Clocks are supplied, never read, and artifact ages are set with
+ * utimensat, so the sweep's window is exercised exactly rather than by
+ * waiting. */
+
+static char g_gate_dir[80];
+
+static void gate_path(char *out, size_t sz, const char *leaf) {
+    snprintf(out, sz, "%s/%s", g_gate_dir, leaf);
+}
+
+static int gate_exists(const char *leaf) {
+    char p[200];
+    struct stat st;
+    gate_path(p, sizeof(p), leaf);
+    return lstat(p, &st) == 0;
+}
+
+static void gate_cleanup(void) {
+    eapol_set_output_dir(NULL);
+    eapol_set_collect_enabled(0);
+    eapol_set_retention_days(EAPOL_DEFAULT_RETENTION_DAYS);
+    chmod(g_gate_dir, 0700);        /* a test may have locked it */
+    DIR *d = opendir(g_gate_dir);
+    if (d) {
+        struct dirent *e;
+        char p[400];
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof(p), "%s/%s", g_gate_dir, e->d_name);
+            unlink(p);
+        }
+        closedir(d);
+    }
+    unlink(g_gate_dir);             /* in case a test left a symlink here */
+    rmdir(g_gate_dir);
+    eapol_clear();
+    assoc_clear();
+}
+
+/* Leaves the gate CLOSED — the shipped default. A test that wants the
+ * export open says so. */
+static void gate_setup(void) {
+    snprintf(g_gate_dir, sizeof(g_gate_dir),
+             "/tmp/sloth_test_eapol87g_%d", (int)getpid());
+    gate_cleanup();
+}
+
+/* A fixture artifact of the given name, created private, with its mtime
+ * placed `age_days` in the past relative to `now`. */
+static void gate_plant(const char *leaf, time_t now, int age_days) {
+    char p[200];
+    gate_path(p, sizeof(p), leaf);
+    FILE *f = fopen(p, "w");
+    if (f) { fputs("x", f); fclose(f); }
+    chmod(p, 0600);
+    struct timespec ts[2];
+    ts[0].tv_sec = ts[1].tv_sec = now - (time_t)age_days * 86400;
+    ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    utimensat(AT_FDCWD, p, ts, 0);
+}
+
+/* ── The gate ──────────────────────────────────────────────────────── */
+
+/* Off unless asked for. The whole point of the flag is that an operator
+ * who said nothing about handshakes gets no crackable material. */
+static void test_collect_is_off_until_opted_in(void) {
+    gate_setup();
+    ASSERT_EQ(eapol_collect_enabled(), 0);
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_collect_enabled(), 1);
+    gate_cleanup();
+    ASSERT_EQ(eapol_collect_enabled(), 0);
+}
+
+/* An export directory is refused while the gate is closed, and not even
+ * created: a 0700 directory named for handshake exports reads as "they
+ * are being collected here", which would be a lie. */
+static void test_gate_closed_refuses_the_export_dir(void) {
+    gate_setup();
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), -1);
+    ASSERT(strstr(eapol_export_error(), "--collect-handshakes") != NULL);
+    struct stat st;
+    ASSERT_EQ(lstat(g_gate_dir, &st), -1);        /* never created */
+    gate_cleanup();
+}
+
+/* Gate closed: a complete, correctly-paired handshake writes nothing —
+ * no .22000 line, no per-handshake pcap, no directory at all. */
+static void test_gate_closed_writes_no_crackable_material(void) {
+    gate_setup();
+    mkdir(g_gate_dir, 0700);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), -1);
+    ASSERT_EQ(feed_m1(7, ANONCE, PMKID, T0), 1);
+    ASSERT_EQ(feed_m2(7, SNONCE, T0 + 1), 1);
+    ASSERT_EQ(dir_entries(g_gate_dir), 0);
+    ASSERT(!gate_exists("eapol.22000"));
+    ASSERT(!gate_exists(HS_PCAP));
+    gate_cleanup();
+}
+
+/* ...and the detector is untouched by that. The pairing verdict, the
+ * PMKID, the PTK generation counter the FragAttacks rule reads and the
+ * M3 association evidence all behave exactly as with the gate open,
+ * because none of them leaves the process. */
+static void test_gate_closed_still_detects_the_handshake(void) {
+    gate_setup();
+    ASSERT_EQ(feed_m1(7, ANONCE, PMKID, T0), 1);
+    ASSERT_EQ(feed_m2(7, SNONCE, T0 + 1), 1);
+    static sloth_state_t s;
+    snap(&s);
+    ASSERT_EQ(s.eapol_count, 2);
+    ASSERT_EQ(s.eapol_events[0].handshake_complete, 1);
+    ASSERT_EQ(s.eapol_events[0].replay_counter_ok, 1);
+    ASSERT_EQ(s.eapol_events[0].handshake_progress, 2);
+    ASSERT_EQ(s.eapol_events[1].has_pmkid, 1);
+    const uint8_t bssid[6] = BSSID, sta[6] = STA;
+    ASSERT_EQ(eapol_key_generation(bssid, sta), 0);
+    ASSERT_EQ(feed_m3(8, ANONCE_B, T0 + 2), 1);
+    snap(&s);
+    ASSERT_EQ(s.eapol_events[0].assoc_evidence, 1);
+    ASSERT_EQ(eapol_key_generation(bssid, sta), 1);
+    ASSERT_EQ(eapol_export_failures(), 0);   /* refusals, not failures */
+    gate_cleanup();
+}
+
+/* Gate open: the same handshake exports exactly as it did before the
+ * gate existed. The guard is the opt-in, not a new code path. */
+static void test_gate_open_exports_as_before(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(feed_m1(7, ANONCE, PMKID, T0), 1);
+    ASSERT_EQ(feed_m2(7, SNONCE, T0 + 1), 1);
+    ASSERT(gate_exists("eapol.22000"));
+    ASSERT(gate_exists(HS_PCAP));
+    char p[200], body[4096];
+    gate_path(p, sizeof(p), "eapol.22000");
+    ASSERT_GT(slurp_file(p, body, sizeof(body)), 0);
+    ASSERT(strstr(body, "WPA*01*") != NULL);   /* the PMKID line */
+    ASSERT(strstr(body, "WPA*02*") != NULL);   /* the M1+M2 line  */
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
+/* Closing the gate mid-run drops the pinned directory with it, so the
+ * validated descriptor cannot outlive permission to write through it. */
+static void test_closing_the_gate_stops_further_writes(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(feed_m1(7, ANONCE, PMKID, T0), 1);
+    char p[200];
+    gate_path(p, sizeof(p), "eapol.22000");
+    long before = size_of(p);
+    ASSERT_GT(before, 0);
+
+    eapol_set_collect_enabled(0);
+    eapol_clear();
+    ASSERT_EQ(feed_m1(9, ANONCE_B, PMKID, T0 + 100), 1);
+    ASSERT_EQ(size_of(p), before);
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
+/* ── Retention ─────────────────────────────────────────────────────── */
+
+static void test_retention_defaults_to_seven_days(void) {
+    gate_setup();
+    ASSERT_EQ(eapol_retention_days(), EAPOL_DEFAULT_RETENTION_DAYS);
+    ASSERT_EQ(eapol_retention_days(), 7);
+    gate_cleanup();
+}
+
+/* A bad value is rejected and changes nothing — not coerced to the
+ * default, which would turn a typo into a window the operator believes
+ * is something else. */
+static void test_retention_rejects_a_bad_value(void) {
+    gate_setup();
+    ASSERT_EQ(eapol_set_retention_days(14), 0);
+    ASSERT_EQ(eapol_set_retention_days(-1), -1);
+    ASSERT_EQ(eapol_retention_days(), 14);
+    ASSERT_EQ(eapol_set_retention_days(-100000), -1);
+    ASSERT_EQ(eapol_retention_days(), 14);
+    ASSERT_EQ(eapol_set_retention_days(EAPOL_MAX_RETENTION_DAYS + 1), -1);
+    ASSERT_EQ(eapol_retention_days(), 14);
+    ASSERT_EQ(eapol_set_retention_days(0), 0);          /* keep forever */
+    ASSERT_EQ(eapol_retention_days(), 0);
+    ASSERT_EQ(eapol_set_retention_days(EAPOL_MAX_RETENTION_DAYS), 0);
+    gate_cleanup();
+}
+
+/* The sweep deletes past the window and keeps inside it, per artifact.
+ * The boundary is "last written before now - window", so an artifact
+ * exactly at the edge is still inside. */
+static void test_sweep_deletes_past_the_window_and_keeps_inside(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(eapol_set_retention_days(7), 0);
+    time_t now = T0 + 400 * 86400;        /* far enough from the epoch */
+
+    gate_plant("eapol.22000",                        now, 8);
+    gate_plant("aabbccddeeff_112233445566.pcap",     now, 30);
+    gate_plant(".aabbccddeeff_112233445566.pcap.tmp", now, 9);
+    gate_plant("001122334455_665544332211.pcap",     now, 6);
+    gate_plant("0a0b0c0d0e0f_f0e0d0c0b0a0.pcap",     now, 7);   /* edge */
+
+    ASSERT_EQ(eapol_sweep(now), 3);
+    ASSERT(!gate_exists("eapol.22000"));
+    ASSERT(!gate_exists("aabbccddeeff_112233445566.pcap"));
+    ASSERT(!gate_exists(".aabbccddeeff_112233445566.pcap.tmp"));
+    ASSERT(gate_exists("001122334455_665544332211.pcap"));
+    ASSERT(gate_exists("0a0b0c0d0e0f_f0e0d0c0b0a0.pcap"));
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
+/* 0 = keep forever: the sweep becomes a no-op, however old the
+ * artifacts are. */
+static void test_sweep_disabled_at_zero_days(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(eapol_set_retention_days(0), 0);
+    time_t now = T0 + 400 * 86400;
+    gate_plant("eapol.22000", now, 4000);
+    gate_plant("aabbccddeeff_112233445566.pcap", now, 4000);
+
+    ASSERT_EQ(eapol_sweep(now), 0);
+    ASSERT(gate_exists("eapol.22000"));
+    ASSERT(gate_exists("aabbccddeeff_112233445566.pcap"));
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
+/* The sweep deletes sloth's artifacts, not the directory's contents. An
+ * operator file that happens to share the directory is older than the
+ * window and stays. */
+static void test_sweep_leaves_files_it_did_not_write(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(eapol_set_retention_days(7), 0);
+    time_t now = T0 + 400 * 86400;
+    gate_plant("notes.txt",                      now, 90);
+    gate_plant("eapol.22000.keep",               now, 90);
+    gate_plant("aabbccddeeff_112233445566.pcap", now, 90);
+
+    ASSERT_EQ(eapol_sweep(now), 1);
+    ASSERT(gate_exists("notes.txt"));
+    ASSERT(gate_exists("eapol.22000.keep"));
+    ASSERT(!gate_exists("aabbccddeeff_112233445566.pcap"));
+    gate_cleanup();
+}
+
+/* A symlink planted at an artifact name is never followed — its target
+ * survives, the link survives — and it is reported, not skipped
+ * silently: in a directory only sloth writes, it is either operator
+ * error or an attempt to steer a deletion, and both deserve a line. */
+static void test_sweep_reports_a_symlink_and_follows_nothing(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(eapol_set_retention_days(7), 0);
+    time_t now = T0 + 400 * 86400;
+
+    char victim[140], link[200];
+    snprintf(victim, sizeof(victim), "%s_victim", g_gate_dir);
+    unlink(victim);
+    FILE *f = fopen(victim, "w");
+    if (f) { fputs("secret", f); fclose(f); }
+    gate_path(link, sizeof(link), "aabbccddeeff_112233445566.pcap");
+    ASSERT_EQ(symlink(victim, link), 0);
+    /* Backdate the LINK itself, not its target. */
+    struct timespec ts[2];
+    ts[0].tv_sec = ts[1].tv_sec = now - 90 * 86400;
+    ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    ASSERT_EQ(utimensat(AT_FDCWD, link, ts, AT_SYMLINK_NOFOLLOW), 0);
+
+    ASSERT_EQ(eapol_sweep(now), 0);
+    ASSERT(gate_exists("aabbccddeeff_112233445566.pcap"));   /* left alone */
+    struct stat st;
+    ASSERT_EQ(lstat(victim, &st), 0);                        /* not followed */
+    ASSERT_EQ((long)st.st_size, 6L);
+    ASSERT_GE(eapol_export_failures(), 1);
+    ASSERT(strstr(eapol_export_error(), "not a regular file") != NULL);
+    ASSERT(strstr(eapol_export_error(), "nothing was followed") != NULL);
+    unlink(victim);
+    gate_cleanup();
+}
+
+/* A delete that fails is counted and its reason kept — the operator is
+ * told the window is not being honoured rather than left believing it
+ * is. Provoked by dropping write permission on the export directory
+ * after the descriptor was pinned. */
+static void test_sweep_reports_a_failed_delete(void) {
+    gate_setup();
+    if (geteuid() == 0) {
+        /* root ignores the directory's write bit, so this cannot be
+         * provoked that way. The symlink case above already covers
+         * "reported, not swallowed" for any uid. */
+        gate_cleanup();
+        return;
+    }
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);
+    ASSERT_EQ(eapol_set_retention_days(7), 0);
+    time_t now = T0 + 400 * 86400;
+    gate_plant("aabbccddeeff_112233445566.pcap", now, 90);
+    ASSERT_EQ(chmod(g_gate_dir, 0500), 0);
+
+    ASSERT_EQ(eapol_sweep(now), 0);
+    ASSERT(gate_exists("aabbccddeeff_112233445566.pcap"));
+    ASSERT_GE(eapol_export_failures(), 1);
+    ASSERT(strstr(eapol_export_error(), "retention window") != NULL);
+    /* ...and it reaches the view header, not only stderr. */
+    static sloth_state_t s;
+    snap(&s);
+    ASSERT_GE(s.eapol_export_failures, 1);
+    ASSERT(strstr(s.eapol_export_err, "retention window") != NULL);
+    ASSERT_EQ(chmod(g_gate_dir, 0700), 0);
+    gate_cleanup();
+}
+
+/* Scheduling: the first eapol_maintain() is the startup sweep, a second
+ * one the same day does nothing, and the next day sweeps again. */
+static void test_maintain_sweeps_at_startup_then_daily(void) {
+    gate_setup();
+    eapol_set_collect_enabled(1);
+    ASSERT_EQ(eapol_set_output_dir(g_gate_dir), 0);   /* resets the clock */
+    ASSERT_EQ(eapol_set_retention_days(7), 0);
+    time_t now = T0 + 400 * 86400;
+
+    gate_plant("aabbccddeeff_112233445566.pcap", now, 90);
+    eapol_maintain(now);                               /* startup sweep */
+    ASSERT(!gate_exists("aabbccddeeff_112233445566.pcap"));
+
+    /* Same day: not due, so a newly-aged artifact survives. */
+    gate_plant("001122334455_665544332211.pcap", now, 90);
+    eapol_maintain(now + EAPOL_SWEEP_INTERVAL_S - 1);
+    ASSERT(gate_exists("001122334455_665544332211.pcap"));
+
+    /* A day on: due again. */
+    eapol_maintain(now + EAPOL_SWEEP_INTERVAL_S);
+    ASSERT(!gate_exists("001122334455_665544332211.pcap"));
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
+/* With no export directory there is nothing to sweep, and asking is not
+ * an error — the poll loop calls eapol_maintain() unconditionally. */
+static void test_maintain_is_inert_without_an_export_dir(void) {
+    gate_setup();
+    ASSERT_EQ(eapol_sweep(T0 + 400 * 86400), 0);
+    eapol_maintain(T0 + 400 * 86400);
+    ASSERT_EQ(eapol_export_failures(), 0);
+    gate_cleanup();
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -1679,4 +2063,21 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_export_pcap_replace_does_not_follow_symlink);
     RUN_TEST(test_export_write_failure_visible);
     RUN_TEST(test_export_failure_reaches_sensor_health);
+
+    TEST_SUITE("eapol_log: crackable-material gate + retention (#87)");
+    RUN_TEST(test_collect_is_off_until_opted_in);
+    RUN_TEST(test_gate_closed_refuses_the_export_dir);
+    RUN_TEST(test_gate_closed_writes_no_crackable_material);
+    RUN_TEST(test_gate_closed_still_detects_the_handshake);
+    RUN_TEST(test_gate_open_exports_as_before);
+    RUN_TEST(test_closing_the_gate_stops_further_writes);
+    RUN_TEST(test_retention_defaults_to_seven_days);
+    RUN_TEST(test_retention_rejects_a_bad_value);
+    RUN_TEST(test_sweep_deletes_past_the_window_and_keeps_inside);
+    RUN_TEST(test_sweep_disabled_at_zero_days);
+    RUN_TEST(test_sweep_leaves_files_it_did_not_write);
+    RUN_TEST(test_sweep_reports_a_symlink_and_follows_nothing);
+    RUN_TEST(test_sweep_reports_a_failed_delete);
+    RUN_TEST(test_maintain_sweeps_at_startup_then_daily);
+    RUN_TEST(test_maintain_is_inert_without_an_export_dir);
 }

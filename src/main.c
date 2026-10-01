@@ -515,8 +515,9 @@ static void handle_key(sloth_state_t *s, int key) {
 
 static void print_usage(const char *argv0) {
     fprintf(stderr,
-            "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR] "
-            "[--data-socket SPEC] [--data-socket-allow-remote]\n"
+            "usage: %s [-o FILE] [--pcap-dir DIR] [--eapol-dir DIR]\n"
+            "       [--collect-handshakes] [--handshake-retention DAYS]\n"
+            "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -543,7 +544,34 @@ static void print_usage(const char *argv0) {
             "                     CRACKABLE MATERIAL: both dirs are created\n"
             "                     0700, files 0600; an existing dir that is\n"
             "                     group/other accessible, not yours, or a\n"
-            "                     symlink is refused, never chmod'ed\n"
+            "                     symlink is refused, never chmod'ed.\n"
+            "                     Requires --collect-handshakes; without it\n"
+            "                     this flag exits 2 rather than starting a\n"
+            "                     run that writes nothing\n"
+            "  --collect-handshakes\n"
+            "                     opt in to writing crackable material to\n"
+            "                     disk. OFF by default. A PMKID or a paired\n"
+            "                     M1+M2 supports offline password guessing,\n"
+            "                     so exporting one is a separate decision\n"
+            "                     from observing one. Detection, alerting,\n"
+            "                     the [e] view and the JSONL/DB records are\n"
+            "                     unaffected by this flag — it gates the\n"
+            "                     .22000 lines and the per-handshake pcaps\n"
+            "                     only. sloth never cracks anything itself\n"
+            "                     (MISSION 2.2)\n"
+            "  --handshake-retention DAYS\n"
+            "                     age-out window for the exported crackable\n"
+            "                     material above. Default 7. Swept at\n"
+            "                     startup and once a day while running:\n"
+            "                     artifacts in DIR last written before the\n"
+            "                     window are deleted. 0 = keep forever.\n"
+            "                     Whole-file granularity by mtime, so\n"
+            "                     eapol.22000 goes only once nothing has\n"
+            "                     been appended for the whole window (the\n"
+            "                     22000 format has no per-line timestamp).\n"
+            "                     A failed delete is counted and shown in\n"
+            "                     the EAPOL view header, never silent.\n"
+            "                     See docs/wiki/retention.md\n"
             "  --data-socket [SPEC]\n"
             "                     stream the same records over a read-only\n"
             "                     socket. SPEC is one of:\n"
@@ -778,6 +806,7 @@ int main(int argc, char **argv) {
     const char *jsonl_path   = NULL;
     const char *pcap_dir     = NULL;
     const char *eapol_dir    = NULL;
+    int         collect_hs   = 0;      /* --collect-handshakes (#87) */
     const char *data_socket  = NULL;
     const char *report_md    = NULL;   /* --report      FILE.md   */
     const char *report_json  = NULL;   /* --report-json FILE.json */
@@ -810,6 +839,20 @@ int main(int argc, char **argv) {
             pcap_dir = argv[++i];
         } else if (!strcmp(argv[i], "--eapol-dir") && i + 1 < argc) {
             eapol_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--collect-handshakes")) {
+            collect_hs = 1;
+        } else if (!strcmp(argv[i], "--handshake-retention") && i + 1 < argc) {
+            char *endp = NULL;
+            long v = strtol(argv[++i], &endp, 10);
+            if (endp == argv[i] || *endp != '\0' || v < 0 ||
+                v > EAPOL_MAX_RETENTION_DAYS ||
+                eapol_set_retention_days((int)v) != 0) {
+                fprintf(stderr,
+                        "bad --handshake-retention %s (expected whole days "
+                        "0..%d; 0 = keep forever)\n",
+                        argv[i], EAPOL_MAX_RETENTION_DAYS);
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--data-socket")) {
             /* Optional value — bare `--data-socket` defaults to the
              * loopback TCP listener so the common case of "stream to a
@@ -963,6 +1006,29 @@ int main(int argc, char **argv) {
      * construction: it names a guarantee, so a command line carrying
      * both flags is a contradiction and is refused either way round
      * rather than silently resolved in favour of one of them. */
+    /* Crackable material is opt-in (#87, owner decision 2026-09-30).
+     * Resolved here, with the other whole-command-line policy, so the
+     * outcome cannot depend on the order the flags were typed in.
+     *
+     * --eapol-dir without the opt-in is a startup error rather than a
+     * run that writes nothing: the operator named a destination for
+     * offline-crackable material, and a sloth that starts anyway reads as
+     * "the export is happening". Failing loudly at argv time is also the
+     * only version an init unit or a script can notice. */
+    if (eapol_dir && !collect_hs) {
+        fprintf(stderr,
+                "sloth: --eapol-dir %s refused: PMKIDs and 4-way handshakes "
+                "are offline-crackable material and need the explicit "
+                "--collect-handshakes opt-in. Detection, alerting and the "
+                "[e] view work without it — only writing to disk is gated.\n",
+                eapol_dir);
+        return 2;
+    }
+    eapol_set_collect_enabled(collect_hs);
+    if (collect_hs && !eapol_dir)
+        fprintf(stderr, "sloth: --collect-handshakes without --eapol-dir: "
+                        "no destination, so nothing is exported\n");
+
     if (strict_lock) {
         observe_lock_strict();       /* scan trigger + discovery (slice 3) */
         dns_resolver_lock_strict();  /* resolver                (slice 2) */
@@ -1062,6 +1128,22 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
         return 1;
     }
+    if (eapol_dir) {
+        /* Sweep once here, then daily from the poll loop. At startup
+         * because a sensor that is restarted more often than once a day
+         * would otherwise never age anything out. */
+        int swept = eapol_sweep(time(NULL));
+        if (eapol_retention_days() > 0)
+            fprintf(stderr,
+                    "sloth: handshake export %s — CRACKABLE MATERIAL, "
+                    "retention %d day(s), %d artifact(s) swept at startup\n",
+                    eapol_dir, eapol_retention_days(), swept > 0 ? swept : 0);
+        else
+            fprintf(stderr,
+                    "sloth: handshake export %s — CRACKABLE MATERIAL, "
+                    "retention disabled (--handshake-retention 0): artifacts "
+                    "are kept until you delete them\n", eapol_dir);
+    }
     if (jsonl_path) {
         if (!jsonl_open(jsonl_path)) {
             fprintf(stderr, "sloth: could not open jsonl output %s\n",
@@ -1160,6 +1242,10 @@ int main(int argc, char **argv) {
             time(NULL) - session_start >= 30)
             wifi_baseline_capture(&g_state);
         data_socket_tick();
+        /* Daily retention sweep over the handshake export (#87). A time
+         * comparison on every poll until the window rolls over; a no-op
+         * entirely when nothing is being collected. */
+        eapol_maintain(time(NULL));
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(time(NULL));

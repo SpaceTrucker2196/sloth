@@ -78,7 +78,8 @@ sudo ip link set wlan1 down
 sudo iw dev wlan1 set type monitor
 sudo ip link set wlan1 up
 # then:
-sudo ./sloth --eapol-dir /tmp/sloth-eapol -o /tmp/sloth.jsonl
+sudo ./sloth --collect-handshakes --eapol-dir /tmp/sloth-eapol \
+             -o /tmp/sloth.jsonl
 ```
 
 `airmon-ng start wlan1` does the same and also kills interfering

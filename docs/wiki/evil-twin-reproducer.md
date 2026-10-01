@@ -8,7 +8,8 @@ project discipline; see `CLAUDE.md` § "Hand-crafted protocol tests").
 These snippets assume:
 
 - sloth running on a wireless adapter in monitor mode, with `-i wlan0mon`
-  and (for Phase 4) `--eapol-dir /tmp/eapol-out`.
+  and (for Phase 4) `--collect-handshakes --eapol-dir /tmp/eapol-out`
+  (the opt-in is required; `--eapol-dir` alone exits 2).
 - A second adapter able to inject — `wlan1mon` in the examples below.
 - Python 3 with `scapy` installed (`pip install scapy`).
 - Root / `CAP_NET_RAW` privileges on the injecting adapter.

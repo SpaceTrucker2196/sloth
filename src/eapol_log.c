@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -91,6 +92,18 @@ static int       g_pending_n = 0;
 static char         g_out_dir[256];
 static int          g_out_fd = -1;
 static sfile_fail_t g_fail;
+
+/* The crackable-material gate and its retention window (#87, owner
+ * decision 2026-09-30). g_collect is the --collect-handshakes opt-in and
+ * starts closed: an operator who said nothing about handshakes gets no
+ * crackable material on disk. g_last_sweep == 0 means "never swept",
+ * which is what makes the first eapol_maintain() call the startup
+ * sweep. */
+static int          g_collect        = 0;
+static int          g_retention_days = EAPOL_DEFAULT_RETENTION_DAYS;
+static time_t       g_last_sweep     = 0;
+
+#define EAPOL_SECS_PER_DAY 86400
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -244,7 +257,10 @@ static int write_all(int fd, const char *buf, size_t n) {
  * leaves no half line, and is reported. */
 static void append_22000_line_for_bssid(const char *line,
                                         const uint8_t bssid[6]) {
-    if (g_out_fd < 0) return;
+    /* The gate is re-checked here, not only at eapol_set_output_dir():
+     * this is the last statement before crackable material becomes a
+     * file, and that is where the cheapest possible check belongs. */
+    if (!g_collect || g_out_fd < 0) return;
     char err[SFILE_ERR_MAX];
     int fd = sfile_open(g_out_fd, "eapol.22000", SFILE_APPEND,
                         err, sizeof(err));
@@ -305,7 +321,9 @@ static void w_u16le(FILE *f, uint16_t v) {
  * rename() replaces whatever sits at the name — a planted symlink
  * included — rather than writing through it. */
 static void write_handshake_pcap(const pending_t *p) {
-    if (g_out_fd < 0) return;
+    /* Same gate as the 22000 append: a replayable handshake pcap is the
+     * same crackable material in another container. */
+    if (!g_collect || g_out_fd < 0) return;
     char name[64], tmp[80], err[SFILE_ERR_MAX];
     snprintf(name, sizeof(name),
              "%02x%02x%02x%02x%02x%02x_%02x%02x%02x%02x%02x%02x.pcap",
@@ -814,20 +832,176 @@ int eapol_set_output_dir(const char *dir) {
     if (g_out_fd >= 0) { close(g_out_fd); g_out_fd = -1; }
     g_out_dir[0] = '\0';
     sfile_fail_reset(&g_fail);
+    g_last_sweep = 0;                 /* a new target gets a startup sweep */
     int rc = 0;
     if (dir && dir[0]) {
-        /* A refusal leaves export disabled; the caller reports it. The
-         * reason is kept where eapol_export_error() finds it. */
-        int fd = sfile_private_dir(dir, g_fail.last, sizeof(g_fail.last));
-        if (fd < 0) {
+        if (!g_collect) {
+            /* Refused before mkdir: a run without the opt-in must not
+             * even leave an export directory behind, since its existence
+             * reads as "handshakes are being collected here". */
+            snprintf(g_fail.last, sizeof(g_fail.last),
+                     "%s: refusing to export crackable material without "
+                     "--collect-handshakes (PMKIDs and 4-way handshakes "
+                     "support offline password guessing; detection and the "
+                     "[e] view do not need the opt-in)", dir);
             rc = -1;
         } else {
-            g_out_fd = fd;
-            snprintf(g_out_dir, sizeof(g_out_dir), "%s", dir);
+            /* A refusal leaves export disabled; the caller reports it.
+             * The reason is kept where eapol_export_error() finds it. */
+            int fd = sfile_private_dir(dir, g_fail.last, sizeof(g_fail.last));
+            if (fd < 0) {
+                rc = -1;
+            } else {
+                g_out_fd = fd;
+                snprintf(g_out_dir, sizeof(g_out_dir), "%s", dir);
+            }
         }
     }
     pthread_mutex_unlock(&g_mu);
     return rc;
+}
+
+/* ── The crackable-material gate and its retention sweep (#87) ─────── */
+
+void eapol_set_collect_enabled(int on) {
+    pthread_mutex_lock(&g_mu);
+    g_collect = on ? 1 : 0;
+    /* Closing the gate mid-run drops the pinned directory too, so the
+     * descriptor cannot outlive the permission to write through it. */
+    if (!g_collect && g_out_fd >= 0) {
+        close(g_out_fd);
+        g_out_fd = -1;
+        g_out_dir[0] = '\0';
+    }
+    pthread_mutex_unlock(&g_mu);
+}
+
+int eapol_collect_enabled(void) {
+    pthread_mutex_lock(&g_mu);
+    int on = g_collect;
+    pthread_mutex_unlock(&g_mu);
+    return on;
+}
+
+int eapol_set_retention_days(int days) {
+    if (days < 0 || days > EAPOL_MAX_RETENTION_DAYS) return -1;
+    pthread_mutex_lock(&g_mu);
+    g_retention_days = days;
+    pthread_mutex_unlock(&g_mu);
+    return 0;
+}
+
+int eapol_retention_days(void) {
+    pthread_mutex_lock(&g_mu);
+    int d = g_retention_days;
+    pthread_mutex_unlock(&g_mu);
+    return d;
+}
+
+/* Names this module writes, and only those. An operator file sharing the
+ * directory is out of scope — the sweep deletes sloth's artifacts, not
+ * the directory's contents. "." and ".." cannot match: both are shorter
+ * than the ".tmp" suffix the dotted branch requires. */
+static int is_export_artifact(const char *name) {
+    size_t n = strlen(name);
+    if (strcmp(name, "eapol.22000") == 0) return 1;
+    if (n > 5 && strcmp(name + n - 5, ".pcap") == 0) return 1;
+    if (name[0] == '.' && n > 5 && strcmp(name + n - 4, ".tmp") == 0) return 1;
+    return 0;
+}
+
+/* Caller holds g_mu. */
+static int sweep_locked(time_t now) {
+    if (g_out_fd < 0 || g_retention_days <= 0) return 0;
+
+    time_t window = (time_t)g_retention_days * EAPOL_SECS_PER_DAY;
+    if (now <= window) return 0;      /* nothing can predate the epoch+window */
+    time_t cutoff = now - window;
+
+    char err[SFILE_ERR_MAX];
+    /* A duplicate, because closedir() closes the descriptor it was given
+     * and g_out_fd has to survive the sweep. F_DUPFD_CLOEXEC rather than
+     * dup() so the copy is not inherited across an exec either. */
+    int dfd = fcntl(g_out_fd, F_DUPFD_CLOEXEC, 0);
+    DIR *d  = dfd >= 0 ? fdopendir(dfd) : NULL;
+    if (!d) {
+        if (dfd >= 0) close(dfd);
+        snprintf(err, sizeof(err),
+                 "%.200s: cannot read the export directory for the "
+                 "retention sweep: %s", g_out_dir, strerror(errno));
+        sfile_fail(&g_fail, "eapol", err);
+        return -1;
+    }
+    /* The duplicate shares its offset with g_out_fd; rewind so a second
+     * sweep starts at the first entry rather than wherever the last one
+     * stopped. */
+    rewinddir(d);
+
+    int removed = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (!is_export_artifact(e->d_name)) continue;
+        struct stat st;
+        if (fstatat(g_out_fd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            if (errno == ENOENT) continue;      /* raced away; fine */
+            snprintf(err, sizeof(err),
+                     "%.100s: cannot stat for the retention sweep: %s",
+                     e->d_name, strerror(errno));
+            sfile_fail(&g_fail, "eapol", err);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            /* A symlink, directory or FIFO at an artifact name is not
+             * something sloth wrote. It is left exactly as it is — the
+             * sweep never follows, so it can never delete through a link
+             * — and reported rather than skipped silently: in a directory
+             * only sloth writes, it is either operator error or someone
+             * steering the export, and both deserve a line. Reported
+             * whatever its age: the anomaly is the entry, not its mtime,
+             * and an mtime read off a planted symlink proves nothing. */
+            snprintf(err, sizeof(err),
+                     "%.100s: not a regular file — left in place by the "
+                     "retention sweep, nothing was followed", e->d_name);
+            sfile_fail(&g_fail, "eapol", err);
+            continue;
+        }
+        if (st.st_mtime >= cutoff) continue;
+        if (unlinkat(g_out_fd, e->d_name, 0) != 0) {
+            snprintf(err, sizeof(err),
+                     "%.100s: could not delete past the %d-day handshake "
+                     "retention window: %s",
+                     e->d_name, g_retention_days, strerror(errno));
+            sfile_fail(&g_fail, "eapol", err);
+            continue;
+        }
+        removed++;
+    }
+    closedir(d);
+    return removed;
+}
+
+int eapol_sweep(time_t now) {
+    pthread_mutex_lock(&g_mu);
+    int n = sweep_locked(now);
+    /* Set after the sweep, failures included: a directory that cannot be
+     * read is retried on the next window, not on every poll. */
+    g_last_sweep = now;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+void eapol_maintain(time_t now) {
+    pthread_mutex_lock(&g_mu);
+    /* A clock that stepped backwards past the last sweep would otherwise
+     * wait a whole day; treat it as due instead. */
+    int due = (g_last_sweep == 0) ||
+              (now < g_last_sweep) ||
+              (now - g_last_sweep >= EAPOL_SWEEP_INTERVAL_S);
+    if (due) {
+        sweep_locked(now);
+        g_last_sweep = now;
+    }
+    pthread_mutex_unlock(&g_mu);
 }
 
 int eapol_export_failures(void) {

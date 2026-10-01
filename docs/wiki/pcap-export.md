@@ -39,7 +39,9 @@ type: reference
 
 ## 3. Per-EAPOL-handshake export
 
-- CLI flag: `--eapol-dir DIR`.
+- CLI flag: `--eapol-dir DIR`, which requires the `--collect-handshakes`
+  opt-in (off by default) and expires on `--handshake-retention` days
+  (default 7) — see [[retention]].
 - For each completed (BSSID, STA) 4-way handshake, writes:
   - `DIR/eapol.22000` in hashcat 22000 mixed format
     (`WPA*01*…` for PMKIDs, `WPA*02*…` for full handshakes with the

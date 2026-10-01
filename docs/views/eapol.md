@@ -39,10 +39,13 @@ Per observed EAPOL-Key frame:
 - `handshake_complete`, `handshake_progress`, `assoc_evidence` — see
   "Attempts, not flags" below
 
-`--eapol-dir DIR` appends each captured PMKID and full handshake to
-`DIR/eapol.22000` in hashcat 22000 mixed format
-(`WPA*01*...` for PMKIDs, `WPA*02*...` for 4-way handshakes with MIC
-field zeroed per spec).
+With `--collect-handshakes --eapol-dir DIR`, each captured PMKID and
+full handshake is appended to `DIR/eapol.22000` in hashcat 22000 mixed
+format (`WPA*01*...` for PMKIDs, `WPA*02*...` for 4-way handshakes with
+the MIC field zeroed per spec). **Both flags are needed**: the opt-in is
+off by default and `--eapol-dir` alone exits `2`. Everything on this page
+above the export section — the events, the state machine, the pairing
+verdicts, the alerts — runs with or without it.
 
 ### Attempts, not flags (#97)
 
@@ -120,8 +123,30 @@ freshest capture for that (BSSID, STA) pair.
 
 **Everything under `--eapol-dir` is crackable material.** A PMKID or a
 4-way handshake supports offline password guessing against the network
-it came from; treat the directory like a password file. sloth enforces
-that on disk, independent of the process umask:
+it came from; treat the directory like a password file.
+
+**Nothing is written without `--collect-handshakes`** (owner decision
+2026-09-30). The opt-in is off by default, and `--eapol-dir` without it
+is a startup error — exit `2`, no directory created — rather than a run
+that writes nothing while looking like it is collecting. The gate covers
+writing only: with it closed the parser, the attempt state machine, the
+replay-counter checks, the PTK-generation counter, M3 association
+evidence, this view and the JSONL / `--db` records are unchanged.
+
+**Exports expire.** `--handshake-retention DAYS` (default **7**, `0` =
+keep forever) is swept once at startup and once a day: artifacts under
+`DIR` last written before the window are deleted. Only the names sloth
+writes — `eapol.22000`, `<bssid>_<sta>.pcap`, `.*.tmp` partials — so an
+operator file in the same directory is untouched. Symlinks are never
+followed (`fstatat` with `AT_SYMLINK_NOFOLLOW`; only regular files are
+unlinked), and both a non-regular entry at an artifact name and a failed
+`unlinkat` are counted and shown in the header below, never swallowed.
+`eapol.22000` expires whole-file by mtime — the format has no per-line
+timestamp — so a file still being appended to keeps older lines. Full
+behaviour: [`docs/wiki/retention.md`](../wiki/retention.md).
+
+sloth enforces the modes below on disk, independent of the process
+umask:
 
 | Artifact | Mode | How it is written |
 |---|---|---|
