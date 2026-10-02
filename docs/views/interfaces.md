@@ -238,6 +238,14 @@ not. An enforced scope and an unscoped run add nothing to the line.
 The same state feeds the `sensor_health` JSONL record — see
 [`../wiki/jsonl-schema.md`](../wiki/jsonl-schema.md).
 
+`probe: <reason>` is the last probe-radio open or `[m]`-retarget
+failure — a monitor-mode interface that doesn't exist, a libpcap open
+error, a non-radiotap datalink, or an `[m]` press on an interface
+outside the `--iface`/`--monitor-only` allow-list (#85). It was already
+surfaced in the Probe, EAPOL and dashboard monitor-radio panels, but not
+here — the one view where an `[m]` keystroke actually lands. Cleared on
+the next successful open or retarget.
+
 **Still hardware-dependent, still open on #91:** the measured
 adapter/driver/kernel/band/width support matrix, and comparing hopping
 against an independent reference receiver. Neither can be produced from

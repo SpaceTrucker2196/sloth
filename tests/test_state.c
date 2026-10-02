@@ -706,12 +706,33 @@ void test_health_strip_truncates_without_overrunning(void) {
     s.chan_retune_failures = 77;
     sh_evict_reset();
     sh_evict_note(SH_EVICT_DEVICE);
+    snprintf(s.probe_err, sizeof(s.probe_err), "wlan1mon9 not in --iface allow-list");
     char buf[24];
     memset(buf, 'X', sizeof(buf));
     iface_fmt_health_strip(&s, buf, (int)sizeof(buf));
     ASSERT(strlen(buf) < sizeof(buf));
     ASSERT(strncmp(buf, "  health:", 9) == 0);
     sh_evict_reset();
+}
+
+/* #85: probe_err was already surfaced in views/probe.c, views/eapol.c and
+ * dashboard_bands.c, but never in the Interfaces view — the one place an
+ * operator's [m] retarget keystroke actually lands. */
+void test_health_strip_reports_probe_err(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    snprintf(s.probe_err, sizeof(s.probe_err),
+             "wlan1mon9 not in --iface allow-list");
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  probe: wlan1mon9 not in --iface allow-list");
+}
+
+void test_health_strip_quiet_when_probe_err_empty(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    s.probe_err[0] = '\0';
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
 }
 
 void test_excluded_render_smoke(void) {
@@ -872,4 +893,6 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_reports_degraded_scope);
     RUN_TEST(test_health_strip_reports_scope_without_capture);
     RUN_TEST(test_health_strip_truncates_without_overrunning);
+    RUN_TEST(test_health_strip_reports_probe_err);
+    RUN_TEST(test_health_strip_quiet_when_probe_err_empty);
 }

@@ -451,6 +451,13 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
                    sc->enforced, sc->requested);
     else if (sc->state == CAPTURE_SCOPE_STATE_NO_CAPTURE)
         strip_addf(buf, sz, &off, "  scope no-capture");
+    /* #85: the last probe open/[m]-retarget attempt failed. Already
+     * surfaced in views/probe.c, views/eapol.c and dashboard_bands.c —
+     * this view (where an operator's [m] keystroke actually lands) was
+     * the one place it was silent. %.60s bounds a message that already
+     * embeds an interface name or a libpcap errbuf. */
+    if (s->probe_err[0])
+        strip_addf(buf, sz, &off, "  probe: %.60s", s->probe_err);
 }
 
 /* SSID of the network the managed radio is joined to ("" = none).
