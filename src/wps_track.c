@@ -78,7 +78,12 @@ void wps_track_observe(const uint8_t bssid[6], const uint8_t sta[6],
     } else if (w.msg_type == WSC_MSG_M3) {
         if (ss->state == WPS_S_M1_SEEN) ss->state = WPS_S_M3_SEEN;
     } else if (w.op_code == WSC_OP_NACK || w.msg_type == WSC_MSG_NACK) {
-        if (ss->state == WPS_S_M3_SEEN) ss->cycle_count++;
+        if (ss->state == WPS_S_M3_SEEN) {
+            /* Stamp before the increment so the cursor matches the
+             * header's (cycle_count - 1) % WPS_CYCLE_RING. */
+            ss->cycle_ts[ss->cycle_count % WPS_CYCLE_RING] = now;
+            ss->cycle_count++;
+        }
         if (ss->state != WPS_S_IDLE && ss->state != WPS_S_DONE)
             ss->state = WPS_S_NACKED;
     } else if (w.op_code == WSC_OP_DONE || w.msg_type == WSC_MSG_DONE ||
@@ -104,6 +109,34 @@ int wps_track_session(const uint8_t bssid[6], const uint8_t sta[6],
     }
     pthread_mutex_unlock(&g_mu);
     return found;
+}
+
+int wps_track_snapshot(wps_session_t *out, int max) {
+    if (!out || max <= 0) return 0;
+    int n = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < MAX_WPS_SESSIONS && n < max; i++)
+        if (g_sess[i].in_use) out[n++] = g_sess[i];
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+int wps_track_cycles_since(const wps_session_t *sess, time_t now,
+                           int window_s) {
+    if (!sess || window_s <= 0) return 0;
+    int have = sess->cycle_count < WPS_CYCLE_RING ? sess->cycle_count
+                                                  : WPS_CYCLE_RING;
+    time_t floor_t = now - (time_t)window_s;
+    int n = 0;
+    for (int i = 0; i < have; i++) {
+        time_t t = sess->cycle_ts[i];
+        /* A zero stamp is an unwritten slot, not the epoch; a stamp in
+         * the future is a clock that stepped and is counted rather
+         * than dropped — the alternative silences a live brute force
+         * for a whole window. */
+        if (t && t >= floor_t) n++;
+    }
+    return n;
 }
 
 int wps_track_count(void) {

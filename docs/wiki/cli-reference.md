@@ -71,6 +71,28 @@ single mode driven by flags.
 | `--no-correlate` | — | on (correlation enabled) | Disable longitudinal device correlation. Seqnum `[j]` still shows each MAC's own trail, but no pair is linked and no `seqnum_correlation` record is exported/stored. → [[mac-randomisation]] |
 | `--correlate-retain` | `SECS` | `300` | Evidence window: a pair is reported only while **both** addresses were heard inside this window, counted from now. |
 
+### WPS alert thresholds (#82)
+
+The only rule thresholds sloth exposes on the command line. Every other
+one in the engine is a `#define`; these three are knobbed because the
+owner asked for the issue's proposed numbers to be tunable per site
+(decision of 2026-09-30). Each is a **floor** — raising it only quiets
+the rule, it can never invent a finding — and a value of zero or less is
+**rejected with exit 2** rather than read as "disabled", because a floor
+of zero fires on every observation. → [[alerts]]
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--wps-pin-brute-cycles` | `N` | `5` | WPS PIN attempts (M1→M3→EAP-NACK restart cycles) from one station, or from one UUID-E behind rotating MACs, within **60 s** before `WPS_PIN_BRUTE` fires. [CERT/CC VU#723755](https://kb.cert.org/vuls/id/723755). |
+| `--wps-lockout-cycles` | `N` | `2` | Completed AP-Setup-Locked lock→unlock cycles on one BSSID within **1 h** before `WPS_LOCKOUT_CYCLING` fires. An AP that locks once and stays locked never fires. |
+| `--wps-pbc-concurrent` | `N` | `2` | Concurrent WPS Push-Button enrollees on one BSSID inside the **120 s** walk time that `WPS_PBC_RACE` fires *above* — the default means the third concurrent enrollee alerts. |
+
+The windows are deliberately **not** flags: 60 s is the rate the
+brute-force threshold is defined over, one hour is the period the
+lockout sawtooth is stated in, and 120 s is the PBC walk time the WSC
+protocol fixes (`WPS_PBC_WALK_TIME`). A knob that moved the walk time
+would be measuring something the protocol does not do.
+
 ### Persistent state — SQLite
 
 | Flag | Arg | Default | Effect |

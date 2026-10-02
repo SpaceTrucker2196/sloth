@@ -41,6 +41,11 @@ typedef struct {
      * clears when the session ends. */
     uint16_t wps_config_methods;
     uint16_t wps_device_pwd_id;
+/* The one Device Password ID value with a detection meaning (WFA WPS
+ * 2.0 §12). Named here rather than spelled 0x0004 at each use, because
+ * the WPS_PBC_RACE rule (#82 wave 8) keys the whole walk-time window
+ * on it. */
+#define WPS_DEV_PWD_ID_PBC 0x0004
     /* WPS vendor-string leakage (#77): Manufacturer / Model Name / Model
      * Number / Serial Number attributes inside the WPS IE (WFA WPS 2.0
      * §12, attribute IDs 0x1021/0x1023/0x1024/0x1042). Many SOHO routers

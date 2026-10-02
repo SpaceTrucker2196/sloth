@@ -24,6 +24,8 @@
 #include "transit.h"
 #include "rf_quality.h"
 #include "flood_window.h"
+#include "wps_track.h"
+#include "eap_parse.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -6439,6 +6441,544 @@ static void test_open_setup_ap_fires_once_per_bssid(void) {
     ASSERT_EQ(seen, 1);
 }
 
+/* ── WPS threshold rules (#82 wave 8) ─────────────────────
+ *
+ * Seeded state, no pcap fixtures (agents/AGENTS.md). Two of the three
+ * rules read the wps_track session table rather than sloth_state_t, so
+ * they are seeded the only honest way: hand-built EAP-WSC frames fed
+ * through wps_track_observe(), the same entry point the capture path
+ * calls. Frames are assembled from spec bytes per RFC 3748 §5.7
+ * (Expanded Type 254) + WSC 2.0 §7.7/§12, the construction
+ * tests/test_wps_track.c and tests/test_eap_parse.c already use.
+ *
+ * The wall clock is frozen through the #88 seam so the 60 s / 1 h /
+ * 120 s windows are exact and nothing sleeps. */
+
+static time_t g_wps_wall;
+static time_t wps_wall(void) { return g_wps_wall; }
+
+static void wps_begin(time_t at) {
+    alerts_clear();
+    wps_track_clear();
+    g_wps_wall = at;
+    flood_test_set_clock(NULL, wps_wall);
+}
+
+static void wps_end(void) {
+    flood_test_set_clock(NULL, NULL);
+    wps_track_clear();
+}
+
+/* One EAP-WSC message on (BSSID, sta). `uuid` NULL omits the UUID-E
+ * attribute; non-NULL appends it as attribute 0x1047 (16 bytes). */
+static void wps_feed(const uint8_t bssid[6], const uint8_t sta[6],
+                     int op, int msg, const uint8_t *uuid, time_t now) {
+    uint8_t f[44] = {
+        0x01, 0x20, 0x00, 0x18, 0xFE,             /* Request, Expanded  */
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, /* WFA / SimpleConfig */
+        0x00, 0x00,                               /* Op-Code, Flags     */
+        0x10, 0x4A, 0x00, 0x01, 0x10,             /* Version 1.0        */
+        0x10, 0x22, 0x00, 0x01, 0x00,             /* Message Type       */
+        0x10, 0x47, 0x00, 0x10,                   /* UUID-E header      */
+    };
+    f[12] = (uint8_t)op;
+    f[23] = (uint8_t)msg;
+    int n = 24;
+    if (uuid) {
+        memcpy(f + 28, uuid, 16);
+        n = 44;
+    }
+    f[3] = (uint8_t)n;                            /* EAP Length         */
+    wps_track_observe(bssid, sta, f, n, now);
+}
+
+/* One completed M1→M3→NACK restart cycle — the unit VU#723755's PIN
+ * brute force is counted in. */
+static void wps_cycle(const uint8_t bssid[6], const uint8_t sta[6],
+                      const uint8_t *uuid, time_t at) {
+    wps_feed(bssid, sta, WSC_OP_MSG,  WSC_MSG_M1,   uuid, at);
+    wps_feed(bssid, sta, WSC_OP_MSG,  WSC_MSG_M3,   NULL, at);
+    wps_feed(bssid, sta, WSC_OP_NACK, WSC_MSG_NACK, NULL, at);
+}
+
+static const uint8_t WPSB[6] = { 0x3c, 0x84, 0x6a, 0x11, 0x22, 0x33 };
+static const uint8_t WPSS[6] = { 0x02, 0xde, 0xad, 0x00, 0x00, 0x01 };
+
+static void test_wps_pin_brute_fires_at_threshold(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++)
+        wps_cycle(WPSB, WPSS, NULL, g_wps_wall - 50 + i);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_STR(s.alerts[i].key,
+                   "wpsbrute:3c:84:6a:11:22:33:02:de:ad:00:00:01");
+        /* The operator needs the count, both addresses and the basis. */
+        ASSERT(strstr(s.alerts[i].detail, "5 WPS PIN attempts") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "02:de:ad:00:00:01") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "3c:84:6a:11:22:33") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "VU#723755") != NULL);
+        ASSERT_STR(s.alerts[i].technique, "T1110.001");
+    }
+    wps_end();
+}
+
+static void test_wps_pin_brute_quiet_below_threshold(void) {
+    /* One short of the floor stays silent — a threshold that fires at
+     * N-1 is not the threshold the owner set. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES - 1; i++)
+        wps_cycle(WPSB, WPSS, NULL, g_wps_wall - 50 + i);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_is_a_rate_not_a_lifetime_count(void) {
+    /* Five cycles spread over ten minutes is a flaky client retrying,
+     * not a brute force. The session's lifetime cycle_count reaches the
+     * threshold either way, so this is the assertion that proves the
+     * rule reads the window and not the total. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++)
+        wps_cycle(WPSB, WPSS, NULL, g_wps_wall - 600 + i * 100);
+    wps_session_t sess;
+    ASSERT_EQ(wps_track_session(WPSB, WPSS, &sess), 1);
+    ASSERT_EQ(sess.cycle_count, WPS_PIN_BRUTE_CYCLES);   /* lifetime: met */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_ignores_nacks_without_m3(void) {
+    /* M1→NACK is an ordinary M2D-style refusal. Ten of them is a client
+     * that cannot get a PIN accepted, not ten guesses — wave 7 drew
+     * that line in the tracker and this holds it from the alert side. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 10; i++) {
+        wps_feed(WPSB, WPSS, WSC_OP_MSG,  WSC_MSG_M1,   NULL,
+                 g_wps_wall - 50 + i);
+        wps_feed(WPSB, WPSS, WSC_OP_NACK, WSC_MSG_NACK, NULL,
+                 g_wps_wall - 50 + i);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_sees_through_rotating_macs(void) {
+    /* The evasion the issue names: rotate the MAC the AP rate-limits
+     * on, leave the enrollee identity in M1 alone. One cycle each from
+     * five MACs is below the per-STA floor and at it per UUID-E. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t uuid[16];
+    for (int k = 0; k < 16; k++) uuid[k] = (uint8_t)(0xA0 + k);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++) {
+        uint8_t sta[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, (uint8_t)i };
+        wps_cycle(WPSB, sta, uuid, g_wps_wall - 50 + i);
+    }
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_STR(s.alerts[i].key,
+                   "wpsbrute-uuid:3c:84:6a:11:22:33:a0a1a2a3a4a5a6a7");
+        ASSERT(strstr(s.alerts[i].detail, "5 MACs") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "a0a1a2a3a4a5a6a7") != NULL);
+    }
+    /* One group, one finding — not one per member. */
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_WPS_PIN_BRUTE) seen++;
+    ASSERT_EQ(seen, 1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_one_mac_with_a_uuid_fires_once(void) {
+    /* A single station that happens to send its UUID-E satisfies both
+     * passes arithmetically. It must still be one finding: the
+     * rotating-MAC pass needs >= 2 stations precisely so a plain
+     * Reaver run is not reported twice under two keys. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t uuid[16];
+    for (int k = 0; k < 16; k++) uuid[k] = (uint8_t)(0x50 + k);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++)
+        wps_cycle(WPSB, WPSS, uuid, g_wps_wall - 50 + i);
+    alerts_update(&s);
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_WPS_PIN_BRUTE) seen++;
+    ASSERT_EQ(seen, 1);
+    int i = find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE);
+    ASSERT(i >= 0);
+    /* And it is the per-station finding, not the rotating one. */
+    if (i >= 0) ASSERT(strstr(s.alerts[i].key, "wpsbrute-uuid:") == NULL);
+    wps_end();
+}
+
+static void test_wps_pin_brute_rotating_needs_one_shared_uuid(void) {
+    /* Five distinct enrollees each making one attempt is a busy estate,
+     * not an attacker. Without a constant UUID-E there is nothing
+     * tying the MACs together and nothing to aggregate. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++) {
+        uint8_t sta[6]  = { 0x02, 0x00, 0x00, 0x00, 0x01, (uint8_t)i };
+        uint8_t uuid[16];
+        for (int k = 0; k < 16; k++) uuid[k] = (uint8_t)(i * 16 + k);
+        wps_cycle(WPSB, sta, uuid, g_wps_wall - 50 + i);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_cycles_are_per_bssid(void) {
+    /* The same station probing five different APs once each is a
+     * roaming client, not a brute force against any of them. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++) {
+        uint8_t bss[6] = { 0x3c, 0x84, 0x6a, 0x11, 0x22, (uint8_t)(0x40 + i) };
+        wps_cycle(bss, WPSS, NULL, g_wps_wall - 50 + i);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    wps_end();
+}
+
+static void test_wps_pin_brute_threshold_is_configurable(void) {
+    /* The owner's knob. A site that wants to hear about three attempts
+     * says so, and the rule reads the override rather than the
+     * constant. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), WPS_PIN_BRUTE_CYCLES);
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(3), 1);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), 3);
+    for (int i = 0; i < 3; i++) wps_cycle(WPSB, WPSS, NULL, g_wps_wall - 10 + i);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE) >= 0);
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(WPS_PIN_BRUTE_CYCLES), 1);
+    wps_end();
+}
+
+static void test_wps_thresholds_reject_nonpositive_values(void) {
+    /* Zero is not an off switch — a floor of zero fires on every
+     * observation, which is the opposite of what the operator typed.
+     * Rejected, and the previous value stands. */
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(0),  0);
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(-1), 0);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), WPS_PIN_BRUTE_CYCLES);
+    ASSERT_EQ(alerts_set_wps_lockout_cycles(0),  0);
+    ASSERT_EQ(alerts_wps_lockout_cycles(), WPS_LOCKOUT_CYCLES);
+    ASSERT_EQ(alerts_set_wps_pbc_concurrent(0),  0);
+    ASSERT_EQ(alerts_wps_pbc_concurrent(), WPS_PBC_CONCURRENT);
+}
+
+/* Stamp `n` completed locked→unlocked cycles into an AP's transition
+ * ring, oldest first, `step` seconds apart ending at `last`. The ring
+ * records transitions between known states only, so they alternate:
+ * 2 (locked) then 1 (unlocked) is one cycle. */
+static void seed_lock_cycles(beacon_ap_t *a, int n, time_t last, int step) {
+    for (int c = 0; c < n; c++) {
+        time_t t = last - (time_t)(n - 1 - c) * step;
+        int i = a->wps_lock_n % WPS_LOCK_RING;
+        a->wps_lock_ts[i] = t - 1;
+        a->wps_lock_to[i] = 2;                  /* → locked   */
+        a->wps_lock_n++;
+        i = a->wps_lock_n % WPS_LOCK_RING;
+        a->wps_lock_ts[i] = t;
+        a->wps_lock_to[i] = 1;                  /* → unlocked */
+        a->wps_lock_n++;
+        a->wps_lock_cycles++;
+    }
+    a->wps_locked = 1;
+}
+
+static void test_wps_lockout_cycling_fires_at_threshold(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x03};
+    add_beacon(&s, "ClinicBackOffice", b, "WPA2");
+    seed_lock_cycles(&s.beacon_aps[0], WPS_LOCKOUT_CYCLES,
+                     g_wps_wall - 60, 300);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_STR(s.alerts[i].key, "wpslockout:74:da:88:01:02:03");
+        ASSERT(strstr(s.alerts[i].detail, "2 WPS lockout cycles") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "ClinicBackOffice") != NULL);
+        ASSERT_STR(s.alerts[i].technique, "T1110.001");
+    }
+    wps_end();
+}
+
+static void test_wps_lockout_cycling_quiet_below_threshold(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x04};
+    add_beacon(&s, "Office", b, "WPA2");
+    seed_lock_cycles(&s.beacon_aps[0], WPS_LOCKOUT_CYCLES - 1,
+                     g_wps_wall - 60, 300);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+    wps_end();
+}
+
+static void test_wps_lockout_cycling_window_is_an_hour(void) {
+    /* Cycles that happened this morning are history, not an attack in
+     * progress. The lifetime counter still holds them, so this is what
+     * proves the rule reads the transition timestamps. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x05};
+    add_beacon(&s, "Office", b, "WPA2");
+    seed_lock_cycles(&s.beacon_aps[0], WPS_LOCKOUT_CYCLES,
+                     g_wps_wall - 2 * WPS_LOCKOUT_WINDOW_S, 300);
+    ASSERT_EQ(s.beacon_aps[0].wps_lock_cycles, WPS_LOCKOUT_CYCLES);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+    wps_end();
+}
+
+static void test_wps_lockout_cycling_quiet_when_locked_and_left(void) {
+    /* An AP that locked once and stayed locked is a configured
+     * posture. No unlock, no cycle, no alert — however many times the
+     * beacon repeats it. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x06};
+    add_beacon(&s, "Office", b, "WPA2");
+    beacon_ap_t *a = &s.beacon_aps[0];
+    a->wps_lock_ts[0] = g_wps_wall - 100;
+    a->wps_lock_to[0] = 2;
+    a->wps_lock_n     = 1;
+    a->wps_locked     = 2;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+    wps_end();
+}
+
+static void test_wps_lockout_cycling_counts_completions_not_transitions(void) {
+    /* lock → unlock → lock is three transitions and ONE completed
+     * cycle: the AP is currently locked and has released once. A rule
+     * counting transitions, or counting the wrong end of them, reaches
+     * the threshold of two here and must not. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x09};
+    add_beacon(&s, "Office", b, "WPA2");
+    beacon_ap_t *a = &s.beacon_aps[0];
+    const uint8_t to[3] = { 2, 1, 2 };
+    for (int i = 0; i < 3; i++) {
+        a->wps_lock_ts[i] = g_wps_wall - 300 + i * 10;
+        a->wps_lock_to[i] = to[i];
+        a->wps_lock_n++;
+    }
+    a->wps_lock_cycles = 1;
+    a->wps_locked      = 2;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+
+    /* One more release completes the second cycle and it fires. */
+    a->wps_lock_ts[3] = g_wps_wall - 260;
+    a->wps_lock_to[3] = 1;
+    a->wps_lock_n++;
+    a->wps_lock_cycles = 2;
+    a->wps_locked      = 1;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING) >= 0);
+    wps_end();
+}
+
+static void test_wps_lockout_cycling_crit_on_my_bssid(void) {
+    /* Same evidence, an operator-designated BSSID: this is the one the
+     * operator can actually act on. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    ownership_clear();
+    ASSERT(ownership_add_bssid("74:da:88:01:02:07"));
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x07};
+    add_beacon(&s, "Office", b, "WPA2");
+    seed_lock_cycles(&s.beacon_aps[0], WPS_LOCKOUT_CYCLES,
+                     g_wps_wall - 60, 300);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    ownership_clear();
+    wps_end();
+}
+
+static void test_wps_lockout_threshold_is_configurable(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(alerts_set_wps_lockout_cycles(4), 1);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x08};
+    add_beacon(&s, "Office", b, "WPA2");
+    seed_lock_cycles(&s.beacon_aps[0], 3, g_wps_wall - 60, 300);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+    seed_lock_cycles(&s.beacon_aps[0], 1, g_wps_wall - 30, 300);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING) >= 0);
+    ASSERT_EQ(alerts_set_wps_lockout_cycles(WPS_LOCKOUT_CYCLES), 1);
+    wps_end();
+}
+
+/* `n` distinct stations each mid-registration on `bssid`, last heard
+ * `age` seconds ago. */
+static void seed_pbc_sessions(const uint8_t bssid[6], int n, int age) {
+    for (int i = 0; i < n; i++) {
+        uint8_t sta[6] = { 0x02, 0x11, 0x00, 0x00, 0x00, (uint8_t)i };
+        wps_feed(bssid, sta, WSC_OP_MSG, WSC_MSG_M1, NULL,
+                 g_wps_wall - (time_t)age);
+    }
+}
+
+static void test_wps_pbc_race_fires_above_threshold(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xcc};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    seed_pbc_sessions(b, WPS_PBC_CONCURRENT + 1, 10);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_WPS_PBC_RACE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT_STR(s.alerts[i].key, "wpspbc:d8:47:32:aa:bb:cc");
+        ASSERT(strstr(s.alerts[i].detail, "3 concurrent WPS PBC") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "session overlap") != NULL);
+        ASSERT_STR(s.alerts[i].technique, "T1557");
+    }
+    wps_end();
+}
+
+static void test_wps_pbc_race_quiet_at_threshold(void) {
+    /* ">2 concurrent", so exactly two is the quiet case: one person at
+     * the button and one device answering is the protocol working. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xcd};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    seed_pbc_sessions(b, WPS_PBC_CONCURRENT, 10);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
+static void test_wps_pbc_race_needs_an_open_walk_window(void) {
+    /* No Device Password ID 0x0004 on the beacon means no PBC window
+     * is open, so concurrent registrations are PIN sessions and not a
+     * race for the button. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xce};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = 0x0000;
+    seed_pbc_sessions(b, WPS_PBC_CONCURRENT + 2, 10);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
+static void test_wps_pbc_race_ignores_sessions_past_the_walk_time(void) {
+    /* Concurrency is the finding, and the walk time is what makes two
+     * sessions concurrent. Registrations from ten minutes ago overlap
+     * nothing. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xcf};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    seed_pbc_sessions(b, WPS_PBC_CONCURRENT + 2,
+                      WPS_PBC_WALK_TIME_S + 60);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
+static void test_wps_pbc_race_ignores_completed_registrations(void) {
+    /* A session that reached WSC_Done is enrolled, not racing. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xd0};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    for (int i = 0; i < WPS_PBC_CONCURRENT + 2; i++) {
+        uint8_t sta[6] = { 0x02, 0x12, 0x00, 0x00, 0x00, (uint8_t)i };
+        wps_feed(b, sta, WSC_OP_MSG,  WSC_MSG_M1,   NULL, g_wps_wall - 10);
+        wps_feed(b, sta, WSC_OP_DONE, WSC_MSG_DONE, NULL, g_wps_wall - 5);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
+static void test_wps_pbc_race_counts_per_bssid(void) {
+    /* Sessions on a neighbouring AP are not enrollees here. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6]     = {0xd8,0x47,0x32,0xaa,0xbb,0xd1};
+    uint8_t other[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xd2};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    seed_pbc_sessions(b,     WPS_PBC_CONCURRENT, 10);
+    seed_pbc_sessions(other, WPS_PBC_CONCURRENT, 10);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
+static void test_wps_pbc_threshold_is_configurable(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    ASSERT_EQ(alerts_set_wps_pbc_concurrent(1), 1);
+    uint8_t b[6] = {0xd8,0x47,0x32,0xaa,0xbb,0xd3};
+    add_beacon(&s, "HomeNet", b, "WPA2");
+    s.beacon_aps[0].wps_device_pwd_id = WPS_DEV_PWD_ID_PBC;
+    seed_pbc_sessions(b, 2, 10);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE) >= 0);
+    ASSERT_EQ(alerts_set_wps_pbc_concurrent(WPS_PBC_CONCURRENT), 1);
+    wps_end();
+}
+
+static void test_wps_rules_quiet_on_an_ordinary_bss(void) {
+    /* The default answer is silence: an AP advertising WPS with no
+     * sessions, no lock transitions and no open walk window is not any
+     * of these three findings. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x09,0x09,0x09};
+    add_beacon(&s, "Office", b, "WPA2");
+    s.beacon_aps[0].wps_state  = 2;
+    s.beacon_aps[0].wps_locked = 1;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING), -1);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_WPS_PBC_RACE), -1);
+    wps_end();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -7151,6 +7691,37 @@ void run_alerts_tests(void) {
     RUN_TEST(test_open_setup_ap_quiet_on_empty_ssid);
     RUN_TEST(test_open_setup_ap_quiet_on_ordinary_open_ssid);
     RUN_TEST(test_open_setup_ap_fires_once_per_bssid);
+
+    TEST_SUITE("alerts: WPS PIN brute force (#82 wave 8)");
+    RUN_TEST(test_wps_pin_brute_fires_at_threshold);
+    RUN_TEST(test_wps_pin_brute_quiet_below_threshold);
+    RUN_TEST(test_wps_pin_brute_is_a_rate_not_a_lifetime_count);
+    RUN_TEST(test_wps_pin_brute_ignores_nacks_without_m3);
+    RUN_TEST(test_wps_pin_brute_sees_through_rotating_macs);
+    RUN_TEST(test_wps_pin_brute_one_mac_with_a_uuid_fires_once);
+    RUN_TEST(test_wps_pin_brute_rotating_needs_one_shared_uuid);
+    RUN_TEST(test_wps_pin_brute_cycles_are_per_bssid);
+    RUN_TEST(test_wps_pin_brute_threshold_is_configurable);
+    RUN_TEST(test_wps_thresholds_reject_nonpositive_values);
+
+    TEST_SUITE("alerts: WPS lockout cycling (#82 wave 8)");
+    RUN_TEST(test_wps_lockout_cycling_fires_at_threshold);
+    RUN_TEST(test_wps_lockout_cycling_quiet_below_threshold);
+    RUN_TEST(test_wps_lockout_cycling_window_is_an_hour);
+    RUN_TEST(test_wps_lockout_cycling_quiet_when_locked_and_left);
+    RUN_TEST(test_wps_lockout_cycling_counts_completions_not_transitions);
+    RUN_TEST(test_wps_lockout_cycling_crit_on_my_bssid);
+    RUN_TEST(test_wps_lockout_threshold_is_configurable);
+
+    TEST_SUITE("alerts: WPS PBC race (#82 wave 8)");
+    RUN_TEST(test_wps_pbc_race_fires_above_threshold);
+    RUN_TEST(test_wps_pbc_race_quiet_at_threshold);
+    RUN_TEST(test_wps_pbc_race_needs_an_open_walk_window);
+    RUN_TEST(test_wps_pbc_race_ignores_sessions_past_the_walk_time);
+    RUN_TEST(test_wps_pbc_race_ignores_completed_registrations);
+    RUN_TEST(test_wps_pbc_race_counts_per_bssid);
+    RUN_TEST(test_wps_pbc_threshold_is_configurable);
+    RUN_TEST(test_wps_rules_quiet_on_an_ordinary_bss);
 
     TEST_SUITE("alerts: incident lifecycle (#98)");
     RUN_TEST(test_lifecycle_create_emits_a_create_event);

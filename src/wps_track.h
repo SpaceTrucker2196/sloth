@@ -29,6 +29,13 @@
  * identities is the cross-session signal the brute detector keys on. */
 
 #define MAX_WPS_SESSIONS 64
+/* Completion timestamps kept per session, so "how many cycles" can be
+ * asked of a *window* rather than of the session's whole life (#82
+ * wave 8). cycle_count stays the lifetime total and doubles as the
+ * ring cursor. Eight is comfortably above the owner-accepted
+ * five-per-60 s threshold, which is all the rule has to resolve: a
+ * brute force that overruns the ring has already fired. */
+#define WPS_CYCLE_RING 8
 
 typedef enum {
     WPS_S_IDLE = 0,
@@ -52,6 +59,10 @@ typedef struct {
                              * M-order, so this is a mapping, not an
                              * offset. */
     int      cycle_count;   /* completed M1→M3→NACK restart cycles */
+    /* When each of the last WPS_CYCLE_RING cycles completed; ring
+     * index = (cycle_count - 1) % WPS_CYCLE_RING for the newest.
+     * Read through wps_track_cycles_since() rather than directly. */
+    time_t   cycle_ts[WPS_CYCLE_RING];
     time_t   first_seen;
     time_t   last_seen;
     uint8_t  in_use;
@@ -69,6 +80,23 @@ int  wps_track_session(const uint8_t bssid[6], const uint8_t sta[6],
 
 /* Sessions currently tracked. */
 int  wps_track_count(void);
+
+/* Copy every live session into out[0..max-1]; returns how many were
+ * written. One lock acquisition for the whole table, so the rules see
+ * a consistent set rather than a table that moved under them. */
+int  wps_track_snapshot(wps_session_t *out, int max);
+
+/* Completed restart cycles in `sess` whose NACK landed within the last
+ * `window_s` seconds. Pure — it reads a *copy* taken by
+ * wps_track_snapshot / wps_track_session, so it takes no lock and is
+ * safe to call from a rule.
+ *
+ * The ring holds WPS_CYCLE_RING completions; a session that overran it
+ * returns at most that many, which under-reports a very fast brute
+ * force and never over-reports one. Deliberate: the threshold is a
+ * floor, so saturating low is the safe direction. */
+int  wps_track_cycles_since(const wps_session_t *sess, time_t now,
+                            int window_s);
 
 /* Drop everything. Tests. */
 void wps_track_clear(void);

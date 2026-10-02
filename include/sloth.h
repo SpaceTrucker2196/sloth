@@ -760,6 +760,9 @@ typedef enum {
     ALERT_TYPE_SA_QUERY_FLOOD,      /* SA-Query storm — the MFP-era shape of a disassoc flood (#76) */
     ALERT_TYPE_MFP_UNPROTECTED,     /* unprotected robust action frame on an MFP-required BSS — CVE-2019-16275 (#76) */
     ALERT_TYPE_OPEN_SETUP_AP,       /* open SoftAP named like a device onboarding surface — NIST SP 1800-36 (#80) */
+    ALERT_TYPE_WPS_PIN_BRUTE,       /* WPS external-registrar PIN brute force — CERT/CC VU#723755 (#82) */
+    ALERT_TYPE_WPS_LOCKOUT_CYCLING, /* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
+    ALERT_TYPE_WPS_PBC_RACE,        /* concurrent PBC enrollees inside the 120 s walk time (#82) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

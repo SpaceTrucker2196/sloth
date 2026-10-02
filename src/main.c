@@ -521,6 +521,8 @@ static void print_usage(const char *argv0) {
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
+            "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
+            "       [--wps-pbc-concurrent N]\n"
             "       [--snapshot-out FILE] [--baseline-in FILE] [--site-label TEXT]\n"
             "       [--my-ssid SSID] [--my-bssid BSSID]\n"
             "       [--inventory FILE] [--site TEXT]\n"
@@ -667,6 +669,28 @@ static void print_usage(const char *argv0) {
             "                     addresses have been heard inside this window,\n"
             "                     counted from now — nothing is inferred from\n"
             "                     two trails that were close an hour ago.\n"
+            "  --wps-pin-brute-cycles N\n"
+            "                     WPS PIN attempts (M1-M3-NACK restart cycles)\n"
+            "                     from one station, or from one UUID-E behind\n"
+            "                     rotating MACs, within 60 s before\n"
+            "                     WPS_PIN_BRUTE fires (default 5, CERT/CC\n"
+            "                     VU#723755). A floor: raising it only quiets\n"
+            "                     the rule, it cannot invent a finding. The\n"
+            "                     60 s window is not tunable — it is the rate\n"
+            "                     the threshold is defined over.\n"
+            "  --wps-lockout-cycles N\n"
+            "                     completed AP-Setup-Locked lock->unlock cycles\n"
+            "                     on one BSSID within an hour before\n"
+            "                     WPS_LOCKOUT_CYCLING fires (default 2). An AP\n"
+            "                     that locks once and stays locked is a posture,\n"
+            "                     not an attack, and never fires.\n"
+            "  --wps-pbc-concurrent N\n"
+            "                     concurrent WPS Push-Button enrollees on one\n"
+            "                     BSSID inside the 120 s walk time that\n"
+            "                     WPS_PBC_RACE fires ABOVE (default 2, i.e. the\n"
+            "                     third concurrent enrollee alerts). The walk\n"
+            "                     time is fixed by the WSC protocol, not by\n"
+            "                     this flag.\n"
             "  --iface NAME       restrict the data stream to NAME (repeatable).\n"
             "                     Launch-time form of the interface view's [y]\n"
             "                     deselect, for headless deployments: frames\n"
@@ -908,6 +932,24 @@ int main(int argc, char **argv) {
                 return 2;
             }
             seqnum_corr_set_retain_secs(secs);
+        } else if (!strcmp(argv[i], "--wps-pin-brute-cycles") && i + 1 < argc) {
+            if (!alerts_set_wps_pin_brute_cycles(atoi(argv[++i]))) {
+                fprintf(stderr, "sloth: --wps-pin-brute-cycles needs a "
+                                "positive cycle count\n");
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--wps-lockout-cycles") && i + 1 < argc) {
+            if (!alerts_set_wps_lockout_cycles(atoi(argv[++i]))) {
+                fprintf(stderr, "sloth: --wps-lockout-cycles needs a "
+                                "positive cycle count\n");
+                return 2;
+            }
+        } else if (!strcmp(argv[i], "--wps-pbc-concurrent") && i + 1 < argc) {
+            if (!alerts_set_wps_pbc_concurrent(atoi(argv[++i]))) {
+                fprintf(stderr, "sloth: --wps-pbc-concurrent needs a "
+                                "positive session count\n");
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {

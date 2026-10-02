@@ -212,7 +212,36 @@ the headline rules per tier:
 - **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
-  `ATTACK_PATH`
+  `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`
+
+### Tunable thresholds (#82)
+
+Almost every threshold in the engine is a `#define` and nothing else —
+`KARMA_SSID_THRESH`, `ASSOC_FLOOD_THRESH`, the flood windows. The three
+WPS rules are the exception: the owner's decision of 2026-09-30 was to
+ship the issue's proposed numbers *each behind a config knob*, so each
+has a `#define` default in `src/alerts.h` **and** a CLI override, in the
+shape `seqnum_corr_set_retain_secs()` / `db_set_retain_days()` already
+use. There is no configuration-file format in sloth and this did not add
+one.
+
+| Rule | Default | Flag |
+|---|---|---|
+| `WPS_PIN_BRUTE` | 5 cycles / 60 s | `--wps-pin-brute-cycles N` |
+| `WPS_LOCKOUT_CYCLING` | 2 cycles / 1 h | `--wps-lockout-cycles N` |
+| `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
+
+Only the **counts** are tunable. The windows are not operator policy:
+60 s is the rate the brute-force threshold is defined over, one hour is
+the period the lockout sawtooth is stated in, and 120 s is the PBC walk
+time the WSC protocol fixes. A knob that moved the walk time would be
+measuring something the protocol does not do.
+
+Every threshold is a **floor** — the rule fires at or above the count —
+so raising one can only quiet sloth and can never invent a finding. A
+value of zero or less is **rejected** rather than read as "disabled": a
+floor of zero fires on every observation, which is the opposite of what
+the operator typed. See [[cli-reference]].
 
 ## Cross-panel coloring
 

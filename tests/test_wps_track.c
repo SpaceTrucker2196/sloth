@@ -118,6 +118,116 @@ static void test_uuid_e_kept_from_m1(void) {
     wps_track_clear();
 }
 
+/* ── Windowed cycle rate + snapshot (#82 wave 8) ──────────
+ *
+ * The rate is the whole point: a session that accumulated five cycles
+ * over an afternoon is not the same observation as one that did it in
+ * a minute, and cycle_count alone cannot tell them apart. */
+
+/* One completed M1→M3→NACK restart cycle at `at`. */
+static void cycle_at(const uint8_t sta[6], time_t at) {
+    wsc_feed(sta, WSC_OP_MSG,  WSC_MSG_M1,   at);
+    wsc_feed(sta, WSC_OP_MSG,  WSC_MSG_M3,   at);
+    wsc_feed(sta, WSC_OP_NACK, WSC_MSG_NACK, at);
+}
+
+static void test_cycles_since_counts_only_the_window(void) {
+    wps_track_clear();
+    /* Three cycles well over an hour ago, two just now. */
+    for (int i = 0; i < 3; i++) cycle_at(STA_A, 9000 + i);
+    for (int i = 0; i < 2; i++) cycle_at(STA_A, 13600 + i);
+    wps_session_t s;
+    ASSERT_EQ(wps_track_session(BSSID, STA_A, &s), 1);
+    ASSERT_EQ(s.cycle_count, 5);                              /* lifetime */
+    ASSERT_EQ(wps_track_cycles_since(&s, 13601, 60), 2);      /* windowed */
+    ASSERT_EQ(wps_track_cycles_since(&s, 13601, 3600), 2);
+    ASSERT_EQ(wps_track_cycles_since(&s, 13601, 7200), 5);
+    /* A window that predates every cycle counts none, and a
+     * nonsensical window is not a free pass. */
+    ASSERT_EQ(wps_track_cycles_since(&s, 20000, 60), 0);
+    ASSERT_EQ(wps_track_cycles_since(&s, 13601, 0), 0);
+    ASSERT_EQ(wps_track_cycles_since(NULL, 13601, 60), 0);
+    wps_track_clear();
+}
+
+static void test_cycles_since_is_inclusive_at_the_edge(void) {
+    /* A cycle exactly `window_s` old is inside the window. An
+     * exclusive bound here would make the documented "5 in 60 s"
+     * silently mean 5 in 59. */
+    wps_track_clear();
+    cycle_at(STA_A, 1000);
+    wps_session_t s;
+    ASSERT_EQ(wps_track_session(BSSID, STA_A, &s), 1);
+    ASSERT_EQ(wps_track_cycles_since(&s, 1060, 60), 1);
+    ASSERT_EQ(wps_track_cycles_since(&s, 1061, 60), 0);
+    wps_track_clear();
+}
+
+static void test_cycle_ring_saturates_without_overcounting(void) {
+    /* More cycles than the ring holds: the lifetime count keeps
+     * rising, the windowed answer saturates at the ring size. Under-
+     * reporting is the safe direction for a floor — a brute force that
+     * overran the ring has already fired. */
+    wps_track_clear();
+    for (int i = 0; i < WPS_CYCLE_RING + 5; i++) cycle_at(STA_A, 2000 + i);
+    wps_session_t s;
+    ASSERT_EQ(wps_track_session(BSSID, STA_A, &s), 1);
+    ASSERT_EQ(s.cycle_count, WPS_CYCLE_RING + 5);
+    ASSERT_EQ(wps_track_cycles_since(&s, 2020, 60), WPS_CYCLE_RING);
+    /* Wrapped slots hold the NEWEST stamps, not the oldest: a window
+     * covering only the last few cycles must still find them. */
+    ASSERT_EQ(wps_track_cycles_since(&s, 2012, 3), 4);
+    wps_track_clear();
+}
+
+static void test_a_session_with_no_cycles_reports_none(void) {
+    wps_track_clear();
+    wsc_feed(STA_A, WSC_OP_MSG, WSC_MSG_M1, 3000);
+    wps_session_t s;
+    ASSERT_EQ(wps_track_session(BSSID, STA_A, &s), 1);
+    ASSERT_EQ(s.cycle_count, 0);
+    ASSERT_EQ(wps_track_cycles_since(&s, 3000, 86400), 0);
+    wps_track_clear();
+}
+
+static void test_an_unwritten_ring_slot_is_not_the_epoch(void) {
+    /* wps_track_cycles_since reads a caller-supplied copy, so it is
+     * answerable for what it does with one whose stamps disagree with
+     * its count — a slot holding 0 is unwritten, not a cycle that
+     * completed in 1970. Without the guard, a window reaching back
+     * past the epoch (now - window_s < 0) counts every empty slot and
+     * manufactures a brute force out of a session that had none. */
+    wps_session_t s;
+    memset(&s, 0, sizeof(s));
+    s.cycle_count = 3;                 /* claims 3, carries no stamps */
+    ASSERT_EQ(wps_track_cycles_since(&s, 100, 86400), 0);
+    s.cycle_ts[1] = 90;                /* one real stamp among them */
+    ASSERT_EQ(wps_track_cycles_since(&s, 100, 86400), 1);
+    ASSERT_EQ(wps_track_cycles_since(&s, 100, 5), 0);
+}
+
+static void test_snapshot_copies_every_live_session(void) {
+    wps_track_clear();
+    wsc_feed(STA_A, WSC_OP_MSG, WSC_MSG_M1, 4000);
+    wsc_feed(STA_B, WSC_OP_MSG, WSC_MSG_M1, 4001);
+    wps_session_t out[MAX_WPS_SESSIONS];
+    ASSERT_EQ(wps_track_snapshot(out, MAX_WPS_SESSIONS), 2);
+    int saw_a = 0, saw_b = 0;
+    for (int i = 0; i < 2; i++) {
+        ASSERT_EQ(memcmp(out[i].bssid, BSSID, 6), 0);
+        if (memcmp(out[i].sta, STA_A, 6) == 0) saw_a = 1;
+        if (memcmp(out[i].sta, STA_B, 6) == 0) saw_b = 1;
+    }
+    ASSERT_EQ(saw_a, 1);
+    ASSERT_EQ(saw_b, 1);
+    /* Bounded by the caller's buffer, and safe at the edges. */
+    ASSERT_EQ(wps_track_snapshot(out, 1), 1);
+    ASSERT_EQ(wps_track_snapshot(out, 0), 0);
+    ASSERT_EQ(wps_track_snapshot(NULL, 4), 0);
+    wps_track_clear();
+    ASSERT_EQ(wps_track_snapshot(out, MAX_WPS_SESSIONS), 0);
+}
+
 static void test_non_wsc_frames_ignored(void) {
     wps_track_clear();
     uint8_t identity[] = { 0x02, 0x01, 0x00, 0x05, 0x01 };
@@ -166,4 +276,12 @@ void run_wps_track_tests(void) {
     RUN_TEST(test_uuid_e_kept_from_m1);
     RUN_TEST(test_non_wsc_frames_ignored);
     RUN_TEST(test_lru_eviction_reaches_tally);
+
+    TEST_SUITE("wps track — cycle rate + snapshot (#82 wave 8)");
+    RUN_TEST(test_cycles_since_counts_only_the_window);
+    RUN_TEST(test_cycles_since_is_inclusive_at_the_edge);
+    RUN_TEST(test_cycle_ring_saturates_without_overcounting);
+    RUN_TEST(test_a_session_with_no_cycles_reports_none);
+    RUN_TEST(test_an_unwritten_ring_slot_is_not_the_epoch);
+    RUN_TEST(test_snapshot_copies_every_live_session);
 }

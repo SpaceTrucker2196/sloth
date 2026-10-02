@@ -261,4 +261,48 @@ const char  *twin_class_label(twin_class_t c);
 #define KARMA_CONF_MIN         5
 #define KARMA_CONF_MAX        95
 
+/* ── WPS attack thresholds (#82 wave 8) ────────────────────
+ *
+ * The owner settled these numbers on 2026-09-30 — the issue's own
+ * proposal, each behind a knob. The knob is a `#define` default plus a
+ * CLI override, following KARMA_W_* for the constant and
+ * seqnum_corr_set_retain_secs() / db_set_retain_days() for the setter:
+ * there is no runtime configuration struct in sloth and inventing a
+ * config-file format to hold three integers would add a parser, a
+ * search path and a reload question for no gain.
+ *
+ * Only the *counts* are tunable. The windows are not operator policy:
+ * 60 s is the rate the issue defines the brute-force unit over, one
+ * hour is the period the lockout sawtooth is stated in, and 120 s is
+ * the PBC Walk Time the WSC protocol itself fixes (hostapd's
+ * WPS_PBC_WALK_TIME) — a site that shortened it would be measuring
+ * something the protocol does not do. Counts are what a noisy estate
+ * needs to move; windows are what the protocol is.
+ *
+ * Every threshold is a *floor*: the rule fires at or above the count,
+ * so raising one only ever quiets sloth and can never invent a
+ * finding. */
+#define WPS_PIN_BRUTE_CYCLES     5     /* M1→M3→NACK restart cycles ... */
+#define WPS_PIN_BRUTE_WINDOW_S  60     /* ... inside this many seconds  */
+#define WPS_LOCKOUT_CYCLES       2     /* locked→unlocked cycles ...    */
+#define WPS_LOCKOUT_WINDOW_S  3600     /* ... inside this many seconds  */
+#define WPS_PBC_CONCURRENT       2     /* fires when EXCEEDED (">2") ... */
+#define WPS_PBC_WALK_TIME_S    120     /* ... inside the WSC walk time  */
+
+/* Set the tunable counts. Return 1 when the value was accepted, 0 when
+ * it was rejected and the previous value stands — the caller (main.c)
+ * turns a rejection into a usage error, the same shape
+ * ownership_add_bssid() already uses. A threshold of zero or less is
+ * rejected rather than read as "disabled": a rule that fires on every
+ * observation is not an off switch, and silently meaning the opposite
+ * of what was typed is worse than refusing. */
+int alerts_set_wps_pin_brute_cycles(int cycles);
+int alerts_set_wps_lockout_cycles(int cycles);
+int alerts_set_wps_pbc_concurrent(int sessions);
+
+/* Current values — the defaults above until a setter moved them. */
+int alerts_wps_pin_brute_cycles(void);
+int alerts_wps_lockout_cycles(void);
+int alerts_wps_pbc_concurrent(void);
+
 #endif /* ALERTS_H */
