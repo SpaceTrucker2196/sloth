@@ -176,3 +176,4 @@
 | d774229 | 2026-10-05T13:10:13Z | claude-opus-5 | 236 | 95869 | 12098208 | 1252907 | 20.9761 | release v1.8.4 |
 | 73c36f7 | 2026-10-05T16:45:25Z | claude-opus-5 | 50 | 21394 | 10275495 | 414885 | 9.8217 | #96 pin wiki counts to the build, retire the assertion count |
 | 7a0a4e2 | 2026-10-05T17:01:13Z | claude-opus-5 | 44 | 19211 | 9898478 | 22595 | 5.6557 | #82 fold the --wps-* flags onto the --tune registry |
+| 5ae0394 | 2026-10-05T18:40:25Z | claude-opus-5 | 124 | 56514 | 31651291 | 78055 | 18.0197 | wave 2: #82 WSC pwd-id, #91 eviction prose, #103 wiki links, #95 action pins, #101 reg envelope |
