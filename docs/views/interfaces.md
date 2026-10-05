@@ -342,12 +342,18 @@ old handle is closed, so a radio that is already capturing keeps
 running — landing on an excluded row costs nothing. An empty allow-list
 admits every retarget, as before.
 
-This covers the interactive half only. At startup the monitor handle is
-still opened on whatever monitor-mode interface the kernel offers,
-without consulting the allow-list, because narrowing that would silence
-802.11 collection for a plain `--iface eth0` run. Until that is
-decided, an allow-list does **not** yet mean no out-of-scope frame is
-ever collected.
+This covers the interactive retarget only, and the asymmetry is settled
+policy rather than unfinished work. The owner ruled on 2026-10-04 that
+the 802.11 monitor stream sits **outside** the `--iface` allow-list: at
+startup the monitor handle is opened on whatever monitor-mode interface
+the kernel offers, without consulting the list, because narrowing it
+would silence 802.11 collection for a plain `--iface eth0` run.
+
+So an allow-list does **not** mean "no out-of-scope frame is ever
+collected" — it scopes the IP capture stream, plus this one keystroke.
+To scope the radio too, use `--monitor-only`, or run on a host with no
+monitor-capable adapter. The `sensor_health` record states the same
+limit under `scope_not_enforced` (see [[jsonl-schema]]).
 
 ## See also
 

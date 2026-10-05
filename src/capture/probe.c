@@ -634,12 +634,20 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
      * running. iface_is_allowed() returns 1 on an empty list, so an
      * unrestricted run is unaffected.
      *
-     * This closes only the interactive half. probe_open() still opens
-     * whatever find_monitor_iface() finds at startup without consulting
-     * the list; narrowing that would silence 802.11 collection for a
-     * plain `--iface eth0` run, which is an owner decision. Until it
-     * ships, an allow-list does not yet mean "no out-of-scope frame is
-     * ever collected". */
+     * Interactive retarget only, and that asymmetry is deliberate
+     * rather than unfinished: the owner ruled on 2026-10-04 that the
+     * monitor stream stays OUTSIDE the --iface allow-list, so
+     * probe_open() goes on opening whatever find_monitor_iface()
+     * discovers at startup. Narrowing that would silence 802.11
+     * collection for a plain `--iface eth0` run.
+     *
+     * So an allow-list does not mean "no out-of-scope frame is ever
+     * collected" — it scopes the IP capture stream, and this one
+     * keystroke. docs/wiki/jsonl-schema.md says so under
+     * scope_not_enforced. What this check still buys is that an
+     * operator cannot move the radio somewhere they did not declare;
+     * sloth's own startup discovery is a different question, and the
+     * owner answered it the other way. */
     if (!iface_is_allowed(s, iface)) {
         /* %.15s, not %s: the name comes in as a const char * that the
          * compiler cannot bound, and kernel iface names are under 16
