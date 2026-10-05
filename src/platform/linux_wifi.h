@@ -24,8 +24,20 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max);
 /* Retune `iface` (a monitor-mode interface) to freq_mhz via nl80211
    (NL80211_CMD_SET_CHANNEL). Requires CAP_NET_ADMIN. Returns 0 on an
    ACKed retune, -1 on any error (bad iface, EPERM, kernel refusal).
-   The only kernel-state write sloth performs; gated behind --hop.
-   See issue #22 and MISSION §2. */
+   A kernel-state write, gated behind --hop, and the narrowest one
+   sloth makes: it retunes sloth's own receiver, changing only what
+   sloth hears.
+
+   Deliberately given no total. This comment has twice claimed a count
+   and been wrong both times — first a sole claim (#84 found the
+   NL80211_CMD_TRIGGER_SCAN built below, behind --allow-active),
+   then a count of two, which missed that opening a capture handle sets
+   promiscuous mode (pcap_set_promisc in src/capture/capture.c, and
+   promisc=1 on every pcap_open_live). That one touches whatever
+   interface libpcap opened and sits behind no opt-in at all. Three
+   known writes is not a guarantee of three; counting them here is what
+   keeps going stale, so this comment names them and asserts no total.
+   See MISSION.md §2 for the governing rule, and issues #22 and #84. */
 int linux_wifi_set_channel(const char *iface, int freq_mhz);
 
 /* ── Scan-trigger policy, limiter and instrumentation (#84) ──

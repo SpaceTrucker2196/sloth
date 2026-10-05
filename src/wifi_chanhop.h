@@ -12,8 +12,9 @@
  *
  * It is pure logic: it never touches hardware. The caller reads
  * chanhop_current_freq() after chanhop_tick() returns 1 and asks the
- * platform to retune the radio (the only kernel-state write sloth performs,
- * gated behind --hop; see MISSION.md §2). Keeping the policy hardware-free
+ * platform to retune the radio — a kernel-state write gated behind
+ * --hop; see src/platform/linux_wifi.h for the others and why this
+ * comment no longer gives a total (#84). Keeping the policy hardware-free
  * makes it unit-testable with a synthetic clock and no live radio.
  *
  * Model: rotate through a static channel list (this alone guarantees every

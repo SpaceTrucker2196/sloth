@@ -2767,9 +2767,11 @@ typedef struct {
     void (*init)(void);
     void (*cleanup)(void);
     /* Retune sloth's own monitor-mode capture interface to freq_mhz
-     * (issue #22, gated behind --hop; see MISSION §2). Returns 0 on
-     * success, -1 if unsupported on this platform / build or the retune
-     * failed. The ONLY kernel-state write in the vtable. */
+     * (issue #22, gated behind --hop). Returns 0 on success, -1 if
+     * unsupported on this platform / build or the retune failed. One of
+     * two kernel-state writes reachable through this vtable — wifi_scan
+     * kicks an nl80211 scan trigger when --allow-active permitted it
+     * (#84). */
     int  (*set_channel)(const char *iface, int freq_mhz);
 } platform_ops_t;
 

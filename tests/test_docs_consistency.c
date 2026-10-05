@@ -571,6 +571,64 @@ static void test_usage_strict_claims_no_total_coverage(void) {
     ASSERT(has_ci(b, "--no-discovery"));
 }
 
+/*
+ * Header-comment honesty — issue #84.
+ *
+ * 6c33228 corrected the "only kernel-state write" claim in
+ * print_usage() and named these headers as out of scope at the time, so
+ * the same claim stayed in the comments a reader of the code hits
+ * first. src/platform/linux_wifi.h contradicted itself inside thirty
+ * lines: the set_channel comment claimed sole ownership while the
+ * TRIGGER_SCAN block below it documented a second write.
+ *
+ * What is pinned is the absence of a TOTAL, not the presence of a
+ * particular number — because the first fix for this replaced "the only
+ * kernel-state write" with "one of two" and that was false too:
+ * opening a capture handle sets promiscuous mode (pcap_set_promisc in
+ * src/capture/capture.c, promisc=1 on every pcap_open_live), which is a
+ * kernel-state write on whatever interface libpcap opened, behind no
+ * opt-in at all. Counting them in a comment is the thing that keeps
+ * going stale, so a counted claim is now as red as a sole claim.
+ *
+ * The presence half asks only that the file still discusses the subject
+ * and points somewhere fuller. It deliberately does not require the
+ * literal "--allow-active": review found that satisfied by unrelated
+ * pre-existing text in two of these files, which is a vacuous
+ * assertion, and it forces every comment to re-enumerate rather than
+ * cross-reference.
+ */
+static void check_file_claims_no_sole_kernel_state_write(const char *path) {
+    char *t = slurp(path);
+    ASSERT(t != NULL);
+    if (!t) return;
+    /* No sole claim. */
+    ASSERT(!has_ci(t, "only kernel-state write"));
+    ASSERT(!has_ci(t, "only kernel state write"));
+    ASSERT(!has_ci(t, "the only kernel-state"));
+    /* No UNSCOPED total either — the second thing that went stale. A
+       scoped count is fine and include/sloth.h makes a true one ("two
+       kernel-state writes reachable through this vtable": set_channel
+       and wifi_scan, since promiscuous mode is set by libpcap and not
+       through the vtable). What is banned is a claim about sloth as a
+       whole, which is what cannot be kept current. */
+    ASSERT(!has_ci(t, "kernel-state writes sloth can make"));
+    ASSERT(!has_ci(t, "kernel-state writes sloth performs"));
+    ASSERT(!has_ci(t, "kernel-state writes sloth makes"));
+    /* Still discusses the subject... */
+    ASSERT(has_ci(t, "kernel-state"));
+    /* ...and points at a fuller account rather than re-counting. */
+    ASSERT(has_ci(t, "--allow-active") || has_ci(t, "linux_wifi.h") ||
+           has_ci(t, "MISSION"));
+    free(t);
+}
+
+static void test_set_channel_comments_claim_no_total(void) {
+    check_file_claims_no_sole_kernel_state_write("src/platform/linux_wifi.h");
+    check_file_claims_no_sole_kernel_state_write("src/wifi_chanhop.h");
+    check_file_claims_no_sole_kernel_state_write("include/sloth.h");
+    check_file_claims_no_sole_kernel_state_write("src/main.c");
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -586,4 +644,5 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_has_ci);
     RUN_TEST(test_usage_hop_claims_no_sole_kernel_state_write);
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
+    RUN_TEST(test_set_channel_comments_claim_no_total);
 }

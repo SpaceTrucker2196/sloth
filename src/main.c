@@ -123,9 +123,12 @@ static sloth_state_t g_state;
 static volatile sig_atomic_t g_quit = 0;
 
 /* Passive channel-hop scheduler (issue #22). Off unless --hop is passed.
- * Drives platform set_channel from sloth's own observed activity — the
- * only kernel-state write sloth performs, and only on its own monitor
- * interface; see MISSION §2. */
+ * Drives platform set_channel from sloth's own observed activity — a
+ * kernel-state write confined to sloth's own monitor interface. Not
+ * "the only" one, which is what #84 corrected here, and not a counted
+ * set either: the nl80211 scan trigger behind --allow-active is
+ * another, and opening a capture handle sets promiscuous mode behind no
+ * flag at all. See src/platform/linux_wifi.h. */
 static chanhop_t g_chanhop;
 static int       g_hop_enabled = 0;
 
