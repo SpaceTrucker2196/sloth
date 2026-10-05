@@ -6,6 +6,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "tune.h"
 #include "alerts.h"
 #include "wired_attach.h"
 #include "secure_file.h"
@@ -1751,6 +1752,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      scope_state, scope_req, scope_enf;
         uint32_t scope_gen;
         uint64_t scope_dropped;
+        int      tuned;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1776,6 +1778,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_enf   = s->scope_health.enforced;
     sig.scope_gen   = s->scope_health.generation;
     sig.scope_dropped = capture_out_of_scope_dropped();
+    sig.tuned         = tune_non_default();
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1846,6 +1849,16 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
            (long long)s->scope_health.generation);
     kv_int(buf, LINEBUF, &off, "scope_dropped",
            (long long)capture_out_of_scope_dropped());
+    /* A raised threshold can silence a detector, so a consumer must be
+     * able to tell a quiet sensor from a detuned one (#82). Count plus
+     * the knobs themselves: the count alone would not say which rule
+     * went quiet. Empty string on a default run. */
+    kv_int(buf, LINEBUF, &off, "tuned_count", (long long)tune_non_default());
+    {
+        char tbuf[256];
+        tune_format_non_default(tbuf, sizeof(tbuf));
+        kv_str(buf, LINEBUF, &off, "tuned", tbuf);
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

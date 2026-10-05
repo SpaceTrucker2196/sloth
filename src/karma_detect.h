@@ -13,7 +13,9 @@ void karma_update(sloth_state_t *s);
 
 /* Minimum distinct SSIDs from one BSSID to be a KARMA candidate — kept
  * in sync with the KARMA_AP alert rule. */
-#define KARMA_SSID_THRESH 3
+#include "tune.h"
+/* Tunable since #82: karma.ssid_thresh. */
+#define KARMA_SSID_THRESH ((int)tune_val(TUNE_KARMA_SSID_THRESH))
 
 /* Correlation window for the deauth-then-lure chain (#30), shared with
  * the KARMA_AP alert rule and karma_update()'s deauth_chain flag. */

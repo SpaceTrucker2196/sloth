@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "alerts.h"
+#include "tune.h"   /* operator-tunable thresholds (#82) */
 #include "sensor_health.h"
 #include "threat_intel.h"
 #include "beacon_detect.h"
@@ -756,7 +757,7 @@ static int btm_source_ever_beaconed(const sloth_state_t *s,
  * controller emits exactly those all day.
  *
  * Returns the steering AP's index in s->btm_steers[], or -1. */
-#define TWIN_STEER_WINDOW_S 300
+#define TWIN_STEER_WINDOW_S ((int)tune_val(TUNE_TWIN_STEER_WINDOW_S))
 
 static int btm_steered_to(const sloth_state_t *s, const uint8_t bssid[6],
                           time_t now) {
@@ -2235,8 +2236,8 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
  * anything. A passer-by's phone probes in a burst as it crosses the
  * area; a device that is still asking ten minutes later is doing
  * something else. */
-#define RECON_SUSTAIN_S      600
-#define RECON_SUSTAIN_PROBES 20
+#define RECON_SUSTAIN_S ((int)tune_val(TUNE_RECON_SUSTAIN_S))
+#define RECON_SUSTAIN_PROBES ((int)tune_val(TUNE_RECON_SUSTAIN_PROBES))
 
 /* Confidence terms. The ceiling stays well under 100 — every input here
  * is circumstantial and the operator is the one who decides. */
@@ -2470,9 +2471,9 @@ static void rule_rf_degraded(const sloth_state_t *s, time_t now) {
  * parent count the total queries and how many of them carried a
  * leftmost label >= 30 chars. >= 8 long-subdomain hits over >= 15
  * total queries inside the alert window -> CRIT. */
-#define DNS_TUNNEL_LABEL_THRESH 30
-#define DNS_TUNNEL_LONG_HITS    8
-#define DNS_TUNNEL_TOTAL_THRESH 15
+#define DNS_TUNNEL_LABEL_THRESH ((int)tune_val(TUNE_DNS_TUNNEL_LABEL_THRESH))
+#define DNS_TUNNEL_LONG_HITS ((int)tune_val(TUNE_DNS_TUNNEL_LONG_HITS))
+#define DNS_TUNNEL_TOTAL_THRESH ((int)tune_val(TUNE_DNS_TUNNEL_TOTAL_THRESH))
 
 static const char *parent_domain(const char *qname) {
     int last_dot = -1, second_last_dot = -1;
@@ -2553,9 +2554,9 @@ static void rule_dns_tunnel(const sloth_state_t *s, time_t now) {
  * Gate on payload size (> normal ping) AND volume (a burst from one
  * pair), so a stray large diagnostic ping doesn't trip it. Metadata
  * only — we read the ICMP length already captured, never the payload. */
-#define ICMP_TUNNEL_MIN_PAYLOAD 64   /* bytes past the 8-byte echo header */
-#define ICMP_TUNNEL_THRESHOLD   8    /* oversized echoes per pair per window */
-#define ICMP_TUNNEL_WINDOW_S    60
+#define ICMP_TUNNEL_MIN_PAYLOAD ((int)tune_val(TUNE_ICMP_TUNNEL_MIN_PAYLOAD))   /* bytes past the 8-byte echo header */
+#define ICMP_TUNNEL_THRESHOLD ((int)tune_val(TUNE_ICMP_TUNNEL_THRESHOLD))    /* oversized echoes per pair per window */
+#define ICMP_TUNNEL_WINDOW_S ((int)tune_val(TUNE_ICMP_TUNNEL_WINDOW_S))
 
 static void rule_icmp_tunnel(const sloth_state_t *s, time_t now) {
     typedef struct {
@@ -3472,7 +3473,7 @@ static int rsn_downgrade_score(const beacon_ap_t *strong,
     return score;
 }
 
-#define SSID_CONFUSION_THRESH 3
+#define SSID_CONFUSION_THRESH ((int)tune_val(TUNE_SSID_CONFUSION_THRESH))
 
 static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
@@ -3519,8 +3520,8 @@ static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
  *
  * Score = ie_overruns + oversize_ssid + truncated_rsn (each capped so a
  * single pathological BSSID can't dominate). WARN at >=3, CRIT at >=5. */
-#define MGMT_FUZZ_WARN 3
-#define MGMT_FUZZ_CRIT 5
+#define MGMT_FUZZ_WARN ((int)tune_val(TUNE_MGMT_FUZZ_WARN))
+#define MGMT_FUZZ_CRIT ((int)tune_val(TUNE_MGMT_FUZZ_CRIT))
 
 static void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
@@ -3588,7 +3589,7 @@ static void rule_rogue_radius(const sloth_state_t *s, time_t now) {
  * the sniffer also cause big swings), but combined with a twin-fp
  * alert it's a strong attack-in-progress signal that Phase 4 will
  * correlate. */
-#define EVIL_TWIN_PROXIMITY_DBM 15
+#define EVIL_TWIN_PROXIMITY_DBM ((int)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM))
 
 
 /* CVE-2023-52160 — a TLS-in-EAP session that reached EAP-Success with
@@ -3676,7 +3677,7 @@ static void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
  * We deliberately re-derive them rather than tracking pairs separately
  * — the cost is one extra O(n²) walk per poll over MAX_BEACON_APS=256,
  * which is fine at ≈1 Hz. */
-#define DEAUTH_TWIN_WIN_SECS 5
+#define DEAUTH_TWIN_WIN_SECS ((int)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS))
 
 static void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
@@ -3863,7 +3864,7 @@ static void rule_smb1_use(const sloth_state_t *s, time_t now) {
  * burst of KDC_ERR_PREAUTH_FAILED (24) responses. The threshold is
  * conservative — five failures from one workstation in any active
  * window is well outside normal user-mistypes-password territory. */
-#define KERB_PREAUTH_BURST_THRESHOLD 5
+#define KERB_PREAUTH_BURST_THRESHOLD ((int)tune_val(TUNE_KERB_PREAUTH_BURST))
 
 static void rule_kerb_preauth_burst(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->kerb_event_count; i++) {
@@ -3893,7 +3894,7 @@ static void rule_kerb_preauth_burst(const sloth_state_t *s, time_t now) {
  * threshold is conservative so misclassified bulk-membership
  * queries (a small AD admin tool sweeping the directory) won't
  * mass-fire — it catches the unmistakeable enumeration shape. */
-#define LDAP_SEARCH_FLOOD_THRESHOLD 50
+#define LDAP_SEARCH_FLOOD_THRESHOLD ((int)tune_val(TUNE_LDAP_SEARCH_FLOOD))
 
 static void rule_ldap_search_flood(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->ldap_event_count; i++) {
@@ -3927,7 +3928,7 @@ static void rule_ldap_search_flood(const sloth_state_t *s, time_t now) {
  * Dedup key includes both peers so each flapping pair gets its own
  * alert — operators pivot to the exact peer-pair that needs
  * investigation. */
-#define BGP_NOTIFICATION_BURST_THRESHOLD 3
+#define BGP_NOTIFICATION_BURST_THRESHOLD ((int)tune_val(TUNE_BGP_NOTIFICATION_BURST))
 
 static void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->bgp_session_count; i++) {
@@ -3962,7 +3963,7 @@ static void rule_bgp_notification_burst(const sloth_state_t *s, time_t now) {
  * the same server inside the active window is unambiguous
  * brute-force shape. fail2ban's default ban threshold is 5 with a
  * wider window; we're a bit higher to stay surprise-free. */
-#define SSH_BRUTE_FORCE_THRESHOLD 10
+#define SSH_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_SSH_BRUTE_FORCE))
 
 static void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->ssh_flow_count; i++) {
@@ -3995,7 +3996,7 @@ static void rule_ssh_brute_force(const sloth_state_t *s, time_t now) {
  * generous enough for laptops behind NAT that re-connect a few
  * times after sleep/wake, well below what brute-force tools
  * produce in their first minute. */
-#define RDP_BRUTE_FORCE_THRESHOLD 10
+#define RDP_BRUTE_FORCE_THRESHOLD ((int)tune_val(TUNE_RDP_BRUTE_FORCE))
 
 static void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->rdp_flow_count; i++) {
@@ -4029,7 +4030,7 @@ static void rule_rdp_brute_force(const sloth_state_t *s, time_t now) {
  * couple times stays well below 5. metasploit's default list
  * starts with public/private/cisco/community/admin — five hits
  * trips immediately. */
-#define SNMP_COMMUNITY_BRUTE_THRESHOLD 5
+#define SNMP_COMMUNITY_BRUTE_THRESHOLD ((int)tune_val(TUNE_SNMP_COMMUNITY_BRUTE))
 
 static void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->snmp_flow_count; i++) {
@@ -4062,8 +4063,8 @@ static void rule_snmp_community_brute(const sloth_state_t *s, time_t now) {
  * (same connection-cadence reasoning) and a tighter 5 for explicit
  * CONNACK failures — the broker telling us "wrong" five times is
  * stronger evidence than just connection volume. */
-#define MQTT_BROKER_BRUTE_CONNECTS  10
-#define MQTT_BROKER_BRUTE_FAILS      5
+#define MQTT_BROKER_BRUTE_CONNECTS ((int)tune_val(TUNE_MQTT_BRUTE_CONNECTS))
+#define MQTT_BROKER_BRUTE_FAILS ((int)tune_val(TUNE_MQTT_BRUTE_FAILS))
 
 static void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->mqtt_flow_count; i++) {

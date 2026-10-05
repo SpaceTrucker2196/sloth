@@ -1784,3 +1784,46 @@ paragraph, the quickstart command, the EAPOL view row) and
 **Not changed**: `MISSION.md` §2.2 already frames the 22000 export as
 material the *operator* cracks, never sloth; the gate narrows what
 reaches disk and needed no mission change.
+
+## 2026-10-04 — operator-tunable detector thresholds (#82)
+
+The owner accepted #82's WPS rate thresholds "each behind a config
+knob" on 2026-09-30, and nothing could satisfy it: every behavioural
+threshold in `src/alerts.c` was a `#define`, and sloth had exactly one
+`getenv` (`NO_COLOR`). Owner decision 2026-10-04 settled the surface as
+one repeatable flag over a named registry rather than ~20 flags.
+
+- `src/tune.{c,h}` — 23-row registry, indexed by a `tune_id_t` so the
+  detector hot path is an array index and not a string compare. Each row
+  carries a name, the shipped default, a range and a unit. Bounds
+  exclude only values that make a rule meaningless (a count under 1, a
+  zero-length window), not values an operator might legitimately want.
+- `--tune NAME=VALUE` (repeatable) and `--tune-list`. An unknown name, a
+  non-integer, a missing value or an out-of-range number **exits 2**.
+  That is the design point, not strictness for its own sake: a knob the
+  operator believes they set but did not is worse than no knob, because
+  the run looks tuned and behaves stock.
+- `src/alerts.c` and `src/karma_detect.h` — the 22 `#define`s and
+  `KARMA_SSID_THRESH` now expand to `tune_val(...)`. Every use site is
+  unchanged, so any site that needed a compile-time constant would have
+  failed the build rather than silently changing meaning.
+- `sensor_health` gains `tuned_count` and `tuned` (additive), and the
+  Interfaces health strip gains a fault-only `tuned N/M` token. A raised
+  threshold can silence a detector, so a quiet sensor and a detuned one
+  must not look alike — to a consumer or to the operator at the
+  terminal.
+- `tests/test_tune.c` — 15 cases. The weight is on the rejections:
+  unknown name, prefix-of-a-real-name (`ssh.brute` must not match
+  `ssh.brute_force`), out-of-range at both ends, every malformed spec
+  shape, and that nothing moves on any rejection. Also that the spec
+  array still matches the enum order, since a reordering would remap one
+  rule's threshold onto another's value with every test still green.
+
+**Deliberately not tunable**: the `RECON_CONF_*` confidence weights.
+Those decide what a corroborator is *worth*, not when a rule fires;
+retuning them rewrites what a confidence percentage means in the export,
+which is #89/#90 territory and not an operator dial.
+
+**Not changed**: `MISSION.md`. A threshold is an observation parameter,
+not a rule of engagement — nothing here lets sloth transmit, scan or
+write kernel state.

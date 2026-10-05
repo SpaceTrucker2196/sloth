@@ -109,6 +109,7 @@ SRCS = src/main.c          \
        src/views/karma.c     \
        src/views/rogue_radius.c \
        src/alerts.c          \
+       src/tune.c            \
        src/views/alerts.c    \
        src/md5.c             \
        src/sha256.c          \
@@ -521,6 +522,8 @@ TEST_SRCS = tests/main_test.c          \
             src/views/rogue_radius.c       \
             tests/test_rogue_radius.c      \
             src/alerts.c                   \
+            src/tune.c                     \
+            tests/test_tune.c              \
             src/views/alerts.c             \
             tests/test_alerts.c            \
             src/md5.c                      \

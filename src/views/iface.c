@@ -7,6 +7,7 @@
 #include "util.h"
 #include "oui.h"
 #include "views/iface.h"
+#include "tune.h"
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_exit_name() for the health strip */
 #include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
@@ -458,6 +459,15 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
      * embeds an interface name or a libpcap errbuf. */
     if (s->probe_err[0])
         strip_addf(buf, sz, &off, "  probe: %.60s", s->probe_err);
+    /* #82: a detector threshold moved off its shipped default. Shown
+     * because a raised threshold is indistinguishable from a quiet
+     * segment at the terminal, the same confusion sensor_health's
+     * `tuned` exists to resolve for a consumer. Fault-only like every
+     * token above: a default run prints nothing. */
+    {
+        int tn = tune_non_default();
+        if (tn > 0) strip_addf(buf, sz, &off, "  tuned %d/%d", tn, TUNE_COUNT);
+    }
 }
 
 /* SSID of the network the managed radio is joined to ("" = none).

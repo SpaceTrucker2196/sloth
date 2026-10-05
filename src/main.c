@@ -90,6 +90,7 @@
 #include "ntp_log.h"
 #include "icmp_log.h"
 #include "alerts.h"
+#include "tune.h"
 #include "devices.h"
 #include "top_hosts.h"
 #include "beacon_detect.h"
@@ -520,6 +521,7 @@ static void print_usage(const char *argv0) {
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
+            "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
             "       [--wps-pbc-concurrent N]\n"
@@ -638,6 +640,16 @@ static void print_usage(const char *argv0) {
             "                     --hop still retunes the monitor interface.\n"
             "                     Worth passing because it puts the operator's\n"
             "                     intent where ps(1) and an audit log can see it.\n"
+            "  --tune NAME=VALUE  move one detector threshold. Repeatable.\n"
+            "                     An unknown name or an out-of-range value\n"
+            "                     exits 2 rather than running with the\n"
+            "                     default you thought you had changed. Any\n"
+            "                     knob off its default is reported in\n"
+            "                     sensor_health (tuned) and the health\n"
+            "                     strip, so a detuned sensor and a quiet\n"
+            "                     one do not read alike.\n"
+            "  --tune-list        print every knob with default, current\n"
+            "                     value and unit, then exit.\n"
             "  --allow-active     opt in to the two active behaviours sloth has:\n"
             "                     (1) reverse-DNS resolution — on a cache miss\n"
             "                     sloth may send a PTR query for an address it\n"
@@ -916,6 +928,22 @@ int main(int argc, char **argv) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
+        } else if (!strcmp(argv[i], "--tune-list")) {
+            tune_print_list(stdout);
+            return 0;
+        } else if (!strcmp(argv[i], "--tune")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "sloth: --tune needs name=value "
+                                "(see --tune-list)\n");
+                return 2;
+            }
+            char terr[160];
+            if (tune_set(argv[++i], terr, sizeof(terr)) != 0) {
+                /* A mistyped knob exits rather than running with the
+                 * default the operator thought they had changed (#82). */
+                fprintf(stderr, "sloth: --tune %s\n", terr);
+                return 2;
+            }
         } else if (!strcmp(argv[i], "--allow-active")) {
             allow_active = 1;
         } else if (!strcmp(argv[i], "--strict")) {
