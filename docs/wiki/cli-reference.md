@@ -89,6 +89,9 @@ of zero fires on every observation. → [[alerts]]
 | `--wps-lockout-cycles` | `N` | `2` | Completed AP-Setup-Locked lock→unlock cycles on one BSSID within **1 h** before `WPS_LOCKOUT_CYCLING` fires. An AP that locks once and stays locked never fires. |
 | `--wps-pbc-concurrent` | `N` | `2` | Concurrent WPS Push-Button enrollees on one BSSID inside the **120 s** walk time that `WPS_PBC_RACE` fires *above* — the default means the third concurrent enrollee alerts. |
 
+The three `--wps-*` flags above are **aliases** for the `wps.pin_brute_cycles`, `wps.lockout_cycles` and `wps.pbc_concurrent` knobs in the `--tune` registry; they shipped first and still work unchanged. Either spelling sets one value, `--tune-list` shows it, and — the part that was broken until 2026-10-05 — either spelling is recorded in `sensor_health`'s `tuned` and in the health strip, so a WPS threshold raised by flag can no longer silence a detector without appearing in the export.
+
+
 The windows are deliberately **not** flags: 60 s is the rate the
 brute-force threshold is defined over, one hour is the period the
 lockout sawtooth is stated in, and 120 s is the PBC walk time the WSC

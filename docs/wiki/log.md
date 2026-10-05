@@ -1859,3 +1859,38 @@ true at the time and stay as they are.
   `sudo`, and a root-created 0600 socket refuses a different uid, so
   they likely fail with EACCES as written. Unchanged by this sweep and
   pre-existing with `/tmp`; same shape as data-socket-exposure.md §5.
+
+## 2026-10-05 — the two threshold mechanisms reconciled (#82)
+
+Two sessions answered the same owner decision ("each behind a config
+knob") in parallel and both landed: `d652502` added three explicit flags
+with module statics behind them, `4206fe7` added the generic `--tune`
+registry. `main` carried two idioms for one job.
+
+- `src/tune.{c,h}` gains `wps.pin_brute_cycles`, `wps.lockout_cycles`
+  and `wps.pbc_concurrent`, plus `tune_set_id()` for setting a knob by
+  id. Their `lo` is 1, not the 2 used by the other counts, because these
+  three inherit the validation `alerts_set_wps_*` already published —
+  widening a shipped CLI contract is the break this reconciliation
+  exists to avoid.
+- `src/alerts.c` drops the three statics; the setters and accessors now
+  read and write the registry. Signatures and the documented 1/0 return
+  are unchanged, so `--wps-pin-brute-cycles` and friends behave exactly
+  as shipped.
+
+**The bug this closed, which was not merely tidiness.** A threshold
+moved through the old statics reached no export: `--wps-pin-brute-cycles
+900` silenced `WPS_PIN_BRUTE` while `sensor_health` still read
+`tuned_count` 0 and the health strip showed nothing. That is precisely
+the "a detuned sensor must not look like a quiet one" confusion `tuned`
+was added to resolve, and the flags bypassed it. Either spelling is now
+recorded.
+
+5 new cases (+35 assertions): defaults agree with the `WPS_*` macros and
+the accessors; both spellings reach one value with last-writer-wins; the
+flag path reaches `tuned`; the published 1/0 and reject-zero-or-less
+contract still holds at the boundary; `tune_set_id()` rejects a bad id
+and an out-of-range value without moving anything. Verified by mutation:
+making `tune_set_id()` accept without recording turns all five red, plus
+`test_wps_pbc_threshold_is_configurable` from the original slice — so the
+reroute is load-bearing for the earlier coverage too.

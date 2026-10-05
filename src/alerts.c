@@ -2934,28 +2934,37 @@ static void rule_open_setup_ap(const sloth_state_t *s, time_t now) {
  * not. The current values live behind accessors rather than being
  * read as constants, so a rule cannot quietly ignore an override. */
 
-static int g_wps_pin_brute_cycles = WPS_PIN_BRUTE_CYCLES;
-static int g_wps_lockout_cycles   = WPS_LOCKOUT_CYCLES;
-static int g_wps_pbc_concurrent   = WPS_PBC_CONCURRENT;
-
+/* These three were module statics until 2026-10-05. They now read and
+ * write the --tune registry instead, so there is one source of truth
+ * for every detector threshold rather than two mechanisms answering the
+ * same owner decision. The accessor/setter signatures are unchanged, so
+ * --wps-pin-brute-cycles and friends keep working exactly as shipped.
+ *
+ * The bug this closes is not tidiness. A threshold moved through the
+ * old statics reached no export at all, so `--wps-pin-brute-cycles 900`
+ * silenced WPS_PIN_BRUTE while sensor_health still read tuned_count 0
+ * and the health strip showed nothing — a detuned sensor
+ * indistinguishable from a quiet one, which is the exact confusion
+ * `tuned` was added to resolve. Routing them through the registry means
+ * either spelling is recorded. */
 int alerts_set_wps_pin_brute_cycles(int cycles) {
-    if (cycles < 1) return 0;
-    g_wps_pin_brute_cycles = cycles;
-    return 1;
+    return tune_set_id(TUNE_WPS_PIN_BRUTE_CYCLES, cycles);
 }
 int alerts_set_wps_lockout_cycles(int cycles) {
-    if (cycles < 1) return 0;
-    g_wps_lockout_cycles = cycles;
-    return 1;
+    return tune_set_id(TUNE_WPS_LOCKOUT_CYCLES, cycles);
 }
 int alerts_set_wps_pbc_concurrent(int sessions) {
-    if (sessions < 1) return 0;
-    g_wps_pbc_concurrent = sessions;
-    return 1;
+    return tune_set_id(TUNE_WPS_PBC_CONCURRENT, sessions);
 }
-int alerts_wps_pin_brute_cycles(void) { return g_wps_pin_brute_cycles; }
-int alerts_wps_lockout_cycles(void)   { return g_wps_lockout_cycles; }
-int alerts_wps_pbc_concurrent(void)   { return g_wps_pbc_concurrent; }
+int alerts_wps_pin_brute_cycles(void) {
+    return (int)tune_val(TUNE_WPS_PIN_BRUTE_CYCLES);
+}
+int alerts_wps_lockout_cycles(void) {
+    return (int)tune_val(TUNE_WPS_LOCKOUT_CYCLES);
+}
+int alerts_wps_pbc_concurrent(void) {
+    return (int)tune_val(TUNE_WPS_PBC_CONCURRENT);
+}
 
 /* Hex of a UUID-E, truncated — enough to key an incident and to let an
  * operator match two findings by eye, short of printing 32 characters

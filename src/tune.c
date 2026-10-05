@@ -40,6 +40,13 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "snmp.community_brute",       5,   2,   1000,   "communities tried" },
     { "mqtt.brute_connects",        10,  2,   1000,   "CONNECTs" },
     { "mqtt.brute_fails",           5,   2,   1000,   "refused CONNECTs" },
+    /* lo is 1, not 2 like the counts above: these three inherit the
+     * contract alerts_set_wps_* published in d652502, which rejects
+     * "zero or less" and accepts 1. Widening a shipped CLI validation
+     * would be the contract break this reconciliation exists to avoid. */
+    { "wps.pin_brute_cycles",       5,   1,   1000,   "M1-M3-NACK restart cycles per 60 s" },
+    { "wps.lockout_cycles",         2,   1,   1000,   "locked-unlocked cycles per hour" },
+    { "wps.pbc_concurrent",         2,   1,   1000,   "concurrent PBC enrollees (fires when exceeded)" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets
@@ -121,6 +128,14 @@ int tune_set(const char *spec, char *err, size_t errsz) {
     }
     g_val[idx] = v;
     return 0;
+}
+
+int tune_set_id(tune_id_t id, long v) {
+    if (id < 0 || id >= TUNE_COUNT) return 0;
+    seed();
+    if (v < g_specs[id].lo || v > g_specs[id].hi) return 0;
+    g_val[id] = v;
+    return 1;
 }
 
 int tune_non_default(void) {

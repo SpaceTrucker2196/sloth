@@ -2,7 +2,8 @@
 #include <stdio.h>
 #include "runner.h"
 #include "tune.h"
-#include "karma_detect.h"   /* KARMA_SSID_THRESH, the macro the knob feeds */
+#include "karma_detect.h"
+#include "alerts.h"        /* the --wps-* aliases folded onto the registry */   /* KARMA_SSID_THRESH, the macro the knob feeds */
 
 /* ── Operator-tunable thresholds — issue #82 ──────────────────
  *
@@ -245,6 +246,91 @@ static void test_a_tuned_threshold_reaches_the_detector_macro(void) {
     ASSERT_EQ(KARMA_SSID_THRESH, 3);
 }
 
+/* ── #82's own three, reconciled 2026-10-05 ───────────────────
+ *
+ * d652502 shipped --wps-pin-brute-cycles / --wps-lockout-cycles /
+ * --wps-pbc-concurrent with module statics behind them, answering the
+ * same owner decision this registry answers. Both now read one value.
+ * These pin that, and pin the bug it closed: a threshold moved by flag
+ * used to reach no export at all. */
+
+static void test_wps_defaults_match_the_shipped_macros(void) {
+    tune_reset();
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_PIN_BRUTE_CYCLES), WPS_PIN_BRUTE_CYCLES);
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_LOCKOUT_CYCLES),   WPS_LOCKOUT_CYCLES);
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_PBC_CONCURRENT),   WPS_PBC_CONCURRENT);
+    /* and the accessors the rules actually call agree */
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), WPS_PIN_BRUTE_CYCLES);
+    ASSERT_EQ(alerts_wps_lockout_cycles(),   WPS_LOCKOUT_CYCLES);
+    ASSERT_EQ(alerts_wps_pbc_concurrent(),   WPS_PBC_CONCURRENT);
+    ASSERT_EQ(tune_non_default(), 0);
+}
+
+static void test_wps_both_spellings_reach_one_value(void) {
+    /* --tune in, accessor out. */
+    tune_reset();
+    char err[160];
+    ASSERT_EQ(tune_set("wps.pin_brute_cycles=9", err, sizeof(err)), 0);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), 9);
+    /* --wps-* in, registry out. */
+    ASSERT_EQ(alerts_set_wps_lockout_cycles(7), 1);
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_LOCKOUT_CYCLES), 7);
+    /* Last writer wins on the same knob, whichever spelling it used —
+       there is one value, not two that can disagree. */
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(4), 1);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), 4);
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_PIN_BRUTE_CYCLES), 4);
+    ASSERT_EQ(tune_set("wps.pin_brute_cycles=6", err, sizeof(err)), 0);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), 6);
+    tune_reset();
+}
+
+static void test_wps_flag_path_reaches_the_tamper_record(void) {
+    /* The defect this reconciliation closed. Before it, the statics were
+       invisible to the export: --wps-pin-brute-cycles 900 silenced
+       WPS_PIN_BRUTE while sensor_health still said tuned_count 0 and the
+       health strip showed nothing — a detuned sensor reading exactly
+       like a quiet one. */
+    tune_reset();
+    ASSERT_EQ(tune_non_default(), 0);
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(900), 1);
+    ASSERT_EQ(tune_non_default(), 1);
+    char buf[256];
+    tune_format_non_default(buf, sizeof(buf));
+    ASSERT(strstr(buf, "wps.pin_brute_cycles=900") != NULL);
+    tune_reset();
+}
+
+static void test_wps_setters_keep_their_published_contract(void) {
+    /* alerts.h documents 1 on accept, 0 on reject with the previous
+       value standing, and rejects "zero or less" rather than reading it
+       as an off switch. Folding these onto the registry must not have
+       widened or narrowed that. */
+    tune_reset();
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(0), 0);
+    ASSERT_EQ(alerts_set_wps_pin_brute_cycles(-1), 0);
+    ASSERT_EQ(alerts_wps_pin_brute_cycles(), WPS_PIN_BRUTE_CYCLES);
+    ASSERT_EQ(tune_non_default(), 0);          /* a rejection moves nothing */
+    /* 1 is accepted — the boundary their contract names explicitly. */
+    ASSERT_EQ(alerts_set_wps_lockout_cycles(1), 1);
+    ASSERT_EQ(alerts_wps_lockout_cycles(), 1);
+    ASSERT_EQ(alerts_set_wps_pbc_concurrent(0), 0);
+    ASSERT_EQ(alerts_wps_pbc_concurrent(), WPS_PBC_CONCURRENT);
+    tune_reset();
+}
+
+static void test_tune_set_id_rejects_out_of_range_and_bad_ids(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set_id(TUNE_WPS_PIN_BRUTE_CYCLES, 0), 0);
+    ASSERT_EQ(tune_set_id(TUNE_WPS_PIN_BRUTE_CYCLES, 100000), 0);
+    ASSERT_EQ(tune_set_id((tune_id_t)-1, 5), 0);
+    ASSERT_EQ(tune_set_id((tune_id_t)TUNE_COUNT, 5), 0);
+    ASSERT_EQ(tune_non_default(), 0);
+    ASSERT_EQ(tune_set_id(TUNE_WPS_PIN_BRUTE_CYCLES, 3), 1);
+    ASSERT_EQ((long long)tune_val(TUNE_WPS_PIN_BRUTE_CYCLES), 3);
+    tune_reset();
+}
+
 void run_tune_tests(void) {
     TEST_SUITE("tune: operator-tunable detector thresholds (#82)");
     RUN_TEST(test_defaults_are_the_shipped_values);
@@ -262,4 +348,9 @@ void run_tune_tests(void) {
     RUN_TEST(test_reset_restores_every_default);
     RUN_TEST(test_print_list_covers_every_knob);
     RUN_TEST(test_a_tuned_threshold_reaches_the_detector_macro);
+    RUN_TEST(test_wps_defaults_match_the_shipped_macros);
+    RUN_TEST(test_wps_both_spellings_reach_one_value);
+    RUN_TEST(test_wps_flag_path_reaches_the_tamper_record);
+    RUN_TEST(test_wps_setters_keep_their_published_contract);
+    RUN_TEST(test_tune_set_id_rejects_out_of_range_and_bad_ids);
 }

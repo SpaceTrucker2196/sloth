@@ -60,6 +60,17 @@ typedef enum {
     TUNE_SNMP_COMMUNITY_BRUTE,
     TUNE_MQTT_BRUTE_CONNECTS,
     TUNE_MQTT_BRUTE_FAILS,
+    /* #82's own three, folded in 2026-10-05. They shipped first as
+     * --wps-pin-brute-cycles / --wps-lockout-cycles /
+     * --wps-pbc-concurrent in d652502, which answered the same owner
+     * decision the other way. Those flags still work and are now
+     * aliases onto these rows, so the registry is the single source of
+     * truth and — the part that was actually broken — a WPS threshold
+     * moved by flag now reaches `tuned` and the health strip instead of
+     * silencing a detector with no record in the export. */
+    TUNE_WPS_PIN_BRUTE_CYCLES,
+    TUNE_WPS_LOCKOUT_CYCLES,
+    TUNE_WPS_PBC_CONCURRENT,
     TUNE_COUNT
 } tune_id_t;
 
@@ -91,6 +102,12 @@ void tune_print_list(FILE *out);
 /* Comma-joined "name=value" for the knobs off default, "" when none.
    Truncates cleanly at n. Feeds sensor_health's `tuned`. */
 void tune_format_non_default(char *buf, size_t n);
+
+/* Set by id, bypassing name lookup. Returns 1 when accepted, 0 when out
+   of range and the previous value stands — the 1/0 shape the
+   alerts_set_wps_* aliases already published, so folding them onto the
+   registry did not change their contract. */
+int tune_set_id(tune_id_t id, long v);
 
 /* Back to shipped defaults. Tests only; main() never calls it. */
 void tune_reset(void);
