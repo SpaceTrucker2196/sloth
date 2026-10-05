@@ -175,3 +175,4 @@
 | 5a2c4cf | 2026-10-05T11:21:42Z | claude-opus-5 | 208 | 81298 | 11254296 | 368694 | 11.3476 | #86 — /run socket docs sweep, direct tcp_port tests, shared spec parse |
 | d774229 | 2026-10-05T13:10:13Z | claude-opus-5 | 236 | 95869 | 12098208 | 1252907 | 20.9761 | release v1.8.4 |
 | 73c36f7 | 2026-10-05T16:45:25Z | claude-opus-5 | 50 | 21394 | 10275495 | 414885 | 9.8217 | #96 pin wiki counts to the build, retire the assertion count |
+| 7a0a4e2 | 2026-10-05T17:01:13Z | claude-opus-5 | 44 | 19211 | 9898478 | 22595 | 5.6557 | #82 fold the --wps-* flags onto the --tune registry |
