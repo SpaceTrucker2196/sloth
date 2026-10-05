@@ -46,6 +46,16 @@ void probe_clear(void);
    everything, so an unrestricted run is unaffected. */
 void probe_set_iface(sloth_state_t *s, const char *iface);
 
+/* Drive the real on_probe_frame() over caller-supplied radiotap+802.11
+   frames via an in-memory libpcap savefile — the monitor twin of
+   capture_test_dispatch() (#92). No device, no .pcap fixture. ts_secs
+   is optional and sets each frame's capture timestamp, which is what
+   lets a test pin which clock a record was stamped from. Synchronous;
+   returns frames delivered, or -1. */
+int probe_test_dispatch(sloth_state_t *s,
+                        const uint8_t *const *frames, const int *lens,
+                        const uint32_t *ts_secs, int n);
+
 /* Refresh `h` from the monitor-radio handle — liveness, the worker's
    exit classification once it has ended, and one pcap_stats() sample
    (#91 slice 2). The mirror of capture_health_poll() for the radio;

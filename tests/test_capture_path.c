@@ -540,6 +540,200 @@ static void test_retarget_ignores_an_empty_name(void) {
     ASSERT_STR(g_s.probe_iface, "wlan1");
 }
 
+/* ── Monitor dispatch seam — issue #92 ───────────────────────
+ *
+ * The 802.11 path had no test entry point at all: on_probe_frame() is
+ * static, src/capture/probe.c is not in TEST_SRCS, and every existing
+ * monitor test seeds sloth_state_t instead. So radiotap parsing and the
+ * frame-type guards — which read bytes straight off the air — were
+ * reachable only through a real radio.
+ *
+ * probe_test_dispatch() is the monitor twin of capture_test_dispatch().
+ * These cases pin the guards in on_probe_frame() by observing
+ * mon_frame_total(), which it bumps once per admitted frame.
+ *
+ * This slice is the seam ONLY. #92's real defect — nine time(NULL)
+ * calls in this callback beside one frame-timestamp read — is NOT
+ * fixed here, and these tests do not claim it is. The seam takes
+ * per-frame timestamps precisely so the fix can be pinned when it is
+ * written. */
+
+#define RT_HDR 8            /* the minimal radiotap header built below */
+
+/* mon_frame_total() is a LIFETIME counter and probe_clear() does not
+   reset it (it clears the probe list only), so every assertion here is
+   a delta. Found by writing the absolute form first and watching three
+   cases fail on carry-over from the case before — which is the correct
+   behaviour of a monotonic counter, not a bug to design around. */
+static uint64_t mon_before(void) { return mon_frame_total(); }
+static long long mon_delta(uint64_t before) {
+    return (long long)(mon_frame_total() - before);
+}
+
+/* radiotap (8-byte, no present fields) + an 802.11 frame of dot11_len
+   bytes. Returns total length. A beacon's Frame Control is 0x80. */
+static int mon_frame(uint8_t *f, int dot11_len, uint8_t fc0) {
+    const int total = RT_HDR + dot11_len;
+    memset(f, 0, (size_t)total);
+    f[0] = 0x00;                       /* it_version */
+    f[1] = 0x00;                       /* it_pad     */
+    f[2] = (uint8_t)RT_HDR;            /* it_len lo  */
+    f[3] = 0x00;                       /* it_len hi  */
+    /* it_present = 0: no fields, so radiotap_parse() finds no signal or
+       channel and the handler proceeds on defaults. */
+    uint8_t *d = f + RT_HDR;
+    if (dot11_len >= 1) d[0] = fc0;    /* type/subtype */
+    if (dot11_len >= 10) {
+        d[4] = 0x02; d[5] = 0x00; d[6] = 0x00;   /* addr1 */
+        d[7] = 0x00; d[8] = 0x00; d[9] = 0x01;
+    }
+    return total;
+}
+
+static void test_monitor_seam_admits_a_wellformed_frame(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);          /* beacon, full framing */
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint64_t b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 1), 1);
+    /* The real callback ran: it parsed radiotap, passed the framing
+       guards and recorded the frame. */
+    ASSERT_EQ(mon_delta(b), 1);
+}
+
+static void test_monitor_seam_counts_each_admitted_frame(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t a[128], b[128], c[128];
+    int an = mon_frame(a, 24, 0x80);         /* beacon      */
+    int bn = mon_frame(b, 24, 0x40);         /* probe req   */
+    int cn = mon_frame(c, 10, 0xD4);         /* ACK, 10 bytes */
+    const uint8_t *fs[3] = { a, b, c };
+    int ls[3] = { an, bn, cn };
+    uint64_t base = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 3), 3);
+    ASSERT_EQ(mon_delta(base), 3);
+}
+
+static void test_monitor_seam_rejects_frames_below_the_guards(void) {
+    /* The four reject paths in on_probe_frame(), each on its own.
+       Every one of these is a frame an attacker can put on the air. */
+    uint8_t f[128];
+    int full = mon_frame(f, 24, 0x80);
+    (void)full;
+
+    /* (a) shorter than 8 bytes: no radiotap length to read. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    const uint8_t *fs1[1] = { f };
+    int ls1[1] = { 7 };
+    uint64_t b1 = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs1, ls1, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b1), 0);
+
+    /* (b) radiotap it_len claiming the frame or more, so there is no
+           802.11 left to read. Both an exact-length and an oversized
+           claim are refused.
+
+           Stated precisely, because the first version of this comment
+           claimed more than the case proves: this does NOT isolate the
+           `rt_len >= len` guard. Mutating it to `rt_len > len` leaves
+           the suite green, because at equality dot11_len is 0 and the
+           `dot11_len < 10` guard below refuses the frame anyway. The
+           two guards overlap, so the `=` in `>=` is behaviourally
+           redundant today — harmless, and worth knowing before someone
+           "simplifies" the wrong one of the pair. What this case does
+           pin is that such a frame is refused at all. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    uint8_t lying[128];
+    int ln = mon_frame(lying, 24, 0x80);
+    lying[2] = (uint8_t)ln;                 /* it_len == caplen */
+    const uint8_t *fs2[1] = { lying };
+    int ls2[1] = { ln };
+    uint64_t b2 = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b2), 0);
+
+    /* it_len far beyond caplen: the overread an attacker would aim for. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    uint8_t over[128];
+    int on = mon_frame(over, 24, 0x80);
+    over[2] = 200;                          /* it_len >> caplen */
+    const uint8_t *fs2b[1] = { over };
+    int ls2b[1] = { on };
+    uint64_t b2b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2b, ls2b, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b2b), 0);
+
+    /* (c) 802.11 shorter than 10 bytes: not enough for FC + duration +
+           addr1, which is the smallest real control frame. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    uint8_t runt[64];
+    int rn = mon_frame(runt, 9, 0x80);
+    const uint8_t *fs3[1] = { runt };
+    int ls3[1] = { rn };
+    uint64_t b3 = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs3, ls3, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b3), 0);
+
+    /* (d) zero-length frame. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    const uint8_t *fs4[1] = { f };
+    int ls4[1] = { 0 };
+    uint64_t b4 = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs4, ls4, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b4), 0);
+}
+
+static void test_monitor_seam_mixes_admitted_and_rejected(void) {
+    /* Interleaved in one dispatch: the count must follow the guards and
+       a rejected frame must not stop the ones behind it. */
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t good[128], runt[64];
+    int gn = mon_frame(good, 24, 0x80);
+    int rn = mon_frame(runt, 9, 0x80);
+    const uint8_t *fs[4] = { good, runt, good, runt };
+    int ls[4] = { gn, rn, gn, rn };
+    uint64_t b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 4), 4);
+    ASSERT_EQ(mon_delta(b), 2);
+}
+
+static void test_monitor_seam_carries_per_frame_timestamps(void) {
+    /* The seam's reason for taking ts_secs. It does not assert which
+       clock a record used — that is #92's open defect and this slice
+       does not fix it — only that the savefile really carries the
+       timestamps a caller asked for, so a later fix can be pinned
+       through here. Proven by the frames arriving at all with
+       deliberately far-apart stamps. */
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[2] = { f, f };
+    int ls[2] = { n, n };
+    uint32_t ts[2] = { 1000000000u, 1700000000u };
+    uint64_t b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 2), 2);
+    ASSERT_EQ(mon_delta(b), 2);
+}
+
+static void test_monitor_seam_rejects_bad_arguments(void) {
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(NULL, fs, ls, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, NULL, ls, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, NULL, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, -1), -1);
+    int bad[1] = { -5 };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, bad, NULL, 1), -1);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -563,6 +757,14 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_scope_refuses_a_datalink_without_an_ifindex);
     RUN_TEST(test_scope_refuses_a_deselected_pinned_interface);
     RUN_TEST(test_no_allow_list_admits_any_ifindex);
+
+    TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
+    RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);
+    RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
+    RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
+    RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
+    RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);
+    RUN_TEST(test_monitor_seam_rejects_bad_arguments);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);

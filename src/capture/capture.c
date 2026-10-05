@@ -1092,19 +1092,31 @@ void capture_test_set_policy(const capture_policy_t *p) {
     else   memset(&g_policy, 0, sizeof(g_policy));
 }
 
-int capture_test_dispatch(sloth_state_t *s, int dlt,
-                          const uint8_t *const *frames, const int *lens,
-                          const int *orig_lens, int n) {
-    if (!s || n < 0) return -1;
-    if (n > 0 && (!frames || !lens)) return -1;
+/* Build an in-memory libpcap savefile image. Shared by both test
+ * dispatch seams rather than copied into each — the monitor seam
+ * (#92) needs the identical header layout, and two copies of a
+ * byte-exact format is two places to get it wrong.
+ *
+ * ts_secs is optional: NULL gives each frame a synthetic increasing
+ * timestamp, which is what the IP-path tests have always seen. Passing
+ * real values is what lets a caller assert which clock a record was
+ * stamped from. orig_lens is likewise optional (defaults to lens).
+ *
+ * Returns a malloc'd image with *out_size set, or NULL. */
+uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
+                               const int *lens, const int *orig_lens,
+                               const uint32_t *ts_secs, int n,
+                               size_t *out_size) {
+    if (n < 0 || !out_size) return NULL;
+    if (n > 0 && (!frames || !lens)) return NULL;
 
     size_t total = PCAP_TEST_GHDR;
     for (int i = 0; i < n; i++) {
-        if (lens[i] < 0) return -1;
+        if (lens[i] < 0) return NULL;
         total += PCAP_TEST_RHDR + (size_t)lens[i];
     }
     uint8_t *img = malloc(total);
-    if (!img) return -1;
+    if (!img) return NULL;
 
     put_u32(img +  0, PCAP_TEST_MAGIC);
     put_u16(img +  4, 2);          /* version major */
@@ -1117,7 +1129,8 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
     size_t off = PCAP_TEST_GHDR;
     for (int i = 0; i < n; i++) {
         uint32_t orig = orig_lens ? (uint32_t)orig_lens[i] : (uint32_t)lens[i];
-        put_u32(img + off +  0, (uint32_t)(1700000000 + i));  /* ts_sec  */
+        uint32_t ts   = ts_secs ? ts_secs[i] : (uint32_t)(1700000000 + i);
+        put_u32(img + off +  0, ts);                          /* ts_sec  */
         put_u32(img + off +  4, (uint32_t)(i * 1000));        /* ts_usec */
         put_u32(img + off +  8, (uint32_t)lens[i]);           /* incl_len */
         put_u32(img + off + 12, orig);                        /* orig_len */
@@ -1125,6 +1138,18 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
         if (lens[i] > 0) memcpy(img + off, frames[i], (size_t)lens[i]);
         off += (size_t)lens[i];
     }
+    *out_size = total;
+    return img;
+}
+
+int capture_test_dispatch(sloth_state_t *s, int dlt,
+                          const uint8_t *const *frames, const int *lens,
+                          const int *orig_lens, int n) {
+    if (!s) return -1;
+    size_t total = 0;
+    uint8_t *img = capture_test_savefile(dlt, frames, lens, orig_lens,
+                                         NULL, n, &total);
+    if (!img) return -1;
 
     FILE *fp = fmemopen(img, total, "rb");
     if (!fp) { free(img); return -1; }

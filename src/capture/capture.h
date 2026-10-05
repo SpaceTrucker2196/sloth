@@ -412,6 +412,15 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
    s->iface_allowed_count, which is what makes an allow-list active. */
 void capture_test_set_policy(const capture_policy_t *p);
 
+/* Build an in-memory libpcap savefile image (same format both dispatch
+   seams read). ts_secs NULL = synthetic increasing timestamps;
+   orig_lens NULL = equal to lens. Caller frees. Shared with the monitor
+   seam in src/capture/probe.c so the byte layout exists once (#92). */
+uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
+                               const int *lens, const int *orig_lens,
+                               const uint32_t *ts_secs, int n,
+                               size_t *out_size);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }

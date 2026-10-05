@@ -1,6 +1,7 @@
 #ifdef WITH_PCAP
 
 #include <stdio.h>
+#include <stdlib.h>   /* malloc/free for the #92 dispatch seam */
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
@@ -512,6 +513,64 @@ void probe_health_poll(capture_health_t *h) {
     if (pcap_stats(g_ph, &ps) == 0)
         capture_stats_accumulate(h, (uint32_t)ps.ps_recv, (uint32_t)ps.ps_drop,
                                  (uint32_t)ps.ps_ifdrop);
+}
+
+/* ── Monitor dispatch test seam (#92) ─────────────────────────
+ *
+ * The 802.11 path had no test entry point. on_probe_frame() is static,
+ * src/capture/probe.c is absent from TEST_SRCS, and every monitor test
+ * in the suite seeds sloth_state_t instead — so radiotap parsing, the
+ * frame-type dispatch and the per-type observers, all of which consume
+ * attacker-controlled bytes off the air, were reachable only through a
+ * real radio.
+ *
+ * This is the monitor twin of capture_test_dispatch() (#95) and works
+ * the same way: an in-memory libpcap savefile through fmemopen() and
+ * pcap_fopen_offline(), so there is no device and no .pcap fixture, and
+ * the frames stay hand-built byte arrays. The savefile builder itself
+ * is shared, not copied.
+ *
+ * ts_secs is deliberately a parameter. Nine call sites in this callback
+ * read time(NULL) while one takes the frame's own capture timestamp,
+ * which is #92's open defect; a seam that could not set per-frame
+ * timestamps could not be used to pin the fix. This slice does NOT fix
+ * that split — it builds the thing needed to test any fix for it.
+ *
+ * DLT is fixed to DLT_IEEE802_11_RADIO because that is the only link
+ * type probe_open() accepts.
+ *
+ * Single-threaded and synchronous: no worker exists, so frames are
+ * decoded on the calling thread and `s` is fully populated on return.
+ * Returns the number of frames libpcap handed to the callback, or -1 if
+ * the savefile could not be opened. */
+int probe_test_dispatch(sloth_state_t *s,
+                        const uint8_t *const *frames, const int *lens,
+                        const uint32_t *ts_secs, int n) {
+    if (!s) return -1;
+    size_t total = 0;
+    uint8_t *img = capture_test_savefile(DLT_IEEE802_11_RADIO, frames, lens,
+                                         NULL, ts_secs, n, &total);
+    if (!img) return -1;
+
+    FILE *fp = fmemopen(img, total, "rb");
+    if (!fp) { free(img); return -1; }
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *pc = pcap_fopen_offline(fp, errbuf);
+    if (!pc) { fclose(fp); free(img); return -1; }
+
+    /* on_probe_frame() reads g_state; g_ph is swapped too so anything
+     * reached from the callback that consults the handle sees this one. */
+    pcap_t        *saved_ph    = g_ph;
+    sloth_state_t *saved_state = g_state;
+    g_ph    = pc;
+    g_state = s;
+    int got = pcap_dispatch(pc, n > 0 ? n : -1, on_probe_frame, NULL);
+    g_ph    = saved_ph;
+    g_state = saved_state;
+
+    pcap_close(pc);          /* closes the FILE* it took ownership of */
+    free(img);
+    return got;
 }
 
 /* ── Public API ──────────────────────────────────────────── */
