@@ -37,7 +37,6 @@ checkLevelNormal:src/beacon_snoop.c
 # argv branches; the function is simply long (arg parsing is nearly all
 # of it), and cppcheck's normal-level ValueFlow gives up rather than
 # finding anything.
-#
 # Honest limit on this entry, stated rather than implied: unlike the
 # beacon_snoop.c line above, it is NOT backed by a one-off
 # --check-level=exhaustive run confirming the normal level missed
