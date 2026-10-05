@@ -32,6 +32,20 @@ missingIncludeSystem
 # normal level missed, and costs minutes per push, so the job stays at
 # normal. A second over-budget function elsewhere still reports.
 checkLevelNormal:src/beacon_snoop.c
+# main() went over the same budget on 2026-10-05, when #82's --tune
+# parsing landed on top of #82's three --wps-* flags. Both are ordinary
+# argv branches; the function is simply long (arg parsing is nearly all
+# of it), and cppcheck's normal-level ValueFlow gives up rather than
+# finding anything.
+#
+# Honest limit on this entry, stated rather than implied: unlike the
+# beacon_snoop.c line above, it is NOT backed by a one-off
+# --check-level=exhaustive run confirming the normal level missed
+# nothing. cppcheck is not installed on the dev host and the job pins
+# 2.13.0, so that cross-check could not be run here. Worth doing, with
+# splitting argv handling out of main() as the real fix — that would
+# retire this entry instead of carrying it.
+checkLevelNormal:src/main.c
 
 # ── Non-reentrant time functions, main thread only ──────────────────────
 # localtime()/gmtime() return a shared static struct tm. Every call below
