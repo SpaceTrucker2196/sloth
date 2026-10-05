@@ -1508,10 +1508,12 @@ JSONL stream.
 - **Coverage gap.** Reverting only the static `g_accept_fn` initializer
   to `accept` stays green, because earlier tests pass NULL first. The
   initial default has no coverage that is independent of test order.
-- **Open.** The liveness-probe socket in `unix_path_removable()` is
-  still not close-on-exec. It is short-lived and closed before init
-  returns. The "every fd this module owns" comment therefore over-claims
-  slightly.
+- ~~**Open.** The liveness-probe socket in `unix_path_removable()` is
+  still not close-on-exec.~~ **Closed 2026-10-05**: it is created
+  close-on-exec with the module's other sockets, and the "every fd this
+  module owns" comment is now true rather than aspirational. The entry
+  is struck rather than deleted — a changelog that quietly loses its own
+  open items stops being a record of what was outstanding when.
 - **Open.** A docs sweep for `unix:/tmp/sloth.sock` is outstanding in
   README.md, docs/streaming.html, docs/wiki/jsonl-schema.md and
   examples/{consumer,forwarder}/README.md. Authenticated remote

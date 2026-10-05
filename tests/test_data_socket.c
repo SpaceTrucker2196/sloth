@@ -1219,6 +1219,95 @@ static void test_accepted_clients_are_cloexec(void) {
     data_socket_cleanup();
 }
 
+/* The stale-socket probe in unix_path_removable() is the one fd this
+ * module creates that no other seam ever sees: it is opened,
+ * connect()ed and closed inside a single call, so record_cloexec_nonblock
+ * above cannot observe it. It was a bare socket(AF_UNIX, SOCK_STREAM, 0)
+ * while the module comment already claimed every fd it owns is
+ * close-on-exec. The socket seam performs the real creation and then
+ * reads F_GETFD back off the fd the kernel returned, so what is asserted
+ * is the flag on the fd, not that an argument was passed.
+ *
+ * O_NONBLOCK is recorded alongside because the probe must NOT have it:
+ * unix_path_removable() reads "stale" off connect() returning
+ * ECONNREFUSED and "live" off it returning 0, and a non-blocking
+ * connect() can answer EINPROGRESS or EAGAIN instead — which the
+ * function treats as unverifiable and refuses on, turning a restart over
+ * a dead socket file into a startup failure. */
+static int socket_seen_n;
+static int socket_seen_cloexec;
+static int socket_seen_nonblock;
+
+static int record_cloexec_socket(int domain, int type, int protocol) {
+    int fd = socket(domain, type, protocol);
+    if (fd < 0) return fd;
+    socket_seen_n++;
+    int fdfl = fcntl(fd, F_GETFD);
+    if (fdfl >= 0 && (fdfl & FD_CLOEXEC)) socket_seen_cloexec++;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && (fl & O_NONBLOCK)) socket_seen_nonblock++;
+    return fd;
+}
+
+/* A live listener already at the path isolates the probe: init refuses
+ * before it ever creates a listener, so exactly one fd is created. */
+static void test_stale_socket_probe_is_cloexec(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+
+    int live = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT(live >= 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    ASSERT_EQ(bind(live, (struct sockaddr *)&addr, sizeof(addr)), 0);
+    ASSERT_EQ(listen(live, 4), 0);
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    socket_seen_n = socket_seen_cloexec = socket_seen_nonblock = 0;
+    data_socket_test_set_socket_fn(record_cloexec_socket);
+    ASSERT(data_socket_init(spec) != 0);      /* somebody is home */
+    data_socket_test_set_socket_fn(NULL);
+
+    ASSERT_EQ(socket_seen_n, 1);              /* the probe, and only it */
+    ASSERT_EQ(socket_seen_cloexec, 1);
+    ASSERT_EQ(socket_seen_nonblock, 0);
+
+    close(live);
+    unlink_quiet(path);
+}
+
+/* The stale path creates both fds in one init — probe, then the listener
+ * that replaces the orphaned file. Both must be close-on-exec; only the
+ * listener takes O_NONBLOCK. */
+static void test_probe_and_listener_differ_only_in_nonblock(void) {
+    const char *path = sock_path();
+    unlink_quiet(path);
+
+    int dead = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT(dead >= 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    ASSERT_EQ(bind(dead, (struct sockaddr *)&addr, sizeof(addr)), 0);
+    ASSERT_EQ(listen(dead, 4), 0);
+    close(dead);              /* orphaned file, nothing behind it */
+
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    socket_seen_n = socket_seen_cloexec = socket_seen_nonblock = 0;
+    data_socket_test_set_socket_fn(record_cloexec_socket);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    data_socket_test_set_socket_fn(NULL);
+
+    ASSERT_EQ(socket_seen_n, 2);
+    ASSERT_EQ(socket_seen_cloexec, 2);
+    ASSERT_EQ(socket_seen_nonblock, 1);
+
+    data_socket_cleanup();
+}
+
 /* ── Remote-bind guard (#86) ──────────────────────────────────
  *
  * The classifier is the whole policy, so it is tested directly and
@@ -1511,6 +1600,8 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_unix_listener_is_cloexec);
     RUN_TEST(test_tcp_listener_is_cloexec);
     RUN_TEST(test_accepted_clients_are_cloexec);
+    RUN_TEST(test_stale_socket_probe_is_cloexec);
+    RUN_TEST(test_probe_and_listener_differ_only_in_nonblock);
 
     TEST_SUITE("data socket (remote-bind guard, #86)");
     RUN_TEST(test_spec_is_remote_accepts_whole_loopback_net);

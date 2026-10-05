@@ -126,11 +126,18 @@ void data_socket_cleanup(void);
 
 /* ── Test-only syscall hooks ────────────────────────────────
  *
- * Internal indirection lets unit tests force send/accept failures
- * (EAGAIN, partial send, EMFILE) that real-socket fixtures can't
- * reliably trigger. Pass NULL to either setter to restore the real
- * libc function (for accept, the default close-on-exec wrapper around
- * it). Production code must not call these. */
+ * Internal indirection lets unit tests force send/accept/socket
+ * failures (EAGAIN, partial send, EMFILE) that real-socket fixtures
+ * can't reliably trigger, and lets a test observe the flags a new
+ * descriptor was created with. Pass NULL to any setter to restore the
+ * real libc function (for accept and socket, the close-on-exec wrapper
+ * around it). Production code must not call these.
+ *
+ * Note what the socket hook can and cannot see: it observes the flags
+ * passed to socket(), so on Linux it pins the atomic SOCK_CLOEXEC
+ * path. The non-atomic fallback, which applies set_cloexec() after the
+ * call for platforms without it, is downstream of the hook and is not
+ * covered by that observation. */
 #include <sys/types.h>           /* ssize_t, socklen_t */
 #include <sys/socket.h>          /* struct sockaddr    */
 #include <time.h>                /* time_t             */
@@ -138,11 +145,19 @@ typedef ssize_t (*data_socket_send_fn)(int, const void *, size_t, int);
 typedef int     (*data_socket_accept_fn)(int, struct sockaddr *, socklen_t *);
 typedef time_t  (*data_socket_clock_fn)(void);
 typedef int     (*data_socket_nonblock_fn)(int);
+typedef int     (*data_socket_socket_fn)(int, int, int);
 void data_socket_test_set_send_fn  (data_socket_send_fn   fn);
 void data_socket_test_set_accept_fn(data_socket_accept_fn fn);
 /* Monotonic seconds for the stall policy; NULL restores the real one. */
 void data_socket_test_set_clock_fn (data_socket_clock_fn  fn);
 /* fcntl(F_SETFL, O_NONBLOCK) indirection; NULL restores the real one. */
 void data_socket_test_set_nonblock_fn(data_socket_nonblock_fn fn);
+/* socket() indirection; NULL restores the real one. Unlike the others
+ * this exists to *observe*: the stale-socket probe in
+ * unix_path_removable() is created, connect()ed and closed inside one
+ * call and reaches no other seam, so FD_CLOEXEC on it is otherwise
+ * unobservable from a test. A fake is expected to create the socket for
+ * real and hand back the fd. */
+void data_socket_test_set_socket_fn(data_socket_socket_fn fn);
 
 #endif /* SLOTH_DATA_SOCKET_H */

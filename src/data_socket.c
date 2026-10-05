@@ -69,7 +69,10 @@ static time_t mono_now(void) {
  * data socket for its whole life; without FD_CLOEXEC any child it
  * exec()s — a helper, a hook, a shell a library spawns — inherits the
  * listener and every live client, and can accept() or read the
- * unauthenticated JSONL stream after sloth itself has moved on.
+ * unauthenticated JSONL stream after sloth itself has moved on. That
+ * includes the short-lived stale-socket probe in unix_path_removable():
+ * it is open across a connect(), which is ample for a concurrent
+ * fork+exec elsewhere in the process to inherit it.
  *
  * Linux sets the flag atomically at creation (SOCK_CLOEXEC on socket(),
  * accept4()), which closes the window between creation and a later
@@ -78,9 +81,11 @@ static time_t mono_now(void) {
  * set_nonblock() calls stay as the fallback and are idempotent here. */
 #if defined(__linux__) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
 #define DS_ATOMIC_SOCK_FLAGS 1
-#define DS_SOCK_FLAGS (SOCK_CLOEXEC | SOCK_NONBLOCK)
+#define DS_SOCK_FLAGS          (SOCK_CLOEXEC | SOCK_NONBLOCK)
+#define DS_SOCK_FLAGS_BLOCKING SOCK_CLOEXEC
 #else
-#define DS_SOCK_FLAGS 0
+#define DS_SOCK_FLAGS          0
+#define DS_SOCK_FLAGS_BLOCKING 0
 #endif
 
 #ifndef DS_ATOMIC_SOCK_FLAGS
@@ -91,8 +96,21 @@ static int set_cloexec(int fd) {
 }
 #endif
 
-static int ds_socket(int domain) {
-    int fd = socket(domain, SOCK_STREAM | DS_SOCK_FLAGS, 0);
+/* Declared ahead of the other syscall seams below because ds_socket()
+ * is defined here: the probe fd it returns is the only fd this module
+ * creates that no other seam ever sees, so a test observing FD_CLOEXEC
+ * has no other vantage point on it. */
+static data_socket_socket_fn g_socket_fn = socket;
+
+/* `type_flags` is the atomic-creation set for this fd. Listeners pass
+ * DS_SOCK_FLAGS; the stale-socket probe passes DS_SOCK_FLAGS_BLOCKING,
+ * because it distinguishes "another instance is listening" from "stale"
+ * by whether connect() succeeds or returns ECONNREFUSED — on a
+ * non-blocking fd that call can return EINPROGRESS or EAGAIN instead,
+ * which unix_path_removable() reads as "cannot verify" and refuses on.
+ * FD_CLOEXEC is set either way; only O_NONBLOCK differs. */
+static int ds_socket(int domain, int type_flags) {
+    int fd = g_socket_fn(domain, SOCK_STREAM | type_flags, 0);
 #ifndef DS_ATOMIC_SOCK_FLAGS
     if (fd >= 0 && set_cloexec(fd) != 0) {
         int err = errno;
@@ -143,6 +161,12 @@ void data_socket_test_set_accept_fn(data_socket_accept_fn fn) {
 void data_socket_test_set_clock_fn(data_socket_clock_fn fn) {
     pthread_mutex_lock(&g_mu);
     g_clock_fn = fn ? fn : mono_now;
+    pthread_mutex_unlock(&g_mu);
+}
+
+void data_socket_test_set_socket_fn(data_socket_socket_fn fn) {
+    pthread_mutex_lock(&g_mu);
+    g_socket_fn = fn ? fn : socket;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -207,7 +231,7 @@ static int unix_path_removable(const char *path) {
         return 0;
     }
 
-    int probe = socket(AF_UNIX, SOCK_STREAM, 0);
+    int probe = ds_socket(AF_UNIX, DS_SOCK_FLAGS_BLOCKING);
     if (probe < 0) {
         fprintf(stderr,
                 "data-socket: cannot verify %s is stale (socket: %s); refusing\n",
@@ -332,7 +356,7 @@ static int init_unix(const char *path) {
     }
     if (!unix_path_removable(path)) return -1;
 
-    int fd = ds_socket(AF_UNIX);
+    int fd = ds_socket(AF_UNIX, DS_SOCK_FLAGS);
     if (fd < 0) { perror("data-socket: socket"); return -1; }
 
     unlink(path);   /* checked above: absent, or a dead socket we own */
@@ -428,7 +452,7 @@ static int init_tcp(const char *host_port, int allow_remote) {
             host, port, host, port);
     }
 
-    int fd = ds_socket(AF_INET);
+    int fd = ds_socket(AF_INET, DS_SOCK_FLAGS);
     if (fd < 0) { perror("data-socket: socket"); return -1; }
 
     int one = 1;
