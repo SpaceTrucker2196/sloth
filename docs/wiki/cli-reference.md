@@ -206,7 +206,7 @@ make WITH_PCAP=0     # no capture, no probe view
 make WITH_WIFI=0     # no nl80211
 make WITH_SQLITE=0   # no --db
 make embedded        # shortcut: no ncurses, no pcap
-make test            # sloth_test — 9304 assertions, no root/tty/net
+make test            # sloth_test — no root/tty/net
 make mutate          # mutation-test the suite (opt-in, offline)
 ```
 

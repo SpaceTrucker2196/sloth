@@ -17,7 +17,7 @@ type: reference
 ## What sloth surfaces
 
 - **35 ncurses views** (`VIEW_COUNT` in `include/sloth.h`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
-- **61 alert rules** (one per `ALERT_TYPE_*`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
+- **65 alert rules** (one per `ALERT_TYPE_*`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
 - **Per-alert pcap dumps** when `--pcap-dir` is set — see [[pcap-export]].
 - **Optional JSONL forensic log** for downstream tooling.
 - **Composite dashboard** that tiles seven bands into one terminal — see [[dashboard]].
@@ -31,7 +31,7 @@ type: reference
 ## Binaries
 
 - `sloth` — main binary.
-- `sloth_test` — test binary, 9304 assertions, must always be green.
+- `sloth_test` — test binary, must always be green.
 - `sloth_test_pcap` — capture-path suite (`make test-capture-path`). The
   only binary built *with* `WITH_PCAP`, so it is the only one where the
   sanitizers see frames arrive through libpcap's own reader and the real

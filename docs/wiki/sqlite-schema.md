@@ -45,7 +45,7 @@ contract; the SQLite file is the retained artifact.
 ## What it is not
 
 - **Not a query surface.** The database is never served over the data
-  socket and gets no RPC. MISSION §4 rules out remote-control surfaces;
+  socket and gets no RPC. MISSION §4 forbids remote-control surfaces;
   a local file is a sink, and that distinction only holds if there is no
   way to reach it remotely. Operators query with the `sqlite3` CLI.
 - **Not a replacement for pcap.** Per-alert pcap export

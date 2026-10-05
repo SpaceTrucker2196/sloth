@@ -78,7 +78,7 @@ void <proto>_log_snapshot(sloth_state_t *s) {
 
 Properties:
 
-- Writes the most-recently-recorded entry into `s->log[0]` —
+- Writes the most-recently-recorded entry into `s->log[0]`, so the
   views render newest-first without extra sorting.
 - The `((idx) % MAX + MAX) % MAX` dance is the standard C
   workaround for negative-modulo: `(g_head - 1 - i)` can go

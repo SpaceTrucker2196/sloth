@@ -31,7 +31,7 @@ the Wi-Fi it watches:
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the 61 rules.
+- [[alerts]] — alert engine internals and the 65 rules.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.

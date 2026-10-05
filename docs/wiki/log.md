@@ -12,7 +12,7 @@ Append-only record of wiki operations. Newest entries at the bottom.
 
 - [sloth.md](sloth.md) — top-level project overview.
 - [architecture.md](architecture.md) — code-tree layout and seams.
-- [views-catalog.md](views-catalog.md) — keybinding map for all 24 views.
+- [views-catalog.md](views-catalog.md) — keybinding map for all 35 views.
 - [dashboard.md](dashboard.md) — seven-band composite layout.
 - [alerts.md](alerts.md) — alert engine + the six rules.
 - [ja3-fingerprinting.md](ja3-fingerprinting.md) — TLS ClientHello fingerprinting primitive.

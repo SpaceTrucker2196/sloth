@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <ctype.h>
 #include <unistd.h>
 #include "runner.h"
@@ -243,6 +244,52 @@ static void test_readme_counts_match_build(void) {
     check_counts("README.md", &c);
     check_no_future_version("README.md", &c);
     free(t);
+}
+
+/* docs/wiki states the same counts README does, and nothing checked it
+ * — which is exactly how it drifted. When the WPS rules took
+ * ALERT_TYPE_COUNT past 61, README, SECURITY and --help were corrected
+ * (the tests above assert them) and five wiki pages were not, so main
+ * carried "61 alert rules" and "65 alert rules" simultaneously, with
+ * docs/wiki/log.md still advertising 24 views against a VIEW_COUNT of
+ * 35.
+ *
+ * Every page is scanned rather than a listed few: a NEW page claiming a
+ * count is the case a hand-kept list would miss, and that is the failure
+ * mode being fixed. docs/wiki is the single source of truth per
+ * agents/AGENTS.md, so a count it states has to be the real one.
+ *
+ * Note what this does not police: an assertion count. Those were removed
+ * from the public docs in the same change rather than pinned here — the
+ * number tells a reader nothing they can act on and is wrong within a
+ * week, so "make test is green" is the honest claim. docs/wiki/log.md
+ * keeps its historical ones, which were true when written. */
+static void test_wiki_counts_match_build(void) {
+    const char *dir = "docs/wiki";
+    DIR *d = opendir(dir);
+    ASSERT(d != NULL);
+    if (!d) return;
+    int pages = 0, with_claims = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 4 || strcmp(e->d_name + nl - 3, ".md") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%.200s", dir, e->d_name);
+        char *t = slurp(path);
+        if (!t) continue;
+        pages++;
+        dc_claims_t c;
+        scan_all(t, &c);
+        if (c.n_views || c.n_rules) with_claims++;
+        check_counts(path, &c);
+        free(t);
+    }
+    closedir(d);
+    /* The walk actually found pages: a wrong relative path would
+       otherwise pass this test by checking nothing at all. */
+    ASSERT_GE(pages, 40);
+    ASSERT_GE(with_claims, 1);
 }
 
 static void test_security_names_only_current_version(void) {
@@ -530,6 +577,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_scanner_ignores_non_claims);
     RUN_TEST(test_scanner_versions_exclude_addresses);
     RUN_TEST(test_readme_counts_match_build);
+    RUN_TEST(test_wiki_counts_match_build);
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);
