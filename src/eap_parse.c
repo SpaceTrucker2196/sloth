@@ -154,6 +154,8 @@ static void wsc_walk_tlvs(const uint8_t *b, int n, eap_wsc_info_t *out) {
          * attribute's header into the identifier. */
         if (type == WSC_ATTR_MESSAGE_TYPE && alen == 1) {
             out->msg_type = v[0];
+        } else if (type == WSC_ATTR_DEV_PWD_ID && alen == 2) {
+            out->dev_pwd_id = (v[0] << 8) | v[1];
         } else if (type == WSC_ATTR_UUID_E && alen == 16) {
             memcpy(out->uuid_e, v, 16);
             out->has_uuid_e = 1;
@@ -169,6 +171,7 @@ int eap_wsc_parse(const uint8_t *p, int len, eap_wsc_info_t *out) {
     if (!p || !out) return 0;
     memset(out, 0, sizeof(*out));
     out->msg_type   = -1;
+    out->dev_pwd_id = -1;
     out->msg_length = -1;
 
     eap_info_t e;

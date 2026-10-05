@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "eap_parse.h"
+#include "beacon_snoop.h"   /* pins WSC_DEV_PWD_ID_PBC to the beacon path */
 #include <string.h>
 
 /* Hand-crafted EAP packets per RFC 3748 §4 — Code(1) Id(1) Len(2) then
@@ -120,6 +121,7 @@ static void test_wsc_m1_full(void) {
     ASSERT_EQ(w.truncated, 0);     /* last TLV ends exactly at the frame */
     ASSERT_EQ(w.msg_type, WSC_MSG_M1);
     ASSERT_STR(wsc_msg_name(w.msg_type), "M1");
+    ASSERT_EQ(w.dev_pwd_id, -1);   /* no 0x1012 in this body */
     ASSERT_EQ(w.has_uuid_e, 1);
     ASSERT_EQ(memcmp(w.uuid_e, uuid, 16), 0);
     ASSERT_EQ(w.has_mac, 1);
@@ -375,6 +377,165 @@ static void test_wsc_fragments(void) {
     ASSERT_EQ(w.msg_type, -1);
 }
 
+static void test_wsc_device_password_id(void) {
+    /* Device Password ID (0x1012, WSC 2.0 §12): 2 bytes big-endian.
+     * Body Version + Message Type + Device Password ID = 16;
+     * EAP length 14 + 16 = 30 = 0x1E. [28]/[29] are the value. */
+    static const int vals[] = {
+        WSC_DEV_PWD_ID_PBC,      /* 0x0004 — proximity-only window   */
+        WSC_DEV_PWD_ID_DEFAULT,  /* 0x0000 — label PIN               */
+        0x0005,                  /* registrar-specified              */
+        0x0008,                  /* reserved in WSC 2.0              */
+        0x1234,                  /* out of the enumerated range      */
+        0xFFFF,
+    };
+    for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+        uint8_t f[] = {
+            0x02, 0x10, 0x00, 0x1E, 0xFE,
+            0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+            0x10, 0x4A, 0x00, 0x01, 0x10,
+            0x10, 0x22, 0x00, 0x01, 0x04,
+            0x10, 0x12, 0x00, 0x02, 0x00, 0x00,
+        };
+        f[28] = (uint8_t)(vals[i] >> 8);
+        f[29] = (uint8_t)(vals[i] & 0xFF);
+        eap_wsc_info_t w;
+        ASSERT_EQ(eap_wsc_parse(f, sizeof(f), &w), 1);
+        ASSERT_EQ(w.msg_type, WSC_MSG_M1);
+        /* Reported as read: an unnamed code still says the enrollee
+         * asked for something other than PBC, and coercing it would
+         * erase that. */
+        ASSERT_EQ(w.dev_pwd_id, vals[i]);
+        ASSERT_EQ(w.truncated, 0);
+    }
+    /* 0x0000 is a value, not an absence — the beacon path cannot tell
+     * the two apart and this one must. */
+    ASSERT_EQ(WSC_DEV_PWD_ID_DEFAULT, 0x0000);
+    /* Same spec code, two layers, two spellings (src/beacon_snoop.h). */
+    ASSERT_EQ(WSC_DEV_PWD_ID_PBC, WPS_DEV_PWD_ID_PBC);
+}
+
+static void test_wsc_device_password_id_malformed(void) {
+    /* A length that lies: 1 byte, then 4. Both ignored rather than read
+     * from the wrong width, and the walk continues to the Message Type
+     * after them. Body 5 + 8 + 5 = 18; EAP length 32 = 0x20. */
+    uint8_t lies[] = {
+        0x02, 0x11, 0x00, 0x20, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x12, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+    };
+    eap_wsc_info_t w;
+    ASSERT_EQ(eap_wsc_parse(lies, sizeof(lies), &w), 1);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+    ASSERT_EQ(w.msg_type, WSC_MSG_M1);
+    ASSERT_EQ(w.truncated, 0);
+
+    /* A lone 1-byte Device Password ID, with nothing valid after it to
+     * mask a loosened width check. Body 5; EAP length 19 = 0x13. */
+    uint8_t lone[] = {
+        0x02, 0x11, 0x00, 0x13, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x12, 0x00, 0x01, 0x04,
+    };
+    ASSERT_EQ(eap_wsc_parse(lone, sizeof(lone), &w), 1);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+    ASSERT_EQ(w.truncated, 0);
+
+    /* Declares 2 bytes, one is present: the value would read a byte
+     * past the frame. Body 5 + 5 = 10; EAP length 24 = 0x18. */
+    uint8_t cut[] = {
+        0x02, 0x12, 0x00, 0x18, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00, 0x02, 0x00,
+    };
+    ASSERT_EQ(eap_wsc_parse(cut, sizeof(cut), &w), 1);
+    ASSERT_EQ(w.truncated, 1);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+    ASSERT_EQ(w.msg_type, WSC_MSG_M1);
+
+    /* Header cut to 3 bytes (Type + half a Length).
+     * Body 5 + 3 = 8; EAP length 22 = 0x16. */
+    uint8_t hdr[] = {
+        0x02, 0x13, 0x00, 0x16, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00,
+    };
+    ASSERT_EQ(eap_wsc_parse(hdr, sizeof(hdr), &w), 1);
+    ASSERT_EQ(w.truncated, 1);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+
+    /* A complete 0x1012 TLV sitting past the declared EAP Length: those
+     * bytes are not part of this packet and must not be read as PBC.
+     * EAP length 24 = 0x18 covers Version + Message Type only. */
+    uint8_t past[] = {
+        0x02, 0x14, 0x00, 0x18, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x4A, 0x00, 0x01, 0x10,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x04,
+    };
+    ASSERT_EQ(eap_wsc_parse(past, sizeof(past), &w), 1);
+    ASSERT_EQ(w.msg_type, WSC_MSG_M1);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+    ASSERT_EQ(w.truncated, 0);
+
+    /* A middle fragment is not walked at all, so a 0x1012-shaped run of
+     * value bytes inside one must not surface as a password ID. */
+    uint8_t mid[] = {
+        0x02, 0x15, 0x00, 0x14, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01,
+        0x04, 0x01,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x04,
+    };
+    ASSERT_EQ(eap_wsc_parse(mid, sizeof(mid), &w), 1);
+    ASSERT_EQ(w.tlvs_walked, 0);
+    ASSERT_EQ(w.dev_pwd_id, -1);
+}
+
+/* A repeated 0x1012. Found in adversarial review of the slice that
+ * added this attribute, and pinned rather than quietly "fixed": every
+ * attribute in eap_wsc_parse()'s walk is last-wins by plain
+ * assignment, so making this one first-wins would make the parser
+ * inconsistent with msg_type, uuid_e and mac for no stated reason.
+ *
+ * The consequence is real and belongs to whoever writes the detector,
+ * not to the parser: a crafted M1 carrying PBC (0x0004) and then a
+ * second Device Password ID reports the LATER value, so a station can
+ * hide an open PBC window from anything that reads dev_pwd_id alone.
+ * WPS_PBC_RACE counts sessions from M1, so it must not treat
+ * "dev_pwd_id is not PBC" as evidence that PBC was absent. Reported on
+ * #82. If the resolution is ever changed to first-wins or to a sticky
+ * PBC, these two assertions fail and name the decision. */
+static void test_repeated_device_password_id_is_last_wins(void) {
+    eap_wsc_info_t w;
+    /* PBC first, then PIN: the evasion direction. */
+    uint8_t pbc_then_pin[] = {
+        0x02, 0x14, 0x00, 0x22, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x04,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x00,
+    };
+    ASSERT_EQ(eap_wsc_parse(pbc_then_pin, sizeof(pbc_then_pin), &w), 1);
+    ASSERT_EQ(w.msg_type, WSC_MSG_M1);
+    ASSERT_EQ(w.dev_pwd_id, 0x0000);   /* the later one wins */
+
+    /* PIN first, then PBC: the same rule, opposite order. */
+    uint8_t pin_then_pbc[] = {
+        0x02, 0x14, 0x00, 0x22, 0xFE,
+        0x00, 0x37, 0x2A, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00,
+        0x10, 0x22, 0x00, 0x01, 0x04,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x00,
+        0x10, 0x12, 0x00, 0x02, 0x00, 0x04,
+    };
+    ASSERT_EQ(eap_wsc_parse(pin_then_pbc, sizeof(pin_then_pbc), &w), 1);
+    ASSERT_EQ(w.dev_pwd_id, 0x0004);
+}
+
 void run_eap_parse_tests(void) {
     TEST_SUITE("EAP inner-frame parser (#31)");
     RUN_TEST(test_request_identity);
@@ -394,4 +555,7 @@ void run_eap_parse_tests(void) {
     RUN_TEST(test_wsc_bad_vendor);
     RUN_TEST(test_wsc_non_wsc_type_254);
     RUN_TEST(test_wsc_fragments);
+    RUN_TEST(test_wsc_device_password_id);
+    RUN_TEST(test_wsc_device_password_id_malformed);
+    RUN_TEST(test_repeated_device_password_id_is_last_wins);
 }

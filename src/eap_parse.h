@@ -109,6 +109,7 @@ const char *eap_type_name(int type);
 #define WSC_FLAG_LF      0x02   /* 2-byte Message Length is present */
 
 /* WSC 2.0 §12 attribute types this decoder extracts. */
+#define WSC_ATTR_DEV_PWD_ID    0x1012   /* 2 bytes, big-endian         */
 #define WSC_ATTR_MAC_ADDRESS   0x1020   /* Enrollee MAC in M1, 6 bytes */
 #define WSC_ATTR_MESSAGE_TYPE  0x1022   /* 1 byte, WSC_MSG_*           */
 #define WSC_ATTR_UUID_E        0x1047   /* 16 bytes                    */
@@ -127,6 +128,22 @@ const char *eap_type_name(int type);
 #define WSC_MSG_NACK  0x0E
 #define WSC_MSG_DONE  0x0F
 
+/* WSC 2.0 §12 Device Password ID values (attribute 0x1012). Only the
+ * two that carry a detection meaning are named: Default is the label
+ * PIN a PIN-brute targets, PushButton is the proximity-only window a
+ * PBC race exploits. The remaining codes (user-, machine- and
+ * registrar-specified, rekey, and the reserved range) are enumerated
+ * but say nothing a detector keys on, so an unrecognised value is
+ * reported as read rather than folded into one of these — a value this
+ * decoder cannot name is still evidence of what the enrollee asked for.
+ *
+ * `src/beacon_snoop.h` carries the same PushButton code as
+ * WPS_DEV_PWD_ID_PBC for the beacon-IE path. Duplicated rather than
+ * shared because this header is standalone on <stdint.h>; the two are
+ * pinned together by a test. */
+#define WSC_DEV_PWD_ID_DEFAULT  0x0000
+#define WSC_DEV_PWD_ID_PBC      0x0004
+
 typedef struct {
     int     op_code;          /* WSC_OP_*                                  */
     int     flags;            /* raw Flags octet                           */
@@ -135,6 +152,12 @@ typedef struct {
     int     tlvs_walked;      /* 1 when the body was read as TLVs          */
     int     truncated;        /* a TLV header or value ran past the frame  */
     int     msg_type;         /* WSC_MSG_*; -1 when absent                 */
+    /* Device Password ID as the message asked for it — the credential
+     * path this registration is using. The beacon attribute only says
+     * the AP's window is open; this one binds the choice to a session.
+     * -1 when absent rather than 0, because 0x0000 (Default/PIN) is a
+     * real answer and must not read as "no attribute". */
+    int     dev_pwd_id;       /* WSC_DEV_PWD_ID_*; -1 when absent          */
     int     has_uuid_e;
     uint8_t uuid_e[16];
     int     has_mac;
