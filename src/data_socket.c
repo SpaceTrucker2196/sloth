@@ -278,28 +278,42 @@ static int addr_is_remote(const struct in_addr *a) {
     return (ntohl(a->s_addr) >> 24) != 127u;
 }
 
+/* Decompose a "tcp:HOST:PORT" spec into the address and port the binder
+ * would use. Returns 0 and fills both out-params on success; -1 when the
+ * spec is not a tcp spec, fails parse_host_port's full-string rule, or
+ * names a host that is not an IPv4 literal (the binder accepts nothing
+ * else, so neither may anything that reports on the binder).
+ *
+ * One helper rather than a copy in each caller: the exposure classifier
+ * and the port reader answer different questions about the *same* parse,
+ * and src/discovery.c consults both on one spec. Two copies of the
+ * sequence are two chances for them to disagree about what the operator
+ * typed — the same reasoning that made parse_host_port shared. */
+static int parse_tcp_spec(const char *spec, struct in_addr *addr,
+                          long *port) {
+    if (!spec || strncmp(spec, "tcp:", 4) != 0) return -1;
+
+    char host[64];
+    if (parse_host_port(spec + 4, host, sizeof(host), port, 0) != 0) return -1;
+    if (inet_pton(AF_INET, host, addr) != 1) return -1;
+    return 0;
+}
+
 int data_socket_spec_is_remote(const char *spec) {
     if (!spec || !spec[0]) return -1;
     /* A filesystem socket has no address to be reachable at. */
     if (strncmp(spec, "unix:", 5) == 0) return spec[5] ? 0 : -1;
-    if (strncmp(spec, "tcp:", 4) != 0) return -1;
-
-    char host[64];
-    long port = 0;
-    if (parse_host_port(spec + 4, host, sizeof(host), &port, 0) != 0) return -1;
 
     struct in_addr a;
-    if (inet_pton(AF_INET, host, &a) != 1) return -1;
+    long port = 0;
+    if (parse_tcp_spec(spec, &a, &port) != 0) return -1;
     return addr_is_remote(&a);
 }
 
 int data_socket_spec_tcp_port(const char *spec) {
-    if (!spec || strncmp(spec, "tcp:", 4) != 0) return -1;
-    char host[64];
-    long port = 0;
-    if (parse_host_port(spec + 4, host, sizeof(host), &port, 0) != 0) return -1;
     struct in_addr a;
-    if (inet_pton(AF_INET, host, &a) != 1) return -1;
+    long port = 0;
+    if (parse_tcp_spec(spec, &a, &port) != 0) return -1;
     return (int)port;
 }
 
