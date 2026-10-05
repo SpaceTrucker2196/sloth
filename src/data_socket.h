@@ -48,12 +48,18 @@ int  data_socket_init_ex(const char *spec, int allow_remote);
  * tested directly against addresses a test is not permitted to bind. */
 int  data_socket_spec_is_remote(const char *spec);
 
-/* The port of a well-formed `tcp:HOST:PORT` spec, parsed by the same
- * full-string rule the binder uses (1..65535, no trailing bytes — so
- * "8765x" is malformed, not 8765). -1 for a `unix:` spec, a non-literal
- * host, or anything the binder would reject. Exported so a consumer of
- * the spec (mDNS discovery) cannot read a different port out of it than
- * the one actually bound. */
+/* The port of a syntactically well-formed `tcp:HOST:PORT` spec, parsed
+ * by the same full-string rule the binder uses (1..65535, no trailing
+ * bytes — so "8765x" is malformed, not 8765). -1 for a `unix:` spec, a
+ * host that is not an IPv4 literal, or a port that fails that rule.
+ * Exported so a consumer of the spec (mDNS discovery) cannot read a
+ * different port out of it than the one actually bound.
+ *
+ * Syntax only: a non-negative return means the spec parses, *not* that
+ * the binder would accept it. In particular this says nothing about the
+ * routable-address refusal — `tcp:192.0.2.1:8765` yields 8765 here and
+ * is still rejected at init without --data-socket-allow-remote. Callers
+ * that need the policy answer ask data_socket_spec_is_remote(). */
 int  data_socket_spec_tcp_port(const char *spec);
 
 /* Call from the main poll loop. Accepts any pending connections,
