@@ -107,7 +107,7 @@ All targets driven by the root [`Makefile`](../Makefile).
 | `make embedded`              | shortcut: `WITH_NCURSES=0 WITH_PCAP=0` |
 | `make test`                  | builds `./sloth_test`, runs all assertions |
 | `make test-capture-path`     | builds `./sloth_test_pcap` (WITH_PCAP), drives the real `pcap_dispatch` → `on_packet` path |
-| `make cppcheck`              | static analysis over `src/` + `research/`. **Advisory** — CI pins Cppcheck 2.13.0 and is authoritative; a newer local version cannot check the suppression baseline. See the comment on the target |
+| `make cppcheck`              | CI's cppcheck command verbatim, with CI's version guard. Green here means the cppcheck job is green. Hard-fails unless `cppcheck --version` is exactly `Cppcheck 2.13.0`; no distro ships it, so build from source per the recipe above the target |
 | `make clean`                 | removes objects, `sloth`, `sloth_test` |
 | `make install PREFIX=...`    | installs to `$PREFIX/bin/sloth` (default `/usr/local`) |
 
