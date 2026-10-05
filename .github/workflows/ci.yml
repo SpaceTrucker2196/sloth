@@ -23,7 +23,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
         run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
@@ -92,7 +92,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:strict_string_checks=1
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
         run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
@@ -171,7 +171,7 @@ jobs:
       EXTRA_CFLAGS: -Werror -fsanitize=thread -fno-omit-frame-pointer -fno-sanitize-recover=all
       TSAN_OPTIONS: halt_on_error=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
         run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
@@ -203,7 +203,7 @@ jobs:
   cppcheck:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install cppcheck
         run: sudo apt-get update && sudo apt-get install -y cppcheck
@@ -257,7 +257,7 @@ jobs:
   harden:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Install dependencies
         run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev

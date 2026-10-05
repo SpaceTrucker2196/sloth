@@ -492,6 +492,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_research_corpus.c   \
             tests/test_docs_consistency.c  \
             tests/test_build_recipe.c      \
+            tests/test_ci_pins.c           \
             research/query.c               \
             tests/test_research_query.c    \
             research/mcp/json.c            \

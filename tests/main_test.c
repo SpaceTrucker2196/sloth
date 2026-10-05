@@ -91,6 +91,7 @@ void run_research_ingest_tests(void);
 void run_research_corpus_tests(void);
 void run_docs_consistency_tests(void);
 void run_build_recipe_tests(void);
+void run_ci_pin_tests(void);
 void run_research_query_tests(void);
 void run_research_mcp_tests(void);
 void run_research_view_tests(void);
@@ -222,6 +223,7 @@ int main(void) {
     run_research_corpus_tests();
     run_docs_consistency_tests();
     run_build_recipe_tests();
+    run_ci_pin_tests();
     run_research_query_tests();
     run_research_mcp_tests();
     run_research_view_tests();

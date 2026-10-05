@@ -221,7 +221,8 @@ Sloth is **one binary**, no config file, no daemon manager required.
 ```yaml
 runs-on: ubuntu-latest
 steps:
-  - actions/checkout@v4
+  - actions/checkout@<40-hex-digest>   # v4 — pinned by digest; see
+                                       # tests/test_ci_pins.c
   - apt-get install libncurses-dev libpcap-dev
   - make
   - make test
