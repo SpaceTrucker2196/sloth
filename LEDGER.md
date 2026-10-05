@@ -172,3 +172,4 @@
 | ab1b140 | 2026-10-01T22:48:24Z | claude-opus-5 | 122 | 64386 | 15386741 | 332499 | 12.6286 | wave 1: #85 [m] retarget refusal, #92 pcap origlen, #90 KARMA benign readings (9-agent workflow + adversarial review) |
 | d652502 | 2026-10-02T11:34:43Z | claude-opus-5 | 378 | 158424 | 34239209 | 558823 | 26.6703 | #82 — WPS PIN-brute, lockout-cycling and PBC-race alert rules at the owner's thr |
 | 5177d7b | 2026-10-05T02:36:48Z | claude-opus-5 | 92 | 43522 | 15902936 | 352364 | 12.5636 | #85 scope-claim correction (owner ruling), #82 --tune threshold registry |
+| 5a2c4cf | 2026-10-05T11:21:42Z | claude-opus-5 | 208 | 81298 | 11254296 | 368694 | 11.3476 | #86 — /run socket docs sweep, direct tcp_port tests, shared spec parse |
