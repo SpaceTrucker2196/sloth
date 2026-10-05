@@ -98,6 +98,8 @@ the Wi-Fi it watches:
   between version awareness and self-update.
 - [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
+- [[posture-report]] — the on-exit sign-off document (`--report`,
+  `--report-json`).
 - [[jsonl-schema]] — wire format for `-o FILE` and `--data-socket SPEC`.
 - [[data-socket-exposure]] — who can read the data socket, the
   `unix:` trust boundary, the remote-bind guard, and the three

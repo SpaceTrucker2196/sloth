@@ -127,7 +127,7 @@ community / admin` — five hits trips immediately.
 - **Reflective amplification source.** UDP/161 is a classic
   reflective DDoS amplifier (GetBulk responses can be 100×
   the request size). The connection-cadence detector for that
-  belongs to the [[beaconing]] / amplification side, not the
+  belongs to the [[beacon-detection]] / amplification side, not the
   SNMP observable per se.
 
 ## References

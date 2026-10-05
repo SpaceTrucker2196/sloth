@@ -12,7 +12,7 @@ mutant should be killed (at least one assertion flips red). Surviving
 mutants are concrete gaps in the test suite — either a missing
 assertion or genuinely dead/equivalent code. This is how sloth checks
 that its **test suite itself** is trustworthy enough to back the
-[[sloth|Level-5]] autonomy claim in [`MISSION.md`](../../MISSION.md).
+Level-5 autonomy claim in [`MISSION.md`](../../MISSION.md).
 
 **Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
@@ -387,8 +387,8 @@ Highest-value files to mutate, in order:
 Don't waste cycles mutating:
 
 - `src/views/*.c` — render code. Low semantic value, lots of
-  formatting noise; tests use [[platform-vtable|the fake platform]] +
-  null TUI but assert mostly on "did it not crash".
+  formatting noise; tests use the [[platform-vtable]] fake platform
+  plus a null TUI but assert mostly on "did it not crash".
 - `src/tui.c`, `src/main.c` — orchestration glue.
 - `src/platform/*.c` — kernel-facing, not run by tests.
 

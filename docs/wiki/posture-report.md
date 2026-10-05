@@ -57,4 +57,5 @@ sign-off document."
 
 - [[alerts]] — where the ATT&CK tag on each alert comes from.
 - [[jsonl-schema]] — the streaming event log the report summarises.
-- [[cleartext-cred-guardrail]] — the "no password field, ever" rule.
+- [`cleartext_cred` in the JSONL schema](jsonl-schema.md#cleartext_cred) —
+  the "no password field, ever" rule.

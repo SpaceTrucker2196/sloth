@@ -116,7 +116,7 @@ surprise-free for noisy laptops behind NAT.
   direction.
 - **Tunnelled-protocol detection.** Some C2 frameworks tunnel
   over SSH. The connection-byte-cadence + beacon detection
-  ([[beaconing]]) catches that pattern at the higher layer;
+  ([[beacon-detection]]) catches that pattern at the higher layer;
   SSH-specific tunnel detection isn't planned.
 
 ## References
