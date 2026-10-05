@@ -409,16 +409,16 @@ format → reconnect`); the same shape ports directly to Go
 
 ```sh
 # Tail every record sloth emits, with ANSI colour
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock
 
 # Only alerts, from any source
 python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
 
 # Raw JSON pass-through into jq
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --raw | jq .
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --raw | jq .
 
 # 5-second rolling tally by record type
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --count
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --count
 ```
 
 ### Reference SIEM forwarder
@@ -435,17 +435,17 @@ SIEM. Three sinks ship:
 
 ```sh
 # Splunk HEC
-python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
     --sink hec \
     --hec-url       https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN
 
 # RFC 5424 syslog (UDP)
-python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
     --sink syslog --syslog-host siem.example.com --syslog-port 514
 
 # Elasticsearch with daily-rolled indices
-python3 examples/forwarder/sloth-forward.py unix:/tmp/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
     --sink elastic \
     --es-url       https://elastic.example.com:9200 \
     --es-index     'sloth-events-%Y.%m.%d' \

@@ -1827,3 +1827,35 @@ which is #89/#90 territory and not an operator dial.
 **Not changed**: `MISSION.md`. A threshold is an observation parameter,
 not a rule of engagement — nothing here lets sloth transmit, scan or
 write kernel state.
+
+## 2026-10-05 — #86: finish the `/run/sloth.sock` docs sweep
+
+**Source**: the open item recorded under the 2026-09-27 `#86` entry above.
+
+**Changed pages**: [jsonl-schema.md](jsonl-schema.md) (2 lines). The rest
+of the sweep is outside `docs/wiki/`: `README.md`, `docs/streaming.html`,
+`examples/consumer/README.md`, `examples/consumer/sloth-stream.py`,
+`examples/forwarder/README.md`, `examples/forwarder/sloth-forward.py` —
+45 lines in all, every one a `unix:/tmp/sloth.sock` in a copyable example.
+
+**Why**: `/tmp` is world-writable, so any local user can pre-plant the
+socket path. Since `f2bf0b5` `init_unix()` refuses a path that is not a
+socket or is owned by another uid, which makes a plant a denial of
+service rather than a hijack — but an example an operator copies should
+not model a path somebody else controls. Slice 3 (`6d5b024`) moved
+`docs/quickstart.html`, `docs/index.html` and `docs/views/interfaces.md`
+and deferred these; four of the files carried both spellings at once.
+
+**Closes the open item** from the 2026-09-27 entry. `git grep
+"tmp/sloth.sock"` now matches only `RELEASE_v1.*.md`, `METRICS.md` and
+the historical lines in this log, all of which are records of what was
+true at the time and stay as they are.
+
+**Notes**:
+
+- Docs only — no code, CLI, JSONL or schema change. `/run/` and `/tmp/`
+  are the same width, so no example's column alignment moved.
+- **Open.** The consumer and forwarder examples still run without
+  `sudo`, and a root-created 0600 socket refuses a different uid, so
+  they likely fail with EACCES as written. Unchanged by this sweep and
+  pre-existing with `/tmp`; same shape as data-socket-exposure.md §5.

@@ -274,7 +274,7 @@
           <span class="code-title">Tail every record, ANSI colour</span>
         </div>
 <pre class="code-block">python3 examples/consumer/sloth-stream.py \
-    unix:/tmp/sloth.sock</pre>
+    unix:/run/sloth.sock</pre>
       </div>
 
       <div class="code-card">
@@ -294,7 +294,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">Raw JSON into jq</span>
         </div>
 <pre class="code-block">python3 examples/consumer/sloth-stream.py \
-    unix:/tmp/sloth.sock --raw | jq .</pre>
+    unix:/run/sloth.sock --raw | jq .</pre>
       </div>
 
       <div class="code-card">
@@ -303,7 +303,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">Type tally every 5s</span>
         </div>
 <pre class="code-block">python3 examples/consumer/sloth-stream.py \
-    unix:/tmp/sloth.sock --count</pre>
+    unix:/run/sloth.sock --count</pre>
       </div>
     </div>
   </div>
@@ -328,7 +328,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">Splunk HEC</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink hec \
     --hec-url       https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN</pre>
@@ -340,7 +340,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">Elasticsearch (daily rolled)</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink elastic \
     --es-url       https://elastic.example.com:9200 \
     --es-index     'sloth-events-%Y.%m.%d' \
@@ -353,7 +353,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">RFC 5424 syslog (UDP)</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --sink syslog \
     --syslog-host siem.example.com \
     --syslog-port 514</pre>
@@ -365,7 +365,7 @@ alert.update,alert.resolve</pre>
           <span class="code-title">Alerts-only feed, big batches</span>
         </div>
 <pre class="code-block">python3 examples/forwarder/sloth-forward.py \
-    unix:/tmp/sloth.sock \
+    unix:/run/sloth.sock \
     --type alert \
     --batch-size 500 --batch-ms 500 \
     --sink hec --hec-url … --hec-token-env …</pre>

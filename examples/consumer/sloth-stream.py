@@ -17,24 +17,24 @@ USAGE
     sloth-stream tcp:100.64.0.5:8765                 # e.g. a Tailscale IP
 
     # filter to one or more record types
-    sloth-stream unix:/tmp/sloth.sock --type alert
-    sloth-stream unix:/tmp/sloth.sock --type dns,tls,quic
+    sloth-stream unix:/run/sloth.sock --type alert
+    sloth-stream unix:/run/sloth.sock --type dns,tls,quic
 
     # the alert lifecycle (#98) — escalations, not just first sightings
-    sloth-stream unix:/tmp/sloth.sock \
+    sloth-stream unix:/run/sloth.sock \
         --type alert.create,alert.escalate,alert.update,alert.resolve
 
     # filter by `src` field substring (any record with a `src`)
-    sloth-stream unix:/tmp/sloth.sock --src 10.0.0.5
+    sloth-stream unix:/run/sloth.sock --src 10.0.0.5
 
     # raw mode — pass-through JSON lines (no pretty-printing)
-    sloth-stream unix:/tmp/sloth.sock --raw
+    sloth-stream unix:/run/sloth.sock --raw
 
     # tally mode — count records by type, print every 5s
-    sloth-stream unix:/tmp/sloth.sock --count
+    sloth-stream unix:/run/sloth.sock --count
 
     # one-shot — exit on disconnect instead of retrying
-    sloth-stream unix:/tmp/sloth.sock --no-reconnect
+    sloth-stream unix:/run/sloth.sock --no-reconnect
 
 CONTRACT
 

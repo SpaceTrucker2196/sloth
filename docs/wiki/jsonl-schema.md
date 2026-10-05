@@ -798,9 +798,9 @@ above, demonstrates the connect / read / parse / filter / reconnect
 loop, and is the first thing to run when validating a deployment:
 
 ```sh
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock
 python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock --raw | jq .
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --raw | jq .
 ```
 
 The script is the worked example for porting a consumer to any other

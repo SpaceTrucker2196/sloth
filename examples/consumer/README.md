@@ -29,7 +29,7 @@ TCP for remote (over a trusted transport — Tailscale, a private VPN,
 or localhost only):
 
 ```sh
-sudo ./sloth --data-socket unix:/tmp/sloth.sock
+sudo ./sloth --data-socket unix:/run/sloth.sock
 sudo ./sloth --data-socket tcp:127.0.0.1:8765
 sudo ./sloth --data-socket tcp:100.64.0.5:8765 --data-socket-allow-remote
 ```
@@ -44,7 +44,7 @@ this script at `tcp:127.0.0.1:8765` on your own machine. See
 Then point this script at the same spec:
 
 ```sh
-python3 examples/consumer/sloth-stream.py unix:/tmp/sloth.sock
+python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock
 python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765
 ```
 
@@ -57,20 +57,20 @@ emits, one line per record.
 
 ```sh
 # Only alerts — note this is FIRST SIGHTINGS ONLY (see below)
-python3 sloth-stream.py unix:/tmp/sloth.sock --type alert
+python3 sloth-stream.py unix:/run/sloth.sock --type alert
 
 # The full alert lifecycle, including WARN -> CRIT escalations (#98)
-python3 sloth-stream.py unix:/tmp/sloth.sock \
+python3 sloth-stream.py unix:/run/sloth.sock \
     --type alert.create,alert.update,alert.escalate,alert.resolve
 
 # Multiple types (comma-separated)
-python3 sloth-stream.py unix:/tmp/sloth.sock --type dns,tls,quic
+python3 sloth-stream.py unix:/run/sloth.sock --type dns,tls,quic
 
 # By `src` substring (matches any record that has a `src` field)
-python3 sloth-stream.py unix:/tmp/sloth.sock --src 10.0.0.5
+python3 sloth-stream.py unix:/run/sloth.sock --src 10.0.0.5
 
 # Combine: TLS handshakes from one client
-python3 sloth-stream.py unix:/tmp/sloth.sock --type tls --src 10.0.0.5
+python3 sloth-stream.py unix:/run/sloth.sock --type tls --src 10.0.0.5
 ```
 
 ---
@@ -79,13 +79,13 @@ python3 sloth-stream.py unix:/tmp/sloth.sock --type tls --src 10.0.0.5
 
 ```sh
 # Pretty-print (default)
-python3 sloth-stream.py unix:/tmp/sloth.sock
+python3 sloth-stream.py unix:/run/sloth.sock
 
 # Raw JSON pass-through — exactly what sloth sends
-python3 sloth-stream.py unix:/tmp/sloth.sock --raw | jq .
+python3 sloth-stream.py unix:/run/sloth.sock --raw | jq .
 
 # Type counts — one summary line every 5 seconds, instead of per-event
-python3 sloth-stream.py unix:/tmp/sloth.sock --count
+python3 sloth-stream.py unix:/run/sloth.sock --count
 # example output:
 #   alert=3 dns=187 http=14 tls=42
 ```
@@ -99,7 +99,7 @@ disconnect (broken pipe, EOF, sloth restart). To exit instead — useful
 for one-shot scripts or shell pipelines that want a finite stream:
 
 ```sh
-python3 sloth-stream.py unix:/tmp/sloth.sock --no-reconnect
+python3 sloth-stream.py unix:/run/sloth.sock --no-reconnect
 ```
 
 Be aware: **lines emitted during the disconnect window are lost**.
@@ -196,7 +196,7 @@ Two gotchas worth knowing before you build on it:
   `docs/wiki/jsonl-schema.md`.
 
 ```sh
-python3 sloth-stream.py unix:/tmp/sloth.sock --type sensor_health
+python3 sloth-stream.py unix:/run/sloth.sock --type sensor_health
 ```
 
 ---
