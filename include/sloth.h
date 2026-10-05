@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <time.h>
 
+/* beacon_ap_t embeds a reg_ie_t (#101). This is the one header
+ * sloth.h pulls in: it depends on nothing but <stdint.h>, and the
+ * alternative was a second copy of the type. */
+#include "reg_ie.h"
+
 #define SLOTH_VERSION "1.8.4"
 
 #define MAX_IFACES   32
@@ -1400,6 +1405,23 @@ typedef struct {
     uint16_t fuzz_ie_overruns;
     uint16_t fuzz_oversize_ssid;
     uint16_t fuzz_truncated_rsn;
+    /* Regulatory envelope this BSSID claims (#101 slice 2) — Country
+     * (tag 7), Power Constraint (32) and TPC Report (35) as
+     * src/reg_ie.c read them, folded in per element by reg_ie_merge().
+     *
+     * It lives here rather than in a table of its own because every
+     * other per-AP observation does, and a second BSSID-keyed table
+     * would age on its own schedule: an entry this table had already
+     * evicted could still have a regulatory claim on file, which is
+     * exactly the kind of divergence the shared IE walk exists to
+     * prevent. The cost is sizeof(reg_ie_t) on all MAX_BEACON_APS
+     * entries, paid whether or not the AP ever sends one.
+     *
+     * The *_present flags are load-bearing for every reader: all-zero
+     * means no regulatory element has ever been parsed from this
+     * BSSID, which is not the same claim as "no country" or "no power
+     * limit". Check the flag before reading the value. */
+    reg_ie_t reg;
 } beacon_ap_t;
 
 /* True when `ap` names `bssid` in its 802.11k Neighbor Report list. */

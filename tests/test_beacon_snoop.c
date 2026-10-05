@@ -2778,6 +2778,300 @@ static void test_wps_lock_rings_are_per_bssid(void) {
     beacon_clear();
 }
 
+/* -- Regulatory envelope retention (#101, slice 2) -------- *
+ *
+ * reg_ie.c's own parse is covered byte by byte in tests/test_reg_ie.c.
+ * These are about what the AP table keeps: elements hand-built per
+ * IEEE 802.11-2020 S9.4.2.8 (Country), S9.4.2.13 (Power Constraint)
+ * and S9.4.2.16 (TPC Report), driven through the production monitor
+ * path (beacon_parse -> beacon_record -> beacon_snapshot) rather than
+ * poked into a beacon_rsn_t, so the plumbing is part of the subject. */
+
+/* Country element: alpha-2 code, environment octet, then triplets. */
+static int reg_country_ie(uint8_t *buf, int off, const char *cc, uint8_t env,
+                          const uint8_t *trip, int tlen) {
+    uint8_t body[3 + 48];
+    body[0] = (uint8_t)cc[0];
+    body[1] = (uint8_t)cc[1];
+    body[2] = env;
+    if (tlen > 0) memcpy(body + 3, trip, (size_t)tlen);
+    return ie_put(buf, off, 7, body, 3 + tlen);
+}
+
+/* SSID + DS Parameter Set, the skeleton every case below starts from. */
+static int reg_base_ies(uint8_t *buf, const char *ssid, uint8_t chan) {
+    int off = ie_put(buf, 0, 0, (const uint8_t *)ssid, (int)strlen(ssid));
+    return ie_put(buf, off, 3, &chan, 1);
+}
+
+static void reg_record_ies(const uint8_t *bssid, const uint8_t *ies, int n) {
+    uint8_t f[BEACON_HDR_LEN + 256];
+    fill_hdr(f, bssid, 100, 0x0010);
+    memcpy(f + BEACON_HDR_LEN, ies, (size_t)n);
+
+    char ssid[33]; uint8_t got[6]; int ch = 0; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, BEACON_HDR_LEN + n, -50,
+                           ssid, got, &ch, enc, &bms, &rsn), 1);
+    beacon_record(got, ssid, -50, ch, enc, bms, &rsn);
+}
+
+static const reg_ie_t *reg_of(const uint8_t *bssid) {
+    static sloth_state_t st;
+    beacon_snapshot(&st);
+    for (int i = 0; i < st.beacon_count; i++)
+        if (memcmp(st.beacon_aps[i].bssid, bssid, 6) == 0)
+            return &st.beacon_aps[i].reg;
+    return NULL;
+}
+
+static void test_reg_envelope_retained_per_bssid(void) {
+    beacon_clear();
+    /* NL, indoor only, one subband triplet for UNII-1 at 23 dBm; a
+     * 3 dB local constraint and a TPC Report of -10 dBm. */
+    const uint8_t trip[3] = { 36, 8, 23 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "NL", 'I', trip, 3);
+    const uint8_t pc[1]  = { 3 };
+    off = ie_put(ies, off, 32, pc, 1);
+    const uint8_t tpc[2] = { 0xf6, 0x00 };
+    off = ie_put(ies, off, 35, tpc, 2);
+    reg_record_ies(BSSID_A, ies, off);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_EQ((int)r->country_present, 1);
+    ASSERT_STR(r->country, "NL");
+    ASSERT_EQ((int)r->env, REG_ENV_INDOOR);
+    ASSERT_EQ((int)r->triplet_count, 1);
+    ASSERT_EQ((int)r->triplets[0].first_channel, 36);
+    ASSERT_EQ((int)r->triplets[0].num_channels, 8);
+    ASSERT_EQ((int)r->triplets[0].max_tx_power_dbm, 23);
+    ASSERT_EQ((int)r->power_constraint_present, 1);
+    ASSERT_EQ((int)r->power_constraint_db, 3);
+    ASSERT_EQ((int)r->tpc_present, 1);
+    ASSERT_EQ((int)r->tpc_tx_power_dbm, -10);
+    ASSERT_EQ((int)r->tpc_link_margin_db, 0);
+}
+
+static void test_reg_second_beacon_updates_rather_than_duplicates(void) {
+    beacon_clear();
+    const uint8_t t_nl[3] = { 36, 8, 23 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "NL", 'I', t_nl, 3);
+    reg_record_ies(BSSID_A, ies, off);
+
+    /* Same BSSID, a different regulatory claim - a re-homed AP, or a
+     * rogue adopting the BSSID. One entry, latest claim. */
+    const uint8_t t_de[3] = { 100, 11, 30 };
+    off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "DE", ' ', t_de, 3);
+    reg_record_ies(BSSID_A, ies, off);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    beacon_snapshot(&st);
+    ASSERT_EQ(st.beacon_count, 1);
+    ASSERT_STR(st.beacon_aps[0].reg.country, "DE");
+    ASSERT_EQ((int)st.beacon_aps[0].reg.env, REG_ENV_ANY);
+    ASSERT_EQ((int)st.beacon_aps[0].reg.triplets[0].first_channel, 100);
+    ASSERT_EQ((int)st.beacon_aps[0].reg.triplets[0].max_tx_power_dbm, 30);
+}
+
+static void test_reg_envelopes_are_isolated_per_bssid(void) {
+    beacon_clear();
+    const uint8_t t_us[3] = { 1, 11, 30 };
+    const uint8_t t_jp[3] = { 1, 13, 20 };
+    uint8_t ies[128];
+
+    int off = reg_base_ies(ies, "netA", 6);
+    off = reg_country_ie(ies, off, "US", ' ', t_us, 3);
+    reg_record_ies(BSSID_A, ies, off);
+
+    off = reg_base_ies(ies, "netB", 6);
+    off = reg_country_ie(ies, off, "JP", 'O', t_jp, 3);
+    const uint8_t pc[1] = { 6 };
+    off = ie_put(ies, off, 32, pc, 1);
+    reg_record_ies(BSSID_B, ies, off);
+
+    const reg_ie_t *a = reg_of(BSSID_A);
+    ASSERT(a != NULL);
+    char a_country[3];
+    memcpy(a_country, a->country, 3);
+    int a_env = a->env, a_chans = a->triplets[0].num_channels;
+    int a_pc  = a->power_constraint_present;
+
+    const reg_ie_t *b = reg_of(BSSID_B);
+    ASSERT(b != NULL);
+    ASSERT_STR(a_country, "US");
+    ASSERT_EQ(a_env, REG_ENV_ANY);
+    ASSERT_EQ(a_chans, 11);
+    /* A's beacon carried no Power Constraint; B's did. The two must
+     * not bleed into each other. */
+    ASSERT_EQ(a_pc, 0);
+    ASSERT_STR(b->country, "JP");
+    ASSERT_EQ((int)b->env, REG_ENV_OUTDOOR);
+    ASSERT_EQ((int)b->triplets[0].num_channels, 13);
+    ASSERT_EQ((int)b->power_constraint_present, 1);
+    ASSERT_EQ((int)b->power_constraint_db, 6);
+}
+
+/* The distinction the *_present flags exist for. An AP that advertises
+ * no regulatory element has made no claim; storing a zeroed envelope
+ * without saying so would read as "country unknown, 0 dB constraint,
+ * 0 dBm transmit power" - three assertions the AP never made. */
+static void test_reg_absent_elements_store_no_envelope(void) {
+    beacon_clear();
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "bare", 6);
+    reg_record_ies(BSSID_A, ies, off);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_EQ((int)r->country_present, 0);
+    ASSERT_STR(r->country, "");
+    ASSERT_EQ((int)r->env, REG_ENV_ABSENT);
+    ASSERT_EQ((int)r->triplet_count, 0);
+    ASSERT_EQ((int)r->power_constraint_present, 0);
+    ASSERT_EQ((int)r->tpc_present, 0);
+    ASSERT_EQ(r->malformed_country, 0);
+    ASSERT_EQ(r->malformed_power_constraint, 0);
+    ASSERT_EQ(r->malformed_tpc, 0);
+}
+
+/* A Country String is three octets or it is not a Country element
+ * (S9.4.2.8). Two octets must leave the stored envelope empty while
+ * still recording that something arrived malformed. */
+static void test_reg_unparseable_country_stores_nothing_but_counts(void) {
+    beacon_clear();
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = ie_put(ies, off, 7, (const uint8_t *)"US", 2);
+    reg_record_ies(BSSID_A, ies, off);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_EQ((int)r->country_present, 0);
+    ASSERT_STR(r->country, "");
+    ASSERT_EQ((int)r->env, REG_ENV_ABSENT);
+    ASSERT_EQ(r->malformed_country, 1);
+}
+
+/* On a hopping radio the beacon that carried the Country element is
+ * missed far more often than the AP retracts it, so an omitted element
+ * leaves the stored one standing. The alternative - assigning the
+ * whole struct every frame - would replace a real "NL, -10 dBm" with
+ * an all-zero envelope the next time the radio caught a bare beacon. */
+static void test_reg_omitted_element_does_not_retract_the_stored_one(void) {
+    beacon_clear();
+    const uint8_t trip[3] = { 36, 8, 23 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "NL", 'I', trip, 3);
+    const uint8_t tpc[2] = { 0xf6, 0x00 };
+    off = ie_put(ies, off, 35, tpc, 2);
+    reg_record_ies(BSSID_A, ies, off);
+
+    off = reg_base_ies(ies, "lab1", 36);     /* bare beacon */
+    reg_record_ies(BSSID_A, ies, off);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_EQ((int)r->country_present, 1);
+    ASSERT_STR(r->country, "NL");
+    ASSERT_EQ((int)r->tpc_present, 1);
+    ASSERT_EQ((int)r->tpc_tx_power_dbm, -10);
+}
+
+/* beacon_record(rsn == NULL) is the no-IE-information path. It must
+ * leave the envelope alone rather than clear it. */
+static void test_reg_envelope_survives_a_bare_rerecord(void) {
+    beacon_clear();
+    const uint8_t trip[3] = { 36, 8, 23 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "NL", 'I', trip, 3);
+    reg_record_ies(BSSID_A, ies, off);
+
+    beacon_record(BSSID_A, "lab1", -55, 36, "OPEN", 100, NULL);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_STR(r->country, "NL");
+}
+
+/* Per-frame in the parse, per-BSSID in the table - the same relation
+ * beacon_ap_t's fuzz_* counters have to beacon_rsn_t's. */
+static void test_reg_malformed_counts_accumulate_across_frames(void) {
+    beacon_clear();
+    uint8_t ies[128];
+    for (int i = 0; i < 3; i++) {
+        int off = reg_base_ies(ies, "lab1", 36);
+        off = ie_put(ies, off, 35, NULL, 0);   /* zero-length TPC Report */
+        reg_record_ies(BSSID_A, ies, off);
+    }
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT(r != NULL);
+    ASSERT_EQ(r->malformed_tpc, 3);
+    ASSERT_EQ((int)r->tpc_present, 0);
+}
+
+/* A shorter Country element must not leave the tail of a longer
+ * previous one readable: triplet_count shrinks, and what sits past it
+ * is zero rather than the old channel plan. */
+static void test_reg_shorter_country_leaves_no_triplet_tail(void) {
+    beacon_clear();
+    const uint8_t three[9] = { 1, 11, 30,  36, 8, 23,  100, 11, 27 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "US", ' ', three, 9);
+    reg_record_ies(BSSID_A, ies, off);
+    ASSERT_EQ((int)reg_of(BSSID_A)->triplet_count, 3);
+
+    const uint8_t one[3] = { 1, 11, 30 };
+    off = reg_base_ies(ies, "lab1", 36);
+    off = reg_country_ie(ies, off, "US", ' ', one, 3);
+    reg_record_ies(BSSID_A, ies, off);
+
+    const reg_ie_t *r = reg_of(BSSID_A);
+    ASSERT_EQ((int)r->triplet_count, 1);
+    ASSERT_EQ((int)r->triplets[1].first_channel, 0);
+    ASSERT_EQ((int)r->triplets[1].num_channels, 0);
+    ASSERT_EQ((int)r->triplets[2].first_channel, 0);
+}
+
+/* The AP table is bounded and evicts its stalest entry. A BSSID that
+ * lands in a reused slot must start with no regulatory claim, not the
+ * evicted AP's - which is what the whole-struct memset on insert is
+ * for, and what a named-member init would quietly break. */
+static void test_reg_envelope_does_not_survive_slot_reuse(void) {
+    beacon_clear();
+    const uint8_t trip[3] = { 36, 8, 23 };
+    uint8_t ies[128];
+    int off = reg_base_ies(ies, "first", 36);
+    off = reg_country_ie(ies, off, "NL", 'I', trip, 3);
+    reg_record_ies(BSSID_A, ies, off);            /* oldest entry */
+
+    for (int i = 1; i < MAX_BEACON_APS; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00,
+                         (uint8_t)(i >> 8), (uint8_t)i };
+        off = reg_base_ies(ies, "filler", 6);
+        reg_record_ies(b, ies, off);
+    }
+    /* One past full: BSSID_A's slot is the stalest and is recycled. */
+    const uint8_t late[6] = { 0x02, 0xff, 0xff, 0xff, 0xff, 0xff };
+    off = reg_base_ies(ies, "late", 6);
+    reg_record_ies(late, ies, off);
+
+    ASSERT(reg_of(BSSID_A) == NULL);
+    const reg_ie_t *r = reg_of(late);
+    ASSERT(r != NULL);
+    ASSERT_EQ((int)r->country_present, 0);
+    ASSERT_STR(r->country, "");
+    ASSERT_EQ((int)r->triplet_count, 0);
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -2935,4 +3229,16 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_wps_lock_unknown_never_transitions);
     RUN_TEST(test_wps_lock_ring_bounds_and_lifetime_count);
     RUN_TEST(test_wps_lock_rings_are_per_bssid);
+
+    TEST_SUITE("beacon snoop: regulatory envelope retention (#101)");
+    RUN_TEST(test_reg_envelope_retained_per_bssid);
+    RUN_TEST(test_reg_second_beacon_updates_rather_than_duplicates);
+    RUN_TEST(test_reg_envelopes_are_isolated_per_bssid);
+    RUN_TEST(test_reg_absent_elements_store_no_envelope);
+    RUN_TEST(test_reg_unparseable_country_stores_nothing_but_counts);
+    RUN_TEST(test_reg_omitted_element_does_not_retract_the_stored_one);
+    RUN_TEST(test_reg_envelope_survives_a_bare_rerecord);
+    RUN_TEST(test_reg_malformed_counts_accumulate_across_frames);
+    RUN_TEST(test_reg_shorter_country_leaves_no_triplet_tail);
+    RUN_TEST(test_reg_envelope_does_not_survive_slot_reuse);
 }

@@ -147,6 +147,14 @@ typedef struct {
     uint64_t tsf;
     int      has_tsf;
     uint16_t tsf_bi_tu;
+    /* Regulatory envelope parsed from this frame (#101 slice 2):
+     * Country, Power Constraint, TPC Report. Carried here as well as
+     * through beacon_parse_ies' own `reg_out` so that beacon_record —
+     * which takes the rsn and nothing else — can retain it per BSSID
+     * without widening its signature and every one of its ~50 existing
+     * call sites. The two outputs are written from the same parse, so
+     * they never disagree. */
+    reg_ie_t reg;
 } beacon_rsn_t;
 
 /* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151
@@ -201,11 +209,13 @@ void rsn_akm_label(uint32_t akm_bits, char *out, size_t sz);
  * `rsn_out` is fully zeroed on entry. Returns 1.
  *
  * `reg_out` is the regulatory envelope (#101): Country, Power
- * Constraint and TPC Report. Optional and zeroed on entry on the same
- * terms as `rsn_out` — every caller that has no use for it passes NULL,
- * which is all of them until a later slice of #101 stores it. It rides
- * this seam rather than its own IE walk so the monitor and nl80211
- * paths cannot diverge on it the way they once did on RSN depth.
+ * Constraint and TPC Report. Optional and fully written before return
+ * on the same terms as `rsn_out`, and a caller with no use for it
+ * passes NULL — it is also published into `rsn_out->reg`, which is the
+ * copy beacon_record retains per BSSID, so both outputs always carry
+ * the same parse. It rides this seam rather than its own IE walk so the
+ * monitor and nl80211 paths cannot diverge on it the way they once did
+ * on RSN depth.
  *
  * Note the output conventions are this file's, not linux_wifi.c's:
  * a hidden SSID is "" (not "<hidden>") and open is "OPEN" (not
@@ -227,7 +237,11 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                  beacon_rsn_t *rsn_out);
 
 /* Record or update an AP in the internal table (thread-safe). rsn may
- * be NULL — fields default to empty / mfp=0 in that case. */
+ * be NULL — fields default to empty / mfp=0 in that case.
+ *
+ * `rsn->reg` is folded into the entry's retained regulatory envelope
+ * per element (#101); see reg_ie_merge() for why a frame that omits an
+ * element leaves the stored one alone instead of zeroing it. */
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,

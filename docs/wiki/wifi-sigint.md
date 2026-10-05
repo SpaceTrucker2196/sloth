@@ -125,7 +125,7 @@ reconfigures an adapter it did not create.
 > live N-thread capture path is hardware-gated like the nl80211
 > channel-set path.
 
-## Regulatory elements (issue #101, slice 1)
+## Regulatory elements (issue #101, slices 1-2)
 
 `src/reg_ie.c` parses the three elements that carry the regulatory
 envelope an AP *claims* to operate in. Until #101 sloth read none of
@@ -168,14 +168,55 @@ frame; it is parsed regardless, since the element layout is the same.
 The parser reaches frames through `beacon_parse_ies()` — the one seam
 both the monitor path and the nl80211 managed path use, so the two
 cannot diverge on regulatory depth the way they once did on RSN depth.
-Its `reg_out` parameter is optional and NULL-safe.
+Its `reg_out` parameter is optional and NULL-safe; the same parse is
+also published into `rsn_out->reg`, which is the copy that reaches
+storage.
 
-**Slice 1 is inert by design.** It parses and stops: no regulatory
-table, no channel-legality decision, no alert type, no field on
-`probe_ap_t`, no view, no JSONL record, no SQLite column. Reading a
-claim is not the same as judging it, and the judging half needs a
-versioned regulatory table that this half must not pre-empt. Every
-caller passes NULL today.
+### Where the parse is kept (slice 2)
+
+Slice 1 shipped inert: every caller passed NULL, so the parser ran
+under tests only and no value was retained. Slice 2 gives it a home.
+`beacon_ap_t` carries one `reg_ie_t` per BSSID, folded in by
+`beacon_record()` through `reg_ie_merge()`.
+
+It lives on the AP entry rather than in a BSSID-keyed table of its own
+because every other per-AP observation does — `neighbors[]`,
+`ssid_history[]`, the WPS strings, the RSSI ring — and a second table
+would age on its own schedule, so an AP this one had already evicted
+could still have a regulatory claim on file. That is the divergence the
+shared IE walk exists to prevent. The price is `sizeof(reg_ie_t)` on
+every one of the 256 entries, paid whether or not the AP ever sends a
+regulatory element.
+
+The merge is **per element, not per struct**. A beacon that omits the
+Country element leaves the stored country alone; only an element that
+actually parsed replaces the stored one. Assigning the whole struct
+each frame would turn every bare beacon into a stored envelope of
+"country unknown, 0 dB constraint, 0 dBm transmit power" — three
+regulatory claims the AP never made, and ones a later legality check
+would read as real. The `*_present` flags are the only thing that can
+separate "never claimed" from "claimed zero", so every reader checks
+the flag before the value.
+
+The corollary is that a retained envelope is **sticky**: an AP that
+stops advertising a Country element keeps the last one it sent. On a
+hopping radio a missing element nearly always means the beacon
+carrying it was not heard, not that the AP retracted it. Seeing a real
+retraction needs per-element recency, which is a later slice's field.
+The three malformed counters accumulate across the BSSID's frames,
+saturating rather than wrapping — the same relation `beacon_ap_t`'s
+`fuzz_*` counters have to `beacon_rsn_t`'s.
+
+`reg_ie.h` sits in `include/` rather than `src/` because `beacon_ap_t`
+embeds the type, so every translation unit that sees `sloth.h` must
+see it too — including the ones built without `-Isrc`.
+
+**Still inert past storage.** No regulatory table, no channel-legality
+decision, no alert type, no view, no JSONL field, no SQLite column.
+Reading a claim is not the same as judging it, and the judging half
+needs a versioned regulatory table that these halves must not pre-empt.
+The nl80211 managed-mode path still passes no envelope onward:
+`wifi_ap_t` has no field for it, the same way it has no `neighbors[]`.
 
 Malformed elements are counted (`malformed_country`,
 `malformed_power_constraint`, `malformed_tpc`) in the same spirit as
@@ -183,9 +224,14 @@ Malformed elements are counted (`malformed_country`,
 element is itself a signal, so it is recorded rather than silently
 skipped.
 
-Tests are hand-built byte arrays in `tests/test_reg_ie.c`, per
-`agents/AGENTS.md` — the issue's pcap-fixture test plan is deferred to
-the `needs-pcap-fixture` follow-up layer it belongs to.
+Tests are hand-built byte arrays, per `agents/AGENTS.md` — the issue's
+pcap-fixture test plan is deferred to the `needs-pcap-fixture`
+follow-up layer it belongs to. `tests/test_reg_ie.c` covers the parse
+clause by clause; `tests/test_beacon_snoop.c` covers retention
+(update-not-duplicate, per-BSSID isolation, absent and unparseable
+elements storing nothing, no stale triplet tail, no envelope surviving
+slot reuse) by driving whole frames through
+`beacon_parse` → `beacon_record` → `beacon_snapshot`.
 
 ## Related pages
 

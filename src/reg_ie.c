@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <string.h>
 #include "reg_ie.h"
 
@@ -41,6 +42,17 @@ static int parse_country(reg_ie_t *out, const uint8_t *body, int len) {
         return 0;
     }
 
+    /* Zero the array, not just the count. A frame may carry two Country
+     * elements; parse_country() is called once per element on the same
+     * struct, so without this a shorter second element leaves the
+     * longer first one's triplets readable past the new count — and
+     * reg_ie_merge() copies the whole array on the stated invariant
+     * that the tail is already zero. Review found that invariant was
+     * false for exactly this case, so it is made true here rather than
+     * weakened there. */
+    memset(out->triplets, 0, sizeof(out->triplets));
+    out->triplets_truncated = 0;
+
     out->country_present = 1;
     out->country[0] = (char)body[0];
     out->country[1] = (char)body[1];
@@ -80,6 +92,18 @@ static int parse_country(reg_ie_t *out, const uint8_t *body, int len) {
     int leftover = (len - 3) % 3;
     if (leftover == 2) {
         out->malformed_country++;
+        /* country_present and the triplets read inside the declared
+         * length are deliberately KEPT, not rolled back: what a rogue
+         * AP claimed is the evidence, and discarding it would lose the
+         * observation this issue exists to make. The consequence a
+         * consumer must respect — raised in review and stated here
+         * because no detector exists yet to get it wrong: a frame can
+         * be both country_present and malformed_country > 0, so
+         * country_present alone is NOT "a valid regulatory claim". A
+         * rule that treats it that way will accept a deliberately
+         * malformed element as conforming. malformed_* is a
+         * per-envelope count, so with one good and one bad element it
+         * says only that something was wrong, not which. */
         return 0;
     }
     return 1;
@@ -120,4 +144,47 @@ int reg_ie_element(reg_ie_t *out, uint8_t tag, const uint8_t *body, int len) {
     default:
         return 0;
     }
+}
+
+/* Saturating add. A hostile transmitter can send malformed elements
+ * indefinitely; signed overflow is undefined behaviour, and a wrapped
+ * count would read as "clean" at the worst possible moment. */
+static void add_sat(int *dst, int add) {
+    if (add <= 0) return;
+    *dst = (*dst > INT_MAX - add) ? INT_MAX : *dst + add;
+}
+
+void reg_ie_merge(reg_ie_t *dst, const reg_ie_t *src) {
+    if (!dst || !src) return;
+
+    if (src->country_present) {
+        dst->country_present = 1;
+        memcpy(dst->country, src->country, sizeof(dst->country));
+        dst->env     = src->env;
+        dst->env_raw = src->env_raw;
+        /* The whole triplet array, not the first triplet_count of it:
+         * a shorter Country element must not leave the tail of a longer
+         * previous one readable below the new count. src's tail is
+         * zero because parse_country() memsets the array per element,
+         * which is what makes this whole-array copy safe — before that
+         * fix, two Country elements in one frame broke it. */
+        memcpy(dst->triplets, src->triplets, sizeof(dst->triplets));
+        dst->triplet_count      = src->triplet_count;
+        dst->triplets_truncated = src->triplets_truncated;
+    }
+
+    if (src->power_constraint_present) {
+        dst->power_constraint_present = 1;
+        dst->power_constraint_db      = src->power_constraint_db;
+    }
+
+    if (src->tpc_present) {
+        dst->tpc_present        = 1;
+        dst->tpc_tx_power_dbm   = src->tpc_tx_power_dbm;
+        dst->tpc_link_margin_db = src->tpc_link_margin_db;
+    }
+
+    add_sat(&dst->malformed_country,          src->malformed_country);
+    add_sat(&dst->malformed_power_constraint, src->malformed_power_constraint);
+    add_sat(&dst->malformed_tpc,              src->malformed_tpc);
 }

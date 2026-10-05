@@ -154,7 +154,14 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
      * and pairwise_bits landed (#60). Zeroing the object makes the
      * documented contract structural. */
     if (rsn_out) memset(rsn_out, 0, sizeof(*rsn_out));
-    reg_ie_reset(reg_out);          /* NULL-safe; same contract as rsn_out */
+    /* The regulatory envelope accumulates in a local and is published
+     * to both outputs after the walk. Parsing straight into reg_out
+     * would leave rsn_out->reg empty for the callers that pass only an
+     * rsn — and that copy is the one beacon_record retains, so the two
+     * outputs have to come from one parse rather than one of them
+     * being the privileged destination. */
+    reg_ie_t reg;
+    reg_ie_reset(&reg);
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
      * body so two same-vendor APs (same firmware, same caps) produce
@@ -229,7 +236,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * reg_ie.c, and keeping the dispatch flat means this file does
          * not have to know which tags those are. Cheap — a switch on a
          * tag that is almost never one of the three. */
-        if (reg_out) reg_ie_element(reg_out, tag, ie + 2, (int)tln);
+        reg_ie_element(&reg, tag, ie + 2, (int)tln);
 
         if (tag == 0) {
             /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal. */
@@ -720,6 +727,9 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
         }
     }
 
+    if (rsn_out) rsn_out->reg = reg;
+    if (reg_out) *reg_out = reg;
+
     /* Determine encryption, strongest first */
     if (sae_found)
         strncpy(enc_out, "WPA3",  10);
@@ -760,7 +770,7 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
     (void)signal;
     int ok = beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
                               ssid_out, channel_out, enc_out, rsn_out,
-                              NULL /* regulatory envelope is unstored (#101) */);
+                              NULL /* rides rsn_out->reg instead (#101) */);
 
     /* Timestamp at bytes 24-31, little-endian: the AP's TSF timer value
      * when it transmitted this beacon (#77). Set after the IE walk
@@ -1087,6 +1097,10 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     g_aps[i].fuzz_oversize_ssid += (uint16_t)rsn->oversize_ssid;
                 if (g_aps[i].fuzz_truncated_rsn < 0xffff)
                     g_aps[i].fuzz_truncated_rsn += (uint16_t)rsn->truncated_rsn;
+                /* Regulatory envelope (#101) — per element, so a beacon
+                 * that omits the Country IE does not replace a stored
+                 * country with "". */
+                reg_ie_merge(&g_aps[i].reg, &rsn->reg);
                 /* Neighbors — merge new entries by BSSID; cap at the
                  * stored array size. */
                 for (int k = 0; k < rsn->neighbor_count; k++) {
@@ -1212,6 +1226,10 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         g_aps[slot].fuzz_ie_overruns   = (uint16_t)rsn->ie_overruns;
         g_aps[slot].fuzz_oversize_ssid = (uint16_t)rsn->oversize_ssid;
         g_aps[slot].fuzz_truncated_rsn = (uint16_t)rsn->truncated_rsn;
+        /* Same merge as the update path above, against the slot's
+         * freshly zeroed envelope — so "absent in this frame" means
+         * absent on a new entry too, not a stored zero (#101). */
+        reg_ie_merge(&g_aps[slot].reg, &rsn->reg);
         int nc = rsn->neighbor_count;
         if (nc > MAX_AP_NEIGHBORS) nc = MAX_AP_NEIGHBORS;
         memcpy(g_aps[slot].neighbors, rsn->neighbors,

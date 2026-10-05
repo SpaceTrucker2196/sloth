@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* Regulatory information elements (issue #101, slice 1).
+/* Regulatory information elements (issue #101, slices 1-2).
  *
  * Three elements carry the regulatory envelope an AP claims to operate
  * in. Sloth ignored all three until now, which meant the most basic
@@ -14,11 +14,17 @@
  *   Power Constraint tag 32  §9.4.2.13
  *   TPC Report       tag 35  §9.4.2.16                  (802.11h)
  *
- * This layer parses and nothing else. It builds no regulatory table,
- * decides no channel legality, fires no alert, stores nothing on
- * probe_ap_t, and exports nothing — those are later slices of #101.
+ * This layer parses and retains, and nothing else. Slice 2 gave the
+ * parse a home: beacon_ap_t carries one reg_ie_t per BSSID, folded in
+ * by beacon_record via reg_ie_merge(). It still builds no regulatory
+ * table, decides no channel legality, fires no alert, and exports
+ * nothing to JSONL, SQLite or a view — those are later slices of #101.
  * Reading a claim is not the same as judging it, and the judging half
- * needs a versioned regulatory table this half must not pre-empt. */
+ * needs a versioned regulatory table this half must not pre-empt.
+ *
+ * Lives in include/ rather than src/ because beacon_ap_t embeds
+ * reg_ie_t, so every translation unit that sees sloth.h must see this
+ * header too — including the ones built without -Isrc. */
 
 /* Country elements in the wild carry one to eight triplets. The cap is
  * well above that and well below the 84 a hostile 255-octet element
@@ -102,5 +108,30 @@ void reg_ie_reset(reg_ie_t *out);
  * which case the matching malformed counter is bumped and no field is
  * written. Never reads beyond `len`. `out` may not be NULL. */
 int reg_ie_element(reg_ie_t *out, uint8_t tag, const uint8_t *body, int len);
+
+/* Fold one frame's parse (`src`) into a retained per-BSSID envelope
+ * (`dst`). Both may be any reg_ie_t; neither may be NULL.
+ *
+ * Per element, not per struct: a frame that omits the Country element
+ * leaves whatever country `dst` already held, and a frame that omits
+ * all three changes nothing but the malformed counts. Assigning the
+ * whole struct instead would turn every beacon without a TPC Report
+ * into a stored tpc_tx_power_dbm of 0 — a real claim of 0 dBm, which
+ * the AP never made. The *_present flags are the only thing that can
+ * tell those apart, so the merge is driven by them.
+ *
+ * The corollary is that a retained envelope is sticky: an AP that
+ * stops advertising a Country element keeps the last one it sent. That
+ * is deliberate — on a hopping radio a missing element usually means
+ * the beacon that carried it was not heard, not that the AP retracted
+ * it. A detector that wants to see the retraction needs per-element
+ * recency, which is a later slice's field, not a reason to drop the
+ * value now.
+ *
+ * The three malformed counters accumulate (saturating at INT_MAX): in
+ * a per-frame parse they count within one frame, in a retained
+ * envelope they count across every frame from that BSSID, the same way
+ * beacon_ap_t's fuzz_* counters relate to beacon_rsn_t's. */
+void reg_ie_merge(reg_ie_t *dst, const reg_ie_t *src);
 
 #endif /* SLOTH_REG_IE_H */
