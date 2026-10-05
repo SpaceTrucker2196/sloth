@@ -154,6 +154,81 @@ static void test_truncated_bodies_are_safe(void) {
     }
 }
 
+/* ── malformed link_id — CVE-2026-58374 / w1.fi 2026-1 (#104) ── */
+
+static void test_link_id_15_flagged(void) {
+    /* hostapd's links[] storage has no slot 15 — the out-of-bounds
+     * write CVE-2026-58374 names exactly this value. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 15, LNK1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 1);
+    ASSERT_EQ((int)m.bad_link_id, 15);
+}
+
+static void test_link_id_14_is_the_valid_boundary(void) {
+    /* 0-14 is the sanctioned range. The boundary itself must not be
+     * mistaken for the invalid value one above it. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 14, LNK1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 0);
+    ASSERT_EQ(m.link_count, 1);
+}
+
+static void test_duplicate_link_id_flagged(void) {
+    /* Two Per-STA Profiles naming the same link_id inside one MLE —
+     * a conformant MLD never does this; it names the same link twice. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    n = put_per_sta(b, n, 0, LNK2);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 1);
+    ASSERT_EQ((int)m.bad_link_id, 0);
+}
+
+static void test_distinct_link_ids_not_flagged(void) {
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    n = put_per_sta(b, n, 1, LNK2);
+    n = put_per_sta(b, n, 2, LNK3);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 0);
+}
+
+static void test_malformed_link_id_persists_across_clean_frames(void) {
+    /* mle_observe()'s lifetime count is sticky: one bad frame followed
+     * by a hundred clean ones must still read as having happened. */
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 15, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 1);
+    ASSERT_EQ((int)st.mlds[0].malformed_link_id_total, 1);
+    ASSERT_EQ((int)st.mlds[0].bad_link_id, 15);
+    ASSERT_EQ((int)st.mlds[0].malformed_link_id_last_seen, 1000);
+    mle_clear();
+}
+
 /* ── the table and the canonical lookup ── */
 
 static void test_observe_and_canonical_lookup(void) {
@@ -233,6 +308,13 @@ void run_mle_tests(void) {
     RUN_TEST(test_group_addressed_mld_rejected);
     RUN_TEST(test_link_overflow_flagged);
     RUN_TEST(test_truncated_bodies_are_safe);
+
+    TEST_SUITE("MLE malformed link_id — CVE-2026-58374 (#104)");
+    RUN_TEST(test_link_id_15_flagged);
+    RUN_TEST(test_link_id_14_is_the_valid_boundary);
+    RUN_TEST(test_duplicate_link_id_flagged);
+    RUN_TEST(test_distinct_link_ids_not_flagged);
+    RUN_TEST(test_malformed_link_id_persists_across_clean_frames);
 
     TEST_SUITE("MLD table and canonical identity (#67)");
     RUN_TEST(test_observe_and_canonical_lookup);

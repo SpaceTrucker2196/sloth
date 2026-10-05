@@ -22,7 +22,7 @@ per-view depth live in [`docs/views/`](docs/views/) and
 Sloth is a terminal-based **passive signals-intelligence (SIGINT)
 console** for IP and 802.11 networks. It turns what a host already
 sees — `/proc`, `/sys`, netlink, and a libpcap stream — into a live
-operator view: 35 panels, 64 alert rules, an embedded (synthetic)
+operator view: 35 panels, 65 alert rules, an embedded (synthetic)
 threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
 forensic log.
 
@@ -128,7 +128,7 @@ truth for this number; if the two disagree, the `#define` is right):
 
 - **35 views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, indexed in
   the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
-- **64 alert rules** in `src/alerts.c` — one per `ALERT_TYPE_*`, each
+- **65 alert rules** in `src/alerts.c` — one per `ALERT_TYPE_*`, each
   with a row in [`docs/views/alerts.md`](docs/views/alerts.md) and a
   cited basis in `research/` (enforced by
   `tests/test_research_corpus.c`).

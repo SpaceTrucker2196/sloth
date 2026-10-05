@@ -523,6 +523,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_WPS_LOCKOUT_CYCLING:    return "T1110.001";   /* same attack, seen through the AP's lockout */
     case ALERT_TYPE_WPS_PBC_RACE:           return "T1557";       /* racing the walk window to become a registrar */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
+    case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -572,6 +573,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_MFP_UNPROTECTED);     N(ALERT_TYPE_OPEN_SETUP_AP);
     N(ALERT_TYPE_WPS_PIN_BRUTE);       N(ALERT_TYPE_WPS_LOCKOUT_CYCLING);
     N(ALERT_TYPE_WPS_PBC_RACE);
+    N(ALERT_TYPE_MLE_INVALID_LINK_ID);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -3157,6 +3159,35 @@ static void rule_wps_pbc_race(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Multi-Link Element Per-STA Profile link_id out of range or repeated —
+ * CVE-2026-58374 / w1.fi 2026-1 (#104). hostapd_process_ml_assoc_req()'s
+ * links[] storage has no slot for a link_id of 15; a frame that claims
+ * one, or that names the same link_id twice inside one MLE, is exactly
+ * the shape of the crash. mle_parse() flags this per frame and
+ * mle_observe() accumulates it onto the MLD's persisted entry, so this
+ * rule only has to ask whether that lifetime count is non-zero. One
+ * frame is enough to report: there is no benign reason a conformant
+ * MLD would ever send it. */
+static void rule_mle_invalid_link_id(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *m = &s->mlds[i];
+        if (!m->malformed_link_id_total) continue;
+
+        char mac[20];
+        mac_to_str(m->mld_mac, mac, sizeof(mac));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mle_link_id:%s", mac);
+        snprintf(detail, sizeof(detail),
+                 "MLD %s sent a Multi-Link Element Per-STA Profile with "
+                 "link_id=%u (valid range is 0-14; %u such frame(s) seen) "
+                 "- CVE-2026-58374",
+                 mac, (unsigned)m->bad_link_id,
+                 (unsigned)m->malformed_link_id_total);
+        fire(ALERT_TYPE_MLE_INVALID_LINK_ID, ALERT_SEV_WARN,
+             "MLE_INVALID_LINK_ID", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -4301,6 +4332,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wps_pin_brute(s, now);
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);
+    rule_mle_invalid_link_id(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

@@ -48,6 +48,7 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
      * later amendment adding one does not silently shift every link
      * address that follows. */
     int off = common_off + common_len;
+    unsigned seen_link_ids = 0;   /* bitmask over the 0-15 field width */
 
     while (off + 2 <= len) {
         uint8_t sid  = ie_body[off];
@@ -62,6 +63,19 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
             int link_id = sc & 0x000f;
             int mac_present = (sc & 0x0020) != 0;
             int info_len = p[2];
+
+            /* CVE-2026-58374 / w1.fi 2026-1: the sanctioned range is
+             * 0-14 — hostapd's own links[] storage has no slot 15, and
+             * a link_id repeated inside one MLE names the same link
+             * twice. Checked unconditionally, independent of whether a
+             * MAC follows: the vulnerable field is Link ID itself, not
+             * whatever comes after it. */
+            if (link_id >= 15 || (seen_link_ids & (1u << link_id))) {
+                out->malformed_link_id = 1;
+                out->bad_link_id = (uint8_t)link_id;
+            } else {
+                seen_link_ids |= (1u << link_id);
+            }
             if (mac_present && info_len >= 7 && slen >= 3 + 6) {
                 const uint8_t *lm = p + 3;
                 if (mac_is_usable(lm)) {
@@ -120,6 +134,16 @@ void mle_observe(const sloth_mld_t *m, time_t now) {
         }
     }
     if (m->links_truncated) e->links_truncated = 1;
+
+    /* Lifetime signal, never cleared by a later clean frame — an MLD
+     * that once sent an invalid or repeated link_id stays reportable,
+     * the same way a one-off CVE-shaped frame should not be forgotten
+     * because the next hundred frames from the same device are fine. */
+    if (m->malformed_link_id) {
+        e->malformed_link_id_total++;
+        e->bad_link_id = m->bad_link_id;
+        e->malformed_link_id_last_seen = now;
+    }
 
     pthread_mutex_unlock(&g_mu);
 }

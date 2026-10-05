@@ -18,6 +18,7 @@
 #include "views/alerts.h"
 #include "beacon_snoop.h"
 #include "auth_track.h"
+#include "mle.h"
 #include "ownership.h"
 #include "inventory.h"
 #include "wired_attach.h"
@@ -6979,6 +6980,56 @@ static void test_wps_rules_quiet_on_an_ordinary_bss(void) {
     wps_end();
 }
 
+/* ── MLE invalid link_id — CVE-2026-58374 (#104) ──────────────── */
+
+static void test_mle_invalid_link_id_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mlds[0].malformed_link_id_total = 1;
+    s.mlds[0].bad_link_id = 15;
+    s.mld_count = 1;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MLE_INVALID_LINK_ID);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
+static void test_mle_invalid_link_id_quiet_when_clean(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mld_count = 1;   /* malformed_link_id_total left at 0 */
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MLE_INVALID_LINK_ID), -1);
+}
+
+static void test_mle_invalid_link_id_fires_once_per_mld(void) {
+    /* A second, equally-malformed MLD must not collapse into the first
+     * incident's key — each MAC is its own finding. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld1[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    static const uint8_t mld2[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    memcpy(s.mlds[0].mld_mac, mld1, 6);
+    s.mlds[0].malformed_link_id_total = 1;
+    s.mlds[0].bad_link_id = 15;
+    memcpy(s.mlds[1].mld_mac, mld2, 6);
+    s.mlds[1].malformed_link_id_total = 3;
+    s.mlds[1].bad_link_id = 0;   /* a duplicate link_id, not an out-of-range one */
+    s.mld_count = 2;
+
+    alerts_update(&s);
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_MLE_INVALID_LINK_ID) n++;
+    ASSERT_EQ(n, 2);
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -7722,6 +7773,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_wps_pbc_race_counts_per_bssid);
     RUN_TEST(test_wps_pbc_threshold_is_configurable);
     RUN_TEST(test_wps_rules_quiet_on_an_ordinary_bss);
+
+    TEST_SUITE("alerts: MLE invalid link_id (#104)");
+    RUN_TEST(test_mle_invalid_link_id_fires);
+    RUN_TEST(test_mle_invalid_link_id_quiet_when_clean);
+    RUN_TEST(test_mle_invalid_link_id_fires_once_per_mld);
 
     TEST_SUITE("alerts: incident lifecycle (#98)");
     RUN_TEST(test_lifecycle_create_emits_a_create_event);

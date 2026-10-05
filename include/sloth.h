@@ -763,6 +763,7 @@ typedef enum {
     ALERT_TYPE_WPS_PIN_BRUTE,       /* WPS external-registrar PIN brute force — CERT/CC VU#723755 (#82) */
     ALERT_TYPE_WPS_LOCKOUT_CYCLING, /* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
     ALERT_TYPE_WPS_PBC_RACE,        /* concurrent PBC enrollees inside the 120 s walk time (#82) */
+    ALERT_TYPE_MLE_INVALID_LINK_ID, /* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -1867,6 +1868,18 @@ typedef struct {
     int     links_truncated;   /* more affiliated links than we can hold */
     time_t  first_seen;
     time_t  last_seen;
+
+    /* CVE-2026-58374 / w1.fi 2026-1 (#104): a Per-STA Profile link_id
+     * outside 0-14, or one repeated inside a single MLE, is exactly the
+     * shape of the hostapd links[] out-of-bounds write. `malformed_link_id`
+     * and `bad_link_id` are this frame's finding, set fresh by mle_parse()
+     * on every call; `malformed_link_id_total` / `_last_seen` are the
+     * persisted, lifetime signal mle_observe() accumulates onto the
+     * stored entry. */
+    uint8_t  malformed_link_id;
+    uint8_t  bad_link_id;
+    uint32_t malformed_link_id_total;
+    time_t   malformed_link_id_last_seen;
 } sloth_mld_t;
 
 /* ── 802.11k Radio Measurement survey (#61) ────────────────

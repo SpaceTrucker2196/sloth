@@ -12,7 +12,7 @@ A terminal-based **passive** network monitor for Linux, written in C99.
 It never injects packets, never scans, never modifies kernel state. It
 reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
 pcap stream, then surfaces what it sees through 35 ncurses views
-(`VIEW_COUNT`), 64 alert rules (one per `ALERT_TYPE_*`), an embedded
+(`VIEW_COUNT`), 65 alert rules (one per `ALERT_TYPE_*`), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 

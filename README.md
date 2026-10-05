@@ -25,7 +25,7 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **35 live views** and **64 passive
+sees and turns it into **35 live views** and **65 passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -351,7 +351,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**64 rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` in [`include/sloth.h`](include/sloth.h), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**65 rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` in [`include/sloth.h`](include/sloth.h), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 
