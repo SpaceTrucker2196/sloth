@@ -1269,6 +1269,102 @@ static void test_spec_is_remote_rejects_malformed(void) {
     ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1:"),       -1);
 }
 
+/* data_socket_spec_tcp_port() is what mDNS discovery advertises, so the
+ * number it returns has to be the one the binder actually bound. Until
+ * now its only coverage was indirect, through discovery_routable_tcp_port()
+ * in tests/test_discovery.c — which, because it gates on
+ * data_socket_spec_is_remote() == 1, can never reach a loopback spec.
+ * The default deployment (tcp:127.0.0.1:8765) was therefore the one path
+ * with no assertion at all. */
+static void test_spec_tcp_port_reads_the_port(void) {
+    /* The shipped default, and the case discovery's gate can't reach. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:8765"),    8765);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.2:1514"),    1514);
+    /* A routable literal parses the same way; whether it is *allowed*
+     * is data_socket_spec_is_remote()'s question, not this one. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:192.168.1.10:9999"), 9999);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:0.0.0.0:8765"),      8765);
+    /* Both ends of the valid range. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:1"),           1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:65535"),   65535);
+}
+
+/* Anything the spec parser calls malformed must come back -1, never a
+ * number a caller could act on. A wrong port advertised over mDNS points
+ * a client at whatever else is listening there. */
+static void test_spec_tcp_port_rejects_malformed(void) {
+    ASSERT_EQ(data_socket_spec_tcp_port(NULL),                      -1);
+    ASSERT_EQ(data_socket_spec_tcp_port(""),                        -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("garbage"),                 -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:"),                    -1);
+
+    /* A filesystem socket has no port. */
+    ASSERT_EQ(data_socket_spec_tcp_port("unix:/run/sloth.sock"),    -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("unix:"),                   -1);
+
+    /* No port at all, or an empty one. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1"),           -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:"),          -1);
+
+    /* strtol() alone would read these as 8765 and hand back a port the
+     * binder refused to bind. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:8765x"),     -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:8765 "),     -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:87.65"),     -1);
+
+    /* Out of range at both ends, plus one that overflows long. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:0"),         -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:65536"),     -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:-1"),        -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1:99999999999999999999"), -1);
+
+    /* The binder accepts only inet_pton literals, so a name the host
+     * could resolve is still not a spec sloth can bind. */
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:sensor.lan:8765"),     -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:localhost:8765"),      -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:999.1.1.1:8765"),      -1);
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:::1:8765"),            -1);
+}
+
+/* Known hole in the full-string port rule, pinned rather than asserted
+ * as correct. strtol() skips leading whitespace *before* it sets endptr,
+ * so a leading space inside the port is consumed and `*endptr == '\0'`
+ * still holds: " 8765" reads as 8765 where "8765 " is rejected. The
+ * endptr check f2bf0b5 added therefore closes the trailing half of the
+ * rule only.
+ *
+ * Pinned at current behaviour deliberately. Tightening it changes which
+ * CLI inputs sloth refuses to start on, which is a behaviour change and
+ * not part of the test/refactor slice this test arrived in (#86). If a
+ * later change rejects a leading space, this assertion is the one that
+ * should flip to -1 — it is not a specification of what the parser
+ * ought to do. */
+static void test_spec_tcp_port_accepts_a_leading_space_today(void) {
+    ASSERT_EQ(data_socket_spec_tcp_port("tcp:127.0.0.1: 8765"), 8765);
+    /* Same hole, same cause, seen through the other exported view. */
+    ASSERT_EQ(data_socket_spec_is_remote("tcp:127.0.0.1: 8765"),   0);
+}
+
+/* The two exported views of one spec are consulted by the same caller
+ * (src/discovery.c reads both), so they must never disagree about
+ * whether the spec is well-formed: a spec is_remote() can classify is a
+ * spec tcp_port() can read a port out of, and vice versa. Pins the
+ * contract that lets the two share one parse. */
+static void test_spec_tcp_port_agrees_with_is_remote(void) {
+    static const char *const specs[] = {
+        "tcp:127.0.0.1:8765", "tcp:127.0.0.2:1514", "tcp:0.0.0.0:8765",
+        "tcp:192.168.1.10:9999", "tcp:8.8.8.8:53", "tcp:127.0.0.1:1",
+        "tcp:127.0.0.1:65535", "tcp:127.0.0.1:0", "tcp:127.0.0.1:65536",
+        "tcp:127.0.0.1:8765x", "tcp:127.0.0.1:", "tcp:127.0.0.1",
+        "tcp:sensor.lan:8765", "tcp:999.1.1.1:8765", "tcp:", "garbage",
+    };
+    for (size_t i = 0; i < sizeof(specs) / sizeof(specs[0]); i++) {
+        int port   = data_socket_spec_tcp_port(specs[i]);
+        int remote = data_socket_spec_is_remote(specs[i]);
+        ASSERT_EQ(port >= 0, remote >= 0);
+    }
+}
+
 /* The foot-gun this slice exists to guard: a routable bind with no
  * opt-in must refuse, and must refuse *without* opening the listener.
  * TEST-NET-1 (RFC 5737) and the wildcard are used because the refusal
@@ -1420,6 +1516,10 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_spec_is_remote_accepts_whole_loopback_net);
     RUN_TEST(test_spec_is_remote_flags_routable_and_wildcard);
     RUN_TEST(test_spec_is_remote_rejects_malformed);
+    RUN_TEST(test_spec_tcp_port_reads_the_port);
+    RUN_TEST(test_spec_tcp_port_rejects_malformed);
+    RUN_TEST(test_spec_tcp_port_accepts_a_leading_space_today);
+    RUN_TEST(test_spec_tcp_port_agrees_with_is_remote);
     RUN_TEST(test_routable_bind_refused_without_optin);
     RUN_TEST(test_optin_lets_the_bind_reach_the_kernel);
     RUN_TEST(test_loopback_tcp_bind_needs_no_optin);
