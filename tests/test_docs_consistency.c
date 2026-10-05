@@ -629,6 +629,416 @@ static void test_set_channel_comments_claim_no_total(void) {
     check_file_claims_no_sole_kernel_state_write("src/main.c");
 }
 
+/*
+ * Wiki and rule-table integrity — issue #103.
+ *
+ * Wave 2 repaired four dead wikilinks, an orphan page and a stale rule
+ * count by hand. Every one of them was found by a human-or-agent pass
+ * that nobody runs on a schedule, so the next regression would have sat
+ * in main until somebody happened to look. The counts are already
+ * pinned (test_wiki_counts_match_build above); these pin the structural
+ * properties beside them.
+ *
+ * Four walks, four floors. A scanner whose source document is reworded
+ * or moved stops checking silently — a walk over zero pages passes
+ * every assertion it never makes — so each one asserts a lower bound on
+ * what it found as well as zero failures.
+ *
+ * Deliberately not checked: external http links, which would put
+ * network access in `make test`; anchor fragments inside a page; and
+ * documents outside docs/wiki and the alerts rule table.
+ * docs/progress-archive.md, for one, carries two repo-root-relative
+ * links that do not resolve from its own directory — it is a frozen
+ * record of shipped work, so widening the walk to it would assert a
+ * property the file was never written to hold.
+ */
+
+#define DC_WIKI_DIR   "docs/wiki"
+#define DC_MAX_PAGES  256
+#define DC_PAGE_LEN   128
+
+/* Blank every fenced block and inline code span in place, preserving
+ * length and line structure. Two traps wave 2 hit live here: a
+ * `[[link]]` inside backticks is a syntax *example* — wiki-maintenance.md
+ * carries `[[wiki-links]]`, `[[links]]` and `[[link]]`, none of which
+ * are pages — while a wikilink carrying a slash or dot
+ * (`[[../views/http]]`) is dead, because the wiki namespace is flat.
+ * Blanking code first makes the first case invisible and leaves the
+ * second to fail the page-exists test like any other bad target.
+ *
+ * Inline spans are paired within one line only: an unpaired backtick is
+ * a literal, not a span running to end of file. */
+static void dc_blank_code(char *t) {
+    int fenced = 0;
+    for (char *line = t; line && *line; ) {
+        char  *nl  = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl - line) : strlen(line);
+        size_t i   = 0;
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+        if (len - i >= 3 && !strncmp(line + i, "```", 3)) {
+            fenced = !fenced;
+            memset(line, ' ', len);
+        } else if (fenced) {
+            memset(line, ' ', len);
+        } else {
+            for (size_t j = 0; j < len; j++) {
+                if (line[j] != '`') continue;
+                size_t k = j + 1;
+                while (k < len && line[k] != '`') k++;
+                if (k >= len) break;
+                memset(line + j, ' ', k - j + 1);
+                j = k;
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+}
+
+static int dc_wiki_pages(char names[DC_MAX_PAGES][DC_PAGE_LEN]) {
+    DIR *d = opendir(DC_WIKI_DIR);
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 4 || nl > DC_PAGE_LEN - 1) continue;
+        if (strcmp(e->d_name + nl - 3, ".md") != 0) continue;
+        if (n >= DC_MAX_PAGES) break;
+        memcpy(names[n], e->d_name, nl - 3);
+        names[n][nl - 3] = '\0';
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+
+static int dc_is_page(char names[DC_MAX_PAGES][DC_PAGE_LEN], int n,
+                      const char *tgt) {
+    for (int i = 0; i < n; i++) if (!strcmp(names[i], tgt)) return 1;
+    return 0;
+}
+
+/* Append the first `len` bytes of `s` as a page name, dropping anything
+ * that cannot be one. */
+static void dc_push_name(char names[DC_MAX_PAGES][DC_PAGE_LEN], int *n,
+                         const char *s, size_t len) {
+    if (*n >= DC_MAX_PAGES || len == 0 || len >= DC_PAGE_LEN) return;
+    memcpy(names[*n], s, len);
+    names[*n][len] = '\0';
+    (*n)++;
+}
+
+/* Copy the target of the wikilink opening at `p` ("[[" included) into
+ * `out`, trimmed and cut at a `|` display-text separator. Returns the
+ * position just past "]]", or NULL when the link never closes. */
+static const char *dc_wikilink(const char *p, char *out, size_t sz) {
+    const char *e = strstr(p + 2, "]]");
+    if (!e) return NULL;
+    const char *s = p + 2;
+    const char *bar = memchr(s, '|', (size_t)(e - s));
+    const char *stop = bar ? bar : e;
+    while (s < stop && isspace((unsigned char)*s)) s++;
+    while (stop > s && isspace((unsigned char)stop[-1])) stop--;
+    size_t n = (size_t)(stop - s);
+    if (n > sz - 1) n = sz - 1;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return e + 2;
+}
+
+/* Copy the destination of the markdown link opening at `p` ("](" included)
+ * into `out`: everything up to the first whitespace (a link title) or the
+ * closing paren, with any `#fragment` dropped. Returns the position just
+ * past the destination, or NULL when it never closes. */
+static const char *dc_md_link(const char *p, char *out, size_t sz) {
+    const char *s = p + 2, *q = s;
+    while (*q && *q != ')' && !isspace((unsigned char)*q)) q++;
+    if (!*q) return NULL;
+    size_t n = (size_t)(q - s);
+    if (n > sz - 1) n = sz - 1;
+    memcpy(out, s, n);
+    out[n] = '\0';
+    char *hash = strchr(out, '#');
+    if (hash) *hash = '\0';
+    return q;
+}
+
+static int dc_link_is_external(const char *u) {
+    return !*u || *u == '#' ||
+           !strncmp(u, "http", 4) || !strncmp(u, "mailto:", 7);
+}
+
+/* ── the scanners, on hand-written input ── */
+
+static void test_wiki_link_scanner_skips_code(void) {
+    char t[] = "see [[alerts]] and `[[link]]`\n"
+               "```\n[[in-a-fence]]\n```\n"
+               "a stray ` backtick, [[dashboard]] too\n";
+    dc_blank_code(t);
+    char tgt[160];
+    int n = 0;
+    char found[4][160];
+    for (const char *p = t; (p = strstr(p, "[[")) != NULL; ) {
+        p = dc_wikilink(p, tgt, sizeof(tgt));
+        if (!p) break;
+        if (n < 4) snprintf(found[n], sizeof(found[n]), "%s", tgt);
+        n++;
+    }
+    ASSERT_EQ(n, 2);
+    ASSERT_STR(found[0], "alerts");
+    ASSERT_STR(found[1], "dashboard");
+}
+
+static void test_wikilink_target_parse(void) {
+    char tgt[160];
+    ASSERT(dc_wikilink("[[ alerts ]]x", tgt, sizeof(tgt)) != NULL);
+    ASSERT_STR(tgt, "alerts");
+    ASSERT(dc_wikilink("[[alerts|the engine]]", tgt, sizeof(tgt)) != NULL);
+    ASSERT_STR(tgt, "alerts");
+    /* A namespaced target survives parsing so the page-exists check can
+     * reject it: the wiki is flat, so this is a dead link, not a path. */
+    ASSERT(dc_wikilink("[[../views/http]]", tgt, sizeof(tgt)) != NULL);
+    ASSERT_STR(tgt, "../views/http");
+    ASSERT(dc_wikilink("[[unclosed", tgt, sizeof(tgt)) == NULL);
+}
+
+static void test_md_link_target_parse(void) {
+    char u[256];
+    ASSERT(dc_md_link("](log.md)", u, sizeof(u)) != NULL);
+    ASSERT_STR(u, "log.md");
+    ASSERT(dc_md_link("](../views/probe.md#flood)", u, sizeof(u)) != NULL);
+    ASSERT_STR(u, "../views/probe.md");
+    ASSERT(dc_md_link("](foo.md \"title\")", u, sizeof(u)) != NULL);
+    ASSERT_STR(u, "foo.md");
+    ASSERT(dc_md_link("](unterminated", u, sizeof(u)) == NULL);
+    ASSERT(dc_link_is_external("https://example.org"));
+    ASSERT(dc_link_is_external("#anchor"));
+    ASSERT(!dc_link_is_external("../views/probe.md"));
+}
+
+/* ── the wiki ── */
+
+static void test_wiki_wikilinks_resolve(void) {
+    char pages[DC_MAX_PAGES][DC_PAGE_LEN];
+    int  np = dc_wiki_pages(pages);
+    ASSERT_GE(np, 40);
+    if (np <= 0) return;
+    int links = 0, dead = 0;
+    for (int i = 0; i < np; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%.120s.md", DC_WIKI_DIR, pages[i]);
+        char *t = slurp(path);
+        if (!t) continue;
+        dc_blank_code(t);
+        char tgt[160];
+        for (const char *p = t; (p = strstr(p, "[[")) != NULL; ) {
+            const char *nx = dc_wikilink(p, tgt, sizeof(tgt));
+            if (!nx) break;
+            p = nx;
+            links++;
+            if (dc_is_page(pages, np, tgt)) continue;
+            dead++;
+            fprintf(stderr, "    %s: [[%s]] names no page in %s\n",
+                    path, tgt, DC_WIKI_DIR);
+        }
+        free(t);
+    }
+    /* Floor: the wiki cross-links heavily, so a walk finding almost none
+     * means the scan broke, not that the links went away. */
+    ASSERT_GE(links, 300);
+    ASSERT_EQ(dead, 0);
+}
+
+static void test_wiki_relative_links_resolve(void) {
+    char pages[DC_MAX_PAGES][DC_PAGE_LEN];
+    int  np = dc_wiki_pages(pages);
+    ASSERT_GE(np, 40);
+    if (np <= 0) return;
+    int links = 0, broken = 0;
+    for (int i = 0; i < np; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%.120s.md", DC_WIKI_DIR, pages[i]);
+        char *t = slurp(path);
+        if (!t) continue;
+        dc_blank_code(t);
+        char u[256];
+        for (const char *p = t; (p = strstr(p, "](")) != NULL; ) {
+            const char *nx = dc_md_link(p, u, sizeof(u));
+            if (!nx) break;
+            p = nx;
+            if (dc_link_is_external(u)) continue;
+            links++;
+            char full[768];
+            snprintf(full, sizeof(full), "%s/%.250s", DC_WIKI_DIR, u);
+            if (access(full, F_OK) == 0) continue;
+            broken++;
+            fprintf(stderr, "    %s: (%s) resolves to no file\n", path, u);
+        }
+        free(t);
+    }
+    ASSERT_GE(links, 100);
+    ASSERT_EQ(broken, 0);
+}
+
+/* index.md generates the per-page sidebar, so a page it does not name is
+ * a page a reader can only reach by already knowing its filename. */
+static void test_wiki_pages_reachable_from_index(void) {
+    char pages[DC_MAX_PAGES][DC_PAGE_LEN];
+    int  np = dc_wiki_pages(pages);
+    ASSERT_GE(np, 40);
+    if (np <= 0) return;
+    char *t = slurp(DC_WIKI_DIR "/index.md");
+    ASSERT(t != NULL);
+    if (!t) return;
+    dc_blank_code(t);
+
+    char named[DC_MAX_PAGES][DC_PAGE_LEN];
+    int  nn = 0;
+    char tgt[160];
+    for (const char *p = t; (p = strstr(p, "[[")) != NULL; ) {
+        const char *nx = dc_wikilink(p, tgt, sizeof(tgt));
+        if (!nx) break;
+        p = nx;
+        dc_push_name(named, &nn, tgt, strlen(tgt));
+    }
+    /* log.md is referenced as an ordinary relative link rather than a
+     * wikilink, and is still indexed; a bare `name.md` counts. */
+    char u[256];
+    for (const char *p = t; (p = strstr(p, "](")) != NULL; ) {
+        const char *nx = dc_md_link(p, u, sizeof(u));
+        if (!nx) break;
+        p = nx;
+        size_t ul = strlen(u);
+        if (ul < 4) continue;
+        if (strchr(u, '/') || strcmp(u + ul - 3, ".md")) continue;
+        dc_push_name(named, &nn, u, ul - 3);
+    }
+    free(t);
+    ASSERT_GE(nn, 40);
+
+    int orphans = 0;
+    for (int i = 0; i < np; i++) {
+        if (!strcmp(pages[i], "index")) continue;
+        if (dc_is_page(named, nn, pages[i])) continue;
+        orphans++;
+        fprintf(stderr, "    %s/%s.md is not linked from index.md\n",
+                DC_WIKI_DIR, pages[i]);
+    }
+    ASSERT_EQ(orphans, 0);
+}
+
+/* ── the alerts rule table ── */
+
+#define DC_MAX_ROWS 128
+#define DC_ROW_LEN  64
+
+/* Collect the Rule column of the rule table in docs/views/alerts.md: the
+ * run of `| `NAME` |` lines under "## Rules", stopped at the next
+ * heading so the severity-tier and counter tables above it, or anything
+ * added below, can never be mistaken for coverage. */
+static int dc_alert_rule_rows(const char *doc, char rows[DC_MAX_ROWS][DC_ROW_LEN]) {
+    const char *p = strstr(doc, "\n## Rules\n");
+    if (!p) return -1;
+    p += strlen("\n## Rules\n");
+    int n = 0;
+    while (p && *p) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        if (len > 3 && !strncmp(p, "## ", 3)) break;
+        if (len > 3 && !strncmp(p, "| `", 3)) {
+            size_t i = 3;
+            while (i < len && (isupper((unsigned char)p[i]) ||
+                               isdigit((unsigned char)p[i]) || p[i] == '_')) i++;
+            if (i > 3 && i < len && p[i] == '`' && i - 3 < DC_ROW_LEN &&
+                n < DC_MAX_ROWS) {
+                memcpy(rows[n], p + 3, i - 3);
+                rows[n][i - 3] = '\0';
+                n++;
+            }
+        }
+        p = nl ? nl + 1 : NULL;
+    }
+    return n;
+}
+
+/* The row label an ALERT_TYPE_* suffix is documented under. The Rule
+ * column names most kinds by their enum suffix, but a row may instead
+ * carry the short `fire()` title — titles are display strings bounded by
+ * ALERT_TITLE_LEN and abbreviated, so they do not always match the enum.
+ * Such a row is correct as it stands: it names what the operator reads
+ * in the view. So the mapping lives here, not in the document. */
+static const char *dc_rule_row_label(const char *kind) {
+    if (!strcmp(kind, "MY_NETWORK_RECON")) return "MY_NET_RECON";
+    return kind;
+}
+
+/* Every ALERT_TYPE_* has a rule-table row and every row has a kind.
+ * agents/AGENTS.md makes the row step 5 of adding a rule; nothing
+ * checked it, so the only evidence a rule was documented was that
+ * somebody had looked. Both directions matter: a missing row hides a
+ * live detector from the operator, a surviving row advertises one that
+ * no longer exists. */
+static void test_every_alert_kind_has_a_rule_row(void) {
+    char *t = slurp("docs/views/alerts.md");
+    ASSERT(t != NULL);
+    if (!t) return;
+    char rows[DC_MAX_ROWS][DC_ROW_LEN];
+    int  nr = dc_alert_rule_rows(t, rows);
+    free(t);
+    ASSERT_GE(nr, 60);
+    if (nr <= 0) return;
+
+    int used[DC_MAX_ROWS] = {0};
+    int matched = 0;
+    for (int ty = 0; ty < (int)ALERT_TYPE_COUNT; ty++) {
+        const char *full = alert_type_name((alert_type_t)ty);
+        int named = strncmp(full, "ALERT_TYPE_", 11) == 0;
+        ASSERT(named);
+        if (!named) continue;
+        const char *want = dc_rule_row_label(full + 11);
+        int hit = -1;
+        for (int i = 0; i < nr && hit < 0; i++)
+            if (!used[i] && !strcmp(rows[i], want)) hit = i;
+        if (hit < 0) {
+            fprintf(stderr, "    docs/views/alerts.md has no rule row "
+                            "`%s` for %s\n", want, full);
+            continue;
+        }
+        used[hit] = 1;
+        matched++;
+    }
+    ASSERT_EQ(matched, (int)ALERT_TYPE_COUNT);
+
+    int stale = 0;
+    for (int i = 0; i < nr; i++) {
+        if (used[i]) continue;
+        stale++;
+        fprintf(stderr, "    docs/views/alerts.md rule row `%s` names no "
+                        "ALERT_TYPE_*\n", rows[i]);
+    }
+    ASSERT_EQ(stale, 0);
+}
+
+static void test_alert_rule_row_scanner(void) {
+    static const char doc[] =
+        "## Severity tiers\n"
+        "| `count` | evaluations |\n"   /* another table's field name */
+        "| LOW | yellow |\n"
+        "\n## Rules\n"
+        "| Rule | Sev |\n"
+        "|------|-----|\n"
+        "| `PORT_SCAN` | LOW | one source |\n"
+        "| `MY_NET_RECON` | LOW/WARN | a PNL |\n"
+        "\n## Cross-panel coloring\n"
+        "| `NOT_A_RULE` | x |\n";
+    char rows[DC_MAX_ROWS][DC_ROW_LEN];
+    int  n = dc_alert_rule_rows(doc, rows);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR(rows[0], "PORT_SCAN");
+    ASSERT_STR(rows[1], "MY_NET_RECON");
+    ASSERT_EQ(dc_alert_rule_rows("no heading here\n", rows), -1);
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -645,4 +1055,13 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_usage_hop_claims_no_sole_kernel_state_write);
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
     RUN_TEST(test_set_channel_comments_claim_no_total);
+    TEST_SUITE("wiki + rule-table integrity (#103)");
+    RUN_TEST(test_wiki_link_scanner_skips_code);
+    RUN_TEST(test_wikilink_target_parse);
+    RUN_TEST(test_md_link_target_parse);
+    RUN_TEST(test_alert_rule_row_scanner);
+    RUN_TEST(test_wiki_wikilinks_resolve);
+    RUN_TEST(test_wiki_relative_links_resolve);
+    RUN_TEST(test_wiki_pages_reachable_from_index);
+    RUN_TEST(test_every_alert_kind_has_a_rule_row);
 }
