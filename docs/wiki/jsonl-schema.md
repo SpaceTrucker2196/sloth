@@ -209,7 +209,7 @@ through as UTF-8.
 | `host`   | string | `Host:` header value, port stripped |
 | `method` | string | `GET` / `POST` / … |
 | `path`   | string | request URI |
-| `ja4h`   | string | 49-char JA4H client fingerprint (FoxIO spec). Omitted when not computed. See [[../views/http]] for the section breakdown. |
+| `ja4h`   | string | 49-char JA4H client fingerprint (FoxIO spec). Omitted when not computed. See [`http`](../views/http.md) for the section breakdown. |
 
 **Response records (#71).** The same record type carries responses,
 distinguished by the presence of `status`. `host` and `path` are the
@@ -728,15 +728,26 @@ for the rest of the run and `scope` goes to `degraded` on the same
 tick. A replugged adapter is not followed: restart to re-pin. A
 consumer should alert on `scope_not_enforced` becoming `1`.
 
-**What the eviction tally does and does not cover.** Counted: alerts,
-top hosts, PNL clients, per-client PNL SSIDs, DHCP events, 802.1X EAP
-sessions, and the device table (which refuses a new entry rather than
-evicting an old one — different mechanism, same meaning). **Not** yet
-counted: the probe-client, beacon, seqnum, assoc and per-protocol flow
-rings. Treat `evictions` as "loss on the instrumented tables", not "all
-loss" — that distinction is stated rather than papered over, because a
-tally that silently omitted a table would read as "no loss" when it
-means "not measured".
+**What the eviction tally does and does not cover.** Counted — one
+`evict_<name>` field each, and this is the whole set: `alert`,
+`top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`,
+`device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`,
+`wps_session`. The device table refuses a new entry rather than evicting
+an old one — different mechanism, same meaning. The 802.11 tables
+(`beacon_ap`, `seqnum_client`, the two `assoc_*`, `wps_session`) joined
+after the first tally shipped; the list above is kept in step with the
+build by `tests/test_sensor_health.c ::
+test_schema_doc_lists_every_counted_table`.
+
+**Not** counted: the probe-client table (the `probe_client` records,
+LRU-evicted in the capture thread) and the per-protocol flow rings
+(DNS, TLS, QUIC, HTTP, NTP, ICMP). Those are examples, not an
+enumeration — the uncounted side is not listed exhaustively, so the
+rule to read by is that a table either has an `evict_<name>` field or
+it is not measured. Treat `evictions` as "loss on the instrumented
+tables", not "all loss": a counted table sitting at zero means nothing
+was dropped, while silence from an uncounted one means nothing is known
+either way.
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are

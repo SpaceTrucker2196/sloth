@@ -219,13 +219,16 @@ exported total run backwards.
 `evict` is the total over every instrumented bounded table — an
 observation that did not make it in because the table was full. The
 counted tables are **alerts, top hosts, PNL clients, per-client PNL
-SSIDs, DHCP events, 802.1X EAP sessions, and the device table**; the
-device table refuses a *new* entry rather than evicting an old one,
-which is a different mechanism with the same meaning. Listing them is
-the point: the probe-client, beacon, seqnum, assoc and per-protocol flow
-rings are **not** instrumented yet, and a tally that silently omitted a
-table would read as "no loss" when it means "not measured". The JSONL
-record breaks the total out per table.
+SSIDs, DHCP events, 802.1X EAP sessions, the device table, and the
+802.11 tables: beacons, sequence-number clients, both association
+tables, and WPS sessions**; the device table refuses a *new* entry
+rather than evicting an old one, which is a different mechanism with the
+same meaning. Listing them is the point: the probe-client ring and the
+per-protocol flow rings are **not** instrumented yet, and a tally that
+silently omitted a table would read as "no loss" when it means "not
+measured". The JSONL record breaks the total out per table, and
+`sh_evict_t` in `src/sensor_health.h` is the list this one has to
+match — `jsonl-schema.md`'s copy is pinned to it by a test.
 
 `scope degraded 1/2` means a launch-time `--iface`/`--monitor-only`
 scope is not being fully served: one of the two requested interfaces

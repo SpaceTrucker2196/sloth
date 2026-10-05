@@ -18,11 +18,14 @@
  * question a consumer asks is "is this sensor losing observations at
  * all", and a monotonic lifetime count answers it from any two samples.
  *
- * Counted tables are exactly the ones listed below. Others (the
- * per-protocol flow rings) are not instrumented yet — stating which
- * are covered is the point, since a tally that silently omits a table
- * reads as "no loss" when it means "not measured". The beacon, seqnum
- * and assoc tables joined the tally in the #91 wave-6 slice.
+ * Counted tables are exactly the ones listed below. Not instrumented
+ * yet: the probe-client ring and the per-protocol flow rings — stating
+ * which are covered is the point, since a tally that silently omits a
+ * table reads as "no loss" when it means "not measured". The beacon,
+ * seqnum and assoc tables joined the tally in the #91 wave-6 slice;
+ * wps_session followed. The probe-client ring was omitted from this
+ * sentence until 2026-10-05, which made the comment read as though the
+ * flow rings were the only gap.
  *
  * Thread safety: the probe-side tables are written from the capture
  * threads and the rest from the poll loop, so the tally takes a mutex.

@@ -23,6 +23,23 @@
  * second drives the real modules past their caps with hand-seeded state,
  * because a counter nobody calls reads as a permanently healthy sensor. */
 
+/* Read a whole text file; the doc-pin test compares prose to the
+ * compiled enum. Path is repo-root relative, as elsewhere in the suite. */
+static char *slurp_text(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    rewind(f);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    buf[got] = '\0';
+    fclose(f);
+    return buf;
+}
+
 static void test_tally_starts_at_zero(void) {
     sh_evict_reset();
     ASSERT_EQ((int)sh_evict_total(), 0);
@@ -266,6 +283,80 @@ static void test_assoc_request_table_overflow_is_counted(void) {
     sh_evict_reset();
 }
 
+/* The schema doc tells an operator which quiet tables are trustworthy
+ * silence and which are unmeasured, so its counted list is part of the
+ * contract — and it went stale the moment the 802.11 tables joined the
+ * tally, because nobody re-read the prose. Pin it: every kind the build
+ * counts must appear in the doc's counted list, so adding a kind without
+ * documenting it fails here instead of misleading a consumer. */
+static void test_schema_doc_lists_every_counted_table(void) {
+    char *doc = slurp_text("docs/wiki/jsonl-schema.md");
+    ASSERT(doc != NULL);
+    if (!doc) return;
+
+    /* Parse the one delimited list rather than searching the section.
+     * The looser form this replaces — substring anywhere between the
+     * heading and "**Not** counted:" — was shown in review to pass with
+     * `wps_session` deleted from the authoritative list, because the
+     * name also occurs in the prose that follows it inside the same
+     * bounds. Exact set comparison, both directions. */
+    const char *start = strstr(doc, "and this is the whole set:");
+    ASSERT(start != NULL);
+    if (!start) { free(doc); return; }
+    start += strlen("and this is the whole set:");
+    const char *end = strstr(start, ". ");
+    ASSERT(end != NULL);
+    if (!end) { free(doc); return; }
+
+    /* Every backticked token in that span is a claimed counted kind. */
+    int seen[SH_EVICT_KIND_COUNT];
+    for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) seen[k] = 0;
+    int doc_names = 0, unknown = 0;
+    for (const char *q = start; q < end; ) {
+        const char *a = memchr(q, '`', (size_t)(end - q));
+        if (!a) break;
+        const char *b = memchr(a + 1, '`', (size_t)(end - a - 1));
+        if (!b) break;
+        size_t nlen = (size_t)(b - a - 1);
+        doc_names++;
+        int matched = 0;
+        for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) {
+            const char *nm = sh_evict_name((sh_evict_t)k);
+            if (strlen(nm) == nlen && strncmp(nm, a + 1, nlen) == 0) {
+                seen[k] = 1; matched = 1; break;
+            }
+        }
+        if (!matched) {
+            unknown++;
+            fprintf(stderr, "    jsonl-schema.md counts `%.*s`, which is "
+                            "not an sh_evict_t kind\n", (int)nlen, a + 1);
+        }
+        q = b + 1;
+    }
+
+    /* doc subset of enum: a stale or invented name is a false coverage
+       claim, which is the failure this prose exists to prevent. */
+    ASSERT_EQ(unknown, 0);
+    /* enum subset of doc: adding a kind without documenting it would
+       otherwise mislead a consumer reading the list as complete. */
+    for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) {
+        if (!seen[k])
+            fprintf(stderr, "    sh_evict_t counts %s; jsonl-schema.md's "
+                            "list omits it\n", sh_evict_name((sh_evict_t)k));
+        ASSERT(seen[k]);
+    }
+    /* The list is exactly the enum, not a superset that happens to
+       contain it. */
+    ASSERT_EQ(doc_names, (int)SH_EVICT_KIND_COUNT);
+
+    /* The uncounted side must name a live example and refuse to read as
+     * full coverage: prose listing only what is counted implies the rest
+     * is loss-free. */
+    ASSERT(strstr(end, "probe_client") != NULL);
+    ASSERT(strstr(end, "not \"all loss\"") != NULL);
+    free(doc);
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -273,6 +364,7 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_tally_is_monotonic);
     RUN_TEST(test_tally_ignores_out_of_range_kinds);
     RUN_TEST(test_evict_names_are_stable_and_distinct);
+    RUN_TEST(test_schema_doc_lists_every_counted_table);
 
     TEST_SUITE("sensor health — eviction sites reach the tally (#91 slice 3)");
     RUN_TEST(test_pnl_ssid_overflow_is_counted);
