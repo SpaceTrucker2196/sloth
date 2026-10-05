@@ -666,6 +666,66 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 	      -Iresearch/ingest -Iresearch -Iresearch/mcp \
 	      -o $@ $(CAPTURE_PATH_SRCS) -lm -lpthread -lsqlite3 -lpcap
 
+# ── Static analysis (#95) ───────────────────────────────────────────────────
+# A LOCAL approximation of the cppcheck CI job, not a replacement for it.
+# CI pins Cppcheck 2.13.0 (the ubuntu-24.04 package) and is authoritative;
+# tests/cppcheck.supp is baselined against that version.
+#
+# Why this is not simply CI's command. Running it verbatim on a newer
+# cppcheck fails on version skew rather than on defects: 2.21 retired
+# readdirCalled, legacyUninitvar, duplicateAssignExpression and
+# missingIncludeSystem, so nine suppressions report as unmatched, and it
+# added normalCheckLevelMaxBranches, which fires on forty-odd files. All
+# of that lands in --enable=information, so this target drops that class
+# and keeps warning, portability and performance — where the defects are.
+#
+# What it catches: a real defect in changed code, in the warning,
+# portability and performance classes. Verified by injecting an
+# out-of-bounds read, which fails the target naming file and line. The
+# cppcheck job's first pass found three genuine bugs, so this is worth
+# having on its own merits.
+#
+# What it does NOT catch — measured, not assumed, and worth reading
+# before trusting this target:
+#   - Neither of the two cppcheck failures of 2026-10-05. The
+#     checkLevelNormal ValueFlow overflow that took main.c red is
+#     reported by 2.13 on two functions; 2.21's equivalent
+#     (normalCheckLevelMaxBranches) fires on forty, so it cannot be a
+#     gate here. And a bare `#` in tests/cppcheck.supp — which 2.13
+#     rejects outright, failing the whole run before analysis — is
+#     accepted silently by 2.21; appending one and running this target
+#     exits 0.
+#   - Suppression-baseline drift generally, which is the entire
+#     --enable=information class and the reason CI pins a version.
+#
+# So this does not close the gap that motivated it. Only a pinned
+# 2.13.0 (built from source, since no distro here ships it) would. Kept
+# because catching a fresh defect locally still beats catching it in
+# CI, provided nobody reads a green run as "cppcheck CI will pass".
+# Green here means "no defect found by the installed checker". Only CI
+# means "the suppression baseline still holds".
+CPPCHECK_DEFS = -D__linux__ -D__GNUC__ -D_DEFAULT_SOURCE -DPLATFORM_LINUX \
+                -DWITH_NCURSES -DWITH_PCAP -DWITH_WIFI -DWITH_SQLITE
+CPPCHECK_CI_VERSION = Cppcheck 2.13.0
+
+.PHONY: cppcheck
+cppcheck:
+	@command -v cppcheck >/dev/null 2>&1 || { \
+	  echo "cppcheck not installed; CI uses $(CPPCHECK_CI_VERSION)" >&2; exit 1; }
+	@v=`cppcheck --version`; \
+	 if [ "$$v" != "$(CPPCHECK_CI_VERSION)" ]; then \
+	   echo "note: local $$v, CI pins $(CPPCHECK_CI_VERSION) — advisory;"; \
+	   echo "      suppression-baseline drift is only checked in CI."; \
+	 fi
+	cppcheck -q -j `nproc` --std=c99 --platform=unix64 --library=posix \
+	  --enable=warning,portability,performance \
+	  --error-exitcode=1 \
+	  --suppressions-list=tests/cppcheck.supp \
+	  --suppress=unmatchedSuppression \
+	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch \
+	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
+	  src research
+
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
 # rebuilds, runs `make test`, and reports surviving mutants. See
