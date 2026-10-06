@@ -734,6 +734,136 @@ static void test_monitor_seam_rejects_bad_arguments(void) {
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, bad, NULL, 1), -1);
 }
 
+/* ── One frame, one clock — issue #92 ────────────────────────
+ *
+ * Nine call sites in on_probe_frame() read time(NULL) while
+ * eapol_observe_dot11() alone took the frame's own capture timestamp,
+ * so one frame could be stamped two different seconds depending on
+ * scheduling and a correlation window built from those stamps was not
+ * reproducible from the capture. All nine now take the frame clock.
+ *
+ * Pinning that needs two kinds of assertion, and the first attempt at
+ * this slice shipped only the weaker one — which is why 6 of its 10
+ * threaded sites could be reverted to time(NULL) with the suite still
+ * green:
+ *
+ *   1. BEHAVIOURAL, below: the frame ring's ts is observable through
+ *      mon_frame_snapshot(), so a dispatched frame must carry the
+ *      timestamp the caller gave it. That pins one site exactly.
+ *   2. SOURCE-LEVEL, test_probe_callback_has_no_wall_clock_read: most
+ *      of the other eight feed windows and thresholds inside their own
+ *      modules and expose no timestamp an assertion here can read, so
+ *      no behavioural test can pin them. What CAN be pinned is that the
+ *      callback does not read the wall clock at all — which is the
+ *      property the slice is actually about, and it fails if ANY of the
+ *      nine is reverted. The repo already asserts source properties
+ *      this way (tests/test_docs_consistency.c, tests/test_ci_pins.c).
+ *
+ * Together those two cover all nine. Neither alone does, and saying so
+ * is the difference between this slice and the one that was blocked. */
+
+static void test_frame_records_carry_the_capture_timestamp(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[2] = { f, f };
+    int ls[2] = { n, n };
+    /* Deliberately far apart, and far from any plausible "now", so a
+       time(NULL) regression cannot coincidentally match. */
+    uint32_t ts[2] = { 1000000000u, 1500000000u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 2), 2);
+
+    mon_frame_snapshot(&g_s);
+    ASSERT_GE(g_s.mon_frame_count, 2);
+    /* Newest first, so the second frame's stamp leads. */
+    ASSERT_EQ((long long)g_s.mon_frames[0].ts, 1500000000LL);
+    ASSERT_EQ((long long)g_s.mon_frames[1].ts, 1000000000LL);
+}
+
+static void test_a_zero_capture_clock_is_counted_not_substituted(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint32_t ts[1] = { 0 };
+    uint64_t bad_before = mon_bad_clock_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 1), 1);
+    /* Counted... */
+    ASSERT_EQ((long long)(mon_bad_clock_total() - bad_before), 1);
+    /* ...and NOT replaced by the wall clock. The record keeps the 0 the
+       capture gave it, because substituting would reintroduce exactly
+       the non-reproducibility this slice removes. */
+    mon_frame_snapshot(&g_s);
+    ASSERT_GE(g_s.mon_frame_count, 1);
+    ASSERT_EQ((long long)g_s.mon_frames[0].ts, 0LL);
+}
+
+static void test_a_good_capture_clock_is_not_counted(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint32_t ts[1] = { 1700000000u };
+    uint64_t bad_before = mon_bad_clock_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 1), 1);
+    ASSERT_EQ((long long)(mon_bad_clock_total() - bad_before), 0);
+}
+
+/* The source-level half. Reads the callback's body and requires it to
+ * contain no wall-clock read — the one assertion that covers all nine
+ * sites at once, including the eight whose observers expose no
+ * timestamp. Bounded to on_probe_frame() so a time(NULL) elsewhere in
+ * the file (the capture thread's own bookkeeping, legitimately wall
+ * clock) does not trip it. */
+static void test_probe_callback_has_no_wall_clock_read(void) {
+    FILE *fp = fopen("src/capture/probe.c", "rb");
+    ASSERT(fp != NULL);
+    if (!fp) return;
+    static char src[600000];
+    size_t got = fread(src, 1, sizeof(src) - 1, fp);
+    fclose(fp);
+    src[got] = '\0';
+    ASSERT(got > 1000);
+
+    const char *start = strstr(src, "static void on_probe_frame(");
+    ASSERT(start != NULL);
+    if (!start) return;
+    /* The callback ends at the next function at column 0 after it. */
+    const char *end = strstr(start, "\n/* \xe2\x94\x80\xe2\x94\x80 Monitor dispatch test seam");
+    if (!end) end = strstr(start, "\nstatic void probe_health");
+    if (!end) end = src + got;
+    ASSERT(end > start);
+
+    /* Comments in that span mention time(NULL) when explaining why it is
+       gone, so count only calls: "time(NULL)" not preceded by a '*' on
+       the same line. Crude, and sufficient — a real call is never in a
+       comment line. */
+    int calls = 0;
+    for (const char *q = start; q < end; ) {
+        const char *hit = strstr(q, "time(NULL)");
+        if (!hit || hit >= end) break;
+        const char *bol = hit;
+        while (bol > start && bol[-1] != '\n') bol--;
+        int commented = 0;
+        for (const char *x = bol; x < hit; x++)
+            if (*x == '*' || (*x == '/' && x + 1 < hit && x[1] == '/')) {
+                commented = 1; break;
+            }
+        if (!commented) calls++;
+        q = hit + 1;
+    }
+    if (calls)
+        fprintf(stderr, "    on_probe_frame() reads the wall clock %d "
+                        "time(s); #92 requires the frame's own "
+                        "timestamp\n", calls);
+    ASSERT_EQ(calls, 0);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -765,6 +895,12 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);
     RUN_TEST(test_monitor_seam_rejects_bad_arguments);
+
+    TEST_SUITE("one frame, one clock (#92)");
+    RUN_TEST(test_frame_records_carry_the_capture_timestamp);
+    RUN_TEST(test_a_zero_capture_clock_is_counted_not_substituted);
+    RUN_TEST(test_a_good_capture_clock_is_not_counted);
+    RUN_TEST(test_probe_callback_has_no_wall_clock_read);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);

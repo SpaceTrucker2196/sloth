@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include "jsonl.h"
 #include "tune.h"
+#include "capture/probe.h"
 #include "alerts.h"
 #include "wired_attach.h"
 #include "secure_file.h"
@@ -1773,6 +1774,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         uint32_t scope_gen;
         uint64_t scope_dropped;
         int      tuned;
+        uint64_t mon_bad_clock;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1799,6 +1801,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_gen   = s->scope_health.generation;
     sig.scope_dropped = capture_out_of_scope_dropped();
     sig.tuned         = tune_non_default();
+    sig.mon_bad_clock = mon_bad_clock_total();
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1811,6 +1814,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_str(buf, LINEBUF, &off, "capture_iface",        s->pkt_iface);
     kv_str(buf, LINEBUF, &off, "monitor_iface",        s->probe_iface);
     kv_str(buf, LINEBUF, &off, "monitor_err",          s->probe_err);
+    /* #92: frames whose capture timestamp was <= 0. Nothing is
+     * substituted when it happens — a record is stamped with what the
+     * capture said — so this is the only way a consumer can tell a
+     * quiet radio from a capture whose clock is broken. */
+    kv_int(buf, LINEBUF, &off, "mon_bad_clock",
+           (long long)mon_bad_clock_total());
     kv_int(buf, LINEBUF, &off, "chan_requested",       s->chan_requested);
     kv_int(buf, LINEBUF, &off, "chan_confirmed",       s->chan_confirmed);
     kv_int(buf, LINEBUF, &off, "chan_confirmed_ok",    chan_ok);

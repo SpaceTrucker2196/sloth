@@ -42,7 +42,15 @@ static mon_frame_t     g_frames[MAX_MON_FRAMES];
 static int             g_frame_head;
 static int             g_frame_count;
 static uint64_t        g_frame_total;   /* cumulative frames ever seen (#28 sensor) */
+static uint64_t        g_bad_clock_total; /* capture ts <= 0 (#92) */
 static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
+
+uint64_t mon_bad_clock_total(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    uint64_t t = g_bad_clock_total;
+    pthread_mutex_unlock(&g_frame_mu);
+    return t;
+}
 
 uint64_t mon_frame_total(void) {
     pthread_mutex_lock(&g_frame_mu);
@@ -78,10 +86,10 @@ static const char *frame_label(uint8_t type, uint8_t sub) {
  * thread). a1/a2 may be NULL for short frames. */
 static void mon_frame_record(uint8_t type, uint8_t sub,
                              const uint8_t *a1, const uint8_t *a2,
-                             uint16_t len, int8_t signal) {
+                             uint16_t len, int8_t signal, time_t ts) {
     pthread_mutex_lock(&g_frame_mu);
     mon_frame_t *f = &g_frames[g_frame_head];
-    f->ts         = time(NULL);
+    f->ts         = ts;
     f->signal_dbm = signal;
     f->len        = len;
     f->type       = type;
@@ -238,6 +246,35 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     int8_t signal  = rt.signal_dbm;
     int    channel = rt.channel;
 
+    /* ── One clock for this frame (#92) ──────────────────────────
+     *
+     * Every observer below is stamped from the frame's own capture
+     * timestamp, not from time(NULL). Nine sites used to read the wall
+     * clock while eapol_observe_dot11() alone took hdr->ts, so one frame
+     * could be stamped two different seconds depending on scheduling,
+     * and a correlation window built from those stamps was not
+     * reproducible from the capture it came from. For an evidence tool
+     * that is the difference between a record and an anecdote.
+     *
+     * No fallback, deliberately. Substituting time(NULL) for a
+     * timestamp that looks wrong would reintroduce exactly the
+     * non-reproducibility this removes — and "looks wrong" is not
+     * decidable: a capture replayed from another host legitimately
+     * carries clocks far from this one's. A frame is stamped with what
+     * the capture says, always.
+     *
+     * What IS tracked is how often that value is unusable: ts <= 0 is
+     * the epoch or before it, which no live kernel produces. The count
+     * is published so an operator can tell "quiet" from "this capture's
+     * clock is broken", the same distinction the #91 health fields
+     * exist to make. Nothing is substituted on the strength of it. */
+    const time_t fts = (time_t)hdr->ts.tv_sec;
+    if (fts <= 0) {
+        pthread_mutex_lock(&g_frame_mu);
+        if (g_bad_clock_total < UINT64_MAX) g_bad_clock_total++;
+        pthread_mutex_unlock(&g_frame_mu);
+    }
+
     /* 802.11 frame starts after radiotap */
     const uint8_t *dot11     = data + rt_len;
     int            dot11_len = len  - rt_len;
@@ -258,14 +295,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * and a frame that failed its FCS is still evidence the channel is
      * struggling even though its contents are untrustworthy. */
     rf_quality_observe(channel, (dot11[1] & 0x08) ? 1 : 0, rt.bad_fcs,
-                       time(NULL));
+                       fts);
 
     /* Log every frame for the monitor packets band, before the per-type
      * dispatch. addr2 (TA/SA) only exists from 16 bytes on — ACK/CTS carry
      * addr1 only, so pass NULL there. */
     mon_frame_record(type, sub, dot11 + 4,
                      dot11_len >= 16 ? dot11 + 10 : NULL,
-                     (uint16_t)dot11_len, signal);
+                     (uint16_t)dot11_len, signal, fts);
 
     if (type == 1) {
         /* Control frames (#64). Dispatched *above* the 24-byte guard
@@ -273,7 +310,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * control frame there is would be dropped by a check written
          * for management headers. Parsing lives in ctrl_frames.c
          * because this file is absent from TEST_SRCS. */
-        ctrl_observe(dot11, dot11_len, channel, time(NULL));
+        ctrl_observe(dot11, dot11_len, channel, fts);
         return;
     }
 
@@ -292,7 +329,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * record headers carry it (#92). */
         eapol_observe_dot11(dot11, dot11_len, signal, channel,
                             (time_t)hdr->ts.tv_sec, (long)hdr->ts.tv_usec);
-        frag_observe(dot11, dot11_len, time(NULL));
+        frag_observe(dot11, dot11_len, fts);
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */
@@ -313,13 +350,13 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             if (rsn.mle_body && rsn.mle_len > 0) {
                 sloth_mld_t mld;
                 if (mle_parse(rsn.mle_body, rsn.mle_len, &mld))
-                    mle_observe(&mld, time(NULL));
+                    mle_observe(&mld, fts);
             }
             if (rsn.csa_present)
                 csa_observe(dot11 + 16, dot11 + 10,
                             rsn.csa_new_channel, rsn.csa_new_op_class,
                             rsn.csa_switch_mode, rsn.csa_switch_count,
-                            CSA_SRC_BEACON, channel, time(NULL));
+                            CSA_SRC_BEACON, channel, fts);
         }
         return;
     }
@@ -369,7 +406,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * same status-0 evidence as assoc_observe, not its result —
              * a station demoted by a later EAPOL-ranked entry still
              * really did (re)associate at this moment. */
-            frag_note_association(bssid_p, sta_p, time(NULL));
+            frag_note_association(bssid_p, sta_p, fts);
         }
         return;
     }
@@ -395,7 +432,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * We don't decode the algorithm here — the flood signal is the
          * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
          * to; a burst there means an association-table exhaustion DoS. */
-        auth_observe(dot11 + 16, time(NULL));
+        auth_observe(dot11 + 16, fts);
         return;
     }
 
@@ -416,7 +453,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * dropped. Parsing lives in action_snoop.c rather than here:
          * this file is compiled only under WITH_PCAP and is absent from
          * TEST_SRCS, so logic placed here cannot be tested. */
-        action_observe(dot11, dot11_len, time(NULL));
+        action_observe(dot11, dot11_len, fts);
         return;
     }
 

@@ -35,6 +35,13 @@ void mon_frame_snapshot(sloth_state_t *s);
    the observation count for the Wi-Fi sensor (#28). */
 uint64_t mon_frame_total(void);
 
+/* Frames whose capture timestamp was <= 0 — the epoch or before it,
+   which no live kernel produces (#92). Nothing is substituted when it
+   happens: a frame is stamped with what the capture says. This exists
+   so an operator can tell a quiet radio from a capture whose clock is
+   broken, and is exported as `mon_bad_clock` in sensor_health. */
+uint64_t mon_bad_clock_total(void);
+
 /* Erase all tracked clients from the internal table. */
 void probe_clear(void);
 
@@ -72,6 +79,7 @@ static inline void probe_stop(void)                                     {}
 static inline void probe_snapshot(sloth_state_t *s)                     { (void)s; }
 static inline void mon_frame_snapshot(sloth_state_t *s)                 { (void)s; }
 static inline uint64_t mon_frame_total(void)                            { return 0; }
+static inline uint64_t mon_bad_clock_total(void)                        { return 0; }
 static inline void probe_clear(void)                                    {}
 static inline void probe_set_iface(sloth_state_t *s, const char *iface) { (void)s; (void)iface; }
 static inline void probe_health_poll(capture_health_t *h)
