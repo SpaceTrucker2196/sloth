@@ -179,3 +179,4 @@
 | 5ae0394 | 2026-10-05T18:40:25Z | claude-opus-5 | 124 | 56514 | 31651291 | 78055 | 18.0197 | wave 2: #82 WSC pwd-id, #91 eviction prose, #103 wiki links, #95 action pins, #101 reg envelope |
 | 4feefd4 | 2026-10-05T21:33:57Z | claude-opus-5 | 166 | 74795 | 49503841 | 99739 | 27.6200 | wave 3 (partial): #84 kernel-write comment, #86 CLOEXEC, #103 wiki integrity; 3 slices held |
 | 741c18e | 2026-10-05T22:26:04Z | claude-opus-5 | 54 | 29004 | 17917608 | 33371 | 10.0179 | #92 monitor dispatch test seam (seam only; clock fix deferred) |
+| 15e2afd | 2026-10-06T17:01:13Z | claude-opus-5 | 66 | 28945 | 22383671 | 698183 | 18.8976 | #84 strict refuses routable data socket; #86 socket to /run/sloth and closed |
