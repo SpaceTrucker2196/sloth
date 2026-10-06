@@ -100,6 +100,43 @@ static void test_dns_strict_lock_is_the_shared_lock(void) {
     observe_reset_policy();
 }
 
+/* ── --strict vs a routable data socket — #84 ────────────────
+ *
+ * The owner ruled on 2026-10-06 that --strict refuses a ROUTABLE data
+ * socket and only a routable one, settling a question README.md and
+ * docs/wiki/data-socket-exposure.md had published as open.
+ *
+ * Pinned as a pure predicate because the composition lives in main(),
+ * which sloth_test does not link — the reason an earlier attempt at
+ * strict-contract tests resorted to matching source strings and ended
+ * up asserting a `return 1;` sixty-eight lines from the one it meant. A
+ * one-line policy function is cheaper than that and actually holds. */
+static void test_strict_refuses_only_a_routable_socket(void) {
+    /* The ruling, in four lines. */
+    ASSERT_EQ(observe_strict_refuses_socket(1, 1), 1);   /* strict + routable */
+    ASSERT_EQ(observe_strict_refuses_socket(1, 0), 0);   /* strict + loopback */
+    ASSERT_EQ(observe_strict_refuses_socket(0, 1), 0);   /* routable, no strict */
+    ASSERT_EQ(observe_strict_refuses_socket(0, 0), 0);
+}
+
+static void test_strict_socket_refusal_ignores_an_unparseable_spec(void) {
+    /* -1 is "cannot parse". Such a spec never binds and
+       data_socket_init_ex() rejects it naming the actual typo, so this
+       predicate stays quiet rather than blaming --strict for it. */
+    ASSERT_EQ(observe_strict_refuses_socket(1, -1), 0);
+    ASSERT_EQ(observe_strict_refuses_socket(0, -1), 0);
+}
+
+static void test_strict_socket_refusal_is_not_overridable(void) {
+    /* --data-socket-allow-remote is how an operator says "expose this";
+       --strict is how they say "not on this run". The predicate takes no
+       opt-in parameter at all, which is the point: a lock that another
+       flag can override is not a lock. The shape of this assertion IS
+       the guarantee — if an allow-remote argument is ever threaded in
+       here, this test stops compiling and names the decision. */
+    ASSERT_EQ(observe_strict_refuses_socket(1, 1), 1);
+}
+
 void run_observe_tests(void) {
     TEST_SUITE("observation policy (#84)");
     RUN_TEST(test_strict_observation_is_the_default);
@@ -109,4 +146,7 @@ void run_observe_tests(void) {
     RUN_TEST(test_discovery_allowed_by_default);
     RUN_TEST(test_strict_suppresses_discovery);
     RUN_TEST(test_dns_strict_lock_is_the_shared_lock);
+    RUN_TEST(test_strict_refuses_only_a_routable_socket);
+    RUN_TEST(test_strict_socket_refusal_ignores_an_unparseable_spec);
+    RUN_TEST(test_strict_socket_refusal_is_not_overridable);
 }

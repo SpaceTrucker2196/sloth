@@ -64,7 +64,7 @@ single mode driven by flags.
 | `--tune NAME=VALUE` | name=value | — | Move one detector threshold. **Repeatable.** An unknown name, a non-integer, or a value outside the knob's range **exits 2** — a threshold the operator believes they set but did not is worse than no knob, so a bad `--tune` never falls back to the default. Any knob off its default is reported in `sensor_health` (`tuned`, `tuned_count`) and as a fault-only `tuned N/M` token on the Interfaces health strip, so a detuned sensor and a quiet segment do not read alike (#82). |
 | `--tune-list` | — | — | Print every knob with its default, current value and unit, then exit 0. The registry is the contract: adding a detector threshold adds a row here, not a new flag. |
 | `--allow-active` | — | off | Opt in to the two active behaviours: (1) reverse-DNS PTR queries on cache miss; (2) nl80211 **passive** scan triggers (no SSID list, no probe transmitted). Prints one stderr line naming what it enabled; never silent. |
-| `--strict` | — | off | Lock: refuses any later attempt to enable active behaviour this run (`--strict --allow-active` exits non-zero). Suppresses the mDNS advert. Does **not** refuse `--hop`, and does **not** close a routable `--data-socket`. Records operator intent where `ps(1)`/audit can see it. |
+| `--strict` | — | off | Lock: refuses any later attempt to enable active behaviour this run (`--strict --allow-active` exits non-zero). Suppresses the mDNS advert. **Refuses a routable `--data-socket` (exit 2), even with `--data-socket-allow-remote`** — loopback and `unix:` are unaffected (#84, 2026-10-06). Does **not** refuse `--hop`. Records operator intent where `ps(1)`/audit can see it. |
 
 ### Correlation — MAC deanonymisation
 
@@ -196,7 +196,7 @@ A view can *claim* a key the global switch also uses; see
 | Code | Meaning |
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`). |
 
 ## Build variants (Makefile)
 

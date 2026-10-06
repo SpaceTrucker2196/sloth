@@ -23,7 +23,7 @@ scripts) code against.
 | Transport       | Configured by                        | Use |
 |-----------------|--------------------------------------|-----|
 | File (append)   | `-o /var/log/sloth.jsonl`            | log forwarder pulls / `tail -f` |
-| UNIX-domain     | `--data-socket unix:/var/run/sloth.sock` | **recommended** — local consumer on the same host. Created `0600`, so the kernel's peer-credential check is the authentication |
+| UNIX-domain     | `--data-socket unix:/run/sloth/sloth.sock` | **recommended** — local consumer on the same host. Created `0600`, so the kernel's peer-credential check is the authentication |
 | TCP (loopback)  | `--data-socket tcp:127.0.0.1:8765`   | the default; any local user on the host |
 | TCP (routable)  | `--data-socket tcp:HOST:PORT --data-socket-allow-remote` | opt-in only — refused without the flag, since the stream has no auth and no TLS. Prefer a tunnel; see [[data-socket-exposure]] |
 
@@ -809,9 +809,9 @@ above, demonstrates the connect / read / parse / filter / reconnect
 loop, and is the first thing to run when validating a deployment:
 
 ```sh
-python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock
+python3 examples/consumer/sloth-stream.py unix:/run/sloth/sloth.sock
 python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
-python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --raw | jq .
+python3 examples/consumer/sloth-stream.py unix:/run/sloth/sloth.sock --raw | jq .
 ```
 
 The script is the worked example for porting a consumer to any other

@@ -45,7 +45,7 @@ durability; this one gives you low-latency triage.
 ## Splunk HEC
 
 ```sh
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink hec \
     --hec-url   https://splunk.example.com:8088/services/collector \
     --hec-token aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
@@ -78,13 +78,13 @@ batch is POSTed as one body of newline-delimited envelopes:
 
 ```sh
 # UDP (default, classic syslog port)
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink syslog \
     --syslog-host siem.example.com \
     --syslog-port 514
 
 # TCP — newline-delimited framing (non-TLS)
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink syslog --syslog-proto tcp \
     --syslog-host siem.example.com --syslog-port 6514
 ```
@@ -113,14 +113,14 @@ via `--syslog-hostname` so the collector can distinguish them.
 
 ```sh
 # Time-rolled index (one per UTC day), API key auth
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink elastic \
     --es-url       https://elastic.example.com:9200 \
     --es-index     'sloth-events-%Y.%m.%d' \
     --es-api-key-env SLOTH_ES_API_KEY
 
 # Basic auth, single fixed index
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink elastic \
     --es-url      https://elastic.example.com:9200 \
     --es-index    sloth-events \
@@ -177,7 +177,7 @@ endpoint. Auth options (`--es-username` / `--es-password(-env)` /
 ## Grafana Loki
 
 ```sh
-sloth-forward.py unix:/run/sloth.sock \
+sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink loki \
     --loki-url http://loki.example.com:3100 \
     --loki-job sloth \
@@ -201,7 +201,7 @@ local Loki + Grafana with this sink pre-wired.
 ## Datadog Logs
 
 ```sh
-sloth-forward.py unix:/run/sloth.sock \
+sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink datadog \
     --dd-api-key-env DD_API_KEY \
     --dd-tags env:prod,region:us-east
@@ -230,7 +230,7 @@ into Logs facets you can filter on.
 ## Generic webhook
 
 ```sh
-sloth-forward.py unix:/run/sloth.sock \
+sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink webhook \
     --webhook-url https://collector.example.com/ingest \
     --webhook-header "Authorization: Bearer $TOKEN" \
@@ -259,7 +259,7 @@ so one outage doesn't drop the batch on the others.
 ```sh
 # Loki for the iOS dashboard, Datadog for the security team —
 # both fed from the same source connection.
-sloth-forward.py unix:/run/sloth.sock \
+sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink loki,datadog \
     --loki-url    http://loki.internal:3100 \
     --loki-job    sloth \
@@ -285,16 +285,16 @@ count.
 
 ```sh
 # Forward only alerts
-python3 sloth-forward.py unix:/run/sloth.sock --type alert \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock --type alert \
     --sink hec --hec-url ... --hec-token ...
 
 # Larger batches for high-volume deployments (HEC payload limit ~1MB)
-python3 sloth-forward.py unix:/run/sloth.sock \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock \
     --batch-size 500 --batch-ms 500 \
     --sink hec --hec-url ... --hec-token ...
 
 # Restrict to traffic from a single source IP for targeted forwarding
-python3 sloth-forward.py unix:/run/sloth.sock --src 10.0.0.5 \
+python3 sloth-forward.py unix:/run/sloth/sloth.sock --src 10.0.0.5 \
     --sink syslog --syslog-host ... --syslog-port 514
 ```
 
@@ -324,7 +324,7 @@ Example systemd unit:
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/python3 /opt/sloth/examples/forwarder/sloth-forward.py \
-    unix:/var/run/sloth.sock \
+    unix:/run/sloth/sloth.sock \
     --sink hec \
     --hec-url https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN

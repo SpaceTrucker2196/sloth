@@ -145,7 +145,7 @@ Sloth has exactly **two** behaviours that are not pure observation, and both are
 
 - **`sloth`** (no flag) — strict. The reverse-DNS resolver worker is never started, so sloth cannot emit a PTR query even by accident. No `TRIGGER_SCAN` request is built either — not built and dropped, *not built*, which is what [`tests/test_wifi_scan_trigger.c`](tests/test_wifi_scan_trigger.c) asserts by counting requests at the message builder rather than at the socket. Hostnames still appear: they come from traffic sloth already watched go past (DNS answers, mDNS, NBNS, DHCP and TLS SNI), which is what [MISSION.md §2](MISSION.md) means by *never resolves hosts it didn't already see*. The WiFi view still lists APs — it reads whatever the kernel already had cached, it just stops asking the kernel to go and look.
 - **`sloth --allow-active`** — opt in to both rows of that table. On a cache miss sloth may send a PTR query for an address it observed, and it may ask the kernel to scan. The scan request carries no `NL80211_ATTR_SCAN_SSIDS`, so Linux runs it as a *passive* scan and no probe request is transmitted; what it changes is kernel state on your own radio, not the monitored segment. It prints **one line on stderr** naming exactly what it turned on; a passive tool that quietly becomes active is the failure this exists to prevent, so the opt-in is never silent. Note the per-packet lookup in the UDP/443 QUIC decoder is **not** restored by this flag — that path stays passive unconditionally, because it runs on the capture thread where no operator toggle can reach it.
-- **`sloth --strict`** — changes nothing by itself against the default, and that is mostly the point. It *locks* strict observation for the run, so any later attempt to enable active behaviour is refused rather than honoured; `--strict --allow-active` exits non-zero (in either order) instead of quietly picking a winner. It does add one thing: it suppresses the mDNS advertisement (see `--no-discovery`). That is not the last path to the network: `--strict` does **not** refuse an opted-in routable data socket (`--data-socket tcp:<routable>:PORT --data-socket-allow-remote`), which is still a listener that transmits to whoever connects, and it does not refuse `--hop` (see [WiFi SIGINT usage](#wifi-sigint-usage)). Pass it when you want the operator's intent visible in `ps` and in an audit log — in a deployment somebody has to attest to, that is worth more than it costs.
+- **`sloth --strict`** — changes nothing by itself against the default, and that is mostly the point. It *locks* strict observation for the run, so any later attempt to enable active behaviour is refused rather than honoured; `--strict --allow-active` exits non-zero (in either order) instead of quietly picking a winner. It does add one thing: it suppresses the mDNS advertisement (see `--no-discovery`). Since 2026-10-06 it also **refuses a routable `--data-socket`**, exit 2, even with `--data-socket-allow-remote`: a routable listener transmits to whoever connects, and a lock another flag can override is not a lock. The loopback default (`tcp:127.0.0.1:8765`) and a `unix:` path keep working, because neither leaves the host. It still does not refuse `--hop` (see [WiFi SIGINT usage](#wifi-sigint-usage)). Pass it when you want the operator's intent visible in `ps` and in an audit log — in a deployment somebody has to attest to, that is worth more than it costs.
 
 The in-TUI `[n]` names/numeric toggle now gates resolution as well as display: with names off, the Top Hosts panel reads the cache and never resolves. Both gates compose — the toggle says whether you want names, the profile says whether sloth may go and get them.
 
@@ -409,16 +409,16 @@ format → reconnect`); the same shape ports directly to Go
 
 ```sh
 # Tail every record sloth emits, with ANSI colour
-python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock
+python3 examples/consumer/sloth-stream.py unix:/run/sloth/sloth.sock
 
 # Only alerts, from any source
 python3 examples/consumer/sloth-stream.py tcp:127.0.0.1:8765 --type alert
 
 # Raw JSON pass-through into jq
-python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --raw | jq .
+python3 examples/consumer/sloth-stream.py unix:/run/sloth/sloth.sock --raw | jq .
 
 # 5-second rolling tally by record type
-python3 examples/consumer/sloth-stream.py unix:/run/sloth.sock --count
+python3 examples/consumer/sloth-stream.py unix:/run/sloth/sloth.sock --count
 ```
 
 ### Reference SIEM forwarder
@@ -435,17 +435,17 @@ SIEM. Three sinks ship:
 
 ```sh
 # Splunk HEC
-python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink hec \
     --hec-url       https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN
 
 # RFC 5424 syslog (UDP)
-python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink syslog --syslog-host siem.example.com --syslog-port 514
 
 # Elasticsearch with daily-rolled indices
-python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink elastic \
     --es-url       https://elastic.example.com:9200 \
     --es-index     'sloth-events-%Y.%m.%d' \

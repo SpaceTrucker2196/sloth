@@ -121,7 +121,7 @@ the sensor side first.
   deployment — real, but owned by a component built for it. Put the
   expiry in whatever reminds you about expiries.
 - **Prefer the UNIX socket where you can.** If the consumer is on the
-  sensor itself, `--data-socket unix:/run/sloth.sock` needs none of
+  sensor itself, `--data-socket unix:/run/sloth/sloth.sock` needs none of
   this: 0600 plus the kernel's peer check is stronger than any of it,
   with nothing to rotate.
 - **Not a sloth component.** These files are templates for an external

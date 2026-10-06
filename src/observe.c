@@ -53,3 +53,7 @@ void observe_reset_policy(void) {
     g_strict_locked  = 0;
     pthread_mutex_unlock(&g_mu);
 }
+
+int observe_strict_refuses_socket(int strict_locked, int spec_is_remote) {
+    return strict_locked && spec_is_remote == 1;
+}

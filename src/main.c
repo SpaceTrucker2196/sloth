@@ -1108,6 +1108,40 @@ int main(int argc, char **argv) {
         observe_lock_strict();       /* scan trigger + discovery (slice 3) */
         dns_resolver_lock_strict();  /* resolver                (slice 2) */
     }
+
+    /* #84, owner ruling 2026-10-06: --strict refuses a ROUTABLE data
+     * socket, and only a routable one. The loopback default
+     * (tcp:127.0.0.1:8765) keeps working, because refusing it would make
+     * bare `--strict --data-socket` a startup error and README has
+     * published that pairing as usable.
+     *
+     * The lock beats the opt-in deliberately: --data-socket-allow-remote
+     * is how an operator says "expose this to the LAN", and --strict is
+     * how they say "not on this run". A lock that any other flag can
+     * override is not a lock, and `--strict` exists so the intent is
+     * visible in ps(1) and an audit log.
+     *
+     * Refused before any sink opens, so a refused run binds nothing —
+     * the same ordering #85 established for scope.
+     *
+     * Gated on == 1 (definitely routable) rather than != 0: a malformed
+     * spec is unparseable, never binds, and data_socket_init_ex()
+     * rejects it with a message about the actual typo. Reporting a
+     * strict violation for a mistyped host would be precise about the
+     * wrong thing. */
+    if (data_socket &&
+        observe_strict_refuses_socket(strict_lock,
+                                      data_socket_spec_is_remote(data_socket))) {
+        fprintf(stderr,
+                "sloth: --strict refuses a routable --data-socket (%s).\n"
+                "       A routable listener transmits to whoever connects, "
+                "which is what\n"
+                "       --strict declines for this run. Bind loopback "
+                "(tcp:127.0.0.1:PORT)\n"
+                "       or a unix: path, or drop --strict.\n",
+                data_socket);
+        return 2;
+    }
     if (allow_active) {
         observe_set_active_allowed(1);
         dns_resolver_set_enabled(1);

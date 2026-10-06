@@ -27,16 +27,16 @@ low-latency triage.
 USAGE
 
   # Splunk HEC
-  sloth-forward unix:/run/sloth.sock \\
+  sloth-forward unix:/run/sloth/sloth.sock \\
       --sink hec --hec-url https://splunk.example.com:8088/services/collector \\
       --hec-token aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 
   # Syslog (UDP, RFC 5424)
-  sloth-forward unix:/run/sloth.sock \\
+  sloth-forward unix:/run/sloth/sloth.sock \\
       --sink syslog --syslog-host siem.example.com --syslog-port 514
 
   # Elasticsearch Bulk API, time-rolled index
-  sloth-forward unix:/run/sloth.sock \\
+  sloth-forward unix:/run/sloth/sloth.sock \\
       --sink elastic \\
       --es-url   https://elastic.example.com:9200 \\
       --es-index 'sloth-events-%Y.%m.%d' \\

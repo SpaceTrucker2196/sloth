@@ -54,6 +54,30 @@ int  observe_active_allowed(void);
  * host's presence on the wire even though sloth transmits nothing. */
 int  observe_discovery_allowed(void);
 
+/* Does --strict refuse this data socket? (#84, owner ruling 2026-10-06)
+ *
+ * A routable listener transmits to whoever connects, which is what
+ * --strict declines for the run; a loopback or unix: socket does not
+ * leave the host, and README has long published bare
+ * `--strict --data-socket` (loopback default) as usable, so refusing
+ * that would break a documented pairing.
+ *
+ * spec_is_remote is data_socket_spec_is_remote()'s answer: 1 routable,
+ * 0 loopback/unix, -1 unparseable. Taken as an int rather than parsed
+ * here so this stays a pure policy predicate with no dependency on the
+ * socket module — which is also what makes it testable without linking
+ * main().
+ *
+ * Refuses only on 1. A -1 spec never binds and
+ * data_socket_init_ex() rejects it with a message about the actual
+ * typo; reporting a strict violation for a mistyped host would be
+ * precise about the wrong thing.
+ *
+ * The lock beats --data-socket-allow-remote deliberately: that flag is
+ * how an operator says "expose this", --strict is how they say "not on
+ * this run", and a lock any other flag can override is not a lock. */
+int  observe_strict_refuses_socket(int strict_locked, int spec_is_remote);
+
 /* Restore the shipped default and clear the lock (for testing). */
 void observe_reset_policy(void);
 

@@ -18,7 +18,7 @@ Reachability *is* the access control. So:
 
 | Deployment | Who can read the stream | Verdict |
 |---|---|---|
-| `unix:/run/sloth.sock` (0600) | only uid 0 and the socket's owner | **recommended** |
+| `unix:/run/sloth/sloth.sock` (0600) | only uid 0 and the socket's owner | **recommended** |
 | `tcp:127.0.0.1:8765` (the default) | any local user on the host | fine on a single-purpose sensor |
 | `tcp:<routable>:8765` | anyone who can reach the port | needs `--data-socket-allow-remote`, and you should not |
 
@@ -56,7 +56,7 @@ is why the default refuses to publish it.
 ## 3. The recommended deployment: `unix:` mode
 
 ```sh
-sloth --headless --data-socket unix:/run/sloth.sock
+sloth --headless --data-socket unix:/run/sloth/sloth.sock
 ```
 
 The socket file is created **0600, owned by the uid sloth runs as**.
@@ -114,7 +114,7 @@ $ sloth --data-socket tcp:192.168.1.50:8765
 data-socket: refusing to bind 192.168.1.50:8765 — not a loopback address.
   The JSONL stream is unauthenticated and unencrypted: anyone who
   can reach that port reads every observation sloth makes.
-  Keep it local (--data-socket unix:/run/sloth.sock, or the default
+  Keep it local (--data-socket unix:/run/sloth/sloth.sock, or the default
   tcp:127.0.0.1:8765) and forward it yourself:
       ssh -L 8765:127.0.0.1:8765 user@this-host
   To expose it anyway, add --data-socket-allow-remote.
@@ -142,13 +142,72 @@ inherited from a default.
 > entirely with `--no-discovery` — or with `--strict`, which refuses it
 > for the whole run (#84).
 >
-> `--strict` does **not** refuse the routable bind itself. `--strict
-> --data-socket tcp:<routable>:PORT --data-socket-allow-remote` still
-> opens a listener that transmits every observation to whoever connects;
-> only the advertisement is suppressed. Under `--strict` an opted-in
-> routable data socket is therefore a remaining path by which a sloth run
-> puts the host on the network. Whether `--strict` should refuse it too
-> is an open owner decision (#84).
+## Where the socket lives, and who may read it
+
+**`/run/sloth/sloth.sock`, created by `RuntimeDirectory=`** (owner
+decision, 2026-10-06). The path matters more than it looks:
+
+- **Not `/tmp`.** A world-traversable, sticky-bit directory is the wrong
+  home for a daemon socket, and it invites the symlink races
+  `secure_file.c` already has to defend against elsewhere.
+- **Not `/run/sloth.sock` either**, even though that reads cleaner.
+  `/run` is root-owned, so a sloth running as a dedicated unprivileged
+  uid — which is the posture worth recommending — cannot create a node
+  there. A bare `/run` path and an unprivileged uid are two
+  recommendations that contradict each other, which is why this section
+  names one path and one mechanism.
+- **`RuntimeDirectory=sloth`** makes systemd create `/run/sloth/` owned
+  by the unit's `User=` before `ExecStart`, and remove it on stop. That
+  is what lets an unprivileged sloth bind inside it:
+
+```ini
+[Service]
+User=sloth
+Group=sloth
+RuntimeDirectory=sloth
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/sloth --data-socket unix:/run/sloth/sloth.sock -o /var/log/sloth/sloth.jsonl
+```
+
+### Who can read it
+
+sloth creates the socket `0600`, owned by its own euid. So a consumer
+running as a **different** user gets `EACCES` from the kernel at
+`connect()`, before any sloth code runs. Three ways out, in the order
+worth preferring:
+
+1. **Run the consumer as the same user** (`sudo -u sloth …`). Nothing to
+   configure, nothing widened.
+2. **Share by directory group**, not by socket mode.
+   `RuntimeDirectoryMode=0750` with `Group=sloth` lets anyone in that
+   group traverse `/run/sloth/` — then the `0600` socket still only
+   admits its owner, so this alone is not enough; pair it with (1).
+3. **Widen the socket by hand** (`chgrp`/`chmod g+rw` after start). Note
+   what sloth does and does not check: `unix_path_removable()` inspects
+   the node's **type and owner** at startup and never its **mode**, and
+   it runs *before* the bind — so a widened mode is not rejected,
+   because by then sloth has stopped looking. That is a deliberate
+   ceiling on what sloth can promise, not an invitation; the operator
+   who widens it owns the consequence.
+
+A `root` reader is the usual exception, and the mechanism is
+`CAP_DAC_OVERRIDE` rather than uid 0 as such — a root process in a unit
+or container that dropped that capability is refused like anyone else.
+
+> **Settled 2026-10-06 (#84): `--strict` refuses a routable bind.**
+> `--strict --data-socket tcp:<routable>:PORT` exits 2, and
+> `--data-socket-allow-remote` does not change that — the opt-in is how
+> an operator says "expose this", `--strict` is how they say "not on
+> this run", and a lock any other flag can override is not a lock. The
+> refusal happens before any sink opens, so a refused run binds nothing.
+>
+> A loopback bind (`tcp:127.0.0.1:PORT`) and a `unix:` path are
+> unaffected: neither leaves the host, and bare `--strict --data-socket`
+> is a documented pairing. An unparseable spec is left to the binder,
+> which names the actual typo rather than blaming `--strict`.
+>
+> So under `--strict` the remaining paths by which a run touches the
+> network are the ones MISSION.md §2 accounts for, not this one.
 
 ---
 
@@ -219,7 +278,7 @@ client and pushes outbound** to a collector. It inverts the direction:
 nothing listens remotely on the sensor at all.
 
 ```sh
-python3 examples/forwarder/sloth-forward.py unix:/run/sloth.sock \
+python3 examples/forwarder/sloth-forward.py unix:/run/sloth/sloth.sock \
     --sink hec \
     --hec-url https://splunk.example.com:8088/services/collector \
     --hec-token-env SLOTH_HEC_TOKEN
