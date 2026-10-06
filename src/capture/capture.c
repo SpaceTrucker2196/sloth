@@ -445,6 +445,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include "ntp_log.h"
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
+#include "onvif_discovery.h"
 #include "http_snoop.h"
 #include "ftp_snoop.h"
 #include "pop3_snoop.h"
@@ -791,6 +792,10 @@ static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
         } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
             if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else if ((pkt->src_port == 3702 || pkt->dst_port == 3702) && tlen > 8) {
+            if (!onvif_ws_discovery_snoop(pkt->src, tp + 8, tlen - 8,
+                                          pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "WSD");
         } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
             ntp_log_entry_t ne;
             if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {
@@ -916,6 +921,10 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
         } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
             if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
                 snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+        } else if ((pkt->src_port == 3702 || pkt->dst_port == 3702) && tlen > 8) {
+            if (!onvif_ws_discovery_snoop(pkt->src, tp + 8, tlen - 8,
+                                          pkt->info, sizeof(pkt->info)))
+                snprintf(pkt->info, sizeof(pkt->info), "WSD");
         } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
             ntp_log_entry_t ne;
             if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {

@@ -1896,3 +1896,29 @@ and an out-of-range value without moving anything. Verified by mutation:
 making `tune_set_id()` accept without recording turns all five red, plus
 `test_wps_pbc_threshold_is_configurable` from the original slice — so the
 reroute is load-bearing for the earlier coverage too.
+
+## 2026-10-06 — `CAM_WS_DISCOVERY`: ONVIF cameras over WS-Discovery (#106 slice 1)
+
+New passive parser `src/onvif_discovery.c` reads UDP/3702 (multicast
+239.255.255.250 / ff02::c) — the OASIS WS-Discovery 1.1 multicast
+protocol an ONVIF camera uses to announce itself (Hello on join, Bye on
+leave, ProbeMatches/ResolveMatches answering a Probe/Resolve sloth
+merely overheard). Nothing here is transmitted by sloth: every field
+read (`EndpointReference`, `Types`, `Scopes`, `XAddrs`) was already put
+on the wire, unauthenticated, by the device itself.
+
+New `ALERT_TYPE_CAM_WS_DISCOVERY` (WARN, alert count 65 → 66), fired
+once per distinct camera (`Types` naming a `NetworkVideoTransmitter`),
+keyed by its `EndpointReference` UUID so a DHCP lease change doesn't
+split one camera into two alerts. `alert_technique()` returns `""` —
+same reasoning as `ALERT_TYPE_OPEN_SETUP_AP` (#80): this is the
+camera's own exposure, not an adversary enumerating it, so ATT&CK T1046
+(Network Service Discovery) would claim an active step sloth did not
+take. Cited in `research/papers/ws-discovery-onvif.md`.
+
+This is slice 1 of #106 — the signal picked first because it needs no
+watchlist, no OUI table and no owner decision: the ONVIF scope grammar
+is fully specified, so the frames are hand-buildable without a capture.
+The remaining signals (mDNS/SSDP camera service types, default-credential
+RTSP/HTTP, setup-mode SoftAP) are later slices on the same issue, gated
+on open questions recorded there.

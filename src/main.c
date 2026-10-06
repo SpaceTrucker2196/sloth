@@ -77,6 +77,7 @@
 #include "snmp_snoop.h"
 #include "mqtt_snoop.h"
 #include "ssdp_snoop.h"
+#include "onvif_discovery.h"
 #include "event_wake.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
@@ -269,6 +270,7 @@ static void poll_data(sloth_state_t *s) {
     snmp_snoop_snapshot(s);
     mqtt_snoop_snapshot(s);
     ssdp_snapshot(s);
+    onvif_snapshot(s);
     beacon_snapshot(s);
     deauth_snapshot(s);
     http_log_snapshot(s);

@@ -214,6 +214,24 @@ typedef struct {
     time_t last_seen;
 } ssdp_device_t;
 
+/* ── WS-Discovery / ONVIF devices (#106 slice 1) ──────────
+ * Passive observation of UDP/3702 multicast discovery traffic.
+ * sloth sends nothing here: it only reads the Hello / Bye /
+ * ProbeMatches / ResolveMatches a device already broadcasts to
+ * announce itself (OASIS WS-Discovery 1.1, 2009-07-01). */
+#define MAX_ONVIF_DEVICES 32
+
+typedef struct {
+    char   ip[46];         /* source IP of the announcing device    */
+    char   uuid[48];       /* EndpointReference, "urn:uuid:..." or ""*/
+    char   types[96];      /* d:Types content, e.g. "dn:NetworkVideoTransmitter" */
+    char   scopes[192];    /* d:Scopes content, space-separated onvif:// URIs */
+    char   xaddrs[160];    /* d:XAddrs content, device service URL  */
+    char   kind[16];       /* "Hello", "Bye", "ProbeMatch", "ResolveMatch" */
+    int    is_camera;      /* 1 if Types names a NetworkVideoTransmitter */
+    time_t last_seen;
+} onvif_device_t;
+
 /* ── Live DHCP snoop events ─────────────────────────────── */
 #define MAX_DHCP_EVENTS 128
 
@@ -769,6 +787,7 @@ typedef enum {
     ALERT_TYPE_WPS_LOCKOUT_CYCLING, /* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
     ALERT_TYPE_WPS_PBC_RACE,        /* concurrent PBC enrollees inside the 120 s walk time (#82) */
     ALERT_TYPE_MLE_INVALID_LINK_ID, /* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
+    ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -2649,6 +2668,10 @@ typedef struct {
     ssdp_device_t  ssdp_devices[MAX_SSDP_DEVICES];
     int            ssdp_count;
     int            ssdp_sel;
+
+    /* ── WS-Discovery / ONVIF devices (#106) ──────────────── */
+    onvif_device_t onvif_devices[MAX_ONVIF_DEVICES];
+    int            onvif_count;
 
     /* ── Session stats baseline ─────────────────────────── */
     time_t   stats_start;                    /* time of last reset */

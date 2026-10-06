@@ -524,6 +524,17 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_WPS_PBC_RACE:           return "T1557";       /* racing the walk window to become a registrar */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
+    /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
+     * (#80): what fires here is a third party's camera announcing its
+     * own presence over an unauthenticated multicast protocol — an
+     * exposure, not an adversary's behaviour. ATT&CK T1046 (Network
+     * Service Discovery) describes an attacker *enumerating* services;
+     * sloth did not enumerate anything, it heard the device volunteer
+     * the information unprompted. The basis is cited — OASIS
+     * WS-Discovery 1.1 and the ONVIF Core Specification, see
+     * research/papers/ws-discovery-onvif.md — it is simply not an
+     * ATT&CK technique. */
+    case ALERT_TYPE_CAM_WS_DISCOVERY:       return "";            /* exposure, not adversary technique (#106) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -574,6 +585,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_WPS_PIN_BRUTE);       N(ALERT_TYPE_WPS_LOCKOUT_CYCLING);
     N(ALERT_TYPE_WPS_PBC_RACE);
     N(ALERT_TYPE_MLE_INVALID_LINK_ID);
+    N(ALERT_TYPE_CAM_WS_DISCOVERY);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -2920,6 +2932,40 @@ static void rule_open_setup_ap(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── CAM_WS_DISCOVERY (#106 slice 1) ────────────────────────
+ *
+ * An ONVIF Network Video Transmitter — an IP camera — announces its
+ * own presence over WS-Discovery multicast with no authentication:
+ * anyone on the segment can enumerate every such camera without
+ * sending a single probe of their own. sloth sends nothing either;
+ * src/onvif_discovery.c only reads what the camera already
+ * broadcast or answered to a Probe sloth happened to overhear.
+ * Basis: OASIS WS-Discovery 1.1 (2009-07-01) + ONVIF Core
+ * Specification, discovery — see
+ * research/papers/ws-discovery-onvif.md. */
+static void rule_cam_ws_discovery(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->onvif_count; i++) {
+        const onvif_device_t *d = &s->onvif_devices[i];
+        if (!d->is_camera) continue;
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        /* Keyed by UUID when the device gave one (stable across a DHCP
+         * lease change), falling back to IP otherwise — same fallback
+         * ssdp_snoop.c's table uses for a message with no USN. */
+        snprintf(key, sizeof(key), "cam-wsd:%s",
+                 d->uuid[0] ? d->uuid : d->ip);
+        snprintf(detail, sizeof(detail),
+                 "ONVIF camera at %s announced itself over WS-Discovery"
+                 " (%s)%s%s",
+                 d->ip, d->kind,
+                 d->xaddrs[0] ? ", service " : "",
+                 d->xaddrs[0] ? d->xaddrs    : "");
+        fire(ALERT_TYPE_CAM_WS_DISCOVERY, ALERT_SEV_WARN,
+             "CAM_WS_DISCOVERY", detail, key, d->ip, 0, now);
+    }
+}
+
 /* ── WPS attack rules (#82 wave 8) ─────────────────────────
  *
  * Waves 6 and 7 shipped the measurement and deliberately stopped
@@ -4338,6 +4384,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
     rule_open_setup_ap(s, now);
+    rule_cam_ws_discovery(s, now);
     rule_wps_pin_brute(s, now);
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);

@@ -1340,6 +1340,26 @@ void jsonl_emit_ssdp_devices(const sloth_state_t *s) {
     }
 }
 
+void jsonl_emit_onvif_devices(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = time(NULL);
+    for (int i = 0; i < s->onvif_count; i++) {
+        const onvif_device_t *e = &s->onvif_devices[i];
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "onvif_device", now);
+        kv_str(buf, LINEBUF, &off, "ip",        e->ip);
+        kv_str(buf, LINEBUF, &off, "uuid",      e->uuid);
+        kv_str(buf, LINEBUF, &off, "types",     e->types);
+        kv_str(buf, LINEBUF, &off, "scopes",    e->scopes);
+        kv_str(buf, LINEBUF, &off, "xaddrs",    e->xaddrs);
+        kv_str(buf, LINEBUF, &off, "kind",      e->kind);
+        kv_int(buf, LINEBUF, &off, "is_camera", e->is_camera);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)e->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_scan_entries(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = time(NULL);
@@ -1894,6 +1914,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_mdns_services     (s);
     jsonl_emit_nbns_names        (s);
     jsonl_emit_ssdp_devices      (s);
+    jsonl_emit_onvif_devices     (s);
     jsonl_emit_scan_entries      (s);
     jsonl_emit_packets           (s);
     jsonl_emit_processes         (s);

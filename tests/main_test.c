@@ -36,6 +36,7 @@ void run_nbns_snoop_tests(void);
 void run_dhcp_snoop_tests(void);
 void run_quic_snoop_tests(void);
 void run_ssdp_snoop_tests(void);
+void run_onvif_discovery_tests(void);
 void run_beacon_snoop_tests(void);
 void run_reg_ie_tests(void);
 void run_deauth_snoop_tests(void);
@@ -168,6 +169,7 @@ int main(void) {
     run_dhcp_snoop_tests();
     run_quic_snoop_tests();
     run_ssdp_snoop_tests();
+    run_onvif_discovery_tests();
     run_beacon_snoop_tests();
     run_reg_ie_tests();
     run_deauth_snoop_tests();

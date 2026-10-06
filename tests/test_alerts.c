@@ -6442,6 +6442,88 @@ static void test_open_setup_ap_fires_once_per_bssid(void) {
     ASSERT_EQ(seen, 1);
 }
 
+/* ── ONVIF camera via WS-Discovery (#106 slice 1) ─────────
+ *
+ * The onvif_discovery.c parser has its own hand-built-frame tests in
+ * tests/test_onvif_discovery.c. Here the state the parser would have
+ * produced is seeded directly onto sloth_state_t, same as every other
+ * rule's end-to-end test in this file. */
+
+static onvif_device_t *add_onvif(sloth_state_t *s, const char *ip,
+                                 const char *uuid, int is_camera) {
+    onvif_device_t *e = &s->onvif_devices[s->onvif_count++];
+    snprintf(e->ip,   sizeof(e->ip),   "%s", ip);
+    snprintf(e->uuid, sizeof(e->uuid), "%s", uuid);
+    snprintf(e->kind, sizeof(e->kind), "Hello");
+    e->is_camera = is_camera;
+    e->last_seen = time(NULL);
+    return e;
+}
+
+static void test_cam_ws_discovery_fires_on_camera(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_onvif(&s, "192.168.1.50", "urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77", 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_CAM_WS_DISCOVERY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "192.168.1.50") != NULL);
+        ASSERT(strcmp(s.alerts[i].key,
+               "cam-wsd:urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77") == 0);
+        /* Exposure, not adversary behaviour — see alert_technique(). */
+        ASSERT_EQ((int)s.alerts[i].technique[0], 0);
+    }
+}
+
+static void test_cam_ws_discovery_quiet_on_non_camera(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_onvif(&s, "192.168.1.60", "urn:uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 0);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_CAM_WS_DISCOVERY), -1);
+}
+
+static void test_cam_ws_discovery_keys_by_ip_without_uuid(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_onvif(&s, "10.0.0.5", "", 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_CAM_WS_DISCOVERY);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strcmp(s.alerts[i].key, "cam-wsd:10.0.0.5") == 0);
+}
+
+static void test_cam_ws_discovery_fires_once_per_device(void) {
+    /* Stable dedup key across polls: a camera still on the network is
+     * one alert with a rising count, not one per poll. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_onvif(&s, "192.168.1.50", "urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77", 1);
+    alerts_update(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_CAM_WS_DISCOVERY);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, 2);
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_CAM_WS_DISCOVERY) seen++;
+    ASSERT_EQ(seen, 1);
+}
+
+static void test_cam_ws_discovery_two_cameras_two_alerts(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_onvif(&s, "192.168.1.50", "urn:uuid:4509a7c0-3b13-11e6-ac61-9e71128cae77", 1);
+    add_onvif(&s, "192.168.1.51", "urn:uuid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 1);
+    alerts_update(&s);
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_CAM_WS_DISCOVERY) seen++;
+    ASSERT_EQ(seen, 2);
+}
+
 /* ── WPS threshold rules (#82 wave 8) ─────────────────────
  *
  * Seeded state, no pcap fixtures (agents/AGENTS.md). Two of the three
@@ -7742,6 +7824,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_open_setup_ap_quiet_on_empty_ssid);
     RUN_TEST(test_open_setup_ap_quiet_on_ordinary_open_ssid);
     RUN_TEST(test_open_setup_ap_fires_once_per_bssid);
+    RUN_TEST(test_cam_ws_discovery_fires_on_camera);
+    RUN_TEST(test_cam_ws_discovery_quiet_on_non_camera);
+    RUN_TEST(test_cam_ws_discovery_keys_by_ip_without_uuid);
+    RUN_TEST(test_cam_ws_discovery_fires_once_per_device);
+    RUN_TEST(test_cam_ws_discovery_two_cameras_two_alerts);
 
     TEST_SUITE("alerts: WPS PIN brute force (#82 wave 8)");
     RUN_TEST(test_wps_pin_brute_fires_at_threshold);

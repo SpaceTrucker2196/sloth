@@ -86,6 +86,7 @@ void jsonl_emit_eapol_events  (const sloth_state_t *s);
 void jsonl_emit_mdns_services (const sloth_state_t *s);
 void jsonl_emit_nbns_names    (const sloth_state_t *s);
 void jsonl_emit_ssdp_devices  (const sloth_state_t *s);
+void jsonl_emit_onvif_devices (const sloth_state_t *s);
 void jsonl_emit_scan_entries  (const sloth_state_t *s);
 void jsonl_emit_packets       (sloth_state_t *s);
 void jsonl_emit_processes     (const sloth_state_t *s);
