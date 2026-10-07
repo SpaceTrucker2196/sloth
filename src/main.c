@@ -113,6 +113,9 @@
 #include "observe.h"
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
+#ifdef WITH_PCAP
+#  include "evidence_ring.h"   /* raw 802.11 evidence ring (#92) */
+#endif
 #include "capture/capture.h"   /* likewise — and #57's scope check needs it
                                   in the no-pcap build too */
 
@@ -1309,6 +1312,26 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: device correlation OFF (--no-correlate)\n");
 
 #ifdef WITH_PCAP
+    /* Raw 802.11 evidence ring (#92), allocated before the monitor
+     * worker exists so no frame can arrive to an uninitialised ring.
+     *
+     * Only with a monitor radio present: nothing but on_probe_frame()
+     * feeds the ring, so on a run with no radiotap interface the arena
+     * would be up to 32 MiB of permanently empty memory.
+     *
+     * Zero-config, per the owner's 2026-09-30 ruling: ~1 % of MemTotal
+     * clamped to [2 MiB, 32 MiB], no flag. An unreadable /proc/meminfo
+     * — including every non-Linux build, where the path simply does not
+     * exist — yields the floor rather than nothing. A failed allocation
+     * is reported and the run continues: the ring is supporting
+     * evidence, and losing it must not cost the operator detection. */
+    if (g_state.probe_iface[0]) {
+        size_t ev_budget = evidence_budget_from_meminfo("/proc/meminfo");
+        if (evidence_ring_init(ev_budget) != 0)
+            fprintf(stderr, "sloth: evidence ring unavailable (%zu bytes "
+                            "refused); 802.11 alerts will carry no frames\n",
+                    ev_budget);
+    }
     /* #85: both workers start here, after the scope policy was sealed
      * and every sink is open; nothing above this point can have decoded
      * a packet. */
@@ -1377,6 +1400,9 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();
+    /* After probe_stop() joins the monitor thread — the only writer — so
+     * the arena cannot be freed from under a frame in flight. */
+    evidence_ring_shutdown();
 #endif
 
     /* Posture reports (roadmap #16 phase 5): rollup of alerts by

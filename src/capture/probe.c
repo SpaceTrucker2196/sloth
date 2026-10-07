@@ -11,6 +11,7 @@
 #include "sloth.h"
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_classify_exit / stats accounting (#91) */
+#include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -304,6 +305,29 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                      dot11_len >= 16 ? dot11 + 10 : NULL,
                      (uint16_t)dot11_len, signal, fts);
 
+    /* Retain the whole frame for evidence (#92). `data`, not `dot11`:
+     * the radiotap header is part of the record — it carries the
+     * frequency, the FCS verdict and the signal an analyst needs to
+     * judge the frame, and the general packet ring's min(caplen, 64)
+     * often holds little else.
+     *
+     * Placed with mon_frame_record() and therefore BEHIND the framing
+     * guards above, not in front of them. A frame too short to parse
+     * cannot be cited by any alert, and admitting runts would let an
+     * attacker flush the whole evidence ring with 10-byte garbage —
+     * cheap for them, and it would evict the frames that actually
+     * triggered something.
+     *
+     * The return value (the event ID) is dropped here: nothing records
+     * IDs on an alert yet. Wiring the alert engine and the exporter to
+     * these IDs is the next #92 slice; this one builds the store and
+     * its retrieval path. */
+    (void)evidence_ring_note(data, (uint32_t)hdr->caplen, (uint32_t)hdr->len,
+                             fts, (long)hdr->ts.tv_usec,
+                             (uint16_t)(rt.freq_mhz > 0 && rt.freq_mhz <= 0xFFFF
+                                        ? rt.freq_mhz : 0),
+                             signal);
+
     if (type == 1) {
         /* Control frames (#64). Dispatched *above* the 24-byte guard
          * below: a CTS or ACK is 14 bytes and an RTS is 20, so every
@@ -573,6 +597,12 @@ void probe_health_poll(capture_health_t *h) {
  * timestamps could not be used to pin the fix. This slice does NOT fix
  * that split — it builds the thing needed to test any fix for it.
  *
+ * orig_lens is a parameter for the same reason one slice later: the
+ * evidence ring records caplen and len separately, so a seam that could
+ * only produce len == caplen could not tell a callback reading hdr->len
+ * from one reading hdr->caplen. capture_test_savefile() already took
+ * the array; only this wrapper was passing NULL.
+ *
  * DLT is fixed to DLT_IEEE802_11_RADIO because that is the only link
  * type probe_open() accepts.
  *
@@ -582,11 +612,12 @@ void probe_health_poll(capture_health_t *h) {
  * the savefile could not be opened. */
 int probe_test_dispatch(sloth_state_t *s,
                         const uint8_t *const *frames, const int *lens,
+                        const int *orig_lens,
                         const uint32_t *ts_secs, int n) {
     if (!s) return -1;
     size_t total = 0;
     uint8_t *img = capture_test_savefile(DLT_IEEE802_11_RADIO, frames, lens,
-                                         NULL, ts_secs, n, &total);
+                                         orig_lens, ts_secs, n, &total);
     if (!img) return -1;
 
     FILE *fp = fmemopen(img, total, "rb");

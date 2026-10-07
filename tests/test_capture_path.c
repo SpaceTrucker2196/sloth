@@ -5,6 +5,8 @@
 #include "sloth.h"
 #include "capture/capture.h"
 #include "capture/probe.h"   /* real under WITH_PCAP; the stub would prove nothing */
+#include "evidence_ring.h"
+#include "sensor_health.h"
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -598,7 +600,7 @@ static void test_monitor_seam_admits_a_wellformed_frame(void) {
     const uint8_t *fs[1] = { f };
     int ls[1] = { n };
     uint64_t b = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
     /* The real callback ran: it parsed radiotap, passed the framing
        guards and recorded the frame. */
     ASSERT_EQ(mon_delta(b), 1);
@@ -614,7 +616,7 @@ static void test_monitor_seam_counts_each_admitted_frame(void) {
     const uint8_t *fs[3] = { a, b, c };
     int ls[3] = { an, bn, cn };
     uint64_t base = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 3), 3);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 3), 3);
     ASSERT_EQ(mon_delta(base), 3);
 }
 
@@ -630,7 +632,7 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs1[1] = { f };
     int ls1[1] = { 7 };
     uint64_t b1 = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs1, ls1, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs1, ls1, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b1), 0);
 
     /* (b) radiotap it_len claiming the frame or more, so there is no
@@ -653,7 +655,7 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs2[1] = { lying };
     int ls2[1] = { ln };
     uint64_t b2 = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b2), 0);
 
     /* it_len far beyond caplen: the overread an attacker would aim for. */
@@ -664,7 +666,7 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs2b[1] = { over };
     int ls2b[1] = { on };
     uint64_t b2b = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs2b, ls2b, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2b, ls2b, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b2b), 0);
 
     /* (c) 802.11 shorter than 10 bytes: not enough for FC + duration +
@@ -675,7 +677,7 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs3[1] = { runt };
     int ls3[1] = { rn };
     uint64_t b3 = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs3, ls3, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs3, ls3, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b3), 0);
 
     /* (d) zero-length frame. */
@@ -683,7 +685,7 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs4[1] = { f };
     int ls4[1] = { 0 };
     uint64_t b4 = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs4, ls4, NULL, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs4, ls4, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b4), 0);
 }
 
@@ -698,7 +700,7 @@ static void test_monitor_seam_mixes_admitted_and_rejected(void) {
     const uint8_t *fs[4] = { good, runt, good, runt };
     int ls[4] = { gn, rn, gn, rn };
     uint64_t b = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, 4), 4);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 4), 4);
     ASSERT_EQ(mon_delta(b), 2);
 }
 
@@ -717,7 +719,7 @@ static void test_monitor_seam_carries_per_frame_timestamps(void) {
     int ls[2] = { n, n };
     uint32_t ts[2] = { 1000000000u, 1700000000u };
     uint64_t b = mon_before();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 2), 2);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
     ASSERT_EQ(mon_delta(b), 2);
 }
 
@@ -726,12 +728,12 @@ static void test_monitor_seam_rejects_bad_arguments(void) {
     int n = mon_frame(f, 24, 0x80);
     const uint8_t *fs[1] = { f };
     int ls[1] = { n };
-    ASSERT_EQ(probe_test_dispatch(NULL, fs, ls, NULL, 1), -1);
-    ASSERT_EQ(probe_test_dispatch(&g_s, NULL, ls, NULL, 1), -1);
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, NULL, NULL, 1), -1);
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, -1), -1);
+    ASSERT_EQ(probe_test_dispatch(NULL, fs, ls, NULL, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, NULL, ls, NULL, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, NULL, NULL, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, -1), -1);
     int bad[1] = { -5 };
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, bad, NULL, 1), -1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, bad, NULL, NULL, 1), -1);
 }
 
 /* ── One frame, one clock — issue #92 ────────────────────────
@@ -772,7 +774,7 @@ static void test_frame_records_carry_the_capture_timestamp(void) {
     /* Deliberately far apart, and far from any plausible "now", so a
        time(NULL) regression cannot coincidentally match. */
     uint32_t ts[2] = { 1000000000u, 1500000000u };
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 2), 2);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
 
     mon_frame_snapshot(&g_s);
     ASSERT_GE(g_s.mon_frame_count, 2);
@@ -790,7 +792,7 @@ static void test_a_zero_capture_clock_is_counted_not_substituted(void) {
     int ls[1] = { n };
     uint32_t ts[1] = { 0 };
     uint64_t bad_before = mon_bad_clock_total();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
     /* Counted... */
     ASSERT_EQ((long long)(mon_bad_clock_total() - bad_before), 1);
     /* ...and NOT replaced by the wall clock. The record keeps the 0 the
@@ -810,8 +812,194 @@ static void test_a_good_capture_clock_is_not_counted(void) {
     int ls[1] = { n };
     uint32_t ts[1] = { 1700000000u };
     uint64_t bad_before = mon_bad_clock_total();
-    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, ts, 1), 1);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
     ASSERT_EQ((long long)(mon_bad_clock_total() - bad_before), 0);
+}
+
+/* ── Evidence ring, through the real callback — issue #92 ─────
+ *
+ * tests/test_evidence_ring.c pins the ring as a data structure. These
+ * pin the thing that structure exists for: that on_probe_frame() puts
+ * real captured bytes into it, with the capture's own clock and lengths,
+ * and that what comes back out by event ID is the frame that went in.
+ *
+ * Frames are the same hand-built radiotap + 802.11 arrays as above.
+ * Carrying a recognisable payload is what makes "the bytes survived"
+ * assertable rather than assumed — mon_frame() alone writes mostly
+ * zeroes, which would compare equal to an empty arena.
+ */
+
+/* mon_frame() with a payload pattern seeded from `tag`, so a retrieved
+   record can be shown to be this frame and not its neighbour. */
+static int mon_frame_tagged(uint8_t *f, int dot11_len, uint8_t fc0,
+                            uint8_t tag) {
+    int n = mon_frame(f, dot11_len, fc0);
+    for (int i = RT_HDR + 10; i < n; i++) f[i] = (uint8_t)(tag + i);
+    return n;
+}
+
+static void evidence_setup(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    evidence_ring_shutdown();
+    sh_evict_reset();
+    ASSERT_EQ(evidence_ring_init(EVIDENCE_BUDGET_FLOOR), 0);
+}
+
+static void test_the_callback_retains_the_whole_frame_with_radiotap(void) {
+    evidence_setup();
+    static uint8_t f[900];
+    int n = mon_frame_tagged(f, (int)sizeof(f) - RT_HDR, 0x80, 0x11);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint32_t ts[1] = { 1500000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
+
+    /* The callback really did store one record, and it is reachable by
+       the ID the ring issued — no IP, no flow, no window. */
+    uint64_t id = evidence_ring_last_id();
+    ASSERT_EQ((long long)(id - before), 1);
+    evidence_rec_t rec;
+    static uint8_t out[1024];
+    int got = evidence_ring_get(id, &rec, out, sizeof(out));
+    ASSERT_EQ(got, n);
+    ASSERT_EQ((long long)rec.cap_len,  n);
+    ASSERT_EQ((long long)rec.orig_len, n);
+    ASSERT_EQ(rec.truncated, 0);
+    /* Byte-exact including the radiotap header — this is the fidelity
+       the general ring's min(caplen, 64) cannot provide: at 64 bytes
+       only 56 bytes of 802.11 would have survived. */
+    ASSERT_EQ(memcmp(out, f, (size_t)n), 0);
+    ASSERT_EQ(out[2], (uint8_t)RT_HDR);
+    ASSERT_GT(got, 64);
+    evidence_ring_shutdown();
+}
+
+static void test_retained_records_carry_the_capture_clock(void) {
+    /* Two frames in one dispatch, stamps far apart and far from any
+       plausible "now", so a time(NULL) regression in the retain path
+       cannot coincidentally match. */
+    evidence_setup();
+    uint8_t a[128], b[128];
+    int an = mon_frame_tagged(a, 64, 0x80, 0x21);
+    int bn = mon_frame_tagged(b, 64, 0xC0, 0x31);
+    const uint8_t *fs[2] = { a, b };
+    int ls[2] = { an, bn };
+    uint32_t ts[2] = { 1000000000u, 1500000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    evidence_rec_t r1, r2;
+    uint8_t out[256];
+    ASSERT_EQ(evidence_ring_get(before + 1, &r1, out, sizeof(out)), an);
+    ASSERT_EQ(memcmp(out, a, (size_t)an), 0);
+    ASSERT_EQ(evidence_ring_get(before + 2, &r2, out, sizeof(out)), bn);
+    ASSERT_EQ(memcmp(out, b, (size_t)bn), 0);
+    ASSERT_EQ((long long)r1.ts_sec, 1000000000LL);
+    ASSERT_EQ((long long)r2.ts_sec, 1500000000LL);
+    evidence_ring_shutdown();
+}
+
+static void test_a_kernel_snapped_frame_is_flagged_truncated(void) {
+    /* caplen < len through the real reader: libpcap hands the callback
+       the short buffer while the record header still reports the frame's
+       length. Both lengths must reach the evidence record and the flag
+       must be set — the case an analyst needs in order to know the
+       reconstruction is partial. */
+    evidence_setup();
+    uint8_t f[256];
+    int n = mon_frame_tagged(f, 128, 0x80, 0x41);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    int origs[1] = { n + 900 };
+    uint32_t ts[1] = { 1500000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, origs, ts, 1), 1);
+
+    evidence_rec_t rec;
+    uint8_t out[512];
+    int got = evidence_ring_get(before + 1, &rec, out, sizeof(out));
+    ASSERT_EQ(got, n);
+    ASSERT_EQ((long long)rec.cap_len,  n);
+    ASSERT_EQ((long long)rec.orig_len, n + 900);
+    ASSERT_EQ(rec.truncated, 1);
+    evidence_ring_shutdown();
+}
+
+static void test_frames_refused_by_the_guards_are_not_retained(void) {
+    /* The deliberate choice recorded in probe.c: the retain call sits
+       behind the framing guards, so a runt an attacker sprays cannot
+       flush the ring. Each of the guard cases, then a well-formed frame
+       as the control that the retain path works at all in this run. */
+    evidence_setup();
+    uint8_t f[128], runt[64];
+    int n  = mon_frame_tagged(f, 64, 0x80, 0x51);
+    int rn = mon_frame_tagged(runt, 9, 0x80, 0x61);   /* dot11_len < 10 */
+    const uint8_t *fs[3] = { runt, f, runt };
+    int ls[3] = { rn, 7, rn };                        /* also a sub-8 caplen */
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 3), 3);
+    ASSERT_EQ((long long)(evidence_ring_last_id() - before), 0);
+    ASSERT_EQ(evidence_ring_count(), 0);
+
+    const uint8_t *ok[1] = { f };
+    int okl[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, ok, okl, NULL, NULL, 1), 1);
+    ASSERT_EQ((long long)(evidence_ring_last_id() - before), 1);
+    ASSERT_EQ(evidence_ring_count(), 1);
+    evidence_ring_shutdown();
+}
+
+static void test_an_uninitialised_ring_does_not_stop_the_callback(void) {
+    /* A run whose evidence ring failed to allocate must still detect:
+       the retain call is a no-op and every other observer is unaffected. */
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    evidence_ring_shutdown();
+    uint8_t f[128];
+    int n = mon_frame_tagged(f, 64, 0x80, 0x71);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint32_t ts[1] = { 1500000000u };
+    uint64_t mb = mon_frame_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
+    ASSERT_EQ((long long)(mon_frame_total() - mb), 1);   /* still observed */
+    ASSERT_EQ(evidence_ring_count(), 0);
+    mon_frame_snapshot(&g_s);
+    ASSERT_GE(g_s.mon_frame_count, 1);
+    ASSERT_EQ((long long)g_s.mon_frames[0].ts, 1500000000LL);
+}
+
+static void test_ring_pressure_from_the_callback_is_counted(void) {
+    /* Eviction driven by real dispatched frames rather than by direct
+       calls: a small ring, more frames than it holds, and the tally has
+       to account for every record that went missing. */
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    evidence_ring_shutdown();
+    sh_evict_reset();
+    ASSERT_EQ(evidence_ring_init(EVIDENCE_MIN_BUDGET * 2), 0);
+
+    static uint8_t f[1024];
+    int n = mon_frame_tagged(f, (int)sizeof(f) - RT_HDR, 0x80, 0x81);
+    const uint8_t *fs[32];
+    int ls[32];
+    for (int i = 0; i < 32; i++) { fs[i] = f; ls[i] = n; }
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 32), 32);
+
+    int kept = evidence_ring_count();
+    ASSERT_GT(kept, 0);
+    ASSERT_LT(kept, 32);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_EVIDENCE_FRAME), 32 - kept);
+    ASSERT(evidence_ring_bytes_used() <= evidence_ring_capacity());
+    /* The newest frame survived and the oldest is gone — an evicted ID
+       reads as absent, not as whatever now sits in its slot. */
+    evidence_rec_t rec;
+    ASSERT_GE(evidence_ring_get(before + 32, &rec, NULL, 0), 0);
+    ASSERT_EQ(evidence_ring_get(before + 1, &rec, NULL, 0), -1);
+    evidence_ring_shutdown();
 }
 
 /* The source-level half. Reads the callback's body and requires it to
@@ -895,6 +1083,14 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);
     RUN_TEST(test_monitor_seam_rejects_bad_arguments);
+
+    TEST_SUITE("evidence ring through the real callback (#92)");
+    RUN_TEST(test_the_callback_retains_the_whole_frame_with_radiotap);
+    RUN_TEST(test_retained_records_carry_the_capture_clock);
+    RUN_TEST(test_a_kernel_snapped_frame_is_flagged_truncated);
+    RUN_TEST(test_frames_refused_by_the_guards_are_not_retained);
+    RUN_TEST(test_an_uninitialised_ring_does_not_stop_the_callback);
+    RUN_TEST(test_ring_pressure_from_the_callback_is_counted);
 
     TEST_SUITE("one frame, one clock (#92)");
     RUN_TEST(test_frame_records_carry_the_capture_timestamp);

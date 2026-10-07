@@ -57,10 +57,16 @@ void probe_set_iface(sloth_state_t *s, const char *iface);
    frames via an in-memory libpcap savefile — the monitor twin of
    capture_test_dispatch() (#92). No device, no .pcap fixture. ts_secs
    is optional and sets each frame's capture timestamp, which is what
-   lets a test pin which clock a record was stamped from. Synchronous;
-   returns frames delivered, or -1. */
+   lets a test pin which clock a record was stamped from. orig_lens is
+   optional and sets each record's `len` independently of its caplen —
+   the "kernel snapped it" case, and the one that distinguishes a
+   callback reading hdr->len from one reading hdr->caplen (the exact
+   confusion #92 found in this file on 2026-10-01). Both NULL reproduce
+   the pre-existing behaviour: synthetic increasing stamps, len ==
+   caplen. Synchronous; returns frames delivered, or -1. */
 int probe_test_dispatch(sloth_state_t *s,
                         const uint8_t *const *frames, const int *lens,
+                        const int *orig_lens,
                         const uint32_t *ts_secs, int n);
 
 /* Refresh `h` from the monitor-radio handle — liveness, the worker's
