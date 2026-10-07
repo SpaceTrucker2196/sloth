@@ -524,6 +524,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_WPS_PBC_RACE:           return "T1557";       /* racing the walk window to become a registrar */
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
+    case ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD: return "T1669";      /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
     /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
      * (#80): what fires here is a third party's camera announcing its
      * own presence over an unauthenticated multicast protocol — an
@@ -585,6 +586,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_WPS_PIN_BRUTE);       N(ALERT_TYPE_WPS_LOCKOUT_CYCLING);
     N(ALERT_TYPE_WPS_PBC_RACE);
     N(ALERT_TYPE_MLE_INVALID_LINK_ID);
+    N(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     case ALERT_TYPE_COUNT: break;
     }
@@ -3243,6 +3245,37 @@ static void rule_mle_invalid_link_id(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* MLE Common Info Length mismatch — CVE-2026-58374 / w1.fi 2026-1
+ * (#104 slice 2). The Common Info Length field covers itself plus the
+ * mandatory MLD MAC (minimum 7) and bounds where Link Info starts; a
+ * declared value that violates either is the buffer-overread shape the
+ * advisory's eight parsing gaps share — trusting it blindly to find
+ * Link Info would read past the element. mle_parse() flags this per
+ * frame and mle_observe() accumulates it onto the MLD's persisted
+ * entry, so this rule only has to ask whether that lifetime count is
+ * non-zero. WARN, same as the sibling link_id rule: one frame is
+ * enough, and there is no benign reason a conformant MLD ever sends a
+ * length this shape. */
+static void rule_mle_common_info_len_bad(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *m = &s->mlds[i];
+        if (!m->malformed_common_info_len_total) continue;
+
+        char mac[20];
+        mac_to_str(m->mld_mac, mac, sizeof(mac));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mle_common_info_len:%s", mac);
+        snprintf(detail, sizeof(detail),
+                 "MLD %s sent a Multi-Link Element with Common Info "
+                 "Length=%u (must be >=7 and fit inside the element; "
+                 "%u such frame(s) seen) - CVE-2026-58374 class",
+                 mac, (unsigned)m->bad_common_info_len,
+                 (unsigned)m->malformed_common_info_len_total);
+        fire(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD, ALERT_SEV_WARN,
+             "MLE_COMMON_INFO_LEN_BAD", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -4389,6 +4422,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);
     rule_mle_invalid_link_id(s, now);
+    rule_mle_common_info_len_bad(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

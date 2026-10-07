@@ -34,14 +34,29 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     if (!(ctl & 0x0010)) return 0;
 
     int common_off = 3;                 /* after ExtID + Control */
-    int common_len = ie_body[common_off];
-    /* The length covers itself, so it must at least hold itself plus
-     * the MLD MAC. */
-    if (common_len < 7) return 0;
-    if (common_off + common_len > len) return 0;
 
+    /* The MLD MAC Address always sits at this fixed offset once the
+     * presence bit above is set — its position does not depend on the
+     * Common Info Length value at all, so reading it is safe whatever
+     * that attacker-controlled byte claims. `len >= 10` (checked above)
+     * guarantees the six bytes exist regardless of what follows. */
     memcpy(out->mld_mac, ie_body + common_off + 1, 6);
     if (!mac_is_usable(out->mld_mac)) return 0;
+
+    int common_len = ie_body[common_off];
+
+    /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 2): the length covers
+     * itself, so it must at least hold itself plus the mandatory MLD
+     * MAC (7), and it must not claim a Link Info start past the
+     * element's own bounds. Either shape is the buffer-overread
+     * signature the advisory's other parsing gaps share — flag it and
+     * stop. We already have identity (the MAC above); we do not have a
+     * safe offset to continue into Link Info. */
+    if (common_len < 7 || common_off + common_len > len) {
+        out->malformed_common_info_len = 1;
+        out->bad_common_info_len = (uint8_t)common_len;
+        return 1;
+    }
 
     /* Link Info starts where Common Info ends. Using the declared
      * length rather than summing the optional fields present means a
@@ -143,6 +158,11 @@ void mle_observe(const sloth_mld_t *m, time_t now) {
         e->malformed_link_id_total++;
         e->bad_link_id = m->bad_link_id;
         e->malformed_link_id_last_seen = now;
+    }
+    if (m->malformed_common_info_len) {
+        e->malformed_common_info_len_total++;
+        e->bad_common_info_len = m->bad_common_info_len;
+        e->malformed_common_info_len_last_seen = now;
     }
 
     pthread_mutex_unlock(&g_mu);

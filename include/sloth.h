@@ -787,6 +787,7 @@ typedef enum {
     ALERT_TYPE_WPS_LOCKOUT_CYCLING, /* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
     ALERT_TYPE_WPS_PBC_RACE,        /* concurrent PBC enrollees inside the 120 s walk time (#82) */
     ALERT_TYPE_MLE_INVALID_LINK_ID, /* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
+    ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD, /* MLE Common Info Length can't cover the mandatory MLD MAC, or overruns the IE — w1.fi 2026-1 (#104 slice 2) */
     ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
@@ -1921,6 +1922,19 @@ typedef struct {
     uint8_t  bad_link_id;
     uint32_t malformed_link_id_total;
     time_t   malformed_link_id_last_seen;
+
+    /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 2): a declared Common
+     * Info Length that can't cover itself plus the mandatory MLD MAC
+     * (minimum 7), or that would push Link Info past the element's own
+     * bounds, is the same buffer-overread shape the advisory's other
+     * parsing gaps share. `malformed_common_info_len`/
+     * `bad_common_info_len` are this frame's finding, set fresh by
+     * mle_parse() on every call; `_total`/`_last_seen` are the
+     * persisted, lifetime signal mle_observe() accumulates. */
+    uint8_t  malformed_common_info_len;
+    uint8_t  bad_common_info_len;
+    uint32_t malformed_common_info_len_total;
+    time_t   malformed_common_info_len_last_seen;
 } sloth_mld_t;
 
 /* ── 802.11k Radio Measurement survey (#61) ────────────────

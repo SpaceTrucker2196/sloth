@@ -229,6 +229,68 @@ static void test_malformed_link_id_persists_across_clean_frames(void) {
     mle_clear();
 }
 
+/* ── malformed Common Info Length — CVE-2026-58374 class / w1.fi 2026-1 (#104 slice 2) ── */
+
+static void test_common_info_len_too_small_flagged(void) {
+    /* The field covers itself (1) plus the mandatory MLD MAC (6): 7 is
+     * the structural floor. A declared value under that cannot even
+     * describe what presence bit 4 says is there. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[3] = 3;   /* declared Common Info Length, below the floor of 7 */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_common_info_len, 1);
+    ASSERT_EQ((int)m.bad_common_info_len, 3);
+    ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);  /* identity still captured */
+}
+
+static void test_common_info_len_overruns_element_flagged(void) {
+    /* A declared length that pushes Link Info past the element's own
+     * bounds is the buffer-overread shape itself: trusting it blindly
+     * to find Link Info would read past the frame. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[3] = 200;   /* far past n */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_common_info_len, 1);
+    ASSERT_EQ((int)m.bad_common_info_len, 200);
+}
+
+static void test_common_info_len_7_is_the_valid_floor(void) {
+    /* The boundary itself must parse clean, not be mistaken for the
+     * invalid value just below it. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);   /* common_len = 7 */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_common_info_len, 0);
+}
+
+static void test_malformed_common_info_len_persists_across_clean_frames(void) {
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[3] = 3;
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 1);
+    ASSERT_EQ((int)st.mlds[0].malformed_common_info_len_total, 1);
+    ASSERT_EQ((int)st.mlds[0].bad_common_info_len, 3);
+    ASSERT_EQ((int)st.mlds[0].malformed_common_info_len_last_seen, 1000);
+    mle_clear();
+}
+
 /* ── the table and the canonical lookup ── */
 
 static void test_observe_and_canonical_lookup(void) {
@@ -315,6 +377,12 @@ void run_mle_tests(void) {
     RUN_TEST(test_duplicate_link_id_flagged);
     RUN_TEST(test_distinct_link_ids_not_flagged);
     RUN_TEST(test_malformed_link_id_persists_across_clean_frames);
+
+    TEST_SUITE("MLE malformed Common Info Length — CVE-2026-58374 class (#104 slice 2)");
+    RUN_TEST(test_common_info_len_too_small_flagged);
+    RUN_TEST(test_common_info_len_overruns_element_flagged);
+    RUN_TEST(test_common_info_len_7_is_the_valid_floor);
+    RUN_TEST(test_malformed_common_info_len_persists_across_clean_frames);
 
     TEST_SUITE("MLD table and canonical identity (#67)");
     RUN_TEST(test_observe_and_canonical_lookup);
