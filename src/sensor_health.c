@@ -5,8 +5,8 @@
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
  * Written from the capture threads (probe_pnl, dhcp_snoop, eap_track,
- * beacon_snoop, seqnum_track, assoc_track) and from the poll loop
- * (alerts, top_hosts, devices), so the tally
+ * beacon_snoop, seqnum_track, assoc_track, evidence_ring) and from the
+ * poll loop (alerts, top_hosts, devices), so the tally
  * takes a mutex rather than relying on unsynchronised increments. The
  * lock is cold by construction: it is only reached when a bounded table
  * is already full. */
@@ -55,6 +55,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_ASSOC_PAIR:    return "assoc_pair";
     case SH_EVICT_ASSOC_REQ:     return "assoc_req";
     case SH_EVICT_WPS_SESSION:   return "wps_session";
+    case SH_EVICT_EVIDENCE_FRAME: return "evidence_frame";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

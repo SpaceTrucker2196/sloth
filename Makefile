@@ -188,6 +188,12 @@ ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
     LDFLAGS += -lpcap
     SRCS    += src/capture/probe.c
+    # The evidence ring (#92) is fed only by on_probe_frame(), which
+    # exists only here, so a no-pcap build would link an arena nothing
+    # can ever fill. TEST_SRCS lists it unconditionally — the module has
+    # no libpcap dependency of its own, which is what lets the ordinary
+    # (WITH_PCAP-less) test binary unit-test it.
+    SRCS    += src/evidence_ring.c
 endif
 
 # Unconditional: capture.c is almost entirely inside its own WITH_PCAP
@@ -515,6 +521,8 @@ TEST_SRCS = tests/main_test.c          \
             src/wps_track.c                \
             tests/test_wps_track.c         \
             tests/test_sensor_health.c     \
+            src/evidence_ring.c            \
+            tests/test_evidence_ring.c     \
             src/wifi_merge.c               \
             tests/test_wifi_merge.c        \
             src/twins.c                    \

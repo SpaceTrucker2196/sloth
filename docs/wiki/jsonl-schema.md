@@ -669,7 +669,7 @@ does not know the type ignores it, as it would any other.
 | `hop_dwells_completed` | dwells that have ended; the denominator behind the means, and 0 while the first is still in flight |
 | `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
 | `evictions` | total observations discarded by a full bounded table, lifetime |
-| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session` | the same total broken out per table |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame` | the same total broken out per table |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export |
 | `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no data-stream handle), `degraded` (at least one requested interface failed closed) |
@@ -716,7 +716,7 @@ one line per second forever and the suppression would be decorative. A
 drop counter moving is genuinely news; a packet counter moving is not.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":5,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25"}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":5,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25"}
 ```
 
 **Capture scope (#85).** The `scope*` fields were appended later; every
@@ -733,12 +733,18 @@ consumer should alert on `scope_not_enforced` becoming `1`.
 `evict_<name>` field each, and this is the whole set: `alert`,
 `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`,
 `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`,
-`wps_session`. The device table refuses a new entry rather than evicting
-an old one — different mechanism, same meaning. The 802.11 tables
-(`beacon_ap`, `seqnum_client`, the two `assoc_*`, `wps_session`) joined
-after the first tally shipped; the list above is kept in step with the
-build by `tests/test_sensor_health.c ::
+`wps_session`, `evidence_frame`. The device table refuses a new entry
+rather than evicting an old one — different mechanism, same meaning. The
+802.11 tables (`beacon_ap`, `seqnum_client`, the two `assoc_*`,
+`wps_session`) joined after the first tally shipped, and
+`evidence_frame` with the #92 raw-frame evidence ring; the list above is
+kept in step with the build by `tests/test_sensor_health.c ::
 test_schema_doc_lists_every_counted_table`.
+
+`evidence_frame` is the one entry whose bound is bytes rather than rows:
+the evidence ring retains whole frames in a fixed arena sized from
+system RAM, so a run on a busy channel evicts steadily by design and a
+rising count is not in itself a fault. See [[ring-buffers]].
 
 **Not** counted: the probe-client table (the `probe_client` records,
 LRU-evicted in the capture thread) and the per-protocol flow rings

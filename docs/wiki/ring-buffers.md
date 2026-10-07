@@ -121,6 +121,57 @@ class (`<` → `<=` on the ternary's comparison) is in the
 equivalence file for the four-file family but not for NTP/ICMP,
 because there's no ternary on those lines to mutate.
 
+### The evidence ring is bounded by bytes, not by rows
+
+`src/evidence_ring.c` (#92) is the one ring whose records are
+variable-length, because it retains **whole captured 802.11 frames
+including radiotap** rather than a fixed-size decoded struct. The
+`min(caplen, 64)` the general packet ring keeps is enough to show a
+frame in a view and not nearly enough to reconstruct one, and a
+wireless alert — evil twin, deauth flood, KARMA — has no IP for the
+per-alert pcap exporter to match on, so without this it ships with no
+supporting frames at all.
+
+So the shape differs in four ways:
+
+- **Two bounds, both enforced on every push.** A heap arena used as a
+  circular *byte* buffer, plus a FIFO ring of fixed-size metadata slots.
+  Payloads are variable-length, so the arena bounds bytes and the slot
+  ring bounds record count; a ring watching only one is unbounded in the
+  other direction. Tiny frames (an ACK is 14 bytes) exhaust slots long
+  before the arena, and one 4 KiB jumbo does the reverse.
+- **Sized from system RAM at startup, not by a `MAX_*` constant.** ~1 %
+  of `MemTotal` from `/proc/meminfo`, clamped to `[2 MiB, 32 MiB]`
+  (owner ruling, 2026-09-30). Zero-config, no flag; an unreadable or
+  malformed `/proc/meminfo` — including every non-Linux build — falls
+  back to the floor, so a sensor that cannot size itself keeps less
+  evidence rather than none.
+- **Addressed by event ID, not by recency.** `evidence_ring_get()` takes
+  a `uint64_t` event ID and nothing else — no address, no port, no
+  window. IDs are issued only once arena space is secured, so live IDs
+  form a contiguous range and the lookup is O(1) rather than a scan. The
+  index that follows from that invariant is still verified against the
+  slot's own ID before the record is returned: if the invariant ever
+  breaks, an evidence lookup must miss, never hand back a different
+  frame under the requested ID.
+- **Eviction is counted.** Dropping the oldest record bumps
+  `SH_EVICT_EVIDENCE_FRAME`, surfaced as `evict_evidence_frame` in
+  `sensor_health` ([[jsonl-schema]]). An evicted record is a lost
+  observation; on a busy channel the ring evicts steadily by design, so
+  a rising count is a depth figure, not a fault.
+
+Per-record fidelity is the other half of why it exists, and the contract
+is in `src/evidence_ring.h`: the frame's own capture timestamp (never
+`time(NULL)`), both the reported original length and the stored captured
+length, and a `truncated` flag that deliberately does **not** claim
+*which* truncation occurred — a kernel snaplen and the ring's own
+`EVIDENCE_FRAME_MAX` cannot be told apart from the record alone.
+
+Memory-only by construction: nothing in the module opens, names or
+writes a file. That is what keeps it clear of the `--collect-handshakes`
+gate ([[pcap-export]]), since full frames include EAPOL/PMKID material
+and a ring that cannot write cannot move that material to disk.
+
 ### Specialised event logs deviate further
 
 `src/eapol_log.c` adds a per-(BSSID, STA) pending-handshake state

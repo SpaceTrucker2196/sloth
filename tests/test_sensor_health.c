@@ -91,6 +91,7 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_ASSOC_PAIR),    "assoc_pair");
     ASSERT_STR(sh_evict_name(SH_EVICT_ASSOC_REQ),     "assoc_req");
     ASSERT_STR(sh_evict_name(SH_EVICT_WPS_SESSION),   "wps_session");
+    ASSERT_STR(sh_evict_name(SH_EVICT_EVIDENCE_FRAME), "evidence_frame");
     ASSERT_STR(sh_evict_name((sh_evict_t)SH_EVICT_KIND_COUNT), "");
     /* Every kind must have a name — an unnamed bucket emits "" into the
      * record, which a consumer reads as a missing field. */

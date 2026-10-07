@@ -1922,3 +1922,35 @@ is fully specified, so the frames are hand-buildable without a capture.
 The remaining signals (mDNS/SSDP camera service types, default-credential
 RTSP/HTTP, setup-mode SoftAP) are later slices on the same issue, gated
 on open questions recorded there.
+
+---
+
+## 2026-10-07 — bounded raw 802.11 evidence ring (#92)
+
+**Updated**: [ring-buffers.md](ring-buffers.md) — new "The evidence ring
+is bounded by bytes, not by rows" variation;
+[jsonl-schema.md](jsonl-schema.md) — `evict_evidence_frame` added to the
+`sensor_health` eviction tally (the field list, the counted-set prose
+that `tests/test_sensor_health.c ::
+test_schema_doc_lists_every_counted_table` holds to the enum, and the
+worked example line).
+
+`src/evidence_ring.c` retains whole captured frames — radiotap included
+— addressed by a monotonic event ID rather than by a flow. The gap it
+closes: `alert_pcap_dump()` selects supporting packets by `match_ip`, so
+the detections with no IP (evil twin, deauth flood, KARMA) shipped with
+zero frames behind them, and the general packet ring could not stand in
+because it keeps `min(caplen, 64)` bytes.
+
+Documented as a ring-buffer *variation* rather than a page of its own:
+it is the same bounded-history idea with four deviations (byte arena
+plus metadata ring, RAM-scaled sizing, ID-keyed lookup, counted
+eviction), and the per-record fidelity contract belongs beside the code
+in `src/evidence_ring.h` where a future reader of the struct will be.
+
+Memory-only, which is what lets it land while the question of what the
+on-disk exporter may write is still open on #92: full frames include
+EAPOL/PMKID material, and #87 gates *writing* that to disk. Evidence
+filenames, exclusive creation, the hashed manifest and the
+`storage_error` event remain unshipped — later slices, all of which
+touch a file.
