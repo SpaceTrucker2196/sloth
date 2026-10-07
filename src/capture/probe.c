@@ -809,6 +809,17 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     }
 
     snprintf(s->probe_iface, sizeof(s->probe_iface), "%s", iface);
+    /* A radio can also arrive here, not just at startup discovery: a run
+     * that began with no radiotap interface skips main()'s evidence-ring
+     * init, and without this the ring would stay dead for the rest of
+     * the session while frames flowed — silent evidence loss, which is
+     * the defect class #92 exists to remove. Idempotent, so a retarget
+     * of an already-running radio keeps the records it has already
+     * collected. A failed allocation leaves evidence_ring_note() a
+     * no-op; it is not reported here because s->probe_err is the
+     * retarget's own refusal channel and overloading it would make a
+     * successful retarget look refused. */
+    (void)evidence_ring_init_default();
     /* Same reset as probe_run(): [m] retargets the radio, and the new
      * worker must not inherit the old one's exit reason (#91 slice 2). */
     pthread_mutex_lock(&g_mu);
