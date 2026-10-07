@@ -103,10 +103,25 @@ size_t evidence_budget_from_mem_kb(uint64_t mem_total_kb);
  * testable without a particular host's RAM. */
 size_t evidence_budget_from_meminfo(const char *path);
 
+/* Where the budget is read from on a live run. A parameter everywhere
+ * else so the clamp arms are testable. */
+#define EVIDENCE_MEMINFO_PATH "/proc/meminfo"
+
 /* Allocate the ring. Returns 0 on success, -1 on a budget below
  * EVIDENCE_MIN_BUDGET or on allocation failure. Re-initialising frees
  * the previous ring first. */
 int evidence_ring_init(size_t budget_bytes);
+
+/* Bring the ring up at the RAM-derived budget if it is not up already,
+ * and return 0 if it is usable afterwards.
+ *
+ * Idempotent on purpose. There are two moments a monitor radio can
+ * appear — startup discovery, and an interactive [m] retarget — and the
+ * ring has to exist for both or it silently stores nothing for the rest
+ * of the session. A second call must leave an existing ring alone,
+ * records and all: retargeting the radio is not a reason to discard the
+ * evidence already collected. */
+int evidence_ring_init_default(void);
 
 /* Free the ring. Safe to call when it was never initialised. */
 void evidence_ring_shutdown(void);

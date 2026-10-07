@@ -589,6 +589,40 @@ static void test_shutdown_is_idempotent_and_leaves_a_dead_ring(void) {
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_EVIDENCE_FRAME), 0);
 }
 
+static void test_init_default_is_idempotent_and_keeps_records(void) {
+    /* A monitor radio can appear twice — at startup discovery and at an
+       [m] retarget — and both call this. The second call must not
+       discard what the first collected: retargeting the radio is not a
+       reason to drop the evidence already in hand. */
+    evidence_ring_shutdown();
+    ASSERT_EQ(evidence_ring_init_default(), 0);
+    size_t footprint = evidence_ring_footprint();
+    ASSERT_GT(footprint, (size_t)0);
+    ASSERT(footprint >= EVIDENCE_BUDGET_FLOOR - 1);
+
+    uint8_t f[128];
+    int n = build_frame(f, 128, 0x80, 0xD0);
+    uint64_t id = evidence_ring_note(f, (uint32_t)n, (uint32_t)n,
+                                     1700000000, 0, 2412, -40);
+    ASSERT_GT((long long)id, 0);
+
+    ASSERT_EQ(evidence_ring_init_default(), 0);          /* second call */
+    ASSERT_EQ((long long)evidence_ring_footprint(), (long long)footprint);
+    ASSERT_EQ(evidence_ring_count(), 1);
+    evidence_rec_t rec;
+    uint8_t out[256];
+    ASSERT_EQ(evidence_ring_get(id, &rec, out, sizeof(out)), n);
+    ASSERT_EQ(memcmp(out, f, (size_t)n), 0);
+
+    /* And it does bring a dead ring back up rather than reporting
+       success on nothing. */
+    evidence_ring_shutdown();
+    ASSERT_EQ((long long)evidence_ring_footprint(), 0);
+    ASSERT_EQ(evidence_ring_init_default(), 0);
+    ASSERT_GT(evidence_ring_footprint(), (size_t)0);
+    evidence_ring_shutdown();
+}
+
 static void test_reinit_replaces_the_ring(void) {
     ring_setup(EVIDENCE_MIN_BUDGET);
     uint8_t f[64];
@@ -641,5 +675,6 @@ void run_evidence_ring_tests(void) {
     RUN_TEST(test_wrapped_payloads_come_back_intact);
     RUN_TEST(test_an_evicted_id_reads_as_absent_not_as_another_frame);
     RUN_TEST(test_shutdown_is_idempotent_and_leaves_a_dead_ring);
+    RUN_TEST(test_init_default_is_idempotent_and_keeps_records);
     RUN_TEST(test_reinit_replaces_the_ring);
 }

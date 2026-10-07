@@ -149,6 +149,15 @@ int evidence_ring_init(size_t budget_bytes) {
     return 0;
 }
 
+int evidence_ring_init_default(void) {
+    pthread_mutex_lock(&g_mu);
+    int up = g_arena != NULL;
+    pthread_mutex_unlock(&g_mu);
+    if (up) return 0;
+    return evidence_ring_init(
+        evidence_budget_from_meminfo(EVIDENCE_MEMINFO_PATH));
+}
+
 void evidence_ring_shutdown(void) {
     pthread_mutex_lock(&g_mu);
     ring_free_locked();
