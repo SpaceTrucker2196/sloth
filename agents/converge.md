@@ -36,7 +36,14 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    files only, push to `main`. CI + the AI code-review and docs-drift
    workflows act as post-hoc judges.
 8. **Instrument.** Append a row to `METRICS.md` (issue, converge
-   iterations, tests passing at ship, notes). Then run the ledger per
+   iterations, tests passing at ship, notes). **Get the assertion count
+   by building, not from memory** — run `make test` on the parent commit
+   and on the shipped tree, and report both. A recalled "was N" figure
+   is worth nothing: on 2026-10-05 a slice reported `+35 assertions` from
+   a parent of 12741 when the parent was 12776, so its real delta was
+   about zero, and once that number was wrong every other figure in the
+   report became unverifiable. Two other sources had the parent right,
+   which is the only reason it was caught. Then run the ledger per
    agents/AGENTS.md Token/Cost Ledger and commit it as its own
    `chore(ledger):` commit — the ledger row is the token-cost record
    for this order.

@@ -41,6 +41,10 @@ Single binary `sloth`. Test binary `sloth_test`.
 ## Discipline
 
 - **Tests must pass.** `make test` returns 0. Never commit a red test.
+  **Any assertion count you report is measured, never recalled** — build
+  the parent and the shipped tree and quote both. A wrong count is worse
+  than no count, because it makes the rest of the report unverifiable
+  (see agents/converge.md step 8 for the case that established this).
 - **Builds must be warning-clean — the whole matrix, not just `make`.**
   `make`, `make WITH_NCURSES=0`, `make WITH_PCAP=0`, `make WITH_WIFI=0`,
   `make WITH_SQLITE=0` and `make embedded` each produce no warnings.
