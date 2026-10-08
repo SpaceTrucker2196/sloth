@@ -183,3 +183,4 @@
 | 8a17a4d | 2026-10-06T18:20:10Z | claude-opus-5 | 58 | 23226 | 21245333 | 27532 | 11.4789 | #92 one frame one clock: nine monitor observers stamped from hdr->ts |
 | ecc4323 | 2026-10-06T13:42:33Z | claude-opus-5 | 380 | 176709 | 39313242 | 657280 | 30.6490 | #106 slice 1 — ONVIF camera WS-Discovery detection (backfilled 2026-10-07: the s |
 | f4d566b | 2026-10-07T12:15:32Z | claude-opus-5 | 414 | 208278 | 41013131 | 586775 | 31.5833 | #92 — bounded raw 802.11 evidence ring, keyed by event ID |
+| d325492 | 2026-10-08T11:23:50Z | claude-opus-5 | 192 | 63805 | 11246763 | 389998 | 11.1194 | #104 slice 3 — MLE Link Info subelement bounds overrun (CRIT) |
