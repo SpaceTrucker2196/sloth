@@ -186,3 +186,4 @@
 | d325492 | 2026-10-08T11:23:50Z | claude-opus-5 | 192 | 63805 | 11246763 | 389998 | 11.1194 | #104 slice 3 — MLE Link Info subelement bounds overrun (CRIT) |
 | 9446299 | 2026-10-08T15:27:38Z | claude-opus-5 | 66 | 34608 | 25815121 | 798994 | 21.7630 | #92 gated evidence exporter behind --collect-handshakes |
 | 982ba75 | 2026-10-08T16:36:27Z | claude-opus-5 | 64 | 25085 | 26930393 | 31663 | 14.4093 | #91 probe-client eviction tally + fill-boundary fix |
+| 052a705 | 2026-10-08T19:45:31Z | claude-opus-5 | 56 | 24881 | 23544992 | 870123 | 21.0960 | #91 per-stream freshness on two clocks |
