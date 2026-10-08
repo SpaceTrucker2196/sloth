@@ -185,3 +185,4 @@
 | f4d566b | 2026-10-07T12:15:32Z | claude-opus-5 | 414 | 208278 | 41013131 | 586775 | 31.5833 | #92 — bounded raw 802.11 evidence ring, keyed by event ID |
 | d325492 | 2026-10-08T11:23:50Z | claude-opus-5 | 192 | 63805 | 11246763 | 389998 | 11.1194 | #104 slice 3 — MLE Link Info subelement bounds overrun (CRIT) |
 | 9446299 | 2026-10-08T15:27:38Z | claude-opus-5 | 66 | 34608 | 25815121 | 798994 | 21.7630 | #92 gated evidence exporter behind --collect-handshakes |
+| 982ba75 | 2026-10-08T16:36:27Z | claude-opus-5 | 64 | 25085 | 26930393 | 31663 | 14.4093 | #91 probe-client eviction tally + fill-boundary fix |
