@@ -884,6 +884,51 @@ int eapol_set_output_dir(const char *dir) {
     return rc;
 }
 
+/* ── Gated export-directory access for other modules (#92) ─────────── */
+
+/* Create a file in the --collect-handshakes export directory, through
+ * the same pinned descriptor every artifact here uses.
+ *
+ * Exists so the #92 evidence exporter can write raw 802.11 frames —
+ * which carry the EAPOL 4-way and PMKID, the same crackable material
+ * this module exports — without a second gate, a second directory or a
+ * second retention policy. Owner ruling 2026-10-08 chose exactly that:
+ * the exporter writes only when this gate is open, and its files expire
+ * on eapol_sweep()'s window because the sweep walks every regular file
+ * in this directory by mtime.
+ *
+ * The descriptor itself does NOT escape. A caller gets an fd for one
+ * named file or a refusal, so it cannot enumerate, unlink or re-point
+ * the directory — and it cannot hold a path and race it, which is the
+ * whole reason this module pins a dirfd rather than keeping a string.
+ *
+ * Re-checks the gate under the lock at the last moment before creating
+ * anything, the same way append_22000_line_for_bssid() and
+ * write_handshake_pcap() do, so a caller that opened the gate, had it
+ * closed under it, and then called here is refused.
+ *
+ * Returns the fd (caller closes), or -1 with a reason in err. */
+int eapol_export_create(const char *name, char *err, size_t errsz) {
+    if (!name || !*name) {
+        if (err && errsz) snprintf(err, errsz, "no name");
+        return -1;
+    }
+    pthread_mutex_lock(&g_mu);
+    int gate = g_collect, dirfd = g_out_fd;
+    pthread_mutex_unlock(&g_mu);
+    if (!gate) {
+        if (err && errsz)
+            snprintf(err, errsz, "--collect-handshakes is not set");
+        return -1;
+    }
+    if (dirfd < 0) {
+        if (err && errsz)
+            snprintf(err, errsz, "no export directory (--eapol-dir)");
+        return -1;
+    }
+    return sfile_open(dirfd, name, SFILE_EXCL, err, errsz);
+}
+
 /* ── The crackable-material gate and its retention sweep (#87) ─────── */
 
 void eapol_set_collect_enabled(int on) {

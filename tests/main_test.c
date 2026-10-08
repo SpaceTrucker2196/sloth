@@ -59,6 +59,7 @@ void run_version_tests(void);
 void run_updater_tests(void);
 void run_md5_tests(void);
 void run_tune_tests(void);
+void run_evidence_export_tests(void);
 void run_sha256_tests(void);
 void run_devices_tests(void);
 void run_beacon_detect_tests(void);
@@ -193,6 +194,7 @@ int main(void) {
     run_updater_tests();
     run_md5_tests();
     run_tune_tests();
+    run_evidence_export_tests();
     run_sha256_tests();
     run_devices_tests();
     run_beacon_detect_tests();

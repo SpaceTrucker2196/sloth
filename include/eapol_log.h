@@ -132,6 +132,21 @@ void eapol_clear(void);
 void eapol_set_collect_enabled(int on);
 int  eapol_collect_enabled(void);
 
+/* Create a file in the gated export directory, through the pinned
+   descriptor, with the same 0600 and symlink-safe handling every
+   artifact here gets — and therefore inside eapol_sweep()'s retention
+   window, which walks every regular file in that directory.
+
+   For the #92 evidence exporter: raw 802.11 frames carry the same
+   crackable material this module exports, and the owner ruled on
+   2026-10-08 that they share this gate rather than getting a second
+   one. The dirfd does not escape — a caller gets one named file or a
+   refusal. The gate is re-checked under the lock at the last moment, so
+   a caller that is mid-call when the gate closes is refused.
+
+   Returns an fd the caller closes, or -1 with a reason in err. */
+int  eapol_export_create(const char *name, char *err, size_t errsz);
+
 /* Retention window for exported crackable material, in days. Default 7;
  * 0 keeps artifacts until the operator removes them.
  *

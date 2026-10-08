@@ -194,6 +194,12 @@ ifeq ($(WITH_PCAP),1)
     # no libpcap dependency of its own, which is what lets the ordinary
     # (WITH_PCAP-less) test binary unit-test it.
     SRCS    += src/evidence_ring.c
+    # The exporter goes with it, and for the same reason: it reads the
+    # ring and nothing else fills the ring, so a no-pcap build would
+    # link an export path with nothing to export. TEST_SRCS lists it
+    # unconditionally alongside the ring — neither has a libpcap
+    # dependency of its own.
+    SRCS    += src/evidence_export.c
 endif
 
 # Unconditional: capture.c is almost entirely inside its own WITH_PCAP
@@ -535,6 +541,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_rogue_radius.c      \
             src/alerts.c                   \
             src/tune.c                     \
+            src/evidence_export.c          \
+            tests/test_evidence_export.c   \
             tests/test_tune.c              \
             src/views/alerts.c             \
             tests/test_alerts.c            \
