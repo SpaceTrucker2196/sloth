@@ -1280,6 +1280,118 @@ static void test_capture_stream_freshness(void) {
     flood_test_set_clock(NULL, NULL);
 }
 
+/* ── Probe-table invariants — issue #91 ──────────────────────
+ *
+ * These are invariants over the table's state rather than assertions
+ * about a feature, and they exist because the feature-shaped tests did
+ * not find the bug that prompted them.
+ *
+ * The fill-boundary defect fixed alongside the eviction tally could
+ * resurrect an aged-out client: probe_snapshot() compacts with
+ * `g_clients[i] = g_clients[--g_count]`, so the vacated index keeps a
+ * COPY of a live row, and the old eviction scan could then leave that
+ * copy inside g_count. Because the stale row is a copy, the symptom is
+ * a DUPLICATE MAC — which no test looked for, and which a single
+ * invariant catches head-on for this and any other slot-reuse bug in
+ * this table.
+ *
+ * Honest about the limit: a duplicate check alone would not have caught
+ * the other half of that defect, a live row silently overwritten. So
+ * the live count is asserted too. */
+
+/* No MAC may appear twice in the snapshot. */
+static int snapshot_has_duplicate_mac(const sloth_state_t *st) {
+    for (int i = 0; i < st->probe_count; i++)
+        for (int j = i + 1; j < st->probe_count; j++)
+            if (memcmp(st->probe_clients[i].mac,
+                       st->probe_clients[j].mac, 6) == 0)
+                return 1;
+    return 0;
+}
+
+static void test_probe_table_holds_no_duplicate_after_ageing(void) {
+    /* The scenario matters, and my first attempt at it did not trigger
+     * the bug: for the defect to bite, the slot the append allocates
+     * must already hold stale data whose last_seen is NEWER than some
+     * live row. A table that merely grew into fresh zeroed slots picks
+     * that slot back (last_seen 0 is the oldest) and behaves.
+     *
+     * The shape that triggers it: fill to MAX, age out exactly ONE old
+     * row so compaction copies the LAST (recent) row into its place and
+     * leaves that recent copy sitting at index g_count, then add one
+     * client. The append allocates that index, the scan sees its recent
+     * timestamp, prefers an older LIVE row instead, overwrites it — and
+     * the stale copy stays inside g_count as a duplicate. */
+    flood_test_set_clock(fake_mono, fake_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    sh_evict_reset();
+
+    /* Timings chosen so the bug can actually bite, which took three
+     * attempts to get right and is worth recording:
+     *
+     *   - one lone early client, old enough to age out;
+     *   - the survivors STAGGERED, because the scan compares with `<`.
+     *     If every survivor shares one timestamp, nothing is strictly
+     *     older than the stale copy and the scan picks the allocated
+     *     slot back — the bug hides. My first two scenarios failed for
+     *     exactly that reason and passed under the pre-fix code.
+     *   - the copy left above g_count comes from the LAST row, so the
+     *     survivors must be staggered with the newest last.
+     *
+     * Then the next append lands on that index, sees a recent
+     * timestamp, prefers an older live row, and destroys it. */
+    const time_t T0    = 100000;
+    const time_t TSNAP = T0 + 200;
+
+    /* The lone ager. */
+    g_fake_wall = T0;
+    drive_probe_clients(1, 1);
+
+    /* Survivors, oldest group first, all inside PROBE_AGE_SECS of the
+       snapshot so none of them ages out. */
+    const int groups = 4, per = (MAX_PROBE_CLIENTS - 1) / groups;
+    int placed = 0;
+    for (int gi = 0; gi < groups; gi++) {
+        int n = (gi == groups - 1) ? (MAX_PROBE_CLIENTS - 1 - placed) : per;
+        g_fake_wall = TSNAP - 100 + gi * 20;      /* -100, -80, -60, -40 */
+        drive_probe_clients(100 + placed, n);
+        placed += n;
+    }
+
+    g_fake_wall = TSNAP;
+    probe_snapshot(&g_s);
+    ASSERT_EQ(g_s.probe_count, MAX_PROBE_CLIENTS - 1);
+    ASSERT_EQ(snapshot_has_duplicate_mac(&g_s), 0);
+
+    /* One more client: the append takes the slot holding the recent
+       stale copy. */
+    g_fake_wall = TSNAP + 10;
+    drive_probe_clients(9000, 1);
+    probe_snapshot(&g_s);
+
+    /* The invariant. Under the pre-fix condition the stale copy stays
+       live and a real row is destroyed to make room for the newcomer. */
+    ASSERT_EQ(snapshot_has_duplicate_mac(&g_s), 0);
+    ASSERT_EQ(g_s.probe_count, MAX_PROBE_CLIENTS);
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_probe_table_never_exceeds_its_cap(void) {
+    /* The other half: a live row must not be lost to a slot that should
+       have been free, and the table must not report more rows than it
+       can hold. */
+    flood_test_set_clock(fake_mono, fake_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    g_fake_wall = 200000;
+    drive_probe_clients(1, MAX_PROBE_CLIENTS * 2);
+    probe_snapshot(&g_s);
+    ASSERT_EQ(g_s.probe_count, MAX_PROBE_CLIENTS);
+    ASSERT_EQ(snapshot_has_duplicate_mac(&g_s), 0);
+    flood_test_set_clock(NULL, NULL);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -1337,6 +1449,10 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_monitor_freshness_follows_two_clocks);
     RUN_TEST(test_a_refused_frame_does_not_refresh_the_stream);
     RUN_TEST(test_capture_stream_freshness);
+
+    TEST_SUITE("probe-table invariants (#91)");
+    RUN_TEST(test_probe_table_holds_no_duplicate_after_ageing);
+    RUN_TEST(test_probe_table_never_exceeds_its_cap);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);

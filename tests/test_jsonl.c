@@ -1302,6 +1302,59 @@ static void test_sensor_health_unchanged_is_suppressed(void) {
     ASSERT_EQ(count_lines(body), 1);
 }
 
+/* The suppression test above cannot see a TIME-VARYING field, and that
+ * blind spot let a real defect through on 2026-10-08.
+ *
+ * It emits three times from one unmodified struct, so every signature
+ * field is byte-identical by construction. But #91's `stale_secs` is
+ * recomputed from the wall clock on every poll, so in production it
+ * ticks up each tick with no new frames. Putting the raw seconds in the
+ * change-only signature therefore made this record emit once a second
+ * forever — a firehose that buries the transitions the record exists to
+ * surface — and the existing test stayed green throughout.
+ *
+ * So: advance the field the way a poll would, and assert suppression
+ * still holds. This guards a class, not an instance. Any future field
+ * sampled from a clock — an age, an uptime, a seconds-since — repeats
+ * the mistake silently, and this is what notices. */
+static void test_sensor_health_suppressed_while_only_age_advances(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.cap_health.stale_secs = 0;
+    s.mon_health.stale_secs = 0;
+    jsonl_emit_sensor_health(&s);
+
+    /* Five ticks of real time with nothing else changing. A poll would
+       raise stale_secs on each one. */
+    for (int i = 1; i <= 5; i++) {
+        s.cap_health.stale_secs = i;
+        s.mon_health.stale_secs = i;
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* Still one line: a rising age is not news until it crosses. */
+    ASSERT_EQ(count_lines(body), 1);
+}
+
+/* ...and the other direction, because suppression must not hide the
+ * transition it is suppressing noise around: going stale IS news. */
+static void test_sensor_health_emits_when_a_stream_goes_stale(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.cap_health.stale_secs = 0;
+    s.mon_health.stale_secs = 0;
+    jsonl_emit_sensor_health(&s);
+    /* Past the staleness threshold: the bucketed state changes. */
+    s.cap_health.stale_secs = 600;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 2);
+}
+
 static void test_sensor_health_degradation_emits_immediately(void) {
     /* Suppression must never hide a transition. A worker dying, a drop
      * counter moving, or a retune failing is the whole signal. */
@@ -1764,6 +1817,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_scope_dropped);
     RUN_TEST(test_sensor_health_scope_failure_emits_immediately);
     RUN_TEST(test_sensor_health_unchanged_is_suppressed);
+    RUN_TEST(test_sensor_health_suppressed_while_only_age_advances);
+    RUN_TEST(test_sensor_health_emits_when_a_stream_goes_stale);
     RUN_TEST(test_sensor_health_degradation_emits_immediately);
     RUN_TEST(test_sensor_health_traffic_alone_does_not_re_emit);
     RUN_TEST(test_sensor_health_new_drop_re_emits);
