@@ -2303,6 +2303,26 @@ typedef struct {
     uint64_t ps_recv, ps_drop, ps_ifdrop;        /* lifetime, wrap-safe */
     uint32_t d_recv, d_drop, d_ifdrop;           /* delta over the last tick */
     uint32_t last_recv, last_drop, last_ifdrop;  /* previous raw sample */
+    /* Per-stream freshness (#91). Two clocks, deliberately, because they
+     * answer different questions and conflating them is the defect #92
+     * fixed in this same callback:
+     *
+     *   last_frame_ts   the frame's OWN capture timestamp — what the
+     *                   data says, reproducible from the capture, and
+     *                   the value to correlate against other records.
+     *   stale_secs      how long since a frame last ARRIVED, measured
+     *                   on the host clock. This is the liveness
+     *                   question: "is this stream still delivering?"
+     *                   An offline replay carries timestamps far from
+     *                   now, so deriving age from last_frame_ts would
+     *                   report a dead stream for a healthy one.
+     *
+     * stale_secs is -1 until the first frame arrives: "never delivered"
+     * is not the same claim as "delivered 0 seconds ago", and a
+     * consumer that cannot tell them apart reads a stream that never
+     * started as perfectly fresh. */
+    time_t   last_frame_ts;
+    int      stale_secs;
 } capture_health_t;
 
 /* ── Capture-scope state (#85) ───────────────────────────

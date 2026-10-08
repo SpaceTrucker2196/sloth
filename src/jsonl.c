@@ -1710,6 +1710,19 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
  * counters and the eviction tally, all of which moving is genuinely
  * news. A healthy sensor emits one line per JSONL_HEARTBEAT_SECS; a
  * degrading one emits the moment it degrades. */
+/* A stream is "stale" once this long has passed with no frame. Chosen
+ * well under the 300 s heartbeat so a transition is reported by the
+ * change path rather than waiting for the next beat, and well above a
+ * poll interval so an idle second does not flap it. */
+#define JSONL_STALE_SECS 60
+
+/* -1 never delivered, 0 fresh, 1 stale. Bucketed because only a
+ * crossing belongs in the change-only signature. */
+static int stale_state(int stale_secs) {
+    if (stale_secs < 0) return -1;
+    return stale_secs > JSONL_STALE_SECS ? 1 : 0;
+}
+
 static void health_kv(char *buf, int *off, const char *prefix,
                       const capture_health_t *h) {
     char key[40];
@@ -1736,6 +1749,13 @@ static void health_kv(char *buf, int *off, const char *prefix,
     kv_int(buf, LINEBUF, off, key, (long long)h->d_drop);
     snprintf(key, sizeof(key), "%s_ifdrop_delta", prefix);
     kv_int(buf, LINEBUF, off, key, (long long)h->d_ifdrop);
+    /* Freshness (#91). Two fields because they answer different
+     * questions: the frame's own clock is what to correlate against,
+     * the age is whether this stream is still delivering. */
+    snprintf(key, sizeof(key), "%s_last_frame_ts", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->last_frame_ts);
+    snprintf(key, sizeof(key), "%s_stale_secs", prefix);
+    kv_int(buf, LINEBUF, off, key, (long long)h->stale_secs);
 }
 
 void jsonl_emit_sensor_health(const sloth_state_t *s) {
@@ -1775,6 +1795,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         uint64_t scope_dropped;
         int      tuned;
         uint64_t mon_bad_clock;
+        int      cap_stale_state, mon_stale_state;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1802,6 +1823,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.scope_dropped = capture_out_of_scope_dropped();
     sig.tuned         = tune_non_default();
     sig.mon_bad_clock = mon_bad_clock_total();
+    /* The STATE, never the raw seconds. stale_secs ticks up every
+     * second, so putting it in the change-only signature would make
+     * this record emit once a second forever — turning a
+     * change-plus-heartbeat stream into a firehose and burying the
+     * transitions it exists to surface. Three states: never delivered,
+     * fresh, stale past the threshold. Only a crossing is news. */
+    sig.cap_stale_state = stale_state(s->cap_health.stale_secs);
+    sig.mon_stale_state = stale_state(s->mon_health.stale_secs);
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";

@@ -64,6 +64,12 @@ void probe_set_iface(sloth_state_t *s, const char *iface);
    confusion #92 found in this file on 2026-10-01). Both NULL reproduce
    the pre-existing behaviour: synthetic increasing stamps, len ==
    caplen. Synchronous; returns frames delivered, or -1. */
+/* Test-only: forget that this stream ever delivered a frame, so the
+   "never delivered" freshness state is reachable after an earlier case
+   has dispatched one (#91). Not part of probe_clear(), which is an
+   operator action. */
+void probe_test_reset_freshness(void);
+
 int probe_test_dispatch(sloth_state_t *s,
                         const uint8_t *const *frames, const int *lens,
                         const int *orig_lens,

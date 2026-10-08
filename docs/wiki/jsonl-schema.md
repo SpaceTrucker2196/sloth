@@ -683,6 +683,8 @@ does not know the type ignores it, as it would any other.
 | `tuned` | the knobs themselves, comma-joined `name=value` in registry order, `""` on a stock run. The count alone would not say *which* rule went quiet, and a raised threshold is indistinguishable from a quiet segment without it. Truncates cleanly if it would exceed the field; see `--tune-list` for the full registry |
 
 Per-stream block, with `<s>` being `capture` or `monitor`:
+| `<s>_last_frame_ts` | the capture timestamp of the last frame this stream delivered, `0` if none yet. The frame's OWN clock, so it correlates with other records from the same capture (#91) |
+| `<s>_stale_secs` | seconds since a frame last **arrived**, on the host clock, or `-1` if none ever has. Measured on the host clock and not derived from `<s>_last_frame_ts` on purpose: an offline replay carries timestamps far from now, so deriving age from the frame clock would report a dead stream for a healthy one. `-1` is not `0` — "never delivered" and "delivered just now" are different claims, and a stream that never started must not read as fresh. The change-only signature carries a bucketed state (never / fresh / stale past 60 s), never the raw seconds, or this record would emit once a second forever |
 
 | Field | Meaning |
 |-------|---------|

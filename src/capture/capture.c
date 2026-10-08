@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "capture/capture.h"
+#include "flood_window.h"   /* injectable wall clock for freshness (#91) */
 #include "captive_portal.h"
 #include "dns.h"
 #include "dot11_data.h"
@@ -465,6 +466,10 @@ static pcap_t         *g_handle;
 /* Pinned allow-list (#85 slice 2). Identities fixed before the worker
  * exists; valid bits and generation written under g_mu thereafter. */
 static capture_policy_t g_policy;
+/* Per-stream freshness (#91). Written by on_packet() under g_mu, read
+ * by capture_health_poll() on the main thread. */
+static time_t g_last_frame_ts   = 0;   /* the frame's own clock */
+static time_t g_last_frame_wall = 0;   /* host clock at arrival, 0 = never */
 
 /* ── Byte helpers ─────────────────────────────────────────── */
 
@@ -1067,6 +1072,11 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     pkt.raw_len = (uint16_t)rl;
 
     pthread_mutex_lock(&g_mu);
+    /* Freshness, recorded where the frame is accepted rather than where
+     * it is dispatched: a frame the decoder rejected is not evidence
+     * this stream is delivering anything usable (#91). */
+    g_last_frame_ts   = (time_t)hdr->ts.tv_sec;
+    g_last_frame_wall = flood_wall();
     g_state->packets[g_state->pkt_head] = pkt;
     g_state->pkt_head = (g_state->pkt_head + 1) % MAX_PACKETS;
     if (g_state->pkt_count < MAX_PACKETS) g_state->pkt_count++;
@@ -1227,6 +1237,14 @@ void capture_health_poll(capture_health_t *h) {
      * the absence of a terminal reason. That conjunction is the whole
      * point: the handle staying open is what made the failure invisible. */
     h->running = capture_run_flag_get(&g_running) && reason == CAPTURE_EXIT_NONE;
+    pthread_mutex_lock(&g_mu);
+    time_t fts = g_last_frame_ts, fwall = g_last_frame_wall;
+    pthread_mutex_unlock(&g_mu);
+    h->last_frame_ts = fts;
+    /* -1 while nothing has arrived: "never delivered" is a different
+     * claim from "delivered just now", and a stream that never started
+     * must not read as fresh. */
+    h->stale_secs = fwall ? (int)(flood_wall() - fwall) : -1;
     if (!g_handle) return;
     struct pcap_stat ps;
     memset(&ps, 0, sizeof(ps));

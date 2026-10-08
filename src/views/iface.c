@@ -8,6 +8,10 @@
 #include "oui.h"
 #include "views/iface.h"
 #include "tune.h"
+
+/* Matches jsonl.c's JSONL_STALE_SECS so the strip and the export agree
+   about when a stream has gone quiet (#91). */
+#define IFACE_STALE_SECS 60
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_exit_name() for the health strip */
 #include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
@@ -468,6 +472,18 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
         int tn = tune_non_default();
         if (tn > 0) strip_addf(buf, sz, &off, "  tuned %d/%d", tn, TUNE_COUNT);
     }
+    /* #91: a stream that has stopped delivering. Fault-only like every
+     * token here, and only once a handle is actually open — a run with
+     * no monitor radio is not a stale radio, and reporting one would
+     * put a permanent fault on the strip of every wired-only
+     * deployment. stale_secs < 0 means nothing has arrived yet, which
+     * on a just-started capture is normal and says nothing. */
+    if (s->cap_health.open && s->cap_health.stale_secs > IFACE_STALE_SECS)
+        strip_addf(buf, sz, &off, "  capture stale %ds",
+                   s->cap_health.stale_secs);
+    if (s->mon_health.open && s->mon_health.stale_secs > IFACE_STALE_SECS)
+        strip_addf(buf, sz, &off, "  monitor stale %ds",
+                   s->mon_health.stale_secs);
 }
 
 /* SSID of the network the managed radio is joined to ("" = none).

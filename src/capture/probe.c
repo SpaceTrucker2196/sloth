@@ -45,6 +45,9 @@ static int             g_frame_head;
 static int             g_frame_count;
 static uint64_t        g_frame_total;   /* cumulative frames ever seen (#28 sensor) */
 static uint64_t        g_bad_clock_total; /* capture ts <= 0 (#92) */
+/* Per-stream freshness (#91), under g_frame_mu like the frame tally. */
+static time_t          g_last_frame_ts;   /* the frame's own clock */
+static time_t          g_last_frame_wall; /* host clock at arrival, 0 = never */
 static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
 
 uint64_t mon_bad_clock_total(void) {
@@ -329,6 +332,22 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                      dot11_len >= 16 ? dot11 + 10 : NULL,
                      (uint16_t)dot11_len, signal, fts);
 
+    /* Freshness for this stream (#91). Recorded here, with the frame
+     * tally, so it counts exactly the frames that cleared the framing
+     * guards — a runt the callback refused is not evidence the radio is
+     * delivering anything usable.
+     *
+     * Two clocks on purpose: fts is the frame's own capture timestamp,
+     * flood_wall() is when it reached us. Age has to come from the
+     * second, because an offline replay carries timestamps far from now
+     * and deriving staleness from the first would call a healthy stream
+     * dead. flood_wall() rather than time(NULL) keeps it injectable and
+     * keeps this callback free of the wall-clock read #92 removed. */
+    pthread_mutex_lock(&g_frame_mu);
+    g_last_frame_ts   = fts;
+    g_last_frame_wall = flood_wall();
+    pthread_mutex_unlock(&g_frame_mu);
+
     /* Retain the whole frame for evidence (#92). `data`, not `dot11`:
      * the radiotap header is part of the record — it carries the
      * frequency, the FCS verdict and the signal an analyst needs to
@@ -592,6 +611,14 @@ void probe_health_poll(capture_health_t *h) {
     int reason = g_exit_reason;
     pthread_mutex_unlock(&g_mu);
     h->running = capture_run_flag_get(&g_running) && reason == CAPTURE_EXIT_NONE;
+    pthread_mutex_lock(&g_frame_mu);
+    time_t fts = g_last_frame_ts, fwall = g_last_frame_wall;
+    pthread_mutex_unlock(&g_frame_mu);
+    h->last_frame_ts = fts;
+    h->stale_secs    = fwall ? (int)(flood_wall() - fwall) : -1;
+    /* Set BEFORE the early return below: a radio whose handle has gone
+     * still has a last-frame time worth reporting, and returning first
+     * would leave the caller's struct carrying whatever it held. */
     if (!g_ph) return;
     struct pcap_stat ps;
     memset(&ps, 0, sizeof(ps));
@@ -634,6 +661,25 @@ void probe_health_poll(capture_health_t *h) {
  * decoded on the calling thread and `s` is fully populated on return.
  * Returns the number of frames libpcap handed to the callback, or -1 if
  * the savefile could not be opened. */
+/* Test-only: forget that this stream ever delivered a frame.
+ *
+ * The freshness statics are process-lifetime by design — a counter that
+ * clears has no lifetime meaning, the same reasoning sh_evict_reset()
+ * and mon_frame_total() carry — so the "never delivered" state (-1) is
+ * unobservable once any earlier case has dispatched a frame. It is
+ * worth asserting anyway: -1 and 0 are different claims, and a stream
+ * that never started must not read as fresh.
+ *
+ * Deliberately NOT folded into probe_clear(). That is the operator's
+ * [c] keypress, and clearing freshness on a keypress would make a live
+ * radio report that it had never delivered anything. */
+void probe_test_reset_freshness(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    g_last_frame_ts   = 0;
+    g_last_frame_wall = 0;
+    pthread_mutex_unlock(&g_frame_mu);
+}
+
 int probe_test_dispatch(sloth_state_t *s,
                         const uint8_t *const *frames, const int *lens,
                         const int *orig_lens,

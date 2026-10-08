@@ -7,6 +7,7 @@
 #include "capture/probe.h"   /* real under WITH_PCAP; the stub would prove nothing */
 #include "evidence_ring.h"
 #include "sensor_health.h"
+#include "flood_window.h"
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -1150,6 +1151,135 @@ static void test_each_further_client_counts_once(void) {
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_PROBE_CLIENT), 10);
 }
 
+/* ── Per-stream freshness — issue #91 ────────────────────────
+ *
+ * "Healthy with no detections" and "not observing" were
+ * indistinguishable to a consumer, which is the problem #91 was filed
+ * about. These pin the two fields that separate them, through both
+ * dispatch seams.
+ *
+ * The design decision under test is the two clocks. last_frame_ts is
+ * the frame's OWN capture timestamp; stale_secs is measured on the host
+ * clock. Deriving age from the frame clock would report a dead stream
+ * for a healthy one replaying an old capture — so a frame stamped in
+ * 2001 must still read as FRESH when it has just arrived, and that is
+ * the assertion that would fail if someone "simplified" the two fields
+ * into one. */
+
+static time_t g_fake_wall = 1000;
+static time_t fake_wall(void)      { return g_fake_wall; }
+static uint64_t fake_mono(void)    { return (uint64_t)g_fake_wall * 1000u; }
+
+static void test_monitor_freshness_starts_as_never(void) {
+    flood_test_set_clock(fake_mono, fake_wall);
+    g_fake_wall = 1000;
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    probe_test_reset_freshness();   /* earlier cases have delivered frames */
+    capture_health_t h;
+    memset(&h, 0, sizeof(h));
+    probe_health_poll(&h);
+    /* -1, not 0: a stream that has never delivered must not read as
+       having delivered this instant. */
+    ASSERT_EQ(h.stale_secs, -1);
+    ASSERT_EQ((long long)h.last_frame_ts, 0);
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_monitor_freshness_follows_two_clocks(void) {
+    flood_test_set_clock(fake_mono, fake_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+
+    /* A frame whose capture clock is ancient, arriving right now. */
+    g_fake_wall = 5000;
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    uint32_t ts[1] = { 1000000000u };          /* 2001 */
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
+
+    capture_health_t h;
+    memset(&h, 0, sizeof(h));
+    probe_health_poll(&h);
+    /* The frame's own clock is reported as-is... */
+    ASSERT_EQ((long long)h.last_frame_ts, 1000000000LL);
+    /* ...and it is FRESH, because it arrived now. This is the whole
+       point of keeping the clocks apart: age from the frame clock would
+       make this ~25 years stale. */
+    ASSERT_EQ(h.stale_secs, 0);
+
+    /* Host clock advances, no new frames: the stream goes stale while
+       last_frame_ts does not move. */
+    g_fake_wall = 5090;
+    memset(&h, 0, sizeof(h));
+    probe_health_poll(&h);
+    ASSERT_EQ(h.stale_secs, 90);
+    ASSERT_EQ((long long)h.last_frame_ts, 1000000000LL);
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_a_refused_frame_does_not_refresh_the_stream(void) {
+    /* A runt the callback drops is not evidence the radio is delivering
+       anything usable, so it must not reset the clock. */
+    flood_test_set_clock(fake_mono, fake_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+
+    g_fake_wall = 7000;
+    uint8_t good[128];
+    int gn = mon_frame(good, 24, 0x80);
+    const uint8_t *fg[1] = { good };
+    int lg[1] = { gn };
+    uint32_t tg[1] = { 1700000000u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fg, lg, NULL, tg, 1), 1);
+
+    g_fake_wall = 7100;
+    uint8_t runt[64];
+    int rn = mon_frame(runt, 9, 0x80);         /* below the framing guard */
+    const uint8_t *fr[1] = { runt };
+    int lr[1] = { rn };
+    uint32_t tr[1] = { 1700000500u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fr, lr, NULL, tr, 1), 1);
+
+    capture_health_t h;
+    memset(&h, 0, sizeof(h));
+    probe_health_poll(&h);
+    /* Still the GOOD frame's clock, and 100s stale — the runt neither
+       refreshed the stream nor overwrote the timestamp. */
+    ASSERT_EQ((long long)h.last_frame_ts, 1700000000LL);
+    ASSERT_EQ(h.stale_secs, 100);
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_capture_stream_freshness(void) {
+    /* The IP stream, through its own seam. */
+    flood_test_set_clock(fake_mono, fake_wall);
+    g_fake_wall = 9000;
+    memset(&g_s, 0, sizeof(g_s));
+    capture_test_set_policy(NULL);
+    uint8_t f[128];
+    int n = eth_ipv4_tcp(f, 8, 5, -1);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(capture_test_dispatch(&g_s, DLT_EN10MB, fs, ls, NULL, 1), 1);
+
+    capture_health_t h;
+    memset(&h, 0, sizeof(h));
+    capture_health_poll(&h);
+    /* capture_test_dispatch stamps synthetic timestamps from
+       1700000000, so the first frame carries exactly that. */
+    ASSERT_EQ((long long)h.last_frame_ts, 1700000000LL);
+    ASSERT_EQ(h.stale_secs, 0);
+
+    g_fake_wall = 9045;
+    memset(&h, 0, sizeof(h));
+    capture_health_poll(&h);
+    ASSERT_EQ(h.stale_secs, 45);
+    flood_test_set_clock(NULL, NULL);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -1201,6 +1331,12 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_one_client_past_the_table_is_counted);
     RUN_TEST(test_a_repeat_client_is_an_update_not_an_eviction);
     RUN_TEST(test_each_further_client_counts_once);
+
+    TEST_SUITE("per-stream freshness: two clocks (#91)");
+    RUN_TEST(test_monitor_freshness_starts_as_never);
+    RUN_TEST(test_monitor_freshness_follows_two_clocks);
+    RUN_TEST(test_a_refused_frame_does_not_refresh_the_stream);
+    RUN_TEST(test_capture_stream_freshness);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);
