@@ -65,10 +65,30 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     int off = common_off + common_len;
     unsigned seen_link_ids = 0;   /* bitmask over the 0-15 field width */
 
-    while (off + 2 <= len) {
+    while (off < len) {
+        /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 3): the subelement
+         * chain has to tile Link Info exactly — no padding is defined
+         * between subelements, so a tail too short to hold even the
+         * 2-byte ID/length header is already a chain whose declared
+         * lengths overshot the container. */
+        if (off + 2 > len) {
+            out->malformed_subelem_len = 1;
+            out->subelem_overrun_bytes = (uint16_t)(off + 2 - len);
+            break;
+        }
         uint8_t sid  = ie_body[off];
         uint8_t slen = ie_body[off + 1];
-        if (off + 2 + (int)slen > len) break;
+        /* ...and the common case of the same fault: a declared body that
+         * reaches past the element's end. The sum of the lengths walked
+         * so far plus this one exceeds the enclosing MLE, which is the
+         * successful overread a trusting parser would perform. Flag and
+         * stop — there is no safe offset to continue from. */
+        if (off + 2 + (int)slen > len) {
+            out->malformed_subelem_len = 1;
+            out->bad_subelem_len = slen;
+            out->subelem_overrun_bytes = (uint16_t)(off + 2 + (int)slen - len);
+            break;
+        }
         if (sid == MLE_SUBELEM_PER_STA && slen >= 3) {
             const uint8_t *p = ie_body + off + 2;
             /* STA Control(2): bits 0-3 Link ID, bit 5 MAC Address
@@ -163,6 +183,12 @@ void mle_observe(const sloth_mld_t *m, time_t now) {
         e->malformed_common_info_len_total++;
         e->bad_common_info_len = m->bad_common_info_len;
         e->malformed_common_info_len_last_seen = now;
+    }
+    if (m->malformed_subelem_len) {
+        e->malformed_subelem_len_total++;
+        e->bad_subelem_len = m->bad_subelem_len;
+        e->subelem_overrun_bytes = m->subelem_overrun_bytes;
+        e->malformed_subelem_len_last_seen = now;
     }
 
     pthread_mutex_unlock(&g_mu);

@@ -291,6 +291,140 @@ static void test_malformed_common_info_len_persists_across_clean_frames(void) {
     mle_clear();
 }
 
+/* ── subelement bounds overrun — CVE-2026-58374 class / w1.fi 2026-1 (#104 slice 3) ──
+ *
+ * `mle_len` handed to mle_parse() is the element's own declared length
+ * (`src/beacon_snoop.c` passes the IE length byte), so the Link Info
+ * subelement chain has to tile it exactly: ID(1) + Length(1) + body, no
+ * padding defined between subelements. A declared length reaching past
+ * that boundary is the summed-lengths-exceed-container overrun itself. */
+
+static void test_subelem_len_overruns_element_by_one_flagged(void) {
+    /* One byte past the element end is still past it. The off-by-one is
+     * the shape a length-confusion bug is most likely to have, and the
+     * one an "approximately in bounds" check would wave through. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int p = n;
+    n = put_per_sta(b, n, 0, LNK1);
+    b[p + 1] = 10;              /* declared body length; 9 is the truth */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)m.bad_subelem_len, 10);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, 1);
+    ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);  /* identity still captured */
+}
+
+static void test_subelem_len_overruns_element_by_many_flagged(void) {
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int p = n;
+    n = put_per_sta(b, n, 0, LNK1);
+    b[p + 1] = 200;
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)m.bad_subelem_len, 200);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, p + 2 + 200 - n);
+    /* The lying length must not have been believed: no affiliated link
+     * address was taken from memory past the element. */
+    ASSERT_EQ(m.link_count, 0);
+}
+
+static void test_subelem_chain_sum_overrun_flagged(void) {
+    /* The issue states the rule as "the sum of subelement lengths
+     * exceeds the enclosing MLE IE length" — so a first subelement that
+     * tiles correctly must not excuse a second one that does not, and
+     * the link the valid subelement carried is still evidence worth
+     * keeping. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    int p = n;
+    n = put_per_sta(b, n, 1, LNK2);
+    b[p + 1] = 20;              /* second subelement overshoots */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)m.bad_subelem_len, 20);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, p + 2 + 20 - n);
+    ASSERT_EQ(m.link_count, 1);
+    ASSERT(memcmp(m.link_mac[0], LNK1, 6) == 0);
+}
+
+static void test_subelem_header_truncated_at_element_boundary_flagged(void) {
+    /* A single byte left where Link Info continues can only be the
+     * start of a subelement — nothing else is defined there — and that
+     * subelement's mandatory 2-byte ID/length header already reaches
+     * one byte past the element the sender declared. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[n++] = MLE_SUBELEM_PER_STA;   /* ID present, length byte missing */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, 1);
+    ASSERT_EQ((int)m.bad_subelem_len, 0);   /* never read — it is not there */
+}
+
+static void test_subelem_exact_fit_not_flagged(void) {
+    /* The boundary case that must stay quiet: a chain ending exactly on
+     * the element's last byte is conformant, and the link it carries
+     * proves the walk ran rather than bailing early. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    n = put_per_sta(b, n, 1, LNK2);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, 0);
+    ASSERT_EQ(m.link_count, 2);
+}
+
+static void test_zero_length_subelement_not_flagged(void) {
+    /* A body-less subelement consumes its 2-byte header and nothing
+     * else. Legal, carries nothing, and must neither fire nor stall the
+     * walk — the chain still has to advance past it. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[n++] = 9;    /* some subelement ID sloth has no interpretation for */
+    b[n++] = 0;    /* ...declaring no body */
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ(m.link_count, 1);     /* the walk got past the empty one */
+    ASSERT(memcmp(m.link_mac[0], LNK1, 6) == 0);
+}
+
+static void test_malformed_subelem_len_persists_across_clean_frames(void) {
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int p = n;
+    n = put_per_sta(b, n, 0, LNK1);
+    b[p + 1] = 10;
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 1);
+    ASSERT_EQ((int)st.mlds[0].malformed_subelem_len_total, 1);
+    ASSERT_EQ((int)st.mlds[0].bad_subelem_len, 10);
+    ASSERT_EQ((int)st.mlds[0].subelem_overrun_bytes, 1);
+    ASSERT_EQ((int)st.mlds[0].malformed_subelem_len_last_seen, 1000);
+    mle_clear();
+}
+
 /* ── the table and the canonical lookup ── */
 
 static void test_observe_and_canonical_lookup(void) {
@@ -383,6 +517,15 @@ void run_mle_tests(void) {
     RUN_TEST(test_common_info_len_overruns_element_flagged);
     RUN_TEST(test_common_info_len_7_is_the_valid_floor);
     RUN_TEST(test_malformed_common_info_len_persists_across_clean_frames);
+
+    TEST_SUITE("MLE subelement bounds overrun — CVE-2026-58374 class (#104 slice 3)");
+    RUN_TEST(test_subelem_len_overruns_element_by_one_flagged);
+    RUN_TEST(test_subelem_len_overruns_element_by_many_flagged);
+    RUN_TEST(test_subelem_chain_sum_overrun_flagged);
+    RUN_TEST(test_subelem_header_truncated_at_element_boundary_flagged);
+    RUN_TEST(test_subelem_exact_fit_not_flagged);
+    RUN_TEST(test_zero_length_subelement_not_flagged);
+    RUN_TEST(test_malformed_subelem_len_persists_across_clean_frames);
 
     TEST_SUITE("MLD table and canonical identity (#67)");
     RUN_TEST(test_observe_and_canonical_lookup);

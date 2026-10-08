@@ -525,6 +525,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
     case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
     case ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD: return "T1669";      /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
+    case ALERT_TYPE_MLE_SUBELEM_OVERRUN:    return "T1669";       /* same class again — Link Info subelement chain overruns its container */
     /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
      * (#80): what fires here is a third party's camera announcing its
      * own presence over an unauthenticated multicast protocol — an
@@ -587,6 +588,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_WPS_PBC_RACE);
     N(ALERT_TYPE_MLE_INVALID_LINK_ID);
     N(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
+    N(ALERT_TYPE_MLE_SUBELEM_OVERRUN);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     case ALERT_TYPE_COUNT: break;
     }
@@ -3276,6 +3278,41 @@ static void rule_mle_common_info_len_bad(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* MLE Link Info subelement bounds overrun — CVE-2026-58374 / w1.fi
+ * 2026-1 (#104 slice 3). The subelement chain must tile Link Info
+ * exactly; a declared subelement length that reaches past the enclosing
+ * element, or a trailing fragment too short to hold a subelement header,
+ * means the summed lengths exceed the container.
+ *
+ * CRIT where the two sibling MLE rules are WARN, and the difference is
+ * real rather than a severity preference: those report a length *shaped*
+ * to cause an overread, this one reports the overrun itself — the
+ * subelement chain already extends past the buffer the sender declared,
+ * so a parser that walked it without this bound has read off the end.
+ * There is no benign reading of it: no padding is defined between MLE
+ * subelements, so a conformant sender cannot produce either shape. */
+static void rule_mle_subelem_overrun(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *m = &s->mlds[i];
+        if (!m->malformed_subelem_len_total) continue;
+
+        char mac[20];
+        mac_to_str(m->mld_mac, mac, sizeof(mac));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mle_subelem_overrun:%s", mac);
+        snprintf(detail, sizeof(detail),
+                 "MLD %s sent a Multi-Link Element whose Link Info "
+                 "subelement chain overruns the element by %u byte(s) "
+                 "(declared subelement length=%u; %u such frame(s) seen) "
+                 "- CVE-2026-58374 class",
+                 mac, (unsigned)m->subelem_overrun_bytes,
+                 (unsigned)m->bad_subelem_len,
+                 (unsigned)m->malformed_subelem_len_total);
+        fire(ALERT_TYPE_MLE_SUBELEM_OVERRUN, ALERT_SEV_CRIT,
+             "MLE_SUBELEM_OVERRUN", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -4423,6 +4460,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wps_pbc_race(s, now);
     rule_mle_invalid_link_id(s, now);
     rule_mle_common_info_len_bad(s, now);
+    rule_mle_subelem_overrun(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

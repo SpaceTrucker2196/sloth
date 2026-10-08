@@ -7160,6 +7160,58 @@ static void test_mle_common_info_len_bad_fires_once_per_mld(void) {
     ASSERT_EQ(n, 2);
 }
 
+/* ── MLE subelement bounds overrun — CVE-2026-58374 class (#104 slice 3) ──── */
+
+static void test_mle_subelem_overrun_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mlds[0].malformed_subelem_len_total = 1;
+    s.mlds[0].bad_subelem_len = 10;
+    s.mlds[0].subelem_overrun_bytes = 1;
+    s.mld_count = 1;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MLE_SUBELEM_OVERRUN);
+    ASSERT(idx >= 0);
+    /* CRIT, not the WARN its two sibling MLE rules use: this is the
+     * overrun itself, not a length shaped to cause one. */
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_mle_subelem_overrun_quiet_when_clean(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mld_count = 1;   /* malformed_subelem_len_total left at 0 */
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MLE_SUBELEM_OVERRUN), -1);
+}
+
+static void test_mle_subelem_overrun_fires_once_per_mld(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld1[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    static const uint8_t mld2[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    memcpy(s.mlds[0].mld_mac, mld1, 6);
+    s.mlds[0].malformed_subelem_len_total = 1;
+    s.mlds[0].subelem_overrun_bytes = 1;
+    memcpy(s.mlds[1].mld_mac, mld2, 6);
+    s.mlds[1].malformed_subelem_len_total = 4;
+    s.mlds[1].bad_subelem_len = 200;
+    s.mlds[1].subelem_overrun_bytes = 191;
+    s.mld_count = 2;
+
+    alerts_update(&s);
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_MLE_SUBELEM_OVERRUN) n++;
+    ASSERT_EQ(n, 2);
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -7916,6 +7968,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_mle_common_info_len_bad_fires);
     RUN_TEST(test_mle_common_info_len_bad_quiet_when_clean);
     RUN_TEST(test_mle_common_info_len_bad_fires_once_per_mld);
+    RUN_TEST(test_mle_subelem_overrun_fires);
+    RUN_TEST(test_mle_subelem_overrun_quiet_when_clean);
+    RUN_TEST(test_mle_subelem_overrun_fires_once_per_mld);
 
     TEST_SUITE("alerts: incident lifecycle (#98)");
     RUN_TEST(test_lifecycle_create_emits_a_create_event);
