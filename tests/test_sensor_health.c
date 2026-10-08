@@ -350,10 +350,42 @@ static void test_schema_doc_lists_every_counted_table(void) {
        contain it. */
     ASSERT_EQ(doc_names, (int)SH_EVICT_KIND_COUNT);
 
-    /* The uncounted side must name a live example and refuse to read as
-     * full coverage: prose listing only what is counted implies the rest
-     * is loss-free. */
-    ASSERT(strstr(end, "probe_client") != NULL);
+    /* The uncounted side must still refuse to read as full coverage:
+     * prose listing only what IS counted implies the rest is loss-free.
+     *
+     * Asserted structurally rather than by naming an example. This
+     * assertion used to require the literal "probe_client" there,
+     * because that table was the example when it was written — and on
+     * 2026-10-08 probe_client became counted, so the test failed on a
+     * change that was correct. A test that has to be edited every time
+     * a table graduates is a test that will one day be edited wrongly.
+     *
+     * What holds regardless: no sh_evict_t name may appear on the
+     * uncounted side, because a kind cannot be both, and the
+     * "not all loss" caveat has to survive. */
+    /* Bounded to the uncounted PARAGRAPH, not the rest of the file:
+       searching to EOF swept in later sections that legitimately name
+       counted kinds, so the first version of this loop reported
+       wps_session and evidence_frame as contradictions when the prose
+       was correct — it had been scanning from the end of the COUNTED
+       list, not from the uncounted marker, so it swept the sentence
+       that legitimately explains which 802.11 tables joined the tally. */
+    const char *nc = strstr(doc, "**Not** counted:");
+    ASSERT(nc != NULL);
+    if (!nc) { free(doc); return; }
+    const char *para_end = strstr(nc, "\n\n");
+    size_t para_len = para_end ? (size_t)(para_end - nc) : strlen(nc);
+    for (int k = 0; k < SH_EVICT_KIND_COUNT; k++) {
+        char quoted[64];
+        snprintf(quoted, sizeof(quoted), "`%s`", sh_evict_name((sh_evict_t)k));
+        const char *hit = strstr(nc, quoted);
+        if (hit && (size_t)(hit - nc) < para_len) {
+            fprintf(stderr, "    jsonl-schema.md lists %s as NOT counted "
+                            "while sh_evict_t counts it\n",
+                    sh_evict_name((sh_evict_t)k));
+            ASSERT(hit == NULL);
+        }
+    }
     ASSERT(strstr(end, "not \"all loss\"") != NULL);
     free(doc);
 }

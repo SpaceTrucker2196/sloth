@@ -669,7 +669,7 @@ does not know the type ignores it, as it would any other.
 | `hop_dwells_completed` | dwells that have ended; the denominator behind the means, and 0 while the first is still in flight |
 | `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
 | `evictions` | total observations discarded by a full bounded table, lifetime |
-| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame` | the same total broken out per table |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client` | the same total broken out per table |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export |
 | `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no data-stream handle), `degraded` (at least one requested interface failed closed) |
@@ -733,7 +733,7 @@ consumer should alert on `scope_not_enforced` becoming `1`.
 `evict_<name>` field each, and this is the whole set: `alert`,
 `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`,
 `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`,
-`wps_session`, `evidence_frame`. The device table refuses a new entry
+`wps_session`, `evidence_frame`, `probe_client`. The device table refuses a new entry
 rather than evicting an old one — different mechanism, same meaning. The
 802.11 tables (`beacon_ap`, `seqnum_client`, the two `assoc_*`,
 `wps_session`) joined after the first tally shipped, and
@@ -746,9 +746,9 @@ the evidence ring retains whole frames in a fixed arena sized from
 system RAM, so a run on a busy channel evicts steadily by design and a
 rising count is not in itself a fault. See [[ring-buffers]].
 
-**Not** counted: the probe-client table (the `probe_client` records,
-LRU-evicted in the capture thread) and the per-protocol flow rings
-(DNS, TLS, QUIC, HTTP, NTP, ICMP). Those are examples, not an
+**Not** counted: the per-protocol flow rings (DNS, TLS, QUIC, HTTP,
+NTP, ICMP). The probe-client table joined the counted side on
+2026-10-08 and is no longer an example here. Those are examples, not an
 enumeration — the uncounted side is not listed exhaustively, so the
 rule to read by is that a table either has an `evict_<name>` field or
 it is not measured. Treat `evictions` as "loss on the instrumented

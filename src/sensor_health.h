@@ -19,18 +19,14 @@
  * all", and a monotonic lifetime count answers it from any two samples.
  *
  * Counted tables are exactly the ones listed below. Not instrumented
- * yet: the probe-client ring and the per-protocol flow rings — stating
+ * yet: the per-protocol flow rings — stating
  * which are covered is the point, since a tally that silently omits a
  * table reads as "no loss" when it means "not measured". The beacon,
  * seqnum and assoc tables joined the tally in the #91 wave-6 slice;
  * wps_session followed, then evidence_frame with the #92 evidence ring.
- * The probe-client ring was omitted from this sentence until 2026-10-05,
- * which made the comment read as though the flow rings were the only gap.
- *
- * Thread safety: the probe-side tables are written from the capture
- * threads and the rest from the poll loop, so the tally takes a mutex.
- * Eviction only happens on a full table, so the lock is cold by
- * construction. */
+ * The probe-client ring was missing from the counted side until
+ * 2026-10-08; it is now instrumented, and the sentence above no longer
+ * names it as a gap. */
 typedef enum {
     SH_EVICT_ALERT = 0,     /* src/alerts.c — oldest incident dropped (resolved first) */
     SH_EVICT_TOP_HOST,      /* src/top_hosts.c — oldest/quietest remote IP dropped */
@@ -45,6 +41,7 @@ typedef enum {
     SH_EVICT_ASSOC_REQ,     /* src/assoc_track.c — oldest pending assoc request dropped */
     SH_EVICT_WPS_SESSION,   /* src/wps_track.c — oldest WPS registration session dropped */
     SH_EVICT_EVIDENCE_FRAME,/* src/evidence_ring.c — oldest retained raw 802.11 frame dropped */
+    SH_EVICT_PROBE_CLIENT,  /* src/capture/probe.c — least-recently-seen probing client dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -59,7 +56,8 @@ uint64_t sh_evict_total(void);
 /* Stable lower-case name, part of the `sensor_health` JSONL contract:
  * "alert", "top_host", "pnl_client", "pnl_ssid", "dhcp_event",
  * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
- * "assoc_req", "wps_session", "evidence_frame". Unknown kinds return "". */
+ * "assoc_req", "wps_session", "evidence_frame", "probe_client".
+ * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
 /* Zero every tally. For tests — nothing in the running binary resets

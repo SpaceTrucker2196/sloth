@@ -1052,6 +1052,104 @@ static void test_probe_callback_has_no_wall_clock_read(void) {
     ASSERT_EQ(calls, 0);
 }
 
+/* ── Probe-client eviction is counted — issue #91 ─────────────
+ *
+ * The probe-client table LRU-evicts in the capture thread and nothing
+ * counted it, so a busy site silently dropped probing clients while
+ * `evictions` reported full coverage of everything else. It now has an
+ * `evict_probe_client` kind.
+ *
+ * These also pin a boundary fix made in the same change. record_probe()
+ * used to read `if (g_count == MAX_PROBE_CLIENTS)` AFTER `g_count++`,
+ * so the arrival that filled the last slot ran the eviction scan over
+ * the slot it had just allocated. On a fresh table that slot is zeroed,
+ * last_seen 0 made it the oldest, and the scan chose it back — which is
+ * why the defect was invisible. It is not invisible once the table has
+ * aged: probe_snapshot() compacts with `g_clients[i] = g_clients[--g_count]`,
+ * leaving the vacated index holding a copy of a live entry, so the scan
+ * could prefer an older LIVE slot, overwrite it, and leave the stale
+ * copy inside g_count — an aged-out client resurrected as current with
+ * someone else's row destroyed to make room.
+ *
+ * The decisive assertion is the first one: filling the table to exactly
+ * MAX must count ZERO evictions. Against the old condition it counts
+ * one, because the scan ran. */
+
+/* A probe request (FC 0x40) with a settable source address. addr2 is at
+   offset 10; 24 bytes is the minimum the parser walks (it reads the
+   sequence control at 22-23 before looking for IEs). */
+static int probe_req_frame(uint8_t *f, int ordinal) {
+    const int dot11_len = 24;
+    int total = mon_frame(f, dot11_len, 0x40);
+    uint8_t *d = f + RT_HDR;
+    d[10] = 0x02;                             /* locally administered */
+    d[11] = 0x00;
+    d[12] = 0x00;
+    d[13] = (uint8_t)((ordinal >> 16) & 0xff);
+    d[14] = (uint8_t)((ordinal >> 8) & 0xff);
+    d[15] = (uint8_t)(ordinal & 0xff);
+    return total;
+}
+
+/* Drive `n` distinct probing clients through the real callback. */
+static void drive_probe_clients(int first, int n) {
+    enum { CHUNK = 64 };
+    static uint8_t bufs[CHUNK][64];
+    const uint8_t *fs[CHUNK];
+    int ls[CHUNK];
+    int done = 0;
+    while (done < n) {
+        int batch = n - done < CHUNK ? n - done : CHUNK;
+        for (int i = 0; i < batch; i++) {
+            ls[i] = probe_req_frame(bufs[i], first + done + i);
+            fs[i] = bufs[i];
+        }
+        ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, batch), batch);
+        done += batch;
+    }
+}
+
+static void test_filling_the_probe_table_counts_no_eviction(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    sh_evict_reset();
+    /* Exactly MAX distinct clients: the table fills and nothing is lost. */
+    drive_probe_clients(1, MAX_PROBE_CLIENTS);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_PROBE_CLIENT), 0);
+}
+
+static void test_one_client_past_the_table_is_counted(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    sh_evict_reset();
+    drive_probe_clients(1, MAX_PROBE_CLIENTS + 1);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_PROBE_CLIENT), 1);
+    /* And it lands in the total, which is what the health strip shows. */
+    ASSERT(sh_evict_total() >= 1);
+}
+
+static void test_a_repeat_client_is_an_update_not_an_eviction(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    sh_evict_reset();
+    drive_probe_clients(1, MAX_PROBE_CLIENTS);
+    /* The same MACs again: every one matches an existing row, so the
+       table neither grows nor evicts. A tally that counted these would
+       report loss on a stable population. */
+    drive_probe_clients(1, MAX_PROBE_CLIENTS);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_PROBE_CLIENT), 0);
+}
+
+static void test_each_further_client_counts_once(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    sh_evict_reset();
+    drive_probe_clients(1, MAX_PROBE_CLIENTS + 10);
+    /* Ten past the cap, ten evictions — not nine, and not one per
+       dispatch batch. */
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_PROBE_CLIENT), 10);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -1097,6 +1195,12 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_zero_capture_clock_is_counted_not_substituted);
     RUN_TEST(test_a_good_capture_clock_is_not_counted);
     RUN_TEST(test_probe_callback_has_no_wall_clock_read);
+
+    TEST_SUITE("probe-client eviction is counted (#91)");
+    RUN_TEST(test_filling_the_probe_table_counts_no_eviction);
+    RUN_TEST(test_one_client_past_the_table_is_counted);
+    RUN_TEST(test_a_repeat_client_is_an_update_not_an_eviction);
+    RUN_TEST(test_each_further_client_counts_once);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);

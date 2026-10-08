@@ -223,8 +223,8 @@ SSIDs, DHCP events, 802.1X EAP sessions, the device table, and the
 802.11 tables: beacons, sequence-number clients, both association
 tables, and WPS sessions**; the device table refuses a *new* entry
 rather than evicting an old one, which is a different mechanism with the
-same meaning. Listing them is the point: the probe-client ring and the
-per-protocol flow rings are **not** instrumented yet, and a tally that
+same meaning. Listing them is the point: the per-protocol flow rings
+are **not** instrumented yet, and a tally that
 silently omitted a table would read as "no loss" when it means "not
 measured". The JSONL record breaks the total out per table, and
 `sh_evict_t` in `src/sensor_health.h` is the list this one has to

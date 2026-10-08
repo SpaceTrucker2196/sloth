@@ -11,6 +11,7 @@
 #include "sloth.h"
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_classify_exit / stats accounting (#91) */
+#include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
 #include "radiotap.h"
 #include "rf_quality.h"
@@ -203,9 +204,31 @@ static void record_probe(const uint8_t *mac, const char *ssid,
         }
     }
 
-    /* new entry — evict oldest if full */
-    int slot = g_count < MAX_PROBE_CLIENTS ? g_count++ : 0;
-    if (g_count == MAX_PROBE_CLIENTS) {
+    /* New entry. Append while there is room; evict the least recently
+     * seen only when there is not.
+     *
+     * The fullness test is on the count BEFORE the append, which is the
+     * fix for a boundary defect (#91): it used to read
+     * `if (g_count == MAX_PROBE_CLIENTS)` after `g_count++`, so the
+     * arrival that filled the last slot also ran the eviction scan over
+     * the slot it had just allocated. In a fresh table that slot is
+     * zeroed, so last_seen 0 made it the oldest and the scan chose it
+     * back — invisible. After an ageing pass it is not: probe_snapshot()
+     * compacts with `g_clients[i] = g_clients[--g_count]`, which leaves
+     * the vacated index holding a copy of a live entry, so the scan
+     * could prefer an older LIVE slot, overwrite that one, and leave
+     * the stale copy inside g_count — an aged-out client resurrected as
+     * current, with someone else's row destroyed to do it.
+     *
+     * Counting belongs here and not inside the scan for the same
+     * reason: an append is not an eviction, and a tally that said
+     * otherwise would report loss on a table that was merely filling. */
+    int full = (g_count == MAX_PROBE_CLIENTS);
+    int slot;
+    if (!full) {
+        slot = g_count++;
+    } else {
+        slot = 0;
         time_t oldest_ts = g_clients[0].last_seen;
         for (int i = 1; i < g_count; i++) {
             if (g_clients[i].last_seen < oldest_ts) {
@@ -213,6 +236,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
                 slot = i;
             }
         }
+        sh_evict_note(SH_EVICT_PROBE_CLIENT);
     }
 
     /* Full reset: the slot may be a recycled eviction, and a stale RSSI

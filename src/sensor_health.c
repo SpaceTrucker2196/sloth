@@ -56,6 +56,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_ASSOC_REQ:     return "assoc_req";
     case SH_EVICT_WPS_SESSION:   return "wps_session";
     case SH_EVICT_EVIDENCE_FRAME: return "evidence_frame";
+    case SH_EVICT_PROBE_CLIENT: return "probe_client";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";
