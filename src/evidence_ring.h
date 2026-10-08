@@ -20,12 +20,21 @@
  * alert records the IDs of the frames that triggered it; an exporter
  * (a later slice of #92) pulls those IDs back out.
  *
- * Memory-only, by construction. Nothing here opens, names or writes a
- * file. That matters beyond tidiness: full frames include EAPOL/PMKID
- * material, and #87 gates *writing* crackable material to disk behind
- * `--collect-handshakes`. A ring that cannot write cannot move that
- * material past the gate, which is why the ring can land while the
- * question of what the on-disk exporter may do is still open on #92.
+ * Memory-only, by construction: **nothing here writes a file, and no
+ * frame byte ever reaches one.** That matters beyond tidiness. Full
+ * frames include EAPOL/PMKID material, and #87 gates *writing*
+ * crackable material to disk behind `--collect-handshakes`. A ring that
+ * cannot write cannot move that material past the gate, which is why
+ * the ring can land while the question of what the on-disk exporter may
+ * do is still open on #92.
+ *
+ * Stated that way rather than as "nothing here opens a file", which the
+ * module contradicts: evidence_budget_from_meminfo() opens
+ * /proc/meminfo to size the arena. That is a read of kernel-reported
+ * memory, never a path to frame data, so the security property is
+ * untouched — but a claim whose whole job is to justify landing before
+ * the gate question is settled has to be exact, and the earlier wording
+ * was refutable by a grep for fopen in this file.
  * `eapol_log.c` already buffers whole EAPOL frames in memory on the
  * same reasoning.
  *
