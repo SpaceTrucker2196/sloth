@@ -154,12 +154,28 @@ void mle_observe(const sloth_mld_t *m, time_t now) {
     /* Merge rather than replace. A device advertises different subsets
      * of its links depending on which band the frame was heard on, so
      * replacing would make the link set flap and the canonical lookup
-     * intermittent — which is worse than not having it. */
+     * intermittent — which is worse than not having it.
+     *
+     * A link_id already bound to a *different* address is not another
+     * subset of the same device — IEEE 802.11be ties one link_id to one
+     * stable affiliated address for the association's life (#104 slice
+     * 4). That is a collision, not a merge: count it and keep the
+     * first-seen binding, rather than letting a second device's address
+     * displace or duplicate it in the roster. */
     for (int i = 0; i < m->link_count; i++) {
-        int known = 0;
-        for (int j = 0; j < e->link_count; j++)
+        int known = 0, conflict = 0;
+        for (int j = 0; j < e->link_count; j++) {
             if (memcmp(e->link_mac[j], m->link_mac[i], 6) == 0) { known = 1; break; }
+            if (e->link_id[j] == m->link_id[i]) conflict = 1;
+        }
         if (known) continue;
+        if (conflict) {
+            e->mac_collision_total++;
+            e->collision_link_id = m->link_id[i];
+            memcpy(e->collision_mac, m->link_mac[i], 6);
+            e->mac_collision_last_seen = now;
+            continue;
+        }
         if (e->link_count < SLOTH_MLD_MAX_LINKS) {
             memcpy(e->link_mac[e->link_count], m->link_mac[i], 6);
             e->link_id[e->link_count] = m->link_id[i];

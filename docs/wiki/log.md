@@ -1954,3 +1954,18 @@ EAPOL/PMKID material, and #87 gates *writing* that to disk. Evidence
 filenames, exclusive creation, the hashed manifest and the
 `storage_error` event remain unshipped — later slices, all of which
 touch a file.
+
+---
+
+## 2026-10-08 — MLD MAC collision detector (#104 slice 4)
+
+New `ALERT_TYPE_MLD_MAC_COLLISION` (CRIT, T1669): the same (MLD MAC,
+link_id) pair reported with two different affiliated addresses.
+IEEE 802.11be §9.4.2.312 ties one `link_id` to one stable hardware
+address for the association's life; `mle_observe()` now counts a
+later conflicting binding rather than merging it into the roster.
+New research page
+[802.11be-9.4.2.312-mld-identity.md](../../research/ieee/802.11be-9.4.2.312-mld-identity.md).
+Alert count 68 → 69, synced across `MISSION.md`, `README.md`,
+`agents/AGENTS.md`, `index.md`, `sloth.md`, `what-sloth-does.md`,
+`attack-map.md`.

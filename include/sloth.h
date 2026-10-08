@@ -789,6 +789,7 @@ typedef enum {
     ALERT_TYPE_MLE_INVALID_LINK_ID, /* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
     ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD, /* MLE Common Info Length can't cover the mandatory MLD MAC, or overruns the IE — w1.fi 2026-1 (#104 slice 2) */
     ALERT_TYPE_MLE_SUBELEM_OVERRUN, /* MLE Link Info subelement lengths sum past the enclosing element — w1.fi 2026-1 (#104 slice 3) */
+    ALERT_TYPE_MLD_MAC_COLLISION,   /* same (MLD MAC, link_id) reported with two different affiliated addresses — IEEE 802.11be 9.4.2.312 (#104 slice 4) */
     ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
@@ -1953,6 +1954,23 @@ typedef struct {
     uint16_t subelem_overrun_bytes; /* how far past the element it reached */
     uint32_t malformed_subelem_len_total;
     time_t   malformed_subelem_len_last_seen;
+
+    /* MLD MAC collision (#104 slice 4). IEEE 802.11be §9.4.2.312: a
+     * Per-STA Profile's link_id names one specific affiliated radio of
+     * the MLD, and that radio's address does not change for the life
+     * of the association. mle_observe() keeps the first address it
+     * sees for a given link_id as authoritative; a later frame naming
+     * the same (MLD MAC, link_id) pair with a *different* address is
+     * not a new subset of the same device's links (that case is the
+     * ordinary merge above) — it is two different radios claiming the
+     * same link identity under the same stable MLD MAC, which is
+     * either impersonation or an address collision either way worth an
+     * operator's attention. The conflicting address is counted and
+     * reported, never merged into the roster. */
+    uint32_t mac_collision_total;
+    time_t   mac_collision_last_seen;
+    uint8_t  collision_link_id;
+    uint8_t  collision_mac[6];
 } sloth_mld_t;
 
 /* ── 802.11k Radio Measurement survey (#61) ────────────────

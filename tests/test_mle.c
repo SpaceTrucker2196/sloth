@@ -493,6 +493,138 @@ static void test_repeat_observation_does_not_duplicate_links(void) {
     mle_clear();
 }
 
+/* ── MLD MAC collision — IEEE 802.11be 9.4.2.312 (#104 slice 4) ──── */
+
+static void test_conflicting_link_id_address_flags_collision(void) {
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    /* Same MLD MAC, same link_id, a different affiliated address. */
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK2);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 1);
+    ASSERT_EQ(st.mlds[0].mac_collision_total, 1);
+    ASSERT_EQ(st.mlds[0].collision_link_id, 0);
+    ASSERT(memcmp(st.mlds[0].collision_mac, LNK2, 6) == 0);
+    /* The first-seen binding stays authoritative in the roster — the
+     * conflicting address is reported, never merged in. */
+    ASSERT_EQ(st.mlds[0].link_count, 1);
+    uint8_t out[6];
+    ASSERT_EQ(mle_canonical(LNK1, out), 1);
+    ASSERT_EQ(mle_canonical(LNK2, out), 0);
+    mle_clear();
+}
+
+static void test_new_link_id_not_flagged_as_collision(void) {
+    /* The ordinary case this rule must not disturb: a genuinely new
+     * link_id, not seen before, is a normal merge. */
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 1, LNK2);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mlds[0].mac_collision_total, 0);
+    ASSERT_EQ(st.mlds[0].link_count, 2);
+    mle_clear();
+}
+
+static void test_repeated_same_binding_not_flagged_as_collision(void) {
+    /* The same (link_id, address) seen again — not a conflict, not a
+     * new link either. */
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    for (int i = 0; i < 3; i++) mle_observe(&m, 1000 + i);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mlds[0].mac_collision_total, 0);
+    ASSERT_EQ(st.mlds[0].link_count, 1);
+    mle_clear();
+}
+
+static void test_mac_collision_persists_across_clean_frames(void) {
+    /* Sticky lifetime count, same convention as the sibling MLE rules:
+     * a later clean frame does not erase an earlier collision. */
+    mle_clear();
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK2);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1002);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mlds[0].mac_collision_total, 1);
+    mle_clear();
+}
+
+static void test_distinct_mlds_isolate_collision_counts(void) {
+    mle_clear();
+    static const uint8_t MLD2[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK1);
+    sloth_mld_t m;
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1000);
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 0, LNK2);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1001);
+
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD2, 0);
+    n = put_per_sta(b, n, 0, LNK3);
+    mle_parse(b, n, &m);
+    mle_observe(&m, 1002);
+
+    sloth_state_t st; memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 2);
+    int collided = 0, clean = 0;
+    for (int i = 0; i < st.mld_count; i++) {
+        if (memcmp(st.mlds[i].mld_mac, MLD, 6) == 0) collided = st.mlds[i].mac_collision_total;
+        if (memcmp(st.mlds[i].mld_mac, MLD2, 6) == 0) clean = st.mlds[i].mac_collision_total;
+    }
+    ASSERT_EQ(collided, 1);
+    ASSERT_EQ(clean, 0);
+    mle_clear();
+}
+
 void run_mle_tests(void) {
     TEST_SUITE("Multi-Link Element parse (#67)");
     RUN_TEST(test_basic_mle_yields_the_mld_mac);
@@ -531,4 +663,11 @@ void run_mle_tests(void) {
     RUN_TEST(test_observe_and_canonical_lookup);
     RUN_TEST(test_links_merge_across_frames);
     RUN_TEST(test_repeat_observation_does_not_duplicate_links);
+
+    TEST_SUITE("MLD MAC collision — IEEE 802.11be 9.4.2.312 (#104 slice 4)");
+    RUN_TEST(test_conflicting_link_id_address_flags_collision);
+    RUN_TEST(test_new_link_id_not_flagged_as_collision);
+    RUN_TEST(test_repeated_same_binding_not_flagged_as_collision);
+    RUN_TEST(test_mac_collision_persists_across_clean_frames);
+    RUN_TEST(test_distinct_mlds_isolate_collision_counts);
 }

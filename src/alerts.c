@@ -526,6 +526,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
     case ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD: return "T1669";      /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
     case ALERT_TYPE_MLE_SUBELEM_OVERRUN:    return "T1669";       /* same class again — Link Info subelement chain overruns its container */
+    case ALERT_TYPE_MLD_MAC_COLLISION:      return "T1669";       /* rogue MLD impersonating a stable Multi-Link identity */
     /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
      * (#80): what fires here is a third party's camera announcing its
      * own presence over an unauthenticated multicast protocol — an
@@ -589,6 +590,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_MLE_INVALID_LINK_ID);
     N(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
     N(ALERT_TYPE_MLE_SUBELEM_OVERRUN);
+    N(ALERT_TYPE_MLD_MAC_COLLISION);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     case ALERT_TYPE_COUNT: break;
     }
@@ -3313,6 +3315,40 @@ static void rule_mle_subelem_overrun(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* MLD MAC collision — IEEE 802.11be §9.4.2.312 (#104 slice 4). A
+ * Per-STA Profile link_id names one specific affiliated radio of the
+ * MLD, and its address is stable for the life of the association.
+ * mle_observe() keeps the first address bound to a (MLD MAC, link_id)
+ * pair and counts, rather than merges, any later frame that names the
+ * same pair with a different address — that is not a new subset of one
+ * device's links, it is two radios claiming the same link identity
+ * under the same stable MLD MAC. CRIT: unlike the sibling CVE-2026-58374
+ * rules, this is not a value shaped to crash a parser — it is one
+ * identity, actively contested by two different addresses, which is
+ * either an MLD impersonation attempt or a real address collision
+ * either way worth immediate attention. */
+static void rule_mld_mac_collision(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *m = &s->mlds[i];
+        if (!m->mac_collision_total) continue;
+
+        char mac[20], coll[20];
+        mac_to_str(m->mld_mac, mac, sizeof(mac));
+        mac_to_str(m->collision_mac, coll, sizeof(coll));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mld_mac_collision:%s", mac);
+        snprintf(detail, sizeof(detail),
+                 "MLD %s link_id %u was bound to one affiliated address, "
+                 "then reported with a different one (%s) - two radios "
+                 "claiming one Multi-Link identity (%u such frame(s) seen) "
+                 "- IEEE 802.11be 9.4.2.312",
+                 mac, (unsigned)m->collision_link_id, coll,
+                 (unsigned)m->mac_collision_total);
+        fire(ALERT_TYPE_MLD_MAC_COLLISION, ALERT_SEV_CRIT,
+             "MLD_MAC_COLLISION", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -4461,6 +4497,7 @@ void alerts_update(sloth_state_t *s) {
     rule_mle_invalid_link_id(s, now);
     rule_mle_common_info_len_bad(s, now);
     rule_mle_subelem_overrun(s, now);
+    rule_mld_mac_collision(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

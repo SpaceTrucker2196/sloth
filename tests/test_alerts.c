@@ -7212,6 +7212,57 @@ static void test_mle_subelem_overrun_fires_once_per_mld(void) {
     ASSERT_EQ(n, 2);
 }
 
+/* ── MLD MAC collision — IEEE 802.11be 9.4.2.312 (#104 slice 4) ──── */
+
+static void test_mld_mac_collision_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    static const uint8_t coll[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x22 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mlds[0].mac_collision_total = 1;
+    s.mlds[0].collision_link_id = 0;
+    memcpy(s.mlds[0].collision_mac, coll, 6);
+    s.mld_count = 1;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MLD_MAC_COLLISION);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+}
+
+static void test_mld_mac_collision_quiet_when_clean(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    memcpy(s.mlds[0].mld_mac, mld, 6);
+    s.mld_count = 1;   /* mac_collision_total left at 0 */
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MLD_MAC_COLLISION), -1);
+}
+
+static void test_mld_mac_collision_fires_once_per_mld(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t mld1[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x01 };
+    static const uint8_t mld2[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
+    static const uint8_t coll[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x33 };
+    memcpy(s.mlds[0].mld_mac, mld1, 6);
+    s.mlds[0].mac_collision_total = 1;
+    memcpy(s.mlds[0].collision_mac, coll, 6);
+    memcpy(s.mlds[1].mld_mac, mld2, 6);
+    s.mlds[1].mac_collision_total = 2;
+    memcpy(s.mlds[1].collision_mac, coll, 6);
+    s.mld_count = 2;
+
+    alerts_update(&s);
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_MLD_MAC_COLLISION) n++;
+    ASSERT_EQ(n, 2);
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -7971,6 +8022,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_mle_subelem_overrun_fires);
     RUN_TEST(test_mle_subelem_overrun_quiet_when_clean);
     RUN_TEST(test_mle_subelem_overrun_fires_once_per_mld);
+    RUN_TEST(test_mld_mac_collision_fires);
+    RUN_TEST(test_mld_mac_collision_quiet_when_clean);
+    RUN_TEST(test_mld_mac_collision_fires_once_per_mld);
 
     TEST_SUITE("alerts: incident lifecycle (#98)");
     RUN_TEST(test_lifecycle_create_emits_a_create_event);
