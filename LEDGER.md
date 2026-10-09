@@ -188,3 +188,4 @@
 | 982ba75 | 2026-10-08T16:36:27Z | claude-opus-5 | 64 | 25085 | 26930393 | 31663 | 14.4093 | #91 probe-client eviction tally + fill-boundary fix |
 | 052a705 | 2026-10-08T19:45:31Z | claude-opus-5 | 56 | 24881 | 23544992 | 870123 | 21.0960 | #91 per-stream freshness on two clocks |
 | 3d1fe65 | 2026-10-08T13:25:35Z | claude-opus-5 | 68 | 28023 | 4301780 | 1112101 | 13.9728 | #104 slice 4 — MLD MAC collision on a reused link_id (backfilled 2026-10-09: mis |
+| 4a86b10 | 2026-10-09T11:22:43Z | claude-opus-5 | 270 | 102946 | 16827905 | 421714 | 15.2061 | #91 — per-protocol flow-ring eviction tally (builder session only) |
