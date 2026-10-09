@@ -230,6 +230,39 @@ jobs:
           -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c
           src research
 
+  # libFuzzer smoke check (#95). Named open on this issue's very first
+  # triage comment (2026-09-22) and never picked up through every
+  # subsequent wave. `sanitize`/`tsan` above prove specific hand-built
+  # cases under gcc; this job searches for a case nobody wrote, under
+  # clang, which is the only compiler here with a libFuzzer runtime.
+  #
+  # Bounded and blocking, not a campaign: no corpus is kept in the repo
+  # (AGENTS.md's no-fixtures rule applies to a saved corpus too — it is a
+  # captured input by another name), there is no crash-triage process,
+  # and FUZZ_SECONDS caps the run so a hang reads as a CI timeout rather
+  # than this job growing without bound. `make fuzz` is the single
+  # source of truth for how a target is built and run; this step does
+  # not duplicate that command.
+  #
+  # One target today: fuzz_deauth_parse, over the pure byte parser in
+  # src/deauth_snoop.c. See the Makefile comment above the `fuzz` target
+  # for why the other three the issue names (parse_eapol_key, the IE
+  # walk, radiotap/LLC) are follow-up slices, not omissions.
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install clang and its compiler-rt (libFuzzer/ASan/UBSan runtimes)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          ver="$(clang -dumpversion | cut -d. -f1)"
+          sudo apt-get install -y "libclang-rt-${ver}-dev"
+
+      - name: Fuzz smoke
+        run: make fuzz FUZZ_CC=clang FUZZ_SECONDS=30
+
   # Hardened build flags (#95, the wave-6 item the original 2026-09-22
   # triage on that issue named and every slice since deferred). The
   # Makefile now always compiles the shipped `sloth`/`embedded` binaries

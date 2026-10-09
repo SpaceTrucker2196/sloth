@@ -685,6 +685,48 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 	      -Iresearch/ingest -Iresearch -Iresearch/mcp \
 	      -o $@ $(CAPTURE_PATH_SRCS) -lm -lpthread -lsqlite3 -lpcap
 
+# ── libFuzzer smoke targets (#95) ───────────────────────────────────────────
+# "fuzzing through the capture path" was named open on #95 since its first
+# triage comment (2026-09-22) and never picked up. `capture_test_dispatch()`
+# / `probe_test_dispatch()` (also #95) already drive the real callback path
+# with hand-built frames under ASan/UBSan/TSan in CI — that proves specific
+# cases, the way every test here does. A fuzzer searches for a case nobody
+# wrote, which is a different kind of coverage and the gap this closes.
+#
+# `-fsanitize=fuzzer` is clang-only (gcc has no libFuzzer runtime), so this
+# target uses $(FUZZ_CC) rather than $(CC) and is not part of `make`, `make
+# test` or the six-config matrix — none of those may assume clang is
+# installed. It is deliberately a SMOKE check, not a fuzzing campaign: no
+# corpus is kept in-tree (AGENTS.md's "no fixtures" rule applies here too —
+# a saved corpus is a captured input by another name) and there is no
+# crash-triage process. `FUZZ_SECONDS` bounds each target so CI gets a
+# bounded memory-safety check rather than an open-ended job.
+#
+# One target lands with this slice: fuzz_deauth_parse, over deauth_parse()
+# (src/deauth_snoop.c) — a pure byte parser with no global state, so it
+# needs no harness scaffolding beyond the bytes themselves. The others the
+# issue names (parse_eapol_key, the IE walk, radiotap/LLC) are follow-ups:
+# parse_eapol_key is `static` in src/eapol_log.c and reaching it means
+# fuzzing through eapol_observe_dot11()'s full frame shape instead of the
+# key field alone, and the IE walk and radiotap/LLC decode both sit behind
+# capture.c's on_packet(), which needs the savefile-harness machinery
+# test-capture-path already built — each is its own slice, not a one-line
+# addition to this one.
+FUZZ_CC      ?= clang
+FUZZ_SECONDS ?= 20
+FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
+                -Iinclude -Isrc -Itests/fuzz
+
+.PHONY: fuzz
+fuzz:
+	@command -v $(FUZZ_CC) >/dev/null 2>&1 || { \
+	  echo "fuzz: $(FUZZ_CC) not found -- libFuzzer needs clang, not gcc" >&2; \
+	  exit 1; }
+	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_deauth_parse \
+	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
+	    -lpthread
+	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
+
 # ── Static analysis (#95) ───────────────────────────────────────────────────
 # Runs CI's cppcheck command, byte for byte, with CI's version guard.
 # This is not an approximation: `make cppcheck` green means the cppcheck
