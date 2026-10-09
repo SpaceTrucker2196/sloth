@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include "icmp_log.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 
 /* ICMP header (RFC 792 / RFC 4443):
  *   0       1       2       3
@@ -101,9 +102,13 @@ int icmp_log_parse(const uint8_t *msg, int len,
 void icmp_log_record(const icmp_log_entry_t *e) {
     if (!e) return;
     pthread_mutex_lock(&icmp_mu);
+    /* Occupancy BEFORE the append; tally on the loss branch only — see
+     * the note in src/dns_log.c for why that boundary matters (#91). */
+    int full = (icmp_count == MAX_ICMP_LOG);
     icmp_buf[icmp_head] = *e;
     icmp_head = (icmp_head + 1) % MAX_ICMP_LOG;
-    if (icmp_count < MAX_ICMP_LOG) icmp_count++;
+    if (full) sh_evict_note(SH_EVICT_ICMP_LOG);
+    else      icmp_count++;
     pthread_mutex_unlock(&icmp_mu);
     jsonl_emit_icmp(e);
 }

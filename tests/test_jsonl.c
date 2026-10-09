@@ -1104,6 +1104,65 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"hop_silent_channels\":0"));
     ASSERT(contains(body, "\"hop_dwell_planned_ms\":0"));
     ASSERT(contains(body, "\"hop_dwells_completed\":0"));
+    /* #91: the six flow rings ride the same loop, so the breakout is
+       complete and `evictions` stays its exact sum. */
+    ASSERT(contains(body, "\"evict_probe_client\":0"));
+    ASSERT(contains(body, "\"evict_dns_log\":0"));
+    ASSERT(contains(body, "\"evict_tls_log\":0"));
+    ASSERT(contains(body, "\"evict_quic_log\":0"));
+    ASSERT(contains(body, "\"evict_http_log\":0"));
+    ASSERT(contains(body, "\"evict_ntp_log\":0"));
+    ASSERT(contains(body, "\"evict_icmp_log\":0"));
+    sh_evict_reset();
+}
+
+/* #91: `evictions` is published as the sum of the per-table breakout,
+ * so the flow rings have to be inside it — that part of the contract is
+ * additive and must not quietly become a subset. */
+static void test_emit_sensor_health_total_includes_flow_rings(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_evict_note(SH_EVICT_ALERT);
+    for (int i = 0; i < 6; i++) sh_evict_note(SH_EVICT_TLS_LOG);
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"evictions\":7"));
+    ASSERT(contains(body, "\"evict_tls_log\":6"));
+    ASSERT(contains(body, "\"evict_alert\":1"));
+    sh_evict_reset();
+}
+
+/* …but the change-only signature must NOT move with them. A flow ring
+ * rolls over continuously on a busy segment, so signing over it would
+ * emit this record every tick forever and bury the transitions it
+ * exists to surface — the same reason `ps_recv` and `stale_secs` are
+ * kept out of that signature. One ring eviction after an identical
+ * record must therefore be suppressed; one table eviction must not. */
+static void test_sensor_health_flow_ring_churn_does_not_re_emit(void) {
+    open_fresh();
+    sh_evict_reset();
+    sloth_state_t s; seed_health(&s);
+
+    jsonl_emit_sensor_health(&s);          /* first record: always news */
+    for (int i = 0; i < 2000; i++) sh_evict_note(SH_EVICT_DNS_LOG);
+    jsonl_emit_sensor_health(&s);          /* ring churn only: suppressed */
+    jsonl_close();
+    char *churn = slurp(tmp_path);
+    ASSERT(churn != NULL);
+    if (churn) ASSERT_EQ(count_lines(churn), 1);
+
+    open_fresh();
+    sh_evict_reset();
+    jsonl_emit_sensor_health(&s);
+    sh_evict_note(SH_EVICT_DEVICE);        /* a real lost observation */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *loss = slurp(tmp_path);
+    ASSERT(loss != NULL);
+    if (loss) ASSERT_EQ(count_lines(loss), 2);
     sh_evict_reset();
 }
 
@@ -1809,6 +1868,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
     RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
     RUN_TEST(test_emit_sensor_health_eviction_tally);
+    RUN_TEST(test_emit_sensor_health_total_includes_flow_rings);
+    RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
     RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
     RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);
     RUN_TEST(test_emit_sensor_health_scope_unrequested);

@@ -6,6 +6,7 @@
 #include "quic_snoop.h"
 #include "quic_log.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 
 static quic_log_entry_t g_log[MAX_QUIC_LOG];
 static int              g_head  = 0;
@@ -31,9 +32,13 @@ int quic_log_parse(const uint8_t *data, int len,
 void quic_log_record(const quic_log_entry_t *e)
 {
     pthread_mutex_lock(&g_mu);
+    /* Occupancy BEFORE the append; tally on the loss branch only — see
+     * the note in src/dns_log.c for why that boundary matters (#91). */
+    int full = (g_count == MAX_QUIC_LOG);
     g_log[g_head] = *e;
     g_head = (g_head + 1) % MAX_QUIC_LOG;
-    if (g_count < MAX_QUIC_LOG) g_count++;
+    if (full) sh_evict_note(SH_EVICT_QUIC_LOG);
+    else      g_count++;
     pthread_mutex_unlock(&g_mu);
     jsonl_emit_quic(e);
 }

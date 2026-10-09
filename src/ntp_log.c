@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include "ntp_log.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 
 /* RFC 5905 — NTPv3/v4 fixed header (48 bytes minimum):
  *
@@ -95,9 +96,13 @@ int ntp_log_parse(const uint8_t *msg, int len,
 void ntp_log_record(const ntp_log_entry_t *e) {
     if (!e) return;
     pthread_mutex_lock(&ntp_mu);
+    /* Occupancy BEFORE the append; tally on the loss branch only — see
+     * the note in src/dns_log.c for why that boundary matters (#91). */
+    int full = (ntp_count == MAX_NTP_LOG);
     ntp_buf[ntp_head] = *e;
     ntp_head = (ntp_head + 1) % MAX_NTP_LOG;
-    if (ntp_count < MAX_NTP_LOG) ntp_count++;
+    if (full) sh_evict_note(SH_EVICT_NTP_LOG);
+    else      ntp_count++;
     pthread_mutex_unlock(&ntp_mu);
     jsonl_emit_ntp(e);
 }

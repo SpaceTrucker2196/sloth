@@ -8,6 +8,7 @@
 #include "md5.h"
 #include "sha256.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 
 static tls_log_entry_t g_log[MAX_TLS_LOG];
 static int             g_head  = 0;
@@ -401,9 +402,13 @@ int tls_log_parse(const uint8_t *data, int len,
 void tls_log_record(const tls_log_entry_t *e)
 {
     pthread_mutex_lock(&g_mu);
+    /* Occupancy BEFORE the append; tally on the loss branch only — see
+     * the note in src/dns_log.c for why that boundary matters (#91). */
+    int full = (g_count == MAX_TLS_LOG);
     g_log[g_head] = *e;
     g_head = (g_head + 1) % MAX_TLS_LOG;
-    if (g_count < MAX_TLS_LOG) g_count++;
+    if (full) sh_evict_note(SH_EVICT_TLS_LOG);
+    else      g_count++;
     pthread_mutex_unlock(&g_mu);
     jsonl_emit_tls(e);
 }

@@ -8,6 +8,7 @@
 #include "dns_log.h"
 #include "jsonl.h"
 #include "host_cache.h"
+#include "sensor_health.h"
 
 static dns_log_entry_t g_log[MAX_DNS_LOG];
 static int             g_head  = 0;
@@ -142,9 +143,18 @@ int dns_log_parse(const uint8_t *msg, int len,
 void dns_log_record(const dns_log_entry_t *e)
 {
     pthread_mutex_lock(&g_mu);
+    /* Occupancy is read BEFORE the append, and the tally sits on the
+     * loss branch only (#91). An append into a ring with room costs
+     * nothing; it is the append onto a FULL ring that overwrites the
+     * oldest record. Reading the count afterwards reports one eviction
+     * for the record that merely filled the last slot — the boundary
+     * defect `6c1e3a9` found in the probe table — which would make
+     * every sensor read as lossy from its first full ring onward. */
+    int full = (g_count == MAX_DNS_LOG);
     g_log[g_head] = *e;
     g_head = (g_head + 1) % MAX_DNS_LOG;
-    if (g_count < MAX_DNS_LOG) g_count++;
+    if (full) sh_evict_note(SH_EVICT_DNS_LOG);
+    else      g_count++;
     pthread_mutex_unlock(&g_mu);
     jsonl_emit_dns(e);
     /* Feed the IP->host cache so downstream views can show qnames

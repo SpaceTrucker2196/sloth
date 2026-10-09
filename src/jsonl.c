@@ -1812,7 +1812,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.cap_ifdrop  = s->cap_health.ps_ifdrop;
     sig.mon_drop    = s->mon_health.ps_drop;
     sig.mon_ifdrop  = s->mon_health.ps_ifdrop;
-    sig.evicted     = evict_total;
+    /* Synthesis tables only (#91). The flow rings are in `evict_total`
+     * and therefore in the emitted `evictions` field, but they must stay
+     * out of the signature: a ring rolls over continuously on a busy
+     * segment, so signing over it would emit this record every second
+     * forever — the same firehose `ps_recv` and `stale_secs` are
+     * excluded to avoid, and it would bury the transitions this record
+     * exists to surface. */
+    sig.evicted     = sh_evict_total_tables();
     sig.storage_fail = storage_fail;
     /* #85: a pin failing closed is a transition, never a heartbeat's
      * worth of news — generation moves even if the counts coincide. */

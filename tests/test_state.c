@@ -662,6 +662,30 @@ void test_health_strip_reports_evictions(void) {
     sh_evict_reset();
 }
 
+/* #91: the flow rings joined the eviction tally, and they roll over
+ * continuously on a busy segment by design. The strip is faults-only, so
+ * ring turnover must not appear on it — otherwise every busy sensor
+ * carries a large permanently-rising `evict`, which is exactly the "a
+ * number every second" habit that trains an operator to stop reading the
+ * line. Synthesis-table loss is still news and still shows. */
+void test_health_strip_ignores_flow_ring_turnover(void) {
+    sloth_state_t s = make_healthy_sensor_state();
+    char buf[160];
+
+    sh_evict_reset();
+    for (int i = 0; i < 4096; i++) sh_evict_note(SH_EVICT_DNS_LOG);
+    sh_evict_note(SH_EVICT_HTTP_LOG);
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+
+    /* One real table loss alongside the ring churn still reports, and
+     * reports the table figure — not the total. */
+    sh_evict_note(SH_EVICT_DEVICE);
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  evict 1");
+    sh_evict_reset();
+}
+
 /* #85 slice 2: a requested scope that is enforced adds nothing; one
  * that is not is a fault and says so, so a fail-closed replug is never
  * just a quiet interface. */
@@ -889,6 +913,7 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_reports_dwell_divergence);
     RUN_TEST(test_health_strip_quiet_when_dwell_is_served);
     RUN_TEST(test_health_strip_reports_evictions);
+    RUN_TEST(test_health_strip_ignores_flow_ring_turnover);
     RUN_TEST(test_health_strip_enforced_scope_is_quiet);
     RUN_TEST(test_health_strip_reports_degraded_scope);
     RUN_TEST(test_health_strip_reports_scope_without_capture);

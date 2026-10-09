@@ -7,6 +7,7 @@
 #include "http_log.h"
 #include "sha256.h"
 #include "jsonl.h"
+#include "sensor_health.h"
 
 static http_log_entry_t g_log[MAX_HTTP_LOG];
 static int              g_head  = 0;   /* next write slot */
@@ -543,9 +544,13 @@ void http_log_record(const http_log_entry_t *e)
     if (!e->is_response) flow_note_request(e);
 
     pthread_mutex_lock(&g_mu);
+    /* Occupancy BEFORE the append; tally on the loss branch only — see
+     * the note in src/dns_log.c for why that boundary matters (#91). */
+    int full = (g_count == MAX_HTTP_LOG);
     g_log[g_head] = *e;
     g_head = (g_head + 1) % MAX_HTTP_LOG;
-    if (g_count < MAX_HTTP_LOG) g_count++;
+    if (full) sh_evict_note(SH_EVICT_HTTP_LOG);
+    else      g_count++;
     pthread_mutex_unlock(&g_mu);
     jsonl_emit_http(e);
 }

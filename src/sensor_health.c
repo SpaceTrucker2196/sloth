@@ -5,7 +5,8 @@
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
  * Written from the capture threads (probe_pnl, dhcp_snoop, eap_track,
- * beacon_snoop, seqnum_track, assoc_track, evidence_ring) and from the
+ * beacon_snoop, seqnum_track, assoc_track, evidence_ring, and the six
+ * per-protocol flow rings) and from the
  * poll loop (alerts, top_hosts, devices), so the tally
  * takes a mutex rather than relying on unsynchronised increments. The
  * lock is cold by construction: it is only reached when a bounded table
@@ -41,6 +42,29 @@ uint64_t sh_evict_total(void) {
     return n;
 }
 
+int sh_evict_is_flow_ring(sh_evict_t kind) {
+    switch (kind) {
+    case SH_EVICT_DNS_LOG:
+    case SH_EVICT_TLS_LOG:
+    case SH_EVICT_QUIC_LOG:
+    case SH_EVICT_HTTP_LOG:
+    case SH_EVICT_NTP_LOG:
+    case SH_EVICT_ICMP_LOG:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+uint64_t sh_evict_total_tables(void) {
+    uint64_t n = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < SH_EVICT_KIND_COUNT; i++)
+        if (!sh_evict_is_flow_ring((sh_evict_t)i)) n += g_evict[i];
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
 const char *sh_evict_name(sh_evict_t kind) {
     switch (kind) {
     case SH_EVICT_ALERT:       return "alert";
@@ -57,6 +81,12 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_WPS_SESSION:   return "wps_session";
     case SH_EVICT_EVIDENCE_FRAME: return "evidence_frame";
     case SH_EVICT_PROBE_CLIENT: return "probe_client";
+    case SH_EVICT_DNS_LOG:     return "dns_log";
+    case SH_EVICT_TLS_LOG:     return "tls_log";
+    case SH_EVICT_QUIC_LOG:    return "quic_log";
+    case SH_EVICT_HTTP_LOG:    return "http_log";
+    case SH_EVICT_NTP_LOG:     return "ntp_log";
+    case SH_EVICT_ICMP_LOG:    return "icmp_log";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

@@ -428,7 +428,13 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
                    (unsigned long long)s->mon_health.ps_ifdrop);
     if (s->chan_retune_failures)
         strip_addf(buf, sz, &off, "  retune-fail %d", s->chan_retune_failures);
-    uint64_t ev = sh_evict_total();
+    /* Synthesis tables only. The per-protocol flow rings joined the
+     * tally in #91, and they roll over continuously on a busy segment by
+     * design — putting them here would pin a large, permanently rising
+     * `evict` on the line, which is precisely the "shows a number every
+     * second" failure the comment above exists to prevent. Flow-ring
+     * loss is reported per table in `sensor_health`. */
+    uint64_t ev = sh_evict_total_tables();
     if (ev)
         strip_addf(buf, sz, &off, "  evict %llu", (unsigned long long)ev);
     /* #91: channels the hopper visits but never hears anything on. A
