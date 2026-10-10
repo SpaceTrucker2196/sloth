@@ -869,6 +869,9 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     s.channels[0].channel  = 36;
     s.channels[0].ap_count = 4;
     s.channel_count = 1;
+    /* Not CH_SRC_HE_6GHZ here on purpose — the collision case (#91) has
+     * its own dedicated test below, using a channel number the plain
+     * 36 above would otherwise also satisfy by accident. */
 
     /* assoc */
     s.assocs[0].bssid[0] = 0xa1;
@@ -952,6 +955,7 @@ static void test_emit_state_snapshots_covers_all_view_types(void) {
     ASSERT(contains(body, "\"gap\":3"));
     ASSERT(contains(body, "\"type\":\"channel_summary\""));
     ASSERT(contains(body, "\"channel\":36"));
+    ASSERT(contains(body, "\"band\":\"5 GHz\""));
     ASSERT(contains(body, "\"type\":\"assoc\""));
     ASSERT(contains(body, "\"ssid\":\"Office\""));
     ASSERT(contains(body, "\"type\":\"eapol\""));
@@ -1048,6 +1052,39 @@ static void test_emit_sensor_health_confirmed_channel_is_ok(void) {
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
     ASSERT(contains(body, "\"chan_confirmed_ok\":1"));
+}
+
+/* #91: channel 37 is a valid number in both 5 GHz and 6 GHz, so a
+ * consumer reading only `channel` cannot tell which band the row is
+ * about. `band` is additive and must agree with the [m] Channel view's
+ * own ap_band_label() call, which is what makes this worth exporting
+ * rather than leaving the TUI as the only correct reader. */
+static void test_emit_channel_summary_band_distinguishes_6ghz_collision(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.channels[0].channel        = 37;
+    s.channels[0].channel_source = CH_SRC_HE_6GHZ;
+    s.channel_count = 1;
+    jsonl_emit_channels(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"channel\":37"));
+    ASSERT(contains(body, "\"band\":\"6 GHz\""));
+}
+
+static void test_emit_channel_summary_same_number_without_source_is_5ghz(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.channels[0].channel        = 37;
+    s.channels[0].channel_source = CH_SRC_DS_PARAM;
+    s.channel_count = 1;
+    jsonl_emit_channels(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"channel\":37"));
+    ASSERT(contains(body, "\"band\":\"5 GHz\""));
 }
 
 static void test_emit_sensor_health_worker_exit_and_drops(void) {
@@ -1861,6 +1898,10 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_pnl_worst_case_escaping_fits);
     RUN_TEST(test_emit_state_snapshots_covers_all_view_types);
     RUN_TEST(test_emit_state_snapshots_empty_writes_nothing);
+
+    TEST_SUITE("jsonl channel_summary band field (#91)");
+    RUN_TEST(test_emit_channel_summary_band_distinguishes_6ghz_collision);
+    RUN_TEST(test_emit_channel_summary_same_number_without_source_is_5ghz);
 
     TEST_SUITE("jsonl sensor_health record (#91 slice 3)");
     RUN_TEST(test_emit_sensor_health_on_empty_state);

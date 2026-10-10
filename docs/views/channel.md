@@ -20,6 +20,25 @@ Frequency-to-channel mapping is shared with the managed-mode nl80211
 path (`radiotap_freq_to_channel()`), so a monitor capture and a scan
 cannot disagree about what channel an AP is on. 2.4, 5 and 6 GHz.
 
+**The channel number alone does not say which band (#91).** 5 GHz and
+6 GHz channel numbers overlap — 37, 149 and others name a real channel
+in both bands — so `Band` is not derived from `Ch` by range alone.
+`ap_band_label()` (`src/beacon_snoop.c`) checks the AP's
+`channel_source` first: a channel named by the HE Operation element's
+6 GHz Operation Info subfield (`CH_SRC_HE_6GHZ`) is 6 GHz regardless of
+the number, because no other band's AP ever sends that subfield. Only
+once that is ruled out does the numeric range decide 2.4 vs. 5 GHz. The
+same function renders both this view and the `band` field on the
+`channel_summary` JSONL record (`docs/wiki/jsonl-schema.md`), so a
+consumer reading the log cannot disagree with the screen.
+
+A known, accepted gap: `channel_summary_t` rows are still keyed by
+channel *number* alone, so a 5 GHz AP and a 6 GHz AP that happen to
+share a number are one row, not two — `ap_count` and `Top SSID` mix
+both, and the row's band is whichever source won promotion (6 GHz wins
+if either AP reported it). That is a data-model change bigger than this
+fix, not swept in here.
+
 ## What sloth captures
 
 | Column | Source |

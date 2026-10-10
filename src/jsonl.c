@@ -1051,6 +1051,13 @@ void jsonl_emit_channels(const sloth_state_t *s) {
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "channel_summary", now);
         kv_int(buf, LINEBUF, &off, "channel",     e->channel);
+        /* Additive: a 5 GHz and a 6 GHz channel can share a number (37,
+         * 149, …), so `channel` alone cannot say which band a consumer
+         * is looking at. ap_band_label() is the same function the [m]
+         * Channel view renders, so a JSONL reader and the TUI cannot
+         * disagree about what band row `channel` describes. */
+        kv_str(buf, LINEBUF, &off, "band",
+               ap_band_label(e->channel, e->channel_source));
         kv_int(buf, LINEBUF, &off, "ap_count",    e->ap_count);
         kv_int(buf, LINEBUF, &off, "assoc_count", e->assoc_count);
         kv_int(buf, LINEBUF, &off, "best_signal", e->best_signal);

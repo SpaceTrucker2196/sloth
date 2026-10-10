@@ -37,6 +37,15 @@ void channel_summary_update(sloth_state_t *s) {
         channel_summary_t *e = find_or_alloc(tbl, &n, a->channel);
         if (!e) continue;
         e->ap_count++;
+        /* Promote-only: once this channel number's row has seen a 6 GHz
+         * source, a later AP on the same number with no source (or a
+         * different one) must not erase it — so the HE_6GHZ arm is
+         * skipped once set, not merely overwritten in both directions.
+         * Otherwise carry the AP's own source through; a non-6-GHz
+         * value has no effect on ap_band_label() but keeping it is no
+         * less honest than zeroing it. See channel_summary_t's
+         * channel_source contract. */
+        if (e->channel_source != CH_SRC_HE_6GHZ) e->channel_source = a->channel_source;
         if (a->signal_dbm > e->best_signal) {
             e->best_signal = a->signal_dbm;
             if (a->ssid[0])
@@ -74,13 +83,6 @@ void channel_summary_update(sloth_state_t *s) {
     memcpy(s->channels, tbl, sizeof(tbl));
     s->channel_count = n;
     if (s->channel_sel >= n && n > 0) s->channel_sel = n - 1;
-}
-
-static const char *band_for(int ch) {
-    if (ch >= 1   && ch <= 14)  return "2.4 GHz";
-    if (ch >= 32  && ch <= 177) return "5 GHz";
-    if (ch >= 181 && ch <= 233) return "6 GHz";
-    return "?";
 }
 
 void view_channel_draw(const sloth_state_t *s) {
@@ -147,7 +149,7 @@ void view_channel_draw(const sloth_state_t *s) {
 
         if (i == s->channel_sel) tui_sel(); else tui_normal();
         TPRINT(" %-5d", c->channel);
-        tui_dim();    TPRINT("  %-7s", band_for(c->channel));
+        tui_dim();    TPRINT("  %-7s", ap_band_label(c->channel, c->channel_source));
         if (i == s->channel_sel) tui_sel(); else tui_bright();
         TPRINT("  %4d", c->ap_count);
         if (i == s->channel_sel) tui_sel(); else tui_normal();

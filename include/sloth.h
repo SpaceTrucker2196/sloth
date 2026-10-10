@@ -1735,12 +1735,22 @@ typedef struct {
 #define MAX_CHAN_ENTRIES   64
 
 typedef struct {
-    int     channel;        /* 1..177 across 2.4/5/6 GHz */
+    int     channel;        /* 1..233 — 2.4, 5 and 6 GHz channel numbers
+                             * overlap, so this number alone never says
+                             * which band; see channel_source below. */
     int     ap_count;       /* APs with a beacon on this channel */
     int     assoc_count;    /* associated STAs on this channel  */
     int8_t  best_signal;    /* strongest signal among APs here  */
     char    top_ssid[33];   /* SSID of the strongest AP         */
     time_t  last_seen;
+    /* Set from any contributing AP's channel_source (sloth_ch_source_t)
+     * that is CH_SRC_HE_6GHZ, and never un-set once it is — the 6 GHz
+     * signal is rarer and more informative than "unknown", so one
+     * beacon that carries it settles the row's band for the pass even
+     * if another AP sharing this channel *number* reported no source.
+     * ap_band_label() is what turns this plus `channel` into a label;
+     * see that contract for the real collision this exists to answer.*/
+    uint8_t channel_source;
     /* RF quality over the last window (roadmap B3). Retries and FCS
      * failures are the passive signature of interference, a hidden
      * node, or a jammer. -1 means "not enough frames to say", which is
@@ -2035,6 +2045,17 @@ typedef enum {
     CH_SRC_HE_6GHZ  = 3,   /* tag 255 ext 36, 6 GHz Operation Info */
     CH_SRC_EHT_OPER = 4,   /* tag 255 ext 106 */
 } sloth_ch_source_t;
+
+/* Band label for a channel number, correctly handling the case a
+ * number-only heuristic cannot: a 5 GHz and a 6 GHz channel can share
+ * the same number (37, 149 and others are valid in both), so "5 GHz"
+ * vs. "6 GHz" is not decidable from the number alone. CH_SRC_HE_6GHZ
+ * is: the HE Operation element's 6 GHz Operation Info subfield exists
+ * only on a 6 GHz BSS, so that source — whatever number it names —
+ * settles the question outright. Any other source, or none, falls back
+ * to the ordinary numeric ranges. Returns "?" for channel <= 0 or a
+ * number in none of the known ranges. */
+const char *ap_band_label(int channel, uint8_t channel_source);
 
 /* ── Channel Switch Announcement (#63) ─────────────────────
  *

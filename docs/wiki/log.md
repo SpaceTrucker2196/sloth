@@ -1969,3 +1969,31 @@ New research page
 Alert count 68 → 69, synced across `MISSION.md`, `README.md`,
 `agents/AGENTS.md`, `index.md`, `sloth.md`, `what-sloth-does.md`,
 `attack-map.md`.
+
+## 2026-10-10 — `[m]` Channel: 6 GHz no longer reads as 5 GHz (#91)
+
+5 GHz and 6 GHz channel numbers overlap (37, 149, …), so the two
+`band_for()` copies in `src/views/beacon.c` and `src/views/channel.c`
+could not tell them apart — both guessed purely from the channel
+*number*, and a 6 GHz AP on a number inside the 32-177 range (most of
+the common ones) was labelled `5 GHz`. `docs/views/channel.md`'s own
+mockup already showed channel 37 as `6GHz`, which the code could not
+actually produce.
+
+New shared `ap_band_label(channel, channel_source)` (`src/beacon_snoop.c`,
+declared in `sloth.h`) checks `channel_source == CH_SRC_HE_6GHZ` first —
+that subfield of the HE Operation element exists only on a 6 GHz BSS, so
+it settles the question regardless of the number — and only falls back
+to the numeric 2.4/5 GHz ranges otherwise. The old, unreachable 181-233
+"6 GHz" branch (no real channel number is ever that) is dropped rather
+than carried forward. `channel_summary_t` gained a `channel_source`
+field, promoted to `CH_SRC_HE_6GHZ` and never un-set once any
+contributing AP reports it, so the `[m]` Channel view's aggregated rows
+get the same fix. New additive JSONL field `channel_summary.band`
+(`docs/wiki/jsonl-schema.md`), so a log consumer and the TUI read the
+same band for the same row.
+
+Known, accepted gap left for a later slice: `channel_summary_t` is
+still keyed by channel number alone, so a 5 GHz and a 6 GHz AP sharing
+a number are still one row, not two — correctly labelled now, but still
+one row's worth of `ap_count`/`Top SSID` for two different frequencies.

@@ -1988,6 +1988,48 @@ static void test_ds_param_is_the_source_when_alone(void) {
     ASSERT_EQ(rsn.oper_channel_source, CH_SRC_DS_PARAM);
 }
 
+/* ap_band_label() (#91) — a 5 GHz and a 6 GHz channel can share a
+ * number (37, 149, ...), so the label is not decidable from the number
+ * alone. channel_source settles it: CH_SRC_HE_6GHZ only ever comes from
+ * the 6 GHz Operation Info subfield, which no other band's AP sends. */
+static void test_band_label_6ghz_source_overrides_5ghz_numeric_range(void) {
+    /* 37 is squarely inside the old band_for()'s 32-177 "5 GHz" range —
+     * the exact collision that made a 6 GHz AP read as 5 GHz. */
+    ASSERT_STR(ap_band_label(37, CH_SRC_HE_6GHZ), "6 GHz");
+}
+
+static void test_band_label_same_number_without_6ghz_source_is_5ghz(void) {
+    ASSERT_STR(ap_band_label(37, CH_SRC_DS_PARAM), "5 GHz");
+    ASSERT_STR(ap_band_label(37, CH_SRC_UNKNOWN),  "5 GHz");
+}
+
+static void test_band_label_149_collision_both_ways(void) {
+    /* 149 is a real channel number in 5 GHz UNII-3 *and* in 6 GHz. */
+    ASSERT_STR(ap_band_label(149, CH_SRC_HE_6GHZ),  "6 GHz");
+    ASSERT_STR(ap_band_label(149, CH_SRC_DS_PARAM), "5 GHz");
+}
+
+static void test_band_label_24ghz_unaffected(void) {
+    ASSERT_STR(ap_band_label(6, CH_SRC_DS_PARAM), "2.4 GHz");
+    ASSERT_STR(ap_band_label(6, CH_SRC_UNKNOWN),  "2.4 GHz");
+}
+
+static void test_band_label_6ghz_source_wins_above_177_too(void) {
+    /* A 6 GHz channel above the 5 GHz table's top (229) must not read
+     * as unknown just because it is outside the numeric fallback range
+     * — the source is what settles it, not the number's size. */
+    ASSERT_STR(ap_band_label(229, CH_SRC_HE_6GHZ), "6 GHz");
+}
+
+static void test_band_label_unattributable_is_unknown(void) {
+    ASSERT_STR(ap_band_label(0,   CH_SRC_UNKNOWN), "?");
+    ASSERT_STR(ap_band_label(-1,  CH_SRC_UNKNOWN), "?");
+    /* 229 with no 6 GHz source: no known range claims it, so honest
+     * "?" rather than a guessed band — same posture as the old
+     * function's dead 181-233 branch, minus the wrong guess. */
+    ASSERT_STR(ap_band_label(229, CH_SRC_DS_PARAM), "?");
+}
+
 static void test_eht_operation_320mhz(void) {
     uint8_t ies[64];
     uint8_t body[10];
@@ -3186,6 +3228,14 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_he_optional_field_order_matters);
     RUN_TEST(test_he_operation_channel_beats_ds_param);
     RUN_TEST(test_ds_param_is_the_source_when_alone);
+    TEST_SUITE("ap_band_label (#91)");
+    RUN_TEST(test_band_label_6ghz_source_overrides_5ghz_numeric_range);
+    RUN_TEST(test_band_label_same_number_without_6ghz_source_is_5ghz);
+    RUN_TEST(test_band_label_149_collision_both_ways);
+    RUN_TEST(test_band_label_24ghz_unaffected);
+    RUN_TEST(test_band_label_6ghz_source_wins_above_177_too);
+    RUN_TEST(test_band_label_unattributable_is_unknown);
+    TEST_SUITE("HT/VHT/HE/EHT operation IEs (#66), cont'd");
     RUN_TEST(test_eht_operation_320mhz);
     RUN_TEST(test_no_operation_ie_leaves_width_unknown);
     RUN_TEST(test_truncated_operation_ies_are_safe);

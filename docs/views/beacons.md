@@ -265,6 +265,16 @@ Operation Info carries the authoritative primary channel, and it now
 wins when both are present. The JSONL record carries `channel_source`
 so a wrong channel is attributable rather than mysterious.
 
+That same field is what makes the AP detail panel's `(5 GHz)` /
+`(6 GHz)` label correct rather than a guess (#91): 5 GHz and 6 GHz
+channel numbers overlap (37, 149, …), so the number by itself cannot
+say which band. `ap_band_label()` treats `channel_source ==
+CH_SRC_HE_6GHZ` as decisive — that subfield only exists on a 6 GHz
+BSS — and only falls back to the ordinary numeric range otherwise. The
+`[m]` Channel view's `Band` column and the `channel_summary` JSONL
+record's `band` field call the same function, so none of the three can
+disagree about one AP's band.
+
 ## Pending channel switches (#63)
 
 When an AP is announcing a **Channel Switch**, the `PHY` cell is

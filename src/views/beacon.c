@@ -19,13 +19,6 @@ static const char *bssid_str(const uint8_t *b) {
     return fmt_bssid;
 }
 
-static const char *band_for(int ch) {
-    if (ch >= 1   && ch <= 14)  return "2.4 GHz";
-    if (ch >= 32  && ch <= 177) return "5 GHz";
-    if (ch >= 181 && ch <= 233) return "6 GHz";
-    return "?";
-}
-
 /* Full-screen detail panel for the selected AP. Triggered by Enter
  * in the beacons list; Enter/Esc returns. Renders every field we've
  * already collected for this BSSID, plus cross-references against
@@ -66,7 +59,7 @@ static void draw_beacon_detail(const sloth_state_t *s) {
     TPRINT("\n \xe2\x94\x80\xe2\x94\x80 RADIO \xe2\x94\x80\xe2\x94\x80\n");
     TPRINT("  Channel:     "); tui_bright();
     TPRINT("%d", ap->channel);
-    tui_dim(); TPRINT("  (%s)\n", band_for(ap->channel));
+    tui_dim(); TPRINT("  (%s)\n", ap_band_label(ap->channel, ap->channel_source));
     TPRINT("  Signal:      "); {
         double frac = (ap->signal_dbm + 90.0) / 60.0;
         if (frac < 0) frac = 0;

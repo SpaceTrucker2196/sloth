@@ -1368,3 +1368,18 @@ int ap_infrastructure_peers(const beacon_ap_t *a, const beacon_ap_t *b)
     return ap_advertises_neighbor(a, b->bssid) ||
            ap_advertises_neighbor(b, a->bssid);
 }
+
+/* Contract in sloth.h. The two numeric ranges below are otherwise
+ * exactly what a prior, now-replaced band_for() in two view files
+ * used — kept here so the single shared answer agrees with both. The
+ * old 181-233 "6 GHz" range was never reachable from a real channel
+ * number (6 GHz runs 1-233, the same numbers 5 GHz and 2.4 GHz use) and
+ * is dropped rather than carried forward as dead, misleading code. */
+const char *ap_band_label(int channel, uint8_t channel_source)
+{
+    if (channel <= 0) return "?";
+    if (channel_source == CH_SRC_HE_6GHZ) return "6 GHz";
+    if (channel >= 1  && channel <= 14)  return "2.4 GHz";
+    if (channel >= 32 && channel <= 177) return "5 GHz";
+    return "?";
+}

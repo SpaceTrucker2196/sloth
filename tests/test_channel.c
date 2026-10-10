@@ -86,6 +86,56 @@ static void test_channels_without_data_ignored(void) {
     ASSERT_EQ(s.channel_count, 0);
 }
 
+/* channel_source (#91): 37 is a valid number in both 5 GHz and 6 GHz,
+ * so the row's band is only correct if this field is carried through. */
+static void test_6ghz_source_is_carried_onto_the_row(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t b[6] = {0xaa,0,0,0,0,1};
+    seed_beacon(&s, b, "SixGAp", 37, -50);
+    s.beacon_aps[0].channel_source = CH_SRC_HE_6GHZ;
+    channel_summary_update(&s);
+    ASSERT_EQ(s.channel_count, 1);
+    ASSERT_EQ(s.channels[0].channel_source, CH_SRC_HE_6GHZ);
+}
+
+static void test_no_6ghz_source_leaves_the_row_unmarked(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t b[6] = {0xaa,0,0,0,0,1};
+    seed_beacon(&s, b, "FiveGAp", 37, -50);
+    s.beacon_aps[0].channel_source = CH_SRC_DS_PARAM;
+    channel_summary_update(&s);
+    ASSERT_EQ(s.channel_count, 1);
+    ASSERT_EQ(s.channels[0].channel_source, CH_SRC_DS_PARAM);
+}
+
+/* Promote-only, in both orders: once a 6 GHz AP has marked this channel
+ * *number*, a later AP sharing the number with no 6 GHz source of its
+ * own must not erase that mark back to unknown. */
+static void test_6ghz_mark_survives_a_later_unsourced_ap_same_number(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t b1[6] = {0xaa,0,0,0,0,1};
+    uint8_t b2[6] = {0xaa,0,0,0,0,2};
+    seed_beacon(&s, b1, "SixGAp",  37, -50);
+    s.beacon_aps[0].channel_source = CH_SRC_HE_6GHZ;
+    seed_beacon(&s, b2, "Unknown", 37, -60);
+    channel_summary_update(&s);
+    ASSERT_EQ(s.channel_count, 1);
+    ASSERT_EQ(s.channels[0].ap_count, 2);
+    ASSERT_EQ(s.channels[0].channel_source, CH_SRC_HE_6GHZ);
+}
+
+static void test_6ghz_mark_set_by_a_later_ap_same_number(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t b1[6] = {0xaa,0,0,0,0,1};
+    uint8_t b2[6] = {0xaa,0,0,0,0,2};
+    seed_beacon(&s, b1, "Unknown", 37, -60);
+    seed_beacon(&s, b2, "SixGAp",  37, -50);
+    s.beacon_aps[1].channel_source = CH_SRC_HE_6GHZ;
+    channel_summary_update(&s);
+    ASSERT_EQ(s.channel_count, 1);
+    ASSERT_EQ(s.channels[0].channel_source, CH_SRC_HE_6GHZ);
+}
+
 void run_channel_tests(void) {
     TEST_SUITE("channel summary");
     RUN_TEST(test_empty_state);
@@ -93,4 +143,8 @@ void run_channel_tests(void) {
     RUN_TEST(test_multiple_channels_sorted_by_activity);
     RUN_TEST(test_associations_add_to_client_count);
     RUN_TEST(test_channels_without_data_ignored);
+    RUN_TEST(test_6ghz_source_is_carried_onto_the_row);
+    RUN_TEST(test_no_6ghz_source_leaves_the_row_unmarked);
+    RUN_TEST(test_6ghz_mark_survives_a_later_unsourced_ap_same_number);
+    RUN_TEST(test_6ghz_mark_set_by_a_later_ap_same_number);
 }
