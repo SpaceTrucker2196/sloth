@@ -702,20 +702,36 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 # crash-triage process. `FUZZ_SECONDS` bounds each target so CI gets a
 # bounded memory-safety check rather than an open-ended job.
 #
-# One target lands with this slice: fuzz_deauth_parse, over deauth_parse()
-# (src/deauth_snoop.c) — a pure byte parser with no global state, so it
-# needs no harness scaffolding beyond the bytes themselves. The others the
-# issue names (parse_eapol_key, the IE walk, radiotap/LLC) are follow-ups:
-# parse_eapol_key is `static` in src/eapol_log.c and reaching it means
-# fuzzing through eapol_observe_dot11()'s full frame shape instead of the
-# key field alone, and the IE walk and radiotap/LLC decode both sit behind
-# capture.c's on_packet(), which needs the savefile-harness machinery
-# test-capture-path already built — each is its own slice, not a one-line
-# addition to this one.
+# fuzz_deauth_parse landed first, over deauth_parse() (src/deauth_snoop.c)
+# — a pure byte parser with no global state, so it needed no harness
+# scaffolding beyond the bytes themselves. fuzz_eapol_observe lands
+# second, over eapol_observe_dot11() (src/eapol_log.c), which reaches
+# parse_eapol_key() plus the shared eap_track/wps_track/assoc_track/
+# alerts.c machinery it feeds — named as a follow-up because
+# parse_eapol_key is `static` and reaching it means fuzzing the whole
+# 802.11-data-frame-to-EAPOL-key shape, not the key field alone. Like
+# fuzz_deauth_parse it takes the frame directly with no libpcap in
+# between, so the fuzzer's own tightly-redzoned input buffer is what the
+# parser reads — the monitor-decode path (radiotap, the IE walk) does
+# go through libpcap's offline reader, whose internal buffer is sized
+# well past any one record's caplen (verified empirically: a 10-byte
+# frame still reports malloc_usable_size 2048 at the record pointer),
+# so a fuzz harness built on that seam cannot catch a modest overread
+# with ASan the way this one can. That is why this slice targets
+# eapol_observe_dot11() rather than probe_test_dispatch() for the
+# "radiotap/LLC" half of the original ask: the latter would have looked
+# like coverage without delivering it.
 FUZZ_CC      ?= clang
 FUZZ_SECONDS ?= 20
 FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
                 -Iinclude -Isrc -Itests/fuzz
+
+# fuzz_eapol_observe rides the same source list sloth_test links (every
+# module eapol_log.c's call tree reaches), swapping main_test.c for the
+# fuzz entry point — same reasoning as CAPTURE_PATH_SRCS: a hand-kept
+# dependency list rots on the first new module.
+FUZZ_EAPOL_SRCS = tests/fuzz/fuzz_eapol_observe.c \
+                  $(filter-out tests/main_test.c,$(TEST_SRCS))
 
 .PHONY: fuzz
 fuzz:
@@ -726,6 +742,11 @@ fuzz:
 	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
 	    -lpthread
 	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
+	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE \
+	    -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp \
+	    -o /tmp/sloth_fuzz_eapol_observe \
+	    $(FUZZ_EAPOL_SRCS) -lm -lpthread -lsqlite3
+	/tmp/sloth_fuzz_eapol_observe -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 
 # ── Static analysis (#95) ───────────────────────────────────────────────────
 # Runs CI's cppcheck command, byte for byte, with CI's version guard.
