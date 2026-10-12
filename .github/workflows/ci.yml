@@ -244,10 +244,17 @@ jobs:
   # source of truth for how a target is built and run; this step does
   # not duplicate that command.
   #
-  # One target today: fuzz_deauth_parse, over the pure byte parser in
-  # src/deauth_snoop.c. See the Makefile comment above the `fuzz` target
-  # for why the other three the issue names (parse_eapol_key, the IE
-  # walk, radiotap/LLC) are follow-up slices, not omissions.
+  # Two targets today: fuzz_deauth_parse, over the pure byte parser in
+  # src/deauth_snoop.c, and fuzz_eapol_observe, over eapol_observe_dot11()
+  # and parse_eapol_key() in src/eapol_log.c (a hand-built, spec-correct
+  # 802.11/LLC/EAPOL skeleton with the fuzzer driving only the EAPOL-Key
+  # body — see the harness file for why). The IE walk and radiotap/LLC
+  # decode remain a follow-up: reaching them through the real
+  # pcap_dispatch savefile seam was tried and abandoned, because
+  # libpcap's own offline-read buffer has slack well past any one
+  # record's caplen, which hides exactly the class of small overread
+  # this kind of fuzzing exists to catch. See the Makefile comment above
+  # the `fuzz` target for the measurements behind both of those calls.
   fuzz:
     runs-on: ubuntu-24.04
     steps:
