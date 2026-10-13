@@ -1234,6 +1234,435 @@ static void test_alert_rule_row_scanner(void) {
     ASSERT_EQ(dc_alert_rule_rows("no heading here\n", rows), -1);
 }
 
+/*
+ * CLI surface vs. the wiki reference — issue #103.
+ *
+ * agents/AGENTS.md ties one surface to one page: "new or changed CLI
+ * flag / keybinding -> docs/wiki/cli-reference.md". Nothing enforced it.
+ * The #103 triage comment checked the flag half by hand and found it
+ * complete — and quoted "37 of them", which was already stale by seven
+ * options the next time anyone measured (44). That is the whole case for
+ * a guard: the hand check does not run again, and its own number rotted
+ * faster than the thing it was checking.
+ *
+ * Flags are checked both ways, because the two failures differ. A flag
+ * parsed in src/main.c and absent from the page is an undocumented
+ * flag; a flag on the page that src/main.c no longer parses is advice
+ * that exits non-zero. Keys are checked one way only: the page's global
+ * and per-view tables also document `Tab`, `/`, `\`, `n`, `q` and
+ * `Enter`, which are not view selections, so a reverse walk would pin
+ * an exception list rather than the bindings.
+ *
+ * src/main.c is not in TEST_SRCS — the test binary has its own main() —
+ * so both scanners read it as text, the way test_usage_text_agrees_with_build
+ * above already does. That also means these check the *parser*, not
+ * print_usage(): the two disagree today (`--no-colour` and `--help` have
+ * no usage line), and reconciling them is not this guard's job.
+ *
+ * Floors on every walk, for the reason the wiki walks have them: a
+ * scanner that matches nothing passes every assertion it never makes.
+ *
+ * Not checked: short options (`-o`, `-V`, `-h`), which the page does
+ * document; `?`, which reaches VIEW_HELP from an if rather than the
+ * switch; and whether a documented flag's described *behaviour* is
+ * right, which is the docs-drift judge's advisory territory.
+ */
+
+#define DC_CLI_REF       "docs/wiki/cli-reference.md"
+#define DC_MAX_OPTS      128
+#define DC_OPT_LEN       48
+/* Measured, not recalled: src/main.c parses 44 distinct long options and
+ * DC_CLI_REF backticks all 44 (both directions, zero missing). */
+#define DC_MIN_LONG_OPTS 44
+
+/* The long-option name charset.
+ *
+ * `_` and upper case are included even though no flag uses them today,
+ * because the point of the forward walk is to catch an UNDOCUMENTED
+ * flag and a narrow charset silently exempts the ones that do not match
+ * house style. Review proved it: `--mutant_flag` and `--MutantFlag`
+ * were both added to src/main.c's argv loop, both genuinely parsed,
+ * both absent from the reference page, and the suite stayed green
+ * because the scanner could not see them. A guard that only sees
+ * conforming names pins the convention, not the parser.
+ *
+ * The glob in a prose mention such as `--wps-*` is still rejected, and
+ * not by this charset — dc_scan_* requires the closing delimiter
+ * IMMEDIATELY after the name, and `*` is neither an option character
+ * nor the close, so the occurrence is dropped whole rather than
+ * truncated to a plausible-looking `--wps-`. Widening the charset does
+ * not re-admit globs; that was the original comment's claim and it was
+ * wrong about which check does the work. */
+static int dc_opt_char(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '_';
+}
+
+#define DC_ARGV_OPEN "strcmp(argv[i], \"--"
+#define DC_DOC_OPEN  "`--"
+
+/* Store one name if it is new. Shared by both walks. */
+static int dc_opt_push(char out[DC_MAX_OPTS][DC_OPT_LEN], int n,
+                       const char *s, size_t len) {
+    if (len == 0 || len >= DC_OPT_LEN || n >= DC_MAX_OPTS) return n;
+    for (int i = 0; i < n; i++)
+        if (!strncmp(out[i], s, len) && out[i][len] == '\0') return n;
+    memcpy(out[n], s, len);
+    out[n][len] = '\0';
+    return n + 1;
+}
+
+/* The PARSER side: every long option the argv loop actually compares.
+ *
+ * Anchored on `strcmp(argv[i]` and then tolerant of whatever separates
+ * it from the string literal, rather than matching one literal spelling
+ * with one space in it. Review proved the literal version vacuous by
+ * deleting a single space — `strcmp(argv[i],"--mutant-fmt")` parsed
+ * fine and the scanner never saw it. Anything that reformats main.c,
+ * including a formatter nobody ran deliberately, would have silently
+ * disabled this guard. */
+static int dc_scan_argv_opts(const char *t,
+                             char out[DC_MAX_OPTS][DC_OPT_LEN]) {
+    static const char anchor[] = "strcmp(argv[i]";
+    int n = 0;
+    for (const char *p = t; (p = strstr(p, anchor)) != NULL; ) {
+        const char *q = p + sizeof(anchor) - 1;
+        p = q;
+        while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+        if (*q != ',') continue;
+        q++;
+        while (*q == ' ' || *q == '\t' || *q == '\n' || *q == '\r') q++;
+        if (strncmp(q, "\"--", 3) != 0) continue;
+        const char *name = q + 3;
+        size_t len = 0;
+        while (dc_opt_char((unsigned char)name[len])) len++;
+        if (name[len] != '"') continue;
+        n = dc_opt_push(out, n, name, len);
+    }
+    return n;
+}
+
+/* The DOCUMENTATION side: only the first cell of a table row counts.
+ *
+ * A backticked flag ANYWHERE on the page used to count, which made the
+ * reverse walk fire on prose that mentions a flag in order to say it
+ * does not exist. That is not hypothetical — docs/wiki/cli-reference.md
+ * says "the storage floors are knobs and not `--min-free-mb`", and with
+ * the old scanner this test went red on current main while the page was
+ * entirely correct. A red test on correct documentation trains the next
+ * reader to delete the test.
+ *
+ * The flag table's first cell is the one place a row DECLARES a flag,
+ * so that is what the reverse direction asks about. Prose may then
+ * mention any flag, real or not, without the suite having an opinion.
+ * A prose allowlist was the alternative and would rot on the first
+ * paragraph nobody remembered to update. */
+static int dc_scan_doc_opts(const char *t,
+                            char out[DC_MAX_OPTS][DC_OPT_LEN]) {
+    int n = 0;
+    for (const char *line = t; line && *line; ) {
+        const char *eol = strchr(line, '\n');
+        const char *p   = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '|') {
+            p++;
+            /* The first cell only: everything up to the next pipe, or
+             * the end of the line. A row documenting one flag may name
+             * another in a later cell, and that is a mention. */
+            const char *cell_end = p;
+            while (*cell_end && *cell_end != '|' &&
+                   (!eol || cell_end < eol)) cell_end++;
+            /* Every backticked flag IN that cell, not just the first:
+             * the page writes `| `-o`, `--out` |` and
+             * `| `--no-color`, `--no-colour` |`, so an alias pair
+             * declares two flags in one cell and taking only the first
+             * loses the second. */
+            for (const char *q = p; q + 3 < cell_end; q++) {
+                if (strncmp(q, "`--", 3) != 0) continue;
+                const char *name = q + 3;
+                size_t len = 0;
+                while (dc_opt_char((unsigned char)name[len])) len++;
+                /* Closed by a backtick, or by a space — the page writes
+                 * `| `--tune NAME=VALUE` |`, where the backtick spans
+                 * the name AND its argument, so demanding a backtick
+                 * immediately after the name drops a genuinely declared
+                 * flag. A glob such as `--wps-*` is still rejected: `*`
+                 * is neither an option character nor either terminator,
+                 * so the occurrence is dropped whole. */
+                if (name + len <= cell_end &&
+                    (name[len] == '`' || name[len] == ' '))
+                    n = dc_opt_push(out, n, name, len);
+                q = name + len;
+            }
+        }
+        line = eol ? eol + 1 : NULL;
+    }
+    return n;
+}
+
+static void test_cli_opt_extractor(void) {
+    /* Hand-written, covering what the real file puts near a flag name:
+     * a second parse of the same option, a short option, the usage text
+     * (which is not the parser) and a prose mention in a comment. */
+    static const char src[] =
+        "    if (!strcmp(argv[i], \"--iface\") && i + 1 < argc) {\n"
+        "    } else if (!strcmp(argv[i], \"-o\") ||\n"
+        "               !strcmp(argv[i], \"--iface\")) {\n"
+        "        fprintf(stderr, \"  --hop   retune the radio\\n\");\n"
+        "    /* --tune is handled before the loop */\n";
+    char opts[DC_MAX_OPTS][DC_OPT_LEN];
+    ASSERT_EQ(dc_scan_argv_opts(src, opts), 1);
+    ASSERT_STR(opts[0], "iface");
+
+    /* The three spellings review proved invisible to the old literal
+       scanner, each a genuinely parsed option: no space after the
+       comma, an underscore, and upper case. All three must be seen now,
+       because the walk exists to catch an undocumented flag and these
+       are three easy ways to add one. */
+    static const char odd[] =
+        "    if (!strcmp(argv[i],\"--tight-fmt\")) {\n"
+        "    } else if (!strcmp(argv[i], \"--under_score\")) {\n"
+        "    } else if (!strcmp(argv[i],\n               \"--MixedCase\")) {\n";
+    ASSERT_EQ(dc_scan_argv_opts(odd, opts), 3);
+    ASSERT_STR(opts[0], "tight-fmt");
+    ASSERT_STR(opts[1], "under_score");
+    ASSERT_STR(opts[2], "MixedCase");
+
+    /* And a usage-text line is still not a parse, even spaced oddly. */
+    static const char usage[] =
+        "        fprintf(stderr, \"  --not-parsed  explains itself\\n\");\n";
+    ASSERT_EQ(dc_scan_argv_opts(usage, opts), 0);
+
+    /* The documentation side, and the glob the charset must not eat. */
+    static const char doc[] =
+        "| `--iface` | ... |\n"
+        "The `--wps-*` thresholds are listed below.\n"
+        "| `--db` | ... |\n"
+        "A bare --db outside backticks is prose, not a reference row.\n";
+    ASSERT_EQ(dc_scan_doc_opts(doc, opts), 2);
+    ASSERT_STR(opts[0], "iface");
+    ASSERT_STR(opts[1], "db");
+
+    /* The case that turned the suite red on correct documentation: a
+       backticked flag in PROSE, mentioned in order to say it does not
+       exist. It is not a table row's first cell, so it declares
+       nothing and the reverse walk must not see it. Taken verbatim in
+       shape from docs/wiki/cli-reference.md. */
+    static const char prose[] =
+        "| `--tune` | name=value | Move one knob. |\n"
+        "The registry is the contract: adding a tunable adds a row\n"
+        "there, not a new flag — which is why the storage floors are\n"
+        "knobs and not `--min-free-mb`.\n";
+    ASSERT_EQ(dc_scan_doc_opts(prose, opts), 1);
+    ASSERT_STR(opts[0], "tune");
+
+    /* A backticked flag in a LATER cell of a row is also a mention, not
+       a declaration — a row documenting one flag may name another. */
+    static const char later[] =
+        "| `--strict` | — | Refuses `--allow-active`. |\n";
+    ASSERT_EQ(dc_scan_doc_opts(later, opts), 1);
+    ASSERT_STR(opts[0], "strict");
+}
+
+static void test_every_cli_flag_is_in_wiki_reference(void) {
+    char *src = slurp("src/main.c");
+    char *ref = slurp(DC_CLI_REF);
+    ASSERT(src != NULL);
+    ASSERT(ref != NULL);
+    if (!src || !ref) { free(src); free(ref); return; }
+    char opts[DC_MAX_OPTS][DC_OPT_LEN];
+    int  n = dc_scan_argv_opts(src, opts);
+    ASSERT_GE(n, DC_MIN_LONG_OPTS);
+    int missing = 0;
+    for (int i = 0; i < n; i++) {
+        char want[DC_OPT_LEN + 8];
+        snprintf(want, sizeof(want), "`--%s`", opts[i]);
+        if (strstr(ref, want)) continue;
+        missing++;
+        fprintf(stderr, "    src/main.c parses --%s; %s does not "
+                        "document it\n", opts[i], DC_CLI_REF);
+    }
+    ASSERT_EQ(missing, 0);
+    free(src);
+    free(ref);
+}
+
+static void test_wiki_reference_documents_no_dead_flag(void) {
+    char *src = slurp("src/main.c");
+    char *ref = slurp(DC_CLI_REF);
+    ASSERT(src != NULL);
+    ASSERT(ref != NULL);
+    if (!src || !ref) { free(src); free(ref); return; }
+    char opts[DC_MAX_OPTS][DC_OPT_LEN];
+    int  n = dc_scan_doc_opts(ref, opts);
+    ASSERT_GE(n, DC_MIN_LONG_OPTS);
+    /* Membership in the parsed SET, not a search for one literal
+     * spelling of the strcmp call. The literal form carried exactly the
+     * spacing fragility dc_scan_argv_opts() exists to avoid, so a
+     * reformatted main.c would have made every documented flag look
+     * dead at once. */
+    char parsed[DC_MAX_OPTS][DC_OPT_LEN];
+    int  pn = dc_scan_argv_opts(src, parsed);
+    int dead = 0;
+    for (int i = 0; i < n; i++) {
+        int found = 0;
+        for (int j = 0; j < pn && !found; j++)
+            if (!strcmp(parsed[j], opts[i])) found = 1;
+        if (found) continue;
+        dead++;
+        fprintf(stderr, "    %s documents --%s; src/main.c parses no "
+                        "such option\n", DC_CLI_REF, opts[i]);
+    }
+    ASSERT_EQ(dead, 0);
+    free(src);
+    free(ref);
+}
+
+#define DC_MAX_KEYS      64
+/* Measured: the global switch binds 34 keys to a view (ten digits plus
+ * 24 letters), and the keybinding tables backtick all 34. */
+#define DC_MIN_VIEW_KEYS 34
+
+/* Collect the keys the global switch binds to a view, upper-case aliases
+ * folded onto their lower-case key because that is how the reference
+ * tables write them.
+ *
+ * An arm counts only when a `case 'x':` label and the `s->active_view =`
+ * assignment share one line, which is src/main.c's layout for every view
+ * selection. That excludes the Tab cycle two ways over: its label sits on
+ * its own line today, and the escape's leading backslash is not
+ * alphanumeric, so a folded `case '\t':` arm is still skipped (the
+ * extractor test below feeds both forms). The closing-quote check is
+ * redundant against that input and is kept only so the scanner reads a
+ * character literal rather than any text starting `case '`. Keys bound to
+ * something other than a view (`n` toggles DNS resolution) never match,
+ * because their arms assign no view.
+ *
+ * `?` is absent by design: VIEW_HELP is toggled by an absolute-global
+ * `if` above the switch, not by a case arm. */
+static int dc_view_keys(const char *src, char *out, int max) {
+    int n = 0;
+    for (const char *line = src; line && *line; ) {
+        const char *nl   = strchr(line, '\n');
+        size_t      llen = nl ? (size_t)(nl - line) : strlen(line);
+        char        buf[1024];
+        size_t      cl = llen < sizeof(buf) - 1 ? llen : sizeof(buf) - 1;
+        memcpy(buf, line, cl);
+        buf[cl] = '\0';
+        line = nl ? nl + 1 : NULL;
+        if (!strstr(buf, "s->active_view =")) continue;
+        for (const char *p = buf; (p = strstr(p, "case '")) != NULL; ) {
+            p += 6;
+            if (!isalnum((unsigned char)p[0]) || p[1] != '\'') continue;
+            char k   = (char)tolower((unsigned char)p[0]);
+            int  dup = 0;
+            for (int i = 0; i < n && !dup; i++) if (out[i] == k) dup = 1;
+            if (!dup && n < max) out[n++] = k;
+        }
+    }
+    return n;
+}
+
+static void test_view_key_extractor(void) {
+    static const char src[] =
+        "    case '1': s->active_view = VIEW_IFACE;   return;\n"
+        "    case 'd': case 'D': s->active_view = VIEW_DHCP; return;\n"
+        "    case '\\t':\n"
+        "        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);\n"
+        "        return;\n"
+        /* The same arm folded onto one line: the one-line rule alone
+         * would admit it, so this pins the alphanumeric test. */
+        "    case '\\t': s->active_view = (view_t)(s->active_view + 1); return;\n"
+        "    case 'n': case 'N':\n"
+        "        s->dns_enabled = !s->dns_enabled;\n"
+        "        return;\n";
+    char keys[DC_MAX_KEYS];
+    ASSERT_EQ(dc_view_keys(src, keys, DC_MAX_KEYS), 2);
+    ASSERT_EQ(keys[0], '1');
+    ASSERT_EQ(keys[1], 'd');
+}
+
+/* The switch and view_labels[] must bind the same key set. This is the
+ * half of the keybinding duty with real teeth: view_labels[] feeds the
+ * tab bar and the [?] help card, so a key the switch gains and the label
+ * table does not is a view the operator can reach and cannot see named,
+ * and a key the label table keeps after the switch drops it advertises a
+ * key that does nothing.
+ *
+ * `?` is in view_labels[] and not in the switch — VIEW_HELP is toggled by
+ * the absolute-global `if` above the switch — so it is the one expected
+ * difference and is excluded by name rather than by a tolerance. */
+static void test_view_keys_match_view_labels(void) {
+    char *src = slurp("src/main.c");
+    ASSERT(src != NULL);
+    if (!src) return;
+    char keys[DC_MAX_KEYS];
+    int  n = dc_view_keys(src, keys, DC_MAX_KEYS);
+    ASSERT_GE(n, DC_MIN_VIEW_KEYS);
+
+    char lab[DC_MAX_KEYS];
+    int  nl = 0;
+    for (int v = 0; v < (int)VIEW_COUNT; v++) {
+        const char *s = view_label((view_t)v);
+        if (s[0] != '[' || s[2] != ']') continue;
+        if (s[1] == '?') continue;
+        if (nl < DC_MAX_KEYS) lab[nl++] = (char)tolower((unsigned char)s[1]);
+    }
+    ASSERT_EQ(nl, (int)VIEW_COUNT - 1);
+
+    int only_switch = 0, only_label = 0;
+    for (int i = 0; i < n; i++) {
+        int hit = 0;
+        for (int j = 0; j < nl && !hit; j++) if (lab[j] == keys[i]) hit = 1;
+        if (hit) continue;
+        only_switch++;
+        fprintf(stderr, "    src/main.c binds '%c' to a view; "
+                        "view_labels[] has no such key\n", keys[i]);
+    }
+    for (int j = 0; j < nl; j++) {
+        int hit = 0;
+        for (int i = 0; i < n && !hit; i++) if (keys[i] == lab[j]) hit = 1;
+        if (hit) continue;
+        only_label++;
+        fprintf(stderr, "    view_labels[] advertises '%c'; the global "
+                        "switch in src/main.c binds no such key\n", lab[j]);
+    }
+    ASSERT_EQ(only_switch, 0);
+    ASSERT_EQ(only_label, 0);
+    free(src);
+}
+
+/* The weaker half, and worth stating: every alphanumeric character is
+ * already backticked somewhere in DC_CLI_REF (measured — all 36), so this
+ * cannot fail on a key *added* to the switch. What it does catch is the
+ * page losing a key: a table rewritten or a row dropped. It also does not
+ * check which view a key is documented against, because the page's own
+ * names ("Dashboard", "Rogue RADIUS") are longer than the view_labels[]
+ * names ("Dash", "RADIUS") and matching them would pin the wording.
+ * test_view_keys_match_view_labels above is the binding-level guard. */
+static void test_every_view_key_is_in_wiki_reference(void) {
+    char *src = slurp("src/main.c");
+    char *ref = slurp(DC_CLI_REF);
+    ASSERT(src != NULL);
+    ASSERT(ref != NULL);
+    if (!src || !ref) { free(src); free(ref); return; }
+    char keys[DC_MAX_KEYS];
+    int  n = dc_view_keys(src, keys, DC_MAX_KEYS);
+    ASSERT_GE(n, DC_MIN_VIEW_KEYS);
+    int missing = 0;
+    for (int i = 0; i < n; i++) {
+        char want[8];
+        snprintf(want, sizeof(want), "`%c`", keys[i]);
+        if (strstr(ref, want)) continue;
+        missing++;
+        fprintf(stderr, "    src/main.c binds '%c' to a view; %s does "
+                        "not list it\n", keys[i], DC_CLI_REF);
+    }
+    ASSERT_EQ(missing, 0);
+    free(src);
+    free(ref);
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -1262,4 +1691,11 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_wiki_relative_links_resolve);
     RUN_TEST(test_wiki_pages_reachable_from_index);
     RUN_TEST(test_every_alert_kind_has_a_rule_row);
+    TEST_SUITE("CLI surface vs. wiki reference (#103)");
+    RUN_TEST(test_cli_opt_extractor);
+    RUN_TEST(test_every_cli_flag_is_in_wiki_reference);
+    RUN_TEST(test_wiki_reference_documents_no_dead_flag);
+    RUN_TEST(test_view_key_extractor);
+    RUN_TEST(test_view_keys_match_view_labels);
+    RUN_TEST(test_every_view_key_is_in_wiki_reference);
 }

@@ -15,7 +15,7 @@ updates the wiki in the same change.
 **Sources**: `.github/scripts/wiki_sync.sh`,
 `.github/workflows/wiki-sync.yml`, `docs/CLAUDE.md`, `agents/AGENTS.md`.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-13.
 
 ---
 
@@ -59,11 +59,22 @@ a hope. From `agents/AGENTS.md` and `docs/CLAUDE.md`:
   `research/` citation ([[research-corpus]], enforced by
   `tests/test_research_corpus.c`). New or changed flag → [[cli-reference]].
   New WiFi vuln or generation → [[wifi-state-of-the-art]].
-- **Two enforcement layers already exist.** The risk gate scores any
-  touch of `agents/` at +40 (`agents/FACTORY.md` §10.3), and the
-  [[docs-drift-judge]] GitHub Action audits per-view docs against their
-  source files. The wiki-sync workflow is the third: it keeps the
-  published copy honest.
+- **Part of it is machine-enforced, in `make test`.**
+  `tests/test_docs_consistency.c` fails on a dead `[[wikilink]]`, a
+  broken relative link, a page unreachable from `index.md`, a stale view
+  or alert-rule count on any page, a missing alert rule-table row, and —
+  since #103 — a long option parsed in `src/main.c` that
+  [[cli-reference]] does not backtick, an option the page documents that
+  `src/main.c` no longer parses, a view-selection key the page does not
+  list, and a switch/`view_labels[]` key-set disagreement.
+  `tests/test_research_corpus.c` fails on an uncited detector. What is
+  still rule-only: whether a *changed* behaviour's prose was updated, and
+  page format.
+- **Two further layers.** The risk gate scores any touch of `agents/` at
+  +40 (`agents/FACTORY.md` §10.3), and the [[docs-drift-judge]] GitHub
+  Action audits per-view docs against their source files (advisory — it
+  never fails the build). The wiki-sync workflow keeps the published copy
+  honest.
 - **Page format** (`docs/CLAUDE.md`): every page carries `**Summary**`,
   `**Sources**`, `**Last updated**`, content, then `## Related pages`;
   after any change, update `index.md` and append to `log.md`.

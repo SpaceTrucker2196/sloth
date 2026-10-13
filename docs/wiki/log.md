@@ -2153,3 +2153,34 @@ shipped without its host and path, from an absence of either.
   completeness claim ("every bounded synthesis table in sloth") and is
   corrected in the same change. Only the *counted* list is pinned to
   the build by a test; the uncounted side is prose and had drifted.
+## 2026-10-13 — CLI surface gated against the reference (#103)
+
+**Source**: `src/main.c` (argv loop, `handle_key`), `src/view_labels.c`,
+`docs/wiki/cli-reference.md`.
+
+**Changed pages**:
+
+- [cli-reference.md](cli-reference.md) — Summary now says the flag list
+  and the view-key table are checked by `make test`, and names what the
+  check does not cover.
+- [wiki-maintenance.md](wiki-maintenance.md) — the enforcement bullet now
+  lists what `make test` actually fails on, and what is still rule-only.
+
+**Notes**:
+
+- The new guard is `tests/test_docs_consistency.c`, suite "CLI surface
+  vs. wiki reference (#103)": five walks, each with a measured floor so a
+  broken scanner cannot pass vacuously. Long options both directions
+  (parser → page, page → parser), view keys page-ward, and the switch's
+  key set against `view_labels[]`.
+- **Nothing was out of sync when it landed.** All 44 long options and all
+  34 view keys already matched. The guard exists because the hand check
+  that found that does not run again — and the number the #103 triage
+  comment quoted for it ("37 of them") was stale by seven options within
+  two weeks.
+- **What it does not catch**, stated so nobody over-trusts it: whether a
+  documented flag's *description* is right (that is the advisory
+  [[docs-drift-judge]]); which view a key is documented against, since
+  the page's names are longer than the `view_labels[]` ones; short
+  options; and the `print_usage()`/parser gap — `--no-colour` and
+  `--help` are parsed and have no usage line.
