@@ -106,6 +106,21 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    `gh run list --commit "$(git rev-parse HEAD)" --json
    workflowName,conclusion,databaseId`, and report per job. "CI is
    green" with no SHA behind it is not a result.
+
+   Two traps in that command, both hit the same day it was written here:
+
+   - **`--commit` filters a page, it does not query.** `gh` fetches its
+     default ~20 most recent runs and filters locally, so the same
+     command that printed a green result an hour ago returns `[]` once
+     enough runs have happened since. An empty result means "not in the
+     window", NOT "never ran" — pass `--limit 300` and filter, or use
+     `gh api .../actions/runs?head_sha=<sha>`, before concluding
+     anything from silence.
+   - **Actions runs on the pushed HEAD, not on each commit.** Two
+     commits in one push give one run, against the second. So an
+     intermediate commit legitimately has no run of its own and is
+     covered by the next one. Check per PUSH, not per commit, or the
+     tally looks short for no reason.
 8. **Instrument.** Append a row to `METRICS.md` (issue, converge
    iterations, tests passing at ship, notes). **Get the assertion count
    by building, not from memory** — run `make test` on the parent commit
