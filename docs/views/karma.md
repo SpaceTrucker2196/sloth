@@ -23,9 +23,14 @@ Per candidate:
   PineAP / `mdk4 b` / `airbase-ng -P` lure climbs past the
   `KARMA_SSID_THRESH` of 3.
 - **PNL** — how many of those SSIDs appear in the union of nearby
-  clients' preferred-network lists. PineAP Beacon Response answers
-  exactly what clients probe for, so a high overlap separates an active
-  lure from a benign SSID-cycling AP.
+  clients' preferred-network lists. **Reported, not scored** (#90): the
+  union says somebody around here remembers one of these names, which
+  common SSIDs guarantee. The column goes bright, and the score picks
+  up its `+2`, only when a *single* station's list asks for at least
+  `KARMA_PNL_CORROB_MIN` = 2 of them — PineAP Beacon Response answers
+  one station's probes for its whole remembered list, and that shape is
+  what separates an active lure from a benign SSID-cycling AP. The
+  union still feeds the J% denominator below.
 - **J%** — Jaccard similarity between the advertised SSID set and the
   client-PNL union (`|A∩B| / |A∪B|`), shown as a percentage. Trends
   toward 100% as the AP mirrors the entire union of probed networks —
@@ -40,14 +45,20 @@ Per candidate:
   last deauth frame, so a trickle after a flood ends doesn't keep it
   "concurrent" — #88) that this candidate can independently be shown
   to be luring — either the victim's PNL already asks for one of the
-  candidate's advertised SSIDs, or the victim has since associated
-  with the candidate. An unrelated flood elsewhere in range, with no
+  candidate's advertised SSIDs (*one* is enough here, unlike the
+  standalone PNL signal above: the flood has already tied this station
+  to this candidate, so the PNL entry only has to name a network the
+  candidate is answering), or the victim has since associated with the
+  candidate. An unrelated flood elsewhere in range, with no
   link to this candidate's own victims, no longer counts
   (`karma_deauth_lure_victim()`, `src/karma_detect.c`) — crediting
   every candidate in range with any concurrent flood was the false
   positive issue #90 reported.
-- **score** — `1 + (PNL>0 ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0)`,
-  ranked strongest-first.
+- **score** —
+  `1 + (>=2 PNL hits on one station ? 2 : 0) + (IE uniform ? 1 : 0) + (chain ? 3 : 0)`,
+  ranked strongest-first. The PNL term uses the single-station count,
+  not the PNL column's union, so the ranking and the `KARMA_AP` alert's
+  CRIT gate cannot disagree about one BSSID (#90).
 - **tool** — a trailing `[label/conf]` when the tool-signature table
   names the candidate ([[tool-fingerprints]]). A row with no capture
   behind it renders as `[ESP32 Marauder/med? provisional]` (#90): a
@@ -58,9 +69,9 @@ Per candidate:
   row shipped today is UNVERIFIED.
 
 The same signals drive the `KARMA_AP` alert in `[v] Alerts`, which adds
-a `confidence` percentage and escalates WARN→CRIT only when PNL
-overlap, the deauth chain, or a verified tool match corroborates the
-bare SSID count (#90) — this view is the ranked, browsable surface for
+a `confidence` percentage and escalates WARN→CRIT only when a
+single-station PNL match, the deauth chain, or a verified tool match
+corroborates the bare SSID count (#90) — this view is the ranked, browsable surface for
 the same underlying signals, not a mirror of the alert's severity.
 
 ## View
@@ -72,7 +83,7 @@ the same underlying signals, not a mirror of the alert's severity.
  -----------------  -----  ----  ----  --  -----  -----  ---------------
  00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
  24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Corp (4s)  [ESP32 Marauder/med? provisional]
- PNL = advertised SSIDs matching nearby client probe lists; chain = deauth-then-lure on a shared victim
+ PNL = SSIDs in client probe lists, >=2 on one station; chain = deauth-then-lure on shared victim
  [tool/conf? provisional] = UNVERIFIED signature, no capture behind it - a hypothesis, not an identification
 ```
 
@@ -100,9 +111,13 @@ operator's eye.
 
 ## What's suspicious
 
-- **PNL overlap > 0** — the AP is beaconing the exact networks nearby
-  clients are looking for. That is the PineAP / KARMA beacon-response
-  fingerprint.
+- **Two or more PNL hits on one station** — the AP is beaconing
+  several of the networks *one* nearby device is looking for. That is
+  the PineAP / KARMA beacon-response fingerprint: the lure answers a
+  station's probes for its whole remembered list. A single hit, or
+  hits spread one-each across several strangers' devices, is the
+  coincidence that used to escalate and no longer does (#90) — the
+  count is still shown, so judge it with the J% column beside it.
 - **chain = YES** — a station this candidate can be tied to was
   deauthed off a different AP moments ago: the classic
   deauth-then-lure sequence

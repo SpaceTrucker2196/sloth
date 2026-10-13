@@ -10,11 +10,26 @@ void karma_alert_key(const uint8_t bssid[6], char *out, size_t sz) {
              bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
 }
 
-/* Distinct advertised SSIDs from this BSSID that appear in the union of
- * nearby clients' preferred-network lists. PineAP Beacon Response answers
- * exactly what clients probe for, so a high overlap separates an active
- * lure from a benign SSID-cycling AP. */
-static int pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
+/* How many of this BSSID's advertised SSIDs appear in one station's
+ * preferred-network list. The per-station primitive both PNL measures
+ * below are built from, and the one the deauth-then-lure chain already
+ * needed — extracted rather than written a third time (#90). */
+static int sta_pnl_hits(const beacon_ap_t *a, const pnl_client_t *cli) {
+    int hits = 0;
+    for (int h = 0; h < a->ssid_history_n && h < MAX_AP_SSID_HISTORY; h++) {
+        const char *name = a->ssid_history[h];
+        if (!name[0]) continue;
+        for (int k = 0; k < cli->ssid_count &&
+                        k < MAX_PNL_SSIDS_PER_CLI; k++) {
+            if (strcmp(name, cli->ssids[k]) == 0) { hits++; break; }
+        }
+    }
+    return hits;
+}
+
+/* Union measure — see the declaration in karma_detect.h. */
+int karma_pnl_union_hits(const sloth_state_t *s, const beacon_ap_t *a) {
+    if (!s || !a) return 0;
     int hits = 0;
     for (int h = 0; h < a->ssid_history_n && h < MAX_AP_SSID_HISTORY; h++) {
         const char *name = a->ssid_history[h];
@@ -29,6 +44,23 @@ static int pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
         next:;
     }
     return hits;
+}
+
+/* Single-station measure — see the declaration in karma_detect.h. */
+int karma_pnl_client_hits(const sloth_state_t *s, const beacon_ap_t *a,
+                          uint8_t best_sta_out[6]) {
+    if (best_sta_out) memset(best_sta_out, 0, 6);
+    if (!s || !a) return 0;
+    int best = 0;
+    for (int c = 0; c < s->pnl_count; c++) {
+        const pnl_client_t *cli = &s->pnl_clients[c];
+        int hits = sta_pnl_hits(a, cli);
+        if (hits > best) {
+            best = hits;
+            if (best_sta_out) memcpy(best_sta_out, cli->mac, 6);
+        }
+    }
+    return best;
 }
 
 /* Size of the union of all nearby clients' PNL SSID sets — the |B| in
@@ -57,7 +89,7 @@ static int pnl_union_size(const sloth_state_t *s) {
  * client-PNL union (B), in parts-per-million: 1e6 * |A∩B| / |A∪B|.
  * PineAP Beacon Response drives this toward 1.0 (1e6) — it advertises
  * exactly the union of what clients probe for. `inter` is the already-
- * computed intersection (pnl_overlap). */
+ * computed intersection (karma_pnl_union_hits). */
 static int jaccard_ppm(int a_count, int b_count, int inter) {
     int uni = a_count + b_count - inter;
     if (uni <= 0) return 0;
@@ -97,17 +129,15 @@ int karma_deauth_lure_victim(const sloth_state_t *s,
         if (memcmp(v->bssid, candidate->bssid, 6) == 0) continue;
 
         int interest = 0;
+        /* One hit is enough here, unlike the KARMA_PNL_CORROB_MIN the
+         * standalone PNL escalator demands: the victim is already tied
+         * to this candidate by the flood, so the PNL entry only has to
+         * name a network the candidate is answering, not carry the
+         * whole correlation on its own. */
         for (int c = 0; c < s->pnl_count && !interest; c++) {
             const pnl_client_t *cli = &s->pnl_clients[c];
             if (memcmp(cli->mac, v->victim, 6) != 0) continue;
-            for (int h = 0; h < candidate->ssid_history_n &&
-                            h < MAX_AP_SSID_HISTORY && !interest; h++) {
-                const char *name = candidate->ssid_history[h];
-                if (!name[0]) continue;
-                for (int p = 0; p < cli->ssid_count &&
-                                p < MAX_PNL_SSIDS_PER_CLI; p++)
-                    if (strcmp(name, cli->ssids[p]) == 0) { interest = 1; break; }
-            }
+            if (sta_pnl_hits(candidate, cli) > 0) interest = 1;
         }
         if (!interest) {
             /* Or the lure already worked and the victim is sitting on
@@ -176,11 +206,17 @@ void karma_update(sloth_state_t *s) {
         memset(k, 0, sizeof(*k));
         memcpy(k->bssid, a->bssid, 6);
         k->ssid_count   = a->ssid_history_n;
-        k->pnl_overlap  = pnl_overlap(s, a);
+        k->pnl_overlap  = karma_pnl_union_hits(s, a);
+        k->pnl_best     = karma_pnl_client_hits(s, a, NULL);
         k->pnl_jaccard_ppm = jaccard_ppm(k->ssid_count, b_count, k->pnl_overlap);
         k->ie_uniform   = ie_uniform(a);
         k->deauth_chain = karma_deauth_lure_victim(s, a, now, NULL);
-        k->score        = 1 + (k->pnl_overlap > 0 ? 2 : 0)
+        /* The PNL bonus keys on pnl_best, not pnl_overlap (#90): the
+         * union is a description, only a single station asking for
+         * KARMA_PNL_CORROB_MIN of these names is evidence. Same rule
+         * as the KARMA_AP alert's CRIT gate, so the [y] score and the
+         * alert severity cannot disagree about one BSSID. */
+        k->score        = 1 + (k->pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
                             + (k->ie_uniform ? 1 : 0)
                             + (k->deauth_chain ? 3 : 0);
         k->last_seen    = a->last_seen;

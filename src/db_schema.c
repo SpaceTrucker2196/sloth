@@ -607,6 +607,24 @@ static const char SCHEMA_SQL[] =
      * MISSION §2: last_identity is a leaked EAP username, not a
      * secret. Same call cleartext_creds makes — the exposure fact and
      * the identifier, never the credential. */
+    /* karma_candidates: NOTE a known provenance gap (#90).
+     *
+     * `score` used to be fully derivable from the other columns here.
+     * Since #90 it also depends on `pnl_best` — the hits from the single
+     * most-corroborating station, which is what decides severity and the
+     * confidence weight — and `pnl_best` is NOT a column. So a stored
+     * row can no longer explain its own score, which is the opposite of
+     * what #90 is about.
+     *
+     * Adding the column is the fix and is deliberately NOT done here:
+     * there is no migration path (src/db.c refuses a file whose
+     * schema_version differs and tells the operator to use a separate
+     * one), so bumping DB_SCHEMA_VERSION makes every existing database
+     * unopenable on the next restart. On a live sensor that is the
+     * operator's call, not a side effect of a detection change. Raised
+     * on #90 for a ruling; until then `pnl_overlap` persists the union
+     * measure and the single-station measure is visible only in the
+     * alert detail and the JSONL stream. */
     "CREATE TABLE IF NOT EXISTS karma_candidates ("
     "  bssid           TEXT PRIMARY KEY,"
     "  ssid_count      INTEGER NOT NULL DEFAULT 0,"

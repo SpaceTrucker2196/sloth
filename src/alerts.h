@@ -251,7 +251,10 @@ const char  *twin_class_label(twin_class_t c);
  * qualify. `confidence` is the separate, non-gating number: how sure
  * sloth is, not how bad it would be if true. */
 #define KARMA_W_SSID_THRESH   20   /* base: SSID count met the threshold */
-#define KARMA_W_PNL_OVERLAP   25   /* advertised SSID answers a nearby PNL */
+#define KARMA_W_PNL_OVERLAP   25   /* >= KARMA_PNL_CORROB_MIN of this BSSID's
+                                    * SSIDs in ONE station's PNL (#90) — the
+                                    * union over all clients is reported but
+                                    * neither scores nor escalates */
 #define KARMA_W_DEAUTH_VICTIM 30   /* shared-victim deauth-then-lure chain */
 #define KARMA_W_TOOL_VERIFIED 30   /* a capture-backed tool signature match */
 #define KARMA_W_TOOL_UNVERIF  10   /* an UNVERIFIED signature guess only */

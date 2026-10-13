@@ -3622,9 +3622,23 @@ static void test_karma_one_ssid_no_fire(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_KARMA_AP), -1);
 }
 
+/* A nearby station whose PNL names `n` of the candidate's advertised
+ * SSIDs. Hand-seeded, like every other state fixture here. */
+static void seed_karma_pnl(sloth_state_t *s, const uint8_t mac[6],
+                           const char *const *ssids, int n) {
+    pnl_client_t *cli = &s->pnl_clients[s->pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    memcpy(cli->mac, mac, 6);
+    int cap = n < MAX_PNL_SSIDS_PER_CLI ? n : MAX_PNL_SSIDS_PER_CLI;
+    for (int i = 0; i < cap; i++) snprintf(cli->ssids[i], 33, "%s", ssids[i]);
+    cli->ssid_count = cap;
+}
+
 /* PNL-overlap enrichment (#30): when the KARMA BSSID's advertised SSIDs
  * match SSIDs nearby clients have probed for, the detail names the
- * overlap count — the "beacon-response" evidence. */
+ * overlap count — the "beacon-response" evidence. Two of them on ONE
+ * station is the PineAP Beacon-Response shape, so this escalates, and
+ * since #90 the detail also names the station that corroborated. */
 static void test_karma_pnl_overlap_in_detail(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -3644,6 +3658,62 @@ static void test_karma_pnl_overlap_in_detail(void) {
     ASSERT(idx >= 0);
     ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
     ASSERT(strstr(s.alerts[idx].detail, "2 in client PNLs") != NULL);
+    /* The operator has to be able to go look at the station, not just
+     * trust a count (#90). */
+    ASSERT(strstr(s.alerts[idx].detail,
+                  "(2 on 02:aa:bb:cc:dd:ee)") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") == NULL);
+}
+
+/* The union of every nearby client's PNL is not evidence about this
+ * BSSID (#90, the issue's third problem bullet). One station that
+ * remembers exactly one of the three advertised names is a fact about
+ * the neighbourhood — common SSIDs are in everyone's list — so the
+ * count is still reported and the finding stays an uncorroborated
+ * WARN candidate. This fired CRIT before the change. */
+static void test_karma_single_pnl_hit_is_uncorroborated(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    uint8_t cmac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "Starbucks" };
+    seed_karma_pnl(&s, cmac, pnl, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") != NULL);
+    /* Still reported — narrowing the gate must not hide the reading. */
+    ASSERT(strstr(s.alerts[idx].detail, "1 in client PNLs") != NULL);
+    /* ...and must not name a station as corroborating. */
+    ASSERT(strstr(s.alerts[idx].detail, "02:aa:bb:cc:dd:ee") == NULL);
+}
+
+/* Two hits spread over two stations reach the union count the old gate
+ * escalated on, while no single station asked for more than one. The
+ * reported figure is 2 and the severity is still WARN — this is the
+ * case that distinguishes "union > 0" from "one station >= 2", and it
+ * is why the union count alone could never be the gate. */
+static void test_karma_pnl_hits_spread_across_clients_no_escalation(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    uint8_t mac_a[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    uint8_t mac_b[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    const char *pnl_a[] = { "homewifi" };
+    const char *pnl_b[] = { "ACME-Corp" };
+    seed_karma_pnl(&s, mac_a, pnl_a, 1);
+    seed_karma_pnl(&s, mac_b, pnl_b, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "2 in client PNLs") != NULL);
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[idx].detail, "uncorroborated") != NULL);
 }
 
 /* Deauth-then-lure requires a *shared victim* (#90): someone deauthed
@@ -3652,6 +3722,116 @@ static void test_karma_pnl_overlap_in_detail(void) {
  * the false-positive the issue reported ("does not establish a shared
  * victim or BSSID with this candidate"). A benign SSID-cycling AP plus
  * an unrelated deauth flood must not produce a chain alert. */
+/* ── The two decisions review found uncovered (#90) ────────
+ *
+ * Both were verified undetected by mutation on the slice as built, and
+ * both are the slice's OWN central choices — the kind a reviewer is
+ * most likely to assume are tested because they are what the commit is
+ * about. */
+
+static void test_karma_confidence_keys_on_the_corroborated_station(void) {
+    /* The one decision the builder made AGAINST its brief: the
+       KARMA_W_PNL_OVERLAP confidence weight is paid for a SINGLE
+       station reaching KARMA_PNL_CORROB_MIN, not for any hit in the
+       client-PNL union. Mutating it back to `if (overlap > 0)` left the
+       whole suite green.
+       
+       Union overlap without a corroborated station is the coincidence
+       case: two clients each asking for one of the candidate's SSIDs.
+       Paying 25 points for that reads as 45% sure of a lure, which is
+       the overstatement this rule is being narrowed to remove. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+
+    /* Two clients, ONE matching SSID each: union overlap is 2, but no
+       single station reaches the corroboration floor. */
+    for (int c = 0; c < 2; c++) {
+        pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+        memset(cli, 0, sizeof(*cli));
+        cli->mac[0] = 0x02; cli->mac[5] = (uint8_t)(0x10 + c);
+        snprintf(cli->ssids[0], 33, "%s", c == 0 ? "homewifi" : "ACME-Corp");
+        cli->ssid_count = 1;
+    }
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    /* WARN, not CRIT: no corroborating station. */
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+    /* And the overlap weight is NOT paid — the bare threshold weight is
+       all the confidence there is. Asserted as the exact value so the
+       mutation that adds 25 for a union hit cannot pass. */
+    ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
+}
+
+static void test_karma_detail_names_the_corroborating_station(void) {
+    /* karma_pnl_client_hits() reports WHICH station corroborated, and
+       the detail prints it. Review mutated `memcpy(best_sta_out,
+       cli->mac, 6)` to copy pnl_clients[0].mac instead and nothing
+       noticed, because every existing fixture makes the corroborating
+       client the FIRST one — so "a MAC is printed" passed while "the
+       right MAC is printed" was never tested.
+       
+       Here the corroborating station is deliberately the SECOND client,
+       and the first is a decoy with no matching SSIDs at all. Naming the
+       wrong station sends an operator to the wrong device. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+
+    /* Decoy first: nothing this candidate advertises. */
+    pnl_client_t *decoy = &s.pnl_clients[s.pnl_count++];
+    memset(decoy, 0, sizeof(*decoy));
+    uint8_t dmac[6] = {0x02,0x00,0x00,0x00,0x00,0x01};
+    memcpy(decoy->mac, dmac, 6);
+    snprintf(decoy->ssids[0], 33, "somewhere-else");
+    decoy->ssid_count = 1;
+
+    /* The real corroborator, second, with two matching SSIDs. */
+    pnl_client_t *cli = &s.pnl_clients[s.pnl_count++];
+    memset(cli, 0, sizeof(*cli));
+    uint8_t cmac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    memcpy(cli->mac, cmac, 6);
+    snprintf(cli->ssids[0], 33, "homewifi");
+    snprintf(cli->ssids[1], 33, "ACME-Corp");
+    cli->ssid_count = 2;
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+    ASSERT(strstr(s.alerts[i].detail, "02:aa:bb:cc:dd:ee") != NULL);
+    /* And NOT the decoy, which is what the mutation would print. */
+    ASSERT(strstr(s.alerts[i].detail, "02:00:00:00:00:01") == NULL);
+}
+
+static void test_karma_alert_key_is_the_shared_one(void) {
+    /* The dashboard badge finds this alert by key to read its severity
+       (#90). Both sides build the key through karma_alert_key(), and
+       this is the half that pins a FIRED alert really carrying what that
+       function produces — the badge predicate itself lives in
+       WITH_NCURSES-only code the suite cannot link. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    char want[ALERT_KEY_LEN];
+    karma_alert_key(bssid, want, sizeof(want));
+    ASSERT_STR(s.alerts[i].key, want);
+    ASSERT_STR(want, "karma:00:11:22:33:44:55");
+}
+
 static void test_karma_unrelated_deauth_flood_no_chain(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -8825,6 +9005,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_two_ssids_no_fire);
     RUN_TEST(test_karma_one_ssid_no_fire);
     RUN_TEST(test_karma_pnl_overlap_in_detail);
+    RUN_TEST(test_karma_single_pnl_hit_is_uncorroborated);
+    RUN_TEST(test_karma_pnl_hits_spread_across_clients_no_escalation);
+    RUN_TEST(test_karma_confidence_keys_on_the_corroborated_station);
+    RUN_TEST(test_karma_detail_names_the_corroborating_station);
+    RUN_TEST(test_karma_alert_key_is_the_shared_one);
     RUN_TEST(test_karma_unrelated_deauth_flood_no_chain);
     RUN_TEST(test_karma_deauth_then_lure_shared_victim_in_detail);
     RUN_TEST(test_karma_stale_deauth_no_chain_note);

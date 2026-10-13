@@ -2390,3 +2390,69 @@ Pages touched: [alerts.md](alerts.md) (new "Exposure rules" subsection),
 plus the 70 → 71 count in [index.md](index.md), [sloth.md](sloth.md),
 [what-sloth-does.md](what-sloth-does.md) and
 [attack-map.md](attack-map.md).
+## 2026-10-13 — #90: the PNL escalator wants one station, not the union
+
+**Source**: issue #90, next slice. `src/karma_detect.{c,h}`,
+`src/alerts.{c,h}`, `src/views/karma.c`, `include/sloth.h`.
+
+**Updated pages**: [alerts.md](alerts.md), `docs/views/alerts.md`,
+`docs/views/karma.md`.
+
+The issue's third problem bullet was the one statement in the body that
+was never stale: PNL overlap was measured against the **union** of
+every nearby client's preferred-network list, and `KARMA_AP` escalated
+to CRIT on `overlap > 0`. One SSID of a benign multi-VAP AP landing in
+one passer-by's remembered list produced a CRIT — and common names
+("Starbucks", a carrier hotspot) land there constantly.
+
+**Changes**:
+
+- `karma_pnl_client_hits()` is the new corroborating measure: the
+  largest number of a candidate's advertised SSIDs found in a *single*
+  station's PNL, plus that station's MAC. PineAP Beacon Response
+  answers one station's probes for its whole remembered list, so that
+  shape — not a union hit — is the attack's own signature.
+- `KARMA_PNL_CORROB_MIN` = 2 gates the `KARMA_AP` CRIT, the
+  `KARMA_W_PNL_OVERLAP` confidence weight, and the `[y]` view's `+2`
+  score bonus. One rule, both surfaces, stated once in the helper's
+  contract — the alert and the ranked table cannot disagree about one
+  BSSID.
+- The union count is now **reported only**: it stays in the detail
+  (`, N in client PNLs`), stays in the `[y]` PNL column, and still
+  feeds the J% denominator. When a station does corroborate, the detail
+  names it (`, 3 in client PNLs (2 on 02:aa:bb:cc:dd:ee)`) so the
+  operator can open `[k]` instead of trusting a count.
+- The duplicate union loop is gone. `karma_pnl_union_hits()` replaces
+  both the `static pnl_overlap` in `src/karma_detect.c` and the
+  behaviourally identical `static karma_pnl_overlap` in `src/alerts.c`
+  — the consolidation slice 1 did for the deauth helper, finally done
+  for this one.
+- The deauth-then-lure chain still accepts **one** PNL hit, and both
+  the code comment and `docs/views/karma.md` now say why: the flood has
+  already tied that station to the candidate, so the PNL entry only has
+  to name a network the candidate is answering. `tests/test_karma.c ::
+  test_deauth_chain` pins the asymmetry.
+
+No new alert type, no `ALERT_TYPE_*` count change, no JSONL field, no
+CLI change, no `DB_SCHEMA_VERSION` bump — `karma_candidates.score`
+keeps its column with a corrected input, and `pnl_overlap` keeps its
+column with its existing meaning.
+
+**Notes**:
+
+- **Flagged (§4.2).** `KARMA_PNL_CORROB_MIN` = 2 is a judgement call,
+  same shape as the `KARMA_W_*` weights: it is the smallest count that
+  cannot be a single coincidence. Deliberately not tunable —
+  `KARMA_SSID_THRESH` is the knob that moves candidate volume.
+- **Not done.** The three explicit states (`PMKID_OBSERVED` /
+  `BEHAVIOR_CONSISTENT_WITH_ACTIVE_COLLECTION` / `CONFIRMED_ATTACK`)
+  as a first-class exported field, which still waits on the owner's
+  ruling about whether a never-transmitting passive sensor may claim
+  `CONFIRMED_ATTACK`. The `[y]` row overflowing the documented
+  100-column minimum when it carries a tool attribution, and the
+  legend clipped by the `LINES - 5` page budget, are also still open;
+  this change kept the rewritten legend line at 97 columns and added a
+  test asserting it fits 100, but did not fix the budget itself.
+- **Not done.** The J% column is still computed, rendered, persisted
+  and then ignored by the severity gate. A Jaccard-based escalator is
+  the obvious next narrowing and is deliberately out of this slice.

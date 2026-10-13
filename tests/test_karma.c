@@ -62,7 +62,9 @@ static void test_threshold(void) {
     ASSERT_EQ(memcmp(s.karma_aps[0].bssid, lure, 6), 0);
 }
 
-/* PNL overlap is counted, and it raises the score. */
+/* PNL overlap is counted, and two names in ONE station's list raise
+ * the score (#90 — see test_pnl_hits_spread_across_clients_* for why
+ * the union does not). */
 static void test_pnl_overlap_and_score(void) {
     sloth_state_t s; seed(&s);
     uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -74,7 +76,50 @@ static void test_pnl_overlap_and_score(void) {
     karma_update(&s);
     ASSERT_EQ(s.karma_count, 1);
     ASSERT_EQ(s.karma_aps[0].pnl_overlap, 2);
+    ASSERT_EQ(s.karma_aps[0].pnl_best,    2);   /* both on one station */
     ASSERT_EQ(s.karma_aps[0].score, 1 + 2);   /* base + overlap */
+}
+
+/* The union is not the measure (#90). Two clients that each remember a
+ * different single one of the advertised SSIDs produce pnl_overlap 2 —
+ * the number the operator is shown — but no station asked for more
+ * than one, so nothing corroborates and the score stays at base.
+ *
+ * This is the issue's third problem bullet: one SSID of a benign
+ * multi-VAP AP landing in one passer-by's remembered list used to be
+ * enough, and common names land there constantly. */
+static void test_pnl_hits_spread_across_clients_no_score_credit(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    add_multi_ssid_ap(&s, lure, many, 3);
+    uint8_t cli_a[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    uint8_t cli_b[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    const char *pnl_a[] = { "homewifi" };
+    const char *pnl_b[] = { "Starbucks" };
+    add_pnl_client(&s, cli_a, pnl_a, 1);
+    add_pnl_client(&s, cli_b, pnl_b, 1);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_count, 1);
+    ASSERT_EQ(s.karma_aps[0].pnl_overlap, 2);   /* union, reported */
+    ASSERT_EQ(s.karma_aps[0].pnl_best,    1);   /* best single station */
+    ASSERT_EQ(s.karma_aps[0].score,       1);   /* base only */
+}
+
+/* One station remembering exactly one of the advertised names is the
+ * same coincidence with one client instead of two. */
+static void test_pnl_single_hit_no_score_credit(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    add_multi_ssid_ap(&s, lure, many, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl[] = { "Starbucks" };
+    add_pnl_client(&s, cli, pnl, 1);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_aps[0].pnl_overlap, 1);
+    ASSERT_EQ(s.karma_aps[0].pnl_best,    1);
+    ASSERT_EQ(s.karma_aps[0].score,       1);
 }
 
 /* Jaccard(advertised, PNL-union) in ppm. AP advertises {a,b,c} (|A|=3),
@@ -165,9 +210,15 @@ static void test_deauth_chain(void) {
     add_pnl_client(&s, victim, many, 1);
     karma_update(&s);
     ASSERT_EQ(s.karma_aps[0].deauth_chain, 1);
-    /* Score picks up both the PNL overlap this victim's PNL produces
-     * and the deauth chain — base + overlap(2) + deauth chain(3). */
-    ASSERT_EQ(s.karma_aps[0].score, 1 + 2 + 3);
+    /* One PNL hit is enough for the chain and deliberately not enough
+     * for the standalone PNL bonus (#90): the flood already ties this
+     * station to this candidate, so the PNL entry only has to name a
+     * network the candidate is answering. The two rules are
+     * independent and this pins the asymmetry — base + chain(3), no
+     * overlap bonus. */
+    ASSERT_EQ(s.karma_aps[0].pnl_overlap, 1);
+    ASSERT_EQ(s.karma_aps[0].pnl_best,    1);
+    ASSERT_EQ(s.karma_aps[0].score, 1 + 3);
 }
 
 /* An unrelated deauth flood — no shared victim — must not set the
@@ -238,6 +289,83 @@ static void test_tool_attribution_marked_provisional(void) {
     ASSERT(strstr(out, "[ESP32") == NULL);
 }
 
+/* The [y] view has to say what earns the PNL credit, or a row showing
+ * PNL 2 and score 1 looks like a bug (#90). The legend quotes
+ * KARMA_PNL_CORROB_MIN rather than a literal, and the column keeps
+ * showing the union so the reading is not hidden. */
+/* Narrowing the gate must not hide the reading: the PNL column still
+ * prints the *union* count, so a row whose score lost its +2 still
+ * shows what was seen. Both states here render the same digit — one
+ * station remembering two of the advertised names versus two stations
+ * remembering one each — and differ only in pnl_best.
+ *
+ * NOT asserted here, and deliberately not claimed: that the column
+ * goes bright on pnl_best >= KARMA_PNL_CORROB_MIN rather than on the
+ * union. `tests/null_tui.c` stubs tui_bright()/tui_dim() to no-ops for
+ * the whole test binary, so no view's colour decision is observable
+ * from a captured draw. Reverting that one condition in
+ * src/views/karma.c leaves this suite green; it is covered by review
+ * and by the legend line below, not by an assertion. */
+static void test_view_pnl_column_still_shows_the_union(void) {
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    char out[8192];
+
+    sloth_state_t spread; seed(&spread);
+    add_multi_ssid_ap(&spread, lure, many, 3);
+    uint8_t cli_a[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    uint8_t cli_b[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    const char *pnl_a[] = { "homewifi" };
+    const char *pnl_b[] = { "Starbucks" };
+    add_pnl_client(&spread, cli_a, pnl_a, 1);
+    add_pnl_client(&spread, cli_b, pnl_b, 1);
+    karma_update(&spread);
+    ASSERT_EQ(spread.karma_aps[0].pnl_overlap, 2);
+    ASSERT_EQ(spread.karma_aps[0].pnl_best,    1);
+    ASSERT_EQ(spread.karma_aps[0].score,       1);
+    capture_karma(&spread, out, sizeof(out));
+    /* BSSID, SSIDs 3, PNL 2 — the union, printed despite no credit. */
+    ASSERT(strstr(out, "00:11:22:33:44:55      3     2") != NULL);
+
+    sloth_state_t one; seed(&one);
+    add_multi_ssid_ap(&one, lure, many, 3);
+    uint8_t cli[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    const char *pnl_both[] = { "homewifi", "Starbucks" };
+    add_pnl_client(&one, cli, pnl_both, 2);
+    karma_update(&one);
+    ASSERT_EQ(one.karma_aps[0].pnl_best, 2);
+    ASSERT_EQ(one.karma_aps[0].score,    1 + 2);
+    capture_karma(&one, out, sizeof(out));
+    ASSERT(strstr(out, "00:11:22:33:44:55      3     2") != NULL);
+}
+
+static void test_view_legend_states_the_corroboration_rule(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    add_multi_ssid_ap(&s, lure, many, 3);
+    uint8_t cli_a[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    uint8_t cli_b[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x02};
+    const char *pnl_a[] = { "homewifi" };
+    const char *pnl_b[] = { "Starbucks" };
+    add_pnl_client(&s, cli_a, pnl_a, 1);
+    add_pnl_client(&s, cli_b, pnl_b, 1);
+    karma_update(&s);
+
+    char out[8192];
+    capture_karma(&s, out, sizeof(out));
+    ASSERT(strstr(out, ">=2 on one station") != NULL);
+    ASSERT(strstr(out, "deauth-then-lure on shared victim") != NULL);
+    /* Legend must fit the documented 100-column minimum terminal. */
+    const char *leg = strstr(out, " PNL = SSIDs");
+    ASSERT(leg != NULL);
+    if (leg) {
+        const char *nl = strchr(leg, '\n');
+        ASSERT(nl != NULL);
+        if (nl) ASSERT(nl - leg <= 100);
+    }
+}
+
 static void test_ranking(void) {
     sloth_state_t s; seed(&s);
     uint8_t weak[6]   = {0x00,0x11,0x22,0x33,0x44,0x01};
@@ -251,7 +379,8 @@ static void test_ranking(void) {
     add_pnl_client(&s, cli, pnl, 2);
     karma_update(&s);
     ASSERT_EQ(s.karma_count, 2);
-    /* strong (overlap>0) must sort ahead of weak (overlap==0). */
+    /* strong (one station asks for 2 of its SSIDs, so the PNL bonus
+     * applies) must sort ahead of weak (no PNL hit at all). */
     ASSERT(s.karma_aps[0].score >= s.karma_aps[1].score);
     ASSERT_EQ(memcmp(s.karma_aps[0].bssid, strong, 6), 0);
 }
@@ -328,6 +457,8 @@ void run_karma_tests(void) {
     RUN_TEST(test_empty_state);
     RUN_TEST(test_threshold);
     RUN_TEST(test_pnl_overlap_and_score);
+    RUN_TEST(test_pnl_hits_spread_across_clients_no_score_credit);
+    RUN_TEST(test_pnl_single_hit_no_score_credit);
     RUN_TEST(test_jaccard_ppm);
     RUN_TEST(test_jaccard_full_overlap);
     RUN_TEST(test_ie_uniform);
@@ -336,6 +467,8 @@ void run_karma_tests(void) {
     RUN_TEST(test_deauth_chain);
     RUN_TEST(test_deauth_chain_unrelated_victim_no_credit);
     RUN_TEST(test_tool_attribution_marked_provisional);
+    RUN_TEST(test_view_legend_states_the_corroboration_rule);
+    RUN_TEST(test_view_pnl_column_still_shows_the_union);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
 }

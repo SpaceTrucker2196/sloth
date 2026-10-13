@@ -62,9 +62,17 @@ nothing to qualify. Rules that *infer* from circumstantial RF report
 both numbers: `EVIL_TWIN` is the first, reported as **suspected
 impersonation** with a percentage rather than as an established fact;
 `KARMA_AP` is the second (#90) — a bare SSID-count candidate is WARN,
-uncorroborated, and escalates to CRIT only when PNL overlap, a
-shared-victim deauth-then-lure chain, or a verified tool signature
-match ties the pattern to that specific BSSID rather than coincidence.
+uncorroborated, and escalates to CRIT only when a PNL match on **one**
+station, a shared-victim deauth-then-lure chain, or a verified tool
+signature match ties the pattern to that specific BSSID rather than
+coincidence. The PNL escalator wants at least `KARMA_PNL_CORROB_MIN`
+= 2 of the advertised SSIDs in a *single* station's list: PineAP
+Beacon Response answers one station's probes for its whole remembered
+list, whereas the union over every nearby client is a description of
+the neighbourhood. The union is still reported and still feeds the
+`[y]` view's Jaccard column; it stopped being the gate because one
+common SSID in one passer-by's list made a benign multi-VAP AP page
+as an active lure.
 
 Collapsing the two axes is what let an uncorroborated same-SSID
 coincidence page at the same volume as an observed attack, and it pushed

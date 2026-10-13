@@ -1602,11 +1602,19 @@ typedef struct {
 typedef struct {
     uint8_t  bssid[6];
     int      ssid_count;    /* distinct SSIDs beaconed (beacon ssid_history_n) */
-    int      pnl_overlap;   /* advertised SSIDs matching nearby client PNLs */
+    int      pnl_overlap;   /* advertised SSIDs in the union of nearby client PNLs */
+    /* Largest count from any *one* station's PNL (#90). pnl_overlap
+     * describes the neighbourhood; this is the input to the score,
+     * because only one station asking for several of these names is
+     * the PineAP Beacon-Response shape. Not persisted — the DB keeps
+     * the union and the score it feeds. */
+    int      pnl_best;
     int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
     int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
     int      deauth_chain;  /* 1 = shared-victim deauth-then-lure (#90) */
-    int      score;         /* composite: 1 + (overlap?2:0) + (deauth?3:0) */
+    /* composite: 1 + (pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
+     *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0) */
+    int      score;
     char     top_ssid[33];  /* most recently advertised SSID */
     /* Tool attribution as the operator reads it — "ESP32 Marauder/med?
      * provisional" for an UNVERIFIED signature, "" when none matched

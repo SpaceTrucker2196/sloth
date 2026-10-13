@@ -4,6 +4,9 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/karma.h"
+/* KARMA_PNL_CORROB_MIN — the legend and the PNL highlight must quote
+ * the same number the score and the alert gate use. */
+#include "karma_detect.h"
 
 #define KARMA_PAGE 30
 
@@ -84,7 +87,18 @@ void view_karma_draw(const sloth_state_t *s) {
         } else {
             tui_bright(); printw(" %-17s", bssid);
             tui_normal(); printw("  %5d", k->ssid_count);
-            if (k->pnl_overlap > 0) tui_bright(); else tui_dim();
+            /* Bright on the count that actually corroborates (#90), not
+             * on a union hit — drawing the operator's eye to a
+             * coincidence is what this column used to do. The column
+             * still prints the union, so narrowing the gate does not
+             * hide the reading.
+             *
+             * Untested, and not claimed otherwise: null_tui.c stubs
+             * tui_bright()/tui_dim() to no-ops for the test binary, so
+             * no view's colour decision is observable from a captured
+             * draw. Reverting this condition leaves the suite green. */
+            if (k->pnl_best >= KARMA_PNL_CORROB_MIN) tui_bright();
+            else tui_dim();
             printw("  %4d", k->pnl_overlap);
             if (k->pnl_jaccard_ppm >= 700000) tui_bright(); else tui_dim();
             printw("  %-4s", jac);
@@ -116,8 +130,9 @@ void view_karma_draw(const sloth_state_t *s) {
 
     /* Legend */
     tui_dim();
-    TPRINT(" PNL = advertised SSIDs matching nearby client probe lists;"
-           " chain = deauth-then-lure on a shared victim\n");
+    TPRINT(" PNL = SSIDs in client probe lists, >=%d on one station;"
+           " chain = deauth-then-lure on shared victim\n",
+           KARMA_PNL_CORROB_MIN);
     TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture"
            " behind it - a hypothesis, not an identification\n");
     tui_normal();

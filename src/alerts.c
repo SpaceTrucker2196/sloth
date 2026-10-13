@@ -2871,31 +2871,6 @@ static void rule_icmp_tunnel(const sloth_state_t *s, time_t now) {
  * two definitions of one threshold, either of which could be retuned
  * without the other. Consolidated when #68 needed a third reader. */
 
-/* How many of this BSSID's advertised SSIDs appear in the union of
- * nearby clients' preferred-network lists. KARMA / PineAP Beacon
- * Response works by answering the exact SSIDs clients probe for, so a
- * high overlap is the signal that separates an active lure from a
- * benign SSID-cycling AP — a real multi-VAP AP advertises its own
- * fixed names, which rarely coincide with what strangers' phones ask
- * for. */
-static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
-    int hits = 0;
-    for (int h = 0; h < a->ssid_history_n && h < MAX_AP_SSID_HISTORY; h++) {
-        const char *name = a->ssid_history[h];
-        if (!name[0]) continue;
-        for (int c = 0; c < s->pnl_count; c++) {
-            const pnl_client_t *cli = &s->pnl_clients[c];
-            int found = 0;
-            for (int k = 0; k < cli->ssid_count &&
-                            k < MAX_PNL_SSIDS_PER_CLI; k++) {
-                if (strcmp(name, cli->ssids[k]) == 0) { found = 1; break; }
-            }
-            if (found) { hits++; break; }   /* count each SSID once */
-        }
-    }
-    return hits;
-}
-
 /* KARMA_AP severity and confidence (#90). A bare SSID-count crossing
  * KARMA_SSID_THRESH is a *candidate* signal, not a finding on its own:
  * a long-lived AP that legitimately renamed itself a few times over a
@@ -2903,9 +2878,13 @@ static int karma_pnl_overlap(const sloth_state_t *s, const beacon_ap_t *a) {
  * escalates to CRIT only when something ties the pattern to *this*
  * candidate specifically, rather than coincidental global activity:
  *
- *   - the beacon answers what a nearby client already asked for (PNL
- *     overlap — the actual PineAP Beacon-Response mechanism, not a
- *     side effect of it), or
+ *   - one nearby station's PNL asks for at least KARMA_PNL_CORROB_MIN
+ *     of the SSIDs this BSSID beacons (the actual PineAP
+ *     Beacon-Response mechanism: a lure answers a station's probes for
+ *     its whole remembered list). The *union* over all clients is
+ *     reported but no longer escalates — a single common name in one
+ *     passer-by's list is a fact about the neighbourhood, not about
+ *     this radio, and that was the false positive #90 reported — or
  *   - a shared-victim deauth-then-lure chain (karma_deauth_lure_victim,
  *     #90 — ties the flood to a station this candidate can be shown to
  *     be luring, not any unrelated flood in range), or
@@ -2925,8 +2904,12 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  a->bssid[0], a->bssid[1], a->bssid[2],
                  a->bssid[3], a->bssid[4], a->bssid[5]);
-        int overlap = karma_pnl_overlap(s, a);
-        int deauth  = karma_deauth_lure_victim(s, a, now, NULL);
+        /* Union: reported only. Single-station best: the gate. */
+        uint8_t pnl_sta[6];
+        int overlap    = karma_pnl_union_hits(s, a);
+        int pnl_best   = karma_pnl_client_hits(s, a, pnl_sta);
+        int pnl_corrob = pnl_best >= KARMA_PNL_CORROB_MIN;
+        int deauth     = karma_deauth_lure_victim(s, a, now, NULL);
 
         /* Has a PMKID been harvested from this BSSID (#68)? Unlike a
          * tool's beacon quirks, this is a *protocol* observable — an AP
@@ -2948,11 +2931,15 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int tool_verified   = tool_row && !tool_row->unverified;
 
         alert_sev_t sev = ALERT_SEV_WARN;
-        if (overlap > 0 || deauth || tool_verified) sev = ALERT_SEV_CRIT;
+        if (pnl_corrob || deauth || tool_verified) sev = ALERT_SEV_CRIT;
 
         int confidence = KARMA_W_SSID_THRESH;
-        if (overlap > 0) confidence += KARMA_W_PNL_OVERLAP;
-        if (deauth)      confidence += KARMA_W_DEAUTH_VICTIM;
+        /* Confidence keys on the same measure as severity. Paying the
+         * weight for a bare union hit would make a coincidence read as
+         * 45% sure of a lure, which is the overstatement this rule is
+         * being narrowed to avoid. */
+        if (pnl_corrob) confidence += KARMA_W_PNL_OVERLAP;
+        if (deauth)     confidence += KARMA_W_DEAUTH_VICTIM;
         if (tool_row)
             confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
                                           : KARMA_W_TOOL_VERIFIED;
@@ -2962,11 +2949,19 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
 
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        char pnl_note[32]   = "";
+        char pnl_note[64]   = "";
         char chain_note[24] = "";
         char tool_note[56]  = "";
         char pmkid_note[16] = "";
-        if (overlap > 0)
+        if (pnl_corrob)   /* implies overlap >= KARMA_PNL_CORROB_MIN */
+            /* Name the station that corroborated, so the operator can
+             * go look at it in [k] rather than trust the count. */
+            snprintf(pnl_note, sizeof(pnl_note),
+                     ", %d in client PNLs (%d on "
+                     "%02x:%02x:%02x:%02x:%02x:%02x)",
+                     overlap, pnl_best, pnl_sta[0], pnl_sta[1], pnl_sta[2],
+                     pnl_sta[3], pnl_sta[4], pnl_sta[5]);
+        else if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
                      ", %d in client PNLs", overlap);
         if (deauth)
