@@ -209,10 +209,47 @@ The full table lives in [`docs/views/alerts.md`](../views/alerts.md);
 the headline rules per tier:
 
 - **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`
-- **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`
+- **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`,
+  `SURV_CLOUD_SNI`
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`
+
+### Surveillance-vendor endpoints (#105)
+
+`SURV_CLOUD_SNI` fires when a host on the monitored segment opens TLS
+whose SNI names a body-cam or ALPR platform's cloud — Axon's evidence
+platform (`evidence.com`, `axon.com`) or Flock Safety
+(`flocksafety.com`). The hostname was already in state from a
+ClientHello sloth overheard, so the rule is a lookup over the embedded
+table in `src/vendor_watchlist.c` and adds no capture surface.
+
+Three things about it are deliberate and worth reading before trusting
+a hit:
+
+- **It cannot tell a device from a browser.** A docked body camera
+  uploading and an analyst with the vendor's portal open in a tab are
+  the same observation. The alert text says so.
+- **A Flock hit is not a Flock camera.** Flock's field cameras uplink
+  over cellular and never cross a monitored LAN, so `flocksafety.com`
+  on the wire means someone on *this* network is using the platform.
+  #105's headline question — "is there a Flock on my street" — is not
+  what this answers, and the other signal families that would try are
+  still gated on owner decisions recorded in that issue.
+- **The table is short because every row needs a primary vendor
+  source.** #105 lists roughly two dozen more vendors with candidate
+  domains, all at the issue's own "confidence: low"; none is included.
+  A domain nobody publishes is a guess with a vendor's name attached,
+  which is the overstatement #90 is open about.
+
+Embedded, not a file: same choice as the IOC list (MISSION.md §3), so
+behaviour stays reproducible from the commit. #105 asks for a
+SIGHUP-reloaded CSV; that is an architecture-contract question the
+owner has not answered and this leaves it open.
+
+Full row, including the false-positive cases, in
+[`docs/views/alerts.md`](../views/alerts.md); basis in
+`research/papers/surveillance-vendor-endpoints.md`.
 
 ### Tunable thresholds (#82)
 

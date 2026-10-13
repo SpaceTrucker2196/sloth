@@ -6,6 +6,7 @@
 #include "tune.h"   /* operator-tunable thresholds (#82) */
 #include "sensor_health.h"
 #include "threat_intel.h"
+#include "vendor_watchlist.h"
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
 #include "db.h"
@@ -540,6 +541,19 @@ const char *alert_technique(alert_type_t type) {
      * ATT&CK technique. */
     case ALERT_TYPE_CAM_WS_DISCOVERY:       return "";            /* exposure, not adversary technique (#106) */
     case ALERT_TYPE_PM_FORGE:               return "T1557";       /* AiTM — queue manipulation, Framing Frames (#107) */
+    /* Deliberately empty, third in the line OPEN_SETUP_AP (#80) and
+     * CAM_WS_DISCOVERY (#106) started: what fires is that a host on
+     * the monitored segment talked to a surveillance vendor's cloud.
+     * Nobody attacked anything. The nearest candidates are all wrong
+     * in the same direction — T1041 (Exfiltration Over C2 Channel) and
+     * T1567.002 (Exfiltration to Cloud Storage) describe an adversary
+     * moving data out, and an officer's docked body camera uploading
+     * to its own vendor is the system working as designed. Calling
+     * that exfiltration would be the overstatement #90 is open about.
+     * The basis is cited — the vendors' own network-requirement docs,
+     * see research/papers/surveillance-vendor-endpoints.md — it is
+     * simply not an ATT&CK technique. */
+    case ALERT_TYPE_SURV_CLOUD_SNI:         return "";            /* exposure, not adversary technique (#105) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -595,6 +609,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_MLD_MAC_COLLISION);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     N(ALERT_TYPE_PM_FORGE);
+    N(ALERT_TYPE_SURV_CLOUD_SNI);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -2975,6 +2990,92 @@ static void rule_cam_ws_discovery(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── Surveillance-vendor cloud endpoint (#105, signal family B) ──
+ *
+ * A host on the monitored segment opened TLS to a body-cam or ALPR
+ * platform's cloud. The SNI is already in state (src/sni_snoop.c put
+ * it there from a ClientHello sloth overheard), so this rule adds no
+ * new capture surface at all — it is a watchlist lookup over
+ * s->tls_log.
+ *
+ * Why only this one of #105's signal families: the issue's OUI, SSID
+ * and DNS-glob families need owner answers that do not exist yet (the
+ * MISSION.md §2.4 reading on third-party street-side devices, and
+ * whether the medium/low confidence tiers fire at all). An endpoint on
+ * a network the operator already monitors needs neither.
+ *
+ * What the alert claims is narrower than #105's framing. The issue's
+ * success criterion is "is there a Flock on my street right now"; a
+ * TLS SNI cannot answer that. It can only say traffic on this segment
+ * went to that vendor, and it cannot distinguish a docked camera
+ * uploading from an analyst's browser tab on the vendor's portal — for
+ * Flock it is almost always the latter, because the cameras uplink
+ * over cellular and never touch a monitored LAN. The detail text says
+ * so rather than implying a device was located.
+ *
+ * WARN, not CRIT: nothing here is an attack, and most hits are the
+ * system working as designed. It is reported because an operator
+ * generally wants to know their network carries surveillance-platform
+ * traffic, not because someone did something wrong.
+ *
+ * Basis: the vendors' own network-requirement documents — see
+ * research/papers/surveillance-vendor-endpoints.md. */
+static void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->tls_log_count; i++) {
+        const tls_log_entry_t *e = &s->tls_log[i];
+        if (!e->host[0]) continue;
+        const char *vendor = NULL, *family = NULL;
+        if (!vendor_watchlist_match_domain(e->host, &vendor, &family))
+            continue;
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        /* Keyed on vendor + LOCAL host. Not on the SNI, because a
+         * vendor's upload tier hands out per-session hostnames and
+         * keying on those makes one dock produce a fresh alert per
+         * connection instead of one with a rising count.
+         *
+         * And not on the endpoint IP, which is what this shipped as.
+         * Two reviewers measured the same two failures independently:
+         *
+         *   - Several of the operator's hosts talking to one vendor IP
+         *     collapsed into a single alert that named only one of them.
+         *     "Which of my hosts is uploading" is the question this rule
+         *     exists to answer, so merging hosts answers the wrong one.
+         *
+         *   - Worse, the endpoint is chosen by the REMOTE side and
+         *     nothing bounds how many it uses. 200 tls rows from ONE
+         *     local host to one vendor domain across 200 destination
+         *     addresses produced 127 incidents and filled the 128-slot
+         *     engine (MAX_ALERTS), evicting real findings. Ordinary CDN
+         *     rotation is enough to do that; no attacker is required.
+         *
+         * The local host bounds fan-out to the size of the segment,
+         * which is the operator's own network and therefore theirs to
+         * bound, and it is the axis a reader wants one row per. */
+        snprintf(key, sizeof(key), "surv-sni:%s:%s", vendor,
+                 e->src[0] ? e->src : "?");
+        /* %.45s, not %.20s: 20 truncates an IPv6 literal mid-address
+         * (measured: "2001:db8:85a3:8d3:13 -> ..."), and with match_ip
+         * set to the endpoint below, the detail is the ONLY place the
+         * local host appears at all. Truncating it there loses the
+         * finding's subject. */
+        snprintf(detail, sizeof(detail),
+                 "%.45s -> %.40s: TLS to %s %s"
+                 " (device upload or portal use, not distinguishable)",
+                 e->src[0] ? e->src : "?", e->host, vendor, family);
+        /* match_ip stays the endpoint, not the local host: a per-alert
+         * pcap is most useful filtered to the conversation with the
+         * vendor, and the local host's other traffic is not evidence
+         * for this finding. Note the consequence, since it is not
+         * obvious — the key names the local host and match_ip names the
+         * remote one, so the two fields carry different ends of the
+         * same conversation on purpose. */
+        fire(ALERT_TYPE_SURV_CLOUD_SNI, ALERT_SEV_WARN,
+             "SURV_CLOUD_SNI", detail, key, e->dst, 443, now);
+    }
+}
+
 /* ── WPS attack rules (#82 wave 8) ─────────────────────────
  *
  * Waves 6 and 7 shipped the measurement and deliberately stopped
@@ -4516,6 +4617,7 @@ void alerts_update(sloth_state_t *s) {
     rule_karma_ap(s, now);
     rule_open_setup_ap(s, now);
     rule_cam_ws_discovery(s, now);
+    rule_surv_cloud_sni(s, now);
     rule_wps_pin_brute(s, now);
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);

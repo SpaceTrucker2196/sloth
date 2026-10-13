@@ -272,6 +272,7 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
     static const char *const kinds[] = {
         "ALERT_TYPE_OPEN_SETUP_AP",
         "ALERT_TYPE_CAM_WS_DISCOVERY",
+        "ALERT_TYPE_SURV_CLOUD_SNI",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

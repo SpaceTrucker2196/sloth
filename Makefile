@@ -86,6 +86,7 @@ SRCS = src/main.c          \
        src/icmp_log.c        \
        src/views/icmp.c      \
        src/threat_intel.c    \
+       src/vendor_watchlist.c \
        src/dga.c             \
        src/wifi_oui_attacker.c \
        src/wifi_chanhop.c    \
@@ -476,6 +477,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_icmp_log.c          \
             src/threat_intel.c             \
             tests/test_threat_intel.c      \
+            src/vendor_watchlist.c         \
+            tests/test_vendor_watchlist.c  \
             src/dga.c                      \
             tests/test_dga.c               \
             src/wifi_oui_attacker.c        \

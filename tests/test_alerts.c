@@ -6525,6 +6525,229 @@ static void test_cam_ws_discovery_two_cameras_two_alerts(void) {
     ASSERT_EQ(seen, 2);
 }
 
+/* ── SURV_CLOUD_SNI (#105 family B) ──────────────────────
+ *
+ * State-seeded through add_tls(), the same helper the weak-TLS rule's
+ * tests use: the SNI already reaches sloth_state_t as a plain
+ * hostname, so there is no frame to hand-build here and nothing to
+ * capture. The watchlist's own string cases live in
+ * tests/test_vendor_watchlist.c; these cover the rule's behaviour. */
+
+static void test_surv_cloud_sni_fires_on_axon_upload_host(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "ab4-upload.evidence.com", "TLS 1.3");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[i].detail, "axon") != NULL);
+    ASSERT(strstr(s.alerts[i].detail, "ab4-upload.evidence.com") != NULL);
+    /* The disclaimer is part of the finding, not decoration: the rule
+       cannot tell an uploading device from a browser tab, and the only
+       place an operator learns that is the alert row. */
+    ASSERT(strstr(s.alerts[i].detail, "not distinguishable") != NULL);
+}
+
+static void test_surv_cloud_sni_names_flock_separately(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.7", "203.0.113.20",
+            "transparency.flocksafety.com", "TLS 1.3");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(s.alerts[i].detail, "flock-safety") != NULL);
+}
+
+static void test_surv_cloud_sni_quiet_on_unrelated_host(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "news.example", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI) < 0);
+}
+
+static void test_surv_cloud_sni_quiet_on_lookalike_host(void) {
+    /* The label-boundary case, driven through the rule rather than the
+       matcher: a domain that merely ends with the table string. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "notevidence.com", "TLS 1.3");
+    add_tls(&s, "10.0.0.6", "203.0.113.9",
+            "evidence.com.attacker.example", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI) < 0);
+}
+
+static void test_surv_cloud_sni_quiet_without_sni(void) {
+    /* A ClientHello with no SNI leaves host empty. Firing on that would
+       mean reporting a vendor the rule never saw named.
+       Honest limit: this does NOT isolate the rule's own
+       `if (!e->host[0]) continue;` guard. Deleting that line leaves the
+       suite green, because vendor_watchlist_match_domain() rejects an
+       empty host twice over (its NULL/empty check, and `dn < en` on the
+       length). The guard is a redundant early-out, not the thing under
+       test here — what this pins is the composite behaviour. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI) < 0);
+}
+
+static int surv_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_SURV_CLOUD_SNI) n++;
+    return n;
+}
+
+static void test_surv_cloud_sni_one_alert_per_local_host(void) {
+    /* Key is vendor + LOCAL host, not the hostname, so a dock handed
+       two per-session upload names is one incident with a rising count
+       rather than two alerts. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "a1.evidence.com", "TLS 1.3");
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "a2.evidence.com", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 1);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, 2);
+}
+
+static void test_surv_cloud_sni_separates_two_local_hosts(void) {
+    /* The question this rule answers is "WHICH of my hosts is talking
+       to a surveillance cloud", so two hosts reaching the SAME vendor
+       endpoint must be two incidents. Keyed on the endpoint, as this
+       shipped, they collapsed into one that named only the first —
+       measured by review. Endpoint and vendor are held constant here
+       so the local host is the only thing that varies. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "evidence.com", "TLS 1.3");
+    add_tls(&s, "10.0.0.9", "203.0.113.9", "evidence.com", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 2);
+}
+
+static void test_surv_cloud_sni_two_vendors_two_alerts(void) {
+    /* Vendor varies, local host held constant — the complement of the
+       case above. The test this replaces varied vendor AND endpoint
+       together, so it could not distinguish vendor-keying from
+       endpoint-keying and its name claimed the latter. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "evidence.com", "TLS 1.3");
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "flocksafety.com", "TLS 1.3");
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 2);
+}
+
+static void test_surv_cloud_sni_endpoint_churn_does_not_fill_the_engine(void) {
+    /* The regression that justified re-keying. The endpoint address is
+       chosen by the REMOTE side and nothing bounds how many it uses, so
+       keying on it let ordinary CDN rotation fan one benign host out
+       across the whole alert engine: review measured 200 rows from one
+       host to one vendor domain producing 127 incidents, s.alert_count
+       at MAX_ALERTS, and real findings evicted. No attacker needed.
+       Keyed on the local host it is one incident with a count of 200. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 200 && s.tls_log_count < MAX_TLS_LOG; i++) {
+        char dst[32];
+        snprintf(dst, sizeof(dst), "198.18.%d.%d", i / 256, i % 256);
+        add_tls(&s, "10.0.0.5", dst, "evidence.com", "TLS 1.3");
+    }
+    const int rows = s.tls_log_count;
+    ASSERT(rows > 1);
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 1);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, rows);
+    /* And the engine is nowhere near full, which is the property that
+       actually matters to every other rule sharing it. */
+    ASSERT(s.alert_count < 16);
+}
+
+static void test_surv_cloud_sni_keys_on_vendor_and_local_host(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", "evidence.com", "TLS 1.3");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_STR(s.alerts[i].key, "surv-sni:axon:10.0.0.5");
+    /* match_ip is the ENDPOINT while the key names the local host, so
+       the two fields carry opposite ends of the conversation. Asserted
+       because review found both undetected by mutation: swapping
+       match_ip to e->src and the port to 0 left the suite green, and
+       the per-alert pcap plumbing the commit body advertises depends on
+       exactly these two values. */
+    ASSERT_STR(s.alerts[i].match_ip, "203.0.113.9");
+    ASSERT_EQ((int)s.alerts[i].match_port, 443);
+    /* The local host must survive in the detail in FULL — with match_ip
+       set to the remote end, the detail is the only field that carries
+       it. An IPv6 literal is the case that caught the old %.20s. */
+    ASSERT(strstr(s.alerts[i].detail, "10.0.0.5") != NULL);
+    /* And the product family is printed, not just the vendor: review
+       dropped `family` from the format and the argument list and the
+       suite stayed green.
+
+       Asserted in FULL ("evidence-cloud"), because a substring is not
+       enough here: the first attempt looked for "evidence" and passed
+       on the SNI host `evidence.com` with the family argument replaced
+       by "". The mutation caught my own assertion, not the code. */
+    ASSERT(strstr(s.alerts[i].detail, "axon") != NULL);
+    ASSERT(strstr(s.alerts[i].detail, "evidence-cloud") != NULL);
+}
+
+static void test_surv_cloud_sni_names_the_product_family(void) {
+    /* Flock's family string ("alpr-cloud") shares no substring with its
+       domain, so this assertion cannot be satisfied by the hostname
+       leaking through — the failure mode the axon case above had to be
+       rescued from. A rule that names a vendor without naming what the
+       traffic IS tells an operator half a finding. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_tls(&s, "10.0.0.7", "203.0.113.20", "flocksafety.com", "TLS 1.3");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(s.alerts[i].detail, "flock-safety") != NULL);
+    ASSERT(strstr(s.alerts[i].detail, "alpr-cloud")   != NULL);
+}
+
+static void test_surv_cloud_sni_ipv6_local_host_is_not_truncated(void) {
+    /* %.20s cut an IPv6 literal mid-address, and because the local host
+       appears in no other field it was simply lost. Measured by review
+       as "2001:db8:85a3:8d3:13 -> ...". */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    const char *v6 = "2001:db8:85a3:8d3:1319:8a2e:370:7348";
+    add_tls(&s, v6, "2001:db8::9", "evidence.com", "TLS 1.3");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(s.alerts[i].detail, v6) != NULL);
+}
+
+static void test_surv_cloud_sni_has_no_attack_technique(void) {
+    /* The exemption is the finding's shape, not an oversight: see
+       research/papers/surveillance-vendor-endpoints.md. Pinned here
+       too, because a later pass tempted to assign T1041 would
+       otherwise only trip the corpus test's coverage branch. */
+    const char *t = alert_technique(ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(t != NULL);
+    ASSERT_EQ((int)strlen(t), 0);
+}
+
 /* ── WPS threshold rules (#82 wave 8) ─────────────────────
  *
  * Seeded state, no pcap fixtures (agents/AGENTS.md). Two of the three
@@ -8093,6 +8316,21 @@ void run_alerts_tests(void) {
     RUN_TEST(test_cam_ws_discovery_keys_by_ip_without_uuid);
     RUN_TEST(test_cam_ws_discovery_fires_once_per_device);
     RUN_TEST(test_cam_ws_discovery_two_cameras_two_alerts);
+
+    TEST_SUITE("alerts: surveillance-vendor cloud endpoints (#105)");
+    RUN_TEST(test_surv_cloud_sni_fires_on_axon_upload_host);
+    RUN_TEST(test_surv_cloud_sni_names_flock_separately);
+    RUN_TEST(test_surv_cloud_sni_quiet_on_unrelated_host);
+    RUN_TEST(test_surv_cloud_sni_quiet_on_lookalike_host);
+    RUN_TEST(test_surv_cloud_sni_quiet_without_sni);
+    RUN_TEST(test_surv_cloud_sni_one_alert_per_local_host);
+    RUN_TEST(test_surv_cloud_sni_separates_two_local_hosts);
+    RUN_TEST(test_surv_cloud_sni_two_vendors_two_alerts);
+    RUN_TEST(test_surv_cloud_sni_endpoint_churn_does_not_fill_the_engine);
+    RUN_TEST(test_surv_cloud_sni_keys_on_vendor_and_local_host);
+    RUN_TEST(test_surv_cloud_sni_names_the_product_family);
+    RUN_TEST(test_surv_cloud_sni_ipv6_local_host_is_not_truncated);
+    RUN_TEST(test_surv_cloud_sni_has_no_attack_technique);
 
     TEST_SUITE("alerts: WPS PIN brute force (#82 wave 8)");
     RUN_TEST(test_wps_pin_brute_fires_at_threshold);

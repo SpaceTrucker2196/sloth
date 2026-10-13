@@ -2229,3 +2229,55 @@ replugged adapter stays failed closed until restart), the
 `scope_dropped`-vs-`[y]`-deselect contract discrepancy, and the
 `cli-reference.md` exit-code mismatch for the scope refusal (doc says
 `2`, `src/main.c` returns `1`). All three are owner decisions.
+## 2026-10-13 — `SURV_CLOUD_SNI`: surveillance-vendor cloud endpoints (#105 family B)
+
+New `src/vendor_watchlist.{c,h}` — an embedded table of surveillance
+platform service domains (`evidence.com`, `axon.com`, `flocksafety.com`)
+with a label-boundary suffix matcher, the same semantics
+`src/threat_intel.c` uses for IOC domains. Embedded rather than the
+`data/surveillance_vendors.csv` with SIGHUP reload that #105 specifies:
+that is an architecture-contract decision (MISSION.md §3 embeds the IOC
+list on purpose) with no owner answer in the thread, so this ships the
+table the way `src/wifi_oui_attacker.c` ships its OUI tables and leaves
+the question open.
+
+New `ALERT_TYPE_SURV_CLOUD_SNI` (WARN, alert count 70 → 71), fired when
+a TLS SNI already in `s->tls_log` matches the table. Keyed
+`surv-sni:<vendor>:<endpoint-ip>` — on the peer address rather than the
+hostname, so a per-session upload host does not split one dock into an
+alert per connection. `alert_technique()` returns `""`, third after
+`OPEN_SETUP_AP` (#80) and `CAM_WS_DISCOVERY` (#106): T1041 and
+T1567.002 describe an attacker moving data out, and a body camera
+uploading to its own vendor is the system working as designed. Cited in
+`research/papers/surveillance-vendor-endpoints.md`.
+
+**Pages changed**:
+
+- `docs/wiki/alerts.md` — `SURV_CLOUD_SNI` in the WARN tier list plus a
+  new "Surveillance-vendor endpoints (#105)" section stating what a hit
+  does not establish.
+- `docs/wiki/sloth.md`, `docs/wiki/what-sloth-does.md`,
+  `docs/wiki/attack-map.md`, `docs/wiki/index.md` — alert count 70 → 71
+  (gated by `tests/test_docs_consistency.c`).
+
+**Notes**:
+
+- **The rule claims less than the issue asks for.** #105's success
+  criterion is "is there a Flock on my street right now". A TLS SNI
+  cannot answer that: a Flock camera uplinks over cellular and never
+  touches a monitored LAN, so a `flocksafety.com` hit is a host on this
+  network *using* the platform. The detector also cannot separate a
+  docked camera uploading from a browser tab on the vendor's portal,
+  and the alert detail says so rather than implying a device was found.
+- **`axon.com` is a known broad row.** It is Axon's marketing site as
+  well as the evidence platform's migration destination, so reading a
+  product page fires the rule. Narrowing it would mean guessing at
+  upload subdomains Axon has not published — a row that matches nothing
+  real while still labelling whatever it does hit.
+- **Still open on #105, owner-only.** Signal family A (OUI and SSID
+  watchlists) is gated on the MISSION.md §2.4 reading for a
+  third-party street-side device, and on whether the medium/low
+  confidence tiers fire at all. The CSV/SIGHUP storage question, the
+  surveillance inventory/JSONL fields, `VIEW_SURVEILLANCE`, the
+  cross-signal CRIT and `SURV_DHCP_VENDOR` (which also needs DHCP
+  option 60/61 parsing that does not exist) are all untouched.
