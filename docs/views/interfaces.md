@@ -222,7 +222,8 @@ counted tables are **alerts, top hosts, PNL clients, per-client PNL
 SSIDs, DHCP events, 802.1X EAP sessions, the device table, the
 802.11 tables (beacons, sequence-number clients, both association
 tables, WPS sessions, probing clients, retained evidence frames,
-PM-bit forgery entries), and
+PM-bit forgery entries), the per-channel RF-quality table, the HTTP
+request/response pairing table, and
 the six per-protocol flow rings (DNS, TLS, QUIC, HTTP, NTP, ICMP)**;
 the device table refuses a *new* entry
 rather than evicting an old one, which is a different mechanism with the
@@ -239,8 +240,10 @@ the 256-record live view rolling over, not an observation lost. Those
 counters rise steadily on a busy segment by design — the same caveat the
 evidence ring carries — so a non-zero `evict` on a healthy sensor is
 normal once any flow ring has filled. `jsonl-schema.md` has the per-field
-detail; the one bounded table still uncounted is the HTTP
-request/response pairing table behind #71.
+detail. More than twenty bounded tables are still uncounted — the
+protocol snoopers, the deauth tables, the DNS reverse cache and others
+listed there — so `evict` reads as "loss on the instrumented tables",
+never as all loss.
 
 `scope degraded 1/2` means a launch-time `--iface`/`--monitor-only`
 scope is not being fully served: one of the two requested interfaces

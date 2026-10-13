@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "http_log.h"
+#include "sensor_health.h"
 #include "views/http.h"
 
 static const uint8_t *u8(const char *s) { return (const uint8_t *)s; }
@@ -626,6 +627,92 @@ static void test_pairing_consumes_the_request(void) {
     http_log_clear();
 }
 
+/* #91: the pairing table LRU-evicts, and a displaced slot is a lost
+ * pairing — the response that eventually arrives for that flow can no
+ * longer be given its host and path, so the record ships unattributed
+ * and reads exactly like a response sloth never saw a request for.
+ *
+ * flow_note_request() is static and reached only through
+ * http_log_record() with is_response == 0, and http_log_clear() zeroes
+ * g_flow and g_flow_n, so this case is self-isolating.
+ *
+ * Both bounds are pinned: HTTP_FLOW_MAX distinct flows must read ZERO
+ * (a fill is not a loss), and a count that drifted from the real bound
+ * in either direction fails one of the two assertions rather than
+ * passing quietly. */
+static void test_flow_table_eviction_is_counted(void) {
+    http_log_clear();
+    sh_evict_reset();
+    http_log_entry_t req;
+
+    /* Distinct flows: same endpoints, one source port each — and
+     * STAGGERED timestamps, which is the part that was missing.
+     *
+     * mk_req() stamps every entry with time(NULL), so all
+     * HTTP_FLOW_MAX flows shared one whole second and the LRU scan's
+     * `g_flow[i].ts < g_flow[idx].ts` never fired once: slot 0 won by
+     * being the loop's initialiser, not by being stalest. Review proved
+     * it by inverting that comparison to `>` — evicting the MOST recent
+     * flow, the exact ordering inversion this case exists to catch —
+     * and watching the entire suite stay green at the same assertion
+     * count. An eviction scan that compares timestamps cannot be tested
+     * by inputs that all share one timestamp. */
+    const time_t base = 1700000000;
+    for (int i = 0; i < HTTP_FLOW_MAX; i++) {
+        mk_req(&req, "fill.example", "/x");
+        req.src_port = (uint16_t)(40000 + i);
+        req.ts       = base + i;          /* port 40000 is the stalest */
+        http_log_record(&req);
+    }
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_HTTP_FLOW), 0);
+
+    mk_req(&req, "overflow.example", "/y");
+    req.src_port = 40000 + HTTP_FLOW_MAX;
+    req.ts       = base + HTTP_FLOW_MAX;
+    http_log_record(&req);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_HTTP_FLOW), 1);
+
+    /* A resident flow matches the four-tuple and is updated in place,
+     * so no identity is displaced. Deliberately the SECOND-oldest and
+     * not the newest: the newest is the control in the two assertions
+     * below, and an in-place update would consume its in_flight and
+     * make a 0 there ambiguous. */
+    mk_req(&req, "fill.example", "/z");
+    req.src_port = (uint16_t)(40000 + 1);
+    req.ts       = base + HTTP_FLOW_MAX + 1;
+    http_log_record(&req);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_HTTP_FLOW), 1);
+
+    /* Tie the counter to the observable loss, and pin the ORDER in both
+     * directions — one assertion alone cannot. The stalest flow, port
+     * 40000, is gone: its response matches no four-tuple at all, so
+     * pairing returns 0 and the host/path stay empty, which is distinct
+     * from "in_flight was consumed", the other way a 0 arises here. */
+    http_log_entry_t resp;
+    mk_resp_entry(&resp);
+    resp.dst_port = 40000;
+    ASSERT_EQ(http_log_pair_response(&resp), 0);
+    ASSERT_EQ((int)resp.host[0], 0);
+
+    /* And the FRESHEST original flow is still resident, which is the
+     * half that fails when the comparison is inverted: under `>` the
+     * table would have evicted this one and kept port 40000, so the two
+     * assertions fail together and name the ordering rather than just
+     * the count. */
+    mk_resp_entry(&resp);
+    resp.dst_port = (uint16_t)(40000 + HTTP_FLOW_MAX - 1);
+    ASSERT_EQ(http_log_pair_response(&resp), 1);
+
+    /* Not a flow ring: the pairing table does not roll over by design,
+     * so the count has to reach the faults-only strip and the
+     * change-only JSONL signature, both of which read
+     * sh_evict_total_tables(). */
+    ASSERT_EQ(sh_evict_is_flow_ring(SH_EVICT_HTTP_FLOW), 0);
+
+    sh_evict_reset();
+    http_log_clear();
+}
+
 void run_http_log_tests(void) {
     TEST_SUITE("http_log");
     RUN_TEST(test_parse_get);
@@ -671,4 +758,5 @@ void run_http_log_tests(void) {
     RUN_TEST(test_unmatched_response_is_unpaired);
     RUN_TEST(test_pipelining_is_left_unpaired);
     RUN_TEST(test_pairing_consumes_the_request);
+    RUN_TEST(test_flow_table_eviction_is_counted);
 }

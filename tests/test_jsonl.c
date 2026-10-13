@@ -1189,6 +1189,11 @@ static void test_emit_sensor_health_eviction_tally(void) {
     ASSERT(contains(body, "\"evict_http_log\":0"));
     ASSERT(contains(body, "\"evict_ntp_log\":0"));
     ASSERT(contains(body, "\"evict_icmp_log\":0"));
+    /* #91 2026-10-13: the per-channel RF-quality table and the #71
+       request/response pairing table ride the same loop. Appended after
+       the flow rings, so no earlier field moved. */
+    ASSERT(contains(body, "\"evict_rf_channel\":0"));
+    ASSERT(contains(body, "\"evict_http_flow\":0"));
     sh_evict_reset();
 }
 
@@ -1239,6 +1244,29 @@ static void test_sensor_health_flow_ring_churn_does_not_re_emit(void) {
     char *loss = slurp(tmp_path);
     ASSERT(loss != NULL);
     if (loss) ASSERT_EQ(count_lines(loss), 2);
+    sh_evict_reset();
+}
+
+/* #91 2026-10-13: the same split, asserted for the two kinds added on
+ * that date. Classifying either as a flow ring would drop it out of
+ * sh_evict_total_tables() and therefore out of the signature — it would
+ * still appear in its `evict_*` field, but a consumer relying on the
+ * change feed would never be told. That is the failure this asserts
+ * against, and it is the half the field asserts above cannot see. */
+static void test_sensor_health_new_table_kinds_move_the_signature(void) {
+    const sh_evict_t kinds[] = { SH_EVICT_RF_CHANNEL, SH_EVICT_HTTP_FLOW };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        open_fresh();
+        sh_evict_reset();
+        sloth_state_t s; seed_health(&s);
+        jsonl_emit_sensor_health(&s);      /* first record: always news */
+        sh_evict_note(kinds[i]);
+        jsonl_emit_sensor_health(&s);
+        jsonl_close();
+        char *body = slurp(tmp_path);
+        ASSERT(body != NULL);
+        if (body) ASSERT_EQ(count_lines(body), 2);
+    }
     sh_evict_reset();
 }
 
@@ -1952,6 +1980,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_eviction_tally);
     RUN_TEST(test_emit_sensor_health_total_includes_flow_rings);
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
+    RUN_TEST(test_sensor_health_new_table_kinds_move_the_signature);
     RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
     RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);
     RUN_TEST(test_emit_sensor_health_scope_unrequested);

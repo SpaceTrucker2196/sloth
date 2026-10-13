@@ -105,6 +105,8 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_HTTP_LOG), "http_log");
     ASSERT_STR(sh_evict_name(SH_EVICT_NTP_LOG),  "ntp_log");
     ASSERT_STR(sh_evict_name(SH_EVICT_ICMP_LOG), "icmp_log");
+    ASSERT_STR(sh_evict_name(SH_EVICT_RF_CHANNEL), "rf_channel");
+    ASSERT_STR(sh_evict_name(SH_EVICT_HTTP_FLOW),  "http_flow");
     ASSERT_STR(sh_evict_name((sh_evict_t)SH_EVICT_KIND_COUNT), "");
     /* Names must be distinct: two kinds sharing one `evict_<name>` field
      * would silently merge two tables' loss into one number, which is the
@@ -517,6 +519,12 @@ static void test_flow_rings_are_classified_apart_from_tables(void) {
     ASSERT(!sh_evict_is_flow_ring(SH_EVICT_DEVICE));
     ASSERT(!sh_evict_is_flow_ring(SH_EVICT_PROBE_CLIENT));
     ASSERT(!sh_evict_is_flow_ring(SH_EVICT_EVIDENCE_FRAME));
+    /* Both tables added on 2026-10-13 are bounded working sets, not
+     * circular buffers: neither rolls over as a matter of course, so a
+     * non-zero count is a lost measurement and belongs in the subtotal
+     * that drives the strip and the signature. */
+    ASSERT(!sh_evict_is_flow_ring(SH_EVICT_RF_CHANNEL));
+    ASSERT(!sh_evict_is_flow_ring(SH_EVICT_HTTP_FLOW));
 }
 
 static void test_table_subtotal_excludes_flow_rings(void) {

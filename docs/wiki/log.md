@@ -2125,3 +2125,31 @@ is actually still open.
 JSONL or schema change. The WPS session table is still not
 state-resident, so no session/opcode timeline is on screen; the
 probe-response path still parses only the SSID tag.
+## 2026-10-13 — #91: eviction tally covers rf_channel and http_flow
+
+**Source**: issue #91. Two more bounded synthesis tables reach the
+`sensor_health` tally: `src/rf_quality.c`'s per-channel RF-quality rows
+(`MAX_RF_CHANNELS` 64, LRU on stalest `last_seen`) and
+`src/http_log.c`'s request/response pairing slots (`HTTP_FLOW_MAX` 64,
+LRU on oldest `ts`). Both LRU-evicted silently, so an operator could
+not tell a channel sloth had stopped measuring, or a response that
+shipped without its host and path, from an absence of either.
+
+**Updated pages**:
+
+- `docs/wiki/jsonl-schema.md` — `evict_rf_channel` and
+  `evict_http_flow` added to the counted list and the sample record
+  (appended, so no earlier field moves). The "**Not** counted"
+  paragraph rewritten: it claimed the HTTP pairing table was "the one
+  bounded table left without a field", which was wrong by more than
+  twenty tables, and it is replaced with a named sample of those plus
+  the mechanical rule (a field or it is not measured).
+- `docs/views/interfaces.md` — same two corrections to the `evict`
+  strip section.
+
+**Notes**:
+
+- `src/sensor_health.h`'s coverage paragraph carried the same false
+  completeness claim ("every bounded synthesis table in sloth") and is
+  corrected in the same change. Only the *counted* list is pinned to
+  the build by a test; the uncounted side is prose and had drifted.

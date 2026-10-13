@@ -205,9 +205,8 @@ int http_log_parse_response(const uint8_t *data, int len,
 
 /* ── Request/response pairing (#71) ────────────────────────
  *
- * One slot per flow, holding the most recent request. Bounded and
- * LRU-evicted like every other table here. */
-#define HTTP_FLOW_MAX 64
+ * One slot per flow, holding the most recent request. HTTP_FLOW_MAX is
+ * in http_log.h. */
 
 typedef struct {
     char     cli[46];        /* the request's source */
@@ -226,6 +225,8 @@ static pthread_mutex_t g_flow_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void flow_note_request(const http_log_entry_t *req) {
     if (!req || !req->src[0] || !req->dst[0]) return;
+    /* Set under g_flow_mu, reported after it — see the eviction branch. */
+    int evicted = 0;
     pthread_mutex_lock(&g_flow_mu);
     int idx = -1;
     for (int i = 0; i < g_flow_n; i++)
@@ -240,6 +241,16 @@ static void flow_note_request(const http_log_entry_t *req) {
             idx = 0;
             for (int i = 1; i < HTTP_FLOW_MAX; i++)
                 if (g_flow[i].ts < g_flow[idx].ts) idx = i;
+            /* A displaced flow slot is a lost pairing: the response that
+             * eventually arrives for it can no longer be given its host
+             * and path, so the record ships unattributed. Counted here
+             * and not on the `idx = g_flow_n++` fill above, and not on
+             * the update-in-place path, where the four-tuple matched.
+             *
+             * Reported after the unlock rather than here, so this lock
+             * is not held across a call into another module. Same
+             * reasoning as src/rf_quality.c's eviction branch. */
+            evicted = 1;
         }
         memset(&g_flow[idx], 0, sizeof(g_flow[idx]));
         snprintf(g_flow[idx].cli, sizeof(g_flow[idx].cli), "%s", req->src);
@@ -261,6 +272,8 @@ static void flow_note_request(const http_log_entry_t *req) {
     }
     g_flow[idx].ts = req->ts;
     pthread_mutex_unlock(&g_flow_mu);
+
+    if (evicted) sh_evict_note(SH_EVICT_HTTP_FLOW);
 }
 
 int http_log_pair_response(http_log_entry_t *resp) {

@@ -5,10 +5,18 @@
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
  * Written from the capture threads (probe_pnl, dhcp_snoop, eap_track,
- * beacon_snoop, seqnum_track, assoc_track, evidence_ring, and the six
- * per-protocol flow rings) and from the
- * poll loop (alerts, top_hosts, devices), so the tally
- * takes a mutex rather than relying on unsynchronised increments. The
+ * beacon_snoop, seqnum_track, assoc_track, evidence_ring, rf_quality,
+ * wps_track, pm_forge, src/capture/probe.c's client table, the HTTP
+ * pairing table, and the six per-protocol flow rings) and from the poll
+ * loop (alerts, top_hosts, devices), so the tally takes a mutex rather
+ * than relying on unsynchronised increments.
+ *
+ * That list is the current set and is maintained by hand, so treat it
+ * as a guide and `grep sh_evict_note` for the authority — three writers
+ * were missing from it until 2026-10-13. What is NOT hand-maintained is
+ * the kind enum itself, which sensor_health.h enumerates and the JSONL
+ * emitter loops over, so a new kind reaches every consumer without an
+ * edit here. The
  * lock is cold by construction: it is only reached when a bounded table
  * is already full. */
 
@@ -88,6 +96,8 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_HTTP_LOG:    return "http_log";
     case SH_EVICT_NTP_LOG:     return "ntp_log";
     case SH_EVICT_ICMP_LOG:    return "icmp_log";
+    case SH_EVICT_RF_CHANNEL:  return "rf_channel";
+    case SH_EVICT_HTTP_FLOW:   return "http_flow";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "rf_quality.h"
+#include "sensor_health.h"
 
 typedef struct {
     int      channel;
@@ -47,6 +48,9 @@ static void roll_if_stale(rf_chan_t *c, time_t now) {
 void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now) {
     if (channel <= 0) return;             /* unmapped frequency */
 
+    /* Set under the lock, reported after it. See the eviction branch. */
+    int evicted = 0;
+
     pthread_mutex_lock(&g_mu);
     rf_chan_t *c = find(channel);
     if (!c) {
@@ -63,6 +67,22 @@ void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now) {
             int oldest = 0;
             for (int i = 1; i < g_n; i++)
                 if (g_ch[i].last_seen < g_ch[oldest].last_seen) oldest = i;
+            /* On the eviction branch only (#91): the fullness test above
+             * reads occupancy BEFORE the append, so filling the last
+             * slot is not counted. A tally that counted a fill would
+             * report loss on a table that was merely filling.
+             *
+             * Flagged, not reported, because sh_evict_note() takes
+             * sensor_health's own mutex and this one is documented as a
+             * leaf — "callers may hold their own locks" in
+             * rf_quality.h is a promise made on that basis. Calling out
+             * of the module from here would not deadlock today, since
+             * sensor_health's mutex is itself a leaf, but it would move
+             * the reason this is safe from "nothing is held" to "the
+             * other module happens to be a leaf too", which is a
+             * property of someone else's file. Reported after the
+             * unlock instead; the count is identical either way. */
+            evicted = 1;
             c = &g_ch[oldest];
             memset(c, 0, sizeof(*c));
             c->channel      = channel;
@@ -76,6 +96,8 @@ void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now) {
     if (bad_fcs) c->bad_fcs++;
     if (now > c->last_seen) c->last_seen = now;
     pthread_mutex_unlock(&g_mu);
+
+    if (evicted) sh_evict_note(SH_EVICT_RF_CHANNEL);
 }
 
 /* Shared ratio helper. -1 means "not enough traffic to say", which is

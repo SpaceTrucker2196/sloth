@@ -18,14 +18,26 @@
  * question a consumer asks is "is this sensor losing observations at
  * all", and a monotonic lifetime count answers it from any two samples.
  *
- * Counted tables are exactly the ones listed below, and that list is now
- * every bounded synthesis table in sloth — stating which are covered is
- * the point, since a tally that silently omits a table reads as "no
- * loss" when it means "not measured". The beacon, seqnum and assoc
- * tables joined the tally in the #91 wave-6 slice; wps_session followed,
- * then evidence_frame with the #92 evidence ring, then probe_client on
- * 2026-10-08. The six per-protocol flow rings were the last family left
- * uncounted and joined on 2026-10-09.
+ * Counted tables are exactly the ones listed below, and that list is
+ * NOT every bounded table in sloth — stating which are covered is the
+ * point, since a tally that silently omits a table reads as "no loss"
+ * when it means "not measured", and claiming completeness it does not
+ * have is the same failure wearing a better hat. More than twenty
+ * further bounded tables still LRU-evict or refuse on full with no
+ * field — at least one in each of these modules, and five in
+ * action_snoop alone: fragattack, the
+ * BGP/Kerberos/LDAP/NDP/SMB/SSH/SMTP/SSDP/SNMP/mDNS/NBNS snoopers,
+ * ONVIF discovery, cleartext_creds, the two deauth tables, transit,
+ * the dns.c reverse cache, eapol_log, beacon_detect, action_snoop,
+ * bandwidth, twins and sensors. The rule to read the tally by is
+ * therefore mechanical: a table either has an `evict_<name>` field or
+ * its loss is unmeasured.
+ *
+ * The list grows by slices. The beacon, seqnum and assoc tables joined
+ * in the #91 wave-6 slice; wps_session followed, then evidence_frame
+ * with the #92 evidence ring, then probe_client on 2026-10-08, the six
+ * per-protocol flow rings on 2026-10-09, pm_forge with #107, and
+ * rf_channel + http_flow on 2026-10-13.
  *
  * The flow rings differ from every other counted table in what their
  * count *means*, and a consumer reading `evict_dns_log` has to know it:
@@ -62,6 +74,15 @@ typedef enum {
     SH_EVICT_HTTP_LOG,      /* src/http_log.c — oldest HTTP request/response overwritten */
     SH_EVICT_NTP_LOG,       /* src/ntp_log.c  — oldest NTP exchange overwritten */
     SH_EVICT_ICMP_LOG,      /* src/icmp_log.c — oldest ICMP record overwritten */
+    /* Two more synthesis tables, appended rather than filed with their
+     * family above: src/jsonl.c emits the breakout in enum order, so
+     * inserting mid-enum would shift the position of already-published
+     * `evict_*` fields, against the "every earlier field keeps its name
+     * and position" rule in docs/wiki/jsonl-schema.md. Nothing reads
+     * this enum as an ordered range — sh_evict_is_flow_ring() is a
+     * switch — so appending costs nothing. */
+    SH_EVICT_RF_CHANNEL,    /* src/rf_quality.c — stalest per-channel RF-quality row dropped */
+    SH_EVICT_HTTP_FLOW,     /* src/http_log.c — oldest HTTP request/response pairing slot dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -99,7 +120,7 @@ uint64_t sh_evict_total_tables(void);
  * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
  * "assoc_req", "wps_session", "evidence_frame", "probe_client",
  * "pm_forge", "dns_log", "tls_log", "quic_log", "http_log", "ntp_log",
- * "icmp_log".
+ * "icmp_log", "rf_channel", "http_flow".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

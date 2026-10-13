@@ -9,6 +9,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "rf_quality.h"
+#include "sensor_health.h"
 
 #define T0 1700000000L
 
@@ -139,6 +140,44 @@ static void test_table_full_evicts_stalest(void) {
     /* A new channel arrives later than everything else. */
     feed(999, RF_MIN_FRAMES, RF_MIN_FRAMES, 0, T0 + 10);
     ASSERT_EQ(rf_quality_retry_pct(999, T0 + 10), 100);
+}
+
+/* #91: the eviction is a lost measurement — the displaced channel's
+ * window is gone and sloth reports -1 ("not enough to say") for it,
+ * which is indistinguishable from a channel it never visited. The
+ * tally is what separates the two.
+ *
+ * The decisive assertion is the FIRST one: exactly MAX_RF_CHANNELS
+ * distinct channels is a fill, not a loss, and must read zero. An
+ * instrumentation that counted the append would pass every later
+ * assertion here and still be wrong. */
+static void test_table_full_eviction_is_counted(void) {
+    rf_quality_clear();
+    sh_evict_reset();
+    for (int ch = 1; ch <= MAX_RF_CHANNELS; ch++)
+        feed(ch, 1, 0, 0, T0 + ch);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_RF_CHANNEL), 0);
+
+    feed(MAX_RF_CHANNELS + 1, 1, 0, 0, T0 + MAX_RF_CHANNELS + 1);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_RF_CHANNEL), 1);
+    feed(MAX_RF_CHANNELS + 2, 1, 0, 0, T0 + MAX_RF_CHANNELS + 2);
+    feed(MAX_RF_CHANNELS + 3, 1, 0, 0, T0 + MAX_RF_CHANNELS + 3);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_RF_CHANNEL), 3);
+
+    /* A resident channel is found by find() and updated in place. No
+     * identity is displaced, so nothing was lost. */
+    feed(MAX_RF_CHANNELS + 1, 1, 0, 0, T0 + MAX_RF_CHANNELS + 4);
+    ASSERT_EQ((long long)sh_evict_count(SH_EVICT_RF_CHANNEL), 3);
+
+    /* An RF-quality row is a synthesis table, not a per-protocol flow
+     * ring: it does not roll over by design, so a non-zero count is
+     * news and must reach the faults-only strip and the change-only
+     * JSONL signature, both of which read sh_evict_total_tables(). */
+    ASSERT_EQ(sh_evict_is_flow_ring(SH_EVICT_RF_CHANNEL), 0);
+    ASSERT_EQ((long long)sh_evict_total_tables(), 3);
+
+    sh_evict_reset();
+    rf_quality_clear();
 }
 
 /* ── snapshot into the channel view ──────────────────────── */
@@ -304,6 +343,7 @@ void run_rf_quality_tests(void) {
     TEST_SUITE("rf quality: channel independence");
     RUN_TEST(test_channels_tracked_separately);
     RUN_TEST(test_table_full_evicts_stalest);
+    RUN_TEST(test_table_full_eviction_is_counted);
 
     TEST_SUITE("rf quality: snapshot");
     RUN_TEST(test_snapshot_annotates_existing_rows);

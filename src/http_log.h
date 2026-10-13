@@ -50,6 +50,22 @@ int http_log_parse_response(const uint8_t *data, int len,
  * flow is paired; anything else is left unpaired and says so. */
 int http_log_pair_response(http_log_entry_t *resp);
 
+/* Flows held open for pairing. Bounded, and LRU-evicted by the flow's
+ * own `ts`; a displaced slot is counted as SH_EVICT_HTTP_FLOW (#91).
+ *
+ * NOT "like every other table here", which an earlier version of this
+ * comment said: the module's other bounded store, g_log[MAX_HTTP_LOG],
+ * is a positional circular ring that overwrites the oldest slot by
+ * index, and sensor_health classifies it as a flow ring rather than a
+ * synthesis table (sh_evict_is_flow_ring). The two evict on different
+ * principles and their counters mean different things — one is a lost
+ * pairing, the other is lost view scrollback — so conflating them in a
+ * header is how a consumer comes to read the wrong one.
+ *
+ * Exposed so the eviction test pins to the real bound rather than to a
+ * copy of the literal that could drift from it. */
+#define HTTP_FLOW_MAX 64
+
 /* Append entry to the rolling log (thread-safe). */
 void http_log_record(const http_log_entry_t *e);
 

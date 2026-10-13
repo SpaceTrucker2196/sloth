@@ -720,7 +720,7 @@ one line per second forever and the suppression would be decorative. A
 drop counter moving is genuinely news; a packet counter moving is not.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25"}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25"}
 ```
 
 **Capture scope (#85).** The `scope*` fields were appended later; every
@@ -738,13 +738,16 @@ consumer should alert on `scope_not_enforced` becoming `1`.
 `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`,
 `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`,
 `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `dns_log`,
-`tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`. The device table refuses a new entry
+`tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`,
+`http_flow`. The device table refuses a new entry
 rather than evicting an old one — different mechanism, same meaning. The
 802.11 tables (`beacon_ap`, `seqnum_client`, the two `assoc_*`,
 `wps_session`) joined after the first tally shipped, then
 `evidence_frame` with the #92 raw-frame evidence ring, then
 `probe_client` on 2026-10-08, the six `*_log` flow rings on
-2026-10-09, and `pm_forge` with the #107 PM-bit forgery detector; the
+2026-10-09, `pm_forge` with the #107 PM-bit forgery detector, and
+`rf_channel` (the per-channel RF-quality table) plus `http_flow` (the
+`#71` request/response pairing table) on 2026-10-13; the
 list above is
 kept in step with the build by `tests/test_sensor_health.c ::
 test_schema_doc_lists_every_counted_table`.
@@ -772,15 +775,21 @@ That also means `evictions`, the sum, now mixes two meanings. A
 consumer that wants "observations sloth lost" should sum the non-`*_log`
 fields; the total is still the right trigger for "look at this sensor".
 
-**Not** counted: the HTTP request/response pairing table behind `#71`
-(`HTTP_FLOW_MAX` flows, LRU) is the one bounded table left without a
-field. Treat that as an example, not an enumeration — the uncounted
-side is not listed exhaustively, so the
-rule to read by is that a table either has an `evict_<name>` field or
-it is not measured. Treat `evictions` as "loss on the instrumented
-tables", not "all loss": a counted table sitting at zero means nothing
-was dropped, while silence from an uncounted one means nothing is known
-either way.
+**Not** counted: more than twenty further bounded tables, which
+LRU-evict or refuse on full with no field of their own — at least one
+in each module named here, and five in `src/action_snoop.c` alone: the
+BGP, Kerberos, LDAP, NDP, SMB, SSH, SMTP, SSDP, SNMP, mDNS and NBNS
+snoopers, ONVIF discovery, the FragAttacks BSS table, the
+cleartext-credential table, the two deauth tables, the transit
+tracker, the DNS reverse cache, the EAPOL pending table, the
+beacon-cadence tracker, the action-frame tables, bandwidth, twins
+and sensors. That is a list of examples, not an enumeration, and
+nothing pins it — only the *counted* list is held to the build by a
+test. So the rule to read the tally by is mechanical: a table either
+has an `evict_<name>` field or its loss is not measured. Treat
+`evictions` as "loss on the instrumented tables", not "all loss": a
+counted table sitting at zero means nothing was dropped, while silence
+from an uncounted one means nothing is known either way.
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are
