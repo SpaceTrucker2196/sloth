@@ -274,6 +274,13 @@ int  beacon_find_ssid(const uint8_t bssid[6], char ssid_out[33]);
  * tuned to yet. Callers must distinguish. */
 int  beacon_find_mfp(const uint8_t bssid[6]);
 
+/* Beacon interval this BSSID advertises, in milliseconds, or 0 if the
+ * BSSID has never been heard beacon. Used by PM_FORGE (#107) to size
+ * its contradiction window from the AP's own schedule rather than a
+ * guessed constant: §2 does not pick a number when the capture already
+ * carries the right one. */
+int  beacon_find_interval_ms(const uint8_t bssid[6]);
+
 /* Derive the beacon TBTT jitter figures from an accumulator (#77).
  *
  * `stddev_us` is the population standard deviation of the per-beacon

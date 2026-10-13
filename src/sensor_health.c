@@ -81,6 +81,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_WPS_SESSION:   return "wps_session";
     case SH_EVICT_EVIDENCE_FRAME: return "evidence_frame";
     case SH_EVICT_PROBE_CLIENT: return "probe_client";
+    case SH_EVICT_PM_FORGE:    return "pm_forge";
     case SH_EVICT_DNS_LOG:     return "dns_log";
     case SH_EVICT_TLS_LOG:     return "tls_log";
     case SH_EVICT_QUIC_LOG:    return "quic_log";

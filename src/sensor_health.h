@@ -53,6 +53,7 @@ typedef enum {
     SH_EVICT_WPS_SESSION,   /* src/wps_track.c — oldest WPS registration session dropped */
     SH_EVICT_EVIDENCE_FRAME,/* src/evidence_ring.c — oldest retained raw 802.11 frame dropped */
     SH_EVICT_PROBE_CLIENT,  /* src/capture/probe.c — least-recently-seen probing client dropped */
+    SH_EVICT_PM_FORGE,      /* src/pm_forge.c — least-recently-seen PM-state entry dropped (#107) */
     /* The six per-protocol flow rings: plain circular buffers, so the
      * oldest record is overwritten by an append onto a full ring. */
     SH_EVICT_DNS_LOG,       /* src/dns_log.c  — oldest DNS record overwritten */
@@ -97,7 +98,8 @@ uint64_t sh_evict_total_tables(void);
  * "alert", "top_host", "pnl_client", "pnl_ssid", "dhcp_event",
  * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
  * "assoc_req", "wps_session", "evidence_frame", "probe_client",
- * "dns_log", "tls_log", "quic_log", "http_log", "ntp_log", "icmp_log".
+ * "pm_forge", "dns_log", "tls_log", "quic_log", "http_log", "ntp_log",
+ * "icmp_log".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

@@ -106,6 +106,7 @@ void run_sensor_health_tests(void);
 void run_evidence_ring_tests(void);
 void run_persist_health_tests(void);
 void run_wps_track_tests(void);
+void run_pm_forge_tests(void);
 void run_wifi_merge_tests(void);
 void run_twins_tests(void);
 void run_karma_tests(void);
@@ -241,6 +242,7 @@ int main(void) {
     run_evidence_ring_tests();
     run_persist_health_tests();
     run_wps_track_tests();
+    run_pm_forge_tests();
     run_wifi_merge_tests();
     run_twins_tests();
     run_karma_tests();

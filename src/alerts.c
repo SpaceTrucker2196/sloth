@@ -30,6 +30,7 @@
 #include "event_wake.h"
 #include "flood_window.h"
 #include "wps_track.h"
+#include "pm_forge.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -538,6 +539,7 @@ const char *alert_technique(alert_type_t type) {
      * research/papers/ws-discovery-onvif.md — it is simply not an
      * ATT&CK technique. */
     case ALERT_TYPE_CAM_WS_DISCOVERY:       return "";            /* exposure, not adversary technique (#106) */
+    case ALERT_TYPE_PM_FORGE:               return "T1557";       /* AiTM — queue manipulation, Framing Frames (#107) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -592,6 +594,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_MLE_SUBELEM_OVERRUN);
     N(ALERT_TYPE_MLD_MAC_COLLISION);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
+    N(ALERT_TYPE_PM_FORGE);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -3220,6 +3223,47 @@ static void rule_wps_pbc_race(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* PM-bit forgery — Framing Frames, CVE-2022-47522 (#107 shape A).
+ *
+ * pm_forge_observe() (capture thread) has already found the
+ * contradiction: this station sent a PM=0 data frame on one TID
+ * within its AP's own beacon interval of a PM=1 Null/QoS-Null it (or
+ * something claiming to be it) sent on a different TID. One honest
+ * half-duplex radio cannot be both declaring itself asleep and
+ * actively transmitting inside that window, so this rule only has to
+ * ask whether the lifetime count is non-zero.
+ *
+ * Deliberately WARN, not CRIT, with no ownership match: sloth has no
+ * key and no location fix, so it cannot tell attacker from victim —
+ * only that the two declarations disagree. Escalated to CRIT only
+ * when the BSSID is operator-designated, per the issue's own
+ * correlation rule and the wording discipline #90 established:
+ * "pattern consistent with", never "attacker is". */
+static void rule_pm_forge(const sloth_state_t *s, time_t now) {
+    (void)s;
+    pm_forge_t tbl[MAX_PM_FORGE_ENTRIES];
+    int n = pm_forge_snapshot(tbl, MAX_PM_FORGE_ENTRIES);
+    for (int i = 0; i < n; i++) {
+        if (tbl[i].contradiction_count == 0) continue;
+
+        char bss[20], sta[20];
+        mac_to_str(tbl[i].bssid, bss, sizeof(bss));
+        mac_to_str(tbl[i].sta,   sta, sizeof(sta));
+        int mine = ownership_is_my_bssid(tbl[i].bssid);
+
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "pmforge:%s", sta);
+        snprintf(detail, sizeof(detail),
+                 "%s at %s: PM=0 data contradicted a PM=1 sleep "
+                 "declaration %d time(s) - pattern consistent with "
+                 "Framing Frames queue manipulation, CVE-2022-47522%s",
+                 sta, bss, tbl[i].contradiction_count,
+                 mine ? " - YOUR network" : "");
+        fire(ALERT_TYPE_PM_FORGE, mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+             "PM_FORGE", detail, key, NULL, 0, now);
+    }
+}
+
 /* Multi-Link Element Per-STA Profile link_id out of range or repeated —
  * CVE-2026-58374 / w1.fi 2026-1 (#104). hostapd_process_ml_assoc_req()'s
  * links[] storage has no slot for a link_id of 15; a frame that claims
@@ -4494,6 +4538,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wps_pin_brute(s, now);
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);
+    rule_pm_forge(s, now);
     rule_mle_invalid_link_id(s, now);
     rule_mle_common_info_len_bad(s, now);
     rule_mle_subelem_overrun(s, now);

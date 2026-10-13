@@ -221,7 +221,8 @@ observation that did not make it in because the table was full. The
 counted tables are **alerts, top hosts, PNL clients, per-client PNL
 SSIDs, DHCP events, 802.1X EAP sessions, the device table, the
 802.11 tables (beacons, sequence-number clients, both association
-tables, WPS sessions, probing clients, retained evidence frames), and
+tables, WPS sessions, probing clients, retained evidence frames,
+PM-bit forgery entries), and
 the six per-protocol flow rings (DNS, TLS, QUIC, HTTP, NTP, ICMP)**;
 the device table refuses a *new* entry
 rather than evicting an old one, which is a different mechanism with the

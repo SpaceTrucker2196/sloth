@@ -26,6 +26,7 @@
 #include "rf_quality.h"
 #include "flood_window.h"
 #include "wps_track.h"
+#include "pm_forge.h"
 #include "eap_parse.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
@@ -7062,6 +7063,92 @@ static void test_wps_rules_quiet_on_an_ordinary_bss(void) {
     wps_end();
 }
 
+/* ── PM-bit forgery — Framing Frames CVE-2022-47522 (#107 shape A) ── */
+
+/* Hand-built STA->AP header: FC + 3 addresses + Sequence Control, plus
+ * QoS Control for a QoS subtype. No payload — the rule only reads
+ * pm_forge_t, which pm_forge_observe() builds from the header alone. */
+static int pmforge_frame(uint8_t *f, int sub, int pm,
+                         const uint8_t bssid[6], const uint8_t sta[6],
+                         int tid) {
+    memset(f, 0, 32);
+    f[0] = (uint8_t)((sub << 4) | (2 << 2));
+    f[1] = (uint8_t)(0x01 | (pm ? 0x10 : 0));   /* ToDS=1 */
+    memcpy(f + 4,  bssid, 6);
+    memcpy(f + 10, sta,   6);
+    memcpy(f + 16, bssid, 6);
+    int len = 24;
+    if (sub & 0x08) { f[24] = (uint8_t)(tid & 0x0f); len = 26; }
+    return len;
+}
+
+static void test_pm_forge_fires_warn_without_ownership(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    static const uint8_t sta[6]   = {0x02,0xaa,0x00,0x00,0x00,0x01};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);       /* QoS-Null, PM=1 */
+    pm_forge_observe(f, len, 1000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);       /* QoS data, PM=0 */
+    pm_forge_observe(f, len, 1000, 50000);               /* 50 ms later */
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_STR(s.alerts[i].key, "pmforge:02:aa:00:00:00:01");
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2022-47522") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "pattern consistent with") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") == NULL);
+        ASSERT_STR(s.alerts[i].technique, "T1557");
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
+static void test_pm_forge_escalates_to_crit_on_my_bssid(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x66};
+    static const uint8_t sta[6]   = {0x02,0xbb,0x00,0x00,0x00,0x02};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:66"));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 2000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 2000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
+static void test_pm_forge_quiet_with_no_contradiction(void) {
+    alerts_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x77};
+    static const uint8_t sta[6]   = {0x02,0xcc,0x00,0x00,0x00,0x03};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+
+    uint8_t f[32];
+    int len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);   /* ordinary PM=0 */
+    pm_forge_observe(f, len, 3000, 0);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PM_FORGE), -1);
+    pm_forge_clear(); beacon_clear();
+}
+
 /* ── MLE invalid link_id — CVE-2026-58374 (#104) ──────────────── */
 
 static void test_mle_invalid_link_id_fires(void) {
@@ -8011,6 +8098,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_wps_pbc_race_counts_per_bssid);
     RUN_TEST(test_wps_pbc_threshold_is_configurable);
     RUN_TEST(test_wps_rules_quiet_on_an_ordinary_bss);
+
+    TEST_SUITE("alerts: PM-bit forgery (#107 shape A)");
+    RUN_TEST(test_pm_forge_fires_warn_without_ownership);
+    RUN_TEST(test_pm_forge_escalates_to_crit_on_my_bssid);
+    RUN_TEST(test_pm_forge_quiet_with_no_contradiction);
 
     TEST_SUITE("alerts: MLE invalid link_id (#104)");
     RUN_TEST(test_mle_invalid_link_id_fires);

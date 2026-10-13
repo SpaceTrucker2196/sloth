@@ -21,6 +21,7 @@
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "fragattack.h"
+#include "pm_forge.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "auth_track.h"
@@ -397,6 +398,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         eapol_observe_dot11(dot11, dot11_len, signal, channel,
                             (time_t)hdr->ts.tv_sec, (long)hdr->ts.tv_usec);
         frag_observe(dot11, dot11_len, fts);
+        pm_forge_observe(dot11, dot11_len, fts, (long)hdr->ts.tv_usec);
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */

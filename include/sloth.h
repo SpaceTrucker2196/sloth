@@ -791,6 +791,7 @@ typedef enum {
     ALERT_TYPE_MLE_SUBELEM_OVERRUN, /* MLE Link Info subelement lengths sum past the enclosing element — w1.fi 2026-1 (#104 slice 3) */
     ALERT_TYPE_MLD_MAC_COLLISION,   /* same (MLD MAC, link_id) reported with two different affiliated addresses — IEEE 802.11be 9.4.2.312 (#104 slice 4) */
     ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
+    ALERT_TYPE_PM_FORGE,            /* PM=1 Null while the same MAC keeps transmitting PM=0 data — Framing Frames, CVE-2022-47522 (#107 shape A) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
