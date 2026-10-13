@@ -17,7 +17,7 @@ the art in WiFi tech in this repo" page.
 research corpus under `research/` (`research/papers/`, `research/cve/`).
 Web-sourced items carry a date and a link.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-13.
 
 ---
 
@@ -76,6 +76,26 @@ landscape:
   implementation bugs. sloth ships seven `FRAG_*` detectors covering eight
   of the twelve; see [[fragattacks]] for which, and why the A-MSDU
   detector as usually described cannot work.
+- **Framing Frames (CVE-2022-47522, Vanhoef & Schepers, USENIX
+  Security 2023).** An AP's transmit queue outlives the security
+  context it was filled under, and the bit that makes the AP start
+  buffering — PwrMgt in Frame Control — is never encrypted, on any
+  BSS. So an attacker can make the AP queue a victim's downlink traffic
+  with a spoofed PM=1 Null, then take it: reassociating under the
+  victim's address releases it under the *new* session's key, and
+  releasing it after the victim is disconnected can put it on the air
+  with no encryption at all. Root cause is in the standard, not one
+  vendor's firmware; D-Link, HPE Aruba Networking, Cisco and Lenovo
+  each advised. sloth covers the two halves that are observable in the
+  clear: `PM_FORGE` (the PM-bit contradiction, #107 shape A) and
+  `QUEUE_EVICT` (the post-session-change downlink burst, #107 shape B,
+  which only reaches WARN when the first corroborates it). The third
+  shape in the issue — the A-MSDU client-isolation bypass — is **not
+  passively detectable on a protected BSS** and is not shipped: the
+  inner subframe DA/SA headers sit inside the encrypted body, so the
+  comparison it needs can only ever be made on an open network. Same
+  structural limit [[fragattacks]] records for the A-MSDU detector.
+  See `research/cve/2022-47522.md`.
 - **SSID Confusion (CVE-2023-52424, 2024).** A client can be made to
   connect to a trusted network under the wrong SSID because the SSID is
   not authenticated in the 4-way handshake. → `SSID_CONFUSION`.

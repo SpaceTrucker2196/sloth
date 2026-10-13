@@ -9,6 +9,7 @@
 #include "sensor_health.h"
 #include "flood_window.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
+#include "queue_evict.h"
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -1502,6 +1503,206 @@ static void test_probe_table_never_exceeds_its_cap(void) {
     flood_test_set_clock(NULL, NULL);
 }
 
+
+/* -- Queued-frame release wiring -- #107 shape B --------------
+ *
+ * queue_evict's own unit tests (tests/test_queue_evict.c) take the
+ * session-change addresses directly. What they cannot reach is the code
+ * in on_probe_frame() that *supplies* those addresses: the status==0
+ * gate on a (re)association response, and which of addr1/addr2 is the
+ * station on a disassoc/deauth, which differs by direction. Those are
+ * exactly the places a wiring bug hides silently -- a detector wired to
+ * the wrong address field never fires and nothing goes red.
+ *
+ * capture_test_savefile() stamps frame i at ts_usec == i * 1000, so
+ * passing one ts_secs value for every frame puts them 1 ms apart,
+ * inside QUEUE_EVICT_WINDOW_MS. */
+
+static const uint8_t QE_BSSID[6] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x77 };
+static const uint8_t QE_STA[6]   = { 0x02, 0xE7, 0x00, 0x00, 0x00, 0x07 };
+
+/* radiotap + a management frame, addr1/addr2/addr3 set explicitly.
+ * IEEE 802.11-2020 Sec 9.3.3.1: addr1=DA addr2=SA addr3=BSSID. */
+static int qe_mgmt(uint8_t *f, uint8_t fc0, const uint8_t a1[6],
+                   const uint8_t a2[6], const uint8_t a3[6], int dot11_len) {
+    const int total = RT_HDR + dot11_len;
+    memset(f, 0, (size_t)total);
+    f[2] = (uint8_t)RT_HDR;
+    uint8_t *d = f + RT_HDR;
+    d[0] = fc0;
+    memcpy(d + 4, a1, 6);
+    memcpy(d + 10, a2, 6);
+    memcpy(d + 16, a3, 6);
+    return total;
+}
+
+/* Reassociation response (subtype 3), status `status`, one SSID element.
+ * Fixed body is caps(2) + status(2) + aid(2) at offset 24 (Sec 9.3.3.7). */
+static int qe_reassoc_resp(uint8_t *f, uint16_t status) {
+    int n = qe_mgmt(f, 0x30, QE_STA, QE_BSSID, QE_BSSID, 36);
+    uint8_t *d = f + RT_HDR;
+    d[26] = (uint8_t)(status & 0xff);
+    d[27] = (uint8_t)(status >> 8);
+    d[30] = 0;                     /* SSID element */
+    d[31] = 4;
+    memcpy(d + 32, "qevt", 4);
+    return n;
+}
+
+/* radiotap + AP->STA QoS data frame (FromDS), addr1=DA addr2=BSSID
+ * addr3=SA (Sec 9.3.2.1 Table 9-26). */
+static int qe_downlink_seq(uint8_t *f, int seq) {
+    const int dot11_len = 26, total = RT_HDR + dot11_len;
+    memset(f, 0, (size_t)total);
+    f[2] = (uint8_t)RT_HDR;
+    uint8_t *d = f + RT_HDR;
+    d[0] = (uint8_t)((0x8 << 4) | (2 << 2));
+    d[1] = 0x02;                   /* FromDS */
+    memcpy(d + 4, QE_STA, 6);
+    memcpy(d + 10, QE_BSSID, 6);
+    memcpy(d + 16, QE_BSSID, 6);
+    /* Sequence Control (Sec 9.2.4.4): the 12-bit sequence number sits in
+     * the high bits. A parameter because the release threshold counts
+     * DISTINCT frames — four memcpy'd copies of one frame are one MSDU
+     * retried, which is what this test used to feed and is exactly the
+     * ordinary-retransmission case the threshold must not accept. */
+    d[22] = (uint8_t)((seq & 0x0f) << 4);
+    d[23] = (uint8_t)((seq >> 4) & 0xff);
+    return total;
+}
+
+static int qe_downlink(uint8_t *f) { return qe_downlink_seq(f, 0); }
+
+static void test_a_granted_reassoc_plus_a_burst_records_a_release(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    queue_evict_clear();
+
+    uint8_t r[128], d0[128], d1[128], d2[128], d3[128];
+    int rn = qe_reassoc_resp(r, 0);
+    /* Four DISTINCT frames, not four copies of one. */
+    int dn = qe_downlink_seq(d0, 10);
+    qe_downlink_seq(d1, 11);
+    qe_downlink_seq(d2, 12);
+    qe_downlink_seq(d3, 13);
+    const uint8_t *fs[5] = { r, d0, d1, d2, d3 };
+    int ls[5] = { rn, dn, dn, dn, dn };
+    const uint32_t ts[5] = { 1700000000u, 1700000000u, 1700000000u,
+                             1700000000u, 1700000000u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 5), 5);
+
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+    ASSERT_EQ(e.event_src, QUEUE_EVICT_SRC_REASSOC);
+    ASSERT_EQ((int)e.burst_frames, 4);
+    ASSERT_EQ((int)e.release_count, 1);
+    queue_evict_clear();
+}
+
+/* The ordinary-retransmission case, through the REAL pcap_dispatch
+ * callback rather than by calling the module directly. One MSDU the AP
+ * keeps retrying must not reach the release threshold, because on a
+ * lossy link that is routine and not a queued-frame release. */
+static void test_a_retried_downlink_burst_records_no_release(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    queue_evict_clear();
+
+    uint8_t r[128], d0[128], d1[128], d2[128], d3[128];
+    int rn = qe_reassoc_resp(r, 0);
+    /* Same sequence number throughout, Retry bit set — one frame. */
+    int dn = qe_downlink_seq(d0, 20);
+    d0[RT_HDR + 1] |= 0x08;
+    memcpy(d1, d0, (size_t)dn);
+    memcpy(d2, d0, (size_t)dn);
+    memcpy(d3, d0, (size_t)dn);
+    const uint8_t *fs[5] = { r, d0, d1, d2, d3 };
+    int ls[5] = { rn, dn, dn, dn, dn };
+    const uint32_t ts[5] = { 1700000000u, 1700000000u, 1700000000u,
+                             1700000000u, 1700000000u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 5), 5);
+
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+    /* The window opened — the reassociation was granted — but nothing
+       distinct arrived in it. */
+    ASSERT_EQ(e.event_src, QUEUE_EVICT_SRC_REASSOC);
+    ASSERT_EQ((int)e.burst_frames, 0);
+    ASSERT_EQ((int)e.release_count, 0);
+    queue_evict_clear();
+}
+
+static void test_a_refused_reassoc_opens_no_window(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    queue_evict_clear();
+
+    /* Status 1 (unspecified failure): the station did not join, so the
+     * AP has no session to release a queue across. The branch feeding
+     * queue_evict is gated on the same status==0 evidence
+     * assoc_observe() and frag_note_association() use. */
+    uint8_t r[128], d0[128];
+    int rn = qe_reassoc_resp(r, 1);
+    int dn = qe_downlink(d0);
+    const uint8_t *fs[5] = { r, d0, d0, d0, d0 };
+    int ls[5] = { rn, dn, dn, dn, dn };
+    const uint32_t ts[5] = { 1700000100u, 1700000100u, 1700000100u,
+                             1700000100u, 1700000100u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 5), 5);
+
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 0);
+    ASSERT_EQ(queue_evict_count(), 0);
+    queue_evict_clear();
+}
+
+static void test_a_deauth_attributes_the_station_in_both_directions(void) {
+    /* AP -> STA deauth: addr1 is the station. */
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    queue_evict_clear();
+    uint8_t m[128];
+    int mn = qe_mgmt(m, 0xC0, QE_STA, QE_BSSID, QE_BSSID, 26);
+    const uint8_t *fs1[1] = { m };
+    int ls1[1] = { mn };
+    const uint32_t ts1[1] = { 1700000200u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs1, ls1, NULL, ts1, 1), 1);
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+    ASSERT_EQ(e.event_src, QUEUE_EVICT_SRC_DISCONNECT);
+    ASSERT_EQ(queue_evict_count(), 1);
+
+    /* STA -> AP deauth: addr1 is the BSSID and addr2 is the station.
+     * Reading addr1 unconditionally would make a second row keyed on
+     * the AP's own address. */
+    queue_evict_clear();
+    mn = qe_mgmt(m, 0xC0, QE_BSSID, QE_STA, QE_BSSID, 26);
+    const uint8_t *fs2[1] = { m };
+    int ls2[1] = { mn };
+    const uint32_t ts2[1] = { 1700000300u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, ts2, 1), 1);
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+    ASSERT_EQ(queue_evict_count(), 1);
+    queue_evict_clear();
+}
+
+static void test_a_broadcast_deauth_opens_no_window(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    queue_evict_clear();
+    static const uint8_t bcast[6] = { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF };
+    uint8_t m[128];
+    int mn = qe_mgmt(m, 0xC0, bcast, QE_BSSID, QE_BSSID, 26);
+    const uint8_t *fs[1] = { m };
+    int ls[1] = { mn };
+    const uint32_t ts[1] = { 1700000400u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
+    /* It names no station; one ff:ff:ff:ff:ff:ff row would collect
+     * every station's downlink traffic on this BSS. */
+    ASSERT_EQ(queue_evict_count(), 0);
+    queue_evict_clear();
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -1565,6 +1766,13 @@ void run_capture_path_tests(void) {
     TEST_SUITE("probe-table invariants (#91)");
     RUN_TEST(test_probe_table_holds_no_duplicate_after_ageing);
     RUN_TEST(test_probe_table_never_exceeds_its_cap);
+
+    TEST_SUITE("queued-frame release wiring (#107 shape B)");
+    RUN_TEST(test_a_granted_reassoc_plus_a_burst_records_a_release);
+    RUN_TEST(test_a_retried_downlink_burst_records_no_release);
+    RUN_TEST(test_a_refused_reassoc_opens_no_window);
+    RUN_TEST(test_a_deauth_attributes_the_station_in_both_directions);
+    RUN_TEST(test_a_broadcast_deauth_opens_no_window);
 
     TEST_SUITE("capture path: [m] retarget honours the allow-list (#85)");
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);

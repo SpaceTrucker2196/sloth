@@ -166,6 +166,44 @@ carry. Since #94:
   is to stay quiet, so it does not wait for the strong score a positive
   claim would need.
 
+#### When the observable itself is ambiguous (#107 shape B)
+
+`MY_NET_RECON` reports something unusual and the doubt is about what it
+*means*. `QUEUE_EVICT` is a step further: the thing it observes — a
+burst of unicast downlink frames to one station just after that
+station's session changed — is **exactly what an ordinary roam looks
+like**. An AP that has just admitted a station has traffic for it. The
+attack (Framing Frames, CVE-2022-47522: the AP releasing a transmit
+queue it filled under the station's previous security context) and the
+benign case are the same bytes on the air.
+
+So corroboration decides the whole severity ladder here, not just the
+wording:
+
+- **Uncorroborated it is LOW at 25 %**, and the detail carries the word
+  `uncorroborated` plus the benign readings (`an ordinary roam or a
+  buffered-traffic flush`). The words *attack* and *attacker* do not
+  appear.
+- **WARN at 70 % needs `PM_FORGE` for the same station within 10 s** of
+  the release. That pairing is the attack's own sequence — the forged
+  PM bit is what makes the AP start buffering, the session change is
+  what makes it hand the buffer over — and it is the correlation rule
+  #107 itself proposed.
+- **CRIT needs that corroboration *and* `--my-bssid` ownership.**
+  Ownership alone does **not** escalate, which is where this departs
+  from `PM_FORGE`. A PM-bit contradiction is something one honest
+  half-duplex radio cannot produce, so it earns a CRIT the moment it is
+  on your own network. A roam is the single most common event on your
+  own network, and promoting that to CRIT would bury the type precisely
+  where the operator is paying attention — the same "don't teach the
+  operator to ignore a type" reasoning `OPEN_SETUP_AP` applied to its
+  pattern table, applied here to severity.
+
+The window the burst is measured in (100 ms) is a **chosen** bound and
+says so in the header: 802.11 fixes no deadline for flushing a buffered
+frame, so unlike `PM_FORGE`'s beacon-interval window there is nothing
+to derive from the air.
+
 ### Records are not conclusions about people
 
 Two families here produce records that can be read as identifying an

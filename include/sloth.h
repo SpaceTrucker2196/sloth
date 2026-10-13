@@ -806,6 +806,7 @@ typedef enum {
     ALERT_TYPE_SURV_CLOUD_SNI,      /* TLS SNI on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
     ALERT_TYPE_TPC_ABSENT_HIGH_BAND, /* designated 5 GHz BSS advertising neither Power Constraint nor TPC Report — IEEE 802.11-2020 §11.8 (#101 slice 3) */
     ALERT_TYPE_CAM_SETUP_SSID,      /* SoftAP named by a camera vendor's documented setup-mode SSID — vendor onboarding docs (#106 slice 2) */
+    ALERT_TYPE_QUEUE_EVICT,         /* unicast downlink burst released within 100 ms of a (BSSID,STA) session change — Framing Frames, CVE-2022-47522 (#107 shape B) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 

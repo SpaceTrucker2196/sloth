@@ -27,6 +27,7 @@
 #include "flood_window.h"
 #include "wps_track.h"
 #include "pm_forge.h"
+#include "queue_evict.h"
 #include "eap_parse.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
@@ -7887,6 +7888,266 @@ static void test_pm_forge_quiet_with_no_contradiction(void) {
     pm_forge_clear(); beacon_clear();
 }
 
+/* ── Queued-frame release — Framing Frames CVE-2022-47522 (#107 shape B) ── */
+
+/* AP -> STA data frame: ToDS=0, FromDS=1, addr1=DA addr2=BSSID
+ * addr3=SA (IEEE 802.11-2020 §9.3.2.1 Table 9-26). Payload-free; the
+ * rule reads queue_evict_t, which the observer builds from the header
+ * alone. */
+/* `seq` is the 12-bit Sequence Number at offset 22 (§9.2.4.4). It is a
+ * parameter because the threshold counts DISTINCT frames: a retried
+ * MSDU repeats its sequence number and must not advance the count. */
+static int qevict_downlink_seq(uint8_t *f, const uint8_t bssid[6],
+                               const uint8_t sta[6], int seq) {
+    memset(f, 0, 32);
+    f[0] = (uint8_t)((0x8 << 4) | (2 << 2));   /* QoS data */
+    f[1] = 0x02;                               /* FromDS */
+    memcpy(f + 4,  sta,   6);
+    memcpy(f + 10, bssid, 6);
+    memcpy(f + 16, bssid, 6);
+    f[22] = (uint8_t)((seq & 0x0f) << 4);
+    f[23] = (uint8_t)((seq >> 4) & 0xff);
+    return 26;
+}
+
+/* The whole queue-evict scenario runs on one synthetic timeline, which
+ * it has to now that rule_queue_evict() bounds how recently a release
+ * must have happened. alerts_update() reads flood_wall(), so without
+ * this the seeded t=1002 events are decades in the past relative to the
+ * rule's clock and nothing fires. The seam exists for exactly this. */
+static time_t g_qe_wall;
+static time_t qe_wall(void) { return g_qe_wall; }
+
+/* A release recorded at t=1002: a reassociation plus four downlink
+ * frames inside the 100 ms window. */
+static void qevict_seed_release(const uint8_t bssid[6], const uint8_t sta[6]) {
+    queue_evict_note_session_change(bssid, sta, QUEUE_EVICT_SRC_REASSOC,
+                                    1002, 0);
+    uint8_t f[32];
+    for (int i = 0; i < 4; i++) {
+        int len = qevict_downlink_seq(f, bssid, sta, 200 + i);
+        queue_evict_observe_downlink(f, len, 1002, (long)(10 + i * 10) * 1000);
+    }
+}
+
+/* A PM-bit contradiction for the same station at t=1000 — two seconds
+ * before the release, inside QUEUE_EVICT_CORROB_SECS. Reuses the shape
+ * A frame builder above. */
+static void qevict_seed_pm_contradiction(const uint8_t bssid[6],
+                                         const uint8_t sta[6]) {
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);   /* QoS-Null, PM=1 */
+    pm_forge_observe(f, len, 1000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);   /* QoS data,  PM=0 */
+    pm_forge_observe(f, len, 1000, 50000);
+}
+
+/* A release ages out of the report window (#107).
+ *
+ * release_count is a LIFETIME figure that only resets in
+ * queue_evict_clear(), so without a recency bound one roam fires this
+ * key for the rest of the run — and review measured 128 distinct
+ * (BSSID,STA) releases filling the whole 128-slot alert engine,
+ * evicting every other rule's findings. Same defect class as #105's
+ * dedup key, reached from the other direction: there the fan-out was
+ * remote-chosen, here it was unbounded in time. */
+static void test_queue_evict_ages_out_of_the_report_window(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x77};
+    static const uint8_t sta[6]   = {0x02,0xa7,0x00,0x00,0x00,0x07};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    qevict_seed_release(bssid, sta);
+
+    /* Just inside the window: still reported. */
+    g_qe_wall = 1002 + QUEUE_EVICT_REPORT_SECS;
+    flood_test_set_clock(NULL, qe_wall);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_QUEUE_EVICT) >= 0);
+
+    /* One second past it: gone, even though release_count is unchanged.
+       That is the whole point — the count is lifetime, the finding is
+       not. */
+    alerts_clear();
+    g_qe_wall = 1002 + QUEUE_EVICT_REPORT_SECS + 1;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_QUEUE_EVICT), -1);
+
+    alerts_clear(); queue_evict_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_warns_when_shape_a_corroborates(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    g_qe_wall = 1003;                 /* one second after the release */
+    flood_test_set_clock(NULL, qe_wall);
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x11};
+    static const uint8_t sta[6]   = {0x02,0xa1,0x00,0x00,0x00,0x01};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+
+    qevict_seed_pm_contradiction(bssid, sta);
+    qevict_seed_release(bssid, sta);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_QUEUE_EVICT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_STR(s.alerts[i].key,
+                   "qevict:02:a1:00:00:00:01@00:11:22:33:44:11");
+        ASSERT_STR(s.alerts[i].technique, "T1557");
+        ASSERT_EQ((int)s.alerts[i].confidence, 70);
+        /* The detail must name the corroborator, not just assert a
+         * severity the operator has to take on trust. */
+        ASSERT(strstr(s.alerts[i].detail, "PM_FORGE") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "corroborated by") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "pattern consistent with") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "CVE-2022-47522") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "4 downlink frames") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "reassociation") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") == NULL);
+    }
+    alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_is_low_and_non_accusatory_uncorroborated(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    g_qe_wall = 1003;                 /* one second after the release */
+    flood_test_set_clock(NULL, qe_wall);
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x22};
+    static const uint8_t sta[6]   = {0x02,0xa2,0x00,0x00,0x00,0x02};
+
+    /* No PM-bit contradiction on file: this is what an ordinary roam
+     * looks like, and it is the common case. */
+    qevict_seed_release(bssid, sta);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_QUEUE_EVICT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT_EQ((int)s.alerts[i].confidence, 25);
+        ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "ordinary roam") != NULL);
+        /* #90's wording discipline: no accusation, and no claim an
+         * attack happened. */
+        ASSERT(strstr(s.alerts[i].detail, "attack") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "attacker") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "corroborated by") == NULL);
+    }
+    alerts_clear(); queue_evict_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_ownership_alone_does_not_escalate(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    g_qe_wall = 1003;                 /* one second after the release */
+    flood_test_set_clock(NULL, qe_wall);
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x33};
+    static const uint8_t sta[6]   = {0x02,0xa3,0x00,0x00,0x00,0x03};
+    ASSERT(ownership_add_bssid("00:11:22:33:44:33"));
+
+    qevict_seed_release(bssid, sta);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_QUEUE_EVICT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* Deliberately NOT CRIT, unlike PM_FORGE. Clients roam on the
+         * operator's own network constantly; promoting every roam to
+         * CRIT would bury the type where it matters most. Ownership
+         * still shows in the detail. */
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    alerts_clear(); queue_evict_clear(); ownership_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_crit_on_my_bssid_with_corroboration(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    g_qe_wall = 1003;                 /* one second after the release */
+    flood_test_set_clock(NULL, qe_wall);
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x44};
+    static const uint8_t sta[6]   = {0x02,0xa4,0x00,0x00,0x00,0x04};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:44"));
+
+    qevict_seed_pm_contradiction(bssid, sta);
+    qevict_seed_release(bssid, sta);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_QUEUE_EVICT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "corroborated by") != NULL);
+    }
+    alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
+    ownership_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_stale_corroboration_does_not_escalate(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear();
+    g_qe_wall = 1003;                 /* one second after the release */
+    flood_test_set_clock(NULL, qe_wall);
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    static const uint8_t sta[6]   = {0x02,0xa5,0x00,0x00,0x00,0x05};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+
+    /* Shape A fired for this station, but 60 s before the release —
+     * outside QUEUE_EVICT_CORROB_SECS, so it is not evidence about this
+     * session. Without this case the corroboration test would pass with
+     * the time comparison deleted entirely. */
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 942, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 942, 50000);
+    qevict_seed_release(bssid, sta);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_QUEUE_EVICT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
+    }
+    alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_queue_evict_quiet_below_the_threshold(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x66};
+    static const uint8_t sta[6]   = {0x02,0xa6,0x00,0x00,0x00,0x06};
+
+    queue_evict_note_session_change(bssid, sta, QUEUE_EVICT_SRC_ASSOC,
+                                    1002, 0);
+    uint8_t f[32];
+    int len = qevict_downlink_seq(f, bssid, sta, 300);
+    queue_evict_observe_downlink(f, len, 1002, 10000);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_QUEUE_EVICT), -1);
+    alerts_clear(); queue_evict_clear();
+}
+
 /* ── MLE invalid link_id — CVE-2026-58374 (#104) ──────────────── */
 
 static void test_mle_invalid_link_id_fires(void) {
@@ -9240,6 +9501,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_pm_forge_fires_warn_without_ownership);
     RUN_TEST(test_pm_forge_escalates_to_crit_on_my_bssid);
     RUN_TEST(test_pm_forge_quiet_with_no_contradiction);
+
+    TEST_SUITE("alerts: queued-frame release (#107 shape B)");
+    RUN_TEST(test_queue_evict_ages_out_of_the_report_window);
+    RUN_TEST(test_queue_evict_warns_when_shape_a_corroborates);
+    RUN_TEST(test_queue_evict_is_low_and_non_accusatory_uncorroborated);
+    RUN_TEST(test_queue_evict_ownership_alone_does_not_escalate);
+    RUN_TEST(test_queue_evict_crit_on_my_bssid_with_corroboration);
+    RUN_TEST(test_queue_evict_stale_corroboration_does_not_escalate);
+    RUN_TEST(test_queue_evict_quiet_below_the_threshold);
 
     TEST_SUITE("alerts: MLE invalid link_id (#104)");
     RUN_TEST(test_mle_invalid_link_id_fires);

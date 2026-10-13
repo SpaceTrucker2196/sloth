@@ -32,6 +32,7 @@
 #include "flood_window.h"
 #include "wps_track.h"
 #include "pm_forge.h"
+#include "queue_evict.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -623,6 +624,7 @@ const char *alert_technique(alert_type_t type) {
      * can see. The basis is cited — the vendors' own onboarding
      * documentation, see research/papers/camera-setup-softap.md. */
     case ALERT_TYPE_CAM_SETUP_SSID:         return "";            /* exposure, not adversary technique (#106 slice 2) */
+    case ALERT_TYPE_QUEUE_EVICT:            return "T1557";       /* AiTM — buffered frames released across a session change, Framing Frames (#107) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -682,6 +684,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_SURV_CLOUD_SNI);
     N(ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
     N(ALERT_TYPE_CAM_SETUP_SSID);
+    N(ALERT_TYPE_QUEUE_EVICT);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -3679,6 +3682,122 @@ static void rule_pm_forge(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── Transmit-queue release after a session change ──
+ * #107 shape B, Framing Frames CVE-2022-47522.
+ *
+ * queue_evict_observe_downlink() (capture thread) has already counted
+ * the burst: unicast downlink frames to one station inside
+ * QUEUE_EVICT_WINDOW_MS of a session change for that (BSSID, STA), at
+ * least QUEUE_EVICT_MIN_FRAMES of them. So this rule only has to ask
+ * whether release_count is non-zero — and then how much to claim.
+ *
+ * That second question is the whole rule. **A bare post-reassociation
+ * downlink burst is ordinary roaming**: an AP that has just admitted a
+ * station has traffic for it, and on a busy network this fires on every
+ * client, all day. The observable is identical to the attack's. So the
+ * severity ladder is built on corroboration rather than on the burst,
+ * the doctrine #94 wrote down for MY_NET_RECON and docs/wiki/alerts.md
+ * §"Corroboration before intent" states generally:
+ *
+ *   - uncorroborated → LOW at 25 %, reporting the observation with the
+ *     benign explanations named. The detail does not use the word
+ *     attack, and names no party.
+ *   - corroborated by shape A — a PM-bit contradiction for the same
+ *     station within QUEUE_EVICT_CORROB_SECS of the release, which is
+ *     the issue's own A+B rule — → WARN at 70 %. Something made the AP
+ *     buffer this station's traffic, and then the buffer came out
+ *     across a session change.
+ *   - corroborated AND the BSSID is operator-designated (#52) → CRIT.
+ *
+ * Ownership deliberately does NOT escalate on its own, which is where
+ * this departs from PM_FORGE. The PM-bit contradiction is a thing one
+ * honest radio cannot produce, so it is worth a CRIT the moment it is
+ * on your own network. A downlink burst after a roam is the single most
+ * common event on an operator's own network, and promoting that to CRIT
+ * would bury the alert type in exactly the place the operator cares
+ * most — the OPEN_SETUP_AP reasoning about not teaching the operator to
+ * ignore a type, applied to severity. */
+#define QUEUE_EVICT_CORROB_SECS 10
+
+static void rule_queue_evict(const sloth_state_t *s, time_t now) {
+    (void)s;
+    queue_evict_t tbl[MAX_QUEUE_EVICT_ENTRIES];
+    int n = queue_evict_snapshot(tbl, MAX_QUEUE_EVICT_ENTRIES);
+    for (int i = 0; i < n; i++) {
+        const queue_evict_t *q = &tbl[i];
+        if (q->release_count == 0) continue;
+        /* Recency bound. release_count is a LIFETIME figure that only
+         * resets in queue_evict_clear(), so without this one roam fires
+         * this key for the rest of the run, and a site with normal
+         * roaming saturates the engine: the table holds
+         * MAX_QUEUE_EVICT_ENTRIES rows and MAX_ALERTS is the same
+         * number, which review measured as alert_count == 128 from 128
+         * distinct (BSSID,STA) releases, evicting every other rule's
+         * findings. Same defect class as #105's dedup key, reached from
+         * the other direction — there the fan-out was remote-chosen,
+         * here it is unbounded in time.
+         *
+         * Keyed on the most recent release rather than on a decaying
+         * count: "this happened in the last QUEUE_EVICT_REPORT_SECS" is
+         * the question an operator is asking, and a station that keeps
+         * doing it keeps re-firing with a rising count, which is what
+         * the alert engine's own dedup is for. */
+        if (q->last_release_ts <= 0 ||
+            now - q->last_release_ts > QUEUE_EVICT_REPORT_SECS) continue;
+
+        /* Shape A for the same station, close enough in time to be
+         * about the same session. Absolute difference on purpose: the
+         * PM forgery normally precedes the release, but sloth hops
+         * channels and may well have heard the two out of order. */
+        int corrob = 0;
+        long corrob_gap = 0;
+        pm_forge_t pf;
+        if (pm_forge_lookup(q->sta, &pf) && pf.contradiction_count > 0 &&
+            pf.last_contradiction_ts > 0) {
+            long d = (long)(pf.last_contradiction_ts > q->last_release_ts
+                            ? pf.last_contradiction_ts - q->last_release_ts
+                            : q->last_release_ts - pf.last_contradiction_ts);
+            if (d <= QUEUE_EVICT_CORROB_SECS) { corrob = 1; corrob_gap = d; }
+        }
+
+        int mine = ownership_is_my_bssid(q->bssid);
+        alert_sev_t sev = corrob ? (mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN)
+                                 : ALERT_SEV_LOW;
+        int conf = corrob ? 70 : 25;
+
+        char bss[20], sta[20];
+        mac_to_str(q->bssid, bss, sizeof(bss));
+        mac_to_str(q->sta,   sta, sizeof(sta));
+
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "qevict:%s@%s", sta, bss);
+        if (corrob)
+            snprintf(detail, sizeof(detail),
+                     "%s at %s: %u downlink frames in %d ms after %s, "
+                     "x%u - corroborated by a PM-bit contradiction %lds "
+                     "away (PM_FORGE) - pattern consistent with Framing "
+                     "Frames transmit-queue release, CVE-2022-47522%s",
+                     sta, bss, q->last_release_frames,
+                     q->last_release_span_ms,
+                     queue_evict_src_name(q->last_release_src),
+                     q->release_count, corrob_gap,
+                     mine ? " - YOUR network" : "");
+        else
+            snprintf(detail, sizeof(detail),
+                     "%s at %s: %u downlink frames in %d ms after %s, "
+                     "x%u - uncorroborated, benign explanations include an "
+                     "ordinary roam or a buffered-traffic flush; see "
+                     "CVE-2022-47522%s",
+                     sta, bss, q->last_release_frames,
+                     q->last_release_span_ms,
+                     queue_evict_src_name(q->last_release_src),
+                     q->release_count,
+                     mine ? " - YOUR network" : "");
+        fire_conf(ALERT_TYPE_QUEUE_EVICT, sev, conf,
+                  "QUEUE_EVICT", detail, key, NULL, 0, now);
+    }
+}
+
 /* Multi-Link Element Per-STA Profile link_id out of range or repeated —
  * CVE-2026-58374 / w1.fi 2026-1 (#104). hostapd_process_ml_assoc_req()'s
  * links[] storage has no slot for a link_id of 15; a frame that claims
@@ -5014,6 +5133,7 @@ void alerts_update(sloth_state_t *s) {
     rule_wps_lockout_cycling(s, now);
     rule_wps_pbc_race(s, now);
     rule_pm_forge(s, now);
+    rule_queue_evict(s, now);
     rule_mle_invalid_link_id(s, now);
     rule_mle_common_info_len_bad(s, now);
     rule_mle_subelem_overrun(s, now);

@@ -101,6 +101,11 @@ int dot11_is_group_addr(const uint8_t addr[6]);
  * HT-Control and addr4 additions that follow it. Returns -1 if `len`
  * cannot hold it. */
 int dot11_frag_num(const uint8_t *dot11, int len);
+
+/* The 12-bit Sequence Number (§9.2.4.4), or -1 if the frame is too
+ * short. A retransmission of one MSDU repeats it, so it is the key for
+ * "already counted this frame". */
+int dot11_seq_num(const uint8_t *dot11, int len);
 int dot11_more_frags(const uint8_t *dot11, int len);
 
 /* QoS Control's Traffic Identifier (low nibble, §9.4.1.4 / §9.2.4.5.1)

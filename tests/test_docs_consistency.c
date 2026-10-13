@@ -352,7 +352,21 @@ static void test_wiki_counts_match_build(void) {
         dc_claims_t c;
         scan_all(t, &c);
         if (c.n_views || c.n_rules) with_claims++;
-        check_counts(path, &c);
+        /* log.md is exempt from the COUNT check, and from that alone.
+         *
+         * It is an append-only historical record: an entry reading
+         * "70 -> 71 alert rules" states what changed on a dated day and
+         * stays true forever, whereas this check asks whether a page
+         * describes the CURRENT build. Without the exemption every
+         * count bump leaves a permanent failure behind it and the only
+         * way to go green is to reword history — which is the wrong
+         * direction, and would have bitten five times in one session as
+         * the rule count went 70 -> 75.
+         *
+         * Same reasoning already applied to the assertion counts there,
+         * noted in this function's own header comment. Nothing else is
+         * skipped: a stale count on any other wiki page still fails. */
+        if (strcmp(e->d_name, "log.md") != 0) check_counts(path, &c);
         free(t);
     }
     closedir(d);

@@ -2456,3 +2456,34 @@ column with its existing meaning.
 - **Not done.** The J% column is still computed, rendered, persisted
   and then ignored by the severity gate. A Jaccard-based escalator is
   the obvious next narrowing and is deliberately out of this slice.
+## 2026-10-13 — Queued-frame release detector (#107 shape B)
+
+**Pages touched**:
+
+- `docs/wiki/wifi-state-of-the-art.md` — Framing Frames
+  (CVE-2022-47522) gains an entry. The class had shipped a detector
+  (`PM_FORGE`, shape A) with no entry on the radar page, which
+  `CLAUDE.md` requires per vulnerability class; this is the change that
+  makes it a two-shape detector, so the entry covers both and states
+  which third shape is structurally undetectable passively.
+- `docs/wiki/alerts.md` — `QUEUE_EVICT` added to the
+  "corroboration before intent" section. It is the first rule where the
+  *observable itself* is indistinguishable from ordinary behaviour, so
+  the doctrine decides the whole severity ladder rather than just the
+  wording.
+- `docs/wiki/jsonl-schema.md` — `evict_queue_evict` joins the
+  per-table eviction tally (additive; gated by
+  `tests/test_sensor_health.c :: test_schema_doc_lists_every_counted_table`).
+- `docs/wiki/index.md`, `docs/wiki/attack-map.md`,
+  `docs/wiki/what-sloth-does.md`, `docs/wiki/sloth.md` — 70 → 71 alert
+  rules, gated by `tests/test_docs_consistency.c`.
+
+**Notes**:
+
+- **Ownership deliberately does not escalate this rule on its own**,
+  which is a departure from `PM_FORGE` and is written down in both the
+  rule comment and the `docs/views/alerts.md` row. A downlink burst
+  after a roam is the most common event on an operator's own network.
+- **Shape C is not coming**, barring an owner decision to ship an
+  open-network-only detector: the A-MSDU inner-subframe headers the
+  comparison needs are inside the encrypted body on any protected BSS.

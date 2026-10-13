@@ -105,6 +105,7 @@ SRCS = src/main.c          \
        src/persist_health.c  \
        src/wps_track.c       \
        src/pm_forge.c        \
+       src/queue_evict.c     \
        src/wifi_merge.c      \
        src/twins.c           \
        src/views/twins.c     \
@@ -532,6 +533,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_wps_track.c         \
             src/pm_forge.c                 \
             tests/test_pm_forge.c          \
+            src/queue_evict.c              \
+            tests/test_queue_evict.c       \
             tests/test_sensor_health.c     \
             src/evidence_ring.c            \
             tests/test_evidence_ring.c     \

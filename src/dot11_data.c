@@ -123,6 +123,18 @@ int dot11_frag_num(const uint8_t *dot11, int len) {
     return dot11[22] & 0x0f;
 }
 
+/* The 12-bit Sequence Number from Sequence Control (IEEE 802.11-2020
+ * §9.2.4.4): bits 4..15 of the little-endian 16-bit field at offset 22.
+ * The low 4 bits are the fragment number, which dot11_frag_num() reads.
+ *
+ * A retransmission of one MSDU carries the SAME sequence number, which
+ * is what makes this the right key for "have I already counted this
+ * frame" — see src/queue_evict.c. */
+int dot11_seq_num(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 24) return -1;
+    return (int)((((unsigned)dot11[23] << 8) | dot11[22]) >> 4) & 0x0fff;
+}
+
 int dot11_more_frags(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
     return (dot11[1] >> 2) & 0x01;

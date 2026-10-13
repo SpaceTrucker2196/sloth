@@ -22,6 +22,7 @@
 #include "eapol_log.h"
 #include "fragattack.h"
 #include "pm_forge.h"
+#include "queue_evict.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "auth_track.h"
@@ -400,6 +401,11 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                             (time_t)hdr->ts.tv_sec, (long)hdr->ts.tv_usec);
         frag_observe(dot11, dot11_len, fts);
         pm_forge_observe(dot11, dot11_len, fts, (long)hdr->ts.tv_usec);
+        /* #107 shape B. Only counts against a (BSSID, STA) some session
+         * change already opened a window for, so the common case —
+         * every data frame on the air — costs one direction test. */
+        queue_evict_observe_downlink(dot11, dot11_len, fts,
+                                     (long)hdr->ts.tv_usec);
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */
@@ -477,6 +483,16 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * a station demoted by a later EAPOL-ranked entry still
              * really did (re)associate at this moment. */
             frag_note_association(bssid_p, sta_p, fts);
+            /* #107 shape B: a granted (re)association is the moment an
+             * AP may hand over frames it buffered under the *previous*
+             * security context. Fed from the same status-0 evidence as
+             * assoc_observe, for the same reason frag_note_association
+             * is. */
+            queue_evict_note_session_change(
+                bssid_p, sta_p,
+                (sub == 3) ? QUEUE_EVICT_SRC_REASSOC
+                           : QUEUE_EVICT_SRC_ASSOC,
+                fts, (long)hdr->ts.tv_usec);
         }
         return;
     }
@@ -498,6 +514,18 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             const uint8_t *a2 = dot11 + 10;
             assoc_forget(a1, a2);
             assoc_forget(a2, a1);
+            /* #107 shape B, the other route to the same buffer: an AP
+             * whose key store has already dropped the station can
+             * still transmit what it queued for it. addr3 is the BSSID
+             * for a management frame in either direction (§9.3.3.1),
+             * so the station is whichever of addr1/addr2 is not it —
+             * which attributes the event correctly whether the AP or
+             * the station sent the frame. A broadcast deauth lands on
+             * ff:ff:ff:ff:ff:ff and queue_evict rejects it. */
+            const uint8_t *bss_p = dot11 + 16;
+            queue_evict_note_session_change(
+                bss_p, memcmp(a1, bss_p, 6) == 0 ? a2 : a1,
+                QUEUE_EVICT_SRC_DISCONNECT, fts, (long)hdr->ts.tv_usec);
         }
         return;
     }
