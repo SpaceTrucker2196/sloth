@@ -10,6 +10,28 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    acceptance criteria, test requirements, autonomy level, out-of-scope.
    If the issue lacks acceptance criteria, comment asking for them and
    stop.
+
+   **Then re-verify the body against the tree.** Issue bodies here are
+   written once and age for months while the code moves under them, so
+   an unchecked body is a description of a tree that no longer exists.
+   Re-run every grep the body quotes and open every `file:line` it
+   cites, *before* planning. On 2026-10-13 a triage pass found #96
+   asserting `SECURITY.md` still said 1.4.x when it had been reconciled
+   to 1.8.4, and #101 quoting `grep -cE 'country_ie|…' src/` → 0 when
+   `src/reg_ie.c` already existed. Either one would have produced a
+   slice that re-did landed work. Record the contradictions in the
+   step-9 report so the next reader does not re-derive them.
+
+   **Ask the second question too.** "What does this issue still need?"
+   and "what is wrong with the code this issue touches?" have different
+   answers, and the second one pays better. #77 was labelled
+   `needs-pcap-fixture` and read as hardware-blocked; reading the code
+   it pointed at instead found `wps_attr_str()` clamping length but not
+   content, so four attacker-controlled WPS strings reached the
+   terminal verbatim through `printf` in non-ncurses builds (CWE-150).
+   A planning pass over the issue text alone would have marked it
+   blocked and moved on. Read the code the issue touches, not only the
+   work the issue asked for.
 2. **Plan.** Map the change against agents/AGENTS.md (architecture, invariants,
    recipes). If the plan requires anything under "stops-and-asks" in
    agents/dark-factory.md §4.3, or touches out-of-scope items, stop and
@@ -20,9 +42,47 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
 4. **Converge.** Run `make test` and `make` (warning-clean). While red:
    fix, re-run, count the iteration. Never weaken an assertion to get
    green — if a test looks wrong, that's a decides-and-flags item.
+
+   **`make clean` between build configs.** The six configs share one
+   object directory, so objects built under one set of `WITH_*` flags
+   are silently reused by the next config and the link fails on symbols
+   that are present in the source. Twice on 2026-10-13 that cost a
+   debugging detour over a build that was never broken — once for
+   `capture_test_savefile`, once for `capture_open`/`capture_run`. A
+   missing symbol you can see in the file is a stale object, not a bug:
+   `make clean` first, then believe the error.
 5. **Self-review.** Diff against agents/AGENTS.md invariants and hard don'ts
    (VIEW_COUNT sync, no circular parser tests, no repo-root files, never
    stage `wifi-sigint/`, `sloth`, or `sloth_test`).
+
+   **Mutation-prove every assertion of absence.** A test that asserts
+   something does *not* happen passes just as happily when it exercises
+   nothing at all, so it is worthless until you have seen it fail:
+   revert the fix (or mutate the guard), run the suite, confirm the new
+   assertion goes red, restore. Do this before writing the comment that
+   claims coverage. On 2026-10-13 three such tests were green for the
+   wrong reason and each was caught only by mutating — the `[m]`
+   ordering test (`probe_stop()` never writes `probe_iface`, so the
+   assertion held either way), the `rt_len >= len` guard (`>=`→`>`
+   leaves the suite green, because `dot11_len < 10` already catches
+   equality — that case cannot be isolated and the comment now says
+   so), and a duplicate-MAC invariant whose first two scenarios passed
+   under the pre-fix code because the eviction scan compares with `<`
+   and so needs *staggered* survivor timestamps to expose the bug.
+   If the mutation does not reproduce, the honest move is to write down
+   what the test does not cover, not to widen the claim.
+
+   **Undo the mutation with the inverse edit, never `git checkout
+   <file>`.** That command restores the file from HEAD, so it discards
+   every *other* uncommitted change in it, not just the mutation — on
+   2026-10-13 it silently threw away a whole new test plus a scanner fix
+   that had taken a dozen minutes to get right, and the loss was visible
+   only because the next `grep` came back empty. Mutate with `sed`, undo
+   with the opposite `sed`, or `cp` the file aside first and copy it
+   back. Choose a mutation that removes the call site or flips the
+   operator you are testing: a tweak the test inputs cannot distinguish
+   proves nothing, and the first mutation tried that day was exactly
+   that — it left the suite green while changing real behaviour.
 6. **Risk gate.** Run `sh agents/risk_score.sh --selftest && sh
    agents/risk_score.sh` (scores the working tree against
    `origin/main`; weights + threshold in the script header, docs in
@@ -35,6 +95,17 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    `(closes #$ARGUMENTS)`, Co-Authored-By trailer, `git add` specific
    files only, push to `main`. CI + the AI code-review and docs-drift
    workflows act as post-hoc judges.
+
+   **Confirm CI by commit SHA, never by workflow name.** `gh run list
+   --workflow CI` returns the newest run of that workflow, which is
+   routinely an older commit's, and the repo has several workflows whose
+   run IDs are easy to conflate. On 2026-10-13 that produced three
+   separate public misreports of CI status in one session — a stale run
+   read as this commit's, a Code Review run read as CI, and a watcher
+   that exited without saying anything. Query the pushed SHA:
+   `gh run list --commit "$(git rev-parse HEAD)" --json
+   workflowName,conclusion,databaseId`, and report per job. "CI is
+   green" with no SHA behind it is not a result.
 8. **Instrument.** Append a row to `METRICS.md` (issue, converge
    iterations, tests passing at ship, notes). **Get the assertion count
    by building, not from memory** — run `make test` on the parent commit

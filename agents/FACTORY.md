@@ -125,7 +125,9 @@ All targets driven by the root [`Makefile`](../Makefile).
 
 ## 5. Test discipline
 
-- 9304 assertions across `tests/*.c`.
+- Assertion count: the last line of `make test`. Not repeated here —
+  a number copied into prose is a number that goes stale (see
+  [`AGENTS.md`](AGENTS.md) — Architecture).
 - No root required. No terminal required. No network required.
 - All kernel-facing code is replaced by `tests/fake_platform.c` (see
   [[platform-vtable]] in the wiki).

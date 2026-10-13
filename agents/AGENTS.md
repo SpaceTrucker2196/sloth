@@ -35,7 +35,11 @@ Single binary `sloth`. Test binary `sloth_test`.
 - `src/views/*.c` — one file per VIEW_*. The dashboard composites
   several panels into one grid.
 - `src/md5.c` — embedded MD5 for JA3 (verified against RFC 1321 vectors).
-- `tests/` — unit tests, fake platform, scenarios. 9304 assertions.
+- `tests/` — unit tests, fake platform, scenarios. For the assertion
+  count, run `make test` and read the last line; this file deliberately
+  does not carry the number, because the three copies of it that used to
+  live in `agents/` all sat three thousand assertions stale while this
+  same file was telling readers never to quote a recalled count.
 - `docs/views/*.md` — per-view deep dives. Linked from README tables.
 
 ## Discipline
@@ -56,6 +60,10 @@ Single binary `sloth`. Test binary `sloth_test`.
   with `EXTRA_CFLAGS=-Werror`, so a warning fails the run rather than
   depending on someone remembering to look. Run them locally anyway —
   finding it after the push is slower, not safer.
+  **`make clean` between configs**, every time. The six configs share
+  one object directory, so objects from the previous config get reused
+  and the link fails on a symbol that is plainly in the source. That
+  error means stale objects, not a bug — see agents/converge.md step 4.
 - **VIEW_COUNT must be kept in sync** across `include/sloth.h`,
   `tests/test_state.c`, and `tests/test_arp.c` whenever a view is added
   or removed.
@@ -111,6 +119,30 @@ Single binary `sloth`. Test binary `sloth_test`.
 
   Adding a document: `docs/wiki/research-corpus.md`. One source may back
   several kinds — group by source, not by alert.
+
+- **A test that asserts absence is worthless until it has been seen to
+  fail.** "X does not happen" passes identically when the test
+  exercises nothing, so mutate the guard or revert the fix, watch the
+  new assertion go red, then restore — and only then write the comment
+  claiming coverage. Three tests in one session on 2026-10-13 were
+  green for the wrong reason; agents/converge.md step 5 has them. Where
+  a case provably cannot be isolated, the comment says that instead of
+  claiming the case.
+
+- **Test helpers are code, and the sanitiser treats them as code.**
+  Size a frame buffer to the frame actually built, not to a round
+  number: `memset(f, 0, 64 + payload_len)` over a `uint8_t f[64]` is a
+  stack overflow that ASan will fail the suite for, and it is the test
+  that is wrong, not the gate.
+
+- **Change-only emission must bucket its continuous values.** The JSONL
+  writer suppresses a record whose signature is unchanged, so putting a
+  raw monotonically-moving value — a seconds-since counter, a byte
+  total — into that signature defeats the suppression and turns a
+  change feed into a once-per-second firehose. Quantise first:
+  `stale_secs` enters the `sensor_health` signature as the three-state
+  `stale_state()` bucket, not as itself. Heartbeat is what guarantees
+  liveness; the signature's job is to encode *meaningful* change.
 
 ## Conventions
 
