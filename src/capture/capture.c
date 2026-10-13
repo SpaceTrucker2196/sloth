@@ -6,6 +6,7 @@
 #include "dns.h"
 #include "dot11_data.h"
 #include "radiotap.h"
+#include "pcap_format.h"
 
 /* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
  * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
@@ -1086,17 +1087,11 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
 
 /* ── Capture-path test seam (#95) ─────────────────────────── */
 
-/* libpcap savefile layout, written from the format spec rather than
- * copied off a capture — same first-principles rule the protocol
- * parsers are tested under. Native byte order throughout: libpcap reads
- * the magic to decide endianness, so a natively-written magic means a
- * natively-read file and no swapping on either side. */
-#define PCAP_TEST_MAGIC   0xa1b2c3d4u
-#define PCAP_TEST_GHDR    24
-#define PCAP_TEST_RHDR    16
-
-static void put_u32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
-static void put_u16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
+/* The savefile layout comes from src/pcap_format.h, the same writer the
+ * four production sinks use. This block used to carry its own fifth
+ * copy of the format in native byte order; sharing it means a change to
+ * the layout cannot leave the test harness building a file the
+ * production writer would no longer produce. */
 
 /* Install a policy snapshot for the dispatches that follow, NULL to
  * clear it. A setter rather than a capture_test_dispatch() parameter
@@ -1129,31 +1124,23 @@ uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
     if (n < 0 || !out_size) return NULL;
     if (n > 0 && (!frames || !lens)) return NULL;
 
-    size_t total = PCAP_TEST_GHDR;
+    size_t total = PCAP_FILE_HDR_LEN;
     for (int i = 0; i < n; i++) {
         if (lens[i] < 0) return NULL;
-        total += PCAP_TEST_RHDR + (size_t)lens[i];
+        total += PCAP_REC_HDR_LEN + (size_t)lens[i];
     }
     uint8_t *img = malloc(total);
     if (!img) return NULL;
 
-    put_u32(img +  0, PCAP_TEST_MAGIC);
-    put_u16(img +  4, 2);          /* version major */
-    put_u16(img +  6, 4);          /* version minor */
-    put_u32(img +  8, 0);          /* thiszone      */
-    put_u32(img + 12, 0);          /* sigfigs       */
-    put_u32(img + 16, 262144);     /* snaplen       */
-    put_u32(img + 20, (uint32_t)dlt);
+    pcap_fmt_file_hdr(img, (uint32_t)dlt, PCAP_SNAPLEN_LARGE);
 
-    size_t off = PCAP_TEST_GHDR;
+    size_t off = PCAP_FILE_HDR_LEN;
     for (int i = 0; i < n; i++) {
         uint32_t orig = orig_lens ? (uint32_t)orig_lens[i] : (uint32_t)lens[i];
         uint32_t ts   = ts_secs ? ts_secs[i] : (uint32_t)(1700000000 + i);
-        put_u32(img + off +  0, ts);                          /* ts_sec  */
-        put_u32(img + off +  4, (uint32_t)(i * 1000));        /* ts_usec */
-        put_u32(img + off +  8, (uint32_t)lens[i]);           /* incl_len */
-        put_u32(img + off + 12, orig);                        /* orig_len */
-        off += PCAP_TEST_RHDR;
+        pcap_fmt_rec_hdr(img + off, ts, (uint32_t)(i * 1000),
+                         (uint32_t)lens[i], orig);
+        off += PCAP_REC_HDR_LEN;
         if (lens[i] > 0) memcpy(img + off, frames[i], (size_t)lens[i]);
         off += (size_t)lens[i];
     }

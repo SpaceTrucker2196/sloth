@@ -6,22 +6,15 @@
 #include "evidence_export.h"
 #include "evidence_ring.h"
 #include "eapol_log.h"
+#include "pcap_format.h"
 
-/* libpcap savefile layout, written from the format spec rather than
- * copied off a capture — the same first-principles rule the protocol
- * parsers are held to. Native byte order throughout: libpcap reads the
- * magic to decide endianness, so a natively written magic means a
- * natively read file and no swapping at either end. */
-#define PCAP_MAGIC      0xa1b2c3d4u
-#define PCAP_VER_MAJOR  2
-#define PCAP_VER_MINOR  4
-#define PCAP_SNAPLEN    262144u
-#define DLT_RADIOTAP    127          /* IEEE 802.11 plus radiotap */
-#define PCAP_GHDR       24
-#define PCAP_RHDR       16
-
-static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
-static void put16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
+/* The savefile layout lives in src/pcap_format.h, shared with the three
+ * other sinks that write one. This file used to carry its own copy and
+ * write it in NATIVE byte order, which is valid pcap — libpcap reads
+ * the magic to decide endianness — but meant sloth emitted two
+ * different encodings depending on which sink wrote the file. The
+ * shared writer is little-endian everywhere, so an evidence export now
+ * hashes the same on any host that recorded it. */
 
 /* write(2) until done or it genuinely fails. A short write on a regular
  * file is legal and is not an error; treating one as failure would
@@ -64,14 +57,8 @@ int evidence_export_pcap(const char *name,
     int fd = eapol_export_create(name, err, errsz);
     if (fd < 0) return -1;
 
-    uint8_t gh[PCAP_GHDR];
-    put32(gh +  0, PCAP_MAGIC);
-    put16(gh +  4, PCAP_VER_MAJOR);
-    put16(gh +  6, PCAP_VER_MINOR);
-    put32(gh +  8, 0);                 /* thiszone */
-    put32(gh + 12, 0);                 /* sigfigs  */
-    put32(gh + 16, PCAP_SNAPLEN);
-    put32(gh + 20, DLT_RADIOTAP);
+    uint8_t gh[PCAP_FILE_HDR_LEN];
+    pcap_fmt_file_hdr(gh, PCAP_DLT_RADIOTAP, PCAP_SNAPLEN_LARGE);
     if (write_all(fd, gh, sizeof(gh)) != 0) {
         if (err && errsz) snprintf(err, errsz, "write failed (header)");
         close(fd);
@@ -101,11 +88,9 @@ int evidence_export_pcap(const char *name,
          * the buffer could not hold the frame; write what is really in
          * hand and let caplen say so, because a record claiming more
          * bytes than follow it corrupts every record after it. */
-        uint8_t rh[PCAP_RHDR];
-        put32(rh +  0, (uint32_t)rec.ts_sec);
-        put32(rh +  4, (uint32_t)rec.ts_usec);
-        put32(rh +  8, (uint32_t)got);
-        put32(rh + 12, rec.orig_len);
+        uint8_t rh[PCAP_REC_HDR_LEN];
+        pcap_fmt_rec_hdr(rh, (uint32_t)rec.ts_sec, (uint32_t)rec.ts_usec,
+                         (uint32_t)got, rec.orig_len);
         if (write_all(fd, rh, sizeof(rh)) != 0 ||
             write_all(fd, frame, (size_t)got) != 0) {
             if (err && errsz) snprintf(err, errsz, "write failed (record)");

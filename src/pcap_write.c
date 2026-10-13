@@ -7,22 +7,7 @@
 
 #include "pcap_write.h"
 #include "secure_file.h"
-
-/* pcap global header */
-#define PCAP_MAGIC   0xa1b2c3d4u
-#define PCAP_MAJOR   2
-#define PCAP_MINOR   4
-#define PCAP_SNAPLEN 65535
-
-static void write_u32le(FILE *f, uint32_t v) {
-    uint8_t b[4] = { v & 0xff, (v>>8)&0xff, (v>>16)&0xff, (v>>24)&0xff };
-    fwrite(b, 1, 4, f);
-}
-
-static void write_u16le(FILE *f, uint16_t v) {
-    uint8_t b[2] = { v & 0xff, (v>>8)&0xff };
-    fwrite(b, 1, 2, f);
-}
+#include "pcap_format.h"
 
 void pcap_export_stem(const struct tm *t, char *out, size_t sz) {
     if (!t) {
@@ -55,15 +40,8 @@ int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
                                  err, sizeof(err));
     if (!f) return -1;
 
-    /* global header */
-    int dlt = s->pkt_linktype ? s->pkt_linktype : 1; /* default DLT_EN10MB */
-    write_u32le(f, PCAP_MAGIC);
-    write_u16le(f, PCAP_MAJOR);
-    write_u16le(f, PCAP_MINOR);
-    write_u32le(f, 0);           /* thiszone: UTC */
-    write_u32le(f, 0);           /* sigfigs */
-    write_u32le(f, PCAP_SNAPLEN);
-    write_u32le(f, (uint32_t)dlt);
+    pcap_fmt_put_file_hdr(f, pcap_fmt_dlt_or_default(s->pkt_linktype),
+                          PCAP_SNAPLEN_FRAME);
 
     /* walk ring buffer oldest-first */
     int start = (s->pkt_count < MAX_PACKETS) ? 0
@@ -74,12 +52,9 @@ int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
         const packet_info_t *p = &s->packets[slot];
         if (p->raw_len == 0) continue;
 
-        uint16_t caplen = p->raw_len;
-        write_u32le(f, p->ts_sec);
-        write_u32le(f, p->ts_usec);
-        write_u32le(f, caplen);
-        write_u32le(f, p->len ? p->len : caplen);
-        fwrite(p->raw, 1, caplen, f);
+        pcap_fmt_put_rec(f, p->ts_sec, p->ts_usec,
+                         p->raw, p->raw_len,
+                         p->len ? (uint32_t)p->len : (uint32_t)p->raw_len);
         written++;
     }
 

@@ -6,17 +6,13 @@
 #include <unistd.h>
 #include "alert_pcap.h"
 #include "fs_capacity.h"
+#include "pcap_format.h"
 #include "tune.h"
 #include "secure_file.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
  * match_port), dump every packet currently in the s->packets[] ring whose
  * src or dst matches, into a fresh per-alert pcap file. */
-
-#define PCAP_MAGIC   0xa1b2c3d4u
-#define PCAP_MAJOR   2
-#define PCAP_MINOR   4
-#define PCAP_SNAPLEN 65535
 
 /* g_dirfd pins the directory validated at set time (#87); files are
  * created relative to it. g_dir is kept to build the reported path. */
@@ -47,16 +43,6 @@ int alert_pcap_capacity(fs_capacity_t *out) {
     if (!out) return -1;
     if (!alert_pcap_enabled()) { memset(out, 0, sizeof(*out)); return -1; }
     return fs_capacity_probe(g_dirfd, out);
-}
-
-static void write_u32le(FILE *f, uint32_t v) {
-    uint8_t b[4] = { v & 0xff, (v>>8)&0xff, (v>>16)&0xff, (v>>24)&0xff };
-    fwrite(b, 1, 4, f);
-}
-
-static void write_u16le(FILE *f, uint16_t v) {
-    uint8_t b[2] = { v & 0xff, (v>>8)&0xff };
-    fwrite(b, 1, 2, f);
 }
 
 /* sanitize a title chunk for use in a filename: keep [A-Za-z0-9_], else '_'. */
@@ -146,14 +132,8 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
                                  err, sizeof(err));
     if (!f) { sfile_fail(&g_fail, "alert pcap", err); return -1; }
 
-    int dlt = s->pkt_linktype ? s->pkt_linktype : 1; /* DLT_EN10MB default */
-    write_u32le(f, PCAP_MAGIC);
-    write_u16le(f, PCAP_MAJOR);
-    write_u16le(f, PCAP_MINOR);
-    write_u32le(f, 0);
-    write_u32le(f, 0);
-    write_u32le(f, PCAP_SNAPLEN);
-    write_u32le(f, (uint32_t)dlt);
+    pcap_fmt_put_file_hdr(f, pcap_fmt_dlt_or_default(s->pkt_linktype),
+                          PCAP_SNAPLEN_FRAME);
 
     int start = (s->pkt_count < MAX_PACKETS) ? 0 : s->pkt_head;
     int written = 0;
@@ -163,11 +143,9 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         if (p->raw_len == 0) continue;
         if (!packet_matches(p, a))     continue;
 
-        write_u32le(f, p->ts_sec);
-        write_u32le(f, p->ts_usec);
-        write_u32le(f, p->raw_len);
-        write_u32le(f, p->len ? p->len : p->raw_len);
-        fwrite(p->raw, 1, p->raw_len, f);
+        pcap_fmt_put_rec(f, p->ts_sec, p->ts_usec,
+                         p->raw, p->raw_len,
+                         p->len ? (uint32_t)p->len : (uint32_t)p->raw_len);
         written++;
     }
     if (sfile_fclose(f, name, err, sizeof(err)) != 0) {

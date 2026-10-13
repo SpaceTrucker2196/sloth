@@ -227,7 +227,7 @@ SRCS += src/fragattack.c
 SRCS += src/views/research.c
 SRCS += src/views/fragattack.c
 SRCS += research/coverage.c
-SRCS += src/pcap_write.c
+SRCS += src/pcap_format.c src/pcap_write.c
 SRCS += src/geo.c
 SRCS += src/scan.c
 
@@ -368,7 +368,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_oui.c           \
             tests/test_services.c      \
             tests/test_arp.c           \
-            tests/test_pcap_write.c    \
+            tests/test_pcap_write.c tests/test_pcap_format.c    \
             src/capture/capture.c      \
             tests/test_capture.c       \
             src/tui_palette.c          \
@@ -393,7 +393,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_iface_graph.c   \
             tests/test_geo.c           \
             src/geo.c                  \
-            src/pcap_write.c           \
+            src/pcap_format.c src/pcap_write.c           \
             src/views/conns.c          \
             src/views/wifi.c           \
             src/views/packets.c        \

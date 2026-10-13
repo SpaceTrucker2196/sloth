@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include "eapol_log.h"
+#include "pcap_format.h"
 #include "secure_file.h"
 #include "eap_track.h"
 #include "wps_track.h"
@@ -311,20 +312,6 @@ static void append_22000_line_for_bssid(const char *line,
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
 
-#define PCAP_MAGIC          0xa1b2c3d4u
-#define DLT_IEEE802_11      105   /* raw 802.11 without radiotap */
-
-/* Short writes are not checked per call: they set the stream's error
- * flag, which sfile_fclose() reports once for the whole file. */
-static void w_u32le(FILE *f, uint32_t v) {
-    uint8_t b[4] = { v & 0xff, (v>>8)&0xff, (v>>16)&0xff, (v>>24)&0xff };
-    fwrite(b, 1, 4, f);
-}
-static void w_u16le(FILE *f, uint16_t v) {
-    uint8_t b[2] = { v & 0xff, (v>>8)&0xff };
-    fwrite(b, 1, 2, f);
-}
-
 /* Write a per-handshake .pcap to <eapol_dir>/<bssid>_<sta>.pcap.
  * Frames are stored as raw IEEE 802.11 (DLT 105). Aircrack-ng + tshark
  * read this fine; pass -e <SSID> to aircrack if no beacon was bundled.
@@ -353,29 +340,18 @@ static void write_handshake_pcap(const pending_t *p) {
     FILE *f = sfile_fopen(g_out_fd, tmp, SFILE_EXCL, err, sizeof(err));
     if (!f) { sfile_fail(&g_fail, "eapol", err); return; }
 
-    /* Global header */
-    w_u32le(f, PCAP_MAGIC);
-    w_u16le(f, 2);            /* major */
-    w_u16le(f, 4);            /* minor */
-    w_u32le(f, 0);            /* thiszone */
-    w_u32le(f, 0);            /* sigfigs */
-    w_u32le(f, 65535);        /* snaplen */
-    w_u32le(f, DLT_IEEE802_11);
+    pcap_fmt_put_file_hdr(f, PCAP_DLT_IEEE802_11, PCAP_SNAPLEN_FRAME);
 
     /* Walk M1..M4 in order. Skip empty slots. */
     for (int i = 0; i < 4; i++) {
         if (p->m_frame_lens[i] == 0) continue;
-        uint16_t cap = (uint16_t)p->m_frame_lens[i];
-        /* The frame's own capture time (#92), not when it was written. */
-        w_u32le(f, (uint32_t)p->m_frame_ts[i]);
-        w_u32le(f, p->m_frame_usec[i]);
-        w_u32le(f, cap);
-        /* caplen then origlen. The two differ only for a frame longer
-         * than EAPOL_FRAME_MAX, and caplen <= origlen holds by
-         * construction: both are set from the same observed length at
-         * the single buffering site, one of them min()-ed. */
-        w_u32le(f, (uint32_t)p->m_frame_origlens[i]);
-        fwrite(p->m_frames[i], 1, cap, f);
+        /* The frame's own capture time (#92), not when it was written.
+         * caplen <= origlen holds by construction here — both come from
+         * the same observed length at the single buffering site, one
+         * min()-ed — and pcap_fmt_put_rec() clamps anyway. */
+        pcap_fmt_put_rec(f, (uint32_t)p->m_frame_ts[i], p->m_frame_usec[i],
+                         p->m_frames[i], (uint32_t)p->m_frame_lens[i],
+                         (uint32_t)p->m_frame_origlens[i]);
     }
     if (sfile_fclose(f, name, err, sizeof(err)) != 0) {
         unlinkat(g_out_fd, tmp, 0);
