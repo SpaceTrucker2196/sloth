@@ -276,8 +276,55 @@ static void test_sel_clamps(void) {
     view_karma_draw(&s);
 }
 
+/* ── The alert key the dashboard badge looks up (#90) ──────
+ *
+ * The beacon panel badges an active lure by finding the KARMA_AP alert
+ * for a BSSID and reading its SEVERITY, rather than comparing
+ * karma_ap_t.score against a hardcoded threshold as it used to. That
+ * change is the point: the score is a confidence number whose formula
+ * moves whenever detection improves, and #90's own PNL work silently
+ * dropped a deauth-chain candidate below the old threshold of 5 —
+ * nobody decided that, it fell out of arithmetic in another file.
+ *
+ * What CANNOT be tested here, stated rather than implied:
+ * karma_badge_hot() lives in src/views/dashboard_grid.c, which is
+ * compiled only under WITH_NCURSES. TEST_CFLAGS does not define it, so
+ * that function is not linked into sloth_test and no assertion can
+ * reach it. Reviewers proved the same thing about this issue's other
+ * view tests, which exercised the `#else` printf branch instead.
+ *
+ * So the contract is moved to where it CAN be tested: both surfaces
+ * build the key through karma_alert_key(), and these cases pin that
+ * function plus the fact that a fired alert actually carries what it
+ * produces. A divergence between the two would not error — it would
+ * quietly stop badging and read as a quiet night. */
+static void test_karma_alert_key_format(void) {
+    const uint8_t b[6] = {0x00,0x11,0x22,0xaa,0xbb,0xcc};
+    char k[ALERT_KEY_LEN];
+    karma_alert_key(b, k, sizeof(k));
+    /* Lower-case hex, colon-separated, "karma:" prefix — the literal the
+       alert engine dedupes on. Written out rather than rebuilt with the
+       same snprintf, which would only prove snprintf is deterministic. */
+    ASSERT_STR(k, "karma:00:11:22:aa:bb:cc");
+
+    /* High bytes are not sign-extended or upper-cased. */
+    const uint8_t hi[6] = {0xff,0xfe,0x80,0x7f,0x01,0x00};
+    karma_alert_key(hi, k, sizeof(k));
+    ASSERT_STR(k, "karma:ff:fe:80:7f:01:00");
+
+    /* Defensive arms: neither writes out of bounds, and a NULL bssid
+       yields an empty string rather than garbage a lookup might match. */
+    karma_alert_key(b, k, 1);
+    ASSERT_EQ((int)k[0], 0);
+    karma_alert_key(NULL, k, sizeof(k));
+    ASSERT_EQ((int)k[0], 0);
+    karma_alert_key(b, NULL, 0);      /* ASan is the assertion */
+    ASSERT(1);
+}
+
 void run_karma_tests(void) {
     TEST_SUITE("KARMA/PineAP view (#30)");
+    RUN_TEST(test_karma_alert_key_format);
     RUN_TEST(test_empty_state);
     RUN_TEST(test_threshold);
     RUN_TEST(test_pnl_overlap_and_score);

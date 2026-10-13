@@ -3,6 +3,13 @@
 #include <string.h>
 #include <time.h>
 
+void karma_alert_key(const uint8_t bssid[6], char *out, size_t sz) {
+    if (!out || sz == 0) return;
+    if (!bssid) { out[0] = '\0'; return; }
+    snprintf(out, sz, "karma:%02x:%02x:%02x:%02x:%02x:%02x",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+}
+
 /* Distinct advertised SSIDs from this BSSID that appear in the union of
  * nearby clients' preferred-network lists. PineAP Beacon Response answers
  * exactly what clients probe for, so a high overlap separates an active

@@ -2982,7 +2982,10 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
             tool_attribution_format(attr, sizeof(attr), tool_row, conf);
             snprintf(tool_note, sizeof(tool_note), " [%s]", attr);
         }
-        snprintf(key, sizeof(key), "karma:%s", bssid_str);
+        /* Shared with the dashboard badge, which looks this alert up by
+         * key to read its severity (#90). Built in one place so the two
+         * cannot drift — see karma_alert_key(). */
+        karma_alert_key(a->bssid, key, sizeof(key));
         snprintf(detail, sizeof(detail),
                  "KARMA BSSID %s: %d SSIDs%s%s%s%s, conf %d%%%s",
                  bssid_str, a->ssid_history_n, pnl_note, chain_note,

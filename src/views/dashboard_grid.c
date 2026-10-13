@@ -10,6 +10,7 @@
 #include "tui.h"
 #include "views/dashboard.h"
 #include "views/dashboard_internal.h"
+#include "karma_detect.h"
 #include "ip_color.h"
 #include "oui.h"
 
@@ -166,16 +167,44 @@ void draw_radio_clients_panel(const sloth_state_t *s,
     }
 }
 
-/* KARMA score for a BSSID from the synthesised candidate table, or 0 if
- * it isn't a candidate. Lets the beacon panel badge active lures (#30). */
-static int karma_score_for(const sloth_state_t *s, const uint8_t bssid[6]) {
-    for (int i = 0; i < s->karma_count; i++)
-        if (memcmp(s->karma_aps[i].bssid, bssid, 6) == 0)
-            return s->karma_aps[i].score;
+/* Should the beacon panel badge this BSSID as an active lure (#30)?
+ *
+ * Reads the KARMA ALERT's severity, not the candidate's raw score, and
+ * that is the whole point of the function (#90).
+ *
+ * It used to compare karma_ap_t.score against a hardcoded 5. That made
+ * the dashboard a third consumer of a confidence number whose formula
+ * changes every time the detection improves — so #90's work gating the
+ * PNL-overlap escalator on a single station silently dropped a
+ * deauth-chain candidate from 6 to below the badge threshold. Nobody
+ * decided that; it fell out of arithmetic in another file. Any future
+ * re-weighting would move this surface again, invisibly, and the
+ * question "what should the threshold be now" would have to be
+ * re-answered each time.
+ *
+ * Severity is the considered verdict rather than an input to one:
+ * rule_karma_ap() already decides CRIT versus WARN from corroboration,
+ * and that decision is reviewed, tested and documented. Keying the
+ * badge off it means the threshold question disappears instead of
+ * recurring, and it is the separation #90 asks for — raw observation,
+ * detection hypothesis plus confidence, and incident severity kept
+ * apart. A dashboard badge is an incident-severity surface, so it reads
+ * severity.
+ *
+ * Matched by the alert key rather than by scanning karma_aps[], because
+ * the key is the identity the alert engine itself dedupes on. The
+ * format is shared with rule_karma_ap(); tests/test_karma.c pins that
+ * the two agree, since a silent divergence here would simply stop
+ * badging and look like "no lures today". */
+static int karma_badge_hot(const sloth_state_t *s, const uint8_t bssid[6]) {
+    char want[ALERT_KEY_LEN];
+    karma_alert_key(bssid, want, sizeof(want));
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_KARMA_AP &&
+            strcmp(s->alerts[i].key, want) == 0)
+            return s->alerts[i].sev == ALERT_SEV_CRIT;
     return 0;
 }
-
-#define KARMA_BADGE_SCORE 5   /* deep-red badge at/above this score */
 
 void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
     char btitle[64];
@@ -197,8 +226,7 @@ void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         /* KARMA badge: a candidate scoring >= threshold gets a deep-red
          * "!" and a red SSID — the dashboard tell for an active lure
          * (#30), mirroring how THREAT_IP flags a hostile host. */
-        int kscore = karma_score_for(s, b->bssid);
-        int hot = kscore >= KARMA_BADGE_SCORE;
+        int hot = karma_badge_hot(s, b->bssid);
         if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr("! "); }
         else     { attrset(COLOR_PAIR(CP_NORMAL));    addstr("  "); }
         const char *ssid = b->ssid[0] ? b->ssid : "(hidden)";

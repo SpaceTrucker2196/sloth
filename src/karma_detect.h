@@ -1,6 +1,7 @@
 #ifndef KARMA_DETECT_H
 #define KARMA_DETECT_H
 
+#include <stddef.h>
 #include "sloth.h"
 #include "tool_fingerprint.h"
 
@@ -20,6 +21,24 @@ void karma_update(sloth_state_t *s);
 /* Correlation window for the deauth-then-lure chain (#30), shared with
  * the KARMA_AP alert rule and karma_update()'s deauth_chain flag. */
 #define KARMA_DEAUTH_WIN_SECS 60
+
+/* The alert key for a KARMA candidate, written in ONE place (#90).
+ *
+ * Two surfaces build this string: rule_karma_ap() when it fires, and
+ * the dashboard beacon panel's badge when it looks the alert up to read
+ * its severity. They used to format it independently, which makes a
+ * silent divergence possible — and a divergence here does not produce
+ * an error, it produces a dashboard that quietly stops badging lures
+ * and looks like a quiet night.
+ *
+ * It lives here rather than in the view because src/views/dashboard_grid.c
+ * is compiled only under WITH_NCURSES, which the test build does not
+ * define, so nothing in that file is reachable from sloth_test. Putting
+ * the shared contract in a module the suite DOES link is what makes it
+ * testable at all; see tests/test_karma.c.
+ *
+ * `out` must hold at least ALERT_KEY_LEN. */
+void karma_alert_key(const uint8_t bssid[6], char *out, size_t sz);
 
 /* Is there a deauth-then-lure chain naming a victim of *this* candidate
  * specifically (#90)? A bare "some flood happened somewhere recently"
