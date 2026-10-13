@@ -686,6 +686,16 @@ const char *device_risk_label(device_risk_level_t l);
 #define ALERT_NXDOMAIN_WINDOW_S  60   /* sliding window for NXDOMAIN-burst rule */
 #define ALERT_NXDOMAIN_THRESH    10   /* NXDOMAINs from one src to trigger */
 
+/* Evidence-ring event IDs an alert may cite (#92). The ring is keyed by
+ * ID and nothing else, so an alert that carries IDs can have its own
+ * frames pulled back out byte-exact — the retrieval path a wireless
+ * detection with no IP match otherwise has no way to reach.
+ *
+ * Eight because the field is a sample a reader can judge the finding
+ * from, not an archive of it: a deauth flood is thousands of frames and
+ * the ring holds as many as its budget allows regardless. */
+#define ALERT_EVIDENCE_IDS   8
+
 /* ── Incident lifecycle (#98) ────────────────────────────────
  * Both durations run on CLOCK_MONOTONIC (the #88 seam in
  * flood_window.h); an NTP step must not resolve a live incident or
@@ -828,6 +838,32 @@ typedef struct {
      * describe operator/host posture rather than an adversary
      * technique (e.g. NO_MONITOR_MODE). */
     char         technique[16];
+    /* Evidence-ring event IDs this incident cites, oldest first (#92).
+     * Empty for every rule that has no frames to cite — today only the
+     * deauth-flood family fills it.
+     *
+     * Stamped on the alert rather than looked up at read time so the
+     * citations exist at the moment the incident opens, inside
+     * fire_inv(), rather than being bolted on after.
+     *
+     * What they are NOT, yet: exported. jsonl_emit_alert_event() emits
+     * event_id, incident_id, key, title, detail and sev and no evidence
+     * field, and this change touches no emitter — so nothing outside
+     * the process can read these IDs today. An earlier version of this
+     * comment claimed the lifecycle events "carry the citations"; both
+     * reviewers checked and they do not. Wiring them into the alert
+     * record and the lifecycle events is the next slice, and until then
+     * the value here is that evidence_export_pcap() has something to
+     * be handed.
+     *
+     * Refreshed on each evaluation so a running incident
+     * cites IDs the ring still holds: the ring evicts oldest-first, so
+     * the IDs an hours-old flood opened with have long since stopped
+     * resolving. An ID whose record is gone reads as absent from
+     * evidence_ring_get(), never as a different frame, so a stale
+     * citation misleads nobody — it just retrieves nothing. */
+    uint64_t     evidence_ids[ALERT_EVIDENCE_IDS];
+    uint8_t      evidence_id_count;
 
     /* How sure sloth is that the finding is real, in percent. Zero
      * means the rule reported no confidence — most rules assert a
@@ -1053,6 +1089,11 @@ typedef struct {
 /* ── Deauth / Disassoc events ───────────────────────────── */
 #define MAX_DEAUTH_ENTRIES    128
 #define MAX_DEAUTH_VICTIMS    128
+/* Evidence-ring event IDs kept per (BSSID, victim) aggregate (#92) —
+ * the most recent distinct frames, which is what the alert cites.
+ * Defined as ALERT_EVIDENCE_IDS rather than its own 8 so the hand-off
+ * in rule_deauth_flood() cannot silently truncate. */
+#define DEAUTH_EVIDENCE_IDS    ALERT_EVIDENCE_IDS
 #define DEAUTH_AGE_SECS        60   /* drop rows idle this long (monotonic) */
 /* Flood = at least DEAUTH_FLOOD_THRESH distinct frames inside any
  * DEAUTH_FLOOD_WIN_SECS-second sliding window (#88). Retransmissions
@@ -1139,6 +1180,13 @@ typedef struct {
     int      peak_win;       /* most distinct frames seen inside one window */
     int      flood;          /* threshold met within DEAUTH_FLOOD_HOLD_SECS (decays) */
     time_t   flood_last;     /* wall time the threshold was last met; 0 = never */
+    /* Evidence-ring event IDs for this aggregate's most recent distinct
+     * frames, oldest first (#92). Retransmissions contribute none —
+     * they are not distinct frames and the row does not count them.
+     * Written by deauth_snapshot(); see src/deauth_snoop.c for why the
+     * newest rather than the first. */
+    uint64_t evidence_ids[DEAUTH_EVIDENCE_IDS];
+    int      evidence_id_count;
 } deauth_victim_t;
 
 /* ── Beacon APs (passively observed 802.11 access points) ── */

@@ -240,6 +240,109 @@ static void test_deauth_flood_detail_content(void) {
                   "deauth:12:34:56:78:9a:bc@de:ad:be:ef:00:42") != NULL);
 }
 
+/* -- Evidence-ring citations on the alert - issue #92 ---------
+ *
+ * A wireless detection has no IP to export packets on, so the alert
+ * engine's only route back to the frames is the evidence-ring event
+ * IDs the detector carries. These pin the hand-off: the engine copies
+ * the detector's IDs onto the alert, in order, and a rule that cites
+ * nothing leaves the field empty rather than inheriting a neighbour's.
+ */
+
+static void test_deauth_flood_alert_carries_the_cited_ids(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+    uint8_t bssid[6] = {0xde,0xad,0xbe,0xef,0x00,0x42};
+    add_deauth_flood_full(&s, dst, bssid, 7, 25);
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count - 1];
+    v->evidence_ids[0] = 4001;
+    v->evidence_ids[1] = 4002;
+    v->evidence_ids[2] = 4003;
+    v->evidence_id_count = 3;
+
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const alert_t *a = &s.alerts[idx];
+        ASSERT_EQ(a->evidence_id_count, 3);
+        ASSERT_EQ((long long)a->evidence_ids[0], 4001LL);
+        ASSERT_EQ((long long)a->evidence_ids[1], 4002LL);
+        ASSERT_EQ((long long)a->evidence_ids[2], 4003LL);
+        ASSERT_EQ((long long)a->evidence_ids[3], 0LL);
+        /* There is no flow to export on - the IDs are the whole of the
+           evidence path for this rule. */
+        ASSERT_EQ(a->match_ip[0], '\0');
+    }
+}
+
+static void test_a_rule_with_no_evidence_cites_nothing(void) {
+    /* Every other rule still passes NULL, 0. The field must read empty
+       rather than whatever the engine slot last held. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    add_scan(&s, "10.0.0.99", 15, 1);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_PORT_SCAN);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ(s.alerts[idx].evidence_id_count, 0);
+        ASSERT_EQ((long long)s.alerts[idx].evidence_ids[0], 0LL);
+    }
+}
+
+/* Re-firing the same incident must re-read the detector's IDs, not keep
+   the ones the incident opened with: the ring evicts as the burst runs,
+   so the opening IDs stop resolving while the newest still do. */
+static void test_a_refired_incident_cites_the_current_ids(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+    uint8_t bssid[6] = {0xde,0xad,0xbe,0xef,0x00,0x42};
+    add_deauth_flood_full(&s, dst, bssid, 7, 25);
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count - 1];
+    v->evidence_ids[0] = 5001;
+    v->evidence_id_count = 1;
+    alerts_update(&s);
+
+    v->evidence_ids[0] = 5009;
+    v->evidence_ids[1] = 5010;
+    v->evidence_id_count = 2;
+    alerts_update(&s);
+
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        const alert_t *a = &s.alerts[idx];
+        ASSERT_EQ(a->evidence_id_count, 2);
+        ASSERT_EQ((long long)a->evidence_ids[0], 5009LL);
+        ASSERT_EQ((long long)a->evidence_ids[1], 5010LL);
+    }
+}
+
+/* A detector handing over more IDs than the alert can hold must be
+   clamped, not allowed to write past the array. ALERT_EVIDENCE_IDS and
+   DEAUTH_EVIDENCE_IDS are the same today, so this is reachable only by
+   lying about the count - which is exactly the input the clamp exists
+   for. */
+static void test_an_overlong_citation_count_is_clamped(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t dst[6]   = {0x12,0x34,0x56,0x78,0x9a,0xbd};
+    uint8_t bssid[6] = {0xde,0xad,0xbe,0xef,0x00,0x43};
+    add_deauth_flood_full(&s, dst, bssid, 7, 25);
+    deauth_victim_t *v = &s.deauth_victims[s.deauth_victim_count - 1];
+    for (int i = 0; i < DEAUTH_EVIDENCE_IDS; i++)
+        v->evidence_ids[i] = (uint64_t)(6000 + i);
+    v->evidence_id_count = DEAUTH_EVIDENCE_IDS + 4;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_DEAUTH_FLOOD);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT_EQ(s.alerts[idx].evidence_id_count, ALERT_EVIDENCE_IDS);
+}
+
 static void test_nxdomain_burst_fires_at_threshold(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -7969,6 +8072,10 @@ void run_alerts_tests(void) {
     RUN_TEST(test_port_scan_not_flagged_no_fire);
     RUN_TEST(test_deauth_flood_fires);
     RUN_TEST(test_deauth_flood_detail_content);
+    RUN_TEST(test_deauth_flood_alert_carries_the_cited_ids);
+    RUN_TEST(test_a_rule_with_no_evidence_cites_nothing);
+    RUN_TEST(test_a_refired_incident_cites_the_current_ids);
+    RUN_TEST(test_an_overlong_citation_count_is_clamped);
     RUN_TEST(test_beacon_flood_fires);
     RUN_TEST(test_beacon_flood_few_no_fire);
     RUN_TEST(test_auth_flood_fires);

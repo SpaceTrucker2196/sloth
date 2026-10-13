@@ -259,9 +259,34 @@ static void stamp_signature(alert_t *a, const sloth_tool_sig_t *tool_row) {
     a->sig_validated = tool_row->unverified ? 0 : 1;
 }
 
+/* Evidence-ring citations (#92). Stamped in here for the same reason as
+ * the two above: fire_inv() is where an incident comes into existence,
+ * so a post-hoc stamp would leave the opening moment uncited.
+ *
+ * Note what that does NOT buy, since the comment here previously said
+ * it did: `alert.create` does not carry these IDs. No emitter does —
+ * see the field's comment in include/sloth.h. This is the detector-to-
+ * alert half of the plumbing; the alert-to-export half is open.
+ *
+ * Rewritten on every evaluation, not set once. The detector hands over
+ * the newest IDs it holds, and those are the ones whose records are
+ * still in the ring — an incident that keeps re-firing should cite
+ * frames an operator can still pull back, not the first ones the ring
+ * has since evicted. `ev_n` is clamped rather than trusted: the caller
+ * is a detector with its own array size. */
+static void stamp_evidence(alert_t *a, const uint64_t *ev_ids, int ev_n) {
+    memset(a->evidence_ids, 0, sizeof(a->evidence_ids));
+    a->evidence_id_count = 0;
+    if (!ev_ids || ev_n <= 0) return;
+    if (ev_n > ALERT_EVIDENCE_IDS) ev_n = ALERT_EVIDENCE_IDS;
+    for (int i = 0; i < ev_n; i++) a->evidence_ids[i] = ev_ids[i];
+    a->evidence_id_count = (uint8_t)ev_n;
+}
+
 static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                      const char *inv_hash, int ap_class, int wired,
                      const sloth_tool_sig_t *tool_row,
+                     const uint64_t *ev_ids, int ev_n,
                      const char *title, const char *detail,
                      const char *key,
                      const char *match_ip, uint16_t match_port,
@@ -309,6 +334,7 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
          * evidence to a signature it no longer satisfies. The tool
          * note in `detail` moves with it, so the change is emitted. */
         stamp_signature(a, tool_row);
+        stamp_evidence(a, ev_ids, ev_n);
 
         if (sev != prev) {
             /* Severity is what a consumer pages on — never throttled,
@@ -371,6 +397,7 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->ap_class     = (uint8_t)ap_class;
     a->wired_attach = (uint8_t)wired;
     stamp_signature(a, tool_row);
+    stamp_evidence(a, ev_ids, ev_n);
     if (match_ip && match_ip[0])
         snprintf(a->match_ip, sizeof(a->match_ip), "%s", match_ip);
     a->match_port = match_port;
@@ -402,7 +429,22 @@ static void fire_conf(alert_type_t type, alert_sev_t sev, int confidence,
                       const char *match_ip, uint16_t match_port,
                       time_t now) {
     fire_inv(type, sev, confidence, NULL,
-             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, NULL,
+             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, NULL, NULL, 0,
+             title, detail, key, match_ip, match_port, now);
+}
+
+/* A rule that cites retained frames by evidence-ring event ID (#92).
+ * Calls fire_inv() directly rather than going through fire_conf(),
+ * which exists to say "no inventory, no pair class" and has no business
+ * growing an evidence parameter it would only ever pass through. */
+static void fire_ev(alert_type_t type, alert_sev_t sev,
+                    const uint64_t *ev_ids, int ev_n,
+                    const char *title, const char *detail,
+                    const char *key,
+                    const char *match_ip, uint16_t match_port,
+                    time_t now) {
+    fire_inv(type, sev, 0, NULL,
+             TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, NULL, ev_ids, ev_n,
              title, detail, key, match_ip, match_port, now);
 }
 
@@ -669,9 +711,14 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
                  tgt, bss, v->frames, v->peak_win, DEAUTH_FLOOD_WIN_SECS,
                  rsn, v->streams, v->streams == 1 ? "" : "s",
                  mine ? " - YOUR network" : "");
-        fire(ALERT_TYPE_DEAUTH_FLOOD,
-             mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-             "DEAUTH_FLOOD", detail, key, NULL, 0, now);
+        /* The first wireless detection to cite its own frames (#92).
+         * There is no IP to export on — a deauth is 802.11 management —
+         * so the ring's event IDs are the only path from this alert
+         * back to the bytes that caused it. */
+        fire_ev(ALERT_TYPE_DEAUTH_FLOOD,
+                mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+                v->evidence_ids, v->evidence_id_count,
+                "DEAUTH_FLOOD", detail, key, NULL, 0, now);
     }
 }
 
@@ -2791,7 +2838,7 @@ static void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  pmkid_note, tool_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
         fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
-                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
+                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row, NULL, 0,
                  "KARMA_AP", detail, key, NULL, 0, now);
     }
 }
@@ -3582,7 +3629,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
                          verdict, conf, note, steer_note, cls_note);
                 fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
-                         inventory_hash(), (int)cls, (int)wired, NULL,
+                         inventory_hash(), (int)cls, (int)wired, NULL, NULL, 0,
                          "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
@@ -3717,7 +3764,7 @@ static void rule_evil_twin(const sloth_state_t *s, time_t now) {
                      a->ssid, a_bssid, b_bssid, a->enc,
                      ev.confidence, reason, note, steer_note, cls_note);
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
-                     inventory_hash(), (int)cls, (int)wired, NULL,
+                     inventory_hash(), (int)cls, (int)wired, NULL, NULL, 0,
                      "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }

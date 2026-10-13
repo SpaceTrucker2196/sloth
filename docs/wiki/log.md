@@ -2281,3 +2281,37 @@ uploading to its own vendor is the system working as designed. Cited in
   surveillance inventory/JSONL fields, `VIEW_SURVEILLANCE`, the
   cross-signal CRIT and `SURV_DHCP_VENDOR` (which also needs DHCP
   option 60/61 parsing that does not exist) are all untouched.
+## 2026-10-13 — evidence-ring citations reach the alert (#92)
+
+**Pages touched**: [pcap-export.md](pcap-export.md) (new §4).
+
+The 2026-10-07 entry landed the ring; the code comment at the retain
+site said the event ID was dropped because "nothing records IDs on an
+alert yet". That is now wired for one detector family: `on_probe_frame()`
+keeps the event ID `evidence_ring_note()` returns, stamps it on the
+parsed deauth frame, `deauth_victim_t` carries up to 8 per (BSSID,
+victim) aggregate, and `rule_deauth_flood()` hands them to the alert
+engine as `alert_t.evidence_ids[]`. A deauth flood has no IP to export
+on, so this is the first route from a wireless alert back to its frames.
+
+**Wiki debt cleared.** The ring reached `ring-buffers.md` (as a
+bounded-by-bytes variation) and `jsonl-schema.md` (the eviction tally)
+on 2026-10-07, but `pcap-export.md` — the page an operator reads to find
+out how sloth keeps frames — had zero evidence content, and the exporter
+had none anywhere. §4 now covers the ring, the RAM-scaled budget, the
+ID-keyed retrieval contract, which alerts cite frames, why the *newest*
+IDs rather than the first, and what is still unwired.
+
+**Notes**:
+
+- §4 states what is still unwired rather than implying completeness:
+  nothing writes evidence frames to disk (`evidence_export.c` has no
+  production caller), the IDs appear in no JSONL record and no `--db`
+  column, and there is no evidence namer, manifest or `storage_error`
+  event.
+- It also records a defect the page's own "partial files are removed"
+  claim would otherwise paper over: `evidence_export.c`'s three failure
+  paths only `close(fd)`, leaving a zero-length or truncated file under
+  its final name, contrary to the promise in `evidence_export.h`.
+- No new `ALERT_TYPE_*`, so no `research/` citation and no rule-count
+  change; `alerts.md` and the count gates are untouched.

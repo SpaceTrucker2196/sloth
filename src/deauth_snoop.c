@@ -19,11 +19,26 @@ typedef struct {
     uint16_t       last_seq;
 } obs_t;
 
-/* (BSSID, victim) impact aggregates. */
+/* (BSSID, victim) impact aggregates.
+ *
+ * `ids` is a ring of evidence-ring event IDs for this aggregate's
+ * distinct frames (#92), kept private the way the window is: the
+ * exported row gets a flat oldest-first copy at snapshot.
+ *
+ * It keeps the *newest* IDs, not the first ones. The frames that opened
+ * a burst are the better evidence in principle, but the evidence ring
+ * is itself a FIFO: a flood of thousands of frames evicts its own
+ * opening frames long before an operator reads the alert, and a cited
+ * ID whose record is gone resolves to nothing. Citing the newest keeps
+ * the citations retrievable, which is the whole point of carrying
+ * them. */
 typedef struct {
     deauth_victim_t v;
     flood_window_t  win;
     uint64_t        last_ms;
+    uint64_t        ids[DEAUTH_EVIDENCE_IDS];
+    int             id_count;   /* stored, saturating at the array size */
+    int             id_head;    /* next slot to write */
 } vic_t;
 
 static obs_t           g_obs[MAX_DEAUTH_ENTRIES];
@@ -186,6 +201,16 @@ void deauth_record(const deauth_frame_t *f)
         v->v.flood_last = wall;
     int in_win = flood_window_count(&v->win, now_ms, WIN_MS);
     if (in_win > v->v.peak_win) v->v.peak_win = in_win;
+    /* Inside the lock and after the duplicate bail above, so a
+     * retransmission cites nothing: it is the same MPDU and already has
+     * an ID in here. 0 means the capture path retained no bytes for
+     * this frame (ring down), and 0 is not a valid event ID — storing
+     * it would hand the alert a citation that can never resolve. */
+    if (f->event_id != 0) {
+        v->ids[v->id_head] = f->event_id;
+        v->id_head = (v->id_head + 1) % DEAUTH_EVIDENCE_IDS;
+        if (v->id_count < DEAUTH_EVIDENCE_IDS) v->id_count++;
+    }
 
     pthread_mutex_unlock(&g_mu);
 }
@@ -238,6 +263,18 @@ void deauth_snapshot(sloth_state_t *s)
                 v->v.streams++;
         }
         if (v->v.flood) flood = 1;
+        /* Published on the row here rather than at record time so the
+         * exported struct and the private ring cannot drift. Flattened
+         * oldest-first: a consumer reading evidence_ids[] in order
+         * should not have to know where the head happened to be. */
+        memset(v->v.evidence_ids, 0, sizeof(v->v.evidence_ids));
+        for (int e = 0; e < v->id_count; e++) {
+            int src = v->id_count < DEAUTH_EVIDENCE_IDS
+                    ? e
+                    : (v->id_head + e) % DEAUTH_EVIDENCE_IDS;
+            v->v.evidence_ids[e] = v->ids[src];
+        }
+        v->v.evidence_id_count = v->id_count;
         s->deauth_victims[i] = v->v;
     }
     s->deauth_victim_count = vn;

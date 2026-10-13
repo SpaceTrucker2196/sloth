@@ -8,6 +8,7 @@
 #include "evidence_ring.h"
 #include "sensor_health.h"
 #include "flood_window.h"
+#include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -902,6 +903,115 @@ static void test_retained_records_carry_the_capture_clock(void) {
     evidence_ring_shutdown();
 }
 
+/* Radiotap + a complete 26-byte deauth (header + Reason Code), built
+   per IEEE 802.11-2020 9.3.3.1 / 9.4.1.7. Addresses are explicit so the
+   victim row this frame lands in can be named rather than guessed —
+   on_probe_frame() keeps no index and other tests in this file push
+   deauths through the same callback. */
+#define DEAUTH_DOT11 26
+static int mon_deauth(uint8_t *f, const uint8_t a1[6], const uint8_t a2[6],
+                      const uint8_t a3[6], uint16_t seq, uint16_t reason) {
+    int n = mon_frame(f, DEAUTH_DOT11, 0xC0);   /* type 0, subtype 12 */
+    uint8_t *d = f + RT_HDR;
+    d[1] = 0x00;                                 /* no Retry, no +HTC   */
+    d[2] = 0x3a; d[3] = 0x01;                    /* Duration, any value */
+    memcpy(d + 4,  a1, 6);
+    memcpy(d + 10, a2, 6);
+    memcpy(d + 16, a3, 6);
+    uint16_t sc = (uint16_t)(seq << 4);          /* fragment 0 */
+    d[22] = (uint8_t)(sc & 0xff);
+    d[23] = (uint8_t)(sc >> 8);
+    d[24] = (uint8_t)(reason & 0xff);
+    d[25] = (uint8_t)(reason >> 8);
+    return n;
+}
+
+/* The end-to-end claim of this slice: a frame the callback retained can
+   be reached from the detector that saw it, with no IP and no flow in
+   between. The ID the ring issued has to survive the parse, the record
+   and the snapshot, and still resolve to these bytes. */
+static void test_a_deauth_row_cites_the_frames_the_ring_kept(void) {
+    evidence_setup();
+    flood_test_set_clock(NULL, NULL);
+    deauth_clear();
+
+    static const uint8_t STA[6]   = {0x02,0x44,0x55,0x66,0x77,0x88};
+    static const uint8_t BSSID[6] = {0x06,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t a[64], b[64];
+    int an = mon_deauth(a, STA, BSSID, BSSID, 11, 7);
+    int bn = mon_deauth(b, STA, BSSID, BSSID, 12, 7);
+    const uint8_t *fs[2] = { a, b };
+    int ls[2] = { an, bn };
+    uint32_t ts[2] = { 1700000000u, 1700000001u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    /* deauth_record() writes deauth_snoop.c's statics; the state rows
+       only exist once snapshot runs. */
+    deauth_snapshot(&g_s);
+    const deauth_victim_t *v = NULL;
+    for (int i = 0; i < g_s.deauth_victim_count; i++)
+        if (memcmp(g_s.deauth_victims[i].bssid,  BSSID, 6) == 0 &&
+            memcmp(g_s.deauth_victims[i].victim, STA,   6) == 0)
+            v = &g_s.deauth_victims[i];
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 2);
+        ASSERT_EQ(v->evidence_id_count, 2);
+        /* The IDs are the ones this dispatch issued, in order. */
+        ASSERT_EQ((long long)v->evidence_ids[0], (long long)(before + 1));
+        ASSERT_EQ((long long)v->evidence_ids[1], (long long)(before + 2));
+
+        /* And they still resolve to the frames, byte for byte, radiotap
+           included — which is what makes the citation evidence rather
+           than a number. */
+        evidence_rec_t r;
+        static uint8_t out[128];
+        ASSERT_EQ(evidence_ring_get(v->evidence_ids[0], &r, out, sizeof(out)), an);
+        ASSERT_EQ((long long)r.cap_len, an);
+        ASSERT_EQ(memcmp(out, a, (size_t)an), 0);
+        ASSERT_EQ(evidence_ring_get(v->evidence_ids[1], &r, out, sizeof(out)), bn);
+        ASSERT_EQ((long long)r.cap_len, bn);
+        ASSERT_EQ(memcmp(out, b, (size_t)bn), 0);
+    }
+    deauth_clear();
+    evidence_ring_shutdown();
+}
+
+/* With the ring down, evidence_ring_note() returns 0 and the detector
+   must cite nothing. The frames are still counted — a missing evidence
+   store is not a reason to stop detecting. */
+static void test_a_deauth_row_cites_nothing_with_the_ring_down(void) {
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    evidence_ring_shutdown();
+    sh_evict_reset();
+    flood_test_set_clock(NULL, NULL);
+    deauth_clear();
+
+    static const uint8_t STA[6]   = {0x02,0x99,0x88,0x77,0x66,0x55};
+    static const uint8_t BSSID[6] = {0x06,0x11,0x22,0x33,0x44,0x55};
+    uint8_t a[64];
+    int an = mon_deauth(a, STA, BSSID, BSSID, 21, 7);
+    const uint8_t *fs[1] = { a };
+    int ls[1] = { an };
+    uint32_t ts[1] = { 1700000100u };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 1), 1);
+
+    deauth_snapshot(&g_s);
+    const deauth_victim_t *v = NULL;
+    for (int i = 0; i < g_s.deauth_victim_count; i++)
+        if (memcmp(g_s.deauth_victims[i].bssid,  BSSID, 6) == 0 &&
+            memcmp(g_s.deauth_victims[i].victim, STA,   6) == 0)
+            v = &g_s.deauth_victims[i];
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 1);
+        ASSERT_EQ(v->evidence_id_count, 0);
+    }
+    deauth_clear();
+}
+
 static void test_a_kernel_snapped_frame_is_flagged_truncated(void) {
     /* caplen < len through the real reader: libpcap hands the callback
        the short buffer while the record header still reports the frame's
@@ -1428,6 +1538,8 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_the_callback_retains_the_whole_frame_with_radiotap);
     RUN_TEST(test_retained_records_carry_the_capture_clock);
     RUN_TEST(test_a_kernel_snapped_frame_is_flagged_truncated);
+    RUN_TEST(test_a_deauth_row_cites_the_frames_the_ring_kept);
+    RUN_TEST(test_a_deauth_row_cites_nothing_with_the_ring_down);
     RUN_TEST(test_frames_refused_by_the_guards_are_not_retained);
     RUN_TEST(test_an_uninitialised_ring_does_not_stop_the_callback);
     RUN_TEST(test_ring_pressure_from_the_callback_is_counted);

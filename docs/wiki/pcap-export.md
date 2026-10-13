@@ -1,16 +1,16 @@
 ---
 name: pcap-export
-description: Per-alert pcap dumps, manual packet-window export, EAPOL per-handshake pcap — all the ways sloth writes pcap files
+description: Per-alert pcap dumps, manual packet-window export, EAPOL per-handshake pcap, the in-memory 802.11 evidence ring — all the ways sloth keeps and writes frames
 type: reference
 ---
 
 # Pcap export
 
-**Summary**: Three independent pcap-export paths: per-alert (driven by `--pcap-dir`), manual from the packets view (`w` key), and per-EAPOL-handshake (driven by `--eapol-dir`).
+**Summary**: Three independent pcap-export paths — per-alert (driven by `--pcap-dir`), manual from the packets view (`w` key), and per-EAPOL-handshake (driven by `--eapol-dir`) — plus a fourth, memory-only path: the 802.11 evidence ring, which retains whole monitor frames and is the only route from a wireless alert back to the frames that caused it.
 
-**Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`.
+**Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
 
-**Last updated**: 2026-10-01 (#92 handshake pcap record lengths).
+**Last updated**: 2026-10-13 (#92 evidence ring, ID keying, and deauth-flood citations).
 
 ---
 
@@ -55,6 +55,73 @@ type: reference
 - Re-completion of the same (BSSID, STA) atomically replaces the prior
   `.pcap` with the freshest capture (temp file + rename); the `.22000`
   file appends.
+
+## 4. The 802.11 evidence ring (#92)
+
+An alert on an IP flow can be exported from the general packet ring by
+`match_ip` + `match_port`. A wireless alert has neither: a deauth frame
+is 802.11 management and carries no IP. Before this existed, every
+wireless detection shipped with zero supporting packets, and the general
+ring would not have helped — it keeps only `min(caplen, 64)` bytes.
+
+- Memory only. No flag, nothing written to disk by this path.
+- `src/evidence_ring.c` retains the **whole** captured frame including
+  the radiotap header, fed from `on_probe_frame()` behind the same
+  framing guards as the rest of the monitor path — a frame too short to
+  parse cannot be cited by anything, and admitting runts would let an
+  attacker flush the ring with 10-byte garbage.
+- Budget scales from RAM: ~1 % of `MemTotal`, clamped to
+  [2 MiB, 32 MiB] (owner ruling, 2026-09-30). Zero-config. Evictions are
+  counted as their own kind, `SH_EVICT_EVIDENCE_FRAME`.
+- Each record carries the frame's own capture clock (sec + usec),
+  `cap_len` and `orig_len` independently, the radiotap frequency and
+  signal, and a `truncated` flag. There is no `time(NULL)` fallback.
+
+### Keyed by event ID, and nothing else
+
+`evidence_ring_note()` returns a monotonic **event ID**, never reused
+and never 0. `evidence_ring_get(id, …)` is the only retrieval path: no
+IP, no flow, no time window. An ID that was never issued, or whose
+record has been evicted, returns −1 — never a different frame. That is
+what makes a citation safe to carry on a long-lived alert.
+
+### Which alerts cite frames
+
+Only the **deauth-flood family** so far. `deauth_victim_t` keeps up to
+`DEAUTH_EVIDENCE_IDS` (8) event IDs per (BSSID, victim) aggregate and
+`rule_deauth_flood()` stamps them onto the alert as
+`evidence_ids[]` / `evidence_id_count`. Every other rule passes none,
+and reads as an empty list.
+
+Two deliberate choices:
+
+- **The newest IDs, not the first.** The ring evicts oldest-first, so a
+  thousand-frame flood evicts its own opening frames; citing those would
+  leave an alert pointing at records that no longer resolve. The list is
+  refreshed on each evaluation for the same reason.
+- **Retransmissions cite nothing.** A Retry=1 frame repeating the
+  previous sequence number is the same MPDU (IEEE 802.11-2020
+  10.3.2.14); the row does not count it as a frame, so it adds no ID.
+
+### What is not wired yet
+
+Being explicit, because the gap is the interesting part:
+
+- **Nothing writes evidence frames to disk.** `src/evidence_export.c`
+  exists and refuses to write unless `--collect-handshakes` is set,
+  creating through the same pinned dirfd and 0600/`O_EXCL` path as the
+  EAPOL export — but it has **no production caller**. Today only the
+  test suite reaches it.
+- **The IDs are not exported.** `evidence_ids` is on `alert_t` and in
+  no JSONL record and no `--db` column; the only consumer is C code.
+- **No evidence filenames, no manifest, no `storage_error` event.** All
+  still open on #92.
+- **A failed evidence export leaves a misleading artifact.**
+  `src/evidence_export.h` promises "nothing partial is left behind", but
+  all three failure paths only `close(fd)`: the file stays under its
+  final name, zero-length or truncated. The §"Permissions and failures"
+  claim below ("partial files are removed") is true of `alert_pcap.c`,
+  `pcap_write.c` and `eapol_log.c`, and **not** of `evidence_export.c`.
 
 ## File writer
 

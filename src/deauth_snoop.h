@@ -21,6 +21,11 @@ typedef struct {
     uint16_t reason;        /* 0 unless reason_valid */
     uint16_t seq;           /* Sequence Number (12 bits) */
     uint8_t  frag;          /* Fragment Number (4 bits) */
+    /* Evidence-ring event ID for this frame's retained bytes, or 0 when
+     * nothing was retained (#92). Not parsed from the frame — the
+     * capture path stamps it between deauth_parse() and deauth_record(),
+     * because deauth_parse() memsets its output. */
+    uint64_t event_id;
 } deauth_frame_t;
 
 /* Parse a raw 802.11 frame. Returns 1 for a management deauth/disassoc

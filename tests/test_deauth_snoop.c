@@ -105,6 +105,21 @@ static void rec(const uint8_t *src, const uint8_t *dst,
     tick_ms(100);
 }
 
+/* Like feed(), but stamps the evidence-ring event ID the capture path
+ * would have stamped (#92). A separate helper rather than a parameter
+ * on feed(): the existing callers are about the window and the tables,
+ * and threading a 0 through all of them would say nothing. */
+static void feed_ev(uint8_t sub, uint8_t fc1, const uint8_t da[6],
+                    const uint8_t sa[6], const uint8_t bssid[6],
+                    uint16_t seq, uint16_t reason, uint64_t event_id) {
+    uint8_t f[26];
+    int n = build(f, sub, fc1, da, sa, bssid, seq, reason);
+    deauth_frame_t df;
+    ASSERT_EQ(deauth_parse(f, n, &df), 1);
+    df.event_id = event_id;
+    deauth_record(&df);
+}
+
 static void snap(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
     deauth_snapshot(s);
@@ -942,6 +957,193 @@ static void test_view_key_clear(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+/* ── Evidence-ring citations — issue #92 ──────────────────────
+ *
+ * A deauth flood has no IP to export on, so the only path from the
+ * alert back to the frames is the evidence ring's event ID. These pin
+ * the detector half of that: which IDs a victim row carries, and which
+ * frames contribute none.
+ *
+ * The IDs are opaque integers here on purpose — this file never calls
+ * evidence_ring_note(). tests/test_capture_path.c pins that the IDs a
+ * row carries really do resolve to the captured bytes.
+ */
+
+static void test_distinct_frames_cite_their_event_ids(void) {
+    clock_reset(); deauth_clear();
+    for (int i = 0; i < 3; i++) {
+        feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A,
+                (uint16_t)(40 + i), 7, (uint64_t)(101 + i));
+        tick_ms(100);
+    }
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_A, DST_STA);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 3);
+        ASSERT_EQ(v->evidence_id_count, 3);
+        /* Oldest first, so a consumer reading in order reads the burst
+           in order. */
+        ASSERT_EQ((long long)v->evidence_ids[0], 101LL);
+        ASSERT_EQ((long long)v->evidence_ids[1], 102LL);
+        ASSERT_EQ((long long)v->evidence_ids[2], 103LL);
+        ASSERT_EQ((long long)v->evidence_ids[3], 0LL);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_a_retransmission_cites_no_new_id(void) {
+    /* Retry=1 repeating the previous sequence number is the same MPDU
+       (IEEE 802.11-2020 10.3.2.14). The row does not count it as a
+       frame, so it must not add a citation either — two IDs for one
+       MPDU would overstate the burst in the field an analyst counts. */
+    clock_reset(); deauth_clear();
+    feed_ev(12, 0,         DST_STA, BSSID_A, BSSID_A, 70, 7, 501);
+    tick_ms(10);
+    feed_ev(12, FC1_RETRY, DST_STA, BSSID_A, BSSID_A, 70, 7, 502);
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_A, DST_STA);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 1);
+        ASSERT_EQ(v->evidence_id_count, 1);
+        ASSERT_EQ((long long)v->evidence_ids[0], 501LL);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_a_frame_with_no_retained_bytes_cites_nothing(void) {
+    /* event_id 0 is what evidence_ring_note() returns when nothing was
+       stored — the ring is down, or this build has no monitor radio. The
+       row still counts the frame; it just has nothing to cite. 0 is not
+       a valid ID, and storing it would give the alert a citation that
+       can never resolve. */
+    clock_reset(); deauth_clear();
+    feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A, 80, 7, 0);
+    tick_ms(100);
+    feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A, 81, 7, 0);
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_A, DST_STA);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 2);
+        ASSERT_EQ(v->evidence_id_count, 0);
+        ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_a_long_burst_cites_the_newest_frames(void) {
+    /* 12 distinct frames into 8 slots. The newest survive, not the
+       first: the evidence ring is itself a FIFO, so by the time anyone
+       reads a thousand-frame flood its opening frames are evicted and a
+       citation of them resolves to nothing. */
+    clock_reset(); deauth_clear();
+    for (int i = 0; i < 12; i++) {
+        feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A,
+                (uint16_t)(90 + i), 7, (uint64_t)(900 + i));
+        tick_ms(50);
+    }
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_A, DST_STA);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->frames, 12);
+        ASSERT_EQ(v->evidence_id_count, DEAUTH_EVIDENCE_IDS);
+        /* 904..911, oldest first — the head wrap is flattened away. */
+        for (int i = 0; i < DEAUTH_EVIDENCE_IDS; i++)
+            ASSERT_EQ((long long)v->evidence_ids[i], (long long)(904 + i));
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+/* A second snapshot of an unchanged table must read the same. Pins that
+   the flatten is a copy and not a rotation of the private ring. */
+static void test_two_snapshots_cite_the_same_ids(void) {
+    clock_reset(); deauth_clear();
+    for (int i = 0; i < 12; i++) {
+        feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A,
+                (uint16_t)(120 + i), 7, (uint64_t)(700 + i));
+        tick_ms(50);
+    }
+    sloth_state_t s1; snap(&s1);
+    sloth_state_t s2; snap(&s2);
+    const deauth_victim_t *a = find_victim(&s1, BSSID_A, DST_STA);
+    const deauth_victim_t *b = find_victim(&s2, BSSID_A, DST_STA);
+    ASSERT(a != NULL); ASSERT(b != NULL);
+    if (a && b) {
+        ASSERT_EQ(a->evidence_id_count, b->evidence_id_count);
+        ASSERT_EQ(memcmp(a->evidence_ids, b->evidence_ids,
+                         sizeof(a->evidence_ids)), 0);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+/* A NEW aggregate starts with no citations. Weak on its own — a slot
+   never used before is zero whatever vic_find_or_add() does — so it is
+   the companion to the eviction case below, which is the one that
+   actually exercises the memset. */
+static void test_a_fresh_aggregate_inherits_no_ids(void) {
+    clock_reset(); deauth_clear();
+    feed_ev(12, 0, DST_STA, BSSID_A, BSSID_A, 150, 7, 601);
+    tick_ms(100);
+    feed_ev(12, 0, STA_X,   BSSID_B, BSSID_B, 151, 7, 0);
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_B, STA_X);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->evidence_id_count, 0);
+        ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
+/* An EVICTED slot must not pass its citations to whoever reuses it.
+ *
+ * This is the case the test above was believed to cover and does not:
+ * review preserved ids/id_count/id_head across the `memset(v, 0,
+ * sizeof(*v))` in vic_find_or_add() — the exact "one network's frames
+ * attributed to another's incident" bug the comment warns about — and
+ * the whole suite stayed green, because every existing case takes a
+ * fresh slot and a fresh slot reads zero either way.
+ *
+ * Reaching the reuse path means filling the table: MAX_DEAUTH_VICTIMS
+ * distinct (BSSID, victim) pairs, each stamped with a citation, then
+ * one more pair to force evict_vic(). The survivor is read back by
+ * identity rather than by slot, since which slot was evicted is the
+ * eviction policy's business and not this test's. */
+static void test_an_evicted_slot_passes_on_no_ids(void) {
+    clock_reset(); deauth_clear();
+
+    /* Fill every slot, each with a distinct victim MAC and a non-zero
+       evidence id so a leak would be visible rather than coincidental. */
+    for (int i = 0; i < MAX_DEAUTH_VICTIMS; i++) {
+        uint8_t vic[6] = { 0x02, 0x00, 0x00, 0x00,
+                           (uint8_t)(i >> 8), (uint8_t)(i & 0xff) };
+        feed_ev(12, 0, vic, BSSID_A, BSSID_A, (uint16_t)(200 + i), 7,
+                (uint64_t)(9000 + i));
+        tick_ms(10);
+    }
+    {
+        sloth_state_t s; snap(&s);
+        /* The table really is full, so the next pair must evict. */
+        ASSERT_EQ(s.deauth_victim_count, MAX_DEAUTH_VICTIMS);
+    }
+
+    /* One more identity, carrying NO citation. If the reused slot kept
+       what its predecessor held, this aggregate cites frames belonging
+       to a different victim on a different network. */
+    feed_ev(12, 0, STA_X, BSSID_B, BSSID_B, 999, 7, 0);
+    sloth_state_t s; snap(&s);
+    const deauth_victim_t *v = find_victim(&s, BSSID_B, STA_X);
+    ASSERT(v != NULL);
+    if (v) {
+        ASSERT_EQ(v->evidence_id_count, 0);
+        ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
+    }
+    flood_test_set_clock(NULL, NULL);
+}
+
 void run_deauth_snoop_tests(void) {
     TEST_SUITE("deauth_snoop");
     RUN_TEST(test_parse_deauth);
@@ -994,5 +1196,14 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_view_draw_btm_table_full);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+
+    TEST_SUITE("deauth: evidence-ring citations (#92)");
+    RUN_TEST(test_distinct_frames_cite_their_event_ids);
+    RUN_TEST(test_a_retransmission_cites_no_new_id);
+    RUN_TEST(test_a_frame_with_no_retained_bytes_cites_nothing);
+    RUN_TEST(test_a_long_burst_cites_the_newest_frames);
+    RUN_TEST(test_two_snapshots_cite_the_same_ids);
+    RUN_TEST(test_a_fresh_aggregate_inherits_no_ids);
+    RUN_TEST(test_an_evicted_slot_passes_on_no_ids);
     flood_test_set_clock(NULL, NULL);
 }

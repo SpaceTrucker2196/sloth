@@ -362,11 +362,12 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * cheap for them, and it would evict the frames that actually
      * triggered something.
      *
-     * The return value (the event ID) is dropped here: nothing records
-     * IDs on an alert yet. Wiring the alert engine and the exporter to
-     * these IDs is the next #92 slice; this one builds the store and
-     * its retrieval path. */
-    (void)evidence_ring_note(data, (uint32_t)hdr->caplen, (uint32_t)hdr->len,
+     * The event ID is kept: it is how a detector cites this frame. 0
+     * means nothing was retained (ring down, or an empty frame), and a
+     * citation of 0 is never stored. Only the deauth/disassoc path
+     * consumes it so far — the other parsers still discard it. */
+    const uint64_t ev = evidence_ring_note(
+                             data, (uint32_t)hdr->caplen, (uint32_t)hdr->len,
                              fts, (long)hdr->ts.tv_usec,
                              (uint16_t)(rt.freq_mhz > 0 && rt.freq_mhz <= 0xFFFF
                                         ? rt.freq_mhz : 0),
@@ -483,8 +484,13 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     if (sub == 10 || sub == 12) {
         /* Disassoc (10) or Deauth (12) */
         deauth_frame_t df;
-        if (deauth_parse(dot11, dot11_len, &df))
+        if (deauth_parse(dot11, dot11_len, &df)) {
+            /* Stamped here, not inside the parser: deauth_parse()
+             * memsets its output, so a stamp before the call is erased
+             * and one after the record is too late. */
+            df.event_id = ev;
             deauth_record(&df);
+        }
         /* Drop the association for this (BSSID, STA) — either side
          * could be initiating, so try both directions. */
         if (dot11_len >= 22) {
