@@ -8066,6 +8066,322 @@ static void test_lifecycle_two_twin_pairs_one_ssid_are_two_incidents(void) {
     lc_end();
 }
 
+/* ── Spectrum-management elements absent on 5 GHz (#101 slice 3) ── */
+
+/* add_beacon() memsets the entry, so every field this rule reads —
+ * first_seen, phy, channel_source and the whole reg envelope — starts
+ * at the "says nothing" value. Each case below sets exactly the ones it
+ * is about. Returns the entry so a case can reach the reg flags. */
+static beacon_ap_t *add_reg_ap(sloth_state_t *s, const char *ssid,
+                               const uint8_t bssid[6], int channel,
+                               uint8_t ch_src, const char *phy,
+                               long observed_s) {
+    add_beacon(s, ssid, bssid, "WPA2");
+    beacon_ap_t *a = &s->beacon_aps[s->beacon_count - 1];
+    a->channel        = channel;
+    a->channel_source = ch_src;
+    snprintf(a->phy, sizeof(a->phy), "%s", phy);
+    a->first_seen     = time(NULL) - observed_s;
+    /* Enough beacons to clear TPC_ABSENT_MIN_BEACONS by default, so a
+       case that is not about the beacon floor does not have to think
+       about it. The two cases that ARE about it set this themselves.
+       Age alone used to be the whole floor; review showed one beacon
+       plus sixty seconds of silence satisfied it. */
+    a->frame_count    = TPC_ABSENT_MIN_BEACONS;
+    return a;
+}
+
+static const uint8_t tpc_bss_a[6] = {0x3c,0x37,0x86,0x10,0x00,0x01};
+static const uint8_t tpc_bss_b[6] = {0x3c,0x37,0x86,0x10,0x00,0x02};
+
+static void test_tpc_absent_fires_on_designated_5ghz(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_STR(s.alerts[i].key, "tpcabsent:3c:37:86:10:00:01");
+        ASSERT(strstr(s.alerts[i].detail, "no Power Constraint (32)") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "no TPC Report (35)") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "ch36") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+        /* No ATT&CK technique, deliberately — a compliance gap is not an
+         * adversary behaviour. The citation is enforced separately, by
+         * tests/test_research_corpus.c. */
+        ASSERT_STR(s.alerts[i].technique, "");
+    }
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_when_tpc_report_present(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    beacon_ap_t *a = add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36,
+                                CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    a->reg.tpc_present      = 1;
+    a->reg.tpc_tx_power_dbm = 17;
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_when_power_constraint_present(void) {
+    /* Either element on its own is a published ceiling, so either one
+     * settles it. Separate case from the TPC Report one because the
+     * guard is a disjunction — dropping one half leaves the other
+     * passing. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    beacon_ap_t *a = add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36,
+                                CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    a->reg.power_constraint_present = 1;
+    a->reg.power_constraint_db      = 3;
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_on_24ghz(void) {
+    /* §11.8 does not apply in the 2.4 GHz plan. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 6, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_on_6ghz(void) {
+    /* Channel 37 is a valid number in both 5 and 6 GHz; only
+     * channel_source separates them. On 6 GHz the element carrying the
+     * power limit is the Transmit Power Envelope (tag 195), which sloth
+     * does not parse — so the absence of tags 32/35 there is the wrong
+     * element missing, not a finding. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 37, CH_SRC_HE_6GHZ, "Wi-Fi 6", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+
+    /* Control: the same number with a 5 GHz source does fire, which is
+     * what makes the line above a statement about the band and not
+     * about channel 37. */
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_reg_ap(&t, "CorpWiFi", tpc_bss_a, 37, CH_SRC_DS_PARAM, "Wi-Fi 6", 120);
+    alerts_update(&t);
+    ASSERT(find_alert(&t, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) >= 0);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_on_legacy_phy(void) {
+    /* 802.11a predates 802.11h-2003, so pre-802.11h 5 GHz gear was
+     * never required to send either element. The issue asks for this
+     * exemption by name. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "legacy", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_on_someone_elses_ap(void) {
+    /* Identical state on a BSSID nobody designated. sloth has no
+     * standing to call a third party's posture wrong. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "Cafe", tpc_bss_b, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_matches_a_designated_ssid_too(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_ssid("CorpWiFi"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_b, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) >= 0);
+    ownership_clear();
+}
+
+static void test_tpc_absent_quiet_without_any_designation(void) {
+    /* This case is NOT isolated to the rule's `if (!ownership_any())
+     * return;` early-out, and saying so is the honest version. Deleting
+     * that line leaves the suite green (measured, not assumed): with
+     * nothing designated the per-AP gate below it already matches no
+     * AP, so the early return is a cheap skip of the loop and not a
+     * guard any observable behaviour depends on. What this case does
+     * prove is the outcome — an undesignated run is silent — which is
+     * the property the operator cares about and which M5 (deleting the
+     * per-AP gate) does turn red. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+}
+
+static void test_tpc_absent_needs_the_observation_floor(void) {
+    /* A BSS caught for one hop has not been listened to long enough for
+     * its silence to be the AP's rather than the receiver's. Both sides
+     * of the boundary, so a floor of 0 would not pass. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5",
+               TPC_ABSENT_MIN_OBSERVED_S - 1);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_reg_ap(&t, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5",
+               TPC_ABSENT_MIN_OBSERVED_S);
+    alerts_update(&t);
+    ASSERT(find_alert(&t, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) >= 0);
+    ownership_clear();
+}
+
+static void test_tpc_absent_needs_more_than_one_beacon(void) {
+    /* The input review supplied: a --hop run hears ONE beacon from a
+       designated 5 GHz AP, hops away and never returns. The entry
+       survives long enough to clear the wall-clock floor while its
+       regulatory fields were read exactly once, which is "missed it",
+       not "absent". */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    beacon_ap_t *a = add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36,
+                                CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    a->frame_count = 1;
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) < 0);
+
+    /* One short of the floor is still silent, and exactly at it fires —
+       so the constant is pinned rather than just "some number". */
+    a->frame_count = TPC_ABSENT_MIN_BEACONS - 1;
+    alerts_clear();
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) < 0);
+
+    a->frame_count = TPC_ABSENT_MIN_BEACONS;
+    alerts_clear();
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND) >= 0);
+}
+
+static void test_tpc_absent_does_not_claim_an_ssid_match_is_yours(void) {
+    /* The security-relevant half. The gate accepts a BSSID match OR an
+       SSID match, and an SSID is a value an attacker writes into a
+       frame — #89 removed it as proof of ownership. An evil twin
+       beaconing the operator's ESSID from a stripped hostapd produces
+       exactly the no-tag-32/no-tag-35 shape this rule describes, so
+       labelling it "YOUR network" was wrong on the case most worth
+       getting right. It still fires; it no longer asserts ownership. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_ssid("CorpWiFi"));
+    const uint8_t rogue[6] = {0xde,0xad,0xbe,0xef,0x00,0x01};
+    add_reg_ap(&s, "CorpWiFi", rogue, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(s.alerts[i].detail, "YOUR network") == NULL);
+    ASSERT(strstr(s.alerts[i].detail, "SSID only")    != NULL);
+
+    /* And a real BSSID match still says so, so the two cases are
+       distinguishable rather than both hedged. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s2; seed_state(&s2);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    add_reg_ap(&s2, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    alerts_update(&s2);
+    int j = find_alert(&s2, ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    ASSERT(j >= 0);
+    if (j >= 0) ASSERT(strstr(s2.alerts[j].detail, "YOUR network") != NULL);
+}
+
+static void test_tpc_absent_quiet_with_no_first_seen(void) {
+    /* first_seen 0 is "never recorded", not "seen at the epoch" — a
+     * subtraction against it would read as decades of observation. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    beacon_ap_t *a = add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36,
+                                CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    a->first_seen = 0;
+
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), -1);
+    ownership_clear();
+}
+
+static void test_tpc_absent_is_one_alert_per_bssid(void) {
+    /* Two designated APs on one ESS are two devices to reconfigure. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_ssid("CorpWiFi"));
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    add_reg_ap(&s, "CorpWiFi", tpc_bss_b, 44, CH_SRC_DS_PARAM, "Wi-Fi 6", 120);
+
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND), 2);
+    ownership_clear();
+}
+
+static void test_tpc_absent_detail_names_the_country_when_known(void) {
+    /* Whether the AP named a country at all is the operator's next
+     * question, so the detail answers it either way. */
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
+    beacon_ap_t *a = add_reg_ap(&s, "CorpWiFi", tpc_bss_a, 36,
+                                CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    a->reg.country_present = 1;
+    snprintf(a->reg.country, sizeof(a->reg.country), "%s", "DE");
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, "Country element DE") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "absent too") == NULL);
+    }
+
+    alerts_clear();
+    sloth_state_t t; seed_state(&t);
+    add_reg_ap(&t, "CorpWiFi", tpc_bss_a, 36, CH_SRC_DS_PARAM, "Wi-Fi 5", 120);
+    alerts_update(&t);
+    int j = find_alert(&t, ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    ASSERT(j >= 0);
+    if (j >= 0)
+        ASSERT(strstr(t.alerts[j].detail, "Country element absent too") != NULL);
+    ownership_clear();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -8500,4 +8816,21 @@ void run_alerts_tests(void) {
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
     RUN_TEST(test_lifecycle_two_twin_pairs_one_ssid_are_two_incidents);
+
+    TEST_SUITE("alerts: spectrum-management absence on 5 GHz (#101 slice 3)");
+    RUN_TEST(test_tpc_absent_fires_on_designated_5ghz);
+    RUN_TEST(test_tpc_absent_quiet_when_tpc_report_present);
+    RUN_TEST(test_tpc_absent_quiet_when_power_constraint_present);
+    RUN_TEST(test_tpc_absent_quiet_on_24ghz);
+    RUN_TEST(test_tpc_absent_quiet_on_6ghz);
+    RUN_TEST(test_tpc_absent_quiet_on_legacy_phy);
+    RUN_TEST(test_tpc_absent_quiet_on_someone_elses_ap);
+    RUN_TEST(test_tpc_absent_matches_a_designated_ssid_too);
+    RUN_TEST(test_tpc_absent_quiet_without_any_designation);
+    RUN_TEST(test_tpc_absent_needs_the_observation_floor);
+    RUN_TEST(test_tpc_absent_needs_more_than_one_beacon);
+    RUN_TEST(test_tpc_absent_does_not_claim_an_ssid_match_is_yours);
+    RUN_TEST(test_tpc_absent_quiet_with_no_first_seen);
+    RUN_TEST(test_tpc_absent_is_one_alert_per_bssid);
+    RUN_TEST(test_tpc_absent_detail_names_the_country_when_known);
 }

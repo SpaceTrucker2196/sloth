@@ -12,7 +12,7 @@ A terminal-based **passive** network monitor for Linux, written in C99.
 It never injects packets, never scans, never modifies kernel state. It
 reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
 pcap stream, then surfaces what it sees through 35 ncurses views
-(`VIEW_COUNT`), 71 alert rules (one per `ALERT_TYPE_*`), an embedded
+(`VIEW_COUNT`), 72 alert rules (one per `ALERT_TYPE_*`), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 
@@ -109,13 +109,28 @@ Single binary `sloth`. Test binary `sloth_test`.
   its source, in the same change, or the suite goes red and names the
   kind in its output.
 
-  The exception is deliberate and narrow: `alert_technique()` returning
-  `""` marks a rule that reports sloth's own operational state rather
-  than an adversary — `ALERT_TYPE_NO_MONITOR_MODE` is the only one
-  today — and there is no CVE, advisory or clause to cite for one. Those
-  are excluded from the count rather than treated as gaps. If you find
-  yourself wanting that exemption for a real detector, the detector
-  needs a source, not an exemption.
+  The exception is deliberate and narrow, and it has two forms. The
+  first is a rule reporting sloth's **own operational state** rather
+  than an adversary: `ALERT_TYPE_NO_MONITOR_MODE` is still the only one,
+  and there is no CVE, advisory or clause to cite for it, so it is
+  excluded from the coverage count rather than treated as a gap.
+
+  The second arrived with #80 and is **not** the same thing: a finding
+  that has a real, citable basis but no honest *ATT&CK technique*,
+  because what it reports is a posture or an exposure and not an
+  adversary's behaviour. `ALERT_TYPE_OPEN_SETUP_AP` (#80),
+  `ALERT_TYPE_CAM_WS_DISCOVERY` (#106) and
+  `ALERT_TYPE_TPC_ABSENT_HIGH_BAND` (#101) are the three today. These
+  are *not* excused the citation — the rule here is about the source,
+  not the technique, so each is named explicitly in
+  `tests/test_research_corpus.c ::
+  test_uncitable_kinds_with_a_real_basis_are_still_cited`, which asserts
+  both that the technique is empty and that a corpus document cites the
+  kind. A new rule in that position belongs on that list.
+
+  So: if you want the exemption because there is no ATT&CK ID, say which
+  form and add the list entry. If you want it because there is no
+  source, the detector needs a source, not an exemption.
 
   Adding a document: `docs/wiki/research-corpus.md`. One source may back
   several kinds — group by source, not by alert.

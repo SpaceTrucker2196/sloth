@@ -596,6 +596,23 @@ const char *alert_technique(alert_type_t type) {
      * see research/papers/surveillance-vendor-endpoints.md — it is
      * simply not an ATT&CK technique. */
     case ALERT_TYPE_SURV_CLOUD_SNI:         return "";            /* exposure, not adversary technique (#105) */
+    /* Deliberately empty, third in the family OPEN_SETUP_AP (#80) and
+     * CAM_WS_DISCOVERY (#106) opened, and for the same reason: what
+     * fires is a *posture*, not a behaviour. The AP the operator
+     * designated as theirs is advertising no local power ceiling, which
+     * is a departure from IEEE 802.11-2020 §11.8 and nothing more —
+     * nobody transmitted anything at sloth to produce it. T1557.004
+     * (Evil Twin) is the technique the issue lists, and claiming it
+     * here would assert impersonation from a compliance gap: the
+     * overwhelmingly likely cause is a stripped hostapd/OpenWrt build,
+     * not a twin. The basis is cited (IEEE 802.11-2020 §11.8,
+     * §9.4.2.13, §9.4.2.16 — see
+     * research/ieee/802.11-2020-11.8-spectrum-management.md), it is
+     * simply not an ATT&CK technique, and
+     * tests/test_research_corpus.c ::
+     * test_uncitable_kinds_with_a_real_basis_are_still_cited holds the
+     * citation anyway. */
+    case ALERT_TYPE_TPC_ABSENT_HIGH_BAND:   return "";            /* non-compliance, not adversary technique (#101) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -652,6 +669,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     N(ALERT_TYPE_PM_FORGE);
     N(ALERT_TYPE_SURV_CLOUD_SNI);
+    N(ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -1912,6 +1930,129 @@ static void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
                  (mine || exercised) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
                  "WPA_DOWNGRADE", detail, key, NULL, 0, now);
         }
+    }
+}
+
+/* Spectrum-management elements absent on a designated 5 GHz BSS
+ * (#101 slice 3).
+ *
+ * IEEE 802.11-2020 §11.8 is how an AP publishes the power it is allowed
+ * to use: the Country element carries the regulatory maximum, the Power
+ * Constraint element (§9.4.2.13) the local reduction below it, and the
+ * TPC Report element (§9.4.2.16) the power actually in use. In the
+ * 5 GHz plan 802.11h was written for, an AP that sends neither of the
+ * latter two has published no ceiling at all. That is the shape a
+ * stripped build leaves: hostapd with `ieee80211d=0` / `ieee80211h=0`
+ * omits both, and a kit assembled that way keeps the 20 dBm default
+ * whatever the local cap is.
+ *
+ * Scoped to a designated BSS (--my-bssid / --my-ssid), which is how the
+ * issue scopes it. Ungated it fires on every third-party 5 GHz AP in RF
+ * range — where sloth has no standing to call a posture wrong and the
+ * operator has nothing to fix. WARN and never CRIT: the finding is the
+ * operator's own equipment being misconfigured, not an attack on them.
+ *
+ * Three suppressions, each for a different reason:
+ *
+ *  - 2.4 GHz, where §11.8 does not apply at all.
+ *
+ *  - 6 GHz, where the element that carries the power limit is the
+ *    Transmit Power Envelope (tag 195), not either of these two. sloth
+ *    does not parse tag 195, so the absence of 32 and 35 there is the
+ *    wrong element being missing and not a finding. ap_band_label() is
+ *    what separates 5 from 6: the channel numbers overlap outright, and
+ *    only channel_source settles it (#66, #91).
+ *
+ *  - phy "legacy", the exemption the issue itself asks for. Pre-802.11h
+ *    802.11a gear predates the requirement, so its silence is not
+ *    evidence of anything.
+ *
+ * Absence is read from the retained envelope, which reg_ie_merge()
+ * never clears (include/reg_ie.h). That stickiness is what this rule
+ * needs rather than something it works around: a *_present flag set by
+ * any beacon ever heard from this BSSID stays set, so "absent" means
+ * "no beacon from this BSSID has ever carried one" and not "the last
+ * one did not". The observation floor is the other half of the same
+ * guard - see TPC_ABSENT_MIN_OBSERVED_S.
+ *
+ * What this does NOT do: it makes no claim about whether the power the
+ * AP uses is legal where it stands, and none about whether the country
+ * it names is the one it is in. Both need the regulatory table, which
+ * is a later slice and gated on an owner decision about how a
+ * compiled-in claim about law is framed. It also does not read the
+ * Spectrum Management bit in Capability Information (§9.4.1.4), which
+ * would turn this from "no ceiling published" into "the AP said it does
+ * spectrum management and then did not" - sloth does not retain the
+ * capability field, so that corroborator is unavailable today.
+ */
+static void rule_tpc_absent_high_band(const sloth_state_t *s, time_t now) {
+    if (!ownership_any()) return;      /* nothing designated - inert */
+
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+
+        if (!ownership_is_my_bssid(a->bssid) &&
+            !ownership_is_my_ssid(a->ssid)) continue;
+
+        if (strcmp(ap_band_label(a->channel, a->channel_source),
+                   "5 GHz") != 0) continue;
+        if (strcmp(a->phy, "legacy") == 0) continue;
+
+        /* An observation floor has to count OBSERVATIONS. Wall-clock age
+         * alone is satisfied by one beacon plus sixty seconds of hearing
+         * nothing: on a --hop run sloth can take a single beacon from a
+         * designated 5 GHz AP, hop away, never return, and then fire on
+         * an entry whose regulatory fields were read exactly once —
+         * which is the false positive this floor is documented to
+         * prevent. Review supplied that input. So both: enough time AND
+         * enough beacons, the second read from a->frame_count, which
+         * src/beacon_snoop.c increments per beacon. */
+        if (!a->first_seen ||
+            now - a->first_seen < TPC_ABSENT_MIN_OBSERVED_S) continue;
+        if (a->frame_count < TPC_ABSENT_MIN_BEACONS) continue;
+
+        if (a->reg.power_constraint_present || a->reg.tpc_present) continue;
+
+        char bss[20];
+        mac_to_str(a->bssid, bss, sizeof(bss));
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        /* Per BSSID, not per SSID: two designated APs on one ESS are two
+         * devices to reconfigure, and one key would hide whichever the
+         * operator did not read. */
+        snprintf(key, sizeof(key), "tpcabsent:%.17s", bss);
+        /* "YOUR network" only when the BSSID matched.
+         *
+         * The gate above accepts a BSSID match OR an SSID match, and an
+         * SSID is a value an attacker writes into a frame — #89 removed
+         * it as proof of ownership for exactly this reason. Printed
+         * unconditionally, as this shipped, an evil twin beaconing the
+         * operator's ESSID from a stripped hostapd gets labelled their
+         * own equipment. That population is what the evil-twin rules
+         * exist to flag, and the no-tag-32/no-tag-35 shape is this
+         * rule's own description of a rogue kit, so the label was
+         * actively wrong on the case most worth getting right.
+         *
+         * An SSID-only match says so instead, and says what it rests
+         * on. The rule still fires — the operator may genuinely have an
+         * AP sloth has no BSSID for — but the detail no longer asserts
+         * ownership the evidence does not carry. */
+        const int bssid_known = ownership_is_my_bssid(a->bssid);
+        snprintf(detail, sizeof(detail),
+                 "%.17s \"%.20s\" ch%d: no Power Constraint (32) and no "
+                 "TPC Report (35) in %lds observed over %u beacons - "
+                 "Country element %s%s",
+                 bss, a->ssid[0] ? a->ssid : "<hidden>", a->channel,
+                 (long)(now - a->first_seen),
+                 (unsigned)a->frame_count,
+                 a->reg.country_present ? a->reg.country : "absent too",
+                 bssid_known
+                     ? " - YOUR network"
+                     : " - matched on SSID only, so this BSSID is not"
+                       " confirmed yours");
+        fire(ALERT_TYPE_TPC_ABSENT_HIGH_BAND, ALERT_SEV_WARN,
+             "TPC_ABSENT", detail, key, NULL, 0, now);
     }
 }
 
@@ -4682,6 +4823,7 @@ void alerts_update(sloth_state_t *s) {
     rule_assoc_flood(s, now);
     rule_btm_abuse(s, now);
     rule_wpa_downgrade(s, now);
+    rule_tpc_absent_high_band(s, now);
     rule_csa_abuse(s, now);
     rule_rrm_survey_abuse(s, now);
     rule_rts_flood(s, now);

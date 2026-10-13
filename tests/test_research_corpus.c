@@ -273,6 +273,12 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
         "ALERT_TYPE_OPEN_SETUP_AP",
         "ALERT_TYPE_CAM_WS_DISCOVERY",
         "ALERT_TYPE_SURV_CLOUD_SNI",
+        /* #101 slice 3. A designated AP publishing no local power
+         * ceiling is a departure from IEEE 802.11-2020 §11.8 and
+         * nothing more — no adversary transmitted anything to produce
+         * it, so there is no honest technique, but §11.8 / §9.4.2.13 /
+         * §9.4.2.16 are exactly what it detects from. */
+        "ALERT_TYPE_TPC_ABSENT_HIGH_BAND",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

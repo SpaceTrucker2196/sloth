@@ -803,6 +803,7 @@ typedef enum {
     ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
     ALERT_TYPE_PM_FORGE,            /* PM=1 Null while the same MAC keeps transmitting PM=0 data — Framing Frames, CVE-2022-47522 (#107 shape A) */
     ALERT_TYPE_SURV_CLOUD_SNI,      /* TLS SNI on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
+    ALERT_TYPE_TPC_ABSENT_HIGH_BAND, /* designated 5 GHz BSS advertising neither Power Constraint nor TPC Report — IEEE 802.11-2020 §11.8 (#101 slice 3) */
     ALERT_TYPE_COUNT,
 } alert_type_t;
 
@@ -2186,6 +2187,22 @@ typedef enum {
  * reported. A single beacon caught while channel-hopping is a sample,
  * not a configuration, and firing on it would make --hop noisy. */
 #define WPA_DOWNGRADE_MIN_OBSERVED_S 30
+
+/* The same floor, longer, for the one finding whose evidence is an
+ * *absence* (#101 slice 3). A posture report reads elements that are
+ * there; rule_tpc_absent_high_band() reports elements that are not, and
+ * a missing element is also what a radio that was listening elsewhere
+ * produces. Thirty seconds of a hopping dwell can be two beacons; sixty
+ * buys enough visits that silence is the AP's and not the receiver's. */
+#define TPC_ABSENT_MIN_OBSERVED_S 60
+/* ...and enough beacons to have actually read the elements that many
+ * times. Age alone is not observation: a --hop run can hear ONE beacon
+ * from a designated AP, hop away, never return, and satisfy a 60-second
+ * floor on an entry whose regulatory fields were read exactly once.
+ * Three is the smallest count that distinguishes "absent" from "missed
+ * once", and a 5 GHz AP on its default 100 TU interval emits it in
+ * roughly 300 ms, so this costs a correct finding nothing. */
+#define TPC_ABSENT_MIN_BEACONS 3
 
 /* ── BSS Transition Management steering (#59) ──────────────
  *

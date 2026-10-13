@@ -10,7 +10,7 @@ type: project
 
 **Sources**: `docs/views/pnl.md`, `docs/views/eapol.md`, `docs/views/seqnum.md`, `docs/views/assoc.md`, `docs/views/probe.md`, `docs/views/beacons.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-13.
 
 ---
 
@@ -125,7 +125,7 @@ reconfigures an adapter it did not create.
 > live N-thread capture path is hardware-gated like the nl80211
 > channel-set path.
 
-## Regulatory elements (issue #101, slices 1-2)
+## Regulatory elements (issue #101, slices 1-3)
 
 `src/reg_ie.c` parses the three elements that carry the regulatory
 envelope an AP *claims* to operate in. Until #101 sloth read none of
@@ -211,12 +211,14 @@ saturating rather than wrapping — the same relation `beacon_ap_t`'s
 embeds the type, so every translation unit that sees `sloth.h` must
 see it too — including the ones built without `-Isrc`.
 
-**Still inert past storage.** No regulatory table, no channel-legality
-decision, no alert type, no view, no JSONL field, no SQLite column.
+**Still mostly inert past storage.** No regulatory table, no
+channel-legality decision, no view, no JSONL field, no SQLite column.
 Reading a claim is not the same as judging it, and the judging half
 needs a versioned regulatory table that these halves must not pre-empt.
-The nl80211 managed-mode path still passes no envelope onward:
-`wifi_ap_t` has no field for it, the same way it has no `neighbors[]`.
+Slice 3 below is the one exception, and it is deliberately the cheapest
+one: the single finding that needs no table at all. The nl80211
+managed-mode path still passes no envelope onward: `wifi_ap_t` has no
+field for it, the same way it has no `neighbors[]`.
 
 Malformed elements are counted (`malformed_country`,
 `malformed_power_constraint`, `malformed_tpc`) in the same spirit as
@@ -232,6 +234,62 @@ clause by clause; `tests/test_beacon_snoop.c` covers retention
 elements storing nothing, no stale triplet tail, no envelope surviving
 slot reuse) by driving whole frames through
 `beacon_parse` → `beacon_record` → `beacon_snapshot`.
+
+### The first finding drawn from it (slice 3)
+
+`ALERT_TYPE_TPC_ABSENT_HIGH_BAND` is the one rule of the five #101
+specifies that needs neither the regulatory table nor a path-loss model
+nor a new field on `beacon_ap_t`. It reads two flags the retained
+envelope already holds and nothing else.
+
+It fires WARN when a BSS the operator **designated** (`--my-bssid` /
+`--my-ssid`) and which is operating in **5 GHz** has, across every
+beacon ever heard from it, advertised neither a Power Constraint element
+(tag 32) nor a TPC Report element (tag 35). IEEE 802.11-2020 §11.8 makes
+those two the mechanism by which an AP publishes a local transmit-power
+ceiling, so an AP sending neither has published no ceiling at all — the
+shape a build with the feature switched off leaves behind (hostapd
+`ieee80211d=0` / `ieee80211h=0`, stripped OpenWrt images), which keeps
+its default 20 dBm wherever the device is carried.
+
+Four things it deliberately is not:
+
+- **Not an accusation.** It reports non-compliance, so
+  `alert_technique()` returns `""` — the third rule in that family after
+  `OPEN_SETUP_AP` (#80) and `CAM_WS_DISCOVERY` (#106). T1557.004, the
+  technique #101 proposed, would assert impersonation from a
+  configuration gap. The basis is still cited and still enforced:
+  `research/ieee/802.11-2020-11.8-spectrum-management.md`, held by
+  `tests/test_research_corpus.c`.
+- **Not about anyone else's AP.** Ungated it would fire on every
+  third-party 5 GHz AP in RF range, where sloth has no standing to call
+  a posture wrong and the operator has nothing to fix. The issue scopes
+  it to a designated network and so does the rule.
+- **Not a 6 GHz rule.** In 6 GHz the power limit rides the Transmit
+  Power Envelope element (tag 195), which sloth does not parse, so the
+  absence of 32 and 35 there is the wrong element missing. The band
+  comes from `ap_band_label()` and `channel_source` (#66, #91), never
+  from the channel number — 5 and 6 GHz numbers overlap outright.
+- **Not a judgement about legality.** Whether the power actually in use
+  is legal where the AP stands, and whether the country it names is the
+  right one, both still need the regulatory table.
+
+The sticky envelope turns out to be exactly right for this rule rather
+than something it has to work around: a `*_present` flag set by any
+beacon at any point stays set, so "absent" means "no beacon from this
+BSSID has ever carried one" and not "the last one did not". The
+observation floor (`TPC_ABSENT_MIN_OBSERVED_S`, 60 s) is the other half
+— longer than the 30 s posture debounce, because a missing element is
+also what a radio that was listening elsewhere produces. `phy ==
+"legacy"` is suppressed: 802.11a predates 802.11h-2003.
+
+One corroborator that would strengthen this is unavailable today. The
+Spectrum Management bit in Capability Information (§9.4.1.4) would turn
+"no ceiling published" into "the AP said it does spectrum management and
+then did not", but sloth retains no capability field, so the bit is not
+readable from `beacon_ap_t`.
+
+Full row: `docs/views/alerts.md`.
 
 ## Related pages
 

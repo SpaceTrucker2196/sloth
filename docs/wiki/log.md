@@ -2315,3 +2315,39 @@ IDs rather than the first, and what is still unwired.
   its final name, contrary to the promise in `evidence_export.h`.
 - No new `ALERT_TYPE_*`, so no `research/` citation and no rule-count
   change; `alerts.md` and the count gates are untouched.
+## 2026-10-13 — `TPC_ABSENT_HIGH_BAND`: the regulatory envelope stops being inert (#101 slice 3)
+
+**Updated**: [wifi-sigint.md](wifi-sigint.md) — the "Regulatory elements"
+section is now slices 1-3, its "Still inert past storage" paragraph is
+corrected (it claimed no alert type, which is no longer true), and a new
+"The first finding drawn from it (slice 3)" subsection states the rule,
+its four deliberate scope limits and the one corroborator that is not
+available yet.
+
+New `ALERT_TYPE_TPC_ABSENT_HIGH_BAND` (WARN, alert count 70 → 71), the
+first rule to read the per-BSSID regulatory envelope slices 1-2
+retained. It fires when a BSS the operator designated (`--my-bssid` /
+`--my-ssid`), operating in 5 GHz, has advertised neither a Power
+Constraint element (tag 32) nor a TPC Report element (tag 35) in any
+beacon heard from it — IEEE 802.11-2020 §11.8 makes those two how an AP
+publishes a local transmit-power ceiling, so an AP sending neither has
+published none. Cited in
+`research/ieee/802.11-2020-11.8-spectrum-management.md`.
+
+`alert_technique()` returns `""`, the third rule in that position after
+`OPEN_SETUP_AP` (#80) and `CAM_WS_DISCOVERY` (#106): this reports
+non-compliance by the operator's own equipment, and T1557.004 — the
+technique #101 proposed — would assert impersonation from a
+configuration gap whose likeliest cause is a stripped hostapd build.
+`agents/AGENTS.md` had described that `""` exemption as covering
+`NO_MONITOR_MODE` alone, which has been false since #80; the sentence
+now names both forms and the three kinds in the second one.
+
+Chosen as the slice because it is the only one of #101's five rules that
+needs neither the regulatory table (owner question 3, still open) nor a
+path-loss model (owner question 2, still open) nor a new field on
+`beacon_ap_t`. 6 GHz is excluded on purpose: there the power limit rides
+the Transmit Power Envelope element (tag 195), which sloth does not
+parse, so the absence of 32/35 would be the wrong element missing.
+
+---
