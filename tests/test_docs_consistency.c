@@ -84,6 +84,20 @@ static int all_digits(const char *w) {
     return 1;
 }
 
+/* True when the digit run ending at `end` is a markdown ordered-list
+ * marker: nothing but spaces back to the line start, and a '.' or ')'
+ * followed by whitespace after it. "5. Views read from ..." is item
+ * five, not five views. */
+static int is_list_marker(const char *text, const char *ws, const char *end) {
+    const char *b = ws;
+    while (b > text && b[-1] != '\n') {
+        if (b[-1] != ' ' && b[-1] != '\t') return 0;
+        b--;
+    }
+    if (*end != '.' && *end != ')') return 0;
+    return end[1] == ' ' || end[1] == '\t' || end[1] == '\n' || end[1] == '\0';
+}
+
 /* Adjectives the docs put between a count and its noun. Kept closed so
  * "6 with named types" or "1 set type" is never read as a claim. */
 static int is_count_adjective(const char *w) {
@@ -101,6 +115,13 @@ static void scan_counts(const char *text, dc_claims_t *c) {
          * not a count: "1.8.2 views" never occurs, "10.0.0.5" often does. */
         if (*p == '.' && isdigit((unsigned char)p[1])) continue;
         if (ws > text && ws[-1] == '.') continue;
+        /* A markdown ordered-list marker is a position, not a quantity.
+         * The recipes in agents/ are numbered lists, so "5. Views read
+         * from `sloth_state_t`" reads as "5 views" under the rule above
+         * and fails against VIEW_COUNT — a false alarm about a sentence
+         * that claims nothing. Prose counts never start a line with the
+         * number, so requiring non-list context costs no real claim. */
+        if (is_list_marker(text, ws, p)) continue;
         int n = atoi(w);
         const char *q = p;
         for (int hop = 0; hop < 4; hop++) {
@@ -220,6 +241,30 @@ static void test_scanner_ignores_non_claims(void) {
     ASSERT_EQ(c.n_rules, 0);
 }
 
+static void test_scanner_ignores_ordered_list_markers(void) {
+    dc_claims_t c;
+    /* Shape taken from agents/FACTORY.md's add-a-platform-backend
+       recipe, which is where this false alarm came from. */
+    scan_all("4. Write the test that drives the new fake.\n"
+             "5. Views read from `sloth_state_t`.\n"
+             "6) Rules live in src/alerts.c\n", &c);
+    ASSERT_EQ(c.n_views, 0);
+    ASSERT_EQ(c.n_rules, 0);
+    /* An indented list item is still a list item. */
+    scan_all("   5. Views read from state\n", &c);
+    ASSERT_EQ(c.n_views, 0);
+    /* But a real claim that merely happens to start a line still
+       counts — the exclusion keys on the '. ' or ') ', not on column
+       zero, so dropping that detail would silently blind the gate. */
+    scan_all("35 views are rendered\n", &c);
+    ASSERT_EQ(c.n_views, 1);
+    ASSERT_EQ(c.views[0], 35);
+    /* And mid-sentence prose is untouched. */
+    scan_all("renders 35 views and 70 alert rules", &c);
+    ASSERT_EQ(c.n_views, 1);
+    ASSERT_EQ(c.n_rules, 1);
+}
+
 static void test_scanner_versions_exclude_addresses(void) {
     dc_claims_t c;
     scan_all("tag `v1.8.0`, src 10.0.0.5, License 1.0, 127.0.0.0/8, "
@@ -289,6 +334,62 @@ static void test_wiki_counts_match_build(void) {
     /* The walk actually found pages: a wrong relative path would
        otherwise pass this test by checking nothing at all. */
     ASSERT_GE(pages, 40);
+    ASSERT_GE(with_claims, 1);
+}
+
+/* agents/ states the same counts, and until now nothing checked it
+ * either — README and docs/wiki were gated above while the files that
+ * steer every agent were left to diligence. That is the wrong way
+ * round: risk_score.sh weights any diff under agents/ at +40 precisely
+ * because a wrong line there propagates into work, so those files
+ * deserve at least the gate the public docs get.
+ *
+ * The gap was not hypothetical. On 2026-10-13 agents/AGENTS.md,
+ * agents/FACTORY.md and agents/dark-factory.md each carried "9304
+ * assertions" against a real 14143 — three thousand stale, in the same
+ * file that tells readers an assertion count is measured and never
+ * recalled. Those three were deleted rather than refreshed, for the
+ * reason given above test_wiki_counts_match_build: the number tells a
+ * reader nothing actionable and is wrong within a week. The view and
+ * rule counts are different — they are the shape of the program and an
+ * agent plans against them — so they stay, and this pins them.
+ *
+ * Versions are deliberately NOT checked here, unlike README and
+ * SECURITY.md. agents/FACTORY.md is a build runbook, so most versions
+ * in it belong to other people's software — `Cppcheck 2.13.0` is the
+ * pinned CI analyser, and check_no_future_version read it as sloth
+ * 2.13.0 and failed. The scanner cannot tell whose version a
+ * three-component number is, and teaching it to would mean a list of
+ * third-party tool names that rots. That check earns its place where
+ * every version named IS sloth's; here it would only cry wolf. */
+static void test_agent_docs_counts_match_build(void) {
+    const char *dir = "agents";
+    DIR *d = opendir(dir);
+    ASSERT(d != NULL);
+    if (!d) return;
+    int pages = 0, with_claims = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 4 || strcmp(e->d_name + nl - 3, ".md") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%.200s", dir, e->d_name);
+        char *t = slurp(path);
+        if (!t) continue;
+        pages++;
+        dc_claims_t c;
+        scan_all(t, &c);
+        if (c.n_views || c.n_rules) with_claims++;
+        check_counts(path, &c);
+        free(t);
+    }
+    closedir(d);
+    /* Four .md files live there today (AGENTS, FACTORY, dark-factory,
+       converge). A wrong path would otherwise check nothing and pass. */
+    ASSERT_GE(pages, 4);
+    /* And at least one really does state a count — without this the
+       test would still pass if the claims were silently dropped, which
+       is half the drift it exists to catch. */
     ASSERT_GE(with_claims, 1);
 }
 
@@ -1043,9 +1144,11 @@ void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
     RUN_TEST(test_scanner_ignores_non_claims);
+    RUN_TEST(test_scanner_ignores_ordered_list_markers);
     RUN_TEST(test_scanner_versions_exclude_addresses);
     RUN_TEST(test_readme_counts_match_build);
     RUN_TEST(test_wiki_counts_match_build);
+    RUN_TEST(test_agent_docs_counts_match_build);
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);
