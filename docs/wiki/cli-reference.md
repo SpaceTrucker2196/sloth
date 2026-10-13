@@ -16,7 +16,7 @@ is a bug ([[docs-drift-judge]], and the wiki-sync duty in `agents/AGENTS.md`).
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
 `src/view_labels.c`, `include/sloth.h`.
 
-**Last updated**: 2026-10-01.
+**Last updated**: 2026-10-13.
 
 ---
 
@@ -122,7 +122,7 @@ would be measuring something the protocol does not do.
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--snapshot-out` | `FILE` | off | On exit, write a passive AP-inventory snapshot (BSSID/SSID/security/channel/vendor) for repeat site assessments. Normalised text, no pcap. → [[posture-report]] |
+| `--snapshot-out` | `FILE` | off | On exit, write a passive AP-inventory snapshot (BSSID/SSID/security/channel/vendor) for repeat site assessments. Normalised text, no pcap. Created `0600`; an existing file must be private, owned by you, not a symlink — one that is not is refused and left unchanged. → [[posture-report]] |
 | `--baseline-in` | `FILE` | off | On exit, diff the current AP inventory against a prior `--snapshot-out` (new/gone/changed APs). |
 | `--site-label` | `TEXT` | off | Operator label stamped into `--snapshot-out`. Distinct from `--site`. |
 | `--with-research` | `research.db` | off | Load the research corpus so `--report` cites the source behind each fired alert. Additive: unreadable corpus warns and continues. → [[research-corpus]] |

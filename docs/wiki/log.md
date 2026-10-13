@@ -1997,3 +1997,56 @@ Known, accepted gap left for a later slice: `channel_summary_t` is
 still keyed by channel number alone, so a 5 GHz and a 6 GHz AP sharing
 a number are still one row, not two — correctly labelled now, but still
 one row's worth of `ap_count`/`Top SSID` for two different frequencies.
+
+## 2026-10-13 — #87: --snapshot-out routed through the private-file helper
+
+**Source**: issue #87 — `--snapshot-out` was the one created artifact
+still written with a plain `fopen(path, "w")`: mode `0666 & ~umask`
+(0644 under the usual 022), a symlink at the final component followed,
+whatever already sat at the path neither validated nor left alone. Its
+eight `fprintf`s and its `fclose` were unchecked and the function
+returned 0 unconditionally, so `src/main.c` announced a truncated or
+failed write as "site snapshot -> FILE". This is what retires the
+"ignores write errors after open" limit recorded in the 2026-09-26
+#87 entry above.
+
+`src/wifi_snapshot.c` now opens through `sfile_fopen(AT_FDCWD, path,
+SFILE_TRUNC, …)` — the same treatment `--report` already gets, because
+a snapshot is an inventory of every AP in range with its security
+posture. `SFILE_TRUNC` validates before it truncates, so a refused file
+is left byte-for-byte intact. `sfile_fclose` folds in `ferror`, the
+flush and the close, which is why the individual `fprintf`s stay
+unchecked. A new `wifi_snapshot_error()` accessor carries the reason to
+the caller, copying `jsonl`'s shape; no mutex, since the snapshot is
+written once at shutdown on the main thread. `EXCL` was deliberately
+not used: re-pointing `--snapshot-out` at last visit's file is the
+documented repeat-survey workflow.
+
+**Updated pages**:
+
+- `docs/wiki/retention.md` — §4.1 table row for `--snapshot-out`
+  rewritten to the real behaviour (0600, validated then truncated,
+  snapshot skipped and the old file left as it was); the §4.1 preamble
+  clause claiming one export bypasses the checks removed; the §6
+  known-gap bullet deleted; "as of 1.8.2" and **Last updated** brought
+  to 1.8.4.
+- `docs/wiki/cli-reference.md` — the `--snapshot-out` row now states the
+  on-disk contract, in the same words as the `-o` row, because the
+  flag's behaviour on an existing file changed.
+
+**Notes**:
+
+- **User-visible on upgrade.** A `site-a.txt` written 0644 by an earlier
+  sloth is now refused and left alone until the operator `chmod 600`s
+  it — the same migration step c588ba9 imposed for `--db` and
+  `--report`. Belongs in release notes.
+- **Scope.** `wifi_snapshot_diff()` is untouched: a baseline the
+  operator names is read, not created, and cd4d4c0 scoped #87's fix
+  list to created artifacts. The §4 retention column is untouched —
+  `--snapshot-out` still has no retention; permissions and retention
+  are different axes.
+- **Still open on #87, owner-only.** Q3, whether a group mode should
+  exist for these artifacts (retention.md §4.1 still answers it with
+  "nothing here answers it", deliberately), and the f8fd5e8 decision-4
+  gap: retention for material left by a run that is no longer
+  collecting.

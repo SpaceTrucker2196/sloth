@@ -22,7 +22,7 @@ pcap and report artifacts still have no retention at all.
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
 
-**Last updated**: 2026-10-01 (sloth 1.8.2).
+**Last updated**: 2026-10-13 (sloth 1.8.4).
 
 ---
 
@@ -257,7 +257,7 @@ artifacts the operator asked for by name.
 ### 4.1 File permissions on those artifacts (current behaviour)
 
 Retention does not bound these files; their permissions at creation are
-enforced. This subsection describes what the code does as of 1.8.2
+enforced. This subsection describes what the code does as of 1.8.4
 (`src/secure_file.c`, #87). It records behaviour, not a policy.
 
 - **Created private, independent of the umask.** Files are opened with
@@ -275,7 +275,7 @@ enforced. This subsection describes what the code does as of 1.8.2
 - **An existing path is refused, not repaired — for append and truncate
   targets and for directories.** That covers `--eapol-dir` and
   `--pcap-dir`, `DIR/eapol.22000`, `-o FILE`, `--db FILE` and its side
-  files, `--report` and `--report-json`. sloth refuses such a path, with
+  files, `--report`, `--report-json` and `--snapshot-out`. sloth refuses such a path, with
   a reason on stderr, when it is the wrong type, is owned by a uid other
   than sloth's effective uid, has any group or other permission bit
   (`mode & 077`), is a file with more than one hard link, or is a
@@ -295,9 +295,7 @@ enforced. This subsection describes what the code does as of 1.8.2
 - **No group mode exists for the artifacts in the table below.** No
   flag or setting makes sloth create one of them group-readable or
   accept a group-accessible existing one. Whether a group mode should
-  exist is an open question on #87; nothing here answers it. The table
-  also lists one export that does not go through these checks at all
-  (`--snapshot-out`).
+  exist is an open question on #87; nothing here answers it.
 
 | Artifact | Created as | Write | If refused |
 |----------|------------|-------|------------|
@@ -310,7 +308,7 @@ enforced. This subsection describes what the code does as of 1.8.2
 | `--db FILE` | 0600, created before SQLite opens it (`SQLITE_OPEN_NOFOLLOW` where available) | SQLite | startup stops |
 | `FILE-wal`, `FILE-shm`, `FILE-journal` | by SQLite, mode copied from the main file | SQLite | an existing one failing the checks stops startup |
 | `--report`, `--report-json` | 0600 | validated, then truncated and rewritten | report skipped; the old file is left as it was |
-| `--snapshot-out FILE` | **not covered** — plain `fopen(path, "w")`: mode is `0666 & ~umask` (0644 under the usual 022, so group- and world-readable), follows a symlink, existing file not validated | truncated and rewritten | write fails with one stderr line |
+| `--snapshot-out FILE` | 0600 | validated, then truncated and rewritten | snapshot skipped; the old file is left as it was |
 
 Detail for the EAPOL export, including the refusal message, is in
 [`docs/views/eapol.md`](../views/eapol.md#export-handling-87).
@@ -352,9 +350,6 @@ Recorded here rather than implied away:
 - **`eapol.22000` expires whole-file, not per line.** The format carries
   no per-line timestamp, so a file still being appended to keeps lines
   older than the window (§2c).
-- **`--snapshot-out` bypasses the #87 file checks.** It is written with
-  plain `fopen`, so its mode follows the umask and a symlink at the path
-  is followed (§4.1). Not fixed as of 1.8.2; a #87 follow-up.
 
 ## Related pages
 

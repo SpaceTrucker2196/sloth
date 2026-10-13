@@ -1,6 +1,14 @@
 #include "wifi_snapshot.h"
+#include "secure_file.h"
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+
+/* No mutex, unlike jsonl's: the snapshot is written once at shutdown
+ * on the main thread, so nothing races the reason buffer. */
+static sfile_fail_t g_fail;
+
+const char *wifi_snapshot_error(void) { return g_fail.last; }
 
 /* One field-safe copy: replace tab/newline with space so the TSV round-trips. */
 static void safe_field(const char *in, char *out, int sz) {
@@ -18,8 +26,21 @@ static void bssid_str(const uint8_t *b, char *out, int sz) {
 
 int wifi_snapshot_write(const sloth_state_t *s, const char *path,
                         const char *label, long now) {
+    /* Reset BEFORE the argument guard, not after: wifi_snapshot_error()
+     * is read by src/main.c on any -1, and returning early left it
+     * holding the previous call's reason — or "" on the first call,
+     * which reads as "failed for no reason". */
+    sfile_fail_reset(&g_fail);
     if (!s || !path) return -1;
-    FILE *f = fopen(path, "w");
+    /* A snapshot names every AP in range with its security posture, so
+     * it gets the same treatment as --report: created 0600, an existing
+     * file validated BEFORE it is truncated, so a refused one is left
+     * byte-for-byte intact (#87). TRUNC rather than EXCL because
+     * re-pointing --snapshot-out at last visit's file is the documented
+     * repeat-survey workflow. stderr is left to the caller, which
+     * already prints one line per outcome. */
+    FILE *f = sfile_fopen(AT_FDCWD, path, SFILE_TRUNC,
+                          g_fail.last, sizeof(g_fail.last));
     if (!f) return -1;
 
     fprintf(f, "# sloth-snapshot v1\n");
@@ -39,8 +60,13 @@ int wifi_snapshot_write(const sloth_state_t *s, const char *path,
         fprintf(f, "%s\t%s\t%s\t%d\t%s\t%d\t%s\n",
                 bss, ssid, enc, a->channel, akm, a->mfp, vendor);
     }
-    fclose(f);
-    return 0;
+    /* sfile_fclose folds in ferror, the flush and the close, so a
+     * failure anywhere in the fprintf run above surfaces here — which
+     * is why the individual writes stay unchecked. Before this the
+     * return was an unconditional 0, and a truncated file was announced
+     * to the operator as written. */
+    return sfile_fclose(f, path, g_fail.last, sizeof(g_fail.last)) == 0
+           ? 0 : -1;
 }
 
 /* Parsed baseline AP — only the fields we diff on. */

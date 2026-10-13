@@ -1461,13 +1461,18 @@ int main(int argc, char **argv) {
         else
             fprintf(stderr, "sloth: %d change(s) vs baseline %s\n", d, baseline_in);
     }
+    /* The snapshot is an AP target list: written 0600, an existing file
+     * validated before truncation, and a refusal reported with the
+     * reason rather than announced as written (#87). The reason already
+     * carries the path, so it is not printed twice. */
     if (snapshot_out) {
         if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
                                 (long)time(NULL)) == 0)
             fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
                     snapshot_out, g_state.beacon_count);
         else
-            fprintf(stderr, "sloth: could not write snapshot %s\n", snapshot_out);
+            fprintf(stderr, "sloth: could not write snapshot %s\n",
+                    wifi_snapshot_error());
     }
 
     dns_cleanup();

@@ -31,7 +31,8 @@
  *            appended to.
  *   EXCL   : a fresh artifact that must not already exist (temp files,
  *            timestamped pcaps). Fails with EEXIST if present.
- *   TRUNC  : a whole-file rewrite at an operator path (--report).
+ *   TRUNC  : a whole-file rewrite at an operator path (--report,
+ *             --report-json, --snapshot-out).
  *            Validated BEFORE truncation, so a refused file is left
  *            intact. */
 typedef enum { SFILE_APPEND, SFILE_EXCL, SFILE_TRUNC } sfile_mode_t;
