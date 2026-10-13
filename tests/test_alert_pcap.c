@@ -10,6 +10,7 @@
 #include "sloth.h"
 #include "alerts.h"
 #include "alert_pcap.h"
+#include "tune.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -392,6 +393,85 @@ static void test_dump_records_path_on_success(void) {
     ap87_cleanup();
 }
 
+
+/* ── Storage floors (#96) ─────────────────────────────────────────
+ *
+ * --pcap-dir is the only operator-named sink with no cap and no sweep,
+ * and on the owner's monitor host it had grown to 15.9M files holding
+ * ~93% of the filesystem's inodes while disk sat at 39% used. The
+ * floors are the refusal; these are the cases that matter about them.
+ *
+ * The floors are set absurdly high rather than by filling a disk: the
+ * real margin belongs to whatever host this runs on, and a test that
+ * depended on it would pass or fail by accident. */
+
+static void test_dump_refuses_below_the_inode_floor(void) {
+    ensure_tmp_dir();
+    tune_reset();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_packet(&s, "192.168.1.5", "203.0.113.7", 33445, 443, 1700000000);
+    alert_t a; memset(&a, 0, sizeof(a));
+    snprintf(a.title,    sizeof(a.title),    "THREAT_IP");
+    snprintf(a.match_ip, sizeof(a.match_ip), "203.0.113.7");
+
+    int before = alert_pcap_failures();
+    /* A floor no filesystem can satisfy. The inode floor specifically,
+       because it is the one the measured failure needed — a byte floor
+       would have let that host write until the inodes ran out. */
+    char terr[256];
+    ASSERT_EQ(tune_set("storage.min_free_inodes=99000000", terr, sizeof(terr)), 0);
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, sizeof(path)), -1);
+    /* Counted through the same sfile_fail path every other write
+       failure uses, so the operator sees it in storage_failures and on
+       the !persist badge with no new reporting path. */
+    ASSERT_EQ(alert_pcap_failures(), before + 1);
+    /* And the reason says inodes, not bytes — the whole point, since an
+       operator reading `df -h` concludes the sensor is healthy. */
+    ASSERT(strstr(alert_pcap_error(), "inode") != NULL);
+    tune_reset();
+}
+
+static void test_dump_writes_when_the_floor_is_satisfiable(void) {
+    ensure_tmp_dir();
+    tune_reset();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_packet(&s, "192.168.1.5", "203.0.113.7", 33445, 443, 1700000000);
+    alert_t a; memset(&a, 0, sizeof(a));
+    snprintf(a.title,    sizeof(a.title),    "THREAT_IP");
+    snprintf(a.match_ip, sizeof(a.match_ip), "203.0.113.7");
+
+    /* Floors set, but to values any host running this suite meets. This
+       is the assertion that the guard is a floor and not a switch — the
+       refusal above would also pass if the guard refused everything. */
+    char terr[256];
+    ASSERT_EQ(tune_set("storage.min_free_mb=1", terr, sizeof(terr)), 0);
+    ASSERT_EQ(tune_set("storage.min_free_inodes=1", terr, sizeof(terr)), 0);
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, sizeof(path)), 1);
+    ASSERT(file_exists(path));
+    tune_reset();
+}
+
+static void test_dump_unaffected_by_default(void) {
+    ensure_tmp_dir();
+    tune_reset();
+    /* Both floors default to 0, so an existing deployment inherits no
+       behaviour change on upgrade. Asserted here rather than only in
+       test_fs_capacity.c, because the default that matters is the one
+       this call site reads. */
+    ASSERT_EQ((long long)tune_val(TUNE_STORAGE_MIN_FREE_MB), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_STORAGE_MIN_FREE_INODES), 0);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_packet(&s, "192.168.1.5", "203.0.113.7", 33445, 443, 1700000000);
+    alert_t a; memset(&a, 0, sizeof(a));
+    snprintf(a.title,    sizeof(a.title),    "THREAT_IP");
+    snprintf(a.match_ip, sizeof(a.match_ip), "203.0.113.7");
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, sizeof(path)), 1);
+    ASSERT(file_exists(path));
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -413,6 +493,11 @@ void run_alert_pcap_tests(void) {
 
     TEST_SUITE("alert_pcap match-criteria integration");
     RUN_TEST(test_threat_ip_rule_sets_match_fields);
+
+    TEST_SUITE("alert_pcap storage floors (#96)");
+    RUN_TEST(test_dump_refuses_below_the_inode_floor);
+    RUN_TEST(test_dump_writes_when_the_floor_is_satisfiable);
+    RUN_TEST(test_dump_unaffected_by_default);
 
     TEST_SUITE("alert_pcap export outcome recorded on the alert (#92)");
     RUN_TEST(test_dump_retries_after_transient_failure);

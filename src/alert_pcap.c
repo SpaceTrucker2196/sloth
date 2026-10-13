@@ -5,6 +5,8 @@
 #include <ctype.h>
 #include <unistd.h>
 #include "alert_pcap.h"
+#include "fs_capacity.h"
+#include "tune.h"
 #include "secure_file.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
@@ -39,6 +41,12 @@ const char *alert_pcap_error(void) { return g_fail.last; }
 
 int alert_pcap_enabled(void) {
     return g_dir[0] != '\0';
+}
+
+int alert_pcap_capacity(fs_capacity_t *out) {
+    if (!out) return -1;
+    if (!alert_pcap_enabled()) { memset(out, 0, sizeof(*out)); return -1; }
+    return fs_capacity_probe(g_dirfd, out);
 }
 
 static void write_u32le(FILE *f, uint32_t v) {
@@ -96,6 +104,39 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
              t ? t->tm_min         : 0,
              t ? t->tm_sec         : 0,
              slug);
+
+    /* Refuse before creating, when the operator has set a floor (#96).
+     *
+     * This sink is the one with no cap and no sweep, so it is the one
+     * that fills a filesystem — and it fills it with INODES first. The
+     * floors default to 0 (off), so this is a no-op unless asked for;
+     * when it does refuse, it goes through the same sfile_fail counter
+     * every other write failure here uses, which means the operator
+     * sees it in `storage_failures` and on the `!persist` badge without
+     * any new reporting path.
+     *
+     * Checked per dump rather than cached: the point is the margin at
+     * the moment of writing, and a cached figure is exactly what makes
+     * a full disk look like a healthy one. fstatvfs on a held
+     * descriptor is cheap and this path already does file IO. */
+    const uint64_t min_bytes = (uint64_t)tune_val(TUNE_STORAGE_MIN_FREE_MB)
+                               * 1024u * 1024u;
+    const uint64_t min_files = (uint64_t)tune_val(TUNE_STORAGE_MIN_FREE_INODES);
+    if (min_bytes || min_files) {
+        fs_capacity_t cap;
+        char why[SFILE_ERR_MAX];
+        if (fs_capacity_probe(g_dirfd, &cap) == 0 &&
+            fs_capacity_blocked(&cap, min_bytes, min_files, why, sizeof(why))) {
+            sfile_fail(&g_fail, "alert pcap", why);
+            return -1;
+        }
+        /* A failed probe is deliberately NOT a refusal. fstatvfs can
+         * fail on an exotic or unmounting filesystem, and turning
+         * "cannot measure" into "do not record" would lose evidence
+         * over a diagnostic. The write below then fails on its own
+         * terms if there is really no room, and that failure is
+         * already counted. */
+    }
 
     /* Exclusive create: each dump is a new artifact. Two dumps for one
      * alert in the same second used to share a name and overwrite; a

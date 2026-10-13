@@ -1813,6 +1813,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      tuned;
         uint64_t mon_bad_clock;
         int      cap_stale_state, mon_stale_state;
+        /* BANDS, never the free figures. Free bytes and free inodes move
+         * on a live sensor every time anything writes, so signing over
+         * them would emit this record once a second forever — the
+         * firehose stale_secs and the flow rings are already excluded to
+         * avoid. A band crosses a handful of times over a filesystem's
+         * life, which is the news: not "it moved", but "it crossed". */
+        int      pcap_dir_byte_band, pcap_dir_file_band;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1855,6 +1862,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
      * fresh, stale past the threshold. Only a crossing is news. */
     sig.cap_stale_state = stale_state(s->cap_health.stale_secs);
     sig.mon_stale_state = stale_state(s->mon_health.stale_secs);
+    /* #96. -1 when no --pcap-dir is configured or the probe failed —
+     * stable values, so not a source of churn. */
+    fs_capacity_t pcap_cap;
+    const int pcap_cap_ok = alert_pcap_capacity(&pcap_cap) == 0;
+    sig.pcap_dir_byte_band = pcap_cap_ok
+        ? fs_capacity_band(pcap_cap.free_bytes, pcap_cap.total_bytes) : -1;
+    sig.pcap_dir_file_band = (pcap_cap_ok && pcap_cap.files_known)
+        ? fs_capacity_band(pcap_cap.free_files, pcap_cap.total_files) : -1;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1916,6 +1931,23 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
                (long long)sh_evict_count((sh_evict_t)k));
     }
     kv_int(buf, LINEBUF, &off, "storage_failures",       storage_fail);
+    /* Headroom of the --pcap-dir filesystem (#96). The free figures are
+     * emitted raw because a consumer wants the number; the signature
+     * above carries only the band, for the firehose reason stated there.
+     * -1 means not measured: no --pcap-dir, fstatvfs failed, or — for
+     * inodes specifically — a filesystem with no fixed inode table
+     * (btrfs and most network filesystems report f_files == 0, which is
+     * not the same as "none left").
+     *
+     * Inodes are reported because bytes alone would have called this
+     * sensor healthy: measured on the owner's monitor host, --pcap-dir
+     * held 15.9M alert pcaps and ~93% of the filesystem's inodes while
+     * disk read 39% used. */
+    kv_int(buf, LINEBUF, &off, "pcap_dir_free_mb",
+           pcap_cap_ok ? (long long)(pcap_cap.free_bytes / (1024u * 1024u)) : -1);
+    kv_int(buf, LINEBUF, &off, "pcap_dir_free_inodes",
+           (pcap_cap_ok && pcap_cap.files_known)
+               ? (long long)pcap_cap.free_files : -1);
     kv_int(buf, LINEBUF, &off, "storage_jsonl_failures", jsonl_fail);
     kv_int(buf, LINEBUF, &off, "storage_pcap_failures",  pcap_fail);
     kv_int(buf, LINEBUF, &off, "storage_eapol_failures", eapol_fail);

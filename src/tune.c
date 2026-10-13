@@ -47,6 +47,21 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "wps.pin_brute_cycles",       5,   1,   1000,   "M1-M3-NACK restart cycles per 60 s" },
     { "wps.lockout_cycles",         2,   1,   1000,   "locked-unlocked cycles per hour" },
     { "wps.pbc_concurrent",         2,   1,   1000,   "concurrent PBC enrollees (fires when exceeded)" },
+    /* The only rows whose `lo` is 0, and the only ones that are not
+     * detector thresholds. 0 means "no floor", which is a meaningful
+     * setting here in a way that a count of 0 never is for a rule —
+     * and it is the DEFAULT, because refusing to write is a behaviour
+     * change every existing deployment would inherit on upgrade, and
+     * because the right floor depends on the operator's disk.
+     *
+     * Both exist because of a measured failure rather than a guess
+     * (src/fs_capacity.h has the numbers): on the owner's monitor host
+     * --pcap-dir held 15.9M files and had consumed ~93% of the
+     * filesystem's inodes while disk sat at 39% used. A byte floor
+     * alone would never have fired. Hence two floors, and hence the
+     * inode one being checked first. */
+    { "storage.min_free_mb",        0,   0,   4194304, "MB that must stay free, or 0 for no floor" },
+    { "storage.min_free_inodes",    0,   0,   100000000, "free inodes that must remain, or 0 for no floor" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

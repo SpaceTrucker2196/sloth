@@ -71,6 +71,10 @@ typedef enum {
     TUNE_WPS_PIN_BRUTE_CYCLES,
     TUNE_WPS_LOCKOUT_CYCLES,
     TUNE_WPS_PBC_CONCURRENT,
+    /* Storage floors, not detector thresholds. See the note beside
+       their rows in tune.c for why these alone may be 0. */
+    TUNE_STORAGE_MIN_FREE_MB,
+    TUNE_STORAGE_MIN_FREE_INODES,
     TUNE_COUNT
 } tune_id_t;
 

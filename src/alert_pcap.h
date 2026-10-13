@@ -2,6 +2,7 @@
 #define ALERT_PCAP_H
 
 #include "sloth.h"
+#include "fs_capacity.h"
 
 /* Configure the directory where per-alert pcap snapshots are written.
  *   - NULL or empty: disable export (alert_pcap_dump becomes a no-op).
@@ -17,6 +18,20 @@ int  alert_pcap_set_dir(const char *dir);
  * printed to stderr. */
 int         alert_pcap_failures(void);
 const char *alert_pcap_error(void);
+
+/* Headroom of the filesystem holding the configured --pcap-dir.
+ *
+ * Reported unconditionally, because the operator failure mode here is
+ * reassurance rather than surprise: this sink has no cap and no sweep,
+ * and on the owner's own monitor host it had consumed ~93% of the
+ * filesystem's inodes while `df -h` still read 39% used. Whoever is
+ * watching needs the number that is actually running out, with no flag
+ * to remember first.
+ *
+ * Returns 0 and fills *out when a directory is configured and the probe
+ * succeeds; -1 otherwise (no --pcap-dir, or fstatvfs failed), with *out
+ * zeroed either way. The module's dirfd never escapes. */
+int         alert_pcap_capacity(fs_capacity_t *out);
 
 /* Returns 1 if a dir was configured. */
 int  alert_pcap_enabled(void);

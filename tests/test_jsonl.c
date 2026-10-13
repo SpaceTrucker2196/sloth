@@ -1022,6 +1022,45 @@ static void test_emit_sensor_health_on_empty_state(void) {
     ASSERT(contains(body, "\"capture_exit\":\"none\""));
 }
 
+static void test_emit_sensor_health_reports_pcap_dir_headroom(void) {
+    /* #96. With no --pcap-dir configured both fields must be -1, which
+       is "not measured" and not "zero left" — reporting 0 free would
+       read as a full filesystem on every sensor that exports no pcaps
+       at all, which is most of them. */
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_pcap_set_dir(NULL);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"pcap_dir_free_mb\":-1"));
+    ASSERT(contains(body, "\"pcap_dir_free_inodes\":-1"));
+}
+
+static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
+    /* With a directory configured the figures become real. Asserted as
+       "present and not -1" rather than against a number, because the
+       number belongs to whatever host runs the suite — pinning it would
+       make this pass or fail by accident. */
+    char dir[] = "/tmp/sloth_cap_XXXXXX";
+    ASSERT(mkdtemp(dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(dir), 0);
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"pcap_dir_free_mb\":"));
+    ASSERT(!contains(body, "\"pcap_dir_free_mb\":-1"));
+    /* The inode figure is -1 on a filesystem with no fixed inode table,
+       so it is checked for presence only — asserting it is non-negative
+       would fail on btrfs for a correct build. */
+    ASSERT(contains(body, "\"pcap_dir_free_inodes\":"));
+    alert_pcap_set_dir(NULL);
+}
+
 static void test_emit_sensor_health_channel_fields(void) {
     /* Slice 1's requested-vs-confirmed pair reaching a consumer: the
      * record must carry the CONFIRMED (old) channel and a failure count,
@@ -1905,6 +1944,8 @@ void run_jsonl_tests(void) {
 
     TEST_SUITE("jsonl sensor_health record (#91 slice 3)");
     RUN_TEST(test_emit_sensor_health_on_empty_state);
+    RUN_TEST(test_emit_sensor_health_reports_pcap_dir_headroom);
+    RUN_TEST(test_emit_sensor_health_measures_a_configured_pcap_dir);
     RUN_TEST(test_emit_sensor_health_channel_fields);
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
     RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
