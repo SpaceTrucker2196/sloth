@@ -1003,6 +1003,47 @@ static void wps_lock_note(beacon_ap_t *ap, int to_locked, time_t now) {
     if (from == 2 && to_locked == 1) ap->wps_lock_cycles++;
 }
 
+/* Readers of the ring wps_lock_note() writes. Contracts in
+ * beacon_snoop.h; they are here so the modular indexing has exactly
+ * one writer and one set of readers in one file. */
+
+int wps_lock_history(const beacon_ap_t *ap, wps_lock_evt_t *out, int max) {
+    if (!ap || !out || max <= 0) return 0;
+    int keep = max < WPS_LOCK_RING ? max : WPS_LOCK_RING;
+    if (ap->wps_lock_n < keep) keep = ap->wps_lock_n;
+    /* Walk lifetime entry numbers, not slots. Entry k lives at slot
+     * k % WPS_LOCK_RING, so after a wrap slot 0 holds a *newer* entry
+     * than slot WPS_LOCK_RING-1 and iterating slots would hand the
+     * caller its history out of order. */
+    int first = ap->wps_lock_n - keep;
+    for (int k = 0; k < keep; k++) {
+        int slot = (first + k) % WPS_LOCK_RING;
+        out[k].ts = ap->wps_lock_ts[slot];
+        out[k].to = ap->wps_lock_to[slot];
+    }
+    return keep;
+}
+
+int wps_lock_cycles_in_window(const beacon_ap_t *ap, time_t now,
+                              int window_s) {
+    if (!ap) return 0;
+    int have = ap->wps_lock_n < WPS_LOCK_RING ? ap->wps_lock_n
+                                              : WPS_LOCK_RING;
+    time_t floor_t = now - (time_t)window_s;
+    int n = 0;
+    for (int i = 0; i < have; i++)
+        if (ap->wps_lock_to[i] == 1 && ap->wps_lock_ts[i] &&
+            ap->wps_lock_ts[i] >= floor_t) n++;
+    return n;
+}
+
+int wps_lock_dropped(const beacon_ap_t *ap) {
+    if (!ap) return 0;
+    int have = ap->wps_lock_n < WPS_LOCK_RING ? ap->wps_lock_n
+                                              : WPS_LOCK_RING;
+    return ap->wps_lock_n - have;
+}
+
 void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,

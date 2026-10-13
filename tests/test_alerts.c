@@ -6909,6 +6909,32 @@ static void test_wps_lockout_cycling_crit_on_my_bssid(void) {
     wps_end();
 }
 
+static void test_wps_lockout_cycling_shares_the_views_counter(void) {
+    /* The beacon detail screen renders wps_lock_cycles_in_window()
+     * directly (src/views/beacon.c), and the rule reads the same
+     * function since it moved to beacon_snoop.c. This pins the two to
+     * one number: if a future change gave either side its own count of
+     * the ring, the figure on screen and the figure in the WARN could
+     * disagree and neither would be obviously wrong. */
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x74,0xda,0x88,0x01,0x02,0x0a};
+    add_beacon(&s, "Office", b, "WPA2");
+    const beacon_ap_t *a = &s.beacon_aps[0];
+    seed_lock_cycles(&s.beacon_aps[0], WPS_LOCKOUT_CYCLES,
+                     g_wps_wall - 60, 300);
+    ASSERT_EQ(wps_lock_cycles_in_window(a, g_wps_wall,
+                                        WPS_LOCKOUT_WINDOW_S),
+              WPS_LOCKOUT_CYCLES);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_WPS_LOCKOUT_CYCLING) >= 0);
+    /* One window later the same ring is history, and the screen says
+     * so for the same reason the rule stops firing. */
+    ASSERT_EQ(wps_lock_cycles_in_window(a, g_wps_wall + 2 * WPS_LOCKOUT_WINDOW_S,
+                                        WPS_LOCKOUT_WINDOW_S), 0);
+    wps_end();
+}
+
 static void test_wps_lockout_threshold_is_configurable(void) {
     wps_begin(1700000000);
     sloth_state_t s; seed_state(&s);
@@ -8087,6 +8113,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_wps_lockout_cycling_quiet_when_locked_and_left);
     RUN_TEST(test_wps_lockout_cycling_counts_completions_not_transitions);
     RUN_TEST(test_wps_lockout_cycling_crit_on_my_bssid);
+    RUN_TEST(test_wps_lockout_cycling_shares_the_views_counter);
     RUN_TEST(test_wps_lockout_threshold_is_configurable);
 
     TEST_SUITE("alerts: WPS PBC race (#82 wave 8)");

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-09-23.
+**Last updated**: 2026-10-13.
 
 ---
 
@@ -230,6 +230,14 @@ one.
 | `WPS_PIN_BRUTE` | 5 cycles / 60 s | `--wps-pin-brute-cycles N` |
 | `WPS_LOCKOUT_CYCLING` | 2 cycles / 1 h | `--wps-lockout-cycles N` |
 | `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
+
+`WPS_LOCKOUT_CYCLING`'s evidence is readable: the **WPS ACTIVITY**
+block on the Beacons detail screen (`b`, then Enter on the AP) shows
+the lifetime cycle count, the windowed count against the current
+threshold, and the retained locked→unlocked timeline with a relative
+age per transition. The screen and the rule call the same counter, so
+the figure in the WARN and the figure on screen are one number. See
+[beacons.md](../views/beacons.md).
 
 Only the **counts** are tunable. The windows are not operator policy:
 60 s is the rate the brute-force threshold is defined over, one hour is

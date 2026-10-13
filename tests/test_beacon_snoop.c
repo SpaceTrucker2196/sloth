@@ -1,5 +1,7 @@
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "beacon_snoop.h"
@@ -2993,6 +2995,322 @@ static void test_wps_lock_rings_are_per_bssid(void) {
     beacon_clear();
 }
 
+/* ── Ring readers: wps_lock_history / _dropped (#82) ─────── *
+ *
+ * Stamped into a local beacon_ap_t rather than driven through
+ * wps_lock_record() above, because beacon_record() takes its own
+ * `time(NULL)` (src/beacon_snoop.c) and has no clock seam: every
+ * transition pushed through it lands on the same second, so no
+ * assertion about ts values or their ordering can be expressed that
+ * way. Same approach tests/test_alerts.c::seed_lock_cycles() takes.
+ *
+ * `to` alternates 2 (locked) then 1 (unlocked) starting at 2, which is
+ * the only sequence the ring can hold — a transition between known
+ * states cannot repeat its destination. */
+static void seed_lock_ring(beacon_ap_t *a, int n, time_t base, int step) {
+    for (int k = 0; k < n; k++) {
+        int i = a->wps_lock_n % WPS_LOCK_RING;
+        a->wps_lock_ts[i] = base + (time_t)k * step;
+        a->wps_lock_to[i] = (k % 2 == 0) ? 2 : 1;
+        a->wps_lock_n++;
+        if (k % 2 == 1) a->wps_lock_cycles++;
+    }
+}
+
+static void test_wps_lock_history_pre_wrap(void) {
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 3, 1700000000, 60);
+    wps_lock_evt_t out[WPS_LOCK_RING];
+    ASSERT_EQ(wps_lock_history(&a, out, WPS_LOCK_RING), 3);
+    ASSERT_EQ(out[0].to, 2);
+    ASSERT_EQ(out[1].to, 1);
+    ASSERT_EQ(out[2].to, 2);
+    ASSERT(out[0].ts == (time_t)1700000000);
+    ASSERT(out[0].ts < out[1].ts);
+    ASSERT(out[1].ts < out[2].ts);
+}
+
+static void test_wps_lock_history_after_wrap_is_chronological(void) {
+    /* 11 transitions through an 8-slot ring. Entry 3 is the oldest
+     * survivor and lives at slot 3, while slot 0 now holds entry 8 —
+     * a reader iterating slots would hand back entry 8 first. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 11, 1700000000, 60);
+    wps_lock_evt_t out[WPS_LOCK_RING];
+    ASSERT_EQ(wps_lock_history(&a, out, WPS_LOCK_RING), WPS_LOCK_RING);
+    ASSERT(out[0].ts == (time_t)(1700000000 + 3 * 60));
+    ASSERT(out[WPS_LOCK_RING - 1].ts == (time_t)(1700000000 + 10 * 60));
+    for (int j = 1; j < WPS_LOCK_RING; j++)
+        ASSERT(out[j - 1].ts < out[j].ts);
+    /* Entry 3 is odd-numbered, so its destination is unlocked. */
+    ASSERT_EQ(out[0].to, 1);
+}
+
+static void test_wps_lock_history_refuses_bad_args(void) {
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 4, 1700000000, 60);
+    wps_lock_evt_t out[WPS_LOCK_RING];
+    memset(out, 0xee, sizeof(out));
+    ASSERT_EQ(wps_lock_history(NULL, out, WPS_LOCK_RING), 0);
+    ASSERT_EQ(wps_lock_history(&a, NULL, WPS_LOCK_RING), 0);
+    ASSERT_EQ(wps_lock_history(&a, out, 0), 0);
+    ASSERT_EQ(wps_lock_history(&a, out, -1), 0);
+    /* Nothing was written on any of those four. */
+    for (size_t i = 0; i < sizeof(out); i++)
+        ASSERT_EQ(((const uint8_t *)out)[i], 0xee);
+    ASSERT_EQ(wps_lock_dropped(NULL), 0);
+}
+
+static void test_wps_lock_history_max_keeps_newest(void) {
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 5, 1700000000, 60);
+    wps_lock_evt_t out[2];
+    ASSERT_EQ(wps_lock_history(&a, out, 2), 2);
+    ASSERT(out[0].ts == (time_t)(1700000000 + 3 * 60));
+    ASSERT(out[1].ts == (time_t)(1700000000 + 4 * 60));
+    ASSERT_EQ(out[0].to, 1);     /* entry 3: odd  -> unlocked */
+    ASSERT_EQ(out[1].to, 2);     /* entry 4: even -> locked   */
+}
+
+static void test_wps_lock_history_empty_for_unknown_only(void) {
+    /* Production-path restatement of "unknown is not a state": a
+     * beacon that omits the attribute leaves nothing for a reader.
+     * Counts only, no timestamps, so beacon_record()'s internal clock
+     * does not matter here. */
+    beacon_clear();
+    wps_lock_record(BSSID_A, 0);
+    wps_lock_record(BSSID_A, 0);
+    const beacon_ap_t *ap = wps_lock_ap(BSSID_A);
+    ASSERT(ap != NULL);
+    wps_lock_evt_t out[WPS_LOCK_RING];
+    ASSERT_EQ(wps_lock_history(ap, out, WPS_LOCK_RING), 0);
+    ASSERT_EQ(wps_lock_dropped(ap), 0);
+    beacon_clear();
+}
+
+static void test_wps_lock_dropped_is_ring_capacity(void) {
+    /* The figure the detail screen prints must come from what the ring
+     * can hold, not from how many rows a caller rendered. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 5, 1700000000, 60);
+    ASSERT_EQ(wps_lock_dropped(&a), 0);
+
+    beacon_ap_t b; memset(&b, 0, sizeof(b));
+    seed_lock_ring(&b, 13, 1700000000, 60);
+    ASSERT_EQ(wps_lock_dropped(&b), 13 - WPS_LOCK_RING);
+    /* And a two-row render still reports five dropped, not eleven. */
+    wps_lock_evt_t out[2];
+    ASSERT_EQ(wps_lock_history(&b, out, 2), 2);
+    ASSERT_EQ(wps_lock_dropped(&b), 13 - WPS_LOCK_RING);
+}
+
+static void test_wps_lock_window_counts_completed_cycles(void) {
+    /* Same counter the WPS_LOCKOUT_CYCLING rule reads, exercised here
+     * on its own: three completed cycles inside the window, none when
+     * the window has moved past them. */
+    beacon_ap_t a; memset(&a, 0, sizeof(a));
+    seed_lock_ring(&a, 6, 1700000000, 60);        /* 3 cycles */
+    ASSERT_EQ(a.wps_lock_cycles, 3);
+    ASSERT_EQ(wps_lock_cycles_in_window(&a, 1700000000 + 6 * 60, 3600), 3);
+    ASSERT_EQ(wps_lock_cycles_in_window(&a, 1700000000 + 2 * 3600, 3600), 0);
+    ASSERT_EQ(wps_lock_cycles_in_window(NULL, 1700000000, 3600), 0);
+}
+
+/* TPRINT is printf in the test build (Makefile: "No WITH_NCURSES: TPRINT
+ * expands to printf in view files"), so a view's rendered bytes can be
+ * captured and asserted. Same dup2/tmpfile technique as
+ * tests/test_help.c and tests/test_assoc_track.c, which have used it
+ * since long before this slice.
+ *
+ * Recorded because the first version of these tests asserted the
+ * opposite: it claimed "the detail screen writes to the terminal, so
+ * nothing here can read the rendered bytes back" and that "isolating it
+ * needs a draw seam that captures output, which this slice does not
+ * add". Both sentences were false when written — the seam was already in
+ * two test files in the same tree — and the effect was that the slice's
+ * only user-facing deliverable shipped with no assertions on it at all,
+ * behind a rationale the next agent would have read and repeated. */
+static void capture_draw(void (*draw)(const sloth_state_t *),
+                         const sloth_state_t *st, char *buf, int sz) {
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    FILE *tmp = tmpfile();
+    dup2(fileno(tmp), fileno(stdout));
+    draw(st);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    rewind(tmp);
+    int n = (int)fread(buf, 1, sz - 1, tmp);
+    buf[n < 0 ? 0 : n] = '\0';
+    fclose(tmp);
+}
+
+static void test_wps_lock_detail_draw_renders_the_sawtooth(void) {
+    beacon_clear();
+    wps_lock_record(BSSID_A, 1);
+    for (int c = 0; c < 6; c++) {       /* 12 transitions, ring wraps */
+        wps_lock_record(BSSID_A, 2);
+        wps_lock_record(BSSID_A, 1);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_EQ(s.beacon_aps[0].wps_lock_n, 12);
+    ASSERT_EQ(wps_lock_dropped(&s.beacon_aps[0]), 12 - WPS_LOCK_RING);
+    s.beacon_detail = 1;
+    s.beacon_sel    = 0;
+
+    char out[8192];
+    capture_draw(view_beacon_draw, &s, out, sizeof(out));
+
+    /* The block is present. Note what this does NOT prove: the seeding
+       helper above sets rsn.has_wps = 1, so this AP satisfies the
+       guard's FIRST term and narrowing `has_wps || wps_lock_n > 0` to
+       `has_wps` leaves this case green. The second term is covered
+       separately below — written down because the first version of this
+       comment claimed the opposite and the mutation proved it wrong. */
+    ASSERT(strstr(out, "WPS ACTIVITY") != NULL);
+    ASSERT(strstr(out, "Lock cycles:") != NULL);
+    ASSERT(strstr(out, "lifetime") != NULL);
+
+    /* Both ends of the sawtooth are labelled, oldest-first, so the
+       sequence reads as alternating rather than as a count. */
+    ASSERT(strstr(out, "LOCKED") != NULL);
+    ASSERT(strstr(out, "unlocked") != NULL);
+
+    /* The ring overflowed, so the aged-out notice must say so — a
+       screen that silently showed 8 of 12 transitions would read as a
+       complete history. */
+    ASSERT(strstr(out, "aged out") != NULL);
+
+    /* And the threshold is named, so an operator can tell the figure
+       is measured against the rule rather than against nothing. */
+    ASSERT(strstr(out, "WPS_LOCKOUT_CYCLING threshold") != NULL);
+    beacon_clear();
+}
+
+static void test_wps_lock_detail_draw_states_when_nothing_transitioned(void) {
+    /* The other arm: an AP advertising WPS that has never changed lock
+       state. The block must still appear and must say the absence is a
+       posture, not render an empty list — "no transitions" and "not
+       observed" are different claims to an operator. */
+    beacon_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.beacon_count = 1;
+    beacon_ap_t *ap = &s.beacon_aps[0];
+    memset(ap, 0, sizeof(*ap));
+    memcpy(ap->bssid, BSSID_A, 6);
+    snprintf(ap->ssid, sizeof(ap->ssid), "wps-quiet");
+    ap->has_wps     = 1;
+    ap->wps_lock_n  = 0;
+    s.beacon_detail = 1;
+    s.beacon_sel    = 0;
+
+    char out[8192];
+    capture_draw(view_beacon_draw, &s, out, sizeof(out));
+    ASSERT(strstr(out, "WPS ACTIVITY") != NULL);
+    ASSERT(strstr(out, "no lock-state transitions observed") != NULL);
+    /* No transition rows, so neither label may appear. */
+    ASSERT(strstr(out, "unlocked") == NULL);
+    beacon_clear();
+}
+
+static void test_wps_lock_detail_block_survives_a_withdrawn_wps_ie(void) {
+    /* The guard's SECOND term, which nothing else reaches. The block
+       must still render for an AP with no current WPS IE but a
+       transition history, because the production comment's reason is
+       sound: an AP that stops advertising WPS mid-attack must not erase
+       what was already observed from the screen.
+       
+       Seeded by hand rather than through beacon_record(), and that is
+       the interesting part. src/beacon_snoop.c:1121 is
+       `if (rsn->has_wps) g_aps[i].has_wps = 1;` — has_wps is STICKY, so
+       no sequence of beacons can take an AP from has_wps=1 back to 0
+       while keeping its ring. The second term is therefore defensive
+       rather than currently reachable from the capture path, and the
+       honest way to pin it is a constructed state plus this note. If
+       has_wps ever stops being sticky, this case is already here. */
+    beacon_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.beacon_count = 1;
+    beacon_ap_t *ap = &s.beacon_aps[0];
+    memset(ap, 0, sizeof(*ap));
+    memcpy(ap->bssid, BSSID_A, 6);
+    snprintf(ap->ssid, sizeof(ap->ssid), "wps-withdrawn");
+    ap->has_wps = 0;                     /* no WPS IE in the latest beacon */
+    ap->wps_lock_n = 2;                  /* but two transitions were seen */
+    ap->wps_lock_ts[0] = 1700000000;
+    ap->wps_lock_to[0] = 2;              /* -> LOCKED   */
+    ap->wps_lock_ts[1] = 1700000060;
+    ap->wps_lock_to[1] = 1;              /* -> unlocked */
+    ap->wps_lock_cycles = 1;
+    s.beacon_detail = 1;
+    s.beacon_sel    = 0;
+
+    char out[8192];
+    capture_draw(view_beacon_draw, &s, out, sizeof(out));
+    ASSERT(strstr(out, "WPS ACTIVITY") != NULL);
+    ASSERT(strstr(out, "LOCKED")   != NULL);
+    ASSERT(strstr(out, "unlocked") != NULL);
+    beacon_clear();
+}
+
+static void test_wps_lock_detail_block_absent_without_wps(void) {
+    /* An AP with no WPS IE and no transition history gets no block at
+       all. Without this the two cases above would pass just as happily
+       if the guard were deleted entirely. */
+    beacon_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.beacon_count = 1;
+    beacon_ap_t *ap = &s.beacon_aps[0];
+    memset(ap, 0, sizeof(*ap));
+    memcpy(ap->bssid, BSSID_A, 6);
+    snprintf(ap->ssid, sizeof(ap->ssid), "no-wps");
+    s.beacon_detail = 1;
+    s.beacon_sel    = 0;
+
+    char out[8192];
+    capture_draw(view_beacon_draw, &s, out, sizeof(out));
+    ASSERT(strstr(out, "WPS ACTIVITY") == NULL);
+    beacon_clear();
+}
+
+static void test_wps_lock_history_clamps_to_the_ring(void) {
+    /* wps_lock_history()'s documented clamp, which had no coverage at
+       all: review verified that replacing
+       `int keep = max < WPS_LOCK_RING ? max : WPS_LOCK_RING;` with
+       `int keep = max;` left the suite byte-for-byte green.
+       Unclamped, a caller asking for more than the ring holds gets
+       fabricated duplicate rows — a history that invents transitions
+       that were never observed, which is the worst failure this screen
+       could have. */
+    beacon_clear();
+    wps_lock_record(BSSID_A, 1);
+    for (int c = 0; c < 6; c++) {
+        wps_lock_record(BSSID_A, 2);
+        wps_lock_record(BSSID_A, 1);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    const beacon_ap_t *ap = &s.beacon_aps[0];
+    ASSERT_EQ(ap->wps_lock_n, 12);
+
+    /* Ask for far more than the ring can hold. */
+    wps_lock_evt_t hist[64];
+    memset(hist, 0, sizeof(hist));
+    int hn = wps_lock_history(ap, hist, 64);
+    ASSERT_EQ(hn, WPS_LOCK_RING);
+
+    /* And nothing past the clamp was written, so an oversized caller
+       buffer is left untouched rather than partly filled. */
+    for (int i = WPS_LOCK_RING; i < 64; i++) {
+        ASSERT_EQ((long long)hist[i].ts, 0);
+        ASSERT_EQ(hist[i].to, 0);
+    }
+    beacon_clear();
+}
+
 /* -- Regulatory envelope retention (#101, slice 2) -------- *
  *
  * reg_ie.c's own parse is covered byte by byte in tests/test_reg_ie.c.
@@ -3458,6 +3776,18 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_wps_lock_unknown_never_transitions);
     RUN_TEST(test_wps_lock_ring_bounds_and_lifetime_count);
     RUN_TEST(test_wps_lock_rings_are_per_bssid);
+    RUN_TEST(test_wps_lock_history_pre_wrap);
+    RUN_TEST(test_wps_lock_history_after_wrap_is_chronological);
+    RUN_TEST(test_wps_lock_history_refuses_bad_args);
+    RUN_TEST(test_wps_lock_history_max_keeps_newest);
+    RUN_TEST(test_wps_lock_history_empty_for_unknown_only);
+    RUN_TEST(test_wps_lock_dropped_is_ring_capacity);
+    RUN_TEST(test_wps_lock_window_counts_completed_cycles);
+    RUN_TEST(test_wps_lock_detail_draw_renders_the_sawtooth);
+    RUN_TEST(test_wps_lock_detail_draw_states_when_nothing_transitioned);
+    RUN_TEST(test_wps_lock_detail_block_survives_a_withdrawn_wps_ie);
+    RUN_TEST(test_wps_lock_detail_block_absent_without_wps);
+    RUN_TEST(test_wps_lock_history_clamps_to_the_ring);
 
     TEST_SUITE("beacon snoop: regulatory envelope retention (#101)");
     RUN_TEST(test_reg_envelope_retained_per_bssid);

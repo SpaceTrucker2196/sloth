@@ -2098,3 +2098,30 @@ told the reader the opposite of what the code now does.
   `persist_health_t` and requires `cli-reference.md` to contain the
   prefix and every sink token the formatter emits, so renaming a token
   in `src/persist_health.c` fails the suite and names the page.
+## 2026-10-13 — the WPS lockout sawtooth is inspectable (#82)
+
+**Pages touched:** `alerts.md` (a paragraph under *Tunable thresholds*
+naming where `WPS_LOCKOUT_CYCLING`'s evidence is readable, and the
+`Last updated` bump). `docs/views/beacons.md` is source material under
+`docs/CLAUDE.md`, but the same change adds its
+`## WPS lockout sawtooth (#82)` section, because the block is a
+behaviour change to that view.
+
+**Why.** `WPS_LOCKOUT_CYCLING` has fired since `d652502` and names a
+cycle count in its detail string, but nothing in the TUI read the
+transition ring — the only consumer of lock state outside `src/alerts.c`
+was the scalar `wps_locked`. The WARN was a number the operator could
+not inspect anywhere. The detail screen now renders the ring, and it
+calls the rule's own `wps_lock_cycles_in_window()` rather than counting
+the ring a second time, so the two figures are one number by
+construction and not by review.
+
+**Also corrected:** the `beacons.md` paragraph that still listed the
+lockout-cycling and PBC thresholds as "left open for want of a citable
+basis". They shipped in `d652502`; the weak-RNG vendor watchlist is what
+is actually still open.
+
+**Not done.** No new alert kind, no new view, no `VIEW_COUNT` change, no
+JSONL or schema change. The WPS session table is still not
+state-resident, so no session/opcode timeline is on screen; the
+probe-response path still parses only the SSID tag.

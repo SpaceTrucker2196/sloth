@@ -302,6 +302,51 @@ int  beacon_find_interval_ms(const uint8_t bssid[6]);
 int beacon_tbtt_jitter(const ap_beacon_timing_t *t,
                        uint32_t *stddev_us, int64_t *mean_us);
 
+/* ── AP-Setup-Locked transition ring readers (#82) ────────
+ *
+ * beacon_ap_t stores the ring as three bare fields indexed modulo
+ * WPS_LOCK_RING (see include/sloth.h). These three readers are the
+ * only code outside wps_lock_note() that is allowed to know that
+ * layout: a second module doing its own modular arithmetic over
+ * wps_lock_n is how the lifetime sequence and the slot order drift
+ * apart. They take a caller-owned beacon_ap_t out of a snapshot, so
+ * they take no lock.
+ *
+ * `to` is the lock state *entered* by the transition, matching
+ * beacon_ap_t::wps_lock_to: 1 = unlocked, 2 = locked. 0 never
+ * appears, because an unknown state on either side records nothing. */
+typedef struct {
+    time_t  ts;
+    uint8_t to;
+} wps_lock_evt_t;
+
+/* Copy up to `max` of the most recent transitions into `out`, oldest
+ * first, and return how many were written. Never writes more than
+ * WPS_LOCK_RING entries, however large `max` is, because that is all
+ * the ring holds. Returns 0 without writing for a NULL `ap`, a NULL
+ * `out`, `max <= 0`, or an AP with no transitions. */
+int wps_lock_history(const beacon_ap_t *ap, wps_lock_evt_t *out, int max);
+
+/* Completed locked->unlocked transitions whose timestamp falls inside
+ * the last `window_s` seconds.
+ *
+ * The ring stores transitions between *known* lock states only, so
+ * they strictly alternate: an entry whose destination is unlocked was
+ * necessarily preceded by one into locked. That is the same definition
+ * of "cycle" the lifetime wps_lock_cycles counter uses, and it lives
+ * here rather than in alerts.c so the WPS_LOCKOUT_CYCLING rule and the
+ * beacon detail screen cannot disagree about the number they show the
+ * operator. */
+int wps_lock_cycles_in_window(const beacon_ap_t *ap, time_t now,
+                              int window_s);
+
+/* Transitions this AP has made that the ring no longer holds, i.e.
+ * wps_lock_n minus its retained tail. Derived from ring capacity, not
+ * from how many rows a caller chose to render: a view with a smaller
+ * row budget than the ring must not report the rows it skipped as
+ * evidence that aged out. 0 for a NULL `ap`. */
+int wps_lock_dropped(const beacon_ap_t *ap);
+
 /* Clear the internal AP table. */
 void beacon_clear(void);
 

@@ -10,10 +10,14 @@
  * design) into per-(BSSID, STA) sessions, so the rate-based detectors
  * — WPS_PIN_BRUTE's M1→M3→NACK restart cycles, WPS_PBC_RACE's
  * concurrent walk-time sessions, Pixie-Dust's M1+M3-then-silence —
- * have a measured substrate to read. Measurement only: the alert rules
- * land in a later slice together with their research-corpus sources
- * (owner-accepted thresholds, 2026-09-30: ≥5 cycles/60 s, >2 PBC in
- * the 120 s walk time, each configurable).
+ * have a measured substrate to read.
+ *
+ * WPS_PIN_BRUTE and WPS_PBC_RACE ship and read this table (d652502),
+ * with their sources in research/ and their counts on the --tune
+ * registry (≥5 cycles/60 s, >2 PBC in the 120 s walk time). The
+ * Pixie-Dust shape is still measurement only: no ALERT_TYPE_* reads
+ * msg_bits for it. This table is also not state-resident — nothing
+ * copies it onto sloth_state_t, so no view can show a session yet.
  *
  * State machine over WSC 2.0 §7.7: IDLE →M1→ M1_SEEN →M3→ M3_SEEN
  * →NACK→ NACKED; a NACK from M3_SEEN completes one restart cycle (the

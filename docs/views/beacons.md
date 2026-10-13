@@ -92,12 +92,77 @@ that sends the literal idle/Default value are indistinguishable, and
 read the same way: no active exposure evidenced. Not persisted to
 `--db`, same reasoning as the vendor strings above.
 
-Left open (needs a lab AP or real capture, per `agents/AGENTS.md`'s "no
-pcap fixtures" rule for anything beyond spec-defined TLV parsing):
-lockout-cycling and PBC-overlap/flood thresholds, and any curated
-vendor-RNG watchlist — none of those have a citable numeric basis this
-environment can verify, so no alert rule or threshold ships with this
-slice, only the measurement.
+The lockout-cycling and PBC thresholds this section once listed as
+"left open for want of a citable basis" shipped in `d652502`, on the
+owner's written decision of 2026-09-30 and against
+`research/cert/vu-723755.md`: `WPS_LOCKOUT_CYCLING`, `WPS_PIN_BRUTE`
+and `WPS_PBC_RACE` all fire today. What is still open is the weak-RNG
+vendor watchlist, which has no captured provenance here.
+
+## WPS lockout sawtooth (#82)
+
+A WPS PIN brute force against a router that implements lockout leaves a
+sawtooth on the air: the AP sets AP Setup Locked (WPS IE attribute
+`0x1057`), releases it when its timer expires, and locks again on the
+next run of attempts. `beacon_ap_t` keeps the last `WPS_LOCK_RING` (8)
+transitions between **known** lock states with the timestamp each was
+observed, plus lifetime transition and completed locked→unlocked cycle
+counts. A beacon that merely omits the attribute records nothing —
+unknown is not a state, so the retained transitions strictly alternate.
+
+`WPS_LOCKOUT_CYCLING` reads that ring and fires at the configured
+number of completed cycles inside one hour. The **WPS ACTIVITY** block
+on the detail screen renders the same evidence, through the same
+function (`wps_lock_cycles_in_window()`), so the number in the alert
+and the number on screen cannot drift apart:
+
+```
+ ── WPS ACTIVITY ──
+  Lock cycles: 6 lifetime   last 1h: 4/2  (WPS_LOCKOUT_CYCLING threshold)
+  (4 earlier transitions aged out of the 8-slot ring)
+      14m ago  unlocked
+      12m ago  LOCKED
+       9m ago  unlocked
+       7m ago  LOCKED
+       4m ago  unlocked
+       2m ago  LOCKED
+      44s ago  unlocked
+      18s ago  LOCKED
+```
+
+The window figure is **4**, not 3, and the arithmetic is worth stating
+because it is easy to miscount from the timeline above:
+`wps_lock_cycles_in_window()` counts every `-> unlocked` transition in
+the ring inside the window, not every locked->unlocked *pair*. The
+`14m ago unlocked` row counts even though the `LOCKED` that preceded it
+has aged out of the 8-slot ring — which is correct, since the AP really
+did unlock then, and the pair is only invisible, not absent. A reader
+pairing rows by eye gets 3; the code gets 4.
+
+
+The windowed count is heat-coloured only at or above the rule's floor,
+so the colour means "this is what fired" rather than "this AP uses
+WPS". The timeline runs oldest first — the sawtooth is a sequence, and
+reading it in ring-slot order after a wrap would hand back a newer
+transition before an older one. The "aged out" figure comes from the
+ring's capacity, not from how many rows were rendered: a terminal too
+short to show eight rows must not report the rows it skipped as
+evidence sloth lost.
+
+The block appears whenever there is history, even if the AP has since
+stopped advertising the WPS IE at all. An AP that drops the IE
+mid-attack must not erase what was already observed from the screen.
+
+**What's normal:** no block at all on an AP without WPS; `0 lifetime`
+and the "never changes state" line on a WPS AP that has only ever been
+heard in one state. An AP that locked once and stayed locked shows one
+`LOCKED` row, zero cycles, and no alert — that is a configured posture.
+
+**What's suspicious:** two or more completed cycles in an hour on a
+network you own. Benign explanations exist (a guest fat-fingering the
+PIN twice in an afternoon; firmware that locks on any failure and
+releases in seconds), which is why the rule's threshold is a floor and
+the raw timeline is on screen for the operator to judge.
 
 ## IE-ordering fingerprint (#77)
 

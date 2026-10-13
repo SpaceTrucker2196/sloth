@@ -3113,25 +3113,6 @@ static void rule_wps_pin_brute(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Completed locked->unlocked transitions inside the window.
- *
- * The ring stores transitions between *known* lock states only, so
- * they strictly alternate: an entry whose destination is 1 (unlocked)
- * was necessarily preceded by one into 2 (locked), which is the same
- * definition beacon_snoop.c's lifetime wps_lock_cycles counter uses.
- * Entry k of the lifetime sequence lives at k % WPS_LOCK_RING, so
- * before the first wrap only the first wps_lock_n slots are written. */
-static int wps_lock_cycles_in_window(const beacon_ap_t *a, time_t now,
-                                     int window_s) {
-    int have = a->wps_lock_n < WPS_LOCK_RING ? a->wps_lock_n : WPS_LOCK_RING;
-    time_t floor_t = now - (time_t)window_s;
-    int n = 0;
-    for (int i = 0; i < have; i++)
-        if (a->wps_lock_to[i] == 1 && a->wps_lock_ts[i] &&
-            a->wps_lock_ts[i] >= floor_t) n++;
-    return n;
-}
-
 /* AP Setup Locked sawtooth — the lockout a PIN brute trips.
  *
  * VU#723755's own text is that many routers implement no lockout at

@@ -1366,10 +1366,26 @@ typedef struct {
      * plus a lifetime completed locked->unlocked cycle count. A
      * Reaver-style brute force trips AP lockout repeatedly, so the
      * sawtooth is attack evidence even when the PIN attempts
-     * themselves were missed. Recording only — the
-     * WPS_LOCKOUT_CYCLING rule (owner-accepted threshold 2026-09-30:
-     * >=2 cycles/hr, configurable) is a later slice, and adding the
-     * ALERT_TYPE_* before its research-corpus source would go red. */
+     * themselves were missed.
+     *
+     * The RING ARRAYS — wps_lock_ts[] and wps_lock_to[] — are read only
+     * through beacon_snoop.h's wps_lock_history() /
+     * wps_lock_cycles_in_window() / wps_lock_dropped(). The modular
+     * indexing is not part of the contract: a second module doing its
+     * own arithmetic over wps_lock_n is how the lifetime sequence and
+     * the slot order drift apart.
+     *
+     * The two SCALARS are ordinary fields and are read directly, which
+     * is why the rule is scoped to the arrays rather than to the group:
+     * src/views/beacon.c reads wps_lock_n to decide whether to draw the
+     * block at all and wps_lock_cycles to print the lifetime figure,
+     * and no accessor exposes the lifetime count. An earlier version of
+     * this comment said "read only through" of all four fields, which
+     * the same commit's own view code contradicted — an unimplementable
+     * rule is worse than none, because the next reader either breaks it
+     * or deletes it. ALERT_TYPE_WPS_LOCKOUT_CYCLING (threshold
+     * 2026-09-30, configurable) and the WPS ACTIVITY block both go
+     * through the accessors for the ring itself. */
     time_t   wps_lock_ts[WPS_LOCK_RING];
     uint8_t  wps_lock_to[WPS_LOCK_RING];
     int      wps_lock_n;        /* lifetime transitions */

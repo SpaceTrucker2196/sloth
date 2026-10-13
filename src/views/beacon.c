@@ -7,6 +7,12 @@
 #include "views/beacon.h"
 #include "wifi_assess.h"
 #include "beacon_snoop.h"
+/* ../ is required: src/views/alerts.h is the view header and would
+ * shadow the rules header on a bare "alerts.h" from this directory.
+ * Same form src/views/twins.c already uses. Needed for the
+ * WPS_LOCKOUT_CYCLING threshold and window, so the detail screen
+ * renders the rule's own numbers rather than a second opinion. */
+#include "../alerts.h"
 
 #define BEACON_PAGE 30
 
@@ -17,6 +23,17 @@ static const char *bssid_str(const uint8_t *b) {
              "%02x:%02x:%02x:%02x:%02x:%02x",
              b[0], b[1], b[2], b[3], b[4], b[5]);
     return fmt_bssid;
+}
+
+/* Same shape as src/views/eapol.c and src/views/seqnum.c — kept local
+ * rather than shared, matching how every other view spells it. */
+static void fmt_age(time_t ts, char *buf, int sz) {
+    long age = (long)(time(NULL) - ts);
+    if (age < 0)     age = 0;
+    if (age > 99999) age = 99999;
+    if      (age <   60) snprintf(buf, sz, "%lds", age);
+    else if (age < 3600) snprintf(buf, sz, "%ldm", age / 60);
+    else                 snprintf(buf, sz, "%ldh", age / 3600);
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter
@@ -145,6 +162,58 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         }
         if (ap->wps_serial[0]) TPRINT("  SN:%s", ap->wps_serial);
         TPRINT("\n");
+    }
+
+    /* AP Setup Locked history (#82). WPS_LOCKOUT_CYCLING names a cycle
+     * count in its detail string, and until this block the operator had
+     * nowhere to read the transitions behind it — the WARN was a number
+     * with no inspectable evidence anywhere in the TUI.
+     *
+     * Rendered whenever there is history even if has_wps is now 0: an
+     * AP that stops advertising the WPS IE mid-attack must not erase
+     * what was already observed from the screen. */
+    if (ap->has_wps || ap->wps_lock_n > 0) {
+        wps_lock_evt_t hist[WPS_LOCK_RING];
+        int hn      = wps_lock_history(ap, hist, WPS_LOCK_RING);
+        int dropped = wps_lock_dropped(ap);
+        int thresh  = alerts_wps_lockout_cycles();
+        int win     = wps_lock_cycles_in_window(ap, time(NULL),
+                                                WPS_LOCKOUT_WINDOW_S);
+        tui_dim();
+        TPRINT("\n \xe2\x94\x80\xe2\x94\x80 WPS ACTIVITY \xe2\x94\x80\xe2\x94\x80\n");
+        tui_dim();    TPRINT("  Lock cycles: ");
+        tui_normal(); TPRINT("%d lifetime", ap->wps_lock_cycles);
+        tui_dim();    TPRINT("   last %dh: ", WPS_LOCKOUT_WINDOW_S / 3600);
+        /* Heat only at or above the rule's own floor, so the colour
+         * means "this is what fired", not "this AP uses WPS". */
+        if (win >= thresh) tui_heat(1.0);
+        else               tui_normal();
+        TPRINT("%d/%d", win, thresh);
+        tui_dim();    TPRINT("  (WPS_LOCKOUT_CYCLING threshold)\n");
+
+        if (hn == 0) {
+            tui_dim();
+            TPRINT("  (no lock-state transitions observed — an AP that "
+                   "never changes state is a posture)\n");
+        } else {
+            if (dropped > 0) {
+                tui_dim();
+                TPRINT("  (%d earlier transition%s aged out of the "
+                       "%d-slot ring)\n",
+                       dropped, dropped == 1 ? "" : "s", WPS_LOCK_RING);
+            }
+            /* Oldest first, so the sawtooth reads as a sequence. */
+            for (int j = 0; j < hn; j++) {
+                char age[8];
+                fmt_age(hist[j].ts, age, sizeof(age));
+                tui_dim();    TPRINT("    %5s ago  ", age);
+                /* Unlocked is the hot end: it is the window in which
+                 * the AP accepts registrar PINs again. */
+                if (hist[j].to == 2) { tui_normal(); TPRINT("LOCKED"); }
+                else                 { tui_heat(1.0); TPRINT("unlocked"); }
+                TPRINT("\n");
+            }
+        }
     }
 
     /* Associated clients we've observed. */
