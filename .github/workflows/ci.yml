@@ -244,17 +244,34 @@ jobs:
   # source of truth for how a target is built and run; this step does
   # not duplicate that command.
   #
-  # Two targets today: fuzz_deauth_parse, over the pure byte parser in
-  # src/deauth_snoop.c, and fuzz_eapol_observe, over eapol_observe_dot11()
-  # and parse_eapol_key() in src/eapol_log.c (a hand-built, spec-correct
-  # 802.11/LLC/EAPOL skeleton with the fuzzer driving only the EAPOL-Key
-  # body — see the harness file for why). The IE walk and radiotap/LLC
-  # decode remain a follow-up: reaching them through the real
-  # pcap_dispatch savefile seam was tried and abandoned, because
-  # libpcap's own offline-read buffer has slack well past any one
-  # record's caplen, which hides exactly the class of small overread
-  # this kind of fuzzing exists to catch. See the Makefile comment above
-  # the `fuzz` target for the measurements behind both of those calls.
+  # Four targets today:
+  #
+  #   fuzz_deauth_parse       deauth_parse(), src/deauth_snoop.c
+  #   fuzz_eapol_observe      eapol_observe_dot11() -> parse_eapol_key(),
+  #                           src/eapol_log.c, driven through a
+  #                           hand-built spec-correct 802.11/LLC/EAPOL
+  #                           skeleton with the fuzzer supplying only the
+  #                           EAPOL-Key body — see the harness for why
+  #   fuzz_radiotap_parse     radiotap_parse(), src/radiotap.c
+  #   fuzz_beacon_parse_ies   beacon_parse_ies(), src/beacon_snoop.c
+  #
+  # The last two close what this comment used to call a follow-up, and
+  # they do it at a different seam than the one that was abandoned.
+  # Reaching the IE walk and the radiotap decode through the real
+  # pcap_dispatch savefile path was tried and dropped because libpcap's
+  # offline-read buffer carries slack well past any one record's caplen
+  # (a 10-byte frame still reports malloc_usable_size 2048 at the record
+  # pointer), so ASan has no redzone where the frame ends and a modest
+  # overread reads as a pass. Calling the two parsers directly takes
+  # libpcap out of the path: the fuzzer's own redzoned buffer is what
+  # each one reads, which is the property that was missing. See the
+  # Makefile comment above the `fuzz` target for the full reasoning.
+  #
+  # Cost of those two: both are pure parsers linking a few objects, so
+  # they add roughly a compile apiece plus 2*FUZZ_SECONDS. The bound
+  # still comes from FUZZ_SECONDS, not from the target count, but that
+  # is a per-target bound — adding targets grows this job linearly, so a
+  # fifth one is a question about the job's budget and not a free move.
   fuzz:
     runs-on: ubuntu-24.04
     steps:

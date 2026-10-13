@@ -724,6 +724,21 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 # eapol_observe_dot11() rather than probe_test_dispatch() for the
 # "radiotap/LLC" half of the original ask: the latter would have looked
 # like coverage without delivering it.
+#
+# fuzz_radiotap_parse and fuzz_beacon_parse_ies land third and fourth,
+# and they are the answer to the paragraph above rather than a change of
+# mind about it. The objection there was to fuzzing the monitor decode
+# path THROUGH libpcap's offline reader, whose buffer is sized well past
+# any one record, so ASan has no redzone at the frame's end. Calling
+# radiotap_parse() and beacon_parse_ies() directly removes libpcap from
+# the picture entirely: the fuzzer's own tightly-redzoned buffer is what
+# each parser reads, which is the property the earlier slice said was
+# missing. So the "radiotap / IE walk" half of #95's original ask is now
+# covered at the only seam where ASan can actually see an overread.
+#
+# Both are pure parsers — no global state, no lock, no clock — so like
+# fuzz_deauth_parse they need no harness beyond the bytes, and they link
+# a handful of objects rather than the whole test source list.
 FUZZ_CC      ?= clang
 FUZZ_SECONDS ?= 20
 FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
@@ -750,6 +765,13 @@ fuzz:
 	    -o /tmp/sloth_fuzz_eapol_observe \
 	    $(FUZZ_EAPOL_SRCS) -lm -lpthread -lsqlite3
 	/tmp/sloth_fuzz_eapol_observe -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
+	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_radiotap_parse \
+	    tests/fuzz/fuzz_radiotap_parse.c src/radiotap.c
+	/tmp/sloth_fuzz_radiotap_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
+	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -o /tmp/sloth_fuzz_beacon_parse_ies \
+	    tests/fuzz/fuzz_beacon_parse_ies.c src/beacon_snoop.c src/reg_ie.c \
+	    src/sensor_health.c src/wifi_oui_attacker.c -lm -lpthread
+	/tmp/sloth_fuzz_beacon_parse_ies -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 
 # ── Static analysis (#95) ───────────────────────────────────────────────────
 # Runs CI's cppcheck command, byte for byte, with CI's version guard.
