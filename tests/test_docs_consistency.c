@@ -25,8 +25,17 @@
  *
  * Deterministic by construction: the claims are extracted with a fixed
  * word-level grammar, not a model, and compared to the compiled
- * constants. Scope is deliberately those three surfaces. MISSION.md and
- * the agents/ tree are owner-reviewed text and are not checked here.
+ * constants.
+ *
+ * Scope was originally those three surfaces, on the grounds that
+ * MISSION.md and the agents/ tree are owner-reviewed text. That
+ * reasoning did not survive contact: agents/ joined the gate in 52509db
+ * after all three of its files sat three thousand assertions stale
+ * while one of them instructed readers never to quote a recalled count,
+ * and MISSION.md joined on 2026-10-13 after its "70 alert rules" was
+ * caught by hand during a slice that took the count to 71. Review is
+ * not a mechanism; it is a person remembering. Both surfaces state the
+ * counts in prose a reader will act on, so both are checked.
  *
  * Rules:
  *   - every "<N> [live|passive|ncurses|alert]* views" claim == VIEW_COUNT
@@ -85,14 +94,23 @@ static int all_digits(const char *w) {
     return 1;
 }
 
-/* True when the digit run ending at `end` is a markdown ordered-list
- * marker: nothing but spaces back to the line start, and a '.' or ')'
- * followed by whitespace after it. "5. Views read from ..." is item
- * five, not five views. */
+/* True when the digit run ending at `end` is a POSITION rather than a
+ * quantity: a markdown ordered-list marker or a numbered heading.
+ *
+ * Nothing but spaces and '#' back to the line start, then a '.' or ')'
+ * and whitespace after. Two shapes in this repo:
+ *
+ *   "5. Views read from `sloth_state_t`"  — agents/FACTORY.md recipe
+ *   "## 2. Rules of engagement"           — MISSION.md section heading
+ *
+ * The heading case is why '#' is allowed. Without it, MISSION.md's §2
+ * title reads as a claim of "2 rules" against an ALERT_TYPE_COUNT of
+ * 71 — a false alarm on the charter's own table of contents, found the
+ * moment MISSION.md came under this gate. */
 static int is_list_marker(const char *text, const char *ws, const char *end) {
     const char *b = ws;
     while (b > text && b[-1] != '\n') {
-        if (b[-1] != ' ' && b[-1] != '\t') return 0;
+        if (b[-1] != ' ' && b[-1] != '\t' && b[-1] != '#') return 0;
         b--;
     }
     if (*end != '.' && *end != ')') return 0;
@@ -254,6 +272,12 @@ static void test_scanner_ignores_ordered_list_markers(void) {
     /* An indented list item is still a list item. */
     scan_all("   5. Views read from state\n", &c);
     ASSERT_EQ(c.n_views, 0);
+    /* And a numbered markdown heading is a position too — MISSION.md's
+       own section title, which is what found this gap. */
+    scan_all("## 2. Rules of engagement (non-negotiable)\n", &c);
+    ASSERT_EQ(c.n_rules, 0);
+    scan_all("### 7. Views and what they show\n", &c);
+    ASSERT_EQ(c.n_views, 0);
     /* But a real claim that merely happens to start a line still
        counts — the exclusion keys on the '. ' or ') ', not on column
        zero, so dropping that detail would silently blind the gate. */
@@ -392,6 +416,38 @@ static void test_agent_docs_counts_match_build(void) {
        test would still pass if the claims were silently dropped, which
        is half the drift it exists to catch. */
     ASSERT_GE(with_claims, 1);
+}
+
+/* MISSION.md is the charter and states both counts — four times, in the
+ * overview and in its own counts section. It was unchecked until
+ * 2026-10-13, and the drift that prompted adding it was real: a slice
+ * raising ALERT_TYPE_COUNT to 71 found "70 alert rules" here and fixed
+ * it by hand, which is exactly the mechanism this file exists to
+ * replace.
+ *
+ * Counts only, not versions — same call as the agents/ tree. MISSION.md
+ * may legitimately cite a historical release, and check_no_future_version
+ * earns its place only where every version named is sloth's own. */
+static void test_mission_counts_match_build(void) {
+    char *t = slurp("MISSION.md");
+    ASSERT(t != NULL);
+    if (!t) return;
+    dc_claims_t c;
+    scan_all(t, &c);
+    /* Floors rather than exact counts, so a reworded sentence that slips
+       past the grammar fails loudly instead of turning this check
+       vacuous.
+       
+       Views is 1, not 2: MISSION.md's other mention is "35 panels", and
+       the grammar reads "views" and "rules" only. Widening it to
+       "panels" was the alternative and was rejected — the noun set is
+       deliberately closed, and "panel" appears in this repo's prose for
+       dashboard tiles as well as for views, so admitting it would trade
+       a false negative here for false positives elsewhere. */
+    ASSERT_GE(c.n_views, 1);
+    ASSERT_GE(c.n_rules, 2);
+    check_counts("MISSION.md", &c);
+    free(t);
 }
 
 static void test_security_names_only_current_version(void) {
@@ -1672,6 +1728,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_readme_counts_match_build);
     RUN_TEST(test_wiki_counts_match_build);
     RUN_TEST(test_agent_docs_counts_match_build);
+    RUN_TEST(test_mission_counts_match_build);
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);
