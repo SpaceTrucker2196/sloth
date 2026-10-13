@@ -1080,10 +1080,14 @@ int main(int argc, char **argv) {
 
     /* Observation profile (#84). Resolved after the whole argv is read,
      * not as each flag arrives, so the outcome cannot depend on the
-     * order the operator typed them in. --strict is applied first by
-     * construction: it names a guarantee, so a command line carrying
-     * both flags is a contradiction and is refused either way round
-     * rather than silently resolved in favour of one of them. */
+     * order the operator typed them in. That guarantee now comes from
+     * observe_resolve_profile() rather than from the order these blocks
+     * happen to sit in: the request below records which flags were
+     * given and never their sequence, and the resolver returns a final
+     * state instead of applying flags one at a time. main() prints and
+     * applies, decides nothing. Pinned by tests/test_observe.c, which
+     * can reach the policy because it is pure — sloth_test does not
+     * link main(). */
     /* Crackable material is opt-in (#87, owner decision 2026-09-30).
      * Resolved here, with the other whole-command-line policy, so the
      * outcome cannot depend on the order the flags were typed in.
@@ -1107,34 +1111,38 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --collect-handshakes without --eapol-dir: "
                         "no destination, so nothing is exported\n");
 
-    if (strict_lock) {
-        observe_lock_strict();       /* scan trigger + discovery (slice 3) */
-        dns_resolver_lock_strict();  /* resolver                (slice 2) */
-    }
+    /* socket_is_remote is only consulted when have_data_socket is set,
+     * so the spec parser is never handed a NULL. */
+    observe_profile_req_t prof_req = {
+        .strict           = strict_lock,
+        .allow_active     = allow_active,
+        .hop              = g_hop_enabled,
+        .have_data_socket = data_socket != NULL,
+        .socket_is_remote = data_socket
+                                ? data_socket_spec_is_remote(data_socket)
+                                : 0,
+    };
+    observe_profile_t prof;
+    observe_resolve_profile(&prof_req, &prof);
 
-    /* #84, owner ruling 2026-10-06: --strict refuses a ROUTABLE data
-     * socket, and only a routable one. The loopback default
-     * (tcp:127.0.0.1:8765) keeps working, because refusing it would make
-     * bare `--strict --data-socket` a startup error and README has
-     * published that pairing as usable.
-     *
-     * The lock beats the opt-in deliberately: --data-socket-allow-remote
-     * is how an operator says "expose this to the LAN", and --strict is
-     * how they say "not on this run". A lock that any other flag can
-     * override is not a lock, and `--strict` exists so the intent is
-     * visible in ps(1) and an audit log.
-     *
-     * Refused before any sink opens, so a refused run binds nothing —
-     * the same ordering #85 established for scope.
-     *
-     * Gated on == 1 (definitely routable) rather than != 0: a malformed
-     * spec is unparseable, never binds, and data_socket_init_ex()
-     * rejects it with a message about the actual typo. Reporting a
-     * strict violation for a mistyped host would be precise about the
-     * wrong thing. */
-    if (data_socket &&
-        observe_strict_refuses_socket(strict_lock,
-                                      data_socket_spec_is_remote(data_socket))) {
+    /* Refused before any sink opens, so a refused run binds nothing —
+     * the same ordering #85 established for scope. The refusal text is
+     * main's job; which refusal applies is not. */
+    switch (prof.refusal) {
+    case OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT:
+        fprintf(stderr, "sloth: --allow-active refused: --strict locks "
+                        "strict observation for this run\n");
+        return prof.exit_code;
+    case OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT:
+        /* #84, owner ruling 2026-10-06. The loopback default
+         * (tcp:127.0.0.1:8765) and a unix: path keep working, because
+         * neither leaves the host and README has published bare
+         * `--strict --data-socket` as usable.
+         *
+         * --data-socket-allow-remote does not override this: that flag
+         * is how an operator says "expose this to the LAN", --strict is
+         * how they say "not on this run", and a lock another flag can
+         * override is not a lock. */
         fprintf(stderr,
                 "sloth: --strict refuses a routable --data-socket (%s).\n"
                 "       A routable listener transmits to whoever connects, "
@@ -1143,16 +1151,18 @@ int main(int argc, char **argv) {
                 "(tcp:127.0.0.1:PORT)\n"
                 "       or a unix: path, or drop --strict.\n",
                 data_socket);
-        return 2;
+        return prof.exit_code;
+    case OBSERVE_PROFILE_OK:
+        break;
     }
-    if (allow_active) {
-        observe_set_active_allowed(1);
-        dns_resolver_set_enabled(1);
-        if (!dns_resolver_enabled() || !observe_active_allowed()) {
-            fprintf(stderr, "sloth: --allow-active refused: --strict locks "
-                            "strict observation for this run\n");
-            return 2;
-        }
+
+    if (prof.strict_locked) {
+        observe_lock_strict();       /* scan trigger + discovery (slice 3) */
+        dns_resolver_lock_strict();  /* resolver                (slice 2) */
+    }
+    if (prof.active_allowed)   observe_set_active_allowed(1);
+    if (prof.resolver_enabled) dns_resolver_set_enabled(1);
+    if (prof.active_allowed) {
         /* Never silent. A passive tool that quietly becomes active is
          * the failure mode #84 exists to prevent, so the opt-in names
          * exactly what it turned on — one line, on stderr, before any
@@ -1162,6 +1172,7 @@ int main(int argc, char **argv) {
                         "nl80211 scan triggers on wireless interfaces; "
                         "everything else stays passive\n");
     }
+    g_hop_enabled = prof.hop_enabled;
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);
 

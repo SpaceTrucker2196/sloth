@@ -78,6 +78,73 @@ int  observe_discovery_allowed(void);
  * this run", and a lock any other flag can override is not a lock. */
 int  observe_strict_refuses_socket(int strict_locked, int spec_is_remote);
 
+/* ── The whole-command-line observation profile (#84) ──────────
+ *
+ * The strict contract (owner, 2026-09-30) used to be composed in
+ * main(): a strict block, a socket-refusal block and an allow-active
+ * block, combined in the order they happened to be written. main() is
+ * not linked into sloth_test, so that composition was unprovable
+ * in-process, and the 2026-10-05 attempt to test it by matching source
+ * text matched an unrelated `return 1;` sixty-eight lines downstream.
+ *
+ * So the composition moves here, as a pure function. It reads no
+ * global, opens nothing and prints nothing; main() fills the request,
+ * calls this, prints the refusal text for whatever comes back, and
+ * applies the rest.
+ *
+ * Order-independence is now structural rather than a property of where
+ * two blocks sit in a source file: the request records WHICH flags were
+ * given and never their sequence, and the resolver computes a final
+ * state instead of applying flags one at a time. README's
+ * "`--strict --allow-active` exits non-zero (in either order)" therefore
+ * cannot be broken by moving code around inside main().
+ *
+ * Pinned by tests/test_observe.c. */
+typedef enum {
+    OBSERVE_PROFILE_OK = 0,
+    OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT,
+    OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT
+} observe_profile_refusal_t;
+
+typedef struct {
+    int strict;            /* --strict                        */
+    int allow_active;      /* --allow-active                  */
+    int hop;               /* --hop                           */
+    int have_data_socket;  /* --data-socket was given at all  */
+    /* data_socket_spec_is_remote()'s answer: 1 routable, 0 loopback or
+       unix:, -1 unparseable. An int for the same reason
+       observe_strict_refuses_socket() takes one — it keeps this module
+       independent of the socket parser. Read only when
+       have_data_socket is set, so a stale value cannot reach the
+       decision. */
+    int socket_is_remote;
+} observe_profile_req_t;
+
+typedef struct {
+    observe_profile_refusal_t refusal; /* OK, or which clause refused  */
+    int exit_code;                     /* 0, or 2 on a refusal         */
+    int strict_locked;                 /* -> observe_lock_strict()     */
+    int active_allowed;                /* -> observe_set_active_...(1) */
+    int resolver_enabled;              /* -> dns_resolver_set_...(1)   */
+    int hop_enabled;                   /* --hop survives the profile   */
+} observe_profile_t;
+
+/* Resolve the profile. A NULL req or a NULL out is a no-op.
+ *
+ * On a refusal the applied fields stay at their refused values, so a
+ * caller that ignored exit_code still could not turn anything on.
+ *
+ * The --strict/--allow-active contradiction is reported ahead of the
+ * routable-socket one, deliberately: the flag pair contradicts the
+ * operator's stated intent and is the better thing to name, while the
+ * socket is a configuration consequence. Both exit 2.
+ *
+ * hop_enabled is req->hop unconditionally. --strict does not refuse
+ * --hop; that is the owner's explicit carve-out, recorded as an open
+ * decision in README's WiFi SIGINT section, not an oversight here. */
+void observe_resolve_profile(const observe_profile_req_t *req,
+                             observe_profile_t *out);
+
 /* Restore the shipped default and clear the lock (for testing). */
 void observe_reset_policy(void);
 

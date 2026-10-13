@@ -57,3 +57,48 @@ void observe_reset_policy(void) {
 int observe_strict_refuses_socket(int strict_locked, int spec_is_remote) {
     return strict_locked && spec_is_remote == 1;
 }
+
+/* Pure by construction: no mutex, no global, no I/O. The policy it
+ * composes has one owner each — the socket clause defers to
+ * observe_strict_refuses_socket() rather than restating == 1, so a
+ * future change to that ruling cannot leave two copies disagreeing.
+ *
+ * The apply step deliberately stays in main(): observe must not call
+ * into dns (src/dns.c documents the one-way lock order observe <- dns),
+ * and inverting that would be a cycle. So this returns what to do and
+ * main() does it. */
+void observe_resolve_profile(const observe_profile_req_t *req,
+                             observe_profile_t *out) {
+    if (!req || !out) return;
+
+    out->refusal          = OBSERVE_PROFILE_OK;
+    out->exit_code        = 0;
+    out->strict_locked    = req->strict ? 1 : 0;
+    out->active_allowed   = 0;
+    out->resolver_enabled = 0;
+    out->hop_enabled      = req->hop ? 1 : 0;
+
+    /* A command line carrying both flags states two incompatible
+     * intents. Refused either way round because the request carries no
+     * ordering to prefer one by. */
+    if (req->strict && req->allow_active) {
+        out->refusal   = OBSERVE_PROFILE_REFUSE_ACTIVE_UNDER_STRICT;
+        out->exit_code = 2;
+        return;
+    }
+
+    /* Gated on have_data_socket so a socket_is_remote left over from an
+     * earlier parse cannot refuse a run that asked for no socket. */
+    if (req->have_data_socket &&
+        observe_strict_refuses_socket(out->strict_locked,
+                                      req->socket_is_remote)) {
+        out->refusal   = OBSERVE_PROFILE_REFUSE_ROUTABLE_SOCKET_UNDER_STRICT;
+        out->exit_code = 2;
+        return;
+    }
+
+    if (req->allow_active) {
+        out->active_allowed   = 1;
+        out->resolver_enabled = 1;
+    }
+}
