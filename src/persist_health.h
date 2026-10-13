@@ -18,7 +18,14 @@
  * per poll tick into the state snapshot (same pattern as
  * capture_health_poll); persist_badge() formats the tab-bar warning
  * from that snapshot, naming only the sinks that are failing. Pure,
- * so the badge is testable without a terminal. */
+ * so the badge is testable without a terminal.
+ *
+ * One blind spot, stated because the badge is a safety signal and a
+ * reader should not have to discover it: under ncurses tui_draw()
+ * returns early for VIEW_DASH, so the dashboard has no tab bar and
+ * therefore no badge — and VIEW_DASH is the startup view. The ANSI
+ * fallback draws the bar everywhere. docs/wiki/cli-reference.md
+ * § Status badges and docs/wiki/retention.md §6 say so too. */
 
 void persist_health_poll(persist_health_t *p);
 

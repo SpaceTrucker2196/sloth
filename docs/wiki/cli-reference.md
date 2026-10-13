@@ -7,14 +7,17 @@ type: reference
 # CLI reference
 
 **Summary**: Every command-line flag, its argument, default, and effect;
-every runtime keybinding; the environment variables; and exit codes.
+every runtime keybinding; the tab-bar status badges; the environment
+variables; and exit codes.
 Source of truth is `print_usage()` and the argv loop in `src/main.c`, and
 `view_labels[]` / `handle_key()` for the keys. If this page and the
 binary disagree, the binary is right — and this page is out of sync, which
 is a bug ([[docs-drift-judge]], and the wiki-sync duty in `agents/AGENTS.md`).
 
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
-`src/view_labels.c`, `include/sloth.h`.
+`src/view_labels.c`, `include/sloth.h`; `src/persist_health.c`
+(`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
+the status badges.
 
 **Last updated**: 2026-10-13.
 
@@ -183,6 +186,58 @@ Full map with descriptions: [[views-catalog]].
 
 A view can *claim* a key the global switch also uses; see
 `src/view_route.c` and the "add a view" checklist in `AGENTS.md`.
+
+## Status badges
+
+The tab bar carries one status badge today, drawn immediately after the
+` sloth v<version>` banner at full alert heat (`tui_heat(1.0)`):
+
+| Badge | Meaning |
+|-------|---------|
+| `!persist jsonl:N pcap:N eapol:N` | An on-disk export sink has failed a write, **or was refused one**. Each `N` is that sink's **lifetime** failure count for this run of sloth: it never resets, and there is no rate or recent-window form of it. The refusal case is `pcap:N` only, and only when a `storage.min_free_mb` / `storage.min_free_inodes` floor is set: `src/alert_pcap.c` routes a pre-write capacity refusal through the same `sfile_fail()` counter, so that `N` can count dumps that were never attempted rather than dumps that failed. Both are "evidence you do not have", which is why they share a counter. |
+
+How `persist_badge()` (`src/persist_health.c`) formats it:
+
+- **Only failing sinks appear.** A healthy sink is omitted entirely, so
+  `!persist pcap:2` says the JSONL log and the EAPOL exports are fine
+  and two per-alert pcap dumps failed. With all three healthy the whole
+  badge is absent rather than zeroed, so the bar is quiet when there is
+  nothing to say.
+- **The sink order is fixed** — `jsonl`, then `pcap`, then `eapol` —
+  independent of which failed first or which count is larger.
+- **Worked example.** Three JSONL write failures, one failed per-alert
+  pcap and two failed EAPOL exports render as
+  `!persist jsonl:3 pcap:1 eapol:2`.
+- **It cannot disagree with the log.** The badge reads the same
+  accessors that `sensor_health.storage_failures` sums in the JSONL
+  stream, per sink as `storage_jsonl_failures`,
+  `storage_pcap_failures` and `storage_eapol_failures`
+  ([[jsonl-schema]]).
+- **Where it is not drawn.** Under ncurses, `tui_draw()` gives the
+  dashboard (`[o]`) the entire screen and draws no tab bar there — and
+  the dashboard is the startup view, so the badge is seen only after a
+  switch to a detail view. The ANSI fallback (`WITH_NCURSES=0`) draws
+  the bar on every view, dashboard included. A badge that is absent
+  therefore means "healthy" only on a view that has a tab bar.
+
+The badge is the only signal **on the tab bar**, but not the only one
+anywhere — three others carry the same fact, and an integrator should
+prefer whichever suits their consumer:
+
+- one stderr line per sink on its first failure, `sloth: <sink> export
+  failed: <reason>`, behind a `reported` latch (`src/secure_file.c`);
+- `storage_failures` plus the per-sink `storage_jsonl_failures` /
+  `storage_pcap_failures` / `storage_eapol_failures` on every
+  `sensor_health` record, and `pcap_write_failures` on an alert record
+  (`src/jsonl.c`);
+- `pcap_dir_free_mb` and `pcap_dir_free_inodes` on `sensor_health`,
+  which is the only one that says anything *before* a write fails.
+
+What the badge genuinely is alone in doing is being visible to an
+operator watching a terminal. And in every one of these, a failing sink
+is still not disabled, not throttled and not retried any differently —
+only a configured `storage.*` floor refuses anything in advance. See
+[[retention]] § 6.
 
 ## Environment variables
 

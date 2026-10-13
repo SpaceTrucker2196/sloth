@@ -2050,3 +2050,51 @@ documented repeat-survey workflow.
   "nothing here answers it", deliberately), and the f8fd5e8 decision-4
   gap: retention for material left by a run that is no longer
   collecting.
+
+---
+
+## 2026-10-13 — #96: the `!persist` badge documented, and its blind spot
+
+**Source**: issue #96 (docs that mislead an evaluator). The wave-6 slice
+shipped `src/persist_health.c` and both tab-bar renderers but paid none
+of the wiki duty `agents/AGENTS.md` attaches to a behaviour change: the
+literal `!persist` appeared nowhere under `docs/`, `README.md`,
+`MISSION.md`, `SECURITY.md` or `agents/`, and `retention.md` §6 still
+told the reader the opposite of what the code now does.
+
+**Updated pages**:
+
+- `docs/wiki/cli-reference.md` — new top-level `## Status badges`
+  section (placed after the keybinding block, before the environment
+  variables, because a tab-bar indicator is not a keybinding): the
+  literal badge form, failing-sinks-only, the fixed sink order, a
+  worked example, the shared accessors that stop it disagreeing with
+  `sensor_health.storage_failures`, and where it is not drawn.
+  `**Summary**` and `**Sources**` widened to match — the page used to
+  promise only flags, keys, environment variables and exit codes.
+- `docs/wiki/retention.md` — §6's first known-gap bullet split in two.
+  The visible cannot-persist state is now described as shipped; the
+  capacity half is restated against the code: no free-space precheck,
+  nothing ENOSPC-specific, and no sink that disables itself. The old
+  wording ("the sink disables itself with one stderr line", "not
+  implemented as of 1.8.2") was false on both counts.
+
+**Notes**:
+
+- **Found while verifying, not briefed.** Under ncurses the badge is
+  *not* visible on the startup view: `tui_draw()` returns early for
+  `VIEW_DASH` so the dashboard owns the whole screen and no tab bar is
+  drawn, and `src/main.c` starts there. The ANSI fallback draws the bar
+  everywhere. The wave-6 claim that a failing export is visible from
+  every view holds only for the fallback front end. Documented as a
+  caveat on both pages rather than implied away; the fix is a layout
+  decision inside the dashboard tile and belongs in its own slice.
+- **No sink disables itself** — checked all three. `sfile_fail()`
+  increments a counter and latches one stderr line; JSONL `clearerr()`s
+  deliberately, and the pcap and EAPOL paths open a fresh file per
+  export, so there is no disabled state to enter.
+- **Pinned by the build.** `test_persist_badge_documented` in
+  `tests/test_docs_consistency.c` renders a badge from a seeded
+  `persist_health_t` and requires `cli-reference.md` to contain the
+  prefix and every sink token the formatter emits, so renaming a token
+  in `src/persist_health.c` fails the suite and names the page.

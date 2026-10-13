@@ -8,6 +8,7 @@
 #include "sloth.h"
 #include "tui.h"
 #include "views/help.h"
+#include "persist_health.h"
 
 /*
  * Docs-consistency guard — issue #96.
@@ -462,6 +463,99 @@ static void test_help_card_agrees_with_build(void) {
     scan_all(buf, &c);
     check_counts("help card", &c);
     check_no_future_version("help card", &c);
+}
+
+/* The tab-bar badge is operator-facing surface the wiki has to carry:
+ * an operator who sees `!persist eapol:4` on the bar has nowhere to
+ * look it up unless cli-reference.md spells the form out. The wave-6
+ * slice shipped the badge and skipped the page — the literal
+ * `!persist` existed nowhere under docs/ — which is the AGENTS.md
+ * "a behaviour change updates the wiki in the same change" duty going
+ * unpaid, on the issue whose whole subject is docs drifting from code.
+ *
+ * Asserted against what the formatter actually emits, not against a
+ * sentence: a badge is rendered from a seeded snapshot, then every
+ * token of it has to appear in the page. Renaming the prefix or any
+ * sink token in src/persist_health.c therefore fails here and names
+ * the page, which a prose-matching test could not do. The token
+ * prefixes are matched rather than the whole badge because the page
+ * documents the `N` placeholder form; it also carries this exact
+ * worked example, so the full string is checked too. */
+static void test_persist_badge_documented(void) {
+#define DC_PAGE "docs/wiki/cli-reference.md"   /* DC_WIKI_DIR is defined below */
+    persist_health_t p;
+    memset(&p, 0, sizeof(p));
+    p.jsonl = 3; p.alert_pcap = 1; p.eapol = 2;
+    char badge[96];
+    ASSERT_EQ(persist_badge(&p, badge, sizeof(badge)), 6);
+    ASSERT_STR(badge, "!persist jsonl:3 pcap:1 eapol:2");
+
+    char *t = slurp(DC_PAGE);
+    ASSERT(t != NULL);
+    if (!t) return;
+
+    /* The prefix, the worked example verbatim, and each sink token up
+     * to its colon (the page writes the count as N). */
+    ASSERT(strstr(t, "!persist") != NULL);
+    ASSERT(strstr(t, badge) != NULL);
+    int toks = 0;
+    for (const char *sp = strchr(badge, ' '); sp; sp = strchr(sp, ' ')) {
+        const char *tok = sp + 1;
+        const char *colon = strchr(tok, ':');
+        if (!colon) break;
+        char want[32];
+        size_t n = (size_t)(colon - tok) + 1;          /* include ':' */
+        if (n >= sizeof(want)) break;
+        memcpy(want, tok, n);
+        want[n] = '\0';
+        toks++;
+        if (!strstr(t, want))
+            fprintf(stderr, "    %s does not document "
+                            "the badge token \"%s\" emitted by "
+                            "persist_badge()\n", DC_PAGE, want);
+        ASSERT(strstr(t, want) != NULL);
+        sp = tok;
+    }
+    /* One token per sink: a scan that found none would pass vacuously. */
+    ASSERT_EQ(toks, 3);
+    free(t);
+
+    /* The page's FIRST documented behaviour is "only failing sinks
+     * appear", and the scan above never exercises it — every token is
+     * present because every count was non-zero. Review found the gap
+     * with a surviving mutation: deleting the `p->jsonl > 0` /
+     * `p->alert_pcap > 0` / `p->eapol > 0` guards in
+     * src/persist_health.c so that every sink always prints left the
+     * suite green, which means the documented sentence could become
+     * false without a red build. These three cases close it.
+     *
+     * The badge matters precisely because of this: `jsonl:0` would tell
+     * an operator a sink had failed zero times, which is a strange way
+     * to say "fine", and the point of the badge is that its presence
+     * means something is wrong. */
+    memset(&p, 0, sizeof(p));
+    p.jsonl = 2;
+    ASSERT_EQ(persist_badge(&p, badge, sizeof(badge)), 2);
+    ASSERT_STR(badge, "!persist jsonl:2");
+
+    memset(&p, 0, sizeof(p));
+    p.eapol = 7;
+    ASSERT_EQ(persist_badge(&p, badge, sizeof(badge)), 7);
+    ASSERT_STR(badge, "!persist eapol:7");
+
+    /* The middle sink alone, so a guard deleted from only the first or
+     * only the last is still caught. */
+    memset(&p, 0, sizeof(p));
+    p.alert_pcap = 1;
+    ASSERT_EQ(persist_badge(&p, badge, sizeof(badge)), 1);
+    ASSERT_STR(badge, "!persist pcap:1");
+
+    /* And no failures at all emits nothing, so a healthy run shows no
+     * badge rather than an empty one. */
+    memset(&p, 0, sizeof(p));
+    badge[0] = 'X';
+    ASSERT_EQ(persist_badge(&p, badge, sizeof(badge)), 0);
+#undef DC_PAGE
 }
 
 /* `sloth --help` lives in main.c, which the test binary does not link,
@@ -1152,6 +1246,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);
+    RUN_TEST(test_persist_badge_documented);
     TEST_SUITE("usage-text honesty (#84)");
     RUN_TEST(test_usage_block_extractor);
     RUN_TEST(test_has_ci);

@@ -335,11 +335,49 @@ media or the file with a tool built for that; sloth does not claim to.
 
 Recorded here rather than implied away:
 
-- **No filesystem capacity control.** Sloth does not check free space
-  before writing, and there is no "cannot persist" error surfaced to the
-  operator when the volume fills — the write simply fails and the sink
-  disables itself with one stderr line. Tracked as remaining work on
-  issue #96; not implemented as of 1.8.2.
+- **A failing sink is visible — except from the dashboard.**
+  `persist_health_poll()` (`src/persist_health.c`, polled once per tick
+  from `src/main.c`) snapshots the three sinks' lifetime write-failure
+  counts, and `persist_badge()` renders `!persist jsonl:N pcap:N
+  eapol:N` — failing sinks only — on the tab bar at full alert heat in
+  both front ends (`draw_tabbar` in `src/tui.c`, ncurses and ANSI).
+  The hole is the ncurses dashboard: `tui_draw()` returns early for
+  `VIEW_DASH` so the whole screen belongs to the tile and no tab bar is
+  drawn, and `VIEW_DASH` is the startup view — so under the default
+  front end the badge is seen only once the operator switches to a
+  detail view. The ANSI fallback draws the bar on every view, dashboard
+  included. Format and caveats: [[cli-reference]] § Status badges.
+- **Capacity control covers one sink, and no sink ever gives up.**
+  `--pcap-dir` is checked before each write, and nothing else is.
+  `src/fs_capacity.c` reads the headroom of the filesystem holding that
+  directory and `src/alert_pcap.c` refuses the dump when it is below a
+  configured floor — `storage.min_free_mb` or `storage.min_free_inodes`
+  via `--tune`, **both 0 (off) by default**, so an unchanged deployment
+  behaves exactly as it did before. Free bytes *and* free inodes are
+  reported unconditionally in `sensor_health`
+  (`pcap_dir_free_mb`, `pcap_dir_free_inodes`), because the operator
+  failure mode here is false reassurance rather than surprise: measured
+  on a live monitor host, `--pcap-dir` held 15.9M files and ~93% of the
+  filesystem's inodes while `df -h` read 39% used.
+
+  What is still open: the JSONL log, the SQLite database and its WAL,
+  `--report` output and the EAPOL exports have **no** capacity check at
+  all, and nothing anywhere is ENOSPC-specific. Nor does any sink enter
+  a disabled state. A write on a full volume fails, `sfile_fail()`
+  (`src/secure_file.c`) increments that sink's counter and prints one
+  stderr line behind a `reported` latch, and the next write is
+  attempted anyway: the JSONL sink `clearerr()`s the stream on purpose
+  ("keep trying: a full disk may drain", `src/jsonl.c`), while
+  per-alert pcap and EAPOL exports open a fresh file per export
+  (`src/alert_pcap.c`, `src/eapol_log.c`). Counters rise, the badge
+  grows, and the sink keeps trying at full rate — nothing throttles,
+  degrades or stops.
+
+  Nothing deletes an alert pcap either. `eapol_sweep()` ages handshake
+  exports out because #87 gave crackable material a stated short
+  default; alert pcaps have no such policy to inherit, and the retention
+  window for forensic evidence is an owner decision rather than an
+  engineering one. Remaining work on issue #96.
 - **The size guard measures the wrong number for a disk budget** — the
   main database file only, excluding `-wal`/`-shm` — and gives up for
   the hour after 64 pruning rounds (§3).
