@@ -191,3 +191,4 @@
 | 4a86b10 | 2026-10-09T11:22:43Z | claude-opus-5 | 270 | 102946 | 16827905 | 421714 | 15.2061 | #91 — per-protocol flow-ring eviction tally (builder session only) |
 | d8d47b2 | 2026-10-13T16:12:18Z | claude-opus-5 | 52 | 21874 | 23737092 | 935317 | 21.7688 | #77 WPS string sanitisation, #84 strict profile resolver, #87 snapshot-out through secure_file |
 | 4f3bd88 | 2026-10-13T20:39:37Z | claude-opus-5 | 888 | 343235 | 157763315 | 595174 | 93.4187 | open-issue finish pass: 8 builder slices integrated with review fixes, pcap-format consolidation, --pcap-dir capacity guard, agents/MISSION count gates, 2 fuzz targets |
+| 6e05e02 | 2026-10-13T20:58:42Z | claude-opus-5 | 110 | 32519 | 36129081 | 49690 | 19.3750 | #101 and #106 integrated with review fixes; #90/#104/#107 held with blocking questions |
