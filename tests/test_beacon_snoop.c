@@ -931,6 +931,179 @@ static void test_record_wps_vendor_strings_preserved_on_bare_rerecord(void) {
     ASSERT_STR(s.beacon_aps[0].wps_manufacturer, "Netgear");
 }
 
+/* Every byte of a WPS string attribute is chosen by whoever is
+ * transmitting, so the four tests below are the hostile-input half of
+ * the five above (whose inputs are all conforming printable ASCII).
+ * wps_attr_str() filters to 0x20..0x7e: WFA WPS 2.0 §12 defines these
+ * attributes as ASCII strings, and in the ANSI-fallback builds
+ * (WITH_NCURSES=0, `make embedded`) TPRINT is plain printf, so a
+ * surviving control byte would be an escape sequence on the operator's
+ * terminal rather than a glyph. */
+#define WPS_ATTR_FRAME_MAX (BEACON_HDR_LEN + 2 + 2 + 4 + 4 + 247)
+
+/* One beacon carrying exactly one WPS string attribute, so each test
+ * below differs only in the attribute's bytes. Returns the frame
+ * length. `body_len` is what the attribute *claims*, which is also what
+ * it carries here — the claim-exceeds-destination case is the clamp
+ * test, not this helper's job. */
+static int build_wps_attr_frame(uint8_t *f, uint16_t aid,
+                                const uint8_t *body, uint8_t body_len)
+{
+    int n = BEACON_HDR_LEN;
+    fill_hdr(f, BSSID_A, 100, 0x0010);
+    f[n++] = 0x00; f[n++] = 0x00;                 /* SSID element, length 0 */
+    f[n++] = 0xdd;                                /* vendor-specific */
+    f[n++] = (uint8_t)(4 + 4 + body_len);
+    f[n++] = 0x00; f[n++] = 0x50; f[n++] = 0xf2; f[n++] = 0x04;  /* WFA, WPS */
+    f[n++] = (uint8_t)(aid >> 8); f[n++] = (uint8_t)(aid & 0xff);
+    f[n++] = 0x00; f[n++] = body_len;             /* attribute length, BE */
+    memcpy(f + n, body, body_len);
+    return n + body_len;
+}
+
+/* Assert a stored attribute holds nothing outside printable ASCII. The
+ * byte property is the actual contract; the expected strings the callers
+ * also assert are a second, narrower layer over the same bound. */
+static void assert_printable_ascii(const char *s) {
+    for (int i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        ASSERT(c >= 0x20 && c <= 0x7e);
+    }
+}
+
+/* A CSI/OSC-shaped payload interleaved with legitimate text. ']' '0' ';'
+ * 'x' are printable and must survive — only 0x1b and 0x07 go, which is
+ * enough to disarm the sequence, since the escape introducer is what
+ * makes the rest control data rather than letters. */
+static void test_parse_wps_vendor_string_strips_control_bytes(void) {
+    static const uint8_t body[] = {
+        'T','P', 0x1b, 0x5d, '0', ';', 'x', 0x07, '-','L','i','n','k'
+    };
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    int flen = build_wps_attr_frame(f, 0x1021, body, (uint8_t)sizeof(body));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    assert_printable_ascii(rsn.wps_manufacturer);
+    ASSERT_STR(rsn.wps_manufacturer, "TP]0;x-Link");
+}
+
+/* 0x7f DEL sits above the control block but is not printable, so the
+ * upper bound is `< 0x7f` and not `<= 0x7f`. */
+static void test_parse_wps_vendor_string_strips_del(void) {
+    static const uint8_t body[] = { 'v','1', 0x7f, '.','0' };
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    int flen = build_wps_attr_frame(f, 0x1024, body, (uint8_t)sizeof(body));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    assert_printable_ascii(rsn.wps_model_number);
+    ASSERT_STR(rsn.wps_model_number, "v1.0");
+}
+
+/* Bytes >= 0x80 are dropped too, and the reason is the forensic log
+ * rather than the terminal: json_escape() in src/jsonl.c escapes every
+ * byte below 0x20 but passes the high range through unmodified, so a
+ * high byte here would emit a JSON string that is not valid UTF-8.
+ * Filtering at the parser fixes that for these four fields without
+ * touching json_escape, which every other emitter shares. */
+static void test_parse_wps_vendor_string_strips_high_bytes(void) {
+    static const uint8_t body[] = { 'R', 0x80, 'T', 0xff, 'L', 0xc3, 0xa9 };
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    int flen = build_wps_attr_frame(f, 0x1023, body, (uint8_t)sizeof(body));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    assert_printable_ascii(rsn.wps_model_name);
+    ASSERT_STR(rsn.wps_model_name, "RTL");
+}
+
+/* An attribute that is present but carries no printable byte collapses
+ * to "", which is the same value as absent. That is deliberate: the
+ * `[0]` presence checks in src/views/beacon.c and src/jsonl.c then treat
+ * it as a missing attribute, so nothing renders and no non-empty field
+ * is logged for a string that had no conforming content. */
+static void test_parse_wps_vendor_string_all_nonprintable_reads_absent(void) {
+    static const uint8_t body[] = { 0x1b, 0x00, 0x07, 0xff, 0x7f };
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    int flen = build_wps_attr_frame(f, 0x1042, body, (uint8_t)sizeof(body));
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ(rsn.has_wps, 1);
+    ASSERT_STR(rsn.wps_serial, "");
+    ASSERT_EQ(rsn.wps_serial[0], '\0');
+}
+
+/* The clamp and the filter have to compose in the right order. Bounding
+ * the loop on the *write* index means a long attribute of mostly control
+ * bytes still yields the printable bytes sitting past the first dst_sz
+ * of input; pre-clamping `len` to the destination first would silently
+ * discard them. Both halves below are wrong under a pre-clamp: 40
+ * alternating bytes would yield 16 'A' instead of 20, and 70 would yield
+ * 16 'B' instead of a full 32. */
+static void test_parse_wps_vendor_string_clamp_composes_with_filter(void) {
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    uint8_t body[70];
+    int flen, i;
+
+    /* 40 claimed bytes, every other one an ESC: 20 printable, all of
+     * which fit wps_model_name[33]. */
+    for (i = 0; i < 40; i++) body[i] = (i % 2 == 0) ? 'A' : 0x1b;
+    flen = build_wps_attr_frame(f, 0x1023, body, 40);
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ((int)strlen(rsn.wps_model_name), 20);
+    assert_printable_ascii(rsn.wps_model_name);
+    for (i = 0; i < 20; i++) ASSERT_EQ(rsn.wps_model_name[i], 'A');
+
+    /* 70 claimed bytes: 35 printable, so the destination bound still has
+     * to bite after the filter has run. */
+    for (i = 0; i < 70; i++) body[i] = (i % 2 == 0) ? 'B' : 0x1b;
+    flen = build_wps_attr_frame(f, 0x1023, body, 70);
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_EQ((int)strlen(rsn.wps_model_name), 32);
+    assert_printable_ascii(rsn.wps_model_name);
+    for (i = 0; i < 32; i++) ASSERT_EQ(rsn.wps_model_name[i], 'B');
+}
+
+/* Stripping rather than rejecting is what stops a hostile AP erasing a
+ * leak it already emitted, but only together with the per-field `if
+ * (rsn->wps_model_name[0])` guard in beacon_record(): the junk beacon
+ * filters down to "", and "" does not overwrite. Driven through
+ * beacon_parse() rather than a hand-filled rsn so the filter and the
+ * guard are exercised as the one chain the radio actually feeds. */
+static void test_record_wps_vendor_strings_survive_a_junk_beacon(void) {
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    beacon_rsn_t rsn;
+    uint8_t f[WPS_ATTR_FRAME_MAX];
+    int flen;
+    beacon_clear();
+
+    static const uint8_t good[] = { 'R','T','L','8','1','9','6','E' };
+    flen = build_wps_attr_frame(f, 0x1023, good, (uint8_t)sizeof(good));
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.wps_model_name, "RTL8196E");
+    beacon_record(BSSID_A, "Net", -50, 6, "WPA2", 100, &rsn);
+
+    static const uint8_t junk[] = { 0x1b, 0x1b, 0x07, 0x00 };
+    flen = build_wps_attr_frame(f, 0x1023, junk, (uint8_t)sizeof(junk));
+    ASSERT_EQ(beacon_parse(f, flen, -50, ssid, bssid, &ch, enc, &bms, &rsn), 1);
+    ASSERT_STR(rsn.wps_model_name, "");
+    beacon_record(BSSID_A, "Net", -48, 6, "WPA2", 100, &rsn);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 1);
+    ASSERT_STR(s.beacon_aps[0].wps_model_name, "RTL8196E");
+}
+
 /* Config Methods (0x1008) and Device Password ID (0x1012) — #82, same
  * WFA WPS 2.0 §12 attribute table as the vendor strings above. Both are
  * 2-byte big-endian fields. Device Password ID 0x0004 is Push Button. */
@@ -3183,6 +3356,12 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_wps_vendor_string_truncates_oversized);
     RUN_TEST(test_record_persists_wps_vendor_strings);
     RUN_TEST(test_record_wps_vendor_strings_preserved_on_bare_rerecord);
+    RUN_TEST(test_parse_wps_vendor_string_strips_control_bytes);
+    RUN_TEST(test_parse_wps_vendor_string_strips_del);
+    RUN_TEST(test_parse_wps_vendor_string_strips_high_bytes);
+    RUN_TEST(test_parse_wps_vendor_string_all_nonprintable_reads_absent);
+    RUN_TEST(test_parse_wps_vendor_string_clamp_composes_with_filter);
+    RUN_TEST(test_record_wps_vendor_strings_survive_a_junk_beacon);
     RUN_TEST(test_parse_wps_config_methods_and_pwd_id);
     RUN_TEST(test_parse_wps_config_methods_and_pwd_id_absent);
     RUN_TEST(test_parse_wps_pwd_id_short_length_ignored);

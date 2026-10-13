@@ -814,8 +814,18 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "wps_config_methods", e->wps_config_methods);
         kv_int(buf, LINEBUF, &off, "wps_device_pwd_id",  e->wps_device_pwd_id);
         /* Additive (#77): WPS Manufacturer / Model Name / Model Number /
-         * Serial Number, when the beacon's WPS IE leaks them. "" when
-         * absent, same convention as `vendor` above. */
+         * Serial Number, when the beacon's WPS IE leaks them.
+         *
+         * "" means EITHER absent or present-but-unprintable: these are
+         * filtered to printable ASCII at the parse boundary, because the
+         * bytes are chosen by whoever is transmitting and reached the
+         * operator's terminal unfiltered in non-ncurses builds. An
+         * attribute whose every byte was a control character therefore
+         * reads exactly like a missing one. That is deliberate — a
+         * consumer has nothing useful to do with "present but entirely
+         * unprintable" that it would not also do with absent — but it is
+         * not the same convention as `vendor` above, which is only ever
+         * empty when absent. */
         kv_str(buf, LINEBUF, &off, "wps_manufacturer", e->wps_manufacturer);
         kv_str(buf, LINEBUF, &off, "wps_model_name",    e->wps_model_name);
         kv_str(buf, LINEBUF, &off, "wps_model_number",  e->wps_model_number);

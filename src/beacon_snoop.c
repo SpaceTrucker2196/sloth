@@ -27,18 +27,40 @@ static void note_new_bssid(time_t now) {
     g_new_bssid_head = (g_new_bssid_head + 1) % BEACON_NEW_TS_RING;
 }
 
-/* Bounded copy of a WPS TLV string attribute into a fixed field. The
- * attribute body is not NUL-terminated in the frame, and a hostile AP
- * can claim any length the enclosing IE has room for — the wrem check
- * in the caller only proves the bytes exist in the IE, not that they
- * fit the destination, so the copy is clamped here regardless of what
- * the attribute claims. */
+/* Bounded, printable-ASCII copy of a WPS TLV string attribute into a
+ * fixed field. The attribute body is not NUL-terminated in the frame,
+ * and a hostile AP can claim any length the enclosing IE has room for —
+ * the wrem check in the caller only proves the bytes exist in the IE,
+ * not that they fit the destination, so the copy is clamped here
+ * regardless of what the attribute claims.
+ *
+ * The alphabet is bounded for the same reason the length is: every byte
+ * is attacker-chosen. WFA WPS 2.0 §12 defines all four of these
+ * attributes as ASCII strings, so anything outside 0x20..0x7e is
+ * already not a conforming value, and in the ANSI-fallback builds
+ * (WITH_NCURSES=0, `make embedded`) TPRINT is plain printf — a raw
+ * control byte reaching src/views/beacon.c would be an escape sequence
+ * on the operator's terminal, not a glyph. Filtering here also keeps
+ * the four JSONL fields inside ASCII, which json_escape's >= 0x80
+ * passthrough would otherwise emit as invalid UTF-8.
+ *
+ * Strip rather than reject: these are forensic fingerprint fields, and
+ * discarding the whole string on one bad byte would let a hostile AP
+ * suppress the leak this slice exists to surface. Same reasoning as
+ * sanitize_copy() in src/cleartext_creds.c; src/snmp_snoop.c rejects
+ * instead because a community string with control bytes is not a
+ * community string, whereas a partly-mangled model name is still
+ * evidence. The bound is on the write index, not a pre-clamp of `len`,
+ * so a long attribute of mostly control bytes still yields the
+ * printable bytes that sit past the first dst_sz of input. */
 static void wps_attr_str(char *dst, size_t dst_sz,
                           const uint8_t *data, uint16_t len) {
-    size_t n = len;
-    if (n > dst_sz - 1) n = dst_sz - 1;
-    memcpy(dst, data, n);
-    dst[n] = '\0';
+    size_t j = 0;
+    for (uint16_t i = 0; i < len && j + 1 < dst_sz; i++) {
+        unsigned char c = data[i];
+        if (c >= 0x20 && c < 0x7f) dst[j++] = (char)c;
+    }
+    dst[j] = '\0';
 }
 
 int beacon_recent_new_bssids(time_t now, int window_s) {

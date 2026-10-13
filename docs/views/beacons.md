@@ -39,12 +39,27 @@ the OUI. It needs no attribution to a specific tool to be useful — an
 operator doing a sweep can search a site for a serial number, or notice
 that a "different" SSID shares a model/serial with an AP they already
 know. No signature table, no verdict, nothing unverified: the values
-come straight off the wire, letter for letter. Absent when the WPS IE
-carries none of these attributes (the common case) or `WPS:` is `-`.
+are what the AP said about itself, not an inference drawn from them.
+Absent when the WPS IE carries none of these attributes (the common
+case) or `WPS:` is `-`.
+
+One transformation is applied on the way in: the four strings are
+filtered to printable ASCII (`0x20`..`0x7e`) at the parse boundary, and
+bytes outside that range are dropped while the rest of the string is
+kept. WFA WPS 2.0 §12 defines all four attributes as ASCII strings, so
+nothing conforming is lost — but every byte is chosen by whoever is
+transmitting, and in the builds without ncurses (`WITH_NCURSES=0`,
+`make embedded`) this line is written with a bare `printf`, where a
+control byte would be an escape sequence against the operator's
+terminal rather than a glyph. The displayed and logged value can
+therefore be shorter than what was on the air, which matters if you are
+matching a serial number across two sweeps; a present attribute with no
+printable byte reads as absent.
 
 Additive JSONL fields on the `beacon` record: `wps_manufacturer`,
 `wps_model_name`, `wps_model_number`, `wps_serial` (all `""` when
-absent). Not persisted to `--db` — like `#60f`'s `phy_confirmed` column,
+absent, and all printable ASCII per the filtering above). Not persisted
+to `--db` — like `#60f`'s `phy_confirmed` column,
 a new field on an existing SQLite table needs a schema version bump that
 invalidates every prior database file, and that cost isn't worth paying
 for a display/forensic nuance already visible in the JSONL log.

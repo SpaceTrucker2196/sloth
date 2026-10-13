@@ -53,7 +53,14 @@ typedef struct {
      * every beacon — a fingerprinting/TSCM signal that needs no
      * attacker-tool attribution to be useful. "" = attribute absent.
      * Buffer sizes are the spec's own per-attribute length ceiling
-     * (64/32/32/32) plus a NUL. */
+     * (64/32/32/32) plus a NUL.
+     *
+     * Filtered to printable ASCII (0x20..0x7e) by wps_attr_str(), the
+     * single writer of all four — §12 defines them as ASCII strings, and
+     * these bytes reach a bare printf in the ANSI-fallback builds. The
+     * stored value can therefore be shorter than what was on the air,
+     * and "" also means every byte of a present attribute was
+     * non-printable. */
     char wps_manufacturer[65];
     char wps_model_name[33];
     char wps_model_number[33];
