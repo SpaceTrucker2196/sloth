@@ -571,6 +571,7 @@ const char *alert_technique(alert_type_t type) {
     case ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD: return "T1669";      /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
     case ALERT_TYPE_MLE_SUBELEM_OVERRUN:    return "T1669";       /* same class again — Link Info subelement chain overruns its container */
     case ALERT_TYPE_MLD_MAC_COLLISION:      return "T1669";       /* rogue MLD impersonating a stable Multi-Link identity */
+    case ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE: return "T1557"; /* Adversary-in-the-Middle — one MLD link advertised weaker than its siblings is the lane to steer a client onto (#104) */
     /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
      * (#80): what fires here is a third party's camera announcing its
      * own presence over an unauthenticated multicast protocol — an
@@ -675,6 +676,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
     N(ALERT_TYPE_MLE_SUBELEM_OVERRUN);
     N(ALERT_TYPE_MLD_MAC_COLLISION);
+    N(ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE);
     N(ALERT_TYPE_CAM_WS_DISCOVERY);
     N(ALERT_TYPE_PM_FORGE);
     N(ALERT_TYPE_SURV_CLOUD_SNI);
@@ -3806,6 +3808,64 @@ static void rule_mld_mac_collision(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* Cross-link cipher / PMF downgrade inside one Multi-Link element
+ * (#104 slice 5, IEEE 802.11be §9.4.2.312, MITRE T1557).
+ *
+ * A Multi-Link Device runs several radios under one identity and a
+ * benign one runs one security posture across all of them. Two Per-STA
+ * Profiles of a single MLE that each carry their own explicit RSNE and
+ * disagree — one requiring management-frame protection while another
+ * does not, or one offering GCMP-256/CCMP-256 while another tops out at
+ * CCMP-128/TKIP — advertise the weaker radio as a lane worth taking,
+ * which is exactly what an adversary-in-the-middle needs a client to do.
+ *
+ * WARN, not CRIT, and the distinction is the same structural one slice 3
+ * drew: this is a posture mismatch being advertised, not an overrun that
+ * has already happened. Nothing here says a client took the weak lane.
+ *
+ * The parse side compares only links with an explicit RSNE — an omitted
+ * one is inherited from the reporting AP under 802.11be inheritance, so
+ * absence is not weakness. See src/mle.c. */
+static void rule_mle_cross_link_cipher_downgrade(const sloth_state_t *s,
+                                                 time_t now) {
+    for (int i = 0; i < s->mld_count; i++) {
+        const sloth_mld_t *m = &s->mlds[i];
+        if (!m->cross_link_cipher_downgrade_total) continue;
+
+        char mac[20];
+        mac_to_str(m->mld_mac, mac, sizeof(mac));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        snprintf(key, sizeof(key), "mle_cipher_downgrade:%s", mac);
+        /* The cipher mismatch is the finding and names its own pair.
+         * The PMF mismatch rides along as CONTEXT with its own pair, and
+         * the text says the standard permits it — otherwise an operator
+         * reads two clauses as two problems. The two arms carry separate
+         * link pairs because they can involve different links; they used
+         * to share one, and whichever branch ran second overwrote it
+         * while both flags stayed set, so the pair printed was false of
+         * one of the clauses. */
+        char pmf_note[128] = "";
+        if (m->downgrade_pmf_mismatch)
+            snprintf(pmf_note, sizeof(pmf_note),
+                     " - also: link_id %u negotiates PMF where link_id %u "
+                     "requires it, which the standard permits and is not "
+                     "itself a downgrade",
+                     (unsigned)m->pmf_mismatch_link_id,
+                     (unsigned)m->pmf_mismatch_peer_link_id);
+        snprintf(detail, sizeof(detail),
+                 "MLD %s advertises link_id %u with a weaker pairwise "
+                 "cipher than its sibling link_id %u in the same "
+                 "Multi-Link element - %u such frame(s) seen%s"
+                 " - IEEE 802.11be 9.4.2.312",
+                 mac, (unsigned)m->downgrade_link_id,
+                 (unsigned)m->downgrade_peer_link_id,
+                 (unsigned)m->cross_link_cipher_downgrade_total,
+                 pmf_note);
+        fire(ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE, ALERT_SEV_WARN,
+             "MLE_CROSS_LINK_CIPHER_DOWNGRADE", detail, key, NULL, 0, now);
+    }
+}
+
 /* Evil-twin AP: same SSID broadcast under more than one BSSID, where
  * one of the BSSIDs has weak/no security (OPEN, WEP) and another has
  * strong security (WPA / WPA2 / WPA3). This is the classic credential
@@ -4958,6 +5018,7 @@ void alerts_update(sloth_state_t *s) {
     rule_mle_common_info_len_bad(s, now);
     rule_mle_subelem_overrun(s, now);
     rule_mld_mac_collision(s, now);
+    rule_mle_cross_link_cipher_downgrade(s, now);
     rule_ssid_confusion(s, now);
     rule_mgmt_fuzz(s, now);
     rule_rogue_radius(s, now);

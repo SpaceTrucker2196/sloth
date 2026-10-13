@@ -13,6 +13,84 @@ static int mac_is_usable(const uint8_t m[6]) {
     return 0;
 }
 
+/* Pairwise-cipher strength rank for a 00-0F-AC suite type (IEEE
+ * 802.11-2020 Table 9-149). Only the *ordering* is load-bearing: the
+ * cross-link rule asks whether two radios of one MLD offer the same
+ * strength, never what the absolute strength is. 0 means "not a suite
+ * whose strength we are willing to rank" — suite 0 is Use-Group-Cipher
+ * and anything else is a selector newer than this table, and ranking an
+ * unknown suite as weak would turn every future cipher into an alert. */
+static int cipher_rank(uint8_t t) {
+    switch (t) {
+    case 1:  return 1;   /* WEP-40  */
+    case 2:  return 1;   /* TKIP    */
+    case 5:  return 1;   /* WEP-104 */
+    case 4:  return 2;   /* CCMP-128 */
+    case 8:  return 2;   /* GCMP-128 */
+    case 9:  return 3;   /* GCMP-256 */
+    case 10: return 3;   /* CCMP-256 */
+    default: return 0;
+    }
+}
+
+/* Extract the strongest pairwise cipher and the MFPR bit from the RSNE
+ * in an element list. Returns 1 only when the chain tiles `len`
+ * **exactly** and carries a readable RSNE.
+ *
+ * Exact tiling is the guard, not a nicety — see the caller. Any
+ * internal inconsistency (a declared element body past the end, an RSNE
+ * whose own counts walk off its length) returns 0: a posture read from
+ * a chain that does not add up is worse than no posture at all, and the
+ * bounds faults in this element already have their own three rules.
+ *
+ * RSNE layout after tag+len (IEEE 802.11-2020 §9.4.2.24):
+ *   2 ver | 4 group | 2 N | 4N pairwise | 2 M | 4M AKM | 2 RSN caps
+ * RSN Capabilities bit 6 is MFPR (required), bit 7 MFPC (capable). */
+static int sta_profile_rsn(const uint8_t *p, int len,
+                           int *best_rank, int *mfpr) {
+    int off = 0, found = 0, rank = 0, req = 0;
+
+    while (off + 2 <= len) {
+        uint8_t tag = p[off];
+        uint8_t tln = p[off + 1];
+        if (off + 2 + (int)tln > len) return 0;
+        if (tag == 48 && tln >= 8) {
+            const uint8_t *r = p + off + 2;
+            int o = 2 + 4;                       /* version + group cipher */
+            if (o + 2 > (int)tln) return 0;
+            int pw = r[o] | (r[o + 1] << 8);
+            o += 2;
+            /* `pw` comes off the air and may overstate the list, so the
+             * bound is rechecked per entry rather than once. */
+            for (int k = 0; k < pw; k++) {
+                if (o + 4 > (int)tln) return 0;
+                if (r[o] == 0x00 && r[o + 1] == 0x0f && r[o + 2] == 0xac) {
+                    int cr = cipher_rank(r[o + 3]);
+                    if (cr > rank) rank = cr;
+                }
+                o += 4;
+            }
+            if (o + 2 > (int)tln) return 0;
+            int akm = r[o] | (r[o + 1] << 8);
+            o += 2 + akm * 4;
+            /* RSN Capabilities is optional in the element's grammar. A
+             * link that omits it has not said MFPR=0, it has said
+             * nothing, so the element is unusable for this comparison. */
+            if (o + 2 > (int)tln) return 0;
+            req = (r[o] >> 6) & 1;
+            found = 1;
+        }
+        off += 2 + tln;
+    }
+    /* A trailing byte too short to begin an element means the chain
+     * never tiled the region — which is also what a wrong fixed-field
+     * prefix looks like from here. */
+    if (off != len || !found) return 0;
+    *best_rank = rank;
+    *mfpr      = req;
+    return 1;
+}
+
 int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
@@ -65,6 +143,16 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     int off = common_off + common_len;
     unsigned seen_link_ids = 0;   /* bitmask over the 0-15 field width */
 
+    /* Cross-link posture accumulators (#104 slice 5). Only extremes are
+     * kept rather than a per-link array: the finding is that two links
+     * of one MLE disagree, so the weakest and the strongest answer it
+     * for any number of links, including more than the three the roster
+     * can store. */
+    int rsn_links = 0;              /* links carrying an explicit RSNE */
+    int lo_rank = 0, hi_rank = 0;
+    int lo_rank_link = 0, hi_rank_link = 0;
+    int mfpr_set_link = -1, mfpr_clear_link = -1;
+
     while (off < len) {
         /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 3): the subelement
          * chain has to tile Link Info exactly — no padding is defined
@@ -111,6 +199,57 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
             } else {
                 seen_link_ids |= (1u << link_id);
             }
+            /* #104 slice 5: the STA Profile field follows the STA Info
+             * field, whose declared length counts itself — the same
+             * declared-length skip Common Info uses above, and
+             * draft-revision-proof for the same reason.
+             *
+             * Only a Complete Profile (STA Control bit 4) is read. A
+             * partial profile is a delta against the reporting AP and
+             * says nothing about that link's posture on its own.
+             *
+             * In a Beacon or Probe Response the STA Profile begins with
+             * a 2-octet Capability Information field and then the
+             * element list; that is what cfg80211's
+             * cfg80211_parse_ml_elem_sta_data reads, and it is the only
+             * frame type whose prefix we are prepared to assert. sloth
+             * also hands association-request MLEs to this parser
+             * (src/assoc_track.c), and those carry a different fixed
+             * prefix, so sta_profile_rsn() requires the element chain to
+             * tile the remainder *exactly*: a wrong prefix then yields
+             * no finding instead of a wrong one. Profiles fragmented
+             * across Fragment subelements are not reassembled and fail
+             * the same check. */
+            int complete = (sc & 0x0010) != 0;
+            int prof_off = 2 + info_len;
+            /* The `prof_off + 2 <= slen` arm is belt-and-braces, stated
+             * because it reads like the bound that keeps the read in
+             * range and is not: a declared STA Info Length past the
+             * subelement's end yields a non-positive region length,
+             * which sta_profile_rsn()'s tiling check already rejects
+             * without dereferencing anything. Removing this arm leaves
+             * the suite green and ASan quiet (measured, #104 slice 5) —
+             * it is kept for the explicit bound, not for a fault it is
+             * the only thing catching. */
+            if (complete && info_len >= 1 && prof_off + 2 <= (int)slen) {
+                int rank = 0, mfpr = 0;
+                if (sta_profile_rsn(p + prof_off + 2,
+                                    (int)slen - prof_off - 2,
+                                    &rank, &mfpr)) {
+                    rsn_links++;
+                    if (mfpr) { if (mfpr_set_link   < 0) mfpr_set_link   = link_id; }
+                    else      { if (mfpr_clear_link < 0) mfpr_clear_link = link_id; }
+                    if (rank) {
+                        if (!lo_rank || rank < lo_rank) {
+                            lo_rank = rank; lo_rank_link = link_id;
+                        }
+                        if (rank > hi_rank) {
+                            hi_rank = rank; hi_rank_link = link_id;
+                        }
+                    }
+                }
+            }
+
             if (mac_present && info_len >= 7 && slen >= 3 + 6) {
                 const uint8_t *lm = p + 3;
                 if (mac_is_usable(lm)) {
@@ -125,6 +264,85 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
             }
         }
         off += 2 + slen;
+    }
+
+    /* Two or more links of ONE Multi-Link element, each with its own
+     * explicit RSNE, that disagree on management-frame protection or on
+     * pairwise-cipher strength. A benign MLD runs one posture across
+     * its radios; a weaker link is the lane an adversary-in-the-middle
+     * wants a client steered onto.
+     *
+     * Links without an RSNE are not compared at all. Under 802.11be
+     * profile inheritance an omitted element is inherited from the
+     * reporting AP, so absence means "same as the AP" — reading it as
+     * "insecure" is the false positive this rule exists to avoid.
+     *
+     * Not evaluated on a frame that already overran its subelement
+     * chain: posture inferred from a chain whose declared lengths do
+     * not add up would be a claim about bytes we are not sure we read.
+     *
+     * Deliberately narrow. Two links whose pairwise bitmaps differ but
+     * whose strongest suite and MFPR bit agree are not flagged — that
+     * is a differing offer, not a downgrade, and the operator decision
+     * this rule feeds is "is one radio weaker", not "are the lists
+     * identical". A Non-Inheritance element (ext ID 56) explicitly
+     * refusing the AP's RSNE is also not decoded, so a link that
+     * suppresses inheritance without supplying its own RSNE reads here
+     * as an inheriting link. */
+    /* `rsn_links >= 2` is redundant — both conditions below already
+     * require two distinct RSNE-bearing links — and is kept only
+     * because it states the precondition the rule is about. No test
+     * distinguishes its removal, and none claims to. */
+    /* Also gated on malformed_link_id, not only on malformed_subelem_len.
+     * A frame carrying the SAME link_id twice already fires
+     * MLE_INVALID_LINK_ID, and reading a posture across it produces a
+     * finding whose "weaker link" and its "sibling" are the same link —
+     * review built that input (two Complete Profiles, both link_id 3)
+     * and got downgrade_link_id == downgrade_peer_link_id. A comparison
+     * between two links needs two links. */
+    if (!out->malformed_subelem_len && !out->malformed_link_id &&
+        rsn_links >= 2) {
+        /* The CIPHER arm is the downgrade finding. A link offering a
+         * weaker pairwise cipher than its sibling in the same element
+         * is the attack shape: a client steered onto the weak link gets
+         * the weaker cipher, and nothing in the standard asks for that
+         * asymmetry. */
+        if (lo_rank && hi_rank && lo_rank < hi_rank) {
+            out->cross_link_cipher_downgrade = 1;
+            out->downgrade_cipher_mismatch   = 1;
+            out->downgrade_link_id           = (uint8_t)lo_rank_link;
+            out->downgrade_peer_link_id      = (uint8_t)hi_rank_link;
+        }
+
+        /* The PMF arm is an OBSERVATION, not a downgrade, and that is
+         * the owner ruling of 2026-10-13 rather than a hedge.
+         *
+         * MFPR=1 on one link and MFPR=0 on another is the posture pair
+         * the standard MANDATES for a tri-band AP where one band
+         * requires PMF and the others negotiate it. Review supplied the
+         * firing input — links 0 and 1 with CCMP-128/MFPC=1/MFPR=0, link
+         * 2 with CCMP-128/MFPR=1 — which is a conformant Wi-Fi 7 AP and
+         * nothing else. A rule that reports a downgrade there is not a
+         * detector; it is a reason to mute the type, and on an issue
+         * about Wi-Fi 7 that case is the common one rather than an edge.
+         *
+         * So the mismatch is still RECORDED, because PMF genuinely
+         * absent on one link of an MLD is worth seeing, and still
+         * carries its own link pair. It no longer sets
+         * cross_link_cipher_downgrade on its own, so it cannot raise the
+         * alert by itself; the rule reports it as context when the
+         * cipher arm fires, and src/alerts.c states that the standard
+         * permits the asymmetry.
+         *
+         * The two arms also keep SEPARATE link pairs now. They used to
+         * share one, and whichever ran second overwrote it while both
+         * flags stayed set — so the single pair reported was false of
+         * one of the two clauses in the detail string. */
+        if (mfpr_set_link >= 0 && mfpr_clear_link >= 0) {
+            out->downgrade_pmf_mismatch   = 1;
+            out->pmf_mismatch_link_id     = (uint8_t)mfpr_clear_link;
+            out->pmf_mismatch_peer_link_id = (uint8_t)mfpr_set_link;
+        }
     }
     return 1;
 }
@@ -205,6 +423,14 @@ void mle_observe(const sloth_mld_t *m, time_t now) {
         e->bad_subelem_len = m->bad_subelem_len;
         e->subelem_overrun_bytes = m->subelem_overrun_bytes;
         e->malformed_subelem_len_last_seen = now;
+    }
+    if (m->cross_link_cipher_downgrade) {
+        e->cross_link_cipher_downgrade_total++;
+        e->downgrade_link_id          = m->downgrade_link_id;
+        e->downgrade_peer_link_id     = m->downgrade_peer_link_id;
+        e->downgrade_pmf_mismatch     = m->downgrade_pmf_mismatch;
+        e->downgrade_cipher_mismatch  = m->downgrade_cipher_mismatch;
+        e->cross_link_cipher_downgrade_last_seen = now;
     }
 
     pthread_mutex_unlock(&g_mu);

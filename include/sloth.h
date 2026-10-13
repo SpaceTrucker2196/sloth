@@ -800,6 +800,7 @@ typedef enum {
     ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD, /* MLE Common Info Length can't cover the mandatory MLD MAC, or overruns the IE — w1.fi 2026-1 (#104 slice 2) */
     ALERT_TYPE_MLE_SUBELEM_OVERRUN, /* MLE Link Info subelement lengths sum past the enclosing element — w1.fi 2026-1 (#104 slice 3) */
     ALERT_TYPE_MLD_MAC_COLLISION,   /* same (MLD MAC, link_id) reported with two different affiliated addresses — IEEE 802.11be 9.4.2.312 (#104 slice 4) */
+    ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE, /* two links of one MLD, each with its own RSNE, disagree on PMF or pairwise-cipher strength — IEEE 802.11be 9.4.2.312 (#104 slice 5) */
     ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
     ALERT_TYPE_PM_FORGE,            /* PM=1 Null while the same MAC keeps transmitting PM=0 data — Framing Frames, CVE-2022-47522 (#107 shape A) */
     ALERT_TYPE_SURV_CLOUD_SNI,      /* TLS SNI on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
@@ -2057,6 +2058,40 @@ typedef struct {
     time_t   mac_collision_last_seen;
     uint8_t  collision_link_id;
     uint8_t  collision_mac[6];
+
+    /* Cross-link cipher/PMF downgrade (#104 slice 5). Two Per-STA
+     * Profiles of ONE Multi-Link element, each carrying its own
+     * explicit RSNE, that disagree about whether management-frame
+     * protection is required or about pairwise-cipher strength. A
+     * benign MLD runs one security posture across its radios; a link
+     * advertised weaker than its siblings is the lane an
+     * adversary-in-the-middle wants the client to take.
+     *
+     * Only links with an EXPLICIT RSNE are compared. Under 802.11be
+     * profile inheritance a Per-STA Profile that omits an element
+     * inherits the reporting AP's, so an absent RSNE means "same as
+     * the AP", not "no encryption" — reading absence as weakness is
+     * this rule's false-positive trap.
+     *
+     * The first five fields are this frame's finding, set fresh by
+     * mle_parse() on every call; `_total`/`_last_seen` are the
+     * persisted, lifetime signal mle_observe() accumulates. */
+    uint8_t  cross_link_cipher_downgrade;
+    uint8_t  downgrade_link_id;        /* the weaker link */
+    uint8_t  downgrade_peer_link_id;   /* the sibling it loses to */
+    /* One link MFPR=1, another MFPR=0. RECORDED but not a downgrade on
+     * its own (owner ruling 2026-10-13): that pair is what the standard
+     * mandates for a tri-band AP where one band requires PMF and the
+     * others negotiate it, so firing on it alone would fire on
+     * conformant Wi-Fi 7 hardware. Reported as context when the cipher
+     * arm fires. Carries its own link pair below, because the two
+     * mismatches can involve different links. */
+    uint8_t  downgrade_pmf_mismatch;
+    uint8_t  pmf_mismatch_link_id;
+    uint8_t  pmf_mismatch_peer_link_id;
+    uint8_t  downgrade_cipher_mismatch;/* pairwise-cipher strength differs */
+    uint32_t cross_link_cipher_downgrade_total;
+    time_t   cross_link_cipher_downgrade_last_seen;
 } sloth_mld_t;
 
 /* ── 802.11k Radio Measurement survey (#61) ────────────────

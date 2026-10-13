@@ -37,6 +37,52 @@ static int put_per_sta(uint8_t *b, int off, int link_id, const uint8_t *mac) {
     return off;
 }
 
+/* Append an RSNE (IEEE 802.11-2020 §9.4.2.24) offering exactly one
+ * pairwise cipher suite and the given MFPR/MFPC capability bits:
+ *   tag(1) len(1) ver(2) group(4) N(2) pairwise(4N) M(2) akm(4M) caps(2) */
+static int put_rsne(uint8_t *b, int off, uint8_t pairwise,
+                    int mfpr, int mfpc) {
+    b[off++] = 48;
+    b[off++] = 20;
+    b[off++] = 0x01; b[off++] = 0x00;                  /* version 1 */
+    b[off++] = 0x00; b[off++] = 0x0f; b[off++] = 0xac; b[off++] = 0x04;
+    b[off++] = 0x01; b[off++] = 0x00;                  /* 1 pairwise suite */
+    b[off++] = 0x00; b[off++] = 0x0f; b[off++] = 0xac; b[off++] = pairwise;
+    b[off++] = 0x01; b[off++] = 0x00;                  /* 1 AKM: SAE */
+    b[off++] = 0x00; b[off++] = 0x0f; b[off++] = 0xac; b[off++] = 0x08;
+    uint16_t caps = (uint16_t)((mfpr ? 0x0040 : 0) | (mfpc ? 0x0080 : 0));
+    b[off++] = (uint8_t)(caps & 0xff);
+    b[off++] = (uint8_t)(caps >> 8);
+    return off;
+}
+
+/* Append a Per-STA Profile subelement whose STA Profile carries the
+ * Capability Information field and, when `pairwise` is non-zero, one
+ * RSNE. `complete` sets STA Control bit 4 (Complete Profile); without
+ * it the profile is a delta against the reporting AP and must not be
+ * read for posture. STA Info Length is 1 here — it counts itself and no
+ * optional STA Info field is present. */
+static int put_per_sta_profile(uint8_t *b, int off, int link_id,
+                               uint8_t pairwise, int mfpr, int complete) {
+    int lenpos = off + 1;
+    b[off++] = 0;                  /* subelement ID 0 */
+    b[off++] = 0;                  /* length, patched below */
+    int body = off;
+    uint16_t sc = (uint16_t)((link_id & 0x0f) | (complete ? 0x0010 : 0));
+    b[off++] = (uint8_t)(sc & 0xff);
+    b[off++] = (uint8_t)(sc >> 8);
+    b[off++] = 1;                  /* STA Info Length */
+    b[off++] = 0x31; b[off++] = 0x04;  /* Capability Information */
+    if (pairwise) off = put_rsne(b, off, pairwise, mfpr, 1);
+    b[lenpos] = (uint8_t)(off - body);
+    return off;
+}
+
+/* Cipher suite types, IEEE 802.11-2020 Table 9-149. */
+#define CIPH_TKIP      2
+#define CIPH_CCMP128   4
+#define CIPH_GCMP256   9
+
 /* Build a Basic-variant MLE. `common_extra` pads the Common Info with
  * optional fields the parser must skip via the declared length. */
 static int build_mle(uint8_t *b, int type, int mld_present,
@@ -625,6 +671,287 @@ static void test_distinct_mlds_isolate_collision_counts(void) {
     mle_clear();
 }
 
+/* ── Cross-link cipher / PMF downgrade (#104 slice 5) ─────────────
+ *
+ * IEEE 802.11be §9.4.2.312: each Per-STA Profile of one Multi-Link
+ * element describes one affiliated radio of the same MLD. A benign MLD
+ * runs one security posture across all of them.
+ *
+ * Every frame below is a hand-built byte array per the clause — no
+ * capture, no fixture, no Scapy. */
+
+static void test_cross_link_cipher_and_pmf_downgrade_flagged(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 1);
+    ASSERT_EQ(m.downgrade_link_id, 1);
+    ASSERT_EQ(m.downgrade_peer_link_id, 0);
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 1);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 1);
+}
+
+/* PMF asymmetry ALONE is recorded and is NOT a downgrade.
+ *
+ * Owner ruling 2026-10-13. MFPR=1 on one link and MFPR=0 on another is
+ * the posture pair the standard MANDATES for a tri-band AP where one
+ * band requires PMF and the others negotiate it, so raising a downgrade
+ * finding on it alone fires on CONFORMANT Wi-Fi 7 hardware — which, on
+ * an issue about Wi-Fi 7, is the common case rather than an edge.
+ *
+ * The mismatch is still recorded with its own link pair, because PMF
+ * genuinely absent on one link of an MLD is worth seeing; it just
+ * cannot raise the alert by itself. */
+static void test_pmf_mismatch_alone_is_recorded_not_a_downgrade(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_CCMP128, 1, 1);
+    n = put_per_sta_profile(b, n, 2, CIPH_CCMP128, 0, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    /* Recorded... */
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 1);
+    ASSERT_EQ(m.pmf_mismatch_link_id, 2);
+    ASSERT_EQ(m.pmf_mismatch_peer_link_id, 0);
+    /* ...and not a downgrade. This is the assertion that fires on
+       conformant hardware if the arms are recoupled. */
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 0);
+}
+
+/* The exact frame review built to show the old rule firing on a
+ * conformant tri-band AP: two links negotiating PMF, one requiring it,
+ * identical CCMP-128 throughout. Nothing here is an attack and nothing
+ * here is even a misconfiguration. */
+static void test_conformant_tri_band_ap_does_not_fire(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_CCMP128, 0, 1);  /* MFPC, !MFPR */
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
+    n = put_per_sta_profile(b, n, 2, CIPH_CCMP128, 1, 1);  /* MFPR */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 0);
+    /* The observation is still available to a reader. */
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 1);
+}
+
+/* A repeated link_id already fires MLE_INVALID_LINK_ID; reading a
+ * cross-link posture across it yields a "weaker link" and a "sibling"
+ * that are the SAME link. Review built this input — two Complete
+ * Profiles both at link_id 3 — and got
+ * downgrade_link_id == downgrade_peer_link_id. A comparison between two
+ * links needs two links. */
+static void test_repeated_link_id_suppresses_the_posture_read(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 3, CIPH_TKIP,     0, 1);
+    n = put_per_sta_profile(b, n, 3, CIPH_GCMP256,  1, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 1);
+    /* No posture finding at all, so no self-comparison can be reported. */
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 0);
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 0);
+}
+
+/* Both mismatches present, on DIFFERENT link pairs. They used to share
+ * one pair and whichever branch ran second overwrote it while both flags
+ * stayed set, so the single pair reported was false of one clause in the
+ * detail string. */
+static void test_both_mismatches_keep_separate_link_pairs(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);  /* strong, MFPR */
+    n = put_per_sta_profile(b, n, 1, CIPH_TKIP,    1, 1);  /* weak,   MFPR */
+    n = put_per_sta_profile(b, n, 2, CIPH_GCMP256, 0, 1);  /* strong, !MFPR */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 1);
+    /* The cipher pair is the weak link against a strong sibling... */
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 1);
+    ASSERT_EQ(m.downgrade_link_id, 1);
+    /* ...and the PMF pair is a different pair entirely. */
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 1);
+    ASSERT_EQ(m.pmf_mismatch_link_id, 2);
+    /* The two must not be the same link, which is what the overwrite
+       used to produce. */
+    ASSERT(m.downgrade_link_id != m.pmf_mismatch_link_id);
+}
+
+/* Isolates the cipher condition: identical MFPR, only strength differs.
+ * TKIP against CCMP-128 rather than CCMP-128 against GCMP-256, so the
+ * rank table is exercised at its other end. */
+static void test_cipher_strength_mismatch_alone_flagged(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_TKIP,    1, 1);
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 1, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 1);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 1);
+    ASSERT_EQ(m.downgrade_pmf_mismatch, 0);
+    ASSERT_EQ(m.downgrade_link_id, 0);        /* TKIP is the weaker one */
+    ASSERT_EQ(m.downgrade_peer_link_id, 1);
+}
+
+static void test_identical_per_link_rsne_not_flagged(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    n = put_per_sta_profile(b, n, 1, CIPH_GCMP256, 1, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+/* The false-positive trap. Under 802.11be profile inheritance a link
+ * that omits the RSNE inherits the reporting AP's, so an absent RSNE
+ * means "same as the AP", never "no encryption". */
+static void test_link_without_an_rsne_inherits_and_is_not_flagged(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    n = put_per_sta_profile(b, n, 1, 0,            0, 1);   /* no RSNE */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+/* A partial profile is a delta against the reporting AP, so its RSNE
+ * (if any) is not that link's full posture. */
+static void test_partial_profile_not_read_for_posture(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 0);
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 0);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+static void test_single_link_rsne_not_flagged(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_TKIP, 0, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+/* STA Profile of zero length: Complete Profile is set but there is
+ * nothing after the STA Info field, so there is no RSNE to compare and
+ * nothing to read past either. */
+static void test_zero_length_sta_profile_not_flagged(void) {
+    uint8_t b[64];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    for (int k = 0; k < 2; k++) {
+        b[n++] = 0;              /* subelement ID 0 */
+        b[n++] = 3;              /* control(2) + STA Info Length(1) */
+        uint16_t sc = (uint16_t)(k | 0x0010);
+        b[n++] = (uint8_t)(sc & 0xff);
+        b[n++] = (uint8_t)(sc >> 8);
+        b[n++] = 1;              /* STA Info Length counts itself */
+    }
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+/* An STA Info Length that places the STA Profile past the subelement's
+ * own end. The posture read must be skipped entirely — and the
+ * link_id/subelement checks shipped by slices 1-3 must behave exactly
+ * as before, since this frame is well-formed at the chain level.
+ *
+ * What this test does NOT prove: that the `prof_off + 2 <= slen` bound
+ * in mle_parse() is load-bearing. Removing that bound leaves this test
+ * green and ASan quiet, because the resulting non-positive region
+ * length is rejected by sta_profile_rsn()'s tiling check before any
+ * dereference. Measured, not assumed (#104 slice 5). */
+static void test_sta_info_len_past_subelement_end_is_safe(void) {
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    for (int k = 0; k < 2; k++) {
+        b[n++] = 0;
+        b[n++] = 3;
+        uint16_t sc = (uint16_t)(k | 0x0010);
+        b[n++] = (uint8_t)(sc & 0xff);
+        b[n++] = (uint8_t)(sc >> 8);
+        b[n++] = 200;            /* far beyond the 3-byte subelement */
+    }
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ(m.malformed_link_id, 0);
+}
+
+/* A selector newer than IEEE 802.11-2020 Table 9-149 is ranked
+ * "unknown", not "weak" — otherwise every cipher suite added after this
+ * table was written becomes an alert on a conformant AP. */
+static void test_unrecognised_cipher_suite_is_not_ranked_weak(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, 99, 1, 1);   /* not in the table */
+    n = put_per_sta_profile(b, n, 1, CIPH_GCMP256, 1, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+/* A frame that already tripped MLE_SUBELEM_OVERRUN is not read for
+ * posture: the two profiles before the bad subelement do disagree, but
+ * a chain whose declared lengths do not add up is not evidence we are
+ * willing to draw a posture conclusion from. */
+static void test_downgrade_not_claimed_on_an_overrunning_chain(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
+    b[n++] = 0;        /* a third subelement whose body runs past the end */
+    b[n++] = 40;
+    b[n++] = 0x00;
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
+static void test_cross_link_downgrade_persists_across_clean_frames(void) {
+    mle_clear();
+    uint8_t bad[256];
+    int n = build_mle(bad, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(bad, n, 0, CIPH_GCMP256, 1, 1);
+    n = put_per_sta_profile(bad, n, 1, CIPH_CCMP128, 0, 1);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(bad, n, &m), 1);
+    mle_observe(&m, 1000);
+
+    uint8_t good[256];
+    int g = build_mle(good, MLE_TYPE_BASIC, 1, MLD, 0);
+    g = put_per_sta_profile(good, g, 0, CIPH_GCMP256, 1, 1);
+    g = put_per_sta_profile(good, g, 1, CIPH_GCMP256, 1, 1);
+    for (int i = 0; i < 2; i++) {
+        ASSERT_EQ(mle_parse(good, g, &m), 1);
+        ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+        mle_observe(&m, 1001 + i);
+    }
+
+    sloth_state_t st;
+    memset(&st, 0, sizeof(st));
+    mle_snapshot(&st);
+    ASSERT_EQ(st.mld_count, 1);
+    ASSERT_EQ(st.mlds[0].cross_link_cipher_downgrade_total, 1);
+    ASSERT_EQ(st.mlds[0].downgrade_link_id, 1);
+    mle_clear();
+}
+
 void run_mle_tests(void) {
     TEST_SUITE("Multi-Link Element parse (#67)");
     RUN_TEST(test_basic_mle_yields_the_mld_mac);
@@ -670,4 +997,21 @@ void run_mle_tests(void) {
     RUN_TEST(test_repeated_same_binding_not_flagged_as_collision);
     RUN_TEST(test_mac_collision_persists_across_clean_frames);
     RUN_TEST(test_distinct_mlds_isolate_collision_counts);
+
+    TEST_SUITE("MLE cross-link cipher/PMF downgrade — IEEE 802.11be 9.4.2.312 (#104 slice 5)");
+    RUN_TEST(test_cross_link_cipher_and_pmf_downgrade_flagged);
+    RUN_TEST(test_pmf_mismatch_alone_is_recorded_not_a_downgrade);
+    RUN_TEST(test_conformant_tri_band_ap_does_not_fire);
+    RUN_TEST(test_repeated_link_id_suppresses_the_posture_read);
+    RUN_TEST(test_both_mismatches_keep_separate_link_pairs);
+    RUN_TEST(test_cipher_strength_mismatch_alone_flagged);
+    RUN_TEST(test_identical_per_link_rsne_not_flagged);
+    RUN_TEST(test_link_without_an_rsne_inherits_and_is_not_flagged);
+    RUN_TEST(test_partial_profile_not_read_for_posture);
+    RUN_TEST(test_single_link_rsne_not_flagged);
+    RUN_TEST(test_zero_length_sta_profile_not_flagged);
+    RUN_TEST(test_sta_info_len_past_subelement_end_is_safe);
+    RUN_TEST(test_unrecognised_cipher_suite_is_not_ranked_weak);
+    RUN_TEST(test_downgrade_not_claimed_on_an_overrunning_chain);
+    RUN_TEST(test_cross_link_downgrade_persists_across_clean_frames);
 }
