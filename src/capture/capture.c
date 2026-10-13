@@ -143,6 +143,61 @@ int capture_policy_valid_count(const capture_policy_t *p) {
     return n;
 }
 
+/* Allow-listed names with no valid pin, for the launch notice (#85).
+ * Matched by name rather than by pin index so the operator reads back
+ * what they typed, and recomputed from the live `valid` bits so the
+ * answer stays honest after a mid-run fail-closed instead of describing
+ * only the state at launch.
+ *
+ * Unlocked read of `valid`, on the same argument as
+ * capture_policy_valid_count(): the main thread is its only writer. */
+int capture_policy_unpinned(const capture_policy_t *p, const sloth_state_t *s,
+                            char *buf, int sz) {
+    int off = 0, count = 0;
+    if (buf && sz > 0) buf[0] = '\0';
+    if (!s) return 0;
+    int n = s->iface_allowed_count;
+    if (n < 0) n = 0;
+    if (n > MAX_IFACES) n = MAX_IFACES;
+    for (int i = 0; i < n; i++) {
+        const char *name = s->iface_allowed[i];
+        int pinned = 0;
+        for (int j = 0; p && j < p->count && !pinned; j++)
+            pinned = p->pins[j].valid && strcmp(p->pins[j].name, name) == 0;
+        if (pinned) continue;
+        count++;
+        /* The return counts unpinned names, never the names that fitted:
+         * a short buffer must not understate the problem. */
+        if (!buf || sz <= 0) continue;
+        if (off > 0 && off < sz - 1) buf[off++] = ',';
+        for (const char *c = name; *c && off < sz - 1; c++) buf[off++] = *c;
+        buf[off] = '\0';
+    }
+    return count;
+}
+
+/* Which launch notice the unpinned set earns, if any (#85).
+ *
+ * Pure, and above the WITH_PCAP guard, so the test build can drive it
+ * without libpcap -- the same split capture_scope_verdict() already
+ * uses, which leaves main.c nothing to decide and only a line to print.
+ *
+ * `capture_open == 0` is silent unconditionally, and that gate is why
+ * this function exists rather than main.c comparing the two counts
+ * itself. With no pcap handle capture_run() returns before
+ * capture_policy_pin(), so the policy is still zeroed and every
+ * requested name reads unpinned -- which would announce "none of the
+ * requested interfaces could be resolved" underneath the truthful
+ * "capture unavailable" line main already printed for the NO_CAPTURE
+ * verdict, blaming the resolver for the handle's absence. */
+capture_scope_notice_t capture_scope_notice(int capture_open, int requested,
+                                            int unpinned) {
+    if (!capture_open || requested <= 0 || unpinned <= 0)
+        return CAPTURE_SCOPE_NOTICE_NONE;
+    if (unpinned >= requested) return CAPTURE_SCOPE_NOTICE_ALL;
+    return CAPTURE_SCOPE_NOTICE_SOME;
+}
+
 void capture_policy_sync_deselect(capture_policy_t *p,
                                   const sloth_state_t *s) {
     if (!p || !s) return;
@@ -1238,6 +1293,15 @@ void capture_health_poll(capture_health_t *h) {
     if (pcap_stats(g_handle, &ps) == 0)
         capture_stats_accumulate(h, (uint32_t)ps.ps_recv, (uint32_t)ps.ps_drop,
                                  (uint32_t)ps.ps_ifdrop);
+}
+
+/* Accessor, not logic: g_policy is module-static, and main.c needs the
+ * unpinned set for the launch notice. Deliberately does not revalidate
+ * or sync the deselect snapshot -- that is capture_scope_poll()'s job on
+ * the poll thread, and doing it here would bump `generation` for a
+ * rename landing in this window (#85). */
+int capture_scope_unpinned(const sloth_state_t *s, char *buf, int sz) {
+    return capture_policy_unpinned(&g_policy, s, buf, sz);
 }
 
 void capture_scope_poll(sloth_state_t *s) {

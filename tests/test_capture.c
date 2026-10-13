@@ -579,6 +579,137 @@ static void test_policy_pin_resets_previous_run(void) {
     ASSERT(capture_policy_match(NULL, 3) == NULL);
 }
 
+/* ── launch notice for unpinned allow-list names (#85) ────── */
+
+#define UNPINNED(b) capture_policy_unpinned(&g_scope_policy, &g_scope_state, \
+                                            (b), (int)sizeof(b))
+
+static void test_unpinned_empty_when_every_name_resolves(void) {
+    scope_state2("wlan1", "eth0");
+    char buf[64];
+    memset(buf, 'x', sizeof(buf));
+    ASSERT_EQ(UNPINNED(buf), 0);
+    ASSERT_STR(buf, "");
+}
+
+static void test_unpinned_names_one_absent_interface(void) {
+    /* eth9 is not in the seeded table, so capture_policy_pin() skipped
+       it — the operator's typed name is what must be reported back. */
+    scope_state2("wlan1", "eth9");
+    ASSERT_EQ(g_scope_policy.count, 1);
+    char buf[64];
+    ASSERT_EQ(UNPINNED(buf), 1);
+    ASSERT_STR(buf, "eth9");
+}
+
+static void test_unpinned_lists_both_in_allow_list_order(void) {
+    scope_state2("eth9", "wlan9");
+    ASSERT_EQ(g_scope_policy.count, 0);
+    char buf[64];
+    ASSERT_EQ(UNPINNED(buf), 2);
+    ASSERT_STR(buf, "eth9,wlan9");
+}
+
+static void test_unpinned_counts_a_pin_failed_closed_mid_run(void) {
+    /* A pin that revalidate() failed closed is as uncollected as one
+       that never resolved, so the helper must not answer only for the
+       state at launch. */
+    scope_state2("wlan1", "eth0");
+    char buf[64];
+    ASSERT_EQ(UNPINNED(buf), 0);
+    tbl_del(3);
+    ASSERT_EQ(capture_policy_revalidate(&g_scope_policy, tbl_name), 1);
+    ASSERT_EQ(UNPINNED(buf), 1);
+    ASSERT_STR(buf, "wlan1");
+}
+
+static void test_unpinned_count_survives_a_short_buffer(void) {
+    /* Two 14-char names into 8 bytes: the count is the number of
+       unpinned interfaces, not the number that fitted. */
+    scope_state2("enp0s31f6abcde", "wlxdeadbeef012");
+    char buf[16];
+    memset(buf, '#', sizeof(buf));
+    ASSERT_EQ(capture_policy_unpinned(&g_scope_policy, &g_scope_state,
+                                      buf, 8), 2);
+    ASSERT_EQ((int)strlen(buf), 7);
+    ASSERT_STR(buf, "enp0s31");
+    /* Nothing written at or past the declared size. */
+    ASSERT_EQ(buf[8], '#');
+    ASSERT_EQ(buf[15], '#');
+}
+
+static void test_unpinned_null_arguments_are_safe(void) {
+    scope_state2("eth9", "wlan9");
+    char buf[64];
+    memset(buf, 'x', sizeof(buf));
+    /* No policy at all authorises nothing, the same way
+       capture_frame_in_scope() reads a NULL policy. */
+    ASSERT_EQ(capture_policy_unpinned(NULL, &g_scope_state,
+                                      buf, (int)sizeof(buf)), 2);
+    ASSERT_STR(buf, "eth9,wlan9");
+    memset(buf, 'x', sizeof(buf));
+    ASSERT_EQ(capture_policy_unpinned(&g_scope_policy, NULL,
+                                      buf, (int)sizeof(buf)), 0);
+    ASSERT_STR(buf, "");
+    /* Counting without reporting: no buffer, no write, same answer. */
+    ASSERT_EQ(capture_policy_unpinned(&g_scope_policy, &g_scope_state,
+                                      NULL, 0), 2);
+    ASSERT_EQ(capture_policy_unpinned(&g_scope_policy, &g_scope_state,
+                                      buf, 0), 2);
+    ASSERT_EQ(capture_policy_unpinned(NULL, NULL, NULL, 0), 0);
+}
+
+static void test_scope_notice_silent_without_capture(void) {
+    /* The case the notice must not fire on. With no pcap handle
+       capture_run() returns before capture_policy_pin(), so the policy
+       is zeroed and every requested name reads unpinned — identical
+       input to NOTICE_ALL below, and the handle, not the resolver, is
+       the reason. main already printed the NO_CAPTURE verdict. */
+    ASSERT_EQ((int)capture_scope_notice(0, 2, 2),
+              (int)CAPTURE_SCOPE_NOTICE_NONE);
+    ASSERT_EQ((int)capture_scope_notice(0, 2, 1),
+              (int)CAPTURE_SCOPE_NOTICE_NONE);
+}
+
+static void test_scope_notice_all(void) {
+    ASSERT_EQ((int)capture_scope_notice(1, 2, 2),
+              (int)CAPTURE_SCOPE_NOTICE_ALL);
+    ASSERT_EQ((int)capture_scope_notice(1, 1, 1),
+              (int)CAPTURE_SCOPE_NOTICE_ALL);
+}
+
+static void test_scope_notice_some(void) {
+    ASSERT_EQ((int)capture_scope_notice(1, 3, 1),
+              (int)CAPTURE_SCOPE_NOTICE_SOME);
+    ASSERT_EQ((int)capture_scope_notice(1, 3, 2),
+              (int)CAPTURE_SCOPE_NOTICE_SOME);
+}
+
+static void test_scope_notice_none_when_nothing_unpinned(void) {
+    ASSERT_EQ((int)capture_scope_notice(1, 2, 0),
+              (int)CAPTURE_SCOPE_NOTICE_NONE);
+    /* No allow-list at all: nothing was requested to resolve. Note what
+       this case does NOT test — with requested == 0 and unpinned == 0
+       the `unpinned <= 0` term alone returns NONE, so deleting
+       `requested <= 0` from the guard leaves this assertion green.
+       Review proved exactly that. */
+    ASSERT_EQ((int)capture_scope_notice(1, 0, 0),
+              (int)CAPTURE_SCOPE_NOTICE_NONE);
+
+    /* The input that actually distinguishes the `requested <= 0` term:
+       more unpinned than requested. It is an incoherent pair and no
+       caller produces it today — unpinned is counted out of the
+       requested set — which is why the term reads as dead. It is not
+       dead, it is defensive, and the failure it prevents is specific:
+       without it, `unpinned >= requested` is 1 >= 0, so sloth would
+       announce "none of the requested interfaces could be resolved"
+       on a run where nothing was requested at all. Announcing a
+       resolver failure to an operator who set no allow-list is a worse
+       outcome than the inconsistency that caused it. */
+    ASSERT_EQ((int)capture_scope_notice(1, 0, 1),
+              (int)CAPTURE_SCOPE_NOTICE_NONE);
+}
+
 /* The worker reads `valid` per packet while the main thread clears it;
    both sides go through the policy's mutex. Run under the TSan job. */
 typedef struct {
@@ -1091,6 +1222,16 @@ void run_capture_tests(void) {
     RUN_TEST(test_desel_snapshot_membership_and_bounds);
     RUN_TEST(test_policy_null_under_allow_list_admits_nothing);
     RUN_TEST(test_policy_pin_resets_previous_run);
+    RUN_TEST(test_unpinned_empty_when_every_name_resolves);
+    RUN_TEST(test_unpinned_names_one_absent_interface);
+    RUN_TEST(test_unpinned_lists_both_in_allow_list_order);
+    RUN_TEST(test_unpinned_counts_a_pin_failed_closed_mid_run);
+    RUN_TEST(test_unpinned_count_survives_a_short_buffer);
+    RUN_TEST(test_unpinned_null_arguments_are_safe);
+    RUN_TEST(test_scope_notice_silent_without_capture);
+    RUN_TEST(test_scope_notice_all);
+    RUN_TEST(test_scope_notice_some);
+    RUN_TEST(test_scope_notice_none_when_nothing_unpinned);
     RUN_TEST(test_policy_invalidation_is_seen_by_worker);
     RUN_TEST(test_scope_state_truth_table);
     RUN_TEST(test_scope_state_names_and_not_enforced);

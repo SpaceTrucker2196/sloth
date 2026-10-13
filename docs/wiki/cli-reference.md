@@ -74,6 +74,22 @@ single mode driven by flags.
 | `--allow-active` | — | off | Opt in to the two active behaviours: (1) reverse-DNS PTR queries on cache miss; (2) nl80211 **passive** scan triggers (no SSID list, no probe transmitted). Prints one stderr line naming what it enabled; never silent. |
 | `--strict` | — | off | Lock: refuses any later attempt to enable active behaviour this run (`--strict --allow-active` exits non-zero). Suppresses the mDNS advert. **Refuses a routable `--data-socket` (exit 2), even with `--data-socket-allow-remote`** — loopback and `unix:` are unaffected (#84, 2026-10-06). Does **not** refuse `--hop`. Records operator intent where `ps(1)`/audit can see it. |
 
+**Startup diagnostic — unresolved allow-list names (#85).** An
+`--iface`/`--monitor-only` name that does not resolve at launch is not
+pinned, so every frame arriving on it is refused for the rest of the
+run. Immediately after the capture thread starts, sloth names those
+interfaces once on stderr: `none of the requested interfaces could be
+resolved (<names>)` when nothing pinned, `requested interfaces not
+resolved (<names>)` when only part of the list did. This is a
+diagnostic, **not** a refusal — it does not change the exit code, and a
+run that prints it still collects on whatever did pin. Nothing is
+printed when capture could not be opened at all; that case already has
+its own warning, and no name could have pinned either way. The claim is
+scoped to the IP capture stream: the monitor radio sits outside the
+`--iface` allow-list. An interactive run's line is wiped by ncurses
+init, so the audience is journald / `--headless`. →
+[[views-catalog]], `docs/views/interfaces.md`
+
 ### Correlation — MAC deanonymisation
 
 | Flag | Arg | Default | Effect |

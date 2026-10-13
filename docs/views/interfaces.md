@@ -324,6 +324,38 @@ the health strip shows `scope degraded <enforced>/<requested>` and
 `sensor_health` carries `scope`/`scope_not_enforced` (see above and
 the JSONL schema).
 
+Unresolved names are also named once on stderr, immediately after the
+capture thread is created — either
+
+```
+sloth: none of the requested interfaces could be resolved (eth9,wlan9): the IP capture stream will admit nothing
+sloth: requested interfaces not resolved (eth9): frames arriving on them are refused for the rest of this run; restart to re-pin
+```
+
+Both lines say the *IP capture stream* is what admits nothing, and that
+wording is exact rather than cautious. In a plain `--iface eth0` run the
+802.11 monitor radio sits outside the allow-list entirely (owner
+decision, 2026-10-04), so 802.11 keeps arriving however the IP scope
+resolved.
+
+`--monitor-only` is the one case where that is NOT true, and an earlier
+version of this paragraph picked exactly that case to illustrate it.
+`src/main.c` adds `g_state.probe_iface` to the allow-list under
+`--monitor-only`, so there the radio is inside the scope rather than
+beside it — the mode is named for scoping TO the radio. A
+`--monitor-only` run whose allow-list failed to pin is therefore not
+"still hearing 802.11"; the radio is the thing that did not pin. The run
+continues and the exit code is unchanged — an unpinned name already
+suspends that interface's collection, so nothing out of scope is
+collected, the same reasoning as a capture that could not be opened at
+all (above). Neither line is printed when there is no capture handle:
+nothing was pinned because there was nothing to pin to, and the
+`capture unavailable` warning above has already said so.
+
+An interactive run's line is overwritten by ncurses init a moment
+later, so the real audience is a journald or `--headless` deployment,
+where the health strip never renders at all.
+
 The one window this leaves is between an index being reused and the
 next tick. Linux hands out interface indices in increasing order, so
 closing it within one poll interval would need the counter to wrap.

@@ -56,7 +56,11 @@ int capture_dlt_has_ifindex(int dlt);
    capture_policy_pin() turns the allow-list names into (ifindex, name)
    pairs once, before the worker thread is created (capture_run()). A
    name that does not resolve then is not pinned: it is failed closed,
-   and the scope reports DEGRADED rather than silently admitting nothing.
+   the scope reports DEGRADED rather than silently admitting nothing,
+   and main.c names the unresolved interfaces on stderr once at launch
+   (capture_policy_unpinned() / capture_scope_notice() below) — the
+   health strip only renders in the Interfaces view, so a headless
+   sensor had no report of it at all.
    After pthread_create the pins' ifindex/name/count never change; only
    each pin's `valid` bit and the policy `generation` do, and only under
    `mu` (the capture module's existing g_mu; NULL in single-threaded
@@ -149,6 +153,32 @@ int         capture_policy_deselected(const capture_policy_t *p,
                                       const char *name);
 /* Pins still valid. Main thread only (it is the sole writer). */
 int         capture_policy_valid_count(const capture_policy_t *p);
+/* Allow-listed names with no valid pin. Returns how many there are and
+   writes them into `buf`, comma-separated, in allow-list order. The
+   return value is the true count even when `buf` could not hold them
+   all; `buf` is always NUL-terminated and never written at or past
+   `sz`. A NULL policy makes every requested name unpinned; NULL state
+   is 0; NULL `buf` (or sz <= 0) just counts. Main thread only, same
+   reason as capture_policy_valid_count(). */
+int         capture_policy_unpinned(const capture_policy_t *p,
+                                    const sloth_state_t *s,
+                                    char *buf, int sz);
+
+/* Which launch notice an unpinned set earns (#85). Pure, so main.c
+   only prints. NONE whenever there is no pcap handle: capture_run()
+   returns before it pins anything, so every name would read unpinned
+   and the notice would blame the resolver for a missing handle that
+   main already reported from the NO_CAPTURE verdict. ALL when no
+   requested name pinned, SOME when only part of the list did. */
+typedef enum {
+    CAPTURE_SCOPE_NOTICE_NONE = 0,
+    CAPTURE_SCOPE_NOTICE_SOME,
+    CAPTURE_SCOPE_NOTICE_ALL
+} capture_scope_notice_t;
+
+capture_scope_notice_t capture_scope_notice(int capture_open, int requested,
+                                            int unpinned);
+
 int         capture_frame_in_scope(const sloth_state_t *s,
                                    const capture_policy_t *p, int dlt,
                                    const uint8_t *frame, int caplen,
@@ -365,6 +395,14 @@ void capture_health_poll(capture_health_t *h);
 /* Revalidate the pinned policy against the live ifindex table and
    refresh s->scope_health (#85 slice 2). Main thread, once per poll. */
 void capture_scope_poll(sloth_state_t *s);
+
+/* capture_policy_unpinned() against the module's own pinned policy, so
+   main() can report the unresolved names right after capture_run()
+   sealed them. Pure read; no revalidation. No non-pcap stub, because
+   its only call site is inside main.c's #ifdef WITH_PCAP block — the
+   gate it feeds, capture_scope_notice(), is the part the test build
+   needs and that one is above the guard. */
+int capture_scope_unpinned(const sloth_state_t *s, char *buf, int sz);
 
 /* ── Capture-path test seam (#95) ──────────────────────────────────
 

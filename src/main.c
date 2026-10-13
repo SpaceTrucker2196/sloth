@@ -1345,6 +1345,38 @@ int main(int argc, char **argv) {
      * and every sink is open; nothing above this point can have decoded
      * a packet. */
     capture_run();
+    /* #85: an allow-listed name that did not resolve is failed closed,
+     * which is right, but the only reports of it were the Interfaces
+     * view's health strip and sensor_health's scope fields — so a
+     * headless sensor, or an interactive one left on the dashboard,
+     * collected no IP traffic and said nothing about why. Warn rather
+     * than refuse: not pinning a name already suspends that interface's
+     * collection, and continuing on a degraded scope is the decision
+     * already taken for a capture that could not be opened at all
+     * (cda85c5). Must run after capture_run() — the pins do not exist
+     * until it has made them. The claim is scoped to the IP capture
+     * stream because the 802.11 monitor radio is outside the --iface
+     * allow-list (owner ruling 2026-10-04, bc316f5). */
+    {
+        char unpinned[MAX_IFACES * 17 + 1];
+        int nun = capture_scope_unpinned(&g_state, unpinned,
+                                         (int)sizeof(unpinned));
+        switch (capture_scope_notice(capture_is_open(),
+                                     g_state.iface_allowed_count, nun)) {
+        case CAPTURE_SCOPE_NOTICE_ALL:
+            fprintf(stderr, "sloth: none of the requested interfaces could "
+                            "be resolved (%s): the IP capture stream will "
+                            "admit nothing\n", unpinned);
+            break;
+        case CAPTURE_SCOPE_NOTICE_SOME:
+            fprintf(stderr, "sloth: requested interfaces not resolved (%s): "
+                            "frames arriving on them are refused for the "
+                            "rest of this run; restart to re-pin\n", unpinned);
+            break;
+        case CAPTURE_SCOPE_NOTICE_NONE:
+            break;
+        }
+    }
     probe_run();
 #endif
     event_wake_init();

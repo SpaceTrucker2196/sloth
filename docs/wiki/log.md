@@ -2184,3 +2184,48 @@ shipped without its host and path, from an absence of either.
   the page's names are longer than the `view_labels[]` ones; short
   options; and the `print_usage()`/parser gap — `--no-colour` and
   `--help` are parsed and have no usage line.
+## 2026-10-13 — #85: unresolved allow-list names are announced at launch
+
+**Source**: issue #85. An `--iface`/`--monitor-only` name that does not
+resolve at launch is not pinned, so `capture_frame_in_scope()` refuses
+every frame arriving on it. That is the fail-closed behaviour the issue
+asked for, but the startup verdict is computed from the *requested*
+names (`capture_scope_verdict()` over `iface_allowed_count`), so it
+returned `ENFORCED` and printed nothing even when zero names resolved.
+The only reports of the real state were the Interfaces view's `scope
+degraded e/r` strip and `sensor_health`'s `scope` fields — so a
+headless sensor, or an interactive one sitting on the dashboard,
+collected no IP traffic and said nothing about why.
+`docs/views/interfaces.md` already claimed "Neither case is silent";
+this makes that sentence true.
+
+`capture_policy_unpinned()` is the pure part: allow-listed names with
+no valid pin, counted and named. Matched by name rather than by pin
+index so the operator reads back what they typed, and read from the
+live `valid` bits, so it stays honest after a mid-run fail-closed
+instead of describing only launch. `capture_scope_notice()` is the
+gate, and it is the reason this is not two counts compared inline in
+`main.c`: with no pcap handle `capture_run()` returns before it pins
+anything, so every requested name reads unpinned and an ungated notice
+would print "none of the requested interfaces could be resolved" under
+the truthful `capture unavailable` line, blaming the resolver for the
+handle's absence. `capture_open == 0` is therefore silent
+unconditionally. Both sit above the `WITH_PCAP` guard so the test build
+drives them without libpcap; `main.c` only prints.
+
+**Not a refusal.** The exit code is unchanged. Not pinning a name
+already suspends that interface's collection, and continuing on a
+degraded scope is the decision already taken in `cda85c5` for a
+capture that could not be opened at all. Changing that default is the
+owner's call.
+
+**Scoped to the IP capture stream**, not "no traffic": the 802.11
+monitor radio is outside the `--iface` allow-list per the 2026-10-04
+ruling (`bc316f5`), and a broader claim would reintroduce the false
+boundary statement that ruling removed.
+
+**Still open on #85** — unchanged: the replug policy question (a
+replugged adapter stays failed closed until restart), the
+`scope_dropped`-vs-`[y]`-deselect contract discrepancy, and the
+`cli-reference.md` exit-code mismatch for the scope refusal (doc says
+`2`, `src/main.c` returns `1`). All three are owner decisions.
