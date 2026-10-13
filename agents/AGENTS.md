@@ -12,7 +12,7 @@ A terminal-based **passive** network monitor for Linux, written in C99.
 It never injects packets, never scans, never modifies kernel state. It
 reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
 pcap stream, then surfaces what it sees through 35 ncurses views
-(`VIEW_COUNT`), 72 alert rules (one per `ALERT_TYPE_*`), an embedded
+(`VIEW_COUNT`), 73 alert rules (one per `ALERT_TYPE_*`), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 
@@ -119,8 +119,16 @@ Single binary `sloth`. Test binary `sloth_test`.
   that has a real, citable basis but no honest *ATT&CK technique*,
   because what it reports is a posture or an exposure and not an
   adversary's behaviour. `ALERT_TYPE_OPEN_SETUP_AP` (#80),
-  `ALERT_TYPE_CAM_WS_DISCOVERY` (#106) and
-  `ALERT_TYPE_TPC_ABSENT_HIGH_BAND` (#101) are the three today. These
+  `ALERT_TYPE_CAM_WS_DISCOVERY` (#106),
+  `ALERT_TYPE_SURV_CLOUD_SNI` (#105),
+  `ALERT_TYPE_TPC_ABSENT_HIGH_BAND` (#101) and
+  `ALERT_TYPE_CAM_SETUP_SSID` (#106) are the five today — and this
+  sentence has already said "the three" twice while the set grew, so
+  **do not trust the count here**: the list in the test below is the
+  authority, and it is the thing that fails. (Two other kinds,
+  `ALERT_TYPE_ATTACK_PATH` and `ALERT_TYPE_WEAK_TLS`, also return `""`
+  and are on neither list; they predate this rule and are a third,
+  undocumented shape. Someone should decide which form they are.) These
   are *not* excused the citation — the rule here is about the source,
   not the technique, so each is named explicitly in
   `tests/test_research_corpus.c ::

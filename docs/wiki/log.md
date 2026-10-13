@@ -2351,3 +2351,42 @@ the Transmit Power Envelope element (tag 195), which sloth does not
 parse, so the absence of 32/35 would be the wrong element missing.
 
 ---
+## 2026-10-13 — `CAM_SETUP_SSID`: camera setup-mode SoftAP (#106 slice 2)
+
+New `ALERT_TYPE_CAM_SETUP_SSID` (WARN, alert count 70 → 71). `#80`'s
+`OPEN_SETUP_AP` answers "an open SoftAP exists", which is equally true
+of a printer, a vacuum and a camera. This answers the sentence `#106`
+asks for — *a Hikvision camera is still in setup mode* — because the
+device class changes what the operator does next: a camera never joined
+to a WLAN was also never taken through the password change its
+first-boot wizard performs.
+
+Four prefixes, each sourced to the vendor's own onboarding
+documentation: `HAP_` (Hikvision), `DAP-` (Dahua, and Amcrest as its
+OEM), `EZVIZ_` (Hikvision's consumer brand), `Tapo_Cam_` (TP-Link).
+`Reolink-`, `WyzeCam`, `Arlo_`, `Verkada-`, `UVC-`, `Lorex_`, `Swann-`,
+`Blink-` and substring matches on `CCTV`/`surveil` were **left out
+rather than guessed** — the reasons are in
+`research/papers/camera-setup-softap.md`.
+
+The design decision worth recording: the rule is **not gated on OPEN**,
+unlike `OPEN_SETUP_AP`. Hikvision's `HAP_` AP and EZVIZ's AP-mode
+network are WPA-protected, and the key is printed on the device label —
+the last 8 characters of the serial, or the verification code. An OPEN
+gate would therefore have made the issue's own headline case
+undetectable. The rule reports provisioning *state* and puts the
+encryption in the detail (`OPEN, unauthenticated`, `enc WPA2`, or
+`enc unknown` when the beacon row never filled `enc`, which is not read
+as open) rather than deciding for the operator.
+
+`alert_technique()` returns `""`, the third rule in that position after
+`OPEN_SETUP_AP` and `CAM_WS_DISCOVERY`: nobody has to be present for
+this to fire. Whether `agents/AGENTS.md` should widen its `""` exemption
+from "sloth's own operational state" to cover observed-device exposure
+is still the owner's open question, recorded at `src/alerts.c`'s
+`OPEN_SETUP_AP` case and untouched here.
+
+Pages touched: [alerts.md](alerts.md) (new "Exposure rules" subsection),
+plus the 70 → 71 count in [index.md](index.md), [sloth.md](sloth.md),
+[what-sloth-does.md](what-sloth-does.md) and
+[attack-map.md](attack-map.md).

@@ -6546,6 +6546,212 @@ static void test_open_setup_ap_fires_once_per_bssid(void) {
     ASSERT_EQ(seen, 1);
 }
 
+/* ── Camera setup-mode SoftAP by SSID (#106 slice 2) ──────
+ *
+ * Hand-built beacon_ap rows, no pcap fixtures (agents/AGENTS.md).
+ * Unlike #80's rule this one is deliberately NOT gated on OPEN — the
+ * two largest vendors' setup APs are WPA-protected with a key printed
+ * on the device label — so there is a case here asserting it still
+ * fires when encrypted, which is the inverse of
+ * test_open_setup_ap_quiet_when_encrypted. */
+
+static void test_cam_setup_ssid_fires(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x02,0x0a,0x0b,0x0c,0x0d,0x0e};
+    add_beacon(&s, "HAP_123456", b, "OPEN");
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strcmp(s.alerts[i].key, "camsetup:02:0a:0b:0c:0d:0e") == 0);
+        /* The operator has to be able to find the unit: SSID and BSSID
+         * are the only handles a camera in setup mode offers. */
+        ASSERT(strstr(s.alerts[i].detail, "HAP_123456") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "02:0a:0b:0c:0d:0e") != NULL);
+        /* The device class is the whole point of the separate rule. */
+        ASSERT(strstr(s.alerts[i].detail, "Hikvision") != NULL);
+        /* The detail must report the OBSERVABLE and not infer device
+           state. The only input is an SSID prefix on a beacon; nothing
+           here sees whether the camera is provisioned, and a configured
+           unit advertises this name after a factory reset, during a
+           re-pair, or because an installer left the AP on. Review found
+           the shipped text claiming "in setup mode: ... not yet joined
+           to a WLAN", which the same issue's CAM_WS_DISCOVERY row had
+           explicitly refused one slice earlier. Asserted here so the
+           wording cannot drift back. */
+        ASSERT(strstr(s.alerts[i].detail, "not yet joined") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "in setup mode:") == NULL);
+        ASSERT(strstr(s.alerts[i].detail, "setup SSID")     != NULL);
+        ASSERT(strstr(s.alerts[i].detail,
+                      "provisioning state not observed")    != NULL);
+        /* Exposure, not adversary behaviour — see alert_technique(). */
+        ASSERT_EQ((int)s.alerts[i].technique[0], 0);
+    }
+}
+
+static void test_cam_setup_ssid_covers_the_pattern_table(void) {
+    /* One row per table entry, with the vendor label the row promises.
+     * A deleted, mistyped or relabelled prefix drops an assertion here
+     * rather than going quiet on the air. */
+    static const struct { const char *ssid; const char *vendor; } cases[] = {
+        { "HAP_4A7C21",        "Hikvision" },  /* HAP_ + verification code */
+        { "DAP-AMC501A2B3C4",  "Dahua"     },  /* Dahua OEM prefix, Amcrest unit */
+        { "EZVIZ_123456789",   "EZVIZ"     },  /* EZVIZ_ + 9-digit serial */
+        { "Tapo_Cam_9F3B",     "Tapo"      },  /* Tapo_Cam_ + last 4 of MAC */
+    };
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x02,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, cases[k].ssid, b, "OPEN");
+        alerts_update(&s);
+        int i = find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID);
+        if (i < 0) printf("    cam-setup: no fire for %s\n", cases[k].ssid);
+        ASSERT(i >= 0);
+        if (i >= 0)
+            ASSERT(strstr(s.alerts[i].detail, cases[k].vendor) != NULL);
+    }
+}
+
+static void test_cam_setup_ssid_fires_when_encrypted(void) {
+    /* The design decision, pinned. Hikvision's HAP_ AP and EZVIZ's
+     * AP-mode network both want a key that is printed on the device
+     * label, so gating on OPEN would make #106's own headline case
+     * undetectable. The finding is the provisioning state; the
+     * encryption is reported, not used as a gate. */
+    static const char *encs[] = { "WPA", "WPA2", "WPA3" };
+    for (size_t k = 0; k < sizeof(encs) / sizeof(encs[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x0a,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, "HAP_4A7C21", b, encs[k]);
+        alerts_update(&s);
+        int i = find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID);
+        if (i < 0) printf("    cam-setup: no fire on %s\n", encs[k]);
+        ASSERT(i >= 0);
+        /* And the cipher reaches the operator, so they can tell a key
+         * on the label apart from no key at all. */
+        if (i >= 0) {
+            char want[24];
+            snprintf(want, sizeof(want), "enc %s", encs[k]);
+            ASSERT(strstr(s.alerts[i].detail, want) != NULL);
+        }
+    }
+}
+
+static void test_cam_setup_ssid_reports_open_and_unknown_distinctly(void) {
+    /* An empty enc means the path that filled the row did not decide.
+     * Calling that "OPEN" would invent an unauthenticated surface. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b1[6] = {0x02,0x11,0,0,0,0x01};
+    uint8_t b2[6] = {0x02,0x11,0,0,0,0x02};
+    add_beacon(&s, "EZVIZ_123456789", b1, "OPEN");
+    add_beacon(&s, "DAP-AMC501XYZ",   b2, "");
+    alerts_update(&s);
+    int open_i = -1, unk_i = -1;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_CAM_SETUP_SSID) continue;
+        if (strcmp(s.alerts[k].key, "camsetup:02:11:00:00:00:01") == 0)
+            open_i = k;
+        if (strcmp(s.alerts[k].key, "camsetup:02:11:00:00:00:02") == 0)
+            unk_i = k;
+    }
+    ASSERT(open_i >= 0);
+    ASSERT(unk_i >= 0);
+    if (open_i >= 0)
+        ASSERT(strstr(s.alerts[open_i].detail, "OPEN, unauthenticated") != NULL);
+    if (unk_i >= 0) {
+        ASSERT(strstr(s.alerts[unk_i].detail, "enc unknown") != NULL);
+        ASSERT(strstr(s.alerts[unk_i].detail, "OPEN") == NULL);
+    }
+}
+
+static void test_cam_setup_ssid_guardrail_precedes_the_table(void) {
+    /* ssid_is_public_hotspot() runs before the pattern table, same
+     * ordering #80 uses. Isolating that ordering needs an SSID that
+     * matches BOTH, and only the guardrail's `guest` substring rule
+     * can do that: every entry in g_open_hotspot_ssids[] is
+     * prefix-matched, and no camera prefix is also a hotspot prefix,
+     * so "xfinitywifi-HAP_1" is a near-miss for the *prefix* test and
+     * says nothing about the guardrail at all. (It was in this test
+     * first, and deleting rule_cam_setup_ssid's guardrail line left
+     * the suite green — which is why it is gone.)
+     *
+     * A `guest` token is a deliberate naming act, and under-flagging
+     * is the stated preference, so suppressing these is correct. */
+    static const char *ssids[] = {
+        "HAP_4A7C21-guest", "DAP-AMC501-Guest-WiFi",
+        "EZVIZ_123456789_guest", "Tapo_Cam_9F3B guest",
+    };
+    for (size_t k = 0; k < sizeof(ssids) / sizeof(ssids[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x06,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, ssids[k], b, "OPEN");
+        alerts_update(&s);
+        if (find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID) >= 0)
+            printf("    cam-setup: guardrail bypassed on %s\n", ssids[k]);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID), -1);
+    }
+}
+
+static void test_cam_setup_ssid_quiet_on_empty_and_ordinary_ssid(void) {
+    /* Hidden/broadcast SSID must not fall through a prefix test, and
+     * the default answer for an ordinary name is silence. "Tapo_P100"
+     * is the near-miss the trailing underscore in `Tapo_Cam_` exists
+     * for: a smart plug is not a camera. */
+    static const char *ssids[] = { "", "Airport-Free", "Tapo_P100",
+                                   "HAPPY-HOUR", "DAPHNE" };
+    for (size_t k = 0; k < sizeof(ssids) / sizeof(ssids[0]); k++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        uint8_t b[6] = {0x0e,0x00,0x00,0x00,0x00,(uint8_t)k};
+        add_beacon(&s, ssids[k], b, "OPEN");
+        alerts_update(&s);
+        if (find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID) >= 0)
+            printf("    cam-setup: false positive on \"%s\"\n", ssids[k]);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID), -1);
+    }
+}
+
+static void test_cam_setup_ssid_fires_once_per_bssid(void) {
+    /* Two polls, one alert, count 2 — a camera left in setup mode for
+     * an hour must not flood the ring. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t b[6] = {0x02,0x0a,0x0b,0x0c,0x0d,0x11};
+    add_beacon(&s, "HAP_4A7C21", b, "WPA2");
+    alerts_update(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, 2);
+    int seen = 0;
+    for (int k = 0; k < s.alert_count; k++)
+        if (s.alerts[k].type == ALERT_TYPE_CAM_SETUP_SSID) seen++;
+    ASSERT_EQ(seen, 1);
+}
+
+static void test_cam_setup_ssid_does_not_suppress_open_setup_ap(void) {
+    /* The two rules are additive. No shipped camera prefix is also a
+     * #80 prefix, so this cannot be asserted on one SSID — stated
+     * plainly rather than claimed. What it does assert is that both
+     * rules still run in the same pass and neither swallows the
+     * other's finding. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t cam[6] = {0x02,0x20,0,0,0,0x01};
+    uint8_t gen[6] = {0x02,0x20,0,0,0,0x02};
+    add_beacon(&s, "HAP_4A7C21", cam, "WPA2");
+    add_beacon(&s, "SETUP-A1B2", gen, "OPEN");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_CAM_SETUP_SSID) >= 0);
+    ASSERT(find_alert(&s, ALERT_TYPE_OPEN_SETUP_AP) >= 0);
+}
+
 /* ── ONVIF camera via WS-Discovery (#106 slice 1) ─────────
  *
  * The onvif_discovery.c parser has its own hand-built-frame tests in
@@ -8734,6 +8940,14 @@ void run_alerts_tests(void) {
     RUN_TEST(test_open_setup_ap_quiet_on_empty_ssid);
     RUN_TEST(test_open_setup_ap_quiet_on_ordinary_open_ssid);
     RUN_TEST(test_open_setup_ap_fires_once_per_bssid);
+    RUN_TEST(test_cam_setup_ssid_fires);
+    RUN_TEST(test_cam_setup_ssid_covers_the_pattern_table);
+    RUN_TEST(test_cam_setup_ssid_fires_when_encrypted);
+    RUN_TEST(test_cam_setup_ssid_reports_open_and_unknown_distinctly);
+    RUN_TEST(test_cam_setup_ssid_guardrail_precedes_the_table);
+    RUN_TEST(test_cam_setup_ssid_quiet_on_empty_and_ordinary_ssid);
+    RUN_TEST(test_cam_setup_ssid_fires_once_per_bssid);
+    RUN_TEST(test_cam_setup_ssid_does_not_suppress_open_setup_ap);
     RUN_TEST(test_cam_ws_discovery_fires_on_camera);
     RUN_TEST(test_cam_ws_discovery_quiet_on_non_camera);
     RUN_TEST(test_cam_ws_discovery_keys_by_ip_without_uuid);

@@ -279,6 +279,7 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * it, so there is no honest technique, but §11.8 / §9.4.2.13 /
          * §9.4.2.16 are exactly what it detects from. */
         "ALERT_TYPE_TPC_ABSENT_HIGH_BAND",
+        "ALERT_TYPE_CAM_SETUP_SSID",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

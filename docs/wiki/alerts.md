@@ -250,6 +250,30 @@ owner has not answered and this leaves it open.
 Full row, including the false-positive cases, in
 [`docs/views/alerts.md`](../views/alerts.md); basis in
 `research/papers/surveillance-vendor-endpoints.md`.
+### Exposure rules — no ATT&CK technique, on purpose
+
+Three rules return `""` from `alert_technique()` while still carrying a
+cited basis: `OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1)
+and `CAM_SETUP_SSID` (#106 slice 2). What they report is a third
+party's device exposing itself — an unconfigured SoftAP, a camera
+announcing itself over unauthenticated multicast, a camera still in
+setup mode. **Nobody has to be present for any of them to fire**, so
+assigning T1046, T1669 or T1557 would claim an adversary step sloth did
+not observe.
+
+This is not the `NO_MONITOR_MODE` case, which has no source to cite at
+all. These three have sources, they are just not ATT&CK IDs, and
+`tests/test_research_corpus.c ::
+test_uncitable_kinds_with_a_real_basis_are_still_cited` names each kind
+explicitly and fails if its citing document disappears.
+
+`CAM_SETUP_SSID` is also the one rule in the engine that deliberately
+does **not** gate on an open network. Hikvision's `HAP_` setup AP and
+EZVIZ's AP-mode network are WPA-protected with a key printed on the
+device label, so an OPEN gate would make the most common camera case
+undetectable; the rule reports the provisioning state and records the
+encryption in the detail instead. See the full row in
+[`docs/views/alerts.md`](../views/alerts.md).
 
 ### Tunable thresholds (#82)
 

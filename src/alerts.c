@@ -613,6 +613,15 @@ const char *alert_technique(alert_type_t type) {
      * test_uncitable_kinds_with_a_real_basis_are_still_cited holds the
      * citation anyway. */
     case ALERT_TYPE_TPC_ABSENT_HIGH_BAND:   return "";            /* non-compliance, not adversary technique (#101) */
+    /* Third in the same position as OPEN_SETUP_AP and
+     * CAM_WS_DISCOVERY: the finding is an observed camera's own
+     * provisioning state, not anything an adversary did. Nobody has
+     * to be present for this to fire. T1669 (Wi-Fi Networks) and
+     * T1046 (Network Service Discovery) both describe an attacker
+     * acting on the SoftAP, which is the step *after* the one sloth
+     * can see. The basis is cited — the vendors' own onboarding
+     * documentation, see research/papers/camera-setup-softap.md. */
+    case ALERT_TYPE_CAM_SETUP_SSID:         return "";            /* exposure, not adversary technique (#106 slice 2) */
     case ALERT_TYPE_COUNT:                  break;
     }
     return "";
@@ -670,6 +679,7 @@ const char *alert_type_name(alert_type_t type) {
     N(ALERT_TYPE_PM_FORGE);
     N(ALERT_TYPE_SURV_CLOUD_SNI);
     N(ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
+    N(ALERT_TYPE_CAM_SETUP_SSID);
     case ALERT_TYPE_COUNT: break;
     }
 #undef N
@@ -3144,6 +3154,141 @@ static void rule_open_setup_ap(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ── CAM_SETUP_SSID (#106 slice 2) ──────────────────────────
+ *
+ * #80 answers "an open SoftAP exists". This answers "a Hikvision
+ * camera is still in setup mode", which is the sentence #106 asks for
+ * and the one an operator can act on: a camera that has never been
+ * joined to a WLAN is also a camera whose admin password has never
+ * been changed, and the SoftAP is the surface that reaches it.
+ *
+ * Deliberately NOT gated on OPEN, unlike rule_open_setup_ap. The two
+ * largest vendors' setup APs are WPA-protected, so an OPEN gate would
+ * make the issue's own headline case unreachable: Hikvision's `HAP_`
+ * AP wants the last 8 characters of the serial number, which is
+ * printed on the device label the camera is mounted on, and EZVIZ's
+ * wants the verification code from the same label. A key that ships
+ * on the outside of the chassis is not a key. What this rule reports
+ * is the provisioning *state*, with the encryption recorded in the
+ * detail so the operator can tell the two situations apart rather
+ * than having the rule decide for them.
+ *
+ * Additive to OPEN_SETUP_AP: that rule's table and this one share no
+ * prefix today, so in practice they fire on disjoint sets — but
+ * neither suppresses the other, and a future SSID matching both
+ * should produce both rows (the generic one is the audit trail, the
+ * camera one is the finding).
+ *
+ * Every row cites the vendor's own onboarding documentation — see
+ * research/papers/camera-setup-softap.md. Rows whose SSID shape could
+ * not be sourced to a vendor document were left out rather than
+ * guessed; see that document's "considered and not shipped" section.
+ */
+typedef struct {
+    const char *prefix;
+    const char *vendor;    /* rendered into the alert detail */
+} cam_setup_ssid_pat_t;
+
+static const cam_setup_ssid_pat_t g_camera_setup_ssid_pats[] = {
+    /* "Hikvision Access Point". SSID is HAP_ + the verification code
+     * from the device label; the AP key is the last 8 characters of
+     * the serial number, also on the label. */
+    { "HAP_",      "Hikvision camera" },
+    /* "Dahua Access Point", DAP-<serial fragment>. Amcrest is a Dahua
+     * OEM and uses the same prefix (DAP-AMC...), so one row covers
+     * both brands — which is why the label says the OEM, not Amcrest. */
+    { "DAP-",      "Dahua/Amcrest camera" },
+    /* EZVIZ is Hikvision's consumer brand; AP mode broadcasts
+     * EZVIZ_<9-digit serial>, keyed on the label's verification code. */
+    { "EZVIZ_",    "EZVIZ camera" },
+    /* TP-Link Tapo camera setup SoftAP: Tapo_Cam_<last 4 of MAC>.
+     * Prefix includes the trailing underscore so it cannot collide
+     * with a Tapo plug or bulb, which are not cameras. */
+    { "Tapo_Cam_", "TP-Link Tapo camera" },
+};
+
+static void rule_cam_setup_ssid(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *a = &s->beacon_aps[i];
+
+        /* Hidden / broadcast SSID — no name to match. */
+        if (!a->ssid[0]) continue;
+
+        /* Guardrail ahead of the pattern match, always — same ordering
+         * rule_open_setup_ap uses.
+         *
+         * It DOES change current outcomes, four of them, and an earlier
+         * version of this comment said otherwise. ssid_is_public_hotspot()
+         * matches on the substring `guest`, not only on a closed list of
+         * hotspot names, so any camera setup SSID containing it is
+         * suppressed today — review proved it by deleting this line and
+         * watching four cases go red. That is a live false-NEGATIVE path,
+         * not a placeholder for future rows: a vendor shipping
+         * `HAP_guest…` would be invisible.
+         *
+         * Kept in this order anyway, and the trade stated rather than
+         * hidden: an SSID a human called "guest" is a network someone
+         * intended to be open, and firing a camera-exposure WARN on it
+         * is the kind of noise that teaches an operator to mute the
+         * type. Narrowing the `guest` branch so a vendor prefix wins
+         * over it is a change to shared hotspot logic that
+         * rule_open_setup_ap also depends on, so it belongs in its own
+         * slice rather than here. */
+        if (ssid_is_public_hotspot(a->ssid)) continue;
+
+        const char *vendor = NULL;
+        for (size_t p = 0;
+             p < sizeof(g_camera_setup_ssid_pats) /
+                 sizeof(g_camera_setup_ssid_pats[0]);
+             p++)
+            if (ascii_iprefix(a->ssid, g_camera_setup_ssid_pats[p].prefix)) {
+                vendor = g_camera_setup_ssid_pats[p].vendor;
+                break;
+            }
+        if (!vendor) continue;
+
+        char bssid_str[20];
+        mac_to_str(a->bssid, bssid_str, sizeof(bssid_str));
+
+        /* Reported, not judged. An empty enc means the path that
+         * produced the row did not decide — not that the AP is open —
+         * so it reads "unknown" rather than implying either answer,
+         * and a protected setup AP names its cipher rather than
+         * carrying a claim about where its key is printed (that is
+         * per-vendor, and belongs in the rule's doc row). */
+        char encdesc[32];
+        if (!a->enc[0])
+            snprintf(encdesc, sizeof(encdesc), "enc unknown");
+        else if (ascii_ieq(a->enc, "OPEN"))
+            snprintf(encdesc, sizeof(encdesc), "OPEN, unauthenticated");
+        else
+            snprintf(encdesc, sizeof(encdesc), "enc %.12s", a->enc);
+
+        char key[ALERT_KEY_LEN];
+        char detail[ALERT_DETAIL_LEN];
+        /* Per BSSID, same reasoning as opensetup: a camera left in
+         * setup mode is one alert with a rising count. */
+        snprintf(key, sizeof(key), "camsetup:%s", bssid_str);
+        /* "advertising its setup SSID", not "in setup mode" and not
+         * "not yet joined to a WLAN". The only input is an SSID prefix
+         * on a beacon; nothing here observes whether the camera is
+         * provisioned, and a configured device can advertise this name
+         * after a factory reset, during a re-pair, or because its
+         * installer left the AP enabled. The same issue's
+         * CAM_WS_DISCOVERY row one slice earlier explicitly refused the
+         * equivalent claim, and #90 is open about exactly this class of
+         * overstatement — so the detail reports the observable and lets
+         * the operator draw the inference. */
+        snprintf(detail, sizeof(detail),
+                 "%s advertising its documented setup SSID: %.32s"
+                 " BSSID %s ch %d, %s"
+                 " (provisioning state not observed)",
+                 vendor, a->ssid, bssid_str, a->channel, encdesc);
+        fire(ALERT_TYPE_CAM_SETUP_SSID, ALERT_SEV_WARN,
+             "CAM_SETUP_SSID", detail, key, NULL, 0, now);
+    }
+}
+
 /* ── CAM_WS_DISCOVERY (#106 slice 1) ────────────────────────
  *
  * An ONVIF Network Video Transmitter — an IP camera — announces its
@@ -4804,6 +4949,7 @@ void alerts_update(sloth_state_t *s) {
     rule_evil_twin_attack_chain(s, now);
     rule_karma_ap(s, now);
     rule_open_setup_ap(s, now);
+    rule_cam_setup_ssid(s, now);
     rule_cam_ws_discovery(s, now);
     rule_surv_cloud_sni(s, now);
     rule_wps_pin_brute(s, now);
