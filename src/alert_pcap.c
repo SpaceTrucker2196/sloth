@@ -108,11 +108,13 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
     const uint64_t min_bytes = (uint64_t)tune_val(TUNE_STORAGE_MIN_FREE_MB)
                                * 1024u * 1024u;
     const uint64_t min_files = (uint64_t)tune_val(TUNE_STORAGE_MIN_FREE_INODES);
-    if (min_bytes || min_files) {
+    const int      min_pct   = (int)tune_val(TUNE_STORAGE_MIN_FREE_PCT);
+    if (min_bytes || min_files || min_pct) {
         fs_capacity_t cap;
         char why[SFILE_ERR_MAX];
         if (fs_capacity_probe(g_dirfd, &cap) == 0 &&
-            fs_capacity_blocked(&cap, min_bytes, min_files, why, sizeof(why))) {
+            fs_capacity_blocked(&cap, min_bytes, min_files, min_pct,
+                                why, sizeof(why))) {
             sfile_fail(&g_fail, "alert pcap", why);
             return -1;
         }

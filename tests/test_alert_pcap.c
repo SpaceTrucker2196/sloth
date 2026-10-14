@@ -453,15 +453,26 @@ static void test_dump_writes_when_the_floor_is_satisfiable(void) {
     tune_reset();
 }
 
-static void test_dump_unaffected_by_default(void) {
+static void test_dump_succeeds_on_a_healthy_filesystem_by_default(void) {
     ensure_tmp_dir();
     tune_reset();
-    /* Both floors default to 0, so an existing deployment inherits no
-       behaviour change on upgrade. Asserted here rather than only in
-       test_fs_capacity.c, because the default that matters is the one
-       this call site reads. */
+    /* The guard IS on by default now, via the relative floor — owner
+       instruction 2026-10-13. The two ABSOLUTE floors stay 0, because a
+       fixed inode or byte count cannot be right for two filesystems of
+       different size; the percentage is what carries the default.
+       
+       (An earlier version of this comment said "both floors default to
+       0, so an existing deployment inherits no behaviour change". That
+       was true when the only floors were absolute and is not any more.
+       An upgrade now DOES change behaviour on a filesystem already
+       under 5% free, which is the point of the change rather than a
+       side effect of it.)
+       
+       Asserted here rather than only in test_fs_capacity.c, because the
+       default that matters is the one this call site reads. */
     ASSERT_EQ((long long)tune_val(TUNE_STORAGE_MIN_FREE_MB), 0);
     ASSERT_EQ((long long)tune_val(TUNE_STORAGE_MIN_FREE_INODES), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_STORAGE_MIN_FREE_PCT), 5);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     seed_packet(&s, "192.168.1.5", "203.0.113.7", 33445, 443, 1700000000);
     alert_t a; memset(&a, 0, sizeof(a));
@@ -497,7 +508,7 @@ void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap storage floors (#96)");
     RUN_TEST(test_dump_refuses_below_the_inode_floor);
     RUN_TEST(test_dump_writes_when_the_floor_is_satisfiable);
-    RUN_TEST(test_dump_unaffected_by_default);
+    RUN_TEST(test_dump_succeeds_on_a_healthy_filesystem_by_default);
 
     TEST_SUITE("alert_pcap export outcome recorded on the alert (#92)");
     RUN_TEST(test_dump_retries_after_transient_failure);

@@ -33,9 +33,39 @@ int fs_capacity_probe(int dirfd, fs_capacity_t *out) {
 
 int fs_capacity_blocked(const fs_capacity_t *c,
                         uint64_t min_bytes, uint64_t min_files,
+                        int min_pct,
                         char *why, size_t whysz) {
     if (why && whysz) why[0] = '\0';
     if (!c) return 0;
+
+    /* The relative floor first, because it is the one that is on by
+     * default and therefore the one most likely to be doing the work.
+     * Inodes before bytes within it, for the same reason the absolute
+     * terms are ordered that way: on the failure this module was built
+     * from, inodes were the binding constraint and bytes looked fine. */
+    if (min_pct > 0) {
+        if (c->files_known && c->total_files > 0 &&
+            c->free_files < (c->total_files / 100u) * (unsigned)min_pct) {
+            if (why && whysz)
+                snprintf(why, whysz,
+                         "only %llu of %llu inodes free (under %d%%) "
+                         "(inodes run out before disk does when every "
+                         "alert writes its own file)",
+                         (unsigned long long)c->free_files,
+                         (unsigned long long)c->total_files, min_pct);
+            return 1;
+        }
+        if (c->total_bytes > 0 &&
+            c->free_bytes < (c->total_bytes / 100u) * (unsigned)min_pct) {
+            if (why && whysz)
+                snprintf(why, whysz,
+                         "only %llu MB of %llu MB free (under %d%%)",
+                         (unsigned long long)(c->free_bytes / (1024u*1024u)),
+                         (unsigned long long)(c->total_bytes / (1024u*1024u)),
+                         min_pct);
+            return 1;
+        }
+    }
 
     /* Inodes first. On the measured failure this is the one that would
      * have fired, and reporting the byte figure first would bury it. */

@@ -75,6 +75,7 @@ typedef enum {
        their rows in tune.c for why these alone may be 0. */
     TUNE_STORAGE_MIN_FREE_MB,
     TUNE_STORAGE_MIN_FREE_INODES,
+    TUNE_STORAGE_MIN_FREE_PCT,
     TUNE_COUNT
 } tune_id_t;
 

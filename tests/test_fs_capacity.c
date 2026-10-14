@@ -36,13 +36,13 @@ static void test_the_measured_failure_is_caught(void) {
        claim the byte floor was sufficient. */
     fs_capacity_t c = cap_of(267ull * 1024 * 1024 * 1024, 13138050, 1);
     char why[320];
-    ASSERT_EQ(fs_capacity_blocked(&c, 1024ull * 1024 * 1024, 0, why, sizeof(why)), 0);
+    ASSERT_EQ(fs_capacity_blocked(&c, 1024ull * 1024 * 1024, 0, 0, why, sizeof(why)), 0);
     ASSERT_STR(why, "");
 
     /* With an inode floor above the remaining count, it fires — and the
        reason names inodes, because an operator staring at `df -h` needs
        to be told the constraint is not bytes. */
-    ASSERT_EQ(fs_capacity_blocked(&c, 0, 20000000, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 20000000, 0, why, sizeof(why)), 1);
     ASSERT(strstr(why, "inode") != NULL);
 }
 
@@ -51,7 +51,7 @@ static void test_inode_floor_is_reported_before_the_byte_floor(void) {
        message names the constraint that will actually bite first. */
     fs_capacity_t c = cap_of(10ull * 1024 * 1024, 100, 1);
     char why[320];
-    ASSERT_EQ(fs_capacity_blocked(&c, 500ull * 1024 * 1024, 1000, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 500ull * 1024 * 1024, 1000, 0, why, sizeof(why)), 1);
     ASSERT(strstr(why, "inode") != NULL);
     ASSERT(strstr(why, "MB free") == NULL);
 }
@@ -62,10 +62,10 @@ static void test_zero_floor_disables_that_floor(void) {
     /* Both floors off: never refuses, even on a full filesystem. That
        is the shipped default, so this is the upgrade-safety assertion —
        an existing deployment must not start refusing writes. */
-    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, why, sizeof(why)), 0);
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 0, why, sizeof(why)), 0);
     /* One floor off, the other on, each independently. */
-    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, why, sizeof(why)), 1);
-    ASSERT_EQ(fs_capacity_blocked(&c, 0, 1, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, 0, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 1, 0, why, sizeof(why)), 1);
 }
 
 static void test_floor_is_a_floor_not_a_ceiling(void) {
@@ -75,12 +75,12 @@ static void test_floor_is_a_floor_not_a_ceiling(void) {
        satisfies it. Off by one here would refuse a write the operator
        asked to permit. */
     fs_capacity_t at = cap_of(1000, 50, 1);
-    ASSERT_EQ(fs_capacity_blocked(&at, 1000, 50, why, sizeof(why)), 0);
+    ASSERT_EQ(fs_capacity_blocked(&at, 1000, 50, 0, why, sizeof(why)), 0);
     /* One below either floor refuses. */
     fs_capacity_t b = cap_of(999, 50, 1);
-    ASSERT_EQ(fs_capacity_blocked(&b, 1000, 50, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&b, 1000, 50, 0, why, sizeof(why)), 1);
     fs_capacity_t i = cap_of(1000, 49, 1);
-    ASSERT_EQ(fs_capacity_blocked(&i, 1000, 50, why, sizeof(why)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&i, 1000, 50, 0, why, sizeof(why)), 1);
 }
 
 static void test_filesystem_without_an_inode_table_is_not_refused(void) {
@@ -90,24 +90,24 @@ static void test_filesystem_without_an_inode_table_is_not_refused(void) {
        files_known is a separate field rather than a count of zero. */
     fs_capacity_t c = cap_of(100ull * 1024 * 1024 * 1024, 0, 0);
     char why[320];
-    ASSERT_EQ(fs_capacity_blocked(&c, 0, 1000000, why, sizeof(why)), 0);
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 1000000, 0, why, sizeof(why)), 0);
     ASSERT_STR(why, "");
     /* The byte floor still applies there — only the inode check is
        skipped, not the whole guard. */
-    ASSERT_EQ(fs_capacity_blocked(&c, 200ull * 1024 * 1024 * 1024, 0,
+    ASSERT_EQ(fs_capacity_blocked(&c, 200ull * 1024 * 1024 * 1024, 0, 0,
                                   why, sizeof(why)), 1);
 }
 
 static void test_null_and_short_buffers_are_safe(void) {
     char why[320];
-    ASSERT_EQ(fs_capacity_blocked(NULL, 1, 1, why, sizeof(why)), 0);
+    ASSERT_EQ(fs_capacity_blocked(NULL, 1, 1, 0, why, sizeof(why)), 0);
     fs_capacity_t c = cap_of(0, 0, 1);
     /* No output buffer at all, and a buffer too small for the message:
        neither may write out of bounds, and both must still return the
        verdict. ASan is the real assertion here. */
-    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, NULL, 0), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, 0, NULL, 0), 1);
     char tiny[4];
-    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, tiny, sizeof(tiny)), 1);
+    ASSERT_EQ(fs_capacity_blocked(&c, 1, 0, 0, tiny, sizeof(tiny)), 1);
 }
 
 static void test_probe_reads_a_real_directory(void) {
@@ -183,6 +183,86 @@ static void test_band_does_not_overflow_on_real_sizes(void) {
     ASSERT_EQ(fs_capacity_band(300000, 30269440), 4);
 }
 
+/* ── The relative floor, which is the one on by default ────
+ *
+ * An absolute default cannot be right for two deployments of different
+ * size, and that is not a hypothetical: the floor that would have
+ * protected the host this module was measured on is ~1.5M free inodes,
+ * which is 5% of its 30,269,440-inode filesystem and would refuse every
+ * write on a small one. So the default is a percentage and the absolute
+ * knobs are overrides. */
+static void test_percentage_floor_scales_with_the_filesystem(void) {
+    char why[320];
+    /* The owner's host: 30,269,440 total inodes. 5% is 1,513,472. */
+    fs_capacity_t big = cap_of(100ull * 1024 * 1024 * 1024, 13138050, 1);
+    big.total_files = 30269440;
+    big.total_bytes = 454ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&big, 0, 0, 5, why, sizeof(why)), 0);
+    /* Drop free inodes under 5% and the SAME percentage refuses. */
+    big.free_files = 1000000;
+    ASSERT_EQ(fs_capacity_blocked(&big, 0, 0, 5, why, sizeof(why)), 1);
+    ASSERT(strstr(why, "inode") != NULL);
+
+    /* A small filesystem: 500,000 total inodes, 5% is 25,000. The same
+       knob value that protects the 30M host does not lock this one out,
+       which is the whole reason the default is relative. */
+    fs_capacity_t small = cap_of(8ull * 1024 * 1024 * 1024, 100000, 1);
+    small.total_files = 500000;
+    small.total_bytes = 16ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&small, 0, 0, 5, why, sizeof(why)), 0);
+    /* An ABSOLUTE floor of 1.5M — the right number for the big host —
+       would refuse every write here. Asserted so the reason the default
+       is not absolute is written down as a test, not just a comment. */
+    ASSERT_EQ(fs_capacity_blocked(&small, 0, 1513472, 0, why, sizeof(why)), 1);
+}
+
+static void test_percentage_floor_checks_bytes_too(void) {
+    char why[320];
+    /* Inodes comfortable, bytes under the percentage. */
+    fs_capacity_t c = cap_of(1ull * 1024 * 1024 * 1024, 20000000, 1);
+    c.total_files = 30000000;
+    c.total_bytes = 454ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 5, why, sizeof(why)), 1);
+    ASSERT(strstr(why, "MB") != NULL);
+}
+
+static void test_percentage_floor_reports_inodes_first(void) {
+    /* Both under the percentage at once. Inodes win the message, for
+       the same reason the absolute terms are ordered that way: on the
+       measured failure inodes were the binding constraint while `df -h`
+       read 39% used, so naming bytes first would bury the cause. */
+    char why[320];
+    fs_capacity_t c = cap_of(1ull * 1024 * 1024, 1000, 1);
+    c.total_files = 30000000;
+    c.total_bytes = 454ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 5, why, sizeof(why)), 1);
+    ASSERT(strstr(why, "inode")  != NULL);
+    ASSERT(strstr(why, "MB of")  == NULL);
+}
+
+static void test_percentage_zero_disables_the_relative_floor(void) {
+    /* The escape hatch for a deployment that wants the pre-guard
+       behaviour: all three floors at 0 never refuses. */
+    char why[320];
+    fs_capacity_t c = cap_of(0, 0, 1);
+    c.total_files = 30000000;
+    c.total_bytes = 454ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 0, why, sizeof(why)), 0);
+    /* And with the default 5 it refuses, so the two are distinguishable
+       rather than both passing for unrelated reasons. */
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 5, why, sizeof(why)), 1);
+}
+
+static void test_percentage_floor_skips_inodes_without_a_table(void) {
+    /* btrfs again: f_files == 0 means no fixed inode table, not none
+       left, so the percentage must not divide by it either. */
+    char why[320];
+    fs_capacity_t c = cap_of(100ull * 1024 * 1024 * 1024, 0, 0);
+    c.total_files = 0;
+    c.total_bytes = 454ull * 1024 * 1024 * 1024;
+    ASSERT_EQ(fs_capacity_blocked(&c, 0, 0, 5, why, sizeof(why)), 0);
+}
+
 void run_fs_capacity_tests(void) {
     TEST_SUITE("fs capacity: storage floors for --pcap-dir (#96)");
     RUN_TEST(test_the_measured_failure_is_caught);
@@ -197,4 +277,9 @@ void run_fs_capacity_tests(void) {
     RUN_TEST(test_band_is_undefined_without_a_total);
     RUN_TEST(test_band_tolerates_free_above_total);
     RUN_TEST(test_band_does_not_overflow_on_real_sizes);
+    RUN_TEST(test_percentage_floor_scales_with_the_filesystem);
+    RUN_TEST(test_percentage_floor_checks_bytes_too);
+    RUN_TEST(test_percentage_floor_reports_inodes_first);
+    RUN_TEST(test_percentage_zero_disables_the_relative_floor);
+    RUN_TEST(test_percentage_floor_skips_inodes_without_a_table);
 }

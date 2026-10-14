@@ -60,8 +60,21 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * filesystem's inodes while disk sat at 39% used. A byte floor
      * alone would never have fired. Hence two floors, and hence the
      * inode one being checked first. */
-    { "storage.min_free_mb",        0,   0,   4194304, "MB that must stay free, or 0 for no floor" },
-    { "storage.min_free_inodes",    0,   0,   100000000, "free inodes that must remain, or 0 for no floor" },
+    { "storage.min_free_mb",        0,   0,   4194304, "MB that must stay free, or 0 for no absolute floor" },
+    { "storage.min_free_inodes",    0,   0,   100000000, "free inodes that must remain, or 0 for no absolute floor" },
+    /* The one that is ON by default, and the only one that can be: the
+     * floor which protected the host this was measured on was 1.5M
+     * inodes — 5% of its 30M-inode filesystem, and enough to refuse
+     * every write on a small one. A default has to be relative or it is
+     * wrong for one size of deployment or the other.
+     *
+     * 5% because that is what the measurement supported: at 93% of the
+     * host's inodes consumed by one directory, 5% free is roughly
+     * 1.5M — still hundreds of thousands of alert pcaps of headroom,
+     * while leaving the machine able to create files for anything else.
+     * The cap of 50 is there because a floor above half the filesystem
+     * is a way to disable writing rather than to protect it. */
+    { "storage.min_free_pct",       5,   0,   50,     "percent of the filesystem that must stay free, 0 for none" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

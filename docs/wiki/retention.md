@@ -351,9 +351,18 @@ Recorded here rather than implied away:
   `--pcap-dir` is checked before each write, and nothing else is.
   `src/fs_capacity.c` reads the headroom of the filesystem holding that
   directory and `src/alert_pcap.c` refuses the dump when it is below a
-  configured floor — `storage.min_free_mb` or `storage.min_free_inodes`
-  via `--tune`, **both 0 (off) by default**, so an unchanged deployment
-  behaves exactly as it did before. Free bytes *and* free inodes are
+  floor. **The guard is ON by default** (owner instruction 2026-10-13):
+  `storage.min_free_pct` is 5, so a write is refused once free inodes or
+  free bytes fall under 5% of the filesystem. `storage.min_free_mb` and
+  `storage.min_free_inodes` are absolute overrides and remain 0 (none).
+
+  The default is a percentage rather than a count because an absolute
+  floor cannot be right for two filesystems of different size: the floor
+  that protects a 30M-inode host is ~1.5M free inodes, which would
+  refuse every write on a small one. An upgrade therefore DOES change
+  behaviour on a filesystem already under 5% free — that is the point of
+  the change, not a side effect. `storage.min_free_pct=0` with both
+  absolutes at 0 restores the previous behaviour. Free bytes *and* free inodes are
   reported unconditionally in `sensor_health`
   (`pcap_dir_free_mb`, `pcap_dir_free_inodes`), because the operator
   failure mode here is false reassurance rather than surprise: measured

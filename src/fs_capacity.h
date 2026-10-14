@@ -63,13 +63,27 @@ int fs_capacity_probe(int dirfd, fs_capacity_t *out);
  * without a filesystem to fill.
  *
  * Returns 1 when a write should be refused and writes a reason into
- * `why`, 0 when there is room. A floor of 0 disables that floor; both
- * at 0 means this never refuses.
+ * `why`, 0 when there is room. THREE floors, any one of which refuses:
  *
- * `min_files` is compared only when c->files_known, for the btrfs
- * reason above. */
+ *   min_pct    a PERCENTAGE of the filesystem's own total, checked for
+ *              bytes and for inodes. This is the one that is on by
+ *              default, and it has to be relative: the floor that
+ *              protected the host where this was measured was 1.5M
+ *              inodes, which is 5% of its 30M-inode filesystem and
+ *              would refuse every write on a small one. An absolute
+ *              default cannot be right for both.
+ *   min_bytes  absolute byte floor, 0 for none
+ *   min_files  absolute inode floor, 0 for none
+ *
+ * The absolutes are overrides for an operator who knows their segment,
+ * not the primary mechanism. All three at 0 means this never refuses,
+ * which is what a deployment that wants the old behaviour sets.
+ *
+ * Inode terms — both the absolute and the percentage — are compared
+ * only when c->files_known, for the btrfs reason above. */
 int fs_capacity_blocked(const fs_capacity_t *c,
                         uint64_t min_bytes, uint64_t min_files,
+                        int min_pct,
                         char *why, size_t whysz);
 
 /* Coarse headroom band, 0 (plenty) to 4 (essentially none), or -1 when
