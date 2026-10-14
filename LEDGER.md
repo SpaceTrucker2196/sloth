@@ -194,3 +194,4 @@
 | 6e05e02 | 2026-10-13T20:58:42Z | claude-opus-5 | 110 | 32519 | 36129081 | 49690 | 19.3750 | #101 and #106 integrated with review fixes; #90/#104/#107 held with blocking questions |
 | 50407c4 | 2026-10-13T22:36:29Z | claude-opus-5 | 272 | 100211 | 103436457 | 133645 | 55.5613 | #90/#104/#107 resolved on owner ruling: badge off severity, PMF arm observational, distinct-frame counting + recency bound |
 | d7eafe0 | 2026-10-14T00:42:10Z | claude-opus-5 | 72 | 30658 | 29730285 | 848431 | 24.1163 | storage floors on by default (relative, 5%), karma pnl_best persisted with schema 4->5 |
+| bebb0ec | 2026-10-14T05:20:51Z | claude-opus-5 | 154 | 61326 | 68974366 | 926826 | 45.2894 | per-alert pcap export policy: CRIT-only default + per-key cooldown, full capture via two knobs |
