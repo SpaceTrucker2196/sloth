@@ -201,3 +201,4 @@
 | 6e18080 | 2026-10-14T14:35:52Z | claude-opus-5 | 120 | 33016 | 12550162 | 52494 | 7.6260 | management-frame body offset: +HTC skew in action/assoc/beacon parsers (#95) |
 | 644ae96 | 2026-10-14T14:57:04Z | claude-opus-5 | 72 | 19615 | 9030596 | 31217 | 5.3182 | fuzz link fix + probe.c +HTC sites; record the build-surface gate gap (#95) |
 | 99a326a | 2026-10-14T15:03:22Z | claude-opus-5 | 20 | 7261 | 2688109 | 8466 | 1.6103 | record the omitted-CI reporting lesson in agents/converge.md |
+| 81f792b | 2026-10-14T16:57:43Z | claude-fable-5-1, claude-opus-5 | 470 | 28037 | 7004410 | 299007 | 13.6116 | MISSION.md §2 rule 1 rewrite applied under owner authorisation; lockstep restatements (#84, #102) |
