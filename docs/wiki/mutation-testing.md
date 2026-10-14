@@ -17,7 +17,7 @@ Level-5 autonomy claim in [`MISSION.md`](../../MISSION.md).
 **Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
 
-**Last updated**: 2026-05-26.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -413,3 +413,27 @@ where the suite already had failures.
 - [[platform-vtable]] — why some files won't mutate cleanly on macOS.
 - [`../../agents/dark-factory.md`](../../agents/dark-factory.md) §3.3 — why "tests are
   the ground truth" requires this harness.
+
+## The sandbox is the tracked tree (2026-10-14)
+
+`make mutate` was **dead from #73 until 2026-10-14** and nothing said so. The
+script copied a hand-kept tuple — `Makefile`, `src/`, `include/`, `tests/` —
+into its scratch tree; #73 put `research/*.c` into `TEST_SRCS` and made the
+tests open the committed `research.db`, so the baseline `make test` failed
+to compile (`No rule to make target 'research/coverage.c'`) and the run
+aborted before mutating anything. An aborted mutation run and a never-run
+one are indistinguishable from outside, which is why it lasted.
+
+Adding `research/` by hand only moved the failure: 15 docs-consistency and
+CI-pin tests then failed in the sandbox because they read `docs/`,
+`agents/`, `.github/`, `README.md` and `MISSION.md`. The sandbox is now
+built from `git ls-files` — whatever the tests read today or next year
+travels with them — and `tests/test_build_recipe.c ::
+test_mutate_sandbox_is_built_from_the_tracked_tree` asserts the recipe is
+derived rather than enumerated. First run after the fix: baseline green,
+1,392 sites in `src/alerts.c`, and the single sampled mutant
+(`alerts.c:2201`, `<` → `<=`, in the `g_arp_hist` code) **survived** — a
+genuine test gap, carried to #110 which rewrites that table.
+
+Any mutation score quoted between #73 and 2026-10-14 that came from
+`make mutate` rather than a hand mutation is unverified (#108).

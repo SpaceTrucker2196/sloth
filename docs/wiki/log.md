@@ -2707,3 +2707,11 @@ never injects over the air, which remains true, and stand.
 
 #102 (slothweb) was held against the old text, which forbade a local
 HTTP surface; it is no longer charter-blocked.
+
+## 2026-10-14 — `make mutate` had been aborting since #73 (#108)
+
+The sandbox copied a hand-kept tuple of directories; `TEST_SRCS` outgrew it
+at #73 and every run since aborted at "baseline not green". Fixed by
+deriving the sandbox from `git ls-files`, pinned by a recipe test. First
+real run: baseline green, 1,392 sites, one sampled mutant survived at
+`alerts.c:2201` (`g_arp_hist`, → #110). Details: [[mutation-testing]].

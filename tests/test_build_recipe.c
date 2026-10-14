@@ -89,6 +89,59 @@ static int carries_cflags(const char *line) {
            strstr(line, "$(TEST_CFLAGS)") != NULL;
 }
 
+
+/* ── the mutation sandbox must carry everything the test build needs ──
+ *
+ * .github/scripts/mutate.py copies the repo into a scratch tree and runs
+ * `make test` there as its baseline. It used to copy a hand-kept tuple
+ * ("Makefile", "src", "include", "tests"), and that rotted without a
+ * sound: #73 added the research/ sources to TEST_SRCS and research.db to what the
+ * tests open, so from then until 2026-10-14 every `make mutate` aborted
+ * at "baseline not green" — which from outside is indistinguishable from
+ * never having run it. Adding research/ by hand only moved the failure
+ * into the docs-consistency and CI-pin suites, which read docs/, agents/,
+ * .github/, README.md and MISSION.md.
+ *
+ * The durable property is therefore not "the tuple names X" but "the
+ * sandbox is derived from the tracked tree", so whatever the tests read
+ * next year travels too. Like the rest of this file, a text scan of the
+ * recipe: the behavioural proof is `make mutate MUTATE_FLAGS="--limit 1"`
+ * reaching a green baseline, recorded on #108. */
+
+static char *slurp_path(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    rewind(f);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    buf[got] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static void test_mutate_sandbox_is_built_from_the_tracked_tree(void) {
+    char *py = slurp_path(".github/scripts/mutate.py");
+    ASSERT(py != NULL);
+    if (!py) return;
+    char *fn = strstr(py, "def make_sandbox(");
+    ASSERT(fn != NULL);
+    if (!fn) { free(py); return; }
+    char *end = strstr(fn, "\ndef ");            /* next top-level def */
+    if (end) *end = '\0';
+
+    /* Derived from git, not enumerated. */
+    ASSERT(strstr(fn, "ls-files") != NULL);
+    /* And no longer a hand-kept tuple of roots: the old form was
+       `for entry in ("Makefile", "src", ...)`. Its return would mean the
+       rot is back, so it is asserted absent, not merely unused. */
+    ASSERT(strstr(fn, "for entry in (") == NULL);
+    free(py);
+}
+
 /* ── the invariant ── */
 
 static void test_every_cc_invocation_carries_compiler_flags(void) {
@@ -206,4 +259,5 @@ void run_build_recipe_tests(void) {
     RUN_TEST(test_every_cc_invocation_carries_compiler_flags);
     RUN_TEST(test_sloth_link_rule_passes_cflags);
     RUN_TEST(test_extra_cflags_reaches_both_flag_sets);
+    RUN_TEST(test_mutate_sandbox_is_built_from_the_tracked_tree);
 }

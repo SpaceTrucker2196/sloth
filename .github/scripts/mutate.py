@@ -463,16 +463,45 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def make_sandbox(repo: Path) -> Path:
+    """Copy the tracked tree into a scratch directory and return it.
+
+    Everything `git ls-files` lists, nothing else: no .git, no build
+    outputs, no editor cruft, no untracked local directories. The copy
+    used to be a hand-kept tuple ("Makefile", "src", "include", "tests")
+    and it rotted twice without anyone noticing, because an aborted
+    mutation run and a never-run one look identical from outside:
+
+      - #73 put research/*.c into TEST_SRCS and the tests started opening
+        the committed research.db, so the baseline failed to even
+        COMPILE from then until 2026-10-14 ("No rule to make target
+        'research/coverage.c'").
+      - With research/ added, the baseline compiled and then failed in
+        the docs-consistency and CI-pin suites, which read docs/, agents/,
+        .github/, README.md and MISSION.md from the working directory.
+
+    Deriving the list from git means the sandbox carries whatever the
+    tests read today and whatever they read next year. The property is
+    pinned by tests/test_build_recipe.c ::
+    test_mutate_sandbox_is_built_from_the_tracked_tree.
+    """
     tmp = Path(tempfile.mkdtemp(prefix="sloth-mutate-"))
-    # Copy just what the test build needs. Exclude .git, build outputs,
-    # editor cruft. Keep Makefile, src/, include/, tests/.
-    for entry in ("Makefile", "src", "include", "tests"):
-        src = repo / entry
-        dst = tmp / entry
-        if src.is_dir():
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z"],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SystemExit(f"mutate: cannot list tracked files via git ls-files: {exc}")
+    for rel in out.split(b"\0"):
+        if not rel:
+            continue
+        src = repo / rel.decode("utf-8", "surrogateescape")
+        if not src.is_file():          # deleted-but-tracked, or a submodule entry
+            continue
+        dst = tmp / src.relative_to(repo)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
     return tmp
 
 
