@@ -196,3 +196,4 @@
 | d7eafe0 | 2026-10-14T00:42:10Z | claude-opus-5 | 72 | 30658 | 29730285 | 848431 | 24.1163 | storage floors on by default (relative, 5%), karma pnl_best persisted with schema 4->5 |
 | bebb0ec | 2026-10-14T05:20:51Z | claude-opus-5 | 154 | 61326 | 68974366 | 926826 | 45.2894 | per-alert pcap export policy: CRIT-only default + per-key cooldown, full capture via two knobs |
 | 8c35974 | 2026-10-14T06:34:13Z | claude-opus-5 | 120 | 38990 | 17298625 | 88408 | 10.5087 | alert-engine eviction fairness: evict from the largest-holding type (#96) |
+| 405de1b | 2026-10-14T06:43:11Z | claude-opus-5 | 44 | 10654 | 2475574 | 17795 | 1.6823 | record three process lessons in agents/converge.md |
