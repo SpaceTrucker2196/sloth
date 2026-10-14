@@ -10,6 +10,7 @@
 #include "flood_window.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
+#include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -621,6 +622,67 @@ static void test_monitor_seam_counts_each_admitted_frame(void) {
     uint64_t base = mon_before();
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 3), 3);
     ASSERT_EQ(mon_delta(base), 3);
+}
+
+/* A probe request carrying one SSID IE, optionally with +HTC/Order set.
+ *
+ * With `htc`, four octets of HT Control sit between Sequence Control and
+ * the body, so the IEs start at 28 (IEEE 802.11-2020 §9.2.4.1.10,
+ * §9.3.3.2). The HT Control bytes are DE AD BE EF: read as the start of
+ * the IE list they look like tag 0xDE claiming length 0xAD, which
+ * overruns and ends the walk, so no SSID is extracted at all. */
+static int mon_probe_req(uint8_t *f, const uint8_t sa[6],
+                         const char *ssid, int htc) {
+    int sl    = (int)strlen(ssid);
+    int dlen  = 24 + (htc ? 4 : 0) + 2 + sl;
+    int total = RT_HDR + dlen;
+    memset(f, 0, (size_t)total);
+    f[2] = (uint8_t)RT_HDR;                 /* it_len, it_present = 0 */
+    uint8_t *d = f + RT_HDR;
+    d[0] = 0x40;                            /* probe request */
+    d[1] = htc ? 0x80 : 0x00;               /* +HTC/Order */
+    memset(d + 4,  0xff, 6);                /* addr1 = broadcast */
+    memcpy(d + 10, sa,   6);                /* addr2 = the client */
+    memset(d + 16, 0xff, 6);                /* addr3 = broadcast */
+    int off = 24;
+    if (htc) {
+        d[24] = 0xDE; d[25] = 0xAD; d[26] = 0xBE; d[27] = 0xEF;
+        off = 28;
+    }
+    d[off++] = 0x00;                        /* SSID tag */
+    d[off++] = (uint8_t)sl;
+    memcpy(d + off, ssid, (size_t)sl);
+    return total;
+}
+
+static void test_probe_request_pnl_survives_the_htc_bit(void) {
+    /* The preferred-network list is what the KARMA correlation is built
+       on, and on_probe_frame() walked the IEs from a hardcoded 24 until
+       2026-10-14 — so a probe request with the +HTC bit set contributed
+       no SSID to the PNL. One bit, and the client's network list goes
+       unseen.
+
+       Driven through probe_test_dispatch(), the real pcap_dispatch
+       seam, so the offset is exercised where the frame actually
+       arrives. Both variants asserted together: the plain frame proves
+       the harness works, the +HTC one proves the offset does. */
+    const uint8_t sa[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    uint8_t f[128];
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    int n = mon_probe_req(f, sa, "corp-wifi", 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    n = mon_probe_req(f, sa, "corp-wifi", 1);
+    const uint8_t *fs2[1] = { f };
+    int ls2[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, NULL, 1), 1);
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
+    probe_pnl_clear();
 }
 
 static void test_monitor_seam_rejects_frames_below_the_guards(void) {
@@ -1730,6 +1792,7 @@ void run_capture_path_tests(void) {
     TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);
     RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
+    RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);

@@ -2627,3 +2627,38 @@ which is the cleanest statement of the asymmetry: one parser had both
 the code and the test, three had neither.
 
 Pages: [[fragattacks]] for the data-frame half.
+
+### Addendum, same day — two more sites, and the gate that caught it
+
+`src/capture/probe.c` had the same hardcoded offset twice, and it is the
+file where it matters most for the Wi-Fi detectors:
+
+- **Probe requests** walked the IEs from 24, so a probe request with
+  +HTC set contributed **no SSID to the preferred-network list** — and
+  the PNL is what the KARMA correlation is built on.
+- **Probe / (Re)Association responses** read the status code and the IE
+  list from 24, so `beacon_reveal_hidden_ssid()`, `assoc_observe()` and
+  the queue-eviction session note all received the wrong bytes.
+
+Both now call `dot11_mgmt_hdr_len()`. Covered by
+`test_probe_request_pnl_survives_the_htc_bit` in the capture-path suite,
+driven through the real `pcap_dispatch` seam, and mutation-proved.
+
+**The gate gap this exposed is worth more than the fix.** The first
+version of the management-header change passed `make test`,
+`make test-capture-path` and all six `-Werror` configs locally, and then
+**failed CI** — `make fuzz` could not link `fuzz_deauth_parse` or
+`fuzz_beacon_parse_ies`, because each fuzz target keeps a hand-written
+source list and `deauth_snoop.c` and `beacon_snoop.c` had just gained a
+dependency on `dot11_data.c`. The narrow link is deliberate (it is what
+puts the fuzzer's redzoned buffer directly under the parser), so the
+hand-kept list is the price, and it rots silently.
+
+Separately, `src/capture/probe.c` is in `CAPTURE_PATH_SRCS` but **not**
+in `TEST_SRCS`, so `make test` cannot report even a compile error in it
+— a `hdr` name collision there was visible only to
+`make test-capture-path`.
+
+`agents/AGENTS.md` now says both: six configs are not the whole build
+surface, and `make fuzz FUZZ_SECONDS=1` plus `make test-capture-path`
+belong in the local gate run after touching any module they link.

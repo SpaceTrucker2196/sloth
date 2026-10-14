@@ -745,6 +745,14 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 # Both are pure parsers — no global state, no lock, no clock — so like
 # fuzz_deauth_parse they need no harness beyond the bytes, and they link
 # a handful of objects rather than the whole test source list.
+#
+# That hand-kept list is the cost of the narrow link, and it rots: on
+# 2026-10-14 deauth_snoop.c and beacon_snoop.c started calling
+# dot11_mgmt_hdr_len() and both targets failed to LINK in CI, after
+# `make test`, `make test-capture-path` and all six -Werror configs had
+# passed locally. `make fuzz` is the only gate that exercises these
+# source lists, so run it after touching any module one of them links —
+# the compile is quick even with FUZZ_SECONDS=1.
 FUZZ_CC      ?= clang
 FUZZ_SECONDS ?= 20
 FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
@@ -764,6 +772,7 @@ fuzz:
 	  exit 1; }
 	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_deauth_parse \
 	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
+	    src/dot11_data.c \
 	    -lpthread
 	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE \
@@ -776,7 +785,8 @@ fuzz:
 	/tmp/sloth_fuzz_radiotap_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -o /tmp/sloth_fuzz_beacon_parse_ies \
 	    tests/fuzz/fuzz_beacon_parse_ies.c src/beacon_snoop.c src/reg_ie.c \
-	    src/sensor_health.c src/wifi_oui_attacker.c -lm -lpthread
+	    src/sensor_health.c src/wifi_oui_attacker.c src/dot11_data.c \
+	    -lm -lpthread
 	/tmp/sloth_fuzz_beacon_parse_ies -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 
 # ── Static analysis (#95) ───────────────────────────────────────────────────

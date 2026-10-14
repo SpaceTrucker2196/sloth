@@ -13,6 +13,7 @@
 #include "capture/capture.h"   /* capture_classify_exit / stats accounting (#91) */
 #include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
+#include "dot11_data.h"          /* management header length (+HTC) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -451,13 +452,20 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          *   caps(2) + status(2) + aid(2). probe-resp doesn't have one. */
         int status_ok = 1;
         int fixed = (sub == 5) ? 12 : 6;
+        /* 24, or 28 when +HTC/Order adds an HT Control field — all three
+         * of these subtypes are management frames. A fixed 24 here read
+         * the status code and the whole IE list four octets early. */
+        /* `mhdr`, not `hdr`: `hdr` is the pcap record header in this
+         * function. */
+        int mhdr = dot11_mgmt_hdr_len(dot11, dot11_len);
+        if (mhdr < 0 || dot11_len < mhdr + fixed) return;
         if (sub == 1 || sub == 3) {
-            uint16_t status = (uint16_t)(dot11[24 + 2] |
-                                          ((uint16_t)dot11[24 + 3] << 8));
+            uint16_t status = (uint16_t)(dot11[mhdr + 2] |
+                                          ((uint16_t)dot11[mhdr + 3] << 8));
             status_ok = (status == 0);
         }
-        const uint8_t *ie = dot11 + 24 + fixed;
-        int rem = dot11_len - 24 - fixed;
+        const uint8_t *ie = dot11 + mhdr + fixed;
+        int rem = dot11_len - mhdr - fixed;
         char ssid[33] = "";
         while (rem >= 2) {
             uint8_t tag = ie[0];
@@ -574,9 +582,17 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         seqnum_track_observe(sa, seqnum);
     }
 
-    /* Parse SSID information element (tag 0) */
-    const uint8_t *ie_start = dot11 + 24;
-    int            ie_total = dot11_len - 24;
+    /* Parse SSID information element (tag 0).
+     *
+     * A probe request is a management frame, so +HTC/Order puts an HT
+     * Control field ahead of the body and the IEs start at 28. A fixed
+     * 24 walked into HT Control — and the SSIDs this walk extracts are
+     * the client's preferred-network list, which is what the KARMA
+     * correlation is built on. */
+    int mhdr = dot11_mgmt_hdr_len(dot11, dot11_len);
+    if (mhdr < 0) return;
+    const uint8_t *ie_start = dot11 + mhdr;
+    int            ie_total = dot11_len - mhdr;
     const uint8_t *ie       = ie_start;
     int            ie_rem   = ie_total;
     char           ssid[33] = "";

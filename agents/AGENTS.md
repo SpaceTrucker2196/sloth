@@ -64,6 +64,27 @@ Single binary `sloth`. Test binary `sloth_test`.
   one object directory, so objects from the previous config get reused
   and the link fails on a symbol that is plainly in the source. That
   error means stale objects, not a bug — see agents/converge.md step 4.
+
+  **Six configs are not the whole build surface.** Two targets keep
+  their own hand-written source lists and neither `make` nor `make test`
+  links them:
+
+  - `make fuzz` — each fuzz target links a handful of objects on
+    purpose, so the fuzzer's own redzoned buffer is what the parser
+    reads. The list rots the moment a module it links gains a new
+    dependency.
+  - `make test-capture-path` — a separate binary (`CAPTURE_PATH_SRCS`),
+    and `src/capture/probe.c` is in it but **not** in `TEST_SRCS`, so
+    `make test` cannot see a compile error in that file at all.
+
+  On 2026-10-14 `deauth_snoop.c` and `beacon_snoop.c` started calling a
+  new helper in `dot11_data.c`, and **both fuzz targets failed to link
+  in CI** after `make test`, `make test-capture-path` and all six
+  `-Werror` configs had passed locally. The same change hit a
+  name collision in `probe.c` that only `make test-capture-path`
+  reported. So: after touching any module these targets link, run
+  `make fuzz FUZZ_SECONDS=1` and `make test-capture-path` too. The fuzz
+  compile is quick; the run time is the only part the seconds control.
 - **VIEW_COUNT must be kept in sync** across `include/sloth.h`,
   `tests/test_state.c`, and `tests/test_arp.c` whenever a view is added
   or removed.
