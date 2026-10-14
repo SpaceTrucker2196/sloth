@@ -1363,6 +1363,14 @@ static void test_karma_evidence_persists(void) {
     k->bssid[0] = 0x00; k->bssid[1] = 0x13; k->bssid[2] = 0x37;
     k->ssid_count      = 12;
     k->pnl_overlap     = 5;
+    /* Deliberately DIFFERENT from pnl_overlap. They are different
+       measures — the union across all nearby clients versus the best
+       single station — and if the bind ever crossed them, equal values
+       would hide it. Review found exactly that class of mistake in this
+       slice's other tests, where a fixture made the corroborating
+       client the first one so "a MAC is printed" passed while "the
+       right MAC" was untested. */
+    k->pnl_best        = 3;
     k->pnl_jaccard_ppm = 412000;
     k->ie_uniform      = 1;
     k->deauth_chain    = 1;
@@ -1372,6 +1380,11 @@ static void test_karma_evidence_persists(void) {
     db_tick(&s, 1700000000);
 
     ASSERT_EQ(q_int("SELECT ssid_count FROM karma_candidates"), 12);
+    ASSERT_EQ(q_int("SELECT pnl_overlap FROM karma_candidates"), 5);
+    /* The provenance assertion: the stored score must be re-derivable,
+       which needs the single-station measure stored as itself and not
+       as a copy of the union. */
+    ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"), 3);
     ASSERT_EQ(q_int("SELECT pnl_jaccard_ppm FROM karma_candidates"), 412000);
     ASSERT_EQ(q_int("SELECT ie_uniform FROM karma_candidates"), 1);
     ASSERT_EQ(q_int("SELECT deauth_chain FROM karma_candidates"), 1);
@@ -1826,11 +1839,33 @@ static void test_btm_requests_in_finding_retention_tier(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_four(void) {
+static void test_schema_version_is_five(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "4");
+    ASSERT_STR(v, "5");
+    db_close();
+    unlink(db_path);
+}
+
+/* #90: karma_candidates.pnl_best, the single-station PNL measure that
+ * decides severity and the confidence weight.
+ *
+ * It exists so a stored `score` can be re-derived from its stored
+ * inputs. Before the column, `score` depended on a number the row did
+ * not carry — a provenance gap on the very issue about provenance of
+ * evidence. Asserted alongside pnl_overlap because the two are
+ * different measures (union across clients versus the best single
+ * station) and a reader who conflates them draws the wrong conclusion
+ * about how much corroboration there was. */
+static void test_v5_karma_pnl_best_column_exists(void) {
+    fresh_db();
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM "
+                    "pragma_table_info('karma_candidates')"
+                    " WHERE name='pnl_best'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM "
+                    "pragma_table_info('karma_candidates')"
+                    " WHERE name='pnl_overlap'"), 1);
     db_close();
     unlink(db_path);
 }
@@ -2247,7 +2282,8 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_four);
+    RUN_TEST(test_schema_version_is_five);
+    RUN_TEST(test_v5_karma_pnl_best_column_exists);
     RUN_TEST(test_v4_columns_exist);
     RUN_TEST(test_downgrade_flags_accumulate_on_the_ap);
     RUN_TEST(test_phy_confirmed_never_regresses);

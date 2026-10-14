@@ -48,7 +48,15 @@
  * file fails at schema application with a confusing SQL error instead
  * of the clear version message. Bumped retroactively; v1 files are
  * refused with an explanation. */
-#define DB_SCHEMA_VERSION 4
+/* Bumped to 5 on 2026-10-13: karma_candidates gained `pnl_best` so a
+ * stored score can be re-derived from its stored inputs (#90).
+ *
+ * There is no migration path by design — db_open() refuses a file whose
+ * version differs and tells the operator to use a separate one, rather
+ * than rewriting a forensic database in place. So a bump is a breaking
+ * change for every existing file and is an owner decision, not a
+ * detection-change side effect. */
+#define DB_SCHEMA_VERSION 5
 
 /* ── AKM regression (#74 Detector B, temporal half) ──────────────────
  *

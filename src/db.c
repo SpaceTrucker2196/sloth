@@ -558,15 +558,16 @@ static const char *const SQL[ST_COUNT] = {
     "  first_seen=MIN(scan_entry_ports.first_seen,excluded.first_seen),"
     "  last_seen=MAX(scan_entry_ports.last_seen,excluded.last_seen)",
 [ST_KARMA] =
-    "INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,"
+    "INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,pnl_best,"
     "pnl_jaccard_ppm,ie_uniform,deauth_chain,score,top_ssid,"
-    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"
+    "first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
     " ON CONFLICT(bssid) DO UPDATE SET"
     /* Evidence is high-water: the table is rebuilt from scratch each
      * poll, so a radio that is briefly quiet would otherwise erase the
      * peak that justified the alert. */
     "  ssid_count=MAX(karma_candidates.ssid_count,excluded.ssid_count),"
     "  pnl_overlap=MAX(karma_candidates.pnl_overlap,excluded.pnl_overlap),"
+    "  pnl_best=MAX(karma_candidates.pnl_best,excluded.pnl_best),"
     "  pnl_jaccard_ppm=MAX(karma_candidates.pnl_jaccard_ppm,"
     "                      excluded.pnl_jaccard_ppm),"
     "  ie_uniform=MAX(karma_candidates.ie_uniform,excluded.ie_uniform),"
@@ -1483,13 +1484,14 @@ static void write_detector_evidence(const sloth_state_t *s, time_t now) {
         bind_txt(st, 1, bssid);
         sqlite3_bind_int(st, 2, k->ssid_count);
         sqlite3_bind_int(st, 3, k->pnl_overlap);
-        sqlite3_bind_int(st, 4, k->pnl_jaccard_ppm);
-        sqlite3_bind_int(st, 5, k->ie_uniform ? 1 : 0);
-        sqlite3_bind_int(st, 6, k->deauth_chain ? 1 : 0);
-        sqlite3_bind_int(st, 7, k->score);
-        bind_txt(st, 8, k->top_ssid);
-        sqlite3_bind_int64(st, 9,  (sqlite3_int64)last);
+        sqlite3_bind_int(st, 4, k->pnl_best);
+        sqlite3_bind_int(st, 5, k->pnl_jaccard_ppm);
+        sqlite3_bind_int(st, 6, k->ie_uniform ? 1 : 0);
+        sqlite3_bind_int(st, 7, k->deauth_chain ? 1 : 0);
+        sqlite3_bind_int(st, 8, k->score);
+        bind_txt(st, 9, k->top_ssid);
         sqlite3_bind_int64(st, 10, (sqlite3_int64)last);
+        sqlite3_bind_int64(st, 11, (sqlite3_int64)last);
         step_reset(ST_KARMA);
     }
     for (int i = 0; i < s->rogue_radius_count; i++) {
