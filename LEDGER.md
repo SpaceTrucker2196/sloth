@@ -199,3 +199,4 @@
 | 405de1b | 2026-10-14T06:43:11Z | claude-opus-5 | 44 | 10654 | 2475574 | 17795 | 1.6823 | record three process lessons in agents/converge.md |
 | cfdeaa0 | 2026-10-14T14:19:06Z | claude-opus-5 | 98 | 30096 | 7638592 | 161073 | 6.1829 | +HTC/Order misread as HT Control on non-QoS data frames: detector evasion fix (#95) |
 | 6e18080 | 2026-10-14T14:35:52Z | claude-opus-5 | 120 | 33016 | 12550162 | 52494 | 7.6260 | management-frame body offset: +HTC skew in action/assoc/beacon parsers (#95) |
+| 644ae96 | 2026-10-14T14:57:04Z | claude-opus-5 | 72 | 19615 | 9030596 | 31217 | 5.3182 | fuzz link fix + probe.c +HTC sites; record the build-surface gate gap (#95) |
