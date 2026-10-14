@@ -737,6 +737,86 @@ static void test_emit_alert_event_carries_pcap_write_failures(void) {
     ASSERT(!contains(body, "pcap_path"));
 }
 
+/* #92: evidence-ring citations as first-class fields, on both record
+ * families, same convention as the #90 signature provenance above —
+ * additive, omitted when the detector cited nothing. DEAUTH_FLOOD is
+ * the one rule that populates evidence_ids today, because a deauth has
+ * no IP to export pcap evidence against. */
+static void fill_deauth_alert(alert_t *a) {
+    memset(a, 0, sizeof(*a));
+    a->last_seen = 1700000004;
+    a->sev       = ALERT_SEV_WARN;
+    a->type      = ALERT_TYPE_DEAUTH_FLOOD;
+    a->count     = 1;
+    a->event_seq = 1;
+    snprintf(a->title,       sizeof(a->title),       "DEAUTH_FLOOD");
+    snprintf(a->detail,      sizeof(a->detail),      "victim=aa:bb bssid=cc:dd");
+    snprintf(a->key,         sizeof(a->key),         "deauth:aa:bb@cc:dd");
+    snprintf(a->incident_id, sizeof(a->incident_id), "deadbeefdeadbeef");
+}
+
+static void test_emit_alert_carries_evidence_ids(void) {
+    open_fresh();
+    alert_t a; fill_deauth_alert(&a);
+    a.evidence_ids[0] = 101;
+    a.evidence_ids[1] = 102;
+    a.evidence_ids[2] = 103;
+    a.evidence_id_count = 3;
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_lines(body), 2);
+    ASSERT_EQ(count_occ(body, "\"evidence_count\":3"), 2);
+    ASSERT_EQ(count_occ(body, "\"evidence_id_0\":101"), 2);
+    ASSERT_EQ(count_occ(body, "\"evidence_id_1\":102"), 2);
+    ASSERT_EQ(count_occ(body, "\"evidence_id_2\":103"), 2);
+    /* Only the cited count is emitted, not the whole fixed-size array. */
+    ASSERT(!contains(body, "evidence_id_3"));
+}
+
+/* No frames cited: both fields absent, not a zero count beside empty
+ * ids — same "half a claim is worse than none" reasoning as the #90
+ * signature-omission test above. */
+static void test_emit_alert_omits_evidence_when_none_cited(void) {
+    open_fresh();
+    alert_t a; fill_deauth_alert(&a);
+    jsonl_emit_alert(&a);
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_lines(body), 2);
+    ASSERT(!contains(body, "evidence_count"));
+    ASSERT(!contains(body, "evidence_id_0"));
+}
+
+/* The emitter clamps to ALERT_EVIDENCE_IDS even if evidence_id_count
+ * somehow claims more than the array actually holds — defensive, since
+ * the only production writer (stamp_evidence in alerts.c) already
+ * clamps ev_n before this point, but the emitter must not trust that a
+ * second caller always will. Without the clamp this reads 12 untouched
+ * array slots past evidence_id_count, which are zero-initialised by
+ * `alert_t a; fill_deauth_alert(&a)`'s memset and so would emit eight
+ * `evidence_id_N:0` lines rather than crash — a mutation that removed
+ * the clamp would still need this assertion to catch it. */
+static void test_emit_alert_evidence_clamped_to_array_size(void) {
+    open_fresh();
+    alert_t a; fill_deauth_alert(&a);
+    a.evidence_ids[0] = 201;
+    a.evidence_id_count = 20; /* only ALERT_EVIDENCE_IDS (8) slots exist */
+    jsonl_emit_alert_event(&a, "alert.create", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"evidence_id_0\":201"));
+    ASSERT(!contains(body, "evidence_id_8"));
+}
+
 static void test_emit_alert_event_omits_pcap_fields_without_match_ip(void) {
     /* Most rules have no single flow. pcap export never runs for them
      * (dump_new_alert_pcaps skips a bare match_ip), so neither field
@@ -1949,6 +2029,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_carries_unverified_signature);
     RUN_TEST(test_emit_alert_carries_validated_signature);
     RUN_TEST(test_emit_alert_omits_signature_when_no_tool_matched);
+    RUN_TEST(test_emit_alert_carries_evidence_ids);
+    RUN_TEST(test_emit_alert_omits_evidence_when_none_cited);
+    RUN_TEST(test_emit_alert_evidence_clamped_to_array_size);
     RUN_TEST(test_emit_alert_event_carries_pcap_path);
     RUN_TEST(test_emit_alert_event_carries_pcap_write_failures);
     RUN_TEST(test_emit_alert_event_omits_pcap_fields_without_match_ip);

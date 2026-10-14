@@ -410,6 +410,30 @@ static void emit_signature(char *buf, int *off, const alert_t *a) {
     kv_str(buf, LINEBUF, off, "signature_evidence", a->sig_evidence);
 }
 
+/* Evidence-ring citations (#92), additive, shared by both record
+ * families for the same reason as the signature fields above. Indexed
+ * keys rather than a JSON array, matching the existing convention for a
+ * small bounded list (jsonl_emit_btm_steers' candidate_N, jsonl_emit_mlds'
+ * link_N_mac) so every record this file emits stays a flat object.
+ *
+ * Named `evidence_id_N` rather than reusing `event_id` — the lifecycle
+ * event's own `event_id` field is a different, unrelated string
+ * (`<incident_id>-<seq>`), and the two must not collide in one object.
+ *
+ * Omitted entirely when the detector cited nothing: today only the
+ * deauth-flood family (#92) ever populates evidence_ids, and a record
+ * with `evidence_count` but no ids (or the reverse) would be a claim
+ * half made. */
+static void emit_evidence(char *buf, int *off, const alert_t *a) {
+    if (!a->evidence_id_count) return;
+    kv_int(buf, LINEBUF, off, "evidence_count", a->evidence_id_count);
+    for (int i = 0; i < a->evidence_id_count && i < ALERT_EVIDENCE_IDS; i++) {
+        char key[24];
+        snprintf(key, sizeof(key), "evidence_id_%d", i);
+        kv_int(buf, LINEBUF, off, key, (long long)a->evidence_ids[i]);
+    }
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -444,6 +468,7 @@ void jsonl_emit_alert(const alert_t *a) {
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
+    emit_evidence(buf, &off, a);
     /* Join key into the lifecycle stream (#98), additive. A consumer
      * that only knows `alert` sees exactly the record it always saw
      * plus one field it can ignore. */
@@ -493,6 +518,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
         kv_str(buf, LINEBUF, &off, "inventory", a->inventory);
     emit_pair_axes(buf, &off, a);
     emit_signature(buf, &off, a);
+    emit_evidence(buf, &off, a);
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);

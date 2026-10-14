@@ -275,6 +275,8 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `signature_version` | string | additive, #90 — which revision of that row's values the finding was matched against. A capture-backed row names its capture; an UNVERIFIED row has no firmware version to name and carries `research-<date>` (the date of the research its values came from), so it is never mistaken for one |
 | `validated` | bool | additive, #90 — `true` only when the row is backed by a capture of the tool; `false` otherwise, which is **every row shipped today**. A JSON boolean, unlike the 0/1 ints elsewhere in this schema: it is the one field a consumer must not read past. Present whenever `signature_id` is |
 | `signature_evidence` | string | additive, #90 — the row's provenance note, verbatim. Starts with `UNVERIFIED` exactly when `validated` is `false` (a test enforces the agreement in source) |
+| `evidence_count` | int | additive, #92 — how many evidence-ring frame IDs this incident cites, below. **Omitted** when the rule cited none, which is every rule except `DEAUTH_FLOOD` today — a deauth has no IP to export on, so the ring's own frames are the only path from this alert back to the bytes that caused it |
+| `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — the cited frames' evidence-ring IDs, oldest first, present for `0 .. evidence_count-1` only. Opaque and **not** the same thing as this record's own `event_id` below — look one up with the evidence-ring retrieval path, never by assuming it is a byte offset or a packet count. Refreshed on every evaluation: a long-running incident cites the IDs still resolvable in the ring, not the first ones it opened with, which the ring may since have evicted |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
@@ -381,15 +383,19 @@ the identity is not.
 | `alert.update` | severity **decreased**, or the rendered evidence (`detail`) changed. Evidence-only updates are rate-limited to **one per 60 s** per incident |
 | `alert.resolve` | the incident closed. Once per incident, never repeated |
 
-The lifecycle records carry `confidence`, `inventory` and the #90
+The lifecycle records carry `confidence`, `inventory`, the #90
 signature provenance (`signature_id`, `signature_version`, `validated`,
-`signature_evidence`) on the same terms as the legacy `alert` record:
-all are additive, all are omitted when the rule reported none, so a
-lifecycle-only consumer never has to read both families to get them.
-The provenance is refreshed on every evaluation, not fixed at
-`alert.create`: if the match vanishes inside one incident (the same AP
-later seen negotiating HT), the next record omits it rather than
-attributing the current evidence to a row it no longer satisfies.
+`signature_evidence`) and the #92 evidence-ring citations
+(`evidence_count`, `evidence_id_N`) on the same terms as the legacy
+`alert` record: all are additive, all are omitted when the rule
+reported none, so a lifecycle-only consumer never has to read both
+families to get them. The provenance and the citations are both
+refreshed on every evaluation, not fixed at `alert.create`: if the
+match vanishes inside one incident (the same AP later seen negotiating
+HT), the next record omits the signature rather than attributing the
+current evidence to a row it no longer satisfies, and a long-running
+`DEAUTH_FLOOD` cites whichever frames the ring still holds rather than
+the ones it opened with.
 
 **Material change, never a poll.** An evaluation that re-renders
 identical evidence emits nothing, however long the condition persists:
@@ -433,6 +439,7 @@ not duration.
 | `title`, `detail`, `sev`, `ty`, `technique`, `match_ip`, `match_port` | | same meaning as on the `alert` record; `detail` and `sev` are the **current** values at the moment of the event. `match_ip`/`match_port` are omitted when the rule has no single flow |
 | `pcap_path` | string | the per-alert pcap this incident's evidence was written to (#92). Present only once export has actually written packets — omitted while nothing has matched yet, and always absent when there's no `match_ip` |
 | `pcap_write_failures` | int | failed export attempts for this incident so far. Export retries every tick rather than giving up after one disk-full or permission error, so this can be non-zero while `pcap_path` is still absent. Omitted at 0 |
+| `evidence_count`, `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — same meaning and same omission rule as on the legacy `alert` record above. Present on `alert.create`/`.escalate`/`.update` for the `DEAUTH_FLOOD` family only, refreshed each time rather than fixed at `alert.create` |
 | `prev_sev` | int | severity before the transition. Present on `alert.escalate` and on severity-decrease `alert.update` only |
 | `observations` | int | evaluations whose rendered evidence differed from the previous one. A retained condition re-evaluated unchanged does **not** move this. It is the honest answer to "how many distinct observations", which `count` never was — but it is not a packet count either: sloth's rules read retained state, not frames |
 | `evaluations` | int | rule ticks under this key, i.e. what `count` has always counted |

@@ -850,15 +850,14 @@ typedef struct {
      * citations exist at the moment the incident opens, inside
      * fire_inv(), rather than being bolted on after.
      *
-     * What they are NOT, yet: exported. jsonl_emit_alert_event() emits
-     * event_id, incident_id, key, title, detail and sev and no evidence
-     * field, and this change touches no emitter — so nothing outside
-     * the process can read these IDs today. An earlier version of this
-     * comment claimed the lifecycle events "carry the citations"; both
-     * reviewers checked and they do not. Wiring them into the alert
-     * record and the lifecycle events is the next slice, and until then
-     * the value here is that evidence_export_pcap() has something to
-     * be handed.
+     * Exported as `evidence_count` + `evidence_id_N` on both the legacy
+     * `alert` record and the `alert.*` lifecycle events (jsonl.c's
+     * emit_evidence(), additive, omitted whenever evidence_id_count is
+     * 0). Two earlier versions of this comment each overclaimed what
+     * reached a consumer — one said the lifecycle events "carry the
+     * citations" when no emitter did, the next said "no emitter does"
+     * after that was fixed — so this one names the function rather than
+     * describing it, to make the next overclaim a one-grep check.
      *
      * Refreshed on each evaluation so a running incident
      * cites IDs the ring still holds: the ring evicts oldest-first, so

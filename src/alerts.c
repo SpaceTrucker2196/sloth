@@ -325,10 +325,10 @@ static void stamp_signature(alert_t *a, const sloth_tool_sig_t *tool_row) {
  * the two above: fire_inv() is where an incident comes into existence,
  * so a post-hoc stamp would leave the opening moment uncited.
  *
- * Note what that does NOT buy, since the comment here previously said
- * it did: `alert.create` does not carry these IDs. No emitter does —
- * see the field's comment in include/sloth.h. This is the detector-to-
- * alert half of the plumbing; the alert-to-export half is open.
+ * `alert.create` and the legacy `alert` record both now carry these IDs
+ * (jsonl.c's emit_evidence()) — the detector-to-alert half built here
+ * and the alert-to-export half are both wired. See the field's comment
+ * in include/sloth.h for why this sentence is deliberately terse.
  *
  * Rewritten on every evaluation, not set once. The detector hands over
  * the newest IDs it holds, and those are the ones whose records are
