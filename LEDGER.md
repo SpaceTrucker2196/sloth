@@ -198,3 +198,4 @@
 | 8c35974 | 2026-10-14T06:34:13Z | claude-opus-5 | 120 | 38990 | 17298625 | 88408 | 10.5087 | alert-engine eviction fairness: evict from the largest-holding type (#96) |
 | 405de1b | 2026-10-14T06:43:11Z | claude-opus-5 | 44 | 10654 | 2475574 | 17795 | 1.6823 | record three process lessons in agents/converge.md |
 | cfdeaa0 | 2026-10-14T14:19:06Z | claude-opus-5 | 98 | 30096 | 7638592 | 161073 | 6.1829 | +HTC/Order misread as HT Control on non-QoS data frames: detector evasion fix (#95) |
+| 6e18080 | 2026-10-14T14:35:52Z | claude-opus-5 | 120 | 33016 | 12550162 | 52494 | 7.6260 | management-frame body offset: +HTC skew in action/assoc/beacon parsers (#95) |
