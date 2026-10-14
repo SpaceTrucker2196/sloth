@@ -19,7 +19,36 @@ int dot11_data_header_len(const uint8_t *dot11, int len) {
      * Control carries all three additions at once. */
     if (to_ds && from_ds) hdr += 6;
     if (sub & 0x08)       hdr += 2;   /* QoS Control */
-    if (order)            hdr += 4;   /* HT Control  */
+
+    /* HT Control is present only in QoS Data and Management frames
+     * (IEEE 802.11-2020 §9.2.4.6). The same Frame Control bit has two
+     * unrelated meanings (§9.2.4.1.10): +HTC in a QoS data or
+     * management frame, but in a NON-QoS data frame it is the
+     * StrictlyOrdered service-class indication and no HT Control field
+     * follows it.
+     *
+     * Conditioning on `order` alone put the LLC header four bytes late
+     * on any non-QoS data frame with that bit set, which is one bit an
+     * attacker picks. Three consequences, all of them the "invents
+     * data" failure the rest of this file is written to avoid:
+     *
+     *   - dot11_data_payload() reads LLC/SNAP from mid-payload, so the
+     *     frame is dropped as NOT_SNAP (lost visibility) or, if the
+     *     bytes there happen to be AA AA 03, yields an ethertype and a
+     *     payload offset invented from the middle of the packet.
+     *   - dot11_ccmp_pn() reads the CCMP header four bytes late and
+     *     returns a PN assembled from payload bytes — a number that
+     *     looks like evidence, which is exactly what that function's
+     *     own comment refuses to do for a WEP/TKIP IV.
+     *   - src/fragattack.c :: first_frag_ethertype() returns -1, and
+     *     its caller treats -1 as "nothing to see" — so setting this
+     *     one bit on a plaintext non-QoS data frame walked past the
+     *     CVE-2020-26140/-26143 plaintext-unicast rule unrecorded.
+     *
+     * Management frames also carry HT Control under this bit, but they
+     * do not come through here: this function is the data-frame header,
+     * and every caller has already selected type 2. */
+    if (order && (sub & 0x08)) hdr += 4;   /* HT Control */   /* HT Control */
     return len >= hdr ? hdr : -1;
 }
 
@@ -59,12 +88,16 @@ int dot11_data_payload(const uint8_t *dot11, int len,
      * aggregated subframes, each with its own header, rather than one
      * LLC-encapsulated packet. Detected and skipped explicitly — a
      * silent misparse here reads as a valid but wrong packet. */
-    if (sub & 0x08) {
-        int qos_off = 24 + ((( dot11[1] & 0x01) && ((dot11[1] >> 1) & 0x01))
-                            ? 6 : 0);
-        if (qos_off + 1 < len && (dot11[qos_off] & 0x80))
-            return DOT11_DATA_AMSDU;
-    }
+    /* Via the helper, not a fourth hand-rolled copy of the same offset
+     * arithmetic. The copy that used to live here guarded with
+     * `qos_off + 1 < len` while dot11_amsdu_present() guards with
+     * `qos_off >= len`, so a frame carrying exactly one byte of QoS
+     * Control was "A-MSDU present" to one function and not even
+     * inspected by the other. Both still refused the frame, so nothing
+     * was misparsed — but two bounds for one field is how a real
+     * divergence arrives, and the offset is now computed in one place
+     * so it cannot. */
+    if (dot11_amsdu_present(dot11, len) == 1) return DOT11_DATA_AMSDU;
 
     if (hdr + LLC_SNAP_LEN > len) return DOT11_DATA_TRUNCATED;
     const uint8_t *llc = dot11 + hdr;

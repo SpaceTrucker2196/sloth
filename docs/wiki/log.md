@@ -2537,3 +2537,54 @@ also the more faithful route: it is what actually recycled slots in the
 field, 300 s at a time.
 
 Pages: [[alerts]], [[retention]], `docs/views/alerts.md`.
+
+## 2026-10-14 — +HTC/Order misread as HT Control on non-QoS data frames (#95)
+
+`dot11_data_header_len()` added four bytes for an HT Control field
+whenever the +HTC/Order bit was set in a data frame's Frame Control.
+That bit has two unrelated meanings (IEEE 802.11-2020 §9.2.4.1.10), and
+HT Control is present only in **QoS Data and Management** frames
+(§9.2.4.6). In a non-QoS data frame the bit is the StrictlyOrdered
+service class and no field follows it, so the header is the plain 24.
+
+Four bytes of skew on one attacker-chosen bit, with three consequences,
+all of them the "invents data" failure `src/dot11_data.c` is written to
+avoid:
+
+- **Detector evasion.** `first_frag_ethertype()` found no `AA AA 03` at
+  the shifted offset and returned −1; its caller reads −1 as nothing to
+  see (`if (et < 0 || et == ETHERTYPE_EAPOL) return;`), so a plaintext
+  unicast frame with that bit set walked past `FRAG_PLAINTEXT`
+  (CVE-2020-26140 / -26143) unrecorded.
+- **Invented evidence.** `dot11_ccmp_pn()` read the CCMP header four
+  bytes late and returned a PN assembled from payload bytes — precisely
+  what that function already refuses to do for a WEP/TKIP IV.
+- **Invented EtherType.** `dot11_data_payload()` read LLC/SNAP from
+  mid-payload: usually `NOT_SNAP` and a dropped frame, but `AA AA 03`
+  occurring there yields an EtherType and payload offset invented from
+  the middle of the packet.
+
+**Why the existing gates could not have caught it.** Every offset stayed
+in bounds, so there is no memory error for ASan/UBSan or the four fuzz
+targets to find — this is a semantic misparse, and #95's own fuzzing
+work would not have reached it. A pcap fixture would not have either:
+`fragattacks.py` does not set that bit, so its frames parse correctly
+under the bug. It was found by reading the clause against the code,
+which is the one method none of the automated gates implement.
+
+`tests/test_dot11_data.c` had asserted 28 for this case since #72 and
+the code agreed, so the suite was green on a shared wrong belief — the
+test was the thing that had to change, with the IEEE clause as the
+authority. Mutation-proved in both directions: restoring `if (order)`
+reddens the two parser tests and the detector test; removing the
+HT Control addition entirely reddens the QoS tests.
+
+Also consolidated the A-MSDU presence check. It existed in three copies
+with **two different bounds** — `dot11_data_payload()` guarded with
+`qos_off + 1 < len`, `dot11_amsdu_present()` with `qos_off >= len` — so
+a frame carrying exactly one byte of QoS Control was "A-MSDU present" to
+one and uninspected by the other. Both refused the frame, so nothing was
+misparsed, but two bounds for one field is how a divergence arrives. All
+three sites now call the helper.
+
+Pages: [[fragattacks]].

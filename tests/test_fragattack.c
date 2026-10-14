@@ -26,6 +26,7 @@
 #define FC1_FROMDS    0x02
 #define FC1_MOREFRAG  0x04
 #define FC1_PROTECTED 0x40
+#define FC1_ORDER     0x80
 
 static const uint8_t BSSID[6] = { 0x02, 0xaa, 0xbb, 0x00, 0x00, 0x01 };
 static const uint8_t STA_A[6] = { 0x02, 0xaa, 0xbb, 0x00, 0x00, 0x10 };
@@ -48,7 +49,11 @@ static int build(uint8_t *f, int sub, uint8_t fc1,
     memcpy(f + 16, sa,    6);
     f[22] = (uint8_t)(frag_num & 0x0f);
 
-    int hdr = 24 + ((sub & 0x08) ? 2 : 0);
+    /* HT Control follows QoS Control, and only in a QoS data frame —
+       in a non-QoS one the +HTC/Order bit is StrictlyOrdered and adds
+       nothing. See dot11_data_header_len(). */
+    int hdr = 24 + ((sub & 0x08) ? 2 : 0)
+                 + (((fc1 & FC1_ORDER) && (sub & 0x08)) ? 4 : 0);
     /* A protected frame's body is ciphertext, so no LLC header is
      * written — reading one out of it is exactly the mistake the
      * Protected check exists to prevent. */
@@ -202,6 +207,45 @@ static void test_plaintext_after_key_install_fires(void) {
     ASSERT_EQ(bss()->last_sa[5], STA_B[5]);
     ASSERT_EQ(bss()->last_da[5], STA_A[5]);
     ASSERT_EQ(bss()->last_hit, (time_t)1001);
+}
+
+static void test_order_bit_does_not_hide_a_plaintext_frame(void) {
+    /* One attacker-set bit used to walk a plaintext unicast frame past
+       this detector unrecorded.
+
+       dot11_data_header_len() added 4 bytes for HT Control whenever the
+       +HTC/Order bit was set, but a NON-QoS data frame has no HT
+       Control field — that bit is the StrictlyOrdered service class
+       there (IEEE 802.11-2020 §9.2.4.1.10, §9.2.4.6). So the LLC header
+       was read 4 bytes late, first_frag_ethertype() found no AA AA 03
+       and returned -1, and its caller treats -1 as "nothing to see":
+
+           if (et < 0 || et == ETHERTYPE_EAPOL) return;
+
+       so plaintext_unicast was never incremented. Nothing read out of
+       bounds, which is why neither the sanitisers nor the fuzz targets
+       could have found it. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[128];
+    int n = build(f, 0, FC1_ORDER, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 1u);
+}
+
+static void test_qos_order_plaintext_frame_is_counted(void) {
+    /* The other half of the same bit: in a QoS data frame +HTC really
+       does mean an HT Control field, so the header is 24+2+4 and the
+       frame must still be counted. Fixing the non-QoS case by ignoring
+       the bit outright would break this one. */
+    frag_clear();
+    witness_key_install(STA_B, 1000);
+    uint8_t f[128];
+    int n = build(f, 8, FC1_ORDER, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 1u);
 }
 
 static void test_first_fragment_counts(void) {
@@ -1416,6 +1460,8 @@ void run_fragattack_tests(void) {
 
     TEST_SUITE("fragattacks: plaintext in RSN, CVE-2020-26140/-26143");
     RUN_TEST(test_plaintext_after_key_install_fires);
+    RUN_TEST(test_order_bit_does_not_hide_a_plaintext_frame);
+    RUN_TEST(test_qos_order_plaintext_frame_is_counted);
     RUN_TEST(test_first_fragment_counts);
     RUN_TEST(test_later_fragment_is_not_counted);
     RUN_TEST(test_eapol_is_exempt);

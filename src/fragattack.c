@@ -93,15 +93,12 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
 static int first_frag_ethertype(const uint8_t *dot11, int len) {
     if (dot11_frag_num(dot11, len) != 0) return -1;
 
-    int sub = (dot11[0] >> 4) & 0x0f;
     /* An A-MSDU body is subframes, not one LLC-encapsulated packet, so
      * there is no single EtherType to read. Plaintext A-MSDU on a
-     * protected network is CVE-2020-26144 and its own detector. */
-    if (sub & 0x08) {
-        int qos_off = 24 + (((dot11[1] & 0x01) && ((dot11[1] >> 1) & 0x01))
-                            ? 6 : 0);
-        if (qos_off + 1 < len && (dot11[qos_off] & 0x80)) return -1;
-    }
+     * protected network is CVE-2020-26144 and its own detector.
+     * Via the helper rather than a local copy of the QoS Control offset
+     * arithmetic — see dot11_data_payload(). */
+    if (dot11_amsdu_present(dot11, len) == 1) return -1;
 
     int hdr = dot11_data_header_len(dot11, len);
     if (hdr < 0 || hdr + 8 > len) return -1;

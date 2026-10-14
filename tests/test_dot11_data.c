@@ -12,7 +12,12 @@
  * Frame Control byte 0 = (subtype << 4) | (type << 2) | version.
  * Byte 1 carries the flags:
  *   bit 0 ToDS   bit 1 FromDS   bit 2 More Fragments
- *   bit 6 Protected              bit 7 Order (HT Control present)
+ *   bit 6 Protected              bit 7 +HTC/Order
+ *
+ * Bit 7 has two unrelated meanings (IEEE 802.11-2020 §9.2.4.1.10): in a
+ * QoS data frame it means an HT Control field follows the QoS Control
+ * field; in a NON-QoS data frame it is the StrictlyOrdered service
+ * class and adds nothing to the header.
  */
 
 #define FC1_TODS      0x01
@@ -39,7 +44,9 @@ static int build_data(uint8_t *f, int sub, uint8_t fc1, uint16_t ethertype,
         if (amsdu) f[qos_off] = 0x80;
         hdr += 2;
     }
-    if (fc1 & FC1_ORDER) hdr += 4;
+    /* HT Control only in QoS data frames — see dot11_data_header_len().
+       In a non-QoS data frame this bit is StrictlyOrdered, not +HTC. */
+    if ((fc1 & FC1_ORDER) && (sub & 0x08)) hdr += 4;
 
     f[hdr + 0] = 0xaa; f[hdr + 1] = 0xaa; f[hdr + 2] = 0x03;
     f[hdr + 3] = 0x00; f[hdr + 4] = 0x00; f[hdr + 5] = 0x00;
@@ -94,10 +101,45 @@ static void test_tods_alone_is_three_address(void) {
 }
 
 static void test_order_bit_adds_four(void) {
+    /* QoS data frame: +HTC, so 24 + 2 (QoS Control) + 4 (HT Control). */
+    uint8_t f[128];
+    int n = build_data(f, 8, FC1_ORDER, 0x0800, 0, 0);
+    ASSERT_EQ(dot11_data_header_len(f, n), 30);
+    assert_finds_payload(f, n, 30);
+}
+
+static void test_order_bit_adds_nothing_without_qos(void) {
+    /* The same bit on a NON-QoS data frame is the StrictlyOrdered
+       service class, not +HTC: IEEE 802.11-2020 §9.2.4.6 puts HT
+       Control in QoS Data and Management frames only, and §9.2.4.1.10
+       gives the bit its two meanings. No HT Control field follows, so
+       the header is the plain 24.
+
+       This file asserted 28 here until 2026-10-14, and the code agreed
+       with it, so the suite was green on a shared wrong belief. It is a
+       bit an attacker sets freely, and four bytes of skew put the LLC
+       header inside the payload — which this file's own opening comment
+       says "does not fail loudly: it produces a plausible ethertype
+       from payload bytes and feeds garbage to the IP decoder". Found by
+       reading the clause, not by fuzzing: every offset involved stays
+       in bounds, so there is no memory error for a sanitiser to catch.
+       See test_fragattack.c for the detector evasion it allowed. */
     uint8_t f[128];
     int n = build_data(f, 0, FC1_ORDER, 0x0800, 0, 0);
-    ASSERT_EQ(dot11_data_header_len(f, n), 28);
-    assert_finds_payload(f, n, 28);
+    ASSERT_EQ(dot11_data_header_len(f, n), 24);
+    assert_finds_payload(f, n, 24);
+}
+
+static void test_order_bit_composes_with_four_address(void) {
+    /* 24 + 6 (addr4) + 2 (QoS) + 4 (HTC) = 36 with QoS; without QoS the
+       HT Control must drop out and leave 30, not 34. */
+    uint8_t f[128];
+    int n = build_data(f, 8, FC1_TODS | FC1_FROMDS | FC1_ORDER, 0x0800, 0, 0);
+    ASSERT_EQ(dot11_data_header_len(f, n), 36);
+    assert_finds_payload(f, n, 36);
+    n = build_data(f, 0, FC1_TODS | FC1_FROMDS | FC1_ORDER, 0x0800, 0, 0);
+    ASSERT_EQ(dot11_data_header_len(f, n), 30);
+    assert_finds_payload(f, n, 30);
 }
 
 static void test_all_modifiers_compose(void) {
@@ -252,6 +294,8 @@ void run_dot11_data_tests(void) {
     RUN_TEST(test_four_address_adds_six);
     RUN_TEST(test_tods_alone_is_three_address);
     RUN_TEST(test_order_bit_adds_four);
+    RUN_TEST(test_order_bit_adds_nothing_without_qos);
+    RUN_TEST(test_order_bit_composes_with_four_address);
     RUN_TEST(test_all_modifiers_compose);
 
     TEST_SUITE("802.11 data-frame payload location (#72)");

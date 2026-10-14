@@ -50,6 +50,29 @@ A data frame with the Protected bit clear, carrying something other than
 EAPOL, on a session where the sender's key install has already been
 witnessed.
 
+> **Evasion fixed 2026-10-14.** Deciding "something other than EAPOL"
+> means reading the EtherType out of the LLC/SNAP header, which means
+> knowing the 802.11 header's length. `dot11_data_header_len()` added
+> four bytes for an HT Control field whenever the +HTC/Order bit was
+> set — but that field is present only in **QoS Data and Management**
+> frames (IEEE 802.11-2020 §9.2.4.6); in a non-QoS data frame the same
+> bit is the StrictlyOrdered service class and nothing follows it
+> (§9.2.4.1.10). So on a non-QoS data frame with that one bit set, the
+> LLC header was read four bytes late, no `AA AA 03` was found,
+> `first_frag_ethertype()` returned −1, and the caller's
+> `if (et < 0 || et == ETHERTYPE_EAPOL) return;` declined the frame
+> silently. A single attacker-chosen bit therefore suppressed this
+> detector.
+>
+> Nothing read out of bounds, so neither the sanitiser jobs nor the
+> `fuzz` targets could have found it — it was found by reading the
+> clause against the code. The same skew also made `dot11_ccmp_pn()`
+> assemble a PN from payload bytes and `dot11_data_payload()` hand the
+> IP decoder an invented EtherType. Covered by
+> `test_order_bit_does_not_hide_a_plaintext_frame` and
+> `test_qos_order_plaintext_frame_is_counted`, each mutation-proved in
+> both directions.
+
 ### `FRAG_BCAST` — CVE-2020-26145
 
 A **fragmented** group-addressed data frame with Protected clear. In an
@@ -425,8 +448,12 @@ Hand-built `uint8_t` frames per IEEE 802.11-2020 §9.2, no captures — see
 `agents/AGENTS.md` § Discipline. The cases that decide whether this is
 usable in the field are the *negative* ones: an open network, a client
 mid-association, a rekey, an idle client sending Null frames, a QoS
-frame whose LLC sits two bytes further along. A capture from a lab rig
-running `fragattacks.py` would exercise none of them.
+frame whose LLC sits two bytes further along, and a non-QoS frame with
+the +HTC/Order bit set whose LLC does **not** move. A capture from a lab
+rig running `fragattacks.py` would exercise none of them — and the
+`fragattacks.py` frames would all have been parsed correctly by the
+header bug above, which is why a fixture would not have caught it
+either.
 
 That gap is real and worth stating: these tests prove the detector
 against the specification, not against what the tool actually puts on
