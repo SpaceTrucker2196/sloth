@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-07-04.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -28,9 +28,10 @@ Every family is judged against MISSION §2 first. A sensor may **only** land if
 it is:
 
 - **Passive.** It reads a local device / socket / file / capture stream. It
-  never transmits, never associates, never probes, never injects. (The one
-  charter carve-out — retuning sloth's *own* monitor radio's channel, #22 —
-  does not extend to transmitting on any band.)
+  never transmits, never associates, never probes, never injects. (The
+  charter's one absolute is no injection onto a monitored network —
+  `MISSION.md` §2; retuning sloth's *own* monitor radio's channel with
+  `--hop`, #22, is a receiver change and never a transmission.)
 - **Local.** The operator owns the receiver and is authorised to observe the
   signal in their environment.
 - **Flag-not-exploit.** It surfaces what it hears; it never acts on it.

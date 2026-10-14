@@ -43,42 +43,56 @@ and they are not negotiable per feature. If a proposed change violates
 any of them, the change does not land — find another way or close the
 issue.
 
-1. **Passive only.** Sloth never injects packets, never sends probes,
-   never deauthenticates, never beacons, never ARP-poisons, never
-   port-scans, never resolves hosts it didn't already see. It never
-   writes to the wire, and it never modifies network or host state:
-   no `ip link set`, no `iptables`, no monitor-mode toggling, no
-   configuration of interfaces it did not create.
+1. **No injection.** Sloth never crafts and sends a frame onto a network
+   it is monitoring. No injected packets, no probe requests, no
+   deauthentication, no beacons, no ARP poisoning. This is the whole of
+   the rule, and it is absolute: there is no flag, no build option and no
+   deployment mode that turns it off, and no observation is worth
+   acquiring by transmitting onto the segment under observation.
 
-   **One narrow, opt-in exception:** with passive channel-hopping
-   enabled (`--hop`, off by default), sloth may retune the *channel* of
-   its **own monitor-mode capture interface** — the receiver the
-   operator explicitly dedicated to sloth. This changes only what sloth
-   *hears*, never what the network *does*: no frame is transmitted, no
-   other interface is touched, and the monitored segment is unaffected.
-   Retuning a receiver is not writing to the wire. With `--hop` off
-   (the default) sloth modifies no kernel state at all, preserving the
-   guarantee that it can run on a sensitive segment without changing it.
-   Everything else in this rule stands — no injection, no deauth, no
-   probing, and sloth still never puts an interface *into* monitor mode
-   (the operator does that; sloth only tunes what's already there).
-   *(This carve-out was authorised by the operator on 2026-07-04 to
-   enable issue #22; see PROGRESS.md.)*
+   It is also the *only* absolute here, which is a change from how this
+   section used to read. Sloth previously claimed never to scan, never to
+   resolve a host it had not already seen, and never to modify network or
+   host state. Those were not kept: `--hop` retunes sloth's own receiver,
+   `--allow-active` sends a reverse-DNS query and asks the kernel to
+   scan, a routable `--data-socket` publishes an mDNS service file, and
+   **opening a capture handle sets promiscuous mode on whatever interface
+   libpcap opened** — that last one behind no flag at all. Each of the
+   first three arrived as a separate "narrow exception"; the fourth was
+   never noticed in this document. Four is the point at which the
+   exceptions have become the rule.
 
-   **A second narrow, opt-out exception:** when the operator has bound
-   the read-only data socket (`--data-socket`) to a *routable* address —
-   itself a deliberate choice to expose that socket to the LAN — sloth
-   may drop an Avahi service file so the host's mDNS responder advertises
-   `_sloth._tcp`, letting the sloth-ios client discover the socket by
-   name. sloth itself transmits **nothing**: it writes a config file that
-   a separate daemon (avahi-daemon) uses to announce. Nothing is
-   published for a loopback or UNIX-domain data socket, or when no data
-   socket is bound — so the passive default stays fully silent — and the
-   advertisement is suppressed entirely with `--no-discovery`. This is
-   the one place sloth's *presence* (never its observations) touches the
-   network, and only for a socket the operator already chose to expose.
-   *(This carve-out was authorised by the operator on 2026-07-05 to
-   enable issue #29; see PROGRESS.md.)*
+   So the line is drawn where it can actually be held. **Optional
+   services may use the network.** A resolver, a scan trigger, a
+   telemetry socket, an mDNS advertisement, a local web interface — these
+   transmit from the host, over paths the operator configured, and none
+   of them puts a frame on the monitored segment. What sloth *observes*,
+   it observes passively; what sloth *offers*, it may offer over the
+   network like any other daemon.
+
+   Two properties still hold, and they are what "passive" is now worth:
+
+   - **Sloth never puts an interface into monitor mode.** The operator
+     does that. Sloth only tunes a receiver already in it, and only its
+     own.
+   - **Every network-using service is opt-in and announced.** None is on
+     by default; `--allow-active` prints on stderr exactly what it
+     enabled; `--strict` locks the active behaviours off for the run and
+     refuses a routable `--data-socket`. A passive tool that quietly
+     becomes active is the failure this section exists to prevent, and
+     that failure is about silence, not about capability.
+
+   Promiscuous mode is the one write that is neither opt-in nor
+   announced, because it is inherent to capturing at all: libpcap sets it
+   when the handle opens. It changes what sloth's own NIC accepts, never
+   what the segment carries. Stated here so the list is complete rather
+   than comfortable.
+
+   *(Rule rewritten 2026-10-14. Drafted by the agent on #84 and applied
+   under the operator's explicit authorisation of that date — the charter
+   is never the agent's to change on its own (agents/dark-factory.md
+   §4.3). Consolidates the carve-outs of 2026-07-04 (#22), 2026-07-05
+   (#29) and the `--allow-active` behaviour of #84.)*
 
 2. **No active key recovery.** Sloth never runs a passphrase against a
    captured handshake. It never calls `hashcat`, `aircrack-ng`, John,

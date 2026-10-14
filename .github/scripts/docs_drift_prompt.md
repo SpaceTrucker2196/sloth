@@ -70,10 +70,12 @@ Prefer `uncertain` over a confident wrong answer.
 
 ### Project discipline
 
-- Sloth is passive — it never modifies kernel state, never injects
-  packets, never makes outbound connections that aren't part of
-  the documented data-socket / file sink. Your findings must be
-  consistent with that. Do **not** suggest adding active-response
+- Sloth is passive in one absolute sense — it never injects a frame
+  onto a network it monitors. Other network use (resolver, scan
+  trigger, data socket, mDNS advertisement) exists but is opt-in and
+  announced; see `MISSION.md` §2. Your findings must be consistent
+  with that, and must not re-assert the retired "never scans, never
+  modifies kernel state" wording. Do **not** suggest adding active-response
   features.
 - The doc template (per `docs/views/README.md`) is:
   protocol / data source → what sloth captures → ASCII view mockup

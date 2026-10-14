@@ -2662,3 +2662,48 @@ in `TEST_SRCS`, so `make test` cannot report even a compile error in it
 `agents/AGENTS.md` now says both: six configs are not the whole build
 surface, and `make fuzz FUZZ_SECONDS=1` plus `make test-capture-path`
 belong in the local gate run after touching any module they link.
+
+## 2026-10-14 — MISSION.md §2 rule 1 rewritten: one absolute, not four exceptions (#84, unblocks #102)
+
+Applied today under the operator's explicit authorisation; the text is
+the final draft posted on #84 on 2026-10-06, unchanged except for the
+attribution line. The charter is never the agent's to change on its own
+(`agents/dark-factory.md` §4.3), and the permission layer had refused
+the edit twice before — correctly.
+
+Rule 1 used to say sloth never injects, never scans, never resolves a
+host it had not already seen, and never modifies network or host state,
+then listed two "narrow exceptions". Those absolutes were not kept:
+`--hop` (#22) retunes the receiver, a routable `--data-socket` (#29)
+publishes an mDNS service file, `--allow-active` (#84) sends a
+reverse-DNS query and asks the kernel to scan, and opening a capture
+handle sets **promiscuous mode behind no flag at all** — the fourth was
+never in the document. Four is where exceptions have become the rule.
+
+The owner's ruling, verbatim: *"as long as sloth's sensors are not
+injecting it's fine to have optional services that use the network."*
+So the line is drawn where it can be held. **No injection** — never
+crafting and sending a frame onto a network sloth is monitoring — is the
+one absolute, with no flag, build option or mode that turns it off.
+Optional services may use the network from the host over paths the
+operator configured. Two properties still hold and are what "passive"
+is now worth: sloth never puts an interface into monitor mode, and every
+network-using service is opt-in and announced (`--allow-active` prints
+what it enabled; `--strict` locks it all off). Promiscuous mode is
+stated as the one write that is neither, because it is inherent to
+capturing. Rule 2 (no active key recovery) is untouched.
+
+Shipped behaviour does **not** change: `--hop`, `--allow-active` and
+discovery stay off by default. What changes is that keeping them off is
+now convention rather than charter.
+
+Moved in lockstep, since each restated the retired wording:
+`agents/AGENTS.md` (the one-line summary), [[what-sloth-does]] (summary
+and "What it never does"), [[sloth]], [[non-ip-sensors]], and
+`.github/scripts/docs_drift_prompt.md` — which would otherwise have
+instructed the drift reviewer to enforce a sentence the charter no
+longer contains. `README.md` and [[monitor-mode]] claim only that sloth
+never injects over the air, which remains true, and stand.
+
+#102 (slothweb) was held against the old text, which forbade a local
+HTTP surface; it is no longer charter-blocked.

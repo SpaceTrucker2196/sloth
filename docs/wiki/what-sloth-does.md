@@ -9,14 +9,14 @@ type: reference
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99, single binary. It reads what is already on the wire and in
 the air and surfaces it through 35 views and 75 alert rules. It never
-injects, never scans (by default), never modifies kernel state. This
-page is the one-screen map of everything it does; each row links to the
+injects a frame onto a network it monitors; everything else that uses
+the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
 
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -85,17 +85,37 @@ Everything sloth writes can hold captured traffic, so directories are
 
 ## What it never does
 
-This is the charter, from `MISSION.md`, and it is load-bearing:
+This is the charter, from `MISSION.md` §2, and it is load-bearing. Since
+2026-10-14 it has **one absolute** and two properties that make the word
+"passive" worth something:
 
-- **No packet injection.** No deauth, no forged frames, no spoofing —
-  ever, under any flag.
-- **No active scanning by default.** Two kernel-state writes exist and
-  are separately opt-in and never silent: `--hop` (retune the monitor
-  radio) and `--allow-active` (reverse-DNS + nl80211 passive scan
-  triggers). `--strict` locks `--allow-active` out for the run.
-- **No kernel-state modification** beyond those two opt-ins. sloth never
-  puts an interface into monitor mode itself — you do that with `iw`
-  first. See [[monitor-mode]].
+- **No injection — ever, under any flag.** sloth never crafts and sends
+  a frame onto a network it is monitoring: no deauth, no probes, no
+  beacons, no ARP poisoning, no forged frames. No flag, build option or
+  deployment mode turns this off.
+- **Optional services may use the network.** A resolver, a scan
+  trigger, the data socket, an mDNS advertisement, a local web
+  interface — these transmit from the host over paths you configured,
+  and none puts a frame on the monitored segment. What sloth *observes*
+  it observes passively; what it *offers* it may offer like any daemon.
+- **sloth never puts an interface into monitor mode.** You do that with
+  `iw` first; sloth only tunes a receiver already in it (`--hop`), and
+  only its own. See [[monitor-mode]].
+- **Every network-using service is opt-in and announced.** None is on
+  by default; `--allow-active` prints on stderr exactly what it enabled;
+  `--strict` locks the active behaviours off for the run and refuses a
+  routable `--data-socket`. The failure this guards against is a passive
+  tool that quietly becomes active — about silence, not capability.
+
+The one write that is neither opt-in nor announced is **promiscuous
+mode**: libpcap sets it when the capture handle opens. It changes what
+sloth's own NIC accepts, never what the segment carries.
+
+The older wording — "never scans, never modifies kernel state" — was
+retired because three documented opt-ins (`--hop` #22, discovery #29,
+`--allow-active` #84) had already eaten it, and promiscuous mode was
+never in it at all. See [[log]] 2026-10-14.
+
 - **No mocks of real-data interfaces** in tests; the fake platform in
   `tests/fake_platform.c` is the seam.
 - **No network fetch.** No threat feed, no self-update, no telemetry. A

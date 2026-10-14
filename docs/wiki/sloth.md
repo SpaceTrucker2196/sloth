@@ -6,11 +6,11 @@ type: reference
 
 # Sloth
 
-**Summary**: Terminal-based **passive** network monitor for Linux, written in C99. Reads `/proc`, `/sys`, netlink, and a pcap stream — never injects, scans, or modifies kernel state.
+**Summary**: Terminal-based **passive** network monitor for Linux, written in C99. Reads `/proc`, `/sys`, netlink, and a pcap stream. Never injects a frame onto a network it monitors; every other network-using behaviour is opt-in and announced (`MISSION.md` §2).
 
 **Sources**: `CLAUDE.md`, `docs/views/README.md`, all `docs/views/*.md`.
 
-**Last updated**: 2026-10-01.
+**Last updated**: 2026-10-14.
 
 ---
 
