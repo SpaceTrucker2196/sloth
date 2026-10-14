@@ -32,6 +32,35 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    A planning pass over the issue text alone would have marked it
    blocked and moved on. Read the code the issue touches, not only the
    work the issue asked for.
+
+   **Ask the third question when the bug has a sibling: does the shared
+   resource have a policy?** A fix that bounds one caller's demand on a
+   shared resource leaves every other caller free to do the same thing.
+   Three defects shipped separately on 2026-10-13/14 before anyone
+   looked at the resource they shared: #105 keyed an alert on an
+   endpoint address the *remote side* chooses, #107 left a counter
+   unbounded in time, and #96's beaconing rule re-fired 128 tracks
+   every tick. All three filled the 128-slot alert ring, and because
+   eviction took the globally oldest entry, each starved every other
+   rule. Each was fixed inside the offending rule, and each fix was
+   correct — which is exactly why there kept being a next one.
+   A `grep` for a per-type budget across ~200 `ALERT_TYPE_*` references
+   found none: the engine had no fairness policy at all, and the slots
+   are shared by all 75 detectors.
+
+   The trigger to look is **the second instance, not the third**: two
+   bugs with the same shape against one shared resource means the
+   resource is missing a rule, and the cheap check is to grep for
+   whether any policy exists before writing the third local fix. Fixing
+   the class retires the instances; fixing instances does not retire
+   the class.
+
+   When you do add such a policy, say what it does **not** guarantee.
+   Per-type fairness here is work-conserving, not a quota — a rule may
+   still hold every slot unopposed — so the guarantee is only that no
+   rule can hold the resource against another indefinitely, never that
+   any rule has a reserved share. The stronger claim is the one a
+   reader will assume, and it would be false.
 2. **Plan.** Map the change against agents/AGENTS.md (architecture, invariants,
    recipes). If the plan requires anything under "stops-and-asks" in
    agents/dark-factory.md §4.3, or touches out-of-scope items, stop and
@@ -83,6 +112,41 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    operator you are testing: a tweak the test inputs cannot distinguish
    proves nothing, and the first mutation tried that day was exactly
    that — it left the suite green while changing real behaviour.
+
+   **One mutation per claim, and the mutation must model the claim.** A
+   mutation that merely breaks the code proves only that the suite
+   notices breakage. On 2026-10-14 the engine-fairness work shipped
+   three tests making two different claims — *a flood must not starve
+   another rule* and *one rule may still hold every slot* — and they
+   needed two different mutations. Reverting to globally-oldest
+   eviction reddened the two starvation tests but left the third green,
+   correctly: that test pins the **absence** of a per-type cap, which
+   globally-oldest also has. The first attempt at a cap mutation
+   clamped the internal `most` variable, which did not model a quota at
+   all — it broke victim selection, failed the starvation tests for the
+   wrong reason, and left the one test it was aimed at green. Only a
+   real budget at the allocation site reddened it. If one mutation
+   reddens every test in a group, suspect the mutation rather than
+   celebrating the coverage; tests asserting different properties
+   should be separable.
+
+   **When a fix reddens an existing test, decide which one is wrong
+   before touching either.** The default assumption should be that the
+   fix is wrong, but not the conclusion. Same day: per-rule eviction
+   fairness reddened two pcap-cooldown tests whose harness flooded
+   `PORT_SCAN` until a lone `THREAT_IP` entry was evicted. That harness
+   had encoded the *old* policy as its premise, and fairness makes a
+   rule holding one slot the last thing evicted — by design, and the
+   whole point of the change. The test's premise had expired, so the
+   harness moved to another route to the same state (let the incident
+   expire, since `fire()` treats a key as seen only while its entry is
+   live) and the policy did not bend. Write down which way you decided
+   and why, in the test's own comment: the next reader otherwise cannot
+   tell a premise that expired from a regression that was explained
+   away. The tell that it was really the premise: the replacement route
+   was also the more faithful one — expiry is what recycled engine
+   slots in the field, 300s at a time, while a `PORT_SCAN` flood never
+   did.
 6. **Risk gate.** Run `sh agents/risk_score.sh --selftest && sh
    agents/risk_score.sh` (scores the working tree against
    `origin/main`; weights + threshold in the script header, docs in
