@@ -185,6 +185,17 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
      intermediate commit legitimately has no run of its own and is
      covered by the next one. Check per PUSH, not per commit, or the
      tally looks short for no reason.
+
+   **Omitting CI from the report is not neutral — it reads as green.**
+   On 2026-10-14 a slice was pushed, the step-9 comment was posted with
+   the local gates listed and no mention of CI, and CI then failed: a
+   `make fuzz` link error, in a target no local gate ran. Nothing in the
+   report was false, and that is the problem — a gate list with CI
+   missing from it looks complete, so the red push read as a finished
+   slice until the next check. Either wait for the verdict and name it
+   with its SHA, or say in the report that CI is still running and post
+   the result when it lands. The step is "confirm CI by SHA", and
+   leaving the line out does not satisfy it.
 8. **Instrument.** Append a row to `METRICS.md` (issue, converge
    iterations, tests passing at ship, notes). **Get the assertion count
    by building, not from memory** — run `make test` on the parent commit
