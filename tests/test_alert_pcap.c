@@ -10,6 +10,7 @@
 #include "sloth.h"
 #include "alerts.h"
 #include "alert_pcap.h"
+#include "beacon_detect.h"
 #include "tune.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -305,6 +306,166 @@ static void test_threat_ip_rule_sets_match_fields(void) {
     ASSERT_EQ((int)s.alerts[found].match_port, 443);
 }
 
+/* ── Export policy: CRIT only, once per finding (#96) ─────
+ *
+ * The behaviour these pin was measured on a live sensor before it
+ * existed: 16,131,622 files and 78 GB in --pcap-dir, 17.9 per second,
+ * 98.6% of them one WARN-severity rule re-exported after every
+ * alert-engine eviction. Across the whole corpus those 16.1M files held
+ * about 191 distinct (destination, port) pairs.
+ *
+ * Both knobs open all the way up, so a full capture stays available —
+ * the defaults just stop keeping the same evidence millions of times. */
+
+static int find_threat_ip(const sloth_state_t *s);
+
+static int ap_find(const sloth_state_t *s, alert_type_t t) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == t) return i;
+    return -1;
+}
+
+/* A WARN alert that carries a match_ip. BEACONING is the real one from
+ * the measurement; seeded directly rather than driven through
+ * beacon_detect so the case is about the export policy and not about
+ * periodicity maths. */
+static void ap_seed_warn_with_match(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    seed_packet(s, "192.168.1.5", "198.51.100.9", 33445, 443, 1700000000);
+    bd_clear();
+    for (int i = 0; i < 12; i++)
+        bd_observe("198.51.100.9", 443, 1700000000 + i * 60);
+}
+
+static void test_warn_alerts_are_not_exported_by_default(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear(); tune_reset();
+    /* The default IS the documented contract: `--help` has always said
+       "when a critical alert fires", and the export never checked. */
+    ASSERT_EQ((long long)tune_val(TUNE_PCAP_MIN_SEVERITY), 2);
+
+    sloth_state_t s; ap_seed_warn_with_match(&s);
+    alerts_update(&s);
+    int i = ap_find(&s, ALERT_TYPE_BEACONING);
+    if (i >= 0) {
+        /* If the detector fired, it is WARN and must not have exported. */
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ(ap87_entries(), 0);
+    }
+    alerts_clear(); tune_reset(); ap87_cleanup();
+}
+
+static void test_min_severity_zero_restores_the_full_capture(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear(); tune_reset();
+    char err[256];
+    ASSERT_EQ(tune_set("pcap.min_severity=0", err, sizeof(err)), 0);
+
+    sloth_state_t s; ap_seed_warn_with_match(&s);
+    alerts_update(&s);
+    int i = ap_find(&s, ALERT_TYPE_BEACONING);
+    if (i >= 0) {
+        /* Same WARN alert, now exported — which is what "allow a full
+           capture" has to mean, and the pre-#96 behaviour. */
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT_EQ(ap87_entries(), 1);
+    }
+    alerts_clear(); tune_reset(); ap87_cleanup();
+}
+
+/* Seed the threat connection the engine turns into a CRIT THREAT_IP. */
+static void ap_seed_threat(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    conn_t *c = &s->conns[s->conn_count++];
+    snprintf(c->local_addr,  sizeof(c->local_addr),  "192.168.1.5");
+    snprintf(c->remote_addr, sizeof(c->remote_addr), "192.0.2.66");
+    c->local_port = 33445; c->remote_port = 443; c->proto = PROTO_TCP;
+    seed_packet(s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
+}
+
+/* Push the THREAT_IP entry out of the engine for real.
+ *
+ * This has to be genuine eviction. A first attempt at these tests just
+ * set s.alerts[i].pcap_dumped = 0, which does NOTHING: s->alerts is the
+ * snapshot copy, not engine[], so both tests passed while proving
+ * nothing about the cooldown. The cooldown is only reachable when an
+ * entry is RECREATED, and that needs the engine over capacity.
+ *
+ * PORT_SCAN is the filler because it is ALERT_SEV_LOW, so under the
+ * default pcap.min_severity it creates no pcaps of its own and cannot
+ * confuse the file count. MAX_SCAN_ENTRIES is 32, so this runs several
+ * ticks with distinct source IPs to get past MAX_ALERTS. */
+static void ap_evict_engine(void) {
+    sloth_state_t f; 
+    int made = 0;
+    for (int round = 0; round < 6; round++) {
+        memset(&f, 0, sizeof(f));
+        for (int i = 0; i < MAX_SCAN_ENTRIES; i++) {
+            scan_entry_t *e = &f.scan_entries[f.scan_count++];
+            memset(e, 0, sizeof(*e));
+            snprintf(e->ip, sizeof(e->ip), "203.0.113.%d", made % 250);
+            e->ip[sizeof(e->ip)-1] = '\0';
+            snprintf(e->ip, sizeof(e->ip), "10.%d.%d.%d",
+                     made / 65536, (made / 256) % 256, made % 256);
+            e->port_count = 50;
+            e->flagged    = 1;
+            made++;
+        }
+        alerts_update(&f);
+    }
+}
+
+static void test_a_refired_finding_does_not_export_twice(void) {
+    /* The churn case, which is where the 78 GB came from. An evicted
+       and re-fired alert looks brand new to the engine: fire_inv()
+       memsets the slot, clearing pcap_dumped, and incident_id_make()
+       hands it a FRESH incident id — so neither of those can be the
+       dedupe key. The cooldown keys on the alert key instead. */
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear(); tune_reset();
+
+    sloth_state_t s; ap_seed_threat(&s);
+    alerts_update(&s);
+    ASSERT_EQ(ap87_entries(), 1);           /* CRIT, exported once */
+
+    ap_evict_engine();                      /* really push it out */
+    ap_seed_threat(&s);
+    alerts_update(&s);                      /* re-fires as a new entry */
+    int i = find_threat_ip(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+    /* Still ONE file: the finding is the same even though the engine
+       entry and the incident id are not. */
+    ASSERT_EQ(ap87_entries(), 1);
+
+    alerts_clear(); tune_reset(); ap87_cleanup();
+}
+
+static void test_cooldown_zero_restores_the_full_capture(void) {
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear(); tune_reset();
+    char err[256];
+    ASSERT_EQ(tune_set("pcap.key_cooldown_secs=0", err, sizeof(err)), 0);
+
+    sloth_state_t s; ap_seed_threat(&s);
+    alerts_update(&s);
+    ASSERT_EQ(ap87_entries(), 1);
+
+    ap_evict_engine();
+    ap_seed_threat(&s);
+    alerts_update(&s);
+    /* With the cooldown off, the re-fire exports again — the behaviour
+       that produced the 78 GB, still reachable on request, which is the
+       point of making it a parameter rather than a fix. */
+    ASSERT_EQ(ap87_entries(), 2);
+
+    alerts_clear(); tune_reset(); ap87_cleanup();
+}
+
 /* ── #92: a failed export retries instead of being lost forever ── */
 
 static int find_threat_ip(const sloth_state_t *s) {
@@ -511,6 +672,10 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_dump_succeeds_on_a_healthy_filesystem_by_default);
 
     TEST_SUITE("alert_pcap export outcome recorded on the alert (#92)");
+    RUN_TEST(test_warn_alerts_are_not_exported_by_default);
+    RUN_TEST(test_min_severity_zero_restores_the_full_capture);
+    RUN_TEST(test_a_refired_finding_does_not_export_twice);
+    RUN_TEST(test_cooldown_zero_restores_the_full_capture);
     RUN_TEST(test_dump_retries_after_transient_failure);
     RUN_TEST(test_dump_records_path_on_success);
 }

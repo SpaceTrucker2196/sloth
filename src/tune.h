@@ -76,6 +76,9 @@ typedef enum {
     TUNE_STORAGE_MIN_FREE_MB,
     TUNE_STORAGE_MIN_FREE_INODES,
     TUNE_STORAGE_MIN_FREE_PCT,
+    /* Per-alert pcap export policy (#96). See the rows in tune.c. */
+    TUNE_PCAP_MIN_SEVERITY,
+    TUNE_PCAP_KEY_COOLDOWN_SECS,
     TUNE_COUNT
 } tune_id_t;
 

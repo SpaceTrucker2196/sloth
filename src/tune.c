@@ -75,6 +75,31 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * The cap of 50 is there because a floor above half the filesystem
      * is a way to disable writing rather than to protect it. */
     { "storage.min_free_pct",       5,   0,   50,     "percent of the filesystem that must stay free, 0 for none" },
+    /* Per-alert pcap export policy (#96). Both default to KEEPING LESS,
+     * and both open all the way up, so a full capture is two knobs away
+     * rather than a rebuild.
+     *
+     * These exist because of what the unfiltered behaviour actually
+     * produced on a live sensor: 16,131,622 files and 78 GB in
+     * --pcap-dir, 17.9 per second, of which 98.6% were one WARN-severity
+     * rule (BEACONING) re-exported after every alert-engine eviction.
+     * Measured across the whole corpus, those 16.1M files held about
+     * 191 distinct (destination, port) pairs — a couple of hundred real
+     * findings, written millions of times.
+     *
+     * min_severity 2 (CRIT) is not a new policy: `--help` has always
+     * said "when a critical alert fires", and the export never checked.
+     * This makes the code keep the promise the CLI already made. 0 keeps
+     * every alert that carries a match_ip, which is the old behaviour.
+     *
+     * key_cooldown_secs exists because a re-fire is not new evidence.
+     * It has to key on the alert KEY rather than the incident: eviction
+     * wipes the entry, the next fire for the same key calls
+     * incident_id_make() again, so the incident id is fresh even though
+     * the finding is not. An hour bounds a recurring finding to 24
+     * captures a day instead of 86,400. 0 disables it. */
+    { "pcap.min_severity",          2,   0,   2,      "0=any alert, 1=WARN and up, 2=CRIT only" },
+    { "pcap.key_cooldown_secs",     3600, 0, 86400,   "seconds before the same alert key exports again, 0 for none" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

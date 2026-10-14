@@ -347,6 +347,36 @@ Recorded here rather than implied away:
   front end the badge is seen only once the operator switches to a
   detail view. The ANSI fallback draws the bar on every view, dashboard
   included. Format and caveats: [[cli-reference]] § Status badges.
+- **`--pcap-dir` keeps what is worth keeping, and can be opened all
+  the way up.** Two `--tune` knobs decide what reaches disk:
+  `pcap.min_severity` (default `2`, CRIT only) and
+  `pcap.key_cooldown_secs` (default `3600`). Set both to `0` for an
+  unfiltered full capture.
+
+  The defaults exist because of what unfiltered actually produced on a
+  live sensor: **16,131,622 files and 78 GB** in `--pcap-dir`, **17.9
+  per second**, of which **98.6%** were one *WARN*-severity rule
+  (`BEACONING`) re-exported after every alert-engine eviction. Measured
+  across the whole corpus, those 16.1M files held about **191 distinct
+  (destination, port) pairs** — a couple of hundred real findings,
+  written millions of times. One address, the monitored host's own IPv6,
+  appeared in 81% of sampled files.
+
+  Two separate defects produced that, and both are fixed rather than
+  merely configurable. The severity gate never existed: `--help` has
+  always said "when a critical alert fires" and `dump_new_alert_pcaps()`
+  tested only `match_ip`. And `fire_inv()` memsets a reused engine slot,
+  which clears `pcap_dumped`, so an evicted-then-refired alert looked
+  brand new and exported again. `incident_id` cannot be the dedupe key
+  either — `incident_id_make()` runs on the new-entry path, so the
+  re-fire has a fresh id even though the finding does not. The cooldown
+  therefore keys on the alert key.
+
+  The cooldown records only a **successful** export. A write that fails
+  leaves `pcap_dumped` at 0 so the next tick retries (#92), and starting
+  a cooldown from a failed attempt would block that retry and lose the
+  evidence the retry exists to save.
+
 - **Capacity control covers one sink, and no sink ever gives up.**
   `--pcap-dir` is checked before each write, and nothing else is.
   `src/fs_capacity.c` reads the headroom of the filesystem holding that

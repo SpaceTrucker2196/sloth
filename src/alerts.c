@@ -5062,12 +5062,91 @@ static void snapshot(sloth_state_t *s) {
  * permanently losing this incident's evidence to one transient error.
  * Zero packets matched (0, no failure) IS terminal — the ring already
  * doesn't hold anything for this alert and never will retroactively. */
-static void dump_new_alert_pcaps(const sloth_state_t *s) {
+/* ── Per-alert pcap export policy (#96) ───────────────────
+ *
+ * `pcap_dumped` on the alert is not enough on its own, and the reason is
+ * worth stating because it cost 78 GB before anyone noticed.
+ *
+ * fire_inv() memsets a reused engine slot, which clears pcap_dumped. The
+ * engine holds MAX_ALERTS entries; a segment with more concurrent
+ * findings than that churns, and every eviction-then-refire of the same
+ * key looks like a brand-new alert and exports the same frames again.
+ * Measured on a live sensor: 16,131,622 files holding roughly 191
+ * distinct (destination, port) pairs.
+ *
+ * incident_id cannot be the dedupe key either. incident_id_make() runs
+ * on the new-entry path, so the re-fired alert has a FRESH id even
+ * though the finding is the same — the id is honest about the engine's
+ * view and useless for this question.
+ *
+ * So: a bounded table of alert keys and when each last exported. One
+ * row per key, LRU-evicted, with the eviction counted like every other
+ * bounded table here (#91). Losing a row means a possible duplicate
+ * export rather than a lost observation, which is why it is a tally and
+ * not a fault. Sized above MAX_ALERTS so the steady state never
+ * evicts. */
+#define PCAP_COOL_MAX 512
+
+static struct { char key[ALERT_KEY_LEN]; time_t ts; } pcap_cool[PCAP_COOL_MAX];
+static int pcap_cool_n;
+
+/* Check and record are SEPARATE, and that split is the whole subtlety.
+ *
+ * A first attempt stamped the key on the attempt. That silently broke
+ * #92's retry: a write that fails on a full disk leaves pcap_dumped at
+ * 0 so the next tick tries again, but a cooldown started by the failed
+ * attempt blocked that retry for an hour and the evidence was lost —
+ * precisely what the retry exists to prevent. The existing test
+ * test_dump_retries_after_transient_failure caught it.
+ *
+ * So the cooldown records only a SUCCESSFUL export. "Do not write this
+ * finding's frames twice" is a statement about files that exist, not
+ * about attempts that were made. */
+static int pcap_cooldown_active(const char *key, time_t now, int secs) {
+    if (secs <= 0 || !key || !key[0]) return 0;
+    for (int i = 0; i < pcap_cool_n; i++)
+        if (strcmp(pcap_cool[i].key, key) == 0)
+            return pcap_cool[i].ts > 0 && now >= pcap_cool[i].ts &&
+                   now - pcap_cool[i].ts < secs;
+    return 0;
+}
+
+static void pcap_cooldown_stamp(const char *key, time_t now) {
+    if (!key || !key[0]) return;
+    int oldest = 0;
+    for (int i = 0; i < pcap_cool_n; i++) {
+        if (strcmp(pcap_cool[i].key, key) == 0) { pcap_cool[i].ts = now; return; }
+        if (pcap_cool[i].ts < pcap_cool[oldest].ts) oldest = i;
+    }
+    int slot;
+    if (pcap_cool_n < PCAP_COOL_MAX) {
+        slot = pcap_cool_n++;
+    } else {
+        slot = oldest;
+        sh_evict_note(SH_EVICT_PCAP_COOLDOWN);
+    }
+    snprintf(pcap_cool[slot].key, sizeof(pcap_cool[slot].key), "%s", key);
+    pcap_cool[slot].ts = now;
+}
+
+static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
     if (!alert_pcap_enabled()) return;
+    const int min_sev = (int)tune_val(TUNE_PCAP_MIN_SEVERITY);
+    const int cool    = (int)tune_val(TUNE_PCAP_KEY_COOLDOWN_SECS);
     for (int i = 0; i < engine_count; i++) {
         alert_t *a = &engine[i];
         if (a->pcap_dumped) continue;
         if (!a->match_ip[0]) continue;
+        /* Severity first: it is the cheapest test and the one that
+         * makes this feature match what `--help` has always claimed. */
+        if ((int)a->sev < min_sev) continue;
+        if (pcap_cooldown_active(a->key, now, cool)) {
+            /* Done for this entry. Not a failure, so it must not touch
+             * pcap_write_failures or the !persist badge — nothing
+             * failed, the evidence is simply already on disk. */
+            a->pcap_dumped = 1;
+            continue;
+        }
         int written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (written < 0) {
             a->pcap_write_failures++;
@@ -5075,6 +5154,10 @@ static void dump_new_alert_pcaps(const sloth_state_t *s) {
             continue;
         }
         a->pcap_dumped = 1;
+        /* Only a real file starts the cooldown. written == 0 means the
+         * ring held nothing for this alert and no file was created, so
+         * there is nothing to avoid duplicating. */
+        if (written > 0) pcap_cooldown_stamp(a->key, now);
     }
 }
 
@@ -5173,7 +5256,7 @@ void alerts_update(sloth_state_t *s) {
     rule_threat_ip(s, now);
     rule_beaconing(s, now);
     expire_incidents(now, flood_mono_ms());
-    dump_new_alert_pcaps(s);
+    dump_new_alert_pcaps(s, now);
     snapshot(s);
 }
 
@@ -5187,6 +5270,13 @@ void alerts_clear(void) {
         alert_resolve(&engine[i], now, "cleared");
     engine_count = 0;
     memset(engine, 0, sizeof(engine));
+    /* The export cooldown is engine state too (#96): a test that clears
+     * the engine and re-fires the same key expects a fresh export, and
+     * a long-lived process that clears is starting over. Leaving it
+     * populated would make alerts_clear() non-deterministic from a
+     * caller's point of view. */
+    memset(pcap_cool, 0, sizeof(pcap_cool));
+    pcap_cool_n = 0;
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
     g_arp_hist_n = 0;

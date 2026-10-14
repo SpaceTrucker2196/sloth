@@ -91,6 +91,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_PROBE_CLIENT: return "probe_client";
     case SH_EVICT_PM_FORGE:    return "pm_forge";
     case SH_EVICT_QUEUE_EVICT: return "queue_evict";
+    case SH_EVICT_PCAP_COOLDOWN: return "pcap_cooldown";
     case SH_EVICT_DNS_LOG:     return "dns_log";
     case SH_EVICT_TLS_LOG:     return "tls_log";
     case SH_EVICT_QUIC_LOG:    return "quic_log";
