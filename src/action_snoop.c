@@ -4,15 +4,25 @@
 
 #include "action_snoop.h"
 #include "beacon_snoop.h"
+#include "dot11_data.h"
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
 }
 
-/* 802.11 management header is 24 bytes; the Action body starts there.
+/* Offset of the Action frame body. Every parser below derives its own
+ * fixed-field offsets from this one call, so none of them can drift
+ * from the others the way three copies of a constant did. */
+static int action_body_off(const uint8_t *dot11, int len) {
+    return dot11_mgmt_hdr_len(dot11, len);
+}
+
+/* The Action body starts after the management header, whose length is
+ * 24 or 28 — dot11_mgmt_hdr_len() owns that, because the +HTC/Order bit
+ * adds an HT Control field. This file hardcoded 24 until 2026-10-14 and
+ * so read Category out of HT Control on any Action frame carrying that
+ * bit, which silently declined the frame in every detector below.
  * Category and Action occupy the first two body bytes. */
-#define DOT11_HDR_LEN     24
-#define ACTION_MIN_LEN    (DOT11_HDR_LEN + 2)
 
 /* Neighbor Report element (tag 52) — IEEE 802.11-2020 §9.4.2.36.
  * BSSID(6) + BSSID Info(4) + Operating Class(1) + Channel(1) + PHY(1).
@@ -64,13 +74,17 @@ static uint16_t le16(const uint8_t *p) {
 }
 
 int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out) {
-    if (!dot11 || len < ACTION_MIN_LEN) return -1;
+    if (!dot11) return -1;
     /* Subtype 13, type 0, protocol version 0 → FC byte 0 == 0xD0.
      * Compared whole rather than masked so a protocol-version-nonzero
-     * frame (which we cannot interpret) is rejected rather than parsed. */
+     * frame (which we cannot interpret) is rejected rather than parsed.
+     * Note this check does NOT see the +HTC bit, which lives in byte 1 —
+     * so it never excluded the frames the old fixed offset mis-read. */
     if (dot11[0] != 0xD0) return -1;
-    if (action_out) *action_out = dot11[DOT11_HDR_LEN + 1];
-    return dot11[DOT11_HDR_LEN];
+    int hdr = action_body_off(dot11, len);
+    if (hdr < 0 || len < hdr + 2) return -1;
+    if (action_out) *action_out = dot11[hdr + 1];
+    return dot11[hdr];
 }
 
 int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
@@ -83,7 +97,9 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
 
     /* Fixed fields: category, action, dialog token, request mode,
      * disassoc timer (2), validity interval. */
-    int off = DOT11_HDR_LEN + 2;
+    int hdr = action_body_off(dot11, len);
+    if (hdr < 0) return 0;
+    int off = hdr + 2;
     if (off + 5 > len) return 0;
 
     out->dialog_token      = dot11[off++];
@@ -379,7 +395,9 @@ int csa_parse_action(const uint8_t *dot11, int len, time_t now) {
 
     /* Body after Category + Action is one or more elements. Tag 37 is
      * the announcement; tag 60 carries it with an operating class. */
-    int off = DOT11_HDR_LEN + 2;
+    int hdr = action_body_off(dot11, len);
+    if (hdr < 0) return 0;
+    int off = hdr + 2;
     int mode = 0, chan = 0, count = 0, opclass = 0, found = 0;
     while (off + 2 <= len) {
         uint8_t tag = dot11[off];
@@ -515,7 +533,9 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
 
     /* Category(1) Action(1) DialogToken(1), then Measurement Request
      * or Report elements (tag 38 / 39). */
-    int off = DOT11_HDR_LEN + 3;
+    int hdr = action_body_off(dot11, len);
+    if (hdr < 0) return 0;
+    int off = hdr + 3;
     if (action == RRM_ACT_MEASUREMENT_REQUEST) off += 2;  /* + repetitions */
     int found = 0;
 

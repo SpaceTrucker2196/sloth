@@ -45,12 +45,35 @@ typedef enum {
  *   24 base
  *   +6  when both ToDS and FromDS are set (addr4 — WDS / mesh)
  *   +2  when the subtype has the QoS bit (sub & 0x08)
- *   +4  when the Order bit is set in Frame Control (HT Control)
+ *   +4  when the Order bit is set AND the subtype has the QoS bit
+ *       (HT Control — present only in QoS Data frames, §9.2.4.6)
  *
  * Each addend is independent and they compose. An implementation that
  * treats them as alternatives is wrong in a way that only shows up on
  * the frames that carry more than one. */
 int dot11_data_header_len(const uint8_t *dot11, int len);
+
+/* Length of the MAC header for a MANAGEMENT frame, in bytes, or -1 if
+ * `len` cannot hold it: 24, or 28 when the +HTC/Order bit is set.
+ *
+ * The management sibling of the function above, and the one place that
+ * knowledge lives. Management frames have no ToDS/FromDS fourth address
+ * and no QoS Control, so the only variable part is HT Control — which
+ * for a management frame is announced by the +HTC bit outright, with
+ * none of the QoS-subtype condition the data case needs (IEEE
+ * 802.11-2020 §9.2.4.1.10, §9.3.3.2).
+ *
+ * It exists as a function because four parsers needed it and only one
+ * had it: deauth_snoop.c computed `(fc1 & 0x80) ? 28 : 24` correctly,
+ * while action_snoop.c, assoc_track.c and beacon_snoop.c read their
+ * bodies from a hardcoded 24 (36 for beacons, including the 12 fixed
+ * octets). Those three mis-parsed every management frame carrying the
+ * bit, which is one bit an attacker sets freely — see the comment in
+ * dot11_data.c for what each one then did with the wrong offset.
+ *
+ * Callers must have already established that the frame is management
+ * (type 0); this reads only Frame Control byte 1. */
+int dot11_mgmt_hdr_len(const uint8_t *dot11, int len);
 
 /* Locate the network-layer payload inside an 802.11 data frame.
  *

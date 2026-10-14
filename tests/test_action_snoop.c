@@ -607,6 +607,65 @@ static int build_csa_action(uint8_t *f, const uint8_t bssid[6],
     return off;
 }
 
+/* Rebuild a management frame with the +HTC/Order bit set: four octets
+ * of HT Control go between Sequence Control and the body, so the body
+ * moves from 24 to 28 (IEEE 802.11-2020 §9.2.4.1.10, §9.3.3.2).
+ *
+ * The HT Control bytes are 0xDE 0xAD 0xBE 0xEF deliberately: if a
+ * parser still reads the body at 24 it gets category 0xDE, which
+ * matches no ACTION_CAT_* and makes the frame vanish silently. That was
+ * the behaviour until 2026-10-14 — one attacker-set bit that suppressed
+ * every detector in this file. `cap` must be at least len + 4.
+ *
+ * The frame is otherwise untouched, so every assertion about the
+ * +HTC version is the same assertion as for the plain one. That is the
+ * property: this bit changes where the body sits and nothing else. */
+static int add_htc(uint8_t *f, int len, size_t cap) {
+    uint8_t tmp[256];
+    if (len < 24 || len > (int)sizeof(tmp) || (size_t)(len + 4) > cap) {
+        ASSERT(0);
+        return len;
+    }
+    memcpy(tmp, f, (size_t)len);
+    memset(f, 0, cap);
+    memcpy(f, tmp, 24);
+    f[1] |= 0x80;
+    f[24] = 0xDE; f[25] = 0xAD; f[26] = 0xBE; f[27] = 0xEF;
+    memcpy(f + 28, tmp + 24, (size_t)(len - 24));
+    return len + 4;
+}
+
+static void test_csa_action_survives_the_htc_bit(void) {
+    /* Same frame, same expectations, +HTC set. */
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 1, 0, 36, 3);
+    n = add_htc(f, n, sizeof(f));
+    ASSERT_EQ(csa_parse_action(f, n, 5000), 1);
+    ASSERT_EQ(csa_event_count(), 1);
+    sloth_csa_event_t e;
+    ASSERT_EQ(csa_latest(AP_A, 5000, 60, &e), 1);
+    ASSERT_EQ(e.new_channel, 36);
+    ASSERT_EQ(e.switch_mode, 1);
+    ASSERT_EQ(e.switch_count, 3);
+    ASSERT_EQ(e.source, CSA_SRC_ACTION);
+    csa_clear();
+}
+
+static void test_action_category_read_past_ht_control(void) {
+    /* The narrowest statement of the bug: the category byte itself. */
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 1, 0, 36, 3);
+    uint8_t act = 0;
+    ASSERT_EQ(action_parse_category(f, n, &act), ACTION_CAT_SPECTRUM);
+    ASSERT_EQ(act, SPECTRUM_ACT_CHANNEL_SWITCH);
+
+    n = add_htc(f, n, sizeof(f));
+    act = 0;
+    ASSERT_EQ(action_parse_category(f, n, &act), ACTION_CAT_SPECTRUM);
+    ASSERT_EQ(act, SPECTRUM_ACT_CHANNEL_SWITCH);
+}
+
 static void test_csa_action_parsed(void) {
     csa_clear();
     uint8_t f[64];
@@ -774,6 +833,24 @@ static void test_rrm_targeted_request_parsed(void) {
     rrm_clear();
     uint8_t f[128];
     int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ(p.targeted_reqs, 1);
+    ASSERT_EQ(p.broadcast_reqs, 0);
+    ASSERT_STR(p.last_ssid, "corp-wifi");
+    ASSERT_EQ(p.last_channel, 6);
+    rrm_clear();
+}
+
+static void test_rrm_targeted_request_survives_the_htc_bit(void) {
+    /* The RRM body offset is hdr+3, so it carried the same bug as CSA:
+       an SSID-targeted measurement request — the steering probe that
+       precedes a forced roam — went unrecorded with one bit set. */
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    n = add_htc(f, n, sizeof(f));
     ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
     sloth_rrm_pair_t p;
     ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
@@ -1157,6 +1234,8 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_btm_other_wnm_actions_counted_not_tabled);
     TEST_SUITE("Channel Switch Announcement (#63)");
     RUN_TEST(test_csa_action_parsed);
+    RUN_TEST(test_csa_action_survives_the_htc_bit);
+    RUN_TEST(test_action_category_read_past_ht_control);
     RUN_TEST(test_csa_extended_carries_op_class);
     RUN_TEST(test_csa_records_the_real_transmitter);
     RUN_TEST(test_csa_rejects_channel_zero);
@@ -1167,6 +1246,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_csa_snapshot_newest_first);
     TEST_SUITE("802.11k Radio Measurement (#61)");
     RUN_TEST(test_rrm_targeted_request_parsed);
+    RUN_TEST(test_rrm_targeted_request_survives_the_htc_bit);
     RUN_TEST(test_rrm_request_without_ssid_is_broadcast);
     RUN_TEST(test_rrm_report_counted_but_separate);
     RUN_TEST(test_rrm_non_beacon_measurement_ignored);

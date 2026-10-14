@@ -7,6 +7,7 @@
 #include "mle.h"
 #include "beacon_snoop.h"
 #include "sensor_health.h"
+#include "dot11_data.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -19,7 +20,14 @@ static pthread_mutex_t g_mu  = PTHREAD_MUTEX_INITIALIZER;
  *   ReassocReq §9.3.3.8: the same, plus current AP address(6) */
 #define ASSOC_REQ_FIXED    4
 #define REASSOC_REQ_FIXED  10
-#define DOT11_HDR_LEN      24
+/* The management header is 24 or 28 octets: dot11_mgmt_hdr_len() owns
+ * that, because the +HTC/Order bit adds an HT Control field between
+ * Sequence Control and the body. This file used a fixed 24 until
+ * 2026-10-14, so an (Re)Association Request carrying that bit had its
+ * Capability Information, Listen Interval and whole IE list read four
+ * octets early — out of HT Control and then off the end of the real
+ * elements. The RSN and PNL readings that come out of those IEs feed
+ * the KARMA and evil-twin detectors, so the skew was not cosmetic. */
 
 /* Supported Rates (tag 1) and Extended Supported Rates (tag 50) carry
  * rates in 500 kbit/s units. The top bit flags "basic rate"; mask it
@@ -66,7 +74,7 @@ static uint32_t parse_rates(const uint8_t *ies, int len) {
 int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     if (!dot11 || !out) return 0;
     memset(out, 0, sizeof(*out));
-    if (len < DOT11_HDR_LEN) return 0;
+    if (len < 2) return 0;
 
     /* Subtype 0 = AssocReq, subtype 2 = ReassocReq; type 0, proto 0.
      * FC0 = (subtype<<4) → 0x00 and 0x20 respectively. Compared whole
@@ -77,19 +85,24 @@ int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     else if (fc0 == 0x20) is_reassoc = 1;
     else return 0;
 
+    int hdr = dot11_mgmt_hdr_len(dot11, len);
+    if (hdr < 0) return 0;
+
     int fixed = is_reassoc ? REASSOC_REQ_FIXED : ASSOC_REQ_FIXED;
-    if (len < DOT11_HDR_LEN + fixed) return 0;
+    if (len < hdr + fixed) return 0;
 
     out->is_reassoc = is_reassoc;
     /* A request travels STA → AP: addr2 is the client, addr3 the BSSID.
      * The mirror of the response case, where addr1 is the client. */
     memcpy(out->sta,   dot11 + 10, 6);
     memcpy(out->bssid, dot11 + 16, 6);
-    out->capability_info = (uint16_t)(dot11[24] | ((uint16_t)dot11[25] << 8));
-    out->listen_interval = (uint16_t)(dot11[26] | ((uint16_t)dot11[27] << 8));
+    out->capability_info = (uint16_t)(dot11[hdr]     |
+                                      ((uint16_t)dot11[hdr + 1] << 8));
+    out->listen_interval = (uint16_t)(dot11[hdr + 2] |
+                                      ((uint16_t)dot11[hdr + 3] << 8));
 
-    const uint8_t *ies    = dot11 + DOT11_HDR_LEN + fixed;
-    int            ie_len = len   - DOT11_HDR_LEN - fixed;
+    const uint8_t *ies    = dot11 + hdr + fixed;
+    int            ie_len = len   - hdr - fixed;
     if (ie_len < 0) return 0;
 
     out->supported_rates = parse_rates(ies, ie_len);

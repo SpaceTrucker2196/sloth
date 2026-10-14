@@ -138,6 +138,52 @@ static void test_parse_ssid(void) {
     ASSERT_EQ(memcmp(bssid, BSSID_A, 6), 0);
 }
 
+static void test_parse_survives_the_htc_bit(void) {
+    /* A beacon with the +HTC/Order bit set carries a 4-octet HT Control
+       field between Sequence Control and the fixed params (IEEE
+       802.11-2020 §9.2.4.1.10, §9.3.3.2), so the fixed params start at
+       28 and the IEs at 40 — not the hardcoded 36 this file used until
+       2026-10-14.
+
+       Under that bug the beacon interval came out of HT Control, the
+       Privacy bit out of the Timestamp, and the IE walk started four
+       octets early inside the Timestamp — so SSID, channel, RSN and the
+       vendor / IE-order fingerprints were all read from the wrong
+       place. One attacker-set bit, and the frame either vanished or
+       reported invented values. Same bug as src/dot11_data.c's data-frame
+       case and action_snoop.c's Action case; dot11_mgmt_hdr_len() is now
+       the single owner of the offset.
+
+       Layout is built explicitly rather than via fill_hdr(), which
+       hardcodes the 24/36 offsets. */
+    uint8_t f[40 + 2 + 6 + 3];
+    memset(f, 0, sizeof(f));
+    f[0] = 0x80; f[1] = 0x80;                  /* beacon, +HTC/Order set */
+    memset(f + 4, 0xff, 6);
+    memcpy(f + 10, BSSID_A, 6);
+    memcpy(f + 16, BSSID_A, 6);
+    /* HT Control at 24-27, recognisable: read as a beacon interval it
+       would give a wildly wrong number, which is the point. */
+    f[24] = 0xDE; f[25] = 0xAD; f[26] = 0xBE; f[27] = 0xEF;
+    /* Timestamp 28-35 stays zero; Beacon Interval at 36-37 = 100 TU. */
+    f[36] = 100; f[37] = 0;
+    f[38] = 0x00; f[39] = 0x00;                /* Capability: no Privacy */
+    f[40] = 0x00; f[41] = 6;                   /* SSID IE */
+    memcpy(f + 42, "HomeAP", 6);
+    f[48] = 0x03; f[49] = 1; f[50] = 11;       /* DS Param: channel 11 */
+
+    char ssid[33]; uint8_t bssid[6]; int ch = 0; char enc[10]; uint16_t bms = 0;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc,
+                           &bms, &rsn), 1);
+    ASSERT_STR(ssid, "HomeAP");
+    ASSERT_EQ(memcmp(bssid, BSSID_A, 6), 0);
+    ASSERT_EQ(ch, 11);
+    ASSERT_EQ(bms, 102);                       /* 100 TU = 102 ms */
+    ASSERT_EQ((long long)rsn.tsf, 0LL);        /* Timestamp, not HT Control */
+    ASSERT_EQ(rsn.has_tsf, 1);
+}
+
 static void test_parse_hidden_ssid(void) {
     uint8_t f[BEACON_HDR_LEN + 2];       /* header + zero-length SSID IE */
     fill_hdr(f, BSSID_A, 100, 0x0000);
@@ -3623,6 +3669,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_parse_rejects_non_beacon);
     RUN_TEST(test_parse_rejects_too_short);
     RUN_TEST(test_parse_ssid);
+    RUN_TEST(test_parse_survives_the_htc_bit);
     RUN_TEST(test_parse_hidden_ssid);
     RUN_TEST(test_parse_channel_ds_param);
     RUN_TEST(test_parse_beacon_interval);

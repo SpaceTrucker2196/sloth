@@ -2588,3 +2588,42 @@ misparsed, but two bounds for one field is how a divergence arrives. All
 three sites now call the helper.
 
 Pages: [[fragattacks]].
+
+## 2026-10-14 — three more management parsers read their bodies at a fixed 24 (#95)
+
+Follow-on to the +HTC/Order entry above, and the reason that one was
+worth generalising: the same clause was being got wrong in three more
+parsers, and each had its own hardcoded offset.
+
+A management frame with the +HTC/Order bit set carries a 4-octet HT
+Control field between Sequence Control and the body (IEEE 802.11-2020
+§9.2.4.1.10, §9.3.3.2), so the body starts at 28, not 24.
+`src/deauth_snoop.c` handled that correctly and cited the clause while
+doing it. The other three did not:
+
+| parser | hardcoded | what the skew did |
+|---|---|---|
+| `src/action_snoop.c` | 24 | Category read out of HT Control, matching no `ACTION_CAT_*` — so **CSA, RRM and BTM all declined the frame silently**. Spoofed channel-switch and forced-roam detection, evaded by one bit. |
+| `src/assoc_track.c` | 24 | Capability, Listen Interval and the whole IE list read 4 octets early, so the SSID and the RSN "ask" that feed the WPA-downgrade delta and the PNL/KARMA correlation came from the wrong place. |
+| `src/beacon_snoop.c` | 36 (24 + 12 fixed) | Beacon interval out of HT Control, Privacy bit out of the Timestamp, IE walk started inside the Timestamp — SSID, channel, RSN, TSF and the vendor / IE-order fingerprints all wrong. |
+
+The offset now lives in one place, `dot11_mgmt_hdr_len()`, and all four
+parsers call it — including `deauth_snoop.c`, which gave up its correct
+local copy so that there is nothing left to diverge from. Note the
+contrast with the data-frame function beside it: for a management frame
+the bit means +HTC outright, with none of the QoS-subtype condition the
+data case needs, which is exactly the kind of difference that invites
+four hand-rolled copies.
+
+**Why nothing caught this.** `action_parse_category()` rejects a frame
+whose Frame Control byte 0 is not `0xD0`, but the +HTC bit is in byte
+**1**, so the guard never excluded the frames being mis-read. Every
+offset stayed in bounds, so the sanitiser and fuzz jobs were blind to it
+for the same reason as the data-frame case. And `deauth_snoop.c` had a
+test for exactly this (`test_parse_htc_shifts_body`) — it just never
+generalised to its three siblings. Mutating the shared helper back to a
+fixed 24 reddens all six new tests *and* that pre-existing deauth test,
+which is the cleanest statement of the asymmetry: one parser had both
+the code and the test, three had neither.
+
+Pages: [[fragattacks]] for the data-frame half.

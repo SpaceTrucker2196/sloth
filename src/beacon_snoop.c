@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include "sloth.h"
 #include "beacon_snoop.h"
+#include "dot11_data.h"
 #include "sensor_health.h"
 #include "wifi_oui_attacker.h"
 
@@ -772,38 +773,49 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                  int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
                  beacon_rsn_t *rsn_out)
 {
-    /* Need at least 802.11 header (24) + fixed params (12) = 36 bytes */
-    if (len < 36) return 0;
-
     /* FC byte 0: type=0b00 (management), subtype=0b1000 (beacon) → 0x80 */
-    if (dot11[0] != 0x80) return 0;
+    if (len < 2 || dot11[0] != 0x80) return 0;
+
+    /* Management header (24, or 28 with HT Control under the +HTC/Order
+     * bit) + the 12 fixed octets: Timestamp(8), Beacon Interval(2),
+     * Capability(2). This was a hardcoded 36 until 2026-10-14, so a
+     * beacon carrying +HTC had its interval, Privacy bit and entire IE
+     * list read four octets early — SSID, RSN and the vendor/IE-order
+     * fingerprints all come out of that walk. */
+    int hdr = dot11_mgmt_hdr_len(dot11, len);
+    if (hdr < 0 || len < hdr + 12) return 0;
 
     /* BSSID at bytes 16-21 */
     memcpy(bssid_out, dot11 + 16, 6);
 
-    /* Beacon interval at bytes 32-33, little-endian TUs (1 TU = 1024 µs) */
-    uint32_t bi_tu = (uint32_t)(dot11[32] | ((uint32_t)dot11[33] << 8));
+    /* Beacon interval: little-endian TUs (1 TU = 1024 µs), after the
+     * 8-octet Timestamp. */
+    uint32_t bi_tu = (uint32_t)(dot11[hdr + 8] |
+                                ((uint32_t)dot11[hdr + 9] << 8));
     *beacon_ms_out = (uint16_t)(bi_tu * 1024 / 1000);
 
-    /* Capability Information at bytes 34-35; bit 4 = Privacy */
-    uint16_t cap     = (uint16_t)(dot11[34] | ((uint16_t)dot11[35] << 8));
+    /* Capability Information; bit 4 = Privacy */
+    uint16_t cap     = (uint16_t)(dot11[hdr + 10] |
+                                 ((uint16_t)dot11[hdr + 11] << 8));
     int      privacy = (cap >> 4) & 1;
 
     (void)signal;
-    int ok = beacon_parse_ies(dot11 + 36, len - 36, privacy, *beacon_ms_out,
+    int ok = beacon_parse_ies(dot11 + hdr + 12, len - hdr - 12,
+                              privacy, *beacon_ms_out,
                               ssid_out, channel_out, enc_out, rsn_out,
                               NULL /* rides rsn_out->reg instead (#101) */);
 
-    /* Timestamp at bytes 24-31, little-endian: the AP's TSF timer value
-     * when it transmitted this beacon (#77). Set after the IE walk
-     * because beacon_parse_ies zeroes rsn_out on entry — and because
-     * that function is also the managed-mode nl80211 entry point, which
-     * sees an IE blob and no frame, so leaving has_tsf at 0 there is
-     * exactly right. */
+    /* Timestamp: the 8 little-endian octets that open the fixed params,
+     * so at `hdr`, not at a fixed 24 — the AP's TSF timer value when it
+     * transmitted this beacon (#77). Set after the IE walk because
+     * beacon_parse_ies zeroes rsn_out on entry — and because that
+     * function is also the managed-mode nl80211 entry point, which sees
+     * an IE blob and no frame, so leaving has_tsf at 0 there is exactly
+     * right. */
     if (ok && rsn_out) {
         uint64_t tsf = 0;
         for (int b = 7; b >= 0; b--)
-            tsf = (tsf << 8) | (uint64_t)dot11[24 + b];
+            tsf = (tsf << 8) | (uint64_t)dot11[hdr + b];
         rsn_out->tsf       = tsf;
         rsn_out->has_tsf   = 1;
         rsn_out->tsf_bi_tu = (uint16_t)bi_tu;

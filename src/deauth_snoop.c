@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
+#include "dot11_data.h"
 
 #define WIN_MS  ((uint32_t)DEAUTH_FLOOD_WIN_SECS  * 1000u)
 #define HOLD_MS ((uint32_t)DEAUTH_FLOOD_HOLD_SECS * 1000u)
@@ -64,9 +65,13 @@ int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out)
     /* +HTC: the Order bit in a management frame announces a 4-octet HT
      * Control field between Sequence Control and the body (IEEE
      * 802.11-2020 9.2.4.1.10, 9.3.3.2). Without it the body offset is
-     * wrong and the "reason" is HT Control bytes. */
-    int hdr = (fc1 & 0x80) ? 28 : 24;
-    if (len < hdr) return 0;
+     * wrong and the "reason" is HT Control bytes.
+     *
+     * This file had it right and the other three management parsers did
+     * not, so the expression moved to dot11_mgmt_hdr_len() and they all
+     * call it now — the divergence is the reason it is a function. */
+    int hdr = dot11_mgmt_hdr_len(dot11, len);
+    if (hdr < 0) return 0;
 
     memset(out, 0, sizeof(*out));
     memcpy(out->dst,   dot11 + 4,  6);

@@ -52,6 +52,19 @@ int dot11_data_header_len(const uint8_t *dot11, int len) {
     return len >= hdr ? hdr : -1;
 }
 
+/* See dot11_data.h for why this is a shared function rather than the
+ * expression three of the four management parsers were missing.
+ *
+ * Unlike the data case there is no QoS-subtype condition: §9.2.4.1.10
+ * gives the bit one meaning in a management frame (+HTC) and only the
+ * non-QoS DATA frame reading is StrictlyOrdered. So this really is
+ * `set ? 28 : 24`, which is what deauth_snoop.c already had. */
+int dot11_mgmt_hdr_len(const uint8_t *dot11, int len) {
+    if (!dot11 || len < 2) return -1;
+    int hdr = (dot11[1] & 0x80) ? 28 : 24;
+    return len >= hdr ? hdr : -1;
+}
+
 int dot11_data_payload(const uint8_t *dot11, int len,
                        int *payload_off, uint16_t *ethertype) {
     if (payload_off) *payload_off = 0;

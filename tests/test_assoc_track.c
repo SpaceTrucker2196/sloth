@@ -174,6 +174,48 @@ static void test_req_parses_assoc(void) {
     ASSERT_STR(r.requested_ssid, "home");
 }
 
+static void test_req_parses_with_the_htc_bit(void) {
+    /* +HTC/Order set: 4 octets of HT Control sit between Sequence
+       Control and the fixed fields (IEEE 802.11-2020 §9.2.4.1.10,
+       §9.3.3.2), so Capability starts at 28, not the 24 this file used
+       until 2026-10-14.
+
+       Under that bug Capability and Listen Interval came out of HT
+       Control and the IE walk started four octets early, so the SSID
+       and the RSN "ask" — the input to the WPA-downgrade delta and the
+       PNL/KARMA correlation — were read from the wrong place. One bit a
+       client (or an attacker impersonating one) sets freely.
+
+       Built explicitly rather than via build_req(), which hardcodes the
+       24-octet header. */
+    uint8_t f[256];
+    memset(f, 0, sizeof(f));
+    f[0] = 0x00;                      /* AssocReq */
+    f[1] = 0x80;                      /* +HTC/Order */
+    memcpy(f + 4,  RQ_BSSID, 6);
+    memcpy(f + 10, RQ_STA,   6);
+    memcpy(f + 16, RQ_BSSID, 6);
+    /* HT Control at 24-27. Read as Capability it would give 0xADDE and
+       a Listen Interval of 0xEFBE, so the assertions below cannot pass
+       by accident. */
+    f[24] = 0xDE; f[25] = 0xAD; f[26] = 0xBE; f[27] = 0xEF;
+    int off = 28;
+    f[off++] = 0x31; f[off++] = 0x04;      /* Capability 0x0431 */
+    f[off++] = 10;   f[off++] = 0;         /* Listen Interval 10 */
+    memcpy(f + off, IES_WPA3_SAE, sizeof(IES_WPA3_SAE));
+    off += (int)sizeof(IES_WPA3_SAE);
+
+    assoc_req_t r;
+    ASSERT_EQ(assoc_request_parse(f, off, &r), 1);
+    ASSERT_EQ(r.is_reassoc, 0);
+    ASSERT_EQ(memcmp(r.sta,   RQ_STA,   6), 0);
+    ASSERT_EQ(memcmp(r.bssid, RQ_BSSID, 6), 0);
+    ASSERT_EQ(r.capability_info, 0x0431);
+    ASSERT_EQ(r.listen_interval, 10);
+    ASSERT_STR(r.requested_ssid, "home");
+    ASSERT(r.akm_bits & RSN_AKM_SAE);
+}
+
 static void test_req_parses_reassoc_with_current_ap(void) {
     /* The 6-byte Current AP Address shifts the IE list. Miscounting it
      * makes every IE unreadable, so the SSID coming back intact is the
@@ -718,6 +760,7 @@ void run_assoc_track_tests(void) {
 
     TEST_SUITE("assoc request parse (#60)");
     RUN_TEST(test_req_parses_assoc);
+    RUN_TEST(test_req_parses_with_the_htc_bit);
     RUN_TEST(test_req_parses_reassoc_with_current_ap);
     RUN_TEST(test_req_extracts_rsn_ask);
     RUN_TEST(test_req_extracts_rates);
