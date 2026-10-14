@@ -7137,6 +7137,115 @@ static void test_surv_cloud_sni_two_vendors_two_alerts(void) {
     ASSERT_EQ(surv_count(&s), 2);
 }
 
+/* ── #96: the engine's eviction policy is fair between rules ──
+ *
+ * Every instance of the recurring saturation bug — #105's remotely
+ * chosen key component, #107's unbounded release_count, #96's own
+ * 128-beacon churn — had the same shape: one rule's cardinality was
+ * unbounded, it filled all MAX_ALERTS slots, and because eviction picked
+ * the globally oldest entry, every OTHER rule's findings were discarded
+ * the moment they fired. Each was fixed in its own rule, which is why
+ * there kept being a next one; these pin the property in the engine. */
+
+static int fair_count(const sloth_state_t *s, alert_type_t t) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == t) n++;
+    return n;
+}
+
+/* `keys` distinct PORT_SCAN keys. MAX_SCAN_ENTRIES caps one poll's worth
+ * of scan rows, so this takes several polls — which is also how the
+ * field case arrived. `extra` is re-asserted on every poll so a victim
+ * rule can be kept live alongside the flood. */
+static void fair_flood_scans(int keys, void (*extra)(sloth_state_t *)) {
+    int made = 0;
+    while (made < keys) {
+        sloth_state_t f; seed_state(&f);
+        if (extra) extra(&f);
+        for (int i = 0; i < MAX_SCAN_ENTRIES && made < keys; i++, made++) {
+            char ip[32];
+            snprintf(ip, sizeof(ip), "10.%d.%d.%d",
+                     made / 65536, (made / 256) % 256, made % 256);
+            add_scan(&f, ip, 50, 1);
+        }
+        alerts_update(&f);
+    }
+}
+
+static void fair_add_one_threat(sloth_state_t *s) {
+    add_conn(s, "192.0.2.66", 443);      /* demo IOC → THREAT_IP, CRIT */
+}
+
+static void test_engine_fairness_a_flood_does_not_starve_another_rule(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    fair_add_one_threat(&s);
+    alerts_update(&s);
+    int i0 = find_alert(&s, ALERT_TYPE_THREAT_IP);
+    ASSERT(i0 >= 0);
+    char id0[ALERT_INCIDENT_ID_LEN];
+    snprintf(id0, sizeof(id0), "%s", s.alerts[i0].incident_id);
+    ASSERT(id0[0] != '\0');
+
+    /* 300 distinct scan keys against 128 slots: saturated several times
+       over. The THREAT_IP key is deliberately NOT re-asserted during the
+       flood, so it is the oldest entry in the engine throughout — which
+       is precisely what globally-oldest eviction threw away first. */
+    fair_flood_scans(300, NULL);
+
+    /* Read the engine back WITHOUT re-asserting the threat: a re-fire
+       would mint a new entry and make find_alert() succeed even if the
+       original had been evicted, which is the trap this assertion has to
+       avoid. The incident id is the identity check — same id means the
+       same entry survived, not that an identical finding re-fired. */
+    sloth_state_t out; seed_state(&out);
+    alerts_update(&out);
+    ASSERT_EQ(out.alert_count, MAX_ALERTS);          /* really did evict */
+    ASSERT(fair_count(&out, ALERT_TYPE_PORT_SCAN) > 1);
+    int i1 = find_alert(&out, ALERT_TYPE_THREAT_IP);
+    ASSERT(i1 >= 0);
+    ASSERT_EQ(fair_count(&out, ALERT_TYPE_THREAT_IP), 1);
+    if (i1 >= 0) {
+        ASSERT_STR(out.alerts[i1].incident_id, id0);
+        ASSERT_EQ(out.alerts[i1].resolved, 0);       /* not evicted-and-closed */
+    }
+    alerts_clear();
+}
+
+static void test_engine_fairness_one_rule_may_still_use_every_slot(void) {
+    /* Work-conserving, and why this is not a per-type cap: with ~75
+       types and 128 slots an equal share would be one or two each, and
+       since most types hold nothing most of the time, most of the engine
+       would sit idle. A rule with nothing to compete against gets all of
+       it. */
+    alerts_clear();
+    fair_flood_scans(300, NULL);
+    sloth_state_t out; seed_state(&out);
+    alerts_update(&out);
+    ASSERT_EQ(out.alert_count, MAX_ALERTS);
+    ASSERT_EQ(fair_count(&out, ALERT_TYPE_PORT_SCAN), MAX_ALERTS);
+    alerts_clear();
+}
+
+static void test_engine_fairness_the_flood_yields_slots_as_others_fire(void) {
+    /* The flood goes FIRST here, so the quiet rule is not an incumbent
+       being protected — it arrives at a full engine and still gets in,
+       twice, and the slots come out of the largest holder. */
+    alerts_clear();
+    fair_flood_scans(300, NULL);
+
+    sloth_state_t s; seed_state(&s);
+    add_conn(&s, "192.0.2.66", 443);
+    add_conn(&s, "192.0.2.99", 8443);    /* a second demo IOC → 2nd key */
+    alerts_update(&s);
+
+    ASSERT_EQ(s.alert_count, MAX_ALERTS);
+    ASSERT_EQ(fair_count(&s, ALERT_TYPE_THREAT_IP), 2);
+    ASSERT_EQ(fair_count(&s, ALERT_TYPE_PORT_SCAN), MAX_ALERTS - 2);
+    alerts_clear();
+}
+
 static void test_surv_cloud_sni_endpoint_churn_does_not_fill_the_engine(void) {
     /* The regression that justified re-keying. The endpoint address is
        chosen by the REMOTE side and nothing bounds how many it uses, so
@@ -9527,6 +9636,11 @@ void run_alerts_tests(void) {
     RUN_TEST(test_mle_cross_link_cipher_downgrade_fires);
     RUN_TEST(test_mle_cross_link_cipher_downgrade_quiet_when_clean);
     RUN_TEST(test_mle_cross_link_cipher_downgrade_fires_once_per_mld);
+
+    TEST_SUITE("alerts: engine eviction fairness (#96)");
+    RUN_TEST(test_engine_fairness_a_flood_does_not_starve_another_rule);
+    RUN_TEST(test_engine_fairness_one_rule_may_still_use_every_slot);
+    RUN_TEST(test_engine_fairness_the_flood_yields_slots_as_others_fire);
 
     TEST_SUITE("alerts: incident lifecycle (#98)");
     RUN_TEST(test_lifecycle_create_emits_a_create_event);

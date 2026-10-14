@@ -12,6 +12,7 @@
 #include "alert_pcap.h"
 #include "beacon_detect.h"
 #include "tune.h"
+#include "flood_window.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -376,6 +377,10 @@ static void test_min_severity_zero_restores_the_full_capture(void) {
 }
 
 /* Seed the threat connection the engine turns into a CRIT THREAT_IP. */
+static time_t   g_ap_wall = 1700000000;
+static time_t   ap_wall(void)   { return g_ap_wall; }
+static uint64_t ap_mono(void)   { return (uint64_t)g_ap_wall * 1000u; }
+
 static void ap_seed_threat(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
     conn_t *c = &s->conns[s->conn_count++];
@@ -397,24 +402,28 @@ static void ap_seed_threat(sloth_state_t *s) {
  * default pcap.min_severity it creates no pcaps of its own and cannot
  * confuse the file count. MAX_SCAN_ENTRIES is 32, so this runs several
  * ticks with distinct source IPs to get past MAX_ALERTS. */
-static void ap_evict_engine(void) {
-    sloth_state_t f; 
-    int made = 0;
-    for (int round = 0; round < 6; round++) {
-        memset(&f, 0, sizeof(f));
-        for (int i = 0; i < MAX_SCAN_ENTRIES; i++) {
-            scan_entry_t *e = &f.scan_entries[f.scan_count++];
-            memset(e, 0, sizeof(*e));
-            snprintf(e->ip, sizeof(e->ip), "203.0.113.%d", made % 250);
-            e->ip[sizeof(e->ip)-1] = '\0';
-            snprintf(e->ip, sizeof(e->ip), "10.%d.%d.%d",
-                     made / 65536, (made / 256) % 256, made % 256);
-            e->port_count = 50;
-            e->flagged    = 1;
-            made++;
-        }
-        alerts_update(&f);
-    }
+/* Drive the THREAT_IP incident through resolve → re-fire, which is the
+ * state the 16.1M duplicate pcaps came from: fire() only treats a key as
+ * "already seen" while its entry is LIVE (`idx >= 0 && !resolved`), so a
+ * resolved key falls through to the new-entry path, which memsets the
+ * slot — clearing pcap_dumped — and mints a fresh incident id.
+ *
+ * This used to flood the engine with PORT_SCAN until the THREAT_IP entry
+ * was evicted. That stopped working when eviction learned per-type
+ * fairness (#96): the flood's victim is now the flooding type's own
+ * oldest entry, so a rule holding ONE slot is the last thing evicted and
+ * a THREAT_IP incident survives any amount of PORT_SCAN. That is the
+ * point of the fairness change, so the harness moved to the other route
+ * to the same slot-reuse, rather than the policy bending to the test.
+ * Expiry is also the more faithful route: it is what actually recycled
+ * engine slots in the field, 300s at a time. */
+static void ap_churn_engine(void) {
+    sloth_state_t empty;
+    memset(&empty, 0, sizeof(empty));
+    g_ap_wall += ALERT_RESOLVE_AFTER_S + 1;
+    /* No rule re-asserts the key against empty state, so expire_incidents
+       resolves it; the next fire of the same key opens a new incident. */
+    alerts_update(&empty);
 }
 
 static void test_a_refired_finding_does_not_export_twice(void) {
@@ -423,6 +432,8 @@ static void test_a_refired_finding_does_not_export_twice(void) {
        memsets the slot, clearing pcap_dumped, and incident_id_make()
        hands it a FRESH incident id — so neither of those can be the
        dedupe key. The cooldown keys on the alert key instead. */
+    flood_test_set_clock(ap_mono, ap_wall);
+    g_ap_wall = 1700000000;
     ap87_setup();
     ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
     alerts_clear(); tune_reset();
@@ -431,7 +442,7 @@ static void test_a_refired_finding_does_not_export_twice(void) {
     alerts_update(&s);
     ASSERT_EQ(ap87_entries(), 1);           /* CRIT, exported once */
 
-    ap_evict_engine();                      /* really push it out */
+    ap_churn_engine();                      /* resolve, so it re-fires fresh */
     ap_seed_threat(&s);
     alerts_update(&s);                      /* re-fires as a new entry */
     int i = find_threat_ip(&s);
@@ -442,9 +453,12 @@ static void test_a_refired_finding_does_not_export_twice(void) {
     ASSERT_EQ(ap87_entries(), 1);
 
     alerts_clear(); tune_reset(); ap87_cleanup();
+    flood_test_set_clock(NULL, NULL);
 }
 
 static void test_cooldown_zero_restores_the_full_capture(void) {
+    flood_test_set_clock(ap_mono, ap_wall);
+    g_ap_wall = 1700000000;
     ap87_setup();
     ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
     alerts_clear(); tune_reset();
@@ -455,7 +469,7 @@ static void test_cooldown_zero_restores_the_full_capture(void) {
     alerts_update(&s);
     ASSERT_EQ(ap87_entries(), 1);
 
-    ap_evict_engine();
+    ap_churn_engine();
     ap_seed_threat(&s);
     alerts_update(&s);
     /* With the cooldown off, the re-fire exports again — the behaviour
@@ -464,6 +478,7 @@ static void test_cooldown_zero_restores_the_full_capture(void) {
     ASSERT_EQ(ap87_entries(), 2);
 
     alerts_clear(); tune_reset(); ap87_cleanup();
+    flood_test_set_clock(NULL, NULL);
 }
 
 /* ── #92: a failed export retries instead of being lost forever ── */

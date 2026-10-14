@@ -58,6 +58,29 @@ ring hits `MAX_ALERTS`, so a live incident is now dropped only when all
 resolve on the way out, and `c` (clear) resolves every open incident,
 so a consumer is never left waiting for a resolve that cannot come.
 
+Among live incidents the victim is **the oldest entry of whichever
+alert type holds the most slots** — not the oldest entry overall (#96).
+The engine's 128 slots are shared by every rule, and nothing bounds how
+many one rule can want, so under globally-oldest eviction a single
+prolific rule filled the ring and then discarded every other rule's
+findings as they fired. That shape recurred three times — a dedup key
+with a remotely chosen component (#105), a counter unbounded in time
+(#107), and 128 beaconing tracks re-firing every tick (#96) — each time
+found separately and each time fixed inside the offending rule, which
+is why there kept being a next one. Evicting the greediest type instead
+makes the engine itself fair, so the next unbounded rule degrades only
+its own findings.
+
+It is deliberately **not** a per-type quota: with ~75 types and 128
+slots an equal share would be one or two each, and since most types
+hold nothing most of the time, most of the ring would sit idle. The
+policy is work-conserving — one rule may hold all 128 slots when
+nothing competes for them, and yields one the moment another rule
+fires, so a quiet rule that keeps firing converges on a fair share
+rather than being refused. The guarantee is not a reserved slot per
+rule; it is that no rule can hold the ring against another
+indefinitely.
+
 ### Counters and timestamps
 
 | Field | Counts |

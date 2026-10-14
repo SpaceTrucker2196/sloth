@@ -22,7 +22,7 @@ pcap and report artifacts still have no retention at all.
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
 
-**Last updated**: 2026-10-13 (sloth 1.8.4).
+**Last updated**: 2026-10-14 (sloth 1.8.4).
 
 ---
 
@@ -371,6 +371,11 @@ Recorded here rather than implied away:
   either — `incident_id_make()` runs on the new-entry path, so the
   re-fire has a fresh id even though the finding does not. The cooldown
   therefore keys on the alert key.
+
+  A third change removed the *source* of that churn rather than its
+  output: alert-engine eviction now takes the oldest entry of whichever
+  type holds the most slots, so 128 beaconing tracks recycle their own
+  slots instead of the whole ring. See [[alerts]] and `docs/views/alerts.md`.
 
   The cooldown records only a **successful** export. A write that fails
   leaves `pcap_dumped` at 0 so the next tick retries (#92), and starting

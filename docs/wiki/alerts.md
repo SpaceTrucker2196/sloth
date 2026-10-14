@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-13.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -46,6 +46,15 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   `first_observed` / `last_observed`).
 - Durations run on `CLOCK_MONOTONIC` via the #88 seam in
   `src/flood_window.c`; exported timestamps stay wall clock.
+- **Eviction is fair between rules (#96).** The ring holds `MAX_ALERTS`
+  (128) entries for every rule together. Resolved incidents go first;
+  among live ones the victim is the oldest entry of the type holding the
+  **most** slots, not the oldest entry overall. Globally-oldest let one
+  unbounded rule fill the ring and then discard every other rule's
+  findings — the same bug three times (#105, #107, #96) — so the rule is
+  now in the engine rather than in each detector. It is not a quota: a
+  rule may use all 128 slots unopposed and yields one as soon as another
+  rule fires. Detail: `docs/views/alerts.md`.
 
 Wire format and the full field table: [[jsonl-schema]].
 

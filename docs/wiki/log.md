@@ -2487,3 +2487,53 @@ column with its existing meaning.
 - **Shape C is not coming**, barring an owner decision to ship an
   open-network-only detector: the A-MSDU inner-subframe headers the
   comparison needs are inside the encrypted body on any protected BSS.
+
+## 2026-10-14 — alert-engine eviction is fair between rules (#96)
+
+`evict_oldest()` kept preferring resolved incidents, but among live ones
+it now evicts the oldest entry of whichever `ALERT_TYPE_*` holds the
+**most** slots instead of the oldest entry overall.
+
+Written because the same defect was found and fixed three separate times
+in one session, each time inside the rule that happened to trip it:
+
+- **#105** — `SURV_CLOUD_SNI` keyed on an endpoint address *the remote
+  side chooses*, so ordinary CDN rotation turned 200 rows from one
+  benign host into 127 incidents and filled the ring.
+- **#107** — `QUEUE_EVICT`'s `release_count` was unbounded in time, so
+  one roam fired forever and 128 roams saturated the ring.
+- **#96** — 128 `BEACONING` tracks re-firing every tick churned the ring
+  continuously, and because a reused slot is memset (clearing
+  `pcap_dumped`), that churn is what wrote 16.1M duplicate pcaps.
+
+Each fix bounded one rule's cardinality. None stopped the *next* rule
+doing the same thing, because the engine had no notion of fairness at
+all — a grep for a per-type budget across ~200 `ALERT_TYPE_*` references
+found nothing. The shared resource is 128 slots; the policy belonged
+there, not in each of 75 detectors.
+
+Deliberately not a quota. With ~75 types and 128 slots an equal share is
+one or two each, and most types hold nothing most of the time, so a hard
+cap would idle most of the ring. Evicting the greediest type is
+work-conserving: one rule may hold all 128 slots unopposed and gives one
+back the moment another rule fires, so a quiet rule that keeps firing
+converges on a fair share. The guarantee is not a reserved slot per
+rule — it is that no rule can hold the ring against another
+indefinitely.
+
+Three tests in `tests/test_alerts.c`, each mutation-proved against a
+distinct mutation: reverting to globally-oldest reddens the two
+starvation tests, and introducing a real per-type cap reddens all three
+(the third exists to pin the *absence* of a cap).
+
+The change also broke two pcap-cooldown tests, in the way a correct
+change should: their harness flooded `PORT_SCAN` until the lone
+`THREAT_IP` entry was evicted, and under fairness a rule holding one
+slot is the last thing evicted, so the flood can no longer reach it.
+The harness moved to the other route to the same slot reuse — let the
+incident **expire**, since `fire()` only treats a key as seen while its
+entry is live — rather than the policy bending to the test. Expiry is
+also the more faithful route: it is what actually recycled slots in the
+field, 300 s at a time.
+
+Pages: [[alerts]], [[retention]], `docs/views/alerts.md`.

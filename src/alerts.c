@@ -199,11 +199,50 @@ static int find_by_key(const char *key) {
     return -1;
 }
 
-/* Evict an entry and return its slot. Resolved incidents go first —
- * their stream lifecycle is already complete, so dropping one costs a
- * consumer nothing, while dropping a live one would strand an incident
- * with no resolve. Within each class, lowest last_seen. An evicted live
- * incident is resolved on the way out so the stream stays closed (#98). */
+/* Evict an entry and return its slot.
+ *
+ * Resolved incidents go first — their stream lifecycle is already
+ * complete, so dropping one costs a consumer nothing, while dropping a
+ * live one would strand an incident with no resolve. Within that class,
+ * lowest last_seen. An evicted live incident is resolved on the way out
+ * so the stream stays closed (#98).
+ *
+ * ── Among LIVE incidents, the victim comes from whichever TYPE holds
+ * the most slots, not from whichever entry is globally oldest (#96).
+ *
+ * Globally-oldest is why the same bug kept recurring. The engine is
+ * MAX_ALERTS entries shared by every rule, and nothing bounded how many
+ * one rule could hold, so a prolific rule filled it and then every
+ * other rule's findings were evicted the moment they fired. Four
+ * instances in one session, each found separately and each "fixed" in
+ * its own rule:
+ *
+ *   #105  a dedup key with a remote-chosen component — 200 addresses
+ *         from one benign host produced 127 incidents and filled the
+ *         engine, evicting real findings
+ *   #107  release_count unbounded in time — one roam fired forever, and
+ *         128 roams saturated the engine
+ *   #96   128 beaconing tracks firing every tick against 128 slots,
+ *         which churned the engine continuously and (via a cleared
+ *         export latch) wrote 16.1M duplicate pcaps
+ *
+ * Each of those was a rule bounding its own cardinality better. None of
+ * them stopped the NEXT rule from doing the same thing, because the
+ * engine had no opinion about fairness at all — a grep for a per-type
+ * budget across 200-odd ALERT_TYPE_* references found nothing.
+ *
+ * Evicting from the largest holder is work-conserving, which is why it
+ * is preferred to a fixed per-type cap: with 75 types and 128 slots a
+ * hard equal share would be one or two each, and since most types hold
+ * nothing most of the time that would waste most of the engine. Here a
+ * single rule may still use every slot when nothing else needs one, and
+ * gives a slot back as soon as another rule fires. Repeated firing by a
+ * quiet rule therefore converges toward a fair share instead of being
+ * refused.
+ *
+ * It does NOT guarantee any rule a reserved slot, and it is not meant
+ * to: the guarantee is the weaker and more useful one that no rule can
+ * hold the engine against another indefinitely. */
 static int evict_oldest(time_t now) {
     int slot = -1;
     time_t oldest = 0;
@@ -215,14 +254,36 @@ static int evict_oldest(time_t now) {
         }
     }
     if (slot < 0) {
-        slot   = 0;
-        oldest = engine[0].last_seen;
-        for (int i = 1; i < engine_count; i++) {
-            if (engine[i].last_seen < oldest) {
+        /* How many live slots each type holds. */
+        int held[ALERT_TYPE_COUNT];
+        memset(held, 0, sizeof(held));
+        for (int i = 0; i < engine_count; i++) {
+            int t = (int)engine[i].type;
+            if (t >= 0 && t < (int)ALERT_TYPE_COUNT) held[t]++;
+        }
+        int most = 0;
+        for (int t = 0; t < (int)ALERT_TYPE_COUNT; t++)
+            if (held[t] > most) most = held[t];
+
+        /* The oldest entry among the types tied for most-held. Ties
+         * broken by age so the choice is deterministic and still
+         * prefers stale evidence over fresh. */
+        slot   = -1;
+        oldest = 0;
+        for (int i = 0; i < engine_count; i++) {
+            int t = (int)engine[i].type;
+            if (t < 0 || t >= (int)ALERT_TYPE_COUNT) continue;
+            if (held[t] != most) continue;
+            if (slot < 0 || engine[i].last_seen < oldest) {
                 oldest = engine[i].last_seen;
                 slot   = i;
             }
         }
+        /* Defensive: an engine_count > 0 always has a most-held type, so
+         * slot is set. Falling back to 0 rather than returning -1 keeps
+         * the caller's contract (it indexes the result) if that ever
+         * stops being true. */
+        if (slot < 0) slot = 0;
         alert_resolve(&engine[slot], now, "evicted");
     }
     /* Counted whichever class was picked: a resolved incident dropped
