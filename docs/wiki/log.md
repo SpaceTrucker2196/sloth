@@ -3176,3 +3176,32 @@ narrow property). Each restored by an inverse edit, green again.
 SRCS and TEST_SRCS" and keeps the `make clean` between configs rule;
 ci.yml keeps its own cppcheck command. Both are `agents/`/`.github/`
 edits, batched into #119.
+
+## 2026-10-15 — Bare `--data-socket` defaults to `unix:/run/sloth/sloth.sock` (#136)
+
+Owner ruling 2026-10-15 on #136: the bare flag stops meaning loopback
+TCP. A `tcp:127.0.0.1:8765` listener is readable by every local account
+(CWE-1188, threat model TB-4), and it was what an operator got for
+naming no transport at all.
+
+- Bare `--data-socket` → `unix:/run/sloth/sloth.sock`. `/run/sloth` is
+  validated by `sfile_system_dir()` — real directory, not a symlink,
+  owned by root or the effective uid, not group/other-writable — and
+  never created or chmod'ed.
+- Failure exits `2` with the remedy (`RuntimeDirectory=sloth`, or
+  `install -d -m 0750 -o <euid> /run/sloth`, or the explicit
+  `tcp:127.0.0.1:8765`). **No silent TCP fallback.**
+- Explicit `unix:`/`tcp:` specs unchanged. The shipped unit already
+  passes the `unix:` spec explicitly, so production is unaffected.
+- Code: `data_socket_default_spec(run_dir_ok)` (pure),
+  `data_socket_default_dir_ok()`, `data_socket_default_refusal()` in
+  `src/data_socket.c`; `src/main.c` argv parsing and `--help` text.
+- Pages: [[cli-reference]], [[data-socket-exposure]] (§1 table, new
+  §1.1, §4.1 notice, §5.1 typed spec), [[jsonl-schema]] transports,
+  [[threat-model]] TB-4. README and `examples/stunnel/README.md` now
+  type the loopback spec.
+- Guards: `tests/test_docs_consistency.c ::
+  test_data_socket_default_documented` pins `--help`, the
+  cli-reference row and README to `DATA_SOCKET_DEFAULT_SPEC`;
+  `test_main_assigns_no_tcp_default` reads `src/main.c` for a TCP
+  literal assigned to the spec.

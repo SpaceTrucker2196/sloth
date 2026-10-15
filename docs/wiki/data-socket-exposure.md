@@ -17,7 +17,7 @@ carry the stream off-host without putting it on the wire yourself.
 `src/tune.c`, `src/jsonl.c`, `src/discovery.c`, `src/secure_file.c`,
 `packaging/`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -29,13 +29,40 @@ Reachability *is* the access control. So:
 
 | Deployment | Who can read the stream | Verdict |
 |---|---|---|
-| `unix:/run/sloth/sloth.sock` (0600) | only uid 0 and the socket's owner | **recommended** |
-| `tcp:127.0.0.1:8765` (the default) | any local user on the host | fine on a single-purpose sensor |
+| `unix:/run/sloth/sloth.sock` (0600) — **the bare-flag default** | only uid 0 and the socket's owner | **recommended** |
+| `tcp:127.0.0.1:8765` (must be typed) | any local user on the host | fine on a single-purpose sensor |
 | `tcp:<routable>:8765` | anyone who can reach the port | needs `--data-socket-allow-remote`, and you should not |
 
 Nothing is exposed off-host unless an operator explicitly types a
 routable address *and* passes the opt-in flag. That is the whole
 guard — see §4.
+
+### 1.1 The bare flag (#136)
+
+Bare `--data-socket` means `unix:/run/sloth/sloth.sock` (owner ruling
+2026-10-15). Before #136 it meant `tcp:127.0.0.1:8765` — a listener
+every local account can read, chosen for an operator who never asked
+for TCP (CWE-1188). The directory is checked before anything is bound,
+by the same rule sloth applies to every system directory it writes into
+without creating (`sfile_system_dir`): a real directory, not a symlink,
+owned by root or sloth's effective uid, not group/other-writable.
+sloth never creates or chmods it. If the check fails, sloth exits `2`:
+
+```
+$ sloth --headless --data-socket
+sloth: --data-socket default unix:/run/sloth/sloth.sock: /run/sloth: No such file or directory.
+  Create it (RuntimeDirectory=sloth, or: install -d -m 0750 -o 1000 /run/sloth)
+  or name a transport explicitly: --data-socket tcp:127.0.0.1:8765
+```
+
+The uid in the `install` line is sloth's own effective uid, so the
+directory it creates is one the check accepts. There is **no fallback
+to TCP**: a bare flag that silently became a loopback listener would
+widen exposure in exactly the case the operator chose nothing. Explicit
+`unix:` and `tcp:` specs are unchanged. The shipped unit already passes
+the `unix:` spec explicitly and provisions the directory with
+`RuntimeDirectory=sloth` (`packaging/systemd/sloth-sensor.service`),
+so it is unaffected.
 
 ---
 
@@ -68,6 +95,8 @@ is why the default refuses to publish it.
 
 ```sh
 sloth --headless --data-socket unix:/run/sloth/sloth.sock
+# or, identically since #136:
+sloth --headless --data-socket
 ```
 
 The socket file is created **0600, owned by the uid sloth runs as**.
@@ -229,15 +258,16 @@ listener and a fifth is turned away by the global guard, not by this
 one. The guarantee is that no single peer can hold the listener against
 the others indefinitely, never that any peer has a slot kept for it.
 
-**The loopback-TCP notice.** The bare `--data-socket` flag still
-defaults to `tcp:127.0.0.1:8765` (changing that is #136; ruling
-pending). Since #135 sloth says at start-up what that default means:
+**The loopback-TCP notice.** Since #135 sloth says at start-up what a
+loopback `tcp:` spec means. (Until #136 that was also the bare-flag
+default; the bare flag is now `unix:`, §1.1, so loopback TCP is only
+ever something an operator typed.)
 
 ```
 sloth: data-socket tcp:127.0.0.1:8765 is readable by every local account; prefer unix:/run/sloth/sloth.sock (0600, kernel-checked peer)
 ```
 
-Printed for any loopback `tcp:` spec, the default or a typed one.
+Printed for any loopback `tcp:` spec.
 `unix:` paths do not get it, and a routable bind has its own warning
 (§4). Announced rather than changed, per `MISSION.md` §2.
 
@@ -319,10 +349,11 @@ crypto stack inside a C99 binary is not (#86, #100).
 
 ### 5.1 SSH port-forward — the default answer
 
-Run sloth with the default loopback socket on the sensor:
+Run sloth with a loopback socket on the sensor — typed, since the bare
+flag means `unix:` (§1.1):
 
 ```sh
-sloth --headless --data-socket          # tcp:127.0.0.1:8765
+sloth --headless --data-socket tcp:127.0.0.1:8765
 ```
 
 From the management host, pull the port across:

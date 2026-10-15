@@ -38,6 +38,7 @@
 #include "jsonl.h"
 #include "formatter.h"
 #include "tune.h"
+#include "secure_file.h"
 
 #define MAX_CLIENTS  16
 
@@ -591,6 +592,32 @@ static int init_tcp(const char *host_port, int allow_remote) {
     install_listener(fd, NULL);
     pthread_mutex_unlock(&g_mu);
     return 0;
+}
+
+const char *data_socket_default_spec(int run_dir_ok) {
+    return run_dir_ok ? DATA_SOCKET_DEFAULT_SPEC : NULL;
+}
+
+int data_socket_default_dir_ok(const char *dir, char *err, size_t errsz) {
+    if (err && errsz) err[0] = '\0';
+    int fd = sfile_system_dir(dir, err, errsz);
+    if (fd < 0) return 0;
+    close(fd);
+    return 1;
+}
+
+void data_socket_default_refusal(const char *why, uid_t euid,
+                                 char *out, size_t outsz) {
+    if (!out || !outsz) return;
+    snprintf(out, outsz,
+             "sloth: --data-socket default %s: %s.\n"
+             "  Create it (RuntimeDirectory=sloth, or: install -d -m 0750 "
+             "-o %lu %s)\n"
+             "  or name a transport explicitly: "
+             "--data-socket tcp:127.0.0.1:8765\n",
+             DATA_SOCKET_DEFAULT_SPEC,
+             (why && why[0]) ? why : DATA_SOCKET_DEFAULT_DIR " unusable",
+             (unsigned long)euid, DATA_SOCKET_DEFAULT_DIR);
 }
 
 int data_socket_init_ex(const char *spec, int allow_remote) {

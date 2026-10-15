@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -23,8 +23,8 @@ scripts) code against.
 | Transport       | Configured by                        | Use |
 |-----------------|--------------------------------------|-----|
 | File (append)   | `-o /var/log/sloth.jsonl`            | log forwarder pulls / `tail -f` |
-| UNIX-domain     | `--data-socket unix:/run/sloth/sloth.sock` | **recommended** — local consumer on the same host. Created `0600`, so the kernel's peer-credential check is the authentication |
-| TCP (loopback)  | `--data-socket tcp:127.0.0.1:8765`   | the default; any local user on the host |
+| UNIX-domain     | `--data-socket unix:/run/sloth/sloth.sock` | **recommended**, and what bare `--data-socket` means (#136) — local consumer on the same host. Created `0600`, so the kernel's peer-credential check is the authentication |
+| TCP (loopback)  | `--data-socket tcp:127.0.0.1:8765`   | explicit only (not the default since #136); any local user on the host |
 | TCP (routable)  | `--data-socket tcp:HOST:PORT --data-socket-allow-remote` | opt-in only — refused without the flag, since the stream has no auth and no TLS. Prefer a tunnel; see [[data-socket-exposure]] |
 
 Both `-o` and `--data-socket` can be set at the same time. Each record

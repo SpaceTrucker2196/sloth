@@ -9,6 +9,7 @@
 #include "tui.h"
 #include "views/help.h"
 #include "persist_health.h"
+#include "data_socket.h"
 
 /*
  * Docs-consistency guard — issue #96.
@@ -1733,6 +1734,97 @@ static void test_every_view_key_is_in_wiki_reference(void) {
     free(ref);
 }
 
+/*
+ * Bare `--data-socket` default — issue #136.
+ *
+ * The default moved from loopback TCP to DATA_SOCKET_DEFAULT_SPEC, and
+ * three places tell an operator what it is: --help, the wiki flag
+ * table and README. Each is checked for the new spec and for the
+ * absence of the old claim, so a doc left behind reads as red rather
+ * than as a second, contradicting default.
+ */
+static void dc_row(const char *doc, const char *lead, char *out, size_t sz) {
+    out[0] = '\0';
+    const char *p = doc ? strstr(doc, lead) : NULL;
+    if (!p) return;
+    const char *nl = strchr(p, '\n');
+    size_t n = nl ? (size_t)(nl - p) : strlen(p);
+    if (n >= sz) n = sz - 1;
+    memcpy(out, p, n);
+    out[n] = '\0';
+}
+
+static void test_data_socket_default_documented(void) {
+    char b[2048];
+    ASSERT_EQ(usage_option_block("--data-socket", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, DATA_SOCKET_DEFAULT_SPEC));
+    ASSERT(has_ci(b, "exits 2"));
+    ASSERT(has_ci(b, "never falls back to TCP"));
+    ASSERT(!has_ci(b, "defaults to tcp:"));
+    ASSERT(!has_ci(b, "(loopback only)"));
+
+    char *ref = slurp(DC_CLI_REF);
+    ASSERT(ref != NULL);
+    char row[4096];
+    dc_row(ref, "| `--data-socket` |", row, sizeof(row));
+    ASSERT(row[0] != '\0');
+    ASSERT(strstr(row, "Bare flag → `" DATA_SOCKET_DEFAULT_SPEC "`") != NULL);
+    ASSERT(strstr(row, "Bare flag → `tcp:") == NULL);
+    ASSERT(strstr(row, "exits `2`") != NULL);
+    free(ref);
+
+    char *readme = slurp("README.md");
+    ASSERT(readme != NULL);
+    ASSERT(readme && strstr(readme, "Bare `--data-socket` with no SPEC "
+                            "defaults to `" DATA_SOCKET_DEFAULT_SPEC "`"));
+    ASSERT(readme && !strstr(readme, "defaults to `tcp:127.0.0.1:8765`"));
+    ASSERT(readme && !strstr(readme, "loopback default (`tcp:"));
+    free(readme);
+}
+
+/* The wiring, read from source because main.c is not linked into the
+ * test binary. Outside print_usage() — where the explicit opt-in is
+ * quoted to the operator — main.c must hold no TCP address literal
+ * ("tcp:" followed by a digit) at all: that is the shape the pre-#136
+ * default had, and the shape a "helpful" fallback would take whether it
+ * is written as an assignment, a ternary or an initialiser. "tcp:"
+ * alone, the prefix test on an operator's own spec, is not a literal
+ * address and stays legal. */
+static int dc_tcp_literals_outside_usage(const char *csrc) {
+    char *t = malloc(strlen(csrc) + 1);
+    if (!t) return -1;
+    strcpy(t, csrc);
+    char *u = strstr(t, "static void print_usage(");
+    char *e = u ? strstr(u, "\n}\n") : NULL;
+    if (!u || !e) { free(t); return -1; }
+    memset(u, ' ', (size_t)(e - u));
+    int n = 0;
+    for (const char *p = t; (p = strstr(p, "\"tcp:")) != NULL; p += 5)
+        if (isdigit((unsigned char)p[5])) n++;
+    free(t);
+    return n;
+}
+
+static void test_main_assigns_no_tcp_default(void) {
+    /* The scanner itself, on fixed text: a literal in a function body
+     * counts, the same literal inside print_usage() and a bare prefix
+     * do not, and a source with no print_usage() is unreadable. */
+    ASSERT_EQ(dc_tcp_literals_outside_usage(
+        "static void print_usage(void) {\n  \"tcp:127.0.0.1:1\"\n}\n"
+        "int f(void) { s = ok ? d : \"tcp:127.0.0.1:8765\"; "
+        "g(\"tcp:\", 4); }\n"), 1);
+    ASSERT_EQ(dc_tcp_literals_outside_usage(
+        "static void print_usage(void) {\n  \"tcp:127.0.0.1:1\"\n}\n"), 0);
+    ASSERT_EQ(dc_tcp_literals_outside_usage("int f(void);\n"), -1);
+
+    char *src = slurp("src/main.c");
+    ASSERT(src != NULL);
+    if (!src) return;
+    ASSERT_EQ(dc_tcp_literals_outside_usage(src), 0);
+    ASSERT(strstr(src, "data_socket_default_spec(") != NULL);
+    free(src);
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -1766,6 +1858,8 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_cli_opt_extractor);
     RUN_TEST(test_every_cli_flag_is_in_wiki_reference);
     RUN_TEST(test_wiki_reference_documents_no_dead_flag);
+    RUN_TEST(test_data_socket_default_documented);
+    RUN_TEST(test_main_assigns_no_tcp_default);
     RUN_TEST(test_view_key_extractor);
     RUN_TEST(test_view_keys_match_view_labels);
     RUN_TEST(test_every_view_key_is_in_wiki_reference);

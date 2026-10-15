@@ -62,6 +62,44 @@ int  data_socket_spec_is_remote(const char *spec);
  * that need the policy answer ask data_socket_spec_is_remote(). */
 int  data_socket_spec_tcp_port(const char *spec);
 
+/* ── The bare-flag default (#136) ───────────────────────────
+ *
+ * Bare `--data-socket` means a `unix:` socket in sloth's runtime
+ * directory, never loopback TCP: TCP on 127.0.0.1 is readable by every
+ * local account (CWE-1188), while a 0600 `unix:` socket makes the
+ * kernel's peer-credential check the authentication. The directory is
+ * the one the shipped unit provisions with RuntimeDirectory=sloth.
+ *
+ * There is deliberately no fallback. When the directory is absent or
+ * not ours, the bare flag is refused (exit 2) with the remedy printed —
+ * a flag that silently became a TCP listener would widen exposure in
+ * exactly the case the operator did not choose a transport. Explicit
+ * `unix:` / `tcp:` specs never reach any of this. */
+#include <stddef.h>              /* size_t */
+#include <sys/types.h>           /* uid_t  */
+#define DATA_SOCKET_DEFAULT_DIR  "/run/sloth"
+#define DATA_SOCKET_DEFAULT_SPEC "unix:" DATA_SOCKET_DEFAULT_DIR "/sloth.sock"
+
+/* Pure resolver: DATA_SOCKET_DEFAULT_SPEC when `run_dir_ok`, otherwise
+ * NULL — the caller refuses. Never a TCP spec, whatever the input. */
+const char *data_socket_default_spec(int run_dir_ok);
+
+/* Is `dir` fit to hold the default socket? Same rule as the other
+ * directories sloth writes into without creating (secure_file.c's
+ * sfile_system_dir): a real directory, not a symlink, owned by root or
+ * the effective uid, not group/other-writable. Never created, never
+ * chmod'ed — validated, not repaired. 1 = yes; 0 = no, with the reason
+ * in `err`. */
+int  data_socket_default_dir_ok(const char *dir, char *err, size_t errsz);
+
+/* The refusal for a bare flag whose directory failed the check above:
+ * names the default, the reason, both ways to provision the directory
+ * (for `euid`, so the install line produces a directory the rule will
+ * accept), and the explicit spec that opts in to loopback TCP. Always
+ * NUL-terminated, newline-terminated when it fits. Pure: no I/O. */
+void data_socket_default_refusal(const char *why, uid_t euid,
+                                 char *out, size_t outsz);
+
 /* Call from the main poll loop. Accepts any pending connections,
  * flushes queued bytes to clients that have become writable, and
  * disconnects clients stalled past DATA_SOCKET_STALL_SECS or idle past

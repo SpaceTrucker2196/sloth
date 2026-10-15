@@ -3,7 +3,7 @@
 #include <string.h>
 #include <signal.h>
 #include <fcntl.h>
-
+#include <unistd.h>
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
@@ -600,7 +600,11 @@ static void print_usage(const char *argv0) {
             "                       unix:/path/to/socket\n"
             "                       tcp:HOST:PORT  (HOST is a literal IPv4)\n"
             "                     If SPEC is omitted, defaults to\n"
-            "                     tcp:127.0.0.1:8765 (loopback only).\n"
+            "                     unix:/run/sloth/sloth.sock; if /run/sloth\n"
+            "                     is absent or not owned by root or this\n"
+            "                     user, sloth exits 2 with the remedy —\n"
+            "                     it never falls back to TCP. Loopback TCP\n"
+            "                     must be asked for: tcp:127.0.0.1:8765.\n"
             "                     Read-only: nothing is ever read from the\n"
             "                     socket. The stream carries no authentication\n"
             "                     and no encryption, so a non-loopback bind is\n"
@@ -908,14 +912,26 @@ int main(int argc, char **argv) {
                 return 2;
             }
         } else if (!strcmp(argv[i], "--data-socket")) {
-            /* Optional value — bare `--data-socket` defaults to the
-             * loopback TCP listener so the common case of "stream to a
-             * local consumer" needs zero typing. An explicit spec wins
-             * if the next token doesn't look like another flag. */
+            /* Optional value. An explicit spec wins if the next token
+             * doesn't look like another flag. Bare, it means the unix:
+             * socket in /run/sloth (#136) — and when that directory is
+             * absent or not ours, a refusal rather than loopback TCP:
+             * an operator who named no transport must not get the one
+             * every local account can read. */
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 data_socket = argv[++i];
             } else {
-                data_socket = "tcp:127.0.0.1:8765";
+                char why[256];
+                int  ok = data_socket_default_dir_ok(DATA_SOCKET_DEFAULT_DIR,
+                                                     why, sizeof(why));
+                data_socket = data_socket_default_spec(ok);
+                if (!data_socket) {
+                    char msg[768];
+                    data_socket_default_refusal(why, geteuid(),
+                                                msg, sizeof(msg));
+                    fputs(msg, stderr);
+                    return 2;
+                }
             }
         } else if (!strcmp(argv[i], "--refresh-ms") && i + 1 < argc) {
             char *endp = NULL;

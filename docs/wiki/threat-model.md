@@ -28,7 +28,7 @@ whether it is closed today, and the Track X slice that owns it.
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-14 (#133)
+**Last updated**: 2026-10-15 (#136)
 
 ---
 
@@ -147,14 +147,17 @@ permissions and `SO_PEERCRED` is the kernel's authentication; the socket
 is write-only (nothing is ever read from a peer); a peer with queued
 bytes that has not drained them for `DATA_SOCKET_STALL_SECS` is closed.
 
-**Known unchecked**: the bare flag defaults to `tcp:127.0.0.1:8765`,
-readable by any ADV-2 account (CWE-306); `MAX_CLIENTS` is 16 **global**
+**Enforced since #136**: the bare flag means
+`unix:/run/sloth/sloth.sock`; when `/run/sloth` is absent or not ours it
+exits 2 with the remedy and never falls back to TCP, so loopback TCP —
+readable by any ADV-2 account (CWE-306) — is only ever typed.
+
+**Known unchecked**: `MAX_CLIENTS` is 16 **global**
 slots with no per-peer cap, so one local account can hold all of them
 (CWE-770); the stall timer runs only while `c->off < c->len`, so an
 idle peer with nothing queued is held indefinitely. Owner: #135
 (per-peer cap, idle timeout independent of queued bytes, loopback-TCP
-notice), #136 (default to `unix:/run/sloth/sloth.sock` — owner ruling
-required).
+notice).
 
 ### TB-5 — render and export
 

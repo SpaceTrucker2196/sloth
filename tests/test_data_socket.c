@@ -1915,6 +1915,113 @@ static void test_sensor_health_carries_socket_fields(void) {
     ASSERT_EQ(data_socket_client_count(), 0);
 }
 
+/* ── Bare-flag default (#136) ─────────────────────────────────────── */
+
+/* The resolver's whole contract: the unix: spec when the directory
+ * passed, nothing otherwise. The `0` branch is the one that matters —
+ * the pre-#136 default was the loopback TCP literal, and a fallback to
+ * it here is what the owner ruling forbids. */
+static void test_default_spec_is_unix_and_never_falls_back(void) {
+    const char *ok = data_socket_default_spec(1);
+    ASSERT(ok != NULL);
+    if (!ok) return;
+    ASSERT_STR(ok, "unix:/run/sloth/sloth.sock");
+    ASSERT_STR(ok, DATA_SOCKET_DEFAULT_SPEC);
+    ASSERT_EQ(strncmp(ok, "unix:", 5), 0);
+    /* The policy classifiers agree it never reaches the wire. */
+    ASSERT_EQ(data_socket_spec_is_remote(ok), 0);
+    ASSERT_EQ(data_socket_spec_tcp_port(ok), -1);
+    /* The spec is the directory plus a name, so the directory checked
+     * is the one the socket lands in. */
+    ASSERT_EQ(strncmp(ok + 5, DATA_SOCKET_DEFAULT_DIR "/",
+                      strlen(DATA_SOCKET_DEFAULT_DIR) + 1), 0);
+
+    ASSERT(data_socket_default_spec(0) == NULL);
+}
+
+/* Directory check, exercised against a mkdtemp() directory standing in
+ * for /run/sloth. A directory owned by a third uid cannot be built
+ * without root, so that refusal is covered by sfile_system_dir's own
+ * tests (test_secure_file.c), not claimed here. */
+static void test_default_dir_check(void) {
+    char dir[] = "/tmp/sloth_ds_rundir_XXXXXX";
+    ASSERT(mkdtemp(dir) != NULL);
+    char err[256];
+
+    /* mkdtemp gives 0700, owned by us: the provisioned case. */
+    strcpy(err, "sentinel");
+    ASSERT_EQ(data_socket_default_dir_ok(dir, err, sizeof(err)), 1);
+    ASSERT_STR(err, "");
+
+    /* RuntimeDirectoryMode=0750, what the shipped unit asks for. */
+    ASSERT_EQ(chmod(dir, 0750), 0);
+    ASSERT_EQ(data_socket_default_dir_ok(dir, err, sizeof(err)), 1);
+
+    /* Writable by others: anyone could plant the socket name. */
+    ASSERT_EQ(chmod(dir, 0777), 0);
+    ASSERT_EQ(data_socket_default_dir_ok(dir, err, sizeof(err)), 0);
+    ASSERT(strstr(err, "writable") != NULL);
+    ASSERT_EQ(chmod(dir, 0770), 0);
+    ASSERT_EQ(data_socket_default_dir_ok(dir, err, sizeof(err)), 0);
+    ASSERT_EQ(chmod(dir, 0700), 0);
+
+    /* Absent: the reason names the path and the errno. */
+    char missing[sizeof(dir) + 16];
+    snprintf(missing, sizeof(missing), "%s/absent", dir);
+    ASSERT_EQ(data_socket_default_dir_ok(missing, err, sizeof(err)), 0);
+    ASSERT(strstr(err, missing) != NULL);
+    ASSERT(strstr(err, strerror(ENOENT)) != NULL);
+
+    /* A symlink to a good directory is still refused. */
+    char link[sizeof(dir) + 16];
+    snprintf(link, sizeof(link), "%s.lnk", dir);
+    ASSERT_EQ(symlink(dir, link), 0);
+    ASSERT_EQ(data_socket_default_dir_ok(link, err, sizeof(err)), 0);
+    ASSERT(strstr(err, "symbolic link") != NULL);
+    unlink(link);
+
+    /* A regular file where the directory should be. */
+    char file[sizeof(dir) + 16];
+    snprintf(file, sizeof(file), "%s/f", dir);
+    int fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ASSERT(fd >= 0);
+    if (fd >= 0) close(fd);
+    ASSERT_EQ(data_socket_default_dir_ok(file, err, sizeof(err)), 0);
+    unlink(file);
+
+    rmdir(dir);
+}
+
+/* The refusal is the operator's only guidance, so every part of the
+ * remedy is pinned: the default, the reason, both provisioning routes,
+ * the uid the install line must name, and the explicit TCP opt-in. */
+static void test_default_refusal_names_the_remedy(void) {
+    char out[768];
+    data_socket_default_refusal("/run/sloth: sentinel-reason", (uid_t)4242,
+                                out, sizeof(out));
+    const char *head = "sloth: --data-socket default "
+                       "unix:/run/sloth/sloth.sock: "
+                       "/run/sloth: sentinel-reason.\n";
+    ASSERT_EQ(strncmp(out, head, strlen(head)), 0);
+    ASSERT(strstr(out, "RuntimeDirectory=sloth") != NULL);
+    ASSERT(strstr(out, "install -d -m 0750 -o 4242 /run/sloth") != NULL);
+    ASSERT(strstr(out, "--data-socket tcp:127.0.0.1:8765") != NULL);
+    ASSERT_EQ(out[strlen(out) - 1], '\n');
+
+    /* No reason supplied still produces a sentence, not "(null)". */
+    data_socket_default_refusal(NULL, (uid_t)0, out, sizeof(out));
+    ASSERT(strstr(out, "(null)") == NULL);
+    ASSERT(strstr(out, "/run/sloth unusable") != NULL);
+    ASSERT(strstr(out, "-o 0 /run/sloth") != NULL);
+
+    /* A short buffer truncates; it never overruns. */
+    char tiny[8];
+    memset(tiny, 'X', sizeof(tiny));
+    data_socket_default_refusal("r", (uid_t)1, tiny, sizeof(tiny));
+    ASSERT_EQ(tiny[sizeof(tiny) - 1], '\0');
+    ASSERT_STR(tiny, "sloth: ");
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -1990,4 +2097,9 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_idle_clock_restarts_on_delivery);
     RUN_TEST(test_idle_zero_disables_the_rule);
     RUN_TEST(test_sensor_health_carries_socket_fields);
+
+    TEST_SUITE("data socket (bare-flag default, #136)");
+    RUN_TEST(test_default_spec_is_unix_and_never_falls_back);
+    RUN_TEST(test_default_dir_check);
+    RUN_TEST(test_default_refusal_names_the_remedy);
 }

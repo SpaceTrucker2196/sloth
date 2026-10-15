@@ -84,7 +84,7 @@ and `checkHost` to the sensor cert's CN.
 **3. Start sloth on loopback** — no opt-in flag, by design:
 
 ```sh
-sloth --headless --data-socket          # tcp:127.0.0.1:8765
+sloth --headless --data-socket tcp:127.0.0.1:8765   # typed: bare means unix: (#136)
 ```
 
 **4. Run stunnel** on each host:

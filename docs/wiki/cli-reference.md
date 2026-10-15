@@ -24,7 +24,7 @@ only that each flag and key is here.
 (`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
 the status badges.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -58,7 +58,7 @@ single mode driven by flags.
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--data-socket` | `[SPEC]` | off | Stream the same records over a **read-only** socket. `SPEC` = `unix:/path` or `tcp:HOST:PORT`. Bare flag → `tcp:127.0.0.1:8765` (loopback). Nothing is ever read from it. A loopback `tcp:` spec — the bare-flag default included — prints a one-line notice at start-up that the stream is readable by every local account and names the `unix:` alternative (#135; the default itself is #136's ruling). Slots are capped per peer and reaped when idle: `--tune socket.max_per_peer`, `socket.idle_secs`. → [[data-socket-exposure]] |
+| `--data-socket` | `[SPEC]` | off | Stream the same records over a **read-only** socket. `SPEC` = `unix:/path` or `tcp:HOST:PORT`. Bare flag → `unix:/run/sloth/sloth.sock` (#136, owner ruling 2026-10-15). If `/run/sloth` is absent, a symlink, owned by neither root nor sloth's effective user, or group/other-writable, the bare flag **exits `2`** and prints the remedy (`RuntimeDirectory=sloth`, or `install -d -m 0750 -o <uid> /run/sloth`) — there is **no fallback to TCP**, so a flag that named no transport never becomes one every local account can read. Loopback TCP must be typed: `--data-socket tcp:127.0.0.1:8765`. Explicit specs are unchanged. Nothing is ever read from the socket. A loopback `tcp:` spec prints a one-line notice at start-up that the stream is readable by every local account and names the `unix:` alternative (#135). Slots are capped per peer and reaped when idle: `--tune socket.max_per_peer`, `socket.idle_secs`. → [[data-socket-exposure]] |
 | `--data-socket-allow-remote` | — | off | Permit a non-loopback bind (incl. `0.0.0.0`). Every observation becomes readable by anyone who can reach the port. Prefer an SSH tunnel. |
 | `--no-discovery` | — | advertises | Suppress the mDNS advert of a routable data socket. Loopback/unix never advertise regardless. |
 
