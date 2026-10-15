@@ -33,6 +33,13 @@ Run the dark-factory converge loop on GitHub issue #$ARGUMENTS.
    blocked and moved on. Read the code the issue touches, not only the
    work the issue asked for.
 
+   **When a parser defect is found, grep for the same clause's other
+   implementations before closing it.** On 2026-10-14 one +HTC/Order
+   fix in `dot11_data.c` turned into five more in sibling parsers, and
+   the architecture review then found eleven more of the same class -
+   every one in bounds, so no sanitizer or fuzzer could have seen it.
+   The fix is not done until the grep for its siblings is empty.
+
    **Ask the third question when the bug has a sibling: does the shared
    resource have a policy?** A fix that bounds one caller's demand on a
    shared resource leaves every other caller free to do the same thing.

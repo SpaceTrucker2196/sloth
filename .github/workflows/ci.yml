@@ -208,27 +208,12 @@ jobs:
       - name: Install cppcheck
         run: sudo apt-get update && sudo apt-get install -y cppcheck
 
-      - name: Check cppcheck version
-        run: |
-          v=$(cppcheck --version)
-          echo "$v"
-          test "$v" = "Cppcheck 2.13.0" || {
-            echo "expected Cppcheck 2.13.0; re-baseline tests/cppcheck.supp before moving versions" >&2
-            exit 1
-          }
-
+      # One command, one place: `make cppcheck` carries the version guard,
+      # the flags and the scan list (#119). Before this, the same command
+      # lived here and in the Makefile, pinned together by a test; the
+      # duplicate is gone instead of policed.
       - name: cppcheck
-        run: >-
-          cppcheck -q -j "$(nproc)" --std=c99 --platform=unix64
-          --library=posix
-          --enable=warning,portability,performance,information
-          --error-exitcode=1
-          --suppressions-list=tests/cppcheck.supp
-          -D__linux__ -D__GNUC__ -D_DEFAULT_SOURCE -DPLATFORM_LINUX
-          -DWITH_NCURSES -DWITH_PCAP -DWITH_WIFI -DWITH_SQLITE
-          -Iinclude -Isrc -Iresearch
-          -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c
-          src research
+        run: make cppcheck
 
   # libFuzzer smoke check (#95). Named open on this issue's very first
   # triage comment (2026-09-22) and never picked up through every
@@ -244,16 +229,10 @@ jobs:
   # source of truth for how a target is built and run; this step does
   # not duplicate that command.
   #
-  # Four targets today:
-  #
-  #   fuzz_deauth_parse       deauth_parse(), src/deauth_snoop.c
-  #   fuzz_eapol_observe      eapol_observe_dot11() -> parse_eapol_key(),
-  #                           src/eapol_log.c, driven through a
-  #                           hand-built spec-correct 802.11/LLC/EAPOL
-  #                           skeleton with the fuzzer supplying only the
-  #                           EAPOL-Key body — see the harness for why
-  #   fuzz_radiotap_parse     radiotap_parse(), src/radiotap.c
-  #   fuzz_beacon_parse_ies   beacon_parse_ies(), src/beacon_snoop.c
+  # Targets: every tests/fuzz/fuzz_*.c, discovered by the Makefile (#115,
+  # #125) - ten as of 2026-10-15, including fuzz_decode_frame, the one
+  # WITH_PCAP harness. No list is kept here, so this comment cannot go
+  # stale the way the old "four targets" list did.
   #
   # The last two close what this comment used to call a follow-up, and
   # they do it at a different seam than the one that was abandoned.
@@ -283,9 +262,13 @@ jobs:
           sudo apt-get install -y clang
           ver="$(clang -dumpversion | cut -d. -f1)"
           sudo apt-get install -y "libclang-rt-${ver}-dev"
+          # libpcap-dev so the WITH_PCAP harness (fuzz_decode_frame, #125)
+          # builds here; FUZZ_PCAP=1 below makes its absence a failure
+          # rather than the visible SKIP the Makefile allows locally.
+          sudo apt-get install -y libpcap-dev
 
       - name: Fuzz smoke
-        run: make fuzz FUZZ_CC=clang FUZZ_SECONDS=30
+        run: make fuzz FUZZ_CC=clang FUZZ_SECONDS=30 FUZZ_PCAP=1
 
   # Hardened build flags (#95, the wave-6 item the original 2026-09-22
   # triage on that issue named and every slice since deferred). The

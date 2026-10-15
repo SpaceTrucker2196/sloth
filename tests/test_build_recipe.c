@@ -440,83 +440,20 @@ static void test_object_dir_is_per_config(void) {
  * scan is what CI runs, and it already covers every source the lists
  * above derive from. */
 
-#define BR_MAX_TOK 96
-#define BR_TOK_LEN 96
-
-static int split_tokens(const char *s, char out[][BR_TOK_LEN], int n, int max) {
-    const char *p = s;
-    while (*p && n < max) {
-        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-        if (!*p) break;
-        const char *t = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
-        size_t len = (size_t)(p - t);
-        if (len >= BR_TOK_LEN) len = BR_TOK_LEN - 1;
-        memcpy(out[n], t, len);
-        out[n][len] = '\0';
-        n++;
-    }
-    return n;
-}
-
-static void test_cppcheck_target_matches_ci(void) {
-    char *mk = slurp_makefile();
+static void test_ci_cppcheck_is_the_make_target(void) {
+    /* #119 removed the duplicate: CI runs `make cppcheck` and nothing
+       else, so the Makefile is the only place the command lives. The
+       old test pinned two copies together token by token; this one
+       asserts there is only one copy. */
     char *ci = slurp_path(".github/workflows/ci.yml");
-    ASSERT(mk != NULL);
     ASSERT(ci != NULL);
-    if (!mk || !ci) { free(mk); free(ci); return; }
-
-    static char *lines[BR_MAX_LINES];
-    int n = logical_lines(mk, lines, BR_MAX_LINES);
-    const char *defs = NULL, *cmd = NULL;
-    for (int i = 0; i < n; i++) {
-        if (strncmp(lines[i], "CPPCHECK_DEFS", 13) == 0 && strchr(lines[i], '='))
-            defs = strchr(lines[i], '=') + 1;
-        if (strncmp(lines[i], "\tcppcheck -q", 12) == 0) cmd = lines[i];
-    }
-    ASSERT(defs != NULL);
-    ASSERT(cmd != NULL);
-
-    /* ci.yml: the folded `run: >-` block under `- name: cppcheck`. */
-    char *step = strstr(ci, "- name: cppcheck\n");
-    ASSERT(step != NULL);
-    char *run = step ? strstr(step, "run: >-\n") : NULL;
-    ASSERT(run != NULL);
-    if (!defs || !cmd || !run) { free(mk); free(ci); return; }
-    run += strlen("run: >-\n");
-    char *end = strstr(run, "\n\n");      /* the block ends at a blank line */
-    if (end) *end = '\0';
-
-    static char want[BR_MAX_TOK][BR_TOK_LEN], got[BR_MAX_TOK][BR_TOK_LEN];
-    int nw = split_tokens(run, want, 0, BR_MAX_TOK);
-
-    static char raw[BR_MAX_TOK][BR_TOK_LEN];
-    int nr = split_tokens(cmd, raw, 0, BR_MAX_TOK);
-    int ng = 0;
-    for (int i = 0; i < nr && ng < BR_MAX_TOK; i++) {
-        if (strcmp(raw[i], "$(CPPCHECK_DEFS)") == 0)
-            ng = split_tokens(defs, got, ng, BR_MAX_TOK);
-        else
-            memcpy(got[ng++], raw[i], BR_TOK_LEN);
-    }
-    ASSERT_LT(nw, BR_MAX_TOK);
-    ASSERT_LT(ng, BR_MAX_TOK);
-    ASSERT_GT(nw, 10);
-    ASSERT_EQ(nw, ng);
-
-    int k = nw < ng ? nw : ng, mismatched = 0;
-    for (int i = 0; i < k; i++) {
-        /* The -j value is spelt per shell; everything else is the same. */
-        if (i > 0 && strcmp(want[i - 1], "-j") == 0 && strcmp(got[i - 1], "-j") == 0)
-            continue;
-        if (strcmp(want[i], got[i]) != 0) {
-            fprintf(stderr, "    cppcheck arg %d: ci.yml '%s' vs Makefile '%s'\n",
-                    i, want[i], got[i]);
-            mismatched++;
-        }
-    }
-    ASSERT_EQ(mismatched, 0);
-    free(mk);
+    if (!ci) return;
+    char *job = strstr(ci, "\n  cppcheck:\n");
+    ASSERT(job != NULL);
+    char *next = job ? strstr(job + 3, "\n  fuzz:\n") : NULL;
+    if (next) *next = '\0';
+    ASSERT(job && strstr(job, "run: make cppcheck\n") != NULL);   /* whole line */
+    ASSERT(job && strstr(job, "cppcheck -q") == NULL);   /* no inline copy */
     free(ci);
 }
 
@@ -532,5 +469,5 @@ void run_build_recipe_tests(void) {
     RUN_TEST(test_no_compile_or_link_command_names_a_source);
     RUN_TEST(test_no_variable_spells_out_a_test_file);
     RUN_TEST(test_object_dir_is_per_config);
-    RUN_TEST(test_cppcheck_target_matches_ci);
+    RUN_TEST(test_ci_cppcheck_is_the_make_target);
 }

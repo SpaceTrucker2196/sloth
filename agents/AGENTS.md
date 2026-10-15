@@ -61,34 +61,24 @@ Single binary `sloth`. Test binary `sloth_test`.
   with `EXTRA_CFLAGS=-Werror`, so a warning fails the run rather than
   depending on someone remembering to look. Run them locally anyway —
   finding it after the push is slower, not safer.
-  **`make clean` between configs**, every time. The six configs share
-  one object directory, so objects from the previous config get reused
-  and the link fails on a symbol that is plainly in the source. That
-  error means stale objects, not a bug — see agents/converge.md step 4.
+  **Objects are per config** since #115 (`build/<cfg>/`, with flag
+  stamps), so the old "`make clean` between configs" rule is no longer
+  load-bearing. It is still cheap insurance before quoting a matrix
+  result, and the six-config loops in this repo's history do it.
 
-  **Six configs are not the whole build surface.** Two targets keep
-  their own hand-written source lists and neither `make` nor `make test`
-  links them:
-
-  - `make fuzz` — each fuzz target links a handful of objects on
-    purpose, so the fuzzer's own redzoned buffer is what the parser
-    reads. The list rots the moment a module it links gains a new
-    dependency.
-  - `make test-capture-path` — a separate binary (`CAPTURE_PATH_SRCS`),
-    and `src/capture/probe.c` is in it but **not** in `TEST_SRCS`, so
-    `make test` cannot see a compile error in that file at all.
-
-  On 2026-10-14 `deauth_snoop.c` and `beacon_snoop.c` started calling a
-  new helper in `dot11_data.c`, and **both fuzz targets failed to link
-  in CI** after `make test`, `make test-capture-path` and all six
-  `-Werror` configs had passed locally. The same change hit a
-  name collision in `probe.c` that only `make test-capture-path`
-  reported. So: after touching any module these targets link, run
-  `make fuzz FUZZ_SECONDS=1` and `make test-capture-path` too. The fuzz
-  compile is quick; the run time is the only part the seconds control.
-- **VIEW_COUNT must be kept in sync** across `include/sloth.h`,
-  `tests/test_state.c`, and `tests/test_arp.c` whenever a view is added
-  or removed.
+  **The whole build surface, every slice:** the six configs above;
+  `make test` and `make test-capture-path`; **both again under
+  `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined
+  -fno-omit-frame-pointer -fno-sanitize-recover=all"`**; `make fuzz
+  FUZZ_SECONDS=1`; `make cppcheck`. The sanitized capture-path run is
+  the one that caught a 900-byte stack over-read in a test helper on
+  2026-10-15 after every other local gate was green. Source lists are
+  derived since #115 - a new `src/*.c` goes in `CORE_COMMON_SRCS` once,
+  and tests and fuzz harnesses are picked up by wildcard.
+- **Views and alert kinds are X-macro lists** since #117:
+  `include/sloth_views.def` and `include/sloth_alerts.def` generate the
+  enums, labels, dispatch, key switch and name/technique tables. Edit
+  the `.def`, then run `make docs-counts` so the prose counts follow.
 - **Hand-crafted protocol tests.** Parsers are tested with raw byte
   arrays built from first principles per RFC. Don't write circular
   tests (parser feeding its own output back).
@@ -263,34 +253,33 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
 
 ## How to add a new view
 
-1. Define `VIEW_* = N` in `include/sloth.h` enum; bump `VIEW_COUNT`.
-2. Add state fields (ring buffer + count + sel) on `sloth_state_t`.
+1. Add one `X(ID, label, key, slug)` line to `include/sloth_views.def`
+   (its position is the tab order); the enum, `VIEW_COUNT`, the label,
+   the `tui.c` dispatch and the `main.c` key case are generated from it.
+2. Add state fields (ring buffer + count + sel) on `sloth_state_t` only
+   if the view needs a snapshot; prefer an accessor on the module.
 3. Add the data type / log entry struct.
 4. Create `src/views/<name>.c` + `.h` with `view_<name>_draw` and
-   `view_<name>_key`.
-5. Pick a key in `src/main.c`, add to the case statement.
-6. Add to `view_labels[]` and the dispatch switch in `src/tui.c`.
-7. Update the Makefile SRCS and TEST_SRCS.
-   - If the new view has any *view-local* action bound to a letter that
-     the global switch already uses (see `src/main.c` view-switch
-     cases), add a claim entry in `src/view_route.c ::
-     view_claims_key()` — otherwise the global switch silently swallows
-     the key before the view sees it. Cover the new claim in
-     `tests/test_state.c`. See issue #13 for the original shadow bug.
-8. Update `VIEW_COUNT` and the tab-cycle assertions in
-   `tests/test_state.c` and `tests/test_arp.c`.
-9. Write a `tests/test_<name>.c` with at least: empty-state,
+   `view_<name>_key`. Add the `.c` to `CORE_COMMON_SRCS` once.
+5. If the view has any *view-local* action bound to a letter that the
+   global switch already uses, add a claim in `src/view_route.c ::
+   view_claims_key()` and cover it in `tests/test_state.c` (#13).
+6. Run `make docs-counts`.
+7. Write a `tests/test_<name>.c` with at least: empty-state,
    populated-state render, nav, and any protocol-specific parse tests.
-10. Write a `docs/views/<name>.md` and link it from `README.md` and
+8. Write a `docs/views/<name>.md` and link it from `README.md` and
     `docs/views/README.md`.
-11. `make test && make` clean before committing.
+9. The full build surface (Discipline, above) before committing.
 
 ## How to add an alert rule
 
-1. Add `ALERT_TYPE_<NAME>` to the enum in `include/sloth.h`.
+1. Add one `X(NAME, "NAME", "T1xxx")` line to `include/sloth_alerts.def`
+   (empty technique only under the documented exceptions), then
+   `make docs-counts`.
 2. Write a `rule_<name>(state, now)` function in `src/alerts.c` that
    calls `fire(...)`.
-3. Add the call from `alerts_update()`.
+3. Add the call from `alerts_update()`; build its key with the
+   `akey_*` builder (#112), never `snprintf` of a remote string.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`
    to `fire()` so per-alert pcap export works.
 5. Add a row to the rule table in `docs/views/alerts.md`.

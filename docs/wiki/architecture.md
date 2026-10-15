@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories)., #113, #125
+**Last updated**: 2026-10-15 (#119 batch)
 
 ---
 
@@ -254,3 +254,11 @@ and keeps its unmarked counts, still checked by the prose scanner.
 - [[views-catalog]]
 - [[alerts]]
 - [[pcap-export]]
+
+## Rule: do not add arrays to `sloth_state_t`
+
+`sloth_state_t` is 2.2 MB and is copied into from 43 snapshot functions.
+New modules expose an accessor (`const T *mod_rows(int *n)`, or the
+`frag_bss_copy` / `stab_snapshot` style) instead of adding a ring to the
+struct. Existing members move out one header at a time, never in a flag
+day (#117, #143).

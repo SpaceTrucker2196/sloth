@@ -3485,3 +3485,16 @@ unescapes and range-checks channel/mfp with `strtol`. Pages:
 [[research-corpus]], [[sqlite-schema]], [[manifest-format]],
 [[wifi-sigint-techniques]] (snapshot format), [[cli-reference]],
 [[threat-model]] (TB-6, two risk rows closed).
+
+## 2026-10-15 — the batched `.github` / `agents` edit (#119)
+
+One commit instead of four +40s. CI's fuzz job installs libpcap-dev and
+runs `FUZZ_PCAP=1`, so `fuzz_decode_frame` (#125) runs in CI instead of
+being skipped. CI's cppcheck job is now `make cppcheck` - the duplicated
+command and the test that pinned the two copies together are gone, a
+test asserting there is one copy replaces it. `agents/AGENTS.md`: the
+view/alert recipes describe the `.def` X-macro lists (#117) and the
+derived source lists (#115); the gate list includes both test binaries
+under ASan+UBSan; the "make clean between configs" rule is downgraded
+now objects are per config. `agents/converge.md` gains the sibling-grep
+rule. [[architecture]] gains "do not add arrays to `sloth_state_t`".
