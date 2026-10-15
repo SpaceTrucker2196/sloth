@@ -206,7 +206,7 @@ static void mac_to_str(const uint8_t mac[6], char *out, int sz) {
  *
  * The hash only filters. strcmp still decides, because two keys can
  * collide and a collision that merged two findings into one incident is
- * exactly the class of bug #112 exists to remove. tests/test_alerts.c ::
+ * exactly the class of bug #112 exists to remove. tests/test_alert_key.c ::
  * test_find_by_key_still_compares_the_full_key forces every hash to one
  * value through alerts_test_key_hash_mask() to prove that. */
 static uint64_t engine_hash[MAX_ALERTS];
