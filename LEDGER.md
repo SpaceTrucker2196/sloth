@@ -217,3 +217,5 @@
 | 6ae7380 | 2026-10-15T20:11:04Z | claude-opus-5-5, claude-sonnet-5-5 | 32 | 17747 | 8915839 | 1358148 | 13.2261 | one source list: CORE_SRCS + libsloth_core.a, derived test/fuzz lists, per-config object dirs (#115) |
 | f29d076 | 2026-10-15T20:14:42Z | claude-opus-5-5 | 4 | 1436 | 1416699 | 2111 | 0.3290 | privileges dropped by default after capture opens; --no-privdrop escape hatch (#140) |
 | 1c66754 | 2026-10-15T20:14:43Z | claude-opus-5-5 | 2 | 1470 | 709984 | 668 | 0.1767 | typed alert-key builder, incident side-state, hash-first lookup (#112) |
+| 9912cf8 | 2026-10-15T21:18:38Z | claude-opus-5-5 | 32 | 14208 | 10065031 | 23380 | 2.4843 | sloth.h split: view/alert X-macro lists, generated prose counts (#117) |
+| 64231f2 | 2026-10-15T21:37:59Z | claude-opus-5-5 | 14 | 4322 | 4441250 | 13747 | 1.0847 | bounded reader + TLV iterator + parse-fault tally, 15 commits (#126) |
