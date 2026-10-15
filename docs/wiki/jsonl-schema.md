@@ -858,7 +858,7 @@ holds both lists to the build.
   Request candidate list; the Channel Switch Announcement action
   frame; the Radio Measurement Request/Report element list and the
   Beacon Request subelements inside it; the association request rate
-  walk. A one-octet tail counts here
+  walk; the probe-request vendor-IE fingerprint. A one-octet tail counts here
   but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
   pre-#126 meaning (an element whose length runs off the end) so that
   `MGMT_FUZZ` scores do not move.

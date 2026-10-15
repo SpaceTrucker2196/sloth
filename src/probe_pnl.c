@@ -4,6 +4,7 @@
 #include <time.h>
 #include "probe_pnl.h"
 #include "sensor_health.h"
+#include "bytes.h"
 
 static pnl_client_t    g_tbl[MAX_PNL_CLIENTS];
 static int             g_n   = 0;
@@ -21,13 +22,12 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
 const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
 {
     if (!ies || ielen < 2) return NULL;
-    const uint8_t *p = ies;
-    int rem = ielen;
     const char *guess = NULL;
-    while (rem >= 2) {
-        uint8_t tag = p[0];
-        uint8_t len = p[1];
-        if (2 + (int)len > rem) break;
+    tlv_it_t it;
+    uint16_t tag; int len; const uint8_t *body;
+    tlv_init(&it, ies, ielen);
+    while (tlv_next(&it, &tag, &len, &body) == TLV_OK) {
+        const uint8_t *p = body - 2;   /* element header; offsets below */
         if (tag == 221 && len >= 4) {
             uint8_t o0 = p[2], o1 = p[3], o2 = p[4];
             uint8_t ty = (len >= 4) ? p[5] : 0;
@@ -55,9 +55,10 @@ const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
                 /* don't break — a later Apple/MS IE would override */
             }
         }
-        p   += 2 + len;
-        rem -= 2 + len;
     }
+    /* An early break on a decisive vendor IE leaves the walk unfinished
+     * but not faulted; only a stop on a bad element is counted. */
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     return guess;
 }
 

@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "probe_pnl.h"
+#include "sensor_health.h"
 
 static void with_mac(uint8_t out[6], uint8_t a, uint8_t b, uint8_t c,
                                        uint8_t d, uint8_t e, uint8_t f) {
@@ -197,6 +198,39 @@ static void test_fingerprint_null_or_empty(void) {
     ASSERT(probe_pnl_fingerprint_ies(one, 1)   == NULL);
 }
 
+/* #126: the fingerprint walk runs on the shared iterator. A truncated
+ * element after a Wi-Fi Alliance IE keeps the weak guess (unchanged)
+ * and is counted once. A decisive Apple IE before the same truncation
+ * ends the walk early — the bad element is never reached, so nothing
+ * is counted: the tally records stops on a bad element, not walks that
+ * had their answer. The clean list and the too-short-to-walk input
+ * count nothing. */
+static void test_fingerprint_truncation_is_tallied(void) {
+    static const uint8_t wfa_then_bad[] = {
+        0xdd, 0x04, 0x50, 0x6f, 0x9a, 0x09,
+        0xdd, 0x09, 0x00, 0x17,                  /* claims 9, has 2 */
+    };
+    sh_parse_fault_reset();
+    ASSERT_STR(probe_pnl_fingerprint_ies(wfa_then_bad, sizeof(wfa_then_bad)),
+               "Android");
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+
+    static const uint8_t apple_then_bad[] = {
+        0xdd, 0x04, 0x00, 0x17, 0xf2, 0x01,
+        0xdd, 0x09, 0x00, 0x17,
+    };
+    sh_parse_fault_reset();
+    ASSERT_STR(probe_pnl_fingerprint_ies(apple_then_bad,
+                                         sizeof(apple_then_bad)), "Apple");
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+
+    sh_parse_fault_reset();
+    ASSERT_STR(probe_pnl_fingerprint_ies(wfa_then_bad, 6), "Android");
+    static const uint8_t one[] = { 0x00 };
+    ASSERT(probe_pnl_fingerprint_ies(one, 1) == NULL);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+}
+
 /* ── PHY tier classifier ──────────────────────────────────── */
 
 static void test_phy_legacy(void) {
@@ -292,6 +326,7 @@ void run_probe_pnl_tests(void) {
     RUN_TEST(test_fingerprint_apple_wins_over_wifialliance);
     RUN_TEST(test_fingerprint_unknown_returns_null);
     RUN_TEST(test_fingerprint_null_or_empty);
+    RUN_TEST(test_fingerprint_truncation_is_tallied);
     RUN_TEST(test_os_fp_stored_on_first_observation);
     RUN_TEST(test_os_fp_sticky_does_not_overwrite);
     RUN_TEST(test_phy_legacy);
