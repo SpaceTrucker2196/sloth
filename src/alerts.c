@@ -5269,10 +5269,16 @@ static int beacon_cb_fire(const bd_track_t *t, void *ud) {
     if (!kind) return 0;
     struct beacon_cb *bc = (struct beacon_cb *)ud;
 
+    /* A typed address, not %.39s (#112): a 45-byte IPv4-mapped IPv6
+     * literal was cut at 39, so two endpoints differing in their last
+     * octet were one track's worth of findings. */
     char key[ALERT_KEY_LEN];
     char detail[ALERT_DETAIL_LEN];
-    snprintf(key, sizeof(key), "beacon:%.39s:%u",
-             t->remote_ip, (unsigned)t->remote_port);
+    akey_t k;
+    akey_begin(&k, key, sizeof(key), "beacon");
+    akey_ip(&k, t->remote_ip);
+    akey_u(&k, (unsigned)t->remote_port);
+    if (!akey_end(&k)[0]) return 0;
 
     if (kind == 1) {
         /* v1 — classic low-jitter detector. */

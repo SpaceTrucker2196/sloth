@@ -92,6 +92,7 @@ holds both shapes for one finding.
 | `EVIL_TWIN` (attack chain) | `twin-chain:<ssid>` | `twin-chain:<ssid, 32 kept>:<hash>` |
 | `ROGUE_DHCP` | `rogue_dhcp:<ip>,<ip>,...` (cut at 191 bytes) | `rogue_dhcp:<server count>:<hash of the sorted set>` |
 | `WPS_PIN_BRUTE` (rotating MAC) | `wpsbrute-uuid:<bssid>:<first 8 UUID-E bytes>` | `wpsbrute-uuid:<bssid>:<all 16 UUID-E bytes, hex>` |
+| `BEACONING` | `beacon:<ip, 39 cut>:<port>` | `beacon:<ip>:<port>` (IPv6 bracketed, never cut) |
 
 ## Incident lifecycle (#98)
 

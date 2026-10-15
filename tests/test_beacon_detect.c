@@ -275,6 +275,35 @@ static void test_alert_does_not_fire_for_weak(void) {
     ASSERT_EQ(found, 0);
 }
 
+/* Two IPv4-mapped IPv6 endpoints at the 45-byte literal limit, equal
+ * for their first 44 bytes (#112). The old key cut the address at 39,
+ * so both beacons were one finding. */
+static void test_beacon_key_distinguishes_long_prefix_pair(void) {
+    bd_clear();
+    alerts_clear();
+    const char *a = "0000:0000:0000:0000:0000:ffff:192.168.100.201";
+    const char *b = "0000:0000:0000:0000:0000:ffff:192.168.100.202";
+    ASSERT_EQ((int)strlen(a), 45);
+    time_t base = 1700000000;
+    for (int i = 0; i < 5; i++) {
+        bd_observe(a, 443, base + i * 30);
+        bd_observe(b, 443, base + i * 30);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int n = 0, shaped = 0;
+    for (int i = 0; i < s.alert_count; i++) {
+        if (s.alerts[i].type != ALERT_TYPE_BEACONING) continue;
+        n++;
+        if (strncmp(s.alerts[i].key, "beacon:[0000:0000:0000:0000:0000:ffff:192.168.100.20", 52) == 0 &&
+            strstr(s.alerts[i].key, "]:443") != NULL) shaped++;
+    }
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(shaped, 2);
+    alerts_clear();
+    bd_clear();
+}
+
 /* ── v2 autocorrelation tests ────────────────────────────── */
 
 /* Deterministic pseudo-random for jitter: small LCG keeps the test
@@ -403,6 +432,7 @@ void run_beacon_detect_tests(void) {
     TEST_SUITE("beacon_detect alerts hook");
     RUN_TEST(test_alert_fires_for_strong_beacon);
     RUN_TEST(test_alert_does_not_fire_for_weak);
+    RUN_TEST(test_beacon_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_v2_catches_30pct_jitter_beacon);
     RUN_TEST(test_v2_does_not_fire_on_uniform_random);
     RUN_TEST(test_v1_low_jitter_returns_kind_1);
