@@ -42,6 +42,13 @@ uint64_t mon_frame_total(void);
    broken, and is exported as `mon_bad_clock` in sensor_health. */
 uint64_t mon_bad_clock_total(void);
 
+/* Frames on_probe_frame() refused because radiotap_parse() rejected
+   their radiotap header (#123): shorter than the 8-octet fixed part,
+   an it_len below 8 or beyond the capture, or a truncated extended
+   present bitmap. Lifetime; also published as mon_health.parse_rejects
+   by probe_health_poll(). */
+uint64_t mon_radiotap_reject_total(void);
+
 /* Erase all tracked clients from the internal table. */
 void probe_clear(void);
 
@@ -92,6 +99,7 @@ static inline void probe_snapshot(sloth_state_t *s)                     { (void)
 static inline void mon_frame_snapshot(sloth_state_t *s)                 { (void)s; }
 static inline uint64_t mon_frame_total(void)                            { return 0; }
 static inline uint64_t mon_bad_clock_total(void)                        { return 0; }
+static inline uint64_t mon_radiotap_reject_total(void)                  { return 0; }
 static inline void probe_clear(void)                                    {}
 static inline void probe_set_iface(sloth_state_t *s, const char *iface) { (void)s; (void)iface; }
 static inline void probe_health_poll(capture_health_t *h)

@@ -426,6 +426,13 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     if (s->mon_health.ps_ifdrop)
         strip_addf(buf, sz, &off, "  mon ifdrop %llu",
                    (unsigned long long)s->mon_health.ps_ifdrop);
+    /* #123: frames the radio delivered whose radiotap header did not
+     * parse. Without it a radio handing over only garbage reads as a
+     * quiet channel — the drop counters never see these, because
+     * libpcap delivered them. */
+    if (s->mon_health.parse_rejects)
+        strip_addf(buf, sz, &off, "  mon rt-reject %llu",
+                   (unsigned long long)s->mon_health.parse_rejects);
     if (s->chan_retune_failures)
         strip_addf(buf, sz, &off, "  retune-fail %d", s->chan_retune_failures);
     /* Synthesis tables only. The per-protocol flow rings joined the

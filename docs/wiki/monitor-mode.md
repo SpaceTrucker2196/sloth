@@ -17,7 +17,7 @@ it never puts one into monitor mode itself.
 `docs/views/{wifi,probe,beacons}.md`, `README.md` "WiFi SIGINT usage",
 IEEE 802.11-2020.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -103,6 +103,20 @@ accept channel retunes.
   never injects — see [[what-sloth-does]] "What it never does".
 - **Range is physics.** You hear what your antenna hears; a weak signal
   is a weak signal.
+- **The driver's framing is applied before parsing, not trusted
+  blindly** (#122, #123). Radiotap's FLAGS octet says whether the frame
+  ends in a 4-octet FCS (`0x10`) and whether the driver padded the MAC
+  header to a 4-octet boundary (`0x20`, DATAPAD). sloth strips the FCS
+  and removes the pad before any parser sees the frame, so an
+  FCS-including driver no longer reads as a stream of malformed beacons
+  and a padded QoS EAPOL frame is not missed. A radiotap header that
+  does not parse is refused at one gate shared by both monitor entry
+  points and counted (`mon rt-reject` on the interfaces health strip).
+  The evidence ring keeps the frame exactly as delivered, FCS and pad
+  included. **Deferred:** a frame whose FCS the driver marked failed
+  (`0x40`) still feeds RF quality, the evidence ring *and* the per-type
+  parsers — whether its contents should be parsed at all is an open
+  decision, not a settled one.
 - **"Monitor mode" is not a transmit interlock.** The mode itself does
   not stop a radio transmitting — that is a property of sloth's code, not
   the mode. This is why sloth is explicit that `--hop` and `--allow-active`

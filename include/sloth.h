@@ -2471,6 +2471,12 @@ typedef struct {
      * started as perfectly fresh. */
     time_t   last_frame_ts;
     int      stale_secs;
+    /* Frames refused because their link-layer framing header did not
+     * parse — for the monitor radio, a radiotap header radiotap_parse()
+     * rejects (#123). Lifetime. Without it a radio delivering only
+     * unparseable frames reads as a quiet channel. 0 on the IP stream,
+     * which does not tally yet. Not exported to JSONL. */
+    uint64_t parse_rejects;
 } capture_health_t;
 
 /* ── Capture-scope state (#85) ───────────────────────────

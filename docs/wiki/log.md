@@ -3205,3 +3205,77 @@ naming no transport at all.
   cli-reference row and README to `DATA_SOCKET_DEFAULT_SPEC`;
   `test_main_assigns_no_tcp_default` reads `src/main.c` for a TCP
   literal assigned to the spec.
+
+## 2026-10-15 — Radiotap applied before parsing: one gate, DATAPAD out, FCS false positives pinned (#123)
+
+**Why.** #122 gave `radiotap_info_t` `fcs_present` / `datapad` and taught
+both monitor entry points to strip the FCS and decode with the hints.
+Three things in #123 were still open: `on_probe_frame()` read `it_len`
+itself and discarded `radiotap_parse()`'s verdict, so an `it_len` below
+the 8-octet fixed header (which the parser rejects) was accepted and the
+"802.11 frame" began inside the present bitmap (defect H); the
+data-frame observers in `probe.c` take a bare `(dot11, len)` and put
+LLC at the end of the MAC header, so with DATAPAD an EAPOL handshake
+was read two octets early and missed; and nothing in the capture-path
+suite pinned what the FCS strip buys a beacon — `fuzz_ie_overruns`
+climbing on every healthy beacon on ath9k/rt2800 (`MGMT_FUZZ` on clean
+air) and `ie_order_hash` suppressed (defect G).
+
+**What landed.**
+
+- `src/capture/probe.c` — `if (!radiotap_parse(...)) { tally; return; }`
+  is the gate, and `rt.hdr_len` the offset; the private `it_len` read is
+  gone. Refusals are counted in `mon_radiotap_reject_total()` and
+  published as `capture_health_t.parse_rejects` by
+  `probe_health_poll()`.
+- `src/capture/probe.c` — for data frames, when the view's `body_off`
+  exceeds `hdr_len` the pad is removed into a static buffer before
+  `eapol_observe_dot11()`, `frag_observe()`, `pm_forge_observe()` and
+  `queue_evict_observe_downlink()` run. Removing it once, rather than
+  teaching four observers the hint, also keeps the EAPOL collector's
+  verbatim `DLT_IEEE802_11` handshake export free of pad octets. The
+  evidence ring still keeps the capture exactly as delivered.
+- `src/views/iface.c` — `mon rt-reject N` on the health strip, only when
+  non-zero. Not in JSONL.
+- Docs: [[monitor-mode]] Limits, [[jsonl-schema]] `beacon` row
+  (semantics corrected, no field change), `docs/views/beacons.md`,
+  `docs/views/interfaces.md`.
+
+**Tests** (`tests/test_capture_path.c`, through `probe_test_dispatch()` /
+`capture_test_dispatch()`): FCS beacon with a `DD 7F 00 00` trailer →
+`fuzz_ie_overruns == 0`, `ie_order_hash != 0`, and the same octets with
+the flag clear → 1 overrun, hash 0 (the control); DATAPAD QoS EAPOL M1
+→ one event, flag clear → none; DATAPAD+FCS UDP/53 query →
+`dns_log` record; `it_len = 4` → no frame, reject tally +1, health poll
+agrees; 100 bad-FCS frames still reach the monitor ring, the evidence
+ring and `rf_quality` (100 % bad-FCS). `tests/test_state.c`: the strip
+entry.
+
+**Mutations** (each `grep -c` = 1 applied, 0 after the inverse edit,
+green restored):
+
+- `rt.fcs_present` → `0` in `on_probe_frame()`'s
+  `dot11_fcs_strip_len()` call: red in
+  `test_an_fcs_beacon_walks_no_phantom_element` and
+  `test_fcs_is_stripped_before_the_frame_is_recorded`.
+- `out->body_off = need;` in `dot11_frame_decode()`: red in
+  `test_a_datapad_eapol_m1_reaches_the_collector`,
+  `test_a_datapad_dns_query_reaches_the_dns_log`,
+  `test_radiotap_datapad_frame_reaches_the_ip_decoder`.
+- depad block disabled (`if (0 && ...)`) in `probe.c`: red in
+  `test_a_datapad_eapol_m1_reaches_the_collector` only.
+- `radiotap_parse()` return discarded: red in
+  `test_a_short_radiotap_length_is_refused_and_counted` and the
+  oversized-`it_len` case of
+  `test_monitor_seam_rejects_frames_below_the_guards`.
+- `mon rt-reject` printed unconditionally: red across the
+  `test_health_strip_*` quiet cases and
+  `test_health_strip_reports_radiotap_rejects`.
+
+**Not claimed / deferred.** Bad-FCS frames are still parsed by every
+per-type observer — pinned, not decided; that policy is open. The IP
+stream's `cap_health.parse_rejects` stays 0: `capture.c`'s radio arm
+already gates on `radiotap_parse()` but does not tally (it returns one
+"not decodable" for many reasons, and splitting them is the sensor-health
+tally work, `SH_PF_RADIOTAP_BAD`, P5). `radiotap_parse()` still does not
+check `it_version == 0`.

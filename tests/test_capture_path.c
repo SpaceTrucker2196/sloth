@@ -16,6 +16,10 @@
 #include "assoc_track.h"    /* the grant a short assoc response must still record (#122) */
 #include "frame_build.h"    /* spec-derived 802.11 builder (#122) */
 #include "radiotap.h"       /* RT_F_* flag bits */
+#include "beacon_snoop.h"   /* the fuzz counters an FCS trailer used to bump (#123) */
+#include "eapol_log.h"      /* the collector DATAPAD used to blind (#123) */
+#include "dns_log.h"
+#include "rf_quality.h"     /* bad-FCS policy pin (#123) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -861,6 +865,278 @@ static void test_radiotap_datapad_frame_reaches_the_ip_decoder(void) {
     ASSERT_EQ(g_s.pkt_count, 0);
 }
 
+/* ── Radiotap applied before parsing (#123) ──────────────────
+ *
+ * #122 taught both monitor entry points to strip the FCS and decode
+ * with radiotap's hints. These pin what that buys downstream, through
+ * the real pcap_dispatch seam, plus the remainder #123 delivered: one
+ * radiotap gate in probe.c, and DATAPAD removed before the data-frame
+ * observers. */
+
+static const uint8_t RT_AP [6] = { 0x02, 0x00, 0x5e, 0x00, 0x7b, 0x01 };
+static const uint8_t RT_STA[6] = { 0x02, 0x00, 0x5e, 0x00, 0x7b, 0x02 };
+
+/* A healthy beacon (§9.3.3.3): fixed part, SSID, Supported Rates, DSSS
+ * Parameter Set, then a 4-octet trailer the radiotap FLAGS octet calls
+ * the FCS. sloth never verifies an FCS value — the radiotap BADFCS bit
+ * is the driver's verdict — so the trailer is chosen as the worst case
+ * for an element walker that mistakes it for body: DD 7F reads as a
+ * vendor-specific element claiming 127 octets with 2 left, an overrun
+ * on every beacon. `rt_flags` is the FLAGS octet. Returns the length
+ * and leaves the FLAGS octet's offset in *flags_at. */
+static int rt_beacon(uint8_t *f, int cap, uint8_t rt_flags, int *flags_at) {
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    static const uint8_t rates[4] = { 0x82, 0x84, 0x8b, 0x96 };
+    static const uint8_t ds[1] = { 6 };
+    static const uint8_t trailer[4] = { 0xdd, 0x7f, 0x00, 0x00 };
+    fb_t b; fb_init(&b, f, cap);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = rt_flags;
+    int rtl = fb_radiotap(&b, &rt);
+    *flags_at = rtl - 1;                  /* the only present field */
+    fb_mgmt(&b, 8, 0, bc, RT_AP, RT_AP, 0x0010, 0);
+    fb_beacon_fixed(&b, 0, 100, 0x0001);  /* ESS, open */
+    fb_ssid(&b, "rt-test-net");
+    fb_ie(&b, 1, rates, (int)sizeof rates);
+    fb_ie(&b, 3, ds, 1);
+    fb_bytes(&b, trailer, 4);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static const beacon_ap_t *rt_find_ap(void) {
+    beacon_snapshot(&g_s);
+    for (int i = 0; i < g_s.beacon_count; i++)
+        if (memcmp(g_s.beacon_aps[i].bssid, RT_AP, 6) == 0)
+            return &g_s.beacon_aps[i];
+    return NULL;
+}
+
+static void test_an_fcs_beacon_walks_no_phantom_element(void) {
+    /* Defect G. On an FCS-including driver (ath9k, rt2800 in monitor
+       mode) the trailer used to reach beacon_parse() as body: every
+       beacon counted an IE overrun, which is MGMT_FUZZ's input, and the
+       overrun suppressed ie_order_hash, so the evil-twin fingerprint
+       lost that dimension on healthy air.
+
+       Mutation-proved: passing 0 for fcs_present to
+       dot11_fcs_strip_len() in on_probe_frame() reddens both
+       assertions on the FCS frame; the inverse edit restores green. */
+    uint8_t f[160];
+    int fl = 0;
+    int n = rt_beacon(f, sizeof f, RT_F_FCS, &fl);
+    ASSERT_GT(n, 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    const beacon_ap_t *ap = rt_find_ap();
+    ASSERT(ap != NULL);
+    if (ap) {
+        ASSERT_STR(ap->ssid, "rt-test-net");
+        ASSERT_EQ(ap->fuzz_ie_overruns, 0);
+        ASSERT(ap->fp.ie_order_hash != 0);
+    }
+
+    /* Control: the same octets with the FCS flag clear ARE body, so
+       the walker must see the overrun. Without this the zero above
+       could be a beacon that never parsed far enough to overrun. */
+    f[fl] = 0;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ap = rt_find_ap();
+    ASSERT(ap != NULL);
+    if (ap) {
+        ASSERT_EQ(ap->fuzz_ie_overruns, 1);
+        ASSERT_EQ(ap->fp.ie_order_hash, 0u);
+    }
+    beacon_clear();
+}
+
+/* QoS data, AP -> STA (FromDS), RT_F_DATAPAD set, carrying an
+ * EAPOL-Key M1 (§12.7.6.2): Key Information = pairwise | Ack |
+ * descriptor version 2, no MIC, no Install, no Secure; Key Data Length
+ * 0. The 26-octet QoS header is padded to 28 per the flag. */
+static int rt_datapad_m1(uint8_t *f, int cap, int *flags_at) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = RT_F_DATAPAD;
+    int rtl = fb_radiotap(&b, &rt);
+    *flags_at = rtl - 1;
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 8; h.flags = FB_FROMDS;
+    h.a1 = RT_STA; h.a2 = RT_AP; h.a3 = RT_AP; h.qos_present = 1;
+    fb_dot11_hdr(&b, &h);
+    fb_datapad_to4(&b, rtl);
+    fb_llc_snap(&b, 0x888E);
+    fb_u8(&b, 2);                 /* EAPOL version 802.1X-2004 */
+    fb_u8(&b, 3);                 /* EAPOL-Key */
+    fb_be16(&b, 95);              /* body: the fixed key descriptor */
+    fb_u8(&b, 2);                 /* descriptor type: RSN */
+    fb_be16(&b, 0x008A);          /* Key Info: Ack | Pairwise | ver 2 */
+    fb_be16(&b, 16);              /* Key Length */
+    fb_le64(&b, 0);               /* Replay Counter (8, value irrelevant) */
+    for (int i = 0; i < 32; i++) fb_u8(&b, 0x11);   /* ANonce */
+    for (int i = 0; i < 16 + 8 + 8 + 16; i++) fb_u8(&b, 0);  /* IV RSC ID MIC */
+    fb_be16(&b, 0);               /* Key Data Length */
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_a_datapad_eapol_m1_reaches_the_collector(void) {
+    /* The data-frame observers in on_probe_frame() take a bare frame
+       and put LLC at the end of the MAC header. With DATAPAD the two
+       pad octets sat there instead, so the handshake was missed.
+
+       Mutation-proved: `out->body_off = need;` in dot11_frame_decode()
+       (the pad ignored) reddens the first assertion; the inverse edit
+       restores green. */
+    uint8_t f[200];
+    int fl = 0;
+    int n = rt_datapad_m1(f, sizeof f, &fl);
+    ASSERT_GT(n, 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); eapol_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(eapol_event_count(), 1);
+
+    /* Control: flag clear, pad still present. LLC is then read at 26,
+       which holds the pad — not SNAP — so nothing is recorded. The
+       flag, not the frame's shape, is what moved the body. */
+    f[fl] = 0;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); eapol_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(eapol_event_count(), 0);
+    eapol_clear();
+}
+
+static void test_a_datapad_dns_query_reaches_the_dns_log(void) {
+    /* The IP-side twin: capture.c's DLT_IEEE802_11_RADIO arm, a QoS
+       data frame STA -> AP with DATAPAD and FCS, carrying an RFC 1035
+       query. Pins #122's arm end to end at the DNS log rather than at
+       the packet ring. */
+    uint8_t f[200];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = RT_F_DATAPAD | RT_F_FCS;
+    int rtl = fb_radiotap(&b, &rt);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 8; h.flags = FB_TODS;
+    h.a1 = RT_AP; h.a2 = RT_STA; h.a3 = RT_AP; h.qos_present = 1;
+    fb_dot11_hdr(&b, &h);
+    fb_datapad_to4(&b, rtl);
+    fb_llc_snap(&b, 0x0800);
+    /* DNS: ID, RD, QDCOUNT 1, then QNAME "printer.lan" A IN. */
+    static const uint8_t dns[] = {
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        7, 'p', 'r', 'i', 'n', 't', 'e', 'r', 3, 'l', 'a', 'n', 0,
+        0x00, 0x01, 0x00, 0x01 };
+    const int udp_len = 8 + (int)sizeof dns;
+    const int ip_len  = 20 + udp_len;
+    fb_u8(&b, 0x45); fb_u8(&b, 0);       /* v4, IHL 5, DSCP 0 */
+    fb_be16(&b, (uint16_t)ip_len);
+    fb_be16(&b, 0); fb_be16(&b, 0);      /* ID, flags/frag */
+    fb_u8(&b, 64); fb_u8(&b, 17);        /* TTL, UDP */
+    fb_be16(&b, 0);                      /* checksum: not verified */
+    fb_bytes(&b, "\xc0\xa8\x01\x0a", 4); /* 192.168.1.10 */
+    fb_bytes(&b, "\xc0\xa8\x01\x01", 4); /* 192.168.1.1  */
+    fb_be16(&b, 40000); fb_be16(&b, 53);
+    fb_be16(&b, (uint16_t)udp_len); fb_be16(&b, 0);
+    fb_bytes(&b, dns, (int)sizeof dns);
+    fb_fcs(&b);
+    ASSERT(fb_ok(&b));
+
+    dns_log_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(drive(DLT_IEEE802_11_RADIO, fs, ls, 1), 1);
+    dns_log_snapshot(&g_s);
+    ASSERT_EQ(g_s.dns_log_count, 1);
+    ASSERT_STR(g_s.dns_log[0].qname, "printer.lan");
+    ASSERT_STR(g_s.dns_log[0].src, "192.168.1.10");
+    dns_log_clear();
+}
+
+static void test_a_short_radiotap_length_is_refused_and_counted(void) {
+    /* Defect H. on_probe_frame() read it_len itself, checked only that
+       it was below caplen, and ignored radiotap_parse()'s verdict — so
+       an it_len of 4, which the parser rejects, was accepted and the
+       "802.11 frame" began inside the present bitmap. capture.c already
+       gated on the parser; now both entry points do.
+
+       Mutation-proved: discarding the return (`radiotap_parse(data,
+       len, &rt);` with no `if`) admits the frame and reddens both the
+       mon_frame_total delta and the reject delta; the inverse edit
+       restores green. */
+    uint8_t f[128];
+    int n = mon_frame(f, 24, 0x80);
+    f[2] = 4; f[3] = 0;                     /* it_len below the fixed 8 */
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    uint64_t b   = mon_before();
+    uint64_t rj0 = mon_radiotap_reject_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b), 0);
+    ASSERT_EQ((long long)(mon_radiotap_reject_total() - rj0), 1);
+
+    /* Published to the operator through the health poll. */
+    capture_health_t h; memset(&h, 0, sizeof h);
+    probe_health_poll(&h);
+    ASSERT_EQ((long long)h.parse_rejects,
+              (long long)mon_radiotap_reject_total());
+    ASSERT_GT((long long)h.parse_rejects, 0);
+
+    /* A well-formed header is admitted and not tallied, so the tally
+       counts refusals and not frames. */
+    n = mon_frame(f, 24, 0x80);
+    ls[0] = n;
+    b   = mon_before();
+    rj0 = mon_radiotap_reject_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b), 1);
+    ASSERT_EQ((long long)(mon_radiotap_reject_total() - rj0), 0);
+}
+
+static void evidence_setup(void);   /* with the #92 evidence cases below */
+
+static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
+    /* Policy pinned, not changed. A frame the driver marked FCS-failed
+       is untrustworthy content but real evidence about the channel, so
+       it still reaches rf_quality_observe() and the evidence ring. It
+       is also still parsed: whether a bad-FCS frame should feed the
+       per-type parsers at all is a deferred decision (#123), and this
+       test does not claim one either way. */
+    evidence_setup();
+    rf_quality_clear();
+    uint8_t f[160];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = RT_F_FCS | RT_F_BADFCS;
+    rt.has_channel = 1; rt.freq_mhz = 2437;          /* channel 6 */
+    fb_radiotap(&b, &rt);
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_mgmt(&b, 4, 0, bc, RT_STA, bc, 0x0020, 0);    /* probe request */
+    fb_ssid(&b, "rt-test-net");
+    fb_fcs(&b);
+    ASSERT(fb_ok(&b));
+
+    enum { N = RF_MIN_FRAMES };
+    const uint8_t *fs[N]; int ls[N]; uint32_t ts[N];
+    for (int i = 0; i < N; i++) { fs[i] = f; ls[i] = b.len; ts[i] = 1600000000u; }
+    uint64_t m0 = mon_before();
+    uint64_t e0 = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, N), N);
+    ASSERT_EQ(mon_delta(m0), N);
+    ASSERT_EQ((long long)(evidence_ring_last_id() - e0), N);
+    ASSERT_EQ(rf_quality_badfcs_pct(6, (time_t)1600000000), 100);
+    rf_quality_clear();
+    evidence_ring_shutdown();
+}
+
 static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     /* The four reject paths in on_probe_frame(), each on its own.
        Every one of these is a frame an attacker can put on the air. */
@@ -880,15 +1156,14 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
            802.11 left to read. Both an exact-length and an oversized
            claim are refused.
 
-           Stated precisely, because the first version of this comment
-           claimed more than the case proves: this does NOT isolate the
-           `rt_len >= len` guard. Mutating it to `rt_len > len` leaves
-           the suite green, because at equality dot11_len is 0 and the
-           `dot11_len < 10` guard below refuses the frame anyway. The
-           two guards overlap, so the `=` in `>=` is behaviourally
-           redundant today — harmless, and worth knowing before someone
-           "simplifies" the wrong one of the pair. What this case does
-           pin is that such a frame is refused at all. */
+           Stated precisely: the private `rt_len >= len` check this
+           case was written against is gone (#123); radiotap_parse()
+           is the gate now, and it ACCEPTS it_len == caplen — a header
+           with nothing after it is well-formed radiotap. The
+           exact-length frame is refused by the `dot11_len < 10` runt
+           guard instead, and is not counted as a radiotap reject. The
+           oversized claim is the parser's refusal. What this case pins
+           is that both are refused at all. */
     memset(&g_s, 0, sizeof(g_s)); probe_clear();
     uint8_t lying[128];
     int ln = mon_frame(lying, 24, 0x80);
@@ -2133,6 +2408,11 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
+    RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);
+    RUN_TEST(test_a_datapad_eapol_m1_reaches_the_collector);
+    RUN_TEST(test_a_datapad_dns_query_reaches_the_dns_log);
+    RUN_TEST(test_a_short_radiotap_length_is_refused_and_counted);
+    RUN_TEST(test_bad_fcs_frames_still_feed_rf_quality_and_evidence);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);

@@ -214,6 +214,14 @@ accumulates its own totals from those deltas rather than echoing
 libpcap's 32-bit counters, so a counter that resets cannot make the
 exported total run backwards.
 
+`mon rt-reject` (#123) counts frames the monitor radio delivered whose
+radiotap header `radiotap_parse()` refused — shorter than the 8-octet
+fixed part, an `it_len` below 8 or past the captured length, or a
+truncated extended present bitmap. libpcap delivered these, so the drop
+counters never see them; without this a radio handing over only garbage
+reads as a quiet channel. Lifetime, shown only when non-zero, not in
+JSONL.
+
 `retune-fail` is the lifetime `chan_retune_failures` from slice 1 above.
 
 `evict` is the total over every instrumented bounded table — an

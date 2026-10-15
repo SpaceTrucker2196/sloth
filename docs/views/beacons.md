@@ -187,6 +187,14 @@ there to probe requests; this is the AP-side analogue.
 - **A frame that overruns contributes nothing**: a truncated element
   list is a prefix, and its hash would name a stack that does not exist.
   `0` means not decoded; a later `0` never overwrites a real value.
+- **The FCS trailer is not an element** (#122, pinned by #123): on a
+  driver that delivers the FCS (radiotap FLAGS `0x10` — ath9k, rt2800
+  in monitor mode) the last four octets used to be walked as one more
+  element, which overran on almost every beacon. That raised
+  `fuzz_ie_overruns` on healthy air — `MGMT_FUZZ`'s input — and, by the
+  rule above, suppressed `ie_order_hash`. Both entry points now strip
+  the trailer before parsing; on those drivers the counter stays at 0
+  and the order hash is populated.
 - **Latest non-zero wins** per BSSID, same as `vendor_ies_hash`.
 
 This is an observable, not a verdict. There is no table of known stack

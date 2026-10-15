@@ -588,6 +588,20 @@ void test_health_strip_zero_drops_are_not_shown(void) {
     ASSERT_STR(buf, "  health: cap up  mon up");
 }
 
+void test_health_strip_reports_radiotap_rejects(void) {
+    /* #123: the monitor radio's radiotap refusals, after the drop
+     * counters and only when non-zero. */
+    sloth_state_t s = make_healthy_sensor_state();
+    char buf[160];
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up");
+    s.mon_health.stats_valid   = 1;
+    s.mon_health.ps_drop       = 2;
+    s.mon_health.parse_rejects = 7;
+    iface_fmt_health_strip(&s, buf, sizeof(buf));
+    ASSERT_STR(buf, "  health: cap up  mon up  mon drop 2  mon rt-reject 7");
+}
+
 void test_health_strip_reports_retune_failures(void) {
     sloth_state_t s = make_healthy_sensor_state();
     s.chan_retune_failures = 3;
@@ -907,6 +921,7 @@ void run_state_tests(void) {
     RUN_TEST(test_health_strip_open_handle_with_dead_worker_is_down);
     RUN_TEST(test_health_strip_reports_drops_per_stream);
     RUN_TEST(test_health_strip_zero_drops_are_not_shown);
+    RUN_TEST(test_health_strip_reports_radiotap_rejects);
     RUN_TEST(test_health_strip_reports_retune_failures);
     RUN_TEST(test_health_strip_reports_silent_hop_channels);
     RUN_TEST(test_health_strip_quiet_when_every_hop_channel_hears);

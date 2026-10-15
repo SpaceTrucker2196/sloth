@@ -48,6 +48,7 @@ static int             g_frame_head;
 static int             g_frame_count;
 static uint64_t        g_frame_total;   /* cumulative frames ever seen (#28 sensor) */
 static uint64_t        g_bad_clock_total; /* capture ts <= 0 (#92) */
+static uint64_t        g_radiotap_rejects; /* radiotap_parse() refused (#123) */
 /* Per-stream freshness (#91), under g_frame_mu like the frame tally. */
 static time_t          g_last_frame_ts;   /* the frame's own clock */
 static time_t          g_last_frame_wall; /* host clock at arrival, 0 = never */
@@ -56,6 +57,13 @@ static pthread_mutex_t g_frame_mu = PTHREAD_MUTEX_INITIALIZER;
 uint64_t mon_bad_clock_total(void) {
     pthread_mutex_lock(&g_frame_mu);
     uint64_t t = g_bad_clock_total;
+    pthread_mutex_unlock(&g_frame_mu);
+    return t;
+}
+
+uint64_t mon_radiotap_reject_total(void) {
+    pthread_mutex_lock(&g_frame_mu);
+    uint64_t t = g_radiotap_rejects;
     pthread_mutex_unlock(&g_frame_mu);
     return t;
 }
@@ -266,14 +274,28 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                            const u_char *data) {
     (void)user;
     int len = (int)hdr->caplen;
-    if (len < 8) return;
 
-    /* parse radiotap header */
-    uint16_t rt_len = (uint16_t)(data[2] | (data[3] << 8));
-    if ((int)rt_len >= len) return;
-
+    /* ── One radiotap gate (#123) ────────────────────────────────
+     *
+     * radiotap_parse()'s verdict is the gate, the same one capture.c's
+     * DLT_IEEE802_11_RADIO arm applies. This callback used to read
+     * it_len itself, check only `it_len < caplen`, and discard the
+     * parser's return — so an it_len below the 8-octet fixed header
+     * (which the parser rejects) was accepted here, and the "802.11
+     * frame" began inside the radiotap present bitmap. Two monitor
+     * entry points, two definitions of a valid header.
+     *
+     * A refusal is counted, not just dropped: a radio delivering frames
+     * that all fail here looks exactly like a quiet one otherwise. The
+     * tally reaches the operator through probe_health_poll(). */
     radiotap_info_t rt;
-    radiotap_parse(data, len, &rt);
+    if (!radiotap_parse(data, len, &rt)) {
+        pthread_mutex_lock(&g_frame_mu);
+        if (g_radiotap_rejects < UINT64_MAX) g_radiotap_rejects++;
+        pthread_mutex_unlock(&g_frame_mu);
+        return;
+    }
+    const int rt_len = rt.hdr_len;
     int8_t signal  = rt.signal_dbm;
     int    channel = rt.channel;
 
@@ -414,6 +436,34 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * FragAttacks family is about frames on a protected network — so it
      * runs on every data frame, before any payload check. */
     if (type == 2) {
+        /* DATAPAD (#123). The data-frame observers below take a bare
+         * (dot11, len) frame and place the body at the MAC header's
+         * end, as the clause lays it out. A driver that sets
+         * RT_F_DATAPAD has inserted up to 3 alignment octets there, so
+         * every one of them read LLC/SNAP early — a 26-octet QoS header
+         * put the pad where "AA AA 03" should be — and an EAPOL
+         * handshake on such a driver was silently missed.
+         *
+         * The pad is taken out here, once, rather than taught to each
+         * observer: what they receive is then the frame that was on the
+         * air, which is also what the EAPOL collector writes verbatim
+         * into a DLT_IEEE802_11 handshake pcap, where pad octets would
+         * be misread by every tool that opens the file. The evidence
+         * ring above keeps the capture as delivered, pad included.
+         *
+         * Static, not automatic: this callback runs on the one monitor
+         * thread (or synchronously under probe_test_dispatch), and a
+         * 64 KiB stack buffer per frame buys nothing. */
+        static uint8_t depad[65536];
+        if (full && fr.body_off > fr.hdr_len && fr.body_off <= dot11_len &&
+            dot11_len - (fr.body_off - fr.hdr_len) <= (int)sizeof depad) {
+            const int pad = fr.body_off - fr.hdr_len;
+            memcpy(depad, dot11, (size_t)fr.hdr_len);
+            memcpy(depad + fr.hdr_len, dot11 + fr.body_off,
+                   (size_t)(dot11_len - fr.body_off));
+            dot11      = depad;
+            dot11_len -= pad;
+        }
         /* Capture time, not processing time: the handshake pcap's
          * record headers carry it (#92). */
         eapol_observe_dot11(dot11, dot11_len, signal, channel,
@@ -681,6 +731,7 @@ void probe_health_poll(capture_health_t *h) {
     pthread_mutex_unlock(&g_frame_mu);
     h->last_frame_ts = fts;
     h->stale_secs    = fwall ? (int)(flood_wall() - fwall) : -1;
+    h->parse_rejects = mon_radiotap_reject_total();
     /* Set BEFORE the early return below: a radio whose handle has gone
      * still has a last-frame time worth reporting, and returning first
      * would leave the caller's struct carrying whatever it held. */
