@@ -208,3 +208,4 @@
 | 59b9bd7 | 2026-10-15T00:54:29Z | claude-fable-5-1 | 226 | 5877 | 5255286 | 7291 | 5.6972 | secure_file bypasses closed; discovery via O_EXCL+renameat; sqlite NOFOLLOW compile-time pin; localtime_r (#134, workflow build + adversarial review) |
 | d947412 | 2026-10-15T00:58:29Z | claude-fable-5-1 | 130 | 3975 | 3312506 | 5320 | 3.6190 | stab_t bounded table: 8 snoop tables + mdns/nbns/arp_hist stop refusing forever (#110, workflow build + adversarial review) |
 | b583877 | 2026-10-15T01:03:14Z | claude-fable-5-1 | 96 | 4015 | 2003520 | 7593 | 2.3571 | clock-seam test no longer assumes two minutes of host uptime (CI flake on fresh runners, #109) |
+| 6adc02d | 2026-10-15T01:04:15Z | claude-fable-5-1 | 98 | 3745 | 2706222 | 7096 | 3.0364 | make install + shipped hardened systemd unit; service stops executing the build tree as root (#139, workflow build + adversarial review) |
