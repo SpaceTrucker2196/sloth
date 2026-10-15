@@ -31,12 +31,16 @@ static void capture_help(char *buf, int sz) {
 static void test_help_lists_every_view(void) {
     char buf[8192];
     capture_help(buf, sizeof(buf));
+    /* Asserting only inside the failure branch (#114) runs zero
+     * assertions on the normal, all-present path — exactly the
+     * "silently correct" shape this view exists to guard against.
+     * Assert the condition itself every iteration instead, so VIEW_COUNT
+     * assertions always run and the missing label still gets named. */
     for (int v = 0; v < VIEW_COUNT; v++) {
         const char *label = view_label((view_t)v);
-        if (!strstr(buf, label)) {
+        if (!strstr(buf, label))
             fprintf(stderr, "help card missing view label: %s\n", label);
-            ASSERT(0);
-        }
+        ASSERT(strstr(buf, label) != NULL);
     }
 }
 

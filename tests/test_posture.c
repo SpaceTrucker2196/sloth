@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sqlite3.h>
 #include "runner.h"
 #include "sloth.h"
 #include "posture.h"
@@ -216,21 +217,32 @@ static void test_uncited_alert_produces_no_block(void) {
     /* An alert with no documents must not emit an empty References
      * heading.
      *
-     * Driven from a synthetic one-document corpus rather than the
-     * shipped one. That is not a mock: it is a real FTS5 file the query
-     * layer runs against unmodified. It is needed because the shipped
-     * corpus now cites 59 of 60 kinds, so no real alert reaches this
-     * path — and the path is still live, because a detector added
-     * tomorrow starts uncited. */
+     * Driven from a synthetic empty corpus rather than the shipped one.
+     * That is not a mock: it is a real FTS5 file the query layer runs
+     * against unmodified. It is needed because the shipped corpus now
+     * cites 59 of 60 kinds, so no real alert reaches this path — and
+     * the path is still live, because a detector added tomorrow starts
+     * uncited.
+     *
+     * Built via the sqlite3 C API this binary already links, not by
+     * shelling out to the `sqlite3` CLI (#114) — the old `system()` call
+     * returned non-zero and silently skipped the whole test, with zero
+     * assertions run, on any host without that CLI installed (this
+     * sandbox included: libsqlite3-dev ships the library, not the
+     * binary). A skip that executes no ASSERT is indistinguishable from
+     * a pass until something makes it visible. */
     const char *tmp = "/tmp/sloth_posture_sparse.db";
     unlink(tmp);
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-        "sqlite3 %s \"CREATE VIRTUAL TABLE research USING fts5("
+    sqlite3 *db = NULL;
+    ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);
+    int rc = sqlite3_exec(db,
+        "CREATE VIRTUAL TABLE research USING fts5("
         "title, body, source_url UNINDEXED, retrieved UNINDEXED, topics,"
-        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');\""
-        " >/dev/null 2>&1", tmp);
-    if (system(cmd) != 0) return;                /* no sqlite3 CLI; skip */
+        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');",
+        NULL, NULL, NULL);
+    ASSERT_EQ(rc, SQLITE_OK);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) { unlink(tmp); return; }
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     seed_titled_alert(&s, ALERT_TYPE_PORT_SCAN, "PORT_SCAN");

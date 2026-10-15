@@ -1,10 +1,24 @@
 #include <stdio.h>
 #include "runner.h"
+#include "reset_all.h"
+#include "sloth_clock.h"
 
 /* Shared counters — all test files reference these via extern */
-int g_pass     = 0;
-int g_fail     = 0;
-int g_test_fail = 0;
+int g_pass      = 0;
+int g_fail      = 0;
+int g_test_fail  = 0;
+int g_test_total = 0;
+
+/* Default setUp (#114): every test starts from the same clean slate —
+ * every module table sloth_reset_all() knows about, plus the real
+ * clock restored — whether or not the test remembers to ask for it.
+ * A test with its own extra setup still runs it after this. */
+static void default_test_setup(void) {
+    sloth_reset_all();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+void (*g_test_setup)(void) = default_test_setup;
 
 void run_parse_tests(void);
 void run_rate_tests(void);
@@ -145,6 +159,7 @@ void run_presence_tests(void);
 void run_transit_tests(void);
 void run_radiotap_tests(void);
 void run_rf_quality_tests(void);
+void run_reset_registry_tests(void);
 
 int main(void) {
     printf("sloth test suite\n");
@@ -289,6 +304,7 @@ int main(void) {
     run_transit_tests();
     run_radiotap_tests();
     run_rf_quality_tests();
+    run_reset_registry_tests();
 
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;

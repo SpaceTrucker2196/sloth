@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sqlite3.h>
 #include "runner.h"
 #include "sloth.h"
 #include "coverage.h"
@@ -196,21 +197,30 @@ static void test_corpus_backed_rows_carry_provenance(void) {
  * That path has not become unreachable in production — a detector added
  * tomorrow starts uncited, which is precisely the case this view exists
  * to show — so it keeps its test rather than losing one to the corpus
- * having got better. Returns NULL if the sqlite3 CLI is unavailable. */
+ * having got better.
+ *
+ * Built via the sqlite3 C API this binary already links, not by
+ * shelling out to the `sqlite3` CLI (#114) — the old `system()` calls
+ * returned non-zero and silently skipped every caller, with zero
+ * assertions run, on any host without that CLI installed. Returns
+ * NULL only on a real sqlite3 failure, which callers still assert on. */
 static rq_handle_t *sparse_corpus(const char *path) {
     unlink(path);
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "sqlite3 %s \"CREATE VIRTUAL TABLE research USING fts5("
+    sqlite3 *db = NULL;
+    if (sqlite3_open(path, &db) != SQLITE_OK) { sqlite3_close(db); return NULL; }
+    int rc = sqlite3_exec(db,
+        "CREATE VIRTUAL TABLE research USING fts5("
         "title, body, source_url UNINDEXED, retrieved UNINDEXED, topics,"
-        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');\""
-        " >/dev/null 2>&1", path);
-    if (system(cmd) != 0) return NULL;
-    snprintf(cmd, sizeof(cmd),
-        "sqlite3 %s \"INSERT INTO research VALUES('only doc','body',"
-        "'https://example.org/1','2026-09-07','t',"
-        "'ALERT_TYPE_EVIL_TWIN','research/x/1.md');\" >/dev/null 2>&1", path);
-    if (system(cmd) != 0) { unlink(path); return NULL; }
+        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');",
+        NULL, NULL, NULL);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_exec(db,
+            "INSERT INTO research VALUES('only doc','body',"
+            "'https://example.org/1','2026-09-07','t',"
+            "'ALERT_TYPE_EVIL_TWIN','research/x/1.md');",
+            NULL, NULL, NULL);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) { unlink(path); return NULL; }
     return rq_open(path);
 }
 
@@ -220,7 +230,8 @@ static void test_uncovered_kinds_still_get_a_row(void) {
      * on a CRIT needs to know the threshold has no cited basis. */
     const char *tmp = "/tmp/sloth_cov_sparse.db";
     rq_handle_t *h = sparse_corpus(tmp);
-    if (!h) return;                              /* no sqlite3 CLI; skip */
+    ASSERT(h != NULL);
+    if (!h) { unlink(tmp); return; }
     sloth_state_t s; memset(&s, 0, sizeof(s));
     add_alert(&s, ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, "EVIL_TWIN", 1);
     add_alert(&s, ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, "PORT_SCAN", 1);
@@ -312,25 +323,33 @@ static void test_more_documents_than_fit_are_reported(void) {
      *
      * So a synthetic corpus, built with the same DDL research_ingest
      * uses. Not a mock of the query layer: this is a real FTS5 file
-     * that rq_open and rq_for_alert run against unmodified. */
+     * that rq_open and rq_for_alert run against unmodified.
+     *
+     * Built via the sqlite3 C API this binary already links, not by
+     * shelling out to the `sqlite3` CLI (#114) — the old `system()`
+     * calls returned non-zero and silently skipped the whole test,
+     * with zero assertions run, on any host without that CLI
+     * installed. */
     const char *tmp = "/tmp/sloth_cov_trunc.db";
     unlink(tmp);
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "sqlite3 %s \"CREATE VIRTUAL TABLE research USING fts5("
+    sqlite3 *db = NULL;
+    ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);
+    int rc = sqlite3_exec(db,
+        "CREATE VIRTUAL TABLE research USING fts5("
         "title, body, source_url UNINDEXED, retrieved UNINDEXED, topics,"
-        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');\""
-        " >/dev/null 2>&1", tmp);
-    if (system(cmd) != 0) return;                /* no sqlite3 CLI; skip */
-
-    for (int i = 0; i < MAX_RESEARCH_DOCS + 4; i++) {
-        snprintf(cmd, sizeof(cmd),
-            "sqlite3 %s \"INSERT INTO research VALUES('doc%d','body',"
+        " alert_kinds, path UNINDEXED, tokenize = 'porter unicode61');",
+        NULL, NULL, NULL);
+    for (int i = 0; rc == SQLITE_OK && i < MAX_RESEARCH_DOCS + 4; i++) {
+        char sql[512];
+        snprintf(sql, sizeof(sql),
+            "INSERT INTO research VALUES('doc%d','body',"
             "'https://example.org/%d','2026-09-04','t',"
-            "'ALERT_TYPE_PORT_SCAN','research/x/%02d.md');\" >/dev/null 2>&1",
-            tmp, i, i, i);
-        if (system(cmd) != 0) { unlink(tmp); return; }
+            "'ALERT_TYPE_PORT_SCAN','research/x/%02d.md');", i, i, i);
+        rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     }
+    sqlite3_close(db);
+    ASSERT_EQ(rc, SQLITE_OK);
+    if (rc != SQLITE_OK) { unlink(tmp); return; }
 
     rq_handle_t *h = rq_open(tmp);
     ASSERT(h != NULL);

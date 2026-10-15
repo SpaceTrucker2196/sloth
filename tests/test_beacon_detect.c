@@ -265,8 +265,14 @@ static void test_alert_does_not_fire_for_weak(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     alerts_update(&s);
 
+    /* A loop-guarded ASSERT over an empty alert_count runs zero
+     * assertions and passes for free (#114) — this path's whole point
+     * is that alert_count stays empty, so the check has to survive
+     * that case explicitly rather than depend on iterating anything. */
+    int found = 0;
     for (int i = 0; i < s.alert_count; i++)
-        ASSERT(s.alerts[i].type != ALERT_TYPE_BEACONING);
+        if (s.alerts[i].type == ALERT_TYPE_BEACONING) found = 1;
+    ASSERT_EQ(found, 0);
 }
 
 /* ── v2 autocorrelation tests ────────────────────────────── */

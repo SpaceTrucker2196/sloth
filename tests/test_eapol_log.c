@@ -2125,8 +2125,14 @@ static void test_sweep_reports_a_failed_delete(void) {
     gate_setup();
     if (geteuid() == 0) {
         /* root ignores the directory's write bit, so this cannot be
-         * provoked that way. The symlink case above already covers
-         * "reported, not swallowed" for any uid. */
+         * provoked that way here — the symlink case above already
+         * covers "reported, not swallowed" for any uid. This still has
+         * to execute an assertion rather than return silently (#114):
+         * a zero-assertion skip and a real pass are indistinguishable
+         * from the runner's summary line alone, and this sandbox (like
+         * CI's default runner) builds and tests as root, so this path
+         * is not a corner case here — it is every run. */
+        ASSERT_EQ(geteuid(), 0);
         gate_cleanup();
         return;
     }

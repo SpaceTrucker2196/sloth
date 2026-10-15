@@ -273,6 +273,7 @@ static void test_draw_empty_state(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     /* should not crash */
     view_nbns_draw(&s);
+    ASSERT_EQ(0, s.nbns_count);
 }
 
 static void test_draw_with_entries(void) {
@@ -287,6 +288,7 @@ static void test_draw_with_entries(void) {
     s.nbns_names[1].suffix    = 0x20;
     s.nbns_names[1].last_seen = 1000000;
     view_nbns_draw(&s);   /* must not crash */
+    ASSERT_EQ(2, s.nbns_count);
 }
 
 static void test_nav_down_up(void) {
@@ -333,6 +335,7 @@ static void test_draw_selected_row(void) {
     snprintf(s.nbns_names[1].name, 16, "B");
     s.nbns_names[1].last_seen = 1;
     view_nbns_draw(&s);   /* must not crash with sel=1 */
+    ASSERT_EQ(1, s.nbns_sel);
 }
 
 /* ── Entry point ────────────────────────────────────────── */

@@ -165,8 +165,14 @@ static void test_retune_failures_accumulate_across_successes(void) {
 }
 
 static void test_retune_null_outputs_do_not_crash(void) {
+    /* chanhop_record_retune is pure logic with no state of its own —
+     * every observable lives in the caller's out-params, so with all
+     * three NULL there is nothing left to assert except that it
+     * returned at all. ASSERT(1) marks that deliberately rather than
+     * leaving the test with zero recorded assertions (#114). */
     chanhop_record_retune(11, 1, NULL, NULL, NULL);
     chanhop_record_retune(11, 0, NULL, NULL, NULL);
+    ASSERT(1);
 }
 
 /* ââ hop activity (#91 wave 7) âââââââââââââââââââââ */

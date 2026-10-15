@@ -308,6 +308,7 @@ static void test_draw_no_scan(void) {
     sloth_state_t s; make_state(&s);
     conn_rebuild_idx(&s);
     view_conns_draw(&s);
+    ASSERT_EQ(0, s.scan_count);
 }
 
 static void test_draw_with_banner(void) {
@@ -316,6 +317,7 @@ static void test_draw_with_banner(void) {
         add_tcp_conn(&s, "1.1.1.1", (uint16_t)p);
     scan_update(&s);
     conn_rebuild_idx(&s);
+    ASSERT(scan_is_flagged(&s, "1.1.1.1") > 0);
     view_conns_draw(&s);
 }
 

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sqlite3.h>
 #include "runner.h"
 #include "query.h"
 
@@ -40,13 +41,21 @@ static void test_missing_corpus_degrades(void) {
 static void test_wrong_schema_is_distinguished(void) {
     /* A valid SQLite file that is not a corpus. Without the schema
      * probe this opens fine and then fails one query at a time with
-     * errors that say nothing useful. */
+     * errors that say nothing useful.
+     *
+     * Built via the sqlite3 C API this binary already links, not by
+     * shelling out to the `sqlite3` CLI (#114) — the old `system()`
+     * call returned non-zero and silently skipped the whole test, with
+     * zero assertions run, on any host without that CLI installed. */
     const char *tmp = "/tmp/sloth_not_a_corpus.db";
     unlink(tmp);
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "sqlite3 %s 'CREATE TABLE something(x);' >/dev/null 2>&1", tmp);
-    if (system(cmd) != 0) return;         /* no sqlite3 CLI; skip */
+    sqlite3 *db = NULL;
+    ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);
+    int rc = sqlite3_exec(db, "CREATE TABLE something(x);", NULL, NULL, NULL);
+    ASSERT_EQ(rc, SQLITE_OK);
+    sqlite3_close(db);
+    if (rc != SQLITE_OK) { unlink(tmp); return; }
+
     rq_handle_t *h = rq_open(tmp);
     ASSERT(h == NULL);
     ASSERT(strstr(rq_open_error(), "not a research corpus") != NULL);

@@ -338,6 +338,7 @@ static void test_clear_empties_table(void) {
 static void test_draw_empty_state(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_dhcp_snoop_draw(&s);   /* must not crash */
+    ASSERT_EQ(0, s.dhcp_event_count);
 }
 
 static void test_draw_with_entries(void) {
@@ -353,6 +354,7 @@ static void test_draw_with_entries(void) {
     s.dhcp_events[1].msg_type  = 3;
     s.dhcp_events[1].last_seen = 1000000;
     view_dhcp_snoop_draw(&s);   /* must not crash */
+    ASSERT_EQ(2, s.dhcp_event_count);
 }
 
 static void test_nav_down_up(void) {

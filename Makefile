@@ -323,6 +323,8 @@ TEST_CFLAGS += $(EXTRA_CFLAGS)
 
 TEST_SRCS = tests/main_test.c          \
             tests/null_tui.c           \
+            src/reset_all.c            \
+            tests/test_reset_registry.c \
             src/view_route.c           \
             src/view_labels.c          \
             tests/test_help.c          \
@@ -769,7 +771,16 @@ FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
 # fuzz_eapol_observe rides the same source list sloth_test links (every
 # module eapol_log.c's call tree reaches), swapping main_test.c for the
 # fuzz entry point — same reasoning as CAPTURE_PATH_SRCS: a hand-kept
-# dependency list rots on the first new module.
+# dependency list rots on the first new module. It must also ride the
+# same platform define TEST_CFLAGS adds: without it, src/platform/
+# linux_wifi.c (in that source list) compiles to an empty translation
+# unit — same as on Darwin — and anything in the list that calls one of
+# its functions unconditionally (sloth_reset_all(), #114) fails to link
+# on a Linux build host, where every other gate defines it.
+FUZZ_PLATFORM_DEFS =
+ifeq ($(UNAME),Linux)
+    FUZZ_PLATFORM_DEFS += -DPLATFORM_LINUX
+endif
 FUZZ_EAPOL_SRCS = tests/fuzz/fuzz_eapol_observe.c \
                   $(filter-out tests/main_test.c,$(TEST_SRCS))
 
@@ -783,7 +794,7 @@ fuzz:
 	    src/sloth_clock.c src/dot11_data.c \
 	    -lpthread
 	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
-	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE \
+	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE $(FUZZ_PLATFORM_DEFS) \
 	    -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp \
 	    -o /tmp/sloth_fuzz_eapol_observe \
 	    $(FUZZ_EAPOL_SRCS) -lm -lpthread -lsqlite3
