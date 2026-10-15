@@ -695,6 +695,25 @@ static void test_action_category_read_past_ht_control(void) {
     ASSERT_EQ(act, SPECTRUM_ACT_CHANNEL_SWITCH);
 }
 
+/* #126: a CSA element followed by a one-octet tail. The announcement
+ * is still recorded (unchanged), and the stop reaches the tally once;
+ * the frame without the tail adds nothing. */
+static void test_csa_trailing_octet_is_tallied(void) {
+    csa_clear();
+    uint8_t f[64];
+    int n = build_csa_action(f, AP_A, AP_A, 0, 1, 0, 36, 3);
+    f[n] = 0xdd;
+    sh_parse_fault_reset();
+    ASSERT_EQ(csa_parse_action(f, n + 1, 5000), 1);
+    ASSERT_EQ(csa_event_count(), 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+
+    sh_parse_fault_reset();
+    ASSERT_EQ(csa_parse_action(f, n, 5001), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    csa_clear();
+}
+
 static void test_csa_action_parsed(void) {
     csa_clear();
     uint8_t f[64];
@@ -1474,6 +1493,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_btm_other_wnm_actions_counted_not_tabled);
     TEST_SUITE("Channel Switch Announcement (#63)");
     RUN_TEST(test_csa_action_parsed);
+    RUN_TEST(test_csa_trailing_octet_is_tallied);
     RUN_TEST(test_csa_action_survives_the_htc_bit);
     RUN_TEST(test_action_category_read_past_ht_control);
     RUN_TEST(test_csa_extended_carries_op_class);

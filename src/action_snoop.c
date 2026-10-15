@@ -428,19 +428,20 @@ int csa_parse_action(const uint8_t *dot11, int len, time_t now) {
     if (hdr < 0) return 0;
     int off = hdr + 2;
     int mode = 0, chan = 0, count = 0, opclass = 0, found = 0;
-    while (off + 2 <= len) {
-        uint8_t tag = dot11[off];
-        uint8_t tln = dot11[off + 1];
-        if (off + 2 + (int)tln > len) break;
-        const uint8_t *b = dot11 + off + 2;
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *b;
+    tlv_init(&it, dot11 + off, len - off);
+    while (tlv_next(&it, &tag, &tln, &b) == TLV_OK) {
         if (tag == 37 && tln >= 3) {
             mode = b[0]; chan = b[1]; count = b[2]; found = 1;
         } else if (tag == 60 && tln >= 4) {
             mode = b[0]; opclass = b[1]; chan = b[2]; count = b[3];
             found = 1;
         }
-        off += 2 + tln;
     }
+    /* An announcement read before the stop is still recorded, as
+     * before; the stop itself is now counted (#126). */
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     if (!found) return 0;
 
     /* addr2 is the real transmitter and addr3 the BSS it claims to
