@@ -11,6 +11,19 @@ void alerts_update(sloth_state_t *s);
 /* Drop all known alerts (clears engine state, not just the snapshot). */
 void alerts_clear(void);
 
+/* Test-only: fire one finding through the engine's real dedup path
+ * (fire → fire_inv), stamped with sloth_wall(). The rules are the only
+ * production callers; this exists so engine properties — key lookup,
+ * slot reuse, side state (#112) — can be pinned without contriving a
+ * rule's trigger for each one. The next alerts_update() snapshots it. */
+void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
+                          const char *key, const char *detail,
+                          const char *match_ip, uint16_t match_port);
+/* Test-only: AND every key hash with `mask` (0 → every key collides),
+ * to prove find_by_key() still compares the full key. alerts_clear()
+ * restores ~0; call this after it. */
+void alerts_test_key_hash_mask(uint64_t mask);
+
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ─────────────────
  *
  * Maintained by rule_evil_twin_attack_chain when it correlates a

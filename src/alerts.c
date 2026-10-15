@@ -196,10 +196,35 @@ static void mac_to_str(const uint8_t mac[6], char *out, int sz) {
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+/* FNV-1a of each live slot's key, kept beside engine[] (#112).
+ *
+ * find_by_key() runs once per fire(), and fire() runs for every rule
+ * condition every poll, so the old 128-way strcmp over 192-byte keys was
+ * the engine's inner loop. Comparing a 64-bit hash first rejects every
+ * non-matching slot with one integer compare.
+ *
+ * The hash only filters. strcmp still decides, because two keys can
+ * collide and a collision that merged two findings into one incident is
+ * exactly the class of bug #112 exists to remove. tests/test_alerts.c ::
+ * test_find_by_key_still_compares_the_full_key forces every hash to one
+ * value through alerts_test_key_hash_mask() to prove that. */
+static uint64_t engine_hash[MAX_ALERTS];
+
+/* ~0 in production. A test narrows it (to 0, so every key collides) to
+ * show the strcmp is load-bearing, which a real 64-bit FNV collision
+ * would be needed to show otherwise. Reset by alerts_clear(). */
+static uint64_t g_key_hash_mask = ~(uint64_t)0;
+
+static uint64_t key_hash(const char *key) {
+    return alert_fnv1a(key, strlen(key), ALERT_FNV64_OFFSET) & g_key_hash_mask;
+}
+
+void alerts_test_key_hash_mask(uint64_t mask) { g_key_hash_mask = mask; }
+
 /* Find existing alert with this key; returns index or -1. */
-static int find_by_key(const char *key) {
+static int find_by_key(const char *key, uint64_t h) {
     for (int i = 0; i < engine_count; i++) {
-        if (strcmp(engine[i].key, key) == 0) return i;
+        if (engine_hash[i] == h && strcmp(engine[i].key, key) == 0) return i;
     }
     return -1;
 }
@@ -360,7 +385,16 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                      time_t now) {
     uint64_t mono = flood_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
-    int idx = find_by_key(key);
+    /* Looked up as it will be stored. Before #112 an over-long key was
+     * truncated into the slot but compared in full, so it never matched
+     * its own entry and opened a new incident every tick. The typed
+     * builder (alert_key.h) keeps keys inside the bound; this keeps the
+     * engine honest for any caller that does not. */
+    char kbuf[ALERT_KEY_LEN];
+    snprintf(kbuf, sizeof(kbuf), "%s", key);
+    key = kbuf;
+    uint64_t kh   = key_hash(key);
+    int idx = find_by_key(key, kh);
     if (idx >= 0 && !engine[idx].resolved) {
         alert_t    *a    = &engine[idx];
         alert_sev_t prev = a->sev;
@@ -459,6 +493,7 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     snprintf(a->title,  sizeof(a->title),  "%s", title);
     snprintf(a->detail, sizeof(a->detail), "%s", detail);
     snprintf(a->key,    sizeof(a->key),    "%s", key);
+    engine_hash[slot] = kh;
     if (inv_hash && inv_hash[0])
         snprintf(a->inventory, sizeof(a->inventory), "%s", inv_hash);
     a->ap_class     = (uint8_t)ap_class;
@@ -527,6 +562,13 @@ static void fire(alert_type_t type, alert_sev_t sev,
                  const char *match_ip, uint16_t match_port,
                  time_t now) {
     fire_conf(type, sev, 0, title, detail, key, match_ip, match_port, now);
+}
+
+void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
+                          const char *key, const char *detail,
+                          const char *match_ip, uint16_t match_port) {
+    fire(type, sev, "TEST", detail ? detail : "", key ? key : "",
+         match_ip, match_port, sloth_wall());
 }
 
 /* ── MITRE ATT&CK technique lookup ──────────────────────
@@ -5352,6 +5394,8 @@ void alerts_clear(void) {
         alert_resolve(&engine[i], now, "cleared");
     engine_count = 0;
     memset(engine, 0, sizeof(engine));
+    memset(engine_hash, 0, sizeof(engine_hash));
+    g_key_hash_mask = ~(uint64_t)0;
     /* The export cooldown is engine state too (#96): a test that clears
      * the engine and re-fires the same key expects a fresh export, and
      * a long-lived process that clears is starting over. Leaving it

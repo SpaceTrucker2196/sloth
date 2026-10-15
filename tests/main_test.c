@@ -84,6 +84,7 @@ void run_beacon_detect_tests(void);
 void run_jsonl_tests(void);
 void run_filter_tests(void);
 void run_alert_pcap_tests(void);
+void run_alert_key_tests(void);
 void run_ip_owner_tests(void);
 void run_dashboard_tests(void);
 void run_ip_color_tests(void);
@@ -231,6 +232,7 @@ int main(void) {
     run_jsonl_tests();
     run_filter_tests();
     run_alert_pcap_tests();
+    run_alert_key_tests();
     run_ip_owner_tests();
     run_dashboard_tests();
     run_ip_color_tests();
