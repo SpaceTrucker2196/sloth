@@ -5,6 +5,8 @@
 #include "action_snoop.h"
 #include "beacon_snoop.h"
 #include "dot11_data.h"
+#include "bytes.h"          /* le16, tlv_next (#126) */
+#include "sensor_health.h"  /* parse-fault tally (#126) */
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
@@ -76,10 +78,6 @@ static btm_evt_t       g_ring[BTM_EVT_RING];
 static int             g_ring_i;
 static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
 
-static uint16_t le16(const uint8_t *p) {
-    return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
-}
-
 int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out) {
     if (!dot11 || len < 2) return ACTION_PARSE_NOT_ACTION;
     /* Subtype 13, type 0, protocol version 0 → FC byte 0 == 0xD0.
@@ -147,19 +145,20 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
      * Report elements. A Request with no candidates is legal (and is
      * what a pure "leave now" steer looks like), so running out here is
      * success, not failure. */
-    while (off + 2 <= len) {
-        uint8_t tag = dot11[off];
-        uint8_t tln = dot11[off + 1];
-        if (off + 2 + (int)tln > len) break;   /* truncated element */
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *b;
+    tlv_init(&it, dot11 + off, len - off);
+    while (tlv_next(&it, &tag, &tln, &b) == TLV_OK) {
         if (tag == IE_NEIGHBOR_REPORT && tln >= NEIGHBOR_MIN_LEN) {
             if (out->candidate_count < SLOTH_BTM_MAX_CANDIDATES)
-                memcpy(out->candidate_bssids[out->candidate_count++],
-                       dot11 + off + 2, 6);
+                memcpy(out->candidate_bssids[out->candidate_count++], b, 6);
             else
                 out->candidates_truncated = 1;
         }
-        off += 2 + tln;
     }
+    /* A truncated candidate list still returns the candidates read so
+     * far, as before; the stop is now counted rather than silent. */
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     return 1;
 }
 

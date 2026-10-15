@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include "runner.h"
 #include "action_snoop.h"
+#include "sensor_health.h"
 #include "beacon_snoop.h"
 #include "sloth.h"
 
@@ -257,6 +258,34 @@ static void test_btm_truncated_candidate_ignored(void) {
     sloth_btm_req_t r;
     ASSERT_EQ(action_parse_btm_req(f, off, &r), 1);
     ASSERT_EQ(r.candidate_count, 0);
+}
+
+/* #126: the candidate walk runs on the shared iterator. A truncated
+ * second candidate keeps the first (unchanged behaviour) and the stop
+ * reaches the parse-fault tally exactly once; the same list without
+ * the bad element adds nothing, which is what makes the first count
+ * mean something. */
+static void test_btm_truncated_candidate_is_tallied(void) {
+    uint8_t f[HDR + 7 + 15 + 4];
+    fill_hdr(f, 0xD0, STA_A, AP_A);
+    int off = put_btm_fixed(f, 1, BTM_REQ_PREF_CANDIDATE, 0, 0);
+    off = put_candidate(f, off, CAND_1);
+    const int clean_len = off;
+    f[off++] = 52;      /* Neighbor Report */
+    f[off++] = 13;      /* claims 13; 2 remain */
+    f[off++] = 0xAA; f[off++] = 0xBB;
+
+    sloth_btm_req_t r;
+    sh_parse_fault_reset();
+    ASSERT_EQ(action_parse_btm_req(f, off, &r), 1);
+    ASSERT_EQ(r.candidate_count, 1);
+    ASSERT_EQ(memcmp(r.candidate_bssids[0], CAND_1, 6), 0);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+
+    sh_parse_fault_reset();
+    ASSERT_EQ(action_parse_btm_req(f, clean_len, &r), 1);
+    ASSERT_EQ(r.candidate_count, 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
 }
 
 static void test_btm_candidate_overflow_flagged(void) {
@@ -1420,6 +1449,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_btm_rejects_wrong_category_and_action);
     RUN_TEST(test_btm_truncated_fixed_fields);
     RUN_TEST(test_btm_truncated_candidate_ignored);
+    RUN_TEST(test_btm_truncated_candidate_is_tallied);
     RUN_TEST(test_btm_candidate_overflow_flagged);
     RUN_TEST(test_btm_output_zeroed_on_reject);
 

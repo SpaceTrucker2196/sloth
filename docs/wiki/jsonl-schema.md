@@ -854,7 +854,8 @@ holds both lists to the build.
   length runs past the end of its region, or on a tail too short to be
   an element header. Walks on the iterator today:
   `beacon_parse_ies()` (beacons, association requests and the
-  managed-mode nl80211 scan results). A one-octet tail counts here
+  managed-mode nl80211 scan results); the BSS Transition Management
+  Request candidate list. A one-octet tail counts here
   but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
   pre-#126 meaning (an element whose length runs off the end) so that
   `MGMT_FUZZ` scores do not move.
