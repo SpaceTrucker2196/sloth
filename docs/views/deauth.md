@@ -154,6 +154,29 @@ establish:
   is in force the real AP protects them, so these deserve suspicion —
   and the station is also likely to discard them. Both halves matter.
 
+## Protected Action frames (#124)
+
+The header line carries a third count when it is non-zero:
+
+```
+ Deauth/Disassoc events: 14   BTM steers: 2   protected action: 311
+```
+
+`protected action` is every 802.11 Action frame seen with the
+Protected Frame bit set. On a PMF (802.11w) link the robust Action
+categories — SA Query, WNM/BTM, Radio Measurement, Spectrum Management
+— are CCMP ciphertext, and sloth cannot read their category, let alone
+their body. Until 2026-10-14 it read the first ciphertext octet as a
+category anyway; now the frame is counted here and nothing else is
+done with it (`src/action_snoop.c :: action_observe`).
+
+The row exists so the BTM table below it can be read correctly. On a
+PMF network an empty steering table next to a large `protected action`
+count means the steering traffic is there and unreadable, not that
+nothing is moving clients. Deauth rows already make the same
+distinction per frame with `encrypted` in the Reason column; this is
+the Action-frame equivalent, as one number.
+
 ## BTM steering (802.11v)
 
 Below the deauth table the view lists **BSS Transition Management**

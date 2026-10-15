@@ -6472,11 +6472,16 @@ static void test_sae_psk_regression_silent_without_a_database(void) {
 
 /* ── Action-frame coverage (#76) ─────────────────────────── */
 
+/* An *unprotected* Action frame. The `protect` flag this took until
+ * #124 set FC B14 over a plaintext category — a frame that cannot occur,
+ * since a protected body is CCMP ciphertext — and the SA Query rule
+ * test below leaned on it. The rule now sees only unprotected SA Query,
+ * so that is what the test feeds it. */
 static int aq_frame(uint8_t *f, uint8_t cat, const uint8_t bssid[6],
-                    const uint8_t sta[6], int protect) {
-    memset(f, 0, 64);
+                    const uint8_t sta[6]) {
+    memset(f, 0, 28);
     f[0] = 0xD0;                                 /* Action */
-    f[1] = (uint8_t)(protect ? 0x40 : 0x00);
+    f[1] = 0x00;
     memcpy(f + 4,  sta,   6);
     memcpy(f + 10, bssid, 6);
     memcpy(f + 16, bssid, 6);
@@ -6493,7 +6498,7 @@ static void test_sa_query_flood_alert_fires(void) {
     uint8_t f[64];
     time_t now = time(NULL);
     for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
-        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta, 1);
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta);
         action_observe(f, n, now);
     }
     sloth_state_t s; seed_state(&s);
@@ -6522,7 +6527,7 @@ static void test_mfp_unprotected_alert_fires(void) {
     beacon_record(bssid, "Corp", -50, 6, "WPA3", 100, &rsn);
 
     uint8_t f[64];
-    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta, 0);
+    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta);
     action_observe(f, n, time(NULL));
 
     sloth_state_t s; seed_state(&s);
@@ -6554,10 +6559,10 @@ static void test_action_alerts_quiet_on_an_ordinary_bss(void) {
     uint8_t f[64];
     time_t now = time(NULL);
     for (int i = 0; i < 3; i++) {
-        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta, 1);
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta);
         action_observe(f, n, now);
     }
-    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta, 0);
+    int n = aq_frame(f, ACTION_CAT_WNM, bssid, sta);
     action_observe(f, n, now);
 
     sloth_state_t s; seed_state(&s);

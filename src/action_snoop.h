@@ -88,11 +88,27 @@ typedef struct {
  *
  * `dot11` starts at the FC byte, post-radiotap, as everywhere else in
  * the capture path. Returns the category on success and writes the
- * following byte to *action_out (may be NULL); returns -1 if the frame
- * is not a well-formed Action frame long enough to carry both.
+ * following byte to *action_out (may be NULL). Two negative results,
+ * kept distinct because the callers treat them differently:
+ *
+ *   ACTION_PARSE_NOT_ACTION  not an Action frame, or too short to carry
+ *                            Category + Action after its header;
+ *   ACTION_PARSE_PROTECTED   an Action frame with the Protected Frame
+ *                            bit (FC B14) set. The body is CCMP/GCMP
+ *                            ciphertext (§12.5.3) and the two octets
+ *                            where Category and Action would be are PN0
+ *                            and PN1 of the CCMP header. Nothing about
+ *                            the category can be read; the frame is
+ *                            counted under action_protected_count().
+ *
+ * The Protected check comes before the length check, so a protected
+ * frame cut to its bare header is still reported as protected rather
+ * than as short — the bit is in the FC, which is what was read.
  *
  * Subtype 14 ("Action No Ack") is deliberately rejected: it shares the
  * body format but not the semantics, and nothing consumes it yet. */
+#define ACTION_PARSE_NOT_ACTION  (-1)
+#define ACTION_PARSE_PROTECTED   (-2)
 int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out);
 
 /* Parse a WNM BSS Transition Management Request into *out.
@@ -288,8 +304,20 @@ void action_mfp_clear(void);
 
 int  action_category_count(uint8_t category);
 
-/* Total Action frames observed, including categories with no handler. */
+/* Total Action frames observed, including categories with no handler.
+ * Excludes protected frames: their category was never read, so there is
+ * nothing to total them under. */
 int  action_total_count(void);
+
+/* Action frames declined as ciphertext (Protected Frame bit set) since
+ * the last clear. On a PMF network this is where SA Query, WNM and RRM
+ * traffic goes; the deauth view shows it so a low category count there
+ * reads as "unreadable", not "absent" (#124). */
+int  action_protected_count(void);
+
+/* Copy the protected-frame tally into s->action_protected_count. Views
+ * read state, never this module, per AGENTS.md. */
+void action_snapshot(sloth_state_t *s);
 
 /* Reset all counters. */
 void action_clear(void);

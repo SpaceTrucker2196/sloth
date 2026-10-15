@@ -843,6 +843,33 @@ static void test_rrm_targeted_request_parsed(void) {
     rrm_clear();
 }
 
+static void test_rrm_measurement_mode_is_octet_9(void) {
+    /* Beacon Request body (§9.4.2.20.7): Token Mode Type OpClass Channel
+     * RandInt(2) Duration(2) MeasMode BSSID(6). MeasMode is b[9]; b[11]
+     * is BSSID octet 1, which the parser read until #124. The builder
+     * writes a wildcard BSSID, so b[11] is 0xff and a parser reading
+     * the wrong octet reports 255, never the mode it was given. */
+    rrm_clear();
+    uint8_t f[128];
+    sloth_rrm_pair_t p;
+    for (int mode = 0; mode <= 2; mode++) {
+        rrm_clear();
+        int n = build_rrm_req(f, AP_A, RRM_STA, 6, (uint8_t)mode, NULL);
+        ASSERT_EQ(f[HDR + 5 + 2 + 9], (uint8_t)mode);   /* builder puts it at b[9] */
+        ASSERT_EQ(f[HDR + 5 + 2 + 11], 0xff);          /* and 0xff at b[11]  */
+        ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+        ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+        ASSERT_EQ((int)p.last_mode, mode);
+    }
+    /* A targeted request carries it at the same offset. */
+    rrm_clear();
+    int n = build_rrm_req(f, AP_A, RRM_STA, 11, 1, "corp-wifi");
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ((int)p.last_mode, 1);
+    rrm_clear();
+}
+
 static void test_rrm_targeted_request_survives_the_htc_bit(void) {
     /* The RRM body offset is hdr+3, so it carried the same bug as CSA:
        an SSID-targeted measurement request — the steering probe that
@@ -953,16 +980,23 @@ static void test_rrm_reached_through_action_observe(void) {
 
 /* ── SA-Query storms and MFP violations (#76) ──────────────────────── */
 
-/* One Action frame: category, action, and the AP as transmitter unless
- * `from_sta` says the station sent it. `protect` sets the Protected bit,
- * which on an individually addressed robust action frame is what MFP
- * requires. */
+/* One *unprotected* Action frame: category, action, and the AP as
+ * transmitter unless `from_sta` says the station sent it.
+ *
+ * This builder used to take a `protect` flag that set FC B14 and then
+ * wrote the category in clear anyway. No such frame exists: with the
+ * Protected bit set the body is CCMP ciphertext and the octet at the
+ * category position is PN0 (§12.5.3.2). Every test that used the flag
+ * was therefore exercising a frame the air cannot carry, which is how
+ * the parser went 2026-10-14 without anyone noticing it never looked at
+ * the bit (#124). A protected frame now comes only from
+ * build_protected_action() below, which cannot be given a category. */
 static int build_action(uint8_t *f, uint8_t category, uint8_t action,
                         const uint8_t bssid[6], const uint8_t sta[6],
-                        int from_sta, int protect, int group_da) {
-    memset(f, 0, 64);
+                        int from_sta, int group_da) {
+    memset(f, 0, HDR + 4);
     f[0] = 0xD0;                                  /* Action, subtype 13 */
-    f[1] = (uint8_t)(protect ? 0x40 : 0x00);
+    f[1] = 0x00;
     if (from_sta) {
         memcpy(f + 4,  bssid, 6);                 /* DA = the AP  */
         memcpy(f + 10, sta,   6);                 /* SA = the STA */
@@ -977,6 +1011,46 @@ static int build_action(uint8_t *f, uint8_t category, uint8_t action,
     f[HDR + 2] = 0x01;                            /* transaction id */
     f[HDR + 3] = 0x00;
     return HDR + 4;
+}
+
+/* A robust Action frame as it appears on a PMF link — IEEE 802.11-2020
+ * §12.5.3.2 (CCMP MPDU format), individually addressed:
+ *
+ *   FC B14 (Protected Frame) set
+ *   CCMP header, 8 octets:  PN0 PN1 Rsvd KeyID|ExtIV(0x20) PN2 PN3 PN4 PN5
+ *   `body_len` octets of ciphertext (opaque)
+ *   MIC, 8 octets
+ *
+ * There is no category field. The octet at the category position is
+ * PN0, and the caller chooses it so that a parser which reads it as a
+ * category is caught: PN0 = 0x08 looks like SA Query, 0x0A like WNM.
+ * The packet number is a counter, so any value is a legal PN0. */
+#define CCMP_HDR_LEN 8
+#define CCMP_MIC_LEN 8
+static int build_protected_action(uint8_t *f, const uint8_t bssid[6],
+                                  const uint8_t sta[6], int from_sta,
+                                  uint8_t pn0, uint8_t pn1, int body_len) {
+    memset(f, 0, (size_t)(HDR + CCMP_HDR_LEN + body_len + CCMP_MIC_LEN));
+    f[0] = 0xD0;                                  /* Action, subtype 13 */
+    f[1] = 0x40;                                  /* Protected Frame    */
+    if (from_sta) {
+        memcpy(f + 4,  bssid, 6);
+        memcpy(f + 10, sta,   6);
+    } else {
+        memcpy(f + 4,  sta,   6);
+        memcpy(f + 10, bssid, 6);
+    }
+    memcpy(f + 16, bssid, 6);
+    int off = HDR;
+    f[off++] = pn0;
+    f[off++] = pn1;
+    f[off++] = 0x00;                              /* reserved           */
+    f[off++] = 0x20;                              /* KeyID 0, ExtIV = 1 */
+    f[off++] = 0x00; f[off++] = 0x00;             /* PN2 PN3            */
+    f[off++] = 0x00; f[off++] = 0x00;             /* PN4 PN5            */
+    for (int i = 0; i < body_len; i++) f[off++] = (uint8_t)(0xA5 ^ i);
+    for (int i = 0; i < CCMP_MIC_LEN; i++) f[off++] = (uint8_t)(0x5A ^ i);
+    return off;
 }
 
 /* Put one AP in the beacon table with a given MFP state. The MFP
@@ -1007,7 +1081,7 @@ static void test_mfp_violation_fires_on_a_required_bss(void) {
     action_mfp_clear(); beacon_clear();
     seed_beacon_mfp(AP_A, 2);                     /* MFP required */
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0);
     action_observe(f, n, 1000);
     uint8_t bss[6], cat[1];
     int count = 0;
@@ -1019,14 +1093,22 @@ static void test_mfp_violation_fires_on_a_required_bss(void) {
 }
 
 static void test_protected_frame_is_not_a_violation(void) {
-    action_mfp_clear(); beacon_clear();
+    /* Until #124 this fed a frame with the Protected bit set and a
+     * plaintext WNM category behind it — impossible on air — so it
+     * passed through the MFP guard's `!(dot11[1] & 0x40)` and proved
+     * only that. The realistic form has PN0 where the category was;
+     * 0x0A is chosen so a parser that reads PN0 as WNM is caught. */
+    action_mfp_clear(); beacon_clear(); action_clear();
     seed_beacon_mfp(AP_A, 2);
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 1, 0);
+    int n = build_protected_action(f, AP_A, STA_U, 0,
+                                   ACTION_CAT_WNM, WNM_ACT_BTM_REQUEST, 12);
     action_observe(f, n, 1000);
     int count = 0;
     ASSERT_EQ(action_mfp_violations(NULL, &count, NULL), 0);
-    action_mfp_clear(); beacon_clear();
+    ASSERT_EQ(action_category_count(ACTION_CAT_WNM), 0);
+    ASSERT_EQ(action_protected_count(), 1);
+    action_mfp_clear(); beacon_clear(); action_clear();
 }
 
 static void test_mfp_capable_is_not_required(void) {
@@ -1036,7 +1118,7 @@ static void test_mfp_capable_is_not_required(void) {
     action_mfp_clear(); beacon_clear();
     seed_beacon_mfp(AP_A, 1);
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0);
     action_observe(f, n, 1000);
     ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
     action_mfp_clear(); beacon_clear();
@@ -1048,7 +1130,7 @@ static void test_unheard_bss_is_not_a_violation(void) {
      * on every network sloth has not tuned to yet. */
     action_mfp_clear(); beacon_clear();
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 0);
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0);
     action_observe(f, n, 1000);
     ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
     ASSERT_EQ(beacon_find_mfp(AP_A), -1);
@@ -1061,9 +1143,9 @@ static void test_never_protected_categories_are_exempt(void) {
     action_mfp_clear(); beacon_clear();
     seed_beacon_mfp(AP_A, 2);
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_PUBLIC, 0, AP_A, STA_U, 0, 0, 0);
+    int n = build_action(f, ACTION_CAT_PUBLIC, 0, AP_A, STA_U, 0, 0);
     action_observe(f, n, 1000);
-    n = build_action(f, ACTION_CAT_VENDOR, 0, AP_A, STA_U, 0, 0, 0);
+    n = build_action(f, ACTION_CAT_VENDOR, 0, AP_A, STA_U, 0, 0);
     action_observe(f, n, 1001);
     ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
     action_mfp_clear(); beacon_clear();
@@ -1077,18 +1159,26 @@ static void test_group_addressed_action_is_not_read_for_mfp(void) {
     action_mfp_clear(); beacon_clear();
     seed_beacon_mfp(AP_A, 2);
     uint8_t f[64];
-    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 0, 1);
+    int n = build_action(f, ACTION_CAT_WNM, 7, AP_A, STA_U, 0, 1);
     action_observe(f, n, 1000);
     ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
     action_mfp_clear(); beacon_clear();
 }
 
+/* The SA Query frames below are *unprotected*. Before #124 they carried
+ * the Protected bit with a plaintext category behind it, a frame that
+ * cannot exist, and the detector "worked" only because the parser never
+ * looked at the bit. A real SA Query on a PMF link is ciphertext and is
+ * declined — see test_protected_sa_query_is_declined — so what this
+ * detector sees in the field is unprotected SA Query, which on a
+ * non-PMF BSS is itself worth a look. The premise expired, not the
+ * detector; the frames changed, the thresholds did not. */
 static void test_sa_query_flood_fires(void) {
     saq_clear(); beacon_clear();
     uint8_t f[64];
     for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
         int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                             AP_A, STA_U, 0, 1, 0);
+                             AP_A, STA_U, 0, 0);
         action_observe(f, n, 1000);
     }
     uint8_t bss[6], sta[6];
@@ -1109,10 +1199,10 @@ static void test_sa_query_normal_exchange_is_quiet(void) {
     uint8_t f[64];
     for (int i = 0; i < 3; i++) {
         int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                             AP_A, STA_U, 0, 1, 0);
+                             AP_A, STA_U, 0, 0);
         action_observe(f, n, 1000);
         n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_RESPONSE,
-                         AP_A, STA_U, 1, 1, 0);
+                         AP_A, STA_U, 1, 0);
         action_observe(f, n, 1000);
     }
     ASSERT_EQ(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
@@ -1127,7 +1217,7 @@ static void test_sa_query_window_slides(void) {
     uint8_t f[64];
     for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
         int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                             AP_A, STA_U, 0, 1, 0);
+                             AP_A, STA_U, 0, 0);
         action_observe(f, n, 1000);
     }
     ASSERT(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
@@ -1147,10 +1237,10 @@ static void test_sa_query_counts_both_directions_per_station(void) {
     uint8_t f[64];
     for (int i = 0; i < SAQ_FLOOD_THRESH - 1; i++) {
         int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                             AP_A, STA_U, 0, 1, 0);
+                             AP_A, STA_U, 0, 0);
         action_observe(f, n, 1000);
         n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                         AP_A, STA_V, 0, 1, 0);
+                         AP_A, STA_V, 0, 0);
         action_observe(f, n, 1000);
     }
     ASSERT_EQ(saq_pair_count(), 2);
@@ -1158,7 +1248,7 @@ static void test_sa_query_counts_both_directions_per_station(void) {
                              NULL, NULL, NULL), 0);
     /* One more to STA_U alone crosses it. */
     int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_RESPONSE,
-                         AP_A, STA_U, 1, 1, 0);
+                         AP_A, STA_U, 1, 0);
     action_observe(f, n, 1000);
     uint8_t sta[6];
     ASSERT(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
@@ -1175,7 +1265,7 @@ static void test_sa_query_table_is_bounded_and_clears(void) {
         sta[5] = (uint8_t)(i & 0xff);
         sta[4] = (uint8_t)(i >> 8);
         int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                             AP_A, sta, 0, 1, 0);
+                             AP_A, sta, 0, 0);
         action_observe(f, n, 1000 + i);
     }
     ASSERT(saq_pair_count() <= SAQ_MAX_PAIRS);
@@ -1183,12 +1273,132 @@ static void test_sa_query_table_is_bounded_and_clears(void) {
     ASSERT_EQ(saq_pair_count(), 0);
 }
 
+/* ── Protected Action frames (#124) ─────────────────────────────── */
+
+static void test_protected_sa_query_is_declined(void) {
+    /* PN0 = 0x08 is the trap: a parser that reads the first body octet
+     * as a category sees SA Query, counts it, and feeds the flood
+     * detector from a 1/256 random source. */
+    action_clear(); saq_clear(); action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_protected_action(f, AP_A, STA_U, 0,
+                                   ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST, 12);
+    uint8_t action = 0xEE;
+    ASSERT_EQ(action_parse_category(f, n, &action), ACTION_PARSE_PROTECTED);
+    ASSERT_EQ((int)action, 0xEE);          /* nothing written on decline */
+
+    int cat_before  = action_category_count(ACTION_CAT_SA_QUERY);
+    int tot_before  = action_total_count();
+    int saq_before  = saq_pair_count();
+    int prot_before = action_protected_count();
+    action_observe(f, n, 1000);
+    ASSERT_EQ(action_category_count(ACTION_CAT_SA_QUERY), cat_before);
+    ASSERT_EQ(action_total_count(), tot_before);
+    ASSERT_EQ(saq_pair_count(), saq_before);
+    ASSERT_EQ(action_protected_count(), prot_before + 1);
+    /* Protected is the opposite of the MFP violation. */
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 0);
+    action_clear(); saq_clear(); action_mfp_clear(); beacon_clear();
+}
+
+static void test_protected_sa_query_storm_does_not_reach_the_detector(void) {
+    /* A whole storm of them, all PN0 = 0x08 — the worst case for the
+     * old parser, which would have alerted on it. */
+    action_clear(); saq_clear(); beacon_clear();
+    uint8_t f[64];
+    for (int i = 0; i < SAQ_FLOOD_THRESH * 2; i++) {
+        int n = build_protected_action(f, AP_A, STA_U, i & 1,
+                                       ACTION_CAT_SA_QUERY,
+                                       (uint8_t)(i & 1), 12);
+        action_observe(f, n, 1000);
+    }
+    ASSERT_EQ(saq_flood_pair(1000, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+                             NULL, NULL, NULL), 0);
+    ASSERT_EQ(saq_pair_count(), 0);
+    ASSERT_EQ(action_protected_count(), SAQ_FLOOD_THRESH * 2);
+    action_clear(); saq_clear(); beacon_clear();
+}
+
+static void test_protected_wnm_is_not_parsed_as_btm(void) {
+    /* PN0 = 0x0A, PN1 = 0x07 reads as a BTM Request to a parser that
+     * ignores the bit; the "dialog token" would be the reserved octet
+     * and the "request mode" 0x20, the ExtIV flag. */
+    action_clear(); btm_clear(); beacon_clear();
+    uint8_t f[64];
+    int n = build_protected_action(f, AP_A, STA_U, 0,
+                                   ACTION_CAT_WNM, WNM_ACT_BTM_REQUEST, 12);
+    sloth_btm_req_t req;
+    ASSERT_EQ(action_parse_btm_req(f, n, &req), 0);
+    ASSERT_EQ(csa_parse_action(f, n, 1000), 0);
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 0);
+    action_observe(f, n, 1000);
+    ASSERT_EQ(btm_pair_count(), 0);
+    ASSERT_EQ(action_category_count(ACTION_CAT_WNM), 0);
+    ASSERT_EQ(action_protected_count(), 1);
+    action_clear(); btm_clear(); beacon_clear();
+}
+
+static void test_protected_bit_is_read_before_the_body_length(void) {
+    /* The bit lives in the FC. A protected frame cut to its bare header
+     * is still protected, not "short" — and cuts below the FC are not
+     * an Action frame at all. Every cut must be safe to observe. */
+    action_clear();
+    uint8_t f[64];
+    int n = build_protected_action(f, AP_A, STA_U, 0,
+                                   ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST, 12);
+    ASSERT_EQ(action_parse_category(f, HDR, NULL), ACTION_PARSE_PROTECTED);
+    ASSERT_EQ(action_parse_category(f, 2,   NULL), ACTION_PARSE_PROTECTED);
+    ASSERT_EQ(action_parse_category(f, 1,   NULL), ACTION_PARSE_NOT_ACTION);
+    ASSERT_EQ(action_parse_category(f, 0,   NULL), ACTION_PARSE_NOT_ACTION);
+    for (int cut = 0; cut <= n; cut++) action_observe(f, cut, 1000);
+    /* cuts 2..n inclusive carried a readable FC with the bit set */
+    ASSERT_EQ(action_protected_count(), n - 1);
+    ASSERT_EQ(action_total_count(), 0);
+    action_clear();
+}
+
+static void test_protected_count_snapshots_and_clears(void) {
+    action_clear();
+    uint8_t f[64];
+    for (int i = 0; i < 3; i++) {
+        int n = build_protected_action(f, AP_A, STA_U, 0,
+                                       ACTION_CAT_RRM, 0, 12);
+        action_observe(f, n, 1000);
+    }
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    action_snapshot(&s);
+    ASSERT_EQ(s.action_protected_count, 3);
+    action_snapshot(NULL);                        /* must not crash */
+    action_clear();
+    ASSERT_EQ(action_protected_count(), 0);
+    action_snapshot(&s);
+    ASSERT_EQ(s.action_protected_count, 0);
+}
+
+static void test_unprotected_frames_do_not_count_as_protected(void) {
+    /* The counter is the Protected bit and nothing else: a robust
+     * category in clear on an MFP-required BSS is a *violation*, which
+     * is the other counter. */
+    action_clear(); action_mfp_clear(); beacon_clear();
+    seed_beacon_mfp(AP_A, 2);
+    uint8_t f[64];
+    int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
+                         AP_A, STA_U, 0, 0);
+    action_observe(f, n, 1000);
+    ASSERT_EQ(action_protected_count(), 0);
+    ASSERT_EQ(action_category_count(ACTION_CAT_SA_QUERY), 1);
+    ASSERT_EQ(action_mfp_violations(NULL, NULL, NULL), 1);
+    action_clear(); action_mfp_clear(); beacon_clear(); saq_clear();
+}
+
 static void test_action_short_frames_are_safe(void) {
     action_mfp_clear(); saq_clear(); beacon_clear();
     seed_beacon_mfp(AP_A, 2);
     uint8_t f[64];
     int n = build_action(f, ACTION_CAT_SA_QUERY, SAQ_ACT_REQUEST,
-                         AP_A, STA_U, 0, 0, 0);
+                         AP_A, STA_U, 0, 0);
     for (int cut = 0; cut <= n; cut++) action_observe(f, cut, 1000);
     ASSERT(1);                                   /* no crash is the claim */
     action_mfp_clear(); saq_clear(); beacon_clear();
@@ -1246,6 +1456,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_csa_snapshot_newest_first);
     TEST_SUITE("802.11k Radio Measurement (#61)");
     RUN_TEST(test_rrm_targeted_request_parsed);
+    RUN_TEST(test_rrm_measurement_mode_is_octet_9);
     RUN_TEST(test_rrm_targeted_request_survives_the_htc_bit);
     RUN_TEST(test_rrm_request_without_ssid_is_broadcast);
     RUN_TEST(test_rrm_report_counted_but_separate);
@@ -1269,5 +1480,13 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_sa_query_window_slides);
     RUN_TEST(test_sa_query_counts_both_directions_per_station);
     RUN_TEST(test_sa_query_table_is_bounded_and_clears);
+
+    TEST_SUITE("action: Protected Frame bit (#124)");
+    RUN_TEST(test_protected_sa_query_is_declined);
+    RUN_TEST(test_protected_sa_query_storm_does_not_reach_the_detector);
+    RUN_TEST(test_protected_wnm_is_not_parsed_as_btm);
+    RUN_TEST(test_protected_bit_is_read_before_the_body_length);
+    RUN_TEST(test_protected_count_snapshots_and_clears);
+    RUN_TEST(test_unprotected_frames_do_not_count_as_protected);
     RUN_TEST(test_action_short_frames_are_safe);
 }

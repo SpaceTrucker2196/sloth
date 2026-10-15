@@ -74,6 +74,14 @@ void view_deauth_draw(const sloth_state_t *s) {
         tui_normal(); TPRINT("   BTM steers: ");
         tui_bright(); TPRINT("%d", s->btm_steer_count);
     }
+    /* Action frames whose body was CCMP ciphertext. On a PMF network
+     * this is where the SA Query / WNM / RRM traffic went, so a quiet
+     * BTM table next to a large number here means "unreadable", not
+     * "nothing is steering" (#124). */
+    if (s->action_protected_count) {
+        tui_normal(); TPRINT("   protected action: ");
+        tui_bright(); TPRINT("%d", s->action_protected_count);
+    }
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     if (s->probe_iface[0])
         TPRINT("  iface: %s", s->probe_iface);

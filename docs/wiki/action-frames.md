@@ -3,7 +3,9 @@
 **Issue:** [#76](https://github.com/SpaceTrucker2196/sloth/issues/76) ·
 **Code:** [`src/action_snoop.c`](../../src/action_snoop.c) ·
 **Surfaces in:** `SA_QUERY_FLOOD`, `MFP_UNPROTECTED`, and the four
-action-frame detectors that came before them
+action-frame detectors that came before them ·
+**Last updated**: 2026-10-14 (#124 — the Protected bit; Beacon Request
+mode read from the right octet).
 
 ## Why this surface matters
 
@@ -104,6 +106,66 @@ protected by BIP, which appends a Management MIC element rather than
 setting the Protected bit. Reading that bit on a broadcast answers a
 question it was never asked.
 
+## The Protected bit — what sloth cannot read (#124)
+
+Every detector on this page reads the Category octet, the first octet
+of the Action body. On a PMF link that octet does not exist in the
+clear. The robust categories — Spectrum Management (0), Radio
+Measurement (5), SA Query (8), WNM (10) — are sent as CCMP/GCMP
+ciphertext (IEEE 802.11-2020 §12.5.3.2): after the 24- or 28-octet
+header comes an 8-octet CCMP header `PN0 PN1 Rsvd KeyID|ExtIV PN2 PN3
+PN4 PN5`, then the encrypted body, then an 8-octet MIC. The octet where
+Category would sit is **PN0**, the low byte of a packet counter, and
+the next is PN1.
+
+Until 2026-10-14 `action_parse_category()` never looked at the
+Protected Frame bit (FC B14). It read PN0 as a category, so on a PMF
+network:
+
+- every protected Action frame was counted under whatever its PN0
+  happened to be — one in 256 under SA Query, one in 256 under WNM;
+- the frames that *were* SA Query were counted under their own PN0,
+  i.e. almost never as SA Query. `SA_QUERY_FLOOD` was nearly blind on
+  exactly the networks where SA Query exists, and could fire from a
+  PN0 coincidence on a busy link;
+- `csa_parse_action`, `rrm_parse_action` and `action_parse_btm_req`
+  parsed ciphertext when PN0/PN1 lined up. The "dialog token" of such
+  a BTM Request was the CCMP reserved octet and its "request mode" was
+  `0x20`, the ExtIV flag.
+
+The test suite could not catch this because its builder wrote a
+plaintext category into a frame with the Protected bit set — a frame
+the air cannot carry — so the MFP-violation guard's `!(dot11[1] &
+0x40)` was the only code that ever saw the bit, and it passed.
+
+**What changed.** The parser now returns `ACTION_PARSE_PROTECTED` (-2)
+for any Action frame with the bit set, before reading a single body
+octet; `ACTION_PARSE_NOT_ACTION` (-1) keeps its old meaning.
+`action_observe()` tallies the frame under `action_protected_count()`
+and returns — nothing downstream runs on ciphertext. The deauth view
+(`[a]`) shows the tally as `protected action: N` beside the BTM count,
+so an empty steering table on a PMF network reads as "unreadable", not
+"nothing happening". The frames are not totalled under
+`action_total_count()`: that figure is frames whose category was read,
+and these have none.
+
+**What this does to the detectors.** `MFP_UNPROTECTED` is unchanged;
+it only ever applied to frames with the bit clear. `SA_QUERY_FLOOD`
+becomes honest: it sees only *unprotected* SA Query, which on a
+non-PMF BSS is itself worth attention — SA Query has no business there.
+On a PMF BSS the AP's SA Queries are now invisible to it, as they
+always really were. A length-and-timing heuristic for protected SA
+Query (the exchange has a fixed body size) is possible but needs its
+own citation and its own false-positive analysis; it is a follow-up,
+not part of this change.
+
+**The second octet.** The same pass fixed the Beacon Request
+Measurement Mode: §9.4.2.20.7 lays the element body out as Token,
+Mode, Type, OpClass, Channel, RandInt(2), Duration(2), **Measurement
+Mode**, BSSID(6) — Measurement Mode is octet 9 and the parser read
+octet 11, BSSID octet 1. Exported as `measurement_mode`; see the
+contract note in [[jsonl-schema]].
+
 ## The chain, as a marker
 
 #76 also proposed `EVIL_TWIN_BTM_CHAIN`: action → deauth → new-BSSID
@@ -168,6 +230,18 @@ usable are the negative ones: MFP capable rather than required, a BSSID
 never heard beacon, a Public Action frame, a group-addressed frame, and
 a legitimate three-frame SA-Query exchange. A capture from a lab rig
 running `mdk4` would exercise none of them.
+
+Since #124 the protected case is built the way it appears on air: FC
+B14 set, an 8-octet CCMP header, opaque body, 8-octet MIC, and **no
+category field** — the test builder for it cannot be given one. PN0 is
+chosen as `0x08` or `0x0A` so that a parser reading PN0 as a category
+is caught by the SA Query and WNM assertions. The old builder's
+`protect` flag, which set the bit over a plaintext category, is gone,
+because a frame that cannot occur proves nothing about the ones that
+do. Both fixes are mutation-proved: putting the octet-11 read back
+reddens the mode test, and removing the Protected check reddens every
+protected-frame test (category count, SA Query pair count, protected
+tally, and the parse result itself).
 
 ## See also
 

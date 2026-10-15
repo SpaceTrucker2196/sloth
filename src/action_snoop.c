@@ -40,6 +40,13 @@ static int action_body_off(const uint8_t *dot11, int len) {
  * silently dropped rather than counted. */
 static int             g_cat_count[256];
 static int             g_total;
+/* Action frames declined because the Protected bit was set. Kept apart
+ * from g_total on purpose: g_total is "frames whose category was read",
+ * and a ciphertext frame has no readable category to be totalled under.
+ * The view shows this row so an operator on a PMF network can see why
+ * the SA Query / WNM / RRM counts look low there — they are not missing,
+ * they are unreadable, and saying so beats a silent zero (#124). */
+static int             g_protected;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── BTM steering state (slice 2) ─────────────────────────
@@ -74,15 +81,26 @@ static uint16_t le16(const uint8_t *p) {
 }
 
 int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out) {
-    if (!dot11) return -1;
+    if (!dot11 || len < 2) return ACTION_PARSE_NOT_ACTION;
     /* Subtype 13, type 0, protocol version 0 → FC byte 0 == 0xD0.
      * Compared whole rather than masked so a protocol-version-nonzero
      * frame (which we cannot interpret) is rejected rather than parsed.
      * Note this check does NOT see the +HTC bit, which lives in byte 1 —
      * so it never excluded the frames the old fixed offset mis-read. */
-    if (dot11[0] != 0xD0) return -1;
+    if (dot11[0] != 0xD0) return ACTION_PARSE_NOT_ACTION;
+    /* Protected Frame (FC B14) before anything in the body is read. On
+     * a PMF link every robust category — Spectrum, RRM, SA Query, WNM —
+     * travels as CCMP/GCMP ciphertext (§12.5.3): the octet where the
+     * category would sit is PN0 of the CCMP header and the next is PN1.
+     * Until 2026-10-14 this function read them anyway, so a protected
+     * frame whose PN0 happened to be 0x08 was tallied as SA Query and
+     * fed the flood detector from a 1/256 random source, while the real
+     * SA Queries on the same link were counted under whatever PN0 they
+     * carried. deauth_parse() has declined ciphertext the same way since
+     * #88; this is the Action-frame half of that rule (#124). */
+    if (dot11[1] & 0x40) return ACTION_PARSE_PROTECTED;
     int hdr = action_body_off(dot11, len);
-    if (hdr < 0 || len < hdr + 2) return -1;
+    if (hdr < 0 || len < hdr + 2) return ACTION_PARSE_NOT_ACTION;
     if (action_out) *action_out = dot11[hdr + 1];
     return dot11[hdr];
 }
@@ -301,6 +319,18 @@ void action_mfp_clear(void) {
 void action_observe(const uint8_t *dot11, int len, time_t now) {
     uint8_t action = 0;
     int cat = action_parse_category(dot11, len, &action);
+    if (cat == ACTION_PARSE_PROTECTED) {
+        /* Nothing below can run on ciphertext. The MFP-violation path is
+         * unaffected — it only ever applied to frames with the bit
+         * clear — and the SA Query detector becomes honest: it now sees
+         * only unprotected SA Query, which on a non-PMF BSS is itself a
+         * finding. A length heuristic for protected SA Query is a
+         * follow-up with its own citation, not this slice (#124). */
+        pthread_mutex_lock(&g_mu);
+        g_protected++;
+        pthread_mutex_unlock(&g_mu);
+        return;
+    }
     if (cat < 0) return;
     pthread_mutex_lock(&g_mu);
     g_cat_count[cat]++;
@@ -562,7 +592,13 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
             char ssid[33] = "";
             int  targeted = 0;
             uint8_t chan = (tln >= 5) ? b[4] : 0;
-            uint8_t mode = (tln >= 12) ? b[11] : 0;
+            /* Beacon Request layout (§9.4.2.20.7) counted from the
+             * element body: Token b[0], Mode b[1], Type b[2], OpClass
+             * b[3], Channel b[4], RandInt b[5..6], Duration b[7..8],
+             * Measurement Mode b[9], BSSID b[10..15]. This read b[11]
+             * until 2026-10-14 — BSSID octet 1 — and exported it as
+             * `measurement_mode`; 0xff on every wildcard request (#124). */
+            uint8_t mode = (tln >= 10) ? b[9] : 0;
             int sub = 3 + 13;                 /* past the fixed body */
             while (sub + 2 <= (int)tln) {
                 uint8_t sid  = b[sub];
@@ -673,10 +709,23 @@ int action_total_count(void) {
     return n;
 }
 
+int action_protected_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_protected;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+void action_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    s->action_protected_count = action_protected_count();
+}
+
 void action_clear(void) {
     pthread_mutex_lock(&g_mu);
     memset(g_cat_count, 0, sizeof(g_cat_count));
     g_total = 0;
+    g_protected = 0;
     pthread_mutex_unlock(&g_mu);
 }
 

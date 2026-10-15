@@ -258,6 +258,7 @@ static void poll_data(sloth_state_t *s) {
     assoc_snapshot(s);
     assoc_request_snapshot(s);
     btm_snapshot(s);
+    action_snapshot(s);   /* protected-frame tally (#124) */
     csa_snapshot(s);
     rrm_snapshot(s);
     frag_snapshot(s);   /* VIEW_FRAGATTACK (#75 slice 5) */

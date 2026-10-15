@@ -806,6 +806,29 @@ static void test_view_draw_with_flood(void) {
     ASSERT(s.deauth_flood_active);
 }
 
+/* Defined further down with the BTM section; declared here so this
+ * test can assert on rendered output instead of smoke-testing. */
+static void capture_deauth(const sloth_state_t *s, char *buf, int sz);
+
+static void test_view_draw_protected_action_row(void) {
+    /* The "protected action" row appears only when the tally is
+     * non-zero (#124). Asserted on the RENDERED text, both ways: the
+     * first version drew the view and then checked the input struct was
+     * unchanged, which cannot fail - it stayed green with the row
+     * deleted from the view. */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    char out[8192];
+
+    s.action_protected_count = 7;
+    capture_deauth(&s, out, sizeof out);
+    ASSERT(strstr(out, "protected action: ") != NULL);
+    ASSERT(strstr(out, "protected action: 7") != NULL);
+
+    s.action_protected_count = 0;
+    capture_deauth(&s, out, sizeof out);
+    ASSERT(strstr(out, "protected action") == NULL);
+}
+
 static void test_view_draw_disassoc(void) {
     clock_reset(); deauth_clear();
     rec(SRC_A, DST_STA, BSSID_A, 4, 10);  /* disassoc reason 4 */
@@ -1189,6 +1212,7 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_view_draw_normal);
     RUN_TEST(test_view_draw_with_flood);
     RUN_TEST(test_view_draw_disassoc);
+    RUN_TEST(test_view_draw_protected_action_row);
     RUN_TEST(test_view_draw_protected_reason);
     RUN_TEST(test_view_draw_btm_section);
     RUN_TEST(test_view_draw_btm_with_no_deauths);

@@ -2895,3 +2895,33 @@ shown as a commented example, not the reference site's real SSID and
 BSSID. Those are operator data; the migration recipe on the page tells
 the operator to edit the file, and the test asserts the real SSID is
 not in the shipped copy.
+
+## 2026-10-14 — Action frames honour the Protected bit; Beacon Request mode read from octet 9 (#124)
+
+[[action-frames]] gains a section on what the Protected Frame bit
+means for every detector on that page, and [[jsonl-schema]] carries a
+contract note on `rrm_beacon_request.measurement_mode`.
+
+Two defects in `src/action_snoop.c`. **B:** `action_parse_category()`
+never checked FC B14, so on a PMF link it read PN0 of the CCMP header
+as the category: `SA_QUERY_FLOOD` was nearly blind where SA Query
+exists and could fire from a 1/256 PN0 coincidence; the CSA, RRM and
+BTM parsers ran on ciphertext when PN0/PN1 lined up. The parser now
+returns `ACTION_PARSE_PROTECTED` (-2) before reading the body,
+`action_observe()` tallies the frame under `action_protected_count()`
+and stops, and the `[a]` deauth view shows the tally as `protected
+action: N` beside the BTM count (`docs/views/deauth.md`). **C:** the
+Beacon Request Measurement Mode was read from element octet 11 (BSSID
+octet 1, `0xff` on every wildcard request) instead of octet 9
+(§9.4.2.20.7); `measurement_mode` values before this date are not
+modes.
+
+The tests had not caught B because `build_action(..., protect=1, ...)`
+wrote a plaintext category into a Protected frame. That flag is gone
+from both `tests/test_action_snoop.c` and `tests/test_alerts.c`; the
+protected form is now built by a CCMP-header helper that cannot be
+given a category, with PN0 chosen to look like SA Query or WNM. Six
+protected-frame tests and one mode test, each mutation-proved. The
+`docs/views/alerts.md` `SA_QUERY_FLOOD` row carries the scope note:
+unprotected SA Query only, which on a non-PMF BSS is itself a finding.
+No length heuristic for protected SA Query in this slice.

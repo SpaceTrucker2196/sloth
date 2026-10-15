@@ -2813,6 +2813,10 @@ typedef struct {
      * a client landed, btm_steer_t is who told it to move. */
     btm_steer_t          btm_steers[MAX_BTM_PAIRS];
     int                  btm_steer_count;
+    /* Action frames declined as PMF ciphertext (#124). Shown beside the
+     * BTM count so an empty steering table on a PMF network reads as
+     * "unreadable", not "nothing happening". */
+    int                  action_protected_count;
     /* Channel-switch announcements (#63), newest first. */
     sloth_csa_event_t    csa_events[SLOTH_CSA_MAX_EVENTS];
     int                  csa_count;
