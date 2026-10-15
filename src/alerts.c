@@ -3786,8 +3786,15 @@ static void rule_wps_pin_brute(const sloth_state_t *s, time_t now) {
         wps_uuid_hex(uhex, sess[i].uuid_e);
         int mine = ownership_is_my_bssid(sess[i].bssid);
 
+        /* UUID-E is chosen by the enrollee, i.e. the attacker (#112).
+         * The key carries all 16 bytes: the 8-byte display prefix in
+         * the detail merged two tools whose UUIDs agree that far. */
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
-        snprintf(key, sizeof(key), "wpsbrute-uuid:%s:%s", bss, uhex);
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "wpsbrute-uuid");
+        akey_mac(&k, sess[i].bssid);
+        akey_hex(&k, sess[i].uuid_e, sizeof(sess[i].uuid_e));
+        if (!akey_end(&k)[0]) continue;
         snprintf(detail, sizeof(detail),
                  "%d WPS PIN attempts at %s in %ds from %d MACs sharing "
                  "UUID-E %s.. - rotating-MAC brute force, VU#723755%s",

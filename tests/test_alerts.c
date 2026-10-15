@@ -7609,8 +7609,11 @@ static void test_wps_pin_brute_sees_through_rotating_macs(void) {
     ASSERT(i >= 0);
     if (i >= 0) {
         ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        /* All 16 UUID-E bytes in the key (#112); the detail keeps the
+         * 8-byte display prefix. */
         ASSERT_STR(s.alerts[i].key,
-                   "wpsbrute-uuid:3c:84:6a:11:22:33:a0a1a2a3a4a5a6a7");
+                   "wpsbrute-uuid:3c:84:6a:11:22:33:"
+                   "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf");
         ASSERT(strstr(s.alerts[i].detail, "5 MACs") != NULL);
         ASSERT(strstr(s.alerts[i].detail, "a0a1a2a3a4a5a6a7") != NULL);
     }
@@ -8835,6 +8838,32 @@ static void test_rogue_dhcp_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+/* Two rotating-MAC groups at one AP whose UUID-Es agree for 15 of 16
+ * bytes. The old key carried only the first 8, so they were one
+ * finding. */
+static void test_wps_pin_brute_key_distinguishes_long_prefix_pair(void) {
+    wps_begin(1700000000);
+    sloth_state_t s; seed_state(&s);
+    for (int g = 0; g < 2; g++) {
+        uint8_t uuid[16];
+        for (int k = 0; k < 16; k++) uuid[k] = (uint8_t)(0xA0 + k);
+        uuid[15] = (uint8_t)(0xE0 + g);
+        for (int i = 0; i < WPS_PIN_BRUTE_CYCLES; i++) {
+            uint8_t sta[6] = { 0x02, 0x00, 0x00, 0x00, (uint8_t)g, (uint8_t)i };
+            wps_cycle(WPSB, sta, uuid, g_wps_wall - 50 + i);
+        }
+    }
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_WPS_PIN_BRUTE), 2);
+    int i = find_alert(&s, ALERT_TYPE_WPS_PIN_BRUTE);
+    ASSERT(i >= 0);
+    if (i >= 0)
+        ASSERT(strncmp(s.alerts[i].key,
+                       "wpsbrute-uuid:3c:84:6a:11:22:33:a0a1a2a3a4a5a6a7a8a9aaabacad",
+                       60) == 0);
+    wps_end();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -10020,6 +10049,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_ssid_confusion_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_twin_chain_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_rogue_dhcp_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_wps_pin_brute_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
