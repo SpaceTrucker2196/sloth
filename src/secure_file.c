@@ -50,6 +50,31 @@ static int validate(const struct stat *st, int want_dir, const char *path,
     return 0;
 }
 
+/* Open `path` as a directory without following a final symlink and
+ * fstat it, so every later check runs against the object we hold and
+ * not against whatever the name resolves to a moment later. */
+static int open_dir_nofollow(const char *path, struct stat *st,
+                             char *err, size_t errsz) {
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) {
+        /* O_DIRECTORY|O_NOFOLLOW on a link reports ENOTDIR or ELOOP
+         * depending on the kernel; name the actual problem. */
+        int e = errno;
+        struct stat ls;
+        if (lstat(path, &ls) == 0 && S_ISLNK(ls.st_mode))
+            seterr(err, errsz, "%s: is a symbolic link — refusing", path);
+        else
+            seterr(err, errsz, "%s: %s", path, strerror(e));
+        return -1;
+    }
+    if (fstat(fd, st) != 0) {
+        seterr(err, errsz, "%s: %s", path, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 int sfile_private_dir(const char *path, char *err, size_t errsz) {
     if (!path || !path[0]) {
         seterr(err, errsz, "empty directory path");
@@ -63,25 +88,45 @@ int sfile_private_dir(const char *path, char *err, size_t errsz) {
                path, strerror(errno));
         return -1;
     }
-    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
-        /* O_DIRECTORY|O_NOFOLLOW on a link reports ENOTDIR or ELOOP
-         * depending on the kernel; name the actual problem. */
-        int e = errno;
-        struct stat ls;
-        if (lstat(path, &ls) == 0 && S_ISLNK(ls.st_mode))
-            seterr(err, errsz, "%s: is a symbolic link — refusing", path);
-        else
-            seterr(err, errsz, "%s: %s", path, strerror(e));
-        return -1;
-    }
     struct stat st;
-    if (fstat(fd, &st) != 0) {
-        seterr(err, errsz, "%s: %s", path, strerror(errno));
+    int fd = open_dir_nofollow(path, &st, err, errsz);
+    if (fd < 0) return -1;
+    if (validate(&st, 1, path, err, errsz) != 0) {
         close(fd);
         return -1;
     }
-    if (validate(&st, 1, path, err, errsz) != 0) {
+    return fd;
+}
+
+int sfile_system_dir(const char *path, char *err, size_t errsz) {
+    if (!path || !path[0]) {
+        seterr(err, errsz, "empty directory path");
+        return -1;
+    }
+    /* No mkdir: a system directory that is absent means the daemon it
+     * belongs to is not installed, and creating it would be sloth
+     * configuring a service it does not own. */
+    struct stat st;
+    int fd = open_dir_nofollow(path, &st, err, errsz);
+    if (fd < 0) return -1;
+    /* Root-owned is the normal case for /etc/...; euid-owned covers a
+     * --discovery path an operator points somewhere of their own. Any
+     * third owner could swap the entries under us. */
+    if (st.st_uid != 0 && st.st_uid != geteuid()) {
+        seterr(err, errsz,
+               "%s: owned by neither root nor the effective user — refusing",
+               path);
+        close(fd);
+        return -1;
+    }
+    /* Readable by the world is fine and expected; writable by anyone
+     * but the owner is not, because the name we rename into could then
+     * be replanted between our checks and our write. */
+    if (st.st_mode & 022) {
+        seterr(err, errsz,
+               "%s: mode %04o is group/other writable — refusing "
+               "(sloth will not chmod it)",
+               path, (unsigned)(st.st_mode & 07777));
         close(fd);
         return -1;
     }
@@ -90,6 +135,20 @@ int sfile_private_dir(const char *path, char *err, size_t errsz) {
 
 int sfile_open(int dirfd, const char *name, sfile_mode_t mode,
                char *err, size_t errsz) {
+    if (!name) name = "";
+    /* A dirfd caller is writing INSIDE a directory it validated and
+     * pinned; a name with a path component would resolve outside that
+     * pin while every check above it still passed (#134, CWE-22). The
+     * names that reach here are built by sloth today, so this is a
+     * contract the next caller cannot break by accident: the day a TUI
+     * prompt or the data socket supplies one, "../" stops at the door. */
+    if (dirfd != AT_FDCWD &&
+        (!name[0] || strchr(name, '/') ||
+         strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) {
+        seterr(err, errsz, "%s: not a bare file name — refusing", name);
+        errno = EINVAL;
+        return -1;
+    }
     /* O_NONBLOCK so a FIFO planted at the path cannot hang the open
      * waiting for a reader; it is refused by the type check below and
      * the flag is cleared again for the regular file we keep. */

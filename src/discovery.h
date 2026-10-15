@@ -32,12 +32,21 @@ int discovery_routable_tcp_port(const char *data_socket_spec);
 
 /* Publish a service file for `data_socket_spec` at `path` (NULL =
  * the default /etc/avahi/services/sloth.service). No-op returning -1
- * when the spec isn't a routable TCP bind. Returns 0 on a successful
- * write. Records the path so discovery_unpublish() can remove it. */
+ * when the spec isn't a routable TCP bind, or when --strict is locked.
+ * Returns 0 on a successful write.
+ *
+ * The write is symlink-safe (#134): the directory is pinned with
+ * sfile_system_dir() — it must be root- or euid-owned and not
+ * group/other-writable, so a 1777 /tmp is refused — the content goes
+ * into an O_EXCL temp inside it and takes the final name by rename,
+ * which replaces a planted link rather than following it. The file is
+ * 0644 on purpose: avahi-daemon runs as `avahi` and must read it. The
+ * directory descriptor is held until discovery_unpublish(). */
 int discovery_publish(const char *data_socket_spec, const char *path);
 
-/* Remove the service file previously written by discovery_publish().
- * Safe to call when nothing was published. */
+/* Remove the service file previously written by discovery_publish(),
+ * through the directory descriptor held since then. Safe to call when
+ * nothing was published. */
 void discovery_unpublish(void);
 
 #endif /* SLOTH_DISCOVERY_H */

@@ -12,6 +12,15 @@
 #include <unistd.h>
 #include <sqlite3.h>
 
+/* The side-file checks in db_prepare_private() are advisory — a
+ * symlink can appear between the lstat and SQLite's own open — and are
+ * acceptable only because SQLite itself refuses to follow one with
+ * SQLITE_OPEN_NOFOLLOW. That flag arrived in 3.31.0; an #ifdef around
+ * it compiled silently without it on older headers (#134). */
+#if defined(SQLITE_VERSION_NUMBER) && SQLITE_VERSION_NUMBER < 3031000
+#error "sloth needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW, SQLITE_DBCONFIG_TRUSTED_SCHEMA)"
+#endif
+
 #include "ownership.h"
 #include "presence.h"
 #include "secure_file.h"
@@ -706,10 +715,8 @@ static int db_prepare_private(const char *path) {
 int db_open(const char *path) {
     if (!path || !path[0]) return 0;
     if (!db_prepare_private(path)) return 0;
-    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-#ifdef SQLITE_OPEN_NOFOLLOW
-    flags |= SQLITE_OPEN_NOFOLLOW;
-#endif
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                SQLITE_OPEN_NOFOLLOW;
     if (sqlite3_open_v2(path, &g_db, flags, NULL) != SQLITE_OK) {
         fprintf(stderr, "sloth: could not open db %s: %s\n", path,
                 g_db ? sqlite3_errmsg(g_db) : "?");

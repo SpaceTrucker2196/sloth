@@ -5,6 +5,12 @@
 
 #include "query.h"
 
+/* Same pin as src/db.c (#134): the corpus is opened read-only, but a
+ * --corpus path that is a symlink still should not be followed. */
+#if defined(SQLITE_VERSION_NUMBER) && SQLITE_VERSION_NUMBER < 3031000
+#error "sloth needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW, SQLITE_DBCONFIG_TRUSTED_SCHEMA)"
+#endif
+
 struct rq_handle { sqlite3 *db; };
 
 static char g_open_err[128];
@@ -18,7 +24,8 @@ rq_handle_t *rq_open(const char *path) {
         return NULL;
     }
     sqlite3 *db = NULL;
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW,
+                        NULL) != SQLITE_OK) {
         snprintf(g_open_err, sizeof(g_open_err), "cannot open %.80s", path);
         if (db) sqlite3_close(db);
         return NULL;

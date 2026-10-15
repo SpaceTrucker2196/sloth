@@ -52,7 +52,6 @@ checkLevelNormal:src/main.c
 # the next call, and no other thread in sloth calls either function.
 # A call moved onto the capture, probe or DNS worker thread must switch
 # to localtime_r()/gmtime_r() and drop its line here.
-localtimeCalled:src/alert_pcap.c
 gmtimeCalled:src/posture.c
 localtimeCalled:src/views/dashboard_bands.c
 localtimeCalled:src/views/dns_log.c

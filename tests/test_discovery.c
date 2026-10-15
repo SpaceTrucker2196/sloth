@@ -5,6 +5,49 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
+
+/* The service file lands in a directory sloth does not own, as root,
+ * so publish goes through secure_file (#134). A fresh mkdtemp (0700,
+ * euid-owned) stands in for /etc/avahi/services: it passes
+ * sfile_system_dir()'s owner/mode rule, and a bare mkstemp path in a
+ * 1777 /tmp — which the older tests used — is exactly what that rule
+ * refuses. */
+static char g_dir[64];
+static char g_path[128];
+
+static void fresh_dir(void) {
+    snprintf(g_dir, sizeof(g_dir), "/tmp/sloth_disc_XXXXXX");
+    ASSERT(mkdtemp(g_dir) != NULL);
+    snprintf(g_path, sizeof(g_path), "%s/sloth.service", g_dir);
+}
+
+static void remove_dir(void) {
+    const char *names[] = { "sloth.service", ".sloth.service.tmp",
+                            "sentinel", "sentinel2", NULL };
+    char p[160];
+    for (int i = 0; names[i]; i++) {
+        snprintf(p, sizeof(p), "%s/%s", g_dir, names[i]);
+        unlink(p);
+    }
+    rmdir(g_dir);
+}
+
+static int read_file(const char *path, char *buf, size_t sz) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    size_t got = fread(buf, 1, sz - 1, f);
+    buf[got] = '\0';
+    fclose(f);
+    return (int)got;
+}
+
+static void write_file(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    ASSERT(f != NULL);
+    fputs(text, f);
+    fclose(f);
+}
 
 /* ── Routable-port classification ────────────────────────── */
 
@@ -107,65 +150,141 @@ static void test_xml_rejects_bad_args(void) {
 /* ── Publish / unpublish round-trip (to a temp path) ─────── */
 
 static void test_publish_writes_and_unpublish_removes(void) {
-    char path[] = "/tmp/sloth_disc_test_XXXXXX";
-    int fd = mkstemp(path);
-    ASSERT(fd >= 0);
-    close(fd);
+    fresh_dir();
+    /* An existing regular file at the name is replaced: re-running
+     * sloth must not be refused by its own previous advertisement. */
+    write_file(g_path, "stale");
 
     /* Routable spec → file written with the advertised port. */
-    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), 0);
-    FILE *f = fopen(path, "r");
-    ASSERT(f != NULL);
-    char content[2048]; size_t got = fread(content, 1, sizeof(content) - 1, f);
-    content[got] = '\0';
-    fclose(f);
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", g_path), 0);
+    char content[2048];
+    ASSERT(read_file(g_path, content, sizeof(content)) > 0);
     ASSERT(strstr(content, "<port>8765</port>") != NULL);
     ASSERT(strstr(content, "_sloth._tcp") != NULL);
 
+    /* 0644 on purpose: avahi-daemon runs as `avahi` and must read it.
+     * A regular file, one link, no temp left behind. */
+    struct stat st;
+    ASSERT_EQ(lstat(g_path, &st), 0);
+    ASSERT(S_ISREG(st.st_mode));
+    ASSERT_EQ((int)(st.st_mode & 07777), 0644);
+    ASSERT_EQ((int)st.st_nlink, 1);
+    char tmp[160];
+    snprintf(tmp, sizeof(tmp), "%s/.sloth.service.tmp", g_dir);
+    ASSERT(access(tmp, F_OK) != 0);
+
     /* Unpublish removes exactly that file. */
     discovery_unpublish();
-    ASSERT(access(path, F_OK) != 0);
+    ASSERT(access(g_path, F_OK) != 0);
+    remove_dir();
 }
 
 static void test_publish_skips_loopback(void) {
-    char path[] = "/tmp/sloth_disc_lo_XXXXXX";
+    fresh_dir();
+    /* Loopback bind → nothing published, file stays absent. */
+    ASSERT_EQ(discovery_publish("tcp:127.0.0.1:8765", g_path), -1);
+    ASSERT(access(g_path, F_OK) != 0);
+    discovery_unpublish();   /* safe no-op */
+    remove_dir();
+}
+
+/* ── The write is symlink-safe (#134) ─────────────────────── */
+
+/* The bypass the issue found: fopen(out, "w") as root followed a
+ * symlink planted at sloth.service and truncated its target (CWE-59).
+ * Plant one pointing at a sentinel; publish must leave the sentinel
+ * byte-for-byte intact and replace the LINK with a regular file.
+ * Mutation-proved: with the fopen writer restored the sentinel reads
+ * as the service XML and this goes red. */
+static void test_publish_does_not_follow_a_planted_symlink(void) {
+    fresh_dir();
+    char sentinel[160];
+    snprintf(sentinel, sizeof(sentinel), "%s/sentinel", g_dir);
+    write_file(sentinel, "SENTINEL: must survive publish\n");
+    ASSERT_EQ(symlink(sentinel, g_path), 0);
+
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", g_path), 0);
+
+    char content[2048];
+    ASSERT(read_file(sentinel, content, sizeof(content)) > 0);
+    ASSERT_STR(content, "SENTINEL: must survive publish\n");
+
+    struct stat st;
+    ASSERT_EQ(lstat(g_path, &st), 0);
+    ASSERT(S_ISREG(st.st_mode));          /* the link itself is gone */
+    ASSERT_EQ((int)(st.st_mode & 07777), 0644);
+    ASSERT(read_file(g_path, content, sizeof(content)) > 0);
+    ASSERT(strstr(content, "<port>8765</port>") != NULL);
+
+    /* Unpublish removes the file sloth wrote and nothing else. */
+    discovery_unpublish();
+    ASSERT(access(g_path, F_OK) != 0);
+    ASSERT_EQ(access(sentinel, F_OK), 0);
+    remove_dir();
+}
+
+/* The temp name is sloth's own, so a stale one is removed before the
+ * O_EXCL create — removed by name, never written through. A link
+ * planted there must not reach its target either. */
+static void test_publish_replaces_a_stale_tmp_without_following_it(void) {
+    fresh_dir();
+    char sentinel[160], tmp[160];
+    snprintf(sentinel, sizeof(sentinel), "%s/sentinel2", g_dir);
+    snprintf(tmp, sizeof(tmp), "%s/.sloth.service.tmp", g_dir);
+    write_file(sentinel, "SENTINEL2\n");
+    ASSERT_EQ(symlink(sentinel, tmp), 0);
+
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", g_path), 0);
+
+    char content[64];
+    ASSERT(read_file(sentinel, content, sizeof(content)) > 0);
+    ASSERT_STR(content, "SENTINEL2\n");
+    ASSERT(access(tmp, F_OK) != 0);       /* consumed by the rename */
+    struct stat st;
+    ASSERT_EQ(lstat(g_path, &st), 0);
+    ASSERT(S_ISREG(st.st_mode));
+
+    discovery_unpublish();
+    remove_dir();
+}
+
+/* A directory anyone can write into is refused outright, because the
+ * name sloth renames onto could be replanted between its checks and
+ * the rename. /tmp is the canonical case. */
+static void test_publish_refuses_a_shared_directory(void) {
+    char path[] = "/tmp/sloth_disc_shared_XXXXXX";
     int fd = mkstemp(path);
     ASSERT(fd >= 0);
     close(fd);
     unlink(path);   /* start absent */
 
-    /* Loopback bind → nothing published, file stays absent. */
-    ASSERT_EQ(discovery_publish("tcp:127.0.0.1:8765", path), -1);
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), -1);
     ASSERT(access(path, F_OK) != 0);
-    discovery_unpublish();   /* safe no-op */
+    discovery_unpublish();   /* nothing to remove */
 }
 
 /* ── Strict observation suppresses the carve-out (#84) ───── */
 
 static void test_strict_suppresses_publish(void) {
-    char path[] = "/tmp/sloth_disc_strict_XXXXXX";
-    int fd = mkstemp(path);
-    ASSERT(fd >= 0);
-    close(fd);
-    unlink(path);   /* start absent */
-
+    fresh_dir();
     observe_reset_policy();
     observe_lock_strict();
 
     /* A routable bind that would otherwise publish: under --strict no
      * service file is written, so avahi-daemon never announces on
      * sloth's behalf. */
-    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), -1);
-    ASSERT(access(path, F_OK) != 0);
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", g_path), -1);
+    ASSERT(access(g_path, F_OK) != 0);
 
     /* Same spec, same path, lock cleared → it does publish, so the -1
      * above is the lock and not some unrelated failure. */
     observe_reset_policy();
-    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), 0);
-    ASSERT_EQ(access(path, F_OK), 0);
+    ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", g_path), 0);
+    ASSERT_EQ(access(g_path, F_OK), 0);
 
     discovery_unpublish();
-    ASSERT(access(path, F_OK) != 0);
+    ASSERT(access(g_path, F_OK) != 0);
+    remove_dir();
 }
 
 void run_discovery_tests(void) {
@@ -183,5 +302,8 @@ void run_discovery_tests(void) {
     RUN_TEST(test_xml_rejects_bad_args);
     RUN_TEST(test_publish_writes_and_unpublish_removes);
     RUN_TEST(test_publish_skips_loopback);
+    RUN_TEST(test_publish_does_not_follow_a_planted_symlink);
+    RUN_TEST(test_publish_replaces_a_stale_tmp_without_following_it);
+    RUN_TEST(test_publish_refuses_a_shared_directory);
     RUN_TEST(test_strict_suppresses_publish);
 }

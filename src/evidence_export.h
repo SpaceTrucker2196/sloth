@@ -64,10 +64,16 @@
  * out is still worth the frames that remain, and a partial export that
  * says so beats no export. A record is never substituted for another.
  *
+ * `name` is a bare file name inside the export directory: empty, ".",
+ * ".." or anything containing '/' is refused before any syscall
+ * (sfile_open(), #134), so a caller-supplied name cannot leave the
+ * pinned directory.
+ *
  * Returns frames written (>= 0), or -1 with a reason in `err`:
- * the gate is closed, no export directory, bad arguments, the file
- * already exists, or a write failed. On -1 nothing partial is left
- * behind that a reader could mistake for a complete export. */
+ * the gate is closed, no export directory, bad arguments, a name that
+ * is not bare, the file already exists, or a write failed. On -1
+ * nothing partial is left behind that a reader could mistake for a
+ * complete export. */
 int evidence_export_pcap(const char *name,
                          const uint64_t *ids, int n,
                          int *skipped,

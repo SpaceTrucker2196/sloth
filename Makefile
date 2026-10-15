@@ -584,6 +584,7 @@ TEST_SRCS = tests/main_test.c          \
             src/alert_pcap.c               \
             tests/test_alert_pcap.c        \
             src/secure_file.c              \
+            tests/test_secure_file.c       \
             src/ip_owner.c                 \
             tests/test_ip_owner.c          \
             src/ip_color.c                 \

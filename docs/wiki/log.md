@@ -2765,3 +2765,52 @@ capture, probe, beacon/deauth snoop) migrate in later slices.
 
 **Pages**: [[architecture]] (new "Clock seam" bullet), [[alerts]],
 [[jsonl-schema]] (seam location).
+
+---
+
+## 2026-10-14 — File-write hardening: the two secure_file bypasses, NOFOLLOW pinned, reentrant clock (#134)
+
+`src/secure_file.c` (#87) is where every root write is meant to go, and
+a sweep in the 2026-10 architecture review found the writes that did
+not. Closed in one slice, each with a test seen red under the mutation
+the issue named before it was committed green.
+
+- **`discovery_publish()` followed symlinks.** `fopen(out, "w")` on
+  `/etc/avahi/services/sloth.service` as root, no owner check, truncated
+  whatever a planted link pointed at (CWE-59, CWE-367). Now:
+  `sfile_system_dir()` pins the directory (new; root- *or* euid-owned,
+  not group/other-writable, `O_DIRECTORY|O_NOFOLLOW`, never created),
+  `O_EXCL` temp inside it, `fsync`, `fchmod 0644` (deliberate: avahi
+  reads it; content is hostname + port), `renameat` over the final
+  name, `unlinkat` through the held fd on unpublish. Test plants the
+  name as a symlink to a sentinel; sentinel survives, link replaced by
+  a regular 0644 file. Mutation: fopen writer restored → sentinel
+  overwritten → red. The existing publish tests moved from `mkstemp` in
+  `/tmp` to a private `mkdtemp`, because a `1777` directory is now
+  refused by design and a test asserting that was added.
+- **`sfile_open(dirfd, name)` took any name.** `eapol_export_create()`
+  passed the evidence-export name straight through, so `"../x"` would
+  have left the pinned directory the day a TUI prompt or the socket
+  supplied one (CWE-22). A real dirfd now refuses empty, `.`, `..` and
+  any `/` with `EINVAL`; `AT_FDCWD` operator paths keep their slashes.
+  Mutation: guard disabled → `../escape` created in the parent → red,
+  through both `sfile_open()` and `evidence_export_pcap()`.
+- **`SQLITE_OPEN_NOFOLLOW` was `#ifdef`-optional.** On sqlite < 3.31 it
+  compiled away silently and the advisory side-file checks in
+  `db_prepare_private()` stood alone against a TOCTOU they cannot win.
+  `src/db.c` and `research/query.c` now `#error` below 3.31.0 and pass
+  the flag unconditionally; `rq_open()` gained it.
+- **`alert_pcap.c` used `localtime()`**, the last writer still on the
+  non-reentrant clock (CWE-663); `localtime_r`, as `pcap_write.c` has
+  since #95.
+- **`w` in Packets writes to the working directory**, documented rather
+  than changed: no flag, no directory check; the shipped unit should pin
+  `WorkingDirectory=` (X6).
+
+Pages: [[pcap-export]] (CWD note, bare-name rule, `localtime_r`),
+[[data-socket-exposure]] (how the service file is written),
+[[sqlite-schema]] (the compile-time pin). New `tests/test_secure_file.c`.
+
+One correction to the issue text: the manual packet export is bound to
+`w` in the Packets view (`src/views/packets.c`), not `[p]`, which is the
+NTP view switch; `src/pcap_write.c` is the right file either way.

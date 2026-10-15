@@ -81,7 +81,11 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
 
     char stem[64], name[80], err[SFILE_ERR_MAX];
     time_t now = sloth_wall();
-    struct tm *t = localtime(&now);
+    /* localtime_r, as pcap_write.c already does: the capture thread and
+     * the UI both stamp times, and localtime()'s shared static struct
+     * tm is the aliasing hazard behind #95 (CWE-663). */
+    struct tm tmv;
+    struct tm *t = localtime_r(&now, &tmv);
     snprintf(stem, sizeof(stem),
              "alert_%04d%02d%02d_%02d%02d%02d_%s",
              t ? t->tm_year + 1900 : 1970,

@@ -1,17 +1,36 @@
 #include "discovery.h"
 #include "observe.h"
 #include "data_socket.h"
+#include "secure_file.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #define DISCOVERY_DEFAULT_PATH "/etc/avahi/services/sloth.service"
 
-/* Path we actually wrote, so unpublish can remove exactly that file.
- * Empty = nothing published. */
-static char g_published_path[512];
+/* What we actually wrote, so unpublish can remove exactly that file:
+ * the directory descriptor pinned at publish time plus the bare name
+ * inside it. Unlinking through the held descriptor means a swap of
+ * /etc/avahi/services itself between publish and exit cannot redirect
+ * the removal (#134). g_dfd < 0 = nothing published. */
+static int  g_dfd = -1;
+static char g_name[256];
+
+/* write(2) until done; a short write on a regular file is not an
+ * error. */
+static int write_all(int fd, const char *buf, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, buf + off, n - off);
+        if (w <= 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
 
 /* XML-escape the instance name into out (bounded). The service name is
  * operator-controlled (the hostname), but escaping keeps the XML
@@ -90,27 +109,92 @@ int discovery_publish(const char *spec, const char *path) {
         snprintf(host, sizeof(host), "sloth");
 
     char xml[1024];
-    if (discovery_service_xml(xml, sizeof(xml), host, port) < 0) return -1;
+    int xml_len = discovery_service_xml(xml, sizeof(xml), host, port);
+    if (xml_len < 0) return -1;
 
-    FILE *f = fopen(out, "w");
-    if (!f) {
-        fprintf(stderr,
-                "sloth: discovery: could not write %s (%s); "
-                "not advertising. Use --no-discovery to silence this.\n",
-                out, strerror(errno));
+    /* This file is written as root into a directory sloth does not own,
+     * so it goes through secure_file like every other write (#134):
+     * a plain fopen(out, "w") followed a symlink planted at the name
+     * and truncated whatever it pointed at (CWE-59, CWE-367). The
+     * directory is pinned first, the content lands in an O_EXCL temp
+     * inside it, and the final name is taken over by rename — which
+     * replaces a planted link rather than following it. */
+    char dir[512], name[256], tmp[264], err[SFILE_ERR_MAX];
+    const char *slash = strrchr(out, '/');
+    const char *base  = slash ? slash + 1 : out;
+    size_t dl = slash ? (size_t)(slash - out) : 0;
+    /* Refused, never clamped: a truncated directory path would pin
+     * some other directory and write there with every check passing. */
+    if (!base[0] || strlen(base) >= sizeof(name) || dl >= sizeof(dir)) {
+        fprintf(stderr, "sloth: discovery: %s: bad path; "
+                        "not advertising.\n", out);
         return -1;
     }
-    fputs(xml, f);
-    fclose(f);
-    snprintf(g_published_path, sizeof(g_published_path), "%s", out);
+    if (!slash) {
+        snprintf(dir, sizeof(dir), ".");
+    } else if (slash == out) {
+        snprintf(dir, sizeof(dir), "/");
+    } else {
+        memcpy(dir, out, dl);
+        dir[dl] = '\0';
+    }
+    snprintf(name, sizeof(name), "%s", base);
+    snprintf(tmp, sizeof(tmp), ".%s.tmp", name);
+
+    int dfd = sfile_system_dir(dir, err, sizeof(err));
+    if (dfd < 0) {
+        fprintf(stderr, "sloth: discovery: %s; not advertising. "
+                        "Use --no-discovery to silence this.\n", err);
+        return -1;
+    }
+    /* A temp of this name is ours, left by a crash mid-write (the same
+     * reasoning as the handshake pcap writer). unlinkat removes the
+     * name without following it, so a planted link here is removed,
+     * not written through. */
+    unlinkat(dfd, tmp, 0);
+    int fd = sfile_open(dfd, tmp, SFILE_EXCL, err, sizeof(err));
+    if (fd < 0) {
+        fprintf(stderr, "sloth: discovery: %s; not advertising. "
+                        "Use --no-discovery to silence this.\n", err);
+        close(dfd);
+        return -1;
+    }
+    /* fchmod 0644 is deliberate and is the one place sloth loosens a
+     * mode: avahi-daemon runs as the `avahi` user and has to read the
+     * file, and the content is the hostname and a port — the very
+     * things the mDNS announcement is about to broadcast. It is by
+     * descriptor on a file this call created a moment ago, never a
+     * chmod of an operator path. */
+    const char *fail = NULL;
+    if (write_all(fd, xml, (size_t)xml_len) != 0) fail = "write";
+    else if (fsync(fd) != 0)                     fail = "fsync";
+    else if (fchmod(fd, 0644) != 0)              fail = "chmod";
+    int e = errno;
+    close(fd);
+    if (!fail && renameat(dfd, tmp, dfd, name) != 0) {
+        fail = "rename";
+        e = errno;
+    }
+    if (fail) {
+        unlinkat(dfd, tmp, 0);
+        fprintf(stderr, "sloth: discovery: %s: %s failed: %s; "
+                        "not advertising.\n", out, fail, strerror(e));
+        close(dfd);
+        return -1;
+    }
+    if (g_dfd >= 0) close(g_dfd);   /* re-publish: drop the older pin */
+    g_dfd = dfd;
+    snprintf(g_name, sizeof(g_name), "%s", name);
     fprintf(stderr, "sloth: advertising _sloth._tcp on port %d via %s\n",
             port, out);
     return 0;
 }
 
 void discovery_unpublish(void) {
-    if (g_published_path[0]) {
-        unlink(g_published_path);
-        g_published_path[0] = '\0';
+    if (g_dfd >= 0) {
+        unlinkat(g_dfd, g_name, 0);
+        close(g_dfd);
+        g_dfd = -1;
     }
+    g_name[0] = '\0';
 }

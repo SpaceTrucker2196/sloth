@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-07-28 (schema v2).
+**Last updated**: 2026-10-14 (#134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional).
 
 ---
 
@@ -59,6 +59,19 @@ contract; the SQLite file is the retained artifact.
 `WITH_PCAP` block. `make WITH_SQLITE=0` builds without it; `make
 embedded` already excludes it, so the zero-dependency embedded target is
 unchanged. CI builds both.
+
+**sqlite3 >= 3.31.0 is a compile-time requirement** (#134). `src/db.c`
+and `research/query.c` carry
+`#if SQLITE_VERSION_NUMBER < 3031000 #error …`. The reason is
+`SQLITE_OPEN_NOFOLLOW`: the `-wal` / `-shm` / `-journal` checks in
+`db_prepare_private()` are advisory — a symlink can appear between the
+`lstat` and SQLite's own open — and are acceptable only because SQLite
+itself refuses to follow one. The flag used to sit behind an `#ifdef`
+that compiled silently without it on older headers, which made the
+side-file checks look stronger than they were on exactly the systems
+where they were weakest. `rq_open()` (the read-only research corpus)
+passes it too. 3.31.0 is from January 2020; every supported Debian,
+Ubuntu, Fedora and Alpine ships newer.
 
 ## Write path
 

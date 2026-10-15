@@ -142,6 +142,23 @@ inherited from a default.
 > entirely with `--no-discovery` — or with `--strict`, which refuses it
 > for the whole run (#84).
 >
+> **How the file is written** (#134). `/etc/avahi/services/sloth.service`
+> is written as root into a directory sloth does not own, and until #134
+> it was a plain `fopen(path, "w")`: a symlink planted at that name was
+> followed and its target truncated (CWE-59/CWE-367). It now goes through
+> `secure_file.c` like every other write: the directory is pinned with
+> `sfile_system_dir()` (root- or euid-owned, not group/other-writable —
+> `0755` is accepted, a `1777` `/tmp` is refused), the XML lands in an
+> `O_EXCL` temp inside that pin, is `fsync`ed, and takes the final name
+> by `renameat()`, which *replaces* a planted link rather than following
+> it. The file is `fchmod`ed to **0644 on purpose**: avahi-daemon runs as
+> `avahi` and has to read it, and the content — hostname and port — is
+> what the announcement broadcasts anyway. That is the one place sloth
+> loosens a mode, by descriptor on a file it created a moment earlier;
+> operator paths are still validated, never repaired. `discovery_unpublish()`
+> removes the file through the held directory descriptor. Nothing here is
+> on the shipped unit's path, which passes `--no-discovery`.
+>
 ## Where the socket lives, and who may read it
 
 **`/run/sloth/sloth.sock`, created by `RuntimeDirectory=`** (owner

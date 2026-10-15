@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
 
-**Last updated**: 2026-10-13 (#92 evidence ring, ID keying, and deauth-flood citations).
+**Last updated**: 2026-10-14 (#134: manual export writes to the working directory; per-alert stamp is reentrant).
 
 ---
 
@@ -34,6 +34,17 @@ type: reference
   the packet ring, created exclusively at 0600 (same-second exports get
   a suffix). A failed write removes the partial file and the view shows
   `export failed`.
+- **"cwd" is literal** (#134). This is the one export path with no
+  `--*-dir` flag and no directory validation: the file lands wherever
+  the process was started, `O_EXCL|O_NOFOLLOW` so a planted name is
+  refused rather than followed, but the directory itself is not
+  checked. Under a service manager that is whatever `WorkingDirectory=`
+  says — the shipped unit will pin `WorkingDirectory=/var/lib/sloth` (the
+  X6 slice of the 2026-10 architecture review; until it lands, set it
+  yourself). Started by hand from `/tmp` or `$HOME`, that is where the
+  pcap goes. There is deliberately no flag: `src/pcap_write.c` is
+  unchanged, and an operator who wants exports somewhere specific
+  starts sloth there.
 - Useful for ad-hoc carving when you've narrowed via `/` to a flow of
   interest.
 
@@ -127,7 +138,19 @@ Being explicit, because the gap is the interesting part:
 
 Each path has its own writer — `src/alert_pcap.c`, `src/pcap_write.c`,
 `src/eapol_log.c` — all emitting the classic pcap header (no pcapng) so
-the output is portable to every reasonable tool.
+the output is portable to every reasonable tool. All three stamp their
+file names with `localtime_r()`; `alert_pcap.c` was the last to use the
+non-reentrant `localtime()` (CWE-663), fixed in #134 after `pcap_write.c`
+had already moved for #95.
+
+Every writer that takes a *directory descriptor* (`--pcap-dir`,
+`--eapol-dir`, the evidence export) now refuses a file name that is not
+bare: empty, `.`, `..` or anything containing `/` is `EINVAL` before any
+syscall (`sfile_open()`, #134). The names are built by sloth today, so
+nothing changes in the field; the guard is there for the day a TUI
+prompt or the data socket supplies one, so `../` stops at the pin
+instead of walking out of it (CWE-22). Operator paths (`--report`,
+`--snapshot-out`, `-o`, `--db`) are `AT_FDCWD` and keep their slashes.
 
 ## Permissions and failures (#87)
 
@@ -137,7 +160,7 @@ offline-crackable. Modes do not depend on the umask:
 | Path | Dir | File | Create mode |
 |---|---|---|---|
 | `--pcap-dir DIR` | 0700 | 0600 | exclusive, suffixed on collision |
-| `w` in Packets | (cwd, not checked) | 0600 | exclusive, suffixed on collision |
+| `w` in Packets | cwd — not checked; pin it with `WorkingDirectory=` | 0600 | exclusive, suffixed on collision |
 | `--eapol-dir DIR` | 0700 | 0600 | `eapol.22000` append; per-handshake pcap atomic replace |
 
 `--pcap-dir` and `--eapol-dir` are created 0700 when absent. An

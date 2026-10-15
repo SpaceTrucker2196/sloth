@@ -44,9 +44,26 @@ typedef enum { SFILE_APPEND, SFILE_EXCL, SFILE_TRUNC } sfile_mode_t;
  * by a rename or symlink swap of `path`. */
 int   sfile_private_dir(const char *path, char *err, size_t errsz);
 
+/* Pin a SYSTEM directory that sloth drops a world-readable file into —
+ * today only /etc/avahi/services for the mDNS service file (#134).
+ * Never created. The rule is deliberately weaker than the private one:
+ * owned by root OR the effective uid, and not writable by group or
+ * other (0755 is what such a directory legitimately is; a 1777 /tmp is
+ * not, because anyone there can plant the name we are about to write
+ * through). Returns an O_DIRECTORY|O_NOFOLLOW descriptor (caller
+ * closes) or -1 with `err` filled. */
+int   sfile_system_dir(const char *path, char *err, size_t errsz);
+
 /* Open `name` relative to `dirfd` (AT_FDCWD for an operator path).
  * Write-only, 0600 on create. Returns an fd or -1 with `err` filled
- * (errno preserved for EXCL's EEXIST). */
+ * (errno preserved for EXCL's EEXIST).
+ *
+ * With a real `dirfd`, `name` must be a bare file name: empty, ".",
+ * ".." or anything containing '/' is refused with EINVAL before any
+ * syscall. The pinned descriptor is the whole point of a dirfd caller,
+ * and "../x" would walk straight out of it (CWE-22). Operator paths
+ * (--report, --snapshot-out, -o, --db) legitimately carry '/', which
+ * is why the check keys on the descriptor and not on the string. */
 int   sfile_open(int dirfd, const char *name, sfile_mode_t mode,
                  char *err, size_t errsz);
 FILE *sfile_fopen(int dirfd, const char *name, sfile_mode_t mode,
