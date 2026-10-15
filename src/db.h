@@ -107,6 +107,10 @@ void db_close(void);
  * prior error. */
 int  db_is_open(void);
 
+/* True iff the open connection has SQLITE_DBCONFIG_DEFENSIVE in force,
+ * read back from sqlite (#137). 0 when closed. For the test. */
+int  db_is_defensive(void);
+
 /* Persist one tick of entity state. Called from the poll loop after
  * poll_data() has refreshed `s`. Wraps every upsert in a single
  * transaction; on any error the transaction is rolled back, the sink
@@ -207,6 +211,7 @@ int  db_due(time_t now);
 static inline int  db_open(const char *path) { (void)path; return 0; }
 static inline void db_close(void)            {}
 static inline int  db_is_open(void)          { return 0; }
+static inline int  db_is_defensive(void)     { return 0; }
 static inline void db_tick(const sloth_state_t *s, time_t now)
                                              { (void)s; (void)now; }
 static inline void db_set_interval(int secs) { (void)secs; }

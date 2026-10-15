@@ -3471,3 +3471,17 @@ fields from a sibling enum (`sh_parse_fault_t`), kept out of both the
 `evictions` sum and the change-only signature. Some kinds are reserved
 for later slices and reported as unmeasured, not as zero faults.
 Page: [[jsonl-schema]] → *Parse faults*.
+
+## 2026-10-15 — Operator-supplied files are untrusted bytes (#137)
+
+`rq_open()` sets `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extension loading
+and a 1 MiB `SQLITE_LIMIT_LENGTH`, reads each back, and refuses a corpus
+whose `research` is not the FTS5 table or that holds a view or trigger;
+`MATCH` still works. `db_open()` sets `DEFENSIVE`. The manifest reader
+fails on a C0/DEL byte in `latest`/`url`; a bad roster line is echoed
+bounded and sanitised; the snapshot writer escapes SSID and label
+(`\t` `\n` `\\` `\xHH`, `\x2d` for a literal `-`) and the reader
+unescapes and range-checks channel/mfp with `strtol`. Pages:
+[[research-corpus]], [[sqlite-schema]], [[manifest-format]],
+[[wifi-sigint-techniques]] (snapshot format), [[cli-reference]],
+[[threat-model]] (TB-6, two risk rows closed).

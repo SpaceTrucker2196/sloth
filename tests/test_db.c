@@ -238,6 +238,24 @@ static void test_open_refuses_foreign_schema_version(void) {
     unlink(db_path);
 }
 
+/* --db is an operator path whose file may predate this run (#137).
+ * DEFENSIVE must be in force on the connection sloth writes through,
+ * and the full write path (schema, a tick) must still work under it. */
+static void test_open_is_defensive_and_still_writes(void) {
+    db_close();
+    ASSERT_EQ(db_is_defensive(), 0);           /* closed: nothing in force */
+    fresh_db();
+    ASSERT_EQ(db_is_defensive(), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(db_is_open(), 1);                /* tick did not disable it */
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);            /* reopen of an existing file */
+    ASSERT_EQ(db_is_defensive(), 1);
+    db_close();
+    unlink(db_path);
+}
+
 static void test_open_bad_path_fails_cleanly(void) {
     db_close();
     ASSERT_EQ(db_open("/this/does/not/exist/nope/x.db"), 0);
@@ -2261,6 +2279,7 @@ void run_db_tests(void) {
     RUN_TEST(test_open_creates_and_stamps_version);
     RUN_TEST(test_reopen_is_idempotent);
     RUN_TEST(test_open_refuses_foreign_schema_version);
+    RUN_TEST(test_open_is_defensive_and_still_writes);
     RUN_TEST(test_open_bad_path_fails_cleanly);
     RUN_TEST(test_open_creates_db_and_wal_private_under_permissive_umask);
     RUN_TEST(test_open_refuses_permissive_existing_db);

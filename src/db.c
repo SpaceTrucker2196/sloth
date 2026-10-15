@@ -724,6 +724,22 @@ int db_open(const char *path) {
         g_db = NULL;
         return 0;
     }
+    /* --db names an operator path, and the file at it may predate this
+     * run or have been written by something else (#137). DEFENSIVE
+     * shuts the schema-corruption doors (writable_schema, shadow-table
+     * writes) that sloth never needs. Only DEFENSIVE here, not the
+     * corpus's TRUSTED_SCHEMA=0: this is sloth's own read-write store
+     * and its schema is the one db_schema.c writes. Read back, so a
+     * library that ignores it fails the open rather than passing it. */
+    int defensive = -1;
+    if (sqlite3_db_config(g_db, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive)
+            != SQLITE_OK || defensive != 1) {
+        fprintf(stderr, "sloth: could not open db %s: DEFENSIVE refused\n",
+                path);
+        sqlite3_close(g_db);
+        g_db = NULL;
+        return 0;
+    }
     /* WAL so a reader (the operator's sqlite3 CLI) never blocks the
      * writer mid-capture. synchronous=NORMAL fsyncs at checkpoint
      * rather than per commit — at 1 Hz on an SD card the difference is
@@ -786,6 +802,13 @@ void db_close(void) {
 }
 
 int db_is_open(void) { return g_db != NULL && !g_disabled; }
+
+int db_is_defensive(void) {
+    int v = -1;
+    if (!g_db) return 0;
+    sqlite3_db_config(g_db, SQLITE_DBCONFIG_DEFENSIVE, -1, &v);
+    return v == 1;
+}
 
 void db_set_interval(int secs) {
     g_interval = secs > 0 ? secs : DB_DEFAULT_INTERVAL_S;

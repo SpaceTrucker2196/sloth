@@ -184,17 +184,17 @@ would be measuring something the protocol does not do.
 | `--my-ssid` | `SSID` | off | Designate your own network (repeatable, max 16). Label only; unlocks `MY_NET_RECON`. |
 | `--my-bssid` | `BSSID` | off | Designate your own AP (repeatable, max 16). Floods at it escalate WARN→CRIT; never named the impostor half of a twin. |
 | `--known-mac` | `MAC` | off | Add a MAC to the known-device roster (repeatable, max 512). |
-| `--known-macs` | `FILE` | off | Load a roster (one MAC/line, `#` comments). With a roster **and** a `--my-ssid`/`--my-bssid`, an associated device not on the roster raises `UNKNOWN_DEVICE`. |
+| `--known-macs` | `FILE` | off | Load a roster (one MAC/line, `#` comments). With a roster **and** a `--my-ssid`/`--my-bssid`, an associated device not on the roster raises `UNKNOWN_DEVICE`. A bad line is echoed as at most 48 bytes with C0/DEL shown as `?` (#137). |
 
 ### Posture — snapshots & research
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--snapshot-out` | `FILE` | off | On exit, write a passive AP-inventory snapshot (BSSID/SSID/security/channel/vendor) for repeat site assessments. Normalised text, no pcap. Created `0600`; an existing file must be private, owned by you, not a symlink — one that is not is refused and left unchanged. → [[posture-report]] |
-| `--baseline-in` | `FILE` | off | On exit, diff the current AP inventory against a prior `--snapshot-out` (new/gone/changed APs). |
-| `--site-label` | `TEXT` | off | Operator label stamped into `--snapshot-out`. Distinct from `--site`. |
-| `--with-research` | `research.db` | off | Load the research corpus so `--report` cites the source behind each fired alert. Additive: unreadable corpus warns and continues. → [[research-corpus]] |
-| `--check-manifest` | `FILE` | off | Read a locally-populated release manifest (JSON); show "update available" in Help when `latest` > `SLOTH_VERSION`. sloth never fetches — populate `FILE` via cron/systemd. → [[manifest-format]] |
+| `--snapshot-out` | `FILE` | off | On exit, write a passive AP-inventory snapshot (BSSID/SSID/security/channel/vendor) for repeat site assessments. Normalised text, no pcap. Created `0600`; an existing file must be private, owned by you, not a symlink — one that is not is refused and left unchanged. SSIDs are escaped (`\t` `\n` `\\` `\xHH`), so an on-air tab or newline cannot add a field or row (#137). Format → [[wifi-sigint-techniques]]; also [[posture-report]] |
+| `--baseline-in` | `FILE` | off | On exit, diff the current AP inventory against a prior `--snapshot-out` (new/gone/changed APs). A row whose channel is not 0–255 or mfp not 0–2 is skipped; SSIDs print escaped (#137). |
+| `--site-label` | `TEXT` | off | Operator label stamped into `--snapshot-out`, escaped the same way as an SSID. Distinct from `--site`. |
+| `--with-research` | `research.db` | off | Load the research corpus so `--report` cites the source behind each fired alert. Opened as an untrusted database: `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extensions; a file whose `research` is not the FTS5 table, or that holds a view or trigger, is refused (#137). Additive: unreadable or refused corpus warns and continues. → [[research-corpus]] |
+| `--check-manifest` | `FILE` | off | Read a locally-populated release manifest (JSON); show "update available" in Help when `latest` > `SLOTH_VERSION`. sloth never fetches — populate `FILE` via cron/systemd. A control byte in `latest` or `url` fails the manifest (#137). → [[manifest-format]] |
 
 ### Runtime & meta
 

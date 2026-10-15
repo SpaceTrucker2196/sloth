@@ -13,13 +13,36 @@ static int     g_bssid_n;
 static uint8_t g_known[MAX_KNOWN_MACS][6];
 static int     g_known_n;
 
+/* Bounded, printable copy of operator-supplied text for an error line
+ * (#137). The roster is a file, and the bad line about to be echoed is
+ * exactly the part nobody has validated: a C0 byte or DEL in it is a
+ * terminal escape on an interactive run and a forged record in the
+ * journal under systemd (CWE-117, CWE-150). Each such byte becomes '?';
+ * past SHOWN_MAX the copy ends in "..." so one long line cannot fill
+ * the operator's screen. Bytes >= 0x80 pass — the rule is C0/DEL, and a
+ * UTF-8 SSID given to --my-ssid should read as itself. */
+#define SHOWN_MAX 48
+static const char *shown(const char *in, char out[SHOWN_MAX + 4]) {
+    size_t i = 0;
+    if (!in) in = "(null)";
+    for (; i < SHOWN_MAX && in[i]; i++) {
+        unsigned char c = (unsigned char)in[i];
+        out[i] = (c < 0x20 || c == 0x7f) ? '?' : (char)c;
+    }
+    if (in[i]) { memcpy(out + i, "...", 3); i += 3; }
+    out[i] = '\0';
+    return out;
+}
+
 int ownership_add_ssid(const char *ssid) {
     if (!ssid || !ssid[0]) {
         fprintf(stderr, "sloth: --my-ssid needs a non-empty SSID\n");
         return 0;
     }
     if (strlen(ssid) > 32) {
-        fprintf(stderr, "sloth: --my-ssid '%s' exceeds 32 octets\n", ssid);
+        char q[SHOWN_MAX + 4];
+        fprintf(stderr, "sloth: --my-ssid '%s' exceeds 32 octets\n",
+                shown(ssid, q));
         return 0;
     }
     for (int i = 0; i < g_ssid_n; i++)
@@ -73,8 +96,9 @@ static int parse_mac(const char *str, uint8_t out[6]) {
 int ownership_add_bssid(const char *str) {
     uint8_t mac[6];
     if (!parse_mac(str, mac)) {
+        char q[SHOWN_MAX + 4];
         fprintf(stderr, "sloth: --my-bssid '%s' is not aa:bb:cc:dd:ee:ff\n",
-                str ? str : "(null)");
+                shown(str, q));
         return 0;
     }
     for (int i = 0; i < g_bssid_n; i++)
@@ -105,8 +129,9 @@ int ownership_is_my_bssid(const uint8_t bssid[6]) {
 int ownership_add_known_mac(const char *str) {
     uint8_t mac[6];
     if (!parse_mac(str, mac)) {
+        char q[SHOWN_MAX + 4];
         fprintf(stderr, "sloth: --known-mac '%s' is not aa:bb:cc:dd:ee:ff\n",
-                str ? str : "(null)");
+                shown(str, q));
         return 0;
     }
     for (int i = 0; i < g_known_n; i++)
@@ -148,8 +173,9 @@ int ownership_load_known_macs(const char *path) {
             /* Report the line number: a typo that silently rostered
              * nothing would leave the operator believing their devices
              * were recognised while every one of them alerted. */
+            char q[SHOWN_MAX + 4];
             fprintf(stderr, "sloth: %s:%d: '%s' is not a MAC — skipped\n",
-                    path, lineno, p);
+                    path, lineno, shown(p, q));
             bad++;
             continue;
         }

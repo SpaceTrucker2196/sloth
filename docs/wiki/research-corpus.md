@@ -3,6 +3,8 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
+**Last updated**: 2026-10-15 (#137: corpus opened as an untrusted database)
+
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
 they are prose scattered across three places, so an operator looking at
@@ -164,6 +166,37 @@ sloth: research corpus unavailable: cannot open /nope/x.db — continuing withou
 Every entry point tolerates a NULL handle and returns zero results, and
 the no-SQLite build stubs the whole layer to no-ops. Nothing in the
 capture path may depend on research context.
+
+### The corpus file is untrusted bytes (#137)
+
+`--with-research` names a file, and a SQLite file carries its own
+schema, which is SQL that sqlite parses and runs on the reader's behalf.
+`rq_open()` therefore follows sqlite's own guidance for an untrusted
+database before it runs a single statement:
+
+| Setting | Value | What it closes |
+|---------|-------|----------------|
+| `SQLITE_OPEN_NOFOLLOW` | on (#134) | a symlinked `--with-research` path |
+| `SQLITE_DBCONFIG_DEFENSIVE` | on | `writable_schema`, shadow-table writes |
+| `SQLITE_DBCONFIG_TRUSTED_SCHEMA` | off | non-innocuous functions called from the file's views, triggers or generated columns |
+| `SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION` | off | `load_extension()` |
+| `SQLITE_LIMIT_LENGTH` | 1 MiB | one value forcing a huge allocation |
+
+Each one is set and then read back, and a mismatch refuses the corpus
+(`cannot harden sqlite for …`) rather than opening it on the assumption
+that the setting took. FTS5 is `SQLITE_VTAB_INNOCUOUS`, so `MATCH` still
+works with the schema untrusted; `tests/test_research_query.c` proves
+that on the same handle it reads the settings from.
+
+The schema probe checks the catalogue as well as the columns:
+`research` must be a `CREATE VIRTUAL TABLE … USING fts5` entry, and the
+file must hold **neither a view nor a trigger** — ingest writes neither. A
+column-compatible `VIEW` named `research` used to pass the probe and
+would have put the file author's SQL behind every query. Either case is
+reported as `… is not a research corpus`.
+
+sloth's own `--db` gets `DEFENSIVE` too (see [[sqlite-schema]]), but not
+`TRUSTED_SCHEMA=0`: that file's schema is the one sloth writes.
 
 ### Two things the tokenizer forces
 

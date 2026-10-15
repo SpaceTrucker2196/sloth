@@ -57,6 +57,18 @@ void         rq_close(rq_handle_t *h);
  * "research unavailable". */
 const char *rq_open_error(void);
 
+/* The untrusted-database settings rq_open() applied (#137), read back
+ * from the live connection. Exists so the test can prove each one is in
+ * force on a handle that also still answers MATCH; nothing else calls
+ * it. Returns 0 on a NULL handle. */
+typedef struct {
+    int defensive;        /* SQLITE_DBCONFIG_DEFENSIVE, want 1 */
+    int trusted_schema;   /* PRAGMA trusted_schema, want 0 */
+    int load_extension;   /* SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, want 0 */
+    int length_limit;     /* SQLITE_LIMIT_LENGTH */
+} rq_guards_t;
+int rq_guards(rq_handle_t *h, rq_guards_t *out);
+
 /* Full-text search, BM25-ranked. `filter` may be NULL, or a topic or
  * alert-kind to restrict to. Returns the number of hits written. */
 int rq_search(rq_handle_t *h, const char *query, const char *filter,

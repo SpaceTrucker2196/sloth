@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional).
+**Last updated**: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional)., #137
 
 ---
 
@@ -72,6 +72,15 @@ side-file checks look stronger than they were on exactly the systems
 where they were weakest. `rq_open()` (the read-only research corpus)
 passes it too. 3.31.0 is from January 2020; every supported Debian,
 Ubuntu, Fedora and Alpine ships newer.
+
+**`SQLITE_DBCONFIG_DEFENSIVE` is on** (#137). `db_open()` sets it before
+the first PRAGMA and reads it back; a library that does not honour it
+fails the open (`DEFENSIVE refused`) rather than proceeding. The file
+`--db` names may predate this run or have been written by something
+else, and DEFENSIVE closes the schema-corruption paths
+(`writable_schema`, direct shadow-table writes) that sloth never uses.
+Only DEFENSIVE: `TRUSTED_SCHEMA=0` is for the research corpus, whose
+schema somebody else wrote — see [[research-corpus]].
 
 ## Write path
 

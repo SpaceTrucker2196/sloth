@@ -50,13 +50,21 @@ static const char *skip_ws(const char *s) {
 
 /* Naive extractor: find `"key"` in body, expect `:`, then read either
  * a quoted string (into out/outsz) or a bare literal (unused here).
- * Returns 1 on success, 0 if the key is missing or malformed.
+ * Returns 1 on success, 0 if the key is missing or malformed, -1 if the
+ * value carries a control byte. `out` is "" on every non-1 return.
  *
- * Not a general JSON parser — the file is trusted local input and the
- * schema is tiny. We reject anything we don't understand rather than
- * try to be forgiving. */
-static int scan_str_field(const char *body, const char *key,
-                          char *out, int outsz)
+ * Not a general JSON parser — the schema is tiny, and we reject
+ * anything we don't understand rather than try to be forgiving.
+ *
+ * The file is *not* trusted input (#137): a cron job fetched it from
+ * the network, and the help view prints `url` straight to the
+ * terminal. A C0 byte or DEL there is a terminal escape sequence
+ * (CWE-150), and JSON forbids them unescaped inside a string anyway
+ * (RFC 8259 §7), so -1 is a distinct "malformed" rather than a quiet
+ * "field absent" — an optional field that is present and hostile must
+ * not be indistinguishable from one the producer left out. */
+static int scan_str_field_raw(const char *body, const char *key,
+                              char *out, int outsz)
 {
     if (outsz < 1) return 0;
     out[0] = '\0';
@@ -82,11 +90,23 @@ static int scan_str_field(const char *body, const char *key,
          * characters not requiring backslash. Anything with an actual
          * backslash escape is treated as invalid. */
         if (*p == '\\') return 0;
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c == 0x7f) return -1;
         out[i++] = *p++;
     }
     if (*p != '"') return 0;
     out[i] = '\0';
     return 1;
+}
+
+/* The early returns above leave the bytes copied so far in `out` with no
+ * terminator; the caller must never see that. */
+static int scan_str_field(const char *body, const char *key,
+                          char *out, int outsz)
+{
+    int r = scan_str_field_raw(body, key, out, outsz);
+    if (r != 1 && outsz > 0) out[0] = '\0';
+    return r;
 }
 
 /* Read the file at g_path into a fixed-size buffer. Returns bytes read
@@ -139,12 +159,19 @@ static void do_check(time_t now) {
     if (n <= 0) { set_err("manifest read failed"); return; }
 
     char latest[16];
-    if (!scan_str_field(buf, "latest", latest, sizeof(latest))) {
+    int  r = scan_str_field(buf, "latest", latest, sizeof(latest));
+    if (r < 0) { set_err("malformed \"latest\" (control byte)"); return; }
+    if (r == 0) {
         set_err("no \"latest\" field");
         return;
     }
     char url[128];
-    scan_str_field(buf, "url", url, sizeof(url));   /* optional */
+    /* Optional — absent stays absent — but present and carrying a
+     * control byte fails the whole manifest, last-good status kept. */
+    if (scan_str_field(buf, "url", url, sizeof(url)) < 0) {
+        set_err("malformed \"url\" (control byte)");
+        return;
+    }
 
     semver_t curr, next;
     if (!semver_parse(SLOTH_VERSION, &curr)) {

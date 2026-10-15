@@ -12,7 +12,10 @@ on purpose — the whole point of the manifest split is that sloth
 never fetches from the network, so someone else has to produce this
 file.
 
-**Sources**: `src/updater.c`, `examples/updater/check-latest.sh`.
+**Sources**: `src/updater.c`, `examples/updater/check-latest.sh`,
+`tests/test_updater.c`.
+
+**Last updated**: 2026-10-15 (#137: control bytes in a string field fail the manifest)
 
 ---
 
@@ -43,6 +46,15 @@ sloth binaries.
   clobber the display.
 - Malformed JSON → `err=1` with a short reason.
 - Unparseable `latest` → `err=1`, `err_msg="latest not semver"`.
+- A control byte (`0x00`–`0x1f` or `0x7f`) inside the `latest` or `url`
+  string → `err=1`, `err_msg="malformed \"<field>\" (control byte)"`,
+  last-good status kept (#137). `url` is optional, but present-and-hostile
+  is not treated as absent: the help view prints it to the terminal, so
+  an ESC there would be a terminal escape sequence from whoever answered
+  the producer's fetch (CWE-150). RFC 8259 §7 forbids these unescaped in
+  a JSON string anyway. Bytes `>= 0x80` (UTF-8) pass.
+- A backslash escape inside a string → the field is treated as absent
+  (`latest`: `no "latest" field`; `url`: no link shown). Unchanged.
 - `latest` <= `SLOTH_VERSION` → up-to-date (no highlight).
 - `latest` > `SLOTH_VERSION` → "update available" in the help view.
 
@@ -70,9 +82,12 @@ metadata itself. If your policy requires stronger integrity:
 - or maintain a private mirror with signed metadata and point the
   producer there
 
-sloth's job is to trust the file and report the result. Publishing
-integrity is left to the producer so different operators can plug in
-different trust stories without recompiling sloth.
+sloth's job is to trust the file's *claim* and report the result.
+Publishing integrity is left to the producer so different operators can
+plug in different trust stories without recompiling sloth. What sloth
+does not trust is the file's *bytes*: whatever the producer fetched ends
+up on the operator's terminal, so control bytes are refused at parse
+time whatever the trust story (#137, see Reader behaviour above).
 
 ## Related pages
 

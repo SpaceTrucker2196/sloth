@@ -28,7 +28,7 @@ whether it is closed today, and the Track X slice that owns it.
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-15 (#136, #140)
+**Last updated**: 2026-10-15 (#136, #140, #137)
 
 ---
 
@@ -199,15 +199,22 @@ manifest/roster/baseline raw prints are #137's.
 **Enforced today**: `--inventory` is all-or-nothing with a printable
 check per octet (`src/inventory.c`); `--known-macs` and `--inventory`
 exit 2 on a malformed line; `research.db` is opened
-`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`.
+`SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW` with `DEFENSIVE` on,
+`TRUSTED_SCHEMA` off, extension loading off and a 1 MiB length limit,
+each read back, and is refused unless `research` is the FTS5 virtual
+table and the file holds no view or trigger (#137, [[research-corpus]]).
+`--db` has `DEFENSIVE` on (#137). The manifest reader refuses a C0/DEL
+byte in `latest` or `url` ([[manifest-format]]); a bad roster line is
+echoed as a bounded copy with C0/DEL replaced by `?`; the snapshot
+writer escapes the SSID and label columns so `--baseline-in` reads back
+exactly the octets heard, and the drift report prints them escaped
+([[wifi-sigint-techniques]]).
 
-**Known unchecked**: neither `research/query.c` nor `src/db.c` calls
-`sqlite3_db_config()` — `SQLITE_DBCONFIG_DEFENSIVE` is not set and
-`TRUSTED_SCHEMA` is not turned off, so a crafted `research.db` schema
-is executed with the defaults (CWE-20). Manifest fields, roster comments
-and baseline SSIDs are printed as read (CWE-117 at TB-5). `--baseline-in`
-is the loop that turns ADV-1 into ADV-3: its SSIDs were beaconed at the
-sensor. Owner: #137.
+**Known unchecked**: the research view still prints corpus titles as
+stored (`src/views/research.c`); that is the TB-5 choke point's job
+(#138), not a parser's. `--baseline-in` remains the loop that turns
+ADV-1 into ADV-3 — the escaping makes it lossless and inert, it does not
+make the SSIDs trustworthy.
 
 ### TB-7 — build and CI
 
@@ -242,8 +249,8 @@ does on the date above, not what the issue said when it was filed —
 | Loopback TCP by default; 16 global slots; idle peers held forever | TB-4 | ADV-2 | 306, 770 | **Open.** `MAX_CLIENTS 16`, no per-peer cap; stall timer only while bytes are queued. | #135 (X2), #136 (X3) |
 | Terminal escapes in stored strings; `json_escape` passes `>= 0x80`; CEF/syslog strip CR/LF only | TB-5 | ADV-1 (stored) | 150, 116, 117, 838 | **Open.** Per-field filters exist where someone looked; no choke point. | #138 (X5) |
 | `caplen` cast to `int`; `probe.c` private radiotap length; no IPv4 Total-Length clamp | TB-1 | ADV-1 | 1284, 125 | **Open.** Both entry points cast; `decode_ipv4()` never reads Total Length. | #141 (X8), #132 (P10b) |
-| `research.db` opened without `DEFENSIVE` / `TRUSTED_SCHEMA` off | TB-6 | ADV-3 | 20 | **Open.** No `sqlite3_db_config()` call in the tree. | #137 (X4) |
-| Manifest / roster / baseline fields printed raw | TB-6 → TB-5 | ADV-3 (and ADV-1 via baseline) | 117 | **Open.** | #137 (X4) |
+| `research.db` opened without `DEFENSIVE` / `TRUSTED_SCHEMA` off | TB-6 | ADV-3 | 20 | **Closed** by #137: `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extensions, `SQLITE_LIMIT_LENGTH` 1 MiB, each read back; catalogue probe refuses a `research` VIEW and any trigger. `--db` gets `DEFENSIVE`. | #137 (X4) |
+| Manifest / roster / baseline fields printed raw | TB-6 → TB-5 | ADV-3 (and ADV-1 via baseline) | 117 | **Closed** by #137: manifest C0/DEL → `err=1`; roster echo bounded and sanitised; snapshot SSID/label escaped, `strtol` with range on read. | #137 (X4) |
 | No dependency minimums, `ubuntu-latest`, no SBOM | TB-7 | ADV-4 | 1104, 1357 | **Open** except the sqlite 3.31.0 floor (#134) and the pinned cppcheck. | #142 (X9) |
 
 ## 6. What this model deliberately leaves out

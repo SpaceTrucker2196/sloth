@@ -17,6 +17,93 @@ static char g_open_err[128];
 
 const char *rq_open_error(void) { return g_open_err; }
 
+/* Ceiling on any one string or blob the corpus can hand back. The
+ * largest section ingest writes is a few KiB; a megabyte is two orders
+ * of magnitude of headroom and still bounds what a crafted file can
+ * make sqlite allocate per value. */
+#define RQ_LENGTH_LIMIT (1 << 20)
+
+/* The corpus is a file the operator points --with-research at, so it is
+ * untrusted bytes (#137): whoever wrote it chose its schema, and its
+ * schema is SQL that sqlite parses and runs. sqlite's own guidance for
+ * an untrusted database is this set — DEFENSIVE (no writable_schema,
+ * no shadow-table writes), TRUSTED_SCHEMA off (views, triggers and
+ * generated columns may call only innocuous functions), no extension
+ * loading, a length limit. Each is set *and read back*: a library that
+ * ignores one must make sloth refuse the corpus, not open it on the
+ * assumption that the setting took. FTS5 registers as
+ * SQLITE_VTAB_INNOCUOUS, so MATCH keeps working with the schema
+ * untrusted — test_research_query.c proves that, not this comment. */
+static int harden(sqlite3 *db) {
+    int v = -1;
+    if (sqlite3_db_config(db, SQLITE_DBCONFIG_DEFENSIVE, 1, &v) != SQLITE_OK
+        || v != 1)
+        return 0;
+    v = -1;
+    if (sqlite3_db_config(db, SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0, &v)
+            != SQLITE_OK || v != 0)
+        return 0;
+    v = -1;
+    if (sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 0, &v)
+            != SQLITE_OK || v != 0)
+        return 0;
+    sqlite3_limit(db, SQLITE_LIMIT_LENGTH, RQ_LENGTH_LIMIT);
+    if (sqlite3_limit(db, SQLITE_LIMIT_LENGTH, -1) != RQ_LENGTH_LIMIT)
+        return 0;
+    return 1;
+}
+
+/* `research` must be the FTS5 virtual table ingest creates, and the file
+ * must hold no view or trigger at all — ingest writes neither. A
+ * column-compatible VIEW named `research` passes the SELECT probe below
+ * and would put the file author's SQL behind every query sloth makes,
+ * so the catalogue is checked first. sqlite_master rather than
+ * sqlite_schema: that alias only exists from 3.33, the pin is 3.31. */
+static int schema_is_corpus(sqlite3 *db) {
+    sqlite3_stmt *st = NULL;
+    int ok = 0;
+    if (sqlite3_prepare_v2(db,
+            "SELECT (SELECT count(*) FROM sqlite_master"
+            "         WHERE type = 'table' AND name = 'research'"
+            "           AND sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'),"
+            "       (SELECT count(*) FROM sqlite_master"
+            "         WHERE type IN ('view', 'trigger'))",
+            -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        ok = sqlite3_column_int(st, 0) == 1 && sqlite3_column_int(st, 1) == 0;
+    if (st) sqlite3_finalize(st);
+    if (!ok) return 0;
+
+    /* Schema check, not just an open. A file that exists and is a valid
+     * SQLite database but carries some other schema would otherwise
+     * fail later, one query at a time, with errors that say nothing
+     * useful. */
+    st = NULL;
+    ok = sqlite3_prepare_v2(db, "SELECT title, body, source_url, retrieved,"
+                                " topics, alert_kinds, path FROM research"
+                                " LIMIT 0", -1, &st, NULL) == SQLITE_OK;
+    if (st) sqlite3_finalize(st);
+    return ok;
+}
+
+int rq_guards(rq_handle_t *h, rq_guards_t *out) {
+    if (!h || !h->db || !out) return 0;
+    out->defensive = out->trusted_schema = out->load_extension = -1;
+    sqlite3_db_config(h->db, SQLITE_DBCONFIG_DEFENSIVE, -1, &out->defensive);
+    sqlite3_db_config(h->db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, -1,
+                      &out->load_extension);
+    /* Through the PRAGMA rather than the db_config getter: the read an
+     * operator would make in the sqlite3 shell, independent of the call
+     * that set it. */
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(h->db, "PRAGMA trusted_schema", -1, &st, NULL)
+            == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW)
+        out->trusted_schema = sqlite3_column_int(st, 0);
+    if (st) sqlite3_finalize(st);
+    out->length_limit = sqlite3_limit(h->db, SQLITE_LIMIT_LENGTH, -1);
+    return 1;
+}
+
 rq_handle_t *rq_open(const char *path) {
     g_open_err[0] = '\0';
     if (!path || !path[0]) {
@@ -30,16 +117,15 @@ rq_handle_t *rq_open(const char *path) {
         if (db) sqlite3_close(db);
         return NULL;
     }
-    /* Schema check, not just an open. A file that exists and is a valid
-     * SQLite database but carries some other schema would otherwise
-     * fail later, one query at a time, with errors that say nothing
-     * useful. */
-    sqlite3_stmt *st = NULL;
-    int ok = sqlite3_prepare_v2(db, "SELECT title, body, source_url, retrieved,"
-                                    " topics, alert_kinds, path FROM research"
-                                    " LIMIT 0", -1, &st, NULL) == SQLITE_OK;
-    if (st) sqlite3_finalize(st);
-    if (!ok) {
+    /* Before the first statement: the schema is parsed on first use, and
+     * the catalogue probe is that first use. */
+    if (!harden(db)) {
+        snprintf(g_open_err, sizeof(g_open_err),
+                 "cannot harden sqlite for %.60s", path);
+        sqlite3_close(db);
+        return NULL;
+    }
+    if (!schema_is_corpus(db)) {
         snprintf(g_open_err, sizeof(g_open_err),
                  "%.60s is not a research corpus", path);
         sqlite3_close(db);

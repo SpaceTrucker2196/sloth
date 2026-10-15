@@ -304,6 +304,107 @@ static void test_unconfigured_roster_knows_nothing(void) {
     ASSERT_EQ(ownership_known_count(), 0);
 }
 
+/* ── echoed input is sanitised (#137) ─────────────────────── */
+
+/* Run fn with stderr redirected to a temp file; returns bytes captured. */
+static size_t capture_stderr(void (*fn)(void), char *buf, size_t cap) {
+    fflush(stderr);
+    int saved = dup(fileno(stderr));
+    FILE *tmp = tmpfile();
+    if (!tmp || saved < 0) {
+        if (tmp) fclose(tmp);
+        if (saved >= 0) close(saved);
+        buf[0] = '\0';
+        return 0;
+    }
+    dup2(fileno(tmp), fileno(stderr));
+    fn();
+    fflush(stderr);
+    dup2(saved, fileno(stderr));
+    close(saved);
+    rewind(tmp);
+    size_t n = fread(buf, 1, cap - 1, tmp);
+    buf[n] = '\0';
+    fclose(tmp);
+    return n;
+}
+
+static const char *HOSTILE_ROSTER = "/tmp/sloth_roster_hostile.txt";
+
+static void load_hostile_roster(void) {
+    ownership_load_known_macs(HOSTILE_ROSTER);
+}
+
+static void add_hostile_known_mac(void) {
+    ownership_add_known_mac("\x1b]0;owned\x07zz:\x7f");
+}
+
+static int count_byte(const char *s, size_t n, unsigned char b) {
+    int k = 0;
+    for (size_t i = 0; i < n; i++) if ((unsigned char)s[i] == b) k++;
+    return k;
+}
+
+static void test_roster_bad_line_echo_has_no_control_bytes(void) {
+    /* A roster line that is a terminal escape (clear screen, retitle)
+     * plus a mid-line CR — the byte that lets a journal line overwrite
+     * itself — and a DEL. Echoed raw, the operator's terminal executes
+     * it. */
+    ownership_clear();
+    write_roster(HOSTILE_ROSTER,
+        "aa:bb:cc:00:00:01\n"
+        "\x1b[2J\x1b]0;pwn\x07zz\rsloth: roster ok\x7f\n");
+    char out[1024];
+    size_t n = capture_stderr(load_hostile_roster, out, sizeof(out));
+    ASSERT_GT((long)n, 0L);
+    int ctl = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)out[i];
+        if (c != '\n' && (c < 0x20 || c == 0x7f)) ctl++;
+    }
+    ASSERT_EQ(ctl, 0);
+    /* Still says which line, and the readable part survives. */
+    ASSERT(strstr(out, ":2: '?[2J?]0;pwn?zz?sloth: roster ok?'") != NULL);
+    /* One skip line plus the summary: no forged extra line. */
+    ASSERT_EQ(count_byte(out, n, '\n'), 2);
+    ASSERT_EQ(ownership_known_count(), 1);
+    unlink(HOSTILE_ROSTER);
+}
+
+static void test_roster_bad_line_echo_is_bounded(void) {
+    ownership_clear();
+    char body[300];
+    memset(body, 'x', 200);
+    body[200] = '\n';
+    body[201] = '\0';
+    write_roster(HOSTILE_ROSTER, body);
+    char out[1024];
+    size_t n = capture_stderr(load_hostile_roster, out, sizeof(out));
+    ASSERT_GT((long)n, 0L);
+    /* 48 shown, then the truncation mark; never the full 200. */
+    char want[64];
+    memset(want, 'x', 48);
+    snprintf(want + 48, sizeof(want) - 48, "...'");
+    ASSERT(strstr(out, want) != NULL);
+    char longer[64];
+    memset(longer, 'x', 49);
+    longer[49] = '\0';
+    ASSERT(strstr(out, longer) == NULL);
+    unlink(HOSTILE_ROSTER);
+}
+
+static void test_known_mac_flag_echo_has_no_control_bytes(void) {
+    ownership_clear();
+    char out[512];
+    size_t n = capture_stderr(add_hostile_known_mac, out, sizeof(out));
+    ASSERT_GT((long)n, 0L);
+    ASSERT_EQ(count_byte(out, n, 0x1b), 0);
+    ASSERT_EQ(count_byte(out, n, 0x07), 0);
+    ASSERT_EQ(count_byte(out, n, 0x7f), 0);
+    ASSERT(strstr(out, "'?]0;owned?zz:?'") != NULL);
+    ASSERT_EQ(ownership_known_count(), 0);
+}
+
 void run_ownership_tests(void) {
     TEST_SUITE("ownership: SSID designation");
     RUN_TEST(test_ssid_add_and_match);
@@ -336,4 +437,9 @@ void run_ownership_tests(void) {
     RUN_TEST(test_roster_file_load_is_idempotent);
     RUN_TEST(test_roster_is_bounded);
     RUN_TEST(test_unconfigured_roster_knows_nothing);
+
+    TEST_SUITE("ownership: echoed input is sanitised (#137)");
+    RUN_TEST(test_roster_bad_line_echo_has_no_control_bytes);
+    RUN_TEST(test_roster_bad_line_echo_is_bounded);
+    RUN_TEST(test_known_mac_flag_echo_has_no_control_bytes);
 }

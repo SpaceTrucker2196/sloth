@@ -15,7 +15,7 @@ this page is receive-only; it is the discipline sloth was built around.
 **Sources**: `docs/views/{probe,pnl,beacons,seqnum,assoc,eapol,channel,devices}.md`,
 `docs/wiki/{wifi-sigint,mac-randomisation,ja3-fingerprinting}.md`.
 
-**Last updated**: 2026-09-30.
+**Last updated**: 2026-10-15 (#137: snapshot file format, SSID escaping).
 
 ---
 
@@ -44,6 +44,22 @@ sloth does can break it.
 
 **Tradecraft limit**: one channel at a time ([[monitor-mode]]). A true
 survey hops the band and dwells; a single-channel snapshot is partial.
+
+**Snapshot file format** (`src/wifi_snapshot.c`). Tab-separated text,
+first line `# sloth-snapshot v1`, then `# label`, `# ts`, `# count` and
+a column header, then one AP per line:
+`bssid ssid enc channel akm mfp vendor`. The SSID is whatever the
+transmitter chose — any 32 octets — so it is **escaped**, not blanked
+(#137): `\\` `\t` `\n` `\r`, `\xHH` for any other C0 byte or DEL, `-`
+for a hidden network and `\x2d` for an SSID that really is `-`. The
+`--site-label` text takes the same escape. A raw tab or newline in an
+SSID would otherwise add fields or whole rows to the baseline the next
+run reads. A file written before #137 has no backslashes and parses
+exactly as before, so the version line did not change. On read,
+`channel` must be 0–255 and `mfp` 0–2 (`strtol`, whole field); a row
+outside either is skipped rather than read as channel 0. The
+`--baseline-in` drift report shows SSIDs in the same escaped form, so
+no on-air byte reaches the terminal raw.
 
 ## Technique 2 — Device fingerprinting
 

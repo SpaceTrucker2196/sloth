@@ -62,6 +62,145 @@ static void test_wrong_schema_is_distinguished(void) {
     unlink(tmp);
 }
 
+/* ── untrusted corpus (#137) ─────────────────────────────── */
+
+static void test_open_applies_untrusted_db_settings(void) {
+    /* The corpus is whatever file --with-research names, so its schema
+     * is SQL somebody else wrote. Every setting sqlite's untrusted-
+     * database guidance asks for must be live on the handle. */
+    rq_handle_t *h = corpus();
+    ASSERT(h != NULL);
+    if (!h) return;
+    rq_guards_t g;
+    memset(&g, 0x7f, sizeof(g));          /* sentinel, not a real value */
+    ASSERT_EQ(rq_guards(h, &g), 1);
+    ASSERT_EQ(g.defensive, 1);
+    ASSERT_EQ(g.trusted_schema, 0);
+    ASSERT_EQ(g.load_extension, 0);
+    ASSERT_EQ(g.length_limit, 1 << 20);
+    ASSERT_EQ(rq_guards(NULL, &g), 0);
+    rq_close(h);
+}
+
+static void test_match_still_works_with_schema_untrusted(void) {
+    /* The positive half. FTS5 is SQLITE_VTAB_INNOCUOUS, which is the
+     * claim that lets TRUSTED_SCHEMA=0 coexist with MATCH — asserted on
+     * the same handle the guards were read from, so a sqlite that
+     * disagreed would show here as zero hits rather than in the field
+     * as an empty research view. */
+    rq_handle_t *h = corpus();
+    ASSERT(h != NULL);
+    if (!h) return;
+    rq_guards_t g;
+    ASSERT_EQ(rq_guards(h, &g), 1);
+    ASSERT_EQ(g.trusted_schema, 0);
+    rq_hit_t hits[RQ_MAX_HITS];
+    ASSERT_GT(rq_search(h, "dragonblood", NULL, hits, RQ_MAX_HITS), 0);
+    ASSERT_GT(rq_for_alert(h, "ALERT_TYPE_BTM_ABUSE", hits, RQ_MAX_HITS), 0);
+    rq_close(h);
+}
+
+static int build_db(const char *path, const char *sql) {
+    unlink(path);
+    sqlite3 *db = NULL;
+    if (sqlite3_open(path, &db) != SQLITE_OK) { sqlite3_close(db); return 0; }
+    int rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_close(db);
+    return rc == SQLITE_OK;
+}
+
+static int side_rows(const char *path) {
+    sqlite3 *db = NULL;
+    int n = -1;
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT count(*) FROM side", -1, &st,
+                               NULL) == SQLITE_OK &&
+            sqlite3_step(st) == SQLITE_ROW)
+            n = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return n;
+}
+
+static void test_view_named_research_is_refused(void) {
+    /* Column-compatible with the probe SELECT, so before the catalogue
+     * check this opened as a corpus and every query sloth made ran the
+     * file author's view — the h == NULL assertion goes red with the
+     * catalogue check removed.
+     *
+     * The `side` assertion is a tripwire, NOT coverage, and cannot be
+     * made one: the corpus is opened read-only, so no statement sloth
+     * issues can fire the trigger even with the catalogue check gone
+     * (seen: with it removed, `side` still read 0). It would only catch
+     * a future change that opened the corpus writable. */
+    const char *tmp = "/tmp/sloth_view_corpus.db";
+    int built = build_db(tmp,
+        "CREATE TABLE side(x);"
+        "CREATE TABLE t(title, body, source_url, retrieved, topics,"
+        "               alert_kinds, path);"
+        "INSERT INTO t VALUES('t','dragonblood','u','2026-08-31','x','',"
+        "                     'p');"
+        "CREATE VIEW research AS SELECT * FROM t;"
+        "CREATE TRIGGER tr INSTEAD OF INSERT ON research"
+        " BEGIN INSERT INTO side VALUES(1); END;");
+    ASSERT_EQ(built, 1);
+    if (!built) { unlink(tmp); return; }
+
+    rq_handle_t *h = rq_open(tmp);
+    ASSERT(h == NULL);
+    ASSERT(strstr(rq_open_error(), "not a research corpus") != NULL);
+    rq_close(h);
+    ASSERT_EQ(side_rows(tmp), 0);
+    unlink(tmp);
+}
+
+static void test_fts5_corpus_with_a_trigger_is_refused(void) {
+    /* The right table, plus something ingest never writes. A trigger in
+     * a read-only file cannot fire, but the file is not one ingest made
+     * and nothing about it should be taken on trust. */
+    const char *tmp = "/tmp/sloth_trigger_corpus.db";
+    int built = build_db(tmp,
+        "CREATE VIRTUAL TABLE research USING fts5(title, body,"
+        "  source_url UNINDEXED, retrieved UNINDEXED, topics, alert_kinds,"
+        "  path UNINDEXED);"
+        "CREATE TABLE side(x);"
+        "CREATE TRIGGER tr AFTER INSERT ON side"
+        " BEGIN INSERT INTO side VALUES(2); END;");
+    ASSERT_EQ(built, 1);
+    if (!built) { unlink(tmp); return; }
+    rq_handle_t *h = rq_open(tmp);
+    ASSERT(h == NULL);
+    ASSERT(strstr(rq_open_error(), "not a research corpus") != NULL);
+    rq_close(h);
+    ASSERT_EQ(side_rows(tmp), 0);
+    unlink(tmp);
+}
+
+static void test_minimal_fts5_corpus_opens(void) {
+    /* The catalogue check must not refuse what ingest actually writes:
+     * one FTS5 table plus its shadow tables, nothing else. Built here
+     * rather than read from research.db so the shape is visible. */
+    const char *tmp = "/tmp/sloth_min_corpus.db";
+    int built = build_db(tmp,
+        "CREATE VIRTUAL TABLE research USING fts5(title, body,"
+        "  source_url UNINDEXED, retrieved UNINDEXED, topics, alert_kinds,"
+        "  path UNINDEXED, tokenize = 'porter unicode61');"
+        "INSERT INTO research VALUES('T','a sentinel zqxj body','u',"
+        "  '2026-08-31','x','','p.md');");
+    ASSERT_EQ(built, 1);
+    if (!built) { unlink(tmp); return; }
+    rq_handle_t *h = rq_open(tmp);
+    ASSERT(h != NULL);
+    ASSERT_STR(rq_open_error(), "");
+    rq_hit_t hits[RQ_MAX_HITS];
+    ASSERT_EQ(rq_search(h, "zqxj", NULL, hits, RQ_MAX_HITS), 1);
+    ASSERT_STR(hits[0].path, "p.md");
+    rq_close(h);
+    unlink(tmp);
+}
+
 static void test_null_handle_is_safe_everywhere(void) {
     /* Every entry point, with the handle the degraded path supplies. */
     rq_hit_t hits[RQ_MAX_HITS];
@@ -360,6 +499,13 @@ void run_research_query_tests(void) {
     RUN_TEST(test_missing_corpus_degrades);
     RUN_TEST(test_wrong_schema_is_distinguished);
     RUN_TEST(test_null_handle_is_safe_everywhere);
+
+    TEST_SUITE("research query: untrusted corpus file (#137)");
+    RUN_TEST(test_open_applies_untrusted_db_settings);
+    RUN_TEST(test_match_still_works_with_schema_untrusted);
+    RUN_TEST(test_view_named_research_is_refused);
+    RUN_TEST(test_fts5_corpus_with_a_trigger_is_refused);
+    RUN_TEST(test_minimal_fts5_corpus_opens);
 
     TEST_SUITE("research query: search (#73)");
     RUN_TEST(test_search_finds_a_seeded_document);

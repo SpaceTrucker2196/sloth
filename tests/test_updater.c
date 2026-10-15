@@ -77,6 +77,74 @@ static void test_malformed_manifest_sets_err(void) {
     ASSERT(s.updater.err_msg[0] != '\0');
 }
 
+/* ── Control bytes (#137) ─────────────────────────── */
+
+/* The manifest is cron-fetched and the help view prints `url` to the
+ * terminal, so an ESC in it is a terminal escape sequence delivered by
+ * whoever answered the fetch. It must fail the manifest, not reach the
+ * snapshot. */
+static void test_url_with_escape_byte_is_malformed(void) {
+    reset_manifest();
+    write_manifest("{\"latest\":\"99.99.0\","
+                   "\"url\":\"https://x/\x1b[2J\x1b]0;pwn\x07\"}");
+    force_recheck();
+    updater_tick(1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    updater_snapshot(&s);
+    ASSERT_EQ(s.updater.err, 1);
+    ASSERT(strstr(s.updater.err_msg, "malformed") != NULL);
+    ASSERT(strchr(s.updater.url, 0x1b) == NULL);
+    ASSERT_STR(s.updater.url, "");
+    ASSERT_EQ(s.updater.has_update, 0);
+}
+
+static void test_control_bytes_rejected_across_the_range(void) {
+    /* Not just ESC: every C0 byte and DEL. Tab and newline included —
+     * JSON does not allow them raw inside a string either. */
+    static const char bad[] = { 0x01, 0x07, 0x08, '\t', '\n', '\r',
+                                0x1b, 0x1f, 0x7f };
+    for (size_t i = 0; i < sizeof(bad); i++) {
+        char body[96];
+        snprintf(body, sizeof(body),
+                 "{\"latest\":\"99.99.0\",\"url\":\"https://x/%cy\"}", bad[i]);
+        reset_manifest();
+        write_manifest(body);
+        force_recheck();
+        updater_tick(1700000000);
+        sloth_state_t s; memset(&s, 0, sizeof(s));
+        updater_snapshot(&s);
+        ASSERT_EQ(s.updater.err, 1);
+        ASSERT_STR(s.updater.url, "");
+    }
+}
+
+static void test_latest_with_control_byte_is_malformed(void) {
+    reset_manifest();
+    write_manifest("{\"latest\":\"99.\x1b" "99.0\"}");
+    force_recheck();
+    updater_tick(1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    updater_snapshot(&s);
+    ASSERT_EQ(s.updater.err, 1);
+    ASSERT(strstr(s.updater.err_msg, "malformed") != NULL);
+    ASSERT_STR(s.updater.latest, "");
+}
+
+static void test_printable_high_bytes_still_accepted(void) {
+    /* The positive half: the filter is C0/DEL only, so a UTF-8 path in
+     * an internationalised mirror URL still loads. */
+    reset_manifest();
+    write_manifest("{\"latest\":\"99.99.0\","
+                   "\"url\":\"https://x/caf\xc3\xa9/ ~\"}");
+    force_recheck();
+    updater_tick(1700000000);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    updater_snapshot(&s);
+    ASSERT_EQ(s.updater.err, 0);
+    ASSERT_STR(s.updater.url, "https://x/caf\xc3\xa9/ ~");
+    ASSERT_EQ(s.updater.has_update, 1);
+}
+
 /* ── Happy paths ──────────────────────────────────── */
 
 /* Decouple these tests from SLOTH_VERSION so a routine version bump
@@ -165,6 +233,12 @@ void run_updater_tests(void) {
     TEST_SUITE("updater — errors");
     RUN_TEST(test_missing_manifest_sets_err);
     RUN_TEST(test_malformed_manifest_sets_err);
+
+    TEST_SUITE("updater — control bytes (#137)");
+    RUN_TEST(test_url_with_escape_byte_is_malformed);
+    RUN_TEST(test_control_bytes_rejected_across_the_range);
+    RUN_TEST(test_latest_with_control_byte_is_malformed);
+    RUN_TEST(test_printable_high_bytes_still_accepted);
 
     TEST_SUITE("updater — comparison");
     RUN_TEST(test_up_to_date_reports_no_update);
