@@ -363,6 +363,27 @@ static void test_subelem_len_overruns_element_by_one_flagged(void) {
     ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);  /* identity still captured */
 }
 
+static void test_subelem_header_in_last_two_octets_flagged(void) {
+    /* The boundary the #126 review found untested: a subelement whose
+     * 2-octet ID/length header occupies exactly the last two octets of
+     * Link Info, with a non-zero declared body. The header fits
+     * (at + 2 == len) and the body is wholly past the end, so this is
+     * the "declared body reaches past the element" branch, NOT the
+     * "tail too short for a header" branch - bad_subelem_len must be the
+     * declared 5 and the overrun exactly 5. Mutating the branch test to
+     * `at + 2 >= len` routed this case down the tail branch and left the
+     * suite green; this test is what turns that red. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[n++] = 0x00;              /* subelement ID: Per-STA Profile */
+    b[n++] = 0x05;              /* declared body length; 0 octets follow */
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)m.bad_subelem_len, 5);
+    ASSERT_EQ((int)m.subelem_overrun_bytes, 5);
+}
+
 static void test_subelem_len_overruns_element_by_many_flagged(void) {
     uint8_t b[128];
     int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
@@ -1068,6 +1089,7 @@ void run_mle_tests(void) {
 
     TEST_SUITE("MLE subelement bounds overrun — CVE-2026-58374 class (#104 slice 3)");
     RUN_TEST(test_subelem_len_overruns_element_by_one_flagged);
+    RUN_TEST(test_subelem_header_in_last_two_octets_flagged);
     RUN_TEST(test_subelem_len_overruns_element_by_many_flagged);
     RUN_TEST(test_subelem_chain_sum_overrun_flagged);
     RUN_TEST(test_subelem_header_truncated_at_element_boundary_flagged);

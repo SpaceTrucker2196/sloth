@@ -831,7 +831,7 @@ from an uncounted one means nothing is known either way.
 **Parse faults (#126).** A frame that fails to parse used to leave no
 trace in most of sloth: seventeen hand-written element walks had four
 different behaviours on an element whose declared length ran off the
-end, and most of them stopped silently. They now share one iterator
+end, and most of them stopped silently. They share one iterator (all walks #126 listed; the WPS attribute walk inside `beacon_parse_ies` and the WSC walk in `eap_parse.c` are not yet converted — #127)
 (`src/bytes.h`) with one policy — stop and report — and the report is
 this tally. The kinds, and this is the whole parse-fault set:
 `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
@@ -864,16 +864,17 @@ holds both lists to the build.
   request therefore counts up to three: the SSID, fingerprint and
   PHY-tier walks each cover its element list. Also the KDE walk over an
   unencrypted EAPOL-Key M1's Key Data.
+  A one-octet tail after the last element counts in `ie_overrun` but
+  not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
+  pre-#126 meaning (an element whose length runs off the end) so that
+  `MGMT_FUZZ` scores do not move.
 - `mle_malformed` — a Multi-Link element (beacon or association
   request) broke one of its three bounds rules: a Common Info Length
   too small or past the element, a subelement chain that does not tile
   Link Info, or an out-of-range or repeated Link ID — the shapes behind
   CVE-2026-58374 that `MLE_*` alerts already report per MLD. One count
   per element however many rules it broke. A subelement overrun counts
-  here and not in `ie_overrun`. A one-octet tail counts here
-  but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
-  pre-#126 meaning (an element whose length runs off the end) so that
-  `MGMT_FUZZ` scores do not move.
+  here and not in `ie_overrun`.
 
 What is counted is a parser **walk** that hit the fault, not a frame:
 an association request's elements are walked by more than one parser,
