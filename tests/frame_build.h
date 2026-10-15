@@ -248,9 +248,12 @@ static inline void fb_amsdu_subframe(fb_t *b, const uint8_t da[6],
 }
 
 /* Radiotap DATAPAD: zero octets until the MAC header ends on a 4-octet
- * boundary. Called right after the header, before the body. */
-static inline void fb_datapad_to4(fb_t *b) {
-    while (b->len % 4) fb_u8(b, 0);
+ * boundary measured from the start of the 802.11 frame — `frame_start`
+ * is the buffer offset the frame began at (0 with no radiotap header,
+ * the value fb_radiotap() returned otherwise; a radiotap header need
+ * not itself be a multiple of 4). Called right after the header. */
+static inline void fb_datapad_to4(fb_t *b, int frame_start) {
+    while ((b->len - frame_start) % 4) fb_u8(b, 0);
 }
 
 /* ── Trailer ──────────────────────────────────────────────────────── */

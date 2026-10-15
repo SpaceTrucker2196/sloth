@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `src/sloth_clock.h`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `src/sloth_clock.h`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-14 (#122: the one-decode 802.11 frame view).
 
 ---
 
@@ -46,6 +46,26 @@ docs/views/*.md            -- per-view deep dives
   802.11 side (`src/capture/probe.c`) follows the same rule, and every
   module it feeds, `src/fragattack.c` included since #111, holds its
   tables behind its own mutex.
+- **802.11 frame view** (`src/dot11_frame.h`, #122) — each monitor frame
+  is decoded **once**: `probe.c :: on_probe_frame()` and the
+  `DLT_IEEE802_11_RADIO` arm of `capture.c :: decode_frame()` strip the
+  FCS radiotap announces (`dot11_fcs_strip_len()`, truncation-aware),
+  hand radiotap's FCS/DATAPAD/BADFCS flags to `dot11_frame_decode()`
+  as hints, and read type, subtype, flags, header length, body offset
+  and the Table 9-26 address roles out of the resulting `dot11_frame_t`.
+  The §9.2.4.1.10 rule (Order means HT Control only in management and
+  QoS data frames) lives in that one function. The byte-pointer helpers
+  in `src/dot11_data.h` are wrappers over it, kept because the
+  observers (`eapol_log.c`, `fragattack.c`, `pm_forge.c`,
+  `queue_evict.c`, `deauth_snoop.c`, `action_snoop.c`, `assoc_track.c`,
+  `ctrl_frames.c`) still take `(dot11, len)` and their tests and fuzz
+  harnesses are written against that. Tests build frames with
+  `tests/frame_build.h`, which appends optional fields only when the
+  test states them. Two consequences an operator can see: the monitor
+  packets band's per-frame length excludes the FCS when radiotap says
+  one is present (it used to include the four trailer octets), and a
+  (re)association response of 30–35 octets now reaches the assoc
+  tracker (a stale 36-octet floor dropped them).
 - **Alert engine** — `src/alerts.c` runs each rule every poll, dedupes by
   stable key, fires JSONL + per-alert pcap. See [[alerts]].
 - **Clock seam** (`src/sloth_clock.h`, #109) — `sloth_wall()` for

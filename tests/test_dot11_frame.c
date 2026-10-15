@@ -257,7 +257,9 @@ static void test_extension_frames_are_not_decoded(void) {
     ASSERT_EQ(dot11_frame_decode(f, sizeof f, NULL, &v), 0);
     ASSERT_EQ(v.type, 3);
     ASSERT_EQ(v.hdr_len, -1);
-    ASSERT(v.a1 == NULL);
+    ASSERT(v.a1 == f + 4);               /* loggable */
+    ASSERT(v.a2 == NULL && v.a3 == NULL && v.bssid == NULL);
+    ASSERT_EQ(v.seq_num, -1);
 }
 
 /* ── Payload status codes over the view ───────────────────────────── */
@@ -376,7 +378,7 @@ static void test_datapad_rounds_the_body_to_four(void) {
     h.a1 = M_AP; h.a2 = M_STA; h.a3 = M_DA; h.qos_present = 1;
     fb_dot11_hdr(&b, &h);
     ASSERT_EQ(b.len, 26);
-    fb_datapad_to4(&b);
+    fb_datapad_to4(&b, 0);
     ASSERT_EQ(b.len, 28);
     fb_llc_snap(&b, 0x86dd);
     fb_u8(&b, 0x60);

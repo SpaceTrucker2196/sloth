@@ -13,6 +13,9 @@
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
 #include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
+#include "assoc_track.h"    /* the grant a short assoc response must still record (#122) */
+#include "frame_build.h"    /* spec-derived 802.11 builder (#122) */
+#include "radiotap.h"       /* RT_F_* flag bits */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -578,23 +581,25 @@ static long long mon_delta(uint64_t before) {
     return (long long)(mon_frame_total() - before);
 }
 
-/* radiotap (8-byte, no present fields) + an 802.11 frame of dot11_len
-   bytes. Returns total length. A beacon's Frame Control is 0x80. */
+/* radiotap (8-byte, no present fields) + the first dot11_len bytes of
+   a zero-addressed management-shaped frame with Frame Control fc0 (a
+   beacon's is 0x80). Built whole with tests/frame_build.h and then cut
+   to the requested length, so a 9-byte runt is the prefix of a real
+   frame rather than nine arbitrary octets. it_present = 0: no fields,
+   so radiotap_parse() finds no signal or channel and the handler
+   proceeds on defaults. Returns total length. */
 static int mon_frame(uint8_t *f, int dot11_len, uint8_t fc0) {
+    static const uint8_t a1[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    uint8_t whole[RT_HDR + 64];
+    fb_t b; fb_init(&b, whole, sizeof whole);
+    fb_radiotap(&b, NULL);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = (uint8_t)((fc0 >> 2) & 0x03);
+    h.subtype = (uint8_t)(fc0 >> 4);
+    h.a1 = a1;
+    fb_dot11_hdr(&b, &h);
     const int total = RT_HDR + dot11_len;
-    memset(f, 0, (size_t)total);
-    f[0] = 0x00;                       /* it_version */
-    f[1] = 0x00;                       /* it_pad     */
-    f[2] = (uint8_t)RT_HDR;            /* it_len lo  */
-    f[3] = 0x00;                       /* it_len hi  */
-    /* it_present = 0: no fields, so radiotap_parse() finds no signal or
-       channel and the handler proceeds on defaults. */
-    uint8_t *d = f + RT_HDR;
-    if (dot11_len >= 1) d[0] = fc0;    /* type/subtype */
-    if (dot11_len >= 10) {
-        d[4] = 0x02; d[5] = 0x00; d[6] = 0x00;   /* addr1 */
-        d[7] = 0x00; d[8] = 0x00; d[9] = 0x01;
-    }
+    memcpy(f, whole, (size_t)total);   /* zeros past the 24-byte header */
     return total;
 }
 
@@ -685,6 +690,167 @@ static void test_probe_request_pnl_survives_the_htc_bit(void) {
     ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, NULL, 1), 1);
     ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
     probe_pnl_clear();
+}
+
+/* ── Fix I (#122): no 36-octet floor on (re)association responses ──
+ *
+ * on_probe_frame() kept `if (dot11_len < 36) return;` ahead of the
+ * assoc/probe-response arm from before the +HTC work gave that arm a
+ * proper `mhdr + fixed` check. An association response is legal at
+ * header + 6 fixed octets (§9.3.3.7): 30 bytes bare, 33 with a
+ * one-rate Supported Rates element. Every such grant was dropped
+ * before the association tracker saw it, so a station joining an AP
+ * whose response carried few elements never appeared in the assoc
+ * view. Driven through probe_test_dispatch(), the real pcap_dispatch
+ * seam.
+ *
+ * Mutation-proved: reinserting `if (dot11_len < 36) return;` at the
+ * top of that arm reddens both cases; the inverse edit restores green. */
+static const uint8_t SA_BSSID[6] = { 0x02, 0x00, 0x5e, 0x00, 0x01, 0x01 };
+static const uint8_t SA_STA[6]   = { 0x02, 0x00, 0x5e, 0x00, 0x01, 0x02 };
+
+static int assoc_resp_short(uint8_t *f, int cap, int with_rates) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    if (with_rates) {
+        static const uint8_t rates[1] = { 0x82 };     /* 1 Mb/s, basic */
+        fb_ie(&b, 1, rates, 1);
+    }
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_a_short_assoc_response_records_the_grant(void) {
+    uint8_t f[64];
+    for (int rates = 0; rates <= 1; rates++) {
+        memset(&g_s, 0, sizeof(g_s));
+        probe_clear();
+        assoc_clear();
+        int n = assoc_resp_short(f, sizeof f, rates);
+        ASSERT_EQ(n - RT_HDR, rates ? 33 : 30);
+        const uint8_t *fs[1] = { f };
+        int ls[1] = { n };
+        ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+        ASSERT_EQ(assoc_count(), 1);
+        assoc_snapshot(&g_s);
+        ASSERT_EQ(g_s.assoc_count, 1);
+        ASSERT_EQ(memcmp(g_s.assocs[0].bssid,   SA_BSSID, 6), 0);
+        ASSERT_EQ(memcmp(g_s.assocs[0].sta_mac, SA_STA,   6), 0);
+        ASSERT_EQ(g_s.assocs[0].source, ASSOC_SRC_ASSOC);
+    }
+    /* The floor that remains is the fixed part: 29 octets has no
+       status code to read and records nothing. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    int n = assoc_resp_short(f, sizeof f, 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n - 1 };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(assoc_count(), 0);
+    /* And a refused grant (status 17, AP full) is not an association. */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    n = assoc_resp_short(f, sizeof f, 1);
+    f[RT_HDR + 26] = 17;
+    int ls2[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls2, NULL, NULL, 1), 1);
+    ASSERT_EQ(assoc_count(), 0);
+    assoc_clear();
+}
+
+/* ── FCS is a trailer, not frame (#122) ──────────────────────
+ *
+ * With radiotap FLAGS saying the FCS is present, the four trailing
+ * octets used to reach every parser as frame body — an IE walker read
+ * them as one more element. The monitor band's per-frame length is
+ * the one place the stripped length is directly observable. */
+static void test_fcs_is_stripped_before_the_frame_is_recorded(void) {
+    static const uint8_t sa[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x66 };
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    uint8_t f[128];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = RT_F_FCS;
+    int rtl = fb_radiotap(&b, &rt);
+    fb_mgmt(&b, 4, 0, bc, sa, bc, 0x0020, 0);  /* probe request */
+    fb_ssid(&b, "fb-test-net");
+    int mpdu = b.len - rtl;
+    fb_fcs(&b);
+    ASSERT(fb_ok(&b));
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    mon_frame_snapshot(&g_s);
+    ASSERT(g_s.mon_frame_count >= 1);
+    ASSERT_EQ((int)g_s.mon_frames[0].len, mpdu);
+    /* The SSID still arrives, with the trailer no longer walked. */
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
+
+    /* Same frame, FCS flag clear: the four octets are frame. */
+    f[rtl - 1] = 0;                       /* the FLAGS octet */
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    mon_frame_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.mon_frames[0].len, mpdu + 4);
+
+    /* A capture truncated inside the trailer strips only what is
+       there: origlen says 4 FCS octets, caplen holds 2 of them. */
+    f[rtl - 1] = RT_F_FCS;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    int ls3[1] = { b.len - 2 };
+    int ol3[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls3, ol3, NULL, 1), 1);
+    mon_frame_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.mon_frames[0].len, mpdu);
+    probe_pnl_clear();
+}
+
+/* ── DATAPAD on the IP side (#122) ───────────────────────────
+ *
+ * capture.c's DLT_IEEE802_11_RADIO arm now decodes through the view
+ * with radiotap's hints. RT_F_DATAPAD means the driver padded the MAC
+ * header to a 4-octet boundary: a 26-octet QoS header puts LLC/SNAP
+ * at 28, and without honouring the flag the frame reads as bare LLC
+ * and is dropped. With RT_F_FCS the trailer is also taken off the
+ * length handed to the IP decoder. */
+static void test_radiotap_datapad_frame_reaches_the_ip_decoder(void) {
+    static const uint8_t ap [6] = { 0x02, 0x00, 0x5e, 0x00, 0x00, 0x11 };
+    static const uint8_t sta[6] = { 0x02, 0x00, 0x5e, 0x00, 0x00, 0x12 };
+    uint8_t f[160];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_flags = 1; rt.flags = RT_F_DATAPAD | RT_F_FCS;
+    int rtl = fb_radiotap(&b, &rt);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 8; h.flags = FB_FROMDS;
+    h.a1 = sta; h.a2 = ap; h.a3 = ap; h.qos_present = 1;
+    fb_dot11_hdr(&b, &h);
+    ASSERT_EQ(b.len - rtl, 26);
+    fb_datapad_to4(&b, rtl);
+    ASSERT_EQ(b.len - rtl, 28);
+    fb_llc_snap(&b, 0x0800);
+    uint8_t ip[48];
+    memset(ip, 0, sizeof ip);
+    int ipn = ipv4_tcp(ip, 8, 5, -1);
+    fb_bytes(&b, ip, ipn);
+    fb_fcs(&b);
+    ASSERT(fb_ok(&b));
+
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(drive(DLT_IEEE802_11_RADIO, fs, ls, 1), 1);
+    ASSERT_EQ(g_s.pkt_count, 1);
+    ASSERT_EQ(g_s.packets[0].proto, IPPROTO_TCP);
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
+    ASSERT_EQ(g_s.packets[0].dst_port, 443);
+
+    /* Flag clear, pad bytes still there: LLC is read at 26, which is
+       00 00 AA — not SNAP — so the frame is dropped rather than
+       misparsed. The hint, not luck, is what placed the body. */
+    f[rtl - 1] = RT_F_FCS;
+    ASSERT_EQ(drive(DLT_IEEE802_11_RADIO, fs, ls, 1), 1);
+    ASSERT_EQ(g_s.pkt_count, 0);
 }
 
 static void test_monitor_seam_rejects_frames_below_the_guards(void) {
@@ -1956,6 +2122,9 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);
     RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
+    RUN_TEST(test_a_short_assoc_response_records_the_grant);
+    RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
+    RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);

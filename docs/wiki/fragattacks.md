@@ -439,8 +439,12 @@ BSSID, and it moves with the DS bits (§9.3.2.1, Table 9-26):
 Reading addr3 as the BSSID unconditionally is the shape that looks right
 because it holds for a beacon. On a downlink frame it attributes the
 traffic to the *sending station* instead of its AP, which silently
-merges every station on the network into one bogus BSS. `dot11_data_addrs()`
-in `src/dot11_data.c` owns this table and is tested against all four rows.
+merges every station on the network into one bogus BSS. Since #122 the
+table lives in `src/dot11_frame.c :: dot11_frame_decode()` (the
+`bssid`/`sa`/`da` roles of `dot11_frame_t`); `dot11_data_addrs()` in
+`src/dot11_data.c` is a wrapper over it and is still tested against all
+four rows, with the four-address case reporting "no single BSSID"
+rather than guessing one.
 
 ## Threading
 

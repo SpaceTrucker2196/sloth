@@ -53,9 +53,13 @@ int dot11_frame_decode(const uint8_t *p, int len,
     const int type = out->type;
 
     /* Extension frames (type 3: DMG beacon, S1G) have their own header
-     * layouts and nothing in sloth parses them. Flags are reported;
-     * nothing else is claimed. */
-    if (type == 3) return 0;
+     * layouts and nothing in sloth parses them. Flags and the first
+     * address (octets 4-9 in every type-3 layout, §9.3.4) are reported
+     * so the frame can be logged; nothing else is claimed. */
+    if (type == 3) {
+        if (len >= 10) out->a1 = p + 4;
+        return 0;
+    }
 
     /* ── The one copy of the header-length rule ──────────────────
      *

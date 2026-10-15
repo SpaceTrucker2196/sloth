@@ -3073,3 +3073,49 @@ structurally blind to this class.
 `test_order_bit_does_not_hide_a_plaintext_frame` (fragattack).
 `test_m1_qos_with_htc_is_recorded` stayed green, as it should — the two
 cases are separable. Restored green.
+
+- **Decode once in `probe.c` / `capture.c`.** `on_probe_frame()` strips
+  the FCS radiotap announces (`dot11_fcs_strip_len(caplen, origlen,
+  fcs_present)`, so a snaplen-truncated capture strips only the trailer
+  octets it still holds), builds one `dot11_frame_t` with the
+  FCS/DATAPAD/BADFCS hints, and reads `type`/`subtype`/`retry`/`a1`/
+  `a2`/`bssid`/`sa`/`da`/`seq_num` and the body from it; every inline
+  `dot11[...]` read and `dot11_mgmt_hdr_len()` call in that function is
+  gone. The observers keep their `(dot11, len)` signatures this slice.
+  `capture.c :: decode_frame()` gained `origlen` and its
+  `DLT_IEEE802_11_RADIO` arm goes `radiotap_parse` → hints →
+  `dot11_frame_decode` → `dot11_frame_payload`, with the FCS taken off
+  the length handed to the IP decoder and DATAPAD honoured (a 26-octet
+  QoS header puts LLC/SNAP at 28; before, such a frame was dropped as
+  bare LLC).
+- **Fix I** — the stale `if (dot11_len < 36) return;` ahead of the
+  assoc/reassoc/probe-response arm is deleted; the floor is the view's
+  header plus the subtype's fixed part (`mhdr + 6`, or `+ 12` for a
+  probe response). A 30–35-octet (re)association response is legal and
+  now reaches `assoc_observe()`. A Protected (ciphertext) body in that
+  arm is refused by `dot11_frame_body()` instead of parsed.
+- Operator-visible: the monitor packets band's per-frame length now
+  excludes the FCS when radiotap says one is present; a CTS/ACK that
+  arrives with trailing octets no longer shows a TA made from them;
+  short association grants appear in the assoc view. No JSONL value
+  changes.
+- Builders converted to `frame_build.h`: `test_eapol_log.c ::
+  build_frame` (now `build_frame_opt`, capped at exactly 24 + 8 + n
+  because `feed_exact()` mallocs that many — the first draft capped at
+  a round 256 and ASan-less `free()` caught the heap overrun instead),
+  `test_capture_path.c :: mon_frame`, and `test_dot11_data.c ::
+  build_data` in its own commit — that one computed the header length
+  with the production formula, so it was a tautology.
+
+**Mutation (I).** `if (dot11_len < 36) return;` reinserted at the top
+of the assoc/probe-response arm in `src/capture/probe.c` (`grep -c` =
+1 applied, 0 after the inverse `sed '/.../d'`): 10 assertions red in
+`tests/test_capture_path.c :: test_a_short_assoc_response_records_the_grant`
+(both the 30- and the 33-octet response), driven through
+`probe_test_dispatch()`. Restored green, 431/0 in `sloth_test_pcap`.
+
+**Not claimed.** Observers other than `eapol_log.c` still re-derive
+header fields from `(dot11, len)` through the `dot11_data` wrappers;
+their migration to taking the view directly is the next slice. The
+`src/action_snoop.c` copy is owned by a parallel slice this round and
+was not touched here.

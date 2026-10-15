@@ -4,7 +4,7 @@
 #include "flood_window.h"   /* injectable wall clock for freshness (#91) */
 #include "captive_portal.h"
 #include "dns.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "radiotap.h"
 #include "pcap_format.h"
 
@@ -1042,8 +1042,8 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
  * Payload starts at offset 20; ethertype lives at offset 0.
  * SLL2_HDRLEN is defined above the WITH_PCAP guard (#85). */
 
-static int decode_frame(const uint8_t *data, int caplen, int dlt,
-                        packet_info_t *pkt) {
+static int decode_frame(const uint8_t *data, int caplen, int origlen,
+                        int dlt, packet_info_t *pkt) {
     int       offset    = 0;
     uint16_t  ethertype = 0;
 
@@ -1066,17 +1066,27 @@ static int decode_frame(const uint8_t *data, int caplen, int dlt,
          * the payload is in the clear.
          *
          * Radiotap first, then the variable 802.11 header, then
-         * LLC/SNAP. The arithmetic lives in dot11_data.c because that
-         * is where the risk is and this file is not in TEST_SRCS. */
+         * LLC/SNAP. The arithmetic lives in dot11_frame.c because that
+         * is where the risk is and this file is not in TEST_SRCS.
+         *
+         * One decode (#122): radiotap's FCS / DATAPAD / BADFCS flags
+         * become hints, the FCS trailer is taken off the length so it
+         * is not handed to the IP decoder as payload, and the body
+         * offset honours the driver's 4-octet padding. */
         radiotap_info_t rti;
         if (!radiotap_parse(data, caplen, &rti)) return 0;
         int rt = rti.hdr_len;
         if (rt <= 0 || rt >= caplen) return 0;
-        const uint8_t *dot11 = data + rt;
-        int dlen = caplen - rt;
+        int strip = dot11_fcs_strip_len(caplen, origlen, rti.fcs_present);
+        if (strip > caplen - rt) strip = caplen - rt;
+        caplen -= strip;
+        const dot11_rt_hints_t hints = { rti.fcs_present, rti.datapad,
+                                         rti.bad_fcs };
+        dot11_frame_t fr;
+        dot11_frame_decode(data + rt, caplen - rt, &hints, &fr);
         int poff = 0;
-        if (dot11_data_payload(dot11, dlen, &poff, &ethertype)
-            != DOT11_DATA_OK) return 0;
+        if (dot11_frame_payload(&fr, &poff, &ethertype) != DOT11_DATA_OK)
+            return 0;
         offset = rt + poff;
     } else {
         return 0;
@@ -1135,7 +1145,7 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     pkt.ts_sec  = (uint32_t)hdr->ts.tv_sec;
     pkt.ts_usec = (uint32_t)hdr->ts.tv_usec;
     pkt.len     = hdr->len;
-    if (!decode_frame(data, (int)hdr->caplen, dlt, &pkt))
+    if (!decode_frame(data, (int)hdr->caplen, (int)hdr->len, dlt, &pkt))
         return;  /* drop ARP / LLC / unknown — see decode_frame() comment */
 
     int rl = (int)hdr->caplen < 64 ? (int)hdr->caplen : 64;

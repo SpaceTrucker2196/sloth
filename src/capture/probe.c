@@ -13,7 +13,7 @@
 #include "capture/capture.h"   /* capture_classify_exit / stats accounting (#91) */
 #include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
-#include "dot11_data.h"          /* management header length (+HTC) */
+#include "dot11_frame.h"         /* one decode per frame (#122) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -306,18 +306,38 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         pthread_mutex_unlock(&g_frame_mu);
     }
 
-    /* 802.11 frame starts after radiotap */
+    /* 802.11 frame starts after radiotap. When radiotap says the FCS
+     * is present, its four octets are a trailer and not frame (#122):
+     * every parser below used to see them as four extra body bytes,
+     * which an IE walker reads as one more element. A capture cut by
+     * snaplen may have lost some or all of the trailer, so the strip
+     * is computed from caplen against the original length. */
     const uint8_t *dot11     = data + rt_len;
     int            dot11_len = len  - rt_len;
+    {
+        int strip = dot11_fcs_strip_len((int)hdr->caplen, (int)hdr->len,
+                                        rt.fcs_present);
+        if (strip > dot11_len) strip = dot11_len;
+        dot11_len -= strip;
+    }
     /* Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
      * duration(2) + addr1(6) = 10 bytes. Control frames like ACK/CTS are
      * exactly this size. */
     if (dot11_len < 10) return;
 
-    /* Frame Control byte 0: bits 2-3 = type, bits 4-7 = subtype */
-    uint8_t fc0  = dot11[0];
-    uint8_t type = (fc0 >> 2) & 0x03;
-    uint8_t sub  = (fc0 >> 4) & 0x0f;
+    /* ── One decode for this frame (#122) ───────────────────────
+     *
+     * Type, subtype, flags, header length, body offset and the address
+     * roles are read once here and nowhere else in this function. The
+     * observers below keep their (dot11, len) entry points for now —
+     * their own tests and the fuzz harnesses are written against them
+     * — and re-derive what they need through the dot11_data wrappers,
+     * which are themselves the same view. */
+    const dot11_rt_hints_t hints = { rt.fcs_present, rt.datapad, rt.bad_fcs };
+    dot11_frame_t fr;
+    const int     full = dot11_frame_decode(dot11, dot11_len, &hints, &fr);
+    const uint8_t type = fr.type;
+    const uint8_t sub  = fr.subtype;
 
     /* Per-channel RF quality (roadmap B3). The retry bit is Frame
      * Control byte 1 bit 3; the FCS-failed flag came from radiotap.
@@ -325,14 +345,12 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * channel health is about the air, not about what the frame said —
      * and a frame that failed its FCS is still evidence the channel is
      * struggling even though its contents are untrustworthy. */
-    rf_quality_observe(channel, (dot11[1] & 0x08) ? 1 : 0, rt.bad_fcs,
-                       fts);
+    rf_quality_observe(channel, fr.retry ? 1 : 0, rt.bad_fcs, fts);
 
     /* Log every frame for the monitor packets band, before the per-type
-     * dispatch. addr2 (TA/SA) only exists from 16 bytes on — ACK/CTS carry
-     * addr1 only, so pass NULL there. */
-    mon_frame_record(type, sub, dot11 + 4,
-                     dot11_len >= 16 ? dot11 + 10 : NULL,
+     * dispatch. The view hands out addr2 only where the frame has one —
+     * ACK/CTS carry addr1 only, so it is NULL there whatever follows. */
+    mon_frame_record(type, sub, fr.a1, fr.a2,
                      (uint16_t)dot11_len, signal, fts);
 
     /* Freshness for this stream (#91). Recorded here, with the frame
@@ -430,7 +448,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                     mle_observe(&mld, fts);
             }
             if (rsn.csa_present)
-                csa_observe(dot11 + 16, dot11 + 10,
+                csa_observe(fr.bssid, fr.sa,
                             rsn.csa_new_channel, rsn.csa_new_op_class,
                             rsn.csa_switch_mode, rsn.csa_switch_count,
                             CSA_SRC_BEACON, channel, fts);
@@ -444,28 +462,29 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * tells us whether the STA actually joined; if so, feed the
      * association tracker. */
     if (sub == 1 || sub == 3 || sub == 5) {
-        if (dot11_len < 36) return;
-        /* AP → STA: DA(=STA) at addr1, BSSID at addr2/addr3 (same). */
-        const uint8_t *sta_p   = dot11 + 4;
-        const uint8_t *bssid_p = dot11 + 16;
+        /* AP -> STA: DA (= STA) is addr1, BSSID is addr3 (§9.3.3.1). */
+        const uint8_t *sta_p   = fr.da;
+        const uint8_t *bssid_p = fr.bssid;
         /* Status code lives in the assoc/reassoc-resp fixed body:
          *   caps(2) + status(2) + aid(2). probe-resp doesn't have one. */
         int status_ok = 1;
         int fixed = (sub == 5) ? 12 : 6;
-        /* 24, or 28 when +HTC/Order adds an HT Control field — all three
-         * of these subtypes are management frames. A fixed 24 here read
-         * the status code and the whole IE list four octets early. */
-        /* `mhdr`, not `hdr`: `hdr` is the pcap record header in this
-         * function. */
-        int mhdr = dot11_mgmt_hdr_len(dot11, dot11_len);
-        if (mhdr < 0 || dot11_len < mhdr + fixed) return;
+        /* The body is where the view says it starts — 24 or 28 octets
+         * in, datapad-rounded when radiotap says so — and the only
+         * length floor is the fixed part itself. A stale
+         * `dot11_len < 36` guard sat here until #122 and dropped every
+         * 30–35-octet (re)association response, which is a legal frame:
+         * header + 6 fixed octets + a 2-octet Supported Rates element
+         * is 34. A Protected body (ciphertext) is refused outright. */
+        const uint8_t *body; int blen;
+        if (!full || !dot11_frame_body(&fr, &body, &blen) || blen < fixed)
+            return;
         if (sub == 1 || sub == 3) {
-            uint16_t status = (uint16_t)(dot11[mhdr + 2] |
-                                          ((uint16_t)dot11[mhdr + 3] << 8));
+            uint16_t status = (uint16_t)(body[2] | ((uint16_t)body[3] << 8));
             status_ok = (status == 0);
         }
-        const uint8_t *ie = dot11 + mhdr + fixed;
-        int rem = dot11_len - mhdr - fixed;
+        const uint8_t *ie = body + fixed;
+        int rem = blen - fixed;
         char ssid[33] = "";
         while (rem >= 2) {
             uint8_t tag = ie[0];
@@ -517,9 +536,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         }
         /* Drop the association for this (BSSID, STA) — either side
          * could be initiating, so try both directions. */
-        if (dot11_len >= 22) {
-            const uint8_t *a1 = dot11 + 4;
-            const uint8_t *a2 = dot11 + 10;
+        if (fr.a1 && fr.a2 && fr.a3) {
+            const uint8_t *a1 = fr.a1;
+            const uint8_t *a2 = fr.a2;
             assoc_forget(a1, a2);
             assoc_forget(a2, a1);
             /* #107 shape B, the other route to the same buffer: an AP
@@ -530,7 +549,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * which attributes the event correctly whether the AP or
              * the station sent the frame. A broadcast deauth lands on
              * ff:ff:ff:ff:ff:ff and queue_evict rejects it. */
-            const uint8_t *bss_p = dot11 + 16;
+            const uint8_t *bss_p = fr.a3;
             queue_evict_note_session_change(
                 bss_p, memcmp(a1, bss_p, 6) == 0 ? a2 : a1,
                 QUEUE_EVICT_SRC_DISCONNECT, fts, (long)hdr->ts.tv_usec);
@@ -543,7 +562,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * We don't decode the algorithm here — the flood signal is the
          * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
          * to; a burst there means an association-table exhaustion DoS. */
-        auth_observe(dot11 + 16, fts);
+        auth_observe(fr.bssid, fts);
         return;
     }
 
@@ -570,17 +589,13 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
 
     if (sub != 4) return;  /* only probe requests beyond this point */
 
-    /* Source Address: bytes 10-15 */
-    const uint8_t *sa = dot11 + 10;
-    /* Sequence Control field at bytes 22-23 (little-endian).
-     * Upper 12 bits = sequence number. Feed the seqnum tracker so we
-     * can correlate randomised probe MACs back to the same physical
-     * radio across MAC changes. */
-    if (dot11_len >= 24) {
-        uint16_t sc = (uint16_t)(dot11[22] | (dot11[23] << 8));
-        uint16_t seqnum = (uint16_t)(sc >> 4);
-        seqnum_track_observe(sa, seqnum);
-    }
+    /* Source Address (addr2 in a management frame). */
+    const uint8_t *sa = fr.sa;
+    /* Sequence Number: feed the seqnum tracker so we can correlate
+     * randomised probe MACs back to the same physical radio across MAC
+     * changes. -1 means the frame did not reach Sequence Control. */
+    if (fr.seq_num >= 0)
+        seqnum_track_observe(sa, (uint16_t)fr.seq_num);
 
     /* Parse SSID information element (tag 0).
      *
@@ -589,10 +604,8 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * 24 walked into HT Control — and the SSIDs this walk extracts are
      * the client's preferred-network list, which is what the KARMA
      * correlation is built on. */
-    int mhdr = dot11_mgmt_hdr_len(dot11, dot11_len);
-    if (mhdr < 0) return;
-    const uint8_t *ie_start = dot11 + mhdr;
-    int            ie_total = dot11_len - mhdr;
+    const uint8_t *ie_start; int ie_total;
+    if (!full || !dot11_frame_body(&fr, &ie_start, &ie_total)) return;
     const uint8_t *ie       = ie_start;
     int            ie_rem   = ie_total;
     char           ssid[33] = "";
