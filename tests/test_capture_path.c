@@ -599,7 +599,15 @@ static int mon_frame(uint8_t *f, int dot11_len, uint8_t fc0) {
     h.a1 = a1;
     fb_dot11_hdr(&b, &h);
     const int total = RT_HDR + dot11_len;
-    memcpy(f, whole, (size_t)total);   /* zeros past the 24-byte header */
+    /* Copy only what the builder wrote and zero the rest. `whole` holds
+     * RT_HDR + 64 bytes; callers ask for far more (the evidence-ring tests
+     * build a 900-byte frame), and copying `total` bytes out of it read
+     * 836 bytes past the end of this stack buffer - ASan failed the
+     * capture-path binary on 6f2f9c2 while every local gate was green,
+     * because the sanitized capture-path run is a CI-only gate. */
+    memset(f, 0, (size_t)total);
+    int built = b.len < total ? b.len : total;
+    memcpy(f, whole, (size_t)built);
     return total;
 }
 
