@@ -5,6 +5,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "assoc_track.h"
+#include "sensor_health.h"
 #include "beacon_snoop.h"
 #include "probe_pnl.h"
 #include "tui.h"
@@ -270,6 +271,33 @@ static void test_req_legacy_11b_client(void) {
     ASSERT_EQ(r.supported_rates, (uint32_t)ASSOC_RATES_11B_ONLY);
     ASSERT_EQ(r.akm_bits, 0u);                /* open — no RSN IE */
     ASSERT_EQ(r.requested_mfp, 0);
+}
+
+/* #126: the rate walk runs on the shared iterator. Rates read before a
+ * truncated Extended Supported Rates element are kept, as before. The
+ * tally reads 2, not 1, and that is the documented semantics rather
+ * than a double count to fix here: the same element list is walked by
+ * this file's rate reader and by beacon_parse_ies(), and the tally
+ * counts walks that stopped (sensor_health.h). The clean list adds 0. */
+static void test_req_truncated_rates_are_tallied_per_walk(void) {
+    static const uint8_t ies[] = {
+        0x00, 0x03, 'o','l','d',
+        0x01, 0x04, 0x82, 0x84, 0x8b, 0x96,     /* 1, 2, 5.5, 11       */
+        0x32, 0x08, 0x0c, 0x12                  /* ext rates: claims 8 */
+    };
+    uint8_t f[128];
+    int n = build_req(f, 0, 0, 1, ies, (int)sizeof(ies));
+    assoc_req_t r;
+    sh_parse_fault_reset();
+    ASSERT_EQ(assoc_request_parse(f, n, &r), 1);
+    ASSERT_EQ(r.supported_rates, (uint32_t)ASSOC_RATES_11B_ONLY);
+    ASSERT_STR(r.requested_ssid, "old");
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 2);
+
+    n = build_req(f, 0, 0, 1, ies, (int)sizeof(ies) - 4);
+    sh_parse_fault_reset();
+    ASSERT_EQ(assoc_request_parse(f, n, &r), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
 }
 
 static void test_req_rejects_other_subtypes(void) {
@@ -765,6 +793,7 @@ void run_assoc_track_tests(void) {
     RUN_TEST(test_req_extracts_rsn_ask);
     RUN_TEST(test_req_extracts_rates);
     RUN_TEST(test_req_legacy_11b_client);
+    RUN_TEST(test_req_truncated_rates_are_tallied_per_walk);
     RUN_TEST(test_req_rejects_other_subtypes);
     RUN_TEST(test_req_rejects_truncated);
     RUN_TEST(test_req_zeroed_on_reject);

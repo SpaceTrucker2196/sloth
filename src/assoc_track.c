@@ -9,6 +9,7 @@
 #include "beacon_snoop.h"
 #include "sensor_health.h"
 #include "dot11_data.h"
+#include "bytes.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -58,17 +59,20 @@ static uint32_t rate_bit(uint8_t raw) {
  * answers a different question than a client's. */
 static uint32_t parse_rates(const uint8_t *ies, int len) {
     uint32_t bits = 0;
-    int off = 0;
-    while (off + 2 <= len) {
-        uint8_t tag = ies[off];
-        uint8_t tln = ies[off + 1];
-        if (off + 2 + (int)tln > len) break;      /* truncated — stop */
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *b;
+    tlv_init(&it, ies, len);
+    while (tlv_next(&it, &tag, &tln, &b) == TLV_OK) {
         if (tag == 1 || tag == 50) {
-            for (int i = 0; i < (int)tln; i++)
-                bits |= rate_bit(ies[off + 2 + i]);
+            for (int i = 0; i < tln; i++)
+                bits |= rate_bit(b[i]);
         }
-        off += 2 + tln;
     }
+    /* Rates read before a truncated element are kept, as before. The
+     * same element list goes through beacon_parse_ies() next, which
+     * tallies its own stop, so one malformed request counts twice —
+     * the tally counts walks, not frames (sensor_health.h). */
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     return bits;
 }
 
