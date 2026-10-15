@@ -1,68 +1,37 @@
 #include <string.h>
 
 #include "dot11_data.h"
+#include "dot11_frame.h"
 
-/* LLC/SNAP: DSAP AA, SSAP AA, control 03, then a three-byte
- * organisation code and the two-byte ethertype (RFC 1042). */
-#define LLC_SNAP_LEN 8
+/* Byte-pointer wrappers over the one-decode view (#122).
+ *
+ * Until #122 this file held its own copy of the MAC-header formula; the
+ * fuzz targets, the tests and a dozen observers depend on these entry
+ * points, so the signatures stay and the arithmetic moves to
+ * dot11_frame.c. Nothing below reads a header offset directly: every
+ * answer comes out of a dot11_frame_t, so the s9.2.4.1.10 rule, the
+ * Address 4 shift and the QoS Control position each exist once.
+ *
+ * None of these take radiotap hints, because none of their callers
+ * hold a radiotap header: body offsets here are the plain header
+ * length, never datapad-rounded. */
 
 int dot11_data_header_len(const uint8_t *dot11, int len) {
-    if (!dot11 || len < 2) return -1;
-    int sub     = (dot11[0] >> 4) & 0x0f;
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
-    int order   = (dot11[1] >> 7) & 0x01;
-
-    int hdr = 24;
-    /* Four addresses when the frame crosses two distribution-system
-     * hops. Independent of the two below — a QoS WDS frame with HT
-     * Control carries all three additions at once. */
-    if (to_ds && from_ds) hdr += 6;
-    if (sub & 0x08)       hdr += 2;   /* QoS Control */
-
-    /* HT Control is present only in QoS Data and Management frames
-     * (IEEE 802.11-2020 §9.2.4.6). The same Frame Control bit has two
-     * unrelated meanings (§9.2.4.1.10): +HTC in a QoS data or
-     * management frame, but in a NON-QoS data frame it is the
-     * StrictlyOrdered service-class indication and no HT Control field
-     * follows it.
-     *
-     * Conditioning on `order` alone put the LLC header four bytes late
-     * on any non-QoS data frame with that bit set, which is one bit an
-     * attacker picks. Three consequences, all of them the "invents
-     * data" failure the rest of this file is written to avoid:
-     *
-     *   - dot11_data_payload() reads LLC/SNAP from mid-payload, so the
-     *     frame is dropped as NOT_SNAP (lost visibility) or, if the
-     *     bytes there happen to be AA AA 03, yields an ethertype and a
-     *     payload offset invented from the middle of the packet.
-     *   - dot11_ccmp_pn() reads the CCMP header four bytes late and
-     *     returns a PN assembled from payload bytes — a number that
-     *     looks like evidence, which is exactly what that function's
-     *     own comment refuses to do for a WEP/TKIP IV.
-     *   - src/fragattack.c :: first_frag_ethertype() returns -1, and
-     *     its caller treats -1 as "nothing to see" — so setting this
-     *     one bit on a plaintext non-QoS data frame walked past the
-     *     CVE-2020-26140/-26143 plaintext-unicast rule unrecorded.
-     *
-     * Management frames also carry HT Control under this bit, but they
-     * do not come through here: this function is the data-frame header,
-     * and every caller has already selected type 2. */
-    if (order && (sub & 0x08)) hdr += 4;   /* HT Control */   /* HT Control */
-    return len >= hdr ? hdr : -1;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    /* The data-frame header. Every caller has already selected type 2;
+     * a frame that is not one has no data header to report. */
+    if (!dot11 || f.type != 2) return -1;
+    return f.hdr_len;
 }
 
 /* See dot11_data.h for why this is a shared function rather than the
- * expression three of the four management parsers were missing.
- *
- * Unlike the data case there is no QoS-subtype condition: §9.2.4.1.10
- * gives the bit one meaning in a management frame (+HTC) and only the
- * non-QoS DATA frame reading is StrictlyOrdered. So this really is
- * `set ? 28 : 24`, which is what deauth_snoop.c already had. */
+ * expression three of the four management parsers were missing. */
 int dot11_mgmt_hdr_len(const uint8_t *dot11, int len) {
-    if (!dot11 || len < 2) return -1;
-    int hdr = (dot11[1] & 0x80) ? 28 : 24;
-    return len >= hdr ? hdr : -1;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    if (!dot11 || f.type != 0) return -1;
+    return f.hdr_len;
 }
 
 int dot11_data_payload(const uint8_t *dot11, int len,
@@ -70,93 +39,31 @@ int dot11_data_payload(const uint8_t *dot11, int len,
     if (payload_off) *payload_off = 0;
     if (ethertype)   *ethertype   = 0;
     if (!dot11 || len < 4) return DOT11_DATA_TRUNCATED;
-
-    int type = (dot11[0] >> 2) & 0x03;
-    if (type != 2) return DOT11_DATA_NOT_DATA;
-    int sub = (dot11[0] >> 4) & 0x0f;
-
-    /* Subtypes with bit 2 set carry no frame body at all — Null,
-     * QoS Null and friends exist to move power-management state. */
-    if (sub & 0x04) return DOT11_DATA_NO_PAYLOAD;
-
-    /* Protected: the body is ciphertext. Rejected rather than parsed,
-     * per MISSION §2 — and distinguished from malformed, because on
-     * most networks this is simply the normal case. */
-    if (dot11[1] & 0x40) return DOT11_DATA_ENCRYPTED;
-
-    int hdr = dot11_data_header_len(dot11, len);
-    if (hdr < 0) return DOT11_DATA_TRUNCATED;
-
-    /* Sequence Control sits at hdr-2 for a non-QoS frame, but is always
-     * at offset 22 regardless of the additions before it. Fragment
-     * number is the low four bits; anything other than fragment zero is
-     * a continuation with no LLC header of its own. */
-    if (len >= 24) {
-        uint16_t sc = (uint16_t)(dot11[22] | (dot11[23] << 8));
-        if ((sc & 0x000f) != 0) return DOT11_DATA_FRAGMENT;
-    }
-    if (dot11[1] & 0x04) return DOT11_DATA_FRAGMENT;   /* More Fragments */
-
-    /* A-MSDU: the QoS Control field's bit 7 says the body is several
-     * aggregated subframes, each with its own header, rather than one
-     * LLC-encapsulated packet. Detected and skipped explicitly — a
-     * silent misparse here reads as a valid but wrong packet. */
-    /* Via the helper, not a fourth hand-rolled copy of the same offset
-     * arithmetic. The copy that used to live here guarded with
-     * `qos_off + 1 < len` while dot11_amsdu_present() guards with
-     * `qos_off >= len`, so a frame carrying exactly one byte of QoS
-     * Control was "A-MSDU present" to one function and not even
-     * inspected by the other. Both still refused the frame, so nothing
-     * was misparsed — but two bounds for one field is how a real
-     * divergence arrives, and the offset is now computed in one place
-     * so it cannot. */
-    if (dot11_amsdu_present(dot11, len) == 1) return DOT11_DATA_AMSDU;
-
-    if (hdr + LLC_SNAP_LEN > len) return DOT11_DATA_TRUNCATED;
-    const uint8_t *llc = dot11 + hdr;
-    /* Only SNAP-encapsulated frames carry an ethertype. Bare LLC (IPX,
-     * NetBIOS over 802.2) has a protocol identifier in a different
-     * place, and reading one as the other invents an ethertype. */
-    if (llc[0] != 0xaa || llc[1] != 0xaa || llc[2] != 0x03)
-        return DOT11_DATA_NOT_SNAP;
-
-    if (payload_off) *payload_off = hdr + LLC_SNAP_LEN;
-    if (ethertype)   *ethertype   = (uint16_t)((llc[6] << 8) | llc[7]);
-    return DOT11_DATA_OK;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return dot11_frame_payload(&f, payload_off, ethertype);
 }
 
 int dot11_data_addrs(const uint8_t *dot11, int len,
                      uint8_t bssid[6], uint8_t sa[6], uint8_t da[6]) {
     if (!dot11 || len < 24) return 0;
-    if (((dot11[0] >> 2) & 0x03) != 2) return 0;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    if (f.type != 2) return 0;
 
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
-    const uint8_t *a1 = dot11 + 4, *a2 = dot11 + 10, *a3 = dot11 + 16;
-
-    if (to_ds && from_ds) {
-        /* addr4 sits after the header's fixed part; sa is only readable
-         * when the frame is long enough to carry it. */
-        if (da) memcpy(da, a3, 6);
+    if (f.has_addr4) {
+        /* Address 4 sits after the fixed part; sa is only readable when
+         * the frame is long enough to carry it. */
+        if (da) memcpy(da, f.da, 6);
         if (sa) {
-            if (len < 30) return 0;
-            memcpy(sa, dot11 + 24, 6);
+            if (!f.sa) return 0;
+            memcpy(sa, f.sa, 6);
         }
         return DOT11_ADDRS_NO_BSSID;
     }
-    if (from_ds) {                       /* AP -> STA */
-        if (da)    memcpy(da,    a1, 6);
-        if (bssid) memcpy(bssid, a2, 6);
-        if (sa)    memcpy(sa,    a3, 6);
-    } else if (to_ds) {                  /* STA -> AP */
-        if (bssid) memcpy(bssid, a1, 6);
-        if (sa)    memcpy(sa,    a2, 6);
-        if (da)    memcpy(da,    a3, 6);
-    } else {                             /* IBSS */
-        if (da)    memcpy(da,    a1, 6);
-        if (sa)    memcpy(sa,    a2, 6);
-        if (bssid) memcpy(bssid, a3, 6);
-    }
+    if (bssid) memcpy(bssid, f.bssid, 6);
+    if (sa)    memcpy(sa,    f.sa,    6);
+    if (da)    memcpy(da,    f.da,    6);
     return 1;
 }
 
@@ -166,62 +73,52 @@ int dot11_is_group_addr(const uint8_t addr[6]) {
 
 int dot11_frag_num(const uint8_t *dot11, int len) {
     if (!dot11 || len < 24) return -1;
-    return dot11[22] & 0x0f;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return f.frag_num;
 }
 
-/* The 12-bit Sequence Number from Sequence Control (IEEE 802.11-2020
- * §9.2.4.4): bits 4..15 of the little-endian 16-bit field at offset 22.
- * The low 4 bits are the fragment number, which dot11_frag_num() reads.
- *
- * A retransmission of one MSDU carries the SAME sequence number, which
+/* A retransmission of one MSDU carries the SAME sequence number, which
  * is what makes this the right key for "have I already counted this
  * frame" — see src/queue_evict.c. */
 int dot11_seq_num(const uint8_t *dot11, int len) {
     if (!dot11 || len < 24) return -1;
-    return (int)((((unsigned)dot11[23] << 8) | dot11[22]) >> 4) & 0x0fff;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return f.seq_num;
 }
 
 int dot11_more_frags(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
-    return (dot11[1] >> 2) & 0x01;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return f.more_frag;
 }
 
 int dot11_data_tid(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
-    int type = (dot11[0] >> 2) & 0x03;
-    if (type != 2) return -1;
-
-    int sub = (dot11[0] >> 4) & 0x0f;
-    if (!(sub & 0x08)) return 0;      /* non-QoS: implicit single queue */
-
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
-    int qos_off = 24 + ((to_ds && from_ds) ? 6 : 0);
-    if (qos_off >= len) return -1;
-    return dot11[qos_off] & 0x0f;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    if (f.type != 2) return -1;
+    if (!f.has_qos) return 0;      /* non-QoS: implicit single queue */
+    return f.tid;                  /* -1 when QoS Control is cut off */
 }
 
 int dot11_amsdu_present(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
-    if (((dot11[0] >> 2) & 0x03) != 2) return -1;
-    int sub = (dot11[0] >> 4) & 0x0f;
-    if (!(sub & 0x08)) return -1;          /* no QoS Control field */
-
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
-    int qos_off = 24 + ((to_ds && from_ds) ? 6 : 0);
-    if (qos_off >= len) return -1;
-    return (dot11[qos_off] >> 7) & 0x01;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    if (f.type != 2 || !f.has_qos) return -1;   /* no QoS Control field */
+    return f.amsdu;
 }
 
 int64_t dot11_ccmp_pn(const uint8_t *dot11, int len) {
     if (!dot11 || len < 24) return -1;
-    if (((dot11[0] >> 2) & 0x03) != 2) return -1;
-    if (!(dot11[1] & 0x40)) return -1;               /* not protected */
-
-    int hdr = dot11_data_header_len(dot11, len);
-    if (hdr < 0 || hdr + 8 > len) return -1;
-    const uint8_t *iv = dot11 + hdr;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    if (f.type != 2 || !f.protected_) return -1;
+    if (f.hdr_len < 0 || f.body_len < 8) return -1;
+    const uint8_t *iv = f.p + f.body_off;
 
     /* Without the Extended IV bit these eight bytes are a WEP IV or an
      * original-TKIP one, neither of which carries a 48-bit PN. Reading

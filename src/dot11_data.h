@@ -40,7 +40,11 @@ typedef enum {
 } dot11_data_status_t;
 
 /* Length of the MAC header for a data frame, in bytes, or -1 if `len`
- * cannot hold it.
+ * cannot hold it or the frame is not a data frame. Since #122 this and
+ * every function below is a wrapper over dot11_frame_decode() in
+ * dot11_frame.h, which is the one place the layout rule lives; the
+ * entry points stay because the observers, the tests and the fuzz
+ * targets are written against them.
  *
  *   24 base
  *   +6  when both ToDS and FromDS are set (addr4 — WDS / mesh)
