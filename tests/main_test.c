@@ -137,6 +137,7 @@ void run_help_tests(void);
 void run_discovery_tests(void);
 void run_secure_file_tests(void);
 void run_observe_tests(void);
+void run_privdrop_tests(void);
 void run_wifi_scan_trigger_tests(void);
 void run_eap_parse_tests(void);
 void run_eap_track_tests(void);
@@ -283,6 +284,7 @@ int main(void) {
     run_discovery_tests();
     run_secure_file_tests();
     run_observe_tests();
+    run_privdrop_tests();
     run_wifi_scan_trigger_tests();
     run_eap_parse_tests();
     run_eap_track_tests();

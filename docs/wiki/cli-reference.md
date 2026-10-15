@@ -35,7 +35,9 @@ sloth [output] [handshakes] [stream] [wifi] [correlation] [db]
       [inventory] [posture] [runtime] [--help] [--version]
 ```
 
-Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. The
+Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. A
+root run **drops privileges by default** once the capture handles are
+open (#140) — see [Privilege](#privilege--dropping-root-after-capture-opens). The
 test binary `sloth_test` takes no flags. No subcommands — sloth is a
 single mode driven by flags.
 
@@ -89,6 +91,47 @@ scoped to the IP capture stream: the monitor radio sits outside the
 `--iface` allow-list. An interactive run's line is wiped by ncurses
 init, so the audience is journald / `--headless`. →
 [[views-catalog]], `docs/views/interfaces.md`
+
+### Privilege — dropping root after capture opens
+
+Owner ruling 2026-10-15, "only use root when necessary" (#140). sloth
+needs `CAP_NET_RAW` once, to open the capture handles, and
+`CAP_NET_ADMIN` for the whole run only when it writes nl80211 (`--hop`
+retunes, `--allow-active` scan triggers — each opens a fresh netlink
+socket). So after `capture_open`/`probe_open` and the scope check, and
+before any sink or thread exists, a root run switches account and sheds
+everything else. Every sink (`-o`, `--db`, `--pcap-dir`, `--eapol-dir`,
+`--data-socket`, the exit-time `--report`/`--snapshot-out`) is then
+created **as the target account**, so its path must be owned by that
+account — the existing "validated, never repaired" refusal fires
+otherwise.
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--user` | `NAME` | `sloth` when that account exists | Account a root run drops to (`setgroups(0)` → `setresgid` → `setresuid`, then raw `capset`; no libcap). Keeps `CAP_NET_ADMIN` only for `--hop`/`--allow-active`, never `CAP_NET_RAW`. An unknown `NAME` exits `2` before anything opens. Without `--user` and with no `sloth` account a root run **keeps uid 0 but drops every capability it does not need**, and says so on stderr. Needs root (`CAP_SETUID`+`CAP_SETGID`); a non-root `--user` exits `2`. |
+| `--no-privdrop` | — | off | Keep every privilege for the whole run — the explicit escape for dev boxes (e.g. a root-owned `data/`). Announced on stderr; `no_new_privs` is still set. `--user` with `--no-privdrop` exits `2`. |
+
+What every run does regardless of flags: `PR_SET_NO_NEW_PRIVS`, ambient
+set cleared, inheritable set cleared. A non-root run (the shipped
+systemd unit runs as `sloth` with ambient caps) keeps its uid and sheds
+`CAP_NET_RAW` the same way. Every step is read back (`getresuid`,
+`capget`, `PR_CAPBSET_READ`, `PR_GET_NO_NEW_PRIVS`); a mismatch is a
+startup failure, exit `2`, never a half-dropped run. The stderr line is
+one of:
+
+```
+sloth: dropped to uid 998 (sloth) after capture opened; caps kept: CAP_NET_ADMIN for --hop; no_new_privs on
+sloth: no 'sloth' account to drop to — staying uid 0 with every capability dropped; caps kept: none; no_new_privs on. Create the account (packaging/systemd/sloth.sysusers.conf) or pass --user NAME
+sloth: --no-privdrop: privileges NOT dropped — this run keeps uid 0 and every capability for its whole life
+```
+
+Consequences of a dropped run, by design: the `[m]` monitor retarget
+cannot open a new radio (`CAP_NET_RAW` is gone; the current radio keeps
+capturing and the pcap error is shown — restart with the new interface
+instead); the process views lose the pid map for other users'
+sockets (`/proc/<pid>/fd` is unreadable); the mDNS service file cannot
+be written to `/etc/avahi/services` (the existing "use --no-discovery"
+notice). → [[deployment]], [[monitor-mode]]
 
 ### Correlation — MAC deanonymisation
 
@@ -272,7 +315,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 | Code | Meaning |
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back). |
 
 ## Build variants (Makefile)
 

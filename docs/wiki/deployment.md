@@ -15,9 +15,9 @@ build tree.
 `packaging/systemd/sloth.sysusers.conf`, `packaging/bin/sloth-monitor-up`,
 `packaging/default/sloth`, `Makefile` (`install`, `install-service`),
 `tests/test_unit_file.c`, `src/secure_file.c`, `src/data_socket.c`,
-`MISSION.md` §2.
+`src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-14 (#139)
+**Last updated**: 2026-10-15 (#140)
 
 ---
 
@@ -55,7 +55,7 @@ Three consequences, each observed rather than hypothetical:
 The shipped unit removes uid 0 from the process **with no code change**:
 `User=sloth` plus `AmbientCapabilities=` gives an unprivileged account
 the two capabilities at `exec`, and the bounding set keeps it from ever
-getting more. An in-process privilege drop (track X7) is defence in
+getting more. The in-process privilege drop (#140, §3.3) is defence in
 depth on top of this, not a prerequisite for it.
 
 ## 2. What gets installed
@@ -191,6 +191,32 @@ a subset of `{CAP_NET_RAW, CAP_NET_ADMIN}`, that ambient is a subset of
 bounding, and that each is given exactly once (a second
 `CapabilityBoundingSet=` line *merges*, it does not replace).
 
+**Inside the process (#140).** The unit hands sloth both capabilities
+at `exec`; sloth gives back what it no longer needs once the capture
+handles are open. `CAP_NET_RAW` is used once — `pcap_activate()`
+creates the `AF_PACKET` sockets and reading them needs nothing — so it
+is shed with `capset` before any sink or thread exists. `CAP_NET_ADMIN`
+is kept only when the run writes nl80211 for its whole life: `--hop`
+(every retune opens a fresh netlink socket) or `--allow-active` (scan
+triggers, likewise). The shipped `ExecStart=` has `--hop`, so the
+steady state is `CapEff: 0000000000001000`. The ambient and inheritable
+sets are cleared and `no_new_privs` is set on every run, and each step
+is read back; a mismatch is exit `2`, never a half-dropped run.
+
+The same code runs for a hand start outside systemd. `sudo sloth ...`
+**drops by default** (owner ruling 2026-10-15, "only use root when
+necessary"): to the `sloth` account the sysusers fragment creates, or
+`--user NAME`; with no such account it keeps uid 0 and sheds every
+capability it does not need, and says so. `--no-privdrop` is the
+announced escape for a dev box. Because the drop happens *before* the
+sinks open, `--db`, `--pcap-dir`, `-o`, `--eapol-dir` and the
+`--data-socket` path are created as the target account, and
+`secure_file.c`'s ownership check holds against that account — a
+`data/` owned by your login user is refused when the run drops to
+`sloth`. Either `chown` it (as the migration below already does for
+`/var/lib/sloth`), point the run at `/var/lib/sloth`, pass `--user
+<you>`, or pass `--no-privdrop`. → [[cli-reference]] "Privilege".
+
 ### 3.4 Filesystem
 
 `ProtectSystem=strict` makes the entire filesystem read-only except the
@@ -207,15 +233,20 @@ the process views — fine headless, where no view is drawn.
 | Key | Value | Why |
 |---|---|---|
 | `RestrictAddressFamilies=` | `AF_UNIX AF_NETLINK AF_PACKET` | capture, rtnetlink/nl80211/INET_DIAG, the data socket. **No `AF_INET`**: the db-only profile opens no Internet socket. Add `AF_INET AF_INET6` only for a `tcp:` `--data-socket` or `--allow-active`; the test enforces that pairing in both directions |
-| `SystemCallFilter=` | `@system-service`, then `~@privileged @resources` | the standard service allow-list minus privilege changes and resource-limit calls; sloth uses neither |
+| `SystemCallFilter=` | `@system-service`, then `~@privileged @resources`, then `capset` | the standard service allow-list minus privilege changes and resource-limit calls, with `capset` alone re-allowed for the in-process drop (#140). A later allow line adds back to the filter. `capset` can only shed here: it never grows the permitted set, and growing the inheritable set needs `CAP_SETPCAP`, which the bounding set excludes. The test asserts the re-allow sits after the deny |
 | `SystemCallErrorNumber=` | `EPERM` | a blocked call fails with an error sloth already handles, instead of `SIGSYS` |
 | `SystemCallArchitectures=` | `native` | no 32-bit syscall table |
 | `RestrictNamespaces`, `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`, `MemoryDenyWriteExecute` | `true` | none needed; SQLite does not JIT |
 
-If X7 (an in-process `setresuid`/`capset` drop) lands, verify on the
-target host that those calls pass `@system-service` minus
-`@privileged` — `capset` is in `@privileged` — or the drop fails with
-`EPERM` at startup. The unit carries the same note.
+`capset` is in `@privileged`, so without that third line every start
+fails closed at the drop with `capset: Operation not permitted` and
+exit `2`. Measured on systemd 261 (2026-10-15) with a probe that only
+calls `capset` to lower its sets, run via `systemd-run --user` under the
+unit's three filter lines: `EPERM` with the first two alone, `0` with
+the third added. **Upgrade the binary and the unit together** (`sudo
+make install install-service`): a #140 binary under a pre-#140 unit
+will not start. `setresuid`/`setgroups` stay denied — the unit already
+starts as `sloth`, so the account switch never runs under it.
 
 ### 3.6 Resources and lifecycle
 
@@ -300,6 +331,11 @@ systemctl show -p User,AmbientCapabilities,CapabilityBoundingSet sloth-sensor
 # AmbientCapabilities=cap_net_admin cap_net_raw
 # CapabilityBoundingSet=cap_net_admin cap_net_raw
 ps -o user,cap_eff -C sloth                 # not root
+grep -E 'CapEff|CapAmb|NoNewPrivs' /proc/$(pidof sloth)/status
+# CapEff: 0000000000001000   (CAP_NET_ADMIN only, for --hop; 0 without)
+# CapAmb: 0000000000000000
+# NoNewPrivs: 1
+journalctl -u sloth-sensor -b | grep 'capabilities dropped'
 ls -la /var/lib/sloth /run/sloth            # sloth:sloth, 0700 / 0750
 systemd-analyze security sloth-sensor
 ```
@@ -315,9 +351,9 @@ under a mutation before it shipped (`docs/wiki/log.md`, #139 entry).
 
 ## 6. What this does not do
 
-- It does not drop privileges *inside* sloth. The process holds
-  `CAP_NET_ADMIN` for its lifetime because `--hop` needs it per retune.
-  X7 is that work.
+- It does not shed `CAP_NET_ADMIN` while `--hop` is on. Every retune
+  opens a fresh nl80211 socket, so the capability is needed for the
+  whole run; sloth drops everything else (#140, §3.3).
 - It does not run fully unprivileged or through a privsep helper (track
   X "do not" list: not now).
 - It does not put TLS or bearer tokens on the data socket; the `unix:`

@@ -546,6 +546,24 @@ static void test_an_empty_allow_list_admits_any_retarget(void) {
     ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
 }
 
+static void test_a_failed_retarget_open_keeps_the_current_radio(void) {
+    /* #140: a run that dropped CAP_NET_RAW cannot open a new radio, so
+       [m] fails at pcap_open_live(). The new handle is opened before
+       probe_stop(), so the failure leaves the radio already named in
+       probe_iface in place instead of blanking it. The unopenable name
+       stands in for the EPERM a dropped run gets.
+       Seen to fail: with the pre-#140 clear of probe_iface put back in
+       the failed-open branch, probe_iface comes back "" here. What this
+       does not prove is the ordering against probe_stop() — with no
+       live worker, probe_stop() changes nothing observable — nor that
+       a live worker survives; both need a real radio, as the
+       allow-list case above says, and are argued from the code. */
+    retarget_setup(NULL, "current0");
+    probe_set_iface(&g_s, NO_SUCH_IF);
+    ASSERT_EQ(strncmp(g_s.probe_err, "pcap(", 5), 0);
+    ASSERT_STR(g_s.probe_iface, "current0");
+}
+
 static void test_retarget_ignores_an_empty_name(void) {
     /* Guard ordering: an empty name is rejected before the boundary, so
        it must not be reported as an allow-list refusal. */
@@ -2461,6 +2479,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_retarget_outside_the_allow_list_is_refused);
     RUN_TEST(test_refusal_is_attributable_to_the_allow_list);
     RUN_TEST(test_an_empty_allow_list_admits_any_retarget);
+    RUN_TEST(test_a_failed_retarget_open_keeps_the_current_radio);
     RUN_TEST(test_retarget_ignores_an_empty_name);
 
     TEST_SUITE("capture path: the packet ring is a snapshot (#111)");

@@ -377,6 +377,21 @@ static void test_unit_sandbox_keys_present(void) {
     ASSERT(allow_seen);
     ASSERT(deny_seen);
 
+    /* #140: sloth sheds CAP_NET_RAW with capset after capture opens and
+     * fails closed if it cannot. capset is in @privileged, so the unit
+     * must re-allow it on a line AFTER the deny — an earlier allow line
+     * is removed again by the deny that follows it. */
+    int deny_at = -1, capset_at = -1;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        if (uf_has_token(l + 17, "~@privileged")) deny_at = i;
+        if (l[17] != '~' && uf_has_token(l + 17, "capset")) capset_at = i;
+    }
+    ASSERT(capset_at >= 0);
+    ASSERT(capset_at > deny_at);
+
     /* Memory ceiling until M0 closes; without one a leak is a host OOM. */
     ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
     ASSERT(uf_value(lines, n, "TasksMax") != NULL);

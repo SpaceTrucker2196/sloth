@@ -111,6 +111,8 @@
 #include "discovery.h"
 #include "dns.h"
 #include "observe.h"
+#include "privdrop.h"
+#include <pwd.h>
 #include "scan.h"
 #include "capture/probe.h"     /* self-stubbing without WITH_PCAP */
 #ifdef WITH_PCAP
@@ -536,6 +538,7 @@ static void print_usage(const char *argv0) {
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
+            "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
             "       [--wps-pin-brute-cycles N] [--wps-lockout-cycles N]\n"
@@ -689,6 +692,20 @@ static void print_usage(const char *argv0) {
             "                     is never silent. Does not re-enable per-packet\n"
             "                     lookups on the capture thread, which stay\n"
             "                     passive unconditionally.\n"
+            "  --user NAME        account a root run drops to once the capture\n"
+            "                     handles are open (default: sloth, when that\n"
+            "                     account exists). Every sink (-o, --db,\n"
+            "                     --pcap-dir, --eapol-dir, --data-socket) is\n"
+            "                     opened AFTER the drop, as NAME, so its paths\n"
+            "                     must be owned by NAME. CAP_NET_ADMIN is kept\n"
+            "                     only for --hop / --allow-active; nothing else\n"
+            "                     is. With no such account a root run keeps\n"
+            "                     uid 0 but sheds every capability it does not\n"
+            "                     need, and says so. An unknown NAME exits 2.\n"
+            "                     no_new_privs is set on every run.\n"
+            "  --no-privdrop      keep every privilege for the whole run (dev\n"
+            "                     boxes only). Announced on stderr; never the\n"
+            "                     default. Conflicts with --user (exit 2).\n"
             "  --no-correlate     disable longitudinal device correlation: the\n"
             "                     [j] seqnum view keeps showing each MAC's own\n"
             "                     counter trail, but no pair of addresses is\n"
@@ -877,6 +894,8 @@ int main(int argc, char **argv) {
     int         refresh_ms   = 0;        /* 0 = use POLL_MS default */
     int         no_discovery = 0;        /* --no-discovery: suppress mDNS advert (#29) */
     int         allow_active = 0;        /* --allow-active (#84) */
+    const char *privdrop_user = NULL;    /* --user NAME    (#140) */
+    int         no_privdrop  = 0;        /* --no-privdrop  (#140) */
     int         strict_lock  = 0;        /* --strict       (#84) */
     int         ds_allow_remote = 0;     /* --data-socket-allow-remote (#86) */
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
@@ -980,6 +999,10 @@ int main(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "--allow-active")) {
             allow_active = 1;
+        } else if (!strcmp(argv[i], "--user") && i + 1 < argc) {
+            privdrop_user = argv[++i];
+        } else if (!strcmp(argv[i], "--no-privdrop")) {
+            no_privdrop = 1;
         } else if (!strcmp(argv[i], "--strict")) {
             strict_lock = 1;
         } else if (!strcmp(argv[i], "--data-socket-allow-remote")) {
@@ -1202,6 +1225,43 @@ int main(int argc, char **argv) {
 
     if (g_hop_enabled) chanhop_init_default(&g_chanhop);
 
+    /* Privilege plan (#140, owner ruling 2026-10-15: "only use root
+     * when necessary"). Decided here, before anything opens, so a
+     * --user that names no account exits 2 having opened nothing.
+     * Applied below, between the capture opens (which need the
+     * privilege) and the sinks (which must be created as the account
+     * the run will live as). */
+    privdrop_req_t pd_req;
+    memset(&pd_req, 0, sizeof(pd_req));
+    privdrop_probe(&pd_req);
+    pd_req.hop          = g_hop_enabled;
+    pd_req.allow_active = prof.active_allowed;
+    pd_req.no_privdrop  = no_privdrop;
+    pd_req.user_given   = privdrop_user != NULL;
+    if (!privdrop_user) privdrop_user = PRIVDROP_DEFAULT_USER;
+    {
+        /* The reentrant form: nothing is threaded yet, but nothing here
+         * should depend on that staying true. A lookup error (not just
+         * "no such account") reads as unresolved, which refuses an
+         * explicit --user and announces the default case. */
+        static char pwbuf[16384];
+        struct passwd pwd, *pw = NULL;
+        if (getpwnam_r(privdrop_user, &pwd, pwbuf, sizeof(pwbuf), &pw) != 0)
+            pw = NULL;
+        if (pw) {
+            pd_req.user_resolved = 1;
+            pd_req.uid           = pw->pw_uid;
+            pd_req.gid           = pw->pw_gid;
+        }
+    }
+    privdrop_plan_t pd_plan;
+    privdrop_resolve(&pd_req, &pd_plan);
+    if (pd_plan.exit_code != 0) {
+        fprintf(stderr, "sloth: %s (--user %s)\n", pd_plan.reason,
+                privdrop_user);
+        return pd_plan.exit_code;
+    }
+
     memset(&g_state, 0, sizeof(g_state));
     g_state.poll_ms     = refresh_ms > 0 ? refresh_ms : POLL_MS;
     g_state.active_view = VIEW_DASH;
@@ -1224,7 +1284,6 @@ int main(int argc, char **argv) {
         iface_allow_add(&g_state, allow_ifaces[i]);
 
     g_platform.init();
-    dns_init();
 #ifdef WITH_PCAP
     capture_open(&g_state);
     probe_open(&g_state);
@@ -1263,6 +1322,34 @@ int main(int argc, char **argv) {
         if (v == CAPTURE_SCOPE_NO_CAPTURE)
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
+
+    /* #140: drop here — every handle that needs CAP_NET_RAW is open,
+     * the scope is sealed, and no thread exists yet (capset and
+     * no_new_privs are per-thread, so a worker started earlier would
+     * keep root's set). That is also why dns_init(), which starts the
+     * --allow-active resolver worker, moved below this point. Every
+     * sink after it is opened as the account the run lives as, so
+     * secure_file's ownership check holds against that account. A
+     * failed step fails closed: half-dropped is not a state to run in. */
+    {
+        char pd_err[160];
+        if (privdrop_apply(&pd_plan, pd_err, sizeof(pd_err)) != 0) {
+            fprintf(stderr, "sloth: privilege drop failed: %s — refusing "
+                            "to run (--no-privdrop to keep privileges)\n",
+                    pd_err);
+#ifdef WITH_PCAP
+            probe_stop();
+            capture_stop();
+#endif
+            g_platform.cleanup();
+            return 2;
+        }
+        char pd_msg[320];
+        privdrop_describe(&pd_req, &pd_plan, privdrop_user, pd_msg,
+                          sizeof(pd_msg));
+        if (pd_msg[0]) fprintf(stderr, "%s\n", pd_msg);
+    }
+    dns_init();
 
     /* Export directories first: a refused one is a startup error, and
      * failing here — before the DB records a session — leaves nothing

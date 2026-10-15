@@ -972,28 +972,32 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
         return;
     }
 
+    /* Open the new handle BEFORE stopping the old one (#140). A run
+     * that dropped privileges after startup no longer holds CAP_NET_RAW,
+     * so this open fails there by design; stopping first would turn a
+     * refused retarget into a lost radio. Same reasoning as the
+     * allow-list refusal above: a retarget that cannot happen must leave
+     * the running capture alone. */
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *nh = pcap_open_live(iface, 65535, 1, 100, errbuf);
+    if (!nh) {
+        snprintf(s->probe_err, sizeof(s->probe_err), "pcap(%s): %.50s", iface, errbuf);
+        return;
+    }
+
+    int dlt = pcap_datalink(nh);
+    if (dlt != DLT_IEEE802_11_RADIO) {
+        pcap_close(nh);
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%s: DLT %d not radiotap (not in monitor mode?)", iface, dlt);
+        return;
+    }
+
     probe_stop();   /* also closes a handle opened but never run */
 
     s->probe_err[0] = '\0';
     g_state = s;
-    char errbuf[PCAP_ERRBUF_SIZE];
-    g_ph = pcap_open_live(iface, 65535, 1, 100, errbuf);
-    if (!g_ph) {
-        snprintf(s->probe_err, sizeof(s->probe_err), "pcap(%s): %.50s", iface, errbuf);
-        s->probe_iface[0] = '\0';
-        return;
-    }
-
-    int dlt = pcap_datalink(g_ph);
-    if (dlt != DLT_IEEE802_11_RADIO) {
-        pcap_close(g_ph);
-        g_ph = NULL;
-        snprintf(s->probe_err, sizeof(s->probe_err),
-                 "%s: DLT %d not radiotap (not in monitor mode?)", iface, dlt);
-        s->probe_iface[0] = '\0';
-        return;
-    }
-
+    g_ph = nh;
     snprintf(s->probe_iface, sizeof(s->probe_iface), "%s", iface);
     /* A radio can also arrive here, not just at startup discovery: a run
      * that began with no radiotap interface skips main()'s evidence-ring

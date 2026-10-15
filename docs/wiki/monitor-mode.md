@@ -14,8 +14,8 @@ IP monitor into a Wi-Fi SIGINT tool. sloth **reads** a monitor interface;
 it never puts one into monitor mode itself.
 
 **Sources**: `src/platform/linux_wifi.c`, `src/capture/capture.c`,
-`docs/views/{wifi,probe,beacons}.md`, `README.md` "WiFi SIGINT usage",
-IEEE 802.11-2020.
+`src/privdrop.c`, `docs/views/{wifi,probe,beacons}.md`, `README.md`
+"WiFi SIGINT usage", IEEE 802.11-2020.
 
 **Last updated**: 2026-10-15.
 
@@ -90,6 +90,36 @@ none is found ([[cli-reference]]).
 Requirements: a chipset+driver that supports monitor mode (not all do),
 and `CAP_NET_ADMIN` / root. `--hop` additionally needs the driver to
 accept channel retunes.
+
+## Privileges while monitoring — why `CAP_NET_ADMIN` stays with `--hop`
+
+sloth gives up privilege once the capture handles are open (#140,
+default on for root runs; [[cli-reference]] "Privilege"). Two
+capabilities matter here, and they are needed for different lengths of
+time:
+
+- **`CAP_NET_RAW`** — only to *open* the monitor radio's pcap handle
+  (`pcap_open_live()` creates the `AF_PACKET` socket). Reading frames
+  from an open handle needs nothing, so it is dropped straight after
+  `probe_open()`.
+- **`CAP_NET_ADMIN`** — for every `NL80211_CMD_SET_CHANNEL`. sloth does
+  not hold an nl80211 socket open between retunes:
+  `linux_wifi_set_channel()` opens a fresh one each time, and the kernel
+  checks the capability per command. So a `--hop` run keeps
+  `CAP_NET_ADMIN` effective for its whole life (`CapEff:
+  0000000000001000`), and a run without `--hop` or `--allow-active`
+  keeps nothing. Reading the scan cache, station dumps and INET_DIAG
+  needs no capability.
+
+One interactive consequence: the `[m]` retarget opens a **new** pcap
+handle on another radio, which needs the `CAP_NET_RAW` a dropped run
+no longer has. The new handle is opened before the old one is stopped,
+so the refusal reports the pcap error in the radio status and the
+current radio keeps capturing; restart sloth on the interface you want,
+or run with
+`--no-privdrop` on a dev box. A radio that re-enumerates under the
+shipped unit is handled by `BindsTo=` and a restart, not a reopen
+([[deployment]]).
 
 ## Limits — what monitor mode does *not* give you
 

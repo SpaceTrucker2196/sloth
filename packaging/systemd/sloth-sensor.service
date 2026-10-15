@@ -87,6 +87,9 @@ ExecStart=/usr/local/bin/sloth \
 # Exactly what capture needs: CAP_NET_RAW for the AF_PACKET handle,
 # CAP_NET_ADMIN for --hop's nl80211 retunes. Ambient so an unprivileged
 # user receives them at exec; the bounding set so nothing can regain more.
+# Since #140 sloth sheds CAP_NET_RAW itself once the handles are open
+# (and CAP_NET_ADMIN too on a run without --hop/--allow-active), so the
+# process holds CapEff 0000000000001000 for its life, not both caps.
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
@@ -120,10 +123,15 @@ MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# capset is in @privileged, and sloth's in-process drop (#140) needs it
+# to shed CAP_NET_RAW after capture opens. Re-allowed alone: a later
+# allow line adds back to the filter. capset cannot grow the permitted
+# set at all, and growing the inheritable set needs CAP_SETPCAP, which
+# the bounding set above excludes — so here it can only shed. Without
+# this line every start fails closed (exit 2, "capset: Operation not
+# permitted"). prctl is already in @system-service.
+SystemCallFilter=capset
 SystemCallErrorNumber=EPERM
-# If X7 (in-process privilege drop) lands, verify on the target host that
-# capset/prctl/setresuid still pass @system-service minus @privileged, or
-# the drop will fail with EPERM at startup.
 
 # ── Resources ────────────────────────────────────────────────────────────
 # Ceiling until the memory-growth item (M0) closes: an OOM kill plus

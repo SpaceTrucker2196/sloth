@@ -182,6 +182,7 @@ CORE_COMMON_SRCS += research/coverage.c
 CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
 CORE_COMMON_SRCS += src/geo.c
 CORE_COMMON_SRCS += src/scan.c
+CORE_COMMON_SRCS += src/privdrop.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz

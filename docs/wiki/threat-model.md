@@ -19,7 +19,7 @@ whether it is closed today, and the Track X slice that owns it.
 
 **Sources**: `src/capture/capture.c` (`on_packet`, `decode_frame`,
 `decode_ipv4`), `src/capture/probe.c` (`on_probe_frame`),
-`src/secure_file.c`, `src/discovery.c`, `src/eapol_log.c`,
+`src/secure_file.c`, `src/privdrop.c`, `src/discovery.c`, `src/eapol_log.c`,
 `src/alert_pcap.c`, `src/db.c`, `research/query.c`, `src/data_socket.c`,
 `src/jsonl.c` (`json_escape`), `src/formatter.c` (`cef_escape_field`,
 `cef_escape_ext`, `syslog_sd_escape`), `src/inventory.c`, `src/posture.c`,
@@ -28,7 +28,7 @@ whether it is closed today, and the Track X slice that owns it.
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-15 (#136)
+**Last updated**: 2026-10-15 (#136, #140)
 
 ---
 
@@ -101,13 +101,24 @@ needs to open the capture and keeps them.
 `CAP_NET_ADMIN`, `NoNewPrivileges`, from `/usr/local/bin`;
 `tests/test_unit_file.c` pins each of those. See [[deployment]].
 
-**Known unchecked**: a run that is not under that unit — `sudo ./sloth`
-from a checkout, or a sensor still on a hand-written unit — is uid 0 for
-its whole life with every capability (CWE-250, CWE-269). There is no
-in-process drop; `--hop` needs `CAP_NET_ADMIN` on every retune, which is
-why the Track X "do not" list rules out a fully unprivileged start.
-Owner: #140 (`--user NAME`, opt-in; a root-run default needs an owner
-ruling).
+**Enforced since #140** (owner ruling 2026-10-15, default on): once
+the capture handles are open and before any sink or thread exists,
+`src/privdrop.c` drops a root run to the `sloth` account (or `--user
+NAME`), or — with no such account — keeps uid 0 and sheds every
+capability it does not need. `CAP_NET_ADMIN` stays only for
+`--hop`/`--allow-active`; `CAP_NET_RAW` never does. `no_new_privs` and
+an empty ambient/inheritable set on every run, the unit's included.
+Each step is read back and a mismatch exits 2. The plan is pinned by
+`tests/test_privdrop.c`; the unit's `capset` re-allow by
+`tests/test_unit_file.c`.
+
+**Known unchecked**: `--no-privdrop` keeps uid 0 and every capability
+for the run — announced on stderr, never the default. A root run with no
+`sloth` account is still uid 0, so it still owns root's files, though
+without `CAP_DAC_OVERRIDE` it no longer reads everyone else's. The
+root half of `privdrop_apply()` (`setresuid`, `PR_CAPBSET_DROP`) cannot
+run in CI and is a hand check on the host. A fully unprivileged start
+stays ruled out: `--hop` needs `CAP_NET_ADMIN` on every retune.
 
 ### TB-3 — filesystem write
 
@@ -222,7 +233,7 @@ does on the date above, not what the issue said when it was filed —
 
 | Finding | Boundary | Adversary | CWE | Status (2026-10-14) | Slice |
 |---|---|---|---|---|---|
-| Root for the life of the process | TB-2 | ADV-1 via TB-1 | 250, 269 | **Narrowed** by #139: shipped unit runs as `sloth` with two capabilities. Still true for any run outside that unit. | #140 (X7) |
+| Root for the life of the process | TB-2 | ADV-1 via TB-1 | 250, 269 | **Closed** by #140 (narrowed by #139): a root run drops to `sloth` (or keeps uid 0 with capabilities shed) after capture opens; `--no-privdrop` is the announced exception. | #140 (X7) |
 | systemd unit executes the build tree | TB-2 / TB-7 | ADV-2 | 426, 732 | **Closed** by #139: unit runs `/usr/local/bin/sloth`, `tests/test_unit_file.c` scans for a `/home/` path. Migration recipe on [[deployment]]. | #139 (X6) |
 | `discovery.c` `fopen(out, "w")` followed symlinks as root | TB-3 | ADV-2 | 59, 367 | **Closed** by #134: `sfile_system_dir()` + `O_EXCL` temp + `renameat`; sentinel test. | #134 (X1) |
 | `eapol_log.c` passed an export name with `/` into `openat` | TB-3 | ADV-1 (name from the air) | 22 | **Closed** by #134: `sfile_open()` refuses `/`, `.`, `..` and empty on a real dirfd. | #134 (X1) |

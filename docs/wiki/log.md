@@ -3279,3 +3279,103 @@ already gates on `radiotap_parse()` but does not tally (it returns one
 "not decodable" for many reasons, and splitting them is the sensor-health
 tally work, `SH_PF_RADIOTAP_BAD`, P5). `radiotap_parse()` still does not
 check `it_version == 0`.
+
+## 2026-10-15 — Privilege drop after capture opens, default on for root runs (#140)
+
+**Source**: `src/privdrop.c`, `src/privdrop.h`, `src/main.c`,
+`src/capture/probe.c` (`probe_set_iface`),
+`packaging/systemd/sloth-sensor.service`, `tests/test_privdrop.c`,
+`tests/test_unit_file.c`, `tests/test_capture_path.c`.
+
+**Updated pages**:
+
+- [cli-reference.md](cli-reference.md) — new "Privilege" group:
+  `--user NAME` (default `sloth` when the account exists) and
+  `--no-privdrop`; the three stderr announcements; what a dropped run
+  can no longer do (`[m]` onto a new radio, the other-user pid map,
+  writing `/etc/avahi/services`); exit-code `2` row gains the four
+  privdrop refusals.
+- [deployment.md](deployment.md) — §3.3 "Inside the process": what is
+  shed and when, the steady-state `CapEff: 0000000000001000` under the
+  shipped `--hop` unit, and the hand-run default; §3.5 the new
+  `SystemCallFilter=capset` re-allow and why it is safe; §5 the
+  `/proc/<pid>/status` check; §6 no longer says there is no in-process
+  drop.
+- [monitor-mode.md](monitor-mode.md) — new section: why `CAP_NET_RAW`
+  is needed only to open the radio and `CAP_NET_ADMIN` for every
+  `--hop` retune.
+- [threat-model.md](threat-model.md) — TB-2 "Enforced since #140" and
+  its remaining unchecked cases; the §5 row for "Root for the life of
+  the process" moves to **Closed**.
+
+**Notes**:
+
+Owner ruling 2026-10-15, "only use root when necessary", made this a
+default rather than the opt-in the issue body first proposed. The split
+follows `observe_resolve_profile()` (#84): `privdrop_resolve()` is a
+pure plan, `privdrop_apply()` performs it with raw `capget`/`capset`/
+`prctl`/`setres[ug]id` (no libcap) and reads every step back, failing
+closed with exit `2`.
+
+Placement in `main()`: after `capture_open()`/`probe_open()` and the
+scope verdict, before `--pcap-dir`/`--eapol-dir`/`-o`/`--db`/socket/
+discovery open — so every sink is created as the account the run lives
+as and `secure_file.c`'s ownership check holds against that account.
+`dns_init()` moved below the drop because it starts the `--allow-active`
+resolver thread, and `capset`/`no_new_privs` are per-thread: a worker
+created earlier would have kept root's set.
+
+Deviations from the issue body, each forced by the kernel or the
+ruling: the apply order runs `PR_CAPBSET_DROP` **first**, while
+`CAP_SETPCAP` is still effective (after `capset` or a `setresuid` away
+from 0 it is gone and the drop would `EPERM`); the bounding drop is
+skipped when `CAP_SETPCAP` is not held (the shipped unit, whose own
+`CapabilityBoundingSet=` already does that job); `keep_net_admin` is
+`(hop || allow_active) && held`, because `capset` cannot grant a
+capability the permitted set lacks; `PRIVDROP_NONE_ROOT_ANNOUNCED`
+became `PRIVDROP_ROOT_KEEP_UID` (uid 0 kept, capabilities shed) plus
+`PRIVDROP_DISABLED` (`--no-privdrop`), since the ruling forbids a root
+run that silently stays fully root.
+
+`capset` is in systemd's `@privileged`, which the shipped unit denies.
+Measured with `systemd-run --user` under the unit's filter lines: the
+binary exits `2` at the drop ("capset: Operation not permitted")
+without the new `SystemCallFilter=capset` line, and runs with it. The
+binary and the unit therefore have to be upgraded together.
+
+`probe_set_iface()` now opens the new handle before stopping the old
+one. A dropped run has no `CAP_NET_RAW`, so `[m]` onto a new radio
+fails at the open; stopping first would have turned that refusal into
+a lost radio.
+
+**Mutations (each applied, `grep -c` = 1, red, inverse edit, `grep -c`
+= 0, green).**
+
+1. `keep_net_raw = 1` in `privdrop_resolve()` — 6 tests red, including
+   `test_net_raw_is_never_kept_by_a_shedding_plan` (24 shedding plans
+   checked) and the forked apply test (the child cannot `capset` a cap
+   it does not hold).
+2. `want_admin = req->hop` (the `allow_active` term dropped) —
+   `test_allow_active_alone_keeps_net_admin` and
+   `test_describe_names_uid_account_and_kept_cap` red.
+3. `exit_code = 0` on `REFUSE_NO_SUCH_USER` —
+   `test_unknown_user_is_refused_with_exit_2` red.
+4. The `PR_SET_NO_NEW_PRIVS` call removed from `privdrop_apply()` —
+   `test_apply_unprivileged_plan_sets_nnp_and_sheds` red (child exit 10,
+   the readback refuses).
+5. `ROOT_KEEP_UID` with `shed_caps = 0` (the "silently stays fully
+   root" case) — 4 tests red.
+6. `SystemCallFilter=capset` commented out of the unit, and separately
+   moved onto the `@system-service` line *before* the deny —
+   `test_unit_sandbox_keys_present` red both times.
+7. The pre-#140 `probe_iface` clear put back in the failed-open branch
+   of `probe_set_iface()` —
+   `test_a_failed_retarget_open_keeps_the_current_radio` red in
+   `sloth_test_pcap`.
+
+**Not claimed.** The root half of `privdrop_apply()` — `setresuid`,
+`setgroups`, `PR_CAPBSET_DROP`, ambient clear under real caps — cannot
+run in CI (non-root) and is the hand checklist on the issue:
+`CapEff: 0000000000001000` with `--hop`, `0` without, `NoNewPrivs: 1`,
+`chan_retune_failures` staying 0. That a live probe worker survives a
+refused `[m]` needs a real radio and is argued from the code.
