@@ -15,6 +15,7 @@
 #include "beacon_snoop.h"
 #include "assoc_track.h"
 #include "alerts.h"
+#include "dot11_data.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -485,23 +486,20 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     uint32_t usec = (ts_usec >= 0 && ts_usec <= 999999)
                   ? (uint32_t)ts_usec : 0;
     if (len < 32) return 0;
-    uint8_t fc0   = d[0];
-    uint8_t fc1   = d[1];
-    uint8_t type  = (fc0 >> 2) & 0x03;
-    uint8_t sub   = (fc0 >> 4) & 0x0f;
-    if (type != 2) return 0;   /* data frame */
-    int to_ds   = (fc1 >> 0) & 1;
-    int from_ds = (fc1 >> 1) & 1;
+    if (((d[0] >> 2) & 0x03) != 2) return 0;   /* data frame */
+    int to_ds   = (d[1] >> 0) & 1;
+    int from_ds = (d[1] >> 1) & 1;
 
-    /* Frame header layout: FC(2)+Dur(2) + Addr1(6)+Addr2(6)+Addr3(6) +
-     * SeqCtl(2). With 4-address (WDS) ToDS=FromDS=1 adds Addr4(6).
-     * QoS data subtype (sub & 0x08) adds QoSCtl(2). */
-    int hdr = 24;
-    if (to_ds && from_ds) hdr += 6;
-    if (sub & 0x08)       hdr += 2;
-    /* Optional Order bit means +HT Control (4 bytes) — uncommon. */
-    if ((fc1 >> 7) & 1)   hdr += 4;
-    if (len < hdr + 8 + 4) return 0;   /* LLC(8) + at-least EAPOL hdr */
+    /* The header length comes from the shared view (#122), not from a
+     * private formula. The copy that lived here added HT Control for
+     * EVERY data frame with the Order bit set — the non-QoS
+     * StrictlyOrdered misread fixed in dot11_data.c on 2026-10-14 was
+     * still live in this seventh implementation, so a non-QoS EAPOL
+     * frame carrying that one bit had its LLC header read four bytes
+     * late and the handshake was silently missed. In bounds throughout,
+     * so no sanitiser or fuzz target could see it. */
+    int hdr = dot11_data_header_len(d, len);
+    if (hdr < 0 || len < hdr + 8 + 4) return 0;   /* LLC(8) + at-least EAPOL hdr */
 
     /* LLC SNAP: AA AA 03 00 00 00 + ethertype */
     const uint8_t *llc = d + hdr;
@@ -510,20 +508,14 @@ int eapol_observe_dot11(const uint8_t *d, int len,
     uint16_t et = (uint16_t)((llc[6] << 8) | llc[7]);
     if (et != 0x888E) return 0;        /* not EAPOL */
 
-    /* Direction → derive BSSID + STA MAC. M1/M3 are AP→STA, so the
-     * source (Addr2) is the BSSID; M2/M4 are STA→AP, source is STA. */
-    const uint8_t *addr1 = d + 4;
-    const uint8_t *addr2 = d + 10;
-    uint8_t bssid[6], sta[6];
-    if (to_ds && !from_ds) {           /* STA → AP */
-        memcpy(bssid, addr1, 6);
-        memcpy(sta,   addr2, 6);
-    } else if (!to_ds && from_ds) {    /* AP → STA */
-        memcpy(sta,   addr1, 6);
-        memcpy(bssid, addr2, 6);
-    } else {
-        return 0;                       /* WDS or ad-hoc — skip */
-    }
+    /* Direction -> BSSID + STA, from the Table 9-26 roles the view
+     * owns. M1/M3 are AP->STA, so the station is the DA; M2/M4 are
+     * STA->AP, so the station is the SA. WDS (no single BSSID) and
+     * IBSS (no AP) are skipped as before. */
+    uint8_t bssid[6], sta[6], sa[6], da[6];
+    if (to_ds == from_ds) return 0;                  /* WDS or ad-hoc */
+    if (dot11_data_addrs(d, len, bssid, sa, da) != 1) return 0;
+    memcpy(sta, to_ds ? sa : da, 6);
 
     /* EAPOL frame: version(1) type(1) length(2) then payload. Type 0 is
      * an EAP-Packet (the 802.1X inner conversation); type 3 is EAPOL-Key

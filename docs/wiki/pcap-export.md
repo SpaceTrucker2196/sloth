@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
 
-**Last updated**: 2026-10-14 (#134: manual export writes to the working directory; per-alert stamp is reentrant).
+**Last updated**: 2026-10-14 (#122: EAPOL collector takes its header length and roles from the shared 802.11 view; StrictlyOrdered non-QoS frames no longer missed).
 
 ---
 
@@ -66,6 +66,19 @@ type: reference
 - Re-completion of the same (BSSID, STA) atomically replaces the prior
   `.pcap` with the freshest capture (temp file + rename); the `.22000`
   file appends.
+- **Which data frames reach the collector (#122).** `eapol_observe_dot11()`
+  takes its MAC-header length from `dot11_data_header_len()` and its
+  BSSID/STA from `dot11_data_addrs()` — both wrappers over the shared
+  `dot11_frame_t` view — instead of a private formula. Until #122 the
+  private copy added an HT Control field for *every* data frame with
+  the Frame Control Order bit set; in a **non-QoS** data frame that bit
+  is StrictlyOrdered and no field follows (IEEE 802.11-2020
+  §9.2.4.1.10), so such an EAPOL frame had its LLC header read four
+  bytes late and the handshake was silently missed. Operator-visible
+  effect: StrictlyOrdered non-QoS EAPOL-Key frames now appear in the
+  EAPOL view, the `.22000` file and the per-handshake pcap. Pinned by
+  `tests/test_eapol_log.c :: test_m1_non_qos_strictly_ordered_is_recorded`
+  (mutation-proved against the `has_htc` rule in `src/dot11_frame.c`).
 
 ## 4. The 802.11 evidence ring (#92)
 

@@ -13,6 +13,7 @@
 #include "jsonl.h"
 #include "alerts.h"
 #include "assoc_track.h"
+#include "frame_build.h"
 
 /* Build a synthetic 802.11 data frame (FromDS=1) carrying an EAPOL-Key
  * frame. We construct the lot from byte arrays — no parser feeding its
@@ -21,40 +22,49 @@
 #define BSSID  {0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE}
 #define STA    {0x10, 0x20, 0x30, 0x40, 0x50, 0x60}
 
-/* Build a complete dot11 + LLC + EAPOL frame.
- *   out      : destination buffer
+/* Build a complete dot11 + LLC + EAPOL frame with tests/frame_build.h
+ * (#122): every header field appended in clause order, and HT Control
+ * present only when the test says `htc_present` — never inferred from
+ * the Order bit, because that inference is the very bug fix A pins.
+ *   out      : destination buffer of `cap` bytes
  *   eapol    : raw EAPOL bytes (starts with version byte)
  *   eapol_n  : length of eapol[]
  *   from_ds  : 1 = AP->STA (M1/M3), 0 = STA->AP (M2/M4)
+ *   qos      : QoS Data subtype, with a QoS Control field
+ *   order    : Frame Control Order bit set
+ *   htc_present : an HT Control field follows (QoS + Order only)
  * Returns total length written. */
-static int build_frame(uint8_t *out, const uint8_t *eapol, int eapol_n,
-                       int from_ds) {
+static int build_frame_opt(uint8_t *out, int cap,
+                           const uint8_t *eapol, int eapol_n,
+                           int from_ds, int qos, int order, int htc_present) {
     static const uint8_t bssid[6] = BSSID;
     static const uint8_t sta[6]   = STA;
-    int p = 0;
-    /* FC: type=2 data, subtype=0 data */
-    out[p++] = 0x08;
-    /* FC byte 1: ToDS / FromDS bits */
-    out[p++] = (uint8_t)(from_ds ? 0x02 : 0x01);
-    /* Duration */
-    out[p++] = 0; out[p++] = 0;
-    /* Addr1, Addr2, Addr3 — direction-aware */
-    const uint8_t *a1, *a2;
-    if (from_ds) { a1 = sta;   a2 = bssid; }
-    else         { a1 = bssid; a2 = sta;   }
-    memcpy(out + p, a1, 6); p += 6;
-    memcpy(out + p, a2, 6); p += 6;
-    memcpy(out + p, bssid, 6); p += 6;
-    /* SeqCtl */
-    out[p++] = 0; out[p++] = 0;
-    /* LLC SNAP: AA AA 03 00 00 00 + 0x888E */
-    out[p++] = 0xAA; out[p++] = 0xAA; out[p++] = 0x03;
-    out[p++] = 0x00; out[p++] = 0x00; out[p++] = 0x00;
-    out[p++] = 0x88; out[p++] = 0x8E;
-    /* EAPOL payload */
-    memcpy(out + p, eapol, eapol_n);
-    p += eapol_n;
-    return p;
+    fb_t b; fb_init(&b, out, cap);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type    = 2;
+    h.subtype = qos ? 8 : 0;
+    h.flags   = (uint8_t)((from_ds ? FB_FROMDS : FB_TODS) | (order ? FB_ORDER : 0));
+    /* Table 9-26: FromDS -> A1=DA(STA) A2=BSSID A3=SA(BSSID);
+     *             ToDS   -> A1=BSSID   A2=SA(STA) A3=DA(BSSID). */
+    if (from_ds) { h.a1 = sta;   h.a2 = bssid; }
+    else         { h.a1 = bssid; h.a2 = sta;   }
+    h.a3 = bssid;
+    h.qos_present = qos;
+    h.htc_present = htc_present;
+    fb_dot11_hdr(&b, &h);
+    fb_llc_snap(&b, 0x888E);
+    fb_bytes(&b, eapol, eapol_n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+/* The plain three-address data frame every existing case uses. */
+static int build_frame(uint8_t *out, const uint8_t *eapol, int eapol_n,
+                       int from_ds) {
+    /* Exactly the bytes written: feed_exact() mallocs 32 + n so an
+       over-read lands in the allocator redzone, and a builder that
+       zeroed a round number past that would be the overrun itself. */
+    return build_frame_opt(out, 24 + 8 + eapol_n, eapol, eapol_n,
+                           from_ds, 0, 0, 0);
 }
 
 /* Build an EAPOL-Key body. ki = Key Information (big-endian 16-bit).
@@ -161,6 +171,91 @@ static void test_m1_with_pmkid_extracted(void) {
     ASSERT_EQ(s.eapol_events[0].has_pmkid, 1);
     ASSERT_EQ(memcmp(s.eapol_events[0].pmkid, PMKID, 16), 0);
     ASSERT_EQ(memcmp(s.eapol_events[0].anonce, ANONCE, 32), 0);
+}
+
+/* ── Fix A (#122): the header length is the view's, not a 7th copy ──
+ *
+ * eapol_observe_dot11() carried its own header formula and added HT
+ * Control for every data frame with the Order bit set. IEEE
+ * 802.11-2020 s9.2.4.1.10 gives that bit two meanings: +HTC in a QoS
+ * data or management frame, StrictlyOrdered — no field — in a non-QoS
+ * data frame. The first case below was always recorded; the second
+ * was silently missed, because the LLC header was read four bytes late
+ * and the frame failed the AA AA 03 check. One attacker-chosen bit
+ * hid a handshake from the collector.
+ *
+ * Mutation-proved: with the has_htc rule in src/dot11_frame.c changed
+ * from `order && (type == 0 || has_qos)` to `order`, the second case
+ * goes red and the first stays green. */
+static void test_m1_qos_with_htc_is_recorded(void) {
+    eapol_clear();
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, NULL, NULL);
+    uint8_t frame[256];
+    int fn = build_frame_opt(frame, sizeof frame, eapol, en,
+                             /*from_ds=*/1, /*qos=*/1, /*order=*/1,
+                             /*htc_present=*/1);
+    ASSERT(fn > 0);
+    /* QoS Control at 24, HT Control DE AD BE EF at 26, LLC at 30. */
+    ASSERT_EQ(frame[26], 0xDE);
+    ASSERT_EQ(frame[30], 0xAA);
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000000, 0), 1);
+    ASSERT_EQ(eapol_event_count(), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 1);
+}
+
+static void test_m1_non_qos_strictly_ordered_is_recorded(void) {
+    eapol_clear();
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, NULL, NULL);
+    uint8_t frame[256];
+    int fn = build_frame_opt(frame, sizeof frame, eapol, en,
+                             /*from_ds=*/1, /*qos=*/0, /*order=*/1,
+                             /*htc_present=*/0);
+    ASSERT(fn > 0);
+    /* Non-QoS: nothing between Sequence Control and the LLC header. */
+    ASSERT_EQ(frame[1] & 0x80, 0x80);
+    ASSERT_EQ(frame[24], 0xAA);
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000000, 0), 1);
+    ASSERT_EQ(eapol_event_count(), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 1);
+    static const uint8_t bssid[6] = BSSID;
+    static const uint8_t sta[6]   = STA;
+    ASSERT_EQ(memcmp(s.eapol_events[0].bssid, bssid, 6), 0);
+    ASSERT_EQ(memcmp(s.eapol_events[0].sta_mac, sta, 6), 0);
+}
+
+static void test_m2_uplink_roles_come_from_the_view(void) {
+    /* STA->AP: the station is the SA (A2) and the BSSID is A1. The
+       roles now come from dot11_data_addrs(); a swap here would file
+       the handshake under the station's address as the BSS. */
+    eapol_clear();
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 8) | (1 << 3) | 0x02;      /* M2 */
+    int en = build_eapol_key(eapol, ki, SNONCE, M2_MIC, NULL);
+    uint8_t frame[256];
+    int fn = build_frame_opt(frame, sizeof frame, eapol, en,
+                             /*from_ds=*/0, /*qos=*/1, /*order=*/0, 0);
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000000, 0), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 2);
+    static const uint8_t bssid[6] = BSSID;
+    static const uint8_t sta[6]   = STA;
+    ASSERT_EQ(memcmp(s.eapol_events[0].bssid, bssid, 6), 0);
+    ASSERT_EQ(memcmp(s.eapol_events[0].sta_mac, sta, 6), 0);
+    /* A WDS frame has no single BSSID and is skipped, as before. */
+    frame[1] |= 0x03;
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000000, 0), 0);
 }
 
 static void test_m1_without_pmkid(void) {
@@ -2195,6 +2290,9 @@ void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
     RUN_TEST(test_m1_with_pmkid_extracted);
+    RUN_TEST(test_m1_qos_with_htc_is_recorded);
+    RUN_TEST(test_m1_non_qos_strictly_ordered_is_recorded);
+    RUN_TEST(test_m2_uplink_roles_come_from_the_view);
     RUN_TEST(test_m1_without_pmkid);
     RUN_TEST(test_full_handshake_m1_then_m2);
     RUN_TEST(test_m2_without_m1_is_not_complete);

@@ -3013,3 +3013,63 @@ stall tests now install the injected clock *before* the accept, because
 with an idle rule a client stamped from the real monotonic clock on a
 seconds-old CI host would read as idle on the first injected tick
 (#109's lesson).
+
+## 2026-10-14 — Decode each 802.11 frame once: `dot11_frame_t` view, `tests/frame_build.h`, EAPOL +HTC fix (#122)
+
+**Why.** ~12 observers re-derived type/subtype/flags/header length/
+Protected/addresses from the raw `(dot11, len)` pair, and
+`src/dot11_data.c` was an opt-in helper rather than a choke point. The
+three +HTC fixes of 2026-10-14 (#95) were one instance of the class;
+`src/eapol_log.c` still carried a seventh copy of the header formula
+that added HT Control for every data frame with the Order bit set, so a
+non-QoS StrictlyOrdered EAPOL frame (§9.2.4.1.10) had its LLC header
+read four bytes late and the handshake was silently missed. Every
+offset stayed in bounds; ASan/UBSan and the fuzz targets are
+structurally blind to this class.
+
+**What landed.**
+
+- `src/dot11_frame.{h,c}` — `dot11_frame_decode()` fills a
+  `dot11_frame_t`: type/subtype/flags, `has_qos` / `has_htc` /
+  `has_addr4` (the §9.2.4.1.10 rule lives here and nowhere else),
+  `hdr_len`, datapad-aware `body_off` / `body_len`, positional `a1..a4`
+  and Table 9-26 roles (`bssid`/`sa`/`da`/`ta`/`ra`, NULL when the
+  clause defines none — control frames are RA/TA only, a WDS frame has
+  no single BSSID), `seq_num` / `frag_num` / `tid` / `amsdu` (−1 when
+  absent), and the radiotap `fcs_stripped` / `bad_fcs` record.
+  `dot11_frame_body()` refuses a Protected body; `dot11_frame_payload()`
+  locates LLC/SNAP with the `dot11_data` status codes;
+  `dot11_fcs_strip_len()` is the FCS arithmetic for a possibly
+  truncated capture. Runt → 0 with `hdr_len == -1`; type-3 Extension
+  frames are reported, not decoded.
+- `src/dot11_data.c` — every entry point is now a wrapper over the view;
+  the formula body is deleted. `tests/test_dot11_data.c` was the
+  regression net for that commit (unchanged, 17666 before and after).
+  One narrowing: `dot11_data_header_len()` / `dot11_mgmt_hdr_len()`
+  return −1 for a frame of the other type instead of computing a header
+  the frame does not have.
+- `src/radiotap.c` — `radiotap_info_t` gains `fcs_present` and
+  `datapad`, the two FLAGS bits the view consumes (both were stepped
+  over before).
+- `tests/frame_build.h` — spec-derived builder: `fb_dot11_hdr()` appends
+  FC, Duration, A1–A3, SeqCtl, then A4 / QoS / HTC **iff the test says
+  so** — presence is stated, never inferred from the flags, which is
+  the difference between a builder that checks the parser and one that
+  copies it. `fb_fcs()` is the real 802.3 CRC-32 (check value pinned);
+  `fb_ciphertext()` never starts `AA AA 03`; `fb_radiotap()` builds a
+  header with FLAGS / CHANNEL / DBM_ANTSIGNAL in bit order.
+- **Fix A** — `src/eapol_log.c :: eapol_observe_dot11()` takes
+  `dot11_data_header_len()` and `dot11_data_addrs()`; its own formula
+  and address switch are deleted. Own commit, because `eapol_log.c` is
+  +20 on the risk gate. See [[pcap-export]] §3.
+
+**Mutation (A).** `has_htc` rule in `src/dot11_frame.c` changed from
+`order && (type == 0 || has_qos)` to `order` (`grep -c` = 1 applied,
+0 after the inverse edit): 33 assertions red across
+`test_m1_non_qos_strictly_ordered_is_recorded` (eapol),
+`test_header_length_table` (frame view),
+`test_order_bit_adds_nothing_without_qos`,
+`test_order_bit_composes_with_four_address` (dot11_data) and
+`test_order_bit_does_not_hide_a_plaintext_frame` (fragattack).
+`test_m1_qos_with_htc_is_recorded` stayed green, as it should — the two
+cases are separable. Restored green.
