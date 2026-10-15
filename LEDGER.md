@@ -203,3 +203,4 @@
 | 99a326a | 2026-10-14T15:03:22Z | claude-opus-5 | 20 | 7261 | 2688109 | 8466 | 1.6103 | record the omitted-CI reporting lesson in agents/converge.md |
 | 81f792b | 2026-10-14T16:57:43Z | claude-fable-5-1, claude-opus-5 | 470 | 28037 | 7004410 | 299007 | 13.6116 | MISSION.md §2 rule 1 rewrite applied under owner authorisation; lockstep restatements (#84, #102) |
 | 4523e79 | 2026-10-14T23:53:31Z | claude-fable-5-1 | 1862 | 157915 | 34513883 | 1419661 | 70.8215 | make mutate sandbox derived from git ls-files; gate dead since #73 (#108) |
+| 1323a23 | 2026-10-15T00:45:51Z | claude-fable-5-1 | 420 | 16964 | 8863356 | 32025 | 10.3563 | fragattack mutex; packet ring becomes a per-poll snapshot (#111, workflow build + adversarial review) |
