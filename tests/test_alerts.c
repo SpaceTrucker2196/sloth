@@ -125,14 +125,6 @@ static int find_alert(const sloth_state_t *s, alert_type_t type) {
     return -1;
 }
 
-/* Alerts of one type in the snapshot. */
-static int count_type(const sloth_state_t *s, alert_type_t type) {
-    int n = 0;
-    for (int i = 0; i < s->alert_count; i++)
-        if (s->alerts[i].type == type) n++;
-    return n;
-}
-
 /* ':' count of a key — how many components the builder emitted. */
 static int key_colons(const char *k) {
     int n = 0;
@@ -8635,7 +8627,7 @@ static void test_dga_key_distinguishes_long_prefix_pair(void) {
     add_dns_query(&s, "192.168.1.20", q1);
     add_dns_query(&s, "192.168.1.20", q2);
     alerts_update(&s);
-    ASSERT_EQ(count_type(&s, ALERT_TYPE_DGA_DOMAIN), 2);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_DGA_DOMAIN), 2);
     int i = find_alert(&s, ALERT_TYPE_DGA_DOMAIN);
     ASSERT(i >= 0);
     if (i >= 0) {
@@ -8646,7 +8638,36 @@ static void test_dga_key_distinguishes_long_prefix_pair(void) {
     }
     /* Re-seen, still two: the key is stable tick to tick. */
     alerts_update(&s);
-    ASSERT_EQ(count_type(&s, ALERT_TYPE_DGA_DOMAIN), 2);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_DGA_DOMAIN), 2);
+    alerts_clear();
+}
+
+static void test_cleartext_cred_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* The worst case the key must hold: two 45-byte IPv6 literals,
+     * a 5-digit port, the longest protocol token, and usernames at the
+     * 63-byte field limit that agree for their first 40 bytes. */
+    const char *src = "0000:0000:0000:0000:0000:ffff:192.168.100.200";
+    const char *dst = "0000:0000:0000:0000:0000:ffff:192.168.100.201";
+    char u1[64], u2[64];
+    memset(u1, 'u', 63); u1[63] = '\0';
+    memcpy(u2, u1, sizeof(u2));
+    u1[50] = '1';
+    u2[50] = '2';
+    add_cred(&s, src, dst, 65535, "HTTP-Basic", u1);
+    add_cred(&s, src, dst, 65535, "HTTP-Basic", u2);
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_CLEARTEXT_CRED), 2);
+    int i = find_alert(&s, ALERT_TYPE_CLEARTEXT_CRED);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strncmp(s.alerts[i].key,
+                       "cred:[0000:0000:0000:0000:0000:ffff:192.168.100.200]:"
+                       "[0000:0000:0000:0000:0000:ffff:192.168.100.201]:"
+                       "65535:HTTP-Basic:uuuu", 122) == 0);
+        ASSERT((int)strlen(s.alerts[i].key) < ALERT_KEY_LEN - 1);
+    }
     alerts_clear();
 }
 
@@ -9829,6 +9850,7 @@ void run_alerts_tests(void) {
 
     TEST_SUITE("alerts: typed dedup keys (#112)");
     RUN_TEST(test_dga_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_cleartext_cred_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

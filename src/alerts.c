@@ -2446,12 +2446,19 @@ static void rule_no_monitor_mode(const sloth_state_t *s, time_t now) {
 static void rule_cleartext_cred(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->cleartext_cred_count; i++) {
         const cleartext_cred_t *r = &s->cleartext_creds[i];
+        /* The username is whatever the client typed (#112): a remote
+         * component, so two accounts sharing a long prefix stay two
+         * exposures. protocol is one of the snoopers' own literals. */
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key, sizeof(key),
-                 "cred:%s->%s:%u:%s:%s",
-                 r->src, r->dst, (unsigned)r->dst_port,
-                 r->protocol, r->username);
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "cred");
+        akey_ip(&k, r->src);
+        akey_ip(&k, r->dst);
+        akey_u(&k, (unsigned)r->dst_port);
+        akey_tok(&k, r->protocol);
+        akey_remote(&k, r->username, 32);
+        if (!akey_end(&k)[0]) continue;
         snprintf(detail, sizeof(detail),
                  "%s user %.24s in the clear on %.20s%s -> %.24s:%u",
                  r->protocol,

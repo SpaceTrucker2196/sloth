@@ -85,6 +85,7 @@ holds both shapes for one finding.
 | Rule | Before | After |
 |------|--------|-------|
 | `DGA_DOMAIN` | `dga:<qname>` | `dga:<qname, 40 kept>:<hash>` |
+| `CLEARTEXT_CRED` | `cred:<src>-><dst>:<port>:<proto>:<user>` | `cred:<src>:<dst>:<port>:<proto>:<user, 32 kept>:<hash>` (IPv6 bracketed) |
 
 ## Incident lifecycle (#98)
 
