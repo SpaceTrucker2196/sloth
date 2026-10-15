@@ -2925,3 +2925,33 @@ protected-frame tests and one mode test, each mutation-proved. The
 `docs/views/alerts.md` `SA_QUERY_FLOOD` row carries the scope note:
 unprotected SA Query only, which on a non-PMF BSS is itself a finding.
 No length heuristic for protected SA Query in this slice.
+
+## 2026-10-14 — Threat model page: assets, adversaries, trust boundaries (#133)
+
+New page [threat-model.md](threat-model.md): the five assets
+(A1 captured third-party data, A2 sensor host, A3 operator decision
+surface, A4 downstream parsers, A5 build/provenance), the four
+adversaries (ADV-1 on-air/on-wire, ADV-2 local unprivileged account,
+ADV-3 operator-supplied files, ADV-4 upstream compromise), the seven
+trust boundaries (TB-1 pcap edge through TB-7 build/CI) with what is
+enforced and what is known unchecked at each, and the finding → boundary
+map for the 2026-10 architecture review with a CWE, a status and an
+owning Track X slice per row. Every security issue from here on cites
+the IDs instead of restating the model. Linked from `index.md` under
+"Start here".
+
+Re-verifying the issue body against the tree moved five map rows from
+"finding" to "closed" or "narrowed" before the page was written: the
+`discovery.c` `fopen` and the `eapol_log.c` name passthrough (#134), the
+`NOFOLLOW` `#ifdef` (#134, now a compile-time floor), `alert_pcap.c`'s
+`localtime()` (#134, `localtime_r`), and the unit executing the build
+tree (#139). The page records the tree as it is dated, not as the issue
+described it; cited line numbers in the issue (`capture.c:1115`,
+`probe.c:268`) had drifted by a few lines and the page names the
+functions instead. Two facts the issue did not state were checked and
+added: no `sqlite3_db_config()` call exists anywhere in `src/` or
+`research/`, and the data-socket stall timer runs only while bytes are
+queued, so an idle peer is held indefinitely.
+
+No code in this slice; `test_docs_consistency` is the gate (wikilinks,
+relative links, index reachability, counts).

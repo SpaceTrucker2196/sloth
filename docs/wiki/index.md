@@ -26,6 +26,9 @@ the Wi-Fi it watches:
 
 - [[sloth]] — what sloth is, what it explicitly never does.
 - [[architecture]] — code-tree layout and the seams between layers.
+- [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
+  boundaries TB-1..7, and the finding → boundary map every security
+  issue cites by ID.
 - [[views-catalog]] — keybinding-to-view map for all 35 views.
 - [[dashboard]] — the seven-band composite view.
 
