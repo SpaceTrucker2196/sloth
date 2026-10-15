@@ -543,6 +543,52 @@ static void test_dump_retries_after_transient_failure(void) {
     ap87_cleanup();
 }
 
+/* pcap_write_failures belongs to the KEY, not the incident (#112):
+ * jsonl-schema.md documents it as carried across incidents with
+ * pcap_path, via the alert_side_t copy-back in fire_inv. Without this
+ * test that copy-back could be deleted and nothing would notice - the
+ * reviewer of #112 found exactly that gap. Fail one export, let the
+ * incident resolve and re-fire as a NEW incident (fresh incident_id),
+ * and the count must still be there. */
+static void test_write_failures_survive_reopen(void) {
+    flood_test_set_clock(ap_mono, ap_wall);
+    g_ap_wall = 1700000000;
+    ap87_setup();
+    ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
+    alerts_clear(); tune_reset();
+
+    sloth_state_t s; ap_seed_threat(&s);
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old; lim.rlim_cur = 8;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    setrlimit(RLIMIT_FSIZE, &lim);
+    alerts_update(&s);
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    int i = find_threat_ip(&s);
+    ASSERT(i >= 0);
+    char first_id[ALERT_INCIDENT_ID_LEN] = "";
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].pcap_write_failures, 1);
+        snprintf(first_id, sizeof first_id, "%s", s.alerts[i].incident_id);
+    }
+
+    ap_churn_engine();                  /* resolve the incident */
+    ap_seed_threat(&s);
+    alerts_update(&s);                  /* same key, new incident */
+    i = find_threat_ip(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strcmp(s.alerts[i].incident_id, first_id) != 0);
+        ASSERT_EQ(s.alerts[i].pcap_write_failures, 1);
+    }
+
+    alerts_clear(); tune_reset(); ap87_cleanup();
+    flood_test_set_clock(NULL, NULL);
+}
+
 /* A clean export on the first attempt records the path and never
  * retries — the write-failure count stays at 0. */
 static void test_dump_records_path_on_success(void) {
@@ -695,5 +741,6 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_a_refired_finding_does_not_export_twice);
     RUN_TEST(test_cooldown_zero_restores_the_full_capture);
     RUN_TEST(test_dump_retries_after_transient_failure);
+    RUN_TEST(test_write_failures_survive_reopen);
     RUN_TEST(test_dump_records_path_on_success);
 }
