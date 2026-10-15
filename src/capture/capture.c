@@ -527,6 +527,21 @@ static capture_policy_t g_policy;
 static time_t g_last_frame_ts   = 0;   /* the frame's own clock */
 static time_t g_last_frame_wall = 0;   /* host clock at arrival, 0 = never */
 
+/* The wired packet ring (#111). on_packet() used to write
+ * g_state->packets[] directly under g_mu, which protected the writer
+ * from nothing: every reader -- views/packets.c, bandwidth.c,
+ * pcap_write.c, ip_color.c, alerts.c, jsonl.c, alert_pcap.c -- is on
+ * main and never took the lock, because the lock was this module's
+ * private static. The ring now lives here and main gets a copy once per
+ * poll through capture_ring_snapshot(), the same copy pattern
+ * mon_frame_snapshot() has used for the 802.11 stream since #21.
+ * Head / count / total keep their meanings exactly (bandwidth.c's
+ * cursor arithmetic depends on them), so s->packets reads unchanged. */
+static packet_info_t g_ring[MAX_PACKETS];
+static int           g_ring_head;
+static int           g_ring_count;
+static uint64_t      g_ring_total;
+
 /* ── Byte helpers ─────────────────────────────────────────── */
 
 static uint16_t u16be(const uint8_t *p) {
@@ -1133,10 +1148,22 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
      * this stream is delivering anything usable (#91). */
     g_last_frame_ts   = (time_t)hdr->ts.tv_sec;
     g_last_frame_wall = flood_wall();
-    g_state->packets[g_state->pkt_head] = pkt;
-    g_state->pkt_head = (g_state->pkt_head + 1) % MAX_PACKETS;
-    if (g_state->pkt_count < MAX_PACKETS) g_state->pkt_count++;
-    g_state->pkt_total++;   /* monotonic; drives once-only jsonl emit (issue #20) */
+    g_ring[g_ring_head] = pkt;
+    g_ring_head = (g_ring_head + 1) % MAX_PACKETS;
+    if (g_ring_count < MAX_PACKETS) g_ring_count++;
+    g_ring_total++;   /* monotonic; drives once-only jsonl emit (issue #20) */
+    pthread_mutex_unlock(&g_mu);
+}
+
+void capture_ring_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_mu);
+    /* Slots [0, count) are the populated ones in both regimes: before
+     * the first wrap head == count, after it count == MAX_PACKETS. */
+    memcpy(s->packets, g_ring, (size_t)g_ring_count * sizeof(g_ring[0]));
+    s->pkt_head  = g_ring_head;
+    s->pkt_count = g_ring_count;
+    s->pkt_total = g_ring_total;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -1224,7 +1251,22 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
     sloth_state_t *saved_state  = g_state;
     g_handle = pc;
     g_state  = s;
+    /* The ring is module-private since #111, so `s` is seeded into it
+     * before the dispatch and copied back out after: the caller's state
+     * stays the whole premise and the whole result, exactly as when
+     * on_packet() wrote s->packets directly. A zeroed `s` therefore
+     * means an empty ring, and a second dispatch on the same `s`
+     * continues where the first left off. Under g_mu for the one caller
+     * that dispatches on a worker thread while main snapshots
+     * (test_ring_snapshot_is_stable_under_writer). */
+    pthread_mutex_lock(&g_mu);
+    memcpy(g_ring, s->packets, sizeof(g_ring));
+    g_ring_head  = s->pkt_head;
+    g_ring_count = s->pkt_count;
+    g_ring_total = s->pkt_total;
+    pthread_mutex_unlock(&g_mu);
     int got = pcap_dispatch(pc, n > 0 ? n : -1, on_packet, NULL);
+    capture_ring_snapshot(s);
     g_handle = saved_handle;
     g_state  = saved_state;
 

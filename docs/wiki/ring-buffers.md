@@ -172,6 +172,57 @@ writes a file. That is what keeps it clear of the `--collect-handshakes`
 gate ([[pcap-export]]), since full frames include EAPOL/PMKID material
 and a ring that cannot write cannot move that material to disk.
 
+### The wired packet ring is a snapshot, not a shared buffer (#111)
+
+`s->packets[MAX_PACKETS]` / `pkt_head` / `pkt_count` / `pkt_total` on
+`sloth_state_t` look like the pattern above and, until #111, were not
+an instance of it. `on_packet()` in `src/capture/capture.c` wrote them
+*directly* on the capture thread under the module's private `g_mu`,
+and the readers on main — `views/packets.c`, `bandwidth.c`,
+`pcap_write.c`, `ip_color.c`, `alerts.c`, `jsonl.c`, `alert_pcap.c` —
+never took that lock, because a static in another file is not
+something they could take. The lock protected the writer from the
+writer.
+
+Since #111 the ring is private to `capture.c` (`g_ring`, `g_ring_head`,
+`g_ring_count`, `g_ring_total`) and main gets a copy once per poll:
+
+```c
+void capture_ring_snapshot(sloth_state_t *s) {
+    pthread_mutex_lock(&g_mu);
+    memcpy(s->packets, g_ring, g_ring_count * sizeof(g_ring[0]));
+    s->pkt_head  = g_ring_head;
+    s->pkt_count = g_ring_count;
+    s->pkt_total = g_ring_total;
+    pthread_mutex_unlock(&g_mu);
+}
+```
+
+`poll_data()` calls it **first**, before `bw_update()` walks the ring
+from `pkt_bw_cursor` and before the JSONL emitters compare
+`pkt_total` against `pkt_jsonl_emitted`. Head, count and total keep
+their meanings exactly, so no reader changed; this is the same copy
+`mon_frame_snapshot()` has made for the 802.11 stream since #21. The
+one difference from the `*_log_snapshot` shape above is that the slots
+are copied positionally (`[0, count)`) rather than re-ordered newest
+first, because every reader already does its own modulo walk from
+`pkt_head`.
+
+The test seam `capture_test_dispatch()` seeds the private ring from
+the caller's state before dispatching and snapshots back into it
+after, so a test's `sloth_state_t` remains the whole premise and the
+whole result, as it was when `on_packet()` wrote it directly.
+
+The same review found `src/fragattack.c` — fed by the probe thread,
+read by `frag_snapshot()` and `rule_fragattack()` on main — with no
+mutex at all, the one capture-fed module in that state; #111 gave it
+one. Both fixes are proved by the ThreadSanitizer CI job, not by the
+concurrent tests that accompany them: a single writer against a
+reader cannot lose an update, so those tests pass with the lock
+deleted, and TSan is what turns the deletion red
+(`tests/test_fragattack.c :: test_frag_observe_concurrent_with_snapshot`,
+`tests/test_capture_path.c :: test_ring_snapshot_is_stable_under_writer`).
+
 ### Specialised event logs deviate further
 
 `src/eapol_log.c` adds a per-(BSSID, STA) pending-handshake state

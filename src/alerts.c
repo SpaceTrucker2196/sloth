@@ -1453,12 +1453,18 @@ static void rule_captive_portal(const sloth_state_t *s, time_t now) {
 /* FragAttacks slice 1 — issue #75. Reads fragattack.c directly rather
  * than a snapshot on sloth_state_t, the same shape rule_rts_flood uses
  * for ctrl_frames.c: there is no view yet, and copying a table into
- * state so one rule can read it is plumbing with no reader. */
+ * state so one rule can read it is plumbing with no reader.
+ *
+ * Per row, a *copy* taken under fragattack's lock (#111), not a pointer
+ * into the live table: the probe thread rewrites a row in place on
+ * eviction, and the eight snprintf()s below would otherwise read a
+ * BSSID from one row and a last_sa from the row that replaced it. */
 static void rule_fragattack(const sloth_state_t *s, time_t now) {
     (void)s;
     for (int i = 0; i < frag_bss_count(); i++) {
-        const frag_bss_t *b = frag_bss_at(i);
-        if (!b) continue;
+        frag_bss_t row;
+        if (!frag_bss_copy(i, &row)) continue;
+        const frag_bss_t *b = &row;
 
         char bss[20], sa[20], da[20];
         mac_to_str(b->bssid,   bss, sizeof(bss));

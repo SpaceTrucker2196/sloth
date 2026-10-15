@@ -1,10 +1,26 @@
 #include <string.h>
+#include <pthread.h>
 
 #include "fragattack.h"
 #include "dot11_data.h"
 #include "eapol_log.h"
 
 #define ETHERTYPE_EAPOL 0x888E
+
+/* One lock for every table in this file (#111). frag_observe() and
+ * frag_note_association() run on the monitor-capture thread
+ * (probe.c:on_probe_frame); frag_snapshot(), frag_bss_count() and the
+ * per-row readers run on main, once per poll and from rule_fragattack().
+ * Until #111 this was the one capture-fed module with no mutex at all,
+ * and the 2026-10 architecture review named it the one known data race.
+ *
+ * The public entry points take g_mu and call a *_locked() body; the
+ * static helpers below assume it is held and never take it themselves,
+ * so there is exactly one place per entry point where the lock is
+ * visible. eapol_key_generation() is called with g_mu held: eapol_log's
+ * own mutex is a leaf (eapol_log.c never calls back into this file), so
+ * the order frag -> eapol is the only one that exists. */
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static frag_bss_t g_bss[FRAG_MAX_BSS];
 static int        g_bss_n;
@@ -133,18 +149,25 @@ static int first_amsdu_subframe_ethertype(const uint8_t *dot11, int len) {
     return (p[6] << 8) | p[7];
 }
 
-int frag_find(const uint8_t bssid[6]) {
+static int find_locked(const uint8_t bssid[6]) {
     if (!bssid) return -1;
     for (int i = 0; i < g_bss_n; i++)
         if (mac_eq(g_bss[i].bssid, bssid)) return i;
     return -1;
 }
 
+int frag_find(const uint8_t bssid[6]) {
+    pthread_mutex_lock(&g_mu);
+    int i = find_locked(bssid);
+    pthread_mutex_unlock(&g_mu);
+    return i;
+}
+
 /* Evicts the stalest row when full rather than dropping the new one. A
  * table that stops learning after 64 BSSes is worse on a hopping radio
  * than one that forgets the BSS it has not heard from in longest. */
 static frag_bss_t *bss_get(const uint8_t bssid[6], time_t now) {
-    int i = frag_find(bssid);
+    int i = find_locked(bssid);
     if (i >= 0) { g_bss[i].last_seen = now; return &g_bss[i]; }
 
     if (g_bss_n < FRAG_MAX_BSS) {
@@ -183,8 +206,8 @@ static void sta_mark_protected(const uint8_t bssid[6], const uint8_t sta[6],
     g_sta[i].last_seen = now;
 }
 
-void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
-                           time_t now) {
+static void note_association_locked(const uint8_t bssid[6],
+                                    const uint8_t sta[6], time_t now) {
     if (!bssid || !sta) return;
     for (int i = 0; i < g_assoc_evt_n; i++) {
         if (mac_eq(g_assoc_evt[i].bssid, bssid) &&
@@ -204,6 +227,13 @@ void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
     memcpy(g_assoc_evt[i].bssid, bssid, 6);
     memcpy(g_assoc_evt[i].sta,   sta,   6);
     g_assoc_evt[i].last_assoc = now;
+}
+
+void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
+                           time_t now) {
+    pthread_mutex_lock(&g_mu);
+    note_association_locked(bssid, sta, now);
+    pthread_mutex_unlock(&g_mu);
 }
 
 /* Did (bssid, mac) complete a (re)association strictly after `since`?
@@ -425,7 +455,7 @@ static int mpdu_note(const uint8_t bssid[6], const uint8_t ta[6],
     return 0;
 }
 
-void frag_observe(const uint8_t *dot11, int len, time_t now) {
+static void observe_locked(const uint8_t *dot11, int len, time_t now) {
     if (!dot11 || len < 24) return;
     if (((dot11[0] >> 2) & 0x03) != 2) return;      /* data frames only */
 
@@ -559,19 +589,50 @@ void frag_observe(const uint8_t *dot11, int len, time_t now) {
     b->last_hit = now;
 }
 
-int frag_bss_count(void) { return g_bss_n; }
-
-int frag_mpdu_count(void) { return g_mpdu_n; }
-
-const frag_bss_t *frag_bss_at(int i) {
-    return (i >= 0 && i < g_bss_n) ? &g_bss[i] : NULL;
+void frag_observe(const uint8_t *dot11, int len, time_t now) {
+    pthread_mutex_lock(&g_mu);
+    observe_locked(dot11, len, now);
+    pthread_mutex_unlock(&g_mu);
 }
 
-int frag_session_count(void) { return g_sess_n; }
+int frag_bss_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_bss_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
 
-void frag_snapshot(sloth_state_t *s) {
-    if (!s) return;
+int frag_mpdu_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_mpdu_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
 
+const frag_bss_t *frag_bss_at(int i) {
+    pthread_mutex_lock(&g_mu);
+    const frag_bss_t *b = (i >= 0 && i < g_bss_n) ? &g_bss[i] : NULL;
+    pthread_mutex_unlock(&g_mu);
+    return b;
+}
+
+int frag_bss_copy(int i, frag_bss_t *out) {
+    if (!out) return 0;
+    pthread_mutex_lock(&g_mu);
+    int ok = (i >= 0 && i < g_bss_n);
+    if (ok) *out = g_bss[i];
+    pthread_mutex_unlock(&g_mu);
+    return ok;
+}
+
+int frag_session_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_sess_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+static void snapshot_locked(sloth_state_t *s) {
     int n = g_bss_n < MAX_FRAG_ROWS ? g_bss_n : MAX_FRAG_ROWS;
 
     /* Sorted by last_hit DESC, same rule probe_pnl_snapshot uses for
@@ -609,7 +670,15 @@ void frag_snapshot(sloth_state_t *s) {
     if (s->frag_sel >= n) s->frag_sel = n > 0 ? n - 1 : 0;
 }
 
+void frag_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    pthread_mutex_lock(&g_mu);
+    snapshot_locked(s);
+    pthread_mutex_unlock(&g_mu);
+}
+
 void frag_clear(void) {
+    pthread_mutex_lock(&g_mu);
     memset(g_bss,  0, sizeof(g_bss));
     memset(g_sta,  0, sizeof(g_sta));
     memset(g_sess, 0, sizeof(g_sess));
@@ -620,4 +689,5 @@ void frag_clear(void) {
     g_sess_n      = 0;
     g_assoc_evt_n = 0;
     g_mpdu_n      = 0;
+    pthread_mutex_unlock(&g_mu);
 }

@@ -251,8 +251,27 @@ void frag_observe(const uint8_t *dot11, int len, time_t now);
 void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
                            time_t now);
 
+/* ── Threading (#111) ──
+ *
+ * frag_observe() and frag_note_association() run on the monitor-capture
+ * thread; everything else here runs on main. Every entry point takes
+ * the module's one mutex, so each call is atomic with respect to the
+ * others. Two readers need a word about *what* that atomicity covers:
+ *
+ *   frag_bss_at()   returns a pointer into the live table. The lookup
+ *                   is locked; the caller's reads through the pointer
+ *                   are not. It exists for single-threaded test
+ *                   introspection, where nothing writes concurrently.
+ *   frag_bss_copy() copies the row out under the lock. This is what a
+ *                   reader on main uses while the capture thread is
+ *                   live (rule_fragattack in alerts.c). */
 int              frag_bss_count(void);
 const frag_bss_t *frag_bss_at(int i);
+/* Copy row i into *out under the lock. Returns 1 on success, 0 when i
+ * is out of range (the row count can shrink underneath a caller that
+ * read frag_bss_count() a moment ago -- frag_clear() on the other
+ * thread -- so the index is re-checked here, not trusted). */
+int              frag_bss_copy(int i, frag_bss_t *out);
 /* Index of `bssid` in the table, or -1. */
 int              frag_find(const uint8_t bssid[6]);
 

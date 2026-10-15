@@ -216,6 +216,12 @@ static void headless_wait(int timeout_ms, int wake_fd) {
 static rq_handle_t *g_research = NULL;
 
 static void poll_data(sloth_state_t *s) {
+    /* #111: the wired packet ring is private to the capture thread; take
+     * this tick's copy before anything below reads s->packets --
+     * bw_update() walks it from pkt_bw_cursor and jsonl_emit_* from
+     * pkt_jsonl_emitted. First on purpose: until S5 moves every
+     * capture-fed snapshot into one place, this is where it lives. */
+    capture_ring_snapshot(s);
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
     s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
 #ifdef WITH_WIFI

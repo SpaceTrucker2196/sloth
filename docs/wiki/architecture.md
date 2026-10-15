@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -39,6 +39,12 @@ docs/views/*.md            -- per-view deep dives
   decodes Ethernet → IPv4/v6 → TCP/UDP, then dispatches to
   `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`.
   ARP, LLC, and unknown ethertypes are filtered before the ring buffer.
+  The packet ring itself is private to the capture thread and reaches
+  `sloth_state_t` only as a per-poll copy (`capture_ring_snapshot()`,
+  first thing in `poll_data()`, #111) — see [[ring-buffers]]. The
+  802.11 side (`src/capture/probe.c`) follows the same rule, and every
+  module it feeds, `src/fragattack.c` included since #111, holds its
+  tables behind its own mutex.
 - **Alert engine** — `src/alerts.c` runs each rule every poll, dedupes by
   stable key, fires JSONL + per-alert pcap. See [[alerts]].
 - **Correlation seams** — modules that answer a question sloth's own
@@ -52,8 +58,11 @@ docs/views/*.md            -- per-view deep dives
 ## State
 
 `sloth_state_t` is the single shared structure. Each view declares ring
-buffers + counters + selection index on it. Views read; capture and
-platform code write.
+buffers + counters + selection index on it. Views read; platform code
+and the main-thread `*_snapshot()` copies write. Nothing on a capture
+thread writes `sloth_state_t` directly: each capture-fed module keeps
+its own table behind its own mutex and main copies it out once per
+poll.
 
 ## Test discipline
 

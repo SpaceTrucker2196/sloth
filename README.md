@@ -512,7 +512,7 @@ Adding a new data source means adding one function pointer here and implementing
                                  tui_draw()
 ```
 
-Packet decode runs in a dedicated pcap thread. The eight log modules each have an independent ring buffer behind a `pthread_mutex_t`; `*_snapshot()` helpers copy the latest entries into `sloth_state_t` once per poll. Synthesis modules (alerts, devices, beacon-detect) read snapshot state and produce derived views.
+Packet decode runs in a dedicated pcap thread. The eight log modules each have an independent ring buffer behind a `pthread_mutex_t`; `*_snapshot()` helpers copy the latest entries into `sloth_state_t` once per poll. The raw packet ring follows the same rule since #111: it is private to `capture.c` and `capture_ring_snapshot()` copies it out first thing in `poll_data()`. Synthesis modules (alerts, devices, beacon-detect) read snapshot state and produce derived views.
 
 ### Code layout
 

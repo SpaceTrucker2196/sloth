@@ -442,6 +442,27 @@ traffic to the *sending station* instead of its AP, which silently
 merges every station on the network into one bogus BSS. `dot11_data_addrs()`
 in `src/dot11_data.c` owns this table and is tested against all four rows.
 
+## Threading
+
+`frag_observe()` and `frag_note_association()` run on the probe thread
+(`src/capture/probe.c :: on_probe_frame`); `frag_snapshot()`,
+`frag_bss_count()` and the per-row reads in `rule_fragattack()` run on
+main. Until #111 nothing ordered the two — this was the one
+capture-fed module with no mutex, and the 2026-10 architecture review
+named it the one known data race. Every entry point now takes one
+module lock and calls a `*_locked()` body; `eapol_key_generation()` is
+called with it held, and `eapol_log`'s own lock is a leaf, so
+frag → eapol is the only order that exists.
+
+Two readers differ in what the lock covers. `frag_bss_at()` returns a
+pointer into the live table — the lookup is locked, the caller's reads
+through it are not — and exists for single-threaded test
+introspection. `frag_bss_copy()` copies the row out under the lock and
+is what `rule_fragattack()` uses while the probe thread is live: a row
+is rewritten in place on eviction, and a pointer reader could otherwise
+format a BSSID from one row and a `last_sa` from the row that replaced
+it.
+
 ## Testing
 
 Hand-built `uint8_t` frames per IEEE 802.11-2020 §9.2, no captures — see
@@ -459,6 +480,14 @@ That gap is real and worth stating: these tests prove the detector
 against the specification, not against what the tool actually puts on
 the air. The `needs-pcap-fixture` label on #75 means exactly that —
 wanted as follow-up validation, not blocking.
+
+The lock (#111) is proved differently. `test_frag_observe_concurrent_with_snapshot`
+runs a writer thread through the protected-then-plaintext pair while
+main loops `frag_snapshot()`; its assertions pin coherence and the
+final count, and they pass with the mutex deleted, because one writer
+cannot lose an update to a reader. The ThreadSanitizer CI job is the
+gate: with the lock removed it reports the race between
+`observe_locked` and `snapshot_locked` on every run.
 
 ## See also
 

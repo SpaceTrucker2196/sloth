@@ -1,4 +1,6 @@
 #include <string.h>
+#include <stdlib.h>
+#include <pthread.h>
 #include "runner.h"
 #include "fragattack.h"
 #include "dot11_data.h"
@@ -1445,6 +1447,115 @@ static void test_eapol_relay_needs_no_witnessed_association(void) {
     ASSERT_EQ(bss() ? bss()->protected_frames : 99u, 0u);
 }
 
+
+/* ── #111: one lock, two threads ──────────────────────────────────── */
+
+static void test_bss_copy_is_the_row_and_rejects_out_of_range(void) {
+    frag_clear();
+    frag_bss_t row;
+    memset(&row, 0xA5, sizeof(row));
+    ASSERT_EQ(frag_bss_copy(0, &row), 0);              /* empty table */
+    ASSERT_EQ(row.plaintext_unicast, 0xA5A5A5A5u);     /* untouched on miss */
+
+    witness_key_install(STA_B, 1000);
+    uint8_t f[128];
+    int n = build(f, 0, 0, STA_A, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 1001);
+
+    ASSERT_EQ(frag_bss_copy(0, &row), 1);
+    ASSERT(bss() != NULL);
+    if (!bss()) return;
+    ASSERT_EQ(memcmp(row.bssid, bss()->bssid, 6), 0);
+    ASSERT_EQ(row.plaintext_unicast, bss()->plaintext_unicast);
+    ASSERT_EQ(row.plaintext_unicast, 1u);
+    ASSERT_EQ(memcmp(row.last_sa, STA_B, 6), 0);
+    ASSERT_EQ(memcmp(row.last_da, STA_A, 6), 0);
+    ASSERT_EQ(row.last_hit, (time_t)1001);
+
+    ASSERT_EQ(frag_bss_copy(1,  &row), 0);
+    ASSERT_EQ(frag_bss_copy(-1, &row), 0);
+    ASSERT_EQ(frag_bss_copy(0,  NULL), 0);
+    frag_clear();
+}
+
+/* frag_observe() runs on the probe thread; frag_snapshot() and the
+ * rule_fragattack() readers run on main. Until #111 nothing ordered the
+ * two. This test is the shape the fix is proved by, and the proof is
+ * ThreadSanitizer, not the assertions: a single writer cannot lose an
+ * update to a reader, so every assertion below passes with the mutex
+ * deleted, and was seen to (2026-10-14: locks and unlocks in
+ * fragattack.c replaced by no-ops, suite green, `make test
+ * EXTRA_CFLAGS="-fsanitize=thread"` red: a data race on g_bss_n between
+ * bss_get on the writer and snapshot_locked on main). What the
+ * assertions do pin is coherence under the lock -- one BSS, counters
+ * that only grow, the right pair in last_sa/last_da -- and the final
+ * count, which shows the writer's frames all landed while main was
+ * reading.
+ *
+ * Ops are counted on the worker and asserted on main: the runner's
+ * counters are not thread-safe (same rule as test_rf_quality.c). */
+#define FRAG_RACE_ITERS 20000
+
+typedef struct { int ops; } frag_race_arg_t;
+
+static void *frag_race_writer(void *p) {
+    frag_race_arg_t *a = p;
+    uint8_t prot[128], plain[128];
+    /* The pair test_plaintext_after_key_install_fires uses: STA_B's key
+     * install witnessed, then one plaintext IPv4 frame from STA_B. */
+    int pn = build(prot,  0, FC1_PROTECTED, STA_A, BSSID, STA_B, 0, 0);
+    int ln = build(plain, 0, 0,             STA_A, BSSID, STA_B, 0, 0x0800);
+    for (int i = 0; i < FRAG_RACE_ITERS; i++) {
+        frag_observe(prot,  pn, (time_t)(1000 + i));
+        frag_observe(plain, ln, (time_t)(1000 + i));
+        a->ops++;
+    }
+    return NULL;
+}
+
+static void test_frag_observe_concurrent_with_snapshot(void) {
+    frag_clear();
+    sloth_state_t *s = calloc(1, sizeof(*s));
+    ASSERT(s != NULL);
+    if (!s) return;
+
+    pthread_t th;
+    frag_race_arg_t arg = { 0 };
+    ASSERT_EQ(pthread_create(&th, NULL, frag_race_writer, &arg), 0);
+
+    int      torn = 0;
+    uint32_t last = 0;
+    for (int i = 0; i < FRAG_RACE_ITERS; i++) {
+        frag_snapshot(s);
+        if (s->frag_row_count > 1) torn++;
+        if (s->frag_row_count == 1) {
+            const frag_bss_row_t *r = &s->frag_rows[0];
+            if (memcmp(r->bssid, BSSID, 6) != 0) torn++;
+            if (r->plaintext_unicast < last) torn++;   /* counters only grow */
+            last = r->plaintext_unicast;
+            if (r->plaintext_unicast > 0 &&
+                (memcmp(r->last_sa, STA_B, 6) != 0 ||
+                 memcmp(r->last_da, STA_A, 6) != 0)) torn++;
+        }
+        /* The other main-thread readers, as rule_fragattack() uses them. */
+        int n = frag_bss_count();
+        if (n > 1) torn++;
+        frag_bss_t row;
+        if (n == 1 && frag_bss_copy(0, &row) &&
+            memcmp(row.bssid, BSSID, 6) != 0) torn++;
+    }
+    ASSERT_EQ(pthread_join(th, NULL), 0);
+    ASSERT_EQ(arg.ops, FRAG_RACE_ITERS);
+    ASSERT_EQ(torn, 0);
+
+    frag_snapshot(s);
+    ASSERT_EQ(s->frag_row_count, 1);
+    ASSERT_EQ(s->frag_rows[0].plaintext_unicast, (uint32_t)FRAG_RACE_ITERS);
+    ASSERT_EQ(frag_bss_count(), 1);
+    free(s);
+    frag_clear();
+}
+
 void run_fragattack_tests(void);
 void run_fragattack_tests(void) {
     TEST_SUITE("802.11 addressing (#75)");
@@ -1547,4 +1658,8 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_new_fragment_zero_replaces_an_abandoned_session);
     RUN_TEST(test_sessions_are_cleared);
     RUN_TEST(test_session_table_full_evicts_stalest);
+
+    TEST_SUITE("fragattacks: one lock, two threads (#111)");
+    RUN_TEST(test_bss_copy_is_the_row_and_rejects_out_of_range);
+    RUN_TEST(test_frag_observe_concurrent_with_snapshot);
 }

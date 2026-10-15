@@ -1,4 +1,6 @@
 #include <string.h>
+#include <stdlib.h>
+#include <pthread.h>
 #include <pcap.h>            /* DLT_* — this binary links libpcap by design */
 #include <netinet/in.h>      /* IPPROTO_TCP */
 #include "runner.h"
@@ -1765,6 +1767,167 @@ static void test_a_broadcast_deauth_opens_no_window(void) {
     queue_evict_clear();
 }
 
+
+/* ── #111: the wired packet ring is a snapshot ───────────────────── */
+
+/* Head / count / total keep their pre-#111 meanings through the copy:
+ * bandwidth.c's cursor arithmetic and the once-only JSONL emit read
+ * them off s->packets exactly as before. Pinned here single-threaded,
+ * including the wrap, because the concurrent test below can only say
+ * the copy is coherent, not that it is the same ring. */
+static void test_ring_wraps_with_head_count_total_preserved(void) {
+    uint8_t f[128];
+    int n = eth_ipv4_tcp(f, 8, 5, -1);
+    const uint8_t *fs[MAX_PACKETS + 44];
+    int ls[MAX_PACKETS + 44];
+    for (int i = 0; i < MAX_PACKETS + 44; i++) { fs[i] = f; ls[i] = n; }
+
+    /* Two dispatches on one state continue the same ring. */
+    ASSERT_EQ(drive(DLT_EN10MB, fs, ls, 1), 1);
+    ASSERT_EQ(capture_test_dispatch(&g_s, DLT_EN10MB, fs, ls, NULL, 1), 1);
+    ASSERT_EQ(g_s.pkt_count, 2);
+    ASSERT_EQ(g_s.pkt_head, 2);
+    ASSERT_EQ((long long)g_s.pkt_total, 2);
+
+    /* 300 frames into a 256-slot ring: count saturates, head wraps to
+     * 44, total keeps counting, and the oldest surviving frame is the
+     * 45th (synthetic clock 1700000000 + 44). */
+    ASSERT_EQ(drive(DLT_EN10MB, fs, ls, MAX_PACKETS + 44), MAX_PACKETS + 44);
+    ASSERT_EQ(g_s.pkt_count, MAX_PACKETS);
+    ASSERT_EQ(g_s.pkt_head, 44);
+    ASSERT_EQ((long long)g_s.pkt_total, MAX_PACKETS + 44);
+    ASSERT_EQ(g_s.packets[44].ts_sec, 1700000000u + 44);
+    ASSERT_EQ(g_s.packets[43].ts_sec, 1700000000u + MAX_PACKETS + 43);
+
+    /* The snapshot into a second state is the same ring. */
+    sloth_state_t *m = calloc(1, sizeof(*m));
+    ASSERT(m != NULL);
+    if (!m) return;
+    capture_ring_snapshot(m);
+    ASSERT_EQ(m->pkt_count, g_s.pkt_count);
+    ASSERT_EQ(m->pkt_head,  g_s.pkt_head);
+    ASSERT_EQ((long long)m->pkt_total, (long long)g_s.pkt_total);
+    ASSERT_EQ(memcmp(m->packets, g_s.packets, sizeof(m->packets)), 0);
+    free(m);
+    capture_ring_snapshot(NULL);               /* harmless */
+}
+
+/* on_packet() writes the ring on the capture thread; main reads it
+ * through capture_ring_snapshot() once per poll. Before #111 the reads
+ * went straight to s->packets with no lock on either side.
+ *
+ * Each dispatch is one "call": RING_RACE_PER_CALL copies of one frame
+ * whose TCP source port names the call, with the seam's synthetic
+ * clock numbering the frames inside it (1700000000 + i). Every slot
+ * therefore has a position in one total order, which is what lets a
+ * torn copy be recognised from the copy alone: oldest to newest, the
+ * port never decreases, the clock steps by one inside a call and
+ * restarts at the base when the port steps by one.
+ *
+ * The torn count is a tripwire, not the proof. With the snapshot's
+ * lock/unlock replaced by no-ops it did go red here (2026-10-14, 8
+ * cores: torn > 0 on the first plain run), but that is scheduling luck
+ * a one-core CI runner need not repeat. Under ThreadSanitizer the same
+ * mutation is a reported data race on g_ring_head between the writer
+ * and capture_ring_snapshot, every run, and that job is the gate.
+ *
+ * The writer dispatches into its own state and main snapshots into
+ * another: the seam re-seeds the ring from the caller's state on each
+ * call, so two threads dispatching or snapshotting into one state would
+ * be a race in the test, not in the code under test. Ops are counted on
+ * the worker and asserted on main. */
+#define RING_RACE_CALLS    64
+#define RING_RACE_PER_CALL 48
+#define RING_RACE_SNAPS    3000
+
+typedef struct { sloth_state_t *s; int calls; } ring_race_arg_t;
+
+static void *ring_race_writer(void *p) {
+    ring_race_arg_t *a = p;
+    uint8_t f[128];
+    int n = eth_ipv4_tcp(f, 8, 5, -1);
+    const uint8_t *fs[RING_RACE_PER_CALL];
+    int ls[RING_RACE_PER_CALL];
+    for (int i = 0; i < RING_RACE_PER_CALL; i++) { fs[i] = f; ls[i] = n; }
+    for (int k = 0; k < RING_RACE_CALLS; k++) {
+        uint16_t sport = (uint16_t)(1000 + k);
+        f[ETH_HDR + 20] = (uint8_t)(sport >> 8);   /* TCP source port */
+        f[ETH_HDR + 21] = (uint8_t)sport;
+        if (capture_test_dispatch(a->s, DLT_EN10MB, fs, ls, NULL,
+                                  RING_RACE_PER_CALL) == RING_RACE_PER_CALL)
+            a->calls++;
+    }
+    return NULL;
+}
+
+/* 1 when the copy is one consistent prefix of the writer's order. */
+static int ring_copy_is_coherent(const sloth_state_t *s) {
+    if (s->pkt_count < 0 || s->pkt_count > MAX_PACKETS) return 0;
+    if (s->pkt_head  < 0 || s->pkt_head  >= MAX_PACKETS) return 0;
+    if (s->pkt_total < (uint64_t)s->pkt_count) return 0;
+    if (s->pkt_count < MAX_PACKETS && s->pkt_head != s->pkt_count) return 0;
+    int oldest = (s->pkt_head - s->pkt_count + MAX_PACKETS) % MAX_PACKETS;
+    for (int j = 1; j < s->pkt_count; j++) {
+        const packet_info_t *prev = &s->packets[(oldest + j - 1) % MAX_PACKETS];
+        const packet_info_t *cur  = &s->packets[(oldest + j)     % MAX_PACKETS];
+        if (cur->src_port == prev->src_port) {
+            if (cur->ts_sec != prev->ts_sec + 1) return 0;
+        } else if (cur->src_port == prev->src_port + 1) {
+            if (cur->ts_sec != 1700000000u) return 0;
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void test_ring_snapshot_is_stable_under_writer(void) {
+    capture_test_set_policy(NULL);
+    sloth_state_t *w = calloc(1, sizeof(*w));
+    sloth_state_t *m = calloc(1, sizeof(*m));
+    ASSERT(w != NULL && m != NULL);
+    if (!w || !m) { free(w); free(m); return; }
+
+    /* Empty the ring before the writer exists: an empty dispatch seeds
+     * it from the zeroed state. Otherwise main's first snapshots see
+     * whatever the previous test left, and the writer's first re-seed
+     * reads as pkt_total going backwards -- the harness tearing, not
+     * the ring. Found on this test's first run. */
+    ASSERT_EQ(capture_test_dispatch(w, DLT_EN10MB, NULL, NULL, NULL, 0), 0);
+
+    ring_race_arg_t arg = { w, 0 };
+    pthread_t th;
+    ASSERT_EQ(pthread_create(&th, NULL, ring_race_writer, &arg), 0);
+
+    int      torn = 0;
+    uint64_t last_total = 0;
+    for (int i = 0; i < RING_RACE_SNAPS; i++) {
+        capture_ring_snapshot(m);
+        if (!ring_copy_is_coherent(m)) torn++;
+        if (m->pkt_total < last_total) torn++;      /* total only grows */
+        last_total = m->pkt_total;
+    }
+    ASSERT_EQ(pthread_join(th, NULL), 0);
+    ASSERT_EQ(arg.calls, RING_RACE_CALLS);
+    ASSERT_EQ(torn, 0);
+
+    /* After the writer: main's copy is the writer's ring, full, with the
+     * newest frame being the last of the last call. */
+    capture_ring_snapshot(m);
+    ASSERT(ring_copy_is_coherent(m));
+    ASSERT_EQ(m->pkt_count, MAX_PACKETS);
+    ASSERT_EQ((long long)m->pkt_total,
+              (long long)RING_RACE_CALLS * RING_RACE_PER_CALL);
+    ASSERT_EQ(m->pkt_head,  w->pkt_head);
+    ASSERT_EQ(m->pkt_count, w->pkt_count);
+    ASSERT_EQ(memcmp(m->packets, w->packets, sizeof(m->packets)), 0);
+    int newest = (m->pkt_head - 1 + MAX_PACKETS) % MAX_PACKETS;
+    ASSERT_EQ(m->packets[newest].src_port, 1000 + RING_RACE_CALLS - 1);
+    ASSERT_EQ(m->packets[newest].ts_sec, 1700000000u + RING_RACE_PER_CALL - 1);
+    free(w);
+    free(m);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -1842,4 +2005,8 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_refusal_is_attributable_to_the_allow_list);
     RUN_TEST(test_an_empty_allow_list_admits_any_retarget);
     RUN_TEST(test_retarget_ignores_an_empty_name);
+
+    TEST_SUITE("capture path: the packet ring is a snapshot (#111)");
+    RUN_TEST(test_ring_wraps_with_head_count_total_preserved);
+    RUN_TEST(test_ring_snapshot_is_stable_under_writer);
 }

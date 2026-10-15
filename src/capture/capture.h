@@ -392,6 +392,14 @@ int capture_set_filter(const char *expr, char *errbuf, int errsz);
    main(); safe before capture_open() (reports open=0, running=0). */
 void capture_health_poll(capture_health_t *h);
 
+/* Copy the wired packet ring into s->packets / pkt_head / pkt_count /
+   pkt_total under the capture lock (#111). The ring is private to the
+   capture thread; every reader on main -- the packets view, bandwidth
+   attribution, pcap export, JSONL -- reads this copy, which poll_data()
+   refreshes first thing each tick. Same shape as mon_frame_snapshot()
+   for the 802.11 stream. */
+void capture_ring_snapshot(sloth_state_t *s);
+
 /* Revalidate the pinned policy against the live ifindex table and
    refresh s->scope_health (#85 slice 2). Main thread, once per poll. */
 void capture_scope_poll(sloth_state_t *s);
@@ -470,6 +478,7 @@ static inline int  capture_set_filter(const char *e, char *b, int n)
     { (void)e; (void)b; (void)n; return 0; }
 /* No capture compiled in: "off" is the honest health state, not an
    error, so the record still emits and says the stream is absent. */
+static inline void capture_ring_snapshot(sloth_state_t *s) { (void)s; }
 static inline void capture_health_poll(capture_health_t *h)
     { if (h) { h->open = 0; h->running = 0; } }
 /* A requested scope with no capture compiled in is NO_CAPTURE: nothing

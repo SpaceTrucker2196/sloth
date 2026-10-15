@@ -2715,3 +2715,31 @@ at #73 and every run since aborted at "baseline not green". Fixed by
 deriving the sandbox from `git ls-files`, pinned by a recipe test. First
 real run: baseline green, 1,392 sites, one sampled mutant survived at
 `alerts.c:2201` (`g_arp_hist`, → #110). Details: [[mutation-testing]].
+
+## 2026-10-14 — fragattack gets its mutex; the packet ring becomes a snapshot (#111)
+
+Architecture slice S3, the one the 2026-10 review called "the one known
+data race". `src/fragattack.c` had zero `pthread_mutex` calls while
+`frag_observe()` / `frag_note_association()` ran on the probe thread
+and `frag_snapshot()` / `rule_fragattack()` on main. Separately, the
+wired packet ring on `sloth_state_t` was written by the capture thread
+under `capture.c`'s *private* `g_mu` and read lock-free by seven
+main-thread modules — a lock no reader could take.
+
+Shipped: one module mutex in `fragattack.c` (every entry point takes
+it and calls a `*_locked()` body) plus `frag_bss_copy()`, which
+`rule_fragattack()` now uses instead of a pointer into the live table;
+a private ring in `capture.c` with `capture_ring_snapshot()` called
+first in `poll_data()`, head/count/total semantics unchanged so no
+reader moved. `capture_test_dispatch()` seeds the ring from the
+caller's state and snapshots back, so the capture-path suite's
+`sloth_state_t` stays premise and result.
+
+Proof is ThreadSanitizer, as the issue specified: the two concurrent
+tests pass with the locks deleted (single writer, no lost update) and
+the TSan build of each binary goes red on the same mutation.
+
+Pages: [[ring-buffers]] (new variation section), [[architecture]]
+(capture-pipeline seam, state paragraph), [[fragattacks]] (new
+Threading section, Testing addendum). `README.md`'s data-flow
+paragraph gained one sentence.
