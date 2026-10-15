@@ -4573,9 +4573,16 @@ static void rule_ssid_confusion(const sloth_state_t *s, time_t now) {
         char w_bssid[20], s_bssid[20];
         fmt_bssid(w_bssid, weak->bssid);
         fmt_bssid(s_bssid, strong_hit->bssid);
+        /* SSID is attacker-chosen in exactly this attack (#112): a
+         * remote component, so a 30-byte shared prefix is no longer
+         * one finding. */
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key, sizeof(key), "ssidconf:%.30s:%s", weak->ssid, w_bssid);
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "ssidconf");
+        akey_remote(&k, weak->ssid, 32);
+        akey_mac(&k, weak->bssid);
+        if (!akey_end(&k)[0]) continue;
         snprintf(detail, sizeof(detail),
                  "'%.16s' downgraded on %s [%.6s/mfp%d] vs %s [%.6s/mfp%d] - SSID confusion",
                  weak->ssid, w_bssid, weak->enc, weak->mfp,

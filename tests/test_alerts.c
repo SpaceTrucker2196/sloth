@@ -8731,6 +8731,33 @@ static void test_sae_psk_split_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+/* One downgraded BSSID beaconing two long SSIDs that differ only in
+ * the last byte, each beside its own strong AP. Same weak BSSID, so
+ * only the SSID component can keep the two findings apart. */
+static void test_ssid_confusion_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    char n1[33], n2[33];
+    long_ssid_pair(n1, n2);
+    uint8_t s1[6]   = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
+    uint8_t s2[6]   = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
+    uint8_t weak[6] = {0xde,0xad,0xbe,0x00,0x00,0x09};
+    add_beacon_rsn(&s, n1, s1,   "WPA3", "GCMP", 2);
+    add_beacon_rsn(&s, n1, weak, "WPA2", "CCMP", 0);
+    add_beacon_rsn(&s, n2, s2,   "WPA3", "GCMP", 2);
+    add_beacon_rsn(&s, n2, weak, "WPA2", "CCMP", 0);
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_SSID_CONFUSION), 2);
+    int i = find_alert(&s, ALERT_TYPE_SSID_CONFUSION);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strncmp(s.alerts[i].key, "ssidconf:NNNN", 13) == 0);
+        ASSERT(strstr(s.alerts[i].key, ":de:ad:be:00:00:09") != NULL);
+        ASSERT_EQ((int)strlen(s.alerts[i].key), 8 + 1 + 32 + 1 + 16 + 18);
+    }
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9913,6 +9940,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_cleartext_cred_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_captive_portal_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_sae_psk_split_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_ssid_confusion_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
