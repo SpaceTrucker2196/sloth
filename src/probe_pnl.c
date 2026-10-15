@@ -70,22 +70,20 @@ const char *probe_pnl_phy_ies(const uint8_t *ies, int ielen)
 {
     if (!ies || ielen < 2) return NULL;
     int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
-    const uint8_t *p = ies;
-    int rem = ielen;
-    while (rem >= 2) {
-        uint8_t tag = p[0];
-        uint8_t len = p[1];
-        if (2 + (int)len > rem) break;
+    tlv_it_t it;
+    uint16_t tag; int len; const uint8_t *body;
+    tlv_init(&it, ies, ielen);
+    while (tlv_next(&it, &tag, &len, &body) == TLV_OK) {
         if (tag == 45)  has_ht  = 1;
         if (tag == 191) has_vht = 1;
         if (tag == 255 && len >= 1) {
-            uint8_t ext = p[2];
+            uint8_t ext = body[0];
             if (ext == 35)               has_he  = 1;   /* HE Capabilities */
             if (ext == 81 || ext == 108) has_eht = 1;   /* Multi-Link / EHT */
         }
-        p   += 2 + len;
-        rem -= 2 + len;
     }
+    /* The tier read before a stop stands, as before (#126). */
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     if (has_eht) return "Wi-Fi 7";
     if (has_he)  return "Wi-Fi 6";
     if (has_vht) return "Wi-Fi 5";

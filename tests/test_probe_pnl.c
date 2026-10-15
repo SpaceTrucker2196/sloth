@@ -239,6 +239,23 @@ static void test_phy_legacy(void) {
     ASSERT_STR(p, "legacy");
 }
 
+/* #126: the tier walk runs on the shared iterator. HT Capabilities
+ * then a truncated VHT element: still "Wi-Fi 4" (the VHT claim never
+ * fit, and was not believed before either), and the stop is counted
+ * once. The HT element alone counts nothing. */
+static void test_phy_truncation_is_tallied(void) {
+    static const uint8_t ies[] = {
+        0x2d, 0x01, 0x00,                 /* HT Capabilities (45)      */
+        0xbf, 0x0c, 0x00, 0x00            /* VHT (191) claims 12, has 2 */
+    };
+    sh_parse_fault_reset();
+    ASSERT_STR(probe_pnl_phy_ies(ies, sizeof(ies)), "Wi-Fi 4");
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+    sh_parse_fault_reset();
+    ASSERT_STR(probe_pnl_phy_ies(ies, 3), "Wi-Fi 4");
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+}
+
 static void test_phy_wifi4_ht(void) {
     static const uint8_t ies[] = { 0x2d, 0x01, 0x00 };  /* tag 45 HT */
     const char *p = probe_pnl_phy_ies(ies, sizeof(ies));
@@ -330,6 +347,7 @@ void run_probe_pnl_tests(void) {
     RUN_TEST(test_os_fp_stored_on_first_observation);
     RUN_TEST(test_os_fp_sticky_does_not_overwrite);
     RUN_TEST(test_phy_legacy);
+    RUN_TEST(test_phy_truncation_is_tallied);
     RUN_TEST(test_phy_wifi4_ht);
     RUN_TEST(test_phy_wifi5_vht);
     RUN_TEST(test_phy_wifi6_he);
