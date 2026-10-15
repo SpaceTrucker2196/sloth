@@ -3436,3 +3436,27 @@ one. Shapes and fields unchanged.
 Pages: [[architecture]] (new *Tick* section, capture seam),
 [[jsonl-schema]] (*Order within a tick*, cadence), [[ring-buffers]],
 [[sqlite-schema]] (write path).
+
+## 2026-10-15 — Fuzz the parsers about to be refactored (#125)
+
+Six libFuzzer targets ahead of the Track P rewrites, so each rewrite
+has a sanitizer baseline to keep: `fuzz_action_observe`,
+`fuzz_assoc_request_parse` (which also hands a parsed request's MLE body
+to `mle_parse()` — one parser's bounds trusted by another),
+`fuzz_mle_parse`, `fuzz_dns_read_name` (over `dns_log_parse()` until
+P10a lifts name decoding out), `fuzz_tls_log_parse` and
+`fuzz_decode_frame`. The last reaches the static `decode_frame()`
+through a new seam, `capture_test_decode_frame()`, and not through
+`capture_test_dispatch()`: libpcap's offline buffer runs past each
+record's caplen, so only a direct call puts the fuzzer's redzoned
+buffer under the decoders.
+
+#115 had already made the plain targets a wildcard, so those five
+needed no Makefile edit. `decode_frame` lives inside `WITH_PCAP`, so it
+gets `FUZZ_PCAP_TARGETS` and a second archive (`build/fuzz-pcap/`,
+`-DWITH_PCAP`, `-lpcap`); `make fuzz` runs it after the plain targets.
+The CI fuzz job's runner has no `libpcap-dev`, so `FUZZ_PCAP=auto`
+(default) prints a `SKIPPED` line there instead of failing;
+`FUZZ_PCAP=1` makes it fatal once that job installs the package.
+[[architecture]] → build section carries the mechanism.
+`test_every_fuzz_harness_is_built` holds the list to `tests/fuzz/`.

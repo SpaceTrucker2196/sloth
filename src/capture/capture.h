@@ -467,6 +467,18 @@ uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
                                const uint32_t *ts_secs, int n,
                                size_t *out_size);
 
+/* decode_frame() on its own (#125): the datalink switch, the 802.1Q
+   strip and the IPv4/IPv6 dispatch into every protocol snooper, with
+   none of on_packet()'s scope election or ring around it. `data` is
+   read in place, so a fuzzer's tightly-redzoned input buffer is the
+   buffer the decoders walk — capture_test_dispatch() cannot give that,
+   because libpcap reads each record out of an offline buffer sized far
+   past its caplen. origlen is the wire length (the FCS-strip decision
+   on the monitor DLT compares it with caplen). `out` is zeroed first.
+   Returns decode_frame()'s verdict: 1 decoded, 0 dropped. */
+int capture_test_decode_frame(const uint8_t *data, int caplen, int origlen,
+                              int dlt, packet_info_t *out);
+
 #else
 
 static inline void capture_open(sloth_state_t *s)   { (void)s; }

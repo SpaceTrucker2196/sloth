@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories)., #113
+**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories)., #113, #125
 
 ---
 
@@ -35,7 +35,7 @@ src/views/*.c              -- one file per VIEW_*
 src/md5.c                  -- embedded MD5 for JA3 (RFC 1321 vectors verified)
 src/sloth_clock.c          -- the one clock seam: sloth_wall() / sloth_mono_ms()
 tests/                     -- unit tests, fake platform, scenarios
-tests/fuzz/fuzz_*.c        -- libFuzzer harnesses; one Makefile rule builds them all
+tests/fuzz/fuzz_*.c        -- libFuzzer harnesses; one rule per archive builds them all
 build/<cfg>/               -- objects + libsloth_core.a per configuration (ignored)
 docs/views/*.md            -- per-view deep dives
 ```
@@ -121,8 +121,21 @@ Since #115 every binary is derived from one set of source lists in the
   no snooper and no alert code. A new module or harness needs no
   Makefile edit — the hand-kept inline lists this replaced failed CI on
   2026-10-14 when a module they named gained a dependency.
+- The exception is a harness whose seam exists only under `WITH_PCAP`
+  (`fuzz_decode_frame`, over `capture_test_decode_frame()`, #125). Those
+  are named in `FUZZ_PCAP_TARGETS` and link a second archive,
+  `build/fuzz-pcap/`, compiled with `-DWITH_PCAP` and linked with
+  `-lpcap`. `make fuzz` runs them after the plain targets; `FUZZ_PCAP`
+  says what a missing `<pcap.h>` means — `auto` (default) prints a
+  `SKIPPED` line naming each target, `1` fails, `0` never runs them.
+  `make fuzz-pcap` runs only that half.
+  `tests/test_docs_consistency.c :: test_every_fuzz_harness_is_built`
+  holds the list to the directory: no name without a harness, no
+  WITH_PCAP-seam harness off the list, no plain harness outside
+  `FUZZ_SRCS`.
 - Objects live in `build/n<NCURSES>p<PCAP>w<WIFI>s<SQLITE>/` (`embedded`
-  is `n0p0w1s0`), `build/test/`, `build/test-pcap/` and `build/fuzz/`.
+  is `n0p0w1s0`), `build/test/`, `build/test-pcap/`, `build/fuzz/` and
+  `build/fuzz-pcap/`.
   Each directory carries a flags stamp, so changing `EXTRA_CFLAGS`
   recompiles instead of reusing objects built without, say, `-Werror`;
   `sloth` relinks when the configuration changes even if no object is

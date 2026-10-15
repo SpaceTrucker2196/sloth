@@ -2012,6 +2012,192 @@ static void test_main_assigns_no_tcp_default(void) {
     free(src);
 }
 
+/* ── Every fuzz harness is built (#125) ──────────────────────────────
+ *
+ * A harness that exists but never links is the rot #125 is about: the
+ * inline fuzz lists the Makefile used to keep went stale and failed CI
+ * on 2026-10-14, after every local gate had passed. Since #115 the
+ * plain targets come from a wildcard over tests/fuzz/fuzz_*.c, and the
+ * WITH_PCAP ones — whose seams exist only inside capture.c's WITH_PCAP
+ * guard — are named in FUZZ_PCAP_TARGETS. This holds the two to the
+ * directory:
+ *
+ *   - every name in FUZZ_PCAP_TARGETS has its harness (no stale entry);
+ *   - every harness calling a WITH_PCAP-only capture seam is named
+ *     there, since the plain archive cannot link it;
+ *   - every other harness is reached by FUZZ_SRCS, through the wildcard
+ *     or, if that is ever replaced by a list, by being on the list;
+ *   - `make fuzz` runs the pcap half, so a pcap target is not one that
+ *     builds and is then never run.
+ *
+ * Read from the Makefile's text with a fixed grammar (NAME = value,
+ * backslash continuations joined), the same way the rest of this file
+ * reads documents: deterministic, and a reword of the variable fails
+ * loudly through the "found" assertions rather than going vacuous. */
+
+#define DC_FUZZ_MAX  64
+#define DC_FUZZ_LEN  64
+#define DC_FUZZ_DIR  "tests/fuzz"
+
+/* Value of the first `NAME = value` / `NAME ?= value` assignment at the
+ * start of a line, continuations joined. Returns 1 if found. */
+static int dc_make_var(const char *mk, const char *name, char *out, size_t sz) {
+    out[0] = '\0';
+    size_t nl = strlen(name);
+    for (const char *p = mk; *p; ) {
+        const char *eol = strchr(p, '\n');
+        const char *q = p + nl;
+        if (strncmp(p, name, nl) == 0) {
+            while (*q == ' ' || *q == '\t') q++;
+            if (*q == '?' || *q == ':') q++;
+        }
+        if (strncmp(p, name, nl) != 0 || *q != '=') {
+            if (!eol) break;
+            p = eol + 1;
+            continue;
+        }
+        size_t o = 0;
+        for (q++; *q && *q != '\n'; q++) {
+            char c = *q;
+            if (q[0] == '\\' && q[1] == '\n') { c = ' '; q++; }
+            if (o + 1 < sz) out[o++] = c;
+        }
+        out[o] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+/* Is `word` one whitespace-separated word of `list`? */
+static int dc_has_word(const char *list, const char *word) {
+    size_t wl = strlen(word);
+    for (const char *p = list; (p = strstr(p, word)) != NULL; p += wl) {
+        int lead_ok  = p == list || isspace((unsigned char)p[-1]);
+        int trail_ok = p[wl] == '\0' || isspace((unsigned char)p[wl]);
+        if (lead_ok && trail_ok) return 1;
+    }
+    return 0;
+}
+
+/* Harness names (fuzz_<name>.c → <name>), sorted out of readdir order. */
+static int dc_fuzz_harnesses(char names[DC_FUZZ_MAX][DC_FUZZ_LEN]) {
+    DIR *d = opendir(DC_FUZZ_DIR);
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && n < DC_FUZZ_MAX) {
+        size_t l = strlen(e->d_name);
+        if (l < 8 || strncmp(e->d_name, "fuzz_", 5) != 0 ||
+            strcmp(e->d_name + l - 2, ".c") != 0 || l - 7 >= DC_FUZZ_LEN)
+            continue;
+        memcpy(names[n], e->d_name + 5, l - 7);
+        names[n][l - 7] = '\0';
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+
+/* A harness needs the WITH_PCAP build when it calls a capture seam that
+ * capture.h declares only under WITH_PCAP. */
+static int dc_fuzz_needs_pcap(const char *src) {
+    return strstr(src, "capture_test_decode_frame(") != NULL ||
+           strstr(src, "capture_test_dispatch(")     != NULL ||
+           strstr(src, "capture_test_savefile(")     != NULL;
+}
+
+static void test_make_var_reader(void) {
+    char v[256];
+    const char *mk = "X_FOO = no\nFOO   = a b \\\n        c\nBAR ?= d\n";
+    ASSERT_EQ(dc_make_var(mk, "FOO", v, sizeof(v)), 1);
+    ASSERT(dc_has_word(v, "a"));
+    ASSERT(dc_has_word(v, "c"));
+    ASSERT(!dc_has_word(v, "no"));
+    ASSERT_EQ(dc_make_var(mk, "BAR", v, sizeof(v)), 1);
+    ASSERT(dc_has_word(v, "d"));
+    ASSERT_EQ(dc_make_var(mk, "BAZ", v, sizeof(v)), 0);
+    ASSERT(!dc_has_word("decode_frame_x", "decode_frame"));
+    ASSERT(dc_has_word("a decode_frame", "decode_frame"));
+}
+
+static void test_every_fuzz_harness_is_built(void) {
+    char *mk = slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+
+    char pcap[1024], srcs[4096];
+    ASSERT_EQ(dc_make_var(mk, "FUZZ_PCAP_TARGETS", pcap, sizeof(pcap)), 1);
+    ASSERT_EQ(dc_make_var(mk, "FUZZ_SRCS", srcs, sizeof(srcs)), 1);
+    const int by_wildcard =
+        strstr(srcs, "$(wildcard tests/fuzz/fuzz_*.c)") != NULL;
+
+    static char names[DC_FUZZ_MAX][DC_FUZZ_LEN];
+    int n = dc_fuzz_harnesses(names);
+    /* Ten harnesses since #125: a directory read that silently finds
+     * fewer would make every check below vacuous. */
+    ASSERT(n >= 10);
+
+    int n_pcap = 0;
+    for (int i = 0; i < n; i++) {
+        char path[160];
+        snprintf(path, sizeof(path), DC_FUZZ_DIR "/fuzz_%s.c", names[i]);
+        char *src = slurp(path);
+        ASSERT(src != NULL);
+        if (!src) continue;
+        const int listed = dc_has_word(pcap, names[i]);
+        if (dc_fuzz_needs_pcap(src)) {
+            n_pcap++;
+            if (!listed)
+                printf("    fuzz_%s.c calls a WITH_PCAP seam but is not in "
+                       "FUZZ_PCAP_TARGETS\n", names[i]);
+            ASSERT(listed);
+        } else if (!listed) {
+            char want[160];
+            snprintf(want, sizeof(want), "tests/fuzz/fuzz_%s.c", names[i]);
+            const int built = by_wildcard || dc_has_word(srcs, want);
+            if (!built)
+                printf("    fuzz_%s.c is reached by no FUZZ_SRCS entry\n",
+                       names[i]);
+            ASSERT(built);
+        }
+        free(src);
+    }
+    /* decode_frame is the one pcap harness today; without a floor a
+     * marker the scan stopped recognising would pass every row above. */
+    ASSERT(n_pcap >= 1);
+
+    /* No stale entry: every listed pcap target has its harness. */
+    char word[DC_FUZZ_LEN];
+    for (const char *p = pcap; *p; ) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        size_t l = 0;
+        while (p[l] && !isspace((unsigned char)p[l])) l++;
+        if (l == 0) break;
+        if (l >= sizeof(word)) l = sizeof(word) - 1;
+        memcpy(word, p, l);
+        word[l] = '\0';
+        p += l;
+        int found = 0;
+        for (int i = 0; i < n; i++) if (strcmp(names[i], word) == 0) found = 1;
+        if (!found)
+            printf("    FUZZ_PCAP_TARGETS names %s, which has no harness\n",
+                   word);
+        ASSERT(found);
+    }
+
+    /* `make fuzz` reaches the pcap half, rather than leaving it to a
+     * target nobody runs. */
+    ASSERT(strstr(mk, "fuzz-pcap: $(FUZZ_PCAP_BINS)") != NULL);
+    const char *rule = strstr(mk, "\nfuzz: $(FUZZ_BINS)");
+    const char *next = rule ? strstr(rule + 1, "\n\n") : NULL;
+    ASSERT(rule != NULL && next != NULL);
+    if (rule && next) {
+        const char *call = strstr(rule, "$(MAKE) --no-print-directory fuzz-pcap");
+        ASSERT(call != NULL && call < next);
+    }
+    free(mk);
+}
+
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
@@ -2055,4 +2241,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_view_keys_match_view_labels);
     RUN_TEST(test_main_selects_views_only_through_the_table);
     RUN_TEST(test_every_view_key_is_in_wiki_reference);
+    TEST_SUITE("fuzz harnesses are all built (#125)");
+    RUN_TEST(test_make_var_reader);
+    RUN_TEST(test_every_fuzz_harness_is_built);
 }

@@ -1285,6 +1285,19 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
     return got;
 }
 
+/* decode_frame() alone, for the libFuzzer target (#125). Contract in
+ * capture.h. No on_packet(), no scope election, no ring: those are what
+ * capture_test_dispatch() is for, and they cost the fuzzer the one
+ * property it needs — the bytes decode_frame() walks are the fuzzer's
+ * own redzoned buffer, not a record inside libpcap's oversized
+ * offline-read buffer. */
+int capture_test_decode_frame(const uint8_t *data, int caplen, int origlen,
+                              int dlt, packet_info_t *out) {
+    if (!data || !out || caplen < 0) return 0;
+    memset(out, 0, sizeof(*out));
+    return decode_frame(data, caplen, origlen, dlt, out);
+}
+
 /* ── Capture thread ───────────────────────────────────────── */
 
 /* Why the worker left its loop, published for the poll loop to read

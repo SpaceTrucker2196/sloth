@@ -626,7 +626,17 @@ endif
 FUZZ_DEFS     = -DWITH_WIFI -DWITH_SQLITE $(FUZZ_PLATFORM_DEFS) \
                 -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
 
-FUZZ_SRCS      = $(wildcard tests/fuzz/fuzz_*.c)
+# Harnesses that need -DWITH_PCAP: decode_frame() and everything it
+# reaches sit inside capture.c's WITH_PCAP guard, so its target cannot
+# link against the archive above. Named here — a harness is a pcap one
+# because of the seam it calls, which a file name cannot say — and
+# tests/test_docs_consistency.c holds the list to the files: every name
+# here has a harness, and every harness calling a WITH_PCAP-only seam is
+# named here (#125). Everything else is picked up by the wildcard.
+FUZZ_PCAP_TARGETS = decode_frame
+FUZZ_PCAP_SRCS = $(FUZZ_PCAP_TARGETS:%=tests/fuzz/fuzz_%.c)
+
+FUZZ_SRCS      = $(filter-out $(FUZZ_PCAP_SRCS),$(wildcard tests/fuzz/fuzz_*.c))
 FUZZ_CORE_SRCS = $(TEST_CORE_SRCS) $(TEST_SUPPORT_SRCS)
 FUZZ_OBJDIR    = build/fuzz
 FUZZ_CORE_LIB  = $(FUZZ_OBJDIR)/libsloth_core.a
@@ -655,12 +665,70 @@ $(FUZZ_OBJDIR)/bin/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_CORE_LIB) $(FUZZ_OBJDIR)/.
 	@mkdir -p $(@D)
 	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -o $@ $< $(FUZZ_CORE_LIB) -lm -lpthread -lsqlite3
 
-.PHONY: fuzz
-fuzz: $(FUZZ_BINS)
-	@for f in $(FUZZ_BINS); do \
+# The WITH_PCAP twin of the archive above (#125): the capture-path core
+# (probe.c back in, as for sloth_test_pcap) plus the same stand-ins,
+# compiled with the fuzz flags and -DWITH_PCAP in their own object
+# directory, because -DWITH_PCAP changes what the headers declare.
+FUZZ_PCAP_CORE_SRCS = $(CORE_SRCS_ALL) $(TEST_ONLY_SRCS) $(TEST_SUPPORT_SRCS)
+FUZZ_PCAP_OBJDIR    = build/fuzz-pcap
+FUZZ_PCAP_CORE_LIB  = $(FUZZ_PCAP_OBJDIR)/libsloth_core.a
+FUZZ_PCAP_CORE_OBJS = $(FUZZ_PCAP_CORE_SRCS:%.c=$(FUZZ_PCAP_OBJDIR)/%.o)
+FUZZ_PCAP_BINS      = $(FUZZ_PCAP_SRCS:tests/fuzz/%.c=$(FUZZ_PCAP_OBJDIR)/bin/%)
+
+$(FUZZ_PCAP_OBJDIR)/.flags:   STAMP = $(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -DWITH_PCAP
+$(FUZZ_PCAP_OBJDIR)/.members: STAMP = $(FUZZ_PCAP_CORE_SRCS)
+
+$(FUZZ_PCAP_OBJDIR)/.flags: | fuzz-cc-check
+
+$(FUZZ_PCAP_OBJDIR)/%.o: %.c $(FUZZ_PCAP_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -DWITH_PCAP -MMD -MP -c -o $@ $<
+
+$(FUZZ_PCAP_CORE_LIB): $(FUZZ_PCAP_CORE_OBJS) $(FUZZ_PCAP_OBJDIR)/.members
+
+$(FUZZ_PCAP_OBJDIR)/bin/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_PCAP_CORE_LIB) $(FUZZ_PCAP_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -DWITH_PCAP -o $@ $< $(FUZZ_PCAP_CORE_LIB) \
+	      -lm -lpthread -lsqlite3 -lpcap
+
+# `make fuzz` runs every target. The pcap half needs libpcap's headers,
+# which the CI fuzz job does not install today (its runner image ships
+# libsqlite3-dev but not libpcap-dev, and adding the package is a
+# .github change outside #125). So FUZZ_PCAP decides what a missing
+# header means:
+#
+#   FUZZ_PCAP=auto  (default) run the pcap targets when <pcap.h> is
+#                   there; otherwise print a SKIPPED line naming each one
+#                   and carry on — loud, so a reader of the log can see
+#                   what did not run, rather than a silent pass.
+#   FUZZ_PCAP=1     a missing header is a failure. What CI should pass
+#                   once its fuzz job installs libpcap-dev.
+#   FUZZ_PCAP=0     never run them.
+FUZZ_PCAP ?= auto
+
+FUZZ_RUN = for f in $(1); do \
 	  echo "$$f -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3"; \
 	  $$f -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3 || exit 1; \
 	done
+
+.PHONY: fuzz fuzz-pcap
+fuzz: $(FUZZ_BINS)
+	@$(call FUZZ_RUN,$(FUZZ_BINS))
+	@if [ "$(FUZZ_PCAP)" = 0 ]; then \
+	  echo "fuzz: FUZZ_PCAP=0 -- SKIPPED $(FUZZ_PCAP_BINS)"; \
+	elif printf '#include <pcap.h>\n' | \
+	     $(FUZZ_CC) -fsyntax-only -x c - >/dev/null 2>&1; then \
+	  $(MAKE) --no-print-directory fuzz-pcap; \
+	elif [ "$(FUZZ_PCAP)" = 1 ]; then \
+	  echo "fuzz: FUZZ_PCAP=1 but <pcap.h> not found -- install libpcap-dev" >&2; \
+	  exit 1; \
+	else \
+	  echo "fuzz: <pcap.h> not found -- SKIPPED $(FUZZ_PCAP_BINS)" \
+	       "(install libpcap-dev, or FUZZ_PCAP=1 to make this fatal)"; \
+	fi
+
+fuzz-pcap: $(FUZZ_PCAP_BINS)
+	@$(call FUZZ_RUN,$(FUZZ_PCAP_BINS))
 
 # ── Static analysis (#95) ───────────────────────────────────────────────────
 # Runs CI's cppcheck command, byte for byte, with CI's version guard.
@@ -743,7 +811,7 @@ clean:
 	$(AR) rcs $@ $(filter %.o,$^)
 
 STAMPS = $(LINK_STAMP) \
-         $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(CAPTURE_PATH_OBJDIR) $(FUZZ_OBJDIR),$(d)/.flags $(d)/.members)
+         $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(CAPTURE_PATH_OBJDIR) $(FUZZ_OBJDIR) $(FUZZ_PCAP_OBJDIR),$(d)/.flags $(d)/.members)
 
 .PHONY: FORCE
 $(STAMPS): FORCE
@@ -752,7 +820,8 @@ $(STAMPS): FORCE
 # Header dependencies written by -MMD. Absent until the first compile,
 # which has to rebuild everything anyway.
 -include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
-                    $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_OBJS) $(FUZZ_CORE_OBJS)))
+                    $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_OBJS) $(FUZZ_CORE_OBJS) \
+                    $(FUZZ_PCAP_CORE_OBJS)))
 
 # ── Install (#139) ───────────────────────────────────────────────────────────
 # `install` places what the binary and the shipped unit reference, all
