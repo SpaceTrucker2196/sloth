@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "bgp_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* BGP-4 (RFC 4271 §4.1) — 19-byte common header:
  *   bytes  0..15  Marker (16 × 0xFF)
@@ -190,6 +192,37 @@ static void test_unknown_type_stops_walk(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_bgp_table_full_evicts_oldest_and_tallies(void) {
+    bgp_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[19];
+    int n = build_msg(buf, 4, 19);
+    char peer[32];
+    for (int i = 0; i < MAX_BGP_SESSIONS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(bgp_snoop_observe(peer, 179, "10.0.0.2", 179, buf, n), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_BGP_SESSION), 0);   /* full is not loss */
+    ASSERT_EQ(bgp_snoop_observe("10.9.9.9", 179, "10.0.0.2", 179, buf, n), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_BGP_SESSION), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    bgp_snoop_snapshot(&s);
+    ASSERT_EQ(s.bgp_session_count, MAX_BGP_SESSIONS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.bgp_session_count; i++) {
+        if (strcmp(s.bgp_sessions[i].peer_b, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.bgp_sessions[i].peer_b, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_bgp_snoop_tests(void) {
     TEST_SUITE("bgp_snoop: message-type detection");
     RUN_TEST(test_detects_keepalive);
@@ -214,4 +247,5 @@ void run_bgp_snoop_tests(void) {
     RUN_TEST(test_undersize_rejected);
     RUN_TEST(test_oversize_length_rejected);
     RUN_TEST(test_unknown_type_stops_walk);
+    RUN_TEST(test_bgp_table_full_evicts_oldest_and_tallies);
 }

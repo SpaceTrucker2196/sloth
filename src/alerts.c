@@ -5,6 +5,7 @@
 #include "alerts.h"
 #include "tune.h"   /* operator-tunable thresholds (#82) */
 #include "sensor_health.h"
+#include "stab.h"
 #include "threat_intel.h"
 #include "vendor_watchlist.h"
 #include "beacon_detect.h"
@@ -2189,15 +2190,28 @@ static void rule_nxdomain_burst(const sloth_state_t *s, time_t now) {
  * re-observations are silent. Once we fire we update the recorded MAC
  * so the alert only repeats on subsequent (further) changes.
  *
- * History is a static module-local table sized to the largest ARP
- * table we can ever see. */
+ * History is a bounded table sized to the largest ARP table we can
+ * ever see, keyed by IP, STAB_OLDEST (#110). It used to refuse every
+ * new IP forever once full, so after enough uptime on a busy segment
+ * this rule was blind to new hosts and nothing said so. Now a new IP
+ * evicts the least-recently-seen one and the loss is tallied as
+ * evict_arp_hist. The consequence to know about: an IP whose row was
+ * evicted and that later reappears has no recorded MAC to compare
+ * against, so it is a fresh baseline and not a spoof even if its MAC
+ * differs from the one it had. That window exists only while more than
+ * MAX_ARP_ENTRIES distinct IPs are cycling through the kernel table,
+ * which is also the case the refuse-forever rule handled worst. */
 /* ARP-spoof rule history — file-scope so alerts_clear() can reset it. */
-static struct {
+typedef struct {
     char    ip[46];
     uint8_t mac[6];
     time_t  last_seen;
-} g_arp_hist[MAX_ARP_ENTRIES];
-static int g_arp_hist_n = 0;
+} arp_hist_t;
+static int arp_hist_eq(const void *row, const void *key) {
+    return strcmp(((const arp_hist_t *)row)->ip, (const char *)key) == 0;
+}
+STAB_DECL(g_arp_hist, arp_hist_t, MAX_ARP_ENTRIES, last_seen, STAB_OLDEST,
+          SH_EVICT_ARP_HIST, NULL, arp_hist_eq);
 
 static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
 
@@ -2211,23 +2225,20 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
         for (int j = 0; j < 6; j++) if (a->mac[j]) { all_zero = 0; break; }
         if (all_zero) continue;
 
-        int found = -1;
-        for (int j = 0; j < g_arp_hist_n; j++)
-            if (strcmp(g_arp_hist[j].ip, a->ip) == 0) { found = j; break; }
-
-        if (found < 0) {
-            if (g_arp_hist_n >= MAX_ARP_ENTRIES) continue;
-            snprintf(g_arp_hist[g_arp_hist_n].ip, sizeof(g_arp_hist[g_arp_hist_n].ip), "%s", a->ip);
-            memcpy(g_arp_hist[g_arp_hist_n].mac, a->mac, 6);
-            g_arp_hist[g_arp_hist_n].last_seen = now;
-            g_arp_hist_n++;
+        int created;
+        arp_hist_t *h = stab_get(&g_arp_hist, a->ip, now, &created);
+        if (created) {
+            /* First observation, or an IP back from eviction: no prior
+             * MAC exists, so record a baseline and say nothing. */
+            snprintf(h->ip, sizeof(h->ip), "%s", a->ip);
+            memcpy(h->mac, a->mac, 6);
             continue;
         }
-        if (memcmp(g_arp_hist[found].mac, a->mac, 6) != 0) {
+        if (memcmp(h->mac, a->mac, 6) != 0) {
             char old_mac[18], new_mac[18];
             snprintf(old_mac, sizeof(old_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
-                     g_arp_hist[found].mac[0], g_arp_hist[found].mac[1], g_arp_hist[found].mac[2],
-                     g_arp_hist[found].mac[3], g_arp_hist[found].mac[4], g_arp_hist[found].mac[5]);
+                     h->mac[0], h->mac[1], h->mac[2],
+                     h->mac[3], h->mac[4], h->mac[5]);
             snprintf(new_mac, sizeof(new_mac), "%02x:%02x:%02x:%02x:%02x:%02x",
                      a->mac[0], a->mac[1], a->mac[2],
                      a->mac[3], a->mac[4], a->mac[5]);
@@ -2241,9 +2252,9 @@ static void rule_arp_spoof(const sloth_state_t *s, time_t now) {
                  "ARP_SPOOF", detail, key, a->ip, 0, now);
             /* Update record to the new MAC so we don't keep re-firing
              * on the same observation. Subsequent flips will re-fire. */
-            memcpy(g_arp_hist[found].mac, a->mac, 6);
+            memcpy(h->mac, a->mac, 6);
         }
-        g_arp_hist[found].last_seen = now;
+        h->last_seen = now;
     }
 }
 
@@ -5350,7 +5361,6 @@ void alerts_clear(void) {
     pcap_cool_n = 0;
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
-    g_arp_hist_n = 0;
-    memset(g_arp_hist, 0, sizeof(g_arp_hist));
+    stab_clear(&g_arp_hist);
     evil_twin_taint_clear();
 }

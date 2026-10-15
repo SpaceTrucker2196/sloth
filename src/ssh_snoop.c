@@ -3,10 +3,22 @@
 #include <string.h>
 #include <time.h>
 #include "ssh_snoop.h"
+#include "stab.h"
 
-static ssh_flow_t      g_tbl[MAX_SSH_FLOWS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+typedef struct { const char *src_ip, *dst_ip; } ssh_key_t;
+static int key_eq(const void *row, const void *key) {
+    const ssh_flow_t *e = row; const ssh_key_t *k = key;
+    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+}
+STAB_DECL(g_tbl, ssh_flow_t, MAX_SSH_FLOWS, last_seen, STAB_OLDEST,
+          SH_EVICT_SSH_FLOW, NULL, key_eq);
 
 /* RFC 4253 §4.2 — the protocol version exchange string takes the
  * form:
@@ -24,29 +36,6 @@ static int looks_like_ssh_banner(const uint8_t *p, int len) {
         if (p[i] == '-') return 1;
     }
     return 0;
-}
-
-static int find_or_alloc(const char *src_ip, const char *dst_ip) {
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_tbl[i].src_ip, src_ip) == 0 &&
-            strcmp(g_tbl[i].dst_ip, dst_ip) == 0) {
-            return i;
-        }
-    }
-    int slot;
-    if (g_n < MAX_SSH_FLOWS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest entry by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].src_ip, sizeof(g_tbl[slot].src_ip), "%s", src_ip);
-    snprintf(g_tbl[slot].dst_ip, sizeof(g_tbl[slot].dst_ip), "%s", dst_ip);
-    return slot;
 }
 
 /* Copy banner safely — stop at CR/LF, cap to dest size, strip
@@ -93,8 +82,13 @@ int ssh_snoop_observe(const char *src_ip, uint16_t src_port,
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(client_ip, server_ip);
-    ssh_flow_t *e = &g_tbl[idx];
+    ssh_key_t key = { client_ip, server_ip };
+    int created;
+    ssh_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    if (created) {
+        snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
+        snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", server_ip);
+    }
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
     e->banner_count++;
@@ -107,15 +101,12 @@ int ssh_snoop_observe(const char *src_ip, uint16_t src_port,
 
 void ssh_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_SSH_FLOWS ? g_n : MAX_SSH_FLOWS;
-    for (int i = 0; i < n; i++) s->ssh_flows[i] = g_tbl[i];
-    s->ssh_flow_count = n;
+    s->ssh_flow_count = stab_snapshot(&g_tbl, s->ssh_flows, MAX_SSH_FLOWS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void ssh_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }

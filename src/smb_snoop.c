@@ -3,10 +3,24 @@
 #include <string.h>
 #include <time.h>
 #include "smb_snoop.h"
+#include "stab.h"
 
-static smb_session_t   g_tbl[MAX_SMB_SESSIONS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+typedef struct { const char *client_ip, *server_ip; uint16_t server_port; } smb_key_t;
+static int key_eq(const void *row, const void *key) {
+    const smb_session_t *e = row; const smb_key_t *k = key;
+    return e->server_port == k->server_port &&
+           strcmp(e->client_ip, k->client_ip) == 0 &&
+           strcmp(e->server_ip, k->server_ip) == 0;
+}
+STAB_DECL(g_tbl, smb_session_t, MAX_SMB_SESSIONS, last_seen, STAB_OLDEST,
+          SH_EVICT_SMB_SESSION, NULL, key_eq);
 
 /* Detect SMB magic at the start of the buffer OR after a 4-byte
  * NetBIOS Session Service header (port 139, and many port-445 stacks
@@ -27,32 +41,6 @@ static const char *detect_dialect(const uint8_t *p, int n) {
         if (p[4] == 0xfe && p[5] == 'S' && p[6] == 'M' && p[7] == 'B') return "SMB2";
     }
     return NULL;
-}
-
-static int find_or_alloc(const char *client_ip, const char *server_ip,
-                         uint16_t server_port) {
-    for (int i = 0; i < g_n; i++) {
-        if (g_tbl[i].server_port == server_port &&
-            strcmp(g_tbl[i].client_ip, client_ip) == 0 &&
-            strcmp(g_tbl[i].server_ip, server_ip) == 0) {
-            return i;
-        }
-    }
-    int slot;
-    if (g_n < MAX_SMB_SESSIONS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].client_ip, sizeof(g_tbl[slot].client_ip), "%s", client_ip);
-    snprintf(g_tbl[slot].server_ip, sizeof(g_tbl[slot].server_ip), "%s", server_ip);
-    g_tbl[slot].server_port = server_port;
-    return slot;
 }
 
 int smb_snoop_observe(const char *src_ip, uint16_t src_port,
@@ -83,8 +71,14 @@ int smb_snoop_observe(const char *src_ip, uint16_t src_port,
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(client_ip, server_ip, server_port);
-    smb_session_t *e = &g_tbl[idx];
+    smb_key_t key = { client_ip, server_ip, server_port };
+    int created;
+    smb_session_t *e = stab_get(&g_tbl, &key, now, &created);
+    if (created) {
+        snprintf(e->client_ip, sizeof(e->client_ip), "%s", client_ip);
+        snprintf(e->server_ip, sizeof(e->server_ip), "%s", server_ip);
+        e->server_port = server_port;
+    }
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
     e->count++;
@@ -100,15 +94,12 @@ int smb_snoop_observe(const char *src_ip, uint16_t src_port,
 
 void smb_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_SMB_SESSIONS ? g_n : MAX_SMB_SESSIONS;
-    for (int i = 0; i < n; i++) s->smb_sessions[i] = g_tbl[i];
-    s->smb_session_count = n;
+    s->smb_session_count = stab_snapshot(&g_tbl, s->smb_sessions, MAX_SMB_SESSIONS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void smb_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }

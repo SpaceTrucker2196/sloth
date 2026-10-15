@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "ssh_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* SSH banners (RFC 4253 §4.2):
  *   SSH-protoversion-softwareversion SP comments CR LF
@@ -159,6 +161,35 @@ static void test_banner_truncates_at_crlf(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_ssh_table_full_evicts_oldest_and_tallies(void) {
+    ssh_snoop_clear();
+    sh_evict_reset();
+    char peer[32];
+    for (int i = 0; i < MAX_SSH_FLOWS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(ssh_snoop_observe("10.0.0.10", 22, peer, 49152, BANNER_OPENSSH, (int)sizeof(BANNER_OPENSSH) - 1), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SSH_FLOW), 0);   /* full is not loss */
+    ASSERT_EQ(ssh_snoop_observe("10.0.0.10", 22, "10.9.9.9", 49152, BANNER_OPENSSH, (int)sizeof(BANNER_OPENSSH) - 1), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SSH_FLOW), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ssh_snoop_snapshot(&s);
+    ASSERT_EQ(s.ssh_flow_count, MAX_SSH_FLOWS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.ssh_flow_count; i++) {
+        if (strcmp(s.ssh_flows[i].src_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.ssh_flows[i].src_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_ssh_snoop_tests(void) {
     TEST_SUITE("ssh_snoop: server-banner detection");
     RUN_TEST(test_detects_openssh_banner);
@@ -179,4 +210,5 @@ void run_ssh_snoop_tests(void) {
     RUN_TEST(test_prefix_without_dash_rejected);
     RUN_TEST(test_truncated_banner_rejected);
     RUN_TEST(test_banner_truncates_at_crlf);
+    RUN_TEST(test_ssh_table_full_evicts_oldest_and_tallies);
 }

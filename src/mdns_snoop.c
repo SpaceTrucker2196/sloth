@@ -7,12 +7,34 @@
 
 #include "mdns_snoop.h"
 #include "dns.h"
+#include "stab.h"
 
 /* ── Internal state ──────────────────────────────────────── */
 
-static mdns_service_t  g_svcs[MAX_MDNS_SERVICES];
-static int             g_svc_count = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_REFUSE_AGING. Before this the table refused
+ * every new instance for the life of the process once 64 had been seen,
+ * and nothing reported it. Rows name local, long-lived services, so a
+ * row advertised in the last hour outranks one the segment has only just
+ * started to announce: a new instance is admitted only by reclaiming a
+ * row unseen for MDNS_SERVICE_AGE_S, otherwise it is refused and the
+ * refusal is tallied as evict_mdns_service. g_mu is held by the caller
+ * across every table access, so the table itself runs unlocked.
+ *
+ * The key is compared on the stored width. instance[] is 64 bytes and a
+ * DNS name can be 255: a full-length strcmp against the truncated copy
+ * never matched, so one long-named service created a new row per packet
+ * and, under the old refuse-forever rule, could fill the table with
+ * copies of itself in 64 packets. */
+#define MDNS_SERVICE_AGE_S 3600
+static int key_eq(const void *row, const void *key) {
+    const mdns_service_t *e = row;
+    return strncmp(e->instance, (const char *)key, sizeof(e->instance) - 1) == 0;
+}
+STAB_DECL_AGE(g_svcs, mdns_service_t, MAX_MDNS_SERVICES, last_seen,
+              STAB_REFUSE_AGING, MDNS_SERVICE_AGE_S, SH_EVICT_MDNS_SERVICE,
+              NULL, key_eq);
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -71,19 +93,19 @@ static void extract_service(const char *name, char *buf, int sz) {
     }
 }
 
-static mdns_service_t *find_or_create(const char *instance) {
-    for (int i = 0; i < g_svc_count; i++)
-        if (strcmp(g_svcs[i].instance, instance) == 0)
-            return &g_svcs[i];
-    if (g_svc_count >= MAX_MDNS_SERVICES) return NULL;
-    mdns_service_t *e = &g_svcs[g_svc_count++];
-    memset(e, 0, sizeof(*e));
-    strncpy(e->instance, instance, sizeof(e->instance) - 1);
+/* NULL when the table is full and no row is MDNS_SERVICE_AGE_S stale;
+ * stab_get has tallied that refusal. */
+static mdns_service_t *find_or_create(const char *instance, time_t now) {
+    int created;
+    mdns_service_t *e = stab_get(&g_svcs, instance, now, &created);
+    if (e && created)
+        snprintf(e->instance, sizeof(e->instance), "%s", instance);
     return e;
 }
 
 /* Walk count RRs at msg[*off]; updates *off.  Returns services touched. */
-static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
+static int process_rrs(const uint8_t *msg, int len, int *off, int count,
+                       time_t now) {
     int updated = 0;
     for (int i = 0; i < count; i++) {
         char rname[256];
@@ -96,13 +118,11 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
         int      rdata = noff + 10;
         if (rdata + (int)rdlen > len) return updated;
 
-        time_t now = time(NULL);
-
         if (type == 12) {
             /* PTR: rname=service_type, rdata=instance_name */
             char instance[256];
             if (read_name(msg, len, rdata, instance, sizeof(instance)) >= 0) {
-                mdns_service_t *e = find_or_create(instance);
+                mdns_service_t *e = find_or_create(instance, now);
                 if (e) {
                     if (!e->service[0])
                         extract_service(rname, e->service, sizeof(e->service));
@@ -114,7 +134,7 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
             /* SRV: rname=instance_name, rdata=priority(2)+weight(2)+port(2)+target */
             char host[256];
             if (read_name(msg, len, rdata + 6, host, sizeof(host)) >= 0) {
-                mdns_service_t *e = find_or_create(rname);
+                mdns_service_t *e = find_or_create(rname, now);
                 if (e) {
                     e->port = u16be(msg + rdata + 4);
                     snprintf(e->host, sizeof(e->host), "%.63s", host);
@@ -132,10 +152,12 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
             inet_ntop(AF_INET, &a, ip, sizeof(ip));
             dns_set_resolved(ip, rname);
             /* fill ip in any service whose host matches this name */
-            for (int j = 0; j < g_svc_count; j++) {
-                if (strcmp(g_svcs[j].host, rname) == 0) {
-                    snprintf(g_svcs[j].ip, sizeof(g_svcs[j].ip), "%s", ip);
-                    g_svcs[j].last_seen = now;
+            int cnt = stab_count(&g_svcs);
+            for (int j = 0; j < cnt; j++) {
+                mdns_service_t *sv = stab_at(&g_svcs, j);
+                if (strcmp(sv->host, rname) == 0) {
+                    snprintf(sv->ip, sizeof(sv->ip), "%s", ip);
+                    sv->last_seen = now;
                     updated++;
                 }
             }
@@ -146,10 +168,12 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
             char ip[46];
             inet_ntop(AF_INET6, &a6, ip, sizeof(ip));
             dns_set_resolved(ip, rname);
-            for (int j = 0; j < g_svc_count; j++) {
-                if (strcmp(g_svcs[j].host, rname) == 0 && !g_svcs[j].ip[0]) {
-                    snprintf(g_svcs[j].ip, sizeof(g_svcs[j].ip), "%s", ip);
-                    g_svcs[j].last_seen = now;
+            int cnt = stab_count(&g_svcs);
+            for (int j = 0; j < cnt; j++) {
+                mdns_service_t *sv = stab_at(&g_svcs, j);
+                if (strcmp(sv->host, rname) == 0 && !sv->ip[0]) {
+                    snprintf(sv->ip, sizeof(sv->ip), "%s", ip);
+                    sv->last_seen = now;
                     updated++;
                 }
             }
@@ -162,7 +186,7 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
-int mdns_snoop(const uint8_t *msg, int len) {
+int mdns_snoop_at(const uint8_t *msg, int len, time_t now) {
     if (len < 12) return 0;
 
     int qdcount = (int)u16be(msg + 4);
@@ -183,25 +207,26 @@ int mdns_snoop(const uint8_t *msg, int len) {
 
     pthread_mutex_lock(&g_mu);
     int updated = 0;
-    updated += process_rrs(msg, len, &off, ancount);
-    updated += process_rrs(msg, len, &off, nscount);
-    updated += process_rrs(msg, len, &off, arcount);
+    updated += process_rrs(msg, len, &off, ancount, now);
+    updated += process_rrs(msg, len, &off, nscount, now);
+    updated += process_rrs(msg, len, &off, arcount, now);
     pthread_mutex_unlock(&g_mu);
 
     return updated;
 }
 
+int mdns_snoop(const uint8_t *msg, int len) {
+    return mdns_snoop_at(msg, len, time(NULL));
+}
+
 void mdns_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_svc_count < MAX_MDNS_SERVICES ? g_svc_count : MAX_MDNS_SERVICES;
-    memcpy(s->mdns_services, g_svcs, (size_t)n * sizeof(mdns_service_t));
-    s->mdns_count = n;
+    s->mdns_count = stab_snapshot(&g_svcs, s->mdns_services, MAX_MDNS_SERVICES);
     pthread_mutex_unlock(&g_mu);
 }
 
 void mdns_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_svcs, 0, sizeof(g_svcs));
-    g_svc_count = 0;
+    stab_clear(&g_svcs);
     pthread_mutex_unlock(&g_mu);
 }

@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include "runner.h"
 #include "nbns_snoop.h"
+#include "sensor_health.h"
+#include <stdio.h>
+#include <time.h>
 #include "dns.h"
 
 /* Caller-owned result buffer for the dns.h lookups (#95). */
@@ -334,6 +337,70 @@ static void test_draw_selected_row(void) {
 
 /* ── Entry point ────────────────────────────────────────── */
 
+/* ── #110: the name table is STAB_REFUSE_AGING, 3600 s ──────────── */
+
+static int nbns_has_name(const char *name) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    nbns_snapshot(&s);
+    for (int i = 0; i < s.nbns_count; i++)
+        if (strcmp(s.nbns_names[i].name, name) == 0) return 1;
+    return 0;
+}
+
+static void fill_nbns(time_t t0) {
+    uint8_t buf[64]; char info[64]; char name[16];
+    for (int i = 0; i < MAX_NBNS_NAMES; i++) {
+        snprintf(name, sizeof(name), "HOST%02d", i);
+        int len = make_query(name, 0x00, buf, sizeof(buf));
+        ASSERT_EQ(nbns_snoop_at(buf, len, info, sizeof(info), t0), 1);
+    }
+}
+
+/* Absence claim, mutation-proved: a stab_get that ignored age_secs
+ * reddens the count, the tally and the absence of NEWCOMER. The parser
+ * still returns 1 for a refused query — info is filled from the packet,
+ * not from the table — so the return value is deliberately not the
+ * thing asserted here. */
+static void test_nbns_table_full_refuses_fresh_and_tallies(void) {
+    reset();
+    sh_evict_reset();
+    const time_t t0 = 1700000000;
+    fill_nbns(t0);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 0);       /* full is not loss */
+    uint8_t buf[64]; char info[64];
+    int len = make_query("NEWCOMER", 0x00, buf, sizeof(buf));
+    nbns_snoop_at(buf, len, info, sizeof(info), t0 + 3599);     /* one second short */
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    nbns_snapshot(&s);
+    ASSERT_EQ(s.nbns_count, MAX_NBNS_NAMES);
+    ASSERT_EQ(nbns_has_name("NEWCOMER"), 0);
+    ASSERT_EQ(nbns_has_name("HOST00"), 1);
+    /* Same name, different suffix, is a different key — and is refused
+     * the same way, so the tally climbs again. */
+    len = make_query("HOST00", 0x20, buf, sizeof(buf));
+    nbns_snoop_at(buf, len, info, sizeof(info), t0 + 3599);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 2);
+}
+
+/* Mutation-proved: removing the reclaim branch reddens this. */
+static void test_nbns_table_full_reclaims_stale_after_age(void) {
+    reset();
+    sh_evict_reset();
+    const time_t t0 = 1700000000;
+    fill_nbns(t0);
+    uint8_t buf[64]; char info[64];
+    int len = make_query("NEWCOMER", 0x00, buf, sizeof(buf));
+    ASSERT_EQ(nbns_snoop_at(buf, len, info, sizeof(info), t0 + 3600), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    nbns_snapshot(&s);
+    ASSERT_EQ(s.nbns_count, MAX_NBNS_NAMES);
+    ASSERT_EQ(nbns_has_name("NEWCOMER"), 1);
+    ASSERT_EQ(nbns_has_name("HOST00"), 0);                       /* oldest slot reclaimed */
+    ASSERT_EQ(nbns_has_name("HOST01"), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 0);       /* a reclaim is not a loss */
+}
+
 void run_nbns_snoop_tests(void) {
     TEST_SUITE("nbns_snoop protocol");
     RUN_TEST(test_query_adds_entry);
@@ -357,4 +424,6 @@ void run_nbns_snoop_tests(void) {
     RUN_TEST(test_nav_down_up);
     RUN_TEST(test_clear_key_resets_state);
     RUN_TEST(test_draw_selected_row);
+    RUN_TEST(test_nbns_table_full_refuses_fresh_and_tallies);
+    RUN_TEST(test_nbns_table_full_reclaims_stale_after_age);
 }

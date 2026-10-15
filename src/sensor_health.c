@@ -7,9 +7,11 @@
  * Written from the capture threads (probe_pnl, dhcp_snoop, eap_track,
  * beacon_snoop, seqnum_track, assoc_track, evidence_ring, rf_quality,
  * wps_track, pm_forge, src/capture/probe.c's client table, the HTTP
- * pairing table, and the six per-protocol flow rings) and from the poll
- * loop (alerts, top_hosts, devices), so the tally takes a mutex rather
- * than relying on unsynchronised increments.
+ * pairing table, the six per-protocol flow rings, and — through
+ * src/stab.c since #110 — the BGP/LDAP/Kerberos/SMB/SSH/RDP/SNMP/MQTT
+ * snoopers plus mDNS and NBNS) and from the poll loop (alerts, including
+ * its ARP-spoof baseline, top_hosts, devices), so the tally takes a
+ * mutex rather than relying on unsynchronised increments.
  *
  * That list is the current set and is maintained by hand, so treat it
  * as a guide and `grep sh_evict_note` for the authority — three writers
@@ -100,6 +102,17 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_ICMP_LOG:    return "icmp_log";
     case SH_EVICT_RF_CHANNEL:  return "rf_channel";
     case SH_EVICT_HTTP_FLOW:   return "http_flow";
+    case SH_EVICT_BGP_SESSION: return "bgp_session";
+    case SH_EVICT_LDAP_EVENT:  return "ldap_event";
+    case SH_EVICT_KERB_EVENT:  return "kerb_event";
+    case SH_EVICT_SMB_SESSION: return "smb_session";
+    case SH_EVICT_SSH_FLOW:    return "ssh_flow";
+    case SH_EVICT_RDP_FLOW:    return "rdp_flow";
+    case SH_EVICT_SNMP_FLOW:   return "snmp_flow";
+    case SH_EVICT_MQTT_FLOW:   return "mqtt_flow";
+    case SH_EVICT_MDNS_SERVICE: return "mdns_service";
+    case SH_EVICT_NBNS_NAME:   return "nbns_name";
+    case SH_EVICT_ARP_HIST:    return "arp_hist";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

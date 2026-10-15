@@ -3,10 +3,22 @@
 #include <string.h>
 #include <time.h>
 #include "snmp_snoop.h"
+#include "stab.h"
 
-static snmp_flow_t     g_tbl[MAX_SNMP_FLOWS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+typedef struct { const char *src_ip, *dst_ip; } snmp_key_t;
+static int key_eq(const void *row, const void *key) {
+    const snmp_flow_t *e = row; const snmp_key_t *k = key;
+    return strcmp(e->src_ip, k->src_ip) == 0 && strcmp(e->dst_ip, k->dst_ip) == 0;
+}
+STAB_DECL(g_tbl, snmp_flow_t, MAX_SNMP_FLOWS, last_seen, STAB_OLDEST,
+          SH_EVICT_SNMP_FLOW, NULL, key_eq);
 
 /* SNMP message (RFC 1157 §4.1 v1, RFC 1901 §3 v2c):
  *
@@ -61,28 +73,6 @@ static int ber_len(const uint8_t *p, int len, int *consumed) {
     for (int i = 0; i < n; i++) v = (v << 8) | p[1 + i];
     *consumed = 1 + n;
     return v;
-}
-
-static int find_or_alloc(const char *src_ip, const char *dst_ip) {
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_tbl[i].src_ip, src_ip) == 0 &&
-            strcmp(g_tbl[i].dst_ip, dst_ip) == 0) {
-            return i;
-        }
-    }
-    int slot;
-    if (g_n < MAX_SNMP_FLOWS) {
-        slot = g_n++;
-    } else {
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].src_ip, sizeof(g_tbl[slot].src_ip), "%s", src_ip);
-    snprintf(g_tbl[slot].dst_ip, sizeof(g_tbl[slot].dst_ip), "%s", dst_ip);
-    return slot;
 }
 
 static void record_community(snmp_flow_t *e, const char *community) {
@@ -177,8 +167,13 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(flow_src, flow_dst);
-    snmp_flow_t *e = &g_tbl[idx];
+    snmp_key_t key = { flow_src, flow_dst };
+    int created;
+    snmp_flow_t *e = stab_get(&g_tbl, &key, now, &created);
+    if (created) {
+        snprintf(e->src_ip, sizeof(e->src_ip), "%s", flow_src);
+        snprintf(e->dst_ip, sizeof(e->dst_ip), "%s", flow_dst);
+    }
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
     e->version   = version;
@@ -200,15 +195,12 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
 
 void snmp_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_SNMP_FLOWS ? g_n : MAX_SNMP_FLOWS;
-    for (int i = 0; i < n; i++) s->snmp_flows[i] = g_tbl[i];
-    s->snmp_flow_count = n;
+    s->snmp_flow_count = stab_snapshot(&g_tbl, s->snmp_flows, MAX_SNMP_FLOWS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void snmp_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }

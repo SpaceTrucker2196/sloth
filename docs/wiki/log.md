@@ -2814,3 +2814,31 @@ Pages: [[pcap-export]] (CWD note, bare-name rule, `localtime_r`),
 One correction to the issue text: the manual packet export is bound to
 `w` in the Packets view (`src/views/packets.c`), not `[p]`, which is the
 NTP view switch; `src/pcap_write.c` is the right file either way.
+
+## 2026-10-14 — one bounded keyed table (`stab_t`) replaces eight copied evictors and three refuse-forever tables (#110)
+
+**Source**: `src/stab.{h,c}`, `src/{bgp,ldap,kerb,smb,ssh,rdp,snmp,mqtt,mdns,nbns}_snoop.c`,
+`src/alerts.c` (ARP-spoof history), `src/sensor_health.{h,c}`, `tests/test_stab.c`.
+
+**Updated pages**:
+
+- [ring-buffers.md](ring-buffers.md) — new section *Keyed tables: `stab_t`*: the three
+  policies, which table uses which, and why the tie-break is not an equivalent mutant.
+- [jsonl-schema.md](jsonl-schema.md) — eleven `evict_*` fields appended
+  (`bgp_session` … `arp_hist`); the uncounted list loses the eight snoopers plus mDNS and
+  NBNS; two new paragraphs on what `mdns_service`/`nbns_name` count (refusals, not
+  reclaims) and on the `arp_hist` baseline consequence.
+
+**Notes**:
+
+- Before this, `g_arp_hist`, the mDNS service table and the NBNS name table refused every
+  new key for the life of the process once full. mDNS/NBNS are now `STAB_REFUSE_AGING`
+  (3600 s) and the ARP baseline is `STAB_OLDEST`; all eleven tables reach the tally.
+- `test_arp_spoof_history_overflow_safe` had encoded the refuse-forever rule as its
+  premise, and its "overflow" IP carried MAC `01:…` — multicast bit set — so the rule
+  skipped it before the guard it claimed to kill. Replaced by
+  `test_arp_spoof_history_full_evicts_oldest_and_tallies` with a unicast MAC.
+- mDNS `instance[64]` was looked up with a full-length `strcmp` against a truncated copy, so
+  a >63-char instance name created a new row per packet; `key_eq` now compares on the
+  stored width.
+- The FragAttacks tables stay on their own idiom until the locking slice (S3) lands.

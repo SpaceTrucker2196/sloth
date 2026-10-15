@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "ldap_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* LDAP messages are ASN.1 BER per RFC 4511. We construct minimal
  * but valid frames here, never feeding the parser output of an
@@ -213,6 +215,37 @@ static void test_truncated_envelope_rejected(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_ldap_table_full_evicts_oldest_and_tallies(void) {
+    ldap_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[64];
+    int n = build_bind_request(buf, "CN=Alice,DC=ex,DC=com", 21);
+    char peer[32];
+    for (int i = 0; i < MAX_LDAP_EVENTS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(ldap_snoop_observe(peer, 49152, "10.0.0.10", 389, buf, n), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_LDAP_EVENT), 0);   /* full is not loss */
+    ASSERT_EQ(ldap_snoop_observe("10.9.9.9", 49152, "10.0.0.10", 389, buf, n), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_LDAP_EVENT), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ldap_snoop_snapshot(&s);
+    ASSERT_EQ(s.ldap_event_count, MAX_LDAP_EVENTS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.ldap_event_count; i++) {
+        if (strcmp(s.ldap_events[i].src_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.ldap_events[i].src_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_ldap_snoop_tests(void) {
     TEST_SUITE("ldap_snoop: detection");
     RUN_TEST(test_detects_authenticated_bind);
@@ -233,4 +266,5 @@ void run_ldap_snoop_tests(void) {
     TEST_SUITE("ldap_snoop: negative cases");
     RUN_TEST(test_non_ldap_payload_rejected);
     RUN_TEST(test_truncated_envelope_rejected);
+    RUN_TEST(test_ldap_table_full_evicts_oldest_and_tallies);
 }

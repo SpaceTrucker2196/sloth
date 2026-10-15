@@ -85,6 +85,26 @@ typedef enum {
      * switch — so appending costs nothing. */
     SH_EVICT_RF_CHANNEL,    /* src/rf_quality.c — stalest per-channel RF-quality row dropped */
     SH_EVICT_HTTP_FLOW,     /* src/http_log.c — oldest HTTP request/response pairing slot dropped */
+    /* The stab_t migration (#110): the eight snoop tables that evicted
+     * the oldest row without tallying it, then the three tables that
+     * refused every new key forever once full. Appended, per the rule
+     * above. mdns_service and nbns_name are STAB_REFUSE_AGING tables
+     * and count something different from the rest: a NEW key refused
+     * because no row had gone 3600 s unseen — not a row reclaimed, which
+     * is a TTL expiry and loses nothing current. arp_hist is
+     * STAB_OLDEST keyed by IP; an IP that was evicted and comes back
+     * with a different MAC is a fresh baseline, not a spoof. */
+    SH_EVICT_BGP_SESSION,   /* src/bgp_snoop.c  — least-recently-seen peer pair dropped */
+    SH_EVICT_LDAP_EVENT,    /* src/ldap_snoop.c — least-recently-seen LDAP client dropped */
+    SH_EVICT_KERB_EVENT,    /* src/kerb_snoop.c — least-recently-seen Kerberos client dropped */
+    SH_EVICT_SMB_SESSION,   /* src/smb_snoop.c  — least-recently-seen (client,server,port) dropped */
+    SH_EVICT_SSH_FLOW,      /* src/ssh_snoop.c  — least-recently-seen (client,server) dropped */
+    SH_EVICT_RDP_FLOW,      /* src/rdp_snoop.c  — least-recently-seen (client,server) dropped */
+    SH_EVICT_SNMP_FLOW,     /* src/snmp_snoop.c — least-recently-seen (src,dst) dropped */
+    SH_EVICT_MQTT_FLOW,     /* src/mqtt_snoop.c — least-recently-seen (client,broker) dropped */
+    SH_EVICT_MDNS_SERVICE,  /* src/mdns_snoop.c — a NEW service instance refused, none stale (REFUSE_AGING) */
+    SH_EVICT_NBNS_NAME,     /* src/nbns_snoop.c — a NEW NetBIOS name refused, none stale (REFUSE_AGING) */
+    SH_EVICT_ARP_HIST,      /* src/alerts.c     — least-recently-seen IP dropped from the ARP-spoof baseline */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -121,10 +141,11 @@ uint64_t sh_evict_total_tables(void);
  * "alert", "top_host", "pnl_client", "pnl_ssid", "dhcp_event",
  * "eap_session", "device", "beacon_ap", "seqnum_client", "assoc_pair",
  * "assoc_req", "wps_session", "evidence_frame", "probe_client",
- * "pm_forge", "dns_log", "tls_log", "quic_log", "http_log", "ntp_log",
- * "icmp_log", "rf_channel", "http_flow".
- * "pm_forge", "queue_evict", "dns_log", "tls_log", "quic_log",
- * "http_log", "ntp_log", "icmp_log".
+ * "pm_forge", "queue_evict", "pcap_cooldown", "dns_log", "tls_log",
+ * "quic_log", "http_log", "ntp_log", "icmp_log", "rf_channel",
+ * "http_flow", "bgp_session", "ldap_event", "kerb_event",
+ * "smb_session", "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow",
+ * "mdns_service", "nbns_name", "arp_hist".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

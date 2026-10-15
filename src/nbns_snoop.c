@@ -7,12 +7,26 @@
 #include "sloth.h"
 #include "nbns_snoop.h"
 #include "dns.h"
+#include "stab.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
-static nbns_name_t     g_names[MAX_NBNS_NAMES];
-static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_REFUSE_AGING, same reasoning as the mDNS
+ * service table — rows are local NetBIOS names, a name heard within the
+ * hour outranks a newcomer, and a newcomer that finds no stale row to
+ * reclaim is refused and tallied as evict_nbns_name rather than silently
+ * dropped forever, which is what this table did before. */
+#define NBNS_NAME_AGE_S 3600
+typedef struct { const char *name; uint8_t sfx; } nbns_key_t;
+static int key_eq(const void *row, const void *key) {
+    const nbns_name_t *e = row; const nbns_key_t *k = key;
+    return e->suffix == k->sfx && strcmp(e->name, k->name) == 0;
+}
+STAB_DECL_AGE(g_names, nbns_name_t, MAX_NBNS_NAMES, last_seen,
+              STAB_REFUSE_AGING, NBNS_NAME_AGE_S, SH_EVICT_NBNS_NAME,
+              NULL, key_eq);
 
 /* ── NetBIOS First Level Encoding (RFC 1001 §14.1) ─────── */
 
@@ -49,23 +63,23 @@ static const uint8_t *skip_name(const uint8_t *p, const uint8_t *end) {
 
 /* ── Table helpers ───────────────────────────────────────── */
 
-static nbns_name_t *find_or_create(const char *name, uint8_t sfx) {
-    for (int i = 0; i < g_count; i++) {
-        if (g_names[i].suffix == sfx &&
-            strcmp(g_names[i].name, name) == 0)
-            return &g_names[i];
+/* NULL when the table is full and no row is NBNS_NAME_AGE_S stale;
+ * stab_get has tallied that refusal. */
+static nbns_name_t *find_or_create(const char *name, uint8_t sfx, time_t now) {
+    nbns_key_t key = { name, sfx };
+    int created;
+    nbns_name_t *e = stab_get(&g_names, &key, now, &created);
+    if (e && created) {
+        snprintf(e->name, sizeof(e->name), "%s", name);
+        e->suffix = sfx;
     }
-    if (g_count >= MAX_NBNS_NAMES) return NULL;
-    nbns_name_t *e = &g_names[g_count++];
-    memset(e, 0, sizeof(*e));
-    snprintf(e->name, sizeof(e->name), "%s", name);
-    e->suffix = sfx;
     return e;
 }
 
 /* ── Public API ──────────────────────────────────────────── */
 
-int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
+int nbns_snoop_at(const uint8_t *msg, int len, char *info, int infosz,
+                  time_t now) {
     if (len < 12) return 0;
 
     uint16_t flags   = (uint16_t)((msg[2] << 8) | msg[3]);
@@ -92,8 +106,8 @@ int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
 
         if (!is_resp && got_name) {
             pthread_mutex_lock(&g_mu);
-            nbns_name_t *e = find_or_create(name, sfx);
-            if (e) e->last_seen = time(NULL);
+            nbns_name_t *e = find_or_create(name, sfx, now);
+            if (e) e->last_seen = now;
             pthread_mutex_unlock(&g_mu);
             if (info && infosz > 0)
                 snprintf(info, (size_t)infosz, "NBNS %s?", name);
@@ -123,10 +137,10 @@ int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
             char ip[INET_ADDRSTRLEN] = "";
             inet_ntop(AF_INET, rdata + 2, ip, sizeof(ip));
             pthread_mutex_lock(&g_mu);
-            nbns_name_t *e = find_or_create(name, sfx);
+            nbns_name_t *e = find_or_create(name, sfx, now);
             if (e) {
                 if (ip[0]) snprintf(e->ip, sizeof(e->ip), "%s", ip);
-                e->last_seen = time(NULL);
+                e->last_seen = now;
             }
             pthread_mutex_unlock(&g_mu);
             if (ip[0]) {
@@ -143,17 +157,18 @@ int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
     return (info && info[0]) ? 1 : 0;
 }
 
+int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
+    return nbns_snoop_at(msg, len, info, infosz, time(NULL));
+}
+
 void nbns_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_count < MAX_NBNS_NAMES ? g_count : MAX_NBNS_NAMES;
-    memcpy(s->nbns_names, g_names, (size_t)n * sizeof(nbns_name_t));
-    s->nbns_count = n;
+    s->nbns_count = stab_snapshot(&g_names, s->nbns_names, MAX_NBNS_NAMES);
     pthread_mutex_unlock(&g_mu);
 }
 
 void nbns_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_names, 0, sizeof(g_names));
-    g_count = 0;
+    stab_clear(&g_names);
     pthread_mutex_unlock(&g_mu);
 }

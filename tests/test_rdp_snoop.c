@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "rdp_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* RDP X.224 Connection Request frames built from first principles
  * per RFC 1006 (TPKT) + X.224 (T.0) + MS-RDPBCGR §2.2.1.1.
@@ -198,6 +200,37 @@ static void test_non_rdp_payload_rejected(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_rdp_table_full_evicts_oldest_and_tallies(void) {
+    rdp_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[64];
+    int n = build_minimal_cr(buf);
+    char peer[32];
+    for (int i = 0; i < MAX_RDP_FLOWS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(rdp_snoop_observe(peer, 49152, "10.0.0.10", 3389, buf, n), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_RDP_FLOW), 0);   /* full is not loss */
+    ASSERT_EQ(rdp_snoop_observe("10.9.9.9", 49152, "10.0.0.10", 3389, buf, n), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_RDP_FLOW), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    rdp_snoop_snapshot(&s);
+    ASSERT_EQ(s.rdp_flow_count, MAX_RDP_FLOWS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.rdp_flow_count; i++) {
+        if (strcmp(s.rdp_flows[i].src_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.rdp_flows[i].src_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_rdp_snoop_tests(void) {
     TEST_SUITE("rdp_snoop: X.224 Connection Request detection");
     RUN_TEST(test_detects_minimal_cr);
@@ -218,4 +251,5 @@ void run_rdp_snoop_tests(void) {
     RUN_TEST(test_non_cr_tpdu_rejected);
     RUN_TEST(test_truncated_rejected);
     RUN_TEST(test_non_rdp_payload_rejected);
+    RUN_TEST(test_rdp_table_full_evicts_oldest_and_tallies);
 }

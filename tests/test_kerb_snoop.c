@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "kerb_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* Kerberos message detection is gated on the outer ASN.1
  * [APPLICATION] tag byte. We don't need a full DER-encoded message
@@ -190,6 +192,37 @@ static void test_no_kdc_port_rejected(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_kerb_table_full_evicts_oldest_and_tallies(void) {
+    kerb_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[64];
+    int n = build_as_req(buf);
+    char peer[32];
+    for (int i = 0; i < MAX_KERB_EVENTS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(kerb_snoop_observe(peer, 49152, "10.0.0.10", 88, buf, n), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_KERB_EVENT), 0);   /* full is not loss */
+    ASSERT_EQ(kerb_snoop_observe("10.9.9.9", 49152, "10.0.0.10", 88, buf, n), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_KERB_EVENT), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    kerb_snoop_snapshot(&s);
+    ASSERT_EQ(s.kerb_event_count, MAX_KERB_EVENTS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.kerb_event_count; i++) {
+        if (strcmp(s.kerb_events[i].src_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.kerb_events[i].src_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_kerb_snoop_tests(void) {
     TEST_SUITE("kerb_snoop: detection");
     RUN_TEST(test_detects_as_req);
@@ -208,4 +241,5 @@ void run_kerb_snoop_tests(void) {
     TEST_SUITE("kerb_snoop: negative cases");
     RUN_TEST(test_non_kerb_payload_rejected);
     RUN_TEST(test_no_kdc_port_rejected);
+    RUN_TEST(test_kerb_table_full_evicts_oldest_and_tallies);
 }

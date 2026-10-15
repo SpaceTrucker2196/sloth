@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "snmp_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* SNMP v1/v2c messages built from raw ASN.1 BER per RFC 1157 §4.1
  * and RFC 1901 §3. We never feed the parser its own encoder output.
@@ -227,6 +229,37 @@ static void test_community_with_nul_byte_rejected(void) {
 
 /* ── Suite ──────────────────────────────────────────────── */
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_snmp_table_full_evicts_oldest_and_tallies(void) {
+    snmp_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[64];
+    int n = build_snmp_msg(buf, 0, "public", 0xA0);
+    char peer[32];
+    for (int i = 0; i < MAX_SNMP_FLOWS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(snmp_snoop_observe(peer, 49152, "10.0.0.10", 161, buf, n), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SNMP_FLOW), 0);   /* full is not loss */
+    ASSERT_EQ(snmp_snoop_observe("10.9.9.9", 49152, "10.0.0.10", 161, buf, n), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SNMP_FLOW), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    snmp_snoop_snapshot(&s);
+    ASSERT_EQ(s.snmp_flow_count, MAX_SNMP_FLOWS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.snmp_flow_count; i++) {
+        if (strcmp(s.snmp_flows[i].src_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.snmp_flows[i].src_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_snmp_snoop_tests(void) {
     TEST_SUITE("snmp_snoop: PDU-type detection");
     RUN_TEST(test_detects_get_request);
@@ -249,4 +282,5 @@ void run_snmp_snoop_tests(void) {
     RUN_TEST(test_truncated_rejected);
     RUN_TEST(test_unknown_pdu_tag_rejected);
     RUN_TEST(test_community_with_nul_byte_rejected);
+    RUN_TEST(test_snmp_table_full_evicts_oldest_and_tallies);
 }

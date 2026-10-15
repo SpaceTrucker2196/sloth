@@ -233,6 +233,59 @@ age out instead of being overwritten). These files are *related*
 to the ring pattern but not strict instances; they document their
 own state on the file's `## Storage` comment block.
 
+## Keyed tables: `stab_t`
+
+Not every bounded store is a ring. The snoopers that aggregate *per
+key* — one row per BGP peer pair, per SMB (client, server, port), per
+mDNS instance — look a row up before they write it, and what happens
+on a full table is a policy, not a head pointer. Until #110 that
+policy was whichever idiom each file had copied: eight snoopers
+(`bgp`, `ldap`, `kerb`, `smb`, `ssh`, `rdp`, `snmp`, `mqtt`) carried an
+identical `find_or_alloc` that overwrote the smallest `last_seen` and
+told nobody, and three tables (`mdns_snoop.c`, `nbns_snoop.c`, the
+ARP-spoof history in `alerts.c`) returned NULL or `continue`d once
+full, forever, so after enough uptime those detectors were blind to
+anything new and nothing reported it.
+
+`src/stab.{h,c}` is the one implementation they now share:
+
+```c
+STAB_DECL(g_tbl, bgp_session_t, MAX_BGP_SESSIONS, last_seen,
+          STAB_OLDEST, SH_EVICT_BGP_SESSION, NULL, key_eq);
+...
+bgp_session_t *e = stab_get(&g_tbl, &key, now, &created);
+if (created) { /* fill the key fields; the row is zeroed */ }
+```
+
+The tally kind is a required field, so a table built this way cannot
+be the uncounted kind `sensor_health.h` warns about. Three policies:
+
+| policy | on a full table | used by |
+|---|---|---|
+| `STAB_OLDEST` | overwrite the smallest `last_seen`; tally | the eight snoopers; the ARP-spoof baseline (keyed by IP, 256 rows) |
+| `STAB_REFUSE_AGING` | reclaim the oldest row only if unseen for `age_secs`, else **refuse** the new key; tally the refusal | mDNS services, NBNS names (3600 s) |
+| `STAB_RING` | overwrite in insertion order; tally | nothing yet — kept so a ring-shaped keyed table does not grow a fourth idiom |
+
+Two consequences a reader of [[jsonl-schema]] needs: under
+`REFUSE_AGING` the count is refusals (observations that did not land),
+not reclaims (rows that aged out by policy); and under `OLDEST` an
+evicted ARP row forgets its MAC, so an IP that returns after eviction
+with a new MAC is a fresh baseline, not an `ARP_SPOOF`. Both are stated
+on the enum entries in `src/sensor_health.h`.
+
+Among equal `last_seen` stamps the lowest slot is evicted (strict `<`
+in the scan), so a table filled within one second evicts in insertion
+order. That is deliberately **not** in the equivalence file below:
+`tests/test_stab.c :: test_oldest_ties_evict_lowest_slot` fails on
+`<=`. `tests/test_stab.c` drives every policy with an explicit `now`;
+the per-module `test_<mod>_table_full_evicts_oldest_and_tallies` tests
+prove the same through each parser, and the mDNS/NBNS tests drive aging
+through `mdns_snoop_at()` / `nbns_snoop_at()`, the clock-taking entry
+points added for exactly that.
+
+The FragAttacks BSS table is the one keyed table left on its own idiom;
+it moves once its locking slice has landed.
+
 ## Mutation testing
 
 The pattern's boundary mutations are documented equivalents and
@@ -274,7 +327,8 @@ overflow).
 - [[mutation-testing]] — the harness that consumes the
   equivalence file built around this pattern.
 - [[jsonl-schema]] — the wire format the `*_log_record` emit
-  hook feeds into.
+  hook feeds into, and the `evict_<name>` fields the `stab_t`
+  tables report through.
 - [[ja3-fingerprinting]] — the TLS log's JA3 builder uses one of
   the SBL-bounded scratch buffers documented here
   (`ja3_str[512]`).

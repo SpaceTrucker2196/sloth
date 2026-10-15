@@ -107,6 +107,17 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_ICMP_LOG), "icmp_log");
     ASSERT_STR(sh_evict_name(SH_EVICT_RF_CHANNEL), "rf_channel");
     ASSERT_STR(sh_evict_name(SH_EVICT_HTTP_FLOW),  "http_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_BGP_SESSION), "bgp_session");
+    ASSERT_STR(sh_evict_name(SH_EVICT_LDAP_EVENT),  "ldap_event");
+    ASSERT_STR(sh_evict_name(SH_EVICT_KERB_EVENT),  "kerb_event");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SMB_SESSION), "smb_session");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SSH_FLOW),    "ssh_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_RDP_FLOW),    "rdp_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SNMP_FLOW),   "snmp_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_MQTT_FLOW),   "mqtt_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_MDNS_SERVICE), "mdns_service");
+    ASSERT_STR(sh_evict_name(SH_EVICT_NBNS_NAME),   "nbns_name");
+    ASSERT_STR(sh_evict_name(SH_EVICT_ARP_HIST),    "arp_hist");
     ASSERT_STR(sh_evict_name((sh_evict_t)SH_EVICT_KIND_COUNT), "");
     /* Names must be distinct: two kinds sharing one `evict_<name>` field
      * would silently merge two tables' loss into one number, which is the

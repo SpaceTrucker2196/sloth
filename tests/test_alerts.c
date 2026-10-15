@@ -15,6 +15,7 @@
 #include "wifi_assess.h"
 #include "sloth.h"
 #include "alerts.h"
+#include "sensor_health.h"
 #include "views/alerts.h"
 #include "beacon_snoop.h"
 #include "auth_track.h"
@@ -516,14 +517,27 @@ static void test_arp_spoof_detail_contains_both_macs(void) {
     ASSERT(strstr(s.alerts[idx].detail, "192.168.1.7") != NULL);
 }
 
-/* Kills the `g_arp_hist_n >= MAX_ARP_ENTRIES` overflow guard mutation
- * (`>= -> >`): if the guard loosens by one, the rule writes past the
- * end of g_arp_hist. After saturating the history with first-observations,
- * one more new IP must not crash and must not record. The follow-up
- * spoof check for that overflowing IP must still treat it as a first
- * observation (no alert), proving the entry was rejected by the guard. */
-static void test_arp_spoof_history_overflow_safe(void) {
+/* The history is a STAB_OLDEST table since #110. Before that it refused
+ * every new IP forever once MAX_ARP_ENTRIES had been seen, and the test
+ * that stood here encoded that refusal as its premise: it asserted that
+ * the 257th IP was NOT recorded and so could flip its MAC unalerted.
+ * The premise expired with the policy — the change IS the fix — so this
+ * test pins the replacement contract instead, in three parts:
+ *   1. the 257th IP evicts the least-recently-seen row and the loss is
+ *      tallied as evict_arp_hist;
+ *   2. the newcomer IS recorded, so a MAC flip on it fires ARP_SPOOF;
+ *   3. the evicted IP, back with a different MAC, is a fresh baseline
+ *      and does not fire — the documented cost of eviction.
+ * Overflow safety is covered by the same fill: the bound is stab_t's
+ * cap now, and ASan fails the suite on a write past it.
+ *
+ * The old test was also green for the wrong reason: its overflow IP
+ * carried MAC 01:02:03:04:05:06, multicast bit set, which the rule
+ * skips before it ever reaches the table — the guard it claimed to
+ * kill was never exercised. The MACs below are unicast (0x02). */
+static void test_arp_spoof_history_full_evicts_oldest_and_tallies(void) {
     alerts_clear();
+    sh_evict_reset();
     sloth_state_t s; seed_state(&s);
     /* Saturate history with MAX_ARP_ENTRIES distinct IPs, each a fresh
      * observation. We can't fit them all in one poll (arp_entries is
@@ -537,24 +551,48 @@ static void test_arp_spoof_history_overflow_safe(void) {
         for (int i = 0; i < batch; i++) {
             snprintf(ip, sizeof(ip), "10.%d.%d.1",
                      (total + i) / 256, (total + i) % 256);
-            seed_arp(&s, ip, 0xaa, 0xbb, 0xcc, 0xdd,
+            seed_arp(&s, ip, 0x02, 0xbb, 0xcc, 0xdd,
                      (uint8_t)((total + i) >> 8),
                      (uint8_t)(total + i));
         }
         alerts_update(&s);
         total += batch;
     }
-    /* History is now full. A brand-new IP must not be recorded; if the
-     * guard mutated to `>` we'd write past g_arp_hist. */
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ARP_HIST), 0);   /* full is not loss */
+
+    /* 1. A 257th IP evicts the oldest row — 10.0.0.1, first in and, with
+     *    every stamp within the same second or two, first among the
+     *    equal-oldest — and the eviction is tallied. No alert: it is a
+     *    first observation. */
     s.arp_count = 0;
-    seed_arp(&s, "172.16.0.99", 0x01, 0x02, 0x03, 0x04, 0x05, 0x06);
+    seed_arp(&s, "172.16.0.99", 0x02, 0x02, 0x03, 0x04, 0x05, 0x06);
     alerts_update(&s);
-    /* The overflow IP wasn't recorded — a different MAC on the next
-     * poll must still look like a first observation, not a spoof. */
-    s.arp_count = 0;
-    seed_arp(&s, "172.16.0.99", 0x99, 0x88, 0x77, 0x66, 0x55, 0x44);
-    alerts_update(&s);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ARP_HIST), 1);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_ARP_SPOOF), -1);
+
+    /* 2. It was recorded, so a different MAC on the next poll is a spoof.
+     *    Under the old rule this IP was never recorded and this flip was
+     *    silent — which is what the old test asserted. */
+    s.arp_count = 0;
+    seed_arp(&s, "172.16.0.99", 0x9a, 0x88, 0x77, 0x66, 0x55, 0x44);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_ARP_SPOOF);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "172.16.0.99") != NULL);
+
+    /* 3. The evicted IP returns with a new MAC: no row remembers its old
+     *    one, so this is a baseline, not a second spoof — and its return
+     *    evicts the next-oldest row, so the tally moves again. */
+    s.arp_count = 0;
+    seed_arp(&s, "10.0.0.1", 0x02, 0x0e, 0x0a, 0x0d, 0x0b, 0x0e);
+    alerts_update(&s);
+    int spoofs_for_returned_ip = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_ARP_SPOOF &&
+            strstr(s.alerts[i].detail, "10.0.0.1 now") != NULL)
+            spoofs_for_returned_ip++;
+    ASSERT_EQ(spoofs_for_returned_ip, 0);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ARP_HIST), 2);
 }
 
 /* ── Evil-twin AP ────────────────────────────────────────── */
@@ -9316,7 +9354,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_arp_spoof_skips_multicast_mac);
     RUN_TEST(test_arp_spoof_skips_all_zero_mac);
     RUN_TEST(test_arp_spoof_detail_contains_both_macs);
-    RUN_TEST(test_arp_spoof_history_overflow_safe);
+    RUN_TEST(test_arp_spoof_history_full_evicts_oldest_and_tallies);
     RUN_TEST(test_rogue_dhcp_single_server_no_fire);
     RUN_TEST(test_rogue_dhcp_two_servers_fires);
     RUN_TEST(test_rogue_dhcp_client_requests_dont_count);

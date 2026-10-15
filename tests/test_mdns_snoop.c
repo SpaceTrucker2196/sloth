@@ -5,6 +5,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "mdns_snoop.h"
+#include "sensor_health.h"
+#include <time.h>
 #include "views/mdns.h"
 #include "dns.h"
 
@@ -485,6 +487,126 @@ static void test_sel_clamp_after_clear(void) {
 
 /* ── Runner ──────────────────────────────────────────────── */
 
+/* ── #110: the service table is STAB_REFUSE_AGING, 3600 s ───────── */
+
+/* PTR response per RFC 1035 §4.1 with one answer:
+ *   owner  _http._tcp.local (inline at offset 12)
+ *   TYPE PTR, CLASS IN, TTL 4500
+ *   RDATA  <label inst> + pointer to offset 12
+ * so the parser records the instance "<inst>._http._tcp.local". Built
+ * byte by byte here, not by an encoder the parser owns. */
+static int build_ptr(uint8_t *out, const char *inst) {
+    int il = (int)strlen(inst);
+    int o = 0;
+    const uint8_t hdr[12] = { 0x00,0x00, 0x84,0x00, 0x00,0x00, 0x00,0x01,
+                              0x00,0x00, 0x00,0x00 };
+    memcpy(out, hdr, 12); o = 12;
+    const uint8_t owner[18] = { 0x05,'_','h','t','t','p', 0x04,'_','t','c','p',
+                                0x05,'l','o','c','a','l', 0x00 };
+    memcpy(out + o, owner, 18); o += 18;
+    out[o++] = 0x00; out[o++] = 0x0C;               /* PTR */
+    out[o++] = 0x00; out[o++] = 0x01;               /* IN */
+    out[o++] = 0x00; out[o++] = 0x00; out[o++] = 0x11; out[o++] = 0x94;
+    out[o++] = 0x00; out[o++] = (uint8_t)(1 + il + 2);
+    out[o++] = (uint8_t)il;
+    memcpy(out + o, inst, (size_t)il); o += il;
+    out[o++] = 0xC0; out[o++] = 0x0C;
+    return o;
+}
+
+static int mdns_has_instance(const char *inst) {
+    mdns_snapshot(&g_st);
+    for (int i = 0; i < g_st.mdns_count; i++)
+        if (strncmp(g_st.mdns_services[i].instance, inst, strlen(inst)) == 0 &&
+            g_st.mdns_services[i].instance[strlen(inst)] == '.')
+            return 1;
+    return 0;
+}
+
+static void fill_mdns(time_t t0) {
+    uint8_t pkt[128];
+    char inst[16];
+    for (int i = 0; i < MAX_MDNS_SERVICES; i++) {
+        snprintf(inst, sizeof(inst), "svc%02d", i);
+        int n = build_ptr(pkt, inst);
+        ASSERT_EQ(mdns_snoop_at(pkt, n, t0), 1);
+    }
+}
+
+/* Absence claim, mutation-proved: a stab_get that ignored age_secs
+ * (reclaiming whenever full) reddens the refusal, the count and the
+ * tally assertions. Before #110 this packet was dropped too — but
+ * silently, and forever. */
+static void test_mdns_table_full_refuses_fresh_and_tallies(void) {
+    setup();
+    sh_evict_reset();
+    const time_t t0 = 1700000000;
+    fill_mdns(t0);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_MDNS_SERVICE), 0);   /* full is not loss */
+    uint8_t pkt[128];
+    int n = build_ptr(pkt, "newcomer");
+    ASSERT_EQ(mdns_snoop_at(pkt, n, t0 + 3599), 0);              /* one second short */
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_MDNS_SERVICE), 1);
+    mdns_snapshot(&g_st);
+    ASSERT_EQ(g_st.mdns_count, MAX_MDNS_SERVICES);
+    ASSERT_EQ(mdns_has_instance("newcomer"), 0);
+    ASSERT_EQ(mdns_has_instance("svc00"), 1);
+    /* A known instance still resolves while the table is full. */
+    n = build_ptr(pkt, "svc07");
+    ASSERT_EQ(mdns_snoop_at(pkt, n, t0 + 3599), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_MDNS_SERVICE), 1);
+}
+
+/* Mutation-proved: removing the reclaim branch (always refusing when
+ * full) reddens this. */
+static void test_mdns_table_full_reclaims_stale_after_age(void) {
+    setup();
+    sh_evict_reset();
+    const time_t t0 = 1700000000;
+    fill_mdns(t0);
+    uint8_t pkt[128];
+    int n = build_ptr(pkt, "newcomer");
+    ASSERT_EQ(mdns_snoop_at(pkt, n, t0 + 3600), 1);
+    mdns_snapshot(&g_st);
+    ASSERT_EQ(g_st.mdns_count, MAX_MDNS_SERVICES);
+    ASSERT_EQ(mdns_has_instance("newcomer"), 1);
+    ASSERT_EQ(mdns_has_instance("svc00"), 0);                    /* oldest slot reclaimed */
+    ASSERT_EQ(mdns_has_instance("svc01"), 1);
+    /* A reclaim is a TTL expiry, not a lost observation. */
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_MDNS_SERVICE), 0);
+}
+
+/* instance[] is 64 bytes; a longer name is stored truncated. The lookup
+ * used to compare the full name against the truncated copy, never
+ * matched, and so created a new row per packet — 64 packets from one
+ * long-named service filled the (then refuse-forever) table with copies
+ * of itself. The key is now compared on the stored width. */
+static void test_mdns_long_instance_name_dedups_to_one_row(void) {
+    setup();
+    sh_evict_reset();
+    uint8_t pkt[160];
+    const char *longname = "a-printer-with-a-very-long-instance-name-indeed-0123456789abcdef";
+    int n = build_ptr(pkt, longname);
+    ASSERT_EQ(mdns_snoop_at(pkt, n, 1700000000), 1);
+    ASSERT_EQ(mdns_snoop_at(pkt, n, 1700000001), 1);
+    ASSERT_EQ(mdns_snoop_at(pkt, n, 1700000002), 1);
+    mdns_snapshot(&g_st);
+    ASSERT_EQ(g_st.mdns_count, 1);
+    ASSERT_EQ((long)g_st.mdns_services[0].last_seen, 1700000002L);
+}
+
+/* mdns_snoop() is mdns_snoop_at() on the wall clock: a packet seen now
+ * carries a now-ish stamp, so the aging path is reachable in production
+ * and not only through the test seam. */
+static void test_mdns_snoop_stamps_wall_clock(void) {
+    setup();
+    time_t before = time(NULL);
+    ASSERT_EQ(mdns_snoop(pkt_ptr, sizeof(pkt_ptr)), 1);
+    mdns_snapshot(&g_st);
+    ASSERT(g_st.mdns_services[0].last_seen >= before);
+    ASSERT(g_st.mdns_services[0].last_seen <= time(NULL));
+}
+
 void run_mdns_snoop_tests(void) {
     printf("\n--- mDNS snoop ---\n");
     RUN_TEST(test_too_short);
@@ -516,4 +638,8 @@ void run_mdns_snoop_tests(void) {
     RUN_TEST(test_draw_selected_row);
     RUN_TEST(test_nav_down_up);
     RUN_TEST(test_draw_no_host_or_ip);
+    RUN_TEST(test_mdns_table_full_refuses_fresh_and_tallies);
+    RUN_TEST(test_mdns_table_full_reclaims_stale_after_age);
+    RUN_TEST(test_mdns_long_instance_name_dedups_to_one_row);
+    RUN_TEST(test_mdns_snoop_stamps_wall_clock);
 }

@@ -3,6 +3,8 @@
 #include "runner.h"
 #include "sloth.h"
 #include "smb_snoop.h"
+#include <stdio.h>
+#include "sensor_health.h"
 
 /* Construct minimal SMB-shaped payloads. We only need the magic at
  * the right offset — the parser's contract is "detect dialect from
@@ -169,6 +171,35 @@ static void test_two_distinct_sessions_tracked_separately(void) {
     ASSERT_EQ(s.smb_session_count, 2);
 }
 
+/* #110: the table is STAB_OLDEST. Fill it, then one more distinct key:
+ * the first-in row goes (every stamp lands within a second or two and
+ * the scan takes the lowest slot among equals), the newcomer is present,
+ * the count stays at the cap, and the loss reaches the sensor-health
+ * tally. Mutation-proved: dropping sh_evict_note() from stab_get()
+ * reddens the tally assertion. */
+static void test_smb_table_full_evicts_oldest_and_tallies(void) {
+    smb_snoop_clear();
+    sh_evict_reset();
+    char peer[32];
+    for (int i = 0; i < MAX_SMB_SESSIONS; i++) {
+        snprintf(peer, sizeof(peer), "10.1.%d.%d", i / 256, i % 256);
+        ASSERT_EQ(smb_snoop_observe(peer, 49152, "10.0.0.10", 445, SMB2_DIRECT, (int)sizeof(SMB2_DIRECT)), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SMB_SESSION), 0);   /* full is not loss */
+    ASSERT_EQ(smb_snoop_observe("10.9.9.9", 49152, "10.0.0.10", 445, SMB2_DIRECT, (int)sizeof(SMB2_DIRECT)), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SMB_SESSION), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    smb_snoop_snapshot(&s);
+    ASSERT_EQ(s.smb_session_count, MAX_SMB_SESSIONS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.smb_session_count; i++) {
+        if (strcmp(s.smb_sessions[i].client_ip, "10.9.9.9") == 0) have_new = 1;
+        if (strcmp(s.smb_sessions[i].client_ip, "10.1.0.0") == 0) have_first = 1;
+    }
+    ASSERT_EQ(have_new, 1);
+    ASSERT_EQ(have_first, 0);
+}
+
 void run_smb_snoop_tests(void) {
     TEST_SUITE("smb_snoop: detection");
     RUN_TEST(test_direct_smb1_recorded);
@@ -183,4 +214,5 @@ void run_smb_snoop_tests(void) {
     RUN_TEST(test_non_smb_payload_ignored);
     RUN_TEST(test_short_payload_ignored);
     RUN_TEST(test_no_smb_port_ignored);
+    RUN_TEST(test_smb_table_full_evicts_oldest_and_tallies);
 }

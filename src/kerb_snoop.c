@@ -3,10 +3,20 @@
 #include <string.h>
 #include <time.h>
 #include "kerb_snoop.h"
+#include "stab.h"
 
-static kerb_event_t    g_tbl[MAX_KERB_EVENTS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+static int key_eq(const void *row, const void *key) {
+    return strcmp(((const kerb_event_t *)row)->src_ip, (const char *)key) == 0;
+}
+STAB_DECL(g_tbl, kerb_event_t, MAX_KERB_EVENTS, last_seen, STAB_OLDEST,
+          SH_EVICT_KERB_EVENT, NULL, key_eq);
 
 /* Kerberos message-type tags per RFC 4120 §5.3 / §5.4 — outer
  * [APPLICATION n] wrapper byte. */
@@ -77,25 +87,6 @@ static const uint8_t *find_kerb_msg(const uint8_t *payload, int len,
     return NULL;
 }
 
-static int find_or_alloc(const char *src_ip) {
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_tbl[i].src_ip, src_ip) == 0) return i;
-    }
-    int slot;
-    if (g_n < MAX_KERB_EVENTS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest entry by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].src_ip, sizeof(g_tbl[slot].src_ip), "%s", src_ip);
-    return slot;
-}
-
 int kerb_snoop_observe(const char *src_ip, uint16_t src_port,
                        const char *dst_ip, uint16_t dst_port,
                        const uint8_t *payload, int len) {
@@ -116,8 +107,9 @@ int kerb_snoop_observe(const char *src_ip, uint16_t src_port,
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(client_ip);
-    kerb_event_t *e = &g_tbl[idx];
+    int created;
+    kerb_event_t *e = stab_get(&g_tbl, client_ip, now, &created);
+    if (created) snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
 
@@ -145,15 +137,12 @@ int kerb_snoop_observe(const char *src_ip, uint16_t src_port,
 
 void kerb_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_KERB_EVENTS ? g_n : MAX_KERB_EVENTS;
-    for (int i = 0; i < n; i++) s->kerb_events[i] = g_tbl[i];
-    s->kerb_event_count = n;
+    s->kerb_event_count = stab_snapshot(&g_tbl, s->kerb_events, MAX_KERB_EVENTS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void kerb_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }

@@ -3,10 +3,20 @@
 #include <string.h>
 #include <time.h>
 #include "ldap_snoop.h"
+#include "stab.h"
 
-static ldap_event_t    g_tbl[MAX_LDAP_EVENTS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+static int key_eq(const void *row, const void *key) {
+    return strcmp(((const ldap_event_t *)row)->src_ip, (const char *)key) == 0;
+}
+STAB_DECL(g_tbl, ldap_event_t, MAX_LDAP_EVENTS, last_seen, STAB_OLDEST,
+          SH_EVICT_LDAP_EVENT, NULL, key_eq);
 
 /* LDAP protocolOp tags (RFC 4511 §4.1.1 / §4.5.1 / §4.5.3). The
  * outer SEQUENCE wraps messageID + protocolOp; the op tag is
@@ -81,25 +91,6 @@ static int bind_has_empty_dn(const uint8_t *p, int n) {
     return nlen == 0;
 }
 
-static int find_or_alloc(const char *src_ip) {
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_tbl[i].src_ip, src_ip) == 0) return i;
-    }
-    int slot;
-    if (g_n < MAX_LDAP_EVENTS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest entry by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].src_ip, sizeof(g_tbl[slot].src_ip), "%s", src_ip);
-    return slot;
-}
-
 int ldap_snoop_observe(const char *src_ip, uint16_t src_port,
                        const char *dst_ip, uint16_t dst_port,
                        const uint8_t *payload, int len) {
@@ -124,8 +115,9 @@ int ldap_snoop_observe(const char *src_ip, uint16_t src_port,
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(client_ip);
-    ldap_event_t *e = &g_tbl[idx];
+    int created;
+    ldap_event_t *e = stab_get(&g_tbl, client_ip, now, &created);
+    if (created) snprintf(e->src_ip, sizeof(e->src_ip), "%s", client_ip);
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
 
@@ -151,15 +143,12 @@ int ldap_snoop_observe(const char *src_ip, uint16_t src_port,
 
 void ldap_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_LDAP_EVENTS ? g_n : MAX_LDAP_EVENTS;
-    for (int i = 0; i < n; i++) s->ldap_events[i] = g_tbl[i];
-    s->ldap_event_count = n;
+    s->ldap_event_count = stab_snapshot(&g_tbl, s->ldap_events, MAX_LDAP_EVENTS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void ldap_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }

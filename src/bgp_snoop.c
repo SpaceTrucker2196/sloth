@@ -3,10 +3,22 @@
 #include <string.h>
 #include <time.h>
 #include "bgp_snoop.h"
+#include "stab.h"
 
-static bgp_session_t   g_tbl[MAX_BGP_SESSIONS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Bounded table (#110): STAB_OLDEST, so a spray of new keys churns
+ * the table and is tallied, but can never make it allocate or refuse.
+ * g_mu is held by the callers across get-and-update, so the table
+ * itself runs unlocked (mu = NULL). stab_get never returns NULL under
+ * STAB_OLDEST. */
+typedef struct { const char *peer_a, *peer_b; } bgp_key_t;
+static int key_eq(const void *row, const void *key) {
+    const bgp_session_t *e = row; const bgp_key_t *k = key;
+    return strcmp(e->peer_a, k->peer_a) == 0 && strcmp(e->peer_b, k->peer_b) == 0;
+}
+STAB_DECL(g_tbl, bgp_session_t, MAX_BGP_SESSIONS, last_seen, STAB_OLDEST,
+          SH_EVICT_BGP_SESSION, NULL, key_eq);
 
 /* RFC 4271 §4.1 — BGP common message header is 19 bytes:
  *   bytes  0..15  Marker (16 bytes of 0xFF in modern BGP)
@@ -23,30 +35,6 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 #define BGP_TYPE_UPDATE        2
 #define BGP_TYPE_NOTIFICATION  3
 #define BGP_TYPE_KEEPALIVE     4
-
-static int find_or_alloc(const char *peer_a, const char *peer_b) {
-    /* Inputs to this function are already sorted lexically. */
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_tbl[i].peer_a, peer_a) == 0 &&
-            strcmp(g_tbl[i].peer_b, peer_b) == 0) {
-            return i;
-        }
-    }
-    int slot;
-    if (g_n < MAX_BGP_SESSIONS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest entry by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_tbl[i].last_seen < g_tbl[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_tbl[slot], 0, sizeof(g_tbl[slot]));
-    snprintf(g_tbl[slot].peer_a, sizeof(g_tbl[slot].peer_a), "%s", peer_a);
-    snprintf(g_tbl[slot].peer_b, sizeof(g_tbl[slot].peer_b), "%s", peer_b);
-    return slot;
-}
 
 int bgp_snoop_observe(const char *src_ip, uint16_t src_port,
                       const char *dst_ip, uint16_t dst_port,
@@ -96,8 +84,13 @@ walk_done:
 
     time_t now = time(NULL);
     pthread_mutex_lock(&g_mu);
-    int idx = find_or_alloc(peer_a, peer_b);
-    bgp_session_t *e = &g_tbl[idx];
+    bgp_key_t key = { peer_a, peer_b };
+    int created;
+    bgp_session_t *e = stab_get(&g_tbl, &key, now, &created);
+    if (created) {
+        snprintf(e->peer_a, sizeof(e->peer_a), "%s", peer_a);
+        snprintf(e->peer_b, sizeof(e->peer_b), "%s", peer_b);
+    }
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen = now;
     e->open_count         += seen_open;
@@ -115,15 +108,12 @@ walk_done:
 
 void bgp_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_BGP_SESSIONS ? g_n : MAX_BGP_SESSIONS;
-    for (int i = 0; i < n; i++) s->bgp_sessions[i] = g_tbl[i];
-    s->bgp_session_count = n;
+    s->bgp_session_count = stab_snapshot(&g_tbl, s->bgp_sessions, MAX_BGP_SESSIONS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void bgp_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_tbl, 0, sizeof(g_tbl));
+    stab_clear(&g_tbl);
     pthread_mutex_unlock(&g_mu);
 }
