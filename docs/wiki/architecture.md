@@ -10,14 +10,20 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-15 (#115: derived source lists, `libsloth_core.a`, per-config object directories).
+**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories).
 
 ---
 
 ## Tree
 
 ```
-include/sloth.h            -- central header: shared structs, view_t enum, VIEW_COUNT
+include/sloth.h            -- central header: shared structs; re-includes the two below
+include/sloth_view.h       -- view_t, VIEW_COUNT, view_label(), view_for_key()
+include/sloth_views.def    -- the view list: one X(ID, label, key, slug) row per view
+include/sloth_alert.h      -- alert_type_t, ALERT_TYPE_COUNT, alert_type_name(), alert_technique()
+include/sloth_alerts.def   -- the alert-type list: one X(ID, technique) row per rule
+include/sloth_compat.h     -- SLOTH_STATIC_ASSERT, the C99 compile-time assertion
+tools/docs_counts.sh       -- `make docs-counts`: rewrites the prose counts from the .defs
 src/main.c                 -- CLI, signal handlers, poll loop
 src/tui.c / tui.h          -- ncurses rendering, colour init, key polling (ANSI fallback)
 src/platform/linux*.c      -- rtnetlink, nl80211, /proc readers, INET_DIAG
@@ -143,10 +149,55 @@ poll.
 
 - `make test` returns 0. Never commit a red test.
 - `make` is warning-clean.
-- `VIEW_COUNT` must stay in sync across `include/sloth.h`,
-  `tests/test_state.c`, and `tests/test_arp.c` when adding / removing a view.
+- Views and alert types are each one list, not several kept in step
+  (see *Generated lists* below). Adding a row is the whole registration;
+  `make docs-counts` then updates the prose counts, and
+  `tests/test_docs_consistency.c` fails until it has.
 - Parser tests use raw byte arrays built from RFCs — no parser-feeds-itself
   circular tests.
+
+## Generated lists (#117)
+
+Two enums used to be hand-synced across five places each. `VIEW_COUNT`
+was hardcoded as `35` in two tests, the label table, the `tui.c` draw
+switch and the `main.c` key switches all listed every view again, and
+`alert_type_name()` / `alert_technique()` were two 75-arm switches held
+total only by `-Wswitch` under CI's `-Werror`. Every slice adding a view
+or a rule edited all of them, plus about six prose counts in the docs —
+the collision point when slices land in parallel.
+
+Each list is now an X-macro `.def` file, and everything else is expanded
+from it:
+
+| List | Row | Expanded into |
+|---|---|---|
+| `include/sloth_views.def` | `X(ID, "label", "key", slug)` | `view_t` + `VIEW_COUNT`; `view_label()` (`"[key] label"`, assembled at compile time) and `view_for_key()` in `src/view_labels.c`; the draw dispatch in `src/tui.c` (`view_<slug>_draw`); the per-view key dispatch (`view_<slug>_key`) and the global view-select in `src/main.c` |
+| `include/sloth_alerts.def` | `X(ID, "T1xxx" or "")` | `alert_type_t` + `ALERT_TYPE_COUNT`; the `alert_type_name()` and `alert_technique()` tables in `src/alerts.c` |
+
+Row order is the enum order. For views that is the Tab cycle and the
+help card's order; for alert types the values are carried by the JSONL
+`ty` field and the SQLite store, so rows are appended, never inserted or
+reordered. `alert_type_name()` is the enum spelling stringized, so it
+cannot drift from the enum. The dispatch switches have no `default:`, so
+`-Wswitch` still names a missed value if one is ever hand-written back.
+
+`SLOTH_STATIC_ASSERT` (`include/sloth_compat.h`) is the C99 form — a
+negative-size array typedef, since `_Static_assert` is C11 — and pins
+each table's length to its count and each view key to one character.
+
+`sloth.h` re-includes both headers, so none of its includers changed.
+They came first because neither depends on anything else in `sloth.h`.
+
+**Prose counts.** The docs that state how many views or rules there are
+carry the number inside a marker, `<!-- count:views -->N<!-- /count -->`
+or `<!-- count:rules -->…`. `make docs-counts` (`tools/docs_counts.sh`)
+counts the `X(` rows at column 0 of each `.def` and rewrites every
+marker; `tests/test_docs_consistency.c` asserts each marker against the
+compiled count, asserts the row count the script uses agrees with the
+compiler's, and still runs the free-prose scanner over every page, which
+now reads through the comments. `log.md` carries no markers: it is
+history. `agents/` is outside this change (its edits are batched in #119)
+and keeps its unmarked counts, still checked by the prose scanner.
 
 ## Related pages
 

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "alerts.h"
+#include "sloth_compat.h"
 #include "tune.h"   /* operator-tunable thresholds (#82) */
 #include "sensor_health.h"
 #include "stab.h"
@@ -677,232 +678,40 @@ void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
          match_ip, match_port, sloth_wall());
 }
 
-/* ── MITRE ATT&CK technique lookup ──────────────────────
- * Each alert type is mapped to a single canonical technique — the
- * one a SOC analyst would most naturally tag the finding under.
- * Some rules span two techniques (e.g. an SSH brute-force also
- * counts as network service discovery); we pick the primary
- * behaviour and leave secondary attribution to the reader.
- * NO_MONITOR_MODE is a host-posture alert about the operator's
- * own capture rig — not an adversary technique — so it maps to
- * the empty string. Any new alert type must add an entry here
- * or the tests in test_alerts.c will fail. */
+/* ── Per-type tables ────────────────────────────────────────
+ * Both generated from include/sloth_alerts.def (#117), which also
+ * carries the technique-mapping policy and the reasoning behind every
+ * deliberately empty technique. They replace two hand-kept switches
+ * that had to be edited beside the enum and were held total only by
+ * -Wswitch under CI's -Werror.
+ *
+ * Designated initialisers, so a row lands at its own enum value
+ * whatever order the expansion runs in; the size assertions catch a
+ * table that grew a stray entry past ALERT_TYPE_COUNT. */
+static const char *const alert_names[] = {
+#define X(id, technique) [ALERT_TYPE_##id] = "ALERT_TYPE_" #id,
+#include "sloth_alerts.def"
+#undef X
+};
+SLOTH_STATIC_ASSERT(sizeof(alert_names) / sizeof(*alert_names) ==
+                    ALERT_TYPE_COUNT, alert_names_cover_every_type);
+
+static const char *const alert_techniques[] = {
+#define X(id, technique) [ALERT_TYPE_##id] = technique,
+#include "sloth_alerts.def"
+#undef X
+};
+SLOTH_STATIC_ASSERT(sizeof(alert_techniques) / sizeof(*alert_techniques) ==
+                    ALERT_TYPE_COUNT, alert_techniques_cover_every_type);
+
 const char *alert_technique(alert_type_t type) {
-    switch (type) {
-    case ALERT_TYPE_PORT_SCAN:              return "T1046";       /* Network Service Discovery */
-    case ALERT_TYPE_DEAUTH_FLOOD:           return "T1498.001";   /* Direct Network Flood */
-    case ALERT_TYPE_NXDOMAIN_BURST:         return "T1071.004";   /* DNS */
-    case ALERT_TYPE_THREAT_DOMAIN:          return "T1071.004";   /* DNS to known-bad */
-    case ALERT_TYPE_THREAT_IP:              return "T1071";       /* Application Layer Protocol */
-    case ALERT_TYPE_BEACONING:              return "T1071";       /* C2 over app-layer */
-    case ALERT_TYPE_DGA_DOMAIN:             return "T1568.002";   /* Domain Generation Algorithms */
-    case ALERT_TYPE_ARP_SPOOF:              return "T1557.002";   /* ARP Cache Poisoning */
-    case ALERT_TYPE_ROGUE_DHCP:             return "T1557";       /* Adversary-in-the-Middle */
-    case ALERT_TYPE_ROGUE_RA:               return "T1557";       /* AiTM (IPv6 variant) */
-    case ALERT_TYPE_SMB1_USE:               return "T1210";       /* Exploitation of Remote Services */
-    case ALERT_TYPE_KERB_PREAUTH_BURST:     return "T1110.003";   /* Password Spraying */
-    case ALERT_TYPE_LDAP_SEARCH_FLOOD:      return "T1087.002";   /* Account Discovery: Domain */
-    case ALERT_TYPE_BGP_NOTIFICATION_BURST: return "T1499";       /* Endpoint DoS */
-    case ALERT_TYPE_SSH_BRUTE_FORCE:        return "T1110.001";   /* Password Guessing */
-    case ALERT_TYPE_RDP_BRUTE_FORCE:        return "T1110.001";
-    case ALERT_TYPE_SNMP_COMMUNITY_BRUTE:   return "T1110.001";
-    case ALERT_TYPE_MQTT_BROKER_BRUTE:      return "T1110.001";
-    case ALERT_TYPE_EVIL_TWIN:              return "T1557";       /* AiTM (rogue AP) */
-    case ALERT_TYPE_EVIL_TWIN_PROXIMITY:    return "T1557";
-    case ALERT_TYPE_KARMA_AP:               return "T1557";       /* AiTM (probe response) */
-    case ALERT_TYPE_DNS_TUNNEL:             return "T1071.004";   /* DNS as covert channel */
-    case ALERT_TYPE_PROBE_FLOOD:            return "T1595";       /* Active Scanning (wireless) */
-    case ALERT_TYPE_ATTACK_TOOL_UA:         return "T1595";       /* Vulnerability scanner UA */
-    case ALERT_TYPE_ATTACK_PATH:            return "T1190";       /* Exploit Public-Facing App */
-    case ALERT_TYPE_WEAK_TLS:               return "T1600";       /* Weaken Encryption */
-    case ALERT_TYPE_NO_MONITOR_MODE:        return "";            /* host posture, not adversary */
-    case ALERT_TYPE_CLEARTEXT_CRED:         return "T1040";       /* Network Sniffing (credentials in transit) */
-    case ALERT_TYPE_BEACON_FLOOD:           return "T1498.001";   /* Direct Network Flood (wireless) */
-    case ALERT_TYPE_AUTH_FLOOD:             return "T1499";       /* Endpoint DoS (AP assoc-table exhaustion) */
-    case ALERT_TYPE_ASSOC_FLOOD:            return "T1498.001";   /* Direct Network Flood (assoc requests) */
-    case ALERT_TYPE_SSID_CONFUSION:         return "T1557.004";   /* Evil Twin (RSN downgrade) */
-    case ALERT_TYPE_MGMT_FUZZ:              return "T1499";       /* Endpoint DoS (mgmt-frame fuzzing) */
-    case ALERT_TYPE_ROGUE_RADIUS:           return "T1557.004";   /* Evil Twin (rogue 802.1X RADIUS) */
-    case ALERT_TYPE_ICMP_TUNNEL:            return "T1095";       /* Non-Application Layer Protocol (covert channel) */
-    case ALERT_TYPE_MY_NETWORK_RECON:       return "T1595";       /* Active Scanning — recon aimed at the operator */
-    case ALERT_TYPE_RECURRING_TRANSIT:      return "T1595";       /* Active Scanning — physical reconnaissance */
-    case ALERT_TYPE_UNKNOWN_DEVICE:         return "T1200";       /* Hardware Additions — unrostered device on the network */
-    case ALERT_TYPE_RF_DEGRADED:            return "T1498";       /* Network DoS — the observable, not a claim of intent */
-    /* T1498 rather than T1557: what is observed is a client being
-     * forced off its AP, which is denial of service. Whether it lands
-     * on an attacker AP — the AiTM the forcing exists to set up — is a
-     * separate observation, and when the chain completes the
-     * ATTACK_PATH alert carries T1557 for it. Tagging this one T1557
-     * would claim the second half on the evidence of the first. */
-    case ALERT_TYPE_BTM_ABUSE:              return "T1498";       /* Network DoS — 802.11v forced roam */
-    case ALERT_TYPE_WPA_DOWNGRADE:          return "T1600";       /* Weaken Encryption — the AP offers the weak lane */
-    case ALERT_TYPE_PEAP_NO_SERVER_CERT:    return "T1557";       /* AiTM — the client authenticated to an unverified server */
-    case ALERT_TYPE_CSA_ABUSE:              return "T1557";       /* AiTM — clients steered onto a chosen channel */
-    case ALERT_TYPE_RRM_SURVEY_ABUSE:       return "T1595.002";   /* Vulnerability Scanning — recon through someone else's radio */
-    case ALERT_TYPE_RTS_FLOOD:              return "T1498";       /* Network DoS — the channel reserved out from under everyone */
-    case ALERT_TYPE_CAPTIVE_PORTAL:         return "T1557";       /* AiTM — the connectivity check answered by the attacker */
-    /* FragAttacks (Vanhoef, USENIX Security 2021). Injecting frames
-     * into a session whose key the attacker does not hold is AiTM; the
-     * plaintext frames it produces are also the sniffable artefact. */
-    case ALERT_TYPE_FRAG_PLAINTEXT:         return "T1557";       /* CVE-2020-26140 / -26143 */
-    case ALERT_TYPE_FRAG_BCAST:             return "T1557";       /* CVE-2020-26145 */
-    case ALERT_TYPE_FRAG_CACHE:             return "T1557";       /* CVE-2020-24586 — injection via a poisoned reassembly */
-    case ALERT_TYPE_FRAG_MIXED:             return "T1557";       /* CVE-2020-26147 */
-    case ALERT_TYPE_SAE_PSK_SPLIT:          return "T1557.004";   /* Evil Twin — the PSK-only half is the lane the attacker wants taken */
-    case ALERT_TYPE_SAE_PSK_REGRESSION:     return "T1562.004";   /* Impair Defenses — the AP's own posture was lowered */
-    case ALERT_TYPE_FRAG_AMSDU:             return "T1557";       /* CVE-2020-24588 — frames injected into a session whose key the attacker lacks */
-    case ALERT_TYPE_FRAG_AMSDU_EAPOL:       return "T1557";       /* CVE-2020-26144 — a plaintext subframe impersonating an authenticator message */
-    case ALERT_TYPE_FRAG_MIXKEY:            return "T1557";       /* CVE-2020-24587 — frames injected by combining fragments across a key rotation */
-    case ALERT_TYPE_FRAG_PN_GAP:            return "T1557";       /* CVE-2020-26146 */
-    /* T1557 as well: the relayed EAPOL is what lets an unauthenticated
-     * sender reach a peer it has no business reaching. */
-    case ALERT_TYPE_FRAG_EAPOL_RELAY:       return "T1557";       /* CVE-2020-26139 */
-    /* T1499 Endpoint DoS: the storm is the AP answering spoofed
-     * disassociations, and what it costs is the client's airtime and
-     * association. */
-    case ALERT_TYPE_SA_QUERY_FLOOD:         return "T1499";       /* #76 */
-    /* T1562.004 Impair Defenses: an unprotected robust action frame on
-     * an MFP-required BSS is the protection not being applied. */
-    case ALERT_TYPE_MFP_UNPROTECTED:        return "T1562.004";   /* CVE-2019-16275 */
-    /* Deliberately empty, and not for the NO_MONITOR_MODE reason (#80).
-     * What is observed is a *third party's* device left in its
-     * unconfigured onboarding state — an exposure, with no adversary
-     * behaviour in evidence. ATT&CK models what an adversary does, and
-     * the techniques that would fit (T1557 for the AiTM an attacker
-     * sets up after joining the setup AP, T1600 for weakened crypto)
-     * would each claim an attack on evidence of a posture. That is the
-     * reasoning BTM_ABUSE already applied when it took T1498 over
-     * T1557. The basis is cited — NIST SP 1800-36 and the Wi-Fi P2P
-     * spec, see research/papers/nist-sp1800-36-onboarding.md — it is
-     * simply not an ATT&CK technique. Whether agents/AGENTS.md should
-     * widen its "" exemption to cover observed-device exposure is a
-     * question for the owner, not something this rule decides. */
-    case ALERT_TYPE_OPEN_SETUP_AP:          return "";            /* exposure, not adversary technique (#80) */
-    case ALERT_TYPE_WPS_PIN_BRUTE:          return "T1110.001";   /* Password Guessing — the WPS registrar PIN */
-    case ALERT_TYPE_WPS_LOCKOUT_CYCLING:    return "T1110.001";   /* same attack, seen through the AP's lockout */
-    case ALERT_TYPE_WPS_PBC_RACE:           return "T1557";       /* racing the walk window to become a registrar */
-    case ALERT_TYPE_BLOCKACK_ATTACK:        return "T1499.004";   /* Endpoint DoS — the peer's receive window forced past queued frames */
-    case ALERT_TYPE_MLE_INVALID_LINK_ID:    return "T1669";       /* Wi-Fi Networks — management-frame-driven association abuse */
-    case ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD: return "T1669";      /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
-    case ALERT_TYPE_MLE_SUBELEM_OVERRUN:    return "T1669";       /* same class again — Link Info subelement chain overruns its container */
-    case ALERT_TYPE_MLD_MAC_COLLISION:      return "T1669";       /* rogue MLD impersonating a stable Multi-Link identity */
-    case ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE: return "T1557"; /* Adversary-in-the-Middle — one MLD link advertised weaker than its siblings is the lane to steer a client onto (#104) */
-    /* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
-     * (#80): what fires here is a third party's camera announcing its
-     * own presence over an unauthenticated multicast protocol — an
-     * exposure, not an adversary's behaviour. ATT&CK T1046 (Network
-     * Service Discovery) describes an attacker *enumerating* services;
-     * sloth did not enumerate anything, it heard the device volunteer
-     * the information unprompted. The basis is cited — OASIS
-     * WS-Discovery 1.1 and the ONVIF Core Specification, see
-     * research/papers/ws-discovery-onvif.md — it is simply not an
-     * ATT&CK technique. */
-    case ALERT_TYPE_CAM_WS_DISCOVERY:       return "";            /* exposure, not adversary technique (#106) */
-    case ALERT_TYPE_PM_FORGE:               return "T1557";       /* AiTM — queue manipulation, Framing Frames (#107) */
-    /* Deliberately empty, third in the line OPEN_SETUP_AP (#80) and
-     * CAM_WS_DISCOVERY (#106) started: what fires is that a host on
-     * the monitored segment talked to a surveillance vendor's cloud.
-     * Nobody attacked anything. The nearest candidates are all wrong
-     * in the same direction — T1041 (Exfiltration Over C2 Channel) and
-     * T1567.002 (Exfiltration to Cloud Storage) describe an adversary
-     * moving data out, and an officer's docked body camera uploading
-     * to its own vendor is the system working as designed. Calling
-     * that exfiltration would be the overstatement #90 is open about.
-     * The basis is cited — the vendors' own network-requirement docs,
-     * see research/papers/surveillance-vendor-endpoints.md — it is
-     * simply not an ATT&CK technique. */
-    case ALERT_TYPE_SURV_CLOUD_SNI:         return "";            /* exposure, not adversary technique (#105) */
-    /* Deliberately empty, third in the family OPEN_SETUP_AP (#80) and
-     * CAM_WS_DISCOVERY (#106) opened, and for the same reason: what
-     * fires is a *posture*, not a behaviour. The AP the operator
-     * designated as theirs is advertising no local power ceiling, which
-     * is a departure from IEEE 802.11-2020 §11.8 and nothing more —
-     * nobody transmitted anything at sloth to produce it. T1557.004
-     * (Evil Twin) is the technique the issue lists, and claiming it
-     * here would assert impersonation from a compliance gap: the
-     * overwhelmingly likely cause is a stripped hostapd/OpenWrt build,
-     * not a twin. The basis is cited (IEEE 802.11-2020 §11.8,
-     * §9.4.2.13, §9.4.2.16 — see
-     * research/ieee/802.11-2020-11.8-spectrum-management.md), it is
-     * simply not an ATT&CK technique, and
-     * tests/test_research_corpus.c ::
-     * test_uncitable_kinds_with_a_real_basis_are_still_cited holds the
-     * citation anyway. */
-    case ALERT_TYPE_TPC_ABSENT_HIGH_BAND:   return "";            /* non-compliance, not adversary technique (#101) */
-    /* Third in the same position as OPEN_SETUP_AP and
-     * CAM_WS_DISCOVERY: the finding is an observed camera's own
-     * provisioning state, not anything an adversary did. Nobody has
-     * to be present for this to fire. T1669 (Wi-Fi Networks) and
-     * T1046 (Network Service Discovery) both describe an attacker
-     * acting on the SoftAP, which is the step *after* the one sloth
-     * can see. The basis is cited — the vendors' own onboarding
-     * documentation, see research/papers/camera-setup-softap.md. */
-    case ALERT_TYPE_CAM_SETUP_SSID:         return "";            /* exposure, not adversary technique (#106 slice 2) */
-    case ALERT_TYPE_QUEUE_EVICT:            return "T1557";       /* AiTM — buffered frames released across a session change, Framing Frames (#107) */
-    case ALERT_TYPE_COUNT:                  break;
-    }
-    return "";
+    if ((int)type < 0 || type >= ALERT_TYPE_COUNT) return "";
+    return alert_techniques[type];
 }
 
-/* Enum name for an alert type. Generated from the same list as the
- * enum via X-macro-free duplication, which is a wart — but the
- * alternative is either an X-macro rewrite of a header a dozen files
- * include, or deriving the name from the display title, which does not
- * work: titles are abbreviated to fit ALERT_TITLE_LEN.
- *
- * The test suite asserts every type has a non-empty name, so a new
- * alert that forgets an entry here fails rather than silently losing
- * its citations. */
 const char *alert_type_name(alert_type_t type) {
-#define N(x) case x: return #x
-    switch (type) {
-    N(ALERT_TYPE_PORT_SCAN);            N(ALERT_TYPE_DEAUTH_FLOOD);
-    N(ALERT_TYPE_NXDOMAIN_BURST);       N(ALERT_TYPE_THREAT_DOMAIN);
-    N(ALERT_TYPE_THREAT_IP);            N(ALERT_TYPE_BEACONING);
-    N(ALERT_TYPE_DGA_DOMAIN);           N(ALERT_TYPE_ARP_SPOOF);
-    N(ALERT_TYPE_ROGUE_DHCP);           N(ALERT_TYPE_ROGUE_RA);
-    N(ALERT_TYPE_SMB1_USE);             N(ALERT_TYPE_KERB_PREAUTH_BURST);
-    N(ALERT_TYPE_LDAP_SEARCH_FLOOD);    N(ALERT_TYPE_BGP_NOTIFICATION_BURST);
-    N(ALERT_TYPE_SSH_BRUTE_FORCE);      N(ALERT_TYPE_RDP_BRUTE_FORCE);
-    N(ALERT_TYPE_SNMP_COMMUNITY_BRUTE); N(ALERT_TYPE_MQTT_BROKER_BRUTE);
-    N(ALERT_TYPE_EVIL_TWIN);            N(ALERT_TYPE_EVIL_TWIN_PROXIMITY);
-    N(ALERT_TYPE_KARMA_AP);             N(ALERT_TYPE_DNS_TUNNEL);
-    N(ALERT_TYPE_PROBE_FLOOD);          N(ALERT_TYPE_ATTACK_TOOL_UA);
-    N(ALERT_TYPE_ATTACK_PATH);          N(ALERT_TYPE_WEAK_TLS);
-    N(ALERT_TYPE_NO_MONITOR_MODE);      N(ALERT_TYPE_CLEARTEXT_CRED);
-    N(ALERT_TYPE_BEACON_FLOOD);         N(ALERT_TYPE_AUTH_FLOOD);
-    N(ALERT_TYPE_SSID_CONFUSION);       N(ALERT_TYPE_MGMT_FUZZ);
-    N(ALERT_TYPE_ROGUE_RADIUS);         N(ALERT_TYPE_ICMP_TUNNEL);
-    N(ALERT_TYPE_MY_NETWORK_RECON);     N(ALERT_TYPE_RECURRING_TRANSIT);
-    N(ALERT_TYPE_UNKNOWN_DEVICE);       N(ALERT_TYPE_RF_DEGRADED);
-    N(ALERT_TYPE_ASSOC_FLOOD);          N(ALERT_TYPE_BTM_ABUSE);
-    N(ALERT_TYPE_WPA_DOWNGRADE);        N(ALERT_TYPE_PEAP_NO_SERVER_CERT);
-    N(ALERT_TYPE_CSA_ABUSE);            N(ALERT_TYPE_RRM_SURVEY_ABUSE);
-    N(ALERT_TYPE_RTS_FLOOD);            N(ALERT_TYPE_CAPTIVE_PORTAL);
-    N(ALERT_TYPE_BLOCKACK_ATTACK);      N(ALERT_TYPE_FRAG_PLAINTEXT);
-    N(ALERT_TYPE_FRAG_BCAST);           N(ALERT_TYPE_FRAG_CACHE);
-    N(ALERT_TYPE_FRAG_MIXED);           N(ALERT_TYPE_SAE_PSK_SPLIT);
-    N(ALERT_TYPE_SAE_PSK_REGRESSION);   N(ALERT_TYPE_FRAG_AMSDU);
-    N(ALERT_TYPE_FRAG_AMSDU_EAPOL);     N(ALERT_TYPE_FRAG_MIXKEY);         N(ALERT_TYPE_FRAG_PN_GAP);
-    N(ALERT_TYPE_FRAG_EAPOL_RELAY);    N(ALERT_TYPE_SA_QUERY_FLOOD);
-    N(ALERT_TYPE_MFP_UNPROTECTED);     N(ALERT_TYPE_OPEN_SETUP_AP);
-    N(ALERT_TYPE_WPS_PIN_BRUTE);       N(ALERT_TYPE_WPS_LOCKOUT_CYCLING);
-    N(ALERT_TYPE_WPS_PBC_RACE);
-    N(ALERT_TYPE_MLE_INVALID_LINK_ID);
-    N(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
-    N(ALERT_TYPE_MLE_SUBELEM_OVERRUN);
-    N(ALERT_TYPE_MLD_MAC_COLLISION);
-    N(ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE);
-    N(ALERT_TYPE_CAM_WS_DISCOVERY);
-    N(ALERT_TYPE_PM_FORGE);
-    N(ALERT_TYPE_SURV_CLOUD_SNI);
-    N(ALERT_TYPE_TPC_ABSENT_HIGH_BAND);
-    N(ALERT_TYPE_CAM_SETUP_SSID);
-    N(ALERT_TYPE_QUEUE_EVICT);
-    case ALERT_TYPE_COUNT: break;
-    }
-#undef N
-    return "";
+    if ((int)type < 0 || type >= ALERT_TYPE_COUNT) return "";
+    return alert_names[type];
 }
 
 /* ── Rules ───────────────────────────────────────────────── */

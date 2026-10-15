@@ -407,43 +407,13 @@ static void handle_filter_input(sloth_state_t *s, int key) {
  * dispatch site. view_claims_key itself lives in src/view_route.c
  * so unit tests can cover the routing decision without linking main.c. */
 static void dispatch_to_view(sloth_state_t *s, int key) {
+    /* Generated from include/sloth_views.def (#117); no `default:`, so
+     * -Wswitch names any view_t value the expansion misses. */
     switch (s->active_view) {
-    case VIEW_IFACE:   view_iface_key(s, key);   break;
-    case VIEW_CONNS:   view_conns_key(s, key);   break;
-    case VIEW_WIFI:    view_wifi_key(s, key);     break;
-    case VIEW_PACKETS: view_packets_key(s, key);  break;
-    case VIEW_PROCS:   view_procs_key(s, key);    break;
-    case VIEW_STATS:   view_stats_key(s, key);    break;
-    case VIEW_PROBE:   view_probe_key(s, key);    break;
-    case VIEW_ARP:     view_arp_key(s, key);      break;
-    case VIEW_MDNS:    view_mdns_key(s, key);     break;
-    case VIEW_NBNS:    view_nbns_key(s, key);          break;
-    case VIEW_DHCP:    view_dhcp_snoop_key(s, key);    break;
-    case VIEW_SSDP:    view_ssdp_key(s, key);          break;
-    case VIEW_BEACON:  view_beacon_key(s, key);        break;
-    case VIEW_DEAUTH:  view_deauth_key(s, key);        break;
-    case VIEW_HTTP:    view_http_key(s, key);          break;
-    case VIEW_TLS:     view_tls_key(s, key);           break;
-    case VIEW_QUIC:    view_quic_key(s, key);          break;
-    case VIEW_DNS:     view_dns_key(s, key);           break;
-    case VIEW_NTP:     view_ntp_key(s, key);           break;
-    case VIEW_ICMP:    view_icmp_key(s, key);          break;
-    case VIEW_ALERTS:  view_alerts_key(s, key);        break;
-    case VIEW_DEVICES: view_devices_key(s, key);       break;
-    case VIEW_HELP:    view_help_key(s, key);          break;
-    case VIEW_DASH:    view_dashboard_key(s, key);     break;
-    case VIEW_PNL:     view_pnl_key(s, key);           break;
-    case VIEW_EAPOL:   view_eapol_key(s, key);         break;
-    case VIEW_SEQNUM:  view_seqnum_key(s, key);        break;
-    case VIEW_ASSOC:   view_assoc_key(s, key);         break;
-    case VIEW_CHANNEL: view_channel_key(s, key);       break;
-    case VIEW_OSI:     view_osi_key(s, key);           break;
-    case VIEW_TWINS:   view_twins_key(s, key);         break;
-    case VIEW_KARMA:   view_karma_key(s, key);         break;
-    case VIEW_ROGUE_RADIUS: view_rogue_radius_key(s, key); break;
-    case VIEW_RESEARCH: view_research_key(s, key); break;
-    case VIEW_FRAGATTACK: view_fragattack_key(s, key); break;
-    default: break;
+#define X(id, label, key_, slug) case VIEW_##id: view_##slug##_key(s, key); break;
+#include "sloth_views.def"
+#undef X
+    case VIEW_COUNT: break;
     }
 }
 
@@ -482,41 +452,15 @@ static void handle_key(sloth_state_t *s, int key) {
         return;
     }
 
+    /* The view-select keys, from include/sloth_views.def (#117) through
+     * the same table the tab bar and help card render. */
+    int sel = view_for_key(key);
+    if (sel >= 0) {
+        s->active_view = (view_t)sel;
+        return;
+    }
+
     switch (key) {
-    case '1': s->active_view = VIEW_IFACE;   return;
-    case '2': s->active_view = VIEW_CONNS;   return;
-    case '3': s->active_view = VIEW_WIFI;    return;
-    case '4': s->active_view = VIEW_PACKETS; return;
-    case '5': s->active_view = VIEW_PROCS;   return;
-    case '6': s->active_view = VIEW_STATS;   return;
-    case '7': s->active_view = VIEW_PROBE;   return;
-    case '8': s->active_view = VIEW_ARP;     return;
-    case '9': s->active_view = VIEW_MDNS;    return;
-    case '0': s->active_view = VIEW_NBNS;    return;
-    case 'd': case 'D': s->active_view = VIEW_DHCP; return;
-    case 's': case 'S': s->active_view = VIEW_SSDP;   return;
-    case 'b': case 'B': s->active_view = VIEW_BEACON; return;
-    case 'a': case 'A': s->active_view = VIEW_DEAUTH; return;
-    case 'h': case 'H': s->active_view = VIEW_HTTP;   return;
-    case 't': case 'T': s->active_view = VIEW_TLS;    return;
-    case 'u': case 'U': s->active_view = VIEW_QUIC;   return;
-    case 'r': case 'R': s->active_view = VIEW_DNS;    return;
-    case 'p': case 'P': s->active_view = VIEW_NTP;    return;
-    case 'i': case 'I': s->active_view = VIEW_ICMP;   return;
-    case 'v': case 'V': s->active_view = VIEW_ALERTS; return;
-    case 'g': case 'G': s->active_view = VIEW_DEVICES; return;
-    case 'k': case 'K': s->active_view = VIEW_PNL;     return;
-    case 'e': case 'E': s->active_view = VIEW_EAPOL;   return;
-    case 'j': case 'J': s->active_view = VIEW_SEQNUM;  return;
-    case 'w': case 'W': s->active_view = VIEW_ASSOC;   return;
-    case 'm': case 'M': s->active_view = VIEW_CHANNEL; return;
-    case 'l': case 'L': s->active_view = VIEW_OSI;     return;
-    case 'x': case 'X': s->active_view = VIEW_TWINS;   return;
-    case 'y': case 'Y': s->active_view = VIEW_KARMA;   return;
-    case 'z': case 'Z': s->active_view = VIEW_ROGUE_RADIUS; return;
-    case 'f': case 'F': s->active_view = VIEW_RESEARCH; return;
-    case 'c': case 'C': s->active_view = VIEW_FRAGATTACK; return;
-    case 'o': case 'O': s->active_view = VIEW_DASH;     return;
     case '\t':
         s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);
         return;

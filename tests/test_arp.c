@@ -105,10 +105,6 @@ static void test_arp_zero_init(void) {
     ASSERT_EQ(s.arp_sel, 0);
 }
 
-static void test_view_count_is_12(void) {
-    ASSERT_EQ(VIEW_COUNT, 35);
-}
-
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_arp_tests(void) {
@@ -126,5 +122,4 @@ void run_arp_tests(void) {
 
     TEST_SUITE("ARP state");
     RUN_TEST(test_arp_zero_init);
-    RUN_TEST(test_view_count_is_12);
 }

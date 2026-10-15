@@ -46,33 +46,17 @@
  * fails if it ever goes back.
  */
 
-/* Every ALERT_TYPE_* the build knows about, via the table every alert
- * type is already required to appear in. alert_technique() returns ""
- * for host-posture alerts, which is a real answer, so presence rather
- * than content is what is checked. */
+/* Every ALERT_TYPE_* the build knows about. Until #117 the enum had no
+ * reflection, so this grepped include/sloth.h for the name as a whole
+ * token; the enum and alert_type_name() are now generated from one
+ * list (include/sloth_alerts.def), so the compiled table is the source
+ * of truth the frontmatter references, and an exact comparison needs
+ * none of the token-boundary care the grep did (ALERT_TYPE_ROGUE_RA vs
+ * ALERT_TYPE_ROGUE_RADIUS). */
 static int alert_kind_exists(const char *name) {
-    /* The enum has no reflection in C, so the check is the inverse:
-     * a name is valid if it appears in the header the enum lives in.
-     * Reading the header at test time is deliberate — it is the same
-     * source of truth the frontmatter is claiming to reference. */
-    FILE *f = fopen("include/sloth.h", "r");
-    if (!f) return -1;                     /* cannot tell */
-    char line[512];
-    int found = 0;
-    while (fgets(line, sizeof(line), f)) {
-        const char *p = strstr(line, name);
-        if (!p) continue;
-        /* Must be a whole token: the next char cannot continue an
-         * identifier, or ALERT_TYPE_ROGUE_RA would match
-         * ALERT_TYPE_ROGUE_RADIUS. */
-        char next = p[strlen(name)];
-        if (next == '_' || (next >= 'A' && next <= 'Z') ||
-            (next >= '0' && next <= '9')) continue;
-        found = 1;
-        break;
-    }
-    fclose(f);
-    return found;
+    for (int t = 0; t < ALERT_TYPE_COUNT; t++)
+        if (!strcmp(alert_type_name((alert_type_t)t), name)) return 1;
+    return 0;
 }
 
 static sqlite3 *open_corpus(void) {
@@ -122,7 +106,6 @@ static void test_no_document_cites_a_nonexistent_alert_kind(void) {
         snprintf(buf, sizeof(buf), "%s", kinds);
         for (char *tok = strtok(buf, " "); tok; tok = strtok(NULL, " ")) {
             int ok = alert_kind_exists(tok);
-            if (ok < 0) continue;          /* header unreadable; skip */
             if (!ok)
                 printf("    corpus: %s cites unknown %s\n",
                        path ? path : "?", tok);

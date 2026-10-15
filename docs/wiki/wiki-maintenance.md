@@ -15,7 +15,7 @@ updates the wiki in the same change.
 **Sources**: `.github/scripts/wiki_sync.sh`,
 `.github/workflows/wiki-sync.yml`, `docs/CLAUDE.md`, `agents/AGENTS.md`.
 
-**Last updated**: 2026-10-13.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -66,7 +66,11 @@ a hope. From `agents/AGENTS.md` and `docs/CLAUDE.md`:
   since #103 — a long option parsed in `src/main.c` that
   [[cli-reference]] does not backtick, an option the page documents that
   `src/main.c` no longer parses, a view-selection key the page does not
-  list, and a switch/`view_labels[]` key-set disagreement.
+  list, and a `sloth_views.def`/label key-set disagreement. Since #117
+  the view and rule counts on the pages are generated: `make
+  docs-counts` rewrites every `<!-- count:views -->N<!-- /count -->` /
+  `<!-- count:rules -->` marker, and a stale one fails the suite with
+  that command in its message.
   `tests/test_research_corpus.c` fails on an uncited detector. What is
   still rule-only: whether a *changed* behaviour's prose was updated, and
   page format.

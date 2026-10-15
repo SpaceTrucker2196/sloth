@@ -3400,3 +3400,19 @@ values sharing a prefix can no longer merge into one incident the way
 empty key. The nine rules that put remote-chosen text in a key migrate
 one per commit; [[alerts]] → *Dedup key shapes* carries the
 before/after table, [[jsonl-schema]] the `key` note.
+
+## 2026-10-15 — View and alert-type lists generated; prose counts markered (#117)
+
+`include/sloth_views.def` and `include/sloth_alerts.def` are X-macro
+lists; `sloth_view.h` / `sloth_alert.h` (re-included by `sloth.h`)
+expand the enums, and the label table, `view_for_key()`, the `tui.c`
+draw dispatch, the `main.c` view dispatch and view-select, and the
+`alert_type_name()` / `alert_technique()` tables are expanded from the
+same rows, length-pinned by `SLOTH_STATIC_ASSERT`. The hardcoded
+`VIEW_COUNT == 35` tests are gone. View and rule counts on [[sloth]],
+[[what-sloth-does]], [[views-catalog]], [[index]], [[attack-map]],
+README and MISSION.md sit in count markers (HTML comments) that
+`make docs-counts` rewrites and `make test` checks. No behaviour change:
+same keys, same order, same enum values. Pages: [[architecture]] →
+*Generated lists*, [[alerts]], [[views-catalog]], [[cli-reference]],
+[[wiki-maintenance]], [[jsonl-schema]].

@@ -1,6 +1,6 @@
 ---
 name: views-catalog
-description: All 35 sloth views indexed by keybinding, grouped into observation / synthesis / WiFi SIGINT
+description: Every sloth view indexed by keybinding, grouped into observation / synthesis / WiFi SIGINT
 type: reference
 ---
 
@@ -8,14 +8,14 @@ type: reference
 
 **Summary**: Full keybinding-to-view map, with one-line descriptions and links to the per-view source docs in `docs/views/`.
 
-**Sources**: `view_labels[]` in `src/view_labels.c` (the one table the
-tab bar and the help card both render from), `VIEW_COUNT` in
-`include/sloth.h`, `docs/views/README.md` and all `docs/views/*.md`.
+**Sources**: `include/sloth_views.def` (the one list the enum, the tab
+bar, the help card, the draw dispatch and the view-select keys are all
+generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 
-**Count**: `VIEW_COUNT` = **35**. Every key below is a row of
-`view_labels[]`; if the two disagree, `view_labels[]` is right.
+**Count**: `VIEW_COUNT` = **<!-- count:views -->35<!-- /count -->**. Every key below is a row of
+`include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-09-23 (#96 — eight views were missing here).
+**Last updated**: 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 

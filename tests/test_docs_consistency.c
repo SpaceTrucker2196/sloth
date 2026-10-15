@@ -75,10 +75,25 @@ static char *slurp(const char *path) {
 
 /* Words are runs of alphanumerics; markdown emphasis, backticks and line
  * breaks between them are separators, so "**61 passive\nalert rules**"
- * reads as 61 / passive / alert / rules. */
+ * reads as 61 / passive / alert / rules.
+ *
+ * An HTML comment is a separator too, whole. The generated counts (#117)
+ * sit inside <!-- count:views -->35<!-- /count --> markers, and read word
+ * by word the closing marker would put "count" between the number and
+ * its noun and end the claim — every marked count would silently stop
+ * being checked by this grammar. The renderer drops comments, so the
+ * scanner reads what a reader sees. An unterminated comment runs to the
+ * end of the text, which is also what a renderer does with it. */
 static const char *next_word(const char *p, char *out, int sz,
                              const char **start) {
-    while (*p && !isalnum((unsigned char)*p)) p++;
+    while (*p && !isalnum((unsigned char)*p)) {
+        if (!strncmp(p, "<!--", 4)) {
+            const char *e = strstr(p + 4, "-->");
+            p = e ? e + 3 : p + strlen(p);
+            continue;
+        }
+        p++;
+    }
     if (start) *start = p;
     int n = 0;
     while (*p && isalnum((unsigned char)*p)) {
@@ -252,6 +267,22 @@ static void test_scanner_reads_counts_across_markup(void) {
     ASSERT_EQ(c.rules[1], 61);
 }
 
+/* The generated form must still read as a claim, or marking a count
+ * would hide it from every prose check above. */
+static void test_scanner_reads_counts_inside_markers(void) {
+    dc_claims_t c;
+    scan_all("into **<!-- count:views -->35<!-- /count --> live views** "
+             "and **<!-- count:rules -->75<!-- /count --> passive\n"
+             "alert rules**", &c);
+    ASSERT_EQ(c.n_views, 1);
+    ASSERT_EQ(c.views[0], 35);
+    ASSERT_EQ(c.n_rules, 1);
+    ASSERT_EQ(c.rules[0], 75);
+    /* A word inside a comment is invisible, not a claim of its own. */
+    scan_all("<!-- 9 views -->", &c);
+    ASSERT_EQ(c.n_views, 0);
+}
+
 static void test_scanner_ignores_non_claims(void) {
     dc_claims_t c;
     /* Real README phrases that sit near the nouns but claim nothing. */
@@ -298,6 +329,145 @@ static void test_scanner_versions_exclude_addresses(void) {
     ASSERT_EQ(c.n_ver, 2);
     ASSERT(c.ver[0][0] == 1 && c.ver[0][1] == 8 && c.ver[0][2] == 0);
     ASSERT(c.ver[1][0] == 12 && c.ver[1][1] == 34 && c.ver[1][2] == 5);
+}
+
+/* ── generated counts (#117) ──
+ *
+ * `make docs-counts` (tools/docs_counts.sh) rewrites every
+ * <!-- count:NAME -->N<!-- /count --> marker from the two .def lists.
+ * What is asserted here is the marker's value against the compiled
+ * constant, so drift fails with the fix in its message, and parallel
+ * slices that each add a row merge with one command instead of a
+ * conflict in six files.
+ *
+ * Returns how many markers `text` holds, or -1 for one that is
+ * malformed or names no known count — a typo in a marker would
+ * otherwise leave a number nobody rewrites and nothing checks. *stale
+ * gets the number whose value disagrees with the build; the caller
+ * asserts, so the parser can be exercised on a wrong value without
+ * failing the suite. */
+static int dc_check_count_markers(const char *doc, const char *text,
+                                  int *stale) {
+    static const char open[] = "<!-- count:";
+    static const char close[] = "<!-- /count -->";
+    int n = 0;
+    *stale = 0;
+    for (const char *p = text; (p = strstr(p, open)) != NULL; ) {
+        p += sizeof(open) - 1;
+        const char *e = strstr(p, " -->");
+        if (!e || e - p > 16) {
+            fprintf(stderr, "    %s: unterminated count marker\n", doc);
+            return -1;
+        }
+        int want;
+        if (e - p == 5 && !strncmp(p, "views", 5))      want = VIEW_COUNT;
+        else if (e - p == 5 && !strncmp(p, "rules", 5)) want = ALERT_TYPE_COUNT;
+        else {
+            fprintf(stderr, "    %s: unknown count marker '%.*s'\n",
+                    doc, (int)(e - p), p);
+            return -1;
+        }
+        const char *v = e + 4, *q = v;
+        while (isdigit((unsigned char)*q)) q++;
+        if (q == v || q - v > 6 || strncmp(q, close, sizeof(close) - 1)) {
+            fprintf(stderr, "    %s: malformed count marker '%.*s'\n",
+                    doc, (int)(e - p), p);
+            return -1;
+        }
+        int got = atoi(v);
+        if (got != want) {
+            fprintf(stderr, "    %s: marker says %d %.*s; the build has "
+                    "%d — run `make docs-counts`\n",
+                    doc, got, (int)(e - p), p, want);
+            (*stale)++;
+        }
+        n++;
+        p = q;
+    }
+    return n;
+}
+
+static void test_count_marker_parser(void) {
+    char ok[256], stale[256];
+    snprintf(ok, sizeof(ok),
+             "a <!-- count:views -->%d<!-- /count --> b "
+             "<!-- count:rules -->%d<!-- /count -->",
+             (int)VIEW_COUNT, (int)ALERT_TYPE_COUNT);
+    int bad = -1;
+    ASSERT_EQ(dc_check_count_markers("t", ok, &bad), 2);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(dc_check_count_markers("t", "no markers here", &bad), 0);
+    ASSERT_EQ(dc_check_count_markers("t",
+              "<!-- count:panels -->35<!-- /count -->", &bad), -1);
+    ASSERT_EQ(dc_check_count_markers("t",
+              "<!-- count:views -->35 views<!-- /count -->", &bad), -1);
+    ASSERT_EQ(dc_check_count_markers("t",
+              "<!-- count:views --><!-- /count -->", &bad), -1);
+    ASSERT_EQ(dc_check_count_markers("t", "<!-- count:views", &bad), -1);
+    /* One stale value among good ones is a marker like any other, and
+     * is the one reported. */
+    snprintf(stale, sizeof(stale),
+             "<!-- count:rules -->%d<!-- /count --> "
+             "<!-- count:views -->%d<!-- /count -->",
+             (int)ALERT_TYPE_COUNT, (int)VIEW_COUNT + 1);
+    ASSERT_EQ(dc_check_count_markers("(expected stale)", stale, &bad), 2);
+    ASSERT_EQ(bad, 1);
+}
+
+/* The script counts `X(` rows at column 0; the compiler counts
+ * expansions. A row that is indented, split across lines or commented
+ * out is counted by one and not the other, and the script would then
+ * write a wrong number that this file goes on to reject — so pin that
+ * the two agree. */
+static int dc_def_rows(const char *path) {
+    char *t = slurp(path);
+    if (!t) return -1;
+    int n = 0;
+    for (const char *p = t; p; ) {
+        if (!strncmp(p, "X(", 2)) n++;
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    free(t);
+    return n;
+}
+
+static void test_def_row_counts_match_build(void) {
+    ASSERT_EQ(dc_def_rows("include/sloth_views.def"), (int)VIEW_COUNT);
+    ASSERT_EQ(dc_def_rows("include/sloth_alerts.def"), (int)ALERT_TYPE_COUNT);
+}
+
+/* Every marked document, and the floor of markers each must carry: a
+ * marker reworded away would otherwise take its check with it. log.md is
+ * not on the list and must never carry one (it is history; see
+ * test_wiki_counts_match_build). */
+static void test_count_markers_match_build(void) {
+    static const struct { const char *path; int min; } docs[] = {
+        { "README.md",                     3 },
+        { "MISSION.md",                    3 },
+        { "docs/wiki/what-sloth-does.md",  4 },
+        { "docs/wiki/index.md",            2 },
+        { "docs/wiki/sloth.md",            2 },
+        { "docs/wiki/attack-map.md",       1 },
+        { "docs/wiki/views-catalog.md",    1 },
+    };
+    for (size_t i = 0; i < sizeof(docs) / sizeof(*docs); i++) {
+        char *t = slurp(docs[i].path);
+        ASSERT(t != NULL);
+        if (!t) continue;
+        int stale = -1;
+        int n = dc_check_count_markers(docs[i].path, t, &stale);
+        ASSERT_EQ(stale, 0);
+        if (n < docs[i].min)
+            fprintf(stderr, "    %s carries %d count markers; expected "
+                    "at least %d\n", docs[i].path, n, docs[i].min);
+        ASSERT_GE(n, docs[i].min);
+        free(t);
+    }
+    char *log = slurp("docs/wiki/log.md");
+    ASSERT(log != NULL);
+    if (log) ASSERT(strstr(log, "<!-- count:") == NULL);
+    free(log);
 }
 
 /* ── the documents ── */
@@ -1590,81 +1760,67 @@ static void test_wiki_reference_documents_no_dead_flag(void) {
 }
 
 #define DC_MAX_KEYS      64
-/* Measured: the global switch binds 34 keys to a view (ten digits plus
+/* Measured: the view list binds 34 alphanumeric keys (ten digits plus
  * 24 letters), and the keybinding tables backtick all 34. */
 #define DC_MIN_VIEW_KEYS 34
 
-/* Collect the keys the global switch binds to a view, upper-case aliases
- * folded onto their lower-case key because that is how the reference
- * tables write them.
+/* Collect the alphanumeric view-select keys from include/sloth_views.def
+ * (#117), the list the global key handling is generated from. Before
+ * #117 this scraped `case 'x': s->active_view = ...` arms out of
+ * src/main.c; those arms no longer exist, and the .def is where a key is
+ * now bound.
  *
- * An arm counts only when a `case 'x':` label and the `s->active_view =`
- * assignment share one line, which is src/main.c's layout for every view
- * selection. That excludes the Tab cycle two ways over: its label sits on
- * its own line today, and the escape's leading backslash is not
- * alphanumeric, so a folded `case '\t':` arm is still skipped (the
- * extractor test below feeds both forms). The closing-quote check is
- * redundant against that input and is kept only so the scanner reads a
- * character literal rather than any text starting `case '`. Keys bound to
- * something other than a view (`n` toggles DNS resolution) never match,
- * because their arms assign no view.
- *
- * `?` is absent by design: VIEW_HELP is toggled by an absolute-global
- * `if` above the switch, not by a case arm. */
+ * A row is `X(ID, "label", "k", slug)` at column 0: the key is the
+ * second string literal on the line. `?` is skipped as non-alphanumeric
+ * — the reference documents it with the absolute globals, not the view
+ * table. Upper case folds onto lower, as view_for_key() does. */
 static int dc_view_keys(const char *src, char *out, int max) {
     int n = 0;
     for (const char *line = src; line && *line; ) {
-        const char *nl   = strchr(line, '\n');
-        size_t      llen = nl ? (size_t)(nl - line) : strlen(line);
-        char        buf[1024];
-        size_t      cl = llen < sizeof(buf) - 1 ? llen : sizeof(buf) - 1;
-        memcpy(buf, line, cl);
-        buf[cl] = '\0';
+        const char *nl = strchr(line, '\n');
+        const char *p  = line;
         line = nl ? nl + 1 : NULL;
-        if (!strstr(buf, "s->active_view =")) continue;
-        for (const char *p = buf; (p = strstr(p, "case '")) != NULL; ) {
-            p += 6;
-            if (!isalnum((unsigned char)p[0]) || p[1] != '\'') continue;
-            char k   = (char)tolower((unsigned char)p[0]);
-            int  dup = 0;
-            for (int i = 0; i < n && !dup; i++) if (out[i] == k) dup = 1;
-            if (!dup && n < max) out[n++] = k;
-        }
+        if (strncmp(p, "X(", 2)) continue;
+        const char *q1 = strchr(p, '"');                 /* label open */
+        const char *q2 = q1 ? strchr(q1 + 1, '"') : NULL; /* label close */
+        const char *k  = q2 ? strchr(q2 + 1, '"') : NULL; /* key open */
+        if (!k || (nl && k > nl)) continue;
+        if (!isalnum((unsigned char)k[1]) || k[2] != '"') continue;
+        char c   = (char)tolower((unsigned char)k[1]);
+        int  dup = 0;
+        for (int i = 0; i < n && !dup; i++) if (out[i] == c) dup = 1;
+        if (!dup && n < max) out[n++] = c;
     }
     return n;
 }
 
 static void test_view_key_extractor(void) {
     static const char src[] =
-        "    case '1': s->active_view = VIEW_IFACE;   return;\n"
-        "    case 'd': case 'D': s->active_view = VIEW_DHCP; return;\n"
-        "    case '\\t':\n"
-        "        s->active_view = (view_t)((s->active_view + 1) % VIEW_COUNT);\n"
-        "        return;\n"
-        /* The same arm folded onto one line: the one-line rule alone
-         * would admit it, so this pins the alphanumeric test. */
-        "    case '\\t': s->active_view = (view_t)(s->active_view + 1); return;\n"
-        "    case 'n': case 'N':\n"
-        "        s->dns_enabled = !s->dns_enabled;\n"
-        "        return;\n";
+        "/* X(NOT_A_ROW, \"Comment\", \"q\", nope) */\n"
+        "X(IFACE,   \"Interfaces\", \"1\", iface)\n"
+        "X(DHCP,    \"DHCP\",       \"D\", dhcp_snoop)\n"
+        "X(HELP,    \"Help\",       \"?\", help)\n"
+        "X(TWO,     \"Two\",        \"ab\", two)\n"
+        "  X(INDENTED, \"Indented\", \"z\", indented)\n"
+        "X(BROKEN,  \"Broken\")\n"
+        "\"x\"\n";
     char keys[DC_MAX_KEYS];
     ASSERT_EQ(dc_view_keys(src, keys, DC_MAX_KEYS), 2);
     ASSERT_EQ(keys[0], '1');
     ASSERT_EQ(keys[1], 'd');
 }
 
-/* The switch and view_labels[] must bind the same key set. This is the
- * half of the keybinding duty with real teeth: view_labels[] feeds the
- * tab bar and the [?] help card, so a key the switch gains and the label
- * table does not is a view the operator can reach and cannot see named,
- * and a key the label table keeps after the switch drops it advertises a
- * key that does nothing.
+/* The .def and the compiled tables must agree. With both generated from
+ * one list this cannot drift by hand-editing; what it does catch is the
+ * scraper above losing rows (so the wiki check below would check fewer
+ * keys) and a label or lookup that stops reflecting its row: every key
+ * scraped must be the one view_for_key() maps back to the view whose
+ * label carries it.
  *
- * `?` is in view_labels[] and not in the switch — VIEW_HELP is toggled by
- * the absolute-global `if` above the switch — so it is the one expected
- * difference and is excluded by name rather than by a tolerance. */
+ * `?` is excluded on both sides: it is in the list (the help card names
+ * it) and absent from the scrape by design. */
 static void test_view_keys_match_view_labels(void) {
-    char *src = slurp("src/main.c");
+    char *src = slurp("include/sloth_views.def");
     ASSERT(src != NULL);
     if (!src) return;
     char keys[DC_MAX_KEYS];
@@ -1678,28 +1834,59 @@ static void test_view_keys_match_view_labels(void) {
         if (s[0] != '[' || s[2] != ']') continue;
         if (s[1] == '?') continue;
         if (nl < DC_MAX_KEYS) lab[nl++] = (char)tolower((unsigned char)s[1]);
+        ASSERT_EQ(view_for_key((unsigned char)s[1]), v);
     }
     ASSERT_EQ(nl, (int)VIEW_COUNT - 1);
+    ASSERT_EQ(n, nl);
 
-    int only_switch = 0, only_label = 0;
+    int only_def = 0, only_label = 0;
     for (int i = 0; i < n; i++) {
         int hit = 0;
         for (int j = 0; j < nl && !hit; j++) if (lab[j] == keys[i]) hit = 1;
         if (hit) continue;
-        only_switch++;
-        fprintf(stderr, "    src/main.c binds '%c' to a view; "
-                        "view_labels[] has no such key\n", keys[i]);
+        only_def++;
+        fprintf(stderr, "    sloth_views.def binds '%c'; no view label "
+                        "carries it\n", keys[i]);
     }
     for (int j = 0; j < nl; j++) {
         int hit = 0;
         for (int i = 0; i < n && !hit; i++) if (keys[i] == lab[j]) hit = 1;
         if (hit) continue;
         only_label++;
-        fprintf(stderr, "    view_labels[] advertises '%c'; the global "
-                        "switch in src/main.c binds no such key\n", lab[j]);
+        fprintf(stderr, "    a view label advertises '%c'; "
+                        "sloth_views.def binds no such key\n", lab[j]);
     }
-    ASSERT_EQ(only_switch, 0);
+    ASSERT_EQ(only_def, 0);
     ASSERT_EQ(only_label, 0);
+    free(src);
+}
+
+/* src/main.c selects views through view_for_key() and nowhere else.
+ * A hand-written `case 'x': s->active_view = VIEW_...` arm would bind a
+ * key the tab bar, the help card and this file's wiki check cannot see
+ * — the drift #117 removed — so its return is pinned here. handle_key()
+ * is static in a file the test binary does not link, so this is a text
+ * check; the behaviour behind it is test_state.c's view_for_key tests. */
+static void test_main_selects_views_only_through_the_table(void) {
+    char *src = slurp("src/main.c");
+    ASSERT(src != NULL);
+    if (!src) return;
+    ASSERT(strstr(src, "view_for_key(key)") != NULL);
+    int arms = 0;
+    for (const char *line = src; line && *line; ) {
+        const char *nl = strchr(line, '\n');
+        size_t      ll = nl ? (size_t)(nl - line) : strlen(line);
+        char        buf[512];
+        size_t      cl = ll < sizeof(buf) - 1 ? ll : sizeof(buf) - 1;
+        memcpy(buf, line, cl);
+        buf[cl] = '\0';
+        line = nl ? nl + 1 : NULL;
+        if (strstr(buf, "case '") && strstr(buf, "active_view = VIEW_")) {
+            arms++;
+            fprintf(stderr, "    src/main.c hand-binds a view key: %s\n", buf);
+        }
+    }
+    ASSERT_EQ(arms, 0);
     free(src);
 }
 
@@ -1712,7 +1899,7 @@ static void test_view_keys_match_view_labels(void) {
  * names ("Dash", "RADIUS") and matching them would pin the wording.
  * test_view_keys_match_view_labels above is the binding-level guard. */
 static void test_every_view_key_is_in_wiki_reference(void) {
-    char *src = slurp("src/main.c");
+    char *src = slurp("include/sloth_views.def");
     char *ref = slurp(DC_CLI_REF);
     ASSERT(src != NULL);
     ASSERT(ref != NULL);
@@ -1726,8 +1913,8 @@ static void test_every_view_key_is_in_wiki_reference(void) {
         snprintf(want, sizeof(want), "`%c`", keys[i]);
         if (strstr(ref, want)) continue;
         missing++;
-        fprintf(stderr, "    src/main.c binds '%c' to a view; %s does "
-                        "not list it\n", keys[i], DC_CLI_REF);
+        fprintf(stderr, "    sloth_views.def binds '%c' to a view; %s "
+                        "does not list it\n", keys[i], DC_CLI_REF);
     }
     ASSERT_EQ(missing, 0);
     free(src);
@@ -1828,9 +2015,13 @@ static void test_main_assigns_no_tcp_default(void) {
 void run_docs_consistency_tests(void) {
     TEST_SUITE("docs consistency (#96)");
     RUN_TEST(test_scanner_reads_counts_across_markup);
+    RUN_TEST(test_scanner_reads_counts_inside_markers);
     RUN_TEST(test_scanner_ignores_non_claims);
     RUN_TEST(test_scanner_ignores_ordered_list_markers);
     RUN_TEST(test_scanner_versions_exclude_addresses);
+    RUN_TEST(test_count_marker_parser);
+    RUN_TEST(test_def_row_counts_match_build);
+    RUN_TEST(test_count_markers_match_build);
     RUN_TEST(test_readme_counts_match_build);
     RUN_TEST(test_wiki_counts_match_build);
     RUN_TEST(test_agent_docs_counts_match_build);
@@ -1862,5 +2053,6 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_main_assigns_no_tcp_default);
     RUN_TEST(test_view_key_extractor);
     RUN_TEST(test_view_keys_match_view_labels);
+    RUN_TEST(test_main_selects_views_only_through_the_table);
     RUN_TEST(test_every_view_key_is_in_wiki_reference);
 }

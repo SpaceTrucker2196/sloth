@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/README.md`, `docs/views/alerts.md`, all per-view docs.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -56,7 +56,7 @@ type: reference
 
 ## Related pages
 
-- [[alerts]] — the 75 alert rules and what each one keys on.
+- [[alerts]] — the <!-- count:rules -->75<!-- /count --> alert rules and what each one keys on.
 - [[threat-intel]] — the IOC list and its match semantics.
 - [[ja3-fingerprinting]] — TLS-client identification primitive.
 - [[beacon-detection]] — C2 periodicity detector.

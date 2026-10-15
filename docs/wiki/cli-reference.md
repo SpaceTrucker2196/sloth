@@ -10,7 +10,7 @@ type: reference
 every runtime keybinding; the tab-bar status badges; the environment
 variables; and exit codes.
 Source of truth is `print_usage()` and the argv loop in `src/main.c`, and
-`view_labels[]` / `handle_key()` for the keys. If this page and the
+`include/sloth_views.def` / `handle_key()` for the keys. If this page and the
 binary disagree, the binary is right — and this page is out of sync, which
 is a bug ([[docs-drift-judge]], and the wiki-sync duty in `agents/AGENTS.md`).
 The flag *list* and the view-key table are gated by `make test`
@@ -20,7 +20,8 @@ red suite, and so is the reverse. The flag *descriptions* are not gated —
 only that each flag and key is here.
 
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
-`src/view_labels.c`, `include/sloth.h`; `src/persist_health.c`
+`include/sloth_views.def` (expanded by `src/view_labels.c`),
+`include/sloth.h`; `src/persist_health.c`
 (`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
 the status badges.
 

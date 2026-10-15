@@ -1,6 +1,6 @@
 ---
 name: what-sloth-does
-description: The complete picture of sloth as a passive monitor — the sensing surfaces it reads, the 35 views, the 61 alerts, the outputs, and the hard line it never crosses
+description: The complete picture of sloth as a passive monitor — the sensing surfaces it reads, the views, the alert rules, the outputs, and the hard line it never crosses
 type: reference
 ---
 
@@ -8,7 +8,7 @@ type: reference
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99, single binary. It reads what is already on the wire and in
-the air and surfaces it through 35 views and 75 alert rules. It never
+the air and surfaces it through <!-- count:views -->35<!-- /count --> views and <!-- count:rules -->75<!-- /count --> alert rules. It never
 injects a frame onto a network it monitors; everything else that uses
 the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
@@ -16,7 +16,7 @@ page that covers it in full.
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -44,7 +44,7 @@ NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
 every layer; it writes to none. See [[platform-vtable]] for the kernel
 seam and [[architecture]] for the code tree.
 
-## What it shows (35 views)
+## What it shows (<!-- count:views -->35<!-- /count --> views)
 
 Grouped three ways. Full keybinding map: [[views-catalog]].
 
@@ -57,7 +57,7 @@ Grouped three ways. Full keybinding map: [[views-catalog]].
 
 The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 
-## What it decides (75 alert rules)
+## What it decides (<!-- count:rules -->75<!-- /count --> alert rules)
 
 One rule per `ALERT_TYPE_*`, each with a cited basis (a CVE, CERT
 advisory, MITRE technique, IEEE clause, or paper — the repo enforces the

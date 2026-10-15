@@ -465,7 +465,11 @@ the TTL window.
 
 Per `CLAUDE.md` "How to add an alert rule":
 
-1. Add `ALERT_TYPE_<NAME>` to the enum in `include/sloth.h`.
+1. Append `X(<NAME>, "T1xxx")` to `include/sloth_alerts.def` — at the
+   end, since enum values are carried by JSONL and the SQLite store. That
+   one row is the enum value, `alert_type_name()` and `alert_technique()`
+   (#117). A `""` technique needs a comment on the row saying which
+   exemption it is, and a citing document either way.
 2. Write `rule_<name>(state, now)` in `src/alerts.c` that calls `fire(...)`.
 3. Wire the call from `alerts_update()`.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`
@@ -473,6 +477,7 @@ Per `CLAUDE.md` "How to add an alert rule":
 5. Add a row to the rule table in `docs/views/alerts.md`.
 6. Test: seed state that should trigger, run `alerts_update`, assert
    `find_alert(type) >= 0`.
+7. `make docs-counts` to move the rule count in the docs.
 
 ## Footer enrichment
 

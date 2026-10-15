@@ -291,16 +291,35 @@ static void test_report_is_reproducible(void) {
 }
 
 static void test_every_alert_type_has_a_name(void) {
-    /* alert_type_name() is hand-maintained beside the enum. A new alert
-     * that forgets an entry loses its citations silently, so the guard
-     * is here rather than in a comment. */
+    /* alert_type_name() is a table generated from
+     * include/sloth_alerts.def (#117), with the enum's spelling
+     * stringized. A blank or missing entry loses that alert's citations
+     * silently, so the guard is here rather than in a comment. Names
+     * are also distinct: the corpus keys on them, and two types sharing
+     * one would merge their citations. */
     for (int t = 0; t < ALERT_TYPE_COUNT; t++) {
         const char *n = alert_type_name((alert_type_t)t);
         ASSERT(n != NULL);
+        if (!n) continue;
         ASSERT(n[0] != '\0');
         ASSERT(strncmp(n, "ALERT_TYPE_", 11) == 0);
+        ASSERT(strlen(n) > 11);
+        int dup = 0;
+        for (int u = 0; u < t; u++)
+            if (!strcmp(n, alert_type_name((alert_type_t)u))) dup++;
+        ASSERT_EQ(dup, 0);
     }
+    /* Spot rows across the list, so an expansion that shifted names off
+     * their enum values reads as wrong rather than merely non-empty. */
+    ASSERT_STR(alert_type_name(ALERT_TYPE_PORT_SCAN), "ALERT_TYPE_PORT_SCAN");
+    ASSERT_STR(alert_type_name(ALERT_TYPE_BLOCKACK_ATTACK),
+               "ALERT_TYPE_BLOCKACK_ATTACK");
+    ASSERT_STR(alert_type_name(ALERT_TYPE_QUEUE_EVICT),
+               "ALERT_TYPE_QUEUE_EVICT");
     ASSERT_STR(alert_type_name(ALERT_TYPE_COUNT), "");
+    ASSERT_STR(alert_type_name((alert_type_t)-1), "");
+    ASSERT_STR(alert_technique(ALERT_TYPE_COUNT), "");
+    ASSERT_STR(alert_technique((alert_type_t)-1), "");
 }
 
 void run_posture_tests(void) {

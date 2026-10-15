@@ -25,7 +25,7 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **35 live views** and **75 passive
+sees and turns it into **<!-- count:views -->35<!-- /count --> live views** and **<!-- count:rules -->75<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -351,7 +351,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**75 rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` in [`include/sloth.h`](include/sloth.h), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->75<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 
@@ -518,6 +518,8 @@ Packet decode runs in a dedicated pcap thread. The eight log modules each have a
 
 ```
 include/sloth.h            shared types: state, packet, conn, alert, device, ...
+include/sloth_views.def    the view list; enum, labels, keys and dispatch expand from it
+include/sloth_alerts.def   the alert-type list; enum, names and ATT&CK techniques expand from it
 src/main.c                 CLI, signal handlers, main loop
 src/tui.c                  ncurses / ANSI rendering, key polling
 src/platform/linux*.c      Linux backends (rtnetlink, nl80211, /proc, INET_DIAG)

@@ -10,14 +10,14 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/README.md`, all `docs/views/*.md`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
 ## What sloth surfaces
 
-- **35 ncurses views** (`VIEW_COUNT` in `include/sloth.h`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
-- **75 alert rules** (one per `ALERT_TYPE_*`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
+- **<!-- count:views -->35<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
+- **<!-- count:rules -->75<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
 - **Per-alert pcap dumps** when `--pcap-dir` is set — see [[pcap-export]].
 - **Optional JSONL forensic log** for downstream tooling.
 - **Composite dashboard** that tiles seven bands into one terminal — see [[dashboard]].

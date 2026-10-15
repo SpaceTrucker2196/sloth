@@ -1,0 +1,227 @@
+/* The alert-type list (#117). Not a header: no include guard, on
+ * purpose. Every includer defines X(ID, technique) first and gets one
+ * expansion per row.
+ *
+ *   ID         ALERT_TYPE_<ID> in the alert_type_t enum. Its spelling
+ *              is also alert_type_name()'s answer ("ALERT_TYPE_<ID>"),
+ *              stringized rather than written out, so the name the
+ *              research corpus cites cannot drift from the enum.
+ *   technique  the one MITRE ATT&CK technique a SOC analyst would tag
+ *              the finding under, or "" — see below.
+ *
+ * Row order IS the enum order, and the enum values are stable: the
+ * JSONL `ty` field and the SQLite store carry them. Append new rules at
+ * the end; never insert, reorder or delete a row.
+ *
+ * Generated from this list: alert_type_t and ALERT_TYPE_COUNT
+ * (sloth_alert.h), alert_type_name() and alert_technique()
+ * (src/alerts.c). The prose rule count in the docs is rewritten from it
+ * by `make docs-counts`.
+ *
+ * Mapping policy, carried over from the switch this list replaced: each
+ * type takes a single canonical technique — the primary behaviour —
+ * and secondary attribution is left to the reader (an SSH brute force
+ * also counts as service discovery). A "" technique is a real answer,
+ * never a missing entry, and the comment on every such row says
+ * which of the shapes in agents/AGENTS.md "Detectors cite their
+ * sources" it is. Every type still needs a cited source under
+ * research/ — tests/test_research_corpus.c enforces both. */
+X(PORT_SCAN, "T1046") /* Network Service Discovery */
+X(DEAUTH_FLOOD, "T1498.001") /* Direct Network Flood */
+X(NXDOMAIN_BURST, "T1071.004") /* DNS */
+X(THREAT_DOMAIN, "T1071.004") /* DNS to known-bad */
+X(THREAT_IP, "T1071") /* Application Layer Protocol */
+X(BEACONING, "T1071") /* C2 over app-layer */
+X(DGA_DOMAIN, "T1568.002") /* Domain Generation Algorithms */
+X(ARP_SPOOF, "T1557.002") /* ARP Cache Poisoning */
+X(ROGUE_DHCP, "T1557") /* Adversary-in-the-Middle */
+X(ROGUE_RA, "T1557") /* AiTM (IPv6 variant) */
+X(SMB1_USE, "T1210") /* Exploitation of Remote Services */
+X(KERB_PREAUTH_BURST, "T1110.003") /* Password Spraying */
+X(LDAP_SEARCH_FLOOD, "T1087.002") /* Account Discovery: Domain */
+X(BGP_NOTIFICATION_BURST, "T1499") /* Endpoint DoS */
+X(SSH_BRUTE_FORCE, "T1110.001") /* Password Guessing */
+X(RDP_BRUTE_FORCE, "T1110.001")
+X(SNMP_COMMUNITY_BRUTE, "T1110.001")
+X(MQTT_BROKER_BRUTE, "T1110.001")
+X(EVIL_TWIN, "T1557") /* AiTM (rogue AP) */
+X(EVIL_TWIN_PROXIMITY, "T1557")
+X(KARMA_AP, "T1557") /* AiTM (probe response) */
+X(DNS_TUNNEL, "T1071.004") /* DNS as covert channel */
+X(PROBE_FLOOD, "T1595") /* Active Scanning (wireless) */
+X(ATTACK_TOOL_UA, "T1595") /* Vulnerability scanner UA */
+X(ATTACK_PATH, "T1190") /* Exploit Public-Facing App */
+X(WEAK_TLS, "T1600") /* Weaken Encryption */
+/* startup: no WiFi radio in monitor mode */
+X(NO_MONITOR_MODE, "") /* host posture, not adversary */
+/* username observed in the clear (#16 phase 3) */
+X(CLEARTEXT_CRED, "T1040") /* Network Sniffing (credentials in transit) */
+/* mdk-style flood of fake APs (roadmap B4) */
+X(BEACON_FLOOD, "T1498.001") /* Direct Network Flood (wireless) */
+/* 802.11 auth-request flood at an AP (roadmap B1) */
+X(AUTH_FLOOD, "T1499") /* Endpoint DoS (AP assoc-table exhaustion) */
+/* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
+X(SSID_CONFUSION, "T1557.004") /* Evil Twin (RSN downgrade) */
+/* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
+X(MGMT_FUZZ, "T1499") /* Endpoint DoS (mgmt-frame fuzzing) */
+/* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
+X(ROGUE_RADIUS, "T1557.004") /* Evil Twin (rogue 802.1X RADIUS) */
+/* oversized Echo payloads — ptunnel/icmptunnel/Loki (#40) */
+X(ICMP_TUNNEL, "T1095") /* Non-Application Layer Protocol (covert channel) */
+/* unassociated client remembers an operator-designated SSID (#52) */
+X(MY_NETWORK_RECON, "T1595") /* Active Scanning — recon aimed at the operator */
+/* same device seen passing repeatedly — circling (#54) */
+X(RECURRING_TRANSIT, "T1595") /* Active Scanning — physical reconnaissance */
+/* device on a designated network, absent from the roster (#55) */
+X(UNKNOWN_DEVICE, "T1200") /* Hardware Additions — unrostered device on the network */
+/* sustained retry ratio on a channel — interference/jamming (B3) */
+X(RF_DEGRADED, "T1498") /* Network DoS — the observable, not a claim of intent */
+/* association-request flood at one BSSID (#60) */
+X(ASSOC_FLOOD, "T1498.001") /* Direct Network Flood (assoc requests) */
+/* T1498 rather than T1557: what is observed is a client being
+ * forced off its AP, which is denial of service. Whether it lands
+ * on an attacker AP — the AiTM the forcing exists to set up — is a
+ * separate observation, and when the chain completes the
+ * ATTACK_PATH alert carries T1557 for it. Tagging this one T1557
+ * would claim the second half on the evidence of the first. */
+/* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
+X(BTM_ABUSE, "T1498") /* Network DoS — 802.11v forced roam */
+/* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
+X(WPA_DOWNGRADE, "T1600") /* Weaken Encryption — the AP offers the weak lane */
+/* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
+X(PEAP_NO_SERVER_CERT, "T1557") /* AiTM — the client authenticated to an unverified server */
+/* Channel Switch Announcement misused to steer or churn clients (#63) */
+X(CSA_ABUSE, "T1557") /* AiTM — clients steered onto a chosen channel */
+/* 802.11k Beacon Request used to survey the air through a client (#61) */
+X(RRM_SURVEY_ABUSE, "T1595.002") /* Vulnerability Scanning — recon through someone else's radio */
+/* RTS flood reserving the channel — airtime denial of service (#64) */
+X(RTS_FLOOD, "T1498") /* Network DoS — the channel reserved out from under everyone */
+/* connectivity-check probe intercepted — rogue portal (#69) */
+X(CAPTIVE_PORTAL, "T1557") /* AiTM — the connectivity check answered by the attacker */
+/* spoofed BAR resetting a peer's Block-Ack window — Bl0ck (#70) */
+X(BLOCKACK_ATTACK, "T1499.004") /* Endpoint DoS — the peer's receive window forced past queued frames */
+/* FragAttacks (Vanhoef, USENIX Security 2021). Injecting frames
+ * into a session whose key the attacker does not hold is AiTM; the
+ * plaintext frames it produces are also the sniffable artefact. */
+/* plaintext data frame after key install — FragAttacks CVE-2020-26140/-26143 (#75) */
+X(FRAG_PLAINTEXT, "T1557") /* CVE-2020-26140 / -26143 */
+/* plaintext broadcast fragment on a protected BSS — CVE-2020-26145 (#75) */
+X(FRAG_BCAST, "T1557") /* CVE-2020-26145 */
+/* fragment reassembly straddles a (re)association — CVE-2020-24586 (#75 slice 2) */
+X(FRAG_CACHE, "T1557") /* CVE-2020-24586 — injection via a poisoned reassembly */
+/* reassembly mixes an encrypted fragment with a plaintext one — CVE-2020-26147 (#75 slice 2) */
+X(FRAG_MIXED, "T1557") /* CVE-2020-26147 */
+/* one SSID advertised as SAE-only by one BSSID and PSK-only by another (#74) */
+X(SAE_PSK_SPLIT, "T1557.004") /* Evil Twin — the PSK-only half is the lane the attacker wants taken */
+/* one BSSID that sustained SAE-only and now advertises PSK-only (#74) */
+X(SAE_PSK_REGRESSION, "T1562.004") /* Impair Defenses — the AP's own posture was lowered */
+/* same protected MPDU replayed with the A-MSDU bit flipped — CVE-2020-24588 (#75) */
+X(FRAG_AMSDU, "T1557") /* CVE-2020-24588 — frames injected into a session whose key the attacker lacks */
+/* plaintext A-MSDU whose first subframe claims to carry EAPOL — CVE-2020-26144 (#75 slice 4) */
+X(FRAG_AMSDU_EAPOL, "T1557") /* CVE-2020-26144 — a plaintext subframe impersonating an authenticator message */
+/* fragment reassembly spans a completed PTK rotation — CVE-2020-24587 (#75 slice 4) */
+X(FRAG_MIXKEY, "T1557") /* CVE-2020-24587 — frames injected by combining fragments across a key rotation */
+/* encrypted fragments reassembled with non-consecutive PNs — CVE-2020-26146 (#75) */
+X(FRAG_PN_GAP, "T1557") /* CVE-2020-26146 */
+/* T1557 as well: the relayed EAPOL is what lets an unauthenticated
+ * sender reach a peer it has no business reaching. */
+/* EAPOL forwarded between two stations by the AP — CVE-2020-26139 (#75) */
+X(FRAG_EAPOL_RELAY, "T1557") /* CVE-2020-26139 */
+/* T1499 Endpoint DoS: the storm is the AP answering spoofed
+ * disassociations, and what it costs is the client's airtime and
+ * association. */
+/* SA-Query storm — the MFP-era shape of a disassoc flood (#76) */
+X(SA_QUERY_FLOOD, "T1499") /* #76 */
+/* T1562.004 Impair Defenses: an unprotected robust action frame on
+ * an MFP-required BSS is the protection not being applied. */
+/* unprotected robust action frame on an MFP-required BSS — CVE-2019-16275 (#76) */
+X(MFP_UNPROTECTED, "T1562.004") /* CVE-2019-16275 */
+/* Deliberately empty, and not for the NO_MONITOR_MODE reason (#80).
+ * What is observed is a *third party's* device left in its
+ * unconfigured onboarding state — an exposure, with no adversary
+ * behaviour in evidence. ATT&CK models what an adversary does, and
+ * the techniques that would fit (T1557 for the AiTM an attacker
+ * sets up after joining the setup AP, T1600 for weakened crypto)
+ * would each claim an attack on evidence of a posture. That is the
+ * reasoning BTM_ABUSE already applied when it took T1498 over
+ * T1557. The basis is cited — NIST SP 1800-36 and the Wi-Fi P2P
+ * spec, see research/papers/nist-sp1800-36-onboarding.md — it is
+ * simply not an ATT&CK technique. Whether agents/AGENTS.md should
+ * widen its "" exemption to cover observed-device exposure is a
+ * question for the owner, not something this rule decides. */
+/* open SoftAP named like a device onboarding surface — NIST SP 1800-36 (#80) */
+X(OPEN_SETUP_AP, "") /* exposure, not adversary technique (#80) */
+/* WPS external-registrar PIN brute force — CERT/CC VU#723755 (#82) */
+X(WPS_PIN_BRUTE, "T1110.001") /* Password Guessing — the WPS registrar PIN */
+/* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
+X(WPS_LOCKOUT_CYCLING, "T1110.001") /* same attack, seen through the AP's lockout */
+/* concurrent PBC enrollees inside the 120 s walk time (#82) */
+X(WPS_PBC_RACE, "T1557") /* racing the walk window to become a registrar */
+/* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
+X(MLE_INVALID_LINK_ID, "T1669") /* Wi-Fi Networks — management-frame-driven association abuse */
+/* MLE Common Info Length can't cover the mandatory MLD MAC, or overruns the IE — w1.fi 2026-1 (#104 slice 2) */
+X(MLE_COMMON_INFO_LEN_BAD, "T1669") /* same mgmt-frame-driven MLO parsing-exploit class as MLE_INVALID_LINK_ID */
+/* MLE Link Info subelement lengths sum past the enclosing element — w1.fi 2026-1 (#104 slice 3) */
+X(MLE_SUBELEM_OVERRUN, "T1669") /* same class again — Link Info subelement chain overruns its container */
+/* same (MLD MAC, link_id) reported with two different affiliated addresses — IEEE 802.11be 9.4.2.312 (#104 slice 4) */
+X(MLD_MAC_COLLISION, "T1669") /* rogue MLD impersonating a stable Multi-Link identity */
+/* two links of one MLD, each with its own RSNE, disagree on PMF or pairwise-cipher strength — IEEE 802.11be 9.4.2.312 (#104 slice 5) */
+X(MLE_CROSS_LINK_CIPHER_DOWNGRADE, "T1557") /* Adversary-in-the-Middle — one MLD link advertised weaker than its siblings is the lane to steer a client onto (#104) */
+/* Deliberately empty, same reasoning as ALERT_TYPE_OPEN_SETUP_AP
+ * (#80): what fires here is a third party's camera announcing its
+ * own presence over an unauthenticated multicast protocol — an
+ * exposure, not an adversary's behaviour. ATT&CK T1046 (Network
+ * Service Discovery) describes an attacker *enumerating* services;
+ * sloth did not enumerate anything, it heard the device volunteer
+ * the information unprompted. The basis is cited — OASIS
+ * WS-Discovery 1.1 and the ONVIF Core Specification, see
+ * research/papers/ws-discovery-onvif.md — it is simply not an
+ * ATT&CK technique. */
+/* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
+X(CAM_WS_DISCOVERY, "") /* exposure, not adversary technique (#106) */
+/* PM=1 Null while the same MAC keeps transmitting PM=0 data — Framing Frames, CVE-2022-47522 (#107 shape A) */
+X(PM_FORGE, "T1557") /* AiTM — queue manipulation, Framing Frames (#107) */
+/* Deliberately empty, third in the line OPEN_SETUP_AP (#80) and
+ * CAM_WS_DISCOVERY (#106) started: what fires is that a host on
+ * the monitored segment talked to a surveillance vendor's cloud.
+ * Nobody attacked anything. The nearest candidates are all wrong
+ * in the same direction — T1041 (Exfiltration Over C2 Channel) and
+ * T1567.002 (Exfiltration to Cloud Storage) describe an adversary
+ * moving data out, and an officer's docked body camera uploading
+ * to its own vendor is the system working as designed. Calling
+ * that exfiltration would be the overstatement #90 is open about.
+ * The basis is cited — the vendors' own network-requirement docs,
+ * see research/papers/surveillance-vendor-endpoints.md — it is
+ * simply not an ATT&CK technique. */
+/* TLS SNI on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
+X(SURV_CLOUD_SNI, "") /* exposure, not adversary technique (#105) */
+/* Deliberately empty, third in the family OPEN_SETUP_AP (#80) and
+ * CAM_WS_DISCOVERY (#106) opened, and for the same reason: what
+ * fires is a *posture*, not a behaviour. The AP the operator
+ * designated as theirs is advertising no local power ceiling, which
+ * is a departure from IEEE 802.11-2020 §11.8 and nothing more —
+ * nobody transmitted anything at sloth to produce it. T1557.004
+ * (Evil Twin) is the technique the issue lists, and claiming it
+ * here would assert impersonation from a compliance gap: the
+ * overwhelmingly likely cause is a stripped hostapd/OpenWrt build,
+ * not a twin. The basis is cited (IEEE 802.11-2020 §11.8,
+ * §9.4.2.13, §9.4.2.16 — see
+ * research/ieee/802.11-2020-11.8-spectrum-management.md), it is
+ * simply not an ATT&CK technique, and
+ * tests/test_research_corpus.c ::
+ * test_uncitable_kinds_with_a_real_basis_are_still_cited holds the
+ * citation anyway. */
+/* designated 5 GHz BSS advertising neither Power Constraint nor TPC Report — IEEE 802.11-2020 §11.8 (#101 slice 3) */
+X(TPC_ABSENT_HIGH_BAND, "") /* non-compliance, not adversary technique (#101) */
+/* Third in the same position as OPEN_SETUP_AP and
+ * CAM_WS_DISCOVERY: the finding is an observed camera's own
+ * provisioning state, not anything an adversary did. Nobody has
+ * to be present for this to fire. T1669 (Wi-Fi Networks) and
+ * T1046 (Network Service Discovery) both describe an attacker
+ * acting on the SoftAP, which is the step *after* the one sloth
+ * can see. The basis is cited — the vendors' own onboarding
+ * documentation, see research/papers/camera-setup-softap.md. */
+/* SoftAP named by a camera vendor's documented setup-mode SSID — vendor onboarding docs (#106 slice 2) */
+X(CAM_SETUP_SSID, "") /* exposure, not adversary technique (#106 slice 2) */
+/* unicast downlink burst released within 100 ms of a (BSSID,STA) session change — Framing Frames, CVE-2022-47522 (#107 shape B) */
+X(QUEUE_EVICT, "T1557") /* AiTM — buffered frames released across a session change, Framing Frames (#107) */

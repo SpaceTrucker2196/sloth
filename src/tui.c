@@ -480,44 +480,16 @@ void tui_bar(double val, double max, int width, char *out) {
     out[pos] = '\0';
 }
 
+/* Generated from include/sloth_views.def (#117): every row's slug names
+ * view_<slug>_draw, so a view added to the list without a draw function
+ * fails to compile here. No `default:`, so -Wswitch names any view_t
+ * value the expansion misses. */
 static void dispatch_view(const sloth_state_t *s) {
     switch (s->active_view) {
-    case VIEW_IFACE:   view_iface_draw(s);   break;
-    case VIEW_CONNS:   view_conns_draw(s);   break;
-    case VIEW_WIFI:    view_wifi_draw(s);    break;
-    case VIEW_PACKETS: view_packets_draw(s); break;
-    case VIEW_PROCS:   view_procs_draw(s);   break;
-    case VIEW_STATS:   view_stats_draw(s);   break;
-    case VIEW_PROBE:   view_probe_draw(s);   break;
-    case VIEW_ARP:     view_arp_draw(s);     break;
-    case VIEW_MDNS:    view_mdns_draw(s);    break;
-    case VIEW_NBNS:    view_nbns_draw(s);         break;
-    case VIEW_DHCP:    view_dhcp_snoop_draw(s);   break;
-    case VIEW_SSDP:    view_ssdp_draw(s);         break;
-    case VIEW_BEACON:  view_beacon_draw(s);        break;
-    case VIEW_DEAUTH:  view_deauth_draw(s);        break;
-    case VIEW_HTTP:    view_http_draw(s);          break;
-    case VIEW_TLS:     view_tls_draw(s);           break;
-    case VIEW_QUIC:    view_quic_draw(s);          break;
-    case VIEW_DNS:     view_dns_draw(s);           break;
-    case VIEW_NTP:     view_ntp_draw(s);           break;
-    case VIEW_ICMP:    view_icmp_draw(s);          break;
-    case VIEW_ALERTS:  view_alerts_draw(s);        break;
-    case VIEW_DEVICES: view_devices_draw(s);       break;
-    case VIEW_HELP:    view_help_draw(s);          break;
-    case VIEW_DASH:    view_dashboard_draw(s);     break;
-    case VIEW_PNL:     view_pnl_draw(s);           break;
-    case VIEW_EAPOL:   view_eapol_draw(s);         break;
-    case VIEW_SEQNUM:  view_seqnum_draw(s);        break;
-    case VIEW_ASSOC:   view_assoc_draw(s);         break;
-    case VIEW_CHANNEL: view_channel_draw(s);       break;
-    case VIEW_OSI:     view_osi_draw(s);           break;
-    case VIEW_TWINS:   view_twins_draw(s);         break;
-    case VIEW_KARMA:   view_karma_draw(s);         break;
-    case VIEW_ROGUE_RADIUS: view_rogue_radius_draw(s); break;
-    case VIEW_RESEARCH: view_research_draw(s);      break;
-    case VIEW_FRAGATTACK: view_fragattack_draw(s);  break;
-    default: break;
+#define X(id, label, key, slug) case VIEW_##id: view_##slug##_draw(s); break;
+#include "sloth_views.def"
+#undef X
+    case VIEW_COUNT: break;
     }
 }
 

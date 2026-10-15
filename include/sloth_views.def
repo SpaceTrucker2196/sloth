@@ -1,0 +1,60 @@
+/* The view list (#117). Not a header: no include guard, on purpose.
+ * Every includer defines X(ID, label, key, slug) first and gets one
+ * expansion per row.
+ *
+ *   ID     VIEW_<ID> in the view_t enum
+ *   label  the name on the tab bar and the [?] help card
+ *   key    the global key that selects it, as a one-character string
+ *          literal so the "[key] label" text is assembled at compile
+ *          time. Letters select in either case (view_for_key folds).
+ *   slug   view_<slug>_draw / view_<slug>_key in src/views/<file>.h
+ *
+ * Row order IS the enum order, which is the Tab cycle and the help
+ * card's order. Appending is free; reordering renumbers view_t, which
+ * nothing persists but tests/test_state.c pins as the Tab cycle.
+ *
+ * Generated from this list: view_t and VIEW_COUNT (sloth_view.h),
+ * view_label() and view_for_key() (src/view_labels.c), the draw
+ * dispatch in src/tui.c and the per-view key dispatch plus the global
+ * view-select in src/main.c. The prose counts in the docs are
+ * rewritten from it by `make docs-counts`.
+ *
+ * `?` toggles VIEW_HELP from an absolute-global branch in
+ * src/main.c::handle_key that runs before any view routing, so it is
+ * never reached through view_for_key() from there; the row still
+ * carries it because the label does. */
+X(IFACE,        "Interfaces",  "1", iface)
+X(CONNS,        "Connections", "2", conns)
+X(WIFI,         "WiFi",        "3", wifi)
+X(PACKETS,      "Packets",     "4", packets)
+X(PROCS,        "Processes",   "5", procs)
+X(STATS,        "Stats",       "6", stats)
+X(PROBE,        "Probe",       "7", probe)
+X(ARP,          "ARP",         "8", arp)
+X(MDNS,         "mDNS",        "9", mdns)
+X(NBNS,         "NBNS",        "0", nbns)
+X(DHCP,         "DHCP",        "d", dhcp_snoop)
+X(SSDP,         "SSDP",        "s", ssdp)
+X(BEACON,       "Beacons",     "b", beacon)
+X(DEAUTH,       "Deauth",      "a", deauth)
+X(HTTP,         "HTTP",        "h", http)
+X(TLS,          "TLS",         "t", tls)
+X(QUIC,         "QUIC",        "u", quic)
+X(DNS,          "DNS",         "r", dns)
+X(NTP,          "NTP",         "p", ntp)
+X(ICMP,         "ICMP",        "i", icmp)
+X(ALERTS,       "Alerts",      "v", alerts)
+X(DEVICES,      "Devices",     "g", devices)
+X(HELP,         "Help",        "?", help)
+X(DASH,         "Dash",        "o", dashboard)
+X(PNL,          "PNL",         "k", pnl)          /* per-MAC Preferred Network List */
+X(EAPOL,        "EAPOL",       "e", eapol)        /* PMKID / 4-way handshake capture */
+X(SEQNUM,       "Seqnum",      "j", seqnum)       /* per-MAC seqnum + cross-MAC correlation */
+X(ASSOC,        "Assoc",       "w", assoc)        /* STA <-> AP association tracker */
+X(CHANNEL,      "Channel",     "m", channel)      /* per-channel activity histogram */
+X(OSI,          "OSI",         "l", osi)          /* OSI / TCP-IP stack synthesis (one row per layer) */
+X(TWINS,        "Twins",       "x", twins)        /* Evil-twin episode table (Phase 5) */
+X(KARMA,        "KARMA",       "y", karma)        /* KARMA / PineAP candidate table (#30) */
+X(ROGUE_RADIUS, "RADIUS",      "z", rogue_radius) /* 802.1X EAP method / identity-leak table (#38) */
+X(RESEARCH,     "Research",    "f", research)     /* research-corpus coverage for the alerts that fired (#73) */
+X(FRAGATTACK,   "FragAttacks", "c", fragattack)   /* per-BSSID FragAttacks counters (#75 slice 5) */

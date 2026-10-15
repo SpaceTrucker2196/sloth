@@ -47,18 +47,57 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
-void test_view_direct_key_select(void) {
-    view_t v = VIEW_PACKETS;
-    /* simulating '1' key */
-    v = VIEW_IFACE;   ASSERT_EQ(v, VIEW_IFACE);
-    v = VIEW_CONNS;   ASSERT_EQ(v, VIEW_CONNS);
-    v = VIEW_WIFI;    ASSERT_EQ(v, VIEW_WIFI);
-    v = VIEW_PACKETS; ASSERT_EQ(v, VIEW_PACKETS);
+/* view_for_key() is the global view-select that src/main.c::handle_key
+ * runs once the absolute globals and the active view's claims have had
+ * their turn (#117). Before it, these were 34 hand-kept `case` arms
+ * beside a separately hand-kept label table. */
+void test_view_for_key_selects(void) {
+    ASSERT_EQ(view_for_key('1'), VIEW_IFACE);
+    ASSERT_EQ(view_for_key('4'), VIEW_PACKETS);
+    ASSERT_EQ(view_for_key('0'), VIEW_NBNS);
+    ASSERT_EQ(view_for_key('d'), VIEW_DHCP);
+    ASSERT_EQ(view_for_key('D'), VIEW_DHCP);   /* letters fold */
+    ASSERT_EQ(view_for_key('o'), VIEW_DASH);
+    ASSERT_EQ(view_for_key('O'), VIEW_DASH);
+    ASSERT_EQ(view_for_key('c'), VIEW_FRAGATTACK);
+    ASSERT_EQ(view_for_key('z'), VIEW_ROGUE_RADIUS);
+    ASSERT_EQ(view_for_key('?'), VIEW_HELP);
+    /* Not view keys: the handler's own globals, the Tab cycle, the
+     * arrow codes views navigate with, and the NUL tui_poll_key()
+     * returns for "no key". */
+    ASSERT_EQ(view_for_key('q'), -1);
+    ASSERT_EQ(view_for_key('Q'), -1);
+    ASSERT_EQ(view_for_key('n'), -1);
+    ASSERT_EQ(view_for_key('N'), -1);
+    ASSERT_EQ(view_for_key('/'), -1);
+    ASSERT_EQ(view_for_key('\\'), -1);
+    ASSERT_EQ(view_for_key('\t'), -1);
+    ASSERT_EQ(view_for_key(0), -1);
+    ASSERT_EQ(view_for_key(SLOTH_KEY_UP), -1);
+    ASSERT_EQ(view_for_key(SLOTH_KEY_DOWN), -1);
 }
 
-void test_view_count_matches_labels(void) {
-    /* VIEW_COUNT must stay in sync with actual views */
-    ASSERT_EQ(VIEW_COUNT, 35);
+/* Properties of the whole list rather than of one row, so a row added
+ * later is held to them without anyone editing this test:
+ *   - each key round-trips: the key a label shows selects that view, so
+ *     two rows sharing a key fail here, on the row that loses;
+ *   - no key is upper case — view_for_key() folds input to lower case
+ *     before matching, so an upper-case row could never be selected;
+ *   - no key is one the handler takes before view_for_key() runs (q
+ *     quits) or after it (n toggles DNS), either of which would leave a
+ *     view advertised under a key that does something else. */
+void test_view_keys_are_distinct_and_reachable(void) {
+    for (int v = 0; v < (int)VIEW_COUNT; v++) {
+        const char *l = view_label((view_t)v);
+        ASSERT(l[0] == '[' && l[2] == ']' && l[3] == ' ');
+        int k = (unsigned char)l[1];
+        ASSERT(!(k >= 'A' && k <= 'Z'));
+        ASSERT(k != 'q' && k != 'n' && k != '/' && k != '\\');
+        if (view_for_key(k) != v)
+            fprintf(stderr, "    key '%c' on %s selects view %d\n",
+                    k, l, view_for_key(k));
+        ASSERT_EQ(view_for_key(k), v);
+    }
 }
 
 /* ── packet ring buffer ──────────────────────────────────── */
@@ -851,8 +890,8 @@ void test_view_claims_non_shadow_keys_unclaimed(void) {
 void run_state_tests(void) {
     TEST_SUITE("view switching");
     RUN_TEST(test_view_tab_cycles_forward);
-    RUN_TEST(test_view_direct_key_select);
-    RUN_TEST(test_view_count_matches_labels);
+    RUN_TEST(test_view_for_key_selects);
+    RUN_TEST(test_view_keys_are_distinct_and_reachable);
 
     TEST_SUITE("view key first refusal");
     RUN_TEST(test_view_claims_iface_local_keys);

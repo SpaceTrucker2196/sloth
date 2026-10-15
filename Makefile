@@ -390,6 +390,15 @@ $(CORE_LIB): $(CORE_OBJS) $(OBJDIR)/.members
 embedded:
 	$(MAKE) WITH_NCURSES=0 WITH_PCAP=0 WITH_SQLITE=0
 
+# ── Generated prose counts (#117) ─────────────────────────────────────────
+# The view and alert-rule counts in the docs sit inside
+# <!-- count:NAME -->N<!-- /count --> markers; this rewrites them from
+# include/sloth_views.def and include/sloth_alerts.def. A count that drifts
+# fails test_docs_consistency.c, and this is the fix.
+.PHONY: docs-counts
+docs-counts:
+	sh tools/docs_counts.sh
+
 # ── Research corpus (#73) ───────────────────────────────────────────────────
 # research.db is committed: it is small, deterministic (documents are
 # visited in sorted path order, so a rebuild is byte-identical), and

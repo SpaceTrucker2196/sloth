@@ -4,10 +4,18 @@
 #include <stdint.h>
 #include <time.h>
 
-/* beacon_ap_t embeds a reg_ie_t (#101). This is the one header
- * sloth.h pulls in: it depends on nothing but <stdint.h>, and the
- * alternative was a second copy of the type. */
+/* beacon_ap_t embeds a reg_ie_t (#101). Every header
+ * sloth.h pulls in depends on nothing in sloth.h itself; this one
+ * needs only <stdint.h>, and the alternative was a second copy of
+ * the type. */
 #include "reg_ie.h"
+
+/* The view and alert-type lists, each generated from its own .def
+ * (#117). Re-included here so every file that took view_t or
+ * alert_type_t from sloth.h still does; neither depends on anything
+ * below. */
+#include "sloth_view.h"
+#include "sloth_alert.h"
 
 #define SLOTH_VERSION "1.8.4"
 
@@ -24,44 +32,8 @@
 #define SLOTH_KEY_BACKSPACE 0x103
 
 /* ── Views ──────────────────────────────────────────────── */
-typedef enum {
-    VIEW_IFACE   = 0,
-    VIEW_CONNS   = 1,
-    VIEW_WIFI    = 2,
-    VIEW_PACKETS = 3,
-    VIEW_PROCS   = 4,
-    VIEW_STATS   = 5,
-    VIEW_PROBE   = 6,
-    VIEW_ARP     = 7,
-    VIEW_MDNS    = 8,
-    VIEW_NBNS    = 9,
-    VIEW_DHCP    = 10,
-    VIEW_SSDP    = 11,
-    VIEW_BEACON  = 12,
-    VIEW_DEAUTH  = 13,
-    VIEW_HTTP    = 14,
-    VIEW_TLS     = 15,
-    VIEW_QUIC    = 16,
-    VIEW_DNS     = 17,
-    VIEW_NTP     = 18,
-    VIEW_ICMP    = 19,
-    VIEW_ALERTS  = 20,
-    VIEW_DEVICES = 21,
-    VIEW_HELP    = 22,
-    VIEW_DASH    = 23,
-    VIEW_PNL     = 24,   /* per-MAC Preferred Network List */
-    VIEW_EAPOL   = 25,   /* PMKID / 4-way handshake capture */
-    VIEW_SEQNUM  = 26,   /* per-MAC seqnum + cross-MAC correlation */
-    VIEW_ASSOC   = 27,   /* STA <-> AP association tracker */
-    VIEW_CHANNEL = 28,   /* per-channel activity histogram */
-    VIEW_OSI     = 29,   /* OSI / TCP-IP stack synthesis (one row per layer) */
-    VIEW_TWINS   = 30,   /* Evil-twin episode table (Phase 5) */
-    VIEW_KARMA   = 31,   /* KARMA / PineAP candidate table (#30) */
-    VIEW_ROGUE_RADIUS = 32, /* 802.1X EAP method / identity-leak table (#38) */
-    VIEW_RESEARCH = 33, /* research-corpus coverage for the alerts that fired (#73) */
-    VIEW_FRAGATTACK = 34, /* per-BSSID FragAttacks counters (#75 slice 5) */
-    VIEW_COUNT
-} view_t;
+/* view_t, VIEW_COUNT, view_label() and view_for_key() live in
+ * sloth_view.h, generated from sloth_views.def (#117). */
 
 /* ── Interface stats ────────────────────────────────────── */
 
@@ -731,84 +703,8 @@ typedef enum {
     ALERT_SEV_CRIT = 2,
 } alert_sev_t;
 
-typedef enum {
-    ALERT_TYPE_PORT_SCAN = 0,
-    ALERT_TYPE_DEAUTH_FLOOD,
-    ALERT_TYPE_NXDOMAIN_BURST,
-    ALERT_TYPE_THREAT_DOMAIN,
-    ALERT_TYPE_THREAT_IP,
-    ALERT_TYPE_BEACONING,
-    ALERT_TYPE_DGA_DOMAIN,
-    ALERT_TYPE_ARP_SPOOF,
-    ALERT_TYPE_ROGUE_DHCP,
-    ALERT_TYPE_ROGUE_RA,
-    ALERT_TYPE_SMB1_USE,
-    ALERT_TYPE_KERB_PREAUTH_BURST,
-    ALERT_TYPE_LDAP_SEARCH_FLOOD,
-    ALERT_TYPE_BGP_NOTIFICATION_BURST,
-    ALERT_TYPE_SSH_BRUTE_FORCE,
-    ALERT_TYPE_RDP_BRUTE_FORCE,
-    ALERT_TYPE_SNMP_COMMUNITY_BRUTE,
-    ALERT_TYPE_MQTT_BROKER_BRUTE,
-    ALERT_TYPE_EVIL_TWIN,
-    ALERT_TYPE_EVIL_TWIN_PROXIMITY,
-    ALERT_TYPE_KARMA_AP,
-    ALERT_TYPE_DNS_TUNNEL,
-    ALERT_TYPE_PROBE_FLOOD,
-    ALERT_TYPE_ATTACK_TOOL_UA,
-    ALERT_TYPE_ATTACK_PATH,
-    ALERT_TYPE_WEAK_TLS,
-    ALERT_TYPE_NO_MONITOR_MODE,     /* startup: no WiFi radio in monitor mode */
-    ALERT_TYPE_CLEARTEXT_CRED,      /* username observed in the clear (#16 phase 3) */
-    ALERT_TYPE_BEACON_FLOOD,        /* mdk-style flood of fake APs (roadmap B4) */
-    ALERT_TYPE_AUTH_FLOOD,          /* 802.11 auth-request flood at an AP (roadmap B1) */
-    ALERT_TYPE_SSID_CONFUSION,      /* same SSID advertised with downgraded RSN (CVE-2023-52424, #32) */
-    ALERT_TYPE_MGMT_FUZZ,           /* malformed-IE / fuzzed 802.11 mgmt frames (mdk4 mode m, #33) */
-    ALERT_TYPE_ROGUE_RADIUS,        /* weak EAP method / identity leak — eaphammer/hostapd-wpe (#31) */
-    ALERT_TYPE_ICMP_TUNNEL,         /* oversized Echo payloads — ptunnel/icmptunnel/Loki (#40) */
-    ALERT_TYPE_MY_NETWORK_RECON,    /* unassociated client remembers an operator-designated SSID (#52) */
-    ALERT_TYPE_RECURRING_TRANSIT,   /* same device seen passing repeatedly — circling (#54) */
-    ALERT_TYPE_UNKNOWN_DEVICE,      /* device on a designated network, absent from the roster (#55) */
-    ALERT_TYPE_RF_DEGRADED,         /* sustained retry ratio on a channel — interference/jamming (B3) */
-    ALERT_TYPE_ASSOC_FLOOD,         /* association-request flood at one BSSID (#60) */
-    ALERT_TYPE_BTM_ABUSE,           /* 802.11v BSS-Transition forcing — deauth-equivalent steering (#59) */
-    ALERT_TYPE_WPA_DOWNGRADE,       /* AP advertising a downgrade lane — transition mode / MFP-optional / WPA1+RSN (#62) */
-    ALERT_TYPE_PEAP_NO_SERVER_CERT, /* TLS-in-EAP success with no server cert — CVE-2023-52160 (#65) */
-    ALERT_TYPE_CSA_ABUSE,           /* Channel Switch Announcement misused to steer or churn clients (#63) */
-    ALERT_TYPE_RRM_SURVEY_ABUSE,    /* 802.11k Beacon Request used to survey the air through a client (#61) */
-    ALERT_TYPE_RTS_FLOOD,           /* RTS flood reserving the channel — airtime denial of service (#64) */
-    ALERT_TYPE_CAPTIVE_PORTAL,      /* connectivity-check probe intercepted — rogue portal (#69) */
-    ALERT_TYPE_BLOCKACK_ATTACK,     /* spoofed BAR resetting a peer's Block-Ack window — Bl0ck (#70) */
-    ALERT_TYPE_FRAG_PLAINTEXT,      /* plaintext data frame after key install — FragAttacks CVE-2020-26140/-26143 (#75) */
-    ALERT_TYPE_FRAG_BCAST,          /* plaintext broadcast fragment on a protected BSS — CVE-2020-26145 (#75) */
-    ALERT_TYPE_FRAG_CACHE,          /* fragment reassembly straddles a (re)association — CVE-2020-24586 (#75 slice 2) */
-    ALERT_TYPE_FRAG_MIXED,          /* reassembly mixes an encrypted fragment with a plaintext one — CVE-2020-26147 (#75 slice 2) */
-    ALERT_TYPE_SAE_PSK_SPLIT,       /* one SSID advertised as SAE-only by one BSSID and PSK-only by another (#74) */
-    ALERT_TYPE_SAE_PSK_REGRESSION,  /* one BSSID that sustained SAE-only and now advertises PSK-only (#74) */
-    ALERT_TYPE_FRAG_AMSDU,          /* same protected MPDU replayed with the A-MSDU bit flipped — CVE-2020-24588 (#75) */
-    ALERT_TYPE_FRAG_AMSDU_EAPOL,    /* plaintext A-MSDU whose first subframe claims to carry EAPOL — CVE-2020-26144 (#75 slice 4) */
-    ALERT_TYPE_FRAG_MIXKEY,         /* fragment reassembly spans a completed PTK rotation — CVE-2020-24587 (#75 slice 4) */
-    ALERT_TYPE_FRAG_PN_GAP,         /* encrypted fragments reassembled with non-consecutive PNs — CVE-2020-26146 (#75) */
-    ALERT_TYPE_FRAG_EAPOL_RELAY,    /* EAPOL forwarded between two stations by the AP — CVE-2020-26139 (#75) */
-    ALERT_TYPE_SA_QUERY_FLOOD,      /* SA-Query storm — the MFP-era shape of a disassoc flood (#76) */
-    ALERT_TYPE_MFP_UNPROTECTED,     /* unprotected robust action frame on an MFP-required BSS — CVE-2019-16275 (#76) */
-    ALERT_TYPE_OPEN_SETUP_AP,       /* open SoftAP named like a device onboarding surface — NIST SP 1800-36 (#80) */
-    ALERT_TYPE_WPS_PIN_BRUTE,       /* WPS external-registrar PIN brute force — CERT/CC VU#723755 (#82) */
-    ALERT_TYPE_WPS_LOCKOUT_CYCLING, /* AP Setup Locked sawtooth — the lockout a PIN brute trips (#82) */
-    ALERT_TYPE_WPS_PBC_RACE,        /* concurrent PBC enrollees inside the 120 s walk time (#82) */
-    ALERT_TYPE_MLE_INVALID_LINK_ID, /* MLE Per-STA Profile link_id out of range or repeated — CVE-2026-58374 (#104) */
-    ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD, /* MLE Common Info Length can't cover the mandatory MLD MAC, or overruns the IE — w1.fi 2026-1 (#104 slice 2) */
-    ALERT_TYPE_MLE_SUBELEM_OVERRUN, /* MLE Link Info subelement lengths sum past the enclosing element — w1.fi 2026-1 (#104 slice 3) */
-    ALERT_TYPE_MLD_MAC_COLLISION,   /* same (MLD MAC, link_id) reported with two different affiliated addresses — IEEE 802.11be 9.4.2.312 (#104 slice 4) */
-    ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE, /* two links of one MLD, each with its own RSNE, disagree on PMF or pairwise-cipher strength — IEEE 802.11be 9.4.2.312 (#104 slice 5) */
-    ALERT_TYPE_CAM_WS_DISCOVERY,    /* ONVIF camera announced itself over unauthenticated WS-Discovery — OASIS WS-Discovery 1.1 (#106) */
-    ALERT_TYPE_PM_FORGE,            /* PM=1 Null while the same MAC keeps transmitting PM=0 data — Framing Frames, CVE-2022-47522 (#107 shape A) */
-    ALERT_TYPE_SURV_CLOUD_SNI,      /* TLS SNI on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
-    ALERT_TYPE_TPC_ABSENT_HIGH_BAND, /* designated 5 GHz BSS advertising neither Power Constraint nor TPC Report — IEEE 802.11-2020 §11.8 (#101 slice 3) */
-    ALERT_TYPE_CAM_SETUP_SSID,      /* SoftAP named by a camera vendor's documented setup-mode SSID — vendor onboarding docs (#106 slice 2) */
-    ALERT_TYPE_QUEUE_EVICT,         /* unicast downlink burst released within 100 ms of a (BSSID,STA) session change — Framing Frames, CVE-2022-47522 (#107 shape B) */
-    ALERT_TYPE_COUNT,
-} alert_type_t;
+/* alert_type_t, ALERT_TYPE_COUNT, alert_technique() and alert_type_name()
+ * live in sloth_alert.h, generated from sloth_alerts.def (#117). */
 
 typedef struct {
     alert_type_t type;
@@ -959,21 +855,6 @@ typedef struct {
      * again at 0. */
     uint32_t     reopen_count;
 } alert_t;
-
-/* Canonical MITRE ATT&CK technique for a given alert type. Returns
- * an empty string ("") for alert types that describe host posture
- * rather than adversary behaviour. Defined in src/alerts.c so tests
- * can compile against the table directly. */
-const char *alert_technique(alert_type_t type);
-
-/* The enum's own name, e.g. "ALERT_TYPE_BTM_ABUSE".
- *
- * Not derivable from alert_t.title: titles are display strings capped
- * at ALERT_TITLE_LEN and abbreviated to fit — BLOCKACK_ATK for
- * ALERT_TYPE_BLOCKACK_ATTACK, PEAP_NO_CERT for
- * ALERT_TYPE_PEAP_NO_SERVER_CERT. Anything keying on the identity
- * rather than the label needs this (#73). */
-const char *alert_type_name(alert_type_t type);
 
 /* ── ICMP log ───────────────────────────────────────────── */
 #define MAX_ICMP_LOG 256
@@ -3003,10 +2884,6 @@ int pkt_mon_merged_at(const sloth_state_t *s, int k, int *is_mon, int *idx);
  * view-switch letters? Kept in main.c as a small, centralized table;
  * exposed for direct unit-test coverage of the routing decision. */
 int view_claims_key(view_t v, int key);
-
-/* "[key] Name" label for a view — the tab bar and the [?] help card
- * both read this so their key lists can't drift apart. */
-const char *view_label(view_t v);
 
 /* ── Device risk scoring — declared here (post-state) so we can name
  * sloth_state_t without a forward decl dance. See src/device_risk.c
