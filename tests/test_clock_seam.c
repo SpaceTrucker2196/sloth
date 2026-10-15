@@ -108,16 +108,30 @@ static void test_real_clocks_by_default(void) {
     ASSERT(b >= a);
 }
 
+/* A fake monotonic value no real clock can produce: CLOCK_MONOTONIC in
+ * milliseconds since boot would need ~290 million years to get here, so
+ * "the value is not the sentinel" proves the real clock is back without
+ * assuming anything about how long the host has been up. The first
+ * version of this test asserted real > 123456 ms, i.e. uptime over two
+ * minutes, and a fresh CI runner failed it under TSan on 2026-10-15. */
+#define MONO_SENTINEL (UINT64_MAX - 1)
+
 static void test_test_set_swaps_and_null_restores(void) {
-    g_mono = 123456; g_wall = WALL0;
+    g_mono = MONO_SENTINEL; g_wall = WALL0;
     sloth_clock_test_set(fake_mono, fake_wall);
-    ASSERT_EQ(sloth_mono_ms(), (uint64_t)123456);
+    ASSERT_EQ(sloth_mono_ms(), MONO_SENTINEL);
     ASSERT_EQ((long)sloth_wall(), (long)WALL0);
     g_wall = WALL0 + 7;
     ASSERT_EQ((long)sloth_wall(), (long)(WALL0 + 7));
-    /* Each clock restores independently. */
+    /* Each clock restores independently: mono is real again (not the
+     * sentinel, plausible magnitude, non-decreasing) while wall is still
+     * the fake. */
     sloth_clock_test_set(NULL, fake_wall);
-    ASSERT(sloth_mono_ms() > (uint64_t)123456);
+    uint64_t m1 = sloth_mono_ms();
+    uint64_t m2 = sloth_mono_ms();
+    ASSERT(m1 != MONO_SENTINEL);
+    ASSERT(m1 < UINT64_MAX / 2);
+    ASSERT(m2 >= m1);
     ASSERT_EQ((long)sloth_wall(), (long)(WALL0 + 7));
     sloth_clock_test_set(NULL, NULL);
     time_t libc = time(NULL);
