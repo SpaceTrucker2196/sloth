@@ -836,7 +836,7 @@ end, and most of them stopped silently. They now share one iterator
 this tally. The kinds, and this is the whole parse-fault set:
 `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
 `mle_malformed`, `ip_truncated`, `ip_fragment`, `dns_name_bad`,
-`tls_malformed`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`. The others are reserved by
+`tls_malformed`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`, `mle_malformed`. The others are reserved by
 the issue that introduced the tally and are wired by the slices that
 rewrite those parsers (#128 RSN, #131 DNS/TLS, #132 IP); until then
 their field is emitted and reads 0 because nothing measures it, not
@@ -863,7 +863,14 @@ holds both lists to the build.
   monitor stream and the probe-request SSID walk. A malformed probe
   request therefore counts up to three: the SSID, fingerprint and
   PHY-tier walks each cover its element list. Also the KDE walk over an
-  unencrypted EAPOL-Key M1's Key Data. A one-octet tail counts here
+  unencrypted EAPOL-Key M1's Key Data.
+- `mle_malformed` — a Multi-Link element (beacon or association
+  request) broke one of its three bounds rules: a Common Info Length
+  too small or past the element, a subelement chain that does not tile
+  Link Info, or an out-of-range or repeated Link ID — the shapes behind
+  CVE-2026-58374 that `MLE_*` alerts already report per MLD. One count
+  per element however many rules it broke. A subelement overrun counts
+  here and not in `ie_overrun`. A one-octet tail counts here
   but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
   pre-#126 meaning (an element whose length runs off the end) so that
   `MGMT_FUZZ` scores do not move.

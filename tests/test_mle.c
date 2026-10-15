@@ -923,6 +923,64 @@ static void test_untiled_sta_profile_is_not_read_and_not_a_fault(void) {
     ASSERT_EQ((int)sh_parse_fault_total(), 0);
 }
 
+/* #126: SH_PF_MLE_MALFORMED counts one per element that broke any of
+ * its three bounds rules — and only those. Each rule alone, then two at
+ * once (still one), then a clean element (none). A subelement overrun
+ * is an MLE fault, not an IE_OVERRUN: the kind names the parser. */
+static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
+    uint8_t b[128];
+    sloth_mld_t m;
+
+    /* Common Info Length 6: below the 7 that holds itself + MLD MAC. */
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    b[3] = 6;
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_common_info_len, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
+
+    /* Per-STA subelement claiming one octet more than is there. */
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int sub = n;
+    n = put_per_sta(b, n, 1, LNK1);
+    b[sub + 1]++;
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 0);
+
+    /* Link ID 15, outside the 0-14 hostapd can store. */
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 15, LNK1);
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
+
+    /* Link ID 15 and then an overrunning subelement: two rules, one
+     * element, one count. */
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 15, LNK1);
+    sub = n;
+    n = put_per_sta(b, n, 2, LNK2);
+    b[sub + 1]++;
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_link_id, 1);
+    ASSERT_EQ(m.malformed_subelem_len, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
+
+    /* Two clean links: nothing. */
+    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta(b, n, 1, LNK1);
+    n = put_per_sta(b, n, 2, LNK2);
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.link_count, 2);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+}
+
 /* A selector newer than IEEE 802.11-2020 Table 9-149 is ranked
  * "unknown", not "weak" — otherwise every cipher suite added after this
  * table was written becomes an alert on a conformant AP. */
@@ -1043,6 +1101,7 @@ void run_mle_tests(void) {
     RUN_TEST(test_zero_length_sta_profile_not_flagged);
     RUN_TEST(test_sta_info_len_past_subelement_end_is_safe);
     RUN_TEST(test_untiled_sta_profile_is_not_read_and_not_a_fault);
+    RUN_TEST(test_malformed_mle_reaches_the_parse_fault_tally);
     RUN_TEST(test_unrecognised_cipher_suite_is_not_ranked_weak);
     RUN_TEST(test_downgrade_not_claimed_on_an_overrunning_chain);
     RUN_TEST(test_cross_link_downgrade_persists_across_clean_frames);

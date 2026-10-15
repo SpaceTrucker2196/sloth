@@ -3,6 +3,7 @@
 
 #include "mle.h"
 #include "bytes.h"
+#include "sensor_health.h"
 
 static sloth_mld_t     g_mld[SLOTH_MLD_MAX];
 static int             g_mld_n;
@@ -139,6 +140,7 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     if (common_len < 7 || common_off + common_len > len) {
         out->malformed_common_info_len = 1;
         out->bad_common_info_len = (uint8_t)common_len;
+        sh_parse_fault_note(SH_PF_MLE_MALFORMED);
         return 1;
     }
 
@@ -159,32 +161,16 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
     int lo_rank_link = 0, hi_rank_link = 0;
     int mfpr_set_link = -1, mfpr_clear_link = -1;
 
-    while (off < len) {
-        /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 3): the subelement
-         * chain has to tile Link Info exactly — no padding is defined
-         * between subelements, so a tail too short to hold even the
-         * 2-byte ID/length header is already a chain whose declared
-         * lengths overshot the container. */
-        if (off + 2 > len) {
-            out->malformed_subelem_len = 1;
-            out->subelem_overrun_bytes = (uint16_t)(off + 2 - len);
-            break;
-        }
-        uint8_t sid  = ie_body[off];
-        uint8_t slen = ie_body[off + 1];
-        /* ...and the common case of the same fault: a declared body that
-         * reaches past the element's end. The sum of the lengths walked
-         * so far plus this one exceeds the enclosing MLE, which is the
-         * successful overread a trusting parser would perform. Flag and
-         * stop — there is no safe offset to continue from. */
-        if (off + 2 + (int)slen > len) {
-            out->malformed_subelem_len = 1;
-            out->bad_subelem_len = slen;
-            out->subelem_overrun_bytes = (uint16_t)(off + 2 + (int)slen - len);
-            break;
-        }
+    /* The subelement chain runs on the shared iterator (#126), whose
+     * overrun policy — stop, yield nothing further — is exactly the
+     * rule this element needs; the two fault shapes it reports are
+     * classified after the loop. */
+    tlv_it_t it;
+    uint16_t sid; int slen; const uint8_t *sbody;
+    tlv_init(&it, ie_body + off, len - off);
+    while (tlv_next(&it, &sid, &slen, &sbody) == TLV_OK) {
         if (sid == MLE_SUBELEM_PER_STA && slen >= 3) {
-            const uint8_t *p = ie_body + off + 2;
+            const uint8_t *p = sbody;
             /* STA Control(2): bits 0-3 Link ID, bit 5 MAC Address
              * Present. Then STA Info Length(1), then the affiliated
              * address when present. */
@@ -269,7 +255,27 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
                 }
             }
         }
-        off += 2 + slen;
+    }
+    if (it.status == TLV_OVERRUN) {
+        /* CVE-2026-58374 / w1.fi 2026-1 (#104 slice 3): the chain has to
+         * tile Link Info exactly. `at` is where the subelement that did
+         * not fit begins; the iterator leaves its offset there. */
+        const int at = off + it.off;
+        out->malformed_subelem_len = 1;
+        if (at + 2 > len) {
+            /* A tail too short to hold even the 2-byte ID/length header
+             * — no padding is defined between subelements, so this is
+             * already a chain whose declared lengths overshot. */
+            out->subelem_overrun_bytes = (uint16_t)(at + 2 - len);
+        } else {
+            /* ...and the common case of the same fault: a declared body
+             * that reaches past the element's end, which is the
+             * successful overread a trusting parser would perform. There
+             * is no safe offset to continue from. */
+            const uint8_t bad = ie_body[at + 1];
+            out->bad_subelem_len = bad;
+            out->subelem_overrun_bytes = (uint16_t)(at + 2 + (int)bad - len);
+        }
     }
 
     /* Two or more links of ONE Multi-Link element, each with its own
@@ -350,6 +356,13 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
             out->pmf_mismatch_peer_link_id = (uint8_t)mfpr_set_link;
         }
     }
+    /* One count per element that broke any of its three bounds rules
+     * (#126) — the common-info case counts at its own early return.
+     * A subelement overrun is counted here as an MLE fault, not as an
+     * IE_OVERRUN: this element has its own CVE-specific detector, and
+     * the kind says which parser saw it. */
+    if (out->malformed_subelem_len || out->malformed_link_id)
+        sh_parse_fault_note(SH_PF_MLE_MALFORMED);
     return 1;
 }
 

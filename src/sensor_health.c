@@ -177,6 +177,7 @@ int sh_parse_fault_is_wired(sh_parse_fault_t kind) {
     case SH_PF_RADIOTAP_BAD:
     case SH_PF_DOT11_RUNT:
     case SH_PF_IE_OVERRUN:
+    case SH_PF_MLE_MALFORMED:
         return 1;
     default:
         return 0;
