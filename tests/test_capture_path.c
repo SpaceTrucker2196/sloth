@@ -787,6 +787,42 @@ static void test_a_short_assoc_response_records_the_grant(void) {
     assoc_clear();
 }
 
+/* #126: the (re)association / probe-response SSID walk in
+ * on_probe_frame() runs on the shared iterator. A response whose first
+ * element (Supported Rates) claims 8 octets with 1 present is a stop
+ * counted once; the grant itself is still recorded, as before, because
+ * the status code is a fixed field ahead of the elements. The same
+ * response with a well-formed Supported Rates element counts nothing.
+ * Mutation-proved by deleting that walk's sh_parse_fault_note(). */
+static void test_assoc_response_element_overrun_is_tallied(void) {
+    uint8_t f[64];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    fb_u8(&b, 1);           /* Supported Rates */
+    fb_u8(&b, 8);           /* claims 8 */
+    fb_u8(&b, 0x82);        /* has 1 */
+    ASSERT(fb_ok(&b));
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_IE_OVERRUN);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IE_OVERRUN) - pf0), 1);
+    ASSERT_EQ(assoc_count(), 1);
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    int n = assoc_resp_short(f, sizeof f, 1);
+    ls[0] = n;
+    pf0 = sh_parse_fault_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_total() - pf0), 0);
+    ASSERT_EQ(assoc_count(), 1);
+    assoc_clear();
+}
+
 /* ── FCS is a trailer, not frame (#122) ──────────────────────
  *
  * With radiotap FLAGS saying the FCS is present, the four trailing
@@ -2438,6 +2474,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
+    RUN_TEST(test_assoc_response_element_overrun_is_tallied);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);

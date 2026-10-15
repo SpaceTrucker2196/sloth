@@ -14,6 +14,7 @@
 #include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
 #include "dot11_frame.h"         /* one decode per frame (#122) */
+#include "bytes.h"               /* tlv_next (#126) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -542,22 +543,21 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             uint16_t status = (uint16_t)(body[2] | ((uint16_t)body[3] << 8));
             status_ok = (status == 0);
         }
-        const uint8_t *ie = body + fixed;
-        int rem = blen - fixed;
         char ssid[33] = "";
-        while (rem >= 2) {
-            uint8_t tag = ie[0];
-            uint8_t tln = ie[1];
-            if (2 + (int)tln > rem) break;
+        tlv_it_t it;
+        uint16_t tag; int tln; const uint8_t *eb;
+        tlv_init(&it, body + fixed, blen - fixed);
+        while (tlv_next(&it, &tag, &tln, &eb) == TLV_OK) {
             if (tag == 0) {
                 int slen = tln < 32 ? tln : 32;
-                memcpy(ssid, ie + 2, (size_t)slen);
+                memcpy(ssid, eb, (size_t)slen);
                 ssid[slen] = '\0';
                 break;
             }
-            ie += 2 + tln;
-            rem -= 2 + tln;
         }
+        /* Only a stop before the SSID is reachable here: the walk ends
+         * at the SSID, which is normally the first element (#126). */
+        if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
         if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
         if (status_ok && (sub == 1 || sub == 3)) {
             int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
