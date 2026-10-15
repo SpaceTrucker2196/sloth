@@ -936,6 +936,35 @@ static void test_rrm_targeted_request_survives_the_htc_bit(void) {
     rrm_clear();
 }
 
+/* #126: the element walk in rrm_parse_action() runs on the shared
+ * iterator. A one-octet tail after the Measurement Request is a stop
+ * that reaches the tally once, and the request before it is still
+ * recorded. A Request cut short inside its own fixed fields (token but
+ * no Number of Repetitions) is a truncated frame, not an element
+ * fault, and stays uncounted as it was. */
+static void test_rrm_trailing_octet_is_tallied(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    f[n] = 0xdd;
+    sh_parse_fault_reset();
+    ASSERT_EQ(rrm_parse_action(f, n + 1, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ(p.targeted_reqs, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+
+    sh_parse_fault_reset();
+    ASSERT_EQ(rrm_parse_action(f, n, 1001), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+
+    /* Category, Action, Dialog Token — and nothing else. */
+    sh_parse_fault_reset();
+    ASSERT_EQ(rrm_parse_action(f, HDR + 3, 1002), 0);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    rrm_clear();
+}
+
 static void test_rrm_request_without_ssid_is_broadcast(void) {
     /* No SSID subelement: the AP is asking "what can you hear", which
      * is ordinary steering. Counting it as targeted would make every
@@ -1509,6 +1538,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_rrm_measurement_mode_is_octet_9);
     RUN_TEST(test_rrm_targeted_request_survives_the_htc_bit);
     RUN_TEST(test_rrm_request_without_ssid_is_broadcast);
+    RUN_TEST(test_rrm_trailing_octet_is_tallied);
     RUN_TEST(test_rrm_report_counted_but_separate);
     RUN_TEST(test_rrm_non_beacon_measurement_ignored);
     RUN_TEST(test_rrm_busiest_pair_needs_the_threshold);

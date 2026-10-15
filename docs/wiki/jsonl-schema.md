@@ -856,7 +856,7 @@ holds both lists to the build.
   `beacon_parse_ies()` (beacons, association requests and the
   managed-mode nl80211 scan results); the BSS Transition Management
   Request candidate list; the Channel Switch Announcement action
-  frame. A one-octet tail counts here
+  frame; the Radio Measurement Request/Report element list. A one-octet tail counts here
   but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
   pre-#126 meaning (an element whose length runs off the end) so that
   `MGMT_FUZZ` scores do not move.

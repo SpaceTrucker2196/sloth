@@ -569,11 +569,14 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
     if (action == RRM_ACT_MEASUREMENT_REQUEST) off += 2;  /* + repetitions */
     int found = 0;
 
-    while (off + 2 <= len) {
-        uint8_t tag = dot11[off];
-        uint8_t tln = dot11[off + 1];
-        if (off + 2 + (int)tln > len) break;
-        const uint8_t *b = dot11 + off + 2;
+    /* A Request too short for its own fixed fields leaves `off` past
+     * `len`; the iterator takes that as an empty list, which is what
+     * the old loop did, and it is not counted as an element fault. The
+     * pointer is not formed past the end at all. */
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *b;
+    tlv_init(&it, off <= len ? dot11 + off : NULL, len - off);
+    while (tlv_next(&it, &tag, &tln, &b) == TLV_OK) {
 
         if (action == RRM_ACT_MEASUREMENT_REPORT && tag == 39) {
             pthread_mutex_lock(&g_rrm_mu);
@@ -627,8 +630,8 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
             pthread_mutex_unlock(&g_rrm_mu);
             found = 1;
         }
-        off += 2 + tln;
     }
+    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     return found;
 }
 
