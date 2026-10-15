@@ -101,7 +101,7 @@ sendp([deauth] * 20, iface="wlan1mon", inter=0.02)
 
 Expected within 5 s of the last deauth:
 
-- `EVIL_TWIN` CRIT alert with key `twin-chain:Cafe-Net`, detail
+- `EVIL_TWIN` CRIT alert with key `twin-chain:Cafe-Net:<16-hex hash>` (#112), detail
   `attack-in-progress: real=<real> twin=<twin>`.
 - `evil_twin_bssid_is_tainted(twin)` returns 1 — visible via the
   `[x] Twins` view's `!` glyph.

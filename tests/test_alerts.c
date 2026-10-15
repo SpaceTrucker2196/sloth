@@ -8758,6 +8758,37 @@ static void test_ssid_confusion_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+static void test_twin_chain_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    char n1[33], n2[33];
+    long_ssid_pair(n1, n2);
+    uint8_t real1[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin1[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    uint8_t real2[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x04};
+    uint8_t twin2[6] = {0x11,0x22,0x33,0x44,0x55,0x67};
+    add_beacon(&s, n1, real1, "WPA2");
+    add_beacon(&s, n1, twin1, "WPA2");
+    add_beacon(&s, n2, real2, "WPA2");
+    add_beacon(&s, n2, twin2, "WPA2");
+    uint8_t c1[6] = {0x99,0x99,0x99,0x99,0x99,0x01};
+    uint8_t c2[6] = {0x99,0x99,0x99,0x99,0x99,0x02};
+    add_deauth_flood_full(&s, c1, real1, 7, 20);
+    add_deauth_flood_full(&s, c2, real2, 7, 20);
+    alerts_update(&s);
+    int chains = 0, shaped = 0;
+    for (int k = 0; k < s.alert_count; k++) {
+        if (s.alerts[k].type != ALERT_TYPE_EVIL_TWIN) continue;
+        if (strncmp(s.alerts[k].key, "twin-chain:", 11) != 0) continue;
+        chains++;
+        if (strncmp(s.alerts[k].key, "twin-chain:NNNN", 15) == 0 &&
+            (int)strlen(s.alerts[k].key) == 10 + 1 + 32 + 1 + 16) shaped++;
+    }
+    ASSERT_EQ(chains, 2);
+    ASSERT_EQ(shaped, 2);
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9941,6 +9972,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_captive_portal_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_sae_psk_split_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_ssid_confusion_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_twin_chain_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

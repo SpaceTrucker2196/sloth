@@ -4794,9 +4794,14 @@ static void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             char a_bssid[20], b_bssid[20];
             fmt_bssid(a_bssid, a->bssid);
             fmt_bssid(b_bssid, b->bssid);
+            /* The SSID is the one thing a twin copies on purpose
+             * (#112): a remote component, sanitised and hashed whole. */
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            snprintf(key, sizeof(key), "twin-chain:%.36s", a->ssid);
+            akey_t k;
+            akey_begin(&k, key, sizeof(key), "twin-chain");
+            akey_remote(&k, a->ssid, 32);
+            if (!akey_end(&k)[0]) break;
             snprintf(detail, sizeof(detail),
                      "'%.16s' attack-in-progress: real=%s twin=%s [%.6s]",
                      a->ssid, a_bssid, b_bssid, a->enc);
