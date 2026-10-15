@@ -862,7 +862,8 @@ holds both lists to the build.
   the SSID walk over (re)association and probe responses on the
   monitor stream and the probe-request SSID walk. A malformed probe
   request therefore counts up to three: the SSID, fingerprint and
-  PHY-tier walks each cover its element list. A one-octet tail counts here
+  PHY-tier walks each cover its element list. Also the KDE walk over an
+  unencrypted EAPOL-Key M1's Key Data. A one-octet tail counts here
   but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
   pre-#126 meaning (an element whose length runs off the end) so that
   `MGMT_FUZZ` scores do not move.

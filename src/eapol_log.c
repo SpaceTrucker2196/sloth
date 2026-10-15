@@ -16,6 +16,8 @@
 #include "assoc_track.h"
 #include "alerts.h"
 #include "dot11_data.h"
+#include "bytes.h"
+#include "sensor_health.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -451,24 +453,25 @@ static int parse_eapol_key(const uint8_t *p, size_t len, size_t *out_span,
 
     /* PMKID KDE in M1's Key Data. Walk KDEs:
      *   Type (1B) = 0xDD, Length (1B), then OUI(3B)+DataType(1B)+Data.
-     *   PMKID KDE: OUI 00:0F:AC, DataType 0x04, 16-byte PMKID. */
+     *   PMKID KDE: OUI 00:0F:AC, DataType 0x04, 16-byte PMKID.
+     * KDEs share element framing, so this is the shared iterator
+     * (#126). The 0xDD-then-zeros padding of §12.7.2 applies only to
+     * an encrypted Key Data field, which is never walked here, so a
+     * short tail in what is walked is a real fault, not padding. */
     if (msg == 1 && kdl >= 6 && !encrypted_d) {
-        const uint8_t *kd = p + EAPOL_KEY_FIXED_LEN;
-        size_t rem = kdl;
-        while (rem >= 2) {
-            uint8_t t = kd[0];
-            uint8_t l = kd[1];
-            if (2 + (size_t)l > rem) break;
+        tlv_it_t it;
+        uint16_t t; int l; const uint8_t *kb;
+        tlv_init(&it, p + EAPOL_KEY_FIXED_LEN, (int)kdl);
+        while (tlv_next(&it, &t, &l, &kb) == TLV_OK) {
             if (t == 0xDD && l == 20 &&
-                kd[2] == 0x00 && kd[3] == 0x0f && kd[4] == 0xac &&
-                kd[5] == 0x04) {
-                memcpy(out_pmkid, kd + 6, 16);
+                kb[0] == 0x00 && kb[1] == 0x0f && kb[2] == 0xac &&
+                kb[3] == 0x04) {
+                memcpy(out_pmkid, kb + 4, 16);
                 *out_has_pmkid = 1;
                 break;
             }
-            kd  += 2 + (size_t)l;
-            rem -= 2 + (size_t)l;
         }
+        if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     }
     *out_span = span;
     return msg;

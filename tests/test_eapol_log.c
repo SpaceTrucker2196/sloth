@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include "runner.h"
+#include "sensor_health.h"
 #include "sloth.h"
 #include "eapol_log.h"
 #include "jsonl.h"
@@ -171,6 +172,41 @@ static void test_m1_with_pmkid_extracted(void) {
     ASSERT_EQ(s.eapol_events[0].has_pmkid, 1);
     ASSERT_EQ(memcmp(s.eapol_events[0].pmkid, PMKID, 16), 0);
     ASSERT_EQ(memcmp(s.eapol_events[0].anonce, ANONCE, 32), 0);
+}
+
+/* #126: the KDE walk runs on the shared iterator. The PMKID KDE's
+ * Length octet raised from 20 to 21 makes it claim one octet more than
+ * Key Data holds: the M1 is still recorded, no PMKID is taken from the
+ * element that did not fit (as before), and the stop is counted once.
+ * The well-formed M1 counts nothing. */
+static void test_m1_overrunning_kde_is_tallied(void) {
+    eapol_clear();
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 7) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
+    /* Key Data begins 99 octets into the EAPOL PDU (header 4, then the
+     * descriptor through Key Data Length): the KDE's Type and Length. */
+    ASSERT_EQ(eapol[99], 0xDD);
+    ASSERT_EQ(eapol[99 + 1], 0x14);
+    eapol[99 + 1] = 0x15;
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    sh_parse_fault_reset();
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000000, 0), 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eapol_snapshot(&s);
+    ASSERT_EQ(s.eapol_count, 1);
+    ASSERT_EQ(s.eapol_events[0].msg_num, 1);
+    ASSERT_EQ(s.eapol_events[0].has_pmkid, 0);
+
+    eapol_clear();
+    en = build_eapol_key(eapol, ki, ANONCE, NULL, PMKID);
+    fn = build_frame(frame, eapol, en, 1);
+    sh_parse_fault_reset();
+    ASSERT_EQ(eapol_observe_dot11(frame, fn, -50, 6, 1700000001, 0), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    eapol_clear();
 }
 
 /* ── Fix A (#122): the header length is the view's, not a 7th copy ──
@@ -2290,6 +2326,7 @@ void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
     RUN_TEST(test_m1_with_pmkid_extracted);
+    RUN_TEST(test_m1_overrunning_kde_is_tallied);
     RUN_TEST(test_m1_qos_with_htc_is_recorded);
     RUN_TEST(test_m1_non_qos_strictly_ordered_is_recorded);
     RUN_TEST(test_m2_uplink_roles_come_from_the_view);
