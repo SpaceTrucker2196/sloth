@@ -36,7 +36,10 @@
  * the second would pass the day someone adds a fourth binary and forgets.
  */
 
-#define BR_MAX_LINES 512
+/* Sized well past the Makefile's logical-line count (~600 after #115) so
+ * the scan never stops short of the later rules for a reason unrelated
+ * to what is being checked; the ASSERT_LT below fails if it ever does. */
+#define BR_MAX_LINES 4096
 
 static char *slurp_makefile(void) {
     FILE *f = fopen("Makefile", "rb");
@@ -149,7 +152,7 @@ static void test_every_cc_invocation_carries_compiler_flags(void) {
     ASSERT(buf != NULL);
     if (!buf) return;
 
-    char *lines[BR_MAX_LINES];
+    static char *lines[BR_MAX_LINES];
     int n = logical_lines(buf, lines, BR_MAX_LINES);
     ASSERT_GT(n, 0);
     /* A capped scan would silently stop before the later rules. */
@@ -166,10 +169,11 @@ static void test_every_cc_invocation_carries_compiler_flags(void) {
         ASSERT(carries_cflags(lines[i]));
     }
 
-    /* Five today: the sloth link, the %.o compile, research-index,
-     * research-mcp and the test binary. Asserting a floor keeps the loop
-     * from passing vacuously if the scan ever stops matching anything. */
-    ASSERT_GE(seen, 5);
+    /* Eight today: the sloth link and its object compile, research-index,
+     * research-mcp, and the compile and link of sloth_test and of
+     * sloth_test_pcap. Asserting a floor keeps the loop from passing
+     * vacuously if the scan ever stops matching anything. */
+    ASSERT_GE(seen, 8);
 
     free(buf);
 }
@@ -181,7 +185,7 @@ static void test_sloth_link_rule_passes_cflags(void) {
     ASSERT(buf != NULL);
     if (!buf) return;
 
-    char *lines[BR_MAX_LINES];
+    static char *lines[BR_MAX_LINES];
     int n = logical_lines(buf, lines, BR_MAX_LINES);
 
     int found = 0;
@@ -252,6 +256,270 @@ static void test_continuations_join_into_one_command(void) {
     ASSERT(!is_recipe(lines[1]));
 }
 
+/* ── derived source lists (#115) ──
+ *
+ * The Makefile used to keep seven source lists by hand: SRCS, TEST_SRCS,
+ * CAPTURE_PATH_SRCS, FUZZ_EAPOL_SRCS and three inline lists in the fuzz
+ * recipe. The inline ones rotted first — on 2026-10-14 two fuzz targets
+ * failed to LINK in CI because a module they listed gained a dependency
+ * they did not. Since #115 every binary links libsloth_core.a built from
+ * one list, and each test or fuzz binary takes its own files by wildcard.
+ *
+ * The property, stated so a regression of any shape trips it: no command
+ * that compiles or links names a source file, and no variable spells out
+ * a test file. Both are text scans of the Makefile for the same reason as
+ * everything else here. */
+
+/* Does `line` contain a whitespace-delimited token that is a literal C
+ * source path ("src/x.c", "tests/fuzz/fuzz_y.c")? A make pattern
+ * ("%.c", "tests/test_capture_path%.c") or a variable reference is not
+ * one: those are how a derived list is written. */
+static int names_c_path_under(const char *line, const char *prefix) {
+    const char *p = line;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        const char *t = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - t);
+        if (len < 3) continue;
+        /* Trailing shell punctuation is not part of the path. */
+        while (len > 2 && (t[len - 1] == ';' || t[len - 1] == ')' ||
+                           t[len - 1] == ','))
+            len--;
+        if (len < 3 || t[len - 2] != '.' || t[len - 1] != 'c') continue;
+        int plain = 1;
+        for (size_t i = 0; i < len; i++)
+            if (t[i] == '%' || t[i] == '$' || t[i] == '*' || t[i] == '(') {
+                plain = 0;
+                break;
+            }
+        if (plain && (!prefix || strncmp(t, prefix, strlen(prefix)) == 0))
+            return 1;
+    }
+    return 0;
+}
+
+static int names_c_path(const char *line) { return names_c_path_under(line, NULL); }
+
+/* Blank the first argument of every $(filter-out ...) in `s`, in place.
+ * Naming a file in order to EXCLUDE it from a wildcard (the runner, the
+ * capture-path pair) is how a derived list is written, not a hand list. */
+static void blank_filter_out_patterns(char *s) {
+    char *p = s;
+    while ((p = strstr(p, "$(filter-out ")) != NULL) {
+        p += strlen("$(filter-out ");
+        while (*p && *p != ',') *p++ = ' ';
+    }
+}
+
+static int invokes_fuzz_cc(const char *line) {
+    return strstr(line, "$(FUZZ_CC)") != NULL;
+}
+
+static void test_scanner_finds_literal_c_paths(void) {
+    ASSERT(names_c_path("\t$(FUZZ_CC) $(FUZZ_FLAGS) -o x tests/fuzz/fuzz_a.c src/radiotap.c"));
+    ASSERT(names_c_path("\t$(CC) $(CFLAGS) -c src/x.c;"));
+    ASSERT(names_c_path("TEST_SRCS = tests/main_test.c"));
+    ASSERT(!names_c_path("\t$(CC) $(CFLAGS) -MMD -c -o $@ $<"));
+    ASSERT(!names_c_path("TEST_SRCS = $(filter-out tests/test_capture_path%.c,$(wildcard tests/*.c))"));
+    ASSERT(!names_c_path("$(OBJDIR)/%.o: %.c $(OBJDIR)/.flags"));
+    /* An object, a header or a word that merely ends in "c" is not one. */
+    ASSERT(!names_c_path("\tar rcs lib.a src/x.o include/sloth.h -lc"));
+    /* Under a prefix, and with exclusions blanked. */
+    ASSERT(names_c_path_under("X = src/a.c tests/b.c", "tests/"));
+    ASSERT(!names_c_path_under("X = src/a.c", "tests/"));
+    char ex[] = "X = $(filter-out tests/main_test.c tests/test_%.c,$(wildcard tests/*.c))";
+    ASSERT(names_c_path_under(ex, "tests/"));
+    blank_filter_out_patterns(ex);
+    ASSERT(!names_c_path_under(ex, "tests/"));
+    ASSERT(invokes_fuzz_cc("\t$(FUZZ_CC) $(FUZZ_FLAGS) -o $@ $<"));
+    ASSERT(!invokes_fuzz_cc("\t$(CC) $(CFLAGS) -o $@ $^"));
+}
+
+static void test_no_compile_or_link_command_names_a_source(void) {
+    char *buf = slurp_makefile();
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[BR_MAX_LINES];
+    int n = logical_lines(buf, lines, BR_MAX_LINES);
+    ASSERT_LT(n, BR_MAX_LINES);
+
+    int cc_seen = 0, fuzz_seen = 0, listed = 0;
+    for (int i = 0; i < n; i++) {
+        if (!is_recipe(lines[i])) continue;
+        int cc = invokes_cc(lines[i]), fz = invokes_fuzz_cc(lines[i]);
+        if (!cc && !fz) continue;
+        cc_seen += cc;
+        fuzz_seen += fz;
+        if (names_c_path(lines[i])) {
+            fprintf(stderr, "    Makefile: compiler command with a hand-kept "
+                            "source path:\n      %s\n", lines[i] + 1);
+            listed++;
+        }
+    }
+    ASSERT_EQ(listed, 0);
+    /* Floors, so neither half passes by matching nothing: the fuzz object
+     * compile and the one fuzz link rule; every $(CC) line counted by
+     * test_every_cc_invocation_carries_compiler_flags. */
+    ASSERT_GE(fuzz_seen, 2);
+    ASSERT_GE(cc_seen, 8);
+    free(buf);
+}
+
+static void test_no_variable_spells_out_a_test_file(void) {
+    char *buf = slurp_makefile();
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[BR_MAX_LINES];
+    int n = logical_lines(buf, lines, BR_MAX_LINES);
+    ASSERT_LT(n, BR_MAX_LINES);
+
+    int test_srcs_def = 0, hand = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ') l++;
+        if (*l == '#' || *l == '\t') continue;
+        /* A literal tests/ source anywhere outside a comment — other than
+         * as an exclusion from a wildcard — is a hand list starting again. */
+        static char copy[8192];
+        snprintf(copy, sizeof copy, "%s", l);
+        blank_filter_out_patterns(copy);
+        if (names_c_path_under(copy, "tests/")) {
+            fprintf(stderr, "    Makefile: hand-kept test source:\n      %s\n", l);
+            hand++;
+        }
+        if (strncmp(l, "TEST_SRCS", 9) == 0 && strchr(l, '=') &&
+            strstr(l, "$(wildcard tests/*.c)") != NULL)
+            test_srcs_def = 1;
+    }
+    ASSERT_EQ(hand, 0);
+    ASSERT(test_srcs_def);
+    free(buf);
+}
+
+/* The object directory must spell every feature flag. Leave one out and
+ * two configs share a directory again — the stale-object link failure the
+ * per-config split exists to end — so this is checked by name, flag by
+ * flag, rather than trusted. */
+static void test_object_dir_is_per_config(void) {
+    char *buf = slurp_makefile();
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[BR_MAX_LINES];
+    int n = logical_lines(buf, lines, BR_MAX_LINES);
+
+    int tag = 0, objdir = 0, bare_rule = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (strncmp(l, "CFG_TAG", 7) == 0 && strchr(l, '=')) {
+            tag = 1;
+            ASSERT(strstr(l, "$(WITH_NCURSES)") != NULL);
+            ASSERT(strstr(l, "$(WITH_PCAP)") != NULL);
+            ASSERT(strstr(l, "$(WITH_WIFI)") != NULL);
+            ASSERT(strstr(l, "$(WITH_SQLITE)") != NULL);
+        }
+        if (strncmp(l, "OBJDIR", 6) == 0 && strchr(l, '=') &&
+            strstr(l, "$(CFG_TAG)") != NULL)
+            objdir = 1;
+        /* The pre-#115 rule compiled every config beside its source. */
+        if (strncmp(l, "%.o: %.c", 8) == 0) bare_rule = 1;
+    }
+    ASSERT(tag);
+    ASSERT(objdir);
+    ASSERT(!bare_rule);
+    free(buf);
+}
+
+/* `make cppcheck` runs CI's cppcheck command (ci.yml, job `cppcheck`)
+ * and says so in its comment: green locally means green in CI. Until
+ * #119 makes CI call the target, the two are separate texts, so the
+ * claim is checked here: the same arguments in the same order, with
+ * $(CPPCHECK_DEFS) expanded and the -j value (make's `nproc` vs the
+ * shell's "$(nproc)") left out. This is why the target still names the
+ * `src research` directories rather than $(CORE_SRCS): the directory
+ * scan is what CI runs, and it already covers every source the lists
+ * above derive from. */
+
+#define BR_MAX_TOK 96
+#define BR_TOK_LEN 96
+
+static int split_tokens(const char *s, char out[][BR_TOK_LEN], int n, int max) {
+    const char *p = s;
+    while (*p && n < max) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+        if (!*p) break;
+        const char *t = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
+        size_t len = (size_t)(p - t);
+        if (len >= BR_TOK_LEN) len = BR_TOK_LEN - 1;
+        memcpy(out[n], t, len);
+        out[n][len] = '\0';
+        n++;
+    }
+    return n;
+}
+
+static void test_cppcheck_target_matches_ci(void) {
+    char *mk = slurp_makefile();
+    char *ci = slurp_path(".github/workflows/ci.yml");
+    ASSERT(mk != NULL);
+    ASSERT(ci != NULL);
+    if (!mk || !ci) { free(mk); free(ci); return; }
+
+    static char *lines[BR_MAX_LINES];
+    int n = logical_lines(mk, lines, BR_MAX_LINES);
+    const char *defs = NULL, *cmd = NULL;
+    for (int i = 0; i < n; i++) {
+        if (strncmp(lines[i], "CPPCHECK_DEFS", 13) == 0 && strchr(lines[i], '='))
+            defs = strchr(lines[i], '=') + 1;
+        if (strncmp(lines[i], "\tcppcheck -q", 12) == 0) cmd = lines[i];
+    }
+    ASSERT(defs != NULL);
+    ASSERT(cmd != NULL);
+
+    /* ci.yml: the folded `run: >-` block under `- name: cppcheck`. */
+    char *step = strstr(ci, "- name: cppcheck\n");
+    ASSERT(step != NULL);
+    char *run = step ? strstr(step, "run: >-\n") : NULL;
+    ASSERT(run != NULL);
+    if (!defs || !cmd || !run) { free(mk); free(ci); return; }
+    run += strlen("run: >-\n");
+    char *end = strstr(run, "\n\n");      /* the block ends at a blank line */
+    if (end) *end = '\0';
+
+    static char want[BR_MAX_TOK][BR_TOK_LEN], got[BR_MAX_TOK][BR_TOK_LEN];
+    int nw = split_tokens(run, want, 0, BR_MAX_TOK);
+
+    static char raw[BR_MAX_TOK][BR_TOK_LEN];
+    int nr = split_tokens(cmd, raw, 0, BR_MAX_TOK);
+    int ng = 0;
+    for (int i = 0; i < nr && ng < BR_MAX_TOK; i++) {
+        if (strcmp(raw[i], "$(CPPCHECK_DEFS)") == 0)
+            ng = split_tokens(defs, got, ng, BR_MAX_TOK);
+        else
+            memcpy(got[ng++], raw[i], BR_TOK_LEN);
+    }
+    ASSERT_LT(nw, BR_MAX_TOK);
+    ASSERT_LT(ng, BR_MAX_TOK);
+    ASSERT_GT(nw, 10);
+    ASSERT_EQ(nw, ng);
+
+    int k = nw < ng ? nw : ng, mismatched = 0;
+    for (int i = 0; i < k; i++) {
+        /* The -j value is spelt per shell; everything else is the same. */
+        if (i > 0 && strcmp(want[i - 1], "-j") == 0 && strcmp(got[i - 1], "-j") == 0)
+            continue;
+        if (strcmp(want[i], got[i]) != 0) {
+            fprintf(stderr, "    cppcheck arg %d: ci.yml '%s' vs Makefile '%s'\n",
+                    i, want[i], got[i]);
+            mismatched++;
+        }
+    }
+    ASSERT_EQ(mismatched, 0);
+    free(mk);
+    free(ci);
+}
+
 void run_build_recipe_tests(void) {
     TEST_SUITE("build recipe (#95)");
     RUN_TEST(test_scanner_distinguishes_flagged_from_bare);
@@ -260,4 +528,9 @@ void run_build_recipe_tests(void) {
     RUN_TEST(test_sloth_link_rule_passes_cflags);
     RUN_TEST(test_extra_cflags_reaches_both_flag_sets);
     RUN_TEST(test_mutate_sandbox_is_built_from_the_tracked_tree);
+    RUN_TEST(test_scanner_finds_literal_c_paths);
+    RUN_TEST(test_no_compile_or_link_command_names_a_source);
+    RUN_TEST(test_no_variable_spells_out_a_test_file);
+    RUN_TEST(test_object_dir_is_per_config);
+    RUN_TEST(test_cppcheck_target_matches_ci);
 }

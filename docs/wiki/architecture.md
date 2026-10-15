@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `src/sloth_clock.h`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-14 (#122: the one-decode 802.11 frame view).
+**Last updated**: 2026-10-15 (#115: derived source lists, `libsloth_core.a`, per-config object directories).
 
 ---
 
@@ -29,6 +29,8 @@ src/views/*.c              -- one file per VIEW_*
 src/md5.c                  -- embedded MD5 for JA3 (RFC 1321 vectors verified)
 src/sloth_clock.c          -- the one clock seam: sloth_wall() / sloth_mono_ms()
 tests/                     -- unit tests, fake platform, scenarios
+tests/fuzz/fuzz_*.c        -- libFuzzer harnesses; one Makefile rule builds them all
+build/<cfg>/               -- objects + libsloth_core.a per configuration (ignored)
 docs/views/*.md            -- per-view deep dives
 ```
 
@@ -87,6 +89,46 @@ docs/views/*.md            -- per-view deep dives
   the twin surfaces can render "is this AP on the wire" without any of
   them pretending RF answers it (#89 slice 3). Both are read-only,
   in-process, and neither is a control surface or a plugin loader.
+
+## Build layout
+
+Since #115 every binary is derived from one set of source lists in the
+`Makefile`; nothing keeps a list of its own.
+
+- `APP_SRCS` = `src/main.c`, `src/tui.c` and the real platform vtable
+  (`src/platform/linux.c` on Linux) — what only the shipped `sloth`
+  links.
+- `CORE_SRCS` = everything else the current `WITH_*` configuration
+  compiles: `CORE_COMMON_SRCS` plus whichever feature groups
+  (`LINUX_PLATFORM_SRCS`, `LINUX_WIFI_SRCS`, `PCAP_CORE_SRCS`,
+  `SQLITE_CORE_SRCS`) the flags leave on. It is archived as
+  `build/<cfg>/libsloth_core.a` and linked after the app objects.
+- `sloth_test` links every `tests/*.c` except the capture-path pair
+  against a core archive built from `CORE_SRCS_ALL` minus
+  `src/capture/probe.c`, plus `src/reset_all.c` and the library halves
+  of the research tools (`TEST_ONLY_SRCS`). `sloth_test_pcap` links the
+  same with `-DWITH_PCAP`, its own `main`, and probe.c back in.
+- `make fuzz` builds every `tests/fuzz/fuzz_<name>.c` with one rule
+  against a clang-built core archive (plus the null renderer and fake
+  platform). The archive keeps each target narrow: the linker pulls only
+  the members the harness reaches, so `fuzz_radiotap_parse` still links
+  no snooper and no alert code. A new module or harness needs no
+  Makefile edit — the hand-kept inline lists this replaced failed CI on
+  2026-10-14 when a module they named gained a dependency.
+- Objects live in `build/n<NCURSES>p<PCAP>w<WIFI>s<SQLITE>/` (`embedded`
+  is `n0p0w1s0`), `build/test/`, `build/test-pcap/` and `build/fuzz/`.
+  Each directory carries a flags stamp, so changing `EXTRA_CFLAGS`
+  recompiles instead of reusing objects built without, say, `-Werror`;
+  `sloth` relinks when the configuration changes even if no object is
+  newer. Header dependencies come from `-MMD`.
+- `make cppcheck` still scans the `src` and `research` directories — the
+  exact command CI runs. `tests/test_build_recipe.c ::
+  test_cppcheck_target_matches_ci` holds the two argument lists equal
+  until CI calls the target itself (#119).
+
+The "`make clean` between configs" rule in `agents/AGENTS.md` stays in
+force until the per-config directories have a week of green CI behind
+them; relaxing it belongs to the batched `agents/` change (#119).
 
 ## State
 

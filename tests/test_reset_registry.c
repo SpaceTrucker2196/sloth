@@ -22,7 +22,7 @@
  */
 
 /* The same fixed set of header locations tests/'s own build uses
- * (TEST_HDRS in the Makefile) minus tests/ and research/ — this is a
+ * (the pre-#115 TEST_HDRS list) minus tests/ and research/ — this is a
  * production-only registry, and research/ has none of this shape. */
 static const char *HDR_DIRS[] = {
     "include", "src", "src/views", "src/capture", "src/platform"
@@ -142,7 +142,7 @@ static void scan_sloth_resets(name_set_t *out) {
 typedef struct { const char *name; const char *reason; } excluded_t;
 static const excluded_t EXCLUDED[] = {
     { "probe_clear",
-      "src/capture/probe.c is not in TEST_SRCS (only CAPTURE_PATH_SRCS) — "
+      "src/capture/probe.c is not in TEST_CORE_SRCS (only CAPTURE_PATH_CORE_SRCS) — "
       "calling it here would break the main test binary's link. The "
       "separate test-capture-path binary calls it directly." },
 };

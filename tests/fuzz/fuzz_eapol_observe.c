@@ -55,9 +55,9 @@
 #define BODY_MAX 1024       /* generous over EAPOL_KEY_FIXED_LEN (99)  */
 
 /* runner.h expects these at file scope somewhere (#114); this target
- * links the rest of TEST_SRCS for symbol availability (see
- * FUZZ_EAPOL_SRCS above) but never runs any RUN_TEST itself, so no
- * default setUp is needed here either. */
+ * links the test build's core archive for symbol availability (see
+ * FUZZ_CORE_SRCS in the Makefile, #115) but never runs any RUN_TEST
+ * itself, so no default setUp is needed here either. */
 int g_pass      = 0;
 int g_fail      = 0;
 int g_test_fail = 0;

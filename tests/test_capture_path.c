@@ -554,7 +554,7 @@ static void test_retarget_ignores_an_empty_name(void) {
 /* ── Monitor dispatch seam — issue #92 ───────────────────────
  *
  * The 802.11 path had no test entry point at all: on_probe_frame() is
- * static, src/capture/probe.c is not in TEST_SRCS, and every existing
+ * static, src/capture/probe.c is not in TEST_CORE_SRCS, and every existing
  * monitor test seeds sloth_state_t instead. So radiotap parsing and the
  * frame-type guards — which read bytes straight off the air — were
  * reachable only through a real radio.

@@ -9,10 +9,26 @@ WITH_PCAP    ?= 1
 WITH_WIFI    ?= 1
 WITH_SQLITE  ?= 1
 
-SRCS = src/main.c          \
+# ── Source lists (#115) ─────────────────────────────────────────────────────
+# Every binary this Makefile builds is derived from these lists; none keeps
+# its own. The split is the issue's:
+#
+#   APP_SRCS   what only the shipped `sloth` links: the CLI and poll loop,
+#              the ncurses renderer, and the real platform vtable. The test
+#              build swaps in tests/null_tui.c and tests/fake_platform.c.
+#   CORE_SRCS  everything else the current configuration compiles. It is
+#              archived as libsloth_core.a, so each binary's linker pulls
+#              only the members something it links actually references —
+#              which is what keeps a fuzz target narrow without a hand-kept
+#              list beside it (the inline fuzz lists rotted and failed CI on
+#              2026-10-14).
+#
+# A new module goes in CORE_COMMON_SRCS (or a feature group below) once,
+# and `make`, `make test`, `make test-capture-path` and `make fuzz` all
+# pick it up.
+CORE_COMMON_SRCS = \
        src/view_route.c    \
        src/view_labels.c   \
-       src/tui.c           \
        src/tui_palette.c   \
        src/ownership.c     \
        src/inventory.c     \
@@ -153,29 +169,80 @@ SRCS = src/main.c          \
        src/views/dashboard_grid.c       \
        src/views/osi.c
 
+# Unconditional: capture.c is almost entirely inside its own WITH_PCAP
+# guard, but the pure datalink/return-code classifiers above that guard
+# are compiled and linked in every configuration — main.c calls
+# capture_dlt_has_ifindex() to report inactive scoping even in a build
+# with no capture at all (#46, #57).
+CORE_COMMON_SRCS += src/capture/capture.c
+CORE_COMMON_SRCS += src/fragattack.c
+CORE_COMMON_SRCS += src/views/research.c
+CORE_COMMON_SRCS += src/views/fragattack.c
+CORE_COMMON_SRCS += research/coverage.c
+CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
+CORE_COMMON_SRCS += src/geo.c
+CORE_COMMON_SRCS += src/scan.c
+
+# Feature-gated core sources, grouped by the flag that gates them.
+# CORE_SRCS_ALL is their union with the common list: the test and fuzz
+# builds link it whatever WITH_* says (they set their own -D flags), and a
+# shipped config takes CORE_SRCS, the union minus the groups its flags
+# turn off. One list, filtered — not one list per consumer.
+#
+# The Linux helpers are pure parsers and readers; off Linux they compile
+# to empty translation units, which is why the test build links them on
+# every host while the shipped build leaves them out.
+LINUX_PLATFORM_SRCS = src/platform/linux_parse.c   \
+                      src/platform/linux_pid.c     \
+                      src/platform/linux_dhcp.c    \
+                      src/platform/linux_tcpdiag.c
+LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
+
+# probe.c exists only with WITH_PCAP: without it probe.h's inline stubs
+# stand in. The evidence ring (#92) is fed only by on_probe_frame(), so a
+# no-pcap build would link an arena nothing can ever fill; the exporter
+# goes with it for the same reason — it reads the ring and nothing else
+# fills the ring. Neither has a libpcap dependency of its own, which is
+# what lets the ordinary (WITH_PCAP-less) test binary unit-test both: the
+# test build drops probe.c alone.
+PCAP_CORE_SRCS      = src/capture/probe.c        \
+                      src/evidence_ring.c        \
+                      src/evidence_export.c
+
+# Embedded SQLite sink (#42). The research corpus (#73) is an FTS5 index,
+# so it goes wherever SQLite goes. query.h stubs to no-ops without it, and
+# every caller already tolerates a NULL handle — the additive contract
+# means the no-SQLite build simply never has research context.
+SQLITE_CORE_SRCS    = src/db.c research/query.c
+
+CORE_SRCS_ALL = $(CORE_COMMON_SRCS) $(LINUX_PLATFORM_SRCS) $(LINUX_WIFI_SRCS) \
+                $(PCAP_CORE_SRCS) $(SQLITE_CORE_SRCS)
+
+# The groups the current configuration turns off; appended to below.
+CORE_OFF =
+
 UNAME := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME),Linux)
-    SRCS   += src/platform/linux.c
-    SRCS   += src/platform/linux_parse.c
-    SRCS   += src/platform/linux_pid.c
-    SRCS   += src/platform/linux_dhcp.c
-    SRCS   += src/platform/linux_tcpdiag.c
+    PLATFORM_SRC = src/platform/linux.c
     CFLAGS += -DPLATFORM_LINUX
-    ifeq ($(WITH_WIFI),1)
-        SRCS += src/platform/linux_wifi.c
+    ifneq ($(WITH_WIFI),1)
+        CORE_OFF += $(LINUX_WIFI_SRCS)
     endif
-else ifeq ($(UNAME),Darwin)
-    SRCS   += src/platform/bsd.c
-    CFLAGS += -DPLATFORM_BSD
-else ifneq ($(findstring BSD,$(UNAME)),)
-    SRCS   += src/platform/bsd.c
-    CFLAGS += -DPLATFORM_BSD
-else ifeq ($(OS),Windows_NT)
-    SRCS   += src/platform/win32.c
-    CFLAGS += -DPLATFORM_WIN32
 else
-    SRCS   += src/platform/stub.c
-    CFLAGS += -DPLATFORM_STUB
+    CORE_OFF += $(LINUX_PLATFORM_SRCS) $(LINUX_WIFI_SRCS)
+    ifeq ($(UNAME),Darwin)
+        PLATFORM_SRC = src/platform/bsd.c
+        CFLAGS += -DPLATFORM_BSD
+    else ifneq ($(findstring BSD,$(UNAME)),)
+        PLATFORM_SRC = src/platform/bsd.c
+        CFLAGS += -DPLATFORM_BSD
+    else ifeq ($(OS),Windows_NT)
+        PLATFORM_SRC = src/platform/win32.c
+        CFLAGS += -DPLATFORM_WIN32
+    else
+        PLATFORM_SRC = src/platform/stub.c
+        CFLAGS += -DPLATFORM_STUB
+    endif
 endif
 
 ifeq ($(WITH_NCURSES),1)
@@ -193,48 +260,21 @@ LDFLAGS += -lpthread -lm
 ifeq ($(WITH_PCAP),1)
     CFLAGS  += -DWITH_PCAP
     LDFLAGS += -lpcap
-    SRCS    += src/capture/probe.c
-    # The evidence ring (#92) is fed only by on_probe_frame(), which
-    # exists only here, so a no-pcap build would link an arena nothing
-    # can ever fill. TEST_SRCS lists it unconditionally — the module has
-    # no libpcap dependency of its own, which is what lets the ordinary
-    # (WITH_PCAP-less) test binary unit-test it.
-    SRCS    += src/evidence_ring.c
-    # The exporter goes with it, and for the same reason: it reads the
-    # ring and nothing else fills the ring, so a no-pcap build would
-    # link an export path with nothing to export. TEST_SRCS lists it
-    # unconditionally alongside the ring — neither has a libpcap
-    # dependency of its own.
-    SRCS    += src/evidence_export.c
+else
+    CORE_OFF += $(PCAP_CORE_SRCS)
 endif
-
-# Unconditional: capture.c is almost entirely inside its own WITH_PCAP
-# guard, but the pure datalink/return-code classifiers above that guard
-# are compiled and linked in every configuration — main.c calls
-# capture_dlt_has_ifindex() to report inactive scoping even in a build
-# with no capture at all (#46, #57). TEST_SRCS already lists it
-# unconditionally for the same reason.
-SRCS += src/capture/capture.c
 
 # Embedded SQLite sink (#42). Disable with: make WITH_SQLITE=0
 ifeq ($(WITH_SQLITE),1)
     CFLAGS  += -DWITH_SQLITE
     LDFLAGS += -lsqlite3
-    SRCS    += src/db.c
-    # The research corpus (#73) is an FTS5 index, so it goes wherever
-    # SQLite goes. query.h stubs to no-ops without it, and every caller
-    # already tolerates a NULL handle — the additive contract means the
-    # no-SQLite build simply never has research context.
-    SRCS    += research/query.c
+else
+    CORE_OFF += $(SQLITE_CORE_SRCS)
 endif
 
-SRCS += src/fragattack.c
-SRCS += src/views/research.c
-SRCS += src/views/fragattack.c
-SRCS += research/coverage.c
-SRCS += src/pcap_format.c src/pcap_write.c
-SRCS += src/geo.c
-SRCS += src/scan.c
+APP_SRCS  = src/main.c src/tui.c $(PLATFORM_SRC)
+CORE_SRCS = $(filter-out $(CORE_OFF),$(CORE_SRCS_ALL))
+SRCS      = $(APP_SRCS) $(CORE_SRCS)
 
 ifeq ($(WITH_WIFI),1)
     CFLAGS += -DWITH_WIFI
@@ -280,8 +320,40 @@ endif
 # MAKEFLAGS like any other command-line variable.
 CFLAGS += $(EXTRA_CFLAGS)
 
-OBJS   = $(SRCS:.c=.o)
-TARGET = sloth
+# ── Object directories (#115) ───────────────────────────────────────────────
+# One object directory per configuration, so a config switch never links
+# an object compiled under another one — the stale-object link failure
+# behind the "make clean between configs" rule. CFG_TAG spells the four
+# feature flags; `embedded` is n0p0w1s0.
+#
+# Each directory also carries a flags stamp. Its objects depend on it,
+# and it is rewritten only when the compile command it records changes,
+# so `make EXTRA_CFLAGS=-Werror` after a plain `make` recompiles instead
+# of reusing objects no -Werror ever saw — without that, keeping objects
+# per config would make the -Werror gate vacuous on a warm tree. A
+# second stamp records each archive's member list, so dropping a source
+# rebuilds the archive rather than leaving the old member in it.
+CFG_TAG   = n$(WITH_NCURSES)p$(WITH_PCAP)w$(WITH_WIFI)s$(WITH_SQLITE)
+OBJDIR    = build/$(CFG_TAG)
+CORE_LIB  = $(OBJDIR)/libsloth_core.a
+APP_OBJS  = $(APP_SRCS:%.c=$(OBJDIR)/%.o)
+CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o)
+OBJS      = $(APP_OBJS) $(CORE_LIB)
+TARGET    = sloth
+
+# The shipped binary is relinked when the config or link command changes,
+# not only when an object is newer: going back to a config whose objects
+# predate the current `sloth` would otherwise leave the other config's
+# binary in place and call it up to date.
+LINK_STAMP = build/sloth.link
+
+# Rewrite the stamp only when what it records differs, so its mtime moves
+# exactly when the recorded text does. STAMP is set per target below.
+write_stamp = @mkdir -p $(@D) && { printf '%s\n' '$(STAMP)' | cmp -s - $@ || printf '%s\n' '$(STAMP)' > $@; }
+
+$(OBJDIR)/.flags:   STAMP = $(CC) $(CFLAGS)
+$(OBJDIR)/.members: STAMP = $(CORE_SRCS)
+$(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 
 .PHONY: all clean install embedded
 
@@ -300,335 +372,21 @@ all: $(TARGET)
 #
 # Appending $(LDFLAGS) after the objects is deliberate and unchanged: -l
 # libraries must follow the objects that reference them.
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+#
+# The core library follows the app objects for the same reason: an archive
+# member is pulled in only to satisfy a reference already seen.
+$(TARGET): $(OBJS) $(LINK_STAMP)
+	$(CC) $(CFLAGS) -o $@ $(filter-out $(LINK_STAMP),$^) $(LDFLAGS)
 
-%.o: %.c
-	$(CC) $(CFLAGS) -Iinclude -Isrc -Iresearch -c -o $@ $<
+$(OBJDIR)/%.o: %.c $(OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MMD -MP -Iinclude -Isrc -Iresearch -c -o $@ $<
+
+$(CORE_LIB): $(CORE_OBJS) $(OBJDIR)/.members
 
 # Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
 	$(MAKE) WITH_NCURSES=0 WITH_PCAP=0 WITH_SQLITE=0
-
-# ── Test build ───────────────────────────────────────────────────────────────
-# Compiled without ncurses/pcap — TPRINT falls back to printf, no terminal needed.
-# PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only platform
-# sources become empty translation units (their tests use the fake platform).
-TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI -DWITH_SQLITE
-ifeq ($(UNAME),Linux)
-    TEST_CFLAGS += -DPLATFORM_LINUX
-endif
-TEST_CFLAGS += $(EXTRA_CFLAGS)
-# No WITH_NCURSES: TPRINT expands to printf in view files
-# No WITH_PCAP:    packets view shows disabled message
-
-TEST_SRCS = tests/main_test.c          \
-            tests/null_tui.c           \
-            src/reset_all.c            \
-            tests/test_reset_registry.c \
-            src/view_route.c           \
-            src/view_labels.c          \
-            tests/test_help.c          \
-            tests/fake_platform.c      \
-            tests/scenarios.c          \
-            tests/test_parse.c         \
-            tests/test_rates.c         \
-            tests/test_state.c         \
-            tests/test_scenario.c      \
-            src/history.c              \
-            src/bandwidth.c            \
-            src/dns.c                  \
-            src/dns_snoop.c            \
-            src/sni_snoop.c            \
-            src/http_snoop.c           \
-            src/ftp_snoop.c            \
-            src/pop3_snoop.c           \
-            src/imap_snoop.c           \
-            src/smtp_snoop.c           \
-            src/cleartext_creds.c      \
-            tests/test_cleartext_creds.c \
-            tests/test_pop3_snoop.c    \
-            tests/test_imap_snoop.c    \
-            tests/test_smtp_snoop.c    \
-            src/device_risk.c          \
-            tests/test_device_risk.c   \
-            src/posture.c              \
-            tests/test_posture.c       \
-            src/version.c              \
-            tests/test_version.c       \
-            src/updater.c              \
-            tests/test_updater.c       \
-            src/oui.c                  \
-            src/services.c             \
-            src/platform/linux_parse.c \
-            src/platform/linux_pid.c   \
-            src/platform/linux_wifi.c  \
-            src/views/iface.c          \
-            tests/test_conns.c         \
-            tests/test_wifi.c          \
-            tests/test_packets.c       \
-            tests/test_procs.c         \
-            tests/test_bw.c            \
-            tests/test_dns.c           \
-            tests/test_stats.c         \
-            tests/test_probe.c         \
-            tests/test_oui.c           \
-            tests/test_services.c      \
-            tests/test_arp.c           \
-            tests/test_pcap_write.c tests/test_pcap_format.c    \
-            src/capture/capture.c      \
-            tests/test_capture.c       \
-            src/tui_palette.c          \
-            tests/test_tui_palette.c   \
-            src/ownership.c            \
-            tests/test_ownership.c     \
-            src/inventory.c            \
-            tests/test_inventory.c     \
-            src/wired_attach.c         \
-            tests/test_wired_attach.c  \
-            src/presence.c             \
-            tests/test_presence.c      \
-            src/transit.c              \
-            tests/test_transit.c       \
-            src/radiotap.c             \
-            tests/test_radiotap.c      \
-            src/rf_quality.c           \
-            tests/test_rf_quality.c    \
-            src/db_schema.c            \
-            src/db.c                   \
-            tests/test_db.c            \
-            tests/test_iface_graph.c   \
-            tests/test_geo.c           \
-            src/geo.c                  \
-            src/pcap_format.c src/pcap_write.c           \
-            src/views/conns.c          \
-            src/views/wifi.c           \
-            src/views/packets.c        \
-            src/views/procs.c          \
-            src/views/stats.c          \
-            src/views/probe.c          \
-            src/views/arp.c                \
-            tests/test_dhcp.c              \
-            src/platform/linux_dhcp.c      \
-            tests/test_rtt.c               \
-            src/platform/linux_tcpdiag.c   \
-            tests/test_tree.c              \
-            src/scan.c                     \
-            tests/test_scan.c              \
-            tests/test_dns_snoop.c         \
-            tests/test_sni_snoop.c         \
-            src/mdns_snoop.c               \
-            src/nbns_snoop.c               \
-            src/dhcp_snoop.c               \
-            src/ndp_snoop.c                \
-            tests/test_ndp_snoop.c         \
-            src/smb_snoop.c                \
-            tests/test_smb_snoop.c         \
-            src/kerb_snoop.c               \
-            tests/test_kerb_snoop.c        \
-            src/ldap_snoop.c               \
-            tests/test_ldap_snoop.c        \
-            src/bgp_snoop.c                \
-            tests/test_bgp_snoop.c         \
-            src/ssh_snoop.c                \
-            tests/test_ssh_snoop.c         \
-            src/rdp_snoop.c                \
-            tests/test_rdp_snoop.c         \
-            src/snmp_snoop.c               \
-            tests/test_snmp_snoop.c        \
-            src/mqtt_snoop.c               \
-            tests/test_mqtt_snoop.c        \
-            src/event_wake.c               \
-            src/quic_snoop.c               \
-            src/views/mdns.c               \
-            src/views/nbns.c               \
-            src/views/dhcp_snoop.c         \
-            tests/test_mdns_snoop.c        \
-            tests/test_http_snoop.c        \
-            tests/test_nbns_snoop.c        \
-            tests/test_dhcp_snoop.c        \
-            tests/test_quic_snoop.c        \
-            src/ssdp_snoop.c               \
-            src/views/ssdp.c               \
-            tests/test_ssdp_snoop.c        \
-            src/onvif_discovery.c          \
-            tests/test_onvif_discovery.c   \
-            src/reg_ie.c                   \
-            tests/test_reg_ie.c            \
-            src/beacon_snoop.c             \
-            src/views/beacon.c             \
-            tests/test_beacon_snoop.c      \
-            src/deauth_snoop.c             \
-            src/flood_window.c             \
-            src/sloth_clock.c              \
-            src/views/deauth.c             \
-            tests/test_deauth_snoop.c      \
-            tests/test_flood_window.c      \
-            tests/test_clock_seam.c        \
-            src/http_log.c                 \
-            src/views/http.c               \
-            tests/test_http_log.c          \
-            src/tls_log.c                  \
-            src/views/tls.c                \
-            tests/test_tls_log.c           \
-            src/quic_log.c                 \
-            src/views/quic.c               \
-            tests/test_quic_log.c          \
-            src/dns_log.c                  \
-            src/views/dns_log.c            \
-            tests/test_dns_log.c           \
-            src/ntp_log.c                  \
-            src/views/ntp.c                \
-            tests/test_ntp_log.c           \
-            src/icmp_log.c                 \
-            src/views/icmp.c               \
-            tests/test_icmp_log.c          \
-            src/threat_intel.c             \
-            tests/test_threat_intel.c      \
-            src/vendor_watchlist.c         \
-            tests/test_vendor_watchlist.c  \
-            src/dga.c                      \
-            tests/test_dga.c               \
-            src/wifi_oui_attacker.c        \
-            tests/test_wifi_oui_attacker.c \
-            src/wifi_chanhop.c             \
-            tests/test_chanhop.c           \
-            src/auth_track.c               \
-            tests/test_auth_track.c        \
-            src/action_snoop.c             \
-            tests/test_action_snoop.c      \
-            src/ctrl_frames.c              \
-            tests/test_ctrl_frames.c       \
-            src/dot11_data.c               \
-            tests/test_dot11_data.c        \
-            src/dot11_frame.c              \
-            tests/test_dot11_frame.c       \
-            src/mle.c                      \
-            tests/test_mle.c               \
-            src/tool_fingerprint.c         \
-            tests/test_tool_fingerprint.c  \
-            src/captive_portal.c           \
-            tests/test_captive_portal.c    \
-            src/fragattack.c               \
-            tests/test_fragattack.c        \
-            research/coverage.c            \
-            src/views/research.c           \
-            tests/test_research_view.c     \
-            src/views/fragattack.c         \
-            tests/test_fragattack_view.c   \
-            research/ingest/research_ingest.c \
-            tests/test_research_ingest.c   \
-            tests/test_research_corpus.c   \
-            tests/test_docs_consistency.c  \
-            tests/test_build_recipe.c      \
-            tests/test_unit_file.c         \
-            tests/test_ci_pins.c           \
-            research/query.c               \
-            tests/test_research_query.c    \
-            research/mcp/json.c            \
-            research/mcp/mcp.c             \
-            tests/test_research_mcp.c      \
-            src/wifi_snapshot.c            \
-            tests/test_wifi_snapshot.c     \
-            src/wifi_assess.c              \
-            tests/test_wifi_assess.c       \
-            src/wifi_baseline.c            \
-            tests/test_wifi_baseline.c     \
-            src/sensors.c                  \
-            tests/test_sensors.c           \
-            src/sensor_health.c            \
-            src/persist_health.c           \
-            tests/test_persist_health.c    \
-            src/wps_track.c                \
-            tests/test_wps_track.c         \
-            src/pm_forge.c                 \
-            tests/test_pm_forge.c          \
-            src/queue_evict.c              \
-            tests/test_queue_evict.c       \
-            tests/test_sensor_health.c     \
-            src/stab.c                     \
-            tests/test_stab.c              \
-            src/evidence_ring.c            \
-            tests/test_evidence_ring.c     \
-            src/wifi_merge.c               \
-            tests/test_wifi_merge.c        \
-            src/twins.c                    \
-            src/views/twins.c              \
-            tests/test_twins.c             \
-            src/karma_detect.c             \
-            src/views/karma.c              \
-            tests/test_karma.c             \
-            src/views/rogue_radius.c       \
-            tests/test_rogue_radius.c      \
-            src/alerts.c                   \
-            src/tune.c src/fs_capacity.c                     \
-            src/evidence_export.c          \
-            tests/test_evidence_export.c   \
-            tests/test_tune.c tests/test_fs_capacity.c              \
-            src/views/alerts.c             \
-            tests/test_alerts.c            \
-            src/md5.c                      \
-            tests/test_md5.c               \
-            src/sha256.c                   \
-            tests/test_sha256.c            \
-            src/devices.c                  \
-            src/views/devices.c            \
-            tests/test_devices.c           \
-            src/beacon_detect.c            \
-            tests/test_beacon_detect.c     \
-            src/jsonl.c                    \
-            tests/test_jsonl.c             \
-            src/formatter.c                \
-            tests/test_formatter.c         \
-            src/data_socket.c              \
-            tests/test_data_socket.c       \
-            src/discovery.c                \
-            tests/test_discovery.c         \
-            src/observe.c                  \
-            tests/test_observe.c           \
-            tests/test_wifi_scan_trigger.c \
-            src/views/help.c               \
-            src/filter.c                   \
-            tests/test_filter.c            \
-            src/alert_pcap.c               \
-            tests/test_alert_pcap.c        \
-            src/secure_file.c              \
-            tests/test_secure_file.c       \
-            src/ip_owner.c                 \
-            tests/test_ip_owner.c          \
-            src/ip_color.c                 \
-            tests/test_ip_color.c          \
-            src/top_hosts.c                \
-            tests/test_top_hosts.c         \
-            src/host_cache.c               \
-            tests/test_host_cache.c        \
-            src/probe_pnl.c                \
-            src/views/pnl.c                \
-            tests/test_probe_pnl.c         \
-            src/eapol_log.c                \
-            src/eap_parse.c                \
-            src/eap_track.c                \
-            tests/test_eap_track.c         \
-            tests/test_eap_parse.c         \
-            src/views/eapol.c              \
-            tests/test_eapol_log.c         \
-            src/seqnum_track.c             \
-            src/views/seqnum.c             \
-            tests/test_seqnum_track.c      \
-            src/assoc_track.c              \
-            src/views/assoc.c              \
-            tests/test_assoc_track.c       \
-            src/views/channel.c            \
-            tests/test_channel.c           \
-            src/views/dashboard.c             \
-            src/views/dashboard_primitives.c  \
-            src/views/dashboard_bands.c       \
-            src/views/dashboard_grid.c        \
-            tests/test_dashboard.c            \
-            src/views/osi.c                   \
-            tests/test_osi.c
-
-TEST_BIN = sloth_test
 
 # ── Research corpus (#73) ───────────────────────────────────────────────────
 # research.db is committed: it is small, deterministic (documents are
@@ -654,6 +412,56 @@ research-mcp:
 	$(CC) $(CFLAGS) -DWITH_SQLITE -Iinclude -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
+# ── Test build ───────────────────────────────────────────────────────────────
+# Compiled without ncurses/pcap — TPRINT falls back to printf, no terminal needed.
+# PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only platform
+# sources become empty translation units (their tests use the fake platform).
+TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI -DWITH_SQLITE
+ifeq ($(UNAME),Linux)
+    TEST_CFLAGS += -DPLATFORM_LINUX
+endif
+TEST_CFLAGS += $(EXTRA_CFLAGS)
+# No WITH_NCURSES: TPRINT expands to printf in view files
+# No WITH_PCAP:    packets view shows disabled message
+
+# What the test binary links, derived rather than listed (#115):
+#
+#   TEST_SRCS        every tests/*.c except the capture-path pair, which
+#                    belong to the WITH_PCAP binary below. A new test file
+#                    is linked by existing; its run_*_tests() still has to
+#                    be called from main_test.c, which
+#                    test_every_run_tests_fn_is_declared_and_called checks.
+#   TEST_CORE_SRCS   the full core (whatever WITH_* says — TEST_CFLAGS sets
+#                    its own) minus probe.c, plus the sources only the tests
+#                    link: the reset registry (#114) and the library halves
+#                    of the research tools, taken from those tools' own
+#                    source lists minus their main().
+#
+# The core is archived as for `sloth`, in its own object directory because
+# TEST_CFLAGS is not CFLAGS. TEST_INCS is the include set every test-build
+# translation unit has always been compiled with.
+TEST_SRCS        = $(filter-out tests/test_capture_path%.c,$(wildcard tests/*.c))
+TEST_ONLY_SRCS   = src/reset_all.c \
+                   $(filter-out %/main.c research/query.c,$(RESEARCH_SRCS) $(MCP_SRCS))
+TEST_CORE_SRCS   = $(filter-out src/capture/probe.c,$(CORE_SRCS_ALL)) $(TEST_ONLY_SRCS)
+TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
+
+TEST_OBJDIR      = build/test
+TEST_CORE_LIB    = $(TEST_OBJDIR)/libsloth_core.a
+TEST_OBJS        = $(TEST_SRCS:%.c=$(TEST_OBJDIR)/%.o)
+TEST_CORE_OBJS   = $(TEST_CORE_SRCS:%.c=$(TEST_OBJDIR)/%.o)
+
+$(TEST_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_INCS)
+$(TEST_OBJDIR)/.members: STAMP = $(TEST_CORE_SRCS)
+
+$(TEST_OBJDIR)/%.o: %.c $(TEST_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -MMD -MP -c -o $@ $<
+
+$(TEST_CORE_LIB): $(TEST_CORE_OBJS) $(TEST_OBJDIR)/.members
+
+TEST_BIN = sloth_test
+
 .PHONY: test
 test: $(TEST_BIN)
 	./$(TEST_BIN)
@@ -661,13 +469,11 @@ test: $(TEST_BIN)
 # Headers are dependencies too. Without them a header-only change — a
 # new struct field, a bumped constant — leaves the test binary stale,
 # and the suite reports on code that is no longer there. That is worse
-# than a slow build: it looks like a passing test.
-TEST_HDRS = $(wildcard include/*.h src/*.h src/views/*.h src/capture/*.h \
-                       src/platform/*.h tests/*.h research/*.h \
-                       research/ingest/*.h research/mcp/*.h)
-
-$(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
-	$(CC) $(TEST_CFLAGS) -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp -o $@ $(TEST_SRCS) 	      -lm -lpthread -lsqlite3
+# than a slow build: it looks like a passing test. Every compile above
+# writes its own header list with -MMD; the .d files are included at the
+# end of this Makefile.
+$(TEST_BIN): $(TEST_OBJS) $(TEST_CORE_LIB)
+	$(CC) $(TEST_CFLAGS) -o $@ $(TEST_OBJS) $(TEST_CORE_LIB) -lm -lpthread -lsqlite3
 
 # ── Capture-path test binary (#95) ──────────────────────────────────────────
 # `sloth_test` is built without WITH_PCAP on purpose (the packets view
@@ -683,29 +489,41 @@ $(TEST_BIN): $(TEST_SRCS) $(TEST_HDRS)
 # the capture path needs, so a failure names the parser rather than the
 # whole suite. Run under the same EXTRA_CFLAGS as everything else, which
 # is how the CI sanitize job reaches it.
-# Reuses TEST_SRCS rather than enumerating capture.c's dependency tree
-# by hand: it pulls in every protocol snooper, and a hand-kept list
-# would rot on the first new one. main_test.c is swapped for a main that
-# runs only this suite, so the other run_*_tests() stay linked but
-# unentered — they assert the no-WITH_PCAP behaviour and would not hold
-# in this build.
-# probe.c joins the list because WITH_PCAP turns probe.h's inline stubs
+# Reuses the test build's lists rather than enumerating capture.c's
+# dependency tree by hand: it pulls in every protocol snooper, and a
+# hand-kept list would rot on the first new one. main_test.c is swapped
+# for a main that runs only this suite, so the other run_*_tests() stay
+# linked but unentered — they assert the no-WITH_PCAP behaviour and would
+# not hold in this build. Every test file is recompiled here, in its own
+# object directory, because -DWITH_PCAP changes what the headers declare.
+# probe.c rejoins the core because WITH_PCAP turns probe.h's inline stubs
 # into real declarations — the same source the main build adds.
-CAPTURE_PATH_SRCS = tests/test_capture_path_main.c \
-                    tests/test_capture_path.c      \
-                    src/capture/probe.c            \
-                    $(filter-out tests/main_test.c,$(TEST_SRCS))
+CAPTURE_PATH_SRCS      = $(filter-out tests/main_test.c,$(wildcard tests/*.c))
+CAPTURE_PATH_CORE_SRCS = $(CORE_SRCS_ALL) $(TEST_ONLY_SRCS)
+
+CAPTURE_PATH_OBJDIR    = build/test-pcap
+CAPTURE_PATH_CORE_LIB  = $(CAPTURE_PATH_OBJDIR)/libsloth_core.a
+CAPTURE_PATH_OBJS      = $(CAPTURE_PATH_SRCS:%.c=$(CAPTURE_PATH_OBJDIR)/%.o)
+CAPTURE_PATH_CORE_OBJS = $(CAPTURE_PATH_CORE_SRCS:%.c=$(CAPTURE_PATH_OBJDIR)/%.o)
 
 CAPTURE_PATH_BIN = sloth_test_pcap
+
+$(CAPTURE_PATH_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) -DWITH_PCAP $(TEST_INCS)
+$(CAPTURE_PATH_OBJDIR)/.members: STAMP = $(CAPTURE_PATH_CORE_SRCS)
+
+$(CAPTURE_PATH_OBJDIR)/%.o: %.c $(CAPTURE_PATH_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(CC) $(TEST_CFLAGS) -DWITH_PCAP $(TEST_INCS) -MMD -MP -c -o $@ $<
+
+$(CAPTURE_PATH_CORE_LIB): $(CAPTURE_PATH_CORE_OBJS) $(CAPTURE_PATH_OBJDIR)/.members
 
 .PHONY: test-capture-path
 test-capture-path: $(CAPTURE_PATH_BIN)
 	./$(CAPTURE_PATH_BIN)
 
-$(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
-	$(CC) $(TEST_CFLAGS) -DWITH_PCAP -Iinclude -Isrc -Itests \
-	      -Iresearch/ingest -Iresearch -Iresearch/mcp \
-	      -o $@ $(CAPTURE_PATH_SRCS) -lm -lpthread -lsqlite3 -lpcap
+$(CAPTURE_PATH_BIN): $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_LIB)
+	$(CC) $(TEST_CFLAGS) -DWITH_PCAP -o $@ $(CAPTURE_PATH_OBJS) \
+	      $(CAPTURE_PATH_CORE_LIB) -lm -lpthread -lsqlite3 -lpcap
 
 # ── libFuzzer smoke targets (#95) ───────────────────────────────────────────
 # "fuzzing through the capture path" was named open on #95 since its first
@@ -756,61 +574,81 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_SRCS) $(TEST_HDRS)
 # covered at the only seam where ASan can actually see an overread.
 #
 # Both are pure parsers — no global state, no lock, no clock — so like
-# fuzz_deauth_parse they need no harness beyond the bytes, and they link
-# a handful of objects rather than the whole test source list.
+# fuzz_deauth_parse they need no harness beyond the bytes.
 #
-# That hand-kept list is the cost of the narrow link, and it rots: on
-# 2026-10-14 deauth_snoop.c and beacon_snoop.c started calling
+# Each target used to link a hand-kept source list, and the lists rotted:
+# on 2026-10-14 deauth_snoop.c and beacon_snoop.c started calling
 # dot11_mgmt_hdr_len() and both targets failed to LINK in CI, after
 # `make test`, `make test-capture-path` and all six -Werror configs had
-# passed locally. `make fuzz` is the only gate that exercises these
-# source lists, so run it after touching any module one of them links —
-# the compile is quick even with FUZZ_SECONDS=1.
+# passed locally. Since #115 there is one rule and no list: every
+# tests/fuzz/fuzz_<name>.c is a target, linked against a libsloth_core.a
+# built from the test build's core sources with the fuzz flags. The
+# archive is what keeps each target narrow — the linker pulls only the
+# members the harness's call tree references, which is what the
+# hand-kept lists approximated — so a new dependency is picked up instead
+# of failing the link, and a new harness needs no Makefile edit.
+#
+# The archive also carries the test build's stand-ins — tests/*.c that are
+# neither a suite nor the runner: the null renderer and the fake platform.
+# eapol_observe_dot11() reaches alerts.c and from there code that draws,
+# so like sloth_test the fuzz targets resolve tui_* against the null
+# renderer, never ncurses; a target whose call tree stops short of that
+# simply never pulls those members in.
+TEST_SUPPORT_SRCS = $(filter-out tests/main_test.c tests/test_%.c,$(wildcard tests/*.c))
+
+# One flag set for every target: the union the eapol harness always
+# needed (WITH_WIFI, WITH_SQLITE, the test include set). It must also
+# carry the platform define TEST_CFLAGS adds: without it, src/platform/
+# linux_wifi.c compiles to an empty translation unit — same as on Darwin
+# — and anything that calls one of its functions unconditionally
+# (sloth_reset_all(), #114) fails to link on a Linux build host, where
+# every other gate defines it.
 FUZZ_CC      ?= clang
 FUZZ_SECONDS ?= 20
 FUZZ_FLAGS    = -g -O1 -fsanitize=fuzzer,address,undefined \
                 -Iinclude -Isrc -Itests/fuzz
-
-# fuzz_eapol_observe rides the same source list sloth_test links (every
-# module eapol_log.c's call tree reaches), swapping main_test.c for the
-# fuzz entry point — same reasoning as CAPTURE_PATH_SRCS: a hand-kept
-# dependency list rots on the first new module. It must also ride the
-# same platform define TEST_CFLAGS adds: without it, src/platform/
-# linux_wifi.c (in that source list) compiles to an empty translation
-# unit — same as on Darwin — and anything in the list that calls one of
-# its functions unconditionally (sloth_reset_all(), #114) fails to link
-# on a Linux build host, where every other gate defines it.
 FUZZ_PLATFORM_DEFS =
 ifeq ($(UNAME),Linux)
     FUZZ_PLATFORM_DEFS += -DPLATFORM_LINUX
 endif
-FUZZ_EAPOL_SRCS = tests/fuzz/fuzz_eapol_observe.c \
-                  $(filter-out tests/main_test.c,$(TEST_SRCS))
+FUZZ_DEFS     = -DWITH_WIFI -DWITH_SQLITE $(FUZZ_PLATFORM_DEFS) \
+                -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
 
-.PHONY: fuzz
-fuzz:
+FUZZ_SRCS      = $(wildcard tests/fuzz/fuzz_*.c)
+FUZZ_CORE_SRCS = $(TEST_CORE_SRCS) $(TEST_SUPPORT_SRCS)
+FUZZ_OBJDIR    = build/fuzz
+FUZZ_CORE_LIB  = $(FUZZ_OBJDIR)/libsloth_core.a
+FUZZ_CORE_OBJS = $(FUZZ_CORE_SRCS:%.c=$(FUZZ_OBJDIR)/%.o)
+FUZZ_BINS      = $(FUZZ_SRCS:tests/fuzz/%.c=$(FUZZ_OBJDIR)/bin/%)
+
+$(FUZZ_OBJDIR)/.flags:   STAMP = $(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS)
+$(FUZZ_OBJDIR)/.members: STAMP = $(FUZZ_CORE_SRCS)
+
+# libFuzzer needs clang; say so once, before the first compile fails.
+.PHONY: fuzz-cc-check
+fuzz-cc-check:
 	@command -v $(FUZZ_CC) >/dev/null 2>&1 || { \
 	  echo "fuzz: $(FUZZ_CC) not found -- libFuzzer needs clang, not gcc" >&2; \
 	  exit 1; }
-	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_deauth_parse \
-	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
-	    src/sloth_clock.c src/dot11_data.c src/dot11_frame.c \
-	    -lpthread
-	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
-	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE $(FUZZ_PLATFORM_DEFS) \
-	    -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp \
-	    -o /tmp/sloth_fuzz_eapol_observe \
-	    $(FUZZ_EAPOL_SRCS) -lm -lpthread -lsqlite3
-	/tmp/sloth_fuzz_eapol_observe -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
-	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_radiotap_parse \
-	    tests/fuzz/fuzz_radiotap_parse.c src/radiotap.c
-	/tmp/sloth_fuzz_radiotap_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
-	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -o /tmp/sloth_fuzz_beacon_parse_ies \
-	    tests/fuzz/fuzz_beacon_parse_ies.c src/beacon_snoop.c src/reg_ie.c \
-	    src/sensor_health.c src/wifi_oui_attacker.c src/dot11_data.c \
-	    src/dot11_frame.c \
-	    -lm -lpthread
-	/tmp/sloth_fuzz_beacon_parse_ies -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
+
+$(FUZZ_OBJDIR)/.flags: | fuzz-cc-check
+
+$(FUZZ_OBJDIR)/%.o: %.c $(FUZZ_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -MMD -MP -c -o $@ $<
+
+$(FUZZ_CORE_LIB): $(FUZZ_CORE_OBJS) $(FUZZ_OBJDIR)/.members
+
+$(FUZZ_OBJDIR)/bin/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_CORE_LIB) $(FUZZ_OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -o $@ $< $(FUZZ_CORE_LIB) -lm -lpthread -lsqlite3
+
+.PHONY: fuzz
+fuzz: $(FUZZ_BINS)
+	@for f in $(FUZZ_BINS); do \
+	  echo "$$f -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3"; \
+	  $$f -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3 || exit 1; \
+	done
 
 # ── Static analysis (#95) ───────────────────────────────────────────────────
 # Runs CI's cppcheck command, byte for byte, with CI's version guard.
@@ -875,8 +713,34 @@ mutate:
 	python3 .github/scripts/mutate.py $(MUTATE_FLAGS)
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
+# Every object, archive, stamp and fuzz binary lives under build/. The
+# second rm sweeps objects the pre-#115 layout compiled beside their
+# sources, so a tree upgraded across that change does not keep them.
 clean:
-	rm -f $(OBJS) $(TARGET) $(TEST_BIN) $(CAPTURE_PATH_BIN) research_ingest sloth-research-mcp
+	rm -rf build
+	rm -f $(TARGET) $(TEST_BIN) $(CAPTURE_PATH_BIN) research_ingest sloth-research-mcp
+	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
+
+# ── Shared build machinery (#115) ───────────────────────────────────────────
+# One archive recipe for every libsloth_core.a; each variant above adds
+# its members and its .members stamp as prerequisites. Rebuilt from
+# scratch rather than updated in place, so a member dropped from the list
+# leaves the archive with it.
+%/libsloth_core.a:
+	@rm -f $@
+	$(AR) rcs $@ $(filter %.o,$^)
+
+STAMPS = $(LINK_STAMP) \
+         $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(CAPTURE_PATH_OBJDIR) $(FUZZ_OBJDIR),$(d)/.flags $(d)/.members)
+
+.PHONY: FORCE
+$(STAMPS): FORCE
+	$(write_stamp)
+
+# Header dependencies written by -MMD. Absent until the first compile,
+# which has to rebuild everything anyway.
+-include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
+                    $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_OBJS) $(FUZZ_CORE_OBJS)))
 
 # ── Install (#139) ───────────────────────────────────────────────────────────
 # `install` places what the binary and the shipped unit reference, all

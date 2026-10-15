@@ -3119,3 +3119,60 @@ header fields from `(dot11, len)` through the `dot11_data` wrappers;
 their migration to taking the view directly is the next slice. The
 `src/action_snoop.c` copy is owned by a parallel slice this round and
 was not touched here.
+
+## 2026-10-15 — Derived source lists, `libsloth_core.a`, per-config object directories (#115)
+
+**Why.** The Makefile kept seven source lists by hand — `SRCS`,
+`TEST_SRCS`, `CAPTURE_PATH_SRCS`, `FUZZ_EAPOL_SRCS` and three inline
+lists in the `fuzz` recipe — and the inline ones rotted first: on
+2026-10-14 two fuzz targets failed to link in CI because a module they
+named gained a dependency they did not. The six build configs also
+shared one object directory, which is why `make clean` between configs
+was a rule rather than a habit.
+
+**What landed** ([[architecture]] "Build layout").
+- `APP_SRCS` (`main.c`, `tui.c`, the real platform vtable) and
+  `CORE_SRCS` (everything else the current `WITH_*` config compiles,
+  filtered from `CORE_SRCS_ALL` by feature group). `sloth` links the app
+  objects plus `build/<cfg>/libsloth_core.a`.
+- `sloth_test` takes `$(wildcard tests/*.c)` minus the capture-path
+  pair; its core is `CORE_SRCS_ALL` minus `probe.c` plus
+  `src/reset_all.c` and the research tools' library halves, derived from
+  `RESEARCH_SRCS`/`MCP_SRCS`. `sloth_test_pcap` is the same with
+  `-DWITH_PCAP` and probe.c back in.
+- `make fuzz`: one rule, `build/fuzz/bin/fuzz_%` from
+  `tests/fuzz/fuzz_%.c` and a clang-built core archive (plus the null
+  renderer and fake platform). The archive keeps targets narrow —
+  `fuzz_radiotap_parse` still links no snooper or alert code. Binaries
+  moved from `/tmp/sloth_fuzz_*` to `build/fuzz/bin/`.
+- Object directories `build/n?p?w?s?/`, `build/test/`,
+  `build/test-pcap/`, `build/fuzz/`, each with a flags stamp so a changed
+  `EXTRA_CFLAGS` recompiles, and a member stamp so a dropped source
+  leaves the archive. `sloth` relinks on a config switch. `-MMD`
+  replaces the `TEST_HDRS` wildcard. `build/` is ignored.
+- `make cppcheck` is unchanged: it still scans `src research`, the exact
+  command CI runs. A new test holds the two argument lists equal until
+  #119 makes CI call the target.
+
+**Tests** (`tests/test_build_recipe.c`): no `$(CC)`/`$(FUZZ_CC)`
+command names a literal `.c`; no variable spells out a `tests/` source
+other than as a `filter-out` exclusion, and `TEST_SRCS` is the
+wildcard; `CFG_TAG` names all four feature flags and the bare
+`%.o: %.c` rule is gone; the cppcheck target's arguments equal ci.yml's.
+`BR_MAX_LINES` raised to 4096.
+
+**Mutations.** (a) `src/radiotap.c` added to the fuzz link recipe →
+`test_no_compile_or_link_command_names_a_source` red; (b) a
+`TEST_EXTRA = tests/null_tui.c` line → `test_no_variable_spells_out_a_test_file`
+red; (c) `$(WITH_PCAP)` dropped from `CFG_TAG` →
+`test_object_dir_is_per_config` red; (d) cppcheck scan args replaced by
+`$(CORE_SRCS) $(APP_SRCS) research` → `test_cppcheck_target_matches_ci`
+red; (e) `src/dot11_frame.c` deleted from `CORE_COMMON_SRCS` → `sloth`,
+`sloth_test`, `sloth_test_pcap` and three of four fuzz targets fail to
+link (`fuzz_radiotap_parse` does not reach it and still links — the
+narrow property). Each restored by an inverse edit, green again.
+
+**Not done here.** `agents/AGENTS.md` still says "Update the Makefile
+SRCS and TEST_SRCS" and keeps the `make clean` between configs rule;
+ci.yml keeps its own cppcheck command. Both are `agents/`/`.github/`
+edits, batched into #119.

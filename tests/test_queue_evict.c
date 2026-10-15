@@ -19,7 +19,7 @@
  * supplies those addresses — in particular the status==0 gate on a
  * reassociation response, and which of addr1/addr2 is the station on a
  * deauth — is not reachable from this binary (src/capture/probe.c is
- * absent from TEST_SRCS); it is covered in tests/test_capture_path.c,
+ * absent from TEST_CORE_SRCS); it is covered in tests/test_capture_path.c,
  * which links the real callback.
  */
 

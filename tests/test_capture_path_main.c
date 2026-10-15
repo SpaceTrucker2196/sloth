@@ -5,7 +5,7 @@
  * capture-path suite: the rest of tests/ is compiled into this binary
  * to satisfy the link, but those cases assert the behaviour of the
  * no-WITH_PCAP build and do not hold here. See the Makefile note on
- * CAPTURE_PATH_SRCS. */
+ * CAPTURE_PATH_SRCS (#115: now a wildcard over tests/). */
 
 /* The counters live in main_test.c, which this binary deliberately
  * excludes; runner.h expects them at file scope somewhere. No default
