@@ -823,6 +823,43 @@ static void test_assoc_response_element_overrun_is_tallied(void) {
     assoc_clear();
 }
 
+/* #126: the probe-request SSID walk. A request whose first element
+ * overruns adds THREE — this walk, then the vendor-IE fingerprint and
+ * PHY-tier walks over the same list. That is the tally's stated
+ * meaning (walks that stopped, not frames; sensor_health.h), pinned
+ * here so a change to it is a visible decision. A well-formed request
+ * adds nothing. Mutation-proved by deleting this walk's note: 3 → 2. */
+static void test_probe_request_element_overrun_is_tallied_per_walk(void) {
+    static const uint8_t sa[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x77 };
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    uint8_t f[64];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 4, 0, bc, sa, bc, 0x0020, 0);
+    fb_u8(&b, 1);           /* Supported Rates */
+    fb_u8(&b, 8);           /* claims 8 */
+    fb_u8(&b, 0x82);        /* has 1 */
+    ASSERT(fb_ok(&b));
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_IE_OVERRUN);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IE_OVERRUN) - pf0), 3);
+
+    uint8_t g[128];
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    int n = mon_probe_req(g, sa, "corp-wifi", 0);
+    const uint8_t *gs[1] = { g };
+    int gl[1] = { n };
+    pf0 = sh_parse_fault_total();
+    ASSERT_EQ(probe_test_dispatch(&g_s, gs, gl, NULL, NULL, 1), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_total() - pf0), 0);
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
+    probe_pnl_clear();
+}
+
 /* ── FCS is a trailer, not frame (#122) ──────────────────────
  *
  * With radiotap FLAGS saying the FCS is present, the four trailing
@@ -2475,6 +2512,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
     RUN_TEST(test_assoc_response_element_overrun_is_tallied);
+    RUN_TEST(test_probe_request_element_overrun_is_tallied_per_walk);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);

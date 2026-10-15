@@ -665,22 +665,22 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * correlation is built on. */
     const uint8_t *ie_start; int ie_total;
     if (!full || !dot11_frame_body(&fr, &ie_start, &ie_total)) return;
-    const uint8_t *ie       = ie_start;
-    int            ie_rem   = ie_total;
     char           ssid[33] = "";
-
-    while (ie_rem >= 2) {
-        uint8_t tag = ie[0];
-        uint8_t tln = ie[1];
-        if (2 + (int)tln > ie_rem) break;
-        if (tag == 0) {
-            int slen = tln < 32 ? tln : 32;
-            memcpy(ssid, ie + 2, (size_t)slen);
-            ssid[slen] = '\0';
-            break;
+    {
+        tlv_it_t it;
+        uint16_t tag; int tln; const uint8_t *eb;
+        tlv_init(&it, ie_start, ie_total);
+        while (tlv_next(&it, &tag, &tln, &eb) == TLV_OK) {
+            if (tag == 0) {
+                int slen = tln < 32 ? tln : 32;
+                memcpy(ssid, eb, (size_t)slen);
+                ssid[slen] = '\0';
+                break;
+            }
         }
-        ie     += 2 + tln;
-        ie_rem -= 2 + tln;
+        /* The fingerprint and PHY walks below cover the same list and
+         * count their own stops; the tally counts walks (#126). */
+        if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
     }
 
     pthread_mutex_lock(&g_mu);
