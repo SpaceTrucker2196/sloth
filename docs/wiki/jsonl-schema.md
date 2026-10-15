@@ -836,7 +836,7 @@ end, and most of them stopped silently. They now share one iterator
 this tally. The kinds, and this is the whole parse-fault set:
 `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
 `mle_malformed`, `ip_truncated`, `ip_fragment`, `dns_name_bad`,
-`tls_malformed`. Measured in this build: `radiotap_bad`, `dot11_runt`. The others are reserved by
+`tls_malformed`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`. The others are reserved by
 the issue that introduced the tally and are wired by the slices that
 rewrite those parsers (#128 RSN, #131 DNS/TLS, #132 IP); until then
 their field is emitted and reads 0 because nothing measures it, not
@@ -850,6 +850,14 @@ holds both lists to the build.
   is not counted here.
 - `dot11_runt` — the monitor stream delivered an 802.11 frame shorter
   than Frame Control + Duration + Address 1 (10 octets).
+- `ie_overrun` — an element walk stopped on an element whose declared
+  length runs past the end of its region, or on a tail too short to be
+  an element header. Walks on the iterator today:
+  `beacon_parse_ies()` (beacons, association requests and the
+  managed-mode nl80211 scan results). A one-octet tail counts here
+  but not in a beacon's per-BSSID `fuzz_ie_overruns`, which keeps its
+  pre-#126 meaning (an element whose length runs off the end) so that
+  `MGMT_FUZZ` scores do not move.
 
 What is counted is a parser **walk** that hit the fault, not a frame:
 an association request's elements are walked by more than one parser,

@@ -8,6 +8,7 @@
 #include "beacon_snoop.h"
 #include "dot11_data.h"
 #include "sensor_health.h"
+#include "bytes.h"
 #include "wifi_oui_attacker.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
@@ -217,19 +218,19 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
     int wpa_found = 0;
     int sae_found = 0;
 
-    const uint8_t *ie     = ies;
-    int            ie_rem = ies_len;
+    tlv_it_t       it;
+    uint16_t       etag;
+    int            elen;
+    const uint8_t *ebody;
+    tlv_init(&it, ies, ies_len);
 
-    while (ie_rem >= 2) {
-        uint8_t tag = ie[0];
-        uint8_t tln = ie[1];
-        if (2 + (int)tln > ie_rem) {
-            /* IE claims a length that runs off the frame end — a
-             * malformed-frame signal (mdk4 mode m / crafted injection).
-             * Count it and stop; the rest of the frame is untrustworthy. */
-            if (rsn_out) rsn_out->ie_overruns++;
-            break;
-        }
+    while (tlv_next(&it, &etag, &elen, &ebody) == TLV_OK) {
+        /* 1+1 framing, so both narrow losslessly. `ie` stays the
+         * element header because every per-tag decoder below indexes
+         * its body from ie + 2. */
+        const uint8_t  tag = (uint8_t)etag;
+        const uint8_t  tln = (uint8_t)elen;
+        const uint8_t *ie  = ebody - 2;
         /* RSN IE present (tag 48) but too short to hold even the version
          * + group-cipher selector — truncated / crafted. The full RSN
          * decoder below requires tln >= 8, so this would otherwise be
@@ -716,8 +717,22 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             }
         }
 
-        ie     += 2 + tln;
-        ie_rem -= 2 + tln;
+    }
+
+    if (it.status == TLV_OVERRUN) {
+        /* The walk stopped on an element that does not fit — a
+         * malformed-frame signal (mdk4 mode m / crafted injection); the
+         * rest of the frame is untrustworthy. Every such stop reaches
+         * the sensor-wide tally (#126).
+         *
+         * The per-BSSID `ie_overruns` keeps its pre-#126 meaning: an
+         * element whose declared length runs off the end. A tail of one
+         * octet — too short to be an element header at all — was never
+         * counted there, and counting it now would move MGMT_FUZZ scores
+         * and the ie_order_hash gate below on frames that scored 0
+         * yesterday. It is still a fault, so the tally sees it. */
+        sh_parse_fault_note(SH_PF_IE_OVERRUN);
+        if (rsn_out && it.len - it.off >= 2) rsn_out->ie_overruns++;
     }
 
     if (rsn_out) {

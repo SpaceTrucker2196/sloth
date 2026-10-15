@@ -778,13 +778,66 @@ static void test_parse_fault_names_are_stable_and_distinct(void) {
 static void test_parse_fault_wired_set(void) {
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RADIOTAP_BAD),  1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DOT11_RUNT),    1);
-    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IE_OVERRUN),    0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IE_OVERRUN),    1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RSN_MALFORMED), 0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_MLE_MALFORMED), 0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_TRUNCATED),  0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_FRAGMENT),   0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DNS_NAME_BAD),  0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_TLS_MALFORMED), 0);
+}
+
+/* beacon_parse_ies() is the first walk on the iterator (#126). One
+ * element that overruns adds exactly one IE_OVERRUN — not one per
+ * element skipped, not one per output, and nothing to any other kind.
+ * Elements per IEEE 802.11-2020 §9.4.2.1: SSID (0) "lab", then a DS
+ * Parameter Set (3) claiming 9 body octets with 1 present. */
+static void test_beacon_ie_overrun_reaches_the_parse_fault_tally(void) {
+    static const uint8_t ies[] = { 0x00, 0x03, 'l', 'a', 'b',
+                                   0x03, 0x09, 0x06 };
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    sh_parse_fault_reset();
+    beacon_parse_ies(ies, (int)sizeof ies, 0, 0, ssid, &ch, enc, &rsn, NULL);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 1);
+    /* The element before the fault was still read, and the per-BSSID
+       counter MGMT_FUZZ scores from moved with it. */
+    ASSERT_STR(ssid, "lab");
+    ASSERT_EQ(rsn.ie_overruns, 1);
+    sh_parse_fault_reset();
+}
+
+/* A list that tiles exactly adds nothing. Without this the test above
+ * would pass for a walker that tallied every call. */
+static void test_beacon_clean_ies_add_no_parse_fault(void) {
+    static const uint8_t ies[] = { 0x00, 0x03, 'l', 'a', 'b',
+                                   0x03, 0x01, 0x06 };
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    sh_parse_fault_reset();
+    beacon_parse_ies(ies, (int)sizeof ies, 0, 0, ssid, &ch, enc, &rsn, NULL);
+    ASSERT_EQ(ch, 6);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    ASSERT_EQ(rsn.ie_overruns, 0);
+}
+
+/* A one-octet tail cannot be an element header. It is a fault, so the
+ * sensor-wide tally counts it; it is NOT an element whose length ran
+ * off the end, which is all `ie_overruns` has ever counted, so that
+ * per-BSSID field — and the MGMT_FUZZ score and IE-order fingerprint
+ * that read it — stay where they were before #126. */
+static void test_beacon_one_byte_tail_is_tallied_not_scored(void) {
+    static const uint8_t ies[] = { 0x00, 0x03, 'l', 'a', 'b', 0xdd };
+    char ssid[33]; char enc[10]; int ch = 0;
+    beacon_rsn_t rsn;
+    sh_parse_fault_reset();
+    beacon_parse_ies(ies, (int)sizeof ies, 0, 0, ssid, &ch, enc, &rsn, NULL);
+    ASSERT_STR(ssid, "lab");
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+    ASSERT_EQ(rsn.ie_overruns, 0);
+    ASSERT(rsn.fp.ie_order_hash != 0);
+    sh_parse_fault_reset();
 }
 
 /* Collect the backticked names in the span after `marker` up to the
@@ -882,6 +935,9 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_parse_fault_names_are_stable_and_distinct);
     RUN_TEST(test_parse_fault_wired_set);
     RUN_TEST(test_schema_doc_lists_every_parse_fault_kind);
+    RUN_TEST(test_beacon_ie_overrun_reaches_the_parse_fault_tally);
+    RUN_TEST(test_beacon_clean_ies_add_no_parse_fault);
+    RUN_TEST(test_beacon_one_byte_tail_is_tallied_not_scored);
 
     sh_evict_reset();   /* leave the tally clean for later suites */
     sh_parse_fault_reset();
