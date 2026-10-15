@@ -100,6 +100,30 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * captures a day instead of 86,400. 0 disables it. */
     { "pcap.min_severity",          2,   0,   2,      "0=any alert, 1=WARN and up, 2=CRIT only" },
     { "pcap.key_cooldown_secs",     3600, 0, 86400,   "seconds before the same alert key exports again, 0 for none" },
+    /* Data-socket hygiene (#135). Neither is a detector threshold.
+     *
+     * max_per_peer bounds how many of the listener's 16 client slots one
+     * peer may hold at once — one uid on `unix:` (SO_PEERCRED), one
+     * address on `tcp:` (getpeername), and one shared bucket for any
+     * peer the kernel cannot identify, which fails closed rather than
+     * open. Before it, one local account (or, with
+     * --data-socket-allow-remote, one host) could take every slot and
+     * every other consumer got ECONNREFUSED-by-neglect (CWE-770). 16 is
+     * MAX_CLIENTS, i.e. no per-peer limit at all.
+     *
+     * idle_secs closes a client that has made no progress — accepted,
+     * offered a record, or had bytes taken by the kernel — for that
+     * long, WHATEVER its queue holds. The 30 s stall timer only ran
+     * while bytes were queued, so a client sloth never needed to write
+     * to held its slot forever. 900 is three JSONL heartbeats
+     * (3 × JSONL_HEARTBEAT_SECS): a live consumer is offered a record at
+     * least every 300 s, so one that has seen nothing for three of them
+     * is not a consumer any more. 0 = off, a meaningful setting the way
+     * storage.min_free_* 0 is; a dropped client that reconnects gets
+     * the full baseline again (#47), so the cost of a false positive is
+     * one reconnect, not lost data. */
+    { "socket.max_per_peer",        4,   1,   16,     "concurrent data-socket clients one peer may hold (16 = no per-peer cap)" },
+    { "socket.idle_secs",           900, 0,   86400,  "seconds without progress before a data-socket client is closed, 0 for never" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

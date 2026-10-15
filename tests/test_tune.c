@@ -44,6 +44,9 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_SNMP_COMMUNITY_BRUTE), 5);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_CONNECTS), 10);
     ASSERT_EQ((long long)tune_val(TUNE_MQTT_BRUTE_FAILS), 5);
+    /* #135: 4 slots per peer of 16; idle = 3 × JSONL_HEARTBEAT_SECS. */
+    ASSERT_EQ((long long)tune_val(TUNE_SOCKET_MAX_PER_PEER), 4);
+    ASSERT_EQ((long long)tune_val(TUNE_SOCKET_IDLE_SECS), 900);
     ASSERT_EQ(tune_non_default(), 0);
 }
 
@@ -58,6 +61,8 @@ static void test_specs_match_enum_order(void) {
     ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_FAILS)->name, "mqtt.brute_fails");
     ASSERT_STR(tune_spec(TUNE_TWIN_STEER_WINDOW_S)->name, "twin.steer_window_s");
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
+    ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
+    ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");
     /* Every row has a name, a unit, and a default inside its own
        bounds — a row whose default is out of range could never be
        restored by the operator. */

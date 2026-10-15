@@ -79,6 +79,10 @@ typedef enum {
     /* Per-alert pcap export policy (#96). See the rows in tune.c. */
     TUNE_PCAP_MIN_SEVERITY,
     TUNE_PCAP_KEY_COOLDOWN_SECS,
+    /* Data-socket hygiene (#135): per-peer slot cap and idle timeout.
+       Neither is a detector threshold. See the rows in tune.c. */
+    TUNE_SOCKET_MAX_PER_PEER,
+    TUNE_SOCKET_IDLE_SECS,
     TUNE_COUNT
 } tune_id_t;
 

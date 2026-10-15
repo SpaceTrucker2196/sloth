@@ -1846,6 +1846,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * avoid. A band crosses a handful of times over a filesystem's
          * life, which is the news: not "it moved", but "it crossed". */
         int      pcap_dir_byte_band, pcap_dir_file_band;
+        /* #135. Client count moves only on connect/disconnect, bounded
+         * 0..16, so it signs as itself. The refusal tally is an event
+         * counter that a reconnect loop would advance every tick, so it
+         * signs as a two-state band (none / some): the first refusal is
+         * the transition worth a line, the running count rides the
+         * heartbeat like `evictions` of a flow ring. */
+        int      socket_clients, socket_refused_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -1896,6 +1903,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         ? fs_capacity_band(pcap_cap.free_bytes, pcap_cap.total_bytes) : -1;
     sig.pcap_dir_file_band = (pcap_cap_ok && pcap_cap.files_known)
         ? fs_capacity_band(pcap_cap.free_files, pcap_cap.total_files) : -1;
+    const int                socket_clients = data_socket_client_count();
+    const unsigned long long socket_refused = data_socket_peer_refused_total();
+    sig.socket_clients     = socket_clients;
+    sig.socket_refused_any = socket_refused > 0;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -1999,6 +2010,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         tune_format_non_default(tbuf, sizeof(tbuf));
         kv_str(buf, LINEBUF, &off, "tuned", tbuf);
     }
+    /* Data-socket hygiene (#135). Appended, so every earlier field keeps
+     * its name and position. `socket_peer_refused` climbing is one peer
+     * trying to take more than socket.max_per_peer slots — a consumer
+     * misconfigured to reconnect without closing, or a local account
+     * crowding the listener; `socket_clients` is the live occupancy of
+     * the 16 slots, 0 when no --data-socket is configured. */
+    kv_int(buf, LINEBUF, &off, "socket_peer_refused", (long long)socket_refused);
+    kv_int(buf, LINEBUF, &off, "socket_clients",      socket_clients);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

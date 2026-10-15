@@ -22,6 +22,7 @@
 #include "alerts.h"
 #include "formatter.h"
 #include "tool_fingerprint.h"
+#include "tune.h"
 
 static void ds_seed_pnl(sloth_state_t *s);
 
@@ -484,12 +485,17 @@ static void test_gap_marker_follows_out_format(void) {
  * has accepted nothing for DATA_SOCKET_STALL_SECS it is closed. */
 static void test_stalled_client_is_disconnected(void) {
     io_reset();
+    /* The clock goes in BEFORE the accept, not after (#135): accept
+     * stamps `progress` from whichever clock is installed, and with the
+     * idle rule a client stamped from the real monotonic clock on a
+     * host only seconds old would read as 1000 - uptime >= 900 idle on
+     * the first injected tick. The lesson of #109, applied here. */
+    data_socket_test_set_clock_fn(io_clock);
+    io_now = 1000;
     int c = ds_open_one();
     ASSERT(c >= 0);
-    data_socket_test_set_clock_fn(io_clock);
     data_socket_test_set_send_fn(io_send);
 
-    io_now = 1000;
     data_socket_tick();
     io_now = 1000 + 10 * DATA_SOCKET_STALL_SECS;   /* idle, nothing queued */
     data_socket_tick();
@@ -511,12 +517,12 @@ static void test_stalled_client_is_disconnected(void) {
  * the stall clock restarts on every byte the kernel accepts. */
 static void test_slow_client_progress_resets_stall(void) {
     io_reset();
+    data_socket_test_set_clock_fn(io_clock);   /* before accept — see above */
+    io_now = 5000;
     int c = ds_open_one();
     ASSERT(c >= 0);
-    data_socket_test_set_clock_fn(io_clock);
     data_socket_test_set_send_fn(io_send);
 
-    io_now = 5000;
     io_budget = 0;
     data_socket_emit("{\"slow\":1}");
     io_now = 5000 + DATA_SOCKET_STALL_SECS - 5;
@@ -625,6 +631,16 @@ static void test_tick_caps_at_max_clients(void) {
     char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
+    /* Premise update (#135): the dup'd listener fds this fake hands
+     * back have no peer, so they all land in the shared "unknown"
+     * bucket, and the default per-peer cap of 4 would stop the drain
+     * at 4 with 96 refusals — which is the per-peer policy working,
+     * not the global guard. This test pins the GLOBAL guard, so the
+     * per-peer cap is opened to its maximum (16 = MAX_CLIENTS, no
+     * per-peer limit) and the claim below stands unchanged. The
+     * unknown-bucket cap has its own test in the #135 suite. */
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.max_per_peer=16", NULL, 0), 0);
     g_fake_accept_calls = 0;
     g_fake_accept_max   = 100;        /* fake will "accept" forever */
     data_socket_test_set_accept_fn(fake_accept);
@@ -636,9 +652,11 @@ static void test_tick_caps_at_max_clients(void) {
      * the guard exits the loop. Not 15, not 17. */
     ASSERT_EQ(g_fake_accept_calls, 16);
     ASSERT_EQ(data_socket_has_clients(), 1);
+    ASSERT_EQ(data_socket_client_count(), 16);
 
     data_socket_test_set_accept_fn(NULL);
     data_socket_cleanup();
+    tune_reset();
 }
 
 /* When a client in the MIDDLE of the array disconnects, the emit
@@ -1552,6 +1570,351 @@ static void test_unix_socket_is_created_private(void) {
     data_socket_cleanup();
 }
 
+/* ── Data-socket hygiene (#135) ──────────────────────────────────
+ *
+ * Per-peer slot cap, idle timeout independent of queued bytes, and the
+ * two sensor_health fields. The cap tests pin the knob at 2 rather than
+ * the default 4 because the UNIX listener's backlog is 4: five
+ * un-accepted connections in one tick would be asking the kernel for
+ * more backlog than sloth requests, and a test that depends on Linux
+ * over-admitting is a test that passes for the wrong reason. */
+
+static int fd_set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    return fl < 0 ? -1 : fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+/* 0 = the server closed this one (read gives EOF), 1 = still open and
+ * merely quiet (EAGAIN). Anything else is a test-harness fault. */
+static int fd_status(int fd) {
+    char b[8];
+    if (fd_set_nonblock(fd) != 0) return -1;
+    ssize_t n = read(fd, b, sizeof(b));
+    if (n == 0) return 0;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
+    return -1;
+}
+
+/* Every connection in this test comes from the test's own uid, so
+ * SO_PEERCRED puts them all in one bucket. cap+1 connect; cap are
+ * served; the extra is closed at accept and reads EOF within the same
+ * tick. Named mutation: `peer_slots(&peer) >= cap` → `>` lets a third
+ * in — client_count reads 3, refused reads +0, no fd sees EOF. */
+static void test_per_peer_cap_refuses_the_extra_connection(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    unsigned long long refused_before = data_socket_peer_refused_total();
+    int c[3];
+    for (int i = 0; i < 3; i++) { c[i] = connect_client(path); ASSERT(c[i] >= 0); }
+
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 2);
+    ASSERT_EQ(data_socket_peer_refused_total(), refused_before + 1);
+
+    /* Exactly one of the three was closed by the server, and the two
+     * that were not are still open — counted rather than indexed, so
+     * the test does not lean on accept() order. */
+    int eof = 0, open_ = 0;
+    for (int i = 0; i < 3; i++) {
+        int st = fd_status(c[i]);
+        ASSERT(st >= 0);
+        if (st == 0) eof++; else open_++;
+    }
+    ASSERT_EQ(eof, 1);
+    ASSERT_EQ(open_, 2);
+
+    /* The survivors are served: a record reaches both of them. */
+    data_socket_emit("{\"served\":1}");
+    int got = 0;
+    for (int i = 0; i < 3; i++) {
+        char b[32];
+        ssize_t n = read(c[i], b, sizeof(b) - 1);
+        if (n > 0) { b[n] = '\0'; if (strcmp(b, "{\"served\":1}\n") == 0) got++; }
+    }
+    ASSERT_EQ(got, 2);
+
+    for (int i = 0; i < 3; i++) close(c[i]);
+    data_socket_cleanup();
+    tune_reset();
+}
+
+/* The default is 4: the fifth same-uid connection is the one refused.
+ * Connected across two ticks to stay inside the listen backlog. */
+static void test_per_peer_cap_default_is_four(void) {
+    tune_reset();
+    ASSERT_EQ((long long)tune_val(TUNE_SOCKET_MAX_PER_PEER), 4);
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    unsigned long long refused_before = data_socket_peer_refused_total();
+    int c[5];
+    for (int i = 0; i < 3; i++) { c[i] = connect_client(path); ASSERT(c[i] >= 0); }
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 3);
+    for (int i = 3; i < 5; i++) { c[i] = connect_client(path); ASSERT(c[i] >= 0); }
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 4);
+    ASSERT_EQ(data_socket_peer_refused_total(), refused_before + 1);
+
+    for (int i = 0; i < 5; i++) close(c[i]);
+    data_socket_cleanup();
+}
+
+/* A released slot is a slot again: when one of the capped peer's
+ * clients goes away, the same peer's next connection is served. The
+ * cap is on concurrent holdings, not a lifetime quota. */
+static void test_per_peer_cap_frees_with_the_slot(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.max_per_peer=1", NULL, 0), 0);
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    int a = connect_client(path); ASSERT(a >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 1);
+
+    int b = connect_client(path); ASSERT(b >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 1);
+    ASSERT_EQ(fd_status(b), 0);                 /* refused */
+    close(b);
+
+    close(a);                                   /* slot goes free ... */
+    data_socket_emit("x");                      /* ... once the EPIPE reaps it */
+    data_socket_emit("x");
+    ASSERT_EQ(data_socket_client_count(), 0);
+
+    int d = connect_client(path); ASSERT(d >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 1);  /* ... and is served again */
+    ASSERT_EQ(fd_status(d), 1);
+    close(d);
+    data_socket_cleanup();
+    tune_reset();
+}
+
+/* Pipe ends through the accept seam: not sockets, so getpeername fails
+ * and every one of them is "unknown". They must share ONE capped
+ * bucket — the fail-closed direction — rather than each counting as
+ * its own peer or, worse, being exempt. Named mutation: gate the cap on
+ * `peer.kind != DS_PEER_UNKNOWN` (unknown = unlimited) → the drain runs
+ * on, client_count reads 10, refused reads +0. */
+static int g_pipe_read_ends[64];
+static int g_pipe_read_n = 0;
+
+static int fake_accept_pipe(int fd, struct sockaddr *addr, socklen_t *addrlen) {
+    (void)fd; (void)addr; (void)addrlen;
+    g_fake_accept_calls++;
+    if (g_fake_accept_calls > g_fake_accept_max || g_pipe_read_n >= 64) {
+        errno = EAGAIN;
+        return -1;
+    }
+    int p[2];
+    if (pipe(p) != 0) { errno = EMFILE; return -1; }
+    g_pipe_read_ends[g_pipe_read_n++] = p[0];
+    return p[1];                 /* the server gets the write end */
+}
+
+static void close_pipe_read_ends(void) {
+    for (int i = 0; i < g_pipe_read_n; i++) close(g_pipe_read_ends[i]);
+    g_pipe_read_n = 0;
+}
+
+static void test_unknown_peers_share_one_capped_bucket(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    unsigned long long refused_before = data_socket_peer_refused_total();
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 10;
+    data_socket_test_set_accept_fn(fake_accept_pipe);
+    data_socket_tick();
+    data_socket_test_set_accept_fn(NULL);
+
+    /* The drain keeps going past a refusal (the next connection may be
+     * another peer's), so all 10 are looked at: 2 served, 8 refused. */
+    ASSERT_EQ(g_fake_accept_calls, 11);          /* 10 fds, then EAGAIN */
+    ASSERT_EQ(data_socket_client_count(), 2);
+    ASSERT_EQ(data_socket_peer_refused_total(), refused_before + 8);
+
+    /* The refused write ends were closed by the server, so their read
+     * ends see EOF; the two served ones do not. */
+    int eof = 0;
+    for (int i = 0; i < g_pipe_read_n; i++) {
+        char b[4];
+        fd_set_nonblock(g_pipe_read_ends[i]);
+        if (read(g_pipe_read_ends[i], b, sizeof(b)) == 0) eof++;
+    }
+    ASSERT_EQ(eof, 8);
+
+    data_socket_cleanup();
+    close_pipe_read_ends();
+    tune_reset();
+}
+
+/* The buckets are keyed by identity, not by count: a uid peer at its
+ * cap does not consume the unknown bucket's slots, and vice versa. Two
+ * real same-uid clients plus two unknowns under a cap of 2 → four
+ * clients, nobody refused. (A second real uid is not available to a
+ * unit test; the unknown bucket is the other distinguishable peer.) */
+static void test_peer_buckets_are_independent(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+
+    unsigned long long refused_before = data_socket_peer_refused_total();
+    int a = connect_client(path), b = connect_client(path);
+    ASSERT(a >= 0 && b >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 2);
+
+    g_fake_accept_calls = 0;
+    g_fake_accept_max   = 2;
+    data_socket_test_set_accept_fn(fake_accept_pipe);
+    data_socket_tick();
+    data_socket_test_set_accept_fn(NULL);
+    ASSERT_EQ(data_socket_client_count(), 4);
+    ASSERT_EQ(data_socket_peer_refused_total(), refused_before);
+
+    close(a); close(b);
+    data_socket_cleanup();
+    close_pipe_read_ends();
+    tune_reset();
+}
+
+/* The idle rule: a client with NOTHING queued is closed once
+ * socket.idle_secs have passed since its last progress. Before #135 the
+ * only timer ran under `c->off < c->len`, so this client lived forever.
+ * Named mutation: re-add `c->off < c->len &&` to the idle condition →
+ * has_clients stays 1 at t0+900. Boundary pinned on both sides. */
+static void test_idle_client_is_closed_with_nothing_queued(void) {
+    tune_reset();
+    ASSERT_EQ((long long)tune_val(TUNE_SOCKET_IDLE_SECS), 900);
+    io_reset();
+    data_socket_test_set_clock_fn(io_clock);
+    io_now = 1000;                       /* accept stamps progress = 1000 */
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    io_now = 1000 + 899;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = 1000 + 900;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ASSERT_EQ(fd_status(c), 0);          /* the peer sees EOF */
+    ds_close_one(c);
+}
+
+/* Progress resets the idle clock: a record delivered at t0+500 keeps
+ * the client past t0+900 and it goes at t0+500+900 instead. This is
+ * what makes 900 = 3 heartbeats safe — a live consumer is offered a
+ * record every 300 s and so never reaches the deadline. */
+static void test_idle_clock_restarts_on_delivery(void) {
+    tune_reset();
+    io_reset();
+    data_socket_test_set_clock_fn(io_clock);
+    io_now = 1000;
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+
+    io_now = 1500;
+    data_socket_emit("{\"beat\":1}");     /* sent → progress = 1500 */
+    io_now = 1000 + 900;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = 1500 + 899;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+    io_now = 1500 + 900;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_close_one(c);
+}
+
+/* socket.idle_secs=0 switches the rule off: a client idle for a day is
+ * kept. The queued-bytes stall rule is untouched by the knob. */
+static void test_idle_zero_disables_the_rule(void) {
+    tune_reset();
+    ASSERT_EQ(tune_set("socket.idle_secs=0", NULL, 0), 0);
+    io_reset();
+    data_socket_test_set_clock_fn(io_clock);
+    io_now = 1000;
+    int c = ds_open_one();
+    ASSERT(c >= 0);
+
+    io_now = 1000 + 86400;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 1);
+
+    /* The 30 s stall rule still applies to a client holding bytes. */
+    data_socket_test_set_send_fn(io_send);
+    io_budget = 0;
+    data_socket_emit("{\"stuck\":1}");
+    io_now += DATA_SOCKET_STALL_SECS;
+    data_socket_tick();
+    ASSERT_EQ(data_socket_has_clients(), 0);
+    ds_close_one(c);
+    tune_reset();
+}
+
+/* The two new sensor_health fields are present, additive, and read the
+ * live values: one client connected, and the refusal total this process
+ * has accumulated so far. */
+static void test_sensor_health_carries_socket_fields(void) {
+    tune_reset();
+    const char *path = sock_path();
+    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    ASSERT_EQ(data_socket_init(spec), 0);
+    int c = connect_client(path);
+    ASSERT(c >= 0);
+    data_socket_tick();
+    ASSERT_EQ(data_socket_client_count(), 1);
+
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    snprintf(s.pkt_iface, sizeof(s.pkt_iface), "any");
+    ds_open_jsonl();
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+
+    FILE *fp = fopen(ds_jsonl_path, "r");
+    ASSERT(fp != NULL);
+    char body[8192];
+    size_t n = fp ? fread(body, 1, sizeof(body) - 1, fp) : 0;
+    if (fp) fclose(fp);
+    body[n] = '\0';
+
+    char want[64];
+    snprintf(want, sizeof(want), "\"socket_peer_refused\":%llu",
+             data_socket_peer_refused_total());
+    ASSERT(strstr(body, want) != NULL);
+    ASSERT(strstr(body, "\"socket_clients\":1") != NULL);
+    /* Appended after the last pre-#135 field, in this order. */
+    const char *t = strstr(body, "\"tuned\":");
+    const char *r = strstr(body, "\"socket_peer_refused\":");
+    const char *k = strstr(body, "\"socket_clients\":");
+    ASSERT(t && r && k && t < r && r < k);
+
+    unlink(ds_jsonl_path);
+    close(c);
+    data_socket_cleanup();
+    /* With no listener the occupancy is 0, not stale. */
+    ASSERT_EQ(data_socket_client_count(), 0);
+}
+
 void run_data_socket_tests(void) {
     TEST_SUITE("data socket (read-only JSONL stream)");
     RUN_TEST(test_unconfigured_emit_is_noop);
@@ -1616,4 +1979,15 @@ void run_data_socket_tests(void) {
     RUN_TEST(test_loopback_tcp_bind_needs_no_optin);
     RUN_TEST(test_unix_bind_unaffected_by_guard);
     RUN_TEST(test_unix_socket_is_created_private);
+
+    TEST_SUITE("data socket (per-peer cap, idle timeout, #135)");
+    RUN_TEST(test_per_peer_cap_refuses_the_extra_connection);
+    RUN_TEST(test_per_peer_cap_default_is_four);
+    RUN_TEST(test_per_peer_cap_frees_with_the_slot);
+    RUN_TEST(test_unknown_peers_share_one_capped_bucket);
+    RUN_TEST(test_peer_buckets_are_independent);
+    RUN_TEST(test_idle_client_is_closed_with_nothing_queued);
+    RUN_TEST(test_idle_clock_restarts_on_delivery);
+    RUN_TEST(test_idle_zero_disables_the_rule);
+    RUN_TEST(test_sensor_health_carries_socket_fields);
 }

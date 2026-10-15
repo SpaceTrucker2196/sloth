@@ -20,6 +20,7 @@
 #endif
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -36,8 +37,22 @@
 #include "data_socket.h"
 #include "jsonl.h"
 #include "formatter.h"
+#include "tune.h"
 
 #define MAX_CLIENTS  16
+
+/* Who is on the other end, for the per-peer slot cap (#135). The kinds
+ * are deliberately coarse: the question is "is this the same party that
+ * already holds N slots", not "who is it". A peer the kernel cannot
+ * identify — a non-socket fd from the test seam, an address family this
+ * module never binds, a failed getsockopt — is DS_PEER_UNKNOWN, and all
+ * such peers share ONE bucket. That is the fail-closed direction: an
+ * exemption for the unidentifiable would be the one every flood took. */
+typedef enum { DS_PEER_UNKNOWN = 0, DS_PEER_UID, DS_PEER_IPV4 } ds_peer_kind_t;
+typedef struct {
+    ds_peer_kind_t kind;
+    uint32_t       id;                /* uid, or host-order IPv4 */
+} ds_peer_t;
 
 /* Per-client queue of complete records. buf[off..len) is unsent; the
  * record at `off` may be partly on the wire, everything after it is
@@ -50,12 +65,16 @@ typedef struct {
     unsigned long long gap;           /* dropped since the last marker */
     unsigned long long dropped;       /* dropped over the connection */
     time_t             progress;      /* last time bytes moved, or queued */
+    ds_peer_t          peer;          /* slot-cap identity, fixed at accept */
 } ds_client_t;
 
 static int             g_listen_fd = -1;
 static ds_client_t     g_clients[MAX_CLIENTS];
 static int             g_client_n  = 0;
 static unsigned long long g_dropped_total = 0;
+static unsigned long long g_peer_refused_total = 0;
+static time_t          g_refuse_warn_at = 0;  /* module clock of the last line */
+static int             g_refuse_warned  = 0;  /* 0 until the first one */
 static char            g_unix_path[256];     /* for cleanup unlink */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -175,6 +194,95 @@ unsigned long long data_socket_dropped_total(void) {
     unsigned long long n = g_dropped_total;
     pthread_mutex_unlock(&g_mu);
     return n;
+}
+
+unsigned long long data_socket_peer_refused_total(void) {
+    pthread_mutex_lock(&g_mu);
+    unsigned long long n = g_peer_refused_total;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+int data_socket_client_count(void) {
+    if (g_listen_fd < 0) return 0;
+    pthread_mutex_lock(&g_mu);
+    int n = g_client_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+/* Fill *p for the just-accepted fd. Never fails: anything short of a
+ * positive identification is DS_PEER_UNKNOWN (see the typedef). */
+static void peer_identify(int fd, ds_peer_t *p) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof(ss);
+    p->kind = DS_PEER_UNKNOWN;
+    p->id   = 0;
+    memset(&ss, 0, sizeof(ss));
+    if (getpeername(fd, (struct sockaddr *)&ss, &sl) != 0) return;
+    if (ss.ss_family == AF_UNIX) {
+        /* The kernel's own answer to "which account connected", the same
+         * check the 0600 mode relies on. The path in sockaddr_un is
+         * useless here: a connecting client is normally unnamed. */
+#ifdef SO_PEERCRED
+        struct ucred cr;
+        socklen_t cl = sizeof(cr);
+        if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cr, &cl) == 0) {
+            p->kind = DS_PEER_UID;
+            p->id   = (uint32_t)cr.uid;
+        }
+#endif
+        return;
+    }
+    if (ss.ss_family == AF_INET && sl >= (socklen_t)sizeof(struct sockaddr_in)) {
+        struct sockaddr_in in;
+        memcpy(&in, &ss, sizeof(in));
+        p->kind = DS_PEER_IPV4;
+        p->id   = ntohl(in.sin_addr.s_addr);
+    }
+}
+
+/* Slots this peer holds now. Caller holds g_mu. */
+static int peer_slots(const ds_peer_t *p) {
+    int n = 0;
+    for (int i = 0; i < g_client_n; i++)
+        if (g_clients[i].peer.kind == p->kind && g_clients[i].peer.id == p->id)
+            n++;
+    return n;
+}
+
+static void peer_describe(const ds_peer_t *p, char *out, size_t n) {
+    switch (p->kind) {
+    case DS_PEER_UID:
+        snprintf(out, n, "uid %u", (unsigned)p->id);
+        break;
+    case DS_PEER_IPV4:
+        snprintf(out, n, "%u.%u.%u.%u",
+                 (unsigned)(p->id >> 24) & 255u, (unsigned)(p->id >> 16) & 255u,
+                 (unsigned)(p->id >> 8) & 255u,  (unsigned)p->id & 255u);
+        break;
+    case DS_PEER_UNKNOWN:
+    default:
+        snprintf(out, n, "an unidentifiable peer");
+        break;
+    }
+}
+
+/* One line per DATA_SOCKET_REFUSE_WARN_SECS on the module clock, so a
+ * reconnect loop reaches the journal as a rate, not a flood. The count
+ * on the line is the lifetime total, which is what makes the rate
+ * readable from two lines. Caller holds g_mu. */
+static void refuse_warn(const ds_peer_t *p, long cap, time_t now) {
+    if (g_refuse_warned && now - g_refuse_warn_at < DATA_SOCKET_REFUSE_WARN_SECS)
+        return;
+    g_refuse_warned  = 1;
+    g_refuse_warn_at = now;
+    char who[48];
+    peer_describe(p, who, sizeof(who));
+    fprintf(stderr,
+            "data-socket: refused a connection from %s: it already holds %ld "
+            "client slots (socket.max_per_peer); %llu refused since start\n",
+            who, cap, g_peer_refused_total);
 }
 
 static int set_nonblock_real(int fd) {
@@ -600,9 +708,23 @@ void data_socket_tick(void) {
     int accepted = 0;
     pthread_mutex_lock(&g_mu);
     time_t now = g_clock_fn();
+    const long cap = tune_val(TUNE_SOCKET_MAX_PER_PEER);
     while (g_client_n < MAX_CLIENTS) {
         int c = g_accept_fn(g_listen_fd, NULL, NULL);
         if (c < 0) break;       /* EAGAIN or real error — stop draining */
+        /* Per-peer cap (#135): decided before any other work on the fd,
+         * and the refused fd is closed here and now — a connection that
+         * is not going to be served must not sit in the backlog's place
+         * either. `continue`, not `break`: the next queued connection
+         * may be a different peer's, and it is owed its slot. */
+        ds_peer_t peer;
+        peer_identify(c, &peer);
+        if (peer_slots(&peer) >= cap) {
+            close(c);
+            g_peer_refused_total++;
+            refuse_warn(&peer, cap, now);
+            continue;
+        }
         if (set_nonblock(c) != 0) {
             /* A blocking client fd is a hazard under g_mu: accept()/send()
              * could stall the whole listener. Drop it rather than keep it. */
@@ -617,6 +739,7 @@ void data_socket_tick(void) {
         memset(&g_clients[g_client_n], 0, sizeof(g_clients[0]));
         g_clients[g_client_n].fd       = c;
         g_clients[g_client_n].progress = now;
+        g_clients[g_client_n].peer     = peer;
         g_client_n++;
         accepted++;
     }
@@ -625,12 +748,25 @@ void data_socket_tick(void) {
      * the records it started. A client holding bytes the kernel has
      * refused for DATA_SOCKET_STALL_SECS is closed: a peer that stops
      * reading can hold a TCP window at zero indefinitely without ever
-     * producing EPIPE, and its queue would sit full forever. */
+     * producing EPIPE, and its queue would sit full forever.
+     *
+     * The idle rule (#135) is the same comparison WITHOUT the queue
+     * condition. The stall rule alone let a client the stream never
+     * wrote to — or one whose queue drained and then went quiet — keep
+     * its slot for the life of the process, which with the per-peer cap
+     * is a slot some other consumer cannot have. `idle` is read per tick
+     * so a tune_set() in a test takes effect without a reconnect; in
+     * production it is fixed at startup. 0 disables the rule. */
+    const long idle = tune_val(TUNE_SOCKET_IDLE_SECS);
     int i = 0;
     while (i < g_client_n) {
         if (flush_client(i, now) < 0) continue;
         ds_client_t *c = &g_clients[i];
         if (c->off < c->len && now - c->progress >= DATA_SOCKET_STALL_SECS) {
+            drop_client(i);
+            continue;
+        }
+        if (idle > 0 && now - c->progress >= idle) {
             drop_client(i);
             continue;
         }

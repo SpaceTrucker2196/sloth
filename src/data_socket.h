@@ -64,8 +64,24 @@ int  data_socket_spec_tcp_port(const char *spec);
 
 /* Call from the main poll loop. Accepts any pending connections,
  * flushes queued bytes to clients that have become writable, and
- * disconnects clients stalled past DATA_SOCKET_STALL_SECS. Cheap when
- * no listener is configured.
+ * disconnects clients stalled past DATA_SOCKET_STALL_SECS or idle past
+ * the socket.idle_secs knob. Cheap when no listener is configured.
+ *
+ * Accept is gated per peer (#135). A peer is one uid on `unix:`
+ * (SO_PEERCRED), one IPv4 address on `tcp:` (getpeername), or — when
+ * the kernel cannot say — a single shared "unknown" bucket, so an
+ * unidentifiable connection is capped, never exempt. A connection whose
+ * peer already holds socket.max_per_peer of the 16 slots is close()d
+ * at once, counted in data_socket_peer_refused_total(), and named once
+ * per DATA_SOCKET_REFUSE_WARN_SECS on stderr. The global slot count is
+ * unchanged; the cap only decides who may fill it.
+ *
+ * Idle (#135) is measured from the client's `progress` mark, which
+ * moves on accept, on a record queued onto an empty queue, and on every
+ * byte the kernel takes. The 30 s stall rule below applies only while
+ * bytes are queued; idle applies regardless, so a client the stream
+ * never needs to write to is still reaped. A reaped client that
+ * reconnects gets the full baseline (#47).
  *
  * Accepting at least one client clears the jsonl change-only cache
  * (jsonl_dedup_reset), so the next snapshot pass re-emits a full
@@ -114,6 +130,19 @@ void data_socket_emit(const char *line);
 
 /* Records dropped on queue overflow, all clients, since start. */
 unsigned long long data_socket_dropped_total(void);
+
+/* Connections closed at accept because their peer already held
+ * socket.max_per_peer slots, all peers, since start (#135). Lifetime,
+ * like dropped_total. Feeds sensor_health's `socket_peer_refused`. */
+unsigned long long data_socket_peer_refused_total(void);
+
+/* Clients connected right now, 0..16. Feeds sensor_health's
+ * `socket_clients`. 0 when no listener is configured. */
+int  data_socket_client_count(void);
+
+/* At most one "refused" stderr line per this many seconds, so a peer
+ * reconnecting in a loop cannot turn the diagnostic into a log flood. */
+#define DATA_SOCKET_REFUSE_WARN_SECS 60
 
 /* True iff at least one client is connected. Used by jsonl.c so the
  * emit functions can short-circuit the format work when neither the

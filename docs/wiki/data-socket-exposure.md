@@ -8,6 +8,17 @@ Wire format: [[jsonl-schema]]. Reference consumers:
 [`examples/consumer/`](../../examples/consumer/) and
 [`examples/forwarder/`](../../examples/forwarder/).
 
+**Summary**: What the read-only data socket exposes, which transport
+authenticates (`unix:` via the kernel; `tcp:` does not), the
+remote-bind guard, the per-peer slot cap and idle timeout, and how to
+carry the stream off-host without putting it on the wire yourself.
+
+**Sources**: `src/data_socket.c`, `src/data_socket.h`, `src/main.c`,
+`src/tune.c`, `src/jsonl.c`, `src/discovery.c`, `src/secure_file.c`,
+`packaging/`.
+
+**Last updated**: 2026-10-14.
+
 ---
 
 ## 1. The short version
@@ -159,6 +170,77 @@ inherited from a default.
 > removes the file through the held directory descriptor. Nothing here is
 > on the shipped unit's path, which passes `--no-discovery`.
 >
+## 4.1 Slots and idle (#135)
+
+The listener holds **16 client slots** (`MAX_CLIENTS` in
+`src/data_socket.c`), and until #135 nothing said who could fill them:
+one local account on the loopback TCP default — or, behind
+`--data-socket-allow-remote`, one host — could open sixteen connections
+and every other consumer got nothing (CWE-770). Two knobs in the
+`--tune` registry now govern the slots. Neither changes a transport, an
+address or a default.
+
+| Knob | Default | Range | What it does |
+|------|---------|-------|--------------|
+| `socket.max_per_peer` | 4 | 1..16 | Concurrent clients one peer may hold. 16 = no per-peer cap. |
+| `socket.idle_secs` | 900 | 0..86400 | Seconds without progress before a client is closed, whatever its queue holds. 0 = never. |
+
+**Who counts as a peer.** Decided at `accept()`, from what the kernel
+vouches for and nothing else. On `unix:` it is the connecting **uid**,
+read with `SO_PEERCRED` — the same credential the 0600 mode relies on.
+On `tcp:` it is the peer's **IPv4 address** from `getpeername()`. A
+connection the kernel cannot identify (an address family this module
+never binds, a failed `getsockopt`) falls into one shared **"unknown"
+bucket** that is capped like any single peer. That is the fail-closed
+direction: an exemption for the unidentifiable would be the one every
+flood took.
+
+**Over the cap.** The connection is `close()`d at accept — the peer
+sees EOF, not a hang — `socket_peer_refused` in `sensor_health` goes up
+by one ([[jsonl-schema]]), and one line reaches stderr at most once per
+60 s so a reconnect loop arrives in the journal as a rate, not a flood:
+
+```
+data-socket: refused a connection from uid 1000: it already holds 4 client slots (socket.max_per_peer); 7 refused since start
+```
+
+The accept drain continues past a refusal, because the next queued
+connection may be another peer's and it is owed its slot. The cap is on
+*concurrent* holdings, not a lifetime quota: close one and the same
+peer's next connection is served.
+
+**Idle.** Each client carries a progress mark that moves on accept, on a
+record queued onto an empty queue, and on every byte the kernel takes.
+The 30 s stall rule (`DATA_SOCKET_STALL_SECS`) only ever ran while
+bytes were queued, so a client sloth never needed to write to — or one
+whose queue drained and then went quiet — held its slot for the life of
+the process. `socket.idle_secs` closes a client whose mark is older than
+the knob **regardless of queue state**. The default, 900 s, is three
+JSONL heartbeats (`JSONL_HEARTBEAT_SECS` = 300): a live consumer is
+offered a record at least every 300 s and never reaches it; one that has
+seen nothing for three beats is not a consumer any more. A client
+dropped this way that reconnects receives the full baseline again
+(#47), so the cost of a false positive is one reconnect, not lost data.
+
+**What this does not do.** It authenticates nobody — a peer under the
+cap on loopback TCP is still any local account. And a per-peer cap is
+not a reservation: with 16 slots and 4 per peer, four peers fill the
+listener and a fifth is turned away by the global guard, not by this
+one. The guarantee is that no single peer can hold the listener against
+the others indefinitely, never that any peer has a slot kept for it.
+
+**The loopback-TCP notice.** The bare `--data-socket` flag still
+defaults to `tcp:127.0.0.1:8765` (changing that is #136; ruling
+pending). Since #135 sloth says at start-up what that default means:
+
+```
+sloth: data-socket tcp:127.0.0.1:8765 is readable by every local account; prefer unix:/run/sloth/sloth.sock (0600, kernel-checked peer)
+```
+
+Printed for any loopback `tcp:` spec, the default or a typed one.
+`unix:` paths do not get it, and a routable bind has its own warning
+(§4). Announced rather than changed, per `MISSION.md` §2.
+
 ## Where the socket lives, and who may read it
 
 **`/run/sloth/sloth.sock`, created by `RuntimeDirectory=`** (owner
@@ -385,3 +467,4 @@ itself.
 - [`MISSION.md`](../../MISSION.md) §2, §4 — passivity rules and the
   read-only-socket scope.
 - [`agents/FACTORY.md`](../../agents/FACTORY.md) §6.2 — invocation forms.
+- [[cli-reference]] — `--tune socket.max_per_peer` / `socket.idle_secs`.

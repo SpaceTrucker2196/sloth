@@ -1309,6 +1309,18 @@ int main(int argc, char **argv) {
             return 1;
         }
         fprintf(stderr, "sloth: data-socket listening on %s\n", data_socket);
+        /* #135: a loopback TCP listener authenticates nobody — every
+         * local account can connect to 127.0.0.1 (CWE-306) — where a
+         * unix: path is created 0600 and the kernel vouches for the
+         * peer's uid. Announced, not changed: the bare-flag default
+         * above is #136's ruling, and MISSION §2 asks that an exposure
+         * be said out loud rather than silently inherited. */
+        if (strncmp(data_socket, "tcp:", 4) == 0 &&
+            data_socket_spec_is_remote(data_socket) == 0)
+            fprintf(stderr,
+                    "sloth: data-socket %s is readable by every local account; "
+                    "prefer unix:/run/sloth/sloth.sock (0600, kernel-checked peer)\n",
+                    data_socket);
         /* #29: advertise the socket over mDNS so the sloth-ios client can
          * discover it by name — but only when it's bound to a routable
          * address (loopback/unix publish nothing) and the operator hasn't

@@ -2955,3 +2955,61 @@ queued, so an idle peer is held indefinitely.
 
 No code in this slice; `test_docs_consistency` is the gate (wikilinks,
 relative links, index reachability, counts).
+
+---
+
+## 2026-10-14 — Data-socket hygiene: per-peer slot cap, idle timeout, loopback-TCP notice (#135)
+
+**Source**: `src/data_socket.c`, `src/data_socket.h`, `src/tune.c`,
+`src/tune.h`, `src/jsonl.c`, `src/main.c`, `tests/test_data_socket.c`,
+`tests/test_tune.c`.
+
+**Updated pages**:
+
+- [data-socket-exposure.md](data-socket-exposure.md) — new §4.1 "Slots
+  and idle": who counts as a peer (`SO_PEERCRED` uid on `unix:`,
+  `getpeername` address on `tcp:`, one shared capped bucket for the
+  unidentifiable), what happens over the cap, the idle rule and why 900 s
+  is three heartbeats, what the cap does **not** guarantee, and the new
+  loopback-TCP start-up notice. The page also gained the
+  Summary / Sources / Last-updated header it had been missing.
+- [cli-reference.md](cli-reference.md) — the `--tune` row names
+  `socket.max_per_peer` (4, 1..16) and `socket.idle_secs` (900, 0 =
+  never); the `--data-socket` row names the notice.
+- [jsonl-schema.md](jsonl-schema.md) — `sensor_health` gains
+  `socket_peer_refused` and `socket_clients`, appended after `tuned`;
+  example line updated.
+
+**Notes**:
+
+Before this slice `MAX_CLIENTS 16` was the only limit on the data
+socket, and the 30 s stall timer ran only while a client held queued
+bytes, so one peer could take every slot and a client sloth never wrote
+to kept its slot for the life of the process (CWE-770). The cap is
+decided at `accept()` from what the kernel vouches for; an
+unidentifiable peer is capped, never exempt. No default changed: the
+bare-flag `tcp:127.0.0.1:8765` is announced as readable by every local
+account (CWE-306) and left for #136's ruling.
+
+Four mutations, each applied with `sed`, proven present with `grep -c`,
+run red, reverted with the inverse `sed`, proven absent, run green:
+
+- `peer_slots(&peer) >= cap` → `>`: `test_per_peer_cap_refuses_the_extra_connection`,
+  `test_per_peer_cap_default_is_four`, `test_per_peer_cap_frees_with_the_slot`,
+  `test_unknown_peers_share_one_capped_bucket` red (12 assertions).
+- `c->off < c->len &&` re-added to the idle condition:
+  `test_idle_client_is_closed_with_nothing_queued`,
+  `test_idle_clock_restarts_on_delivery` red.
+- `peer.kind != DS_PEER_UNKNOWN &&` gating the cap (unknown = unlimited):
+  `test_unknown_peers_share_one_capped_bucket` red, and only it.
+- `idle > 0 &&` removed (no off switch): `test_idle_zero_disables_the_rule` red.
+
+One existing test's premise expired: `test_tick_caps_at_max_clients`
+feeds dup'd listener fds through the accept seam, which are all
+"unknown" and so now stop at the per-peer cap of 4. It pins the
+*global* guard, so it opens `socket.max_per_peer` to 16 and its claim
+stands; the unknown-bucket cap has its own test. The two clock-seam
+stall tests now install the injected clock *before* the accept, because
+with an idle rule a client stamped from the real monotonic clock on a
+seconds-old CI host would read as idle on the first injected tick
+(#109's lesson).
