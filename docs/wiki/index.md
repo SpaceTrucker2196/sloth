@@ -104,6 +104,9 @@ the Wi-Fi it watches:
 - [[data-socket-exposure]] — who can read the data socket, the
   `unix:` trust boundary, the remote-bind guard, and the three
   supported ways to reach it from another host.
+- [[deployment]] — `make install` + `make install-service` (#139): the
+  shipped hardened unit, why it runs as `sloth` and not root, what each
+  sandbox key costs, and the migration off a build-tree unit.
 - [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
   retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.

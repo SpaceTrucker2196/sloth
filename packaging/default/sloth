@@ -1,0 +1,21 @@
+# /etc/default/sloth — site configuration for sloth-sensor.service (#139).
+#
+# Read by systemd as an EnvironmentFile: KEY=value, one per line, no
+# shell expansion. `make install-service` installs this file with
+# `install -b`, so a previous copy survives as /etc/default/sloth~.
+
+# The monitor-mode radio. sloth-monitor-up puts it in monitor mode
+# before sloth starts (sloth itself never does — MISSION.md §2). Must
+# match the device unit named in sloth-sensor.service (BindsTo=).
+SLOTH_IFACE=alfa0
+
+# Extra arguments appended to ExecStart, split on whitespace. This is
+# where the site's own AP goes, so the evil-twin layers have a trust
+# anchor that did not arrive over the air (wiki: inventory).
+#   --my-ssid NAME        the SSID this site operates
+#   --my-bssid MAC        its BSSID
+#   --site-label LABEL    name stamped on the posture report
+#   --inventory FILE      approved-inventory JSON (#89), if you keep one
+# Example:
+#   SLOTH_ARGS=--my-ssid HomeNet --my-bssid 28:25:5f:00:00:00 --site-label attic-sensor
+SLOTH_ARGS=--site-label sloth-sensor

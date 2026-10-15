@@ -516,6 +516,7 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_research_corpus.c   \
             tests/test_docs_consistency.c  \
             tests/test_build_recipe.c      \
+            tests/test_unit_file.c         \
             tests/test_ci_pins.c           \
             research/query.c               \
             tests/test_research_query.c    \
@@ -862,5 +863,43 @@ mutate:
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_BIN) $(CAPTURE_PATH_BIN) research_ingest sloth-research-mcp
 
+# ── Install (#139) ───────────────────────────────────────────────────────────
+# `install` places what the binary and the shipped unit reference, all
+# root-owned under $(PREFIX): the binary, the monitor-mode helper the unit
+# runs as ExecStartPre (sloth never sets monitor mode itself — MISSION §2),
+# and the research corpus for --with-research (0644: read-only data, opened
+# SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c).
+# DESTDIR is honoured throughout so CI can stage into a scratch root and
+# `systemd-analyze verify` the result without touching the runner.
+#
+# `install-service` is separate because it writes outside $(PREFIX): the
+# unit, the sysusers fragment and the site defaults. The sloth account is
+# created by `systemd-sysusers`, never by make — a Makefile has no business
+# running useradd. The defaults file goes in with `install -b` so an edited
+# /etc/default/sloth survives as /etc/default/sloth~ rather than being
+# silently replaced. The unit is written for PREFIX=/usr/local; a different
+# prefix is substituted at install time so the text in packaging/ stays the
+# one tests/test_unit_file.c scans.
+DESTDIR     ?=
+UNITDIR     ?= /etc/systemd/system
+SYSUSERSDIR ?= /usr/lib/sysusers.d
+DEFAULTDIR  ?= /etc/default
+
 install: $(TARGET)
-	install -m 755 $(TARGET) $(PREFIX)/bin/$(TARGET)
+	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
+	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
+	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
+
+.PHONY: install-service
+install-service:
+	install -d $(DESTDIR)$(UNITDIR) $(DESTDIR)$(SYSUSERSDIR) $(DESTDIR)$(DEFAULTDIR)
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-sensor.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp $(DESTDIR)$(UNITDIR)/sloth-sensor.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
+	install -m 644 packaging/systemd/sloth.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth.conf
+	install -b -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
+	@echo "installed unit, sysusers fragment and defaults; next:"
+	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
+	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"

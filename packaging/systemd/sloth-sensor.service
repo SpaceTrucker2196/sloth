@@ -1,0 +1,156 @@
+# sloth-sensor.service — the passive sensor as a system service (#139).
+#
+# Installed by `sudo make install-service` to /etc/systemd/system; the
+# binary, the monitor-mode helper and the research corpus it names are
+# placed by `sudo make install`. Recipe, migration and the reasoning
+# behind every hardening key: docs/wiki/deployment.md.
+#
+# Why this unit exists: the one it replaces ran as root straight out of a
+# uid-1000 build tree, so `make clean` took the sensor down and anyone
+# able to write that checkout could replace the binary root executes —
+# CWE-426 / CWE-732 / CWE-250. Here the process runs as the unprivileged
+# `sloth` user with exactly the two capabilities capture needs, from
+# paths only root can write.
+
+[Unit]
+Description=sloth passive network sensor (db-only profile)
+Documentation=https://github.com/SpaceTrucker2196/sloth
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+
+# Wait for the monitor radio rather than racing it at boot, and stop when
+# it is unplugged. The device name must match SLOTH_IFACE in
+# /etc/default/sloth; systemd cannot read an EnvironmentFile here, so it
+# is spelled out. Pin the name by MAC in a .link file (see the wiki page)
+# or probe order will eventually swap it with the uplink.
+After=sys-subsystem-net-devices-alfa0.device
+BindsTo=sys-subsystem-net-devices-alfa0.device
+
+# Do not hot-loop if the radio is present but unusable.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sloth
+Group=sloth
+
+# Site configuration lives in /etc/default/sloth (installed with a backup
+# of any previous copy). Environment= gives the defaults; the file, when
+# present, overrides them.
+Environment=SLOTH_IFACE=alfa0
+Environment=SLOTH_ARGS=
+EnvironmentFile=-/etc/default/sloth
+
+# /var/lib/sloth (0700) holds the db, pcaps, report and snapshot;
+# /run/sloth (0750) holds the data socket. Both are created, owned and
+# cleaned up by systemd, so nothing here depends on a checkout existing.
+StateDirectory=sloth
+StateDirectoryMode=0700
+RuntimeDirectory=sloth
+RuntimeDirectoryMode=0750
+WorkingDirectory=/var/lib/sloth
+UMask=0077
+
+# Prepare the radio. sloth never puts an interface into monitor mode
+# (MISSION.md §2) — that is an operator action, so it runs here, as root
+# (the `+` prefix: full privileges, outside the sandbox below). The helper
+# is idempotent and a no-op when the interface is already type 803.
+ExecStartPre=+/usr/local/sbin/sloth-monitor-up ${SLOTH_IFACE}
+
+# db-only profile: no -o JSONL sink. The JSONL emitters re-dump every
+# table every poll (~1 Hz) and grew to 148 GiB in one run, filling the
+# disk on 2026-09-26. The DB is capped at 512 MiB with 30-day retention.
+#
+# --eapol-dir is deliberately absent. Since #87 writing PMKIDs/handshakes
+# requires --collect-handshakes; without it sloth REFUSES TO START when
+# --eapol-dir is given. Detection, alerting and the [e] view are
+# unaffected. Add both flags together, never one.
+#
+# --data-socket is a unix: path on purpose: SO_PEERCRED is the kernel's
+# authentication, and a tcp: socket would need AF_INET added to
+# RestrictAddressFamilies below. $SLOTH_ARGS carries the site-specific
+# flags (--my-ssid, --my-bssid, --site-label) from /etc/default/sloth.
+ExecStart=/usr/local/bin/sloth \
+    --headless \
+    --hop \
+    --db /var/lib/sloth/sloth.db --db-interval-secs 1 \
+    --pcap-dir /var/lib/sloth/pcap \
+    --data-socket unix:/run/sloth/sloth.sock --no-discovery \
+    --with-research /usr/local/share/sloth/research.db \
+    --report /var/lib/sloth/report.md \
+    --report-json /var/lib/sloth/report.json \
+    --snapshot-out /var/lib/sloth/snapshot.txt \
+    --baseline-in /var/lib/sloth/snapshot.txt \
+    $SLOTH_ARGS
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# Exactly what capture needs: CAP_NET_RAW for the AF_PACKET handle,
+# CAP_NET_ADMIN for --hop's nl80211 retunes. Ambient so an unprivileged
+# user receives them at exec; the bounding set so nothing can regain more.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+# Everything read-only except the two directories above.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# Hides other users' processes. That disables the root-only pid map in
+# the process views — fine headless, where no view is drawn.
+ProtectProc=invisible
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# AF_PACKET for capture, AF_NETLINK for rtnetlink/nl80211/INET_DIAG,
+# AF_UNIX for the data socket. Add AF_INET AF_INET6 only for a tcp:
+# --data-socket or --allow-active; the db-only profile needs neither.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# If X7 (in-process privilege drop) lands, verify on the target host that
+# capset/prctl/setresuid still pass @system-service minus @privileged, or
+# the drop will fail with EPERM at startup.
+
+# ── Resources ────────────────────────────────────────────────────────────
+# Ceiling until the memory-growth item (M0) closes: an OOM kill plus
+# Restart=always bounds the blast radius to one restart.
+MemoryMax=1G
+MemoryHigh=768M
+TasksMax=16
+
+# SIGTERM is sloth's clean shutdown: it writes the posture report and the
+# site snapshot before exiting (observed: ~2 s).
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+Restart=always
+RestartSec=10
+
+# Journald instead of files: it rotates on its own.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sloth
+
+[Install]
+WantedBy=multi-user.target
+# Also start when the radio APPEARS, not just at boot. BindsTo above stops
+# the service when alfa0 goes away, but a dependency stop is not a
+# failure, so Restart=always does not apply. The Realtek 8812AU USB
+# re-enumerates (observed 2026-10-01, 98 s into a run: ifindex 5 -> 6),
+# which left the sensor dead for 19 h. This line restarts it when the
+# device returns.
+WantedBy=sys-subsystem-net-devices-alfa0.device

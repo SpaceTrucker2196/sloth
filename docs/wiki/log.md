@@ -2842,3 +2842,56 @@ NTP view switch; `src/pcap_write.c` is the right file either way.
   a >63-char instance name created a new row per packet; `key_eq` now compares on the
   stored width.
 - The FragAttacks tables stay on their own idiom until the locking slice (S3) lands.
+
+## 2026-10-14 — `make install` + a shipped hardened systemd unit (#139)
+
+New page [[deployment]]; linked from the index under "UI and
+infrastructure". [[data-socket-exposure]] §5.4 no longer says "no
+systemd unit ships in-tree", because one now does. `agents/FACTORY.md`
+§7 still says "no template shipped" — that file is batched in another
+slice and was not edited here, so until that lands §7 is the stale one
+and this page is the authority.
+
+What shipped, all under `packaging/` (AGENTS.md forbids new files at the
+repo root only): `systemd/sloth-sensor.service`,
+`systemd/sloth.sysusers.conf`, `bin/sloth-monitor-up` (copied verbatim
+from `/usr/local/sbin` on the reference sensor, where it had lived
+outside the repo since 2026-09-26) and `default/sloth`. `make install`
+now also places the helper and `research.db`, honours `DESTDIR`, and a
+new `make install-service` puts the unit, the sysusers fragment and the
+defaults file (with `install -b`) in place. Make never calls `useradd`;
+`systemd-sysusers` does.
+
+The unit runs as `User=sloth` with `AmbientCapabilities=CAP_NET_RAW
+CAP_NET_ADMIN` and an equal bounding set, `ProtectSystem=strict`, state
+in `StateDirectory=sloth`, the data socket on a `unix:` path under
+`RuntimeDirectory=sloth`, and a `@system-service` syscall filter minus
+`@privileged @resources`. `systemd-analyze security --offline` scores it
+1.6 (systemd 261); recorded on the page, not gated. This removes uid 0
+from the process with no code change; the in-process drop (X7) is
+defence in depth on top.
+
+`tests/test_unit_file.c` scans the shipped files. Each assertion of
+absence was mutated red before it was claimed, with the inverse edit
+restoring green each time (`grep -c` proved presence both ways):
+
+- `User=sloth` → `User=root` (the mutation the issue names):
+  `test_unit_runs_as_the_sloth_account` red.
+- `AF_INET` appended to `RestrictAddressFamilies=` on the `unix:`
+  profile: `test_unit_flag_pairs_are_consistent` red.
+- `--eapol-dir /var/lib/sloth/eapol` added to `ExecStart` without
+  `--collect-handshakes`: `test_unit_flag_pairs_are_consistent` red.
+- `CAP_SYS_ADMIN` appended to `CapabilityBoundingSet=`:
+  `test_unit_capabilities_are_exactly_the_two` red.
+- `ExecStart` pointed back at `/home/<user>/Projects/sloth/sloth`:
+  `test_unit_executes_installed_paths_only` red (two assertions: the
+  raw `/home/` scan and the `/usr/local/bin/sloth` prefix).
+- `useradd -r sloth` inserted as the first `install-service` recipe:
+  `test_makefile_install_targets` red.
+
+One deviation from the issue text: `packaging/default/sloth` ships
+`SLOTH_ARGS=--site-label sloth-sensor` with `--my-ssid`/`--my-bssid`
+shown as a commented example, not the reference site's real SSID and
+BSSID. Those are operator data; the migration recipe on the page tells
+the operator to edit the file, and the test asserts the real SSID is
+not in the shipped copy.

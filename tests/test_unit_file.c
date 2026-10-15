@@ -1,0 +1,650 @@
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "runner.h"
+
+/*
+ * Shipped-unit guard — issue #139.
+ *
+ * The property under test: the systemd unit this repo ships runs sloth
+ * as an unprivileged account, from root-owned paths, under a sandbox
+ * that lists exactly the two capabilities capture needs — and the
+ * Makefile that installs it never widens that.
+ *
+ * The unit it replaces did none of this. It ran `User=root` with
+ * `ExecStart=/home/<uid 1000>/Projects/sloth/sloth`, so `make clean`
+ * took the sensor down (2026-10-14, ~1 h with no binary on disk) and any
+ * process able to write that checkout could replace the binary root
+ * executes — CWE-426 / CWE-732 / CWE-250. Nothing in-tree could notice,
+ * because nothing in-tree described the unit.
+ *
+ * Why a text scan rather than `systemd-analyze`: this suite runs on
+ * machines without systemd (CI's macOS leg, containers), and the
+ * invariant is about what the *file in the repo* says, before any
+ * install. The CI job that stages `make install DESTDIR=$TMP` and runs
+ * `systemd-analyze verify` is the behavioural half. Pattern follows
+ * tests/test_build_recipe.c (#95): collapse continuations, look at
+ * logical lines, and keep the scanner's own cases hand-built so the
+ * checks are known capable of failing.
+ *
+ * Every check that asserts an *absence* here (no /home/, no AF_INET on a
+ * unix: profile, no --eapol-dir without --collect-handshakes, nothing
+ * outside {NET_RAW, NET_ADMIN}, no useradd from make) was seen red under
+ * a mutation before it was committed; the log entry for #139 names each
+ * one and the test it reddened.
+ */
+
+#define UF_PATH_UNIT     "packaging/systemd/sloth-sensor.service"
+#define UF_PATH_SYSUSERS "packaging/systemd/sloth.sysusers.conf"
+#define UF_PATH_HELPER   "packaging/bin/sloth-monitor-up"
+#define UF_PATH_DEFAULTS "packaging/default/sloth"
+#define UF_PATH_WIKI     "docs/wiki/deployment.md"
+#define UF_MAX_LINES     512
+
+static char *uf_slurp(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return NULL; }
+    rewind(f);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    buf[got] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Collapse backslash continuations (systemd and make share the rule) so
+ * a directive wrapped over several source lines is examined as the one
+ * value systemd sees. Rewrites in place; `out[i]` points into `buf`. */
+static int uf_logical_lines(char *buf, char *out[], int max) {
+    int n = 0;
+    char *p = buf;
+    while (*p && n < max) {
+        out[n++] = p;
+        for (;;) {
+            char *nl = strchr(p, '\n');
+            if (!nl) { p += strlen(p); break; }
+            if (nl > buf && nl[-1] == '\\') {
+                nl[-1] = ' ';
+                *nl = ' ';
+                p = nl + 1;
+                continue;
+            }
+            *nl = '\0';
+            p = nl + 1;
+            break;
+        }
+    }
+    return n;
+}
+
+/* A unit directive is `Key=value` outside a comment or section header. */
+static int uf_is_directive(const char *line) {
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line == '#' || *line == ';' || *line == '[' || *line == '\0') return 0;
+    return strchr(line, '=') != NULL;
+}
+
+/* Value of the first `key=` directive, or NULL. Keys are exact: `User`
+ * must not match `UserNS`, `ExecStart` must not match `ExecStartPre`. */
+static const char *uf_value(char *lines[], int n, const char *key) {
+    size_t k = strlen(key);
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        if (strncmp(l, key, k) == 0 && l[k] == '=') return l + k + 1;
+    }
+    return NULL;
+}
+
+/* Number of directives with this key — a key given twice is how
+ * SystemCallFilter accumulates, and how User= could be overridden. */
+static int uf_count(char *lines[], int n, const char *key) {
+    size_t k = strlen(key);
+    int c = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        if (strncmp(l, key, k) == 0 && l[k] == '=') c++;
+    }
+    return c;
+}
+
+/* Whitespace-separated token membership. `--db` must not match
+ * `--db-interval-secs`, and `AF_INET` must not match `AF_INET6`. */
+static int uf_has_token(const char *value, const char *tok) {
+    if (!value) return 0;
+    size_t k = strlen(tok);
+    const char *p = value;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        if ((size_t)(e - p) == k && strncmp(p, tok, k) == 0) return 1;
+        p = e;
+    }
+    return 0;
+}
+
+/* Every token of `value` is in the allow-list. Empty value → 0, so a
+ * directive emptied out cannot pass as "trivially a subset". */
+static int uf_tokens_within(const char *value, const char *const allow[],
+                            int nallow) {
+    if (!value) return 0;
+    int seen = 0;
+    const char *p = value;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        int ok = 0;
+        for (int i = 0; i < nallow; i++)
+            if ((size_t)(e - p) == strlen(allow[i]) &&
+                strncmp(p, allow[i], (size_t)(e - p)) == 0) ok = 1;
+        if (!ok) return 0;
+        seen++;
+        p = e;
+    }
+    return seen > 0;
+}
+
+/* A flag is "named" by a document when it appears followed by something
+ * that cannot continue a flag name — so a page listing only
+ * `--db-interval-secs` does not get credit for `--db`. */
+static int uf_doc_names_flag(const char *doc, const char *flag) {
+    size_t k = strlen(flag);
+    const char *p = doc;
+    while ((p = strstr(p, flag)) != NULL) {
+        char c = p[k];
+        if (!(isalnum((unsigned char)c) || c == '-' || c == '_')) return 1;
+        p += k;
+    }
+    return 0;
+}
+
+/* ── scanner self-tests: hand-built strings, so the checks below are
+ *    known to be capable of failing ── */
+
+static void test_scanner_directive_lookup_is_exact(void) {
+    char src[] = "[Service]\n"
+                 "# User=root in a comment\n"
+                 "UserNS=no\n"
+                 "User=sloth\n"
+                 "ExecStartPre=+/usr/local/sbin/helper x\n"
+                 "ExecStart=/usr/local/bin/sloth \\\n"
+                 "    --headless \\\n"
+                 "    --db /var/lib/sloth/sloth.db\n"
+                 "SystemCallFilter=@system-service\n"
+                 "SystemCallFilter=~@privileged\n";
+    char *lines[32];
+    int n = uf_logical_lines(src, lines, 32);
+    ASSERT_EQ(n, 8);
+    ASSERT(!uf_is_directive("[Service]"));
+    ASSERT(!uf_is_directive("# User=root in a comment"));
+    ASSERT(uf_is_directive("User=sloth"));
+    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_value(lines, n, "UserNS"), "no");
+    ASSERT(uf_value(lines, n, "Group") == NULL);
+    /* The continuation joined into the one ExecStart systemd sees. */
+    ASSERT(strncmp(uf_value(lines, n, "ExecStart"), "/usr/local/bin/sloth", 20) == 0);
+    ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--db"));
+    ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--headless"));
+    ASSERT(strncmp(uf_value(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
+    ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+}
+
+static void test_scanner_tokens_are_whole_words(void) {
+    ASSERT(uf_has_token("AF_UNIX AF_NETLINK AF_PACKET", "AF_NETLINK"));
+    ASSERT(!uf_has_token("AF_UNIX AF_NETLINK AF_PACKET", "AF_INET"));
+    ASSERT(uf_has_token("AF_UNIX AF_INET6", "AF_INET6"));
+    ASSERT(!uf_has_token("AF_UNIX AF_INET6", "AF_INET"));
+    ASSERT(!uf_has_token("--db-interval-secs 1", "--db"));
+    ASSERT(uf_has_token("--db x --db-interval-secs 1", "--db"));
+    ASSERT(!uf_has_token(NULL, "x"));
+
+    static const char *const caps[] = { "CAP_NET_RAW", "CAP_NET_ADMIN" };
+    ASSERT(uf_tokens_within("CAP_NET_RAW CAP_NET_ADMIN", caps, 2));
+    ASSERT(uf_tokens_within("CAP_NET_RAW", caps, 2));
+    ASSERT(!uf_tokens_within("CAP_NET_RAW CAP_SYS_ADMIN", caps, 2));
+    ASSERT(!uf_tokens_within("CAP_NET_RAW CAP_NET_ADMIN CAP_NET_BIND_SERVICE", caps, 2));
+    /* Emptied-out directive is not a subset, it is a missing directive. */
+    ASSERT(!uf_tokens_within("", caps, 2));
+    ASSERT(!uf_tokens_within(NULL, caps, 2));
+}
+
+static void test_scanner_doc_flag_match_needs_a_boundary(void) {
+    ASSERT(uf_doc_names_flag("run with `--db FILE` and", "--db"));
+    ASSERT(!uf_doc_names_flag("only `--db-interval-secs 1`", "--db"));
+    ASSERT(uf_doc_names_flag("`--db-interval-secs 1` and `--db x`", "--db"));
+    ASSERT(uf_doc_names_flag("--headless\n", "--headless"));
+    ASSERT(!uf_doc_names_flag("", "--headless"));
+}
+
+/* ── the unit ── */
+
+static void test_unit_runs_as_the_sloth_account(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    /* The whole point of the slice. Given once, so a later User= cannot
+     * quietly win. */
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_value(lines, n, "Group"), "sloth");
+    ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
+
+    /* State lives where systemd creates it for that account, not in a
+     * checkout. */
+    ASSERT_STR(uf_value(lines, n, "StateDirectory"), "sloth");
+    ASSERT_STR(uf_value(lines, n, "StateDirectoryMode"), "0700");
+    ASSERT_STR(uf_value(lines, n, "RuntimeDirectory"), "sloth");
+    ASSERT_STR(uf_value(lines, n, "WorkingDirectory"), "/var/lib/sloth");
+    ASSERT_STR(uf_value(lines, n, "UMask"), "0077");
+    free(buf);
+}
+
+static void test_unit_executes_installed_paths_only(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+
+    /* No /home/ anywhere — directives, comments or Documentation=. The
+     * old unit's Documentation=file:///home/... was the tell that it was
+     * written for one checkout. Raw scan, before continuations are
+     * collapsed, so a comment cannot hide one either. */
+    ASSERT(strstr(buf, "/home/") == NULL);
+    /* And no ConditionPathExists on a build artefact: the unit must not
+     * go silent when the artefact is missing, it must fail loudly. */
+    ASSERT(strstr(buf, "ConditionPathExists=") == NULL);
+
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    if (start) {
+        /* No `-`/`@`/`+`/`!` prefix: sloth itself must run inside the
+         * sandbox, and its failure must fail the unit. */
+        ASSERT(strncmp(start, "/usr/local/bin/sloth ", 21) == 0 ||
+               strcmp(start, "/usr/local/bin/sloth") == 0);
+        ASSERT(uf_has_token(start, "--headless"));
+    }
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+
+    /* Monitor mode is set by the helper, as root (`+`), never by sloth:
+     * MISSION.md §2. */
+    const char *pre = uf_value(lines, n, "ExecStartPre");
+    ASSERT(pre != NULL);
+    if (pre) ASSERT(strncmp(pre, "+/usr/local/sbin/sloth-monitor-up ", 34) == 0);
+    free(buf);
+}
+
+static void test_unit_capabilities_are_exactly_the_two(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const char *const allow[] = { "CAP_NET_RAW", "CAP_NET_ADMIN" };
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    ASSERT(bound != NULL);
+    ASSERT(amb != NULL);
+    /* Bounding set ⊆ {NET_RAW, NET_ADMIN}; ambient ⊆ bounding. Each given
+     * once, since a second CapabilityBoundingSet= line merges in. */
+    if (!uf_tokens_within(bound, allow, 2))
+        fprintf(stderr, "    unit: CapabilityBoundingSet=%s is wider than "
+                "{CAP_NET_RAW, CAP_NET_ADMIN}\n", bound ? bound : "(absent)");
+    ASSERT(uf_tokens_within(bound, allow, 2));
+    if (!uf_tokens_within(amb, allow, 2))
+        fprintf(stderr, "    unit: AmbientCapabilities=%s is wider than "
+                "{CAP_NET_RAW, CAP_NET_ADMIN}\n", amb ? amb : "(absent)");
+    ASSERT(uf_tokens_within(amb, allow, 2));
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    /* Both are needed, not just permitted: capture without NET_RAW and
+     * --hop without NET_ADMIN each fail at startup. */
+    ASSERT(uf_has_token(amb, "CAP_NET_RAW"));
+    ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
+    ASSERT(uf_has_token(bound, "CAP_NET_RAW"));
+    ASSERT(uf_has_token(bound, "CAP_NET_ADMIN"));
+    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    free(buf);
+}
+
+static void test_unit_sandbox_keys_present(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "true"      },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "ProtectClock",             "true"      },
+        { "ProtectHostname",          "true"      },
+        { "ProtectProc",              "invisible" },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictRealtime",         "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "LockPersonality",          "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "SystemCallErrorNumber",    "EPERM"     },
+        { "Restart",                  "always"    },
+        { "KillSignal",               "SIGTERM"   },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+
+    /* The syscall filter is an allow-list plus a deny-list; both halves
+     * have to be there for either to mean anything. */
+    int allow_seen = 0, deny_seen = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+        if (uf_has_token(l + 17, "~@privileged")) deny_seen = 1;
+    }
+    ASSERT(allow_seen);
+    ASSERT(deny_seen);
+
+    /* Memory ceiling until M0 closes; without one a leak is a host OOM. */
+    ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
+    ASSERT(uf_value(lines, n, "TasksMax") != NULL);
+    free(buf);
+}
+
+/* Conditional absences in ExecStart. Each reads as "if A then B" and so
+ * passes vacuously when A is absent — the mutations that proved them add
+ * A without B (see the #139 log entry). */
+static void test_unit_flag_pairs_are_consistent(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    if (!start) { free(buf); return; }
+
+    /* #87: --eapol-dir without --collect-handshakes is a refused start,
+     * and a unit that refuses to start restarts forever under
+     * Restart=always. */
+    if (uf_has_token(start, "--eapol-dir"))
+        ASSERT(uf_has_token(start, "--collect-handshakes"));
+
+    /* The address-family list must match the socket the unit asks for.
+     * A unix: data socket with no --allow-active needs no AF_INET; a
+     * tcp: one, or --allow-active, needs it or sloth fails at bind. */
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    ASSERT(fam != NULL);
+    int tcp    = strstr(start, "--data-socket tcp:") != NULL;
+    int active = uf_has_token(start, "--allow-active");
+    if (!tcp && !active) {
+        ASSERT(!uf_has_token(fam, "AF_INET"));
+        ASSERT(!uf_has_token(fam, "AF_INET6"));
+    } else {
+        ASSERT(uf_has_token(fam, "AF_INET"));
+    }
+    /* And the three the db-only profile cannot run without. */
+    ASSERT(uf_has_token(fam, "AF_UNIX"));
+    ASSERT(uf_has_token(fam, "AF_NETLINK"));
+    ASSERT(uf_has_token(fam, "AF_PACKET"));
+
+    /* The data socket is a unix: path under the RuntimeDirectory, so
+     * SO_PEERCRED is the authentication and nothing listens on a port. */
+    ASSERT(strstr(start, "--data-socket unix:/run/sloth/") != NULL);
+    free(buf);
+}
+
+/* docs-consistency: the wiki page describes the unit that ships, flag
+ * for flag. A reader following the page must not be following a
+ * different ExecStart than the one installed. */
+static void test_deployment_page_names_every_execstart_flag(void) {
+    char *buf = uf_slurp(UF_PATH_UNIT);
+    char *doc = uf_slurp(UF_PATH_WIKI);
+    ASSERT(buf != NULL);
+    ASSERT(doc != NULL);
+    if (!buf || !doc) { free(buf); free(doc); return; }
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    if (!start) { free(buf); free(doc); return; }
+
+    int flags = 0;
+    const char *p = start;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        if (e - p > 2 && p[0] == '-' && p[1] == '-') {
+            char flag[64];
+            size_t k = (size_t)(e - p);
+            if (k >= sizeof(flag)) k = sizeof(flag) - 1;
+            memcpy(flag, p, k);
+            flag[k] = '\0';
+            flags++;
+            if (!uf_doc_names_flag(doc, flag))
+                fprintf(stderr, "    %s does not name ExecStart flag %s\n",
+                        UF_PATH_WIKI, flag);
+            ASSERT(uf_doc_names_flag(doc, flag));
+        }
+        p = e;
+    }
+    /* Twelve today. A floor keeps the loop from passing on an ExecStart
+     * that has lost its flags. */
+    ASSERT_GE(flags, 10);
+
+    /* The page's migration recipe must name the account, the state dir
+     * and the install targets it tells the operator to run. */
+    ASSERT(strstr(doc, "install-service") != NULL);
+    ASSERT(strstr(doc, "systemd-sysusers") != NULL);
+    ASSERT(strstr(doc, "/var/lib/sloth") != NULL);
+    ASSERT(strstr(doc, "chown -R sloth:sloth") != NULL);
+    free(buf);
+    free(doc);
+}
+
+/* ── the sysusers fragment ── */
+
+static void test_sysusers_fragment_declares_a_system_account(void) {
+    char *buf = uf_slurp(UF_PATH_SYSUSERS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[64];
+    int n = uf_logical_lines(buf, lines, 64);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (*l == '#' || *l == '\0') continue;
+        found++;
+        /* `u sloth - "..." /var/lib/sloth /usr/sbin/nologin`: a system
+         * user with a kernel-assigned id, a home that is the state dir
+         * and no shell. Field positions per sysusers.d(5). */
+        ASSERT(strncmp(l, "u ", 2) == 0);
+        ASSERT(uf_has_token(l, "sloth"));
+        ASSERT(uf_has_token(l, "-"));
+        ASSERT(uf_has_token(l, "/var/lib/sloth"));
+        ASSERT(uf_has_token(l, "/usr/sbin/nologin"));
+        ASSERT(strstr(l, "/bin/bash") == NULL);
+        ASSERT(strstr(l, "/bin/sh") == NULL);
+    }
+    /* Exactly one record: one account, no groups or ranges smuggled in. */
+    ASSERT_EQ(found, 1);
+    free(buf);
+}
+
+/* ── the helper and the defaults file ── */
+
+static void test_monitor_up_helper_is_idempotent_and_root_side(void) {
+    char *buf = uf_slurp(UF_PATH_HELPER);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    ASSERT(strncmp(buf, "#!/bin/sh", 9) == 0);
+    /* The test for "already 803" has to come before the mode change, or
+     * the helper is not idempotent and the unit flaps the radio on every
+     * restart. */
+    const char *check = strstr(buf, "= \"803\"");
+    const char *set   = strstr(buf, "set type monitor");
+    ASSERT(check != NULL);
+    ASSERT(set != NULL);
+    ASSERT(check != NULL && set != NULL && check < set);
+    /* It prepares the radio; it never starts, stops or configures sloth. */
+    ASSERT(strstr(buf, "/usr/local/bin/sloth") == NULL);
+    ASSERT(strstr(buf, "systemctl") == NULL);
+    free(buf);
+}
+
+static void test_defaults_file_is_an_environment_file(void) {
+    char *buf = uf_slurp(UF_PATH_DEFAULTS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[64];
+    int n = uf_logical_lines(buf, lines, 64);
+    int iface = 0, args = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (*l == '#' || *l == '\0') continue;
+        /* KEY=value only — systemd does not run a shell over this file,
+         * so `export`, `$(...)` and backticks would be read literally. */
+        ASSERT(strchr(l, '=') != NULL);
+        ASSERT(strncmp(l, "export ", 7) != 0);
+        ASSERT(strstr(l, "$(") == NULL);
+        ASSERT(strchr(l, '`') == NULL);
+        if (strncmp(l, "SLOTH_IFACE=", 12) == 0) iface++;
+        if (strncmp(l, "SLOTH_ARGS=", 11) == 0) args++;
+    }
+    ASSERT_EQ(iface, 1);
+    ASSERT_EQ(args, 1);
+    /* Site identity is operator data, not repo content: the shipped
+     * defaults must not carry a real --my-ssid / --my-bssid on any
+     * non-comment line (the commented example is the operator's cue).
+     * Asserted structurally rather than by naming any particular site. */
+    {
+        int leaked = 0;
+        char *copy = strdup(buf);
+        ASSERT(copy != NULL);
+        if (copy) {
+            for (char *l = strtok(copy, "\n"); l; l = strtok(NULL, "\n")) {
+                while (*l == ' ' || *l == '\t') l++;
+                if (*l == '#' || *l == '\0') continue;
+                if (strstr(l, "--my-ssid") || strstr(l, "--my-bssid")) leaked++;
+            }
+            free(copy);
+        }
+        ASSERT_EQ(leaked, 0);
+    }
+    free(buf);
+}
+
+/* ── the Makefile side ── */
+
+static int uf_is_recipe(const char *line) { return line[0] == '\t'; }
+
+/* The Makefile is far longer than a unit file and grows with every
+ * module; size its scan independently so this test cannot go red for a
+ * reason unrelated to the install targets. */
+#define UF_MAX_MAKE_LINES 4096
+
+static void test_makefile_install_targets(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    ASSERT_LT(n, UF_MAX_MAKE_LINES);
+
+    int in_install = 0, in_service = 0;
+    int inst_bin = 0, inst_helper = 0, inst_db = 0;
+    int svc_unit = 0, svc_sysusers = 0, svc_defaults_b = 0;
+    int recipes_seen = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            continue;
+        }
+        if (!in_install && !in_service) continue;
+        recipes_seen++;
+        /* Nothing make installs may create an account. That is
+         * systemd-sysusers' job, from the fragment, after install. */
+        ASSERT(strstr(l, "useradd") == NULL);
+        ASSERT(strstr(l, "adduser") == NULL);
+        ASSERT(strstr(l, "groupadd") == NULL);
+        /* Every `install` must honour DESTDIR so CI can stage into a
+         * scratch root. Only the recipe lines that invoke install(1). */
+        if (strncmp(l, "\tinstall ", 9) == 0)
+            ASSERT(strstr(l, "$(DESTDIR)") != NULL);
+        if (in_install) {
+            if (strstr(l, "$(TARGET)") && strstr(l, "/bin/")) inst_bin = 1;
+            if (strstr(l, "packaging/bin/sloth-monitor-up") && strstr(l, "/sbin/")) inst_helper = 1;
+            if (strstr(l, "research.db") && strstr(l, "/share/sloth/")) inst_db = 1;
+        }
+        if (in_service) {
+            if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
+            if (strstr(l, "sloth.sysusers.conf")) svc_sysusers = 1;
+            if (strstr(l, "install -b") && strstr(l, "packaging/default/sloth")) svc_defaults_b = 1;
+        }
+    }
+    ASSERT_GT(recipes_seen, 0);
+    /* `install`: what the unit's ExecStart/ExecStartPre reference. */
+    ASSERT(inst_bin);
+    ASSERT(inst_helper);
+    ASSERT(inst_db);
+    /* `install-service`: the unit, the account declaration, and the
+     * defaults file installed with a backup, never over an edit. */
+    ASSERT(svc_unit);
+    ASSERT(svc_sysusers);
+    ASSERT(svc_defaults_b);
+    free(buf);
+}
+
+void run_unit_file_tests(void) {
+    TEST_SUITE("shipped systemd unit (#139)");
+    RUN_TEST(test_scanner_directive_lookup_is_exact);
+    RUN_TEST(test_scanner_tokens_are_whole_words);
+    RUN_TEST(test_scanner_doc_flag_match_needs_a_boundary);
+    RUN_TEST(test_unit_runs_as_the_sloth_account);
+    RUN_TEST(test_unit_executes_installed_paths_only);
+    RUN_TEST(test_unit_capabilities_are_exactly_the_two);
+    RUN_TEST(test_unit_sandbox_keys_present);
+    RUN_TEST(test_unit_flag_pairs_are_consistent);
+    RUN_TEST(test_deployment_page_names_every_execstart_flag);
+    RUN_TEST(test_sysusers_fragment_declares_a_system_account);
+    RUN_TEST(test_monitor_up_helper_is_idempotent_and_root_side);
+    RUN_TEST(test_defaults_file_is_an_environment_file);
+    RUN_TEST(test_makefile_install_targets);
+}

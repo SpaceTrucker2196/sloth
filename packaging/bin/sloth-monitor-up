@@ -1,0 +1,30 @@
+#!/bin/sh
+# Ensure an 802.11 NIC is in monitor mode (ARPHRD_IEEE80211_RADIOTAP = 803).
+#
+# sloth itself must never change link state (MISSION.md §2) — preparing the
+# radio is an operator action, which is why it lives here and not in sloth.
+# Idempotent: exits 0 immediately if the interface is already in monitor mode.
+# Added 2026-09-26 for sloth-sensor.service.
+set -e
+IF="${1:?usage: sloth-monitor-up <iface>}"
+
+if [ ! -e "/sys/class/net/$IF" ]; then
+    echo "sloth-monitor-up: $IF is absent — is the 88XXau module loaded?" >&2
+    exit 1
+fi
+
+if [ "$(cat "/sys/class/net/$IF/type")" = "803" ]; then
+    echo "sloth-monitor-up: $IF is already in monitor mode (803), leaving it alone"
+    exit 0
+fi
+
+echo "sloth-monitor-up: $IF is type $(cat "/sys/class/net/$IF/type"), setting monitor mode"
+/usr/sbin/ip link set "$IF" down
+/usr/sbin/iw dev "$IF" set type monitor
+/usr/sbin/ip link set "$IF" up
+
+if [ "$(cat "/sys/class/net/$IF/type")" != "803" ]; then
+    echo "sloth-monitor-up: $IF did NOT enter monitor mode (type is now $(cat "/sys/class/net/$IF/type"))" >&2
+    exit 1
+fi
+echo "sloth-monitor-up: $IF is now in monitor mode (803)"

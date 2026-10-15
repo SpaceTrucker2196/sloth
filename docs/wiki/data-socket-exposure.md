@@ -322,8 +322,8 @@ Grafana stack wired to this sink.
 
 ### 5.4 Keeping the tunnel up
 
-No systemd unit ships in-tree — deployment stays under operator control
-([`FACTORY.md`](../../agents/FACTORY.md) §7). The unit you want is
+The sensor side ships a unit since #139 ([[deployment]]); the tunnel on
+the management host is still the operator's, and the unit you want is
 small:
 
 ```ini
