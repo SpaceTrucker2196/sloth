@@ -3416,3 +3416,23 @@ README and MISSION.md sit in count markers (HTML comments) that
 same keys, same order, same enum values. Pages: [[architecture]] →
 *Generated lists*, [[alerts]], [[views-catalog]], [[cli-reference]],
 [[wiki-maintenance]], [[jsonl-schema]].
+
+## 2026-10-15 — The poll tick becomes a declared phase table (#113)
+
+Architecture slice S5. `main.c :: poll_data()` sequenced ~45 calls by
+hand, sat in a file no test binary links, and had drifted into five
+verified stale reads plus a sixth found while moving them (channel
+summary before `beacon_snapshot()`). `src/poll.{h,c}` replaces the body
+with `poll_tick()` over `g_poll_stages[]` — PLATFORM, SNAPSHOT, DERIVE,
+ALERTS, POST, EMIT, DURABLE — and one `poll_ctx_t` clock reading per
+tick through the seam. `tests/test_poll.c` pins the table invariant and
+runs the real table end to end on the fake platform; every reorder was
+mutation-proved (move the stage back, watch its test go red).
+
+Contract: JSONL record **order within a tick** changed — state records
+now follow the tick's alerts and describe this tick, not the previous
+one. Shapes and fields unchanged.
+
+Pages: [[architecture]] (new *Tick* section, capture seam),
+[[jsonl-schema]] (*Order within a tick*, cadence), [[ring-buffers]],
+[[sqlite-schema]] (write path).

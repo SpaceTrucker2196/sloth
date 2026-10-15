@@ -53,6 +53,7 @@ static const char *const cs_migrated[] = {
     "src/top_hosts.c",
     "src/seqnum_track.c",
     "src/assoc_track.c",
+    "src/poll.c",
 };
 
 /* The counter must see calls before its zero means anything. */

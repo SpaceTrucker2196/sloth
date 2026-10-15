@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories).
+**Last updated**: 2026-10-15 (#117: view and alert-type lists generated from `.def` files; #115: derived source lists, `libsloth_core.a`, per-config object directories)., #113
 
 ---
 
@@ -50,7 +50,7 @@ docs/views/*.md            -- per-view deep dives
   ARP, LLC, and unknown ethertypes are filtered before the ring buffer.
   The packet ring itself is private to the capture thread and reaches
   `sloth_state_t` only as a per-poll copy (`capture_ring_snapshot()`,
-  first thing in `poll_data()`, #111) — see [[ring-buffers]]. The
+  the first SNAPSHOT stage of `poll_tick()`, #111/#113) — see [[ring-buffers]]. The
   802.11 side (`src/capture/probe.c`) follows the same rule, and every
   module it feeds, `src/fragattack.c` included since #111, holds its
   tables behind its own mutex.
@@ -136,6 +136,40 @@ The "`make clean` between configs" rule in `agents/AGENTS.md` stays in
 force until the per-config directories have a week of green CI behind
 them; relaxing it belongs to the batched `agents/` change (#119).
 
+## Tick
+
+One pass of the main loop is `poll_tick()` (`src/poll.c`, #113): a
+table of named stages, each tagged with a phase, run in table order.
+`main.c :: poll_data()` only builds the `poll_ctx_t` — one wall and one
+monotonic reading through the clock seam, the research handle, and two
+hooks for consumers that live in the app rather than the core library
+(the tui alert-hot list, the channel-hop scheduler).
+
+| Phase | What runs | Reads |
+|---|---|---|
+| PLATFORM | `g_platform` ifaces / conns / Wi-Fi / ARP / DHCP, capture + probe + persist health, scope pins, first-tick stats baseline | the kernel |
+| SNAPSHOT | `capture_ring_snapshot()` first, then every capture-fed `*_snapshot(s)` | module tables, under their locks |
+| DERIVE | history + bandwidth, channel summary + control-frame annotation, RF quality, scan, beacon detection, recurring transit, sensor registration + merged Wi-Fi model, twins | this tick's snapshots |
+| ALERTS | `alerts_update()` | everything above |
+| POST | research coverage, KARMA, alert-hot, devices, top hosts, channel hop | this tick's alerts |
+| EMIT | JSONL connections, twin episodes, state snapshots | all of it |
+| DURABLE | `db_tick()` on its own cadence | all of it |
+
+`test_phases_are_monotonic` pins that no stage precedes a stage of an
+earlier phase; the end-to-end tests in `tests/test_poll.c` run the real
+table on the fake platform. The hand-sequenced `poll_data()` it replaced
+had six stale reads, each one tick late: JSONL state before the
+snapshots, twins before beacons, the channel summary before beacons,
+sensor and `wifi_merged` records before registration, recurring transit
+after the alert pass, and RF quality / beacon detection on the raw wall
+clock while the alert engine read the seam. Stages gated on `WITH_PCAP`
+keep that gate, so the WITH_PCAP cases run in `sloth_test_pcap`.
+
+Not in the table: the `(out, max)` copies (`pm_forge`, `wps_track`,
+`queue_evict`) that a rule takes under the module's own lock at the
+point it reads them. They have no `sloth_state_t` field for a stage to
+fill.
+
 ## State
 
 `sloth_state_t` is the single shared structure. Each view declares ring
@@ -202,6 +236,8 @@ and keeps its unmarked counts, still checked by the prose scanner.
 ## Related pages
 
 - [[platform-vtable]]
+- [[jsonl-schema]]
+- [[ring-buffers]]
 - [[views-catalog]]
 - [[alerts]]
 - [[pcap-export]]

@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-10-14 (#134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional).
+**Last updated**: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional).
 
 ---
 
@@ -76,9 +76,9 @@ Ubuntu, Fedora and Alpine ships newer.
 ## Write path
 
 ```
-poll_data()
+poll_tick()                       (src/poll.c, #113)
   ├─ every snapshot refreshes sloth_state_t
-  └─ db_tick(state, now)          ← last, so it sees fully-refreshed state
+  └─ db_tick(state, now)          ← DURABLE, the last phase: fully-refreshed state
        ├─ BEGIN IMMEDIATE
        ├─ ~29 prepared upserts
        └─ COMMIT       … then hourly: db_maintain()

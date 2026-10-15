@@ -184,6 +184,7 @@ CORE_COMMON_SRCS += src/geo.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
 CORE_COMMON_SRCS += src/privdrop.c
+CORE_COMMON_SRCS += src/poll.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz

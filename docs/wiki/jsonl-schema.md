@@ -570,7 +570,7 @@ swap, and so duplicate, whenever the two RSSIs crossed.
 
 These records carry the current contents of each view-backing table.
 **Snapshot semantics — one record per entry per poll**, emitted by
-`jsonl_emit_state_snapshots()` after `poll_data()` finishes. Consumers
+`jsonl_emit_state_snapshots()` in the EMIT phase of `poll_tick()`. Consumers
 (the iOS client; any other view-rebuilding consumer) reconstruct the
 table from the latest snapshot keyed by the natural-identity field
 indicated below. Late-joining clients pick up state on the next tick.
@@ -828,10 +828,24 @@ All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are
 bytes/second as float with 2 decimal places.
 
-**Cadence**: one tick per `poll_data()` call (≈1 Hz). Every active
+**Cadence**: one tick per `poll_tick()` call (≈1 Hz). Every active
 entry in every table emits a record each tick. When an entry is aged
 out of the source table its records simply stop appearing — there is
 no explicit "closed" record.
+
+**Order within a tick (changed, #113).** No record's shape or fields
+changed; where records sit inside a tick did. `alert`, `alert.create`,
+`alert.update` and `alert.resolve` are written inside the alert pass;
+the state-snapshot records (connections, twin episodes, then the list
+above, `sensor_health` last) are written after it, in the EMIT phase.
+Before #113 the state records were written *ahead* of the snapshots and
+the alert pass, so each described the previous tick: a beacon, deauth,
+probe client, PNL entry, device, top host, sensor or `wifi_merged` row
+first appeared one tick after the table held it, and a sensor's first
+registration tick never reached the stream. A consumer that keyed on
+"the state records precede this tick's alerts" must now read them as
+following them. Nothing in this schema promised the old order; a
+consumer that groups by `ts` is unaffected.
 
 **Volume**: a typical home network with ~100 ARP entries, ~30 beacons,
 ~50 connections, ~20 devices, etc., emits on the order of 1 KB/s. The

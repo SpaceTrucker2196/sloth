@@ -56,6 +56,7 @@ void run_reg_ie_tests(void);
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
+void run_poll_tests(void);
 void run_http_log_tests(void);
 void run_tls_log_tests(void);
 void run_quic_log_tests(void);
@@ -204,6 +205,7 @@ int main(void) {
     run_deauth_snoop_tests();
     run_flood_window_tests();
     run_clock_seam_tests();
+    run_poll_tests();
     run_http_log_tests();
     run_tls_log_tests();
     run_quic_log_tests();

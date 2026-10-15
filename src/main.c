@@ -97,6 +97,7 @@
 #include "beacon_detect.h"
 #include "jsonl.h"
 #include "persist_health.h"
+#include "poll.h"
 #include "formatter.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
@@ -217,165 +218,18 @@ static void headless_wait(int timeout_ms, int wake_fd) {
  * posture_render_md. */
 static rq_handle_t *g_research = NULL;
 
+/* One tick of the poll loop. The stages and their order are the phase
+ * table in src/poll.c (#113); this only fills in what lives in the app
+ * rather than the core library. */
 static void poll_data(sloth_state_t *s) {
-    /* #111: the wired packet ring is private to the capture thread; take
-     * this tick's copy before anything below reads s->packets --
-     * bw_update() walks it from pkt_bw_cursor and jsonl_emit_* from
-     * pkt_jsonl_emitted. First on purpose: until S5 moves every
-     * capture-fed snapshot into one place, this is where it lives. */
-    capture_ring_snapshot(s);
-    s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
-    s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
-#ifdef WITH_WIFI
-    s->ap_count      = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);
-    s->wifi_sta_count = g_platform.get_wifi_stations(s->wifi_stas, MAX_WIFI_STAS);
-#endif
-    history_update(s);
-    conn_rebuild_idx(s);
-    bw_update(s);
-    /* #91 slice 2: refresh both capture workers' liveness and pcap_stats()
-     * before anything emits. Both calls self-stub without WITH_PCAP, where
-     * "off" is the honest health state rather than a missing one. Ahead of
-     * the snapshot emitters so the sensor_health record reports this tick,
-     * not the previous one. */
-    capture_health_poll(&s->cap_health);
-    probe_health_poll(&s->mon_health);
-    /* #96: sync per-sink write-failure counts so the tab bar can show
-     * a cannot-persist badge from any view. */
-    persist_health_poll(&s->persist_health);
-    /* #85: re-check each pinned ifindex still names its interface; a
-     * replugged, renamed or reused one fails closed and reads DEGRADED. */
-    capture_scope_poll(s);
-    jsonl_emit_connections(s);
-    twins_snapshot(s);
-    jsonl_emit_twin_episodes(s);
-    jsonl_emit_state_snapshots(s);
-    if (!s->stats_init) stats_take_baseline(s);
+    poll_ctx_t ctx;
+    poll_ctx_init(&ctx);
+    ctx.research  = g_research;
+    ctx.alert_hot = tui_alert_hot_set;
 #ifdef WITH_PCAP
-    probe_snapshot(s);
-    mon_frame_snapshot(s);
-    probe_pnl_snapshot(s);
-    eapol_snapshot(s);
-    seqnum_snapshot(s);
-    assoc_snapshot(s);
-    assoc_request_snapshot(s);
-    btm_snapshot(s);
-    action_snapshot(s);   /* protected-frame tally (#124) */
-    csa_snapshot(s);
-    rrm_snapshot(s);
-    frag_snapshot(s);   /* VIEW_FRAGATTACK (#75 slice 5) */
-    mle_snapshot(s);
-    cp_snapshot(s);
-    channel_summary_update(s);
-    ctrl_snapshot(s);   /* annotates the channel rows built above (#64) */
-    rf_quality_snapshot(s, time(NULL));
-    mdns_snapshot(s);
-    nbns_snapshot(s);
-    dhcp_snoop_snapshot(s);
-    ndp_snoop_snapshot(s);
-    smb_snoop_snapshot(s);
-    kerb_snoop_snapshot(s);
-    ldap_snoop_snapshot(s);
-    bgp_snoop_snapshot(s);
-    ssh_snoop_snapshot(s);
-    rdp_snoop_snapshot(s);
-    snmp_snoop_snapshot(s);
-    mqtt_snoop_snapshot(s);
-    ssdp_snapshot(s);
-    onvif_snapshot(s);
-    beacon_snapshot(s);
-    deauth_snapshot(s);
-    http_log_snapshot(s);
-    tls_log_snapshot(s);
-    quic_log_snapshot(s);
-    dns_log_snapshot(s);
-    ntp_log_snapshot(s);
-    icmp_log_snapshot(s);
-    cleartext_creds_snapshot(s);
+    ctx.chanhop   = chanhop_drive;
 #endif
-    /* clamp selections in case counts shrunk */
-    if (s->iface_sel >= s->iface_count && s->iface_count > 0)
-        s->iface_sel = s->iface_count - 1;
-    if (s->wifi_sel >= s->ap_count && s->ap_count > 0)
-        s->wifi_sel = s->ap_count - 1;
-    s->arp_count  = g_platform.get_arp(s->arp_entries, MAX_ARP_ENTRIES);
-    if (s->arp_sel >= s->arp_count && s->arp_count > 0)
-        s->arp_sel = s->arp_count - 1;
-    s->dhcp_count = g_platform.get_dhcp(s->dhcp_leases, MAX_DHCP_LEASES);
-    scan_update(s);
-    bd_update(s, time(NULL));
-    eap_track_snapshot(s);   /* 802.1X EAP method tracking for ROGUE_RADIUS (#31) */
-    alerts_update(s);
-    /* After alerts_update so coverage sees this poll's alerts, not the
-     * previous one's. NULL handle is fine — the view then shows every
-     * fired kind with no sources, which is the honest picture when no
-     * corpus is loaded. */
-    research_coverage_snapshot(s, g_research);
-    karma_update(s);   /* KARMA/PineAP candidate table for VIEW_KARMA (#30) */
-    /* Feed the tui's alert-hot list: every alert with a concrete match_ip
-     * gets the severity-coloured override for ALERT_HOT_TTL_S (1h).
-     * LOW → yellow, WARN → orange, CRIT → red. Re-calls refresh the
-     * timestamp; promotion-only — a later LOW won't downgrade an
-     * earlier CRIT on the same IP within the TTL window. */
-    for (int i = 0; i < s->alert_count; i++) {
-        const alert_t *a = &s->alerts[i];
-        if (!a->match_ip[0]) continue;
-        tui_alert_hot_set(a->match_ip, (long)a->last_seen, (int)a->sev);
-    }
-    devices_update(s);
-    top_hosts_update(s);
-    /* #28: register the monitor radio as the Wi-Fi sensor and record its
-     * cumulative observation count. Future RF families register the same way. */
-    if (s->probe_iface[0]) {
-        time_t now = time(NULL);
-        sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
-                                       s->probe_iface, now);
-        sensor_observe(sn, mon_frame_total(), now);
-        /* #21: fold this radio's beacon observations into the merged
-         * multi-radio world model. With one adapter this is an identity
-         * map; a second monitor radio would merge under its own sensor id.
-         * Rebuilt each poll so aged-out APs drop from the merged view too. */
-        if (sn) {
-            wifi_merge_reset(&s->wifi_merged);
-            wifi_merge_from_beacons(s, (int)(sn - s->sensors));
-        }
-    }
-#ifdef WITH_PCAP
-    /* Recurring transit (#54): feed every client currently classified
-     * as passing into the episode tracker, keyed by a canonical
-     * identity so a randomising device's rotated MACs count as one.
-     * Runs after the probe snapshot has refreshed the client table. */
-    {
-        time_t t_now = time(NULL);
-        for (int i = 0; i < s->probe_count; i++) {
-            const probe_client_t *c = &s->probe_clients[i];
-            if (presence_classify(&c->rssi_ring, c->first_seen,
-                                  c->last_seen, t_now) != PRESENCE_TRANSIENT)
-                continue;
-            uint8_t id[6];
-            transit_canonical_mac(s, c->mac, id);
-            transit_observe(id, c->last_seen, c->signal_dbm);
-        }
-        transit_snapshot(s, t_now);
-    }
-    chanhop_drive(s);
-#endif
-    /* Durable state (#42) — last, so every snapshot above has already
-     * refreshed the tables it reads.
-     *
-     * Reads sloth_state_t directly rather than hanging off the jsonl
-     * emitters: every jsonl_emit_* short-circuits on any_sink(), which
-     * is false when neither -o nor --data-socket is active, so a
-     * --db-only run would silently write an empty database. It also
-     * keeps durable last_seen off the change-only cache, which would
-     * otherwise let it lag by up to the 300 s heartbeat.
-     *
-     * Its own cadence (--db-interval-secs), so slow storage never paces
-     * the poll loop. */
-    {
-        time_t db_now = time(NULL);
-        if (db_due(db_now)) db_tick(s, db_now);
-    }
+    poll_tick(s, &ctx);
 }
 
 static void handle_filter_input(sloth_state_t *s, int key) {

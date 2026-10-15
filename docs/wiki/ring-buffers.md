@@ -198,7 +198,8 @@ void capture_ring_snapshot(sloth_state_t *s) {
 }
 ```
 
-`poll_data()` calls it **first**, before `bw_update()` walks the ring
+`poll_tick()` runs it as the **first** SNAPSHOT stage (#113), before
+`bw_update()` walks the ring
 from `pkt_bw_cursor` and before the JSONL emitters compare
 `pkt_total` against `pkt_jsonl_emitted`. Head, count and total keep
 their meanings exactly, so no reader changed; this is the same copy
