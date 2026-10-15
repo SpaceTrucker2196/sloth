@@ -210,3 +210,6 @@
 | b583877 | 2026-10-15T01:03:14Z | claude-fable-5-1 | 96 | 4015 | 2003520 | 7593 | 2.3571 | clock-seam test no longer assumes two minutes of host uptime (CI flake on fresh runners, #109) |
 | 6adc02d | 2026-10-15T01:04:15Z | claude-fable-5-1 | 98 | 3745 | 2706222 | 7096 | 3.0364 | make install + shipped hardened systemd unit; service stops executing the build tree as root (#139, workflow build + adversarial review) |
 | 41ed4be | 2026-10-15T17:23:31Z | claude-fable-5-1, claude-sonnet-5-5 | 404 | 24144 | 13420189 | 631612 | 15.9756 | Action frames honour the Protected bit; Beacon Request mode from octet 9 (#124, workflow build + adversarial review) |
+| 9a1f0e1 | 2026-10-15T17:28:19Z | claude-sonnet-5-5 | 8 | 2824 | 2535015 | 3092 | 0.8214 | threat-model page: assets, adversaries, trust boundaries (#133) |
+| ce7f94c | 2026-10-15T17:32:02Z | claude-sonnet-5-5 | 2 | 277 | 635841 | 1505 | 0.2039 | data-socket per-peer cap, idle reaping, loopback-TCP notice (#135) |
+| 9b254bc | 2026-10-15T17:36:34Z | claude-sonnet-5-5 | 4 | 1102 | 1275139 | 1193 | 0.4062 | dot11_frame_t one-decode view + frame_build.h; eapol +HTC and stale probe guard fixed (#122) |
