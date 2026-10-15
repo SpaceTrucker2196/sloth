@@ -8843,6 +8843,40 @@ static void test_lifecycle_recurrence_after_resolve_is_a_new_incident(void) {
     lc_end();
 }
 
+/* `reopen_count` (#112) is on the wire, not only in the struct: the
+ * first create omits it (0), the re-open's create carries 1. Asserted
+ * on the stream because a consumer counting incidents per key reads
+ * the stream. */
+static void test_lifecycle_reopen_count_on_the_second_create(void) {
+    lc_begin();
+    sloth_state_t s;
+    uint8_t b[6] = {0x02,0x98,0x00,0x00,0x00,0x0a};
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 1);
+    ASSERT_EQ(lc_count("\"reopen_count\""), 0);
+
+    sloth_state_t empty; seed_state(&empty);
+    lc_advance(ALERT_RESOLVE_AFTER_S + 1);
+    alerts_update(&empty);
+    lc_advance(1);
+    lc_seed_fuzz(&s, b, 3);
+    alerts_update(&s);
+    ASSERT_EQ(lc_count("\"type\":\"alert.create\""), 2);
+    ASSERT_EQ(lc_count("\"reopen_count\":1"), 1);
+    /* On the second create, not on the resolve of the first. */
+    const char *st = lc_stream();
+    const char *second = strstr(st, "\"type\":\"alert.create\"");
+    if (second) second = strstr(second + 1, "\"type\":\"alert.create\"");
+    ASSERT(second != NULL);
+    if (second) {
+        const char *eol = strchr(second, '\n');
+        const char *rc  = strstr(second, "\"reopen_count\":1");
+        ASSERT(rc != NULL && (!eol || rc < eol));
+    }
+    lc_end();
+}
+
 static void test_lifecycle_event_ids_are_unique_and_ordered(void) {
     lc_begin();
     sloth_state_t s;
@@ -9742,6 +9776,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_lifecycle_unchanged_condition_100_ticks_is_silent);
     RUN_TEST(test_lifecycle_resolve_fires_once_and_only_once);
     RUN_TEST(test_lifecycle_recurrence_after_resolve_is_a_new_incident);
+    RUN_TEST(test_lifecycle_reopen_count_on_the_second_create);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

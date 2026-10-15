@@ -3379,3 +3379,13 @@ run in CI (non-root) and is the hand checklist on the issue:
 `CapEff: 0000000000001000` with `--hop`, `0` without, `NoNewPrivs: 1`,
 `chan_retune_failures` staying 0. That a live probe worker survives a
 refused `[m]` needs a real radio and is argued from the code.
+
+## 2026-10-15 — Alert identity: hash-first lookup and incident side state (#112)
+
+`find_by_key()` compares a 64-bit FNV-1a per slot before `strcmp`
+(which still decides — a forced-collision test proves it), and looks a
+key up as it will be stored, so an over-long key no longer opens a new
+incident every tick. `pcap_cool[]` became a per-key side table that
+also carries `pcap_path`, `pcap_write_failures`, `reopen_count` and,
+after an eviction only, `first_seen`. `alert.*` records gain the
+additive `reopen_count`. Pages: [[jsonl-schema]], [[alerts]].

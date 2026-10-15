@@ -950,6 +950,14 @@ typedef struct {
     uint64_t     last_event_ms;    /* CLOCK_MONOTONIC — drives the update floor */
     uint64_t     detail_sig;       /* FNV-1a of the last emitted detail */
     int          resolved;         /* 1 once alert.resolve has been emitted */
+    /* Earlier incidents on this key, as far as the engine's side table
+     * remembers it (#112): 0 for the first, 1 for the first re-open,
+     * and so on. Carried in src/alerts.c's g_side, which outlives the
+     * engine slot. Exported as `reopen_count` on the `alert.*` events,
+     * omitted at 0. A count, not a guarantee: the side table is LRU
+     * bounded, so a key quiet for long enough under pressure starts
+     * again at 0. */
+    uint32_t     reopen_count;
 } alert_t;
 
 /* Canonical MITRE ATT&CK technique for a given alert type. Returns

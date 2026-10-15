@@ -374,7 +374,9 @@ exactly one `alert.create`, carries one `incident_id` through every
 `alert.update` and `alert.escalate`, and closes with exactly one
 `alert.resolve`. A key that fires again after its resolve opens a
 **new incident with a new `incident_id`** — the engine slot is reused,
-the identity is not.
+the identity is not. What belongs to the *key* rather than the incident
+(the pcap export state and `reopen_count`) survives the slot reuse in
+a side table (#112).
 
 | Record | Fires when |
 |--------|-----------|
@@ -437,8 +439,9 @@ not duration.
 | `incident_id` | string | 16 hex chars, stable for the whole incident. Opaque — FNV-1a over the dedup key, the detection time and a process-wide counter. Collision-resistant, not a UUID, and not stable across sloth restarts |
 | `key` | string | the dedup key, same value as on the `alert` record |
 | `title`, `detail`, `sev`, `ty`, `technique`, `match_ip`, `match_port` | | same meaning as on the `alert` record; `detail` and `sev` are the **current** values at the moment of the event. `match_ip`/`match_port` are omitted when the rule has no single flow |
-| `pcap_path` | string | the per-alert pcap this incident's evidence was written to (#92). Present only once export has actually written packets — omitted while nothing has matched yet, and always absent when there's no `match_ip` |
-| `pcap_write_failures` | int | failed export attempts for this incident so far. Export retries every tick rather than giving up after one disk-full or permission error, so this can be non-zero while `pcap_path` is still absent. Omitted at 0 |
+| `pcap_path` | string | the per-alert pcap this finding's evidence was written to (#92). Present only once export has actually written packets — omitted while nothing has matched yet, and always absent when there's no `match_ip`. Since #112 it belongs to the **key**, not the incident: a key that re-opens inside the export cooldown names the file its earlier incident wrote, because that file is where its frames are and no second one is written |
+| `pcap_write_failures` | int | failed export attempts for this key so far (#112: carried across incidents with `pcap_path`). Export retries every tick rather than giving up after one disk-full or permission error, so this can be non-zero while `pcap_path` is still absent. Omitted at 0 |
+| `reopen_count` | int | additive, #112 — how many earlier incidents this dedup key has had: absent (0) on a key's first incident, 1 on its first re-open, and so on. Present on every `alert.*` record of the incident, not only `alert.create`. Remembered in a bounded LRU table (512 keys), so it counts what sloth still remembers, not a lifetime total, and restarts at 0 after `c` or a restart |
 | `evidence_count`, `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — same meaning and same omission rule as on the legacy `alert` record above. Present on `alert.create`/`.escalate`/`.update` for the `DEAUTH_FLOOD` family only, refreshed each time rather than fixed at `alert.create` |
 | `prev_sev` | int | severity before the transition. Present on `alert.escalate` and on severity-decrease `alert.update` only |
 | `observations` | int | evaluations whose rendered evidence differed from the previous one. A retained condition re-evaluated unchanged does **not** move this. It is the honest answer to "how many distinct observations", which `count` never was — but it is not a packet count either: sloth's rules read retained state, not frames |

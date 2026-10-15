@@ -501,6 +501,12 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     /* Same number as the legacy record's `count`, carried so a
      * lifecycle-only consumer never has to read both families. */
     kv_int(buf, LINEBUF, &off, "count",        a->count);
+    /* Earlier incidents on this key (#112), additive and omitted at 0
+     * like every other counter here. Bounded by the engine's LRU side
+     * table, so it is a count of what sloth remembers, not a lifetime
+     * total — see alert_t.reopen_count. */
+    if (a->reopen_count)
+        kv_int(buf, LINEBUF, &off, "reopen_count", (long long)a->reopen_count);
     kv_int(buf, LINEBUF, &off, "first_detected", (long long)a->first_detected);
     kv_int(buf, LINEBUF, &off, "last_evaluated", (long long)a->last_evaluated);
     kv_int(buf, LINEBUF, &off, "first_observed", (long long)a->first_observed);

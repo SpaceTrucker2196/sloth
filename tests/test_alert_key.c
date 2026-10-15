@@ -11,6 +11,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
+#include "sloth_clock.h"
 
 TEST_STATE(g_s);
 
@@ -98,9 +99,146 @@ static void test_an_overlong_key_still_dedupes(void) {
     alerts_clear();
 }
 
+/* ── Incident side state (#112) ─────────────────────────── */
+
+/* Frozen clocks, both advanced together. Sentinel epoch: nothing here
+ * depends on what time the host thinks it is. */
+static uint64_t g_mono;
+static time_t   g_wall;
+static uint64_t k_mono(void) { return g_mono; }
+static time_t   k_wall(void) { return g_wall; }
+static void k_clock(void) {
+    g_mono = 5000000;
+    g_wall = 1700000000;
+    sloth_clock_test_set(k_mono, k_wall);
+}
+static void k_advance(long secs) {
+    g_mono += (uint64_t)secs * 1000u;
+    g_wall += (time_t)secs;
+}
+
+#define SIDE_KEY "side-test:one"
+
+static void test_reopen_count_counts_earlier_incidents(void) {
+    alerts_clear();
+    k_clock();
+    alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    snap();
+    int i = find_key(SIDE_KEY);
+    ASSERT(i >= 0);
+    if (i < 0) { alerts_clear(); return; }
+    ASSERT_EQ((int)g_s.alerts[i].reopen_count, 0);
+    char first[ALERT_INCIDENT_ID_LEN];
+    snprintf(first, sizeof(first), "%s", g_s.alerts[i].incident_id);
+
+    for (int round = 1; round <= 2; round++) {
+        /* Quiet for the full resolve period: the incident expires, and
+         * the next fire of the key opens a new one. */
+        k_advance(ALERT_RESOLVE_AFTER_S + 1);
+        snap();
+        alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+        snap();
+        i = find_key(SIDE_KEY);
+        ASSERT(i >= 0);
+        if (i < 0) break;
+        ASSERT_EQ((int)g_s.alerts[i].reopen_count, round);
+        ASSERT(!g_s.alerts[i].resolved);
+        /* A new incident: new id, and its counters are its own. */
+        ASSERT(strcmp(g_s.alerts[i].incident_id, first) != 0);
+        ASSERT_EQ((int)g_s.alerts[i].evaluations, 1);
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+}
+
+/* Expiry is the condition ending. The re-fire is a new episode and
+ * keeps its own first_seen. Mutation-proved: restoring first_seen on
+ * every reopen (dropping the `evicted` condition) reddens this. */
+static void test_first_seen_is_fresh_after_expiry(void) {
+    alerts_clear();
+    k_clock();
+    time_t t0 = g_wall;
+    alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    k_advance(ALERT_RESOLVE_AFTER_S + 1);
+    snap();
+    time_t t1 = g_wall;
+    alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    snap();
+    int i = find_key(SIDE_KEY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((long)g_s.alerts[i].first_seen, (long)t1);
+        ASSERT(g_s.alerts[i].first_seen != t0);
+        ASSERT_EQ((long)g_s.alerts[i].first_detected, (long)t1);
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+}
+
+/* Eviction is the engine running out of room, not the finding ending.
+ * Before #112 the slot memset gave the re-fire a new first_seen, and
+ * first_seen is half the `--db` alerts primary key, so every
+ * evict→refire cycle wrote a new row for one finding.
+ * Mutation-proved: removing the restore reddens the first_seen check. */
+static void test_first_seen_survives_eviction(void) {
+    alerts_clear();
+    k_clock();
+    time_t t0 = g_wall;
+    /* The key under test is the OLDEST entry of the type holding the
+     * most slots, so per-type fair eviction picks it first. */
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, SIDE_KEY, "x", NULL, 0);
+    k_advance(1);
+    char k[32];
+    for (int n = 0; n < MAX_ALERTS; n++) {
+        snprintf(k, sizeof(k), "side-filler:%d", n);
+        alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, k, "f", NULL, 0);
+    }
+    snap();
+    /* Precondition: it really was evicted, not merely resolved in place. */
+    ASSERT(find_key(SIDE_KEY) < 0);
+
+    k_advance(1);
+    time_t t2 = g_wall;
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, SIDE_KEY, "x", NULL, 0);
+    snap();
+    int i = find_key(SIDE_KEY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((long)g_s.alerts[i].first_seen, (long)t0);
+        /* Still a new incident — only the key's history carried over. */
+        ASSERT_EQ((long)g_s.alerts[i].first_detected, (long)t2);
+        ASSERT_EQ((int)g_s.alerts[i].reopen_count, 1);
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+}
+
+/* alerts_clear() is a fresh start for the key's history too. */
+static void test_clear_forgets_the_side_state(void) {
+    alerts_clear();
+    k_clock();
+    alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    k_advance(ALERT_RESOLVE_AFTER_S + 1);
+    snap();
+    alerts_clear();
+    alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    snap();
+    int i = find_key(SIDE_KEY);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ((int)g_s.alerts[i].reopen_count, 0);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+}
+
 void run_alert_key_tests(void) {
     TEST_SUITE("alert identity: hash-first lookup (#112)");
     RUN_TEST(test_long_keys_differing_in_the_last_byte_are_two_incidents);
     RUN_TEST(test_find_by_key_still_compares_the_full_key);
     RUN_TEST(test_an_overlong_key_still_dedupes);
+
+    TEST_SUITE("alert identity: incident side state (#112)");
+    RUN_TEST(test_reopen_count_counts_earlier_incidents);
+    RUN_TEST(test_first_seen_is_fresh_after_expiry);
+    RUN_TEST(test_first_seen_survives_eviction);
+    RUN_TEST(test_clear_forgets_the_side_state);
 }

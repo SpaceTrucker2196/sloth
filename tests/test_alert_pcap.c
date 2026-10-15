@@ -390,23 +390,13 @@ static void ap_seed_threat(sloth_state_t *s) {
     seed_packet(s, "192.168.1.5", "192.0.2.66", 33445, 443, 1700000000);
 }
 
-/* Push the THREAT_IP entry out of the engine for real.
- *
- * This has to be genuine eviction. A first attempt at these tests just
- * set s.alerts[i].pcap_dumped = 0, which does NOTHING: s->alerts is the
- * snapshot copy, not engine[], so both tests passed while proving
- * nothing about the cooldown. The cooldown is only reachable when an
- * entry is RECREATED, and that needs the engine over capacity.
- *
- * PORT_SCAN is the filler because it is ALERT_SEV_LOW, so under the
- * default pcap.min_severity it creates no pcaps of its own and cannot
- * confuse the file count. MAX_SCAN_ENTRIES is 32, so this runs several
- * ticks with distinct source IPs to get past MAX_ALERTS. */
 /* Drive the THREAT_IP incident through resolve → re-fire, which is the
  * state the 16.1M duplicate pcaps came from: fire() only treats a key as
  * "already seen" while its entry is LIVE (`idx >= 0 && !resolved`), so a
  * resolved key falls through to the new-entry path, which memsets the
- * slot — clearing pcap_dumped — and mints a fresh incident id.
+ * slot — clearing pcap_dumped — and mints a fresh incident id. What
+ * survives is the key's side row in the engine (#112), which is what the
+ * cooldown reads and what hands pcap_path back to the new incident.
  *
  * This used to flood the engine with PORT_SCAN until the THREAT_IP entry
  * was evicted. That stopped working when eviction learned per-type
@@ -441,13 +431,26 @@ static void test_a_refired_finding_does_not_export_twice(void) {
     sloth_state_t s; ap_seed_threat(&s);
     alerts_update(&s);
     ASSERT_EQ(ap87_entries(), 1);           /* CRIT, exported once */
+    char first_path[80] = "";
+    int i = find_threat_ip(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) snprintf(first_path, sizeof(first_path), "%s", s.alerts[i].pcap_path);
+    ASSERT(first_path[0] != '\0');
 
     ap_churn_engine();                      /* resolve, so it re-fires fresh */
     ap_seed_threat(&s);
     alerts_update(&s);                      /* re-fires as a new entry */
-    int i = find_threat_ip(&s);
+    i = find_threat_ip(&s);
     ASSERT(i >= 0);
-    if (i >= 0) ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+        /* The new incident still names the file its finding's frames
+           are in (#112). Before the side row, the memset left it empty,
+           so the view and alert.create showed no evidence for an
+           incident whose evidence was on disk. */
+        ASSERT_STR(s.alerts[i].pcap_path, first_path);
+        ASSERT_EQ((int)s.alerts[i].reopen_count, 1);
+    }
     /* Still ONE file: the finding is the same even though the engine
        entry and the incident id are not. */
     ASSERT_EQ(ap87_entries(), 1);

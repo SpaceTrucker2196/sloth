@@ -229,6 +229,89 @@ static int find_by_key(const char *key, uint64_t h) {
     return -1;
 }
 
+/* ── Incident side state (#112) ─────────────────────────────
+ *
+ * What a finding needs to remember across engine slot reuse. fire_inv()
+ * memsets a slot when it opens a new incident there, which is right for
+ * the incident (its counters and id are its own) and wrong for three
+ * things that belong to the *key*:
+ *
+ *   - the per-alert pcap export: when this key last wrote a file, and
+ *     which file. Before this table the memset cleared pcap_dumped, so
+ *     every evict-then-refire exported the same frames again — 16.1M
+ *     files on a live sensor (#96). pcap_cool[] was added to survive
+ *     that memset and nothing else; it is this table now.
+ *   - first_seen, half of the `--db` alerts table's primary key. A key
+ *     evicted under pressure and re-fired a tick later is the same
+ *     finding, and minting a new first_seen gave it a new row per
+ *     eviction. Restored only when the previous incident was closed by
+ *     eviction: a key whose evidence went quiet for the full resolve
+ *     period and then came back IS a new episode, and keeps its own.
+ *   - how many incidents the key has had (`reopen_count`), which a
+ *     consumer otherwise has to reconstruct by joining create events.
+ *
+ * incident_id is deliberately NOT carried over. A re-fired key is a new
+ * incident with a new id (#98); the side row records the last one only
+ * so that "this key had an incident before" has a cheap answer.
+ *
+ * Bounded at ALERT_SIDE_MAX rows, LRU by a touch counter. This bounds
+ * memory, not cardinality: the engine's per-type fair eviction still
+ * decides which findings hold slots. A dropped row costs a possible
+ * duplicate pcap (tallied as SH_EVICT_PCAP_COOLDOWN — the name is the
+ * JSONL contract and kept, and it counts only rows that held an export,
+ * so its meaning has not moved) or a reopen_count restarting at 0.
+ * Sized at 4x MAX_ALERTS so the steady state never evicts. */
+#define ALERT_SIDE_MAX 512
+
+typedef struct {
+    uint64_t key_hash;
+    char     key[ALERT_KEY_LEN];
+    time_t   last_pcap_export;      /* wall time of the last real file; 0 = none */
+    int      pcap_write_failures;
+    char     pcap_path[80];
+    char     last_incident_id[ALERT_INCIDENT_ID_LEN];
+    time_t   last_first_seen;
+    uint32_t reopen_count;
+    uint8_t  evicted;               /* last incident closed by eviction */
+    uint64_t touch;                 /* LRU stamp */
+} alert_side_t;
+
+static alert_side_t g_side[ALERT_SIDE_MAX];
+static int          g_side_n;
+static uint64_t     g_side_clock;
+
+static alert_side_t *side_find(const char *key, uint64_t h) {
+    if (!key || !key[0]) return NULL;
+    for (int i = 0; i < g_side_n; i++) {
+        if (g_side[i].key_hash == h && strcmp(g_side[i].key, key) == 0) {
+            g_side[i].touch = ++g_side_clock;
+            return &g_side[i];
+        }
+    }
+    return NULL;
+}
+
+static alert_side_t *side_get(const char *key, uint64_t h) {
+    alert_side_t *r = side_find(key, h);
+    if (r || !key || !key[0]) return r;
+    int slot;
+    if (g_side_n < ALERT_SIDE_MAX) {
+        slot = g_side_n++;
+    } else {
+        slot = 0;
+        for (int i = 1; i < ALERT_SIDE_MAX; i++)
+            if (g_side[i].touch < g_side[slot].touch) slot = i;
+        if (g_side[slot].last_pcap_export > 0)
+            sh_evict_note(SH_EVICT_PCAP_COOLDOWN);
+    }
+    r = &g_side[slot];
+    memset(r, 0, sizeof(*r));
+    r->key_hash = h;
+    snprintf(r->key, sizeof(r->key), "%s", key);
+    r->touch = ++g_side_clock;
+    return r;
+}
+
 /* Evict an entry and return its slot.
  *
  * Resolved incidents go first — their stream lifecycle is already
@@ -315,6 +398,10 @@ static int evict_oldest(time_t now) {
          * stops being true. */
         if (slot < 0) slot = 0;
         alert_resolve(&engine[slot], now, "evicted");
+        /* The finding did not end; the engine ran out of room. A
+         * re-fire of this key restores its first_seen (side table). */
+        alert_side_t *sd = side_find(engine[slot].key, engine_hash[slot]);
+        if (sd) sd->evicted = 1;
     }
     /* Counted whichever class was picked: a resolved incident dropped
      * early is still an observation the consumer will not see again
@@ -506,6 +593,20 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
     incident_id_make(a, now);
     a->event_seq = 1;
+    /* Hand back what belongs to the key, before alert.create goes out
+     * so the opening record already carries it. */
+    alert_side_t *sd = side_get(a->key, kh);
+    if (sd) {
+        if (sd->last_incident_id[0]) sd->reopen_count++;
+        if (sd->evicted && sd->last_first_seen) a->first_seen = sd->last_first_seen;
+        a->reopen_count        = sd->reopen_count;
+        a->pcap_write_failures = sd->pcap_write_failures;
+        snprintf(a->pcap_path, sizeof(a->pcap_path), "%s", sd->pcap_path);
+        snprintf(sd->last_incident_id, sizeof(sd->last_incident_id), "%s",
+                 a->incident_id);
+        sd->last_first_seen = a->first_seen;
+        sd->evicted         = 0;
+    }
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately
      * instead of on the next tick. event_wake_signal is a no-op
@@ -5188,34 +5289,19 @@ static void snapshot(sloth_state_t *s) {
  * doesn't hold anything for this alert and never will retroactively. */
 /* ── Per-alert pcap export policy (#96) ───────────────────
  *
- * `pcap_dumped` on the alert is not enough on its own, and the reason is
- * worth stating because it cost 78 GB before anyone noticed.
+ * `pcap_dumped` on the alert says "export has nothing left to do for
+ * THIS incident". Whether the finding's frames are already on disk is a
+ * question about the KEY, because one finding can be several incidents:
+ * the engine holds MAX_ALERTS entries, a segment with more concurrent
+ * findings than that churns, and every evict-then-refire opens a fresh
+ * incident whose pcap_dumped is 0. Measured on a live sensor before the
+ * cooldown existed: 16,131,622 files holding roughly 191 distinct
+ * (destination, port) pairs.
  *
- * fire_inv() memsets a reused engine slot, which clears pcap_dumped. The
- * engine holds MAX_ALERTS entries; a segment with more concurrent
- * findings than that churns, and every eviction-then-refire of the same
- * key looks like a brand-new alert and exports the same frames again.
- * Measured on a live sensor: 16,131,622 files holding roughly 191
- * distinct (destination, port) pairs.
+ * So the cooldown reads the key's side row (g_side, #112), which
+ * outlives the slot.
  *
- * incident_id cannot be the dedupe key either. incident_id_make() runs
- * on the new-entry path, so the re-fired alert has a FRESH id even
- * though the finding is the same — the id is honest about the engine's
- * view and useless for this question.
- *
- * So: a bounded table of alert keys and when each last exported. One
- * row per key, LRU-evicted, with the eviction counted like every other
- * bounded table here (#91). Losing a row means a possible duplicate
- * export rather than a lost observation, which is why it is a tally and
- * not a fault. Sized above MAX_ALERTS so the steady state never
- * evicts. */
-#define PCAP_COOL_MAX 512
-
-static struct { char key[ALERT_KEY_LEN]; time_t ts; } pcap_cool[PCAP_COOL_MAX];
-static int pcap_cool_n;
-
-/* Check and record are SEPARATE, and that split is the whole subtlety.
- *
+ * Check and record are SEPARATE, and that split is the whole subtlety.
  * A first attempt stamped the key on the attempt. That silently broke
  * #92's retry: a write that fails on a full disk leaves pcap_dumped at
  * 0 so the next tick tries again, but a cooldown started by the failed
@@ -5226,31 +5312,10 @@ static int pcap_cool_n;
  * So the cooldown records only a SUCCESSFUL export. "Do not write this
  * finding's frames twice" is a statement about files that exist, not
  * about attempts that were made. */
-static int pcap_cooldown_active(const char *key, time_t now, int secs) {
-    if (secs <= 0 || !key || !key[0]) return 0;
-    for (int i = 0; i < pcap_cool_n; i++)
-        if (strcmp(pcap_cool[i].key, key) == 0)
-            return pcap_cool[i].ts > 0 && now >= pcap_cool[i].ts &&
-                   now - pcap_cool[i].ts < secs;
-    return 0;
-}
-
-static void pcap_cooldown_stamp(const char *key, time_t now) {
-    if (!key || !key[0]) return;
-    int oldest = 0;
-    for (int i = 0; i < pcap_cool_n; i++) {
-        if (strcmp(pcap_cool[i].key, key) == 0) { pcap_cool[i].ts = now; return; }
-        if (pcap_cool[i].ts < pcap_cool[oldest].ts) oldest = i;
-    }
-    int slot;
-    if (pcap_cool_n < PCAP_COOL_MAX) {
-        slot = pcap_cool_n++;
-    } else {
-        slot = oldest;
-        sh_evict_note(SH_EVICT_PCAP_COOLDOWN);
-    }
-    snprintf(pcap_cool[slot].key, sizeof(pcap_cool[slot].key), "%s", key);
-    pcap_cool[slot].ts = now;
+static int pcap_cooldown_active(const alert_side_t *sd, time_t now, int secs) {
+    if (secs <= 0 || !sd) return 0;
+    return sd->last_pcap_export > 0 && now >= sd->last_pcap_export &&
+           now - sd->last_pcap_export < secs;
 }
 
 static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
@@ -5264,7 +5329,8 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         /* Severity first: it is the cheapest test and the one that
          * makes this feature match what `--help` has always claimed. */
         if ((int)a->sev < min_sev) continue;
-        if (pcap_cooldown_active(a->key, now, cool)) {
+        alert_side_t *sd = side_find(a->key, engine_hash[i]);
+        if (pcap_cooldown_active(sd, now, cool)) {
             /* Done for this entry. Not a failure, so it must not touch
              * pcap_write_failures or the !persist badge — nothing
              * failed, the evidence is simply already on disk. */
@@ -5275,13 +5341,21 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
+            sd = side_get(a->key, engine_hash[i]);
+            if (sd) sd->pcap_write_failures = a->pcap_write_failures;
             continue;
         }
         a->pcap_dumped = 1;
         /* Only a real file starts the cooldown. written == 0 means the
          * ring held nothing for this alert and no file was created, so
          * there is nothing to avoid duplicating. */
-        if (written > 0) pcap_cooldown_stamp(a->key, now);
+        if (written > 0) {
+            sd = side_get(a->key, engine_hash[i]);
+            if (sd) {
+                sd->last_pcap_export = now;
+                snprintf(sd->pcap_path, sizeof(sd->pcap_path), "%s", a->pcap_path);
+            }
+        }
     }
 }
 
@@ -5396,13 +5470,14 @@ void alerts_clear(void) {
     memset(engine, 0, sizeof(engine));
     memset(engine_hash, 0, sizeof(engine_hash));
     g_key_hash_mask = ~(uint64_t)0;
-    /* The export cooldown is engine state too (#96): a test that clears
-     * the engine and re-fires the same key expects a fresh export, and
-     * a long-lived process that clears is starting over. Leaving it
-     * populated would make alerts_clear() non-deterministic from a
-     * caller's point of view. */
-    memset(pcap_cool, 0, sizeof(pcap_cool));
-    pcap_cool_n = 0;
+    /* The side table is engine state too (#96, #112): a test that
+     * clears the engine and re-fires the same key expects a fresh
+     * export and reopen_count 0, and a long-lived process that clears
+     * is starting over. Leaving it populated would make alerts_clear()
+     * non-deterministic from a caller's point of view. */
+    memset(g_side, 0, sizeof(g_side));
+    g_side_n     = 0;
+    g_side_clock = 0;
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
     stab_clear(&g_arp_hist);

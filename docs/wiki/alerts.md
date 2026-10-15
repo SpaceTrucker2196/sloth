@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-15.
 
 ---
 
@@ -23,6 +23,26 @@ type: reference
   [[pcap-export]].
 - `c` clears all alerts and resets dedup state; future hits re-arm.
   Every open incident is resolved with `reason: "cleared"` first.
+- **Key lookup is hash-first (#112).** Each slot's key has a 64-bit
+  FNV-1a beside it, so a non-matching slot costs one integer compare;
+  `strcmp` still decides, so a hash collision cannot merge two
+  findings. A key is looked up exactly as it is stored (truncated to
+  `ALERT_KEY_LEN - 1`), so an over-long key dedupes instead of opening
+  a new incident every tick.
+- **Incident side state (#112).** A new incident memsets its slot,
+  which is right for the incident's own counters and id and wrong for
+  what belongs to the key. A bounded LRU side table (512 keys, 4x
+  `MAX_ALERTS`) keeps, per key: the last real pcap export time and path
+  (the cooldown, formerly `pcap_cool[]`), `pcap_write_failures`,
+  `reopen_count`, and the last incident's `first_seen`. `first_seen` is
+  restored **only** when the previous incident was closed by eviction —
+  the engine ran out of room, the finding did not end — so the `--db`
+  row keyed on `(key, first_seen)` stays one row across evict→refire
+  churn. After an `expired` resolve the re-fire is a new episode with
+  its own `first_seen`. The side table bounds memory, not cardinality:
+  per-type fair eviction (below) still decides which findings hold
+  slots. Dropping a row that held an export is tallied as
+  `evict_pcap_cooldown` on the `sensor_health` record, as before.
 
 ## Incident lifecycle (#98)
 
