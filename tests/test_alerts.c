@@ -4254,8 +4254,22 @@ static void test_rogue_dhcp_detail_lists_servers_sorted(void) {
     /* Sorted: 10.0.0.1 < 172.16.0.1 < 192.168.1.234 by strcmp. */
     ASSERT(p1 < p2);
     ASSERT(p2 < p3);
-    /* Dedup key includes the sorted list (drives stable identity). */
-    ASSERT(strstr(s.alerts[idx].key, "10.0.0.1,172.16.0.1,192.168.1.234") != NULL);
+    /* The key is the server SET (#112): rogue_dhcp:<n>:<hash>, the
+     * same whichever order the servers were seen in. */
+    char first_key[ALERT_KEY_LEN];
+    snprintf(first_key, sizeof(first_key), "%s", s.alerts[idx].key);
+    ASSERT(strncmp(first_key, "rogue_dhcp:3:", 13) == 0);
+    ASSERT_EQ((int)strlen(first_key), 13 + 16);
+
+    alerts_clear();
+    seed_state(&s);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:03", "172.16.0.1",    5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", "192.168.1.234", 5);
+    add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", "10.0.0.1",      5);
+    alerts_update(&s);
+    idx = find_alert(&s, ALERT_TYPE_ROGUE_DHCP);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_STR(s.alerts[idx].key, first_key);
 }
 
 /* Kills the `67` port-literal mutation: the alert must carry the DHCP
@@ -8789,6 +8803,38 @@ static void test_twin_chain_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+/* Six IPv6 servers, five shared and one differing between two
+ * segments. The old comma-joined key ran past ALERT_KEY_LEN after four
+ * of them, so the differing sixth never reached it. */
+static void test_rogue_dhcp_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s;
+    static const char *shared[5] = {
+        "2001:0db8:0000:0000:0000:0000:0000:0001",
+        "2001:0db8:0000:0000:0000:0000:0000:0002",
+        "2001:0db8:0000:0000:0000:0000:0000:0003",
+        "2001:0db8:0000:0000:0000:0000:0000:0004",
+        "2001:0db8:0000:0000:0000:0000:0000:0005",
+    };
+    static const char *last[2] = {
+        "2001:0db8:0000:0000:0000:0000:0000:00f1",
+        "2001:0db8:0000:0000:0000:0000:0000:00f2",
+    };
+    for (int set = 0; set < 2; set++) {
+        seed_state(&s);
+        for (int i = 0; i < 5; i++)
+            add_dhcp_event(&s, "aa:bb:cc:dd:ee:01", shared[i], 5);
+        add_dhcp_event(&s, "aa:bb:cc:dd:ee:02", last[set], 5);
+        alerts_update(&s);
+    }
+    /* The first segment's incident is still live (not yet expired). */
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_ROGUE_DHCP), 2);
+    int i = find_alert(&s, ALERT_TYPE_ROGUE_DHCP);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strncmp(s.alerts[i].key, "rogue_dhcp:6:", 13) == 0);
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9973,6 +10019,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_sae_psk_split_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_ssid_confusion_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_twin_chain_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_rogue_dhcp_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

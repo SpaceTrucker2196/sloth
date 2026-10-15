@@ -4818,7 +4818,7 @@ static void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
  * attacker MITM or a misconfigured device handing out gateway-IPs
  * that bypass the legitimate gateway.
  *
- * Dedup key is the comma-joined sorted list of server IPs so two
+ * Dedup key is the set of server IPs (order-independent, #112) so two
  * different competing servers produce one persistent alert; a third
  * later joining triggers a new key. */
 static void rule_rogue_dhcp(const sloth_state_t *s, time_t now) {
@@ -4849,11 +4849,18 @@ static void rule_rogue_dhcp(const sloth_state_t *s, time_t now) {
         }
     }
 
+    /* The server set as a typed set component (#112): count plus the
+     * hash of the sorted members. The comma-joined list it replaces
+     * was cut at ALERT_KEY_LEN, so four or five IPv6 servers filled it
+     * and two segments differing only in a later server were one
+     * finding. The detail below still lists every server. */
+    const char *members[16];
+    for (int i = 0; i < n; i++) members[i] = servers[i];
     char key[ALERT_KEY_LEN];
-    int  kpos = snprintf(key, sizeof(key), "rogue_dhcp:");
-    for (int i = 0; i < n && kpos < (int)sizeof(key) - 1; i++)
-        kpos += snprintf(key + kpos, sizeof(key) - (size_t)kpos,
-                          "%s%s", i ? "," : "", servers[i]);
+    akey_t k;
+    akey_begin(&k, key, sizeof(key), "rogue_dhcp");
+    akey_set(&k, members, n);
+    if (!akey_end(&k)[0]) return;
 
     char detail[ALERT_DETAIL_LEN];
     int  dpos = snprintf(detail, sizeof(detail),

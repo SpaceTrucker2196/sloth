@@ -90,6 +90,7 @@ holds both shapes for one finding.
 | `SAE_PSK_SPLIT` | `saesplit:<ssid>` | `saesplit:<ssid, 32 kept>:<hash>` |
 | `SSID_CONFUSION` | `ssidconf:<ssid, 30 cut>:<weak bssid>` | `ssidconf:<ssid, 32 kept>:<hash>:<weak bssid>` |
 | `EVIL_TWIN` (attack chain) | `twin-chain:<ssid>` | `twin-chain:<ssid, 32 kept>:<hash>` |
+| `ROGUE_DHCP` | `rogue_dhcp:<ip>,<ip>,...` (cut at 191 bytes) | `rogue_dhcp:<server count>:<hash of the sorted set>` |
 
 ## Incident lifecycle (#98)
 
