@@ -219,3 +219,4 @@
 | 1c66754 | 2026-10-15T20:14:43Z | claude-opus-5-5 | 2 | 1470 | 709984 | 668 | 0.1767 | typed alert-key builder, incident side-state, hash-first lookup (#112) |
 | 9912cf8 | 2026-10-15T21:18:38Z | claude-opus-5-5 | 32 | 14208 | 10065031 | 23380 | 2.4843 | sloth.h split: view/alert X-macro lists, generated prose counts (#117) |
 | 64231f2 | 2026-10-15T21:37:59Z | claude-opus-5-5 | 14 | 4322 | 4441250 | 13747 | 1.0847 | bounded reader + TLV iterator + parse-fault tally, 15 commits (#126) |
+| f5e0ecd | 2026-10-15T23:24:46Z | claude-opus-5-5 | 28 | 15122 | 9107679 | 754919 | 8.1634 | batched .github/agents follow-ups: fuzz runs decode_frame in CI, one cppcheck command, AGENTS recipes current (#119) |
