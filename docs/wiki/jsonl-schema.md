@@ -262,7 +262,7 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 |---------|--------|---------|
 | `title` | string | rule name (see [[alerts]]) |
 | `detail`| string | one-line human-readable detail |
-| `key`   | string | dedup key (`type:identifier`) |
+| `key`   | string | dedup key (`type:identifier`). Opaque for joining — use `incident_id`. Rules with a remote-chosen component build it with the typed builder since #112, which changed those rules' key text; shapes in [[alerts]] → *Dedup key shapes* |
 | `sev`   | int    | severity: **0=LOW (yellow), 1=WARN (orange), 2=CRIT (red)**. See [[alerts]] for the tier semantics. |
 | `ty`    | int    | `alert_type_t` enum value (stable per `include/sloth.h`) |
 | `count` | int    | **rule evaluations** under this dedup key — see the note below. Always `1` on this record, which is emitted only when the key is new |

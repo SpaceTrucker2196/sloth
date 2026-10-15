@@ -44,6 +44,47 @@ type: reference
   slots. Dropping a row that held an export is tallied as
   `evict_pcap_cooldown` on the `sensor_health` record, as before.
 
+## Dedup key shapes (#112)
+
+A dedup key decides what is one finding. Rules that put a
+remote-chosen string into their key — an SSID, a hostname, a queried
+name, a username — used to bound it with a `printf` precision
+(`ssidconf:%.30s:%s`), and a precision **merges**: two SSIDs sharing a
+30-byte prefix became one incident and whichever fired last wrote the
+detail. Those rules now build keys with the typed builder in
+`src/alert_key.h`:
+
+| Component | Renders as |
+|-----------|-----------|
+| MAC | `aa:bb:cc:dd:ee:ff` |
+| IP | `192.0.2.7`, or `[2001:db8::1]` (bracketed so its colons are not separators). Anything not address-shaped is keyed as a remote string kept to 24 bytes |
+| number | decimal |
+| token | one of sloth's own literals (`FTP`, `HTTP-Basic`) |
+| hex | lowercase hex of raw bytes (a WPS UUID-E, all 16 bytes) |
+| remote string | up to *keep* bytes with `:` `,` `[` `]` and non-printables mapped to `_`, then `:` and the 16-hex FNV-1a of the **full** string |
+| set | `<count>:<16-hex FNV-1a>` of the sorted members, so the order they were seen in does not matter |
+
+Components are joined with `:`. The readable prefix is for a human
+grepping the stream; identity is the hash. A key that would not fit
+`ALERT_KEY_LEN` is a programming error — every migrated rule's worst
+case is pinned by a test — and yields `""`, which the engine refuses,
+so the failure mode is a missed alert, never a merged one.
+
+**Scope.** The builder bounds key **length** and removes truncation
+merges. It does not bound **cardinality**: a remote side choosing a
+thousand SSIDs still makes a thousand keys, and that stays with
+per-type fair eviction (below), measured by `evict_alert`.
+
+**Contract change.** Key strings changed for the rules below. A
+consumer matching `key` text (the `alert` record and every `alert.*`
+event) sees the new shape from #112 on; `incident_id` remains the join
+key between records and is unaffected. The `--db` `alerts` table is
+unchanged — keys are stored as text, so a database spanning the upgrade
+holds both shapes for one finding.
+
+| Rule | Before | After |
+|------|--------|-------|
+
 ## Incident lifecycle (#98)
 
 One continuous run of a dedup key is an **incident**: it opens with

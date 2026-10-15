@@ -35,6 +35,7 @@
 #include "wps_track.h"
 #include "pm_forge.h"
 #include "queue_evict.h"
+#include "alert_key.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -470,6 +471,10 @@ static void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                      const char *key,
                      const char *match_ip, uint16_t match_port,
                      time_t now) {
+    /* An empty key is a builder overflow (alert_key.h) that the rule
+     * did not check. Every such fire would share one incident, which is
+     * the merge the builder exists to prevent — drop it instead. */
+    if (!key || !key[0]) return;
     uint64_t mono = flood_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     /* Looked up as it will be stored. Before #112 an over-long key was

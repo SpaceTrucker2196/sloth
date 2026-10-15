@@ -3389,3 +3389,14 @@ incident every tick. `pcap_cool[]` became a per-key side table that
 also carries `pcap_path`, `pcap_write_failures`, `reopen_count` and,
 after an eviction only, `first_seen`. `alert.*` records gain the
 additive `reopen_count`. Pages: [[jsonl-schema]], [[alerts]].
+
+## 2026-10-15 — Typed alert-key builder (#112)
+
+`src/alert_key.h`: MAC / IP / number / token / hex / remote-string /
+set components, each with a fixed shape. A remote string is a
+sanitised readable prefix plus the FNV-1a of the full string, so two
+values sharing a prefix can no longer merge into one incident the way
+`%.30s` merged them. Overflow yields `""` and `fire()` now refuses an
+empty key. The nine rules that put remote-chosen text in a key migrate
+one per commit; [[alerts]] → *Dedup key shapes* carries the
+before/after table, [[jsonl-schema]] the `key` note.
