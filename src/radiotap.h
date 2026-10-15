@@ -46,6 +46,8 @@ typedef struct {
     int    channel;      /* 0 when absent or unmapped */
     int    rate_kbps;    /* 0 when absent */
     int    bad_fcs;      /* 1 iff RT_F_BADFCS was set */
+    int    fcs_present;  /* 1 iff RT_F_FCS: the frame ends in 4 FCS octets */
+    int    datapad;      /* 1 iff RT_F_DATAPAD: 802.11 header padded to 4 */
     int    has_flags;
     int    hdr_len;      /* radiotap header length, for skipping to 802.11 */
 } radiotap_info_t;

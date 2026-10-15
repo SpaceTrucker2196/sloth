@@ -103,6 +103,7 @@ void run_auth_track_tests(void);
 void run_action_snoop_tests(void);
 void run_ctrl_frames_tests(void);
 void run_dot11_data_tests(void);
+void run_dot11_frame_tests(void);
 void run_mle_tests(void);
 void run_tool_fingerprint_tests(void);
 void run_captive_portal_tests(void);
@@ -248,6 +249,7 @@ int main(void) {
     run_action_snoop_tests();
     run_ctrl_frames_tests();
     run_dot11_data_tests();
+    run_dot11_frame_tests();
     run_mle_tests();
     run_tool_fingerprint_tests();
     run_captive_portal_tests();

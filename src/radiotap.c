@@ -59,6 +59,12 @@ int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out) {
         if (off + 1 > (int)rt_len) return 1;
         out->has_flags = 1;
         out->bad_fcs   = (buf[off] & RT_F_BADFCS) ? 1 : 0;
+        /* The two layout flags the 802.11 view needs (#122): FCS says
+         * the last four octets are a trailer and not frame body;
+         * DATAPAD says the driver aligned the body to 4 octets after
+         * the MAC header. Both used to be stepped over. */
+        out->fcs_present = (buf[off] & RT_F_FCS)     ? 1 : 0;
+        out->datapad     = (buf[off] & RT_F_DATAPAD) ? 1 : 0;
         off += 1;
     }
     if (pres & (1u << RT_BIT_RATE)) {

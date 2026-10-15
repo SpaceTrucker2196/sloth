@@ -95,6 +95,7 @@ SRCS = src/main.c          \
        src/action_snoop.c    \
        src/ctrl_frames.c     \
        src/dot11_data.c      \
+       src/dot11_frame.c     \
        src/mle.c             \
        src/tool_fingerprint.c \
        src/captive_portal.c  \
@@ -500,6 +501,8 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_ctrl_frames.c       \
             src/dot11_data.c               \
             tests/test_dot11_data.c        \
+            src/dot11_frame.c              \
+            tests/test_dot11_frame.c       \
             src/mle.c                      \
             tests/test_mle.c               \
             src/tool_fingerprint.c         \
@@ -791,7 +794,7 @@ fuzz:
 	  exit 1; }
 	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_deauth_parse \
 	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
-	    src/sloth_clock.c src/dot11_data.c \
+	    src/sloth_clock.c src/dot11_data.c src/dot11_frame.c \
 	    -lpthread
 	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE $(FUZZ_PLATFORM_DEFS) \
@@ -805,6 +808,7 @@ fuzz:
 	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -o /tmp/sloth_fuzz_beacon_parse_ies \
 	    tests/fuzz/fuzz_beacon_parse_ies.c src/beacon_snoop.c src/reg_ie.c \
 	    src/sensor_health.c src/wifi_oui_attacker.c src/dot11_data.c \
+	    src/dot11_frame.c \
 	    -lm -lpthread
 	/tmp/sloth_fuzz_beacon_parse_ies -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 

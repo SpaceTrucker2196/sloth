@@ -69,6 +69,38 @@ static void test_flags_bad_fcs(void) {
     ASSERT_EQ(rt.bad_fcs, 0);
 }
 
+/* FCS and DATAPAD (#122): the two layout flags the 802.11 frame view
+ * consumes. Each is read from its own bit and nothing else. */
+static void test_flags_fcs_and_datapad(void) {
+    uint8_t buf[64];
+    radiotap_info_t rt;
+    uint8_t fcs[1] = { RT_F_FCS };
+    int len = rt_build(buf, 1u << RT_BIT_FLAGS, fcs, 1);
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.fcs_present, 1);
+    ASSERT_EQ(rt.datapad, 0);
+
+    uint8_t pad[1] = { RT_F_DATAPAD };
+    len = rt_build(buf, 1u << RT_BIT_FLAGS, pad, 1);
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.fcs_present, 0);
+    ASSERT_EQ(rt.datapad, 1);
+
+    uint8_t both[1] = { RT_F_FCS | RT_F_DATAPAD | RT_F_BADFCS };
+    len = rt_build(buf, 1u << RT_BIT_FLAGS, both, 1);
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.fcs_present, 1);
+    ASSERT_EQ(rt.datapad, 1);
+    ASSERT_EQ(rt.bad_fcs, 1);
+
+    /* No FLAGS field at all: neither is claimed. */
+    len = rt_build(buf, 0, NULL, 0);
+    ASSERT_EQ(radiotap_parse(buf, len, &rt), 1);
+    ASSERT_EQ(rt.has_flags, 0);
+    ASSERT_EQ(rt.fcs_present, 0);
+    ASSERT_EQ(rt.datapad, 0);
+}
+
 /* RATE is in 500 kbps units. */
 static void test_rate_units(void) {
     uint8_t body[1] = { 12 };            /* 12 * 500 kbps = 6 Mbps */
@@ -250,6 +282,7 @@ void run_radiotap_tests(void) {
     RUN_TEST(test_signal_only);
     RUN_TEST(test_channel_maps_frequency);
     RUN_TEST(test_flags_bad_fcs);
+    RUN_TEST(test_flags_fcs_and_datapad);
     RUN_TEST(test_rate_units);
     RUN_TEST(test_multiple_fields_in_bit_order);
     RUN_TEST(test_tsft_alignment_shifts_later_fields);
