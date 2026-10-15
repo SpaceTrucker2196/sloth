@@ -84,6 +84,7 @@ holds both shapes for one finding.
 
 | Rule | Before | After |
 |------|--------|-------|
+| `DGA_DOMAIN` | `dga:<qname>` | `dga:<qname, 40 kept>:<hash>` |
 
 ## Incident lifecycle (#98)
 

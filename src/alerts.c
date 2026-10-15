@@ -5156,9 +5156,15 @@ static void rule_dga_domain(const sloth_state_t *s, time_t now) {
         if (!e->qname[0]) continue;
         if (!dga_is_suspicious(e->qname)) continue;
 
+        /* The qname is chosen by whoever generated it — the point of a
+         * DGA — so it is a remote component: readable prefix plus the
+         * hash of the whole name (#112). */
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key,    sizeof(key),    "dga:%s", e->qname);
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "dga");
+        akey_remote(&k, e->qname, 40);
+        if (!akey_end(&k)[0]) continue;
         snprintf(detail, sizeof(detail),
                  "%.30s queried %.30s (entropy %.2f bits/char)",
                  e->src[0] ? e->src : "?", e->qname,

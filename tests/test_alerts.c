@@ -125,6 +125,21 @@ static int find_alert(const sloth_state_t *s, alert_type_t type) {
     return -1;
 }
 
+/* Alerts of one type in the snapshot. */
+static int count_type(const sloth_state_t *s, alert_type_t type) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == type) n++;
+    return n;
+}
+
+/* ':' count of a key — how many components the builder emitted. */
+static int key_colons(const char *k) {
+    int n = 0;
+    for (; *k; k++) if (*k == ':') n++;
+    return n;
+}
+
 /* ── Rule firing ─────────────────────────────────────────── */
 
 static void test_port_scan_fires(void) {
@@ -8601,6 +8616,40 @@ static void test_mle_cross_link_cipher_downgrade_fires_once_per_mld(void) {
     ASSERT_EQ(n, 2);
 }
 
+/* ── Typed dedup keys (#112) ──────────────────────────────────
+ *
+ * One test per migrated rule: two remote-chosen values that share a
+ * long prefix must stay two incidents. Each is mutation-proved by
+ * putting that rule's pre-#112 `%.Ns` back, which merges the pair. */
+
+static void test_dga_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Leftmost label trips dga_is_suspicious (entropy + digit
+     * density); the two names are identical for their first 50 bytes. */
+    const char *base = "xk7qz9vbn3w4.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    char q1[DNS_NAME_LEN], q2[DNS_NAME_LEN];
+    snprintf(q1, sizeof(q1), "%s.one", base);
+    snprintf(q2, sizeof(q2), "%s.two", base);
+    ASSERT(strncmp(q1, q2, 50) == 0);
+    add_dns_query(&s, "192.168.1.20", q1);
+    add_dns_query(&s, "192.168.1.20", q2);
+    alerts_update(&s);
+    ASSERT_EQ(count_type(&s, ALERT_TYPE_DGA_DOMAIN), 2);
+    int i = find_alert(&s, ALERT_TYPE_DGA_DOMAIN);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* dga:<40 kept>:<16 hex> */
+        ASSERT(strncmp(s.alerts[i].key, "dga:xk7qz9vbn3w4.aaa", 20) == 0);
+        ASSERT_EQ((int)strlen(s.alerts[i].key), 4 + 40 + 1 + 16);
+        ASSERT_EQ(key_colons(s.alerts[i].key), 2);
+    }
+    /* Re-seen, still two: the key is stable tick to tick. */
+    alerts_update(&s);
+    ASSERT_EQ(count_type(&s, ALERT_TYPE_DGA_DOMAIN), 2);
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9777,6 +9826,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_lifecycle_resolve_fires_once_and_only_once);
     RUN_TEST(test_lifecycle_recurrence_after_resolve_is_a_new_incident);
     RUN_TEST(test_lifecycle_reopen_count_on_the_second_create);
+
+    TEST_SUITE("alerts: typed dedup keys (#112)");
+    RUN_TEST(test_dga_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
