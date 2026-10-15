@@ -8671,6 +8671,33 @@ static void test_cleartext_cred_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+static void test_captive_portal_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    /* Two hosts at the field limit that agree for their first 50
+     * bytes. ts 0 is "no timestamp", which the rule treats as recent. */
+    for (int n = 0; n < 2; n++) {
+        cp_event_t *e = &s.cp_events[s.cp_event_count++];
+        memset(e, 0, sizeof(*e));
+        memset(e->host, 'h', 63);
+        e->host[63] = '\0';
+        e->host[50] = n ? '2' : '1';
+        snprintf(e->src, sizeof(e->src), "192.168.1.30");
+        e->kind = CP_KIND_HIJACK;
+    }
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_CAPTIVE_PORTAL), 2);
+    int i = find_alert(&s, ALERT_TYPE_CAPTIVE_PORTAL);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* portal:<40 kept>:<16 hex>:<kind> */
+        ASSERT(strncmp(s.alerts[i].key, "portal:hhhh", 11) == 0);
+        ASSERT_EQ((int)strlen(s.alerts[i].key), 6 + 1 + 40 + 1 + 16 + 2);
+        ASSERT_EQ(key_colons(s.alerts[i].key), 3);
+    }
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9851,6 +9878,7 @@ void run_alerts_tests(void) {
     TEST_SUITE("alerts: typed dedup keys (#112)");
     RUN_TEST(test_dga_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_cleartext_cred_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_captive_portal_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

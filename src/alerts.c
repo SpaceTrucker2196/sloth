@@ -1579,9 +1579,15 @@ static void rule_captive_portal(const sloth_state_t *s, time_t now) {
             break;
         }
 
+        /* host came off the wire (#112): a remote component, so two
+         * hosts sharing a 30-byte prefix are no longer one finding. */
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
-        snprintf(key, sizeof(key), "portal:%.30s:%u", e->host, e->kind);
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "portal");
+        akey_remote(&k, e->host, 40);
+        akey_u(&k, e->kind);
+        if (!akey_end(&k)[0]) continue;
         snprintf(detail, sizeof(detail),
                  "%.30s intercepted for %.15s - %s%s%s%s%s",
                  e->host, e->src[0] ? e->src : "?",
