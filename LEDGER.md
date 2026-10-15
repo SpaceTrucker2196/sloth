@@ -214,3 +214,6 @@
 | ce7f94c | 2026-10-15T17:32:02Z | claude-sonnet-5-5 | 2 | 277 | 635841 | 1505 | 0.2039 | data-socket per-peer cap, idle reaping, loopback-TCP notice (#135) |
 | 9b254bc | 2026-10-15T17:36:34Z | claude-sonnet-5-5 | 4 | 1102 | 1275139 | 1193 | 0.4062 | dot11_frame_t one-decode view + frame_build.h; eapol +HTC and stale probe guard fixed (#122) |
 | 51709bc | 2026-10-15T17:54:19Z | claude-sonnet-5-5 | 22 | 6233 | 6425655 | 9734 | 2.0797 | mon_frame stack over-read fixed; ASan caught it in CI (#122) |
+| 6ae7380 | 2026-10-15T20:11:04Z | claude-opus-5-5, claude-sonnet-5-5 | 32 | 17747 | 8915839 | 1358148 | 13.2261 | one source list: CORE_SRCS + libsloth_core.a, derived test/fuzz lists, per-config object dirs (#115) |
+| f29d076 | 2026-10-15T20:14:42Z | claude-opus-5-5 | 4 | 1436 | 1416699 | 2111 | 0.3290 | privileges dropped by default after capture opens; --no-privdrop escape hatch (#140) |
+| 1c66754 | 2026-10-15T20:14:43Z | claude-opus-5-5 | 2 | 1470 | 709984 | 668 | 0.1767 | typed alert-key builder, incident side-state, hash-first lookup (#112) |
