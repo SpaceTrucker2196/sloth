@@ -2024,6 +2024,24 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
      * the 16 slots, 0 when no --data-socket is configured. */
     kv_int(buf, LINEBUF, &off, "socket_peer_refused", (long long)socket_refused);
     kv_int(buf, LINEBUF, &off, "socket_clients",      socket_clients);
+    /* Parse faults (#126). Appended, so every earlier field keeps its
+     * name and position. Deliberately absent from `sig` above: under a
+     * beacon-spam or mode-m fuzz run these climb on every frame, so
+     * signing over them would turn this record into the per-tick
+     * firehose the signature exists to prevent. They ride the 300 s
+     * heartbeat and any other transition's line, the way `ps_recv` and
+     * the flow-ring evictions do. A sibling tally, not more `evict_*`
+     * fields: `evictions` is published as the exact sum of that
+     * breakout and must stay so. */
+    kv_int(buf, LINEBUF, &off, "parse_faults",
+           (long long)sh_parse_fault_total());
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++) {
+        char key[48];
+        snprintf(key, sizeof(key), "parse_fault_%s",
+                 sh_parse_fault_name((sh_parse_fault_t)k));
+        kv_int(buf, LINEBUF, &off, key,
+               (long long)sh_parse_fault_count((sh_parse_fault_t)k));
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

@@ -81,6 +81,7 @@
     X(saq_clear) \
     X(seqnum_clear) \
     X(sh_evict_reset) \
+    X(sh_parse_fault_reset) \
     X(smb_snoop_clear) \
     X(smtp_snoop_reset) \
     X(snmp_snoop_clear) \

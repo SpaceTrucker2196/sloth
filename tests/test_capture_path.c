@@ -1097,9 +1097,15 @@ static void test_a_short_radiotap_length_is_refused_and_counted(void) {
     memset(&g_s, 0, sizeof(g_s)); probe_clear();
     uint64_t b   = mon_before();
     uint64_t rj0 = mon_radiotap_reject_total();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_RADIOTAP_BAD);
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b), 0);
     ASSERT_EQ((long long)(mon_radiotap_reject_total() - rj0), 1);
+    /* …and into the sensor-wide parse-fault tally the JSONL record
+       carries (#126). Mutation-proved: deleting the
+       sh_parse_fault_note(SH_PF_RADIOTAP_BAD) call reddens this line
+       and the zero-delta one below stays green, as it should. */
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_RADIOTAP_BAD) - pf0), 1);
 
     /* Published to the operator through the health poll. */
     capture_health_t h; memset(&h, 0, sizeof h);
@@ -1114,9 +1120,11 @@ static void test_a_short_radiotap_length_is_refused_and_counted(void) {
     ls[0] = n;
     b   = mon_before();
     rj0 = mon_radiotap_reject_total();
+    pf0 = sh_parse_fault_total();
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b), 1);
     ASSERT_EQ((long long)(mon_radiotap_reject_total() - rj0), 0);
+    ASSERT_EQ((long long)(sh_parse_fault_total() - pf0), 0);
 }
 
 static void evidence_setup(void);   /* with the #92 evidence cases below */
@@ -1211,8 +1219,14 @@ static void test_monitor_seam_rejects_frames_below_the_guards(void) {
     const uint8_t *fs3[1] = { runt };
     int ls3[1] = { rn };
     uint64_t b3 = mon_before();
+    uint64_t runt0 = sh_parse_fault_count(SH_PF_DOT11_RUNT);
+    uint64_t rtb0  = sh_parse_fault_count(SH_PF_RADIOTAP_BAD);
     ASSERT_EQ(probe_test_dispatch(&g_s, fs3, ls3, NULL, NULL, 1), 1);
     ASSERT_EQ(mon_delta(b3), 0);
+    /* Counted as a runt, not as a radiotap fault: the header was fine
+       (#126). Mutation-proved by deleting the DOT11_RUNT note. */
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_DOT11_RUNT) - runt0), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_RADIOTAP_BAD) - rtb0), 0);
 
     /* (d) zero-length frame. */
     memset(&g_s, 0, sizeof(g_s)); probe_clear();

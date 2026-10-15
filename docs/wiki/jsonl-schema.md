@@ -12,7 +12,7 @@ same encoding, line-delimited by `\n`. This page is the contract
 downstream consumers (SIEMs, the planned iOS dashboard, ad-hoc
 scripts) code against.
 
-**Sources**: `src/jsonl.c`, `src/data_socket.c`.
+**Sources**: `src/jsonl.c`, `src/data_socket.c`, `src/sensor_health.c`.
 
 **Last updated**: 2026-10-15.
 
@@ -639,7 +639,7 @@ pattern as they are converted.
 | `mqtt_flow`          | `(src_ip, dst_ip)` | `src_ip` (MQTT client — flipped on CONNACK so the conversation stays attributed to the client), `dst_ip` (broker), `connect_count` (CONNECT packets observed), `connack_fail_count` (CONNACK reason codes that mean bad-auth / not-authorised), `subscribe_count`, `publish_count`, `proto_level` (3 / 4 / 5 from the most recent CONNECT), `last_username` (Username field from the most recent CONNECT — sanitised to printable ASCII, dropped if it contained non-printable bytes), `first_seen`, `last_seen`. Feeds the `MQTT_BROKER_BRUTE` alert via dual thresholds (`connect_count ≥ 10` OR `connack_fail_count ≥ 5`). See `docs/wiki/mqtt-snoop.md`. |
 | `sensor`             | `kind`+`iface`    | `kind` (`wifi`/`ble`/`zigbee`/`sdr`/`gps`/`adsb`/`meshtastic`/`can`), `state` (`present`/`active`/`hidden`/`error`), `name`, `iface`, `observed` (cumulative observation count), `first_seen`, `last_seen`. The passive sensor registry — one record per detected observation source. See `docs/wiki/non-ip-sensors.md`. |
 | `wifi_merged`        | `key`             | `key` (observed entity — AP BSSID or STA MAC), `seen_by` (distinct radios that heard it), `sensor_mask` (bitmask, bit *i* = sensor id *i*), `best_rssi` (strongest signal in dBm across radios; 0 = none sampled), `best_sensor` (radio id that heard it strongest; -1 = none), `channel`, `freq_mhz`, `observations` (total merged hits), `first_seen`, `last_seen`. Multi-radio merged 802.11 world model — folds several monitor adapters into one entity-keyed view while retaining observer metadata. See `docs/wiki/wifi-sigint.md`. |
-| `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; the bounded-table eviction tally; and lifetime write-failure counts across every on-disk sink (#92); whether a launch-time `--iface`/`--monitor-only` scope is enforced or has failed closed (`scope`, `scope_not_enforced`, #85), plus a lifetime count of frames the scope boundary itself refused (`scope_dropped`, #85 wave 8); and the data socket's own occupancy and per-peer refusals (`socket_clients`, `socket_peer_refused`, #135). `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
+| `sensor_health`      | *(singleton)*     | The sensor's own state rather than an observation — one line per tick, not one per table row (#91). Monitor radio's requested vs **confirmed** channel plus lifetime retune failures; both capture workers' `_open`/`_running` liveness, the classified `_exit` reason and libpcap's raw `_exit_detail`; `pcap_stats()` lifetime totals and per-tick deltas for received / libpcap-dropped / NIC-dropped; the bounded-table eviction tally; and lifetime write-failure counts across every on-disk sink (#92); whether a launch-time `--iface`/`--monitor-only` scope is enforced or has failed closed (`scope`, `scope_not_enforced`, #85), plus a lifetime count of frames the scope boundary itself refused (`scope_dropped`, #85 wave 8); and the data socket's own occupancy and per-peer refusals (`socket_clients`, `socket_peer_refused`, #135); and a lifetime parse-fault tally (`parse_faults` plus one `parse_fault_<kind>` each, #126). `_open` 1 with `_running` 0 is a dead capture thread behind a still-open handle — the case that used to be indistinguishable from a quiet segment. Change-only with a 300 s heartbeat. Full field list and the eviction tally's coverage limits in the section below. |
 
 ### `sensor_health` — the sensor's self-report (#91)
 
@@ -695,6 +695,8 @@ does not know the type ignores it, as it would any other.
 | `tuned` | the knobs themselves, comma-joined `name=value` in registry order, `""` on a stock run. The count alone would not say *which* rule went quiet, and a raised threshold is indistinguishable from a quiet segment without it. Truncates cleanly if it would exceed the field; see `--tune-list` for the full registry |
 | `socket_peer_refused` | lifetime count of data-socket connections closed at accept because their peer already held `socket.max_per_peer` of the 16 client slots (#135). A peer is a uid on `unix:`, an address on `tcp:`, or the one shared bucket for anything the kernel cannot identify. Climbing means one party is trying to take more than its share — a consumer that reconnects without closing, or a local account crowding the listener. `0` when no `--data-socket` is configured. Appended after `tuned`; **additive** |
 | `socket_clients` | data-socket clients connected right now, `0..16`; `0` when no `--data-socket` is configured (#135). Read together with the field above: refusals with `socket_clients` well under 16 is one peer at its cap, not a full listener. Enters the change-only signature as itself (it moves only on connect/disconnect); `socket_peer_refused` enters as a none/some band so a refusal loop cannot turn this record into a per-tick firehose — the running count rides the 300 s heartbeat |
+| `parse_faults` | lifetime count of parse faults across every kind below (#126) — malformed input reaching sloth's parsers. Appended after `socket_clients`; **additive**. A sibling of `evictions`, never part of it: `evictions` stays the exact sum of the `evict_*` breakout |
+| `parse_fault_radiotap_bad`, `parse_fault_dot11_runt`, `parse_fault_ie_overrun`, `parse_fault_rsn_malformed`, `parse_fault_mle_malformed`, `parse_fault_ip_truncated`, `parse_fault_ip_fragment`, `parse_fault_dns_name_bad`, `parse_fault_tls_malformed` | the same total broken out per kind, in `sh_parse_fault_t` order. **Not in the change-only signature**: under a beacon flood or an `mdk4` mode-m run these climb on every frame, so they ride the heartbeat and any other transition's line. Some kinds are reserved and not yet measured — see *Parse faults* below before reading a 0 |
 
 Per-stream block, with `<s>` being `capture` or `monitor`:
 | `<s>_last_frame_ts` | the capture timestamp of the last frame this stream delivered, `0` if none yet. The frame's OWN clock, so it correlates with other records from the same capture (#91) |
@@ -730,9 +732,11 @@ immediately — deliberately **not** `recv` or any of the deltas.
 `recv` climbs every tick on a working sensor, so including it would mean
 one line per second forever and the suppression would be decorative. A
 drop counter moving is genuinely news; a packet counter moving is not.
+The parse-fault fields (#126) are outside the signature for the same
+reason as `recv`: hostile or broken input moves them every frame.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0}
 ```
 
 **Capture scope (#85).** The `scope*` fields were appended later; every
@@ -823,6 +827,36 @@ has an `evict_<name>` field or its loss is not measured. Treat
 `evictions` as "loss on the instrumented tables", not "all loss": a
 counted table sitting at zero means nothing was dropped, while silence
 from an uncounted one means nothing is known either way.
+
+**Parse faults (#126).** A frame that fails to parse used to leave no
+trace in most of sloth: seventeen hand-written element walks had four
+different behaviours on an element whose declared length ran off the
+end, and most of them stopped silently. They now share one iterator
+(`src/bytes.h`) with one policy — stop and report — and the report is
+this tally. The kinds, and this is the whole parse-fault set:
+`radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
+`mle_malformed`, `ip_truncated`, `ip_fragment`, `dns_name_bad`,
+`tls_malformed`. Measured in this build: `radiotap_bad`, `dot11_runt`. The others are reserved by
+the issue that introduced the tally and are wired by the slices that
+rewrite those parsers (#128 RSN, #131 DNS/TLS, #132 IP); until then
+their field is emitted and reads 0 because nothing measures it, not
+because nothing failed. The test
+`tests/test_sensor_health.c :: test_schema_doc_lists_every_parse_fault_kind`
+holds both lists to the build.
+
+- `radiotap_bad` — the monitor stream's radiotap header was refused by
+  `radiotap_parse()` (the same refusal `mon_health.parse_rejects`
+  counts for the iface view). The IP capture path's own radiotap gate
+  is not counted here.
+- `dot11_runt` — the monitor stream delivered an 802.11 frame shorter
+  than Frame Control + Duration + Address 1 (10 octets).
+
+What is counted is a parser **walk** that hit the fault, not a frame:
+an association request's elements are walked by more than one parser,
+so one malformed frame can add more than one. Read the tally as "is
+malformed input arriving, and roughly how much" — a rising
+`ie_overrun` beside a quiet `MGMT_FUZZ` alert is a sensor seeing
+malformed frames below the alert's threshold, not a contradiction.
 
 All BSSIDs / MACs are lowercase colon-separated hex (`aa:bb:cc:dd:ee:ff`).
 All timestamps are Unix epoch seconds. Rates (`rx_rate`/`tx_rate`) are

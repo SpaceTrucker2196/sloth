@@ -123,3 +123,67 @@ void sh_evict_reset(void) {
     memset(g_evict, 0, sizeof(g_evict));
     pthread_mutex_unlock(&g_mu);
 }
+
+/* ── Parse-fault tally (#126) — contract in sensor_health.h ───── */
+
+static uint64_t        g_pf[SH_PF_KIND_COUNT];
+static pthread_mutex_t g_pf_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int pf_in_range(sh_parse_fault_t kind) {
+    return (int)kind >= 0 && (int)kind < SH_PF_KIND_COUNT;
+}
+
+void sh_parse_fault_note(sh_parse_fault_t kind) {
+    if (!pf_in_range(kind)) return;
+    pthread_mutex_lock(&g_pf_mu);
+    g_pf[kind]++;
+    pthread_mutex_unlock(&g_pf_mu);
+}
+
+uint64_t sh_parse_fault_count(sh_parse_fault_t kind) {
+    if (!pf_in_range(kind)) return 0;
+    pthread_mutex_lock(&g_pf_mu);
+    uint64_t n = g_pf[kind];
+    pthread_mutex_unlock(&g_pf_mu);
+    return n;
+}
+
+uint64_t sh_parse_fault_total(void) {
+    uint64_t n = 0;
+    pthread_mutex_lock(&g_pf_mu);
+    for (int i = 0; i < SH_PF_KIND_COUNT; i++) n += g_pf[i];
+    pthread_mutex_unlock(&g_pf_mu);
+    return n;
+}
+
+const char *sh_parse_fault_name(sh_parse_fault_t kind) {
+    switch (kind) {
+    case SH_PF_RADIOTAP_BAD:  return "radiotap_bad";
+    case SH_PF_DOT11_RUNT:    return "dot11_runt";
+    case SH_PF_IE_OVERRUN:    return "ie_overrun";
+    case SH_PF_RSN_MALFORMED: return "rsn_malformed";
+    case SH_PF_MLE_MALFORMED: return "mle_malformed";
+    case SH_PF_IP_TRUNCATED:  return "ip_truncated";
+    case SH_PF_IP_FRAGMENT:   return "ip_fragment";
+    case SH_PF_DNS_NAME_BAD:  return "dns_name_bad";
+    case SH_PF_TLS_MALFORMED: return "tls_malformed";
+    case SH_PF_KIND_COUNT:    break;
+    }
+    return "";
+}
+
+int sh_parse_fault_is_wired(sh_parse_fault_t kind) {
+    switch (kind) {
+    case SH_PF_RADIOTAP_BAD:
+    case SH_PF_DOT11_RUNT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void sh_parse_fault_reset(void) {
+    pthread_mutex_lock(&g_pf_mu);
+    memset(g_pf, 0, sizeof(g_pf));
+    pthread_mutex_unlock(&g_pf_mu);
+}

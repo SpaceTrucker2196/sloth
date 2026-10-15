@@ -1327,6 +1327,93 @@ static void test_sensor_health_flow_ring_churn_does_not_re_emit(void) {
     sh_evict_reset();
 }
 
+/* #126: the parse-fault tally reaches the record — a total plus one
+ * `parse_fault_<name>` per kind, appended after `socket_clients` so no
+ * earlier field moved, and `evictions` untouched by it. */
+static void test_emit_sensor_health_parse_faults(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sh_parse_fault_note(SH_PF_IE_OVERRUN);
+    sh_parse_fault_note(SH_PF_IE_OVERRUN);
+    sh_parse_fault_note(SH_PF_RADIOTAP_BAD);
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"parse_faults\":3"));
+    ASSERT(contains(body, "\"parse_fault_ie_overrun\":2"));
+    ASSERT(contains(body, "\"parse_fault_radiotap_bad\":1"));
+    ASSERT(contains(body, "\"parse_fault_dot11_runt\":0"));
+    ASSERT(contains(body, "\"parse_fault_tls_malformed\":0"));
+    ASSERT(contains(body, "\"evictions\":0"));
+    /* Every kind is emitted, measured or not — an absent field reads
+       as a schema mismatch, a 0 is documented as "not measured" for
+       the reserved kinds. */
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++) {
+        char key[64];
+        snprintf(key, sizeof(key), "\"parse_fault_%s\":",
+                 sh_parse_fault_name((sh_parse_fault_t)k));
+        ASSERT(contains(body, key));
+    }
+    /* Appended: after the last field that existed before #126, in enum
+       order, and the record still closes after them. */
+    const char *sock = strstr(body, "\"socket_clients\":");
+    const char *pf   = strstr(body, "\"parse_faults\":");
+    const char *first = strstr(body, "\"parse_fault_radiotap_bad\":");
+    const char *last  = strstr(body, "\"parse_fault_tls_malformed\":");
+    ASSERT(sock && pf && first && last);
+    if (sock && pf && first && last) {
+        ASSERT(sock < pf);
+        ASSERT(pf < first);
+        ASSERT(first < last);
+    }
+    sh_parse_fault_reset();
+}
+
+/* …and, like the flow rings, the tally must NOT move the change-only
+ * signature. Under mdk4 mode m or a beacon flood it climbs on every
+ * frame; signing over it would emit this record every tick forever
+ * (AGENTS.md, "Change-only emission must bucket its continuous
+ * values"). A burst of parse faults after an identical record is
+ * suppressed; the same burst with a real table loss beside it is not,
+ * which proves the second emit was reachable at all. */
+static void test_sensor_health_parse_faults_do_not_re_emit(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+
+    jsonl_emit_sensor_health(&s);          /* first record: always news */
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++)
+        for (int i = 0; i < 500; i++)
+            sh_parse_fault_note((sh_parse_fault_t)k);
+    jsonl_emit_sensor_health(&s);          /* parse faults only: suppressed */
+    jsonl_close();
+    char *quiet = slurp(tmp_path);
+    ASSERT(quiet != NULL);
+    if (quiet) ASSERT_EQ(count_lines(quiet), 1);
+
+    open_fresh();
+    sh_parse_fault_reset();
+    jsonl_emit_sensor_health(&s);
+    for (int i = 0; i < 500; i++) sh_parse_fault_note(SH_PF_IE_OVERRUN);
+    sh_evict_note(SH_EVICT_DEVICE);        /* a real lost observation */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *loss = slurp(tmp_path);
+    ASSERT(loss != NULL);
+    if (loss) {
+        ASSERT_EQ(count_lines(loss), 2);
+        /* The line that does go out carries the running count. */
+        ASSERT(contains(loss, "\"parse_fault_ie_overrun\":500"));
+    }
+    sh_evict_reset();
+    sh_parse_fault_reset();
+}
+
 /* #91 2026-10-13: the same split, asserted for the two kinds added on
  * that date. Classifying either as a flow ring would drop it out of
  * sh_evict_total_tables() and therefore out of the signature — it would
@@ -2063,6 +2150,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_eviction_tally);
     RUN_TEST(test_emit_sensor_health_total_includes_flow_rings);
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
+    RUN_TEST(test_emit_sensor_health_parse_faults);
+    RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_sensor_health_new_table_kinds_move_the_signature);
     RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
     RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);

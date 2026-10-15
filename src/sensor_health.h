@@ -153,4 +153,65 @@ const char *sh_evict_name(sh_evict_t kind);
  * these, because a counter that clears has no lifetime meaning. */
 void sh_evict_reset(void);
 
+/* ── Parse-fault accounting (#126) ────────────────────────────────
+ *
+ * A sibling of the eviction tally, deliberately NOT folded into
+ * sh_evict_t. The two answer different questions — "did sloth drop an
+ * observation it had parsed" against "did a frame fail to parse" — and
+ * `evictions` is published as the exact sum of the `evict_*` breakout,
+ * so adding a parse kind there would silently change what that sum
+ * means for every existing consumer.
+ *
+ * Append-only, for the same reason as sh_evict_t: src/jsonl.c emits the
+ * `parse_fault_<name>` breakout in enum order, and a field's position is
+ * part of the published contract.
+ *
+ * What is counted is a WALK that hit the fault, not a frame. Several
+ * parsers walk one frame's element list — an association request goes
+ * through assoc_track's rate walk and through beacon_parse_ies() — so a
+ * single malformed frame can add more than one. The figure answers "is
+ * malformed input reaching the parsers, and roughly how much", which a
+ * frame-exact count would answer no better; making it frame-exact is
+ * #130's job (decode each frame once), not this one's.
+ *
+ * Not every kind has a writer yet, and the gap is stated rather than
+ * left to read as "no faults": see sh_parse_fault_is_wired(). A kind
+ * that is not wired reports 0 because nothing measures it. */
+typedef enum {
+    SH_PF_RADIOTAP_BAD = 0, /* src/capture/probe.c — radiotap_parse() refused the header */
+    SH_PF_DOT11_RUNT,       /* src/capture/probe.c — 802.11 frame shorter than FC+duration+addr1 */
+    SH_PF_IE_OVERRUN,       /* an element / subelement / KDE walk ended in TLV_OVERRUN (src/bytes.h) */
+    SH_PF_RSN_MALFORMED,    /* reserved for #128 (RSN element parsed once) — not yet wired */
+    SH_PF_MLE_MALFORMED,    /* src/mle.c — a Multi-Link element failed one of its three bounds rules */
+    SH_PF_IP_TRUNCATED,     /* reserved for #132 (IPv4 Total Length) — not yet wired */
+    SH_PF_IP_FRAGMENT,      /* reserved for #132 (fragments) — not yet wired */
+    SH_PF_DNS_NAME_BAD,     /* reserved for #131 (DNS name reader once) — not yet wired */
+    SH_PF_TLS_MALFORMED,    /* reserved for #131 (TLS parser under test) — not yet wired */
+    SH_PF_KIND_COUNT
+} sh_parse_fault_t;
+
+/* Record one parse fault. Out-of-range kinds are ignored. Safe from any
+ * thread; the lock is cold — it is reached only on malformed input. */
+void sh_parse_fault_note(sh_parse_fault_t kind);
+
+/* Lifetime tally for one kind, and across all kinds. */
+uint64_t sh_parse_fault_count(sh_parse_fault_t kind);
+uint64_t sh_parse_fault_total(void);
+
+/* Stable lower-case name, part of the `sensor_health` JSONL contract
+ * (`parse_fault_<name>`): "radiotap_bad", "dot11_runt", "ie_overrun",
+ * "rsn_malformed", "mle_malformed", "ip_truncated", "ip_fragment",
+ * "dns_name_bad", "tls_malformed". Unknown kinds return "". */
+const char *sh_parse_fault_name(sh_parse_fault_t kind);
+
+/* 1 when some parser in this build calls sh_parse_fault_note() for the
+ * kind, 0 for a reserved kind whose writer lands with a later slice.
+ * Kept beside the enum so wiring a kind and flipping this are one edit
+ * in one place; tests/test_sensor_health.c pins the set, and the schema
+ * doc lists it. */
+int sh_parse_fault_is_wired(sh_parse_fault_t kind);
+
+/* Zero the parse-fault tally. For tests only, like sh_evict_reset(). */
+void sh_parse_fault_reset(void);
+
 #endif /* SENSOR_HEALTH_H */

@@ -701,6 +701,151 @@ static void test_schema_doc_lists_every_counted_table(void) {
     free(doc);
 }
 
+/* ── Parse-fault tally (#126) ────────────────────────────────
+ *
+ * The sibling of the eviction tally. Pure counter logic first; the
+ * wiring tests live beside each parser (test_beacon_snoop.c,
+ * test_capture_path.c, …) because that is where the frame is built. */
+
+static void test_parse_fault_tally_counts_per_kind(void) {
+    sh_parse_fault_reset();
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++)
+        ASSERT_EQ((int)sh_parse_fault_count((sh_parse_fault_t)k), 0);
+    sh_parse_fault_note(SH_PF_IE_OVERRUN);
+    sh_parse_fault_note(SH_PF_IE_OVERRUN);
+    sh_parse_fault_note(SH_PF_DOT11_RUNT);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 2);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_DOT11_RUNT), 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_RADIOTAP_BAD), 0);
+    ASSERT_EQ((int)sh_parse_fault_total(), 3);
+    sh_parse_fault_reset();
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+}
+
+static void test_parse_fault_ignores_out_of_range_kinds(void) {
+    sh_parse_fault_reset();
+    sh_parse_fault_note((sh_parse_fault_t)SH_PF_KIND_COUNT);
+    sh_parse_fault_note((sh_parse_fault_t)-1);
+    sh_parse_fault_note((sh_parse_fault_t)9999);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    ASSERT_EQ((int)sh_parse_fault_count((sh_parse_fault_t)-1), 0);
+    ASSERT_STR(sh_parse_fault_name((sh_parse_fault_t)SH_PF_KIND_COUNT), "");
+    ASSERT_EQ(sh_parse_fault_is_wired((sh_parse_fault_t)SH_PF_KIND_COUNT), 0);
+}
+
+/* The two tallies are separate stores. A parse fault landing in the
+ * eviction sum would change what the published `evictions` field means
+ * — the reason the issue made this a sibling enum and not more kinds. */
+static void test_parse_faults_do_not_reach_the_eviction_tally(void) {
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++)
+        sh_parse_fault_note((sh_parse_fault_t)k);
+    ASSERT_EQ((int)sh_parse_fault_total(), (int)SH_PF_KIND_COUNT);
+    ASSERT_EQ((int)sh_evict_total(), 0);
+    sh_evict_note(SH_EVICT_ALERT);
+    ASSERT_EQ((int)sh_parse_fault_total(), (int)SH_PF_KIND_COUNT);
+    sh_parse_fault_reset();
+    ASSERT_EQ((int)sh_evict_total(), 1);
+    sh_evict_reset();
+}
+
+static void test_parse_fault_names_are_stable_and_distinct(void) {
+    /* Part of the `sensor_health` JSONL contract (`parse_fault_<name>`),
+     * in enum order — which is emission order. */
+    ASSERT_STR(sh_parse_fault_name(SH_PF_RADIOTAP_BAD),  "radiotap_bad");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_DOT11_RUNT),    "dot11_runt");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_IE_OVERRUN),    "ie_overrun");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_RSN_MALFORMED), "rsn_malformed");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_MLE_MALFORMED), "mle_malformed");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_IP_TRUNCATED),  "ip_truncated");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_IP_FRAGMENT),   "ip_fragment");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_DNS_NAME_BAD),  "dns_name_bad");
+    ASSERT_STR(sh_parse_fault_name(SH_PF_TLS_MALFORMED), "tls_malformed");
+    ASSERT_EQ((int)SH_PF_KIND_COUNT, 9);
+    for (int a = 0; a < SH_PF_KIND_COUNT; a++) {
+        ASSERT(sh_parse_fault_name((sh_parse_fault_t)a)[0] != '\0');
+        for (int b = a + 1; b < SH_PF_KIND_COUNT; b++)
+            ASSERT(strcmp(sh_parse_fault_name((sh_parse_fault_t)a),
+                          sh_parse_fault_name((sh_parse_fault_t)b)) != 0);
+    }
+}
+
+/* Which kinds have a writer. Pinned so that wiring a kind is a visible
+ * edit here and in the schema doc, and so a reserved kind cannot be
+ * mistaken for a measured one: its 0 means "not measured". */
+static void test_parse_fault_wired_set(void) {
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RADIOTAP_BAD),  1);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DOT11_RUNT),    1);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IE_OVERRUN),    0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RSN_MALFORMED), 0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_MLE_MALFORMED), 0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_TRUNCATED),  0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_FRAGMENT),   0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DNS_NAME_BAD),  0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_TLS_MALFORMED), 0);
+}
+
+/* Collect the backticked names in the span after `marker` up to the
+ * next ". ", and compare them to a predicate over the enum both ways. */
+static void doc_list_matches(const char *doc, const char *marker,
+                             int want_wired_only) {
+    const char *start = strstr(doc, marker);
+    ASSERT(start != NULL);
+    if (!start) return;
+    start += strlen(marker);
+    const char *end = strstr(start, ". ");
+    ASSERT(end != NULL);
+    if (!end) return;
+    int seen[SH_PF_KIND_COUNT];
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++) seen[k] = 0;
+    int unknown = 0;
+    for (const char *q = start; q < end; ) {
+        const char *a = memchr(q, '`', (size_t)(end - q));
+        if (!a) break;
+        const char *b = memchr(a + 1, '`', (size_t)(end - a - 1));
+        if (!b) break;
+        size_t nlen = (size_t)(b - a - 1);
+        int matched = 0;
+        for (int k = 0; k < SH_PF_KIND_COUNT; k++) {
+            const char *nm = sh_parse_fault_name((sh_parse_fault_t)k);
+            if (strlen(nm) == nlen && strncmp(nm, a + 1, nlen) == 0) {
+                seen[k]++; matched = 1; break;
+            }
+        }
+        if (!matched) {
+            unknown++;
+            fprintf(stderr, "    jsonl-schema.md lists `%.*s` after \"%s\", "
+                            "which is not an sh_parse_fault_t kind\n",
+                    (int)nlen, a + 1, marker);
+        }
+        q = b + 1;
+    }
+    ASSERT_EQ(unknown, 0);
+    for (int k = 0; k < SH_PF_KIND_COUNT; k++) {
+        int want = want_wired_only
+                 ? sh_parse_fault_is_wired((sh_parse_fault_t)k) : 1;
+        if (seen[k] != want)
+            fprintf(stderr, "    jsonl-schema.md: `%s` listed %d time(s) "
+                            "after \"%s\", expected %d\n",
+                    sh_parse_fault_name((sh_parse_fault_t)k), seen[k],
+                    marker, want);
+        ASSERT_EQ(seen[k], want);
+    }
+}
+
+/* The doc states both the whole set and the measured subset; a kind
+ * added, renamed or wired without the doc moving fails here. */
+static void test_schema_doc_lists_every_parse_fault_kind(void) {
+    char *doc = slurp_text("docs/wiki/jsonl-schema.md");
+    ASSERT(doc != NULL);
+    if (!doc) return;
+    doc_list_matches(doc, "the whole parse-fault set:", 0);
+    doc_list_matches(doc, "Measured in this build:", 1);
+    free(doc);
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -730,5 +875,14 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_table_subtotal_excludes_flow_rings);
     RUN_TEST(test_flow_ring_overflow_counted_through_the_parser);
 
+    TEST_SUITE("sensor health — parse-fault tally (#126)");
+    RUN_TEST(test_parse_fault_tally_counts_per_kind);
+    RUN_TEST(test_parse_fault_ignores_out_of_range_kinds);
+    RUN_TEST(test_parse_faults_do_not_reach_the_eviction_tally);
+    RUN_TEST(test_parse_fault_names_are_stable_and_distinct);
+    RUN_TEST(test_parse_fault_wired_set);
+    RUN_TEST(test_schema_doc_lists_every_parse_fault_kind);
+
     sh_evict_reset();   /* leave the tally clean for later suites */
+    sh_parse_fault_reset();
 }

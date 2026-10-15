@@ -293,6 +293,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         pthread_mutex_lock(&g_frame_mu);
         if (g_radiotap_rejects < UINT64_MAX) g_radiotap_rejects++;
         pthread_mutex_unlock(&g_frame_mu);
+        /* Also into the sensor-wide parse-fault tally (#126), which is
+         * what reaches a JSONL consumer; the per-stream count above
+         * stays the iface view's figure. */
+        sh_parse_fault_note(SH_PF_RADIOTAP_BAD);
         return;
     }
     const int rt_len = rt.hdr_len;
@@ -345,7 +349,12 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
      * duration(2) + addr1(6) = 10 bytes. Control frames like ACK/CTS are
      * exactly this size. */
-    if (dot11_len < 10) return;
+    if (dot11_len < 10) {
+        /* Counted (#126): a radio delivering only runts reads as a quiet
+         * one otherwise. */
+        sh_parse_fault_note(SH_PF_DOT11_RUNT);
+        return;
+    }
 
     /* ── One decode for this frame (#122) ───────────────────────
      *

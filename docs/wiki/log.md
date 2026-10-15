@@ -3460,3 +3460,14 @@ The CI fuzz job's runner has no `libpcap-dev`, so `FUZZ_PCAP=auto`
 `FUZZ_PCAP=1` makes it fatal once that job installs the package.
 [[architecture]] → build section carries the mechanism.
 `test_every_fuzz_harness_is_built` holds the list to `tests/fuzz/`.
+
+## 2026-10-15 — One bounded reader, one TLV iterator, a parse-fault tally (#126)
+
+`src/bytes.h`: `be16/be32/le16/le32/le48`, a bounded cursor (`rd_t`,
+short read → 0 + sticky fault, never past the end) and one TLV iterator
+(`tlv_next`, 1+1 and 2+2) with one overrun policy — stop and report.
+`sensor_health` gains `parse_faults` and nine `parse_fault_<kind>`
+fields from a sibling enum (`sh_parse_fault_t`), kept out of both the
+`evictions` sum and the change-only signature. Some kinds are reserved
+for later slices and reported as unmeasured, not as zero faults.
+Page: [[jsonl-schema]] → *Parse faults*.
