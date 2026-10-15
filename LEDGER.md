@@ -213,3 +213,4 @@
 | 9a1f0e1 | 2026-10-15T17:28:19Z | claude-sonnet-5-5 | 8 | 2824 | 2535015 | 3092 | 0.8214 | threat-model page: assets, adversaries, trust boundaries (#133) |
 | ce7f94c | 2026-10-15T17:32:02Z | claude-sonnet-5-5 | 2 | 277 | 635841 | 1505 | 0.2039 | data-socket per-peer cap, idle reaping, loopback-TCP notice (#135) |
 | 9b254bc | 2026-10-15T17:36:34Z | claude-sonnet-5-5 | 4 | 1102 | 1275139 | 1193 | 0.4062 | dot11_frame_t one-decode view + frame_build.h; eapol +HTC and stale probe guard fixed (#122) |
+| 51709bc | 2026-10-15T17:54:19Z | claude-sonnet-5-5 | 22 | 6233 | 6425655 | 9734 | 2.0797 | mon_frame stack over-read fixed; ASan caught it in CI (#122) |
