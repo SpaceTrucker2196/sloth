@@ -25,6 +25,7 @@
 #include "transit.h"
 #include "rf_quality.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 #include "wps_track.h"
 #include "pm_forge.h"
 #include "queue_evict.h"
@@ -2807,6 +2808,55 @@ static void test_evil_twin_taint_clear_drops_entries(void) {
 
     evil_twin_taint_clear();
     ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+}
+
+/* #109: the taint is stamped from alerts_update's clock and must be
+ * aged by the same clock. Before the fix evil_twin_bssid_is_tainted()
+ * read libc directly, so under an injected clock a fresh mark was
+ * already years old and never matched — and in production an NTP step
+ * aged the TTL by the size of the step. WALL0 sits years from the real
+ * clock so a reader that mixes the two cannot pass by luck. */
+static time_t g_tt_wall;
+static time_t tt_wall(void) { return g_tt_wall; }
+
+static void test_taint_ttl_honours_test_clock(void) {
+    evil_twin_taint_clear();
+    const time_t WALL0 = (time_t)1500000000;
+    uint8_t rogue[6] = {0x02,0x11,0x22,0x33,0x44,0x55};
+    g_tt_wall = WALL0;
+    sloth_clock_test_set(NULL, tt_wall);
+
+    evil_twin_taint_mark_for_test(rogue);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 1);
+
+    /* Inside the TTL, including its last second (<=). */
+    g_tt_wall = WALL0 + EVIL_TWIN_TAINT_TTL_SECS;
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 1);
+
+    /* One second past it: gone, with no real time elapsed. */
+    g_tt_wall = WALL0 + EVIL_TWIN_TAINT_TTL_SECS + 1;
+    ASSERT_EQ(evil_twin_bssid_is_tainted(rogue), 0);
+
+    /* The chain rule's own mark goes through the same clock: a mark
+     * made by alerts_update() at WALL0 ages identically. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t real[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t twin[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
+    add_beacon(&s, "Cafe-Net", real, "WPA2");
+    add_beacon(&s, "Cafe-Net", twin, "WPA2");
+    uint8_t client[6] = {0x99,0x99,0x99,0x99,0x99,0x99};
+    add_deauth_flood_full(&s, client, real, 7, 20);
+    g_tt_wall = WALL0;
+    s.deauth_victims[0].flood_last = WALL0;
+    alerts_update(&s);
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 1);
+    g_tt_wall = WALL0 + EVIL_TWIN_TAINT_TTL_SECS + 1;
+    ASSERT_EQ(evil_twin_bssid_is_tainted(twin), 0);
+
+    sloth_clock_test_set(NULL, NULL);
+    evil_twin_taint_clear();
+    alerts_clear();
 }
 
 /* #95: the alert engine marks from the main loop while the probe
@@ -9417,6 +9467,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_evil_twin_attack_chain_no_flood_no_fire);
     RUN_TEST(test_evil_twin_attack_chain_reverse_direction);
     RUN_TEST(test_evil_twin_taint_clear_drops_entries);
+    RUN_TEST(test_taint_ttl_honours_test_clock);
     RUN_TEST(test_evil_twin_taint_concurrent_mark_query);
     RUN_TEST(test_e2e_full_attack_chain);
     RUN_TEST(test_e2e_clean_baseline_no_alerts);

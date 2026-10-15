@@ -1,28 +1,5 @@
-#include <time.h>
 #include "sloth.h"
 #include "flood_window.h"
-
-/* ── Clock seam ──────────────────────────────────────────── */
-
-static uint64_t real_mono_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
-}
-
-static time_t real_wall(void) { return time(NULL); }
-
-/* Swapped only by tests, before any capture thread exists. */
-static flood_mono_fn g_mono = real_mono_ms;
-static flood_wall_fn g_wall = real_wall;
-
-uint64_t flood_mono_ms(void) { return g_mono(); }
-time_t   flood_wall(void)    { return g_wall(); }
-
-void flood_test_set_clock(flood_mono_fn mono, flood_wall_fn wall) {
-    g_mono = mono ? mono : real_mono_ms;
-    g_wall = wall ? wall : real_wall;
-}
 
 /* ── Window ──────────────────────────────────────────────── */
 

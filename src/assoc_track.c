@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "assoc_track.h"
+#include "sloth_clock.h"
 #include "probe_pnl.h"
 #include "mle.h"
 #include "beacon_snoop.h"
@@ -158,7 +159,7 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     }
     if (all0_s || all0_b) return;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     /* Every request feeds the flood window, including repeats from one
      * STA — the rate is the signal there, independent of whether the
      * ask changed. */
@@ -383,7 +384,7 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
     }
     if (all0_bssid || all0_sta) return;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
     int idx = -1;

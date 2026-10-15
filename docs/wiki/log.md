@@ -2743,3 +2743,25 @@ Pages: [[ring-buffers]] (new variation section), [[architecture]]
 (capture-pipeline seam, state paragraph), [[fragattacks]] (new
 Threading section, Testing addendum). `README.md`'s data-flow
 paragraph gained one sentence.
+
+---
+
+## 2026-10-14 — One clock seam; taint TTL read the wrong clock (#109)
+
+**Source**: `src/sloth_clock.{h,c}`, `src/flood_window.h`, `src/alerts.c`,
+`tests/test_clock_seam.c`, `tests/test_alerts.c`.
+
+**Change**: `sloth_wall()` / `sloth_mono_ms()` / `sloth_clock_test_set()`
+are now the single clock seam; the #88 `flood_*` names in
+`flood_window.h` forward to it until their last caller migrates.
+`evil_twin_bssid_is_tainted()` read `time(NULL)` while the mark was
+stamped through the seam, so under a test clock the taint never matched
+and an NTP step mis-aged the TTL in production; both sites now read
+`sloth_wall()`. `alert_pcap`, `dns`, `cleartext_creds`, `top_hosts`,
+`seqnum_track` and `assoc_track` moved off `time(NULL)` in the same
+commit; `tests/test_clock_seam.c` scrapes the migrated files and fails
+on a regression. Remaining direct sites (snoopers, jsonl, main, views,
+capture, probe, beacon/deauth snoop) migrate in later slices.
+
+**Pages**: [[architecture]] (new "Clock seam" bullet), [[alerts]],
+[[jsonl-schema]] (seam location).

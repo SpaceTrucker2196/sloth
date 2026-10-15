@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 
 #include "dns.h"
+#include "sloth_clock.h"
 #include "observe.h"
 #include "services.h"
 
@@ -81,7 +82,7 @@ static int cache_find(const char *ip) {
 
 /* Evict the best slot for reuse. Caller holds g_mu. */
 static int cache_evict(void) {
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     int oldest = 0;
     /* prefer an empty slot */
     for (int i = 0; i < DNS_CACHE_SIZE; i++) {
@@ -185,7 +186,7 @@ static void *dns_worker(void *arg) {
             } else {
                 g_cache[idx].state = DNS_FAILED;
             }
-            g_cache[idx].ts = time(NULL);
+            g_cache[idx].ts = sloth_wall();
         }
         pthread_mutex_unlock(&g_mu);
     }
@@ -247,7 +248,7 @@ void dns_set_resolved(const char *ip, const char *host) {
     g_cache[idx].ip[sizeof(g_cache[idx].ip) - 1]     = '\0';
     g_cache[idx].host[sizeof(g_cache[idx].host) - 1] = '\0';
     g_cache[idx].state = DNS_RESOLVED;
-    g_cache[idx].ts    = time(NULL);
+    g_cache[idx].ts    = sloth_wall();
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -321,7 +322,7 @@ static void copy_out(char *buf, size_t sz, const char *src) {
 
 const char *dns_lookup_cached(const char *ip, char *buf, size_t sz) {
     if (!buf || sz == 0) return ip;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     pthread_mutex_lock(&g_mu);
     g_stats.cached_lookups++;
@@ -339,7 +340,7 @@ const char *dns_lookup_cached(const char *ip, char *buf, size_t sz) {
 
 const char *dns_resolve(const char *ip, char *buf, size_t sz) {
     if (!buf || sz == 0) return ip;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     pthread_mutex_lock(&g_mu);
     g_stats.resolve_requests++;

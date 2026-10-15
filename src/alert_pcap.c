@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <unistd.h>
 #include "alert_pcap.h"
+#include "sloth_clock.h"
 #include "fs_capacity.h"
 #include "pcap_format.h"
 #include "tune.h"
@@ -79,7 +80,7 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
     char slug[24]; slugify(a->title, slug, sizeof(slug));
 
     char stem[64], name[80], err[SFILE_ERR_MAX];
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     struct tm *t = localtime(&now);
     snprintf(stem, sizeof(stem),
              "alert_%04d%02d%02d_%02d%02d%02d_%s",

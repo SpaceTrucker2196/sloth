@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "top_hosts.h"
+#include "sloth_clock.h"
 #include "sensor_health.h"
 #include "dns.h"
 #include "ip_owner.h"
@@ -129,7 +130,7 @@ static time_t g_last_poll = 0;
 
 void top_hosts_update(sloth_state_t *s) {
     if (!s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     double dt  = g_last_poll ? (double)(now - g_last_poll) : 0.0;
 
     reset_counters();

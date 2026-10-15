@@ -44,8 +44,12 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   `observations` only moves when the evidence does. Timestamps split
   the same way (`first_detected` / `last_evaluated` vs
   `first_observed` / `last_observed`).
-- Durations run on `CLOCK_MONOTONIC` via the #88 seam in
-  `src/flood_window.c`; exported timestamps stay wall clock.
+- Durations run on `CLOCK_MONOTONIC` via the clock seam
+  (`src/sloth_clock.c`, #109; the #88 `flood_*` names forward to it);
+  exported timestamps stay wall clock. The evil-twin taint TTL
+  (`EVIL_TWIN_TAINT_TTL_SECS`) is stamped and aged by that same wall
+  clock — before #109 the check read libc directly, so an injected
+  clock never matched and an NTP step mis-aged it.
 - **Eviction is fair between rules (#96).** The ring holds `MAX_ALERTS`
   (128) entries for every rule together. Resolved incidents go first;
   among live ones the victim is the oldest entry of the type holding the

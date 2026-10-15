@@ -72,6 +72,7 @@ SRCS = src/main.c          \
        src/views/beacon.c    \
        src/deauth_snoop.c    \
        src/flood_window.c    \
+       src/sloth_clock.c     \
        src/views/deauth.c    \
        src/http_log.c        \
        src/views/http.c      \
@@ -455,9 +456,11 @@ TEST_SRCS = tests/main_test.c          \
             tests/test_beacon_snoop.c      \
             src/deauth_snoop.c             \
             src/flood_window.c             \
+            src/sloth_clock.c              \
             src/views/deauth.c             \
             tests/test_deauth_snoop.c      \
             tests/test_flood_window.c      \
+            tests/test_clock_seam.c        \
             src/http_log.c                 \
             src/views/http.c               \
             tests/test_http_log.c          \
@@ -772,7 +775,7 @@ fuzz:
 	  exit 1; }
 	$(FUZZ_CC) $(FUZZ_FLAGS) -o /tmp/sloth_fuzz_deauth_parse \
 	    tests/fuzz/fuzz_deauth_parse.c src/deauth_snoop.c src/flood_window.c \
-	    src/dot11_data.c \
+	    src/sloth_clock.c src/dot11_data.c \
 	    -lpthread
 	/tmp/sloth_fuzz_deauth_parse -max_total_time=$(FUZZ_SECONDS) -close_fd_mask=3
 	$(FUZZ_CC) $(FUZZ_FLAGS) -DWITH_WIFI -DWITH_SQLITE \

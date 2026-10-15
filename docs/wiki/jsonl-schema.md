@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`.
 
-**Last updated**: 2026-10-13.
+**Last updated**: 2026-10-14.
 
 ---
 
@@ -418,7 +418,7 @@ forever) and immediately re-create it, producing a resolve/create pair
 every five minutes for nothing. 300 s matches
 `JSONL_HEARTBEAT_SECS`, so "is this incident still live?" has the same
 horizon as every other entity in the stream. The clock is
-**CLOCK_MONOTONIC** (the #88 seam in `src/flood_window.c`): an NTP step
+**CLOCK_MONOTONIC** (the clock seam, `src/sloth_clock.c`): an NTP step
 or a manual `date` must neither resolve a live incident nor hold a dead
 one open. Every *timestamp* in these records is wall clock — evidence,
 not duration.

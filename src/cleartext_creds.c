@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "cleartext_creds.h"
+#include "sloth_clock.h"
 #include "jsonl.h"
 
 static cleartext_cred_t g_ring[MAX_CLEARTEXT_CREDS];
@@ -81,7 +82,7 @@ void cleartext_creds_record_user(const char *src, const char *dst,
 
     int idx = find_row(src, dst, dst_port, protocol, user_clean);
     if (idx >= 0) {
-        g_ring[idx].ts = time(NULL);
+        g_ring[idx].ts = sloth_wall();
         pthread_mutex_unlock(&g_mu);
         return;
     }
@@ -95,7 +96,7 @@ void cleartext_creds_record_user(const char *src, const char *dst,
     snprintf(r->protocol, sizeof(r->protocol), "%s", protocol);
     snprintf(r->username, sizeof(r->username), "%s", user_clean);
     r->password_observed = 0;
-    r->ts = time(NULL);
+    r->ts = sloth_wall();
 
     /* JSONL log — one line per new exposure. Fired here rather than in
      * the alert engine so downstream consumers see each unique cred
@@ -126,7 +127,7 @@ void cleartext_creds_mark_password(const char *src, const char *dst,
     }
     if (best >= 0) {
         g_ring[best].password_observed = 1;
-        g_ring[best].ts = time(NULL);
+        g_ring[best].ts = sloth_wall();
     }
     pthread_mutex_unlock(&g_mu);
 }

@@ -30,6 +30,7 @@
 #include "rf_quality.h"
 #include "event_wake.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 #include "wps_track.h"
 #include "pm_forge.h"
 #include "queue_evict.h"
@@ -163,7 +164,10 @@ static void taint_mark(const uint8_t bssid[6], time_t now) {
 }
 
 int evil_twin_bssid_is_tainted(const uint8_t bssid[6]) {
-    time_t now = time(NULL);
+    /* Same clock as the mark (alerts_update stamps via the seam). Read
+     * straight from libc here, an injected clock never matched and an
+     * NTP step mis-aged the TTL (#109). */
+    time_t now = sloth_wall();
     int tainted = 0;
     pthread_mutex_lock(&g_taint_mu);
     int slot = taint_find_slot(bssid);
@@ -181,7 +185,7 @@ void evil_twin_taint_clear(void) {
 }
 
 void evil_twin_taint_mark_for_test(const uint8_t bssid[6]) {
-    taint_mark(bssid, time(NULL));
+    taint_mark(bssid, sloth_wall());
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */

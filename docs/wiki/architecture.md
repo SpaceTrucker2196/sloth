@@ -8,7 +8,7 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `src/sloth_clock.h`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
 **Last updated**: 2026-10-14.
 
@@ -27,6 +27,7 @@ src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
      top_hosts,ip_color,ip_owner}.c     -- synthesis + export
 src/views/*.c              -- one file per VIEW_*
 src/md5.c                  -- embedded MD5 for JA3 (RFC 1321 vectors verified)
+src/sloth_clock.c          -- the one clock seam: sloth_wall() / sloth_mono_ms()
 tests/                     -- unit tests, fake platform, scenarios
 docs/views/*.md            -- per-view deep dives
 ```
@@ -47,6 +48,18 @@ docs/views/*.md            -- per-view deep dives
   tables behind its own mutex.
 - **Alert engine** — `src/alerts.c` runs each rule every poll, dedupes by
   stable key, fires JSONL + per-alert pcap. See [[alerts]].
+- **Clock seam** (`src/sloth_clock.h`, #109) — `sloth_wall()` for
+  evidence (timestamps, export) and `sloth_mono_ms()` for durations
+  (windows, TTLs, cooldowns); `sloth_clock_test_set()` swaps either for
+  tests, `NULL` restores the real one. Stamping through the seam and
+  checking against libc is a bug no test can see while both read real
+  clocks: the evil-twin taint did exactly that, so under an injected
+  clock it never matched and in production an NTP step mis-aged its
+  TTL. Modules migrate off direct `time(NULL)` / `clock_gettime()` one
+  at a time; `tests/test_clock_seam.c` lists the migrated files and
+  fails on a regression. The #88 `flood_wall()` / `flood_mono_ms()` /
+  `flood_test_set_clock()` names in `flood_window.h` are `static
+  inline` forwards to it until their last caller moves.
 - **Correlation seams** — modules that answer a question sloth's own
   sensors cannot. `src/inventory.c` reads the operator's approved-BSSID
   file ([[inventory]]); `src/wired_attach.c` is a one-slot in-process

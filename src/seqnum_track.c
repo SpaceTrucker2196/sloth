@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "seqnum_track.h"
+#include "sloth_clock.h"
 #include "sensor_health.h"
 
 static seqnum_client_t g_tbl[MAX_SEQNUM_CLIENTS];
@@ -26,7 +27,7 @@ int  seqnum_corr_retain_secs(void) { return g_corr_retain; }
 
 void seqnum_track_observe(const uint8_t mac[6], uint16_t seqnum)
 {
-    seqnum_track_observe_at(mac, seqnum, time(NULL));
+    seqnum_track_observe_at(mac, seqnum, sloth_wall());
 }
 
 void seqnum_track_observe_at(const uint8_t mac[6], uint16_t seqnum, time_t now)
@@ -313,7 +314,7 @@ int seqnum_corr_candidate_pairs(time_t now, int *out_accepted,
 
 void seqnum_snapshot(sloth_state_t *s)
 {
-    seqnum_snapshot_at(s, time(NULL));
+    seqnum_snapshot_at(s, sloth_wall());
 }
 
 void seqnum_snapshot_at(sloth_state_t *s, time_t now)
