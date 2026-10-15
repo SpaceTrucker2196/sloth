@@ -205,3 +205,4 @@
 | 4523e79 | 2026-10-14T23:53:31Z | claude-fable-5-1 | 1862 | 157915 | 34513883 | 1419661 | 70.8215 | make mutate sandbox derived from git ls-files; gate dead since #73 (#108) |
 | 1323a23 | 2026-10-15T00:45:51Z | claude-fable-5-1 | 420 | 16964 | 8863356 | 32025 | 10.3563 | fragattack mutex; packet ring becomes a per-poll snapshot (#111, workflow build + adversarial review) |
 | 746f0b8 | 2026-10-15T00:49:49Z | claude-fable-5-1 | 64 | 2341 | 1302048 | 3346 | 1.4867 | sloth_clock seam; taint-TTL clock mix fixed; six modules off time(NULL) (#109, workflow build + adversarial review) |
+| 59b9bd7 | 2026-10-15T00:54:29Z | claude-fable-5-1 | 226 | 5877 | 5255286 | 7291 | 5.6972 | secure_file bypasses closed; discovery via O_EXCL+renameat; sqlite NOFOLLOW compile-time pin; localtime_r (#134, workflow build + adversarial review) |
