@@ -965,6 +965,34 @@ static void test_rrm_trailing_octet_is_tallied(void) {
     rrm_clear();
 }
 
+/* #126: the Beacon Request subelement walk. An SSID subelement whose
+ * length runs past its Measurement Request element is a stop that is
+ * counted once, and the SSID is not taken from it — the request reads
+ * as broadcast, as it did before. The same request with no subelements
+ * at all (the fixed body exactly) adds nothing. */
+static void test_rrm_overrunning_ssid_subelement_is_tallied(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp-wifi");
+    const int sub_len_at = HDR + 5 + 2 + 16 + 1;   /* subelement Length */
+    ASSERT_EQ(f[sub_len_at], 9);
+    f[sub_len_at] = 14;                            /* 5 past the element */
+    sh_parse_fault_reset();
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_EQ(p.targeted_reqs, 0);
+    ASSERT_EQ(p.broadcast_reqs, 1);
+    ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 1);
+
+    rrm_clear();
+    n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, NULL);
+    sh_parse_fault_reset();
+    ASSERT_EQ(rrm_parse_action(f, n, 1001), 1);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+    rrm_clear();
+}
+
 static void test_rrm_request_without_ssid_is_broadcast(void) {
     /* No SSID subelement: the AP is asking "what can you hear", which
      * is ordinary steering. Counting it as targeted would make every
@@ -1539,6 +1567,7 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_rrm_targeted_request_survives_the_htc_bit);
     RUN_TEST(test_rrm_request_without_ssid_is_broadcast);
     RUN_TEST(test_rrm_trailing_octet_is_tallied);
+    RUN_TEST(test_rrm_overrunning_ssid_subelement_is_tallied);
     RUN_TEST(test_rrm_report_counted_but_separate);
     RUN_TEST(test_rrm_non_beacon_measurement_ignored);
     RUN_TEST(test_rrm_busiest_pair_needs_the_threshold);

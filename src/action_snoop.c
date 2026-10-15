@@ -602,18 +602,24 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
              * until 2026-10-14 — BSSID octet 1 — and exported it as
              * `measurement_mode`; 0xff on every wildcard request (#124). */
             uint8_t mode = (tln >= 10) ? b[9] : 0;
-            int sub = 3 + 13;                 /* past the fixed body */
-            while (sub + 2 <= (int)tln) {
-                uint8_t sid  = b[sub];
-                uint8_t slen = b[sub + 1];
-                if (sub + 2 + (int)slen > (int)tln) break;
-                if (sid == 0 && slen > 0) {
-                    int n = slen < 32 ? slen : 32;
-                    memcpy(ssid, b + sub + 2, (size_t)n);
-                    ssid[n] = '\0';
-                    targeted = 1;
+            /* Optional subelements start past the fixed body. A body
+             * shorter than that carries none and is not a subelement
+             * fault (it is not counted, as it was not before). */
+            const int sub = 3 + 13;
+            if (tln >= sub) {
+                tlv_it_t si;
+                uint16_t sid; int slen; const uint8_t *sb;
+                tlv_init(&si, b + sub, tln - sub);
+                while (tlv_next(&si, &sid, &slen, &sb) == TLV_OK) {
+                    if (sid == 0 && slen > 0) {
+                        int n = slen < 32 ? slen : 32;
+                        memcpy(ssid, sb, (size_t)n);
+                        ssid[n] = '\0';
+                        targeted = 1;
+                    }
                 }
-                sub += 2 + slen;
+                if (si.status == TLV_OVERRUN)
+                    sh_parse_fault_note(SH_PF_IE_OVERRUN);
             }
 
             pthread_mutex_lock(&g_rrm_mu);
