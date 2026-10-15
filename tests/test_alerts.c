@@ -8698,6 +8698,39 @@ static void test_captive_portal_key_distinguishes_long_prefix_pair(void) {
     alerts_clear();
 }
 
+/* Two 32-byte SSIDs — the 802.11 maximum — that differ only in the
+ * last byte. Shared by the SSID-keyed rules' key tests. */
+static void long_ssid_pair(char a[33], char b[33]) {
+    memset(a, 'N', 32); a[32] = '\0';
+    memcpy(b, a, 33);
+    a[31] = '1';
+    b[31] = '2';
+}
+
+static void test_sae_psk_split_key_distinguishes_long_prefix_pair(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    char n1[33], n2[33];
+    long_ssid_pair(n1, n2);
+    uint8_t a1[6] = { 0x00, 0x11, 0x22, 0, 0, 1 };
+    uint8_t b1[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 2 };
+    uint8_t a2[6] = { 0x00, 0x11, 0x22, 0, 0, 3 };
+    uint8_t b2[6] = { 0xaa, 0xbb, 0xcc, 0, 0, 4 };
+    add_beacon_akm(&s, n1, a1, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, n1, b1, "WPA2", RSN_AKM_PSK);
+    add_beacon_akm(&s, n2, a2, "WPA3", RSN_AKM_SAE);
+    add_beacon_akm(&s, n2, b2, "WPA2", RSN_AKM_PSK);
+    alerts_update(&s);
+    ASSERT_EQ(count_alerts(&s, ALERT_TYPE_SAE_PSK_SPLIT), 2);
+    int i = find_alert(&s, ALERT_TYPE_SAE_PSK_SPLIT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strncmp(s.alerts[i].key, "saesplit:NNNN", 13) == 0);
+        ASSERT_EQ((int)strlen(s.alerts[i].key), 8 + 1 + 32 + 1 + 16);
+    }
+    alerts_clear();
+}
+
 /* ── Incident lifecycle (#98) ─────────────────────────────────
  *
  * These drive the engine through a JSONL file sink and read the stream
@@ -9879,6 +9912,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_dga_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_cleartext_cred_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_captive_portal_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_sae_psk_split_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);

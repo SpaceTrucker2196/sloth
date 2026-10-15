@@ -1827,8 +1827,13 @@ static void rule_sae_psk_split(const sloth_state_t *s, time_t now) {
             char a_bssid[20], b_bssid[20];
             mac_to_str(a->bssid, a_bssid, sizeof(a_bssid));
             mac_to_str(b->bssid, b_bssid, sizeof(b_bssid));
+            /* The SSID is whatever the AP (or an impostor) beacons
+             * (#112): a remote component, sanitised and hashed whole. */
             char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
-            snprintf(key, sizeof(key), "saesplit:%.40s", a->ssid);
+            akey_t k;
+            akey_begin(&k, key, sizeof(key), "saesplit");
+            akey_remote(&k, a->ssid, 32);
+            if (!akey_end(&k)[0]) break;
             snprintf(detail, sizeof(detail),
                      "'%.16s' is SAE-only on %s and PSK-only on %s%s%s",
                      a->ssid, a_bssid, b_bssid,

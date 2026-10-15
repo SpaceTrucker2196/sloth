@@ -87,6 +87,7 @@ holds both shapes for one finding.
 | `DGA_DOMAIN` | `dga:<qname>` | `dga:<qname, 40 kept>:<hash>` |
 | `CLEARTEXT_CRED` | `cred:<src>-><dst>:<port>:<proto>:<user>` | `cred:<src>:<dst>:<port>:<proto>:<user, 32 kept>:<hash>` (IPv6 bracketed) |
 | `CAPTIVE_PORTAL` | `portal:<host, 30 cut>:<kind>` | `portal:<host, 40 kept>:<hash>:<kind>` |
+| `SAE_PSK_SPLIT` | `saesplit:<ssid>` | `saesplit:<ssid, 32 kept>:<hash>` |
 
 ## Incident lifecycle (#98)
 
