@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "mle.h"
+#include "sensor_health.h"
 
 /*
  * Multi-Link Element — issue #67, IEEE 802.11be §9.4.2.312.
@@ -892,6 +893,36 @@ static void test_sta_info_len_past_subelement_end_is_safe(void) {
     ASSERT_EQ(m.malformed_link_id, 0);
 }
 
+/* #126: sta_profile_rsn() holds the STA Profile's element chain to
+ * tlv_exact(). The weaker link's profile below is well-formed except
+ * for one trailing octet inside its subelement, so its chain does not
+ * tile and its RSNE is not believed: one RSNE-bearing link, nothing to
+ * compare, no downgrade. Without that octet the same pair fires (see
+ * test_cross_link_cipher_and_pmf_downgrade_flagged).
+ *
+ * And it is not a parse fault: a non-tiling profile chain is the
+ * expected reading of an association request's per-STA profile, whose
+ * prefix differs from the beacon form, so tallying it would report a
+ * fault on every well-formed Wi-Fi 7 association. Mutation-proved:
+ * dropping the tiling test (`if (!found) return 0;`) fires the
+ * downgrade here. */
+static void test_untiled_sta_profile_is_not_read_and_not_a_fault(void) {
+    uint8_t b[256];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    const int weak = n;
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
+    b[n++] = 0x00;           /* one octet past the RSNE ... */
+    b[weak + 1]++;           /* ... inside the subelement's own length */
+    sloth_mld_t m;
+    sh_parse_fault_reset();
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+    ASSERT_EQ(m.downgrade_cipher_mismatch, 0);
+    ASSERT_EQ((int)sh_parse_fault_total(), 0);
+}
+
 /* A selector newer than IEEE 802.11-2020 Table 9-149 is ranked
  * "unknown", not "weak" — otherwise every cipher suite added after this
  * table was written becomes an alert on a conformant AP. */
@@ -1011,6 +1042,7 @@ void run_mle_tests(void) {
     RUN_TEST(test_single_link_rsne_not_flagged);
     RUN_TEST(test_zero_length_sta_profile_not_flagged);
     RUN_TEST(test_sta_info_len_past_subelement_end_is_safe);
+    RUN_TEST(test_untiled_sta_profile_is_not_read_and_not_a_fault);
     RUN_TEST(test_unrecognised_cipher_suite_is_not_ranked_weak);
     RUN_TEST(test_downgrade_not_claimed_on_an_overrunning_chain);
     RUN_TEST(test_cross_link_downgrade_persists_across_clean_frames);

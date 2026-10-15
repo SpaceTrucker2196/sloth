@@ -2,6 +2,7 @@
 #include <pthread.h>
 
 #include "mle.h"
+#include "bytes.h"
 
 static sloth_mld_t     g_mld[SLOTH_MLD_MAX];
 static int             g_mld_n;
@@ -48,14 +49,13 @@ static int cipher_rank(uint8_t t) {
  * RSN Capabilities bit 6 is MFPR (required), bit 7 MFPC (capable). */
 static int sta_profile_rsn(const uint8_t *p, int len,
                            int *best_rank, int *mfpr) {
-    int off = 0, found = 0, rank = 0, req = 0;
+    int found = 0, rank = 0, req = 0;
 
-    while (off + 2 <= len) {
-        uint8_t tag = p[off];
-        uint8_t tln = p[off + 1];
-        if (off + 2 + (int)tln > len) return 0;
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *r;
+    tlv_init(&it, p, len);
+    while (tlv_next(&it, &tag, &tln, &r) == TLV_OK) {
         if (tag == 48 && tln >= 8) {
-            const uint8_t *r = p + off + 2;
             int o = 2 + 4;                       /* version + group cipher */
             if (o + 2 > (int)tln) return 0;
             int pw = r[o] | (r[o + 1] << 8);
@@ -80,12 +80,18 @@ static int sta_profile_rsn(const uint8_t *p, int len,
             req = (r[o] >> 6) & 1;
             found = 1;
         }
-        off += 2 + tln;
     }
-    /* A trailing byte too short to begin an element means the chain
-     * never tiled the region — which is also what a wrong fixed-field
-     * prefix looks like from here. */
-    if (off != len || !found) return 0;
+    /* The chain must tile the region exactly (tlv_exact): an element
+     * running past the end, or a trailing octet too short to begin one,
+     * means it never tiled — which is also what a wrong fixed-field
+     * prefix looks like from here.
+     *
+     * Deliberately NOT a parse fault (#126). An association request's
+     * per-STA profile carries a different prefix than the beacon form
+     * this assumes, so a non-tiling chain is the expected result on a
+     * well-formed frame there, and counting it would report a fault on
+     * every Wi-Fi 7 association. */
+    if (!tlv_exact(&it) || !found) return 0;
     *best_rank = rank;
     *mfpr      = req;
     return 1;
