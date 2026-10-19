@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/wifi.h"
 
@@ -86,15 +87,28 @@ void test_wifi_draw_no_crash(void) {
     sloth_state_t s;
     make_wifi_state(&s, 5);
     s.wifi_sel = 2;
-    view_wifi_draw(&s);   /* just must not crash */
-    ASSERT(1);
+    view_wifi_draw(&s);
+    ASSERT_LINE_HAS(0, "WiFi: 5 APs");
+    for (int i = 0; i < 5; i++) {
+        char ssid[8];
+        snprintf(ssid, sizeof(ssid), "AP%d ", i);
+        int y = runner_screen_find(ssid);
+        ASSERT(y >= 0);
+        ASSERT_EQ(tui_test_is_reverse(y, 1), i == 2 ? 1 : 0);
+    }
+    /* AP0 at -30 dBm is a full bar; AP4 at -42 two cells short. */
+    ASSERT_LINE_HAS(runner_screen_find("AP0 "),
+        "[\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"
+        "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88] -30");
+    ASSERT_LINE_HAS(runner_screen_find("AP4 "), "\xe2\x96\x91\xe2\x96\x91] -42");
 }
 
 void test_wifi_draw_empty_no_crash(void) {
     sloth_state_t s;
     make_wifi_state(&s, 0);
     view_wifi_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "WiFi: 0 APs");
+    ASSERT_SCREEN_HAS("(scanning...");
 }
 
 /* ── Detail panel tests ──────────────────────────────────── */
@@ -145,8 +159,11 @@ void test_wifi_detail_draw_no_sta(void) {
     s.wifi_sel      = 0;
     s.wifi_detail   = 1;
     s.wifi_sta_count = 0;
-    view_wifi_draw(&s);  /* must not crash with no station data */
-    ASSERT(1);
+    view_wifi_draw(&s);
+    ASSERT_LINE_HAS(0, "AP0  [Esc] back");
+    ASSERT_SCREEN_HAS("BSSID: aa:bb:cc:dd:ee:00");
+    ASSERT_SCREEN_HAS("(not associated");
+    ASSERT_SCREEN_LACKS("TX rate:");
 }
 
 void test_wifi_detail_draw_with_sta(void) {
@@ -166,8 +183,15 @@ void test_wifi_detail_draw_with_sta(void) {
     s.wifi_stas[0].rx_bytes      = 500000;
     s.wifi_sta_count             = 1;
 
-    view_wifi_draw(&s);  /* must not crash with station data */
-    ASSERT(1);
+    view_wifi_draw(&s);
+    ASSERT_SCREEN_HAS("TX rate: 54.0 Mbps");
+    ASSERT_SCREEN_HAS("RX rate: 54.0 Mbps");
+    /* The unit follows the value; it used to be padded out to the
+     * second column ("-55                 dBm"). */
+    ASSERT_SCREEN_HAS("Signal:  -55 dBm");
+    ASSERT_SCREEN_HAS("Connected: 1h 00m");
+    ASSERT_SCREEN_HAS("Inactive: 10 ms");
+    ASSERT_SCREEN_LACKS("(not associated");
 }
 
 void test_wifi_associated_status(void) {
@@ -175,9 +199,11 @@ void test_wifi_associated_status(void) {
     make_wifi_state(&s, 3);
     s.aps[1].status = WIFI_STATUS_ASSOC;
 
-    /* draw must not crash with one associated AP */
     view_wifi_draw(&s);
-    ASSERT(1);
+    /* The associated AP alone carries the '*' marker in column 0. */
+    ASSERT_EQ(runner_find_col(runner_screen_find("AP1 "), "*AP1"), 0);
+    ASSERT_EQ(runner_find_col(runner_screen_find("AP0 "), " AP0"), 0);
+    ASSERT_EQ(runner_find_col(runner_screen_find("AP2 "), " AP2"), 0);
 
     /* the associated AP's status should be visible */
     ASSERT_EQ(s.aps[1].status, WIFI_STATUS_ASSOC);

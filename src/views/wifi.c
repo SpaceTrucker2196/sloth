@@ -125,8 +125,12 @@ static void draw_wifi_detail(const sloth_state_t *s) {
 
         tui_dim();    TPRINT("  Signal:  ");
         phos_signal(st->signal_dbm);
-        TPRINT("%-18d", (int)st->signal_dbm);
-        tui_dim();    TPRINT("  dBm\n");
+        /* Value and unit together: printing the unit after the padded
+         * field put "dBm" under the right-hand column. Found when #116
+         * first read this pane back. */
+        char sig_b[16];
+        snprintf(sig_b, sizeof(sig_b), "%d dBm", (int)st->signal_dbm);
+        TPRINT("%s\n", sig_b);
 
         tui_dim();    TPRINT("  Connected: ");
         tui_bright(); TPRINT("%-16s", con);
