@@ -4,10 +4,11 @@
 #include "views/dashboard.h"
 #include "views/dashboard_internal.h"
 
-/* The dashboard view's draw path is mostly ncurses-positioned mvprintw
- * calls. In the test build those are stubbed, so we mostly verify:
- *   - draw is safe on empty / populated state
- *   - up/down nav drives s->conn_sel as designed */
+/* The dashboard is ~2,000 lines of ncurses-positioned mvprintw that the
+ * test build compiled to nothing until #116; these tests used to be
+ * ASSERT(1) smoke runs of the empty `#else` branch. They now draw into
+ * the offscreen screen and assert on what each band put in the cells,
+ * plus up/down nav driving s->conn_sel. */
 
 static void seed_iface(sloth_state_t *s, const char *name) {
     if (s->iface_count >= MAX_IFACES) return;
@@ -168,7 +169,10 @@ static void seed_beacon(sloth_state_t *s, const char *ssid, int sig, int ch) {
 static void test_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_dashboard_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("\xe2\x94\x80\xe2\x94\x80 Interfaces \xe2\x94\x80");
+    ASSERT_SCREEN_HAS("(no critical alerts");
+    ASSERT_SCREEN_HAS("Packets (live)");
+    ASSERT_SCREEN_HAS("(no packets yet");
 }
 
 static void test_draw_populated(void) {
@@ -203,7 +207,39 @@ static void test_draw_populated(void) {
     seed_icmp_log(&s, "8.8.8.8",     "Echo Reply",  0);
     seed_icmp_log(&s, "fe80::1",     "Neigh Sol",   1);
     view_dashboard_draw(&s);
-    ASSERT(1);
+    /* One needle per band, each a value only that band's seed carries. */
+    ASSERT_SCREEN_HAS("wlan0");
+    ASSERT_SCREEN_HAS("\xe2\x86\x92 142.250.80.46:443");     /* conns    */
+    ASSERT_SCREEN_HAS("TLS handshake");                         /* packets  */
+    ASSERT_SCREEN_HAS("neighbor_24");                           /* wifi/bcn */
+    ASSERT_SCREEN_HAS("Starbucks");                             /* probe    */
+    ASSERT_SCREEN_HAS("My Printer._ipp._tcp");                  /* mdns     */
+    ASSERT_SCREEN_HAS("raspberrypi");                           /* dhcp     */
+    ASSERT_SCREEN_HAS("urn:schemas-upnp-org");                  /* ssdp     */
+    ASSERT_SCREEN_HAS("b8:27:eb:11:22:33");                     /* arp      */
+    ASSERT_SCREEN_HAS("FLOOD");                                 /* deauth   */
+    ASSERT_SCREEN_HAS("NXDOMAIN");                              /* dns      */
+    ASSERT_SCREEN_HAS("Neigh Sol");                             /* icmp     */
+    ASSERT_SCREEN_LACKS("(no packets yet");
+}
+
+/* The packets band's bargraph counts info strings for the session in
+ * slots that keep the first 39 bytes. It used to compare a slot against
+ * the untruncated string, which never matched once the string was
+ * longer, so three packets with one long info took three slots and drew
+ * three cells of 1 instead of one cell of 3. Seen to fail with the
+ * comparison put back to strcmp(slot, p->info). */
+static void test_bargraph_counts_a_long_info_once(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    const char *lng = "TLS ClientHello sni=a-very-long-hostname.example.org";
+    ASSERT_GT((int)strlen(lng), 39);
+    for (int i = 0; i < 3; i++)
+        seed_packet(&s, "192.168.1.5", "198.51.100.7", 40000, 443, lng);
+    view_dashboard_draw(&s);
+    int y = runner_screen_find("TLS ClientHello sni=a-very-long-hostnam  ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "TLS ClientHello sni=a-very-long-hostnam  3 ");
+    ASSERT(!runner_line_has(y, "  1 "));
 }
 
 static void test_draw_with_monitor_iface(void) {
@@ -216,7 +252,11 @@ static void test_draw_with_monitor_iface(void) {
     s.probe_clients[0].channel = 6;
     s.deauth_count = 2;
     view_dashboard_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Monitor radio");
+    ASSERT_SCREEN_HAS("2 deauths");
+    ASSERT_SCREEN_HAS("Associations (wlan1mon)");
+    ASSERT_SCREEN_HAS("Roaming clients (wlan1mon)");
+    ASSERT_SCREEN_HAS("TestSSID");
 }
 
 static void test_draw_with_monitor_error(void) {
@@ -225,7 +265,7 @@ static void test_draw_with_monitor_error(void) {
     snprintf(s.probe_err, sizeof(s.probe_err),
              "no monitor-mode iface found (need type 803)");
     view_dashboard_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("no monitor-mode iface found (need type 803)");
 }
 
 /* ── iface hide election (shared with iface view) ────────── */
@@ -304,7 +344,7 @@ static void test_nav_empty_state(void) {
 }
 
 /* With a monitor interface active, the connections band renders RF
- * associations instead of IP connections; must not crash. */
+ * associations instead of IP connections. */
 static void test_draw_assoc_band_when_monitoring(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
@@ -318,11 +358,13 @@ static void test_draw_assoc_band_when_monitoring(void) {
     s.assocs[0].signal_dbm = -45;
     s.assoc_count = 1;
     view_dashboard_draw(&s);
-    ASSERT(1);
+    int y = runner_screen_find("02:11:22:33:44:55");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "\xe2\x86\x92 aa:bb:cc:dd:ee:ff HomeNet");
 }
 
 /* With a monitor interface active, the packets band interleaves 802.11
- * frames from s->mon_frames with the IP packets; must not crash. */
+ * frames from s->mon_frames with the IP packets. */
 static void test_draw_merged_packets_band_when_monitoring(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
@@ -335,7 +377,11 @@ static void test_draw_merged_packets_band_when_monitoring(void) {
     s.mon_frames[0].signal_dbm = -55;
     s.mon_frame_count = 1;
     view_dashboard_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Packets (live)  mon=wlan1mon");
+    int y = runner_screen_find("Beacon -55dBm");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "aa:bb:cc:dd:ee:ff     \xe2\x86\x92 ff:ff:ff:ff:ff:ff");
+    ASSERT_LINE_HAS(y, "[wlan1mon]");
 }
 
 static void test_conn_panel_drills_to_assoc_when_monitoring(void) {
@@ -359,6 +405,7 @@ void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
+    RUN_TEST(test_bargraph_counts_a_long_info_once);
     RUN_TEST(test_draw_with_monitor_iface);
     RUN_TEST(test_draw_with_monitor_error);
     RUN_TEST(test_draw_assoc_band_when_monitoring);

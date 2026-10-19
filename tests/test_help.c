@@ -6,23 +6,16 @@
 #include "tui.h"
 #include "views/help.h"
 
-/* Capture view_help_draw()'s stdout (TPRINT is printf in the test
- * build) into `buf` so we can assert on what the card actually renders. */
+/* Read view_help_draw()'s rendered screen (#116) into `buf` so we can
+ * assert on what the card actually renders. */
 static void capture_help(char *buf, int sz) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     view_help_draw(&s);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 /* The card's view list is rendered straight from view_label(), so every

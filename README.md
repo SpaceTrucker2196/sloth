@@ -540,10 +540,15 @@ tests/                     unit tests, fake platform, scenarios
 make test    # the whole suite, no root, no terminal, no network
 ```
 
+The suite is built the way `sloth` ships — `WITH_NCURSES` and
+`WITH_PCAP` — and each view draws through the real renderer into an
+offscreen ncurses screen whose output goes to `/dev/null`; tests read
+the cells back (#116).
+
 Every real-data path is replaced by a controllable fake:
 
 - **`tests/fake_platform.c`** — implements `g_platform` with deterministic in-memory data. All vtable functions read from a global `fake_net_t`.
-- **`tests/null_tui.c`** — stubs ncurses functions as no-ops; `TPRINT` falls back to `printf`, so view draw functions execute their full rendering logic.
+- **offscreen ncurses** (`tui_init_offscreen()` / `tui_test_line()` in `src/tui.c`) — views render through the shipped code; `ASSERT_LINE_HAS` / `ASSERT_SCREEN_HAS` in `tests/runner.h` assert on what landed in the cells.
 - **`tests/scenarios.c`** — named configurations (empty, idle, busy, many_conns, wifi_crowded, monitor_env) used by render smoke tests.
 
 Protocol parsers (DNS, TLS, JA3, QUIC, HTTP, NTP, ICMP, mDNS, NBNS, DHCP, SSDP) are tested with **raw byte arrays** constructed by hand from the relevant RFCs. Each test computes byte values from first principles so the tests are not circular.

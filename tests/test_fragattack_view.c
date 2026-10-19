@@ -61,18 +61,11 @@ static void fire_one_plaintext_finding(const uint8_t *bssid,
 }
 
 static void capture_draw(const sloth_state_t *s, char *buf, int sz) {
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     view_fragattack_draw(s);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 static void setup(void) { frag_clear(); }

@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "reset_all.h"
 #include "sloth_clock.h"
+#include "tui.h"
 
 /* Shared counters — all test files reference these via extern */
 int g_pass      = 0;
@@ -16,9 +17,26 @@ int g_test_total = 0;
 static void default_test_setup(void) {
     sloth_reset_all();
     sloth_clock_test_set(NULL, NULL);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+    tui_test_erase();
 }
 
 void (*g_test_setup)(void) = default_test_setup;
+
+/* LeakSanitizer reads this hook at exit when the suite is built with
+ * -fsanitize=address; in any other build it is an unused function.
+ * The offscreen screen (#116) is torn down with endwin() + delscreen(),
+ * and libncursesw still keeps one 3.5 KB calloc() from newterm() that
+ * no public call frees. Suppressed by module, so only allocations made
+ * inside the ncurses libraries match — an allocation sloth makes and
+ * leaks has a sloth frame on top of the stack and is still reported.
+ * Kept here rather than in an LSAN_OPTIONS file so `make test` under
+ * the sanitizer is self-contained and CI needs no change to pick it up. */
+const char *__lsan_default_suppressions(void);
+const char *__lsan_default_suppressions(void) {
+    return "leak:libncursesw.so\n"
+           "leak:libtinfo.so\n";
+}
 
 void run_parse_tests(void);
 void run_rate_tests(void);
@@ -165,10 +183,24 @@ void run_transit_tests(void);
 void run_radiotap_tests(void);
 void run_rf_quality_tests(void);
 void run_reset_registry_tests(void);
+void run_capture_path_tests(void);        /* tests/test_capture_path.c (#95) */
+void run_poll_capture_path_tests(void);   /* tests/test_poll.c (#113) */
 
 int main(void) {
     printf("sloth test suite\n");
     printf("===============\n");
+
+    /* Views draw through the shipped renderer (#116): an ncurses SCREEN
+     * whose output goes to /dev/null, read back with tui_test_line().
+     * Without it every TPRINT is printw onto no window, so a failure
+     * here fails the run rather than letting each view test pass on an
+     * empty screen. */
+    if (tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS) != 0) {
+        fprintf(stderr, "sloth_test: no offscreen ncurses screen "
+                        "(is a terminfo entry for xterm-256color, xterm, "
+                        "vt100 or dumb installed?)\n");
+        return 2;
+    }
 
     run_parse_tests();
     run_rate_tests();
@@ -315,7 +347,10 @@ int main(void) {
     run_radiotap_tests();
     run_rf_quality_tests();
     run_reset_registry_tests();
+    run_capture_path_tests();
+    run_poll_capture_path_tests();
 
+    tui_offscreen_end();
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;
 }

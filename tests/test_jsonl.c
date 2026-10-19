@@ -182,8 +182,8 @@ static void test_emit_icmp_v6_true_writes_one(void) {
  * in one state, asserts both record shapes appear.
  *
  * Touches conn_rebuild_idx so bw_lookup can find a bw entry — we don't
- * pre-populate s->conn_bw here, so rx_bytes/tx_bytes fall back to 0,
- * which is the documented behaviour when WITH_PCAP=0. */
+ * pre-populate s->conn_bw here, so rx_bytes/tx_bytes fall back to 0 —
+ * the same output a WITH_PCAP=0 build documents for every row. */
 static void test_emit_connections_tcp_and_udp(void) {
     open_fresh();
     sloth_state_t s; memset(&s, 0, sizeof(s));

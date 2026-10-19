@@ -1,3 +1,6 @@
+/* The whole file is the WITH_PCAP capture path; the link-only no-flag
+ * build (sloth_test_noflags, #116) gets an empty entry point instead. */
+#ifdef WITH_PCAP
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -29,8 +32,8 @@
  * parsers consume attacker-controlled frames, and until this existed
  * the sanitizers never saw a single one of them.
  *
- * Built only into sloth_test_pcap (make test-capture-path), because the
- * ordinary test binary is deliberately compiled without WITH_PCAP.
+ * Part of sloth_test since #116, which builds the suite WITH_PCAP; it was
+ * a separate binary (sloth_test_pcap) while the suite was not.
  *
  * Frames are hand-built from the RFCs/IEEE clauses per AGENTS.md — no
  * captures, and no .pcap files: capture_test_dispatch() assembles the
@@ -2575,3 +2578,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_ring_wraps_with_head_count_total_preserved);
     RUN_TEST(test_ring_snapshot_is_stable_under_writer);
 }
+#else
+void run_capture_path_tests(void);
+void run_capture_path_tests(void) {}
+#endif

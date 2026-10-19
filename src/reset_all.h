@@ -18,11 +18,9 @@
  * checks against every `_clear(void)` / `_reset(void)` declared under
  * src (recursively) and include's headers. A declared reset deliberately
  * NOT here belongs in that test's own exclusion list, with a reason —
- * not silently dropped. Today there is exactly one: `probe_clear`
- * (src/capture/probe.h) — src/capture/probe.c is not part of the main
- * test binary (see CLAUDE.md on TEST_SRCS vs CAPTURE_PATH_SRCS), so it
- * cannot be called from here without breaking the link; the separate
- * test-capture-path binary calls it directly. */
+ * not silently dropped. Today there are none: `probe_clear` was the
+ * one, while src/capture/probe.c was linked only into the separate
+ * capture-path binary, and since #116 sloth_test links it. */
 #define SLOTH_RESETS(X) \
     X(action_clear) \
     X(action_mfp_clear) \
@@ -42,6 +40,7 @@
     X(cp_clear) \
     X(csa_clear) \
     X(ctrl_clear) \
+    X(dashboard_info_clear) \
     X(data_socket_cleanup) \
     X(db_close) \
     X(deauth_clear) \
@@ -72,6 +71,7 @@
     X(onvif_clear) \
     X(ownership_clear) \
     X(pm_forge_clear) \
+    X(probe_clear) \
     X(probe_pnl_clear) \
     X(queue_evict_clear) \
     X(quic_log_clear) \

@@ -854,23 +854,16 @@ static void seed_btm_row(sloth_state_t *s, int imminent) {
     b->last_seen        = time(NULL);
 }
 
-/* TPRINT is printf in the test build, so the view's output can be
+/* The offscreen screen (#116) is read back, so the view's output can be
  * captured and asserted on rather than smoke-tested. Same technique as
  * test_help.c. Without this the empty-deauth case below would "pass"
  * against a draw that renders nothing at all. */
 static void capture_deauth(const sloth_state_t *s, char *buf, int sz) {
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     view_deauth_draw(s);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 /* A protected frame's reason column must say it is encrypted, not

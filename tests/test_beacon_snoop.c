@@ -3162,11 +3162,10 @@ static void test_wps_lock_window_counts_completed_cycles(void) {
     ASSERT_EQ(wps_lock_cycles_in_window(NULL, 1700000000, 3600), 0);
 }
 
-/* TPRINT is printf in the test build (Makefile: "No WITH_NCURSES: TPRINT
- * expands to printf in view files"), so a view's rendered bytes can be
- * captured and asserted. Same dup2/tmpfile technique as
- * tests/test_help.c and tests/test_assoc_track.c, which have used it
- * since long before this slice.
+/* A view's rendered output can be read back and asserted. Since #116
+ * that is the offscreen ncurses screen (tui_test_screen()); before it,
+ * the same capture was a dup2/tmpfile redirect of stdout, because the
+ * test build compiled TPRINT as printf.
  *
  * Recorded because the first version of these tests asserted the
  * opposite: it claimed "the detail screen writes to the terminal, so
@@ -3178,18 +3177,11 @@ static void test_wps_lock_window_counts_completed_cycles(void) {
  * behind a rationale the next agent would have read and repeated. */
 static void capture_draw(void (*draw)(const sloth_state_t *),
                          const sloth_state_t *st, char *buf, int sz) {
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     draw(st);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 static void test_wps_lock_detail_draw_renders_the_sawtooth(void) {

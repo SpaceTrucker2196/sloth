@@ -706,6 +706,12 @@ static struct info_slot { char info[40]; int count; } g_info_tbl[INFO_TBL_CAP];
 static int      g_info_n = 0;
 static uint64_t g_last_pkt_us = 0;
 
+void dashboard_info_clear(void) {
+    memset(g_info_tbl, 0, sizeof(g_info_tbl));
+    g_info_n      = 0;
+    g_last_pkt_us = 0;
+}
+
 static void update_cumulative_info_counts(const sloth_state_t *s) {
     int pkt_n = s->pkt_count < MAX_PACKETS ? s->pkt_count : MAX_PACKETS;
     uint64_t newest = g_last_pkt_us;
@@ -715,14 +721,22 @@ static void update_cumulative_info_counts(const sloth_state_t *s) {
         if (ts <= g_last_pkt_us) continue;
         if (ts > newest) newest = ts;
         if (!p->info[0]) continue;
+        /* Match on the stored form, not the full string. A slot keeps
+         * the first sizeof(info)-1 bytes; comparing those against an
+         * untruncated info never matched once it was longer, so every
+         * packet carrying a long info string took a fresh slot until the
+         * table was full and the bargraph showed one entry many times.
+         * Surfaced when #116 first compiled this file under -Werror in
+         * the test build (-Wformat-truncation on the copy below). */
+        char key[sizeof(g_info_tbl[0].info)];
+        snprintf(key, sizeof(key), "%.*s", (int)sizeof(key) - 1, p->info);
         int found = -1;
         for (int j = 0; j < g_info_n; j++)
-            if (strcmp(g_info_tbl[j].info, p->info) == 0) { found = j; break; }
+            if (strcmp(g_info_tbl[j].info, key) == 0) { found = j; break; }
         if (found >= 0) {
             g_info_tbl[found].count++;
         } else if (g_info_n < INFO_TBL_CAP) {
-            snprintf(g_info_tbl[g_info_n].info,
-                     sizeof(g_info_tbl[g_info_n].info), "%s", p->info);
+            memcpy(g_info_tbl[g_info_n].info, key, sizeof(key));
             g_info_tbl[g_info_n].count = 1;
             g_info_n++;
         }
@@ -946,5 +960,10 @@ void draw_packets_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     if (h >= 4)
         draw_info_bargraph_row(s, y0 + h - 1, x0, w);
 }
+
+#else
+
+/* The bargraph's table exists only in the ncurses build. */
+void dashboard_info_clear(void) {}
 
 #endif /* WITH_NCURSES */

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/README.md`, all `docs/views/*.md`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-10-18.
 
 ---
 
@@ -31,11 +31,15 @@ type: reference
 ## Binaries
 
 - `sloth` — main binary.
-- `sloth_test` — test binary, must always be green.
-- `sloth_test_pcap` — capture-path suite (`make test-capture-path`). The
-  only binary built *with* `WITH_PCAP`, so it is the only one where the
-  sanitizers see frames arrive through libpcap's own reader and the real
-  `on_packet()` callback rather than seeded state (#95).
+- `sloth_test` — test binary, must always be green. Built the way
+  `sloth` ships (#116): `WITH_NCURSES` + `WITH_PCAP`, the real renderer
+  drawing into an offscreen ncurses screen, and the capture-path suite
+  (#95) in the same run, so the sanitizers see frames arrive through
+  libpcap's own reader and the real `on_packet()` callback.
+- `sloth_test_noflags` — the same suite without ncurses or pcap.
+  Link-only: it proves the `#ifndef` halves still build, and is never
+  run. (`sloth_test_pcap`, the separate capture-path binary, is gone;
+  `make test-capture-path` is an alias for `make test` for one release.)
 
 ## Architecture entry points
 

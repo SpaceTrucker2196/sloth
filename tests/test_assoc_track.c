@@ -604,22 +604,15 @@ static void test_flood_is_per_bssid(void) {
 
 /* ── PNL PHY corroboration + view surfaces (#60 slice 5b) ─── */
 
-/* TPRINT is printf in the test build, so both views can be captured
+/* The offscreen screen (#116) is read back, so both views can be captured
  * and asserted on. Same technique as test_help.c. */
 static void capture_draw(void (*draw)(const sloth_state_t *),
                          const sloth_state_t *st, char *buf, int sz) {
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     draw(st);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 static void test_pnl_phy_confirmed_by_assoc_request(void) {

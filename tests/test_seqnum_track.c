@@ -404,21 +404,14 @@ static void test_dense_environment_false_pair_rate(void) {
  *
  * The wording is the finding in #94, so it is pinned here rather than
  * left to a docs page nobody reads at the terminal. Same technique as
- * test_help.c: TPRINT is printf in the test build. */
+ * test_help.c: the rendered screen is read back (#116). */
 static void capture_draw(void (*draw)(const sloth_state_t *),
                          const sloth_state_t *st, char *buf, int sz) {
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     draw(st);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
 }
 
 static void test_view_never_claims_identity(void) {

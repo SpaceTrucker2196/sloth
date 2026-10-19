@@ -10,8 +10,28 @@
 #  define TPRINT printf
 #endif
 
+#include <stdio.h>
+
 void tui_init(void);
 void tui_cleanup(void);
+
+/* Offscreen rendering (#116). The test binary is built WITH_NCURSES and
+ * draws through the shipped renderer into a SCREEN whose output goes to
+ * /dev/null; these read it back. Without ncurses they exist only so the
+ * no-flag test build links, and every one reports failure.
+ *   tui_init_offscreen  open (or resize) a rows x cols screen; 0 on success
+ *   tui_test_erase      erase it and home the cursor before a draw
+ *   tui_test_line       row y as UTF-8, trailing blanks trimmed; its length or -1
+ *   tui_test_screen     every row, '\n'-joined; its length or -1
+ *   tui_test_rows       the screen's height, 0 when none is open
+ *   tui_test_dump       the non-empty rows, numbered, for a failing test */
+int  tui_init_offscreen(int rows, int cols);
+void tui_offscreen_end(void);
+void tui_test_erase(void);
+int  tui_test_line(int y, char *out, size_t n);
+int  tui_test_screen(char *out, size_t n);
+int  tui_test_rows(void);
+void tui_test_dump(FILE *fp);
 void tui_draw(const sloth_state_t *s);
 int  tui_poll_key(int timeout_ms, int wake_fd); /* blocks up to timeout_ms; wake_fd >= 0 breaks the wait early so a redraw happens in response to a non-key event. Returns key on input, 0 on timeout / wake. */
 void tui_bar(double val, double max, int width, char *out); /* block bar; out needs width*3+1 bytes */

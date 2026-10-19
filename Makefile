@@ -15,7 +15,8 @@ WITH_SQLITE  ?= 1
 #
 #   APP_SRCS   what only the shipped `sloth` links: the CLI and poll loop,
 #              the ncurses renderer, and the real platform vtable. The test
-#              build swaps in tests/null_tui.c and tests/fake_platform.c.
+#              build links the renderer too (#116) but swaps in
+#              tests/fake_platform.c for the platform.
 #   CORE_SRCS  everything else the current configuration compiles. It is
 #              archived as libsloth_core.a, so each binary's linker pulls
 #              only the members something it links actually references —
@@ -24,8 +25,7 @@ WITH_SQLITE  ?= 1
 #              2026-10-14).
 #
 # A new module goes in CORE_COMMON_SRCS (or a feature group below) once,
-# and `make`, `make test`, `make test-capture-path` and `make fuzz` all
-# pick it up.
+# and `make`, `make test` and `make fuzz` all pick it up.
 CORE_COMMON_SRCS = \
        src/view_route.c    \
        src/view_labels.c   \
@@ -425,37 +425,53 @@ research-mcp:
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
 # ── Test build ───────────────────────────────────────────────────────────────
-# Compiled without ncurses/pcap — TPRINT falls back to printf, no terminal needed.
-# PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only platform
-# sources become empty translation units (their tests use the fake platform).
-TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE -DWITH_WIFI -DWITH_SQLITE
+# Built the way the program ships (#116): WITH_NCURSES and WITH_PCAP, the
+# real renderer (src/tui.c) and the real probe (src/capture/probe.c).
+# Until #116 the suite was compiled without either flag, so every view
+# ran its `#ifndef WITH_NCURSES` printf fallback, ~2,200 ncurses-only view
+# lines compiled to nothing, and on_packet()/decode_frame() lived in a
+# second binary. A configuration no operator runs is not the one to test.
+#
+# Views draw into an offscreen ncurses SCREEN (tui_init_offscreen(), its
+# output to /dev/null) and tests read the cells back with tui_test_line().
+# The platform stays the fake one: tests/fake_platform.c stands in for
+# src/platform/linux.c, and main.c is not linked.
+#
+# PLATFORM_LINUX is only defined on Linux; on Darwin the Linux-only
+# platform sources become empty translation units (their tests use the
+# fake platform).
+TEST_FEATURES = -DWITH_WIFI -DWITH_SQLITE
+TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE $(TEST_FEATURES)
 ifeq ($(UNAME),Linux)
     TEST_CFLAGS += -DPLATFORM_LINUX
 endif
 TEST_CFLAGS += $(EXTRA_CFLAGS)
-# No WITH_NCURSES: TPRINT expands to printf in view files
-# No WITH_PCAP:    packets view shows disabled message
+TEST_SHIP_DEFS = -DWITH_NCURSES -DWITH_PCAP
+ifeq ($(UNAME),Darwin)
+    TEST_CURSES_LIB = -lncurses
+else
+    TEST_CURSES_LIB = -lncursesw
+endif
 
 # What the test binary links, derived rather than listed (#115):
 #
-#   TEST_SRCS        every tests/*.c except the capture-path pair, which
-#                    belong to the WITH_PCAP binary below. A new test file
-#                    is linked by existing; its run_*_tests() still has to
-#                    be called from main_test.c, which
+#   TEST_SRCS        every tests/*.c. A new test file is linked by
+#                    existing; its run_*_tests() still has to be called
+#                    from main_test.c, which
 #                    test_every_run_tests_fn_is_declared_and_called checks.
-#   TEST_CORE_SRCS   the full core (whatever WITH_* says — TEST_CFLAGS sets
-#                    its own) minus probe.c, plus the sources only the tests
-#                    link: the reset registry (#114) and the library halves
-#                    of the research tools, taken from those tools' own
-#                    source lists minus their main().
+#   TEST_CORE_SRCS   the full core (whatever WITH_* says — the test build
+#                    sets its own flags) plus the renderer, plus the sources
+#                    only the tests link: the reset registry (#114) and the
+#                    library halves of the research tools, taken from those
+#                    tools' own source lists minus their main().
 #
 # The core is archived as for `sloth`, in its own object directory because
 # TEST_CFLAGS is not CFLAGS. TEST_INCS is the include set every test-build
 # translation unit has always been compiled with.
-TEST_SRCS        = $(filter-out tests/test_capture_path%.c,$(wildcard tests/*.c))
+TEST_SRCS        = $(wildcard tests/*.c)
 TEST_ONLY_SRCS   = src/reset_all.c \
                    $(filter-out %/main.c research/query.c,$(RESEARCH_SRCS) $(MCP_SRCS))
-TEST_CORE_SRCS   = $(filter-out src/capture/probe.c,$(CORE_SRCS_ALL)) $(TEST_ONLY_SRCS)
+TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
 TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
 
 TEST_OBJDIR      = build/test
@@ -463,20 +479,29 @@ TEST_CORE_LIB    = $(TEST_OBJDIR)/libsloth_core.a
 TEST_OBJS        = $(TEST_SRCS:%.c=$(TEST_OBJDIR)/%.o)
 TEST_CORE_OBJS   = $(TEST_CORE_SRCS:%.c=$(TEST_OBJDIR)/%.o)
 
-$(TEST_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_INCS)
+$(TEST_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_SHIP_DEFS) $(TEST_INCS)
 $(TEST_OBJDIR)/.members: STAMP = $(TEST_CORE_SRCS)
 
 $(TEST_OBJDIR)/%.o: %.c $(TEST_OBJDIR)/.flags
 	@mkdir -p $(@D)
-	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -MMD -MP -c -o $@ $<
+	$(CC) $(TEST_CFLAGS) $(TEST_SHIP_DEFS) $(TEST_INCS) -MMD -MP -c -o $@ $<
 
 $(TEST_CORE_LIB): $(TEST_CORE_OBJS) $(TEST_OBJDIR)/.members
 
 TEST_BIN = sloth_test
 
-.PHONY: test
+.PHONY: test test-capture-path
 test: $(TEST_BIN)
 	./$(TEST_BIN)
+
+# The capture-path suite used to be its own binary, sloth_test_pcap,
+# because sloth_test had no WITH_PCAP. It is part of `make test` now
+# (#116); this alias is kept for one release so scripts and muscle memory
+# that call it still run the capture path rather than failing on a
+# missing target.
+test-capture-path: test
+	@echo "test-capture-path: the capture path is part of 'make test' since #116;" \
+	      "this alias goes away next release"
 
 # Headers are dependencies too. Without them a header-only change — a
 # new struct field, a bumped constant — leaves the test binary stale,
@@ -485,57 +510,35 @@ test: $(TEST_BIN)
 # writes its own header list with -MMD; the .d files are included at the
 # end of this Makefile.
 $(TEST_BIN): $(TEST_OBJS) $(TEST_CORE_LIB)
-	$(CC) $(TEST_CFLAGS) -o $@ $(TEST_OBJS) $(TEST_CORE_LIB) -lm -lpthread -lsqlite3
+	$(CC) $(TEST_CFLAGS) -o $@ $(TEST_OBJS) $(TEST_CORE_LIB) \
+	      $(TEST_CURSES_LIB) -lm -lpthread -lsqlite3 -lpcap
 
-# ── Capture-path test binary (#95) ──────────────────────────────────────────
-# `sloth_test` is built without WITH_PCAP on purpose (the packets view
-# renders a disabled message, and the scope helpers are compiled outside
-# the guard so they stay testable). The cost was that on_packet(),
-# decode_frame() and every protocol parser they reach — the code that
-# consumes attacker-controlled bytes — were absent from every sanitizer
-# run, which is exactly what #95 asks to close.
-#
-# This second binary links libpcap and drives the real pcap_dispatch()
-# callback over an in-memory savefile (see capture_test_dispatch() in
-# src/capture/capture.c). It is deliberately narrow: only the sources
-# the capture path needs, so a failure names the parser rather than the
-# whole suite. Run under the same EXTRA_CFLAGS as everything else, which
-# is how the CI sanitize job reaches it.
-# Reuses the test build's lists rather than enumerating capture.c's
-# dependency tree by hand: it pulls in every protocol snooper, and a
-# hand-kept list would rot on the first new one. main_test.c is swapped
-# for a main that runs only this suite, so the other run_*_tests() stay
-# linked but unentered — they assert the no-WITH_PCAP behaviour and would
-# not hold in this build. Every test file is recompiled here, in its own
-# object directory, because -DWITH_PCAP changes what the headers declare.
-# probe.c rejoins the core because WITH_PCAP turns probe.h's inline stubs
-# into real declarations — the same source the main build adds.
-CAPTURE_PATH_SRCS      = $(filter-out tests/main_test.c,$(wildcard tests/*.c))
-CAPTURE_PATH_CORE_SRCS = $(CORE_SRCS_ALL) $(TEST_ONLY_SRCS)
+# ── No-flag test build: link-only (#116) ────────────────────────────────────
+# The same suite compiled without WITH_NCURSES and WITH_PCAP, against the
+# ANSI renderer and probe.h's inline stubs. It is built, never run: the
+# assertions are written for the shipped configuration and do not hold
+# here. What it proves is that the `#ifndef` halves of every source the
+# suite reaches still compile and link — the property the old default
+# test build gave for free and the one `make WITH_NCURSES=0` alone does
+# not cover for tests/.
+NOFLAGS_OBJDIR    = build/test-noflags
+NOFLAGS_CORE_SRCS = $(filter-out src/capture/probe.c,$(CORE_SRCS_ALL)) src/tui.c $(TEST_ONLY_SRCS)
+NOFLAGS_CORE_LIB  = $(NOFLAGS_OBJDIR)/libsloth_core.a
+NOFLAGS_OBJS      = $(TEST_SRCS:%.c=$(NOFLAGS_OBJDIR)/%.o)
+NOFLAGS_CORE_OBJS = $(NOFLAGS_CORE_SRCS:%.c=$(NOFLAGS_OBJDIR)/%.o)
+NOFLAGS_BIN       = sloth_test_noflags
 
-CAPTURE_PATH_OBJDIR    = build/test-pcap
-CAPTURE_PATH_CORE_LIB  = $(CAPTURE_PATH_OBJDIR)/libsloth_core.a
-CAPTURE_PATH_OBJS      = $(CAPTURE_PATH_SRCS:%.c=$(CAPTURE_PATH_OBJDIR)/%.o)
-CAPTURE_PATH_CORE_OBJS = $(CAPTURE_PATH_CORE_SRCS:%.c=$(CAPTURE_PATH_OBJDIR)/%.o)
+$(NOFLAGS_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) $(TEST_INCS)
+$(NOFLAGS_OBJDIR)/.members: STAMP = $(NOFLAGS_CORE_SRCS)
 
-CAPTURE_PATH_BIN = sloth_test_pcap
-
-$(CAPTURE_PATH_OBJDIR)/.flags:   STAMP = $(CC) $(TEST_CFLAGS) -DWITH_PCAP $(TEST_INCS)
-$(CAPTURE_PATH_OBJDIR)/.members: STAMP = $(CAPTURE_PATH_CORE_SRCS)
-
-$(CAPTURE_PATH_OBJDIR)/%.o: %.c $(CAPTURE_PATH_OBJDIR)/.flags
+$(NOFLAGS_OBJDIR)/%.o: %.c $(NOFLAGS_OBJDIR)/.flags
 	@mkdir -p $(@D)
-	$(CC) $(TEST_CFLAGS) -DWITH_PCAP $(TEST_INCS) -MMD -MP -c -o $@ $<
+	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -MMD -MP -c -o $@ $<
 
-$(CAPTURE_PATH_CORE_LIB): $(CAPTURE_PATH_CORE_OBJS) $(CAPTURE_PATH_OBJDIR)/.members
+$(NOFLAGS_CORE_LIB): $(NOFLAGS_CORE_OBJS) $(NOFLAGS_OBJDIR)/.members
 
-.PHONY: test-capture-path
-test-capture-path: $(CAPTURE_PATH_BIN)
-	./$(CAPTURE_PATH_BIN)
-
-$(CAPTURE_PATH_BIN): $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_LIB)
-	$(CC) $(TEST_CFLAGS) -DWITH_PCAP -o $@ $(CAPTURE_PATH_OBJS) \
-	      $(CAPTURE_PATH_CORE_LIB) -lm -lpthread -lsqlite3 -lpcap
+$(NOFLAGS_BIN): $(NOFLAGS_OBJS) $(NOFLAGS_CORE_LIB)
+	$(CC) $(TEST_CFLAGS) -o $@ $(NOFLAGS_OBJS) $(NOFLAGS_CORE_LIB) -lm -lpthread -lsqlite3
 
 # ── libFuzzer smoke targets (#95) ───────────────────────────────────────────
 # "fuzzing through the capture path" was named open on #95 since its first
@@ -601,11 +604,12 @@ $(CAPTURE_PATH_BIN): $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_LIB)
 # of failing the link, and a new harness needs no Makefile edit.
 #
 # The archive also carries the test build's stand-ins — tests/*.c that are
-# neither a suite nor the runner: the null renderer and the fake platform.
+# neither a suite nor the runner: the fake platform and the scenarios.
 # eapol_observe_dot11() reaches alerts.c and from there code that draws,
-# so like sloth_test the fuzz targets resolve tui_* against the null
-# renderer, never ncurses; a target whose call tree stops short of that
-# simply never pulls those members in.
+# so the fuzz targets resolve tui_* against src/tui.c's ANSI backend —
+# the fuzz flags carry no WITH_NCURSES, so no fuzz binary links ncurses
+# (the null renderer that used to stand in here went with #116). A target
+# whose call tree stops short of that simply never pulls those members in.
 TEST_SUPPORT_SRCS = $(filter-out tests/main_test.c tests/test_%.c,$(wildcard tests/*.c))
 
 # One flag set for every target: the union the eapol harness always
@@ -637,7 +641,7 @@ FUZZ_PCAP_TARGETS = decode_frame
 FUZZ_PCAP_SRCS = $(FUZZ_PCAP_TARGETS:%=tests/fuzz/fuzz_%.c)
 
 FUZZ_SRCS      = $(filter-out $(FUZZ_PCAP_SRCS),$(wildcard tests/fuzz/fuzz_*.c))
-FUZZ_CORE_SRCS = $(TEST_CORE_SRCS) $(TEST_SUPPORT_SRCS)
+FUZZ_CORE_SRCS = $(NOFLAGS_CORE_SRCS) $(TEST_SUPPORT_SRCS)
 FUZZ_OBJDIR    = build/fuzz
 FUZZ_CORE_LIB  = $(FUZZ_OBJDIR)/libsloth_core.a
 FUZZ_CORE_OBJS = $(FUZZ_CORE_SRCS:%.c=$(FUZZ_OBJDIR)/%.o)
@@ -665,11 +669,12 @@ $(FUZZ_OBJDIR)/bin/fuzz_%: tests/fuzz/fuzz_%.c $(FUZZ_CORE_LIB) $(FUZZ_OBJDIR)/.
 	@mkdir -p $(@D)
 	$(FUZZ_CC) $(FUZZ_FLAGS) $(FUZZ_DEFS) -o $@ $< $(FUZZ_CORE_LIB) -lm -lpthread -lsqlite3
 
-# The WITH_PCAP twin of the archive above (#125): the capture-path core
-# (probe.c back in, as for sloth_test_pcap) plus the same stand-ins,
+# The WITH_PCAP twin of the archive above (#125): the test core with
+# probe.c back in (TEST_CORE_SRCS, as sloth_test links it) plus the same
+# stand-ins,
 # compiled with the fuzz flags and -DWITH_PCAP in their own object
 # directory, because -DWITH_PCAP changes what the headers declare.
-FUZZ_PCAP_CORE_SRCS = $(CORE_SRCS_ALL) $(TEST_ONLY_SRCS) $(TEST_SUPPORT_SRCS)
+FUZZ_PCAP_CORE_SRCS = $(TEST_CORE_SRCS) $(TEST_SUPPORT_SRCS)
 FUZZ_PCAP_OBJDIR    = build/fuzz-pcap
 FUZZ_PCAP_CORE_LIB  = $(FUZZ_PCAP_OBJDIR)/libsloth_core.a
 FUZZ_PCAP_CORE_OBJS = $(FUZZ_PCAP_CORE_SRCS:%.c=$(FUZZ_PCAP_OBJDIR)/%.o)
@@ -798,7 +803,8 @@ mutate:
 # sources, so a tree upgraded across that change does not keep them.
 clean:
 	rm -rf build
-	rm -f $(TARGET) $(TEST_BIN) $(CAPTURE_PATH_BIN) research_ingest sloth-research-mcp
+	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
+	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 
 # ── Shared build machinery (#115) ───────────────────────────────────────────
@@ -811,7 +817,7 @@ clean:
 	$(AR) rcs $@ $(filter %.o,$^)
 
 STAMPS = $(LINK_STAMP) \
-         $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(CAPTURE_PATH_OBJDIR) $(FUZZ_OBJDIR) $(FUZZ_PCAP_OBJDIR),$(d)/.flags $(d)/.members)
+         $(foreach d,$(OBJDIR) $(TEST_OBJDIR) $(NOFLAGS_OBJDIR) $(FUZZ_OBJDIR) $(FUZZ_PCAP_OBJDIR),$(d)/.flags $(d)/.members)
 
 .PHONY: FORCE
 $(STAMPS): FORCE
@@ -820,7 +826,7 @@ $(STAMPS): FORCE
 # Header dependencies written by -MMD. Absent until the first compile,
 # which has to rebuild everything anyway.
 -include $(wildcard $(patsubst %.o,%.d,$(APP_OBJS) $(CORE_OBJS) $(TEST_OBJS) $(TEST_CORE_OBJS) \
-                    $(CAPTURE_PATH_OBJS) $(CAPTURE_PATH_CORE_OBJS) $(FUZZ_CORE_OBJS) \
+                    $(NOFLAGS_OBJS) $(NOFLAGS_CORE_OBJS) $(FUZZ_CORE_OBJS) \
                     $(FUZZ_PCAP_CORE_OBJS)))
 
 # ── Install (#139) ───────────────────────────────────────────────────────────

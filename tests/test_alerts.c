@@ -4915,20 +4915,11 @@ static void test_view_detail_first_seen_is_not_last_seen(void) {
     snprintf(line2, sizeof(line2), "Last seen:  %s", want2);
 
     static char buf[16384];
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    ASSERT(tmp != NULL);
-    if (!tmp) { close(saved); return; }
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     view_alerts_draw(&s);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    size_t n = fread(buf, 1, sizeof(buf) - 1, tmp);
-    buf[n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, sizeof(buf));
 
     ASSERT(strstr(buf, line1) != NULL);
     ASSERT(strstr(buf, line2) != NULL);

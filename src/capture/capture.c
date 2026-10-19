@@ -325,7 +325,8 @@ int capture_scope_refuses(capture_scope_t v) {
  * it without linking libpcap or touching a radio. */
 
 /* pcap_dispatch()'s error codes, written out rather than #included:
- * the test build has no <pcap.h>, and these have been stable since
+ * this half of the file compiles in every configuration, including the
+ * no-pcap ones that have no <pcap.h>, and these have been stable since
  * libpcap 1.0. */
 #define CAP_PCAP_ERROR               (-1)
 #define CAP_PCAP_ERROR_BREAK         (-2)

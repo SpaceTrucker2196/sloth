@@ -140,16 +140,15 @@ static void scan_sloth_resets(name_set_t *out) {
  * a reason that would survive being read by someone who did not write
  * it. */
 typedef struct { const char *name; const char *reason; } excluded_t;
+/* Empty since #116: its one entry, probe_clear, was excluded only
+ * because src/capture/probe.c was not linked into sloth_test, and it is
+ * now. NULL-terminated so the list can be empty and still be C99. */
 static const excluded_t EXCLUDED[] = {
-    { "probe_clear",
-      "src/capture/probe.c is not in TEST_CORE_SRCS (only CAPTURE_PATH_CORE_SRCS) — "
-      "calling it here would break the main test binary's link. The "
-      "separate test-capture-path binary calls it directly." },
+    { NULL, NULL },
 };
-#define N_EXCLUDED (int)(sizeof(EXCLUDED) / sizeof(EXCLUDED[0]))
 
 static const char *excluded_reason(const char *name) {
-    for (int i = 0; i < N_EXCLUDED; i++)
+    for (int i = 0; EXCLUDED[i].name; i++)
         if (strcmp(EXCLUDED[i].name, name) == 0) return EXCLUDED[i].reason;
     return NULL;
 }
@@ -182,7 +181,7 @@ static void test_every_declared_reset_is_registered(void) {
     /* Every documented exclusion must still be a real declaration —
      * otherwise a rename silently drops the only test coverage of it
      * rather than failing loudly. */
-    for (int i = 0; i < N_EXCLUDED; i++)
+    for (int i = 0; EXCLUDED[i].name; i++)
         ASSERT(set_has(&declared, EXCLUDED[i].name));
 }
 

@@ -19,11 +19,11 @@
  * order of ~45 calls was never under test and five stale reads sat in it
  * unseen. These run the real table end to end on the fake platform.
  *
- * Two binaries: the stages that read the capture-fed tables are compiled
- * only under WITH_PCAP, exactly as poll_data() gated them, so the
- * beacon / twin / transit cases live in run_poll_capture_path_tests()
- * and run from sloth_test_pcap. sloth_test runs the table invariants and
- * the sensor case, whose stages are unconditional. */
+ * The stages that read the capture-fed tables are compiled only under
+ * WITH_PCAP, exactly as poll_data() gated them, so the beacon / twin /
+ * transit cases sit in run_poll_capture_path_tests(). They used to run
+ * from a second binary, sloth_test_pcap; since #116 sloth_test is built
+ * WITH_PCAP and main_test.c calls both groups. */
 
 /* A fixed wall clock far from any real one: the assertions below compare
  * against it, never against the host's time (CI VMs may be seconds old). */
@@ -204,8 +204,9 @@ void run_poll_tests(void) {
 #ifdef WITH_PCAP
 #include "capture/probe.h"
 
-/* sloth_test_pcap has no default setUp (see test_capture_path_main.c),
- * so each case clears what it touches itself. */
+/* Written when these ran in sloth_test_pcap, which had no default
+ * setUp; main_test.c's setUp covers them since #116, and the explicit
+ * reset stays because a whole tick touches every module's table. */
 static void pcap_case_reset(void) {
     sloth_reset_all();
     probe_clear();
@@ -312,11 +313,12 @@ static void test_channel_summary_sees_this_ticks_beacons(void) {
 
 void run_poll_capture_path_tests(void) {
     TEST_SUITE("poll_tick end to end, WITH_PCAP stages (#113)");
-    RUN_TEST(test_phases_are_monotonic);
-    RUN_TEST(test_fixed_orderings_hold);
     RUN_TEST(test_transit_alert_fires_same_tick);
     RUN_TEST(test_twin_episode_sees_this_ticks_beacons);
     RUN_TEST(test_jsonl_state_emitted_after_snapshot);
     RUN_TEST(test_channel_summary_sees_this_ticks_beacons);
 }
+#else
+/* The no-flag build (sloth_test_noflags, #116) is link-only. */
+void run_poll_capture_path_tests(void) {}
 #endif

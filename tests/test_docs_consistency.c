@@ -671,25 +671,11 @@ static void test_security_names_only_current_version(void) {
 static void capture_help(char *buf, int sz) {
     sloth_state_t *s = calloc(1, sizeof(*s));
     if (!s) { buf[0] = '\0'; return; }
-    fflush(stdout);
-    int saved = dup(fileno(stdout));
-    FILE *tmp = tmpfile();
-    if (saved < 0 || !tmp) {
-        if (tmp) fclose(tmp);
-        if (saved >= 0) close(saved);
-        free(s);
-        buf[0] = '\0';
-        return;
-    }
-    dup2(fileno(tmp), fileno(stdout));
+    /* Rendered through ncurses into the offscreen screen (#116), and
+     * read back from the cells rather than from a redirected stdout. */
+    tui_test_erase();
     view_help_draw(s);
-    fflush(stdout);
-    dup2(saved, fileno(stdout));
-    close(saved);
-    rewind(tmp);
-    int n = (int)fread(buf, 1, (size_t)sz - 1, tmp);
-    buf[n < 0 ? 0 : n] = '\0';
-    fclose(tmp);
+    tui_test_screen(buf, (size_t)sz);
     free(s);
 }
 

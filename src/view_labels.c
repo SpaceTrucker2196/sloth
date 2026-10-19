@@ -3,8 +3,8 @@
 
 /* The one "[key] Name" table for every view, generated in enum order
  * from include/sloth_views.def (#117). Lives here — not in tui.c — so
- * both the real ncurses/ANSI build and the test binary (which swaps in
- * null_tui.c) share it. The tab bar and the [?] help card both read it
+ * the ANSI fallback and the fuzz targets, which link no ncurses, share
+ * it with the ncurses build. The tab bar and the [?] help card both read it
  * through view_label(), so a new view can't appear in one place and be
  * missing from the other. */
 static const char *const view_labels[] = {

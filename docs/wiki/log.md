@@ -3498,3 +3498,25 @@ derived source lists (#115); the gate list includes both test binaries
 under ASan+UBSan; the "make clean between configs" rule is downgraded
 now objects are per config. `agents/converge.md` gains the sibling-grep
 rule. [[architecture]] gains "do not add arrays to `sloth_state_t`".
+
+## 2026-10-18 — the suite is built the way the program ships (#116)
+
+`sloth_test` is compiled `WITH_NCURSES` + `WITH_PCAP` and links
+`src/tui.c` and `src/capture/probe.c`. Views draw into an offscreen
+ncurses screen (`tui_init_offscreen()`, `newterm()` over `/dev/null`);
+`tui_test_line()` / `tui_test_screen()` read the cells back through the
+wide-char API, and `tests/runner.h` gains `ASSERT_LINE_HAS`,
+`ASSERT_SCREEN_HAS` and `ASSERT_SCREEN_LACKS`. The capture-path suite
+runs inside `make test`; `sloth_test_pcap`, `tests/null_tui.c` and
+`tests/test_capture_path_main.c` are deleted, and `make
+test-capture-path` is an alias for one release. `make
+sloth_test_noflags` builds the suite without either flag, link-only.
+`probe_clear` joins `SLOTH_RESETS` (its exclusion existed only because
+probe.c was not linked). First compile of `dashboard_bands.c` in the
+test build found the packets-band bargraph comparing a truncated slot
+against the untruncated info string, so a long info took a new slot per
+packet; it now matches on the stored form, and `dashboard_info_clear()`
+resets the table. The `[m]` key tests in `test_iface_graph.c` would now
+have opened the host's interfaces; they go through the `--iface`
+allow-list refusal instead. Pages: [[architecture]], [[sloth]],
+[[cli-reference]].

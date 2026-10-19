@@ -773,8 +773,10 @@ static void test_scope_state_names_and_not_enforced(void) {
 }
 
 static void test_scope_poll_stub_reports_no_capture(void) {
-    /* Test build has no WITH_PCAP: a requested scope reads no_capture,
-       an unrequested one none — never enforced. */
+    /* No capture handle is ever opened in the test binary, so a
+       requested scope reads no_capture and an unrequested one none —
+       never enforced. Held in the no-pcap build too, where the poll is
+       a stub. */
     sloth_state_t *s = scope_state("wlan1");
     capture_scope_poll(s);
     ASSERT_EQ(s->scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);

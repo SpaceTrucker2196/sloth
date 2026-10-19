@@ -171,7 +171,7 @@ static void test_every_cc_invocation_carries_compiler_flags(void) {
 
     /* Eight today: the sloth link and its object compile, research-index,
      * research-mcp, and the compile and link of sloth_test and of
-     * sloth_test_pcap. Asserting a floor keeps the loop from passing
+     * sloth_test_noflags (#116; sloth_test_pcap held that place before). Asserting a floor keeps the loop from passing
      * vacuously if the scan ever stops matching anything. */
     ASSERT_GE(seen, 8);
 

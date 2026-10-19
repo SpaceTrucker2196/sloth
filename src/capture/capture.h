@@ -415,8 +415,9 @@ int capture_scope_unpinned(const sloth_state_t *s, char *buf, int sz);
 /* ── Capture-path test seam (#95) ──────────────────────────────────
 
    #95 asks for the sanitizers to run "through the real pcap_dispatch
-   callback path, not only seeded state". Until now they could not:
-   `sloth_test` is built without WITH_PCAP, so on_packet(), the scope
+   callback path, not only seeded state". Until #95 they could not:
+   `sloth_test` was built without WITH_PCAP (it is built with it since
+   #116), so on_packet(), the scope
    election and the whole decode_frame() dispatch — every line that
    touches attacker-controlled bytes off the air — were absent from
    every ASan, UBSan and TSan run. Seeding sloth_state_t directly

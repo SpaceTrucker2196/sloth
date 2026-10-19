@@ -1,5 +1,11 @@
+/* Before any header: the offscreen read-back (#116) uses ncursesw's
+ * wide-char API, which curses.h declares only when asked. */
+#define NCURSES_WIDECHAR 1
+
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
+#include <wchar.h>
 #include <locale.h>
 #include <time.h>
 
@@ -504,13 +510,9 @@ void tui_dim(void)    { attrset(COLOR_PAIR(CP_DIM));    }
 void tui_sel(void)    { attrset(COLOR_PAIR(CP_NORMAL) | A_REVERSE); }
 void tui_reset(void)  { attrset(COLOR_PAIR(CP_NORMAL)); }
 
-void tui_init(void) {
-    setlocale(LC_ALL, "");  /* must precede initscr() for UTF-8 to work */
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    curs_set(0);
+/* Shared by tui_init() and tui_init_offscreen(), so the test binary
+ * renders with the same pair table the operator's terminal gets. */
+static void init_palette(void) {
     if (has_colors() && tui_color_enabled()) {
         start_color();
         if (COLORS >= 256) {
@@ -641,6 +643,145 @@ void tui_init(void) {
             init_pair(CP_MON_ROW_DIM,    COLOR_GREEN, COLOR_BLACK);
             init_pair(CP_MON_ROW_BRIGHT, COLOR_GREEN, COLOR_BLACK);
         }
+    }
+}
+
+void tui_init(void) {
+    setlocale(LC_ALL, "");  /* must precede initscr() for UTF-8 to work */
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(0);
+    init_palette();
+}
+
+/* ── Offscreen screen for the test binary (#116) ─────────── *
+ *
+ * The suite used to link a no-op renderer and build every view with
+ * TPRINT as printf, a configuration no operator runs. This gives it the
+ * shipped one instead: a real ncurses SCREEN whose terminal output goes
+ * to /dev/null, read back cell by cell. TPRINT is printw onto stdscr
+ * either way, so what a test reads is what `sloth` would have drawn.
+ *
+ * use_env(FALSE) keeps LINES/COLUMNS from the caller's environment out
+ * of the geometry; resize_term() then sets the size the test asked for.
+ * Terminal names are tried best first: xterm-256color takes the
+ * 256-colour pair table tui_init() would, and a host without it still
+ * renders text on the plainer entries. LC_CTYPE only — the wide-char
+ * path needs a UTF-8 ctype, and nothing else should move under the
+ * tests. */
+static SCREEN *g_off_scr;
+static FILE   *g_off_null;   /* one stream, both directions */
+
+int tui_init_offscreen(int rows, int cols) {
+    static const char *terms[] = { "xterm-256color", "xterm", "vt100", "dumb" };
+    if (g_off_scr) return resize_term(rows, cols) == OK ? 0 : -1;
+    if (!setlocale(LC_CTYPE, "C.UTF-8")) setlocale(LC_CTYPE, "");
+    g_off_null = fopen("/dev/null", "r+");
+    if (!g_off_null) {
+        tui_offscreen_end();
+        return -1;
+    }
+    use_env(FALSE);
+    for (size_t i = 0; i < sizeof(terms) / sizeof(terms[0]) && !g_off_scr; i++)
+        g_off_scr = newterm(terms[i], g_off_null, g_off_null);
+    if (!g_off_scr) {
+        tui_offscreen_end();
+        return -1;
+    }
+    set_term(g_off_scr);
+    if (resize_term(rows, cols) != OK) {
+        tui_offscreen_end();
+        return -1;
+    }
+    init_palette();
+    erase();
+    return 0;
+}
+
+void tui_offscreen_end(void) {
+    if (g_off_scr) {
+        endwin();
+        delscreen(g_off_scr);
+        g_off_scr = NULL;
+    }
+    if (g_off_null) { fclose(g_off_null); g_off_null = NULL; }
+}
+
+void tui_test_erase(void) {
+    if (!g_off_scr) return;
+    erase();
+    attrset(A_NORMAL);
+    move(0, 0);
+}
+
+/* Row y as UTF-8, trailing blanks trimmed. Read through the wide-char
+ * API so a box-drawing glyph comes back as the glyph, not as the low
+ * byte of its cell. The cursor is restored: a view mid-draw must not
+ * notice it was read. */
+int tui_test_line(int y, char *out, size_t n) {
+    if (!out || n == 0) return -1;
+    out[0] = '\0';
+    if (!g_off_scr || y < 0 || y >= LINES) return -1;
+    wchar_t wbuf[1024];
+    int cols = COLS < (int)(sizeof(wbuf) / sizeof(wbuf[0])) - 1
+             ? COLS : (int)(sizeof(wbuf) / sizeof(wbuf[0])) - 1;
+    int cy, cx;
+    getyx(stdscr, cy, cx);
+    int got = mvinnwstr(y, 0, wbuf, cols);
+    move(cy, cx);
+    if (got == ERR) return -1;
+    wbuf[cols] = L'\0';
+    size_t len = 0;
+    mbstate_t st;
+    memset(&st, 0, sizeof(st));
+    for (int i = 0; wbuf[i]; i++) {
+        char mb[MB_LEN_MAX];
+        size_t k = wcrtomb(mb, wbuf[i], &st);
+        if (k == (size_t)-1) { mb[0] = '?'; k = 1; memset(&st, 0, sizeof(st)); }
+        if (len + k >= n) break;
+        memcpy(out + len, mb, k);
+        len += k;
+    }
+    while (len > 0 && out[len - 1] == ' ') len--;
+    out[len] = '\0';
+    return (int)len;
+}
+
+int tui_test_rows(void) { return g_off_scr ? LINES : 0; }
+
+/* Every row joined by '\n', for a needle whose row a test cannot know
+ * in advance. Trailing empty rows are dropped. */
+int tui_test_screen(char *out, size_t n) {
+    if (!out || n == 0) return -1;
+    out[0] = '\0';
+    if (!g_off_scr) return -1;
+    size_t len = 0, keep = 0;
+    char line[4096];
+    for (int y = 0; y < LINES; y++) {
+        int k = tui_test_line(y, line, sizeof(line));
+        if (k < 0) k = 0;
+        if (len + (size_t)k + 2 > n) break;
+        memcpy(out + len, line, (size_t)k);
+        len += (size_t)k;
+        if (k > 0) keep = len;
+        out[len++] = '\n';
+    }
+    len = keep;
+    out[len] = '\0';
+    return (int)len;
+}
+
+void tui_test_dump(FILE *fp) {
+    char line[4096];
+    if (!fp) return;
+    int last = -1;
+    for (int y = 0; y < tui_test_rows(); y++)
+        if (tui_test_line(y, line, sizeof(line)) > 0) last = y;
+    for (int y = 0; y <= last; y++) {
+        tui_test_line(y, line, sizeof(line));
+        fprintf(fp, "%3d|%s\n", y, line);
     }
 }
 
@@ -784,6 +925,24 @@ void tui_heat(double frac) {
     else if (frac < 0.70) printf("\033[38;2;255;135;0m");
     else                  printf("\033[38;2;220;20;0m");
 }
+
+/* No screen to read back without ncurses: the offscreen API exists so
+ * the link-only no-flag test build (sloth_test_noflags, #116) resolves,
+ * and reports failure if anything ever does call it. */
+int  tui_init_offscreen(int rows, int cols) { (void)rows; (void)cols; return -1; }
+void tui_offscreen_end(void) {}
+void tui_test_erase(void) {}
+int  tui_test_line(int y, char *out, size_t n) {
+    (void)y;
+    if (out && n) out[0] = '\0';
+    return -1;
+}
+int  tui_test_rows(void) { return 0; }
+int  tui_test_screen(char *out, size_t n) {
+    if (out && n) out[0] = '\0';
+    return -1;
+}
+void tui_test_dump(FILE *fp) { (void)fp; }
 
 static struct termios g_saved_term;
 

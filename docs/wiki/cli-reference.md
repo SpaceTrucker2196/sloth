@@ -25,7 +25,7 @@ only that each flag and key is here.
 (`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
 the status badges.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-10-18.
 
 ---
 
@@ -329,7 +329,10 @@ make WITH_PCAP=0     # no capture, no probe view
 make WITH_WIFI=0     # no nl80211
 make WITH_SQLITE=0   # no --db
 make embedded        # shortcut: no ncurses, no pcap
-make test            # sloth_test — no root/tty/net
+make test            # sloth_test — no root/tty/net; built WITH_NCURSES + WITH_PCAP,
+                     #   views drawn offscreen, capture path included (#116)
+make test-capture-path  # alias for `make test`, kept one release (#116)
+make sloth_test_noflags # the suite without ncurses/pcap — link-only, never run
 make mutate          # mutation-test the suite (opt-in, offline)
 ```
 

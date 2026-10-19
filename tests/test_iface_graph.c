@@ -193,20 +193,35 @@ static void test_detail_gigabit_speed_label(void) {
 
 /* ── Scan interface indicator tests ──────────────────────── */
 
-static void test_scan_key_m_no_crash(void) {
+/* Since #116 the suite links the real probe, so [m] reaches the real
+ * probe_set_iface() and would pcap_open_live() the selected name on the
+ * host, promiscuous. An allow-list naming only another interface stops
+ * it at the #85 boundary, before any open, and the refusal names the
+ * interface the key handed over — which is what these assert. */
+static void test_scan_key_m_hands_the_selected_row_to_the_probe(void) {
     sloth_state_t s = make_state(2);
     s.iface_sel = 1;
-    /* probe_set_iface is a no-op in test build (no WITH_PCAP); must not crash */
+    iface_allow_add(&s, "eth0");
     view_iface_key(&s, 'm');
+    ASSERT(strstr(s.probe_err, "wlan0 not in --iface allow-list") != NULL);
+    ASSERT_STR(s.probe_iface, "");
+    s.probe_err[0] = '\0';
     view_iface_key(&s, 'M');
-    ASSERT(1);
+    ASSERT(strstr(s.probe_err, "wlan0 not in --iface allow-list") != NULL);
 }
 
-static void test_scan_key_m_no_crash_no_ifaces(void) {
+static void test_scan_key_m_with_no_ifaces_calls_nothing(void) {
+    /* A stale name past iface_count stands in for a row that is gone; an
+     * [m] that ignored the count would hand it over and be refused by
+     * name. Seen to fail with the iface_count guard in view_iface_key()
+     * removed. */
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
+    snprintf(s.ifaces[0].name, sizeof(s.ifaces[0].name), "ghost0");
+    iface_allow_add(&s, "eth0");
     view_iface_key(&s, 'm');
-    ASSERT(1);
+    ASSERT_STR(s.probe_err, "");
+    ASSERT_STR(s.probe_iface, "");
 }
 
 static void test_scan_indicator_draw_selected(void) {
@@ -309,8 +324,8 @@ void run_iface_graph_tests(void) {
     RUN_TEST(test_detail_gigabit_speed_label);
 
     TEST_SUITE("iface scan indicator");
-    RUN_TEST(test_scan_key_m_no_crash);
-    RUN_TEST(test_scan_key_m_no_crash_no_ifaces);
+    RUN_TEST(test_scan_key_m_hands_the_selected_row_to_the_probe);
+    RUN_TEST(test_scan_key_m_with_no_ifaces_calls_nothing);
     RUN_TEST(test_scan_indicator_draw_selected);
     RUN_TEST(test_scan_indicator_draw_unselected);
     RUN_TEST(test_scan_indicator_no_probe_iface);

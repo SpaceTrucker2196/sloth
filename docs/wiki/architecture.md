@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-15 (#119 batch)
+**Last updated**: 2026-10-18 (#116)
 
 ---
 
@@ -109,14 +109,24 @@ Since #115 every binary is derived from one set of source lists in the
   (`LINUX_PLATFORM_SRCS`, `LINUX_WIFI_SRCS`, `PCAP_CORE_SRCS`,
   `SQLITE_CORE_SRCS`) the flags leave on. It is archived as
   `build/<cfg>/libsloth_core.a` and linked after the app objects.
-- `sloth_test` links every `tests/*.c` except the capture-path pair
-  against a core archive built from `CORE_SRCS_ALL` minus
-  `src/capture/probe.c`, plus `src/reset_all.c` and the library halves
-  of the research tools (`TEST_ONLY_SRCS`). `sloth_test_pcap` links the
-  same with `-DWITH_PCAP`, its own `main`, and probe.c back in.
+- `sloth_test` links every `tests/*.c` against a core archive built
+  from `CORE_SRCS_ALL` plus `src/tui.c`, `src/reset_all.c` and the
+  library halves of the research tools (`TEST_ONLY_SRCS`), compiled
+  with `-DWITH_NCURSES -DWITH_PCAP` — the configuration `sloth` ships
+  in, since #116. Every view draws through the real renderer into an offscreen
+  ncurses screen (`tui_init_offscreen()`, output to `/dev/null`) and
+  tests read the cells back (`tui_test_line()`, `ASSERT_LINE_HAS`,
+  `ASSERT_SCREEN_HAS`). Only the platform is a stand-in
+  (`tests/fake_platform.c`); `src/main.c` is not linked.
+- `sloth_test_noflags` is the same suite without the two flags,
+  against the ANSI renderer and probe.h's stubs: built, never run, so
+  the `#ifndef` halves keep compiling. Before #116 that was the
+  configuration the suite *ran* in, with a no-op renderer
+  (`tests/null_tui.c`) and the capture path in a second binary,
+  `sloth_test_pcap`.
 - `make fuzz` builds every `tests/fuzz/fuzz_<name>.c` with one rule
-  against a clang-built core archive (plus the null renderer and fake
-  platform). The archive keeps each target narrow: the linker pulls only
+  against a clang-built core archive (plus the ANSI half of `src/tui.c`
+  and the fake platform; no fuzz binary links ncurses). The archive keeps each target narrow: the linker pulls only
   the members the harness reaches, so `fuzz_radiotap_parse` still links
   no snooper and no alert code. A new module or harness needs no
   Makefile edit — the hand-kept inline lists this replaced failed CI on
@@ -176,7 +186,8 @@ snapshots, twins before beacons, the channel summary before beacons,
 sensor and `wifi_merged` records before registration, recurring transit
 after the alert pass, and RF quality / beacon detection on the raw wall
 clock while the alert engine read the seam. Stages gated on `WITH_PCAP`
-keep that gate, so the WITH_PCAP cases run in `sloth_test_pcap`.
+keep that gate; the suite is built `WITH_PCAP` since #116, so they run
+in `sloth_test` with the rest.
 
 Not in the table: the `(out, max)` copies (`pm_forge`, `wps_track`,
 `queue_evict`) that a rule takes under the module's own lock at the

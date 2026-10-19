@@ -6,9 +6,8 @@
 /* The OSI view is a pure synthesis layer — it reads sloth_state_t and
  * renders one row per OSI layer. Tests verify (a) empty-state renders
  * without crashing, (b) populated state produces the expected
- * per-layer counts inside the rendered text. We capture the rendered
- * output through the null TUI's printf passthrough; the runner's
- * stdout is what we'll get since WITH_NCURSES is off in test builds. */
+ * per-layer counts inside the rendered text, read back from the
+ * offscreen ncurses screen the suite draws into (#116). */
 
 static void test_osi_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
