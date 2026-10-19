@@ -355,6 +355,35 @@ static void test_truncated_rsn_through_the_beacon_path(void) {
     sh_parse_fault_reset();
 }
 
+/* RSNEs shorter than the full decoder's 8-octet floor: a cut inside
+ * Version or the Group cipher (1, 3, 4, 5, 7 octets) is a sensor-wide
+ * rsn_malformed fault as well as a per-BSSID truncated_rsn; Version-only
+ * (2) and Version+Group (6) are complete elements and are not faults.
+ * The #128 review found the 1-7 octet cases never reached the tally. */
+static void test_short_rsn_reaches_the_sensor_tally(void) {
+    static const int cut[]  = { 1, 3, 4, 5, 7 };
+    static const int whole[] = { 2, 6 };
+    uint8_t ies[16];
+    char ssid[33]; char enc[10]; int ch = 0; beacon_rsn_t rsn;
+    for (size_t i = 0; i < sizeof cut / sizeof cut[0]; i++) {
+        memset(ies, 0, sizeof ies);
+        ies[0] = 0x30; ies[1] = (uint8_t)cut[i]; ies[2] = 0x01;
+        sh_parse_fault_reset();
+        beacon_parse_ies(ies, 2 + cut[i], 1, 100, ssid, &ch, enc, &rsn, NULL);
+        ASSERT_EQ(rsn.truncated_rsn, 1);
+        ASSERT_EQ((int)sh_parse_fault_count(SH_PF_RSN_MALFORMED), 1);
+    }
+    for (size_t i = 0; i < sizeof whole / sizeof whole[0]; i++) {
+        memset(ies, 0, sizeof ies);
+        ies[0] = 0x30; ies[1] = (uint8_t)whole[i]; ies[2] = 0x01;
+        ies[4] = 0x00; ies[5] = 0x0f; ies[6] = 0xac; ies[7] = 0x04;
+        sh_parse_fault_reset();
+        beacon_parse_ies(ies, 2 + whole[i], 1, 100, ssid, &ch, enc, &rsn, NULL);
+        ASSERT_EQ((int)sh_parse_fault_count(SH_PF_RSN_MALFORMED), 0);
+    }
+    sh_parse_fault_reset();
+}
+
 /* A well-formed RSNE adds nothing to either counter. Mutation-proved:
  * `if (r.truncated)` → `if (1)` in beacon_parse_ies() reddens both
  * zeros here. */
@@ -400,5 +429,6 @@ void run_rsn_ie_tests(void) {
     RUN_TEST(test_psk_is_wpa2_and_transition_is_wpa3);
     RUN_TEST(test_truncated_rsn_through_the_beacon_path);
     RUN_TEST(test_clean_rsn_adds_no_fault);
+    RUN_TEST(test_short_rsn_reaches_the_sensor_tally);
     RUN_TEST(test_undefined_version_is_rsn_without_suites);
 }

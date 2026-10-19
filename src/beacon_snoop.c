@@ -200,6 +200,17 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * decoder below requires tln >= 8, so this would otherwise be
          * silently skipped. Independent count; does not alter parse flow. */
         if (tag == 48 && tln < 8 && rsn_out) rsn_out->truncated_rsn++;
+        /* The sensor-wide fault must see short RSNEs too: the full
+         * decoder below only runs at tln >= 8, so an element cut inside
+         * Version or the Group Data Cipher (tln 1, 3, 4, 5, 7) used to
+         * reach truncated_rsn but never rsn_malformed. Lengths 2
+         * (Version only) and 6 (+ Group) are complete per §9.4.2.24 and
+         * rsn_ie_parse() does not mark them truncated. */
+        if (tag == 48 && tln < 8) {
+            rsn_ie_t short_rsn;
+            rsn_ie_parse(ie + 2, tln, &short_rsn);
+            if (short_rsn.truncated) sh_parse_fault_note(SH_PF_RSN_MALFORMED);
+        }
 
         /* Elements that announce an event rather than describe the BSS
          * — Channel Switch (37), Quiet (40), Extended Channel Switch
