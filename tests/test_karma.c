@@ -3,9 +3,11 @@
 #include <time.h>
 #include <unistd.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "karma_detect.h"
 #include "views/karma.h"
+#include "views/dashboard.h"
 
 /* State-driven only: karma_update reads the beacon table, client PNLs,
  * and the deauth ring, and writes s->karma_aps[]. */
@@ -292,13 +294,22 @@ static void test_tool_attribution_marked_provisional(void) {
  * station remembering two of the advertised names versus two stations
  * remembering one each — and differ only in pnl_best.
  *
- * NOT asserted here, and deliberately not claimed: that the column
- * goes bright on pnl_best >= KARMA_PNL_CORROB_MIN rather than on the
- * union. `tests/null_tui.c` stubs tui_bright()/tui_dim() to no-ops for
- * the whole test binary, so no view's colour decision is observable
- * from a captured draw. Reverting that one condition in
- * src/views/karma.c leaves this suite green; it is covered by review
- * and by the legend line below, not by an assertion. */
+ * The colour is asserted too: the column goes bright on pnl_best >=
+ * KARMA_PNL_CORROB_MIN, not on the union. This used to be stated here
+ * as untestable, because the suite's renderer stubbed tui_bright() and
+ * tui_dim() to no-ops; since #116 it draws into a real screen and the
+ * cell's colour pair can be read. Seen to fail with the condition in
+ * src/views/karma.c put back to the union (pnl_overlap). The rows are
+ * drawn unselected (karma_sel -1), since the selected row is reverse
+ * video and carries no per-column colour. */
+
+/* Colour pair of the PNL digit on the lure's row. */
+static int pnl_cell_pair(void) {
+    int y = runner_screen_find("00:11:22:33:44:55");
+    int c = y < 0 ? -1 : runner_find_col(y, "      3     2");
+    ASSERT(c >= 0);
+    return c < 0 ? -1 : tui_test_pair(y, c + 12);
+}
 static void test_view_pnl_column_still_shows_the_union(void) {
     uint8_t lure[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
     const char *many[] = { "homewifi", "Starbucks", "ACME-Corp" };
@@ -316,9 +327,12 @@ static void test_view_pnl_column_still_shows_the_union(void) {
     ASSERT_EQ(spread.karma_aps[0].pnl_overlap, 2);
     ASSERT_EQ(spread.karma_aps[0].pnl_best,    1);
     ASSERT_EQ(spread.karma_aps[0].score,       1);
+    spread.karma_sel = -1;
     capture_karma(&spread, out, sizeof(out));
-    /* BSSID, SSIDs 3, PNL 2 — the union, printed despite no credit. */
+    /* BSSID, SSIDs 3, PNL 2 — the union, printed despite no credit,
+     * and dim, because no one station corroborates it. */
     ASSERT(strstr(out, "00:11:22:33:44:55      3     2") != NULL);
+    ASSERT_EQ(pnl_cell_pair(), CP_DIM);
 
     sloth_state_t one; seed(&one);
     add_multi_ssid_ap(&one, lure, many, 3);
@@ -328,8 +342,10 @@ static void test_view_pnl_column_still_shows_the_union(void) {
     karma_update(&one);
     ASSERT_EQ(one.karma_aps[0].pnl_best, 2);
     ASSERT_EQ(one.karma_aps[0].score,    1 + 2);
+    one.karma_sel = -1;
     capture_karma(&one, out, sizeof(out));
     ASSERT(strstr(out, "00:11:22:33:44:55      3     2") != NULL);
+    ASSERT_EQ(pnl_cell_pair(), CP_BRIGHT);
 }
 
 static void test_view_legend_states_the_corroboration_rule(void) {
@@ -408,18 +424,61 @@ static void test_sel_clamps(void) {
  * dropped a deauth-chain candidate below the old threshold of 5 —
  * nobody decided that, it fell out of arithmetic in another file.
  *
- * What CANNOT be tested here, stated rather than implied:
  * karma_badge_hot() lives in src/views/dashboard_grid.c, which is
- * compiled only under WITH_NCURSES. TEST_CFLAGS does not define it, so
- * that function is not linked into sloth_test and no assertion can
- * reach it. Reviewers proved the same thing about this issue's other
- * view tests, which exercised the `#else` printf branch instead.
+ * compiled only under WITH_NCURSES. Until #116 the suite was not, so
+ * the contract was pinned here instead: both surfaces build the key
+ * through karma_alert_key(), and these cases pin that function plus
+ * the fact that a fired alert actually carries what it produces. A
+ * divergence between the two would not error — it would quietly stop
+ * badging and read as a quiet night.
  *
- * So the contract is moved to where it CAN be tested: both surfaces
- * build the key through karma_alert_key(), and these cases pin that
- * function plus the fact that a fired alert actually carries what it
- * produces. A divergence between the two would not error — it would
- * quietly stop badging and read as a quiet night. */
+ * The suite links the ncurses dashboard now, so the badge itself is
+ * asserted too, through the rendered beacons panel:
+ * test_dashboard_badges_only_a_crit_karma_lure below. */
+/* A CRIT KARMA_AP alert keyed to a beaconing BSSID puts "!" right
+ * before its SSID in the dashboard's beacons panel, in the peak-heat
+ * pair; a WARN one, or a CRIT one keyed to another BSSID, does not.
+ * This test is how the badge was found never to have shown: it was
+ * drawn in the panel's first cell, which the panel separator then
+ * overwrote. Seen to fail with the badge moved back to that cell, with
+ * karma_badge_hot()'s severity test removed (the WARN row badges), and
+ * with its key comparison removed (every row badges). */
+static void test_dashboard_badges_only_a_crit_karma_lure(void) {
+    static sloth_state_t s;
+    const uint8_t lure[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const uint8_t quiet[6] = {0x00,0x11,0x22,0x33,0x44,0x66};
+    const char *one[] = { "LureNet" };
+    const char *two[] = { "QuietNet" };
+    for (int sev = ALERT_SEV_WARN; sev <= ALERT_SEV_CRIT; sev++) {
+        seed(&s);
+        add_multi_ssid_ap(&s, lure, one, 1);
+        add_multi_ssid_ap(&s, quiet, two, 1);
+        alert_t *a = &s.alerts[s.alert_count++];
+        memset(a, 0, sizeof(*a));
+        a->type = ALERT_TYPE_KARMA_AP;
+        a->sev  = (alert_sev_t)sev;
+        karma_alert_key(lure, a->key, sizeof(a->key));
+        /* A CRIT for a BSSID that is not beaconing must badge no row. */
+        alert_t *b = &s.alerts[s.alert_count++];
+        memset(b, 0, sizeof(*b));
+        b->type = ALERT_TYPE_KARMA_AP;
+        b->sev  = ALERT_SEV_CRIT;
+        const uint8_t gone[6] = {0x00,0x11,0x22,0x33,0x44,0x88};
+        karma_alert_key(gone, b->key, sizeof(b->key));
+
+        tui_test_erase();
+        view_dashboard_draw(&s);
+        int crit = (sev == ALERT_SEV_CRIT);
+        int y = runner_screen_find("LureNet");
+        ASSERT(y >= 0);
+        int c = runner_find_col(y, "LureNet");
+        ASSERT_EQ(runner_line_has(y, "!LureNet"), crit);
+        if (crit) ASSERT_EQ(tui_test_pair(y, c), CP_HEAT_PEAK);
+        ASSERT(runner_screen_find("QuietNet") >= 0);
+        ASSERT(!runner_line_has(runner_screen_find("QuietNet"), "!QuietNet"));
+    }
+}
+
 static void test_karma_alert_key_format(void) {
     const uint8_t b[6] = {0x00,0x11,0x22,0xaa,0xbb,0xcc};
     char k[ALERT_KEY_LEN];
@@ -447,6 +506,7 @@ static void test_karma_alert_key_format(void) {
 void run_karma_tests(void) {
     TEST_SUITE("KARMA/PineAP view (#30)");
     RUN_TEST(test_karma_alert_key_format);
+    RUN_TEST(test_dashboard_badges_only_a_crit_karma_lure);
     RUN_TEST(test_empty_state);
     RUN_TEST(test_threshold);
     RUN_TEST(test_pnl_overlap_and_score);

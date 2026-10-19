@@ -3912,8 +3912,9 @@ static void test_karma_alert_key_is_the_shared_one(void) {
     /* The dashboard badge finds this alert by key to read its severity
        (#90). Both sides build the key through karma_alert_key(), and
        this is the half that pins a FIRED alert really carrying what that
-       function produces — the badge predicate itself lives in
-       WITH_NCURSES-only code the suite cannot link. */
+       function produces. The badge predicate itself is WITH_NCURSES-only;
+       since #116 the suite links it, and tests/test_karma.c ::
+       test_dashboard_badges_only_a_crit_karma_lure asserts the badge. */
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};

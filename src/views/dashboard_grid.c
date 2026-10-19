@@ -227,7 +227,13 @@ void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
          * "!" and a red SSID — the dashboard tell for an active lure
          * (#30), mirroring how THREAT_IP flags a hostile host. */
         int hot = karma_badge_hot(s, b->bssid);
-        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr("! "); }
+        /* The badge goes in the panel's second cell. Column x is where
+         * view_dashboard_draw() puts the separator between this panel
+         * and the one to its left, after every panel has drawn, so a "!"
+         * in the first cell was always overwritten and the badge never
+         * showed - only the red SSID did. Found when #116 first read the
+         * dashboard back. */
+        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr(" !"); }
         else     { attrset(COLOR_PAIR(CP_NORMAL));    addstr("  "); }
         const char *ssid = b->ssid[0] ? b->ssid : "(hidden)";
         char buf[40];

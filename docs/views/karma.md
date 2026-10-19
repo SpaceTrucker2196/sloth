@@ -127,6 +127,8 @@ operator's eye.
   BSSID at this score is also badged deep-red with a `!` on the
   dashboard's Beacons panel, the same way `THREAT_IP` flags a hostile
   host — so an active lure is visible without leaving the dashboard.
+  (Until #116 the `!` was drawn in the panel's first cell, which the
+  separator to its left overwrote, so only the red SSID showed.)
 
 ## See also
 

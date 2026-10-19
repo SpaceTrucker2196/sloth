@@ -93,10 +93,9 @@ void view_karma_draw(const sloth_state_t *s) {
              * still prints the union, so narrowing the gate does not
              * hide the reading.
              *
-             * Untested, and not claimed otherwise: null_tui.c stubs
-             * tui_bright()/tui_dim() to no-ops for the test binary, so
-             * no view's colour decision is observable from a captured
-             * draw. Reverting this condition leaves the suite green. */
+             * Pinned by tests/test_karma.c ::
+             * test_view_pnl_column_still_shows_the_union, which reads the
+             * cell's colour pair off the offscreen screen (#116). */
             if (k->pnl_best >= KARMA_PNL_CORROB_MIN) tui_bright();
             else tui_dim();
             printw("  %4d", k->pnl_overlap);
