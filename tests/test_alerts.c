@@ -3509,7 +3509,7 @@ static void seed_probe_client(sloth_state_t *s, const uint8_t mac[6],
     p->channel     = 6;
     g_pf_mono = 7000000;
     g_pf_wall = time(NULL) - elapsed_s;
-    flood_test_set_clock(pf_mono, pf_wall);
+    sloth_clock_test_set(pf_mono, pf_wall);
     uint64_t span = (uint64_t)elapsed_s * 1000u;
     uint64_t t0 = g_pf_mono;
     for (int i = 0; i < frames; i++) {
@@ -3521,7 +3521,7 @@ static void seed_probe_client(sloth_state_t *s, const uint8_t mac[6],
         probe_flood_note(p, g_pf_mono, g_pf_wall);
     }
     probe_flood_refresh(p, g_pf_mono);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_probe_flood_fires_on_high_rate(void) {
@@ -7477,11 +7477,11 @@ static void wps_begin(time_t at) {
     alerts_clear();
     wps_track_clear();
     g_wps_wall = at;
-    flood_test_set_clock(NULL, wps_wall);
+    sloth_clock_test_set(NULL, wps_wall);
 }
 
 static void wps_end(void) {
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
     wps_track_clear();
 }
 
@@ -8134,7 +8134,7 @@ static int qevict_downlink_seq(uint8_t *f, const uint8_t bssid[6],
 
 /* The whole queue-evict scenario runs on one synthetic timeline, which
  * it has to now that rule_queue_evict() bounds how recently a release
- * must have happened. alerts_update() reads flood_wall(), so without
+ * must have happened. alerts_update() reads sloth_wall(), so without
  * this the seeded t=1002 events are decades in the past relative to the
  * rule's clock and nothing fires. The seam exists for exactly this. */
 static time_t g_qe_wall;
@@ -8184,7 +8184,7 @@ static void test_queue_evict_ages_out_of_the_report_window(void) {
 
     /* Just inside the window: still reported. */
     g_qe_wall = 1002 + QUEUE_EVICT_REPORT_SECS;
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     alerts_update(&s);
     ASSERT(find_alert(&s, ALERT_TYPE_QUEUE_EVICT) >= 0);
 
@@ -8197,14 +8197,14 @@ static void test_queue_evict_ages_out_of_the_report_window(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_QUEUE_EVICT), -1);
 
     alerts_clear(); queue_evict_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_warns_when_shape_a_corroborates(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
     beacon_clear();
     g_qe_wall = 1003;                 /* one second after the release */
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     sloth_state_t s; seed_state(&s);
     static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x11};
     static const uint8_t sta[6]   = {0x02,0xa1,0x00,0x00,0x00,0x01};
@@ -8233,14 +8233,14 @@ static void test_queue_evict_warns_when_shape_a_corroborates(void) {
         ASSERT(strstr(s.alerts[i].detail, "YOUR network") == NULL);
     }
     alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_is_low_and_non_accusatory_uncorroborated(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
     beacon_clear();
     g_qe_wall = 1003;                 /* one second after the release */
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     sloth_state_t s; seed_state(&s);
     static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x22};
     static const uint8_t sta[6]   = {0x02,0xa2,0x00,0x00,0x00,0x02};
@@ -8264,14 +8264,14 @@ static void test_queue_evict_is_low_and_non_accusatory_uncorroborated(void) {
         ASSERT(strstr(s.alerts[i].detail, "corroborated by") == NULL);
     }
     alerts_clear(); queue_evict_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_ownership_alone_does_not_escalate(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
     beacon_clear();
     g_qe_wall = 1003;                 /* one second after the release */
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     sloth_state_t s; seed_state(&s);
     static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x33};
     static const uint8_t sta[6]   = {0x02,0xa3,0x00,0x00,0x00,0x03};
@@ -8291,14 +8291,14 @@ static void test_queue_evict_ownership_alone_does_not_escalate(void) {
         ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
     }
     alerts_clear(); queue_evict_clear(); ownership_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_crit_on_my_bssid_with_corroboration(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
     beacon_clear();
     g_qe_wall = 1003;                 /* one second after the release */
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     sloth_state_t s; seed_state(&s);
     static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x44};
     static const uint8_t sta[6]   = {0x02,0xa4,0x00,0x00,0x00,0x04};
@@ -8318,14 +8318,14 @@ static void test_queue_evict_crit_on_my_bssid_with_corroboration(void) {
     }
     alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
     ownership_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_stale_corroboration_does_not_escalate(void) {
     alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
     beacon_clear();
     g_qe_wall = 1003;                 /* one second after the release */
-    flood_test_set_clock(NULL, qe_wall);
+    sloth_clock_test_set(NULL, qe_wall);
     sloth_state_t s; seed_state(&s);
     static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
     static const uint8_t sta[6]   = {0x02,0xa5,0x00,0x00,0x00,0x05};
@@ -8350,7 +8350,7 @@ static void test_queue_evict_stale_corroboration_does_not_escalate(void) {
         ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
     }
     alerts_clear(); pm_forge_clear(); queue_evict_clear(); beacon_clear();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_queue_evict_quiet_below_the_threshold(void) {
@@ -8889,7 +8889,7 @@ static void lc_begin(void) {
     ASSERT(jsonl_open(lc_path));
     g_lc_mono = 1000000;
     g_lc_wall = 1700000000;
-    flood_test_set_clock(lc_mono, lc_wall);
+    sloth_clock_test_set(lc_mono, lc_wall);
 }
 
 static void lc_end(void) {
@@ -8897,7 +8897,7 @@ static void lc_end(void) {
     unlink(lc_path);
     lc_path[strlen(lc_path) - 6] = '\0';
     strcat(lc_path, "XXXXXX");    /* mkstemp needs the template back */
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Advance both clocks together — evidence and duration stay consistent. */

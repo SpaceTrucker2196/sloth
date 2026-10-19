@@ -151,9 +151,9 @@ void action_observe_frame(const dot11_frame_t *f, time_t now);
  * reading the view needs the first. */
 
 /* Record a parsed BTM Request. Split from action_observe so tests can
- * drive the table directly with a controlled clock — action_observe
- * calls time(NULL) internally the way the rest of the capture path
- * does. Thread-safe. */
+ * drive the table directly with a parsed request and a chosen clock,
+ * without building the frame. action_observe takes `now` from its
+ * caller too; it does not read a clock. Thread-safe. */
 void btm_observe(const sloth_btm_req_t *req, time_t now);
 
 /* Busiest (BSSID, STA) pair by BTM Requests carrying Disassociation

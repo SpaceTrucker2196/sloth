@@ -5,6 +5,7 @@
 #include <math.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "beacon_snoop.h"
 #include "dot11_frame.h"
 #include "sensor_health.h"
@@ -1035,7 +1036,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                    const char *enc, uint16_t beacon_ms,
                    const beacon_rsn_t *rsn)
 {
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
     /* update existing entry */
@@ -1375,7 +1376,7 @@ static int cmp_signal_desc(const void *a, const void *b) {
 
 void beacon_snapshot(sloth_state_t *s)
 {
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
     /* age out stale entries in-place */

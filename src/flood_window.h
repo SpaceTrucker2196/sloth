@@ -15,25 +15,15 @@
  * Durations run on CLOCK_MONOTONIC. Wall-clock time is evidence only
  * (first_seen / last_seen / flood_last shown to the operator and
  * exported): an NTP step or a manual date change must neither create a
- * flood nor dissolve one. Both clocks come from the sloth_clock seam so
- * tests can drive the windows deterministically without sleeping. */
+ * flood nor dissolve one. Callers pass both clocks in, read from the
+ * sloth_clock seam (#109), so tests drive the windows deterministically
+ * without sleeping. The #88 flood_wall() / flood_mono_ms() /
+ * flood_test_set_clock() forwards that used to live here are gone:
+ * every caller reads sloth_wall() / sloth_mono_ms() directly. */
 
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
-#include "sloth_clock.h"
-
-/* The clocks moved to sloth_clock.h (#109). These names stay as
- * forwards until their last caller migrates, then they are deleted;
- * new code calls sloth_wall() / sloth_mono_ms() directly. */
-static inline uint64_t flood_mono_ms(void) { return sloth_mono_ms(); }
-static inline time_t   flood_wall(void)    { return sloth_wall(); }
-
-typedef uint64_t (*flood_mono_fn)(void);
-typedef time_t   (*flood_wall_fn)(void);
-static inline void flood_test_set_clock(flood_mono_fn mono, flood_wall_fn wall) {
-    sloth_clock_test_set(mono, wall);
-}
 
 /* Count one frame at now_ms. Returns 1 iff, including this frame, at
  * least `thresh` counted frames fall inside the half-open window

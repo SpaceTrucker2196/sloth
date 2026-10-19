@@ -89,7 +89,7 @@ typedef struct {
     uint8_t  sta[6];
 
     /* Microsecond-resolution combined (sec*1000000 + usec) stamps from
-     * the frames' own capture timestamps, never time(NULL) — a 100 ms
+     * the frames' own capture timestamps, never the wall clock — a 100 ms
      * window compared in whole seconds collapses to "the same second",
      * the trap shape A hit before it shipped. int64_t so the sub-second
      * term survives. */

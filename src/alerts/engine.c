@@ -17,7 +17,6 @@
 #include "alert_pcap.h"
 #include "wired_attach.h"
 #include "event_wake.h"
-#include "flood_window.h"
 #include "sloth_clock.h"
 #include "rules.h"
 #include "engine_internal.h"
@@ -45,8 +44,8 @@
  * the stream's business) but is evicted first under pressure, and a key
  * that fires again after its resolve opens a *new* incident.
  *
- * Durations run on CLOCK_MONOTONIC through the #88 seam in
- * flood_window.h; wall clock is evidence only. An NTP step must not
+ * Durations run on CLOCK_MONOTONIC through the sloth_clock seam
+ * (#109); wall clock is evidence only. An NTP step must not
  * resolve a live incident or hold a dead one open. */
 
 static alert_t engine[MAX_ALERTS];
@@ -453,7 +452,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
      * did not check. Every such fire would share one incident, which is
      * the merge the builder exists to prevent — drop it instead. */
     if (!key || !key[0]) return;
-    uint64_t mono = flood_mono_ms();
+    uint64_t mono = sloth_mono_ms();
     uint64_t sig  = alert_detail_sig(detail);
     /* Looked up as it will be stored. Before #112 an over-long key was
      * truncated into the slot but compared in full, so it never matched
@@ -823,7 +822,7 @@ void alerts_update(sloth_state_t *s) {
     if (!s) return;
     /* Evidence clock — the #88 seam, so the whole engine can be driven
      * deterministically from tests without sleeping. */
-    time_t now = flood_wall();
+    time_t now = sloth_wall();
     /* Derive posture before any rule reads it (#62). */
     wifi_downgrade_update(s);
     /* Every rule, in src/alerts/rules_table.c's order. That order is
@@ -831,7 +830,7 @@ void alerts_update(sloth_state_t *s) {
      * posture above) and the table says why (#118). */
     for (int i = 0; i < g_alert_rule_count; i++)
         g_alert_rules[i].fn(s, now);
-    expire_incidents(now, flood_mono_ms());
+    expire_incidents(now, sloth_mono_ms());
     dump_new_alert_pcaps(s, now);
     snapshot(s);
 }
@@ -841,7 +840,7 @@ void alerts_clear(void) {
      * incident as far as the stream is concerned — leaving them open
      * would strand a consumer waiting for a resolve that can never
      * come (#98). */
-    time_t now = flood_wall();
+    time_t now = sloth_wall();
     for (int i = 0; i < engine_count; i++)
         alert_resolve(&engine[i], now, "cleared");
     engine_count = 0;

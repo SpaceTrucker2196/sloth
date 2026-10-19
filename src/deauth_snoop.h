@@ -38,7 +38,7 @@ int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out);
 int deauth_parse_frame(const dot11_frame_t *f, deauth_frame_t *out);
 
 /* Record one parsed frame (thread-safe). Clock comes from
- * flood_mono_ms() / flood_wall(). */
+ * sloth_mono_ms() / sloth_wall(). */
 void deauth_record(const deauth_frame_t *f);
 
 /* Copy the tables into s->deauth_events[] / s->deauth_victims[], ageing

@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include "capture/capture.h"
 #include "bytes.h"
-#include "flood_window.h"   /* injectable wall clock for freshness (#91) */
+#include "sloth_clock.h"    /* injectable wall clock for freshness (#91) */
 #include "captive_portal.h"
 #include "dns.h"
 #include "dot11_frame.h"
@@ -575,7 +575,7 @@ static void try_http(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
             char ev[80];
             snprintf(ev, sizeof(ev), "HTTP %u, %d body bytes",
                      entry.status, entry.resp_body_len);
-            cp_record((uint8_t)cp, entry.host, pkt->dst, ev, time(NULL));
+            cp_record((uint8_t)cp, entry.host, pkt->dst, ev, sloth_wall());
         }
         snprintf(pkt->info, sizeof(pkt->info), "HTTP %u %.40s",
                  entry.status, entry.host[0] ? entry.host : "");
@@ -637,7 +637,7 @@ static void try_sni(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     {
         int cp = cp_check_tls(entry.host, pkt->dst);
         if (cp) cp_record((uint8_t)cp, entry.host, pkt->src, pkt->dst,
-                          time(NULL));
+                          sloth_wall());
     }
     snprintf(pkt->info, sizeof(pkt->info), "%s %.46s",
              entry.tls_ver, entry.host[0] ? entry.host : pkt->dst);
@@ -781,7 +781,7 @@ static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
              * CGNAT space is a portal answering for it (#69). */
             int cp = cp_check_dns(dqe.qname, dqe.answer);
             if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
-                              dqe.answer, time(NULL));
+                              dqe.answer, sloth_wall());
         }
     } else if (port_is(pkt, 5353)) {
         mdns_snoop(pay, pay_len);
@@ -1169,7 +1169,7 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
      * it is dispatched: a frame the decoder rejected is not evidence
      * this stream is delivering anything usable (#91). */
     g_last_frame_ts   = f.ts_sec;
-    g_last_frame_wall = flood_wall();
+    g_last_frame_wall = sloth_wall();
     g_ring[g_ring_head] = pkt;
     g_ring_head = (g_ring_head + 1) % MAX_PACKETS;
     if (g_ring_count < MAX_PACKETS) g_ring_count++;
@@ -1201,7 +1201,7 @@ void capture_ring_snapshot(sloth_state_t *s) {
  * clear it. A setter rather than a capture_test_dispatch() parameter
  * because on_packet() reads the module-static g_policy, and because
  * that is the shape the other test seams here already take
- * (data_socket_test_set_*_fn, flood_test_set_clock).
+ * (data_socket_test_set_*_fn, sloth_clock_test_set).
  *
  * `mu` is taken from the caller's snapshot: NULL means single-threaded,
  * which is what this harness is. */
@@ -1380,7 +1380,7 @@ void capture_health_poll(capture_health_t *h) {
     /* -1 while nothing has arrived: "never delivered" is a different
      * claim from "delivered just now", and a stream that never started
      * must not read as fresh. */
-    h->stale_secs = fwall ? (int)(flood_wall() - fwall) : -1;
+    h->stale_secs = fwall ? (int)(sloth_wall() - fwall) : -1;
     if (!g_handle) return;
     struct pcap_stat ps;
     memset(&ps, 0, sizeof(ps));

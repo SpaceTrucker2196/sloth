@@ -3759,3 +3759,21 @@ Verified against hostapd `ieee802_11_defs.h` and Wireshark
 `packet-ieee80211.c` (the IEEE 802.11be-2024 text itself was not read).
 Updated [[jsonl-schema]] (`wifi_mld` semantics: client MLDs now
 appear) and [[mac-randomisation]] (MLD bullet).
+
+## 2026-10-19 — #109: clock migration finished; flood_* forwards deleted
+
+Every remaining direct `time(NULL)` / `clock_gettime()` in `src/` moved
+onto the seam: the wired snoopers, the protocol logs, `jsonl.c`,
+`main.c`, nineteen views, the platform rate code, and last the Track P
+files (`beacon_snoop.c`, `capture/capture.c`, `capture/probe.c`,
+`deauth_snoop.c`). Wall stayed wall. What moved clock: the channel-hop
+dwell and the 30 s settle before the Wi-Fi baseline is frozen (was a
+difference of two wall readings, so an NTP step could fire it early or
+never) are now monotonic; the bandwidth and interface-rate deltas read
+the new `sloth_mono_ts()`. `tests/test_clock_seam.c` no longer keeps a
+hand list: it walks all of `src/` (`.c` and `.h`), exempts only
+`src/sloth_clock.c`, and asserts it found that file and the calls in
+it. The #88 `flood_wall()` / `flood_mono_ms()` /
+`flood_test_set_clock()` forwards in `flood_window.h` are gone. JSONL
+output unchanged; `make replay-check` golden unchanged. Pages:
+[[architecture]] (clock seam bullet), [[alerts]].

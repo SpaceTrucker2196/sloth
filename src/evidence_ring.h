@@ -44,7 +44,7 @@
  * correctly:
  *   - `event_id`  unique and monotonic for the process lifetime;
  *   - `ts_sec`/`ts_usec`  the frame's OWN capture timestamp, passed in
- *     from the pcap record header. Never `time(NULL)` — see the clock
+ *     from the pcap record header. Never the wall clock — see the clock
  *     note in `src/capture/probe.c`;
  *   - `orig_len`  the length the capture reports for the frame
  *     (`pcap_pkthdr.len`). As in the #92 EAPOL slice, this is what the

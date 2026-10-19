@@ -12,7 +12,7 @@
 #include "capture/probe.h"   /* real under WITH_PCAP; the stub would prove nothing */
 #include "evidence_ring.h"
 #include "sensor_health.h"
-#include "flood_window.h"
+#include "sloth_clock.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
 #include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
@@ -1735,7 +1735,7 @@ static int mon_deauth(uint8_t *f, const uint8_t a1[6], const uint8_t a2[6],
    and the snapshot, and still resolve to these bytes. */
 static void test_a_deauth_row_cites_the_frames_the_ring_kept(void) {
     evidence_setup();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
     deauth_clear();
 
     static const uint8_t STA[6]   = {0x02,0x44,0x55,0x66,0x77,0x88};
@@ -1789,7 +1789,7 @@ static void test_a_deauth_row_cites_nothing_with_the_ring_down(void) {
     probe_clear();
     evidence_ring_shutdown();
     sh_evict_reset();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
     deauth_clear();
 
     static const uint8_t STA[6]   = {0x02,0x99,0x88,0x77,0x66,0x55};
@@ -2084,7 +2084,7 @@ static time_t fake_wall(void)      { return g_fake_wall; }
 static uint64_t fake_mono(void)    { return (uint64_t)g_fake_wall * 1000u; }
 
 static void test_monitor_freshness_starts_as_never(void) {
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     g_fake_wall = 1000;
     memset(&g_s, 0, sizeof(g_s));
     probe_clear();
@@ -2096,11 +2096,11 @@ static void test_monitor_freshness_starts_as_never(void) {
        having delivered this instant. */
     ASSERT_EQ(h.stale_secs, -1);
     ASSERT_EQ((long long)h.last_frame_ts, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_monitor_freshness_follows_two_clocks(void) {
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     memset(&g_s, 0, sizeof(g_s));
     probe_clear();
 
@@ -2130,13 +2130,13 @@ static void test_monitor_freshness_follows_two_clocks(void) {
     probe_health_poll(&h);
     ASSERT_EQ(h.stale_secs, 90);
     ASSERT_EQ((long long)h.last_frame_ts, 1000000000LL);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_a_refused_frame_does_not_refresh_the_stream(void) {
     /* A runt the callback drops is not evidence the radio is delivering
        anything usable, so it must not reset the clock. */
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     memset(&g_s, 0, sizeof(g_s));
     probe_clear();
 
@@ -2163,12 +2163,12 @@ static void test_a_refused_frame_does_not_refresh_the_stream(void) {
        refreshed the stream nor overwrote the timestamp. */
     ASSERT_EQ((long long)h.last_frame_ts, 1700000000LL);
     ASSERT_EQ(h.stale_secs, 100);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_capture_stream_freshness(void) {
     /* The IP stream, through its own seam. */
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     g_fake_wall = 9000;
     memset(&g_s, 0, sizeof(g_s));
     capture_test_set_policy(NULL);
@@ -2190,7 +2190,7 @@ static void test_capture_stream_freshness(void) {
     memset(&h, 0, sizeof(h));
     capture_health_poll(&h);
     ASSERT_EQ(h.stale_secs, 45);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ── Probe-table invariants — issue #91 ──────────────────────
@@ -2235,7 +2235,7 @@ static void test_probe_table_holds_no_duplicate_after_ageing(void) {
      * client. The append allocates that index, the scan sees its recent
      * timestamp, prefers an older LIVE row instead, overwrites it — and
      * the stale copy stays inside g_count as a duplicate. */
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     memset(&g_s, 0, sizeof(g_s));
     probe_clear();
     sh_evict_reset();
@@ -2287,14 +2287,14 @@ static void test_probe_table_holds_no_duplicate_after_ageing(void) {
        live and a real row is destroyed to make room for the newcomer. */
     ASSERT_EQ(snapshot_has_duplicate_mac(&g_s), 0);
     ASSERT_EQ(g_s.probe_count, MAX_PROBE_CLIENTS);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_probe_table_never_exceeds_its_cap(void) {
     /* The other half: a live row must not be lost to a slot that should
        have been free, and the table must not report more rows than it
        can hold. */
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
     memset(&g_s, 0, sizeof(g_s));
     probe_clear();
     g_fake_wall = 200000;
@@ -2302,7 +2302,7 @@ static void test_probe_table_never_exceeds_its_cap(void) {
     probe_snapshot(&g_s);
     ASSERT_EQ(g_s.probe_count, MAX_PROBE_CLIENTS);
     ASSERT_EQ(snapshot_has_duplicate_mac(&g_s), 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 

@@ -12,7 +12,7 @@
 #include "alert_pcap.h"
 #include "beacon_detect.h"
 #include "tune.h"
-#include "flood_window.h"
+#include "sloth_clock.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -422,7 +422,7 @@ static void test_a_refired_finding_does_not_export_twice(void) {
        memsets the slot, clearing pcap_dumped, and incident_id_make()
        hands it a FRESH incident id — so neither of those can be the
        dedupe key. The cooldown keys on the alert key instead. */
-    flood_test_set_clock(ap_mono, ap_wall);
+    sloth_clock_test_set(ap_mono, ap_wall);
     g_ap_wall = 1700000000;
     ap87_setup();
     ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
@@ -456,11 +456,11 @@ static void test_a_refired_finding_does_not_export_twice(void) {
     ASSERT_EQ(ap87_entries(), 1);
 
     alerts_clear(); tune_reset(); ap87_cleanup();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_cooldown_zero_restores_the_full_capture(void) {
-    flood_test_set_clock(ap_mono, ap_wall);
+    sloth_clock_test_set(ap_mono, ap_wall);
     g_ap_wall = 1700000000;
     ap87_setup();
     ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
@@ -481,7 +481,7 @@ static void test_cooldown_zero_restores_the_full_capture(void) {
     ASSERT_EQ(ap87_entries(), 2);
 
     alerts_clear(); tune_reset(); ap87_cleanup();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ── #92: a failed export retries instead of being lost forever ── */
@@ -551,7 +551,7 @@ static void test_dump_retries_after_transient_failure(void) {
  * incident resolve and re-fire as a NEW incident (fresh incident_id),
  * and the count must still be there. */
 static void test_write_failures_survive_reopen(void) {
-    flood_test_set_clock(ap_mono, ap_wall);
+    sloth_clock_test_set(ap_mono, ap_wall);
     g_ap_wall = 1700000000;
     ap87_setup();
     ASSERT_EQ(alert_pcap_set_dir(g_ap87), 0);
@@ -586,7 +586,7 @@ static void test_write_failures_survive_reopen(void) {
     }
 
     alerts_clear(); tune_reset(); ap87_cleanup();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A clean export on the first attempt records the path and never

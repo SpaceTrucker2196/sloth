@@ -2,20 +2,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include "runner.h"
 #include "sloth_clock.h"
-#include "flood_window.h"
 
 /* The clock seam (#109) and the migration off direct libc clock calls.
  *
- * A module that reads time(NULL) or clock_gettime() itself is one a
- * test cannot drive: its TTLs and windows age only in real time, and a
- * value stamped through the seam compared against one read from libc
- * is the exact bug the taint TTL had. The list below names the files
- * that have moved; it grows one commit at a time and the test fails
- * naming the file that regressed. Same shape as the Makefile and
- * main.c scrapers in test_docs_consistency.c: read the source, count,
- * assert. */
+ * A module that reads the libc clocks itself is one a test cannot
+ * drive: its TTLs and windows age only in real time, and a value
+ * stamped through the seam compared against one read from libc is the
+ * exact bug the taint TTL had. The migration ran module by module
+ * against a hand-kept list of files; once it completed, the list was
+ * replaced by a walk of the whole of src/ (.c and .h — a static inline
+ * in a header is a call site too), so a new file cannot regress by
+ * simply not being on a list. src/sloth_clock.c is the one exemption,
+ * and the walk asserts it found that file and saw the calls in it, so
+ * the zero for everything else is not the zero of a walk that read
+ * nothing. Same shape as the scrapers in test_docs_consistency.c:
+ * read the source, count, assert. */
 
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -42,81 +47,6 @@ static int cs_count(const char *hay, const char *needle) {
     return n;
 }
 
-/* Files that read only sloth_wall() / sloth_mono_ms(). src/sloth_clock.c
- * is the one place the libc calls belong and is deliberately absent. */
-static const char *const cs_migrated[] = {
-    "src/alerts/engine.c",
-    "src/alerts/rules_mle.c",
-    "src/alerts/rules_enterprise.c",
-    "src/alerts/rules_wired.c",
-    "src/alerts/rules_wifi_mgmt.c",
-    "src/alerts/rules_twin.c",
-    "src/flood_window.c",
-    "src/alert_pcap.c",
-    "src/dns.c",
-    "src/cleartext_creds.c",
-    "src/top_hosts.c",
-    "src/seqnum_track.c",
-    "src/assoc_track.c",
-    "src/poll.c",
-    "src/smtp_snoop.c",
-    "src/smb_snoop.c",
-    "src/kerb_snoop.c",
-    "src/rdp_snoop.c",
-    "src/ldap_snoop.c",
-    "src/karma_detect.c",
-    "src/dhcp_snoop.c",
-    "src/nbns_snoop.c",
-    "src/bgp_snoop.c",
-    "src/probe_pnl.c",
-    "src/ndp_snoop.c",
-    "src/quic_log.c",
-    "src/mqtt_snoop.c",
-    "src/mdns_snoop.c",
-    "src/posture.c",
-    "src/devices.c",
-    "src/tls_log.c",
-    "src/formatter.c",
-    "src/pcap_write.c",
-    "src/snmp_snoop.c",
-    "src/ssh_snoop.c",
-    "src/ssdp_snoop.c",
-    "src/scan.c",
-    "src/http_log.c",
-    "src/icmp_log.c",
-    "src/twins.c",
-    "src/ntp_log.c",
-    "src/dns_log.c",
-    "src/onvif_discovery.c",
-    "src/tui.c",
-    "src/platform/linux_wifi.c",
-    "src/platform/linux.c",
-    "src/platform/bsd.c",
-    "src/data_socket.c",
-    "src/bandwidth.c",
-    "src/jsonl.c",
-    "src/main.c",
-    "src/views/alerts.c",
-    "src/views/arp.c",
-    "src/views/assoc.c",
-    "src/views/beacon.c",
-    "src/views/channel.c",
-    "src/views/dashboard_bands.c",
-    "src/views/deauth.c",
-    "src/views/dhcp_snoop.c",
-    "src/views/eapol.c",
-    "src/views/fragattack.c",
-    "src/views/karma.c",
-    "src/views/nbns.c",
-    "src/views/pnl.c",
-    "src/views/probe.c",
-    "src/views/rogue_radius.c",
-    "src/views/seqnum.c",
-    "src/views/ssdp.c",
-    "src/views/stats.c",
-    "src/views/twins.c",
-};
-
 /* The counter must see calls before its zero means anything. */
 static void test_counter_sees_direct_clock_calls(void) {
     static const char src[] =
@@ -129,26 +59,86 @@ static void test_counter_sees_direct_clock_calls(void) {
     ASSERT_EQ(cs_count("", "time(NULL)"), 0);
 }
 
-static void test_migrated_files_have_no_direct_clock_calls(void) {
-    int n = (int)(sizeof(cs_migrated) / sizeof(cs_migrated[0]));
-    for (int i = 0; i < n; i++) {
-        char *src = slurp(cs_migrated[i]);
-        ASSERT(src != NULL);
-        if (!src) {
-            fprintf(stderr, "    cannot read %s (run from the repo root)\n",
-                    cs_migrated[i]);
-            continue;
-        }
-        int wall = cs_count(src, "time(NULL)");
-        int mono = cs_count(src, "clock_gettime(");
-        if (wall || mono)
-            fprintf(stderr, "    %s reads libc directly: %d time(NULL), "
-                            "%d clock_gettime(); use sloth_wall() / "
-                            "sloth_mono_ms()\n", cs_migrated[i], wall, mono);
-        ASSERT_EQ(wall, 0);
-        ASSERT_EQ(mono, 0);
-        free(src);
+/* ── The tree walk ───────────────────────────────────────── */
+
+#define CS_SEAM_FILE "src/sloth_clock.c"
+
+typedef struct {
+    int files;          /* .c / .h files read, the seam file included */
+    int offenders;      /* files other than the seam with a libc call */
+    int seam_seen;      /* the exempt file was found ... */
+    int seam_wall;      /* ... and the counter saw its calls */
+    int seam_mono;
+    int saw_subdir;     /* a file below src/<dir>/ was read */
+} cs_walk_t;
+
+static int cs_is_source(const char *name) {
+    size_t n = strlen(name);
+    return n > 2 && name[n - 2] == '.' &&
+           (name[n - 1] == 'c' || name[n - 1] == 'h');
+}
+
+static void cs_check_file(const char *path, cs_walk_t *w) {
+    char *src = slurp(path);
+    ASSERT(src != NULL);
+    if (!src) {
+        fprintf(stderr, "    cannot read %s\n", path);
+        return;
     }
+    w->files++;
+    if (strchr(path + 4, '/')) w->saw_subdir = 1;   /* past "src/" */
+    int wall = cs_count(src, "time(NULL)");
+    int mono = cs_count(src, "clock_gettime(");
+    if (strcmp(path, CS_SEAM_FILE) == 0) {
+        w->seam_seen = 1;
+        w->seam_wall = wall;
+        w->seam_mono = mono;
+    } else if (wall || mono) {
+        w->offenders++;
+        fprintf(stderr, "    %s reads libc directly: %d time(NULL), "
+                        "%d clock_gettime(); use sloth_wall() / "
+                        "sloth_mono_ms()\n", path, wall, mono);
+    }
+    free(src);
+}
+
+static void cs_walk(const char *dir, cs_walk_t *w, int depth) {
+    if (depth > 8) return;
+    DIR *d = opendir(dir);
+    ASSERT(d != NULL);
+    if (!d) {
+        fprintf(stderr, "    cannot open %s (run from the repo root)\n", dir);
+        return;
+    }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[512];
+        int n = snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+        struct stat st;
+        if (lstat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode))
+            cs_walk(path, w, depth + 1);
+        else if (S_ISREG(st.st_mode) && cs_is_source(e->d_name))
+            cs_check_file(path, w);
+    }
+    closedir(d);
+}
+
+/* #109's acceptance: no file under src/ but the seam reads a libc
+ * clock. The floor of 300 files is below today's 341 and far above
+ * any walk that silently stopped at the top directory. */
+static void test_no_file_under_src_reads_libc_clocks(void) {
+    cs_walk_t w;
+    memset(&w, 0, sizeof(w));
+    cs_walk("src", &w, 0);
+    ASSERT(w.files >= 300);
+    ASSERT(w.saw_subdir);
+    ASSERT(w.seam_seen);
+    ASSERT(w.seam_wall >= 1);
+    ASSERT(w.seam_mono >= 1);
+    ASSERT_EQ(w.offenders, 0);
 }
 
 /* ── The seam itself ─────────────────────────────────────── */
@@ -221,31 +211,12 @@ static void test_mono_ts_is_mono_ms_split(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
-/* The #88 names and the #109 names are one seam, not two: a module
- * still on flood_wall() and one already on sloth_wall() must agree
- * under an injected clock, or the taint fix would re-create the bug it
- * closed across the forward boundary. */
-static void test_flood_forwards_share_the_seam(void) {
-    g_mono = 99; g_wall = WALL0;
-    flood_test_set_clock(fake_mono, fake_wall);
-    ASSERT_EQ((long)sloth_wall(), (long)WALL0);
-    ASSERT_EQ(sloth_mono_ms(), (uint64_t)99);
-    sloth_clock_test_set(NULL, NULL);
-    g_wall = WALL0 + 1;
-    sloth_clock_test_set(fake_mono, fake_wall);
-    ASSERT_EQ((long)flood_wall(), (long)(WALL0 + 1));
-    ASSERT_EQ(flood_mono_ms(), (uint64_t)99);
-    flood_test_set_clock(NULL, NULL);
-    ASSERT((long)sloth_wall() > (long)WALL0);
-}
-
 void run_clock_seam_tests(void) {
     TEST_SUITE("clock seam (#109)");
     RUN_TEST(test_counter_sees_direct_clock_calls);
-    RUN_TEST(test_migrated_files_have_no_direct_clock_calls);
+    RUN_TEST(test_no_file_under_src_reads_libc_clocks);
     RUN_TEST(test_real_clocks_by_default);
     RUN_TEST(test_test_set_swaps_and_null_restores);
     RUN_TEST(test_mono_ts_is_mono_ms_split);
-    RUN_TEST(test_flood_forwards_share_the_seam);
     sloth_clock_test_set(NULL, NULL);
 }

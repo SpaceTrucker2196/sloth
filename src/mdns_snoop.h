@@ -12,7 +12,7 @@ int mdns_snoop(const uint8_t *msg, int len);
 
 /* Same, with the clock supplied. The service table reclaims a row only
    once it has gone 3600 s unseen (#110), so tests drive aging through
-   this entry point rather than waiting on time(NULL). */
+   this entry point rather than waiting on the wall clock. */
 int mdns_snoop_at(const uint8_t *msg, int len, time_t now);
 
 /* Copy the current service table into s->mdns_services / s->mdns_count. */

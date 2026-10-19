@@ -7,16 +7,16 @@
  * export timestamps, the stamp on a taint. Monotonic time is duration:
  * windows, TTLs, cooldowns, staleness. Mixing them is a bug that no
  * test can see while every caller reads the real clocks — the
- * evil-twin taint was stamped through the seam and checked against
- * time(NULL), so under an injected clock it never matched, and in
+ * evil-twin taint was stamped through the seam and checked against the
+ * libc wall clock, so under an injected clock it never matched, and in
  * production an NTP step mis-aged its TTL.
  *
- * Every direct time(NULL) / clock_gettime() in src/ is a site a test
- * cannot drive. Modules migrate here one at a time;
- * tests/test_clock_seam.c holds the list of those that have and fails
- * if one regresses. The #88 flood_wall() / flood_mono_ms() /
- * flood_test_set_clock() names in flood_window.h forward here until
- * their last caller moves. */
+ * A direct libc clock read anywhere in src/ is a site a test cannot
+ * drive. sloth_clock.c is the only file that makes one;
+ * tests/test_clock_seam.c walks every .c and .h under src/ and fails
+ * naming any other file that does. The #88 flood_wall() /
+ * flood_mono_ms() / flood_test_set_clock() forwards that once lived in
+ * flood_window.h were deleted when their last caller moved. */
 
 #include <stdint.h>
 #include <time.h>

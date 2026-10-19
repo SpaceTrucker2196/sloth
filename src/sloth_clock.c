@@ -1,7 +1,7 @@
 #include "sloth_clock.h"
 
-/* The only time(NULL) and clock_gettime() that belong in src/ once the
- * migration in #109 completes. */
+/* The only libc clock reads in src/ (#109). tests/test_clock_seam.c
+ * walks the tree and exempts this file alone. */
 
 static uint64_t real_mono_ms(void) {
     struct timespec ts;

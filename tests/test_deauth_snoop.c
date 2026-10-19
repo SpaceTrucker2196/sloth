@@ -9,6 +9,7 @@
 #include "alerts.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 #include "views/deauth.h"
 #include "tune.h"
 
@@ -60,7 +61,7 @@ static time_t   fake_wall(void) { return g_wall; }
 static void clock_reset(void) {
     g_mono = 1000000;   /* not 0: a zero timestamp must not look special */
     g_wall = WALL0;
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
 }
 
 /* Advance both clocks together. */
@@ -324,7 +325,7 @@ static void test_record_new_entry(void) {
     ASSERT_EQ(s.deauth_events[0].flood,   0);
     ASSERT_EQ((long)s.deauth_events[0].first_seen, (long)WALL0);
     ASSERT_EQ((long)s.deauth_events[0].flood_last, 0L);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_record_update_existing(void) {
@@ -335,7 +336,7 @@ static void test_record_update_existing(void) {
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_count, 1);
     ASSERT_EQ(s.deauth_events[0].count, 2);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_record_distinct_pairs(void) {
@@ -345,7 +346,7 @@ static void test_record_distinct_pairs(void) {
 
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_count, 2);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Subtype is part of the observation key: deauth and disassoc between
@@ -356,7 +357,7 @@ static void test_record_subtype_is_part_of_key(void) {
     rec(SRC_A, DST_STA, BSSID_A, 8, 10);
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_count, 2);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ── Window semantics (#88 regression list) ──────────────── */
@@ -380,7 +381,7 @@ static void test_five_spaced_4s_no_flood(void) {
     if (v) { ASSERT_EQ(v->flood, 0); ASSERT_EQ(v->frames, 5); }
     alerts_update(&s);
     ASSERT_EQ(find_alert_t(&s, ALERT_TYPE_DEAUTH_FLOOD), -1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_five_within_2s_floods(void) {
@@ -408,7 +409,7 @@ static void test_five_within_2s_floods(void) {
         ASSERT(strstr(s.alerts[idx].detail, "reason=7") != NULL);
         ASSERT(strstr(s.alerts[idx].detail, "unverified") != NULL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Window edge: half-open (now - 5 s, now]. Five frames whose first and
@@ -429,7 +430,7 @@ static void test_window_boundary(void) {
     }
     snap(&s);
     ASSERT_EQ(s.deauth_events[0].flood, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A slow chain that at some point *does* squeeze five into the window
@@ -447,7 +448,7 @@ static void test_sliding_window_trips_mid_chain(void) {
          * first appears at 8.9 (4, 8, 8.3, 8.6, 8.9). */
         ASSERT_EQ(s.deauth_events[0].flood, i >= 4 ? 1 : 0);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Flood status decays with time alone — no further frame needed — and
@@ -478,7 +479,7 @@ static void test_flood_decays_without_new_frames(void) {
     if (v) { ASSERT_EQ(v->flood, 0); ASSERT_EQ((long)v->flood_last, (long)tripped_at); }
     alerts_update(&s);
     ASSERT_EQ(find_alert_t(&s, ALERT_TYPE_DEAUTH_FLOOD), -1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A station roaming away (IEEE 802.11-2020 11.3.5): it tells its old AP
@@ -503,7 +504,7 @@ static void test_benign_roaming_no_flood(void) {
     if (v) { ASSERT_EQ(v->frames, 3); ASSERT_EQ(v->streams, 2); }
     alerts_update(&s);
     ASSERT_EQ(find_alert_t(&s, ALERT_TYPE_DEAUTH_FLOOD), -1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Retransmissions: Retry=1 repeating the previous sequence number is the
@@ -522,7 +523,7 @@ static void test_retransmissions_not_distinct(void) {
     ASSERT_EQ(s.deauth_events[0].flood, 0);
     ASSERT_EQ(s.deauth_events[0].win_count, 1);
     ASSERT_EQ(s.deauth_flood_active, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Retry=1 with a *new* sequence number is a retransmission of a frame
@@ -536,7 +537,7 @@ static void test_retry_with_new_seq_counts(void) {
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].retries, 0);
     ASSERT_EQ(s.deauth_events[0].flood, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* The window runs on the monotonic clock. A wall-clock step forward in
@@ -550,7 +551,7 @@ static void test_wall_jump_forward_keeps_flood(void) {
     }
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].flood, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ...a wall-clock step backwards must not either... */
@@ -563,7 +564,7 @@ static void test_wall_jump_backward_keeps_flood(void) {
     }
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].flood, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ...a frozen wall clock must not compress a slow sequence into one...*/
@@ -575,7 +576,7 @@ static void test_frozen_wall_slow_frames_no_flood(void) {
     }
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].flood, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ...and a step forward must not age a live flood out of the table. */
@@ -595,7 +596,7 @@ static void test_wall_jump_does_not_age_out(void) {
     snap(&s);
     ASSERT_EQ(s.deauth_count, 0);
     ASSERT_EQ(s.deauth_victim_count, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Same addresses under two BSSIDs are two observations, and neither
@@ -621,7 +622,7 @@ static void test_multiple_bssids_not_merged(void) {
     ASSERT_EQ(s.deauth_flood_active, 0);
     alerts_update(&s);
     ASSERT_EQ(find_alert_t(&s, ALERT_TYPE_DEAUTH_FLOOD), -1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Broadcast deauths from two APs share Address 1. Keyed on the
@@ -648,7 +649,7 @@ static void test_broadcast_per_bssid(void) {
     int idx = find_alert_t(&s, ALERT_TYPE_DEAUTH_FLOOD);
     if (idx >= 0)
         ASSERT(strstr(s.alerts[idx].key, "@00:11:22:33:44:55") != NULL);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Spoofing tools alternate AP→STA and STA→AP. Each stream carries three
@@ -673,7 +674,7 @@ static void test_direction_split_floods_victim(void) {
     ASSERT(idx >= 0);
     if (idx >= 0)
         ASSERT(strstr(s.alerts[idx].key, "deauth:12:34:56:78:9a:bc@") != NULL);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Deauth and disassoc at one station add up for impact. */
@@ -689,7 +690,7 @@ static void test_subtype_split_floods_victim(void) {
     const deauth_victim_t *v = find_victim(&s, BSSID_A, STA_X);
     ASSERT(v != NULL);
     if (v) ASSERT_EQ(v->flood, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A PMF-protected deauth is recorded — it was observed — but its
@@ -712,7 +713,7 @@ static void test_protected_deauth_recorded_without_reason(void) {
     const deauth_victim_t *v = find_victim(&s, BSSID_A, STA_X);
     ASSERT(v != NULL);
     if (v) { ASSERT_EQ(v->reason_valid, 0); ASSERT_EQ(v->protected_count, 1); }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A header-only frame is kept as observed, flagged truncated, and its
@@ -726,7 +727,7 @@ static void test_header_only_counts_truncated(void) {
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].truncated_count, 1);
     ASSERT_EQ(s.deauth_events[0].reason_valid, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_victim_of_frame_to_ap_is_sender(void) {
@@ -735,7 +736,7 @@ static void test_victim_of_frame_to_ap_is_sender(void) {
     sloth_state_t s; snap(&s);
     ASSERT(find_victim(&s, BSSID_A, STA_X) != NULL);
     ASSERT(find_victim(&s, BSSID_A, BSSID_A) == NULL);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_flood_active_with_multiple_entries(void) {
@@ -745,7 +746,7 @@ static void test_flood_active_with_multiple_entries(void) {
         rec(SRC_A, BCAST, BSSID_A, 1, 12);          /* flood */
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_flood_active, 1);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_no_flood_below_threshold(void) {
@@ -755,7 +756,7 @@ static void test_no_flood_below_threshold(void) {
     sloth_state_t s; snap(&s);
     ASSERT_EQ(s.deauth_events[0].flood, 0);
     ASSERT_EQ(s.deauth_flood_active, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_clear_empties_table(void) {
@@ -766,7 +767,7 @@ static void test_clear_empties_table(void) {
     ASSERT_EQ(s.deauth_count, 0);
     ASSERT_EQ(s.deauth_victim_count, 0);
     ASSERT_EQ(s.deauth_flood_active, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_snapshot_clamps_sel(void) {
@@ -776,7 +777,7 @@ static void test_snapshot_clamps_sel(void) {
     s.deauth_sel = 99;
     deauth_snapshot(&s);
     ASSERT_EQ(s.deauth_sel, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ── view_deauth_draw smoke tests ────────────────────────── */
@@ -1032,7 +1033,7 @@ static void test_distinct_frames_cite_their_event_ids(void) {
         ASSERT_EQ((long long)v->evidence_ids[2], 103LL);
         ASSERT_EQ((long long)v->evidence_ids[3], 0LL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_a_retransmission_cites_no_new_id(void) {
@@ -1052,7 +1053,7 @@ static void test_a_retransmission_cites_no_new_id(void) {
         ASSERT_EQ(v->evidence_id_count, 1);
         ASSERT_EQ((long long)v->evidence_ids[0], 501LL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_a_frame_with_no_retained_bytes_cites_nothing(void) {
@@ -1073,7 +1074,7 @@ static void test_a_frame_with_no_retained_bytes_cites_nothing(void) {
         ASSERT_EQ(v->evidence_id_count, 0);
         ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_a_long_burst_cites_the_newest_frames(void) {
@@ -1097,7 +1098,7 @@ static void test_a_long_burst_cites_the_newest_frames(void) {
         for (int i = 0; i < DEAUTH_EVIDENCE_IDS; i++)
             ASSERT_EQ((long long)v->evidence_ids[i], (long long)(904 + i));
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A second snapshot of an unchanged table must read the same. Pins that
@@ -1119,7 +1120,7 @@ static void test_two_snapshots_cite_the_same_ids(void) {
         ASSERT_EQ(memcmp(a->evidence_ids, b->evidence_ids,
                          sizeof(a->evidence_ids)), 0);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A NEW aggregate starts with no citations. Weak on its own — a slot
@@ -1138,7 +1139,7 @@ static void test_a_fresh_aggregate_inherits_no_ids(void) {
         ASSERT_EQ(v->evidence_id_count, 0);
         ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* An EVICTED slot must not pass its citations to whoever reuses it.
@@ -1184,7 +1185,7 @@ static void test_an_evicted_slot_passes_on_no_ids(void) {
         ASSERT_EQ(v->evidence_id_count, 0);
         ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* ── #120: this module's thresholds read through --tune ──────
@@ -1208,7 +1209,7 @@ static void test_deauth_flood_threshold_is_tunable(void) {
     snap(&s);
     ASSERT_EQ(s.deauth_flood_active, 1);
     tune_reset();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_deauth_flood_window_is_tunable(void) {
@@ -1230,7 +1231,7 @@ static void test_deauth_flood_window_is_tunable(void) {
     snap(&s);
     ASSERT_EQ(s.deauth_flood_active, 1);
     tune_reset();
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 void run_deauth_snoop_tests(void) {
@@ -1295,7 +1296,7 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_two_snapshots_cite_the_same_ids);
     RUN_TEST(test_a_fresh_aggregate_inherits_no_ids);
     RUN_TEST(test_an_evicted_slot_passes_on_no_ids);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
     RUN_TEST(test_deauth_flood_threshold_is_tunable);
     RUN_TEST(test_deauth_flood_window_is_tunable);
 }

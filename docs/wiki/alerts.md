@@ -139,7 +139,7 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   the same way (`first_detected` / `last_evaluated` vs
   `first_observed` / `last_observed`).
 - Durations run on `CLOCK_MONOTONIC` via the clock seam
-  (`src/sloth_clock.c`, #109; the #88 `flood_*` names forward to it);
+  (`src/sloth_clock.c`, #109; the only libc clock reader in `src/`);
   exported timestamps stay wall clock. The evil-twin taint TTL
   (`EVIL_TWIN_TAINT_TTL_SECS`) is stamped and aged by that same wall
   clock — before #109 the check read libc directly, so an injected

@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 #include "dot11_frame.h"
 #include "tune.h"
 
@@ -172,8 +173,8 @@ static vic_t *vic_find_or_add(const uint8_t bssid[6], const uint8_t victim[6],
 
 void deauth_record(const deauth_frame_t *f)
 {
-    uint64_t now_ms = flood_mono_ms();
-    time_t   wall   = flood_wall();
+    uint64_t now_ms = sloth_mono_ms();
+    time_t   wall   = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
     int fresh;
@@ -233,7 +234,7 @@ static uint64_t idle_ms(uint64_t now_ms, uint64_t last_ms) {
 
 void deauth_snapshot(sloth_state_t *s)
 {
-    uint64_t now_ms = flood_mono_ms();
+    uint64_t now_ms = sloth_mono_ms();
     pthread_mutex_lock(&g_mu);
 
     /* Age out on monotonic idle time: a wall-clock step must neither

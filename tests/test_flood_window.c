@@ -5,6 +5,7 @@
 #include "sloth.h"
 #include "alerts.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 
 /* Sliding flood window + probe-request flood (#88). Everything runs on
  * an injected clock: no sleeps, and the same inputs give the same
@@ -20,7 +21,7 @@ static time_t   fake_wall(void) { return g_wall; }
 static void clock_reset(void) {
     g_mono = 5000000;
     g_wall = WALL0;
-    flood_test_set_clock(fake_mono, fake_wall);
+    sloth_clock_test_set(fake_mono, fake_wall);
 }
 
 /* ── flood_window_t ──────────────────────────────────────── */
@@ -101,13 +102,13 @@ static void test_window_clock_backwards_safe(void) {
 
 static void test_clock_seam_restores(void) {
     clock_reset();
-    ASSERT_EQ(flood_mono_ms(), (uint64_t)5000000);
-    ASSERT_EQ((long)flood_wall(), (long)WALL0);
-    flood_test_set_clock(NULL, NULL);
-    uint64_t a = flood_mono_ms();
-    uint64_t b = flood_mono_ms();
+    ASSERT_EQ(sloth_mono_ms(), (uint64_t)5000000);
+    ASSERT_EQ((long)sloth_wall(), (long)WALL0);
+    sloth_clock_test_set(NULL, NULL);
+    uint64_t a = sloth_mono_ms();
+    uint64_t b = sloth_mono_ms();
     ASSERT(b >= a);
-    ASSERT((long)flood_wall() > (long)WALL0 - 86400L * 365 * 10);
+    ASSERT((long)sloth_wall() > (long)WALL0 - 86400L * 365 * 10);
 }
 
 /* ── Probe-request flood ─────────────────────────────────── */
@@ -169,7 +170,7 @@ static void test_probe_slow_30_over_300s_no_fire(void) {
     ASSERT_EQ(c.frame_count, 30);
     ASSERT_EQ(c.flood, 0);
     ASSERT_EQ(run_rule(&c), 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A burst is exactly what the rule is for — the old "too brief" gate
@@ -184,7 +185,7 @@ static void test_probe_burst_30_over_3s_fires(void) {
     ASSERT_EQ((long)c.flood_last, (long)g_wall);
     int hit = run_rule(&c);
     ASSERT(hit > 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_probe_alert_detail_and_severity(void) {
@@ -209,7 +210,7 @@ static void test_probe_alert_detail_and_severity(void) {
         ASSERT(strstr(s.alerts[idx].detail, "30 probes in 3.0s") != NULL);
         ASSERT(strstr(s.alerts[idx].detail, "10.0/s") != NULL);
     }
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Boundary: 30 frames spanning 4.999 s are inside one 5 s window, 30
@@ -230,7 +231,7 @@ static void test_probe_window_boundaries(void) {
     burst(&c, 29, 1000);
     ASSERT_EQ(c.flood, 0);
     ASSERT_EQ(run_rule(&c), 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* A long slow history does not dilute a burst: lifetime average was
@@ -244,7 +245,7 @@ static void test_probe_burst_after_long_quiet_fires(void) {
     burst(&c, 30, 2000);
     ASSERT_EQ(c.flood, 1);
     ASSERT(run_rule(&c) > 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Flood status decays with time alone. */
@@ -262,7 +263,7 @@ static void test_probe_flood_decays(void) {
     ASSERT_EQ(c.flood, 0);
     ASSERT_EQ((long)c.flood_last, (long)tripped);
     ASSERT_EQ(run_rule(&c), 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* The rule's own rate predicate: a flag without the evidence behind it
@@ -283,7 +284,7 @@ static void test_probe_rule_requires_rate(void) {
     for (int i = 0; i < s.alert_count; i++)
         if (s.alerts[i].type == ALERT_TYPE_PROBE_FLOOD) hit = 1;
     ASSERT_EQ(hit, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* Wall-clock steps inside a burst change nothing. */
@@ -304,7 +305,7 @@ static void test_probe_wall_jump(void) {
         g_mono += 10000;
     }
     ASSERT_EQ(c.flood, 0);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 void run_flood_window_tests(void) {
@@ -325,5 +326,5 @@ void run_flood_window_tests(void) {
     RUN_TEST(test_probe_flood_decays);
     RUN_TEST(test_probe_rule_requires_rate);
     RUN_TEST(test_probe_wall_jump);
-    flood_test_set_clock(NULL, NULL);
+    sloth_clock_test_set(NULL, NULL);
 }

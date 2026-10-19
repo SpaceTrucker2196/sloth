@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#118, #141, #132, #130)
+**Last updated**: 2026-10-19 (#118, #141, #132, #130, #109)
 
 ---
 
@@ -135,11 +135,15 @@ docs/views/*.md            -- per-view deep dives
   checking against libc is a bug no test can see while both read real
   clocks: the evil-twin taint did exactly that, so under an injected
   clock it never matched and in production an NTP step mis-aged its
-  TTL. Modules migrate off direct `time(NULL)` / `clock_gettime()` one
-  at a time; `tests/test_clock_seam.c` lists the migrated files and
-  fails on a regression. The #88 `flood_wall()` / `flood_mono_ms()` /
-  `flood_test_set_clock()` names in `flood_window.h` are `static
-  inline` forwards to it until their last caller moves.
+  TTL. `src/sloth_clock.c` is the only file in `src/` that reads a libc
+  clock: `tests/test_clock_seam.c` walks every `.c` and `.h` under
+  `src/` and fails naming any other file that calls `time(NULL)` or
+  `clock_gettime()` (comments included — say "the wall clock" in
+  prose). Per-poll rate code takes `sloth_mono_ts()`, a timespec view
+  of the same monotonic clock. Views render ages through `sloth_wall()`
+  too, so a test can pin the age column. The #88 `flood_wall()` /
+  `flood_mono_ms()` / `flood_test_set_clock()` forwards were deleted
+  once nothing called them.
 - **Correlation seams** — modules that answer a question sloth's own
   sensors cannot. `src/inventory.c` reads the operator's approved-BSSID
   file ([[inventory]]); `src/wired_attach.c` is a one-slot in-process

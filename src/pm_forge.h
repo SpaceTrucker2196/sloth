@@ -39,7 +39,7 @@ typedef struct {
     uint8_t  sta[6];
     uint8_t  bssid[6];          /* most recently seen BSSID for this STA */
     /* Microsecond-resolution, combined (sec*1000000 + usec) from the
-     * frame's own capture timestamp — never time(NULL), same
+     * frame's own capture timestamp — never the wall clock, same
      * discipline #92 established. Beacon intervals are commonly
      * ~100 ms; a window built from whole-second timestamps would
      * round every real interval down to "the same second", which

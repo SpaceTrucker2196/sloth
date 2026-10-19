@@ -19,7 +19,8 @@ int pcap_export(const sloth_state_t *s, char *path_out, int path_sz);
  * not fit struct tm — and the epoch stem is used instead.
  *
  * Split out of pcap_export() so that branch is reachable from a test:
- * time(NULL) cannot be steered into failing localtime_r() portably.
+ * the real wall clock cannot be steered into failing localtime_r()
+ * portably.
  */
 void pcap_export_stem(const struct tm *t, char *out, size_t sz);
 

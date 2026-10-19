@@ -21,6 +21,7 @@
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
+#include "sloth_clock.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
 #include "fragattack.h"
@@ -201,8 +202,8 @@ static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
 
 static void record_probe(const uint8_t *mac, const char *ssid,
                          int8_t signal, int channel) {
-    time_t   now    = flood_wall();
-    uint64_t now_ms = flood_mono_ms();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
 
     /* find existing entry */
     for (int i = 0; i < g_count; i++) {
@@ -332,14 +333,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* ── One clock for this frame (#92) ──────────────────────────
      *
      * Every observer below is stamped from the frame's own capture
-     * timestamp, not from time(NULL). Nine sites used to read the wall
+     * timestamp, not from the wall clock. Nine sites used to read the wall
      * clock while eapol_observe_dot11() alone took hdr->ts, so one frame
      * could be stamped two different seconds depending on scheduling,
      * and a correlation window built from those stamps was not
      * reproducible from the capture it came from. For an evidence tool
      * that is the difference between a record and an anecdote.
      *
-     * No fallback, deliberately. Substituting time(NULL) for a
+     * No fallback, deliberately. Substituting the wall clock for a
      * timestamp that looks wrong would reintroduce exactly the
      * non-reproducibility this removes — and "looks wrong" is not
      * decidable: a capture replayed from another host legitimately
@@ -413,14 +414,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * delivering anything usable.
      *
      * Two clocks on purpose: fts is the frame's own capture timestamp,
-     * flood_wall() is when it reached us. Age has to come from the
+     * sloth_wall() is when it reached us. Age has to come from the
      * second, because an offline replay carries timestamps far from now
      * and deriving staleness from the first would call a healthy stream
-     * dead. flood_wall() rather than time(NULL) keeps it injectable and
+     * dead. sloth_wall() rather than a libc read keeps it injectable and
      * keeps this callback free of the wall-clock read #92 removed. */
     pthread_mutex_lock(&g_frame_mu);
     g_last_frame_ts   = fts;
-    g_last_frame_wall = flood_wall();
+    g_last_frame_wall = sloth_wall();
     pthread_mutex_unlock(&g_frame_mu);
 
     /* Retain the whole frame for evidence (#92). `data`, not `dot11`:
@@ -734,7 +735,7 @@ void probe_health_poll(capture_health_t *h) {
     time_t fts = g_last_frame_ts, fwall = g_last_frame_wall;
     pthread_mutex_unlock(&g_frame_mu);
     h->last_frame_ts = fts;
-    h->stale_secs    = fwall ? (int)(flood_wall() - fwall) : -1;
+    h->stale_secs    = fwall ? (int)(sloth_wall() - fwall) : -1;
     h->parse_rejects = mon_radiotap_reject_total();
     /* Set BEFORE the early return below: a radio whose handle has gone
      * still has a last-frame time worth reporting, and returning first
@@ -763,7 +764,7 @@ void probe_health_poll(capture_health_t *h) {
  * is shared, not copied.
  *
  * ts_secs is deliberately a parameter. Nine call sites in this callback
- * read time(NULL) while one takes the frame's own capture timestamp,
+ * read the wall clock while one takes the frame's own capture timestamp,
  * which is #92's open defect; a seam that could not set per-frame
  * timestamps could not be used to pin the fix. This slice does NOT fix
  * that split — it builds the thing needed to test any fix for it.
@@ -890,8 +891,8 @@ void probe_stop(void) {
 }
 
 void probe_snapshot(sloth_state_t *s) {
-    time_t   now    = flood_wall();
-    uint64_t now_ms = flood_mono_ms();
+    time_t   now    = sloth_wall();
+    uint64_t now_ms = sloth_mono_ms();
     pthread_mutex_lock(&g_mu);
 
     /* age out stale entries in-place */
