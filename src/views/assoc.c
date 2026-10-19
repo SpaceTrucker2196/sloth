@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "oui.h"
 #include "assoc_track.h"
@@ -29,7 +30,7 @@ static void fmt_mac(const uint8_t *m, char *buf, int sz) {
 }
 
 static void fmt_age(time_t ts, char *buf, int sz) {
-    long age = (long)(time(NULL) - ts);
+    long age = (long)(sloth_wall() - ts);
     if (age < 0)     age = 0;
     if (age > 99999) age = 99999;
     if      (age <   60) snprintf(buf, sz, "%lds", age);

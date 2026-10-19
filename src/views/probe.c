@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "oui.h"
 #include "capture/probe.h"
@@ -18,7 +19,7 @@ static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
 }
 
 static void fmt_age(time_t last_seen, char *buf, int sz) {
-    time_t age = time(NULL) - last_seen;
+    time_t age = sloth_wall() - last_seen;
     if      (age <   60) snprintf(buf, sz, "%llds", (long long)age);
     else if (age < 3600) snprintf(buf, sz, "%lldm", (long long)(age / 60));
     else                 snprintf(buf, sz, "%lldh", (long long)(age / 3600));
@@ -26,7 +27,7 @@ static void fmt_age(time_t last_seen, char *buf, int sz) {
 
 /* Age bucket: < 5s = bright, < 30s = normal, older = dim. */
 static void phos_age(time_t last_seen) {
-    time_t age = time(NULL) - last_seen;
+    time_t age = sloth_wall() - last_seen;
     if      (age <  5) tui_bright();
     else if (age < 30) tui_normal();
     else               tui_dim();
@@ -65,7 +66,7 @@ void view_probe_draw(const sloth_state_t *s) {
 #endif
 
     /* count devices seen in last 5 seconds */
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     int active = 0;
     for (int i = 0; i < s->probe_count; i++)
         if (now - s->probe_clients[i].last_seen < 5) active++;

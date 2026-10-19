@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/fragattack.h"
 
@@ -28,7 +29,7 @@ static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
 
 static void fmt_age(time_t last_hit, char *buf, int sz) {
     if (last_hit == 0) { snprintf(buf, sz, "-"); return; }
-    long age = (long)(time(NULL) - last_hit);
+    long age = (long)(sloth_wall() - last_hit);
     if (age < 0)     age = 0;
     if (age > 99999) age = 99999;
     if      (age <   60) snprintf(buf, sz, "%lds", age);

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/deauth.h"
 #include "deauth_snoop.h"
@@ -139,7 +140,7 @@ void view_deauth_draw(const sloth_state_t *s) {
     int page_end = page_top + page;
     if (page_end > s->deauth_count) page_end = s->deauth_count;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = page_top; row < page_end; row++) {
         const deauth_event_t *e = &s->deauth_events[row];
 
@@ -230,7 +231,7 @@ static void draw_btm_section(const sloth_state_t *s, int rows) {
            "-----", "-----------------", "----");
     tui_normal();
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     int shown = rows - 3;
     if (shown > s->btm_steer_count) shown = s->btm_steer_count;
     /* The same knob rule_btm_abuse fires on (#120), so the heat that

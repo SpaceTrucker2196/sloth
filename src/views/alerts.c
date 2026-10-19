@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/alerts.h"
 #include "../alerts.h"
@@ -110,7 +111,7 @@ static void draw_alert_detail(const sloth_state_t *s) {
     tui_dim();   TPRINT("  First seen: "); tui_normal(); TPRINT("%s\n", ts1);
     tui_dim();   TPRINT("  Last seen:  "); tui_normal(); TPRINT("%s\n", ts2);
 
-    time_t now  = time(NULL);
+    time_t now  = sloth_wall();
     long age_s  = (long)(now - a->first_seen);
     long span_s = (long)(a->last_seen - a->first_seen);
     tui_dim();   TPRINT("  Age:        "); tui_normal();

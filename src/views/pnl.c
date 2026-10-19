@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "oui.h"
 #include "filter.h"
@@ -27,7 +28,7 @@ static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
 }
 
 static void fmt_age(time_t last_seen, char *buf, int sz) {
-    long age = (long)(time(NULL) - last_seen);
+    long age = (long)(sloth_wall() - last_seen);
     if (age < 0)     age = 0;
     if (age > 99999) age = 99999;   /* clamp so the buffer (8 bytes) suffices */
     if      (age <   60) snprintf(buf, sz, "%lds", age);

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/ssdp.h"
 #include "ssdp_snoop.h"
@@ -53,7 +54,7 @@ void view_ssdp_draw(const sloth_state_t *s) {
     int page_end = page_top + page;
     if (page_end > s->ssdp_count) page_end = s->ssdp_count;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = page_top; row < page_end; row++) {
         const ssdp_device_t *e = &s->ssdp_devices[row];
 

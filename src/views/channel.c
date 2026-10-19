@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/channel.h"
 #include "rf_quality.h"
@@ -135,7 +136,7 @@ void view_channel_draw(const sloth_state_t *s) {
         if (a > max_a) max_a = a;
     }
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->channel_count; i++) {
         const channel_summary_t *c = &s->channels[i];
         int activity = c->ap_count + c->assoc_count;

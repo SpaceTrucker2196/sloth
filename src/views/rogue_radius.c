@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "eap_parse.h"
 #include "views/rogue_radius.h"
@@ -113,7 +114,7 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
     int end = top + page;
     if (end > n) end = n;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = top; row < end; row++) {
         const rogue_radius_ap_t *r = &s->rogue_radius[idx[row]];
         char bssid[20], methods[32], age[12], last[64];

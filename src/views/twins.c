@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/twins.h"
 /* ../ is required: src/views/alerts.h is the view header and would
@@ -121,7 +122,7 @@ void view_twins_draw(const sloth_state_t *s) {
         if (!flags[0]) snprintf(flags, sizeof(flags), "-");
 
         char age[12];
-        time_t now = time(NULL);
+        time_t now = sloth_wall();
         if (e->last_seen == 0) snprintf(age, sizeof(age), "?");
         else snprintf(age, sizeof(age), "%lds", (long)(now - e->last_seen));
 

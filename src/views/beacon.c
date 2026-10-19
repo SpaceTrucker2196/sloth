@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "oui.h"
 #include "views/beacon.h"
@@ -28,7 +29,7 @@ static const char *bssid_str(const uint8_t *b) {
 /* Same shape as src/views/eapol.c and src/views/seqnum.c — kept local
  * rather than shared, matching how every other view spells it. */
 static void fmt_age(time_t ts, char *buf, int sz) {
-    long age = (long)(time(NULL) - ts);
+    long age = (long)(sloth_wall() - ts);
     if (age < 0)     age = 0;
     if (age > 99999) age = 99999;
     if      (age <   60) snprintf(buf, sz, "%lds", age);
@@ -177,7 +178,7 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         int hn      = wps_lock_history(ap, hist, WPS_LOCK_RING);
         int dropped = wps_lock_dropped(ap);
         int thresh  = alerts_wps_lockout_cycles();
-        int win     = wps_lock_cycles_in_window(ap, time(NULL),
+        int win     = wps_lock_cycles_in_window(ap, sloth_wall(),
                                                 WPS_LOCKOUT_WINDOW_S);
         tui_dim();
         TPRINT("\n \xe2\x94\x80\xe2\x94\x80 WPS ACTIVITY \xe2\x94\x80\xe2\x94\x80\n");
@@ -361,7 +362,7 @@ void view_beacon_draw(const sloth_state_t *s) {
     int page_end = page_top + page;
     if (page_end > s->beacon_count) page_end = s->beacon_count;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = page_top; row < page_end; row++) {
         const beacon_ap_t *ap = &s->beacon_aps[row];
 

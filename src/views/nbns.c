@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/nbns.h"
 #include "nbns_snoop.h"
@@ -54,7 +55,7 @@ void view_nbns_draw(const sloth_state_t *s) {
     int page_end = page_top + page;
     if (page_end > s->nbns_count) page_end = s->nbns_count;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = page_top; row < page_end; row++) {
         const nbns_name_t *e = &s->nbns_names[row];
 

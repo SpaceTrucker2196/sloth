@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "bandwidth.h"
 #include "dns.h"
@@ -37,7 +38,7 @@ static int baseline_find(const sloth_state_t *s, const char *name) {
 /* ── Baseline ────────────────────────────────────────────── */
 
 void stats_take_baseline(sloth_state_t *s) {
-    s->stats_start      = time(NULL);
+    s->stats_start      = sloth_wall();
     s->stats_base_count = 0;
     int n = s->iface_count < MAX_IFACES ? s->iface_count : MAX_IFACES;
     for (int i = 0; i < n; i++) {
@@ -167,7 +168,7 @@ static void draw_top_bw(const sloth_state_t *s) {
 
 void view_stats_draw(const sloth_state_t *s) {
     /* uptime */
-    time_t now    = time(NULL);
+    time_t now    = sloth_wall();
     time_t uptime = s->stats_init ? (now - s->stats_start) : 0;
     char upbuf[32];
     fmt_uptime(uptime, upbuf, sizeof(upbuf));

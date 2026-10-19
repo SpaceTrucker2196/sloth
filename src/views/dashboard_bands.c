@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/dashboard.h"
 #include "views/dashboard_internal.h"
@@ -430,7 +431,7 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
 
     int rows = h - 2;
     int n = s->top_host_count < rows ? s->top_host_count : rows;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     for (int i = 0; i < n; i++) {
         const top_host_t *e = &s->top_hosts[i];
@@ -886,7 +887,7 @@ void draw_crit_alerts_band(const sloth_state_t *s,
      * back to fitting. */
     static int    s_off    = 0;
     static time_t s_advance = 0;
-    time_t now_t = time(NULL);
+    time_t now_t = sloth_wall();
     if (crit_n > rows) {
         if (now_t - s_advance >= 2) {
             s_off     = (s_off + 1) % crit_n;

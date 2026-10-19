@@ -5,6 +5,7 @@
 #include "seqnum_track.h"
 #include "views/seqnum.h"
 #include "tune.h"
+#include "sloth_clock.h"
 
 static void mac(uint8_t out[6], uint8_t la, uint8_t b1, uint8_t b2,
                                   uint8_t b3, uint8_t b4, uint8_t b5) {
@@ -460,6 +461,37 @@ static void test_view_states_when_correlation_is_off(void) {
     seqnum_clear();
 }
 
+/* The age column reads the clock seam (#109), so a test can pin what
+ * the operator sees. Before the migration the view read the libc wall
+ * clock, and a T0 seeded in 2023 rendered as the 99999 s clamp
+ * ("27h") whatever the test wanted. Two injected readings, two ages:
+ * a view still on the libc clock cannot produce either. */
+static time_t g_view_wall;
+static time_t view_wall(void) { return g_view_wall; }
+
+static void test_view_age_reads_the_clock_seam(void) {
+    seqnum_clear();
+    uint8_t a[6]; mac(a, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55);
+    seqnum_track_observe_at(a, 100, T0);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 1);
+    ASSERT_EQ(s.seqnum_count, 1);
+
+    char buf[8192];
+    g_view_wall = (time_t)(T0 + 7 * 3600 + 5);
+    sloth_clock_test_set(NULL, view_wall);
+    capture_draw(view_seqnum_draw, &s, buf, sizeof(buf));
+    ASSERT(strstr(buf, "-     7h    0100") != NULL);
+
+    g_view_wall = (time_t)(T0 + 42);
+    capture_draw(view_seqnum_draw, &s, buf, sizeof(buf));
+    ASSERT(strstr(buf, "-     42s   0100") != NULL);
+    ASSERT(strstr(buf, "7h") == NULL);
+
+    sloth_clock_test_set(NULL, NULL);
+    seqnum_clear();
+}
+
 /* The strongest reading needs an anchor address, not just a high score. */
 static void test_strong_reading_requires_an_anchor_address(void) {
     seqnum_correlation_t c;
@@ -578,6 +610,7 @@ void run_seqnum_track_tests(void) {
     RUN_TEST(test_strong_reading_requires_an_anchor_address);
     RUN_TEST(test_view_never_claims_identity);
     RUN_TEST(test_view_states_when_correlation_is_off);
+    RUN_TEST(test_view_age_reads_the_clock_seam);
     RUN_TEST(test_seqnum_corr_seq_window_is_tunable);
     RUN_TEST(test_seqnum_corr_dt_max_is_tunable);
     RUN_TEST(test_correlate_retain_is_the_registry_row);

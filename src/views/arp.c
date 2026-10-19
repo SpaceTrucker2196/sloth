@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "oui.h"
 #include "views/arp.h"
@@ -15,7 +16,7 @@ static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
 
 static void fmt_lease_age(time_t expire, char *buf, int sz) {
     if (expire == 0) { snprintf(buf, sz, "--");  return; }
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     if (expire <= now) { snprintf(buf, sz, "exp"); return; }
     time_t rem = expire - now;
     if (rem >= 3600)

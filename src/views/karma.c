@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "views/karma.h"
 /* KARMA_PNL_CORROB_MIN — the legend and the PNL highlight must quote
@@ -60,7 +61,7 @@ void view_karma_draw(const sloth_state_t *s) {
     int end = top + page;
     if (end > s->karma_count) end = s->karma_count;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
         char bssid[20], chain[6], age[12], last[48], jac[16], tool[56];
