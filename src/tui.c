@@ -716,40 +716,90 @@ void tui_test_erase(void) {
     move(0, 0);
 }
 
-/* Row y as UTF-8, trailing blanks trimmed. Read through the wide-char
- * API so a box-drawing glyph comes back as the glyph, not as the low
- * byte of its cell. The cursor is restored: a view mid-draw must not
- * notice it was read. */
+/* Alternate-charset cells (hline(ACS_HLINE), box()) hold the VT100
+ * line-drawing letter, not the glyph the terminal shows; a test reads
+ * the glyph. Only the letters sloth's ACS_* uses are mapped. */
+static wchar_t acs_glyph(wchar_t c) {
+    switch (c) {
+    case L'q': return 0x2500;  /* U+2500 light horizontal */
+    case L'x': return 0x2502;  /* U+2502 light vertical */
+    case L'l': return 0x250C;
+    case L'k': return 0x2510;
+    case L'm': return 0x2514;
+    case L'j': return 0x2518;
+    case L't': return 0x251C;
+    case L'u': return 0x2524;
+    case L'w': return 0x252C;
+    case L'v': return 0x2534;
+    case L'n': return 0x253C;
+    default:   return c;
+    }
+}
+
+/* Row y as UTF-8, trailing blanks trimmed. Read cell by cell through
+ * the wide-char API so a box-drawing glyph comes back as the glyph, not
+ * as the low byte of its cell. The cursor is restored: a view mid-draw
+ * must not notice it was read. */
 int tui_test_line(int y, char *out, size_t n) {
     if (!out || n == 0) return -1;
     out[0] = '\0';
     if (!g_off_scr || y < 0 || y >= LINES) return -1;
-    wchar_t wbuf[1024];
-    int cols = COLS < (int)(sizeof(wbuf) / sizeof(wbuf[0])) - 1
-             ? COLS : (int)(sizeof(wbuf) / sizeof(wbuf[0])) - 1;
     int cy, cx;
     getyx(stdscr, cy, cx);
-    int got = mvinnwstr(y, 0, wbuf, cols);
-    move(cy, cx);
-    if (got == ERR) return -1;
-    wbuf[cols] = L'\0';
     size_t len = 0;
+    int full = 0;
     mbstate_t st;
     memset(&st, 0, sizeof(st));
-    for (int i = 0; wbuf[i]; i++) {
-        char mb[MB_LEN_MAX];
-        size_t k = wcrtomb(mb, wbuf[i], &st);
-        if (k == (size_t)-1) { mb[0] = '?'; k = 1; memset(&st, 0, sizeof(st)); }
-        if (len + k >= n) break;
-        memcpy(out + len, mb, k);
-        len += k;
+    for (int x = 0; x < COLS && !full; x++) {
+        cchar_t cc;
+        wchar_t wch[CCHARW_MAX + 1];
+        attr_t  attr;
+        short   pair;
+        if (mvin_wch(y, x, &cc) == ERR) break;
+        if (getcchar(&cc, wch, &attr, &pair, NULL) == ERR) continue;
+        if (attr & A_ALTCHARSET) wch[0] = acs_glyph(wch[0]);
+        for (int i = 0; wch[i] && !full; i++) {
+            char mb[MB_LEN_MAX];
+            size_t k = wcrtomb(mb, wch[i], &st);
+            if (k == (size_t)-1) { mb[0] = '?'; k = 1; memset(&st, 0, sizeof(st)); }
+            if (len + k >= n) { full = 1; break; }
+            memcpy(out + len, mb, k);
+            len += k;
+        }
     }
+    move(cy, cx);
     while (len > 0 && out[len - 1] == ' ') len--;
     out[len] = '\0';
     return (int)len;
 }
 
 int tui_test_rows(void) { return g_off_scr ? LINES : 0; }
+
+/* Cell attributes, so a test can see a decision the view makes only in
+ * colour or reverse video — invisible to every test before #116. */
+static int off_cell_attr(int y, int x, attr_t *attr, short *pair) {
+    if (!g_off_scr || y < 0 || y >= LINES || x < 0 || x >= COLS) return -1;
+    cchar_t cc;
+    wchar_t wch[CCHARW_MAX + 1];
+    int cy, cx;
+    getyx(stdscr, cy, cx);
+    int rc = mvin_wch(y, x, &cc);
+    move(cy, cx);
+    if (rc == ERR) return -1;
+    return getcchar(&cc, wch, attr, pair, NULL) == ERR ? -1 : 0;
+}
+
+int tui_test_is_reverse(int y, int x) {
+    attr_t a; short p;
+    if (off_cell_attr(y, x, &a, &p) != 0) return -1;
+    return (a & A_REVERSE) ? 1 : 0;
+}
+
+int tui_test_pair(int y, int x) {
+    attr_t a; short p;
+    if (off_cell_attr(y, x, &a, &p) != 0) return -1;
+    return (int)p;
+}
 
 /* Every row joined by '\n', for a needle whose row a test cannot know
  * in advance. Trailing empty rows are dropped. */
@@ -938,6 +988,8 @@ int  tui_test_line(int y, char *out, size_t n) {
     return -1;
 }
 int  tui_test_rows(void) { return 0; }
+int  tui_test_is_reverse(int y, int x) { (void)y; (void)x; return -1; }
+int  tui_test_pair(int y, int x) { (void)y; (void)x; return -1; }
 int  tui_test_screen(char *out, size_t n) {
     if (out && n) out[0] = '\0';
     return -1;

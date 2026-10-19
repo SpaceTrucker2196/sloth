@@ -71,6 +71,8 @@ extern void (*g_test_setup)(void);
 int  tui_test_line(int y, char *out, size_t n);
 int  tui_test_screen(char *out, size_t n);
 int  tui_test_rows(void);
+int  tui_test_is_reverse(int y, int x);
+int  tui_test_pair(int y, int x);
 void tui_test_erase(void);
 void tui_test_dump(FILE *fp);
 
@@ -89,6 +91,20 @@ static inline int runner_screen_find(const char *needle) {
         if (strstr(line, needle)) return y;
     }
     return -1;
+}
+
+/* Screen column of `needle` on row y, or -1. A column is a cell, so
+ * UTF-8 continuation bytes before the match are not counted; every
+ * glyph sloth draws is one cell wide. */
+static inline int runner_find_col(int y, const char *needle) {
+    char line[4096];
+    if (tui_test_line(y, line, sizeof(line)) < 0) return -1;
+    const char *hit = strstr(line, needle);
+    if (!hit) return -1;
+    int col = 0;
+    for (const char *p = line; p < hit; p++)
+        if (((unsigned char)*p & 0xC0) != 0x80) col++;
+    return col;
 }
 
 #define RUNNER_SCREEN_FAIL(what, needle) do { \

@@ -183,6 +183,7 @@ void run_transit_tests(void);
 void run_radiotap_tests(void);
 void run_rf_quality_tests(void);
 void run_reset_registry_tests(void);
+void run_views_render_tests(void);
 void run_capture_path_tests(void);        /* tests/test_capture_path.c (#95) */
 void run_poll_capture_path_tests(void);   /* tests/test_poll.c (#113) */
 
@@ -347,6 +348,7 @@ int main(void) {
     run_radiotap_tests();
     run_rf_quality_tests();
     run_reset_registry_tests();
+    run_views_render_tests();
     run_capture_path_tests();
     run_poll_capture_path_tests();
 

@@ -118,6 +118,11 @@ Since #115 every binary is derived from one set of source lists in the
   tests read the cells back (`tui_test_line()`, `ASSERT_LINE_HAS`,
   `ASSERT_SCREEN_HAS`). Only the platform is a stand-in
   (`tests/fake_platform.c`); `src/main.c` is not linked.
+  `tests/test_views_render.c` walks `sloth_views.def` through
+  `tui_draw()`: each view's tab is the one reverse-video label, its body
+  is what its own draw renders, and the dashboard draws no tab bar. It
+  also ratchets the remaining `ASSERT(1)` smoke asserts — a ceiling that
+  only moves down, and a list of converted files that must hold none.
 - `sloth_test_noflags` is the same suite without the two flags,
   against the ANSI renderer and probe.h's stubs: built, never run, so
   the `#ifndef` halves keep compiling. Before #116 that was the

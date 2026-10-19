@@ -24,6 +24,8 @@ void tui_cleanup(void);
  *   tui_test_line       row y as UTF-8, trailing blanks trimmed; its length or -1
  *   tui_test_screen     every row, '\n'-joined; its length or -1
  *   tui_test_rows       the screen's height, 0 when none is open
+ *   tui_test_is_reverse 1 if cell (y, x) is reverse video, 0 if not, -1 off-screen
+ *   tui_test_pair       the colour pair of cell (y, x), or -1
  *   tui_test_dump       the non-empty rows, numbered, for a failing test */
 int  tui_init_offscreen(int rows, int cols);
 void tui_offscreen_end(void);
@@ -31,6 +33,8 @@ void tui_test_erase(void);
 int  tui_test_line(int y, char *out, size_t n);
 int  tui_test_screen(char *out, size_t n);
 int  tui_test_rows(void);
+int  tui_test_is_reverse(int y, int x);
+int  tui_test_pair(int y, int x);
 void tui_test_dump(FILE *fp);
 void tui_draw(const sloth_state_t *s);
 int  tui_poll_key(int timeout_ms, int wake_fd); /* blocks up to timeout_ms; wake_fd >= 0 breaks the wait early so a redraw happens in response to a non-key event. Returns key on input, 0 on timeout / wake. */
