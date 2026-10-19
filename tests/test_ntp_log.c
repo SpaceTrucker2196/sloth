@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "ntp_log.h"
 #include "views/ntp.h"
@@ -186,7 +187,9 @@ static void test_view_draw_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_ntp_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "NTP packets: 0");
+    ASSERT_LINE_HAS(1, "Mode      V    St   Ref");
+    ASSERT_SCREEN_HAS("(no NTP packets seen");
 }
 
 static void test_view_draw_populated(void) {
