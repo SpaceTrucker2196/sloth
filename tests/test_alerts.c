@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include "runner.h"
+#include "tui.h"
 #include "jsonl.h"
 #include "fragattack.h"
 #include "eapol_log.h"
@@ -4870,7 +4871,8 @@ static void test_view_draw_empty(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
     view_alerts_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Alerts: 0 total");
+    ASSERT_SCREEN_HAS("(no alerts -- everything looks normal)");
 }
 
 static void test_view_draw_populated(void) {
