@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "ssdp_snoop.h"
 #include "views/ssdp.h"
@@ -245,7 +246,8 @@ static void test_view_draw_empty(void) {
     memset(&s, 0, sizeof(s));
     ssdp_snapshot(&s);
     view_ssdp_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "UPnP/SSDP devices: 0");
+    ASSERT_SCREEN_HAS("(no SSDP devices seen");
 }
 
 static void test_view_draw_with_entries(void) {
