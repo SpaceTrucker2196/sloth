@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "quic_log.h"
 #include "views/quic.h"
@@ -166,12 +167,13 @@ static void test_snapshot_clamps_sel_at_boundary_and_empty(void) {
     ASSERT_EQ(s.quic_log_sel, 0);
 }
 
-/* ── view_quic_draw smoke tests ──────────────────────────── */
+/* ── view_quic_draw ───────────────────────────────────────── */
 
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_quic_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "QUIC sessions: 0");
+    ASSERT_SCREEN_HAS("(no QUIC Initial packets seen");
 }
 
 static void test_view_draw_populated(void) {
@@ -186,7 +188,16 @@ static void test_view_draw_populated(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     quic_log_snapshot(&s);
     view_quic_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "QUIC sessions: 3");
+    /* Newest first; an Initial with no SNI reads "(unknown)". */
+    int d = runner_screen_find("151.101.1.140");
+    int f = runner_screen_find("facebook.com");
+    int g = runner_screen_find("google.com");
+    ASSERT(d >= 0 && d < f && f < g);
+    ASSERT_LINE_HAS(d, "(unknown)");
+    ASSERT_LINE_HAS(d, "draft");
+    ASSERT_LINE_HAS(f, "31.13.71.36      facebook.com");
+    ASSERT_LINE_HAS(g, " v1");
 }
 
 /* ── view_quic_key tests ─────────────────────────────────── */

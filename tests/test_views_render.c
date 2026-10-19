@@ -288,6 +288,7 @@ static const char *const CONVERTED[] = {
     "tests/test_dns_log.c",
     "tests/test_http_log.c",
     "tests/test_tls_log.c",
+    "tests/test_quic_log.c",
     "tests/test_views_render.c",
 };
 
@@ -302,7 +303,7 @@ static void test_no_smoke_asserts_in_converted_files(void) {
 
 /* What remains across tests/, as a ceiling that only moves down. Lower
  * it in the commit that converts a file; never raise it. */
-#define SMOKE_CEILING 23
+#define SMOKE_CEILING 21
 
 static void test_smoke_asserts_do_not_grow(void) {
     DIR *d = opendir("tests");
