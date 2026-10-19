@@ -863,6 +863,50 @@ static void test_probe_request_element_overrun_is_tallied_per_walk(void) {
     probe_pnl_clear();
 }
 
+/* #127: both SSID walks in on_probe_frame() are dot11_ie_ssid(). A
+ * 33-octet SSID element (§9.4.2.2 allows 0..32) reaches the PNL from a
+ * probe request and the association table from an association
+ * response clamped to its first 32 octets on each path. Neither path
+ * has an oversize counter — the beacon path's is pinned in
+ * tests/test_dot11_ie.c — so what is asserted here is the clamp. */
+static const char SSID33[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456";
+
+static void test_probe_request_ssid_33_is_clamped_to_32(void) {
+    static const uint8_t sa[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x78 };
+    uint8_t f[RT_HDR + 24 + 2 + 33];
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    int n = mon_probe_req(f, sa, SSID33, 0);
+    ASSERT_EQ(n, (int)sizeof f);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    probe_pnl_snapshot(&g_s);
+    ASSERT_EQ(g_s.pnl_count, 1);
+    ASSERT_EQ(g_s.pnl_clients[0].ssid_count, 1);
+    ASSERT_STR(g_s.pnl_clients[0].ssids[0], "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
+    probe_pnl_clear();
+}
+
+static void test_assoc_response_ssid_33_is_clamped_to_32(void) {
+    uint8_t f[RT_HDR + 24 + 6 + 2 + 33];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    fb_ie(&b, 0, SSID33, 33);
+    ASSERT(fb_ok(&b));
+    ASSERT_EQ(b.len, (int)sizeof f);
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    assoc_snapshot(&g_s);
+    ASSERT_EQ(g_s.assoc_count, 1);
+    ASSERT_STR(g_s.assocs[0].ssid, "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
+    assoc_clear();
+}
+
 /* ── FCS is a trailer, not frame (#122) ──────────────────────
  *
  * With radiotap FLAGS saying the FCS is present, the four trailing
@@ -2516,6 +2560,8 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
     RUN_TEST(test_assoc_response_element_overrun_is_tallied);
     RUN_TEST(test_probe_request_element_overrun_is_tallied_per_walk);
+    RUN_TEST(test_probe_request_ssid_33_is_clamped_to_32);
+    RUN_TEST(test_assoc_response_ssid_33_is_clamped_to_32);
     RUN_TEST(test_fcs_is_stripped_before_the_frame_is_recorded);
     RUN_TEST(test_radiotap_datapad_frame_reaches_the_ip_decoder);
     RUN_TEST(test_an_fcs_beacon_walks_no_phantom_element);

@@ -1,5 +1,7 @@
 #include "eap_parse.h"
 #include <string.h>
+#include "bytes.h"
+#include "sensor_health.h"
 
 int eap_parse(const uint8_t *p, int len, eap_info_t *out) {
     if (!p || !out || len < 4) return 0;
@@ -140,15 +142,16 @@ const char *eap_type_name(int type) {
 #define WSC_OFF_FLAGS       13
 #define WSC_HDR_LEN         14
 
+/* WSC attributes: 2-octet type, 2-octet length, big-endian (WSC 2.0
+ * §12) — the shared iterator's 2+2 form (#127). A header or value that
+ * does not fit ends the walk, sets `truncated` and is tallied as an
+ * element-walk fault; attributes before it are kept. */
 static void wsc_walk_tlvs(const uint8_t *b, int n, eap_wsc_info_t *out) {
-    int off = 0;
+    tlv_it_t it;
+    uint16_t type; int alen; const uint8_t *v;
     out->tlvs_walked = 1;
-    while (off < n) {
-        if (n - off < 4) { out->truncated = 1; return; }
-        int type = (b[off] << 8) | b[off + 1];
-        int alen = (b[off + 2] << 8) | b[off + 3];
-        const uint8_t *v = b + off + 4;
-        if (alen > n - off - 4) { out->truncated = 1; return; }
+    tlv_init16(&it, b, n, 1);
+    while (tlv_next(&it, &type, &alen, &v) == TLV_OK) {
         /* Fixed-size attributes with the wrong length are ignored, not
          * trusted: a short UUID-E copied as 16 bytes would read the next
          * attribute's header into the identifier. */
@@ -163,7 +166,10 @@ static void wsc_walk_tlvs(const uint8_t *b, int n, eap_wsc_info_t *out) {
             memcpy(out->mac, v, 6);
             out->has_mac = 1;
         }
-        off += 4 + alen;
+    }
+    if (it.status == TLV_OVERRUN) {
+        out->truncated = 1;
+        sh_parse_fault_note(SH_PF_IE_OVERRUN);
     }
 }
 

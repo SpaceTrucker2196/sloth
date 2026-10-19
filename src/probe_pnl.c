@@ -5,6 +5,7 @@
 #include "probe_pnl.h"
 #include "sensor_health.h"
 #include "bytes.h"
+#include "dot11_ie.h"
 
 static pnl_client_t    g_tbl[MAX_PNL_CLIENTS];
 static int             g_n   = 0;
@@ -18,7 +19,10 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
  * a stable string (caller does not own it) or NULL. The matches are
  * conservative — only return a label when a single vendor IE points
  * at a specific OS / platform. Anything else stays empty so the view
- * doesn't lie. */
+ * doesn't lie.
+ *
+ * The OUI → vendor map is dot11_oui_vendor() (#127); what a vendor's
+ * IE implies about the client OS is this function's own knowledge. */
 const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
 {
     if (!ies || ielen < 2) return NULL;
@@ -27,34 +31,24 @@ const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
     uint16_t tag; int len; const uint8_t *body;
     tlv_init(&it, ies, ielen);
     while (tlv_next(&it, &tag, &len, &body) == TLV_OK) {
-        const uint8_t *p = body - 2;   /* element header; offsets below */
-        if (tag == 221 && len >= 4) {
-            uint8_t o0 = p[2], o1 = p[3], o2 = p[4];
-            uint8_t ty = (len >= 4) ? p[5] : 0;
-            /* Apple — OUI 00:17:F2. Strongest signal we have. */
-            if (o0 == 0x00 && o1 == 0x17 && o2 == 0xf2) {
-                guess = "Apple";
-                break;
-            }
-            /* Microsoft Provisioning IE (OUI 00:50:F2 type 8). The
-             * other MS sub-types (1=WPA, 2=WMM, 4=WPS) are emitted by
-             * everyone — only type 8 indicates Windows. */
-            if (o0 == 0x00 && o1 == 0x50 && o2 == 0xf2 && ty == 0x08) {
-                guess = "Windows";
-                break;
-            }
-            /* Espressif (ESP32 / ESP8266) — OUI 24:0A:C4. */
-            if (o0 == 0x24 && o1 == 0x0a && o2 == 0xc4) {
-                guess = "ESP32";
-                break;
-            }
-            /* Wi-Fi Alliance OUI 50:6F:9A — used by P2P / Wi-Fi Direct
-             * IEs. Mostly Android devices include this. */
-            if (o0 == 0x50 && o1 == 0x6f && o2 == 0x9a && !guess) {
-                guess = "Android";
-                /* don't break — a later Apple/MS IE would override */
-            }
+        if (tag != 221 || len < 4) continue;
+        const char *v  = dot11_oui_vendor(body);
+        uint8_t     ty = body[3];
+        if (!v) continue;
+        /* Apple — strongest signal we have. */
+        if (strcmp(v, "Apple") == 0) { guess = "Apple"; break; }
+        /* Microsoft Provisioning IE (type 8). The other MS sub-types
+         * (1=WPA, 2=WMM, 4=WPS) are emitted by everyone — only type 8
+         * indicates Windows. */
+        if (strcmp(v, "Microsoft") == 0 && ty == 0x08) {
+            guess = "Windows";
+            break;
         }
+        /* Espressif silicon (ESP32 / ESP8266). */
+        if (strcmp(v, "Espressif") == 0) { guess = "ESP32"; break; }
+        /* Wi-Fi Alliance — P2P / Wi-Fi Direct IEs. Mostly Android
+         * devices include this; a later Apple/MS IE would override. */
+        if (strcmp(v, "Wi-Fi Alliance") == 0 && !guess) guess = "Android";
     }
     /* An early break on a decisive vendor IE leaves the walk unfinished
      * but not faulted; only a stop on a bad element is counted. */
@@ -62,33 +56,20 @@ const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen)
     return guess;
 }
 
-/* Max PHY tier from HT (45) / VHT (191) / HE+EHT (255 ext id 35 / 108).
- * We classify "Wi-Fi 7" via the EHT Capabilities extension and via the
- * Multi-Link IE (ext 81) which is required for EHT operation; the
- * latter alone is enough since pre-EHT chips don't emit it. */
+/* Max PHY tier from the capability elements. The classifier is
+ * dot11_ie_phy() (#127), shared with beacon_parse_ies(); this wrapper
+ * keeps the NULL-for-no-elements contract the PNL view relies on.
+ *
+ * Until #127 this file read Element ID Extension 81 as Multi-Link and
+ * did not look at 106 or 107; Multi-Link is 107 (mle.h, IEEE 802.11be),
+ * so a client advertising only a Multi-Link element was not Wi-Fi 7
+ * here while it was in the beacon path. */
 const char *probe_pnl_phy_ies(const uint8_t *ies, int ielen)
 {
     if (!ies || ielen < 2) return NULL;
-    int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
-    tlv_it_t it;
-    uint16_t tag; int len; const uint8_t *body;
-    tlv_init(&it, ies, ielen);
-    while (tlv_next(&it, &tag, &len, &body) == TLV_OK) {
-        if (tag == 45)  has_ht  = 1;
-        if (tag == 191) has_vht = 1;
-        if (tag == 255 && len >= 1) {
-            uint8_t ext = body[0];
-            if (ext == 35)               has_he  = 1;   /* HE Capabilities */
-            if (ext == 81 || ext == 108) has_eht = 1;   /* Multi-Link / EHT */
-        }
-    }
-    /* The tier read before a stop stands, as before (#126). */
-    if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
-    if (has_eht) return "Wi-Fi 7";
-    if (has_he)  return "Wi-Fi 6";
-    if (has_vht) return "Wi-Fi 5";
-    if (has_ht)  return "Wi-Fi 4";
-    return "legacy";
+    dot11_phy_t p;
+    dot11_ie_phy(ies, ielen, &p);
+    return dot11_phy_tier(&p);
 }
 
 /* Rank PHY tiers so we can upgrade-only on observe(). */

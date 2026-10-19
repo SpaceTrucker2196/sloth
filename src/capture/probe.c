@@ -14,7 +14,7 @@
 #include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
 #include "dot11_frame.h"         /* one decode per frame (#122) */
-#include "bytes.h"               /* tlv_next (#126) */
+#include "dot11_ie.h"            /* dot11_ie_ssid (#127) */
 #include "radiotap.h"
 #include "rf_quality.h"
 #include "beacon_snoop.h"
@@ -543,21 +543,12 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             uint16_t status = (uint16_t)(body[2] | ((uint16_t)body[3] << 8));
             status_ok = (status == 0);
         }
-        char ssid[33] = "";
-        tlv_it_t it;
-        uint16_t tag; int tln; const uint8_t *eb;
-        tlv_init(&it, body + fixed, blen - fixed);
-        while (tlv_next(&it, &tag, &tln, &eb) == TLV_OK) {
-            if (tag == 0) {
-                int slen = tln < 32 ? tln : 32;
-                memcpy(ssid, eb, (size_t)slen);
-                ssid[slen] = '\0';
-                break;
-            }
-        }
-        /* Only a stop before the SSID is reachable here: the walk ends
-         * at the SSID, which is normally the first element (#126). */
-        if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
+        /* The walk ends at the SSID, normally the first element, so
+         * only a stop before it is reachable — and counted (#126). An
+         * oversize SSID is clamped to 32 here and has no counter on
+         * this path; beacons carry the per-BSSID one. */
+        char ssid[33];
+        dot11_ie_ssid(body + fixed, blen - fixed, ssid, NULL);
         if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
         if (status_ok && (sub == 1 || sub == 3)) {
             int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
@@ -665,23 +656,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * correlation is built on. */
     const uint8_t *ie_start; int ie_total;
     if (!full || !dot11_frame_body(&fr, &ie_start, &ie_total)) return;
-    char           ssid[33] = "";
-    {
-        tlv_it_t it;
-        uint16_t tag; int tln; const uint8_t *eb;
-        tlv_init(&it, ie_start, ie_total);
-        while (tlv_next(&it, &tag, &tln, &eb) == TLV_OK) {
-            if (tag == 0) {
-                int slen = tln < 32 ? tln : 32;
-                memcpy(ssid, eb, (size_t)slen);
-                ssid[slen] = '\0';
-                break;
-            }
-        }
-        /* The fingerprint and PHY walks below cover the same list and
-         * count their own stops; the tally counts walks (#126). */
-        if (it.status == TLV_OVERRUN) sh_parse_fault_note(SH_PF_IE_OVERRUN);
-    }
+    /* The fingerprint and PHY walks below cover the same list and
+     * count their own stops; the tally counts walks (#126). */
+    char ssid[33];
+    dot11_ie_ssid(ie_start, ie_total, ssid, NULL);
 
     pthread_mutex_lock(&g_mu);
     record_probe(sa, ssid, signal, channel);

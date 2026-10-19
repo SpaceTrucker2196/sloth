@@ -2344,7 +2344,9 @@ static void test_phy_tier_wifi7_from_each_eht_element(void) {
     uint8_t ies[64];
     char ssid[33]; char enc[10]; int ch = 0;
     beacon_rsn_t rsn;
-    const uint8_t exts[] = { 81, 106, 107, 108 };
+    /* 81 was in this list until #127: it is not a Multi-Link element
+     * (that is 107), and tests/test_dot11_ie.c pins it as "legacy". */
+    const uint8_t exts[] = { 106, 107, 108 };
     for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
         uint8_t body[1] = { exts[i] };
         int off = ie_put(ies, 0, 255, body, 1);

@@ -9,6 +9,7 @@
 #include "dot11_data.h"
 #include "sensor_health.h"
 #include "bytes.h"
+#include "dot11_ie.h"
 #include "wifi_oui_attacker.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
@@ -32,7 +33,7 @@ static void note_new_bssid(time_t now) {
 /* Bounded, printable-ASCII copy of a WPS TLV string attribute into a
  * fixed field. The attribute body is not NUL-terminated in the frame,
  * and a hostile AP can claim any length the enclosing IE has room for —
- * the wrem check in the caller only proves the bytes exist in the IE,
+ * the iterator in the caller only proves the bytes exist in the IE,
  * not that they fit the destination, so the copy is clamped here
  * regardless of what the attribute claims.
  *
@@ -209,7 +210,9 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
      * and OUI + OUI type for 221 (WMM and WPS share an OUI). */
     uint32_t order_hash  = 2166136261u;
     int      order_count = 0;
-    int has_ht = 0, has_vht = 0, has_he = 0, has_eht = 0;
+    /* PHY tier: one classifier, shared with the probe-request path
+     * (dot11_ie_phy_note, #127), fed from this walk. */
+    dot11_phy_t phy = { 0, 0, 0, 0 };
 
     ssid_out[0]  = '\0';
     *channel_out = 0;
@@ -261,13 +264,14 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * not have to know which tags those are. Cheap — a switch on a
          * tag that is almost never one of the three. */
         reg_ie_element(&reg, tag, ie + 2, (int)tln);
+        dot11_ie_phy_note(&phy, tag, ie + 2, (int)tln);
 
         if (tag == 0) {
-            /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal. */
-            if (tln > 32 && rsn_out) rsn_out->oversize_ssid++;
-            int slen = tln < 32 ? tln : 32;
-            memcpy(ssid_out, ie + 2, (size_t)slen);
-            ssid_out[slen] = '\0';
+            /* SSID. Lengths > 32 are invalid per 802.11 — a fuzz signal.
+             * A later SSID element overwrites an earlier one, as it
+             * always has here. */
+            if (dot11_ie_ssid_copy(ie + 2, (int)tln, ssid_out) && rsn_out)
+                rsn_out->oversize_ssid++;
 
         } else if (tag == 11 && rsn_out && tln >= 3) {
             /* QBSS Load (802.11e): station count (2 bytes LE) + channel
@@ -276,7 +280,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             rsn_out->has_qbss       = 1;
             rsn_out->qbss_stations  = ie[2] | (ie[3] << 8);
             rsn_out->qbss_chan_util = ie[4];
-        } else if (tag == 45)  { has_ht  = 1;
+        } else if (tag == 45)  {
             if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HT_PRESENT;
         } else if (tag == 61 && tln >= 2 && rsn_out) {
             /* HT Operation (§9.4.2.56): Primary Channel(1), then the
@@ -295,7 +299,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             rsn_out->oper_width =
                 (any_width && rsn_out->oper_secondary_offset) ? CH_WIDTH_40
                                                               : CH_WIDTH_20;
-        } else if (tag == 191) { has_vht = 1;
+        } else if (tag == 191) {
             if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_VHT_PRESENT;
         } else if (tag == 192 && tln >= 3 && rsn_out) {
             /* VHT Operation (§9.4.2.158): Channel Width(1), CCFS0(1),
@@ -323,18 +327,14 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             }
         } else if (tag == 255 && tln >= 1) {
             uint8_t ext = ie[2];
-            if (ext == 35)               { has_he  = 1;
-                if (rsn_out) rsn_out->fp.flags |= AP_FP_FLAG_HE_PRESENT;
-            }
-            /* EHT Capabilities (108) / EHT Operation (106) / Multi-Link
-             * (107) all mean 802.11be. Kept as its own statement rather
-             * than folded into the operation-IE branches below, because
-             * the capability IE is the one that is always present — an
-             * AP advertising Wi-Fi 7 without an EHT Operation element is
-             * ordinary, and tying the tier to the operation IE would
-             * label it Wi-Fi 6. */
-            if (ext == 81 || ext == 106 || ext == 107 || ext == 108)
-                has_eht = 1;
+            if (ext == 35 && rsn_out)
+                rsn_out->fp.flags |= AP_FP_FLAG_HE_PRESENT;
+            /* The 802.11be tier is dot11_ie_phy_note()'s, above: it
+             * sets EHT on 106, 107 or 108 independently of the
+             * operation-IE decode below, because an AP advertising
+             * Wi-Fi 7 without an EHT Operation element is ordinary.
+             * Ext 81 counted here until #127; it is not a Multi-Link
+             * element (that is 107, MLE_EXT_ID). */
             if (ext == 36 && tln >= 7 && rsn_out) {
                 /* HE Operation (§9.4.2.249). Fixed part after the ext
                  * ID: HE Operation Parameters(3), BSS Color(1), Basic
@@ -615,16 +615,19 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                 if (rsn_out && ty == 0x04) {
                     rsn_out->has_wps = 1;
                     int uuid_e_zero_seen = 0;
-                    /* Walk WPS attributes (TLV body after OUI+type).
-                     * Each attribute: 2 bytes ID + 2 bytes length +
-                     * data, big-endian. */
-                    const uint8_t *wp = ie + 6;        /* after OUI+type */
-                    int            wrem = (int)tln - 4;
-                    while (wrem >= 4) {
-                        uint16_t aid = (uint16_t)((wp[0] << 8) | wp[1]);
-                        uint16_t alen = (uint16_t)((wp[2] << 8) | wp[3]);
-                        if (4 + (int)alen > wrem) break;
-                        const uint8_t *adata = wp + 4;
+                    /* Walk WPS attributes (TLV body after OUI+type):
+                     * 2-octet ID, 2-octet length, big-endian (WSC 2.0
+                     * §12). On the shared iterator since #127; an
+                     * attribute that does not fit ends the walk and is
+                     * tallied, where it used to stop silently. The
+                     * per-BSSID fuzz counters are not moved by it —
+                     * they count element-level faults only. */
+                    tlv_it_t       wi;
+                    uint16_t       aid;
+                    int            alen;
+                    const uint8_t *adata;
+                    tlv_init16(&wi, ie + 6, (int)tln - 4, 1);
+                    while (tlv_next(&wi, &aid, &alen, &adata) == TLV_OK) {
                         if (aid == 0x1044 && alen >= 1) {
                             /* Wi-Fi Protected Setup State */
                             rsn_out->wps_state =
@@ -655,26 +658,26 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                             /* Manufacturer */
                             wps_attr_str(rsn_out->wps_manufacturer,
                                          sizeof(rsn_out->wps_manufacturer),
-                                         adata, alen);
+                                         adata, (uint16_t)alen);
                         } else if (aid == 0x1023 && alen >= 1) {
                             /* Model Name */
                             wps_attr_str(rsn_out->wps_model_name,
                                          sizeof(rsn_out->wps_model_name),
-                                         adata, alen);
+                                         adata, (uint16_t)alen);
                         } else if (aid == 0x1024 && alen >= 1) {
                             /* Model Number */
                             wps_attr_str(rsn_out->wps_model_number,
                                          sizeof(rsn_out->wps_model_number),
-                                         adata, alen);
+                                         adata, (uint16_t)alen);
                         } else if (aid == 0x1042 && alen >= 1) {
                             /* Serial Number */
                             wps_attr_str(rsn_out->wps_serial,
                                          sizeof(rsn_out->wps_serial),
-                                         adata, alen);
+                                         adata, (uint16_t)alen);
                         }
-                        wp   += 4 + alen;
-                        wrem -= 4 + alen;
                     }
+                    if (wi.status == TLV_OVERRUN)
+                        sh_parse_fault_note(SH_PF_IE_OVERRUN);
                     if (uuid_e_zero_seen)
                         rsn_out->fp.flags |= AP_FP_FLAG_WPS_UUID_ZERO;
                 }
@@ -693,25 +696,12 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                 vendor_hash_seen = 1;
             }
             /* AP vendor fingerprint — first non-Microsoft OUI we
-             * recognise wins. Lookup table is small (SOHO + enterprise
-             * + IoT mostly). */
-            if (rsn_out && !rsn_out->vendor[0]) {
-                const char *v = NULL;
-                if      (o0==0x00 && o1==0x17 && o2==0xf2) v = "Apple";
-                else if (o0==0x00 && o1==0x40 && o2==0x96) v = "Cisco";
-                else if (o0==0x00 && o1==0x03 && o2==0x7f) v = "Atheros";
-                else if (o0==0x00 && o1==0x10 && o2==0x18) v = "Broadcom";
-                else if (o0==0x4c && o1==0x5e && o2==0x0c) v = "Mikrotik";
-                else if (o0==0x00 && o1==0x15 && o2==0x6d) v = "Ubiquiti";
-                else if (o0==0xdc && o1==0x9f && o2==0xdb) v = "Ubiquiti";
-                else if (o0==0x24 && o1==0x0a && o2==0xc4) v = "Espressif";
-                else if (o0==0x00 && o1==0x0d && o2==0x97) v = "Ruckus";
-                else if (o0==0x00 && o1==0x24 && o2==0x6c) v = "Aruba";
-                else if (o0==0xc0 && o1==0xc9 && o2==0xe3) v = "TP-Link";
-                else if (o0==0x00 && o1==0x09 && o2==0x5b) v = "Netgear";
-                else if (o0==0x00 && o1==0x18 && o2==0xe7) v = "D-Link";
-                else if (o0==0x00 && o1==0x14 && o2==0x6c) v = "Netgear";
-                else if (o0==0x50 && o1==0x6f && o2==0x9a) v = "Wi-Fi Alliance";
+             * recognise wins. The table is dot11_oui_vendor()'s (#127),
+             * shared with the probe-request fingerprint; it names
+             * Microsoft too, which almost every AP emits for WMM/WPS and
+             * so says nothing about the AP, hence the explicit skip. */
+            if (rsn_out && !rsn_out->vendor[0] && !is_microsoft) {
+                const char *v = dot11_oui_vendor(ie + 2);
                 if (v) snprintf(rsn_out->vendor, sizeof(rsn_out->vendor),
                                 "%s", v);
             }
@@ -746,11 +736,8 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             rsn_out->oper_primary_channel > 0)
             *channel_out = rsn_out->oper_primary_channel;
 
-        const char *p = has_eht ? "Wi-Fi 7"
-                      : has_he  ? "Wi-Fi 6"
-                      : has_vht ? "Wi-Fi 5"
-                      : has_ht  ? "Wi-Fi 4" : "legacy";
-        snprintf(rsn_out->phy, sizeof(rsn_out->phy), "%s", p);
+        snprintf(rsn_out->phy, sizeof(rsn_out->phy), "%s",
+                 dot11_phy_tier(&phy));
         rsn_out->fp.beacon_interval_ms = beacon_ms;
         /* Leave fp.vendor_ies_hash at 0 when the beacon had no
          * non-Microsoft tag-221 IE — the alerts code treats 0 on

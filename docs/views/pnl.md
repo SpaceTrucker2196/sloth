@@ -72,7 +72,11 @@ probes to their owner OS.
 ### `PHY` and the `*` marker
 
 `PHY` is the highest tier the device has advertised — derived from the
-HT (45), VHT (191) and HE / EHT (255 ext) capability IEs. It is
+HT (45), VHT (191) and HE / EHT (255 ext) capability IEs: ext 35 is
+Wi-Fi 6, any of ext 106 (EHT Operation), 107 (Multi-Link) or 108 (EHT
+Capabilities) is Wi-Fi 7. The classifier is the beacon view's own
+(`src/dot11_ie.c`, #127); until #127 this view read ext 81 as
+Multi-Link and missed 107, so the two views could disagree. It is
 upgrade-only: a device that later sends a stripped-down probe omitting
 VHT keeps the stronger tier.
 

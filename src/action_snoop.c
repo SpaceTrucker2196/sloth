@@ -7,6 +7,7 @@
 #include "dot11_data.h"
 #include "bytes.h"          /* le16, tlv_next (#126) */
 #include "sensor_health.h"  /* parse-fault tally (#126) */
+#include "dot11_ie.h"       /* SSID copy (#127) */
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
@@ -611,10 +612,10 @@ int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
                 uint16_t sid; int slen; const uint8_t *sb;
                 tlv_init(&si, b + sub, tln - sub);
                 while (tlv_next(&si, &sid, &slen, &sb) == TLV_OK) {
+                    /* SSID subelement: the SSID element's format
+                     * (§9.4.2.20.7 → §9.4.2.2). Empty = wildcard. */
                     if (sid == 0 && slen > 0) {
-                        int n = slen < 32 ? slen : 32;
-                        memcpy(ssid, sb, (size_t)n);
-                        ssid[n] = '\0';
+                        dot11_ie_ssid_copy(sb, slen, ssid);
                         targeted = 1;
                     }
                 }

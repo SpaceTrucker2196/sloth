@@ -3575,3 +3575,15 @@ it; the use site reads the knob. Ring-backed counts cap at the ring.
 `[j]` seqnum table no longer resets `--correlate-retain`. Pages:
 [[cli-reference]], [[jsonl-schema]], [[retention]].
 
+
+## 2026-10-18 — element helpers once: SSID, PHY tier, OUI vendor (#127)
+
+`src/dot11_ie.{h,c}` holds the SSID copy, the PHY-tier classifier and
+the vendor-IE OUI table that were each written two or three times.
+Defect F fixed: probe_pnl.c read Element ID Extension 81 as Multi-Link
+and ignored 106/107, so `pnl_client.phy` disagreed with `beacon.phy`;
+both now use 106/107/108 and ext 81 alone reads `legacy` on both (and in
+`wifi_assoc_req.phy`, which shares the beacon parser). The WPS
+attribute walk in `beacon_parse_ies` and the WSC walk in `eap_parse.c`
+moved onto the shared iterator and now count in `ie_overrun`.
+Page: [[jsonl-schema]] → *Parse faults*.

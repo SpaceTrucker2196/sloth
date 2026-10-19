@@ -112,6 +112,7 @@ CORE_COMMON_SRCS = \
        src/ctrl_frames.c     \
        src/dot11_data.c      \
        src/dot11_frame.c     \
+       src/dot11_ie.c        \
        src/mle.c             \
        src/tool_fingerprint.c \
        src/captive_portal.c  \

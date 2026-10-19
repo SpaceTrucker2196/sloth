@@ -26,7 +26,7 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
 const char *probe_pnl_fingerprint_ies(const uint8_t *ies, int ielen);
 
 /* Classify maximum PHY tier from the same IE blob. Returns one of
- *   "Wi-Fi 7"  (tag 255 ext id 108 / 81 / EHT)
+ *   "Wi-Fi 7"  (tag 255 ext id 106 / 107 (Multi-Link) / 108; classifier is dot11_ie_phy(), #127)
  *   "Wi-Fi 6"  (tag 255 ext id 35  / HE Capabilities)
  *   "Wi-Fi 5"  (tag 191 / VHT Capabilities)
  *   "Wi-Fi 4"  (tag 45  / HT Capabilities)
