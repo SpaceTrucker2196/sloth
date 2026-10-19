@@ -145,6 +145,7 @@ it, and sloth reads both:
 
 ## Related pages
 
+- [[wifi-sigint-guide]] — what all of this means for a person standing in it, in plain language.
 - [[what-sloth-does]] — the tool built on top of all this.
 - [[monitor-mode]] — how sloth gets to hear frame classes at all.
 - [[wifi-sigint]] — the SIGINT primitives (PNL, EAPOL, seqnum, assoc).

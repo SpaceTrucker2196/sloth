@@ -3791,3 +3791,20 @@ retired without being counted as loss. Updated [[jsonl-schema]] (field
 list, sample, semantics, uncounted list) and [[ring-buffers]] (users,
 the two retire calls, and the three bodies left hand-written with the
 reason for each).
+
+## 2026-10-19 — Wi-Fi SIGINT guide for non-specialists
+
+Added [[wifi-sigint-guide]]: the radio environment around an ordinary
+person — beacons, probe requests and what randomisation does and does
+not hide, cars (factory hotspots, wireless CarPlay/Android Auto, TPMS
+and fobs as sub-GHz, Tesla phone-key BLE), Axon body cameras (what the
+user guides and FCC grants document, what is not published, why sloth
+ships no radio fingerprint), Flock plate readers (vendor LTE documents
+vs. community Wi-Fi/BLE observations, with their dates and measured
+false-positive rates), Bluetooth LE around a person, the inference
+ladder from presence to Wi-Fi sensing, and the legal frame by
+jurisdiction. Every claim was researched and then independently
+fact-checked against its source before being written; 21 candidate
+claims were dropped for lacking an openable source and are not on the
+page. Linked from [[index]] (read-first list and WiFi SIGINT section),
+[[how-wifi-works]] and [[wifi-sigint-techniques]].

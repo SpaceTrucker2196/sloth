@@ -134,6 +134,7 @@ does".
 
 ## Related pages
 
+- [[wifi-sigint-guide]] — the same ground for a non-specialist, with the sources.
 - [[wifi-sigint]] — the v1.1 primitive set and correlation chain.
 - [[how-wifi-works]] · [[monitor-mode]] — the substrate.
 - [[mac-randomisation]] — technique 3 in full, with the score.
