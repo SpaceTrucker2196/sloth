@@ -15,6 +15,8 @@
 #include "beacon_snoop.h"
 #include "assoc_track.h"
 #include "alerts.h"
+#include "stab.h"
+#include "sensor_health.h"
 #include "dot11_frame.h"
 #include "bytes.h"
 #include "sensor_health.h"
@@ -99,8 +101,21 @@ typedef struct {
     uint8_t  installed_anonce[32];
     int      has_installed;
 } pending_t;
-static pending_t g_pending[MAX_PENDING];
-static int       g_pending_n = 0;
+typedef struct { const uint8_t *bssid, *sta; } pending_key_t;
+
+static int pending_key_eq(const void *row, const void *key) {
+    const pending_t *p = row; const pending_key_t *k = key;
+    return memcmp(p->bssid, k->bssid, 6) == 0 &&
+           memcmp(p->sta, k->sta, 6) == 0;
+}
+
+/* Evicts the pair heard from least recently — not the oldest M1, which
+ * reads as "never saw one" for every record that has only ever shown
+ * M3/M4. STAB_OLDEST since #110, and an eviction is counted
+ * (evict_eapol_pending): it drops a handshake in flight, so a capture
+ * that never pairs is distinguishable from one that was crowded out. */
+STAB_DECL(g_pending, pending_t, MAX_PENDING, last_seen, STAB_OLDEST,
+          SH_EVICT_EAPOL_PENDING, NULL, pending_key_eq);
 
 /* Export target (#87). g_out_fd pins the directory validated by
  * eapol_set_output_dir(): every file is opened relative to it, so a
@@ -127,47 +142,24 @@ static time_t       g_last_sweep     = 0;
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
-    return memcmp(a, b, 6) == 0;
-}
-
 /* Read-only lookup — never allocates. Used by eapol_key_generation() so
  * a mere query cannot evict a live pending handshake. */
 static const pending_t *pending_find(const uint8_t bssid[6],
                                       const uint8_t sta[6]) {
-    for (int i = 0; i < g_pending_n; i++) {
-        if (mac_eq(g_pending[i].bssid, bssid) && mac_eq(g_pending[i].sta, sta))
-            return &g_pending[i];
-    }
-    return NULL;
+    pending_key_t key = { bssid, sta };
+    return stab_find(&g_pending, &key);
 }
 
-static pending_t *pending_find_or_alloc(const uint8_t bssid[6],
-                                         const uint8_t sta[6]) {
-    for (int i = 0; i < g_pending_n; i++) {
-        if (mac_eq(g_pending[i].bssid, bssid) && mac_eq(g_pending[i].sta, sta))
-            return &g_pending[i];
+static pending_t *pending_get(const uint8_t bssid[6], const uint8_t sta[6],
+                              time_t now) {
+    pending_key_t key = { bssid, sta };
+    int created;
+    pending_t *p = stab_get(&g_pending, &key, now, &created);
+    if (created) {
+        memcpy(p->bssid, bssid, 6);
+        memcpy(p->sta,   sta,   6);
     }
-    int slot;
-    if (g_pending_n < MAX_PENDING) {
-        slot = g_pending_n++;
-    } else {
-        /* Evict the pair we have heard from least recently — not the
-         * oldest M1, which reads as "never saw one" for every record
-         * that has only ever shown M3/M4. */
-        slot = 0;
-        time_t oldest = g_pending[0].last_seen;
-        for (int i = 1; i < g_pending_n; i++) {
-            if (g_pending[i].last_seen < oldest) {
-                oldest = g_pending[i].last_seen;
-                slot = i;
-            }
-        }
-    }
-    memset(&g_pending[slot], 0, sizeof(g_pending[slot]));
-    memcpy(g_pending[slot].bssid, bssid, 6);
-    memcpy(g_pending[slot].sta,   sta,   6);
-    return &g_pending[slot];
+    return p;
 }
 
 /* ── Handshake attempt bookkeeping (#97 / T12) ───────────── */
@@ -606,7 +598,7 @@ int eapol_observe_frame(const dot11_frame_t *f,
         return 1;
     }
 
-    pending_t *p = pending_find_or_alloc(bssid, sta);
+    pending_t *p = pending_get(bssid, sta, now);
     p->last_seen = now;
     attempt_expire(p, now);
 
@@ -839,7 +831,7 @@ void eapol_clear(void)
 {
     pthread_mutex_lock(&g_mu);
     g_head = g_count = 0;
-    g_pending_n = 0;
+    stab_clear(&g_pending);
     memset(g_rejects, 0, sizeof(g_rejects));
     pthread_mutex_unlock(&g_mu);
 }

@@ -6,33 +6,34 @@
 #include "ndp_snoop.h"
 #include "sloth_clock.h"
 #include "bytes.h"
+#include "stab.h"
+#include "sensor_health.h"
 
 /* Tracker state. Tiny: at most MAX_NDP_RAS distinct router source IPs.
  * Each RA observation either updates an existing entry (same src_ip,
  * unchanged in 99% of normal cases) or appends a new one. */
-static ndp_ra_event_t  g_ras[MAX_NDP_RAS];
-static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int ra_key_eq(const void *row, const void *key) {
+    return strcmp(((const ndp_ra_event_t *)row)->src_ip, (const char *)key) == 0;
+}
+
+/* STAB_OLDEST: the key is a source address anyone on the link can
+ * forge, so a spray of fake routers must churn the table, never stop
+ * it learning — and since #110 the churn is counted (evict_ndp_ra). */
+STAB_DECL(g_ras, ndp_ra_event_t, MAX_NDP_RAS, last_seen, STAB_OLDEST,
+          SH_EVICT_NDP_RA, NULL, ra_key_eq);
 
 /* ── Helpers ──────────────────────────────────────────────── */
 
-static int find_or_alloc(const char *src_ip) {
-    for (int i = 0; i < g_n; i++) {
-        if (strcmp(g_ras[i].src_ip, src_ip) == 0) return i;
-    }
-    int slot;
-    if (g_n < MAX_NDP_RAS) {
-        slot = g_n++;
-    } else {
-        /* Evict the oldest entry by last_seen. */
-        slot = 0;
-        for (int i = 1; i < g_n; i++) {
-            if (g_ras[i].last_seen < g_ras[slot].last_seen) slot = i;
-        }
-    }
-    memset(&g_ras[slot], 0, sizeof(g_ras[slot]));
-    snprintf(g_ras[slot].src_ip, sizeof(g_ras[slot].src_ip), "%s", src_ip);
-    return slot;
+/* A created row comes back with first_seen 0, which is what the caller
+ * keys its own first_seen stamp on. */
+static ndp_ra_event_t *ra_get(const char *src_ip, time_t now) {
+    int created;
+    ndp_ra_event_t *e = stab_get(&g_ras, src_ip, now, &created);
+    if (created)
+        snprintf(e->src_ip, sizeof(e->src_ip), "%s", src_ip);
+    return e;
 }
 
 /* Format an IPv6 prefix as "ADDR/LEN" into out. Returns 0 if the
@@ -63,8 +64,7 @@ int ndp_snoop_ra(const char *src_ip, const uint8_t *payload, int len) {
     time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
-    int idx = find_or_alloc(src_ip);
-    ndp_ra_event_t *e = &g_ras[idx];
+    ndp_ra_event_t *e = ra_get(src_ip, now);
     if (e->first_seen == 0) e->first_seen = now;
     e->last_seen        = now;
     e->cur_hop_limit    = cur_hop_limit;
@@ -125,15 +125,12 @@ int ndp_snoop_ra(const char *src_ip, const uint8_t *payload, int len) {
 
 void ndp_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_n < MAX_NDP_RAS ? g_n : MAX_NDP_RAS;
-    for (int i = 0; i < n; i++) s->ndp_ras[i] = g_ras[i];
-    s->ndp_ra_count = n;
+    s->ndp_ra_count = stab_snapshot(&g_ras, s->ndp_ras, MAX_NDP_RAS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void ndp_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    g_n = 0;
-    memset(g_ras, 0, sizeof(g_ras));
+    stab_clear(&g_ras);
     pthread_mutex_unlock(&g_mu);
 }

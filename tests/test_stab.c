@@ -287,6 +287,78 @@ static void test_clear_empties_rows_and_resets_ring(void) {
     ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 2);
 }
 
+/* ── delete / expire ─────────────────────────────────────── */
+
+static void test_del_removes_moves_last_and_does_not_tally(void) {
+    reset_all();
+    put(&g_old, "a", 1, NULL);
+    trow_t *b = put(&g_old, "b", 2, NULL);
+    put(&g_old, "c", 3, NULL)->v = 33;
+    ASSERT_EQ(stab_del(&g_old, b), 1);
+    ASSERT_EQ(stab_count(&g_old), 2);
+    ASSERT(stab_find(&g_old, "b") == NULL);
+    /* The last row took the vacated slot, intact. */
+    trow_t *c = stab_at(&g_old, 1);
+    ASSERT(c != NULL);
+    if (c) { ASSERT_STR(c->key, "c"); ASSERT_EQ(c->v, 33); }
+    /* The slot past n is zeroed, so nothing stale lingers there. */
+    ASSERT_EQ(((trow_t *)g_old.rows)[2].key[0], '\0');
+    /* Retiring a row is not a loss. */
+    ASSERT_EQ((int)sh_evict_total(), 0);
+    /* And it makes room: filling back to cap evicts nothing. */
+    put(&g_old, "d", 4, NULL);
+    put(&g_old, "e", 5, NULL);
+    ASSERT_EQ(stab_count(&g_old), 4);
+    ASSERT_EQ((int)sh_evict_total(), 0);
+}
+
+static void test_del_last_row_and_refusals(void) {
+    reset_all();
+    put(&g_old, "a", 1, NULL);
+    trow_t *b = put(&g_old, "b", 2, NULL);
+    ASSERT_EQ(stab_del(&g_old, b), 1);                   /* the last slot itself */
+    ASSERT_EQ(stab_count(&g_old), 1);
+    ASSERT(stab_find(&g_old, "a") != NULL);
+    ASSERT_EQ(stab_del(&g_old, b), 0);                   /* past n now */
+    trow_t foreign;
+    memset(&foreign, 0, sizeof(foreign));
+    ASSERT_EQ(stab_del(&g_old, &foreign), 0);            /* not this table's */
+    ASSERT_EQ(stab_del(&g_old, NULL), 0);
+    ASSERT_EQ(stab_count(&g_old), 1);
+    /* A ring's slot order is its eviction order; a swap would break it. */
+    trow_t *r = put(&g_ring, "x", 1, NULL);
+    ASSERT_EQ(stab_del(&g_ring, r), 0);
+    ASSERT_EQ(stab_count(&g_ring), 1);
+    ASSERT_EQ(stab_expire(&g_ring, 1000000, 0), 0);
+    ASSERT_EQ(stab_count(&g_ring), 1);
+}
+
+static void test_expire_drops_only_rows_past_age(void) {
+    reset_all();
+    put(&g_old, "a", 100, NULL);
+    put(&g_old, "b", 195, NULL);
+    put(&g_old, "c", 105, NULL);
+    put(&g_old, "d", 190, NULL);
+    /* age 10 at now 200: a (100) and c (105) are past it; d (190) sits
+     * exactly on it and is kept — "more than age" — and b is fresh. */
+    ASSERT_EQ(stab_expire(&g_old, 200, 10), 2);
+    ASSERT_EQ(stab_count(&g_old), 2);
+    ASSERT(stab_find(&g_old, "a") == NULL);
+    ASSERT(stab_find(&g_old, "c") == NULL);
+    ASSERT(stab_find(&g_old, "b") != NULL);
+    ASSERT(stab_find(&g_old, "d") != NULL);
+    ASSERT_EQ((int)sh_evict_total(), 0);
+    /* Two adjacent expired rows at the end — the case a forward walk
+     * with swap-delete skips — are both found. */
+    reset_all();
+    put(&g_old, "k", 500, NULL);
+    put(&g_old, "x", 1, NULL);
+    put(&g_old, "y", 2, NULL);
+    ASSERT_EQ(stab_expire(&g_old, 500, 10), 2);
+    ASSERT_EQ(stab_count(&g_old), 1);
+    ASSERT(stab_find(&g_old, "k") != NULL);
+}
+
 /* ── optional mutex ──────────────────────────────────────── */
 
 static void test_mutex_is_taken_and_released(void) {
@@ -324,6 +396,9 @@ void run_stab_tests(void) {
     RUN_TEST(test_ring_overwrites_in_insertion_order);
     RUN_TEST(test_snapshot_copies_slot_order_and_clamps);
     RUN_TEST(test_clear_empties_rows_and_resets_ring);
+    RUN_TEST(test_del_removes_moves_last_and_does_not_tally);
+    RUN_TEST(test_del_last_row_and_refusals);
+    RUN_TEST(test_expire_drops_only_rows_past_age);
     RUN_TEST(test_mutex_is_taken_and_released);
     reset_all();
 }

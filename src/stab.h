@@ -108,6 +108,27 @@ int   stab_count(const stab_t *t);
 /* Row at slot i (0 <= i < stab_count), or NULL. */
 void *stab_at(stab_t *t, int i);
 
+/* Remove one row the caller is finished with — a reassembly that
+ * completed, a row whose meaning has expired. Not a loss, so not
+ * tallied: the tally counts observations sloth wanted and could not
+ * keep, and a row retired because it is done is neither.
+ *
+ * The last row moves into the vacated slot, so unlike eviction this
+ * DOES move one surviving row; a caller that holds row pointers or slot
+ * indices across a stab_del must re-find them. Returns 1 when `row` was
+ * a live row of this table and was removed, 0 otherwise. Refused (0)
+ * on a STAB_RING table, where slot order is the insertion order the
+ * ring head walks and a swap would break it. */
+int   stab_del(stab_t *t, void *row);
+
+/* stab_del() every row whose last_seen is more than `age` before `now`.
+ * Returns the number removed. For tables whose rows stop meaning
+ * anything after a window (a CCMP PN is only comparable within one key
+ * lifetime): dropping them before stab_get() lets the policy's
+ * eviction — and therefore the tally — fire only when a row that still
+ * counted had to go. Refused (0) on a STAB_RING table, as stab_del. */
+int   stab_expire(stab_t *t, time_t now, time_t age);
+
 /* Empty the table and zero every row. Does not touch the tally — a
  * counter that clears has no lifetime meaning (sensor_health.h). */
 void  stab_clear(stab_t *t);

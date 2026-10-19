@@ -1,8 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
 #include "sloth.h"
 #include "ndp_snoop.h"
+#include "sensor_health.h"
 
 /* RFC 4861 §4.2 Router Advertisement layout, plus §4.6 options.
  * We build raw byte arrays by hand and feed them to ndp_snoop_ra,
@@ -201,6 +203,34 @@ static void test_zero_length_option_terminates_walk(void) {
 
 /* ── Suite ────────────────────────────────────────────────── */
 
+/* #110: STAB_OLDEST with a tally. The source address is the sender's to
+ * forge, so a spray of fake routers must churn the table and say so
+ * (evict_ndp_ra), never stop it learning the real one that arrives
+ * next. Stamps come from the module's own clock; insertion order is
+ * still oldest-first because that clock does not run backwards between
+ * two calls, and on a tie the lowest slot goes. */
+static void test_ra_table_full_evicts_oldest_and_tallies(void) {
+    ndp_snoop_clear();
+    sh_evict_reset();
+    uint8_t buf[16];
+    ra_header(buf, 64, 0, 1800);
+    char ip[48];
+    for (int i = 0; i < MAX_NDP_RAS; i++) {
+        snprintf(ip, sizeof(ip), "fe80::%x", i + 1);
+        ASSERT_EQ(ndp_snoop_ra(ip, buf, 16), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NDP_RA), 0);   /* full is not loss */
+    ASSERT_EQ(ndp_snoop_ra("fe80::beef", buf, 16), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_NDP_RA), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ndp_snoop_snapshot(&s);
+    ASSERT_EQ(s.ndp_ra_count, MAX_NDP_RAS);
+    ASSERT(find_ra(&s, "fe80::beef") >= 0);
+    ASSERT_EQ(find_ra(&s, "fe80::1"), -1);
+    ndp_snoop_clear();
+}
+
 void run_ndp_snoop_tests(void) {
     TEST_SUITE("ndp_snoop: parse + track");
     RUN_TEST(test_minimal_ra_recorded);
@@ -214,4 +244,5 @@ void run_ndp_snoop_tests(void) {
     RUN_TEST(test_non_ra_icmpv6_rejected);
     RUN_TEST(test_truncated_payload_rejected);
     RUN_TEST(test_zero_length_option_terminates_walk);
+    RUN_TEST(test_ra_table_full_evicts_oldest_and_tallies);
 }

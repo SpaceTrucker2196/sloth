@@ -5,6 +5,7 @@
 #include "fragattack.h"
 #include "dot11_data.h"
 #include "eapol_log.h"
+#include "sensor_health.h"
 
 /*
  * FragAttacks slice 1 — issue #75.
@@ -416,6 +417,7 @@ static void test_table_full_evicts_stalest(void) {
      * radio than one that forgets the BSS it has not heard from in
      * longest. */
     frag_clear();
+    sh_evict_reset();
     uint8_t f[128], b[6] = { 0x02, 0, 0, 0, 0, 0 };
     for (int i = 0; i < FRAG_MAX_BSS; i++) {
         b[5] = (uint8_t)i;
@@ -423,6 +425,7 @@ static void test_table_full_evicts_stalest(void) {
         frag_observe(f, n, 2000 + i);            /* index 0 is stalest */
     }
     ASSERT_EQ(frag_bss_count(), FRAG_MAX_BSS);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_BSS), 0);   /* full is not loss */
     uint8_t fresh[6] = { 0x02, 0, 0, 0, 0, 0xfe };
     int n = build(f, 0, FC1_PROTECTED, STA_A, fresh, STA_B, 0, 0);
     frag_observe(f, n, 9000);
@@ -430,6 +433,64 @@ static void test_table_full_evicts_stalest(void) {
     ASSERT(frag_find(fresh) >= 0);
     b[5] = 0;
     ASSERT_EQ(frag_find(b), -1);
+    /* #110: the loss reaches sensor_health instead of vanishing. */
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_BSS), 1);
+}
+
+/* Station table (the key-install witness). Its eviction has a visible
+ * cost, which is why it is counted: an evicted station's later
+ * plaintext frame is indistinguishable from an open network's, so it
+ * stops being reported. Pinned here so a reader of evict_frag_sta
+ * knows what a non-zero value forgave. */
+static void test_station_table_full_evicts_stalest_and_tallies(void) {
+    frag_clear();
+    sh_evict_reset();
+    uint8_t f[128], sa[6] = { 0x02, 0xcc, 0, 0, 0, 0 };
+    for (int i = 0; i < FRAG_MAX_STATIONS; i++) {
+        sa[4] = (uint8_t)(i >> 8); sa[5] = (uint8_t)i;
+        witness_key_install(sa, 3000 + i);       /* sa ..00 is stalest */
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_STA), 0);
+    uint8_t newest[6] = { 0x02, 0xcc, 0, 0, 0xff, 0xff };
+    witness_key_install(newest, 9000);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_STA), 1);
+
+    /* Newest still gates: its plaintext data frame is a finding. */
+    int n = build(f, 0, 0, STA_A, BSSID, newest, 0, 0x0800);
+    frag_observe(f, n, 9001);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 1u);
+    /* The evicted one no longer does. */
+    uint8_t evicted[6] = { 0x02, 0xcc, 0, 0, 0, 0 };
+    n = build(f, 0, 0, STA_A, BSSID, evicted, 0, 0x0800);
+    frag_observe(f, n, 9002);
+    if (bss()) ASSERT_EQ(bss()->plaintext_unicast, 1u);
+}
+
+/* Association table: keyed (bssid, sta), recency is last_assoc. */
+static void test_assoc_table_full_evicts_oldest_and_tallies(void) {
+    frag_clear();
+    sh_evict_reset();
+    uint8_t f[128];
+    /* A session from NEWEST opens before any association... */
+    uint8_t newest[6] = { 0x02, 0xdd, 0, 0, 0xff, 0xff };
+    int n = build(f, 0, FC1_MOREFRAG, STA_A, BSSID, newest, 0, 0x0800);
+    frag_observe(f, n, 1000);
+    uint8_t sta[6] = { 0x02, 0xdd, 0, 0, 0, 0 };
+    for (int i = 0; i < FRAG_MAX_ASSOC_EVT; i++) {
+        sta[4] = (uint8_t)(i >> 8); sta[5] = (uint8_t)i;
+        frag_note_association(BSSID, sta, 1001 + i);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_ASSOC), 0);
+    /* ...and NEWEST's association is the one that overflows the table. */
+    frag_note_association(BSSID, newest, 1001 + FRAG_MAX_ASSOC_EVT);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_ASSOC), 1);
+    /* The surviving row still does its job: the completion straddles
+     * the association that took the evicted row's slot. */
+    n = build(f, 0, 0, STA_A, BSSID, newest, 1, 0x0800);
+    frag_observe(f, n, 2000);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->cache_poison, 1u);
 }
 
 static void test_four_address_frames_are_skipped(void) {
@@ -854,6 +915,7 @@ static void test_sessions_are_cleared(void) {
 
 static void test_session_table_full_evicts_stalest(void) {
     frag_clear();
+    sh_evict_reset();
     uint8_t f[128];
     for (int i = 0; i < FRAG_MAX_SESSIONS; i++) {
         uint8_t da[6] = { 0x02, 0, 0, 0, 0, (uint8_t)i };
@@ -861,11 +923,12 @@ static void test_session_table_full_evicts_stalest(void) {
         frag_observe(f, n, 2000 + i);             /* index 0 is stalest */
     }
     ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
-
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_SESSION), 0);
     uint8_t fresh_da[6] = { 0x02, 0, 0, 0, 0, 0xfe };
     int n = build(f, 0, FC1_MOREFRAG, fresh_da, BSSID, STA_B, 0, 0x0800);
     frag_observe(f, n, 9000);
     ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_SESSION), 1);
 
     /* The evicted (stalest) session no longer straddles anything: a
      * completion for it now looks like an unopened session. */
@@ -873,6 +936,31 @@ static void test_session_table_full_evicts_stalest(void) {
     n = build(f, 0, 0, evicted_da, BSSID, STA_B, 1, 0x0800);
     frag_observe(f, n, 9001);
     ASSERT_EQ(frag_session_count(), FRAG_MAX_SESSIONS);
+}
+
+/* A completed reassembly is retired, not evicted: evict_frag_session
+ * must count only open sessions sloth was forced to drop. Twice the
+ * table's worth of sessions complete here and then one more opens; if
+ * completion left its row behind (sess_close a no-op), the table would
+ * be full of finished sessions and that last open would be tallied as
+ * a loss. */
+static void test_completed_sessions_are_retired_not_evicted(void) {
+    frag_clear();
+    sh_evict_reset();
+    uint8_t f[128];
+    for (int i = 0; i < 2 * FRAG_MAX_SESSIONS; i++) {
+        uint8_t da[6] = { 0x02, 0, 0, 0, (uint8_t)(i >> 8), (uint8_t)i };
+        int n = build(f, 0, FC1_MOREFRAG, da, BSSID, STA_B, 0, 0x0800);
+        frag_observe(f, n, 2000 + i);
+        n = build(f, 0, 0, da, BSSID, STA_B, 1, 0x0800);   /* completes */
+        frag_observe(f, n, 2000 + i);
+    }
+    ASSERT_EQ(frag_session_count(), 0);
+    uint8_t da[6] = { 0x02, 0, 0, 0, 0xff, 0xfe };
+    int n = build(f, 0, FC1_MOREFRAG, da, BSSID, STA_B, 0, 0x0800);
+    frag_observe(f, n, 9000);
+    ASSERT_EQ(frag_session_count(), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_SESSION), 0);
 }
 
 /* ── CVE-2020-24588: A-MSDU flip ────────────────────────────────────── */
@@ -1054,14 +1142,61 @@ static void test_repeated_flips_each_count(void) {
 
 static void test_mpdu_table_is_bounded(void) {
     frag_clear();
+    sh_evict_reset();
     uint8_t f[128];
     for (int i = 0; i < FRAG_MAX_MPDUS + 40; i++) {
         int n = build_ccmp(f, (uint64_t)(5000 + i), 0, (uint16_t)i, BSSID, 1);
         frag_observe(f, n, 2000);
     }
     ASSERT(frag_mpdu_count() <= FRAG_MAX_MPDUS);
+    /* Every record is inside the window, so each of the 40 overflowing
+     * PNs cost a live one, and each is counted. */
+    ASSERT_EQ(frag_mpdu_count(), FRAG_MAX_MPDUS);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_MPDU), 40);
     frag_clear();
     ASSERT_EQ(frag_mpdu_count(), 0);
+}
+
+/* The newest PN survives an overflow and still detects a flip; the
+ * oldest is the one that went. */
+static void test_mpdu_table_full_evicts_oldest_and_tallies(void) {
+    frag_clear();
+    sh_evict_reset();
+    uint8_t f[128];
+    for (int i = 0; i < FRAG_MAX_MPDUS; i++) {
+        int n = build_ccmp(f, (uint64_t)(7000 + i), 0, 100, BSSID, 1);
+        frag_observe(f, n, 2000);                /* PN 7000 is slot 0 */
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_MPDU), 0);
+    int n = build_ccmp(f, 0x99999ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 2001);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_MPDU), 1);
+    n = build_ccmp(f, 0x99999ULL, 1, 100, BSSID, 1);         /* newest, flipped */
+    frag_observe(f, n, 2002);
+    ASSERT(bss() != NULL);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 1u);
+    n = build_ccmp(f, 7000ULL, 1, 100, BSSID, 1);             /* evicted, flipped */
+    frag_observe(f, n, 2003);
+    if (bss()) ASSERT_EQ(bss()->amsdu_flip, 1u);
+}
+
+/* Records past FRAG_MPDU_WINDOW_S are dropped before the lookup, so a
+ * full table of expired PNs makes room without counting a loss — none
+ * of them could have matched anything. Without the expiry step the new
+ * PN would evict an expired row through STAB_OLDEST and be tallied. */
+static void test_expired_mpdus_are_not_counted_as_evictions(void) {
+    frag_clear();
+    sh_evict_reset();
+    uint8_t f[128];
+    for (int i = 0; i < FRAG_MAX_MPDUS; i++) {
+        int n = build_ccmp(f, (uint64_t)(8000 + i), 0, 100, BSSID, 1);
+        frag_observe(f, n, 2000);
+    }
+    ASSERT_EQ(frag_mpdu_count(), FRAG_MAX_MPDUS);
+    int n = build_ccmp(f, 0x77777ULL, 0, 100, BSSID, 1);
+    frag_observe(f, n, 2000 + FRAG_MPDU_WINDOW_S + 1);
+    ASSERT_EQ(frag_mpdu_count(), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_FRAG_MPDU), 0);
 }
 
 static void test_unprotected_amsdu_is_not_this_detector(void) {
@@ -1597,6 +1732,8 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_flip_window_expires);
     RUN_TEST(test_repeated_flips_each_count);
     RUN_TEST(test_mpdu_table_is_bounded);
+    RUN_TEST(test_mpdu_table_full_evicts_oldest_and_tallies);
+    RUN_TEST(test_expired_mpdus_are_not_counted_as_evictions);
     RUN_TEST(test_unprotected_amsdu_is_not_this_detector);
 
     TEST_SUITE("fragattacks: plaintext A-MSDU claiming EAPOL, CVE-2020-26144 (#75 slice 4)");
@@ -1658,6 +1795,9 @@ void run_fragattack_tests(void) {
     RUN_TEST(test_new_fragment_zero_replaces_an_abandoned_session);
     RUN_TEST(test_sessions_are_cleared);
     RUN_TEST(test_session_table_full_evicts_stalest);
+    RUN_TEST(test_completed_sessions_are_retired_not_evicted);
+    RUN_TEST(test_station_table_full_evicts_stalest_and_tallies);
+    RUN_TEST(test_assoc_table_full_evicts_oldest_and_tallies);
 
     TEST_SUITE("fragattacks: one lock, two threads (#111)");
     RUN_TEST(test_bss_copy_is_the_row_and_rejects_out_of_range);

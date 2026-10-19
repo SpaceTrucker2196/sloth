@@ -10,12 +10,20 @@
 #include "dhcp_snoop.h"
 #include "sensor_health.h"
 #include "dns.h"
+#include "stab.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
-static dhcp_event_t    g_events[MAX_DHCP_EVENTS];
-static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
+
+static int event_key_eq(const void *row, const void *key) {
+    return strcmp(((const dhcp_event_t *)row)->mac, (const char *)key) == 0;
+}
+
+/* Already tallied since #91 slice 3; stab_t since #110 so the eviction
+ * and its count are the shared code's, not a private copy. */
+STAB_DECL(g_events, dhcp_event_t, MAX_DHCP_EVENTS, last_seen, STAB_OLDEST,
+          SH_EVICT_DHCP_EVENT, NULL, event_key_eq);
 
 /* ── DHCP wire format constants (RFC 2131) ───────────────── */
 
@@ -42,25 +50,14 @@ static const char *msg_type_str(uint8_t t) {
 
 /* ── Table helpers ───────────────────────────────────────── */
 
-static dhcp_event_t *find_or_create(const char *mac) {
-    for (int i = 0; i < g_count; i++) {
-        if (strcmp(g_events[i].mac, mac) == 0)
-            return &g_events[i];
-    }
-    if (g_count >= MAX_DHCP_EVENTS) {
-        /* evict oldest */
-        int oldest = 0;
-        for (int i = 1; i < g_count; i++)
-            if (g_events[i].last_seen < g_events[oldest].last_seen)
-                oldest = i;
-        memset(&g_events[oldest], 0, sizeof(g_events[oldest]));
-        snprintf(g_events[oldest].mac, sizeof(g_events[oldest].mac), "%s", mac);
-        sh_evict_note(SH_EVICT_DHCP_EVENT);   /* #91 slice 3 */
-        return &g_events[oldest];
-    }
-    dhcp_event_t *e = &g_events[g_count++];
-    memset(e, 0, sizeof(*e));
-    snprintf(e->mac, sizeof(e->mac), "%s", mac);
+/* `now` 0: the caller stamps last_seen from its own clock read under the
+ * same g_mu hold, before any other lookup can see the row. That read is
+ * left exactly where it was — moving modules onto an injected clock is
+ * its own slice, not this one. */
+static dhcp_event_t *event_get(const char *mac) {
+    int created;
+    dhcp_event_t *e = stab_get(&g_events, mac, 0, &created);
+    if (created) snprintf(e->mac, sizeof(e->mac), "%s", mac);
     return e;
 }
 
@@ -128,7 +125,7 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
                            ? yiaddr : ciaddr;
 
     pthread_mutex_lock(&g_mu);
-    dhcp_event_t *e = find_or_create(mac);
+    dhcp_event_t *e = event_get(mac);
     e->msg_type  = msg_type;
     e->last_seen = sloth_wall();
     if (hostname[0])
@@ -165,15 +162,13 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
 
 void dhcp_snoop_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_count < MAX_DHCP_EVENTS ? g_count : MAX_DHCP_EVENTS;
-    memcpy(s->dhcp_events, g_events, (size_t)n * sizeof(dhcp_event_t));
-    s->dhcp_event_count = n;
+    s->dhcp_event_count = stab_snapshot(&g_events, s->dhcp_events,
+                                        MAX_DHCP_EVENTS);
     pthread_mutex_unlock(&g_mu);
 }
 
 void dhcp_snoop_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_events, 0, sizeof(g_events));
-    g_count = 0;
+    stab_clear(&g_events);
     pthread_mutex_unlock(&g_mu);
 }

@@ -7,11 +7,26 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "onvif_discovery.h"
+#include "stab.h"
+#include "sensor_health.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
-static onvif_device_t  g_devs[MAX_ONVIF_DEVICES];
-static int              g_count = 0;
+/* UUID when the message carries one; otherwise the source IP, and then
+ * only against rows that never learned a UUID — a UUID-less Bye must
+ * not attach to a different device that shares the address. */
+typedef struct { const char *uuid, *ip; } onvif_key_t;
+
+static int dev_key_eq(const void *row, const void *key) {
+    const onvif_device_t *d = row; const onvif_key_t *k = key;
+    if (k->uuid[0]) return strcmp(d->uuid, k->uuid) == 0;
+    return !d->uuid[0] && strcmp(d->ip, k->ip) == 0;
+}
+
+/* STAB_OLDEST (#110), tallied as evict_onvif_device: the UUID is the
+ * sender's to choose, so a spray of invented ones churns the table. */
+STAB_DECL(g_devs, onvif_device_t, MAX_ONVIF_DEVICES, last_seen, STAB_OLDEST,
+          SH_EVICT_ONVIF_DEVICE, NULL, dev_key_eq);
 static pthread_mutex_t  g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Minimal XML scanning ────────────────────────────────────
@@ -134,26 +149,13 @@ int onvif_ws_discovery_parse(const uint8_t *data, int len, onvif_msg_t *out) {
 
 /* ── Table helpers ───────────────────────────────────────── */
 
-static onvif_device_t *find_or_create(const char *uuid, const char *ip) {
-    if (uuid[0]) {
-        for (int i = 0; i < g_count; i++)
-            if (strcmp(g_devs[i].uuid, uuid) == 0) return &g_devs[i];
-    } else {
-        for (int i = 0; i < g_count; i++)
-            if (!g_devs[i].uuid[0] && strcmp(g_devs[i].ip, ip) == 0)
-                return &g_devs[i];
-    }
-
-    if (g_count >= MAX_ONVIF_DEVICES) {
-        int oldest = 0;
-        for (int i = 1; i < g_count; i++)
-            if (g_devs[i].last_seen < g_devs[oldest].last_seen) oldest = i;
-        memset(&g_devs[oldest], 0, sizeof(g_devs[oldest]));
-        return &g_devs[oldest];
-    }
-    onvif_device_t *e = &g_devs[g_count++];
-    memset(e, 0, sizeof(*e));
-    return e;
+/* `now` 0: the caller stamps last_seen from its own clock read under the
+ * same g_mu hold, before any other lookup can see the row. That read is
+ * left exactly where it was — moving modules onto an injected clock is
+ * its own slice, not this one. */
+static onvif_device_t *dev_get(const char *uuid, const char *ip) {
+    onvif_key_t key = { uuid, ip };
+    return stab_get(&g_devs, &key, 0, NULL);
 }
 
 /* ── Public API ──────────────────────────────────────────── */
@@ -164,7 +166,7 @@ int onvif_ws_discovery_snoop(const char *src_ip, const uint8_t *data, int len,
     if (!onvif_ws_discovery_parse(data, len, &m)) return 0;
 
     pthread_mutex_lock(&g_mu);
-    onvif_device_t *e = find_or_create(m.uuid, src_ip);
+    onvif_device_t *e = dev_get(m.uuid, src_ip);
     snprintf(e->ip, sizeof(e->ip), "%s", src_ip);
     /* A Bye carries only the EndpointReference (OASIS WS-Discovery 1.1
      * §4.2) — never overwrite the last-known Types/Scopes/XAddrs with
@@ -179,25 +181,27 @@ int onvif_ws_discovery_snoop(const char *src_ip, const uint8_t *data, int len,
      * one. */
     if (m.is_camera) e->is_camera = 1;
     e->last_seen = sloth_wall();
+    /* Read under the lock: once it is released the row is the table's
+     * again, and an eviction on another thread may already have handed
+     * it to a different device. */
+    int is_camera = e->is_camera;
     pthread_mutex_unlock(&g_mu);
 
     if (info && infosz > 0)
         snprintf(info, (size_t)infosz, "WSD %s%s", m.kind,
-                 e->is_camera ? " cam" : "");
+                 is_camera ? " cam" : "");
     return 1;
 }
 
 void onvif_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_count < MAX_ONVIF_DEVICES ? g_count : MAX_ONVIF_DEVICES;
-    memcpy(s->onvif_devices, g_devs, (size_t)n * sizeof(onvif_device_t));
+    int n = stab_snapshot(&g_devs, s->onvif_devices, MAX_ONVIF_DEVICES);
     s->onvif_count = n;
     pthread_mutex_unlock(&g_mu);
 }
 
 void onvif_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_devs, 0, sizeof(g_devs));
-    g_count = 0;
+    stab_clear(&g_devs);
     pthread_mutex_unlock(&g_mu);
 }

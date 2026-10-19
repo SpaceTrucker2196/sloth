@@ -22,16 +22,13 @@
  * NOT every bounded table in sloth — stating which are covered is the
  * point, since a tally that silently omits a table reads as "no loss"
  * when it means "not measured", and claiming completeness it does not
- * have is the same failure wearing a better hat. More than twenty
- * further bounded tables still LRU-evict or refuse on full with no
- * field — at least one in each of these modules, and five in
- * action_snoop alone: fragattack, the
- * BGP/Kerberos/LDAP/NDP/SMB/SSH/SMTP/SSDP/SNMP/mDNS/NBNS snoopers,
- * ONVIF discovery, cleartext_creds, the two deauth tables, transit,
- * the dns.c reverse cache, eapol_log, beacon_detect, action_snoop,
- * bandwidth, twins and sensors. The rule to read the tally by is
- * therefore mechanical: a table either has an `evict_<name>` field or
- * its loss is unmeasured.
+ * have is the same failure wearing a better hat. Further bounded
+ * tables still LRU-evict or refuse on full with no field — at least
+ * one in each of these modules, and five in action_snoop alone:
+ * cleartext_creds, the two deauth tables, transit, the dns.c reverse
+ * cache, beacon_detect, action_snoop, bandwidth, twins and sensors.
+ * The rule to read the tally by is therefore mechanical: a table
+ * either has an `evict_<name>` field or its loss is unmeasured.
  *
  * The list grows by slices. The beacon, seqnum and assoc tables joined
  * in the #91 wave-6 slice; wps_session followed, then evidence_frame
@@ -105,6 +102,24 @@ typedef enum {
     SH_EVICT_MDNS_SERVICE,  /* src/mdns_snoop.c — a NEW service instance refused, none stale (REFUSE_AGING) */
     SH_EVICT_NBNS_NAME,     /* src/nbns_snoop.c — a NEW NetBIOS name refused, none stale (REFUSE_AGING) */
     SH_EVICT_ARP_HIST,      /* src/alerts/rules_wired.c — least-recently-seen IP dropped from the ARP-spoof baseline */
+    /* The rest of the #110 migration, appended for the same reason:
+     * fragattack's five tables (they waited on #111's lock) and the
+     * remaining hand-written find_or_alloc / find_or_create tables that
+     * evicted without a tally. All STAB_OLDEST. frag_session and
+     * frag_mpdu count only rows that still meant something: a session
+     * that completed and an MPDU record past FRAG_MPDU_WINDOW_S are
+     * retired with stab_del()/stab_expire(), not evicted. */
+    SH_EVICT_FRAG_BSS,      /* src/fragattack.c — least-recently-seen BSS's FragAttacks counters dropped */
+    SH_EVICT_FRAG_STA,      /* src/fragattack.c — least-recently-seen key-install witness (BSSID,STA) dropped */
+    SH_EVICT_FRAG_SESSION,  /* src/fragattack.c — least-recently-seen open reassembly dropped */
+    SH_EVICT_FRAG_ASSOC,    /* src/fragattack.c — oldest (BSSID,STA) (re)association timestamp dropped */
+    SH_EVICT_FRAG_MPDU,     /* src/fragattack.c — oldest in-window (TA,PN) A-MSDU-flip record dropped */
+    SH_EVICT_NDP_RA,        /* src/ndp_snoop.c  — least-recently-seen router-advertisement source dropped */
+    SH_EVICT_ROGUE_RADIUS,  /* src/eap_track.c  — least-recently-seen per-BSSID EAP posture row dropped */
+    SH_EVICT_SSDP_DEVICE,   /* src/ssdp_snoop.c — least-recently-seen SSDP device dropped */
+    SH_EVICT_ONVIF_DEVICE,  /* src/onvif_discovery.c — least-recently-seen WS-Discovery device dropped */
+    SH_EVICT_SMTP_FLOW,     /* src/smtp_snoop.c — least-recently-seen AUTH LOGIN flow dropped */
+    SH_EVICT_EAPOL_PENDING, /* src/eapol_log.c  — least-recently-heard in-flight 4-way handshake dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -145,7 +160,9 @@ uint64_t sh_evict_total_tables(void);
  * "quic_log", "http_log", "ntp_log", "icmp_log", "rf_channel",
  * "http_flow", "bgp_session", "ldap_event", "kerb_event",
  * "smb_session", "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow",
- * "mdns_service", "nbns_name", "arp_hist".
+ * "mdns_service", "nbns_name", "arp_hist", "frag_bss", "frag_sta",
+ * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
+ * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

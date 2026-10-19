@@ -7,12 +7,29 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "ssdp_snoop.h"
+#include "stab.h"
+#include "sensor_health.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
-static ssdp_device_t   g_devs[MAX_SSDP_DEVICES];
-static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
+
+/* USN when the announcement carries one; otherwise (ip, type). The two
+ * modes are the lookup's, so they are the key's: a USN-less key matches
+ * any row with that ip and type, exactly as the hand-rolled loop did. */
+typedef struct { const char *usn, *ip, *type; } ssdp_key_t;
+
+static int dev_key_eq(const void *row, const void *key) {
+    const ssdp_device_t *d = row; const ssdp_key_t *k = key;
+    if (k->usn[0]) return strcmp(d->usn, k->usn) == 0;
+    return strcmp(d->ip, k->ip) == 0 && strcmp(d->type, k->type) == 0;
+}
+
+/* STAB_OLDEST (#110): every field of the key is the announcer's to
+ * choose, so a flood of invented USNs churns the table — counted as
+ * evict_ssdp_device — rather than freezing it. */
+STAB_DECL(g_devs, ssdp_device_t, MAX_SSDP_DEVICES, last_seen, STAB_OLDEST,
+          SH_EVICT_SSDP_DEVICE, NULL, dev_key_eq);
 
 /* ── Header parsing ──────────────────────────────────────── */
 
@@ -74,30 +91,14 @@ static const char *short_type(const char *nt) {
 
 /* ── Table helpers ───────────────────────────────────────── */
 
-static ssdp_device_t *find_or_create(const char *usn, const char *ip,
-                                     const char *type) {
-    /* Prefer USN as key if non-empty */
-    if (usn[0]) {
-        for (int i = 0; i < g_count; i++)
-            if (strcmp(g_devs[i].usn, usn) == 0) return &g_devs[i];
-    } else {
-        /* Fall back to ip+type */
-        for (int i = 0; i < g_count; i++)
-            if (strcmp(g_devs[i].ip, ip) == 0 &&
-                strcmp(g_devs[i].type, type) == 0) return &g_devs[i];
-    }
-
-    if (g_count >= MAX_SSDP_DEVICES) {
-        /* evict oldest */
-        int oldest = 0;
-        for (int i = 1; i < g_count; i++)
-            if (g_devs[i].last_seen < g_devs[oldest].last_seen) oldest = i;
-        memset(&g_devs[oldest], 0, sizeof(g_devs[oldest]));
-        return &g_devs[oldest];
-    }
-    ssdp_device_t *e = &g_devs[g_count++];
-    memset(e, 0, sizeof(*e));
-    return e;
+/* `now` 0: the caller stamps last_seen from its own clock read under the
+ * same g_mu hold, before any other lookup can see the row. That read is
+ * left exactly where it was — moving modules onto an injected clock is
+ * its own slice, not this one. */
+static ssdp_device_t *dev_get(const char *usn, const char *ip,
+                              const char *type) {
+    ssdp_key_t key = { usn, ip, type };
+    return stab_get(&g_devs, &key, 0, NULL);
 }
 
 /* ── Public API ──────────────────────────────────────────── */
@@ -131,7 +132,7 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
     const char *type = is_notify ? nt : st;
 
     pthread_mutex_lock(&g_mu);
-    ssdp_device_t *e = find_or_create(usn, src_ip, type);
+    ssdp_device_t *e = dev_get(usn, src_ip, type);
     snprintf(e->ip,       sizeof(e->ip),       "%s", src_ip);
     snprintf(e->type,     sizeof(e->type),      "%s", type);
     snprintf(e->usn,      sizeof(e->usn),       "%s", usn);
@@ -149,15 +150,13 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
 
 void ssdp_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
-    int n = g_count < MAX_SSDP_DEVICES ? g_count : MAX_SSDP_DEVICES;
-    memcpy(s->ssdp_devices, g_devs, (size_t)n * sizeof(ssdp_device_t));
+    int n = stab_snapshot(&g_devs, s->ssdp_devices, MAX_SSDP_DEVICES);
     s->ssdp_count = n;
     pthread_mutex_unlock(&g_mu);
 }
 
 void ssdp_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_devs, 0, sizeof(g_devs));
-    g_count = 0;
+    stab_clear(&g_devs);
     pthread_mutex_unlock(&g_mu);
 }

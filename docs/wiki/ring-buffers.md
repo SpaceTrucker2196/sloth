@@ -263,7 +263,7 @@ be the uncounted kind `sensor_health.h` warns about. Three policies:
 
 | policy | on a full table | used by |
 |---|---|---|
-| `STAB_OLDEST` | overwrite the smallest `last_seen`; tally | the eight snoopers; the ARP-spoof baseline (keyed by IP, 256 rows) |
+| `STAB_OLDEST` | overwrite the smallest `last_seen`; tally | the eight snoopers; the ARP-spoof baseline (keyed by IP, 256 rows); the five FragAttacks tables; the NDP, SSDP, ONVIF, SMTP AUTH LOGIN, DHCP, per-BSSID EAP posture and EAPOL in-flight handshake tables |
 | `STAB_REFUSE_AGING` | reclaim the oldest row only if unseen for `age_secs`, else **refuse** the new key; tally the refusal | mDNS services, NBNS names (3600 s) |
 | `STAB_RING` | overwrite in insertion order; tally | nothing yet — kept so a ring-shaped keyed table does not grow a fourth idiom |
 
@@ -284,8 +284,40 @@ prove the same through each parser, and the mDNS/NBNS tests drive aging
 through `mdns_snoop_at()` / `nbns_snoop_at()`, the clock-taking entry
 points added for exactly that.
 
-The FragAttacks BSS table is the one keyed table left on its own idiom;
-it moves once its locking slice has landed.
+Two calls retire a row without counting it, because retiring is not
+loss: `stab_del()` removes one row (a FragAttacks reassembly that
+completed), and `stab_expire(now, age)` removes every row older than
+`age` (A-MSDU-flip PN records past their 10 s window, dropped before
+each lookup so a full table of dead PNs makes room without a tally).
+Both move the last row into the vacated slot, so unlike eviction they
+*do* move a surviving row, and both refuse a `STAB_RING` table, whose
+slot order is its eviction order.
+
+**What is still hand-written, and why** (2026-10-19, #110 closing
+pass). After the FragAttacks tables and the six remaining
+`find_or_alloc` / `find_or_create` tables moved, a grep for those
+names finds only thin `stab_get()` wrappers (`mdns_snoop.c`,
+`nbns_snoop.c`) and three bodies that are deliberately not `stab_t`:
+
+- `src/bandwidth.c :: bw_get_or_create` — a mark-and-sweep mirror of
+  the connection table, not a cache. Every row not matched this poll
+  is compacted out at the end of `bw_update()`, the table is sized to
+  `MAX_CONNS` like the table it mirrors, and it has no `last_seen` to
+  evict by. A NULL return is at most one poll of lag during total
+  connection churn, not a lost observation.
+- `src/deauth_snoop.c :: obs_find_or_add` / `vic_find_or_add` —
+  recency is a monotonic millisecond clock (`uint64_t last_ms`), which
+  `stab_t`'s `time_t` stamp cannot express without discarding the
+  sub-second ordering the flood windows depend on. Still uncounted.
+- `src/views/channel.c :: find_or_alloc` — a per-draw aggregation over
+  a caller's stack array, rebuilt every frame and never full by
+  construction (one row per channel). Not module state at all.
+
+Other keyed tables with different function names (for example
+`eap_track.c`'s TLS-in-EAP `session_for`, which reuses resolved slots
+and is already counted as `eap_session`) were outside this pass; the
+uncounted list in [[jsonl-schema]] remains the authority on what is
+measured.
 
 ## Mutation testing
 

@@ -26,6 +26,8 @@
 #include "smtp_snoop.h"
 #include "sloth_clock.h"
 #include "cleartext_creds.h"
+#include "stab.h"
+#include "sensor_health.h"
 
 static int ci_startswith(const char *s, int slen, const char *prefix, int plen) {
     if (slen < plen) return 0;
@@ -103,9 +105,21 @@ typedef struct {
     time_t         last_seen;
 } smtp_flow_t;
 
-static smtp_flow_t     g_flows[SMTP_MAX_FLOWS];
-static int             g_flow_count = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct { const char *client, *server; uint16_t port; } flow_key_t;
+
+static int flow_key_eq(const void *row, const void *key) {
+    const smtp_flow_t *f = row; const flow_key_t *k = key;
+    return f->dst_port == k->port && strcmp(f->client, k->client) == 0 &&
+           strcmp(f->server, k->server) == 0;
+}
+
+/* STAB_OLDEST (#110). An eviction here loses a half-finished AUTH
+ * LOGIN — the password line that follows is then never marked — so it
+ * is counted as evict_smtp_flow rather than lost silently. */
+STAB_DECL(g_flows, smtp_flow_t, SMTP_MAX_FLOWS, last_seen, STAB_OLDEST,
+          SH_EVICT_SMTP_FLOW, NULL, flow_key_eq);
 
 /* True if `port` is one we treat as the SMTP server side. Used to
  * decide direction — client payloads have this as their dst_port. */
@@ -113,33 +127,23 @@ static int is_smtp_port(uint16_t port) {
     return port == 25 || port == 587;
 }
 
-static int flow_find(const char *client, const char *server, uint16_t port) {
-    for (int i = 0; i < g_flow_count; i++) {
-        const smtp_flow_t *f = &g_flows[i];
-        if (f->dst_port != port) continue;
-        if (strcmp(f->client, client) != 0) continue;
-        if (strcmp(f->server, server) != 0) continue;
-        return i;
-    }
-    return -1;
+static smtp_flow_t *flow_find(const char *client, const char *server,
+                              uint16_t port) {
+    flow_key_t key = { client, server, port };
+    return stab_find(&g_flows, &key);
 }
 
-static int flow_evict_oldest(void) {
-    int oldest = 0;
-    for (int i = 1; i < g_flow_count; i++)
-        if (g_flows[i].last_seen < g_flows[oldest].last_seen) oldest = i;
-    return oldest;
-}
-
-static smtp_flow_t *flow_get_or_add(const char *client, const char *server,
-                                    uint16_t port)
+/* `now` 0: the caller stamps last_seen from its own clock read under the
+ * same g_mu hold, before any other lookup can see the row. That read is
+ * left exactly where it was — moving modules onto an injected clock is
+ * its own slice, not this one. */
+static smtp_flow_t *flow_get(const char *client, const char *server,
+                             uint16_t port)
 {
-    int idx = flow_find(client, server, port);
-    if (idx >= 0) return &g_flows[idx];
-    int slot = (g_flow_count < SMTP_MAX_FLOWS) ? g_flow_count++
-                                                : flow_evict_oldest();
-    smtp_flow_t *f = &g_flows[slot];
-    memset(f, 0, sizeof(*f));
+    flow_key_t key = { client, server, port };
+    int created;
+    smtp_flow_t *f = stab_get(&g_flows, &key, 0, &created);
+    if (!created) return f;
     snprintf(f->client, sizeof(f->client), "%s", client);
     snprintf(f->server, sizeof(f->server), "%s", server);
     f->dst_port = port;
@@ -165,8 +169,7 @@ static int looks_like_base64(const char *s, int len) {
 
 void smtp_snoop_reset(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_flows, 0, sizeof(g_flows));
-    g_flow_count = 0;
+    stab_clear(&g_flows);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -198,7 +201,7 @@ int smtp_snoop(const uint8_t *data, int len,
              * Handle both forms. */
             int i = 10;
             while (i < line && (p[i] == ' ' || p[i] == '\t')) i++;
-            smtp_flow_t *f = flow_get_or_add(src, dst, dst_port);
+            smtp_flow_t *f = flow_get(src, dst, dst_port);
             if (i < line && looks_like_base64(p + i, line - i)) {
                 char raw[128];
                 int dl = b64_decode(p + i, line - i, raw, (int)sizeof(raw));
@@ -221,9 +224,8 @@ int smtp_snoop(const uint8_t *data, int len,
          * flow's state expects the client's next payload, this must be
          * it. Guard with looks_like_base64 so a client's plaintext
          * QUIT / RSET etc. doesn't get misread. */
-        int idx = flow_find(src, dst, dst_port);
-        if (idx >= 0 && looks_like_base64(p, line)) {
-            smtp_flow_t *f = &g_flows[idx];
+        smtp_flow_t *f = flow_find(src, dst, dst_port);
+        if (f && looks_like_base64(p, line)) {
             if (f->state == LOGIN_AWAIT_USER) {
                 char raw[128];
                 int dl = b64_decode(p, line, raw, (int)sizeof(raw));

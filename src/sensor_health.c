@@ -123,6 +123,17 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_MDNS_SERVICE: return "mdns_service";
     case SH_EVICT_NBNS_NAME:   return "nbns_name";
     case SH_EVICT_ARP_HIST:    return "arp_hist";
+    case SH_EVICT_FRAG_BSS:     return "frag_bss";
+    case SH_EVICT_FRAG_STA:     return "frag_sta";
+    case SH_EVICT_FRAG_SESSION: return "frag_session";
+    case SH_EVICT_FRAG_ASSOC:   return "frag_assoc";
+    case SH_EVICT_FRAG_MPDU:    return "frag_mpdu";
+    case SH_EVICT_NDP_RA:       return "ndp_ra";
+    case SH_EVICT_ROGUE_RADIUS: return "rogue_radius";
+    case SH_EVICT_SSDP_DEVICE:  return "ssdp_device";
+    case SH_EVICT_ONVIF_DEVICE: return "onvif_device";
+    case SH_EVICT_SMTP_FLOW:    return "smtp_flow";
+    case SH_EVICT_EAPOL_PENDING: return "eapol_pending";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

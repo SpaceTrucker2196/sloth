@@ -122,6 +122,21 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_MDNS_SERVICE), "mdns_service");
     ASSERT_STR(sh_evict_name(SH_EVICT_NBNS_NAME),   "nbns_name");
     ASSERT_STR(sh_evict_name(SH_EVICT_ARP_HIST),    "arp_hist");
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_BSS),     "frag_bss");
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_STA),     "frag_sta");
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_SESSION), "frag_session");
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_ASSOC),   "frag_assoc");
+    ASSERT_STR(sh_evict_name(SH_EVICT_FRAG_MPDU),    "frag_mpdu");
+    ASSERT_STR(sh_evict_name(SH_EVICT_NDP_RA),       "ndp_ra");
+    ASSERT_STR(sh_evict_name(SH_EVICT_ROGUE_RADIUS), "rogue_radius");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SSDP_DEVICE),  "ssdp_device");
+    ASSERT_STR(sh_evict_name(SH_EVICT_ONVIF_DEVICE), "onvif_device");
+    ASSERT_STR(sh_evict_name(SH_EVICT_SMTP_FLOW),    "smtp_flow");
+    ASSERT_STR(sh_evict_name(SH_EVICT_EAPOL_PENDING), "eapol_pending");
+    /* Appended, never inserted: the first new kind sits right after the
+     * last one the previous slice published, so every earlier evict_*
+     * field keeps its position in the record. */
+    ASSERT_EQ((int)SH_EVICT_FRAG_BSS, (int)SH_EVICT_ARP_HIST + 1);
     ASSERT_STR(sh_evict_name((sh_evict_t)SH_EVICT_KIND_COUNT), "");
     /* Names must be distinct: two kinds sharing one `evict_<name>` field
      * would silently merge two tables' loss into one number, which is the

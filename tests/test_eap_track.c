@@ -2,6 +2,7 @@
 #include "sloth.h"
 #include "eap_track.h"
 #include "eap_parse.h"
+#include "sensor_health.h"
 #include <string.h>
 
 static const uint8_t BSSID[6] = {0xde,0xad,0xbe,0xef,0x00,0x01};
@@ -249,6 +250,39 @@ static void test_sessions_are_per_client(void) {
     ASSERT_EQ(memcmp(s.rogue_radius[0].last_nocert_sta, STA2, 6), 0);
 }
 
+/* #110: the per-BSSID posture table is STAB_OLDEST with a tally
+ * (evict_rogue_radius) — a BSSID is the transmitter's to choose. */
+static void test_bssid_table_full_evicts_oldest_and_tallies(void) {
+    eap_track_clear();
+    sh_evict_reset();
+    uint8_t f[16];
+    uint8_t b[6] = {0x02,0xee,0x00,0x00,0x00,0x00};
+    for (int i = 0; i < MAX_ROGUE_RADIUS; i++) {
+        b[5] = (uint8_t)i;
+        eap_track_observe(b, STA, 1, f, req(f, EAP_TYPE_PEAP), 1000 + i);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ROGUE_RADIUS), 0);
+    uint8_t fresh[6] = {0x02,0xee,0x00,0x00,0x00,0xfe};
+    eap_track_observe(fresh, STA, 1, f, req(f, EAP_TYPE_MD5), 5000);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ROGUE_RADIUS), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    eap_track_snapshot(&s);
+    ASSERT_EQ(s.rogue_radius_count, MAX_ROGUE_RADIUS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.rogue_radius_count; i++) {
+        if (memcmp(s.rogue_radius[i].bssid, fresh, 6) == 0) {
+            have_new = 1;
+            ASSERT_EQ(s.rogue_radius[i].weak_method, 1);
+            ASSERT_EQ((long)s.rogue_radius[i].first_seen, 5000L);
+        }
+        if (s.rogue_radius[i].bssid[5] == 0x00) have_first = 1;
+    }
+    ASSERT(have_new);
+    ASSERT(!have_first);
+    eap_track_clear();
+}
+
 void run_eap_track_tests(void) {
     TEST_SUITE("EAP method tracking (#31)");
     RUN_TEST(test_weak_method_recorded);
@@ -267,4 +301,5 @@ void run_eap_track_tests(void) {
     RUN_TEST(test_eap_failure_is_not_a_finding);
     RUN_TEST(test_non_tls_method_is_not_tracked);
     RUN_TEST(test_sessions_are_per_client);
+    RUN_TEST(test_bssid_table_full_evicts_oldest_and_tallies);
 }

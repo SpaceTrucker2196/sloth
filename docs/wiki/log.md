@@ -3777,3 +3777,17 @@ it. The #88 `flood_wall()` / `flood_mono_ms()` /
 `flood_test_set_clock()` forwards in `flood_window.h` are gone. JSONL
 output unchanged; `make replay-check` golden unchanged. Pages:
 [[architecture]] (clock seam bullet), [[alerts]].
+
+## 2026-10-19 — #110 (second half): fragattack and the last find_or_alloc tables onto `stab_t`
+
+The five FragAttacks tables (BSS, key-install witness, open
+reassemblies, association times, A-MSDU-flip PNs) and six more
+hand-written find-or-allocate tables (NDP router advertisements, SSDP,
+ONVIF, SMTP AUTH LOGIN flows, per-BSSID EAP posture, EAPOL in-flight
+handshakes) are `stab_t STAB_OLDEST`; DHCP, already counted, moved too.
+Eleven `evict_*` fields appended to `sensor_health`. `stab_del()` and
+`stab_expire()` added so a completed reassembly and an expired PN are
+retired without being counted as loss. Updated [[jsonl-schema]] (field
+list, sample, semantics, uncounted list) and [[ring-buffers]] (users,
+the two retire calls, and the three bodies left hand-written with the
+reason for each).

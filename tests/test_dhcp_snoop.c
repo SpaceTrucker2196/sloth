@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "dhcp_snoop.h"
 #include "dns.h"
+#include "sensor_health.h"
 
 /* Caller-owned result buffer for the dns.h lookups (#95). */
 static char nb_[DNS_NAME_MAX];
@@ -413,6 +414,40 @@ static void test_hostname_control_octets_marked(void) {
     ASSERT_STR("evil?host?", s.dhcp_events[0].hostname);
 }
 
+/* #110: already tallied since #91; now the shared stab_t eviction. The
+ * test pins that the count survived the move and the victim is still
+ * the least recently seen client. */
+static void test_table_full_evicts_oldest_and_tallies(void) {
+    reset();
+    sh_evict_reset();
+    uint8_t buf[512];
+    dhcp_args_t a; memset(&a, 0, sizeof(a));
+    a.op = 1; a.msg_type = 1;                   /* DISCOVER */
+    a.mac[0] = 0x02; a.mac[1] = 0x44;
+    for (int i = 0; i < MAX_DHCP_EVENTS; i++) {
+        a.mac[4] = (uint8_t)(i >> 8); a.mac[5] = (uint8_t)i;
+        int n = build_dhcp(&a, buf, sizeof(buf));
+        ASSERT_EQ(dhcp_snoop(buf, n, NULL, 0), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DHCP_EVENT), 0);
+    a.mac[4] = 0xff; a.mac[5] = 0xff;
+    int n = build_dhcp(&a, buf, sizeof(buf));
+    ASSERT_EQ(dhcp_snoop(buf, n, NULL, 0), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DHCP_EVENT), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    dhcp_snoop_snapshot(&s);
+    ASSERT_EQ(s.dhcp_event_count, MAX_DHCP_EVENTS);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.dhcp_event_count; i++) {
+        if (strcmp(s.dhcp_events[i].mac, "02:44:00:00:ff:ff") == 0) have_new = 1;
+        if (strcmp(s.dhcp_events[i].mac, "02:44:00:00:00:00") == 0) have_first = 1;
+    }
+    ASSERT(have_new);
+    ASSERT(!have_first);
+    reset();
+}
+
 void run_dhcp_snoop_tests(void) {
     TEST_SUITE("dhcp_snoop protocol");
     RUN_TEST(test_ack_fills_ip_and_hostname);
@@ -438,4 +473,5 @@ void run_dhcp_snoop_tests(void) {
     RUN_TEST(test_nav_down_up);
     RUN_TEST(test_clear_key_resets_state);
     RUN_TEST(test_hostname_control_octets_marked);
+    RUN_TEST(test_table_full_evicts_oldest_and_tallies);
 }

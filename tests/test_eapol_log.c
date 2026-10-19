@@ -2322,6 +2322,47 @@ static void test_maintain_is_inert_without_an_export_dir(void) {
     gate_cleanup();
 }
 
+/* #110: the in-flight handshake table is STAB_OLDEST with a tally
+ * (evict_eapol_pending). One M3 per (BSSID, STA) pair creates its row;
+ * the PTK generation that M3 records is the observable a pair loses
+ * when it is evicted. 64 is MAX_PENDING, private to eapol_log.c. */
+static int m3_for_pair(const uint8_t *bssid, const uint8_t *sta, time_t now) {
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, M2_MIC, NULL);
+    uint8_t frame[256];
+    fb_t b; fb_init(&b, frame, (int)sizeof(frame));
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 0; h.flags = FB_FROMDS;
+    h.a1 = sta; h.a2 = bssid; h.a3 = bssid;     /* Table 9-26, FromDS */
+    fb_dot11_hdr(&b, &h);
+    fb_llc_snap(&b, 0x888E);
+    fb_bytes(&b, eapol, en);
+    if (!fb_ok(&b)) return -1;
+    return eapol_observe_dot11(frame, b.len, -50, 6, now, 0);
+}
+
+static void test_pending_table_full_evicts_oldest_and_tallies(void) {
+    eapol_clear();
+    sh_evict_reset();
+    uint8_t bssid[6] = {0x02, 0x55, 0x00, 0x00, 0x00, 0x01};
+    uint8_t sta[6]   = {0x02, 0x66, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 64; i++) {
+        sta[5] = (uint8_t)i;
+        ASSERT_EQ(m3_for_pair(bssid, sta, 1000 + i), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_EAPOL_PENDING), 0);
+    uint8_t fresh[6] = {0x02, 0x66, 0x00, 0x00, 0x00, 0xfe};
+    ASSERT_EQ(m3_for_pair(bssid, fresh, 5000), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_EAPOL_PENDING), 1);
+    ASSERT_EQ(eapol_key_generation(bssid, fresh), 1);
+    sta[5] = 0x00;                               /* the least recently heard */
+    ASSERT_EQ(eapol_key_generation(bssid, sta), 0);
+    sta[5] = 0x01;
+    ASSERT_EQ(eapol_key_generation(bssid, sta), 1);
+    eapol_clear();
+}
+
 void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log");
     RUN_TEST(test_non_eapol_data_frame_ignored);
@@ -2420,4 +2461,5 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_sweep_reports_a_failed_delete);
     RUN_TEST(test_maintain_sweeps_at_startup_then_daily);
     RUN_TEST(test_maintain_is_inert_without_an_export_dir);
+    RUN_TEST(test_pending_table_full_evicts_oldest_and_tallies);
 }

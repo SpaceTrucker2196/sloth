@@ -109,6 +109,41 @@ void *stab_at(stab_t *t, int i) {
     return row;
 }
 
+/* Caller holds the lock. */
+static void del_idx(stab_t *t, int i) {
+    int last = t->n - 1;
+    if (i != last) memcpy(row_of(t, i), row_of(t, last), t->row_sz);
+    memset(row_of(t, last), 0, t->row_sz);
+    t->n--;
+}
+
+int stab_del(stab_t *t, void *row) {
+    if (!row || t->policy == STAB_RING) return 0;
+    lock(t);
+    /* Equality, not subtraction: a pointer from outside the array has
+     * no defined difference from it, and a foreign row must be a no-op
+     * rather than undefined behaviour. */
+    int ok = 0;
+    for (int i = 0; i < t->n; i++) {
+        if (row_of(t, i) == row) { del_idx(t, i); ok = 1; break; }
+    }
+    unlock(t);
+    return ok;
+}
+
+int stab_expire(stab_t *t, time_t now, time_t age) {
+    if (t->policy == STAB_RING) return 0;
+    lock(t);
+    int removed = 0;
+    /* Walk down so the row del_idx() swaps in from the end has already
+     * been examined. */
+    for (int i = t->n - 1; i >= 0; i--) {
+        if (now - *ls_of(t, i) > age) { del_idx(t, i); removed++; }
+    }
+    unlock(t);
+    return removed;
+}
+
 void stab_clear(stab_t *t) {
     lock(t);
     t->n = 0;

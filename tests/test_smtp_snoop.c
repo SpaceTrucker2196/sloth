@@ -1,8 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include "runner.h"
 #include "sloth.h"
 #include "cleartext_creds.h"
 #include "smtp_snoop.h"
+#include "sensor_health.h"
 
 static int find_cred(const sloth_state_t *s,
                      const char *user, const char *protocol) {
@@ -171,6 +173,37 @@ static void test_smtp_auth_login_separate_flows_independent(void) {
     ASSERT_EQ(s.cleartext_creds[b].password_observed, 1);
 }
 
+/* #110: the AUTH LOGIN flow table is STAB_OLDEST with a tally. An
+ * eviction has a concrete cost — the evicted client's username line is
+ * no longer recognised as one — which is why it is counted
+ * (evict_smtp_flow). 16 is SMTP_MAX_FLOWS, private to smtp_snoop.c. */
+static void test_smtp_flow_table_full_evicts_oldest_and_tallies(void) {
+    cleartext_creds_reset();
+    smtp_snoop_reset();
+    sh_evict_reset();
+    char client[32];
+    for (int i = 0; i < 16; i++) {
+        snprintf(client, sizeof(client), "10.1.0.%d", i + 1);
+        ASSERT(smtp_snoop((const uint8_t *)"AUTH LOGIN\r\n", 12,
+                          client, "192.0.2.60", 587));
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SMTP_FLOW), 0);
+    ASSERT(smtp_snoop((const uint8_t *)"AUTH LOGIN\r\n", 12,
+                      "10.1.0.99", "192.0.2.60", 587));
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SMTP_FLOW), 1);
+
+    /* "alice" base64 = "YWxpY2U=": the newest flow still pairs it... */
+    smtp_snoop((const uint8_t *)"YWxpY2U=\r\n", 10, "10.1.0.99", "192.0.2.60", 587);
+    /* ..."bob" ("Ym9i") from the evicted first client no longer does. */
+    smtp_snoop((const uint8_t *)"Ym9i\r\n", 6, "10.1.0.1", "192.0.2.60", 587);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    cleartext_creds_snapshot(&s);
+    ASSERT(find_cred(&s, "alice", "SMTP") >= 0);
+    ASSERT_EQ(find_cred(&s, "bob", "SMTP"), -1);
+    smtp_snoop_reset();
+    cleartext_creds_reset();
+}
+
 void run_smtp_snoop_tests(void) {
     TEST_SUITE("smtp cleartext creds — AUTH PLAIN");
     RUN_TEST(test_smtp_auth_plain_extracts_user);
@@ -184,4 +217,5 @@ void run_smtp_snoop_tests(void) {
     RUN_TEST(test_smtp_auth_login_pipelined_user);
     RUN_TEST(test_smtp_auth_login_server_prompts_ignored);
     RUN_TEST(test_smtp_auth_login_separate_flows_independent);
+    RUN_TEST(test_smtp_flow_table_full_evicts_oldest_and_tallies);
 }

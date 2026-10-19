@@ -4,6 +4,8 @@
 #include "fragattack.h"
 #include "dot11_data.h"
 #include "eapol_log.h"
+#include "stab.h"
+#include "sensor_health.h"
 
 #define ETHERTYPE_EAPOL 0x888E
 
@@ -22,8 +24,26 @@
  * the order frag -> eapol is the only one that exists. */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
-static frag_bss_t g_bss[FRAG_MAX_BSS];
-static int        g_bss_n;
+/* The five tables are stab_t since #110, every one STAB_OLDEST with its
+ * own SH_EVICT_FRAG_* tally. stab's own mutex is NULL on all of them:
+ * g_mu above already serialises every get-and-update, and the row
+ * pointers stab hands back are only safe to write under that lock
+ * anyway (stab.h, "Locking"). Before this they were five copies of the
+ * same evict-the-stalest loop, none of which told sensor_health. */
+
+static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
+    return memcmp(a, b, 6) == 0;
+}
+
+static int bss_key_eq(const void *row, const void *key) {
+    return mac_eq(((const frag_bss_t *)row)->bssid, (const uint8_t *)key);
+}
+
+/* Evicts the stalest row when full rather than dropping the new one. A
+ * table that stops learning after 64 BSSes is worse on a hopping radio
+ * than one that forgets the BSS it has not heard from in longest. */
+STAB_DECL(g_bss, frag_bss_t, FRAG_MAX_BSS, last_seen, STAB_OLDEST,
+          SH_EVICT_FRAG_BSS, NULL, bss_key_eq);
 
 /* Stations witnessed installing a key, as (bssid, sta). Separate from
  * the BSS table because the gate is per-station: one client still
@@ -35,8 +55,17 @@ typedef struct {
     time_t  last_seen;
 } frag_sta_t;
 
-static frag_sta_t g_sta[FRAG_MAX_STATIONS];
-static int        g_sta_n;
+/* Key for every (bssid, sta)-keyed table below: key_eq is handed this
+ * explicit pair so no table depends on another row type's layout. */
+typedef struct { const uint8_t *bssid, *sta; } pair_key_t;
+
+static int sta_key_eq(const void *row, const void *key) {
+    const frag_sta_t *r = row; const pair_key_t *k = key;
+    return mac_eq(r->bssid, k->bssid) && mac_eq(r->sta, k->sta);
+}
+
+STAB_DECL(g_sta, frag_sta_t, FRAG_MAX_STATIONS, last_seen, STAB_OLDEST,
+          SH_EVICT_FRAG_STA, NULL, sta_key_eq);
 
 /* ── Slice 2: fragment sessions + association timing ──────── */
 
@@ -74,8 +103,22 @@ typedef struct {
     time_t  last_seen;
 } frag_session_t;
 
-static frag_session_t g_sess[FRAG_MAX_SESSIONS];
-static int            g_sess_n;
+typedef struct {
+    const uint8_t *bssid, *sa, *da;
+    uint8_t        tid;
+} sess_key_t;
+
+static int sess_key_eq(const void *row, const void *key) {
+    const frag_session_t *s = row; const sess_key_t *k = key;
+    return mac_eq(s->bssid, k->bssid) && mac_eq(s->sa, k->sa) &&
+           mac_eq(s->da, k->da) && s->tid == k->tid;
+}
+
+/* A session that completes is retired with stab_del() (sess_close), so
+ * the tally counts only reassemblies dropped while still open — the
+ * ones whose continuation sloth can then no longer judge. */
+STAB_DECL(g_sess, frag_session_t, FRAG_MAX_SESSIONS, last_seen, STAB_OLDEST,
+          SH_EVICT_FRAG_SESSION, NULL, sess_key_eq);
 
 /* One (bssid, sta) pair's most recent (re)association. Separate from
  * assoc_track.c's table on purpose: that one is keyed by evidence
@@ -90,12 +133,16 @@ typedef struct {
     time_t  last_assoc;
 } frag_assoc_evt_t;
 
-static frag_assoc_evt_t g_assoc_evt[FRAG_MAX_ASSOC_EVT];
-static int              g_assoc_evt_n;
-
-static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
-    return memcmp(a, b, 6) == 0;
+static int assoc_key_eq(const void *row, const void *key) {
+    const frag_assoc_evt_t *r = row; const pair_key_t *k = key;
+    return mac_eq(r->bssid, k->bssid) && mac_eq(r->sta, k->sta);
 }
+
+/* last_assoc is the recency stamp: it is the only time this row keeps,
+ * and the oldest association is the one least likely to straddle a
+ * session still open. */
+STAB_DECL(g_assoc_evt, frag_assoc_evt_t, FRAG_MAX_ASSOC_EVT, last_assoc,
+          STAB_OLDEST, SH_EVICT_FRAG_ASSOC, NULL, assoc_key_eq);
 
 /* EtherType of a frame that carries an LLC/SNAP header, or -1.
  *
@@ -152,10 +199,12 @@ static int first_amsdu_subframe_ethertype(const dot11_frame_t *f) {
     return (p[6] << 8) | p[7];
 }
 
+/* Slot index, because frag_find()'s callers pair it with frag_bss_at().
+ * stab_find() answers with a row pointer; the walk is the same one. */
 static int find_locked(const uint8_t bssid[6]) {
     if (!bssid) return -1;
-    for (int i = 0; i < g_bss_n; i++)
-        if (mac_eq(g_bss[i].bssid, bssid)) return i;
+    for (int i = 0; i < stab_count(&g_bss); i++)
+        if (bss_key_eq(stab_at(&g_bss, i), bssid)) return i;
     return -1;
 }
 
@@ -166,70 +215,45 @@ int frag_find(const uint8_t bssid[6]) {
     return i;
 }
 
-/* Evicts the stalest row when full rather than dropping the new one. A
- * table that stops learning after 64 BSSes is worse on a hopping radio
- * than one that forgets the BSS it has not heard from in longest. */
 static frag_bss_t *bss_get(const uint8_t bssid[6], time_t now) {
-    int i = find_locked(bssid);
-    if (i >= 0) { g_bss[i].last_seen = now; return &g_bss[i]; }
-
-    if (g_bss_n < FRAG_MAX_BSS) {
-        i = g_bss_n++;
-    } else {
-        i = 0;
-        for (int k = 1; k < g_bss_n; k++)
-            if (g_bss[k].last_seen < g_bss[i].last_seen) i = k;
+    int created;
+    frag_bss_t *b = stab_get(&g_bss, bssid, now, &created);
+    if (created) {
+        memcpy(b->bssid, bssid, 6);
+        b->first_seen = now;
     }
-    memset(&g_bss[i], 0, sizeof(g_bss[i]));
-    memcpy(g_bss[i].bssid, bssid, 6);
-    g_bss[i].first_seen = g_bss[i].last_seen = now;
-    return &g_bss[i];
+    b->last_seen = now;
+    return b;
 }
 
-static int sta_find(const uint8_t bssid[6], const uint8_t sta[6]) {
-    for (int i = 0; i < g_sta_n; i++)
-        if (mac_eq(g_sta[i].bssid, bssid) && mac_eq(g_sta[i].sta, sta))
-            return i;
-    return -1;
+static int sta_known(const uint8_t bssid[6], const uint8_t sta[6]) {
+    pair_key_t key = { bssid, sta };
+    return stab_find(&g_sta, &key) != NULL;
 }
 
 static void sta_mark_protected(const uint8_t bssid[6], const uint8_t sta[6],
                                time_t now) {
-    int i = sta_find(bssid, sta);
-    if (i >= 0) { g_sta[i].last_seen = now; return; }
-    if (g_sta_n < FRAG_MAX_STATIONS) {
-        i = g_sta_n++;
-    } else {
-        i = 0;
-        for (int k = 1; k < g_sta_n; k++)
-            if (g_sta[k].last_seen < g_sta[i].last_seen) i = k;
+    pair_key_t key = { bssid, sta };
+    int created;
+    frag_sta_t *r = stab_get(&g_sta, &key, now, &created);
+    if (created) {
+        memcpy(r->bssid, bssid, 6);
+        memcpy(r->sta,   sta,   6);
     }
-    memcpy(g_sta[i].bssid, bssid, 6);
-    memcpy(g_sta[i].sta,   sta,   6);
-    g_sta[i].last_seen = now;
+    r->last_seen = now;
 }
 
 static void note_association_locked(const uint8_t bssid[6],
                                     const uint8_t sta[6], time_t now) {
     if (!bssid || !sta) return;
-    for (int i = 0; i < g_assoc_evt_n; i++) {
-        if (mac_eq(g_assoc_evt[i].bssid, bssid) &&
-            mac_eq(g_assoc_evt[i].sta, sta)) {
-            g_assoc_evt[i].last_assoc = now;
-            return;
-        }
+    pair_key_t key = { bssid, sta };
+    int created;
+    frag_assoc_evt_t *r = stab_get(&g_assoc_evt, &key, now, &created);
+    if (created) {
+        memcpy(r->bssid, bssid, 6);
+        memcpy(r->sta,   sta,   6);
     }
-    int i;
-    if (g_assoc_evt_n < FRAG_MAX_ASSOC_EVT) {
-        i = g_assoc_evt_n++;
-    } else {
-        i = 0;
-        for (int k = 1; k < g_assoc_evt_n; k++)
-            if (g_assoc_evt[k].last_assoc < g_assoc_evt[i].last_assoc) i = k;
-    }
-    memcpy(g_assoc_evt[i].bssid, bssid, 6);
-    memcpy(g_assoc_evt[i].sta,   sta,   6);
-    g_assoc_evt[i].last_assoc = now;
+    r->last_assoc = now;
 }
 
 void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
@@ -245,24 +269,15 @@ void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
  * order the two. */
 static int frag_assoc_after(const uint8_t bssid[6], const uint8_t mac[6],
                             time_t since) {
-    for (int i = 0; i < g_assoc_evt_n; i++) {
-        if (mac_eq(g_assoc_evt[i].bssid, bssid) &&
-            mac_eq(g_assoc_evt[i].sta, mac) &&
-            g_assoc_evt[i].last_assoc > since)
-            return 1;
-    }
-    return 0;
+    pair_key_t key = { bssid, mac };
+    const frag_assoc_evt_t *r = stab_find(&g_assoc_evt, &key);
+    return r && r->last_assoc > since;
 }
 
 static frag_session_t *sess_find(const uint8_t bssid[6], const uint8_t sa[6],
                                  const uint8_t da[6], uint8_t tid) {
-    for (int i = 0; i < g_sess_n; i++) {
-        frag_session_t *s = &g_sess[i];
-        if (mac_eq(s->bssid, bssid) && mac_eq(s->sa, sa) &&
-            mac_eq(s->da, da) && s->tid == tid)
-            return s;
-    }
-    return NULL;
+    sess_key_t key = { bssid, sa, da, tid };
+    return stab_find(&g_sess, &key);
 }
 
 /* Opens a fresh session under (bssid, sa, da, tid), replacing any
@@ -273,15 +288,10 @@ static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
                       const uint8_t da[6], uint8_t tid,
                       int protected_bit, int generation,
                       int64_t pn, int fn, uint16_t sc, time_t now) {
-    frag_session_t *s = sess_find(bssid, sa, da, tid);
-    if (!s) {
-        if (g_sess_n < FRAG_MAX_SESSIONS) {
-            s = &g_sess[g_sess_n++];
-        } else {
-            s = &g_sess[0];
-            for (int k = 1; k < g_sess_n; k++)
-                if (g_sess[k].last_seen < s->last_seen) s = &g_sess[k];
-        }
+    sess_key_t key = { bssid, sa, da, tid };
+    int created;
+    frag_session_t *s = stab_get(&g_sess, &key, now, &created);
+    if (created) {
         memcpy(s->bssid, bssid, 6);
         memcpy(s->sa,    sa,    6);
         memcpy(s->da,    da,    6);
@@ -297,9 +307,7 @@ static void sess_open(const uint8_t bssid[6], const uint8_t sa[6],
 }
 
 static void sess_close(frag_session_t *s) {
-    int idx = (int)(s - g_sess);
-    if (idx != g_sess_n - 1) g_sess[idx] = g_sess[g_sess_n - 1];
-    g_sess_n--;
+    stab_del(&g_sess, s);
 }
 
 /* Fragment-session bookkeeping — issue #75 slice 2. Runs for every
@@ -411,21 +419,31 @@ typedef struct {
     time_t  ts;
 } frag_mpdu_t;
 
-static frag_mpdu_t g_mpdu[FRAG_MAX_MPDUS];
-static int         g_mpdu_n;
+typedef struct { const uint8_t *ta; int64_t pn; } mpdu_key_t;
+
+static int mpdu_key_eq(const void *row, const void *key) {
+    const frag_mpdu_t *m = row; const mpdu_key_t *k = key;
+    return m->pn == k->pn && mac_eq(m->ta, k->ta);
+}
+
+STAB_DECL(g_mpdu, frag_mpdu_t, FRAG_MAX_MPDUS, ts, STAB_OLDEST,
+          SH_EVICT_FRAG_MPDU, NULL, mpdu_key_eq);
 
 /* Returns 1 when this MPDU is a replay of one already recorded whose
  * A-MSDU bit differs. Records it otherwise. */
 static int mpdu_note(const uint8_t bssid[6], const uint8_t ta[6],
                      int64_t pn, uint16_t sc, int amsdu, time_t now) {
-    int slot = -1;
-    for (int i = 0; i < g_mpdu_n; i++) {
-        frag_mpdu_t *m = &g_mpdu[i];
-        /* Aged-out rows are reused rather than compared. A PN that
-         * matches across a key rotation is not a replay — after a
-         * rekey they legitimately restart from zero. */
-        if (now - m->ts > FRAG_MPDU_WINDOW_S) { if (slot < 0) slot = i; continue; }
-        if (m->pn != pn || !mac_eq(m->ta, ta)) continue;
+    /* Aged-out rows are dropped rather than compared. A PN that
+     * matches across a key rotation is not a replay — after a rekey
+     * they legitimately restart from zero. Dropping them first is also
+     * what keeps the tally honest: an eviction stab_get() then performs,
+     * and counts, is of a record still inside the window. */
+    stab_expire(&g_mpdu, now, FRAG_MPDU_WINDOW_S);
+
+    mpdu_key_t key = { ta, pn };
+    int created;
+    frag_mpdu_t *m = stab_get(&g_mpdu, &key, now, &created);
+    if (!created) {
         if (m->amsdu != (uint8_t)amsdu) {
             /* Do not update the stored bit. The attacker may replay the
              * same MPDU repeatedly, and each one is a separate
@@ -438,17 +456,6 @@ static int mpdu_note(const uint8_t bssid[6], const uint8_t ta[6],
         return 0;
     }
 
-    if (slot < 0) {
-        if (g_mpdu_n < FRAG_MAX_MPDUS) {
-            slot = g_mpdu_n++;
-        } else {
-            slot = 0;
-            for (int k = 1; k < g_mpdu_n; k++)
-                if (g_mpdu[k].ts < g_mpdu[slot].ts) slot = k;
-        }
-    }
-    frag_mpdu_t *m = &g_mpdu[slot];
-    memset(m, 0, sizeof(*m));
     memcpy(m->ta,    ta,    6);
     memcpy(m->bssid, bssid, 6);
     m->pn    = pn;
@@ -552,7 +559,7 @@ static void observe_locked(const dot11_frame_t *f, time_t now) {
      * station, an unprotected frame is an open network or a client
      * mid-association — the overwhelmingly common case, and not a
      * signal. */
-    if (sta_find(bssid, sa) < 0) return;
+    if (!sta_known(bssid, sa)) return;
 
     if (dot11_is_group_addr(da)) {
         /* CVE-2020-26145. Broadcast reassembly is not permitted in a
@@ -607,21 +614,21 @@ void frag_observe_frame(const dot11_frame_t *f, time_t now) {
 
 int frag_bss_count(void) {
     pthread_mutex_lock(&g_mu);
-    int n = g_bss_n;
+    int n = stab_count(&g_bss);
     pthread_mutex_unlock(&g_mu);
     return n;
 }
 
 int frag_mpdu_count(void) {
     pthread_mutex_lock(&g_mu);
-    int n = g_mpdu_n;
+    int n = stab_count(&g_mpdu);
     pthread_mutex_unlock(&g_mu);
     return n;
 }
 
 const frag_bss_t *frag_bss_at(int i) {
     pthread_mutex_lock(&g_mu);
-    const frag_bss_t *b = (i >= 0 && i < g_bss_n) ? &g_bss[i] : NULL;
+    const frag_bss_t *b = stab_at(&g_bss, i);
     pthread_mutex_unlock(&g_mu);
     return b;
 }
@@ -629,21 +636,24 @@ const frag_bss_t *frag_bss_at(int i) {
 int frag_bss_copy(int i, frag_bss_t *out) {
     if (!out) return 0;
     pthread_mutex_lock(&g_mu);
-    int ok = (i >= 0 && i < g_bss_n);
-    if (ok) *out = g_bss[i];
+    const frag_bss_t *b = stab_at(&g_bss, i);
+    int ok = b != NULL;
+    if (ok) *out = *b;
     pthread_mutex_unlock(&g_mu);
     return ok;
 }
 
 int frag_session_count(void) {
     pthread_mutex_lock(&g_mu);
-    int n = g_sess_n;
+    int n = stab_count(&g_sess);
     pthread_mutex_unlock(&g_mu);
     return n;
 }
 
 static void snapshot_locked(sloth_state_t *s) {
-    int n = g_bss_n < MAX_FRAG_ROWS ? g_bss_n : MAX_FRAG_ROWS;
+    int total = stab_count(&g_bss);
+    int n = total < MAX_FRAG_ROWS ? total : MAX_FRAG_ROWS;
+    const frag_bss_t *bss = g_bss_rows;
 
     /* Sorted by last_hit DESC, same rule probe_pnl_snapshot uses for
      * PNL clients: the BSS that just produced a finding belongs at the
@@ -653,13 +663,13 @@ static void snapshot_locked(sloth_state_t *s) {
     for (int i = 0; i < n - 1; i++) {
         int best = i;
         for (int j = i + 1; j < n; j++)
-            if (g_bss[order[j]].last_hit > g_bss[order[best]].last_hit)
+            if (bss[order[j]].last_hit > bss[order[best]].last_hit)
                 best = j;
         if (best != i) { int t = order[i]; order[i] = order[best]; order[best] = t; }
     }
 
     for (int i = 0; i < n; i++) {
-        const frag_bss_t *b = &g_bss[order[i]];
+        const frag_bss_t *b = &bss[order[i]];
         frag_bss_row_t   *r = &s->frag_rows[i];
         memcpy(r->bssid, b->bssid, 6);
         r->protected_frames     = b->protected_frames;
@@ -689,15 +699,10 @@ void frag_snapshot(sloth_state_t *s) {
 
 void frag_clear(void) {
     pthread_mutex_lock(&g_mu);
-    memset(g_bss,  0, sizeof(g_bss));
-    memset(g_sta,  0, sizeof(g_sta));
-    memset(g_sess, 0, sizeof(g_sess));
-    memset(g_assoc_evt, 0, sizeof(g_assoc_evt));
-    memset(g_mpdu, 0, sizeof(g_mpdu));
-    g_bss_n       = 0;
-    g_sta_n       = 0;
-    g_sess_n      = 0;
-    g_assoc_evt_n = 0;
-    g_mpdu_n      = 0;
+    stab_clear(&g_bss);
+    stab_clear(&g_sta);
+    stab_clear(&g_sess);
+    stab_clear(&g_assoc_evt);
+    stab_clear(&g_mpdu);
     pthread_mutex_unlock(&g_mu);
 }

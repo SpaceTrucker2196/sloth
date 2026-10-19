@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "onvif_discovery.h"
+#include "sensor_health.h"
 
 /* Hand-built WS-Discovery / ONVIF SOAP bodies (OASIS WS-Discovery 1.1,
  * 2009-07-01; ONVIF Core Specification, discovery). No pcap fixtures,
@@ -339,6 +340,47 @@ static void test_parse_truncated_hello_does_not_crash(void) {
     ASSERT_STR(m.kind, "Hello");
 }
 
+/* #110: STAB_OLDEST with a tally (evict_onvif_device). */
+static int hello_with_uuid(char *buf, int sz, int n) {
+    return snprintf(buf, (size_t)sz,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\""
+        " xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\""
+        " xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\">"
+        "<e:Body><d:Hello>"
+        "<w:EndpointReference><w:Address>urn:uuid:00000000-0000-0000-0000-%012d</w:Address></w:EndpointReference>"
+        "<d:Types>dn:NetworkVideoTransmitter</d:Types>"
+        "</d:Hello></e:Body></e:Envelope>", n);
+}
+
+static void test_table_full_evicts_oldest_and_tallies(void) {
+    onvif_clear();
+    sh_evict_reset();
+    char msg[640];
+    for (int i = 0; i < MAX_ONVIF_DEVICES; i++) {
+        int n = hello_with_uuid(msg, sizeof(msg), i);
+        ASSERT_EQ(onvif_ws_discovery_snoop("192.0.2.20", to_u8(msg), n, NULL, 0), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ONVIF_DEVICE), 0);
+    int n = hello_with_uuid(msg, sizeof(msg), 999);
+    ASSERT_EQ(onvif_ws_discovery_snoop("192.0.2.20", to_u8(msg), n, NULL, 0), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_ONVIF_DEVICE), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    onvif_snapshot(&s);
+    ASSERT_EQ(s.onvif_count, MAX_ONVIF_DEVICES);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.onvif_count; i++) {
+        if (strcmp(s.onvif_devices[i].uuid,
+                   "urn:uuid:00000000-0000-0000-0000-000000000999") == 0) have_new = 1;
+        if (strcmp(s.onvif_devices[i].uuid,
+                   "urn:uuid:00000000-0000-0000-0000-000000000000") == 0) have_first = 1;
+    }
+    ASSERT(have_new);
+    ASSERT(!have_first);
+    onvif_clear();
+}
+
 void run_onvif_discovery_tests(void) {
     TEST_SUITE("onvif/ws-discovery detection");
     RUN_TEST(test_hello_detected);
@@ -372,4 +414,5 @@ void run_onvif_discovery_tests(void) {
     RUN_TEST(test_parse_rejects_null_data);
     RUN_TEST(test_parse_rejects_null_out);
     RUN_TEST(test_parse_truncated_hello_does_not_crash);
+    RUN_TEST(test_table_full_evicts_oldest_and_tallies);
 }

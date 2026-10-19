@@ -4,6 +4,7 @@
 #include "tui.h"
 #include "sloth.h"
 #include "ssdp_snoop.h"
+#include "sensor_health.h"
 #include "views/ssdp.h"
 
 /* ── Helpers ────────────────────────────────────────────── */
@@ -303,6 +304,45 @@ static void test_view_clear_key(void) {
 
 /* ── Entry point ─────────────────────────────────────────── */
 
+/* #110: STAB_OLDEST with a tally — every part of the key is the
+ * announcer's to choose, so a flood of invented USNs churns the table
+ * and is counted as evict_ssdp_device. */
+static int notify_with_usn(char *buf, int sz, int n) {
+    return snprintf(buf, (size_t)sz,
+        "NOTIFY * HTTP/1.1\r\n"
+        "HOST: 239.255.255.250:1900\r\n"
+        "NT: upnp:rootdevice\r\n"
+        "NTS: ssdp:alive\r\n"
+        "USN: uuid:dev-%04d::upnp:rootdevice\r\n"
+        "\r\n", n);
+}
+
+static void test_table_full_evicts_oldest_and_tallies(void) {
+    ssdp_clear();
+    sh_evict_reset();
+    char msg[256];
+    for (int i = 0; i < MAX_SSDP_DEVICES; i++) {
+        int n = notify_with_usn(msg, sizeof(msg), i);
+        ASSERT_EQ(ssdp_snoop("192.0.2.9", to_u8(msg), n, NULL, 0), 1);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SSDP_DEVICE), 0);
+    int n = notify_with_usn(msg, sizeof(msg), 9999);
+    ASSERT_EQ(ssdp_snoop("192.0.2.9", to_u8(msg), n, NULL, 0), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_SSDP_DEVICE), 1);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    ssdp_snapshot(&s);
+    ASSERT_EQ(s.ssdp_count, MAX_SSDP_DEVICES);
+    int have_new = 0, have_first = 0;
+    for (int i = 0; i < s.ssdp_count; i++) {
+        if (strcmp(s.ssdp_devices[i].usn, "uuid:dev-9999::upnp:rootdevice") == 0) have_new = 1;
+        if (strcmp(s.ssdp_devices[i].usn, "uuid:dev-0000::upnp:rootdevice") == 0) have_first = 1;
+    }
+    ASSERT(have_new);
+    ASSERT(!have_first);
+    ssdp_clear();
+}
+
 void run_ssdp_snoop_tests(void) {
     TEST_SUITE("ssdp detection");
     RUN_TEST(test_notify_alive_detected);
@@ -337,4 +377,5 @@ void run_ssdp_snoop_tests(void) {
     RUN_TEST(test_view_draw_with_entries);
     RUN_TEST(test_view_nav_up_down);
     RUN_TEST(test_view_clear_key);
+    RUN_TEST(test_table_full_evicts_oldest_and_tallies);
 }
