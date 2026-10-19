@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "twins.h"
 #include "alerts.h"
@@ -269,7 +270,8 @@ static void test_twins_snapshot_idempotent(void) {
 static void test_view_twins_empty_does_not_crash(void) {
     sloth_state_t s; seed(&s);
     view_twins_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Evil-twin episodes: 0 / max 64");
+    ASSERT_SCREEN_HAS("(no twin pairs observed");
 }
 
 static void test_view_twins_populated_does_not_crash(void) {
