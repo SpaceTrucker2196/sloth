@@ -177,6 +177,7 @@ const char *sh_parse_fault_name(sh_parse_fault_t kind) {
     case SH_PF_IP_FRAGMENT:   return "ip_fragment";
     case SH_PF_DNS_NAME_BAD:  return "dns_name_bad";
     case SH_PF_TLS_MALFORMED: return "tls_malformed";
+    case SH_PF_FRAME_EDGE:    return "frame_edge";
     case SH_PF_KIND_COUNT:    break;
     }
     return "";
@@ -189,6 +190,7 @@ int sh_parse_fault_is_wired(sh_parse_fault_t kind) {
     case SH_PF_IE_OVERRUN:
     case SH_PF_RSN_MALFORMED:
     case SH_PF_MLE_MALFORMED:
+    case SH_PF_FRAME_EDGE:
         return 1;
     default:
         return 0;

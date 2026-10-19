@@ -184,6 +184,9 @@ CORE_COMMON_SRCS = \
 # capture_dlt_has_ifindex() to report inactive scoping even in a build
 # with no capture at all (#46, #57).
 CORE_COMMON_SRCS += src/capture/capture.c
+# The pcap-edge gate (#141) is libpcap-free so the test and fuzz builds
+# link it whatever WITH_PCAP says; both capture callbacks call it first.
+CORE_COMMON_SRCS += src/capture/frame_edge.c
 CORE_COMMON_SRCS += src/fragattack.c
 CORE_COMMON_SRCS += src/views/research.c
 CORE_COMMON_SRCS += src/views/fragattack.c

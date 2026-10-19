@@ -185,6 +185,7 @@ void run_db_tests(void);
 void run_presence_tests(void);
 void run_transit_tests(void);
 void run_radiotap_tests(void);
+void run_frame_edge_tests(void);
 void run_rf_quality_tests(void);
 void run_reset_registry_tests(void);
 void run_views_render_tests(void);
@@ -354,6 +355,7 @@ int main(void) {
     run_presence_tests();
     run_transit_tests();
     run_radiotap_tests();
+    run_frame_edge_tests();
     run_rf_quality_tests();
     run_reset_registry_tests();
     run_views_render_tests();

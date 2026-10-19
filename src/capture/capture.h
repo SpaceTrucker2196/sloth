@@ -476,6 +476,9 @@ uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
    because libpcap reads each record out of an offline buffer sized far
    past its caplen. origlen is the wire length (the FCS-strip decision
    on the monitor DLT compares it with caplen). `out` is zeroed first.
+   The arguments pass through frame_view_init() first, as on_packet()'s
+   do (#141), so a caplen above FRAME_CAPLEN_MAX or above origlen is
+   refused before decode_frame() runs.
    Returns decode_frame()'s verdict: 1 decoded, 0 dropped. */
 int capture_test_decode_frame(const uint8_t *data, int caplen, int origlen,
                               int dlt, packet_info_t *out);

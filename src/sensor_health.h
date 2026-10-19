@@ -187,6 +187,7 @@ typedef enum {
     SH_PF_IP_FRAGMENT,      /* reserved for #132 (fragments) — not yet wired */
     SH_PF_DNS_NAME_BAD,     /* reserved for #131 (DNS name reader once) — not yet wired */
     SH_PF_TLS_MALFORMED,    /* reserved for #131 (TLS parser under test) — not yet wired */
+    SH_PF_FRAME_EDGE,       /* src/capture/frame_edge.c — a pcap record header refused at the edge (#141) */
     SH_PF_KIND_COUNT
 } sh_parse_fault_t;
 
@@ -201,7 +202,7 @@ uint64_t sh_parse_fault_total(void);
 /* Stable lower-case name, part of the `sensor_health` JSONL contract
  * (`parse_fault_<name>`): "radiotap_bad", "dot11_runt", "ie_overrun",
  * "rsn_malformed", "mle_malformed", "ip_truncated", "ip_fragment",
- * "dns_name_bad", "tls_malformed". Unknown kinds return "". */
+ * "dns_name_bad", "tls_malformed", "frame_edge". Unknown kinds return "". */
 const char *sh_parse_fault_name(sh_parse_fault_t kind);
 
 /* 1 when some parser in this build calls sh_parse_fault_note() for the

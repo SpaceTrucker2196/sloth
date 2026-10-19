@@ -24,6 +24,7 @@
 #include "dns_log.h"
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
 #include "libver.h"         /* loaded-libpcap report (#142) */
+#include "capture/frame_edge.h" /* FRAME_CAPLEN_MAX (#141) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -210,8 +211,13 @@ static void test_zero_length_and_runt_frames(void) {
     uint8_t f[8] = { 0 };
     const uint8_t *fs[3] = { f, f, f };
     int ls[3] = { 0, 1, 8 };
+    uint64_t fe0 = sh_parse_fault_count(SH_PF_FRAME_EDGE);
     ASSERT_EQ(drive(DLT_EN10MB, fs, ls, 3), 3);
     ASSERT_EQ((long long)g_s.pkt_total, 0);
+    /* The zero-length record is refused at the pcap edge (#141); the
+       1- and 8-octet ones pass it and are dropped by the decoder for
+       having no ethertype, which is not an edge fault. */
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 1);
 }
 
 static void test_batch_of_mixed_frames(void) {
@@ -1246,6 +1252,133 @@ static void test_a_short_radiotap_length_is_refused_and_counted(void) {
     ASSERT_EQ(mon_delta(b), 1);
     ASSERT_EQ((long long)(mon_radiotap_reject_total() - rj0), 0);
     ASSERT_EQ((long long)(sh_parse_fault_total() - pf0), 0);
+}
+
+/* ── The pcap-edge gate through both real callbacks (#141) ────
+ *
+ * tests/test_frame_edge.c pins frame_view_init() and
+ * frame_view_radiotap() on their own; these prove on_packet() and
+ * on_probe_frame() actually stand behind them, through the same
+ * libpcap offline reader production uses. */
+
+static void test_a_short_radiotap_probe_request_reaches_no_pnl(void) {
+    /* it_len 4, and the bytes from offset 4 on are a whole probe
+       request. A callback that took it_len on its own authority — what
+       on_probe_frame() did before #123 — reads a probe request there
+       and files its SSID in the client's PNL. The shared gate takes
+       radiotap_parse()'s verdict, which refuses it.
+
+       Mutation-proved: in frame_view_radiotap(), replacing the
+       radiotap_parse() verdict with the old private rule (it_len read
+       from bytes 2..3, refused only when >= caplen) puts "corp-wifi"
+       in the PNL and reddens the three tally / PNL lines; the inverse
+       edit restores green. */
+    const uint8_t sa[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    uint8_t whole[128], f[128];
+    int wn = mon_probe_req(whole, sa, "corp-wifi", 0);
+    f[0] = 0; f[1] = 0; f[2] = 4; f[3] = 0;   /* it_len 4 */
+    memcpy(f + 4, whole + RT_HDR, (size_t)(wn - RT_HDR));
+    const int n = 4 + wn - RT_HDR;
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    uint64_t b   = mon_before();
+    uint64_t rtb = sh_parse_fault_count(SH_PF_RADIOTAP_BAD);
+    uint64_t fe0 = sh_parse_fault_count(SH_PF_FRAME_EDGE);
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 0);
+    ASSERT_EQ(mon_delta(b), 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_RADIOTAP_BAD) - rtb), 1);
+    /* The record header itself was sound: not an edge fault. */
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 0);
+
+    /* Control: the same probe request behind a real 8-octet header is
+       admitted, so the zero above is the gate and not the harness. */
+    const uint8_t *fs2[1] = { whole };
+    int ls2[1] = { wn };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs2, ls2, NULL, NULL, 1), 1);
+    ASSERT_EQ(probe_pnl_ssid_count(sa), 1);
+    probe_pnl_clear();
+}
+
+static void test_a_caplen_above_origlen_is_refused_before_decode(void) {
+    /* A record claiming one octet more was captured than was on the
+       wire. No kernel produces it; a crafted savefile can. Before #141
+       both callbacks read hdr->len only for the FCS-strip decision and
+       the ring, and took the frame regardless.
+
+       Driven through capture_test_decode_frame(), not the dispatch
+       seams, and that is a limit worth stating: the savefile both
+       dispatch seams build goes through pcap_fmt_rec_hdr(), which
+       clamps origlen up to caplen so a bad record cannot misparse the
+       ones after it (src/pcap_format.c). So the dispatch seams cannot
+       express this case. The decode seam takes the same
+       frame_view_init() call on_packet() makes, with no writer between.
+       That on_packet() and on_probe_frame() stand behind the gate at
+       all is proven by the snaplen case below, through both.
+
+       Mutation-proved: deleting the `caplen > origlen` refusal from
+       frame_view_init() decodes the frame and reddens the first
+       assertion; the inverse edit restores green. */
+    uint8_t e[128];
+    int en = eth_ipv4_tcp(e, 8, 5, -1);
+    packet_info_t pkt;
+    ASSERT_EQ(capture_test_decode_frame(e, en, en - 1, DLT_EN10MB, &pkt), 0);
+    ASSERT_STR(pkt.src, "");
+    /* Control: the same bytes with an honest origlen decode. */
+    ASSERT_EQ(capture_test_decode_frame(e, en, en, DLT_EN10MB, &pkt), 1);
+    ASSERT_STR(pkt.src, "192.168.1.10");
+}
+
+static void test_a_caplen_past_the_snaplen_is_refused_at_both_edges(void) {
+    /* 65536 octets: one past the snaplen both handles open with. The
+       savefile the seams build advertises 262144, so libpcap delivers
+       it — the edge is what has to say no. 65535 is the control, on
+       both streams.
+
+       Mutation-proved: deleting the FRAME_CAPLEN_MAX refusal from
+       frame_view_init() admits both 65536-octet frames and reddens the
+       pkt_total, mon_delta and tally lines; the inverse edit restores
+       green. */
+    enum { BIG = FRAME_CAPLEN_MAX + 1 };
+    uint8_t *f = calloc(1, BIG);
+    ASSERT(f != NULL);
+    if (!f) return;
+    uint64_t fe0 = sh_parse_fault_count(SH_PF_FRAME_EDGE);
+
+    /* The IP stream: on_packet(). */
+    eth_ipv4_tcp(f, 8, 5, -1);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { BIG };
+    memset(&g_s, 0, sizeof(g_s));
+    ASSERT_EQ(capture_test_dispatch(&g_s, DLT_EN10MB, fs, ls, NULL, 1), 1);
+    ASSERT_EQ((long long)g_s.pkt_total, 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 1);
+
+    ls[0] = FRAME_CAPLEN_MAX;
+    memset(&g_s, 0, sizeof(g_s));
+    ASSERT_EQ(capture_test_dispatch(&g_s, DLT_EN10MB, fs, ls, NULL, 1), 1);
+    ASSERT_EQ((long long)g_s.pkt_total, 1);
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 1);
+
+    /* The monitor stream: on_probe_frame(). A beacon header padded out
+       with zeros to the full length. */
+    mon_frame(f, BIG - RT_HDR, 0x80);
+    ls[0] = BIG;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear();
+    uint64_t b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b), 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 2);
+
+    ls[0] = FRAME_CAPLEN_MAX;
+    b = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT_EQ(mon_delta(b), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FRAME_EDGE) - fe0), 2);
+    free(f);
 }
 
 static void evidence_setup(void);   /* with the #92 evidence cases below */
@@ -2584,6 +2717,9 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_datapad_eapol_m1_reaches_the_collector);
     RUN_TEST(test_a_datapad_dns_query_reaches_the_dns_log);
     RUN_TEST(test_a_short_radiotap_length_is_refused_and_counted);
+    RUN_TEST(test_a_short_radiotap_probe_request_reaches_no_pnl);
+    RUN_TEST(test_a_caplen_above_origlen_is_refused_before_decode);
+    RUN_TEST(test_a_caplen_past_the_snaplen_is_refused_at_both_edges);
     RUN_TEST(test_bad_fcs_frames_still_feed_rf_quality_and_evidence);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);

@@ -14,6 +14,7 @@
 #include "sensor_health.h"      /* probe-client eviction tally (#91) */
 #include "evidence_ring.h"     /* bounded raw-frame evidence ring (#92) */
 #include "dot11_frame.h"         /* one decode per frame (#122) */
+#include "capture/frame_edge.h"  /* the pcap-edge gate (#141) */
 #include "dot11_ie.h"            /* dot11_ie_ssid (#127) */
 #include "radiotap.h"
 #include "rf_quality.h"
@@ -274,7 +275,23 @@ static void record_probe(const uint8_t *mac, const char *ssid,
 static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                            const u_char *data) {
     (void)user;
-    int len = (int)hdr->caplen;
+
+    /* ── The pcap-edge gate (#141) ──────────────────────────────
+     *
+     * Before anything reads `data`: caplen bounded by our snaplen and
+     * checked against the wire length, the timestamp's microseconds in
+     * range. This callback used to cast hdr->caplen to int unchecked and
+     * read hdr->len separately for the FCS strip — safe only because
+     * libpcap caps a record and the kernel does not lie, which is an
+     * assumption about the producer rather than a check (CWE-1284).
+     * Everything below reads the view, never hdr. */
+    frame_view_t fv;
+    if (!frame_view_init(&fv, data, hdr->caplen, hdr->len,
+                         (long)hdr->ts.tv_sec, (long)hdr->ts.tv_usec,
+                         DLT_IEEE802_11_RADIO)) {
+        sh_parse_fault_note(SH_PF_FRAME_EDGE);
+        return;
+    }
 
     /* ── One radiotap gate (#123) ────────────────────────────────
      *
@@ -288,9 +305,18 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      *
      * A refusal is counted, not just dropped: a radio delivering frames
      * that all fail here looks exactly like a quiet one otherwise. The
-     * tally reaches the operator through probe_health_poll(). */
-    radiotap_info_t rt;
-    if (!radiotap_parse(data, len, &rt)) {
+     * tally reaches the operator through probe_health_poll().
+     *
+     * Since #141 the gate is frame_view_radiotap(), which capture.c's
+     * DLT_IEEE802_11_RADIO arm calls too — one function, not two copies
+     * of the same rule. It also takes the FCS trailer off (#122) and
+     * applies the 802.11 minimum, both decided below. */
+    radiotap_info_t       rt;
+    const uint8_t        *dot11     = NULL;
+    int                   dot11_len = 0;
+    const frame_rt_verdict_t rtv = frame_view_radiotap(&fv, &rt,
+                                                       &dot11, &dot11_len);
+    if (rtv == FRAME_RT_BAD) {
         pthread_mutex_lock(&g_frame_mu);
         if (g_radiotap_rejects < UINT64_MAX) g_radiotap_rejects++;
         pthread_mutex_unlock(&g_frame_mu);
@@ -300,7 +326,6 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         sh_parse_fault_note(SH_PF_RADIOTAP_BAD);
         return;
     }
-    const int rt_len = rt.hdr_len;
     int8_t signal  = rt.signal_dbm;
     int    channel = rt.channel;
 
@@ -326,7 +351,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * is published so an operator can tell "quiet" from "this capture's
      * clock is broken", the same distinction the #91 health fields
      * exist to make. Nothing is substituted on the strength of it. */
-    const time_t fts = (time_t)hdr->ts.tv_sec;
+    const time_t fts = fv.ts_sec;
     if (fts <= 0) {
         pthread_mutex_lock(&g_frame_mu);
         if (g_bad_clock_total < UINT64_MAX) g_bad_clock_total++;
@@ -336,21 +361,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     /* 802.11 frame starts after radiotap. When radiotap says the FCS
      * is present, its four octets are a trailer and not frame (#122):
      * every parser below used to see them as four extra body bytes,
-     * which an IE walker reads as one more element. A capture cut by
-     * snaplen may have lost some or all of the trailer, so the strip
-     * is computed from caplen against the original length. */
-    const uint8_t *dot11     = data + rt_len;
-    int            dot11_len = len  - rt_len;
-    {
-        int strip = dot11_fcs_strip_len((int)hdr->caplen, (int)hdr->len,
-                                        rt.fcs_present);
-        if (strip > dot11_len) strip = dot11_len;
-        dot11_len -= strip;
-    }
-    /* Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
-     * duration(2) + addr1(6) = 10 bytes. Control frames like ACK/CTS are
-     * exactly this size. */
-    if (dot11_len < 10) {
+     * which an IE walker reads as one more element. frame_view_radiotap()
+     * has already taken it off, against the original length, so a
+     * capture cut by snaplen strips only what it holds.
+     *
+     * Minimum framing to read the Frame Control + addr1 (RA): FC(2) +
+     * duration(2) + addr1(6) = FRAME_DOT11_MIN. Control frames like
+     * ACK/CTS are exactly this size. */
+    if (rtv != FRAME_RT_OK) {
         /* Counted (#126): a radio delivering only runts reads as a quiet
          * one otherwise. */
         sh_parse_fault_note(SH_PF_DOT11_RUNT);
@@ -419,8 +437,8 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * citation of 0 is never stored. Only the deauth/disassoc path
      * consumes it so far — the other parsers still discard it. */
     const uint64_t ev = evidence_ring_note(
-                             data, (uint32_t)hdr->caplen, (uint32_t)hdr->len,
-                             fts, (long)hdr->ts.tv_usec,
+                             fv.data, (uint32_t)fv.caplen, fv.origlen,
+                             fts, (long)fv.ts_usec,
                              (uint16_t)(rt.freq_mhz > 0 && rt.freq_mhz <= 0xFFFF
                                         ? rt.freq_mhz : 0),
                              signal);
@@ -477,14 +495,14 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         /* Capture time, not processing time: the handshake pcap's
          * record headers carry it (#92). */
         eapol_observe_dot11(dot11, dot11_len, signal, channel,
-                            (time_t)hdr->ts.tv_sec, (long)hdr->ts.tv_usec);
+                            fts, (long)fv.ts_usec);
         frag_observe(dot11, dot11_len, fts);
-        pm_forge_observe(dot11, dot11_len, fts, (long)hdr->ts.tv_usec);
+        pm_forge_observe(dot11, dot11_len, fts, (long)fv.ts_usec);
         /* #107 shape B. Only counts against a (BSSID, STA) some session
          * change already opened a window for, so the common case —
          * every data frame on the air — costs one direction test. */
         queue_evict_observe_downlink(dot11, dot11_len, fts,
-                                     (long)hdr->ts.tv_usec);
+                                     (long)fv.ts_usec);
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */
@@ -569,7 +587,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                 bssid_p, sta_p,
                 (sub == 3) ? QUEUE_EVICT_SRC_REASSOC
                            : QUEUE_EVICT_SRC_ASSOC,
-                fts, (long)hdr->ts.tv_usec);
+                fts, (long)fv.ts_usec);
         }
         return;
     }
@@ -602,7 +620,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
             const uint8_t *bss_p = fr.a3;
             queue_evict_note_session_change(
                 bss_p, memcmp(a1, bss_p, 6) == 0 ? a2 : a1,
-                QUEUE_EVICT_SRC_DISCONNECT, fts, (long)hdr->ts.tv_usec);
+                QUEUE_EVICT_SRC_DISCONNECT, fts, (long)fv.ts_usec);
         }
         return;
     }

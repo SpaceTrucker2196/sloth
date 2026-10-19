@@ -6,6 +6,7 @@
 #include "dns.h"
 #include "dot11_frame.h"
 #include "radiotap.h"
+#include "capture/frame_edge.h"
 #include "pcap_format.h"
 
 /* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
@@ -504,6 +505,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "onvif_discovery.h"
+#include "sensor_health.h"     /* SH_PF_FRAME_EDGE (#141) */
 #include "http_snoop.h"
 #include "ftp_snoop.h"
 #include "pop3_snoop.h"
@@ -1043,8 +1045,12 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
  * Payload starts at offset 20; ethertype lives at offset 0.
  * SLL2_HDRLEN is defined above the WITH_PCAP guard (#85). */
 
-static int decode_frame(const uint8_t *data, int caplen, int origlen,
-                        int dlt, packet_info_t *pkt) {
+/* Takes the gated view (#141), never a raw pcap header: caplen here has
+ * already been bounded and checked against the wire length. */
+static int decode_frame(const frame_view_t *f, packet_info_t *pkt) {
+    const uint8_t *data   = f->data;
+    int            caplen = f->caplen;
+    const int      dlt    = f->dlt;
     int       offset    = 0;
     uint16_t  ethertype = 0;
 
@@ -1073,18 +1079,24 @@ static int decode_frame(const uint8_t *data, int caplen, int origlen,
          * One decode (#122): radiotap's FCS / DATAPAD / BADFCS flags
          * become hints, the FCS trailer is taken off the length so it
          * is not handed to the IP decoder as payload, and the body
-         * offset honours the driver's 4-octet padding. */
+         * offset honours the driver's 4-octet padding.
+         *
+         * The radiotap gate, the FCS strip and the 802.11 minimum are
+         * frame_view_radiotap()'s (#141) — the same call on_probe_frame()
+         * makes, so the two monitor entry points cannot drift apart on
+         * what a valid header is. Not tallied here: the monitor stream
+         * owns the radiotap_bad / dot11_runt counts. */
         radiotap_info_t rti;
-        if (!radiotap_parse(data, caplen, &rti)) return 0;
-        int rt = rti.hdr_len;
-        if (rt <= 0 || rt >= caplen) return 0;
-        int strip = dot11_fcs_strip_len(caplen, origlen, rti.fcs_present);
-        if (strip > caplen - rt) strip = caplen - rt;
-        caplen -= strip;
+        const uint8_t  *dot11     = NULL;
+        int             dot11_len = 0;
+        if (frame_view_radiotap(f, &rti, &dot11, &dot11_len) != FRAME_RT_OK)
+            return 0;
+        const int rt = (int)(dot11 - data);
+        caplen = rt + dot11_len;              /* the FCS trailer is gone */
         const dot11_rt_hints_t hints = { rti.fcs_present, rti.datapad,
                                          rti.bad_fcs };
         dot11_frame_t fr;
-        dot11_frame_decode(data + rt, caplen - rt, &hints, &fr);
+        dot11_frame_decode(dot11, dot11_len, &hints, &fr);
         int poff = 0;
         if (dot11_frame_payload(&fr, &poff, &ethertype) != DOT11_DATA_OK)
             return 0;
@@ -1130,6 +1142,18 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
     (void)user;
     int dlt = pcap_datalink(g_handle);
 
+    /* The pcap-edge gate (#141), before anything reads `data`: caplen
+     * bounded and checked against the wire length, the timestamp's
+     * microseconds in range. Everything below reads the view, never
+     * hdr. A refusal is tallied — a stream of lying headers otherwise
+     * reads as a quiet segment. */
+    frame_view_t f;
+    if (!frame_view_init(&f, data, hdr->caplen, hdr->len,
+                         (long)hdr->ts.tv_sec, (long)hdr->ts.tv_usec, dlt)) {
+        sh_parse_fault_note(SH_PF_FRAME_EDGE);
+        return;
+    }
+
     /* Data-stream election (#17 + #35), fail-closed since #85: drop
      * before decode when the runtime deselect ([y]) or the launch-time
      * allow-list (--iface / --monitor-only) rejects the ingress iface,
@@ -1137,27 +1161,27 @@ static void on_packet(u_char *user, const struct pcap_pkthdr *hdr,
      * attributed to a pinned, still-valid iface at all. The pins were
      * fixed before this thread was created; the main thread only ever
      * clears their valid bits, under g_mu (#85 slice 2). */
-    if (!capture_frame_in_scope(g_state, &g_policy, dlt, data,
-                                (int)hdr->caplen, sys_ifname))
+    if (!capture_frame_in_scope(g_state, &g_policy, dlt, f.data,
+                                f.caplen, sys_ifname))
         return;
 
     packet_info_t pkt;
     memset(&pkt, 0, sizeof(pkt));
-    pkt.ts_sec  = (uint32_t)hdr->ts.tv_sec;
-    pkt.ts_usec = (uint32_t)hdr->ts.tv_usec;
-    pkt.len     = hdr->len;
-    if (!decode_frame(data, (int)hdr->caplen, (int)hdr->len, dlt, &pkt))
+    pkt.ts_sec  = (uint32_t)f.ts_sec;
+    pkt.ts_usec = f.ts_usec;
+    pkt.len     = f.origlen;
+    if (!decode_frame(&f, &pkt))
         return;  /* drop ARP / LLC / unknown — see decode_frame() comment */
 
-    int rl = (int)hdr->caplen < 64 ? (int)hdr->caplen : 64;
-    memcpy(pkt.raw, data, (size_t)rl);
+    int rl = f.caplen < 64 ? f.caplen : 64;
+    memcpy(pkt.raw, f.data, (size_t)rl);
     pkt.raw_len = (uint16_t)rl;
 
     pthread_mutex_lock(&g_mu);
     /* Freshness, recorded where the frame is accepted rather than where
      * it is dispatched: a frame the decoder rejected is not evidence
      * this stream is delivering anything usable (#91). */
-    g_last_frame_ts   = (time_t)hdr->ts.tv_sec;
+    g_last_frame_ts   = f.ts_sec;
     g_last_frame_wall = flood_wall();
     g_ring[g_ring_head] = pkt;
     g_ring_head = (g_ring_head + 1) % MAX_PACKETS;
@@ -1294,9 +1318,16 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
  * offline-read buffer. */
 int capture_test_decode_frame(const uint8_t *data, int caplen, int origlen,
                               int dlt, packet_info_t *out) {
-    if (!data || !out || caplen < 0) return 0;
+    if (!out) return 0;
     memset(out, 0, sizeof(*out));
-    return decode_frame(data, caplen, origlen, dlt, out);
+    if (!data || caplen < 0 || origlen < 0) return 0;
+    /* Through the same gate on_packet() uses (#141), so the fuzzer
+     * reaches decode_frame() only with a view production could hand it. */
+    frame_view_t f;
+    if (!frame_view_init(&f, data, (uint32_t)caplen, (uint32_t)origlen,
+                         0, 0, dlt))
+        return 0;
+    return decode_frame(&f, out);
 }
 
 /* ── Capture thread ───────────────────────────────────────── */

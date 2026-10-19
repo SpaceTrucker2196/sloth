@@ -3654,3 +3654,19 @@ gone. **Contract change**: `enc` on `beacon`, `wifi_ap` and
 `parse_fault_rsn_malformed` is wired, and `fuzz_truncated_rsn` also
 counts an overrunning count. Pages: [[jsonl-schema]]; per-view doc
 `docs/views/beacons.md`.
+
+## 2026-10-19 — Pcap-edge input gate (#141)
+
+New `src/capture/frame_edge.{c,h}`: `frame_view_init()` is the first
+call in both `on_packet()` and `on_probe_frame()` and refuses a record
+whose caplen is 0, above 65535, or above its own origlen, or whose
+`ts_usec` is outside 0–999999; the callbacks read the resulting
+`frame_view_t`, never `hdr`. `frame_view_radiotap()` is the one radiotap
+gate (verdict, FCS strip, 10-octet 802.11 minimum) for both radio entry
+points — #123 had already made `probe.c` honour `radiotap_parse()`'s
+return; this removes the second copy of the rule in `capture.c`.
+Refusals land in the #126 parse-fault tally as a new appended kind,
+`frame_edge` (`sensor_health.parse_fault_frame_edge`, additive). Tests:
+`tests/test_frame_edge.c`, three capture-path cases, and
+`tests/fuzz/fuzz_frame_edge.c`. The IPv4 Total Length clamp the issue
+also named is #132's. Pages: [[architecture]], [[jsonl-schema]].

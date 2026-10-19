@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#118)
+**Last updated**: 2026-10-19 (#118, #141)
 
 ---
 
@@ -28,6 +28,7 @@ src/main.c                 -- CLI, signal handlers, poll loop
 src/tui.c / tui.h          -- ncurses rendering, colour init, key polling (ANSI fallback)
 src/platform/linux*.c      -- rtnetlink, nl80211, /proc readers, INET_DIAG
 src/capture/capture.c      -- libpcap thread; dispatches to per-protocol parsers
+src/capture/frame_edge.c   -- the pcap-edge gate both capture callbacks call first (#141)
 src/{dns,tls,quic,http,ntp,icmp}_log.c  -- ring buffers + snapshot ([[ring-buffers]])
 src/{alerts,beacon_detect,devices,threat_intel,filter,jsonl,alert_pcap,
      top_hosts,ip_color,ip_owner}.c     -- synthesis + export
@@ -54,10 +55,27 @@ docs/views/*.md            -- per-view deep dives
   802.11 side (`src/capture/probe.c`) follows the same rule, and every
   module it feeds, `src/fragattack.c` included since #111, holds its
   tables behind its own mutex.
+- **Pcap-edge gate** (`src/capture/frame_edge.h`, #141) — the first
+  thing both capture callbacks do. `frame_view_init()` turns a libpcap
+  record header into a `frame_view_t` or refuses the frame before a byte
+  of it is read: capture length 0, above the 65535-octet snaplen both
+  handles open with, or above the record's own wire length, or a
+  timestamp whose microseconds are out of range. Everything after it
+  reads the view, never `hdr`; the unchecked `(int)hdr->caplen` casts
+  in `on_packet()` and `on_probe_frame()` are gone (CWE-1284). Refusals
+  count as `parse_fault_frame_edge` ([[jsonl-schema]]).
+  `frame_view_radiotap()` is the monitor DLT's half — radiotap
+  verdict, FCS strip, 802.11 minimum — and is the one call both
+  `on_probe_frame()` and `decode_frame()`'s `DLT_IEEE802_11_RADIO` arm
+  make, so the two radio entry points cannot disagree on what a valid
+  header is. libpcap-free, so it is unit-tested and fuzzed
+  (`fuzz_frame_edge`) without `WITH_PCAP`. The IPv4 Total Length clamp
+  is not here; it belongs to the IP rework (#132).
 - **802.11 frame view** (`src/dot11_frame.h`, #122) — each monitor frame
   is decoded **once**: `probe.c :: on_probe_frame()` and the
   `DLT_IEEE802_11_RADIO` arm of `capture.c :: decode_frame()` strip the
-  FCS radiotap announces (`dot11_fcs_strip_len()`, truncation-aware),
+  FCS radiotap announces (`dot11_fcs_strip_len()`, truncation-aware,
+  called from `frame_view_radiotap()` since #141),
   hand radiotap's FCS/DATAPAD/BADFCS flags to `dot11_frame_decode()`
   as hints, and read type, subtype, flags, header length, body offset
   and the Table 9-26 address roles out of the resulting `dot11_frame_t`.
