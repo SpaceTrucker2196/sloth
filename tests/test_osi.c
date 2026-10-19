@@ -1,5 +1,6 @@
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/osi.h"
 
@@ -11,9 +12,11 @@
 
 static void test_osi_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
-    /* must not crash on a fully zeroed state */
     view_osi_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "conns:0 ifaces:0");
+    ASSERT_SCREEN_HAS("L7 Application");
+    ASSERT_SCREEN_HAS("DNS:0  HTTP:0  TLS:0  QUIC:0");
+    ASSERT_SCREEN_HAS("(no iface");
 }
 
 static void test_osi_key_is_noop(void) {
@@ -81,7 +84,24 @@ static void test_osi_draw_with_populated_state(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan0mon");
 
     view_osi_draw(&s);
-    ASSERT(1);
+    /* One row per layer, each carrying the counts seeded for it. The
+     * duplicate remote 192.0.2.10 makes three distinct hosts, two of
+     * them IPv4. */
+    ASSERT_LINE_HAS(0, "conns:4 ifaces:2");
+    ASSERT_LINE_HAS(runner_screen_find("L7 Application"),
+                    "DNS:3  HTTP:2  TLS:4  QUIC:1  mDNS:5  NBNS:1  NTP:1");
+    ASSERT_LINE_HAS(runner_screen_find("L6 Presentation"),
+                    "TLS 1.3:2  TLS 1.2:1  legacy:1  JA3:2 distinct");
+    ASSERT_LINE_HAS(runner_screen_find("L5 Session"),
+                    "TLS sessions:4  QUIC:1  EAPOL:2");
+    ASSERT_LINE_HAS(runner_screen_find("L4 Transport"),
+                    "TCP:3 (E:1 L:1 ?:1)  UDP:1  ICMP:2");
+    ASSERT_LINE_HAS(runner_screen_find("L3 Network"),
+                    "IPv4 hosts:2  IPv6 hosts:1  ARP mappings:7");
+    ASSERT_LINE_HAS(runner_screen_find("L2 Data Link"),
+                    "ifaces:2  APs:3  STAs:4  devices:5  beacons:6");
+    ASSERT_LINE_HAS(runner_screen_find("L1 Physical"),
+                    "probe iface: wlan0mon (monitor mode)");
 }
 
 void run_osi_tests(void) {
