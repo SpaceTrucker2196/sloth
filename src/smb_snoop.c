@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "smb_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -69,7 +70,7 @@ int smb_snoop_observe(const char *src_ip, uint16_t src_port,
     const char *dialect = detect_dialect(payload, len);
     if (!dialect) return 0;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     smb_key_t key = { client_ip, server_ip, server_port };
     int created;

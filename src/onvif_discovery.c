@@ -5,6 +5,7 @@
 #include <pthread.h>
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "onvif_discovery.h"
 
 /* ── Internal table ──────────────────────────────────────── */
@@ -177,7 +178,7 @@ int onvif_ws_discovery_snoop(const char *src_ip, const uint8_t *data, int len,
      * (which carries none) must not make it look like it never was
      * one. */
     if (m.is_camera) e->is_camera = 1;
-    e->last_seen = time(NULL);
+    e->last_seen = sloth_wall();
     pthread_mutex_unlock(&g_mu);
 
     if (info && infosz > 0)

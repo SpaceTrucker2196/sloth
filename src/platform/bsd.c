@@ -13,6 +13,7 @@
 #include <net/if_media.h>  /* SIOCGIFMEDIA / IFM_IEEE80211_MONITOR */
 
 #include "sloth.h"
+#include "sloth_clock.h"
 
 /* ── Monitor-mode probe (SIOCGIFMEDIA) ─────────────────────
  * On BSD / macOS, monitor-mode is a mediaopt on the WiFi driver.
@@ -63,7 +64,7 @@ int bsd_get_ifaces(iface_stat_t *out, int max) {
     if (getifaddrs(&ifap) != 0) return 0;
 
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    sloth_mono_ts(&now);
 
     /* Single AF_INET UDP socket for all SIOCGIFMEDIA lookups this
      * poll. Cheap to open once, closed at the end. If open fails,

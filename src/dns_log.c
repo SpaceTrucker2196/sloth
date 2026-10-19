@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "dns_log.h"
 #include "jsonl.h"
@@ -62,7 +63,7 @@ int dns_log_parse(const uint8_t *msg, int len,
     netstr_copy(out->qname, sizeof(out->qname), (const uint8_t *)qname, strlen(qname));
     snprintf(out->qtype, sizeof(out->qtype), "%s", qtype_str(qtype));
     out->is_resp = is_resp;
-    out->ts      = time(NULL);
+    out->ts      = sloth_wall();
 
     if (!is_resp) return 1;
 

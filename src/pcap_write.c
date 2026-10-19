@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "pcap_write.h"
+#include "sloth_clock.h"
 #include "secure_file.h"
 #include "pcap_format.h"
 
@@ -26,7 +27,7 @@ void pcap_export_stem(const struct tm *t, char *out, size_t sz) {
 
 int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
     char stem[64], path[96], err[SFILE_ERR_MAX];
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     /* localtime_r: the shared static struct tm behind localtime() is the
      * aliasing hazard that mis-stamped the alert panel (#95), and its
      * result was dereferenced here unchecked. Both go away together. */

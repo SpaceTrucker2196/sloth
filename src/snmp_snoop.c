@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "snmp_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -165,7 +166,7 @@ int snmp_snoop_observe(const char *src_ip, uint16_t src_port,
     }
     (void)dst_port;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     snmp_key_t key = { flow_src, flow_dst };
     int created;

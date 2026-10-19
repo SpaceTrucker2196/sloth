@@ -10,6 +10,7 @@
 #include "platform/linux_wifi.h"
 #include "platform/linux_dhcp.h"
 #include "platform/linux_tcpdiag.h"
+#include "sloth_clock.h"
 
 /* ── Rate tracking across polls ─────────────────────────── */
 
@@ -35,7 +36,7 @@ int linux_get_ifaces(iface_stat_t *out, int max) {
     if (!f) return 0;
 
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    sloth_mono_ts(&now);
 
     int n = parse_proc_ifaces(f, out, max);
     fclose(f);

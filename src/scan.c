@@ -3,6 +3,7 @@
 #include <time.h>
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "scan.h"
 #include "tune.h"
 
@@ -50,7 +51,7 @@ static int scan_port_is_local_service(const unsigned char bm[8192], uint16_t por
 }
 
 void scan_update(sloth_state_t *s) {
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     unsigned char listen_bm[8192];
     scan_build_listen_set(s, listen_bm);

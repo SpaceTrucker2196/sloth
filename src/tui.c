@@ -21,6 +21,7 @@
 #endif
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "persist_health.h"
 #include "tui_palette.h"
@@ -307,7 +308,7 @@ void tui_alert_hot_set(const char *ip, long t, int sev) {
 
 int tui_alert_hot_check(const char *ip) {
     if (!ip || !ip[0] || g_alert_hot_n == 0) return -1;
-    long now = (long)time(NULL);
+    long now = (long)sloth_wall();
     for (int i = 0; i < g_alert_hot_n; i++) {
         if (strcmp(g_alert_hot[i].ip, ip) != 0) continue;
         if (now - g_alert_hot[i].t > ALERT_HOT_TTL_S) return -1;

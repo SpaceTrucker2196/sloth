@@ -28,6 +28,12 @@ time_t sloth_wall(void);
  * anything. */
 uint64_t sloth_mono_ms(void);
 
+/* sloth_mono_ms() as a timespec, for the rate code that divides a
+ * counter delta by elapsed seconds (bandwidth, interface rates).
+ * Millisecond resolution: those deltas are taken once per poll, so the
+ * nanoseconds CLOCK_MONOTONIC would add are noise. */
+void sloth_mono_ts(struct timespec *out);
+
 /* Test seam: replace either clock. NULL restores the real one. Swapped
  * only by tests, before any capture thread exists — the pointers are
  * read without a lock. */

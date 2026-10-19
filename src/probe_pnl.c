@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "probe_pnl.h"
+#include "sloth_clock.h"
 #include "sensor_health.h"
 #include "bytes.h"
 #include "dot11_ie.h"
@@ -105,7 +106,7 @@ void probe_pnl_observe(const uint8_t mac[6], const char *ssid,
                         const char *os_fp, const char *phy)
 {
     if (!ssid || !ssid[0]) return;   /* wildcard probes carry no PNL info */
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     pthread_mutex_lock(&g_mu);
 

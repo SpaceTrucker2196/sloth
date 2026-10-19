@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include "posture.h"
+#include "sloth_clock.h"
 #include "query.h"
 #include "beacon_snoop.h"
 #include "db.h"
@@ -64,7 +65,7 @@ static int bucketize_techniques(const sloth_state_t *s,
 int posture_render_md(FILE *out, const sloth_state_t *s,
                       time_t session_start, struct rq_handle *research) {
     if (!out || !s) return 0;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     char ts_start[32], ts_end[32];
     iso_time(ts_start, session_start);
     iso_time(ts_end,   now);
@@ -408,7 +409,7 @@ int posture_render_md(FILE *out, const sloth_state_t *s,
 
 int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start) {
     if (!out || !s) return 0;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     char ts_start[32], ts_end[32];
     iso_time(ts_start, session_start);
     iso_time(ts_end,   now);

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "twins.h"
+#include "sloth_clock.h"
 #include "alerts.h"
 #include "wired_attach.h"
 
@@ -39,7 +40,7 @@ static int already_recorded(const sloth_state_t *s,
 
 void twins_snapshot(sloth_state_t *s) {
     s->twin_episode_count = 0;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;

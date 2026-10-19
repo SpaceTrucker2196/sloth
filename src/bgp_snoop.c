@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "bgp_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -82,7 +83,7 @@ walk_done:
         const char *t = peer_a; peer_a = peer_b; peer_b = t;
     }
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     bgp_key_t key = { peer_a, peer_b };
     int created;

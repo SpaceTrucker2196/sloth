@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "mqtt_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -214,7 +215,7 @@ int mqtt_snoop_observe(const char *src_ip, uint16_t src_port,
         }
     }
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     mqtt_key_t key = { client_ip, broker_ip };
     int created;

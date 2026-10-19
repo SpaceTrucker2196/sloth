@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "bandwidth.h"
 
 /* ── Internal per-connection tracking entry ─────────────────── */
@@ -70,7 +71,7 @@ static bw_entry_t *bw_get_or_create(const conn_t *c,
 
 void bw_update(sloth_state_t *s) {
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
+    sloth_mono_ts(&now);
 
     /* mark all entries inactive */
     for (int i = 0; i < g_bw_n; i++)

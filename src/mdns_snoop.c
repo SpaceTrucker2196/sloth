@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "mdns_snoop.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "dns.h"
 #include "stab.h"
@@ -199,7 +200,7 @@ int mdns_snoop_at(const uint8_t *msg, int len, time_t now) {
 }
 
 int mdns_snoop(const uint8_t *msg, int len) {
-    return mdns_snoop_at(msg, len, time(NULL));
+    return mdns_snoop_at(msg, len, sloth_wall());
 }
 
 void mdns_snapshot(sloth_state_t *s) {

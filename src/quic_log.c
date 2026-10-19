@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "quic_snoop.h"
 #include "quic_log.h"
@@ -27,7 +28,7 @@ int quic_log_parse(const uint8_t *data, int len,
     if (host && host[0])   /* #138: the host cache is already clean; this keeps the store honest */
         netstr_copy(out->host, sizeof(out->host), (const uint8_t *)host, strlen(host));
     snprintf(out->ver, sizeof(out->ver), "%s", ver);
-    out->ts = time(NULL);
+    out->ts = sloth_wall();
     return 1;
 }
 

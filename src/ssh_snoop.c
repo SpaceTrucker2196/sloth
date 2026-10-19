@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "ssh_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -80,7 +81,7 @@ int ssh_snoop_observe(const char *src_ip, uint16_t src_port,
         return 0;
     }
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     ssh_key_t key = { client_ip, server_ip };
     int created;

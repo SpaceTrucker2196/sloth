@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include "devices.h"
+#include "sloth_clock.h"
 #include "sensor_health.h"
 #include "oui.h"
 
@@ -134,7 +135,7 @@ static void merge_stas(const sloth_state_t *s, device_t *dev, int *n, time_t now
 
 void devices_update(sloth_state_t *s) {
     if (!s) return;
-    time_t   now = time(NULL);
+    time_t   now = sloth_wall();
     device_t buf[MAX_DEVICES];
     int      n = 0;
 

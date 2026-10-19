@@ -3,6 +3,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "icmp_log.h"
+#include "sloth_clock.h"
 #include "jsonl.h"
 #include "sensor_health.h"
 
@@ -95,7 +96,7 @@ int icmp_log_parse(const uint8_t *msg, int len,
      * Linux, 32 B Windows); ptunnel/icmptunnel/Loki fill toward MTU. */
     out->payload_len = (len > 8) ? (uint16_t)(len - 8) : 0;
     out->is_v6 = is_v6 ? 1 : 0;
-    out->ts    = time(NULL);
+    out->ts    = sloth_wall();
     return 1;
 }
 

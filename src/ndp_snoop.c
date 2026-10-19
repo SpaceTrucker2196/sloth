@@ -4,6 +4,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include "ndp_snoop.h"
+#include "sloth_clock.h"
 #include "bytes.h"
 
 /* Tracker state. Tiny: at most MAX_NDP_RAS distinct router source IPs.
@@ -59,7 +60,7 @@ int ndp_snoop_ra(const char *src_ip, const uint8_t *payload, int len) {
     /* Reachable Time (payload+8..11) and Retrans Timer (payload+12..15)
      * are not retained — they aren't relevant to rogue-RA detection. */
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
     int idx = find_or_alloc(src_ip);

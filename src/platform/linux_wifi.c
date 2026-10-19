@@ -19,6 +19,7 @@
 #include "beacon_snoop.h"
 #include "observe.h"
 #include "platform/linux_wifi.h"
+#include "sloth_clock.h"
 
 /* ── Netlink attribute helpers ───────────────────────────── */
 
@@ -362,7 +363,7 @@ void linux_wifi_scan_trigger_reset(void) {
 static void trigger_scan_async(int family, unsigned ifidx) {
     uint8_t sbuf[64];
     size_t msg_sz = linux_wifi_prepare_scan_trigger(sbuf, sizeof(sbuf),
-                                                    family, ifidx, time(NULL));
+                                                    family, ifidx, sloth_wall());
     if (msg_sz == 0) return;   /* no socket is opened when nothing was built */
 
     int tfd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);

@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include "ldap_snoop.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -113,7 +114,7 @@ int ldap_snoop_observe(const char *src_ip, uint16_t src_port,
         op != LDAP_OP_SEARCH_REQ &&
         op != LDAP_OP_SEARCH_RES_REF) return 0;
 
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
     int created;
     ldap_event_t *e = stab_get(&g_tbl, client_ip, now, &created);

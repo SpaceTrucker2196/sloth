@@ -5,6 +5,7 @@
 #include <pthread.h>
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "ssdp_snoop.h"
 
 /* ── Internal table ──────────────────────────────────────── */
@@ -136,7 +137,7 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
     snprintf(e->usn,      sizeof(e->usn),       "%s", usn);
     snprintf(e->location, sizeof(e->location),  "%s", loc);
     snprintf(e->nts,      sizeof(e->nts),       "%s", nts_short);
-    e->last_seen = time(NULL);
+    e->last_seen = sloth_wall();
     pthread_mutex_unlock(&g_mu);
 
     if (info && infosz > 0) {

@@ -1,4 +1,5 @@
 #include "karma_detect.h"
+#include "sloth_clock.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -193,7 +194,7 @@ const sloth_tool_sig_t *karma_tool_match(const sloth_state_t *s,
 }
 
 void karma_update(sloth_state_t *s) {
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     int b_count = pnl_union_size(s);   /* |PNL union| — same for every BSSID */
     s->karma_count = 0;
 

@@ -4,6 +4,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "tls_log.h"
 #include "md5.h"
@@ -397,7 +398,7 @@ int tls_log_parse(const uint8_t *data, int len,
     snprintf(out->ja4, sizeof(out->ja4), "%s_%.12s_%.12s",
              sec_a, sec_b_hex, sec_c_hex);
 
-    out->ts = time(NULL);
+    out->ts = sloth_wall();
     return 1;
 }
 

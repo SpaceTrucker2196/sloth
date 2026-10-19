@@ -4,6 +4,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "http_log.h"
 #include "sha256.h"
@@ -148,7 +149,7 @@ int http_log_parse_response(const uint8_t *data, int len,
     out->status = (uint16_t)((p[9] - '0') * 100 + (p[10] - '0') * 10 +
                              (p[11] - '0'));
     snprintf(out->src, sizeof(out->src), "%s", src_ip ? src_ip : "");
-    out->ts = time(NULL);
+    out->ts = sloth_wall();
 
     /* Find the header/body boundary. Absent one, the headers ran past
      * this segment and there is no body here to speak of. */
@@ -549,7 +550,7 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
     snprintf(out->ja4h, sizeof(out->ja4h), "%.10s_%.12s_%s_%s",
              sec_a, sec_b_full, sec_c_hex, sec_d_hex);
 
-    out->ts = time(NULL);
+    out->ts = sloth_wall();
     return 1;
 }
 

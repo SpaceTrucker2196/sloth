@@ -35,6 +35,7 @@
 #include <arpa/inet.h>
 
 #include "data_socket.h"
+#include "sloth_clock.h"
 #include "jsonl.h"
 #include "formatter.h"
 #include "tune.h"
@@ -80,9 +81,7 @@ static char            g_unix_path[256];     /* for cleanup unlink */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static time_t mono_now(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec;
+    return (time_t)(sloth_mono_ms() / 1000u);
 }
 
 /* Every fd this module owns is close-on-exec (#86). sloth holds the
@@ -706,7 +705,7 @@ static void offer(ds_client_t *c, const char *line, size_t len, time_t now) {
         snprintf(js, sizeof(js),
                  "{\"type\":\"socket_gap\",\"ts\":%lld,\"seq\":%llu,"
                  "\"dropped\":%llu,\"dropped_total\":%llu}",
-                 (long long)time(NULL), c->seq, c->gap, c->dropped);
+                 (long long)sloth_wall(), c->seq, c->gap, c->dropped);
         if (formatter_get() != OUT_FMT_JSONL &&
             formatter_transform(js, out, (int)sizeof(out)) >= 0)
             m = out;

@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "dhcp_snoop.h"
 #include "sensor_health.h"
@@ -129,7 +130,7 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
     pthread_mutex_lock(&g_mu);
     dhcp_event_t *e = find_or_create(mac);
     e->msg_type  = msg_type;
-    e->last_seen = time(NULL);
+    e->last_seen = sloth_wall();
     if (hostname[0])
         snprintf(e->hostname, sizeof(e->hostname), "%s", hostname);
     if (assigned[0] && strcmp(assigned, "0.0.0.0") != 0)

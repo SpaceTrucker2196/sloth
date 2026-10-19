@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "nbns_snoop.h"
 #include "dns.h"
@@ -150,7 +151,7 @@ int nbns_snoop_at(const uint8_t *msg, int len, char *info, int infosz,
 }
 
 int nbns_snoop(const uint8_t *msg, int len, char *info, int infosz) {
-    return nbns_snoop_at(msg, len, info, infosz, time(NULL));
+    return nbns_snoop_at(msg, len, info, infosz, sloth_wall());
 }
 
 void nbns_snapshot(sloth_state_t *s) {

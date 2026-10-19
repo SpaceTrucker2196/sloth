@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <ctype.h>
 #include "ntp_log.h"
+#include "sloth_clock.h"
 #include "jsonl.h"
 #include "sensor_health.h"
 
@@ -89,7 +90,7 @@ int ntp_log_parse(const uint8_t *msg, int len,
     format_ref(stratum, msg + 12, out->ref, (int)sizeof(out->ref));
     out->version = version;
     out->stratum = stratum;
-    out->ts      = time(NULL);
+    out->ts      = sloth_wall();
     return 1;
 }
 

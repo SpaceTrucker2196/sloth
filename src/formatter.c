@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "formatter.h"
+#include "sloth_clock.h"
 
 /* Configured format — set once at startup from the --out-format flag,
  * read by emit_line() for every record. No mutex: writes happen at
@@ -384,7 +385,7 @@ static int format_syslog(const char *jsonl, char *out, int out_sz) {
 
     /* RFC 3339 UTC timestamp. */
     char ts[32];
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     struct tm tm;
     gmtime_r(&now, &tm);
     strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);

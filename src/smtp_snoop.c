@@ -24,6 +24,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "smtp_snoop.h"
+#include "sloth_clock.h"
 #include "cleartext_creds.h"
 
 static int ci_startswith(const char *s, int slen, const char *prefix, int plen) {
@@ -211,7 +212,7 @@ int smtp_snoop(const uint8_t *data, int len,
             } else {
                 f->state = LOGIN_AWAIT_USER;
             }
-            f->last_seen = time(NULL);
+            f->last_seen = sloth_wall();
             pthread_mutex_unlock(&g_mu);
             return 1;
         }
@@ -233,7 +234,7 @@ int smtp_snoop(const uint8_t *data, int len,
                                                 "SMTP", raw);
                 }
                 f->state = LOGIN_AWAIT_PASS;
-                f->last_seen = time(NULL);
+                f->last_seen = sloth_wall();
                 pthread_mutex_unlock(&g_mu);
                 return 1;
             }
@@ -241,7 +242,7 @@ int smtp_snoop(const uint8_t *data, int len,
                 /* Never inspect the payload — just mark the flow. */
                 cleartext_creds_mark_password(src, dst, dst_port, "SMTP");
                 f->state = LOGIN_NONE;
-                f->last_seen = time(NULL);
+                f->last_seen = sloth_wall();
                 pthread_mutex_unlock(&g_mu);
                 return 1;
             }
