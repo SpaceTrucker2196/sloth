@@ -1,6 +1,7 @@
 #include <string.h>
 #include <time.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "devices.h"
 #include "views/devices.h"
@@ -142,7 +143,9 @@ static void test_zero_mac_skipped(void) {
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_devices_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Devices: 0");
+    ASSERT_LINE_HAS(1, "Risk  Hits");
+    ASSERT_SCREEN_HAS("(no devices seen yet)");
 }
 
 static void test_view_draw_populated(void) {
