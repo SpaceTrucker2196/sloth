@@ -48,6 +48,25 @@ static int cs_count(const char *hay, const char *needle) {
 }
 
 /* The counter must see calls before its zero means anything. */
+static int cs_count_wall(const char *src);
+static void test_wall_counter_sees_every_spelling(void) {
+    ASSERT_EQ(cs_count_wall("t = time(NULL);"), 1);
+    ASSERT_EQ(cs_count_wall("t = time(0);"), 1);
+    ASSERT_EQ(cs_count_wall("t = time( NULL );"), 1);
+    ASSERT_EQ(cs_count_wall("time(&t);"), 1);
+    ASSERT_EQ(cs_count_wall("gettimeofday(&tv, NULL);"), 1);
+    ASSERT_EQ(cs_count_wall("timespec_get(&ts, TIME_UTC);"), 1);
+    /* Not clock reads: other functions that end in "time". */
+    ASSERT_EQ(cs_count_wall("localtime(&t); gmtime_r(&t, &tm); mktime(&tm);"), 0);
+    ASSERT_EQ(cs_count_wall("strftime(b, n, f, tm); difftime(a, b);"), 0);
+    ASSERT_EQ(cs_count_wall("t = sloth_wall();"), 0);
+    /* Prose is not a call: comments and string literals are skipped. */
+    ASSERT_EQ(cs_count_wall("/* one time(2) compare */ x();"), 0);
+    ASSERT_EQ(cs_count_wall("// time(NULL) was here\n"), 0);
+    ASSERT_EQ(cs_count_wall("f(\"%d time(s)\");"), 0);
+    ASSERT_EQ(cs_count_wall("f(\"x\\\"y\"); t = time(0);"), 1);   /* escaped quote */
+}
+
 static void test_counter_sees_direct_clock_calls(void) {
     static const char src[] =
         "    time_t now = time(NULL);\n"
@@ -78,6 +97,56 @@ static int cs_is_source(const char *name) {
            (name[n - 1] == 'c' || name[n - 1] == 'h');
 }
 
+/* Any libc wall-clock read, however spelled: `time(` as a standalone
+ * identifier with any argument - time(NULL), time(0), time( NULL ),
+ * time(&t) - plus gettimeofday( and timespec_get(. The first version
+ * matched the literal "time(NULL)" only; the #109 review changed
+ * seqnum.c to time(0) and the walk stayed green. localtime(, gmtime(,
+ * mktime( and the like are not reads of the clock and are skipped by
+ * requiring a non-identifier character before `time`. */
+static int cs_is_ident(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+/* Code only: comments and string/char literals blanked to spaces, so
+ * prose such as "time(2)" or an alert detail reading "%d time(s)" is
+ * not a call. Newlines are kept so nothing else shifts. */
+static char *cs_code_only(const char *src) {
+    size_t n = strlen(src);
+    char *o = malloc(n + 1);
+    if (!o) return NULL;
+    size_t i = 0;
+    while (i < n) {
+        if (src[i] == '/' && src[i + 1] == '*') {
+            o[i] = o[i + 1] = ' '; i += 2;
+            while (i < n && !(src[i] == '*' && src[i + 1] == '/')) { o[i] = src[i] == '\n' ? '\n' : ' '; i++; }
+            if (i < n) { o[i] = o[i + 1] = ' '; i += 2; }
+        } else if (src[i] == '/' && src[i + 1] == '/') {
+            while (i < n && src[i] != '\n') o[i++] = ' ';
+        } else if (src[i] == '"' || src[i] == '\'') {
+            char q = src[i]; o[i++] = ' ';
+            while (i < n && src[i] != q) {
+                if (src[i] == '\\' && i + 1 < n) { o[i++] = ' '; }
+                o[i] = src[i] == '\n' ? '\n' : ' '; i++;
+            }
+            if (i < n) o[i++] = ' ';
+        } else { o[i] = src[i]; i++; }
+    }
+    o[n] = '\0';
+    return o;
+}
+
+static int cs_count_wall(const char *src) {
+    char *c = cs_code_only(src);
+    if (!c) return -1;
+    int n = 0;
+    for (const char *p = strstr(c, "time("); p; p = strstr(p + 1, "time("))
+        if (p == c || !cs_is_ident(p[-1])) n++;
+    n += cs_count(c, "gettimeofday(") + cs_count(c, "timespec_get(");
+    free(c);
+    return n;
+}
+
 static void cs_check_file(const char *path, cs_walk_t *w) {
     char *src = slurp(path);
     ASSERT(src != NULL);
@@ -87,7 +156,7 @@ static void cs_check_file(const char *path, cs_walk_t *w) {
     }
     w->files++;
     if (strchr(path + 4, '/')) w->saw_subdir = 1;   /* past "src/" */
-    int wall = cs_count(src, "time(NULL)");
+    int wall = cs_count_wall(src);
     int mono = cs_count(src, "clock_gettime(");
     if (strcmp(path, CS_SEAM_FILE) == 0) {
         w->seam_seen = 1;
@@ -95,7 +164,7 @@ static void cs_check_file(const char *path, cs_walk_t *w) {
         w->seam_mono = mono;
     } else if (wall || mono) {
         w->offenders++;
-        fprintf(stderr, "    %s reads libc directly: %d time(NULL), "
+        fprintf(stderr, "    %s reads libc directly: %d wall reads (time()/gettimeofday/timespec_get), "
                         "%d clock_gettime(); use sloth_wall() / "
                         "sloth_mono_ms()\n", path, wall, mono);
     }
@@ -214,6 +283,7 @@ static void test_mono_ts_is_mono_ms_split(void) {
 void run_clock_seam_tests(void) {
     TEST_SUITE("clock seam (#109)");
     RUN_TEST(test_counter_sees_direct_clock_calls);
+    RUN_TEST(test_wall_counter_sees_every_spelling);
     RUN_TEST(test_no_file_under_src_reads_libc_clocks);
     RUN_TEST(test_real_clocks_by_default);
     RUN_TEST(test_test_set_swaps_and_null_restores);
