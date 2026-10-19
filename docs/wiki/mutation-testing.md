@@ -17,7 +17,7 @@ Level-5 autonomy claim in [`MISSION.md`](../../MISSION.md).
 **Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -386,10 +386,14 @@ Highest-value files to mutate, in order:
 
 Don't waste cycles mutating:
 
-- `src/views/*.c` — render code. Low semantic value, lots of
-  formatting noise; tests use the [[platform-vtable]] fake platform
-  plus a null TUI but assert mostly on "did it not crash".
-- `src/tui.c`, `src/main.c` — orchestration glue.
+- `src/views/*.c` — render code. Lots of formatting noise. Since #116
+  `make test` builds the shipped renderer and the view tests assert on
+  the cells they draw, so a mutant here *can* be killed now (until then
+  the suite linked a no-op TUI and every view mutant survived); expect
+  a low rate on pure layout and a useful one on the decisions — which
+  row is selected, which colour a column takes, which message an empty
+  table shows. `src/capture/probe.c` is in `make test` too since #116.
+- `src/main.c` — orchestration glue, still not linked into any test.
 - `src/platform/*.c` — kernel-facing, not run by tests.
 
 ---

@@ -3520,3 +3520,26 @@ resets the table. The `[m]` key tests in `test_iface_graph.c` would now
 have opened the host's interfaces; they go through the `--iface`
 allow-list refusal instead. Pages: [[architecture]], [[sloth]],
 [[cli-reference]].
+
+## 2026-10-19 — #116 continued: view tests assert what they draw
+
+`tests/test_views_render.c` drives every `sloth_views.def` entry
+through `tui_draw()` (tab selection by reverse video, body equals the
+view's own draw, dashboard has no tab bar, wrapped tab bar, a seeded
+row for the two draws nothing called) and ratchets `ASSERT(1)`: 98 at
+the start of the slice, 10 left, none of them a render test. The ones
+left are sanitizer-only no-crash checks with nothing observable to
+assert: `test_action_snoop.c`, `test_chanhop.c`, `test_capture.c`,
+`test_dns_snoop.c`, `test_fragattack.c`, `test_fragattack_view.c`
+(NULL snapshot), `test_jsonl.c` (two), `test_karma.c` (NULL key
+buffer), `test_pcap_format.c`. Reading the screens back found five
+display defects, each fixed with the assertion that found it: the
+dashboard's KARMA `!` badge was drawn into the cell the panel separator
+then overwrote and had never shown; the DNS log's Answer column sat two
+cells right of its header on unselected rows; the WiFi detail pane
+padded the signal value and printed `dBm` under the next column; the
+packet detail pane said "build with WITH_PCAP=1" from code compiled only
+WITH_PCAP; the process tree's fold set had no reset, so one test's fold
+leaked into the next (`view_procs_fold_clear()` joins `SLOTH_RESETS`).
+`test_procs.c`'s detail case used PID 99 and printed the host's process;
+it uses a PID above any `pid_max` now. Pages: [[mutation-testing]].
