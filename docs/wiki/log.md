@@ -3587,3 +3587,21 @@ both now use 106/107/108 and ext 81 alone reads `legacy` on both (and in
 attribute walk in `beacon_parse_ies` and the WSC walk in `eap_parse.c`
 moved onto the shared iterator and now count in `ie_overrun`.
 Page: [[jsonl-schema]] → *Parse faults*.
+
+## 2026-10-18 — Supply-chain basics, first slice (#142)
+
+`db_open()` and `rq_open()` refuse a **loaded** sqlite below 3.31.0
+(`src/libver.c`); the compile-time `#error` (#134) cannot see the
+library the dynamic linker picks. `sloth --version` gains two lines
+naming the loaded libpcap and sqlite, and `sensor_health` gains `libs`
+with the same two, appended and outside the change-only signature.
+`make check-deps` (run by `all`) applies pkg-config floors — sqlite
+3.31.0, libpcap 1.9.0 — fatal when unmet, a one-line notice when
+pkg-config or a `.pc` file is absent. `make sbom` writes a CycloneDX
+1.5 SBOM of the five link deps (`tools/sbom.sh`). `tests/test_ci_pins.c`
+gains a `runs-on: *-latest` classifier; the workflow half of the slice
+(runners to `ubuntu-24.04`, the `sbom` and `release-attestation` CI
+jobs) did not land and is the open remainder. New page
+[[release-checklist]], including the manual `git tag -s` step. Pages:
+[[jsonl-schema]], [[cli-reference]], [[version-checkin]],
+[[threat-model]] (TB-7 and its risk row, partly closed).

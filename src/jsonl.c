@@ -19,6 +19,7 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "libver.h"
 #include "capture/capture.h"
 #include "alert_pcap.h"
 #include "eapol_log.h"
@@ -2061,6 +2062,17 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_int(buf, LINEBUF, &off, "malloc_kb",         mem.malloc_kb);
     kv_int(buf, LINEBUF, &off, "fd_count",          mem.fd_count);
     kv_int(buf, LINEBUF, &off, "resolver_calls",    mem.resolver_calls);
+    /* Loaded parser libraries (#142). Appended, so every earlier field
+     * keeps its name and position. Outside `sig` on purpose: it is
+     * fixed for the life of the process, so it could never be the
+     * change worth a line — it rides every line instead, which is what
+     * lets a consumer match any one record against a libpcap or sqlite
+     * advisory without a second source. */
+    {
+        char lbuf[192];
+        libver_format(lbuf, sizeof(lbuf));
+        kv_str(buf, LINEBUF, &off, "libs", lbuf);
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

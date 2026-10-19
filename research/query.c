@@ -4,6 +4,7 @@
 #include <sqlite3.h>
 
 #include "query.h"
+#include "libver.h"
 
 /* Same pin as src/db.c (#134): the corpus is opened read-only, but a
  * --corpus path that is a symlink still should not be followed. */
@@ -108,6 +109,14 @@ rq_handle_t *rq_open(const char *path) {
     g_open_err[0] = '\0';
     if (!path || !path[0]) {
         snprintf(g_open_err, sizeof(g_open_err), "no path given");
+        return NULL;
+    }
+    /* Runtime floor (#142): the corpus is untrusted bytes, and the
+     * TRUSTED_SCHEMA and NOFOLLOW guards below exist only from 3.31.0.
+     * The compile-time #error cannot see the library actually loaded. */
+    char floor_err[96];
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
+        snprintf(g_open_err, sizeof(g_open_err), "%s", floor_err);
         return NULL;
     }
     sqlite3 *db = NULL;

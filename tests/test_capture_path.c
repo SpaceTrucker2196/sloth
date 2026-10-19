@@ -23,6 +23,7 @@
 #include "eapol_log.h"      /* the collector DATAPAD used to blind (#123) */
 #include "dns_log.h"
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
+#include "libver.h"         /* loaded-libpcap report (#142) */
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -2529,6 +2530,20 @@ static void test_ring_snapshot_is_stable_under_writer(void) {
     free(m);
 }
 
+/* #142: the one binary that links libpcap is the one that can prove
+ * `--version` and sensor_health's `libs` report the LOADED libpcap —
+ * pcap_lib_version() of this process — rather than "none" or a string
+ * baked in at build time. Compared against the library, never a
+ * literal, because which libpcap a host has is host state. */
+static void test_libver_reports_the_loaded_libpcap(void) {
+    ASSERT_STR(libver_pcap(), pcap_lib_version());
+    ASSERT(strcmp(libver_pcap(), "none") != 0);
+    char buf[192], want[192];
+    libver_format(buf, sizeof(buf));
+    snprintf(want, sizeof(want), "pcap: %s; sqlite: ", pcap_lib_version());
+    ASSERT(strncmp(buf, want, strlen(want)) == 0);
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -2542,6 +2557,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_sll2_truncated_below_the_ifindex);
     RUN_TEST(test_dispatch_rejects_bad_arguments);
     RUN_TEST(test_capture_length_shorter_than_original);
+    RUN_TEST(test_libver_reports_the_loaded_libpcap);
 
     TEST_SUITE("capture path: scope is an authorization boundary (#85)");
     RUN_TEST(test_scope_admits_the_pinned_interface);

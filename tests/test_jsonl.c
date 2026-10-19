@@ -12,6 +12,7 @@
 #include "sensor_health.h"
 #include "dns.h"
 #include <sqlite3.h>
+#include "libver.h"
 #include "capture/capture.h"
 #include "alert_pcap.h"
 #include "tls_log.h"
@@ -1375,6 +1376,37 @@ static void test_emit_sensor_health_parse_faults(void) {
     sh_parse_fault_reset();
 }
 
+/* #142: the loaded parser libraries ride every sensor_health line, as
+ * one `libs` string, appended after the last #126 field so nothing
+ * earlier moved. The value is compared against libver_format() rather
+ * than a literal: which libpcap and sqlite this host loads is host
+ * state, and the test must not depend on it. */
+static void test_emit_sensor_health_carries_loaded_libs(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    char want[256], lbuf[192];
+    libver_format(lbuf, sizeof(lbuf));
+    snprintf(want, sizeof(want), "\"libs\":\"%s\"", lbuf);
+    ASSERT(contains(body, want));
+    ASSERT(contains(body, "\"libs\":\"pcap: "));
+    ASSERT(contains(body, "; sqlite: "));
+    const char *last = strstr(body, "\"parse_fault_tls_malformed\":");
+    const char *libs = strstr(body, "\"libs\":");
+    ASSERT(last && libs);
+    if (last && libs) ASSERT(last < libs);
+    /* Last field: the object closes right after the value. */
+    const char *close = libs ? strstr(libs, "\"}") : NULL;
+    ASSERT(close != NULL);
+    if (close) ASSERT_EQ(close[2], '\n');
+}
+
 /* …and, like the flow rings, the tally must NOT move the change-only
  * signature. Under mdk4 mode m or a beacon flood it climbs on every
  * frame; signing over it would emit this record every tick forever
@@ -2246,6 +2278,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_total_includes_flow_rings);
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
     RUN_TEST(test_emit_sensor_health_parse_faults);
+    RUN_TEST(test_emit_sensor_health_carries_loaded_libs);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_emit_sensor_health_memory_fields);
     RUN_TEST(test_sensor_health_memory_does_not_re_emit);

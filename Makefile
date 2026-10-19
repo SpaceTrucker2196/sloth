@@ -52,6 +52,7 @@ CORE_COMMON_SRCS = \
        src/device_risk.c   \
        src/posture.c       \
        src/version.c       \
+       src/libver.c        \
        src/updater.c       \
        src/oui.c           \
        src/services.c      \
@@ -359,9 +360,62 @@ $(OBJDIR)/.flags:   STAMP = $(CC) $(CFLAGS)
 $(OBJDIR)/.members: STAMP = $(CORE_SRCS)
 $(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 
-.PHONY: all clean install embedded
+.PHONY: all clean install embedded check-deps sbom
 
-all: $(TARGET)
+all: check-deps $(TARGET)
+
+# ── Dependency floors (#142) ────────────────────────────────────────────────
+# The minimum library versions, checked before compiling rather than
+# discovered as an #error halfway through. sqlite 3.31.0 is the release
+# that added SQLITE_OPEN_NOFOLLOW and SQLITE_DBCONFIG_TRUSTED_SCHEMA,
+# which src/db.c and research/query.c depend on (#134); libpcap 1.9 is
+# the oldest release the capture path is exercised against, and
+# capture.c degrades rather than refuses below the features it probes.
+#
+# Only the libraries this configuration links are checked. Fatal when
+# pkg-config is present and reports a version below the floor; skipped
+# with a one-line notice when pkg-config is absent (embedded hosts often
+# have none) or has no .pc file for the library, because "cannot tell"
+# is not "too old" — the compile-time #error and the runtime refusal in
+# db_open()/rq_open() still stand behind it. Vendoring either library
+# was rejected: the distro is the patch channel (#142).
+SQLITE_FLOOR  = 3.31.0
+LIBPCAP_FLOOR = 1.9.0
+DEP_FLOORS    =
+ifeq ($(WITH_SQLITE),1)
+    DEP_FLOORS += sqlite3:$(SQLITE_FLOOR)
+endif
+ifeq ($(WITH_PCAP),1)
+    DEP_FLOORS += libpcap:$(LIBPCAP_FLOOR)
+endif
+PKG_CONFIG ?= pkg-config
+
+check-deps:
+	@if [ -z "$(strip $(DEP_FLOORS))" ]; then :; \
+	elif ! command -v $(PKG_CONFIG) >/dev/null 2>&1; then \
+	  echo "check-deps: $(PKG_CONFIG) not found -- dependency floors not checked ($(strip $(DEP_FLOORS)))"; \
+	else \
+	  fail=0; \
+	  for d in $(DEP_FLOORS); do \
+	    pkg=$${d%%:*}; floor=$${d#*:}; \
+	    if ! $(PKG_CONFIG) --exists "$$pkg"; then \
+	      echo "check-deps: no pkg-config data for $$pkg -- floor $$floor not checked"; \
+	    elif ! $(PKG_CONFIG) --atleast-version="$$floor" "$$pkg"; then \
+	      echo "check-deps: $$pkg `$(PKG_CONFIG) --modversion $$pkg` is below the $$floor floor" >&2; \
+	      fail=1; \
+	    fi; \
+	  done; \
+	  exit $$fail; \
+	fi
+
+# ── SBOM fallback (#142) ────────────────────────────────────────────────────
+# CI produces the SBOM with anchore/sbom-action. This is the fallback for
+# a host without it: a CycloneDX 1.5 document naming sloth itself and the
+# five libraries the default build links, each at the version
+# pkg-config (or the C library) reports. Written to stdout; redirect it.
+sbom:
+	@SLOTH_VERSION="`sed -n 's/^#define SLOTH_VERSION "\(.*\)"$$/\1/p' include/sloth.h`" \
+	  PKG_CONFIG="$(PKG_CONFIG)" sh tools/sbom.sh
 
 # CFLAGS on the *link* line, not just the compile line. Several flags are
 # not compile-only: -fsanitize=... has to reach the driver at link time or
@@ -417,12 +471,17 @@ research-index:
 # layer directly (see research/query.h); this exists for the external
 # consumers MCP is actually for, and keeping it out of `all` means the
 # monitor never grows a JSON-RPC surface it does not use.
+#
+# src/libver.c rides along because rq_open() applies the runtime sqlite
+# floor (#142). -UWITH_PCAP because CFLAGS carries the shipped build's
+# -DWITH_PCAP and this binary links no libpcap: libver then reports
+# "none" for it, which is true.
 MCP_SRCS = research/mcp/main.c research/mcp/mcp.c research/mcp/json.c \
-           research/query.c
+           research/query.c src/libver.c
 
 .PHONY: research-mcp
 research-mcp:
-	$(CC) $(CFLAGS) -DWITH_SQLITE -Iinclude -Iresearch -Iresearch/mcp \
+	$(CC) $(CFLAGS) -UWITH_PCAP -DWITH_SQLITE -Iinclude -Isrc -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
 # ── Test build ───────────────────────────────────────────────────────────────
@@ -471,7 +530,7 @@ endif
 # translation unit has always been compiled with.
 TEST_SRCS        = $(wildcard tests/*.c)
 TEST_ONLY_SRCS   = src/reset_all.c \
-                   $(filter-out %/main.c research/query.c,$(RESEARCH_SRCS) $(MCP_SRCS))
+                   $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
 TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
 

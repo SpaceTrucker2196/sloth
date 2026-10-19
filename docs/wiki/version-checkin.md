@@ -10,7 +10,7 @@ type: architecture
 
 **Sources**: `include/sloth.h`, `src/main.c`, `src/event_wake.c`, `src/data_socket.c`, `README.md`, `RELEASE_v1.4.0.md`, `SECURITY.md`.
 
-**Last updated**: 2026-07-02.
+**Last updated**: 2026-10-18 (#142).
 
 ---
 
@@ -159,8 +159,34 @@ out-of-process**. That delivers regular version awareness with minimal user
 interruption, while keeping network fetch, source build, install, and
 restart concerns outside the passive-monitoring hot path.
 
+## Library versions and release integrity (#142)
+
+sloth's own version is half of what a deployed sensor runs. libpcap and
+sqlite parse untrusted bytes for it, and the distribution patches both
+independently of the sloth binary, so "is this sensor affected by
+advisory X" needs the *loaded* library versions:
+
+- `sloth --version` prints them on lines 2 and 3 ([[cli-reference]]);
+- every `sensor_health` record carries them as `libs` ([[jsonl-schema]]).
+
+Minimum versions are enforced in three places. `make check-deps` (run
+by `all`) refuses sqlite below 3.31.0 and libpcap below 1.9.0 when
+pkg-config can report them, and says so in one line when it cannot. The
+`#error` in `src/db.c` and `research/query.c` refuses sqlite headers
+below 3.31.0 (#134). And `db_open()` / `rq_open()` refuse a *loaded*
+sqlite below 3.31.0 (`src/libver.c`), because a binary copied to an
+older host links whatever library is there, and the NOFOLLOW and
+TRUSTED_SCHEMA guards the floor exists for would silently not be in
+force.
+
+The trusted-release-source question above is answered for the release
+side by [[release-checklist]]: `SHA256SUMS` in the release notes, an
+SBOM from `make sbom`, and a tag signed by hand with the owner's key.
+GitHub build-provenance attestation is approved and pending.
+
 ## Related pages
 
+- [[release-checklist]]
 - [[architecture]]
 - [[sloth]]
 - [[platform-vtable]]

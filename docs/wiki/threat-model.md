@@ -28,7 +28,7 @@ whether it is closed today, and the Track X slice that owns it.
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-15 (#136, #140, #137)
+**Last updated**: 2026-10-18 (#136, #140, #137, #142)
 
 ---
 
@@ -224,13 +224,21 @@ code into the link.
 **Enforced today**: CI builds all six configurations with `-Werror`
 (`.github/workflows/ci.yml`); the install path is root-owned and the
 unit executes only `/usr/local/bin/sloth` (#139); cppcheck is pinned
-to one version; sqlite has a compile-time floor.
+to one version; sqlite has a compile-time floor and, since #142, a
+runtime one — `db_open()` and `rq_open()` refuse a loaded library
+below 3.31.0, which the compile check cannot see; `make check-deps`
+(run by `all`) refuses sqlite below 3.31.0 and libpcap below 1.9.0
+when pkg-config can say; `make sbom` writes a CycloneDX SBOM of the
+link dependencies; `sloth --version` and `sensor_health.libs` report
+the libraries actually loaded.
 
-**Known unchecked**: no floor for libpcap or ncursesw (CWE-1104); most
-CI jobs run on `ubuntu-latest` rather than a pinned image; no SBOM is
-produced (CWE-1357); nothing attests that the release binary came from
-the tagged source. Owner: #142 (floors, image pin, SBOM; attestation and
-signing are an owner decision).
+**Known unchecked**: no floor for ncursesw (CWE-1104); most CI jobs
+still run on `ubuntu-latest` rather than a pinned image; CI produces no
+SBOM (CWE-1357); nothing attests that the release binary came from the
+tagged source. The owner approved the attestation and CI SBOM jobs on
+2026-10-15 and they are the open half of #142 — the workflow edit did
+not land with the first slice. Tag signing stays a manual owner step
+([[release-checklist]]).
 
 ## 5. Finding → boundary map
 
@@ -251,7 +259,7 @@ does on the date above, not what the issue said when it was filed —
 | `caplen` cast to `int`; `probe.c` private radiotap length; no IPv4 Total-Length clamp | TB-1 | ADV-1 | 1284, 125 | **Open.** Both entry points cast; `decode_ipv4()` never reads Total Length. | #141 (X8), #132 (P10b) |
 | `research.db` opened without `DEFENSIVE` / `TRUSTED_SCHEMA` off | TB-6 | ADV-3 | 20 | **Closed** by #137: `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extensions, `SQLITE_LIMIT_LENGTH` 1 MiB, each read back; catalogue probe refuses a `research` VIEW and any trigger. `--db` gets `DEFENSIVE`. | #137 (X4) |
 | Manifest / roster / baseline fields printed raw | TB-6 → TB-5 | ADV-3 (and ADV-1 via baseline) | 117 | **Closed** by #137: manifest C0/DEL → `err=1`; roster echo bounded and sanitised; snapshot SSID/label escaped, `strtol` with range on read. | #137 (X4) |
-| No dependency minimums, `ubuntu-latest`, no SBOM | TB-7 | ADV-4 | 1104, 1357 | **Open** except the sqlite 3.31.0 floor (#134) and the pinned cppcheck. | #142 (X9) |
+| No dependency minimums, `ubuntu-latest`, no SBOM | TB-7 | ADV-4 | 1104, 1357 | **Partly closed** by #142: sqlite 3.31.0 floor at compile (#134) and run time, `make check-deps` floors, `make sbom`, loaded versions in `--version` / `sensor_health.libs`. **Open**: `ubuntu-latest` runners, the CI SBOM and attestation jobs. | #142 (X9) |
 
 ## 6. What this model deliberately leaves out
 

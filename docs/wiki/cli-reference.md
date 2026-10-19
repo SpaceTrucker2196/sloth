@@ -236,7 +236,7 @@ The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` an
 | `--refresh-ms` | `N` | `250` (~4 Hz) | Dashboard refresh interval, ms. Floor 50. The loop also wakes early on alert fires, so it is an upper bound. |
 | `--headless` | — | off | Draw nothing, never touch the terminal (no clears, no escape sequences, no raw-mode termios). For appliance/systemd. Capture, alerting and every sink run normally. |
 | `--no-color`, `--no-colour` | — | color on | Suppress colour escapes, keep drawing. Also honoured via `NO_COLOR` env. |
-| `--version`, `-V` | — | — | Print version to stdout and exit `0`. |
+| `--version`, `-V` | — | — | Print version to stdout and exit `0`. Line 1 is `sloth <SLOTH_VERSION>`, unchanged for scripts that read it alone; lines 2–3 (#142) are `pcap: <pcap_lib_version()>` and `sqlite: <sqlite3_libversion()>` — the libraries the dynamic linker **loaded**, `none` in a build without one. → [[release-checklist]] |
 | `--help`, `-h` | — | — | Print usage and exit `0`. |
 
 ## Keybindings (runtime TUI)

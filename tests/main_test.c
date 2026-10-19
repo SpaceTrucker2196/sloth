@@ -134,6 +134,7 @@ void run_docs_consistency_tests(void);
 void run_build_recipe_tests(void);
 void run_unit_file_tests(void);
 void run_ci_pin_tests(void);
+void run_libver_tests(void);
 void run_research_query_tests(void);
 void run_research_mcp_tests(void);
 void run_research_view_tests(void);
@@ -300,6 +301,7 @@ int main(void) {
     run_build_recipe_tests();
     run_unit_file_tests();
     run_ci_pin_tests();
+    run_libver_tests();
     run_research_query_tests();
     run_research_mcp_tests();
     run_research_view_tests();

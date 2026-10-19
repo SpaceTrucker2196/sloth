@@ -63,6 +63,7 @@
 #include "captive_portal.h"
 #include "fragattack.h"
 #include "query.h"
+#include "libver.h"
 #include "bandwidth.h"
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
@@ -606,6 +607,8 @@ static void print_usage(const char *argv0) {
             "  --version, -V      print the version and exit. The banner\n"
             "                     shows it too, but that needs the TUI\n"
             "                     running — no use on a headless sensor.\n"
+            "                     Lines 2-3 name the libpcap and sqlite\n"
+            "                     actually loaded.\n"
             "  --with-research FILE\n"
             "                     load the research corpus for per-alert\n"
             "                     citations in --report. Additive: an\n"
@@ -880,6 +883,14 @@ int main(int argc, char **argv) {
              * in a script. Goes to stdout, not stderr: this is the
              * requested output, not a diagnostic. */
             printf("sloth %s\n", SLOTH_VERSION);
+            /* The loaded libraries, not the ones built against (#142):
+             * libpcap and sqlite are the two that parse untrusted bytes,
+             * and the distro patches them independently of this binary,
+             * so matching a sensor against a CVE needs what the dynamic
+             * linker found. First line unchanged for scripts that read
+             * it alone. */
+            printf("pcap: %s\n", libver_pcap());
+            printf("sqlite: %s\n", libver_sqlite());
             return 0;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;

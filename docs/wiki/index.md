@@ -100,6 +100,8 @@ the Wi-Fi it watches:
 - [[version-checkin]] — periodic release checks and the safe boundary
   between version awareness and self-update.
 - [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
+- [[release-checklist]] — cutting a release: floors, SBOM,
+  `SHA256SUMS`, the manual signed tag, and what is still pending.
 - [[pcap-export]] — per-alert, manual, and per-EAPOL-handshake pcap.
 - [[posture-report]] — the on-exit sign-off document (`--report`,
   `--report-json`).

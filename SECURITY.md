@@ -42,6 +42,47 @@ defined maintenance window, sloth does not offer one today, and you
 should say so in your own risk write-up rather than infer one from this
 file.
 
+### Minimum library versions
+
+| Library | Floor | Enforced |
+|---------|-------|----------|
+| sqlite3 | **3.31** | compile time (`#error` in `src/db.c`, `research/query.c`, #134); build time (`make check-deps`); **run time** — `db_open()` and `rq_open()` refuse a loaded library below the floor (#142) |
+| libpcap | **1.9** | build time only (`make check-deps`). No runtime floor: the capture path degrades on an older libpcap rather than refusing, by design |
+| ncursesw | none | — |
+
+3.31 is the sqlite release that added `SQLITE_OPEN_NOFOLLOW` and
+`SQLITE_DBCONFIG_TRUSTED_SCHEMA`, which the `--db` store and the
+research corpus depend on. The runtime check exists because the library
+the dynamic linker loads is not necessarily the one the binary was
+built against. `make check-deps` (run by `make`) fails when pkg-config
+reports a version below the floor and prints a one-line notice instead
+when pkg-config or the library's `.pc` file is absent.
+
+Neither library is vendored: the distribution is the patch channel. To
+see what a deployed sensor actually loaded, run `sloth --version`
+(lines 2–3), or read the `libs` field of any `sensor_health` JSONL
+record.
+
+### SBOM and release integrity
+
+- **SBOM**: `make sbom` writes a CycloneDX 1.5 document naming sloth
+  and the five libraries the default build links, at the build host's
+  versions. A CI SBOM job (`anchore/sbom-action`, pinned by commit SHA)
+  is approved and **not yet in the workflows**.
+- **Checksums**: the release checklist puts a `SHA256SUMS` block for
+  the binary and the SBOM into each `RELEASE_v*.md`. Releases cut
+  before #142 predate it and carry none.
+- **Signed tags**: release tags are signed by the owner with
+  `git tag -s`, by hand — no workflow holds the key. Verify with
+  `git tag -v v<version>`. Tags cut before #142 are annotated but
+  unsigned.
+- **Build provenance**: GitHub artifact attestation
+  (`actions/attest-build-provenance`, pinned by commit SHA) on `v*`
+  tags is approved and **not yet in the workflows**. Until it lands
+  there is no attestation to verify, and this file does not claim one.
+
+The procedure is [`docs/wiki/release-checklist.md`](docs/wiki/release-checklist.md).
+
 ## Version awareness
 
 sloth carries its own version in `#define SLOTH_VERSION` in

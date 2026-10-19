@@ -133,6 +133,42 @@ static int comment_names_a_version(const char *c) {
     return 0;
 }
 
+/*
+ * Runner images (#142). `runs-on: ubuntu-latest` is the same mutable
+ * reference as an action tag, one level down: GitHub moves the label to
+ * a new image on its own schedule, and the compiler, libc, sqlite and
+ * libpcap the gates ran against change underneath a commit nobody
+ * touched. The action digests and the cppcheck 2.13.0 pin made the rest
+ * of the job reproducible; a moving image undid it. So any `-latest`
+ * label is refused, and an explicit version (`ubuntu-24.04`) is the
+ * only accepted form — moving it is then a reviewed one-line diff.
+ *
+ * Returns 1 for a `runs-on:` key whose value names a `-latest` image,
+ * 0 otherwise (including lines that are not `runs-on:` at all). A list
+ * value (`[self-hosted, ubuntu-latest]`) is caught too: the check is
+ * for the label anywhere in the value, not for the value's shape.
+ *
+ * Only the classifier is asserted today. The whole-tree assertion —
+ * every `runs-on:` in .github/ free of `-latest` — cannot pass until
+ * the workflows themselves move to `ubuntu-24.04`, and that edit did
+ * not land with #142's first slice; it is the follow-up that turns
+ * this into a guard. A test that is red on arrival is not shipped.
+ */
+static int runs_on_is_latest(const char *line, int *is_runs_on) {
+    const char *p = line;
+    *is_runs_on = 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "runs-on:", 8) != 0) return 0;     /* incl. `#` */
+    p += 8;
+    *is_runs_on = 1;
+    /* The value ends at a comment; a label in a comment is not a label. */
+    const char *end = strchr(p, '#');
+    size_t n = end ? (size_t)(end - p) : strlen(p);
+    for (size_t i = 0; i + 7 <= n; i++)
+        if (strncmp(p + i, "-latest", 7) == 0) return 1;
+    return 0;
+}
+
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
     long n;
@@ -291,8 +327,31 @@ static void test_every_workflow_action_is_digest_pinned(void) {
     ASSERT_EQ(g_no_tag_comment, 0);
 }
 
+/* Hand-written lines, not workflow text fed back to the scanner. */
+static void test_runner_classifier_refuses_moving_images(void) {
+    int ro = 0;
+    ASSERT_EQ(runs_on_is_latest("    runs-on: ubuntu-latest", &ro), 1);
+    ASSERT_EQ(ro, 1);
+    ASSERT_EQ(runs_on_is_latest("    runs-on: ubuntu-24.04", &ro), 0);
+    ASSERT_EQ(ro, 1);
+    ASSERT_EQ(runs_on_is_latest("    runs-on: [self-hosted, ubuntu-latest]",
+                                &ro), 1);
+    ASSERT_EQ(runs_on_is_latest("    runs-on: macos-latest", &ro), 1);
+    ASSERT_EQ(runs_on_is_latest("    runs-on: windows-latest  # x", &ro), 1);
+    /* A pinned image with the old label in a trailing comment is fine. */
+    ASSERT_EQ(runs_on_is_latest("    runs-on: ubuntu-24.04  # was ubuntu-latest",
+                                &ro), 0);
+    /* Not a runs-on key: commented out, or prose in a script. */
+    ASSERT_EQ(runs_on_is_latest("    # runs-on: ubuntu-latest", &ro), 0);
+    ASSERT_EQ(ro, 0);
+    ASSERT_EQ(runs_on_is_latest("        echo runs-on: ubuntu-latest", &ro), 0);
+    ASSERT_EQ(ro, 0);
+}
+
 void run_ci_pin_tests(void) {
     TEST_SUITE("CI action pins (#95)");
     RUN_TEST(test_classifier_separates_pinned_from_moving);
     RUN_TEST(test_every_workflow_action_is_digest_pinned);
+    TEST_SUITE("CI runner images (#142)");
+    RUN_TEST(test_runner_classifier_refuses_moving_images);
 }

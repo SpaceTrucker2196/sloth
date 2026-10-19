@@ -21,6 +21,7 @@
 #error "sloth needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW, SQLITE_DBCONFIG_TRUSTED_SCHEMA)"
 #endif
 
+#include "libver.h"
 #include "ownership.h"
 #include "presence.h"
 #include "secure_file.h"
@@ -715,6 +716,16 @@ static int db_prepare_private(const char *path) {
 
 int db_open(const char *path) {
     if (!path || !path[0]) return 0;
+    /* The #error above checks the headers; this checks the library the
+     * dynamic linker actually loaded, which can be older on a host the
+     * binary was copied to (#142). Before anything touches the path:
+     * NOFOLLOW is the guard the side-file checks below lean on. */
+    char floor_err[96];
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
+        fprintf(stderr, "sloth: could not open db %s: %s\n", path,
+                floor_err);
+        return 0;
+    }
     if (!db_prepare_private(path)) return 0;
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
                 SQLITE_OPEN_NOFOLLOW;
