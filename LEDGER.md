@@ -230,3 +230,5 @@
 | 83c36c9 | 2026-10-19T09:06:31Z | claude-opus-5-5 | 30 | 12634 | 11924075 | 24866 | 2.8365 | batch C #132 |
 | 2684740 | 2026-10-19T09:07:24Z | claude-opus-5-5 | 6 | 1720 | 2803913 | 5070 | 0.6358 | batch C #131 |
 | 2f94da0 | 2026-10-19T09:07:41Z | claude-opus-5-5 | 2 | 532 | 937648 | 944 | 0.2057 | batch C #130 |
+| 95e9eed | 2026-10-19T09:52:14Z | claude-opus-5-5 | 32 | 12801 | 13262534 | 21991 | 3.0846 | Move the snoopers, logs and platform rate code onto sloth_clock (refs #109) |
+| f665297 | 2026-10-19T09:52:52Z | claude-opus-5-5 | 4 | 808 | 1922534 | 1680 | 0.4141 | Move fragattack and the last find_or_alloc tables onto stab_t (refs #110) |
