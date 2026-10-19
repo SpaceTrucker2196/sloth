@@ -1,6 +1,7 @@
 #include <string.h>
 #include <time.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/arp.h"
 
@@ -50,7 +51,9 @@ static void test_draw_no_arp_no_leases(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_arp_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "ARP neighbors: 0");
+    ASSERT(!runner_line_has(0, "leases"));
+    ASSERT_SCREEN_HAS("(ARP table empty");
 }
 
 static void test_draw_arp_with_lease(void) {
@@ -84,6 +87,13 @@ static void test_draw_multiple_leases(void) {
     view_arp_draw(&s);
     ASSERT_EQ(s.arp_count,  3);
     ASSERT_EQ(s.dhcp_count, 2);
+    ASSERT_LINE_HAS(0, "ARP neighbors: 3  leases: 2");
+    /* A lease names its neighbour; a neighbour with none has no name. */
+    ASSERT_LINE_HAS(runner_screen_find("192.168.1.1 "), "router");
+    ASSERT_LINE_HAS(runner_screen_find("192.168.1.100 "), "laptop");
+    int y = runner_screen_find("192.168.1.200 ");
+    ASSERT(y >= 0);
+    ASSERT(!runner_line_has(y, "router") && !runner_line_has(y, "laptop"));
 }
 
 static void test_draw_expired_lease(void) {
@@ -92,7 +102,10 @@ static void test_draw_expired_lease(void) {
     inject_arp(&s,   "10.0.0.5", "aa:bb:cc:dd:ee:05", "eth0");
     inject_lease(&s, "10.0.0.5", "oldhost", (time_t)1);  /* very old */
     view_arp_draw(&s);
-    ASSERT(1);
+    int y = runner_screen_find("10.0.0.5 ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "oldhost");
+    ASSERT_LINE_HAS(y, " exp ");
 }
 
 static void test_draw_unknown_expire(void) {
@@ -101,7 +114,11 @@ static void test_draw_unknown_expire(void) {
     inject_arp(&s,   "10.0.0.6", "aa:bb:cc:dd:ee:06", "eth0");
     inject_lease(&s, "10.0.0.6", "nas", 0);  /* expire=0 → unknown */
     view_arp_draw(&s);
-    ASSERT(1);
+    int y = runner_screen_find("10.0.0.6 ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "nas");
+    ASSERT_LINE_HAS(y, " --  ");
+    ASSERT(!runner_line_has(y, " exp "));
 }
 
 static void test_draw_empty_hostname_ignored(void) {
@@ -111,7 +128,11 @@ static void test_draw_empty_hostname_ignored(void) {
     /* hostname="" → dhcp_lookup returns NULL */
     inject_lease(&s, "10.0.0.7", "", time(NULL) + 3600);
     view_arp_draw(&s);
-    ASSERT(1);
+    /* The hostname column stays blank: MAC, then spaces up to Vendor.
+     * The expiry is not asserted — it counts down on the real clock. */
+    int y = runner_screen_find("10.0.0.7 ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "aa:bb:cc:dd:ee:07                    Randomized");
 }
 
 /* ── Lease struct capacity ───────────────────────────────── */
