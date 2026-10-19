@@ -585,7 +585,12 @@ static void test_mdns_long_instance_name_dedups_to_one_row(void) {
     setup();
     sh_evict_reset();
     uint8_t pkt[160];
-    const char *longname = "a-printer-with-a-very-long-instance-name-indeed-0123456789abcdef";
+    /* 63 octets, the longest legal label (RFC 1035 §2.3.4; RFC 6763
+     * §4.1.1). This was 64 until #131: the old per-file reader took a
+     * 0x40 length octet for a label, so the frame parsed, but 01 is a
+     * reserved label type and dns_read_name() refuses it. The stored
+     * name is still truncated: "<63>._http._tcp.local" is 80 octets. */
+    const char *longname = "a-printer-with-a-very-long-instance-name-indeed-0123456789abcde";
     int n = build_ptr(pkt, longname);
     ASSERT_EQ(mdns_snoop_at(pkt, n, 1700000000), 1);
     ASSERT_EQ(mdns_snoop_at(pkt, n, 1700000001), 1);
@@ -607,9 +612,9 @@ static void test_mdns_snoop_stamps_wall_clock(void) {
     ASSERT(g_st.mdns_services[0].last_seen <= time(NULL));
 }
 
-/* #138: every mDNS name is assembled in read_name(), which now copies
- * labels through netstr_copy(). Mutation-proved: the memcpy restored
- * there reddens it. */
+/* #138: every mDNS name passes through mdns_snoop's read_name(), which
+ * marks dns_read_name()'s raw output with netstr_copy() (#131).
+ * Mutation-proved: a memcpy in place of that netstr_copy reddens it. */
 static void test_instance_control_octets_marked(void) {
     uint8_t pkt[128];
     int n = build_ptr(pkt, "cam\n\x1b" "1");

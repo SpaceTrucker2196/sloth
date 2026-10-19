@@ -18,7 +18,8 @@
 void cleartext_creds_reset(void);
 
 /* Register a username observed in the clear. Called by
- * src/http_snoop.c (HTTP Basic) and src/ftp_snoop.c (FTP USER). */
+ * http_snoop_scan_creds() in src/http_log.c (HTTP Basic) and
+ * src/ftp_snoop.c (FTP USER). */
 void cleartext_creds_record_user(const char *src, const char *dst,
                                  uint16_t dst_port, const char *protocol,
                                  const char *username);

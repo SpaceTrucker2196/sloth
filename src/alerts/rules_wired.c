@@ -567,10 +567,10 @@ void rule_cam_ws_discovery(const sloth_state_t *s, time_t now) {
 /* ── Surveillance-vendor cloud endpoint (#105, signal family B) ──
  *
  * A host on the monitored segment opened TLS to a body-cam or ALPR
- * platform's cloud. The SNI is already in state (src/sni_snoop.c put
- * it there from a ClientHello sloth overheard), so this rule adds no
- * new capture surface at all — it is a watchlist lookup over
- * s->tls_log.
+ * platform's cloud. The SNI is already in state (tls_log_parse() in
+ * src/tls_log.c put it there from a ClientHello sloth overheard), so
+ * this rule adds no new capture surface at all — it is a watchlist
+ * lookup over s->tls_log.
  *
  * Why only this one of #105's signal families: the issue's OUI, SSID
  * and DNS-glob families need owner answers that do not exist yet (the

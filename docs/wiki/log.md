@@ -3715,3 +3715,23 @@ parse-fault kinds `ip_truncated` and `ip_fragment` are now measured.
 Pages: [[jsonl-schema]] (`packet.info` values, the two kinds),
 [[architecture]], [[kerberos-snoop]], [[snmp-snoop]];
 `docs/views/packets.md`.
+
+## 2026-10-19 — one DNS name reader; the shipped TLS/HTTP parsers under test (#131)
+
+`src/dns_wire.{c,h}`: `dns_read_name()` / `dns_skip_name()` (RFC 1035
+§4.1.4) replace the three verbatim `read_name()` copies in
+`dns_snoop`, `dns_log` and `mdns_snoop` and `nbns_snoop`'s
+`skip_name()`. The shared reader refuses the reserved label types
+`01`/`10`; the copies refused only `10`, and NBNS refused neither. The
+compression bound is unchanged: 20 pointers followed, the 21st refused.
+The reader copies raw; marking stays at the stores (#138), and the
+passive DNS cache (`dns_set_resolved`) joins them. `sni_snoop()` and
+`http_snoop()` are now wrappers over `tls_log_parse()` /
+`http_log_parse()`, and `src/sni_snoop.c` / `src/http_snoop.c` are gone
+(the credential scanner moved to `http_log.c`). Running their suites
+through the shipped parsers found three divergences, each resolved
+toward the spec: session_id > 32 and empty cipher_suites (RFC 8446
+§4.1.2) and a lowercase method (RFC 9110 §9.1). All `u16be` statics →
+`be16` from `src/bytes.h`. `fuzz_dns_read_name` drives the reader
+directly. Pages: [[jsonl-schema]] (versioning note),
+[[ja3-fingerprinting]].

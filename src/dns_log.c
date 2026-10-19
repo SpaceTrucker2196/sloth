@@ -10,6 +10,8 @@
 #include "jsonl.h"
 #include "host_cache.h"
 #include "sensor_health.h"
+#include "dns_wire.h"
+#include "bytes.h"
 
 static dns_log_entry_t g_log[MAX_DNS_LOG];
 static int             g_head  = 0;
@@ -17,41 +19,6 @@ static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── DNS parser helpers ──────────────────────────────────── */
-
-static uint16_t u16be(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
-
-/* Decode DNS-encoded name from msg into buf.  Returns offset after name,
-   or -1 on error.  Handles compression pointers (RFC 1035 §4.1.4). */
-static int read_name(const uint8_t *msg, int msglen, int off,
-                     char *buf, int bufsz) {
-    int out = 0, jumped = 0, resume = -1, hops = 0;
-    buf[0] = '\0';
-    for (;;) {
-        if (off < 0 || off >= msglen) return -1;
-        uint8_t c = msg[off];
-        if ((c & 0xC0) == 0xC0) {
-            if (off + 1 >= msglen) return -1;
-            if (!jumped) resume = off + 2;
-            off = ((c & 0x3F) << 8) | msg[off + 1];
-            jumped = 1;
-            if (++hops > 20) return -1;
-            continue;
-        }
-        if (c & 0x80) return -1;
-        off++;
-        if (c == 0) break;
-        if (off + (int)c > msglen) return -1;
-        if (out > 0 && out < bufsz - 1) buf[out++] = '.';
-        int copy = (int)c;
-        if (out + copy >= bufsz) copy = bufsz - out - 1;
-        if (copy > 0) { memcpy(buf + out, msg + off, (size_t)copy); out += copy; }
-        buf[out] = '\0';
-        off += c;
-    }
-    return jumped ? resume : off;
-}
 
 static const char *qtype_str(uint16_t t) {
     switch (t) {
@@ -75,19 +42,19 @@ int dns_log_parse(const uint8_t *msg, int len,
 {
     if (len < 12) return 0;
 
-    uint16_t flags   = u16be(msg + 2);
+    uint16_t flags   = be16(msg + 2);
     int      is_resp = (flags >> 15) & 1;
     int      rcode   = flags & 0x0f;
-    int      qdcount = (int)u16be(msg + 4);
-    int      ancount = (int)u16be(msg + 6);
+    int      qdcount = (int)be16(msg + 4);
+    int      ancount = (int)be16(msg + 6);
 
     if (qdcount == 0 || qdcount > 32) return 0;
     if (ancount > 64) return 0;
 
     char qname[DNS_NAME_LEN];
-    int  noff = read_name(msg, len, 12, qname, sizeof(qname));
+    int  noff = dns_read_name(msg, len, 12, qname, sizeof(qname));
     if (noff < 0 || noff + 4 > len) return 0;
-    uint16_t qtype = u16be(msg + noff);
+    uint16_t qtype = be16(msg + noff);
 
     memset(out, 0, sizeof(*out));
     if (src_ip) snprintf(out->src, sizeof(out->src), "%s", src_ip);
@@ -109,7 +76,7 @@ int dns_log_parse(const uint8_t *msg, int len,
     int off = noff + 4;
     for (int q = 1; q < qdcount; q++) {
         char tmp[DNS_NAME_LEN];
-        int n = read_name(msg, len, off, tmp, sizeof(tmp));
+        int n = dns_read_name(msg, len, off, tmp, sizeof(tmp));
         if (n < 0 || n + 4 > len) return 1;
         off = n + 4;
     }
@@ -117,10 +84,10 @@ int dns_log_parse(const uint8_t *msg, int len,
     /* walk answer RRs for first A / AAAA */
     for (int i = 0; i < ancount; i++) {
         char rname[DNS_NAME_LEN];
-        int n = read_name(msg, len, off, rname, sizeof(rname));
+        int n = dns_read_name(msg, len, off, rname, sizeof(rname));
         if (n < 0 || n + 10 > len) break;
-        uint16_t rtype  = u16be(msg + n);
-        uint16_t rdlen  = u16be(msg + n + 8);
+        uint16_t rtype  = be16(msg + n);
+        uint16_t rdlen  = be16(msg + n + 8);
         int      rdata  = n + 10;
         if (rdata + (int)rdlen > len) break;
 

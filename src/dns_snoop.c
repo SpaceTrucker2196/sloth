@@ -5,69 +5,18 @@
 
 #include "dns_snoop.h"
 #include "dns.h"
-
-/* ── helpers ─────────────────────────────────────────────── */
-
-static uint16_t dns_u16(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
-
-/* Read a DNS encoded name from msg[off..msglen-1] into buf[bufsz].
-   Handles compression pointers (0xC0xx, RFC 1035 §4.1.4).
-   Returns the offset in msg immediately after this name (the "resume"
-   position for the caller), or -1 on any error. */
-static int read_name(const uint8_t *msg, int msglen, int off,
-                     char *buf, int bufsz) {
-    int out    = 0;
-    int jumped = 0;
-    int resume = -1;
-    int hops   = 0;
-
-    buf[0] = '\0';
-
-    for (;;) {
-        if (off < 0 || off >= msglen) return -1;
-        uint8_t c = msg[off];
-
-        if ((c & 0xC0) == 0xC0) {
-            if (off + 1 >= msglen) return -1;
-            if (!jumped) resume = off + 2;
-            off = ((c & 0x3F) << 8) | msg[off + 1];
-            jumped = 1;
-            if (++hops > 20) return -1;
-            continue;
-        }
-        if (c & 0x80) return -1;   /* reserved bits — malformed */
-
-        off++;
-        if (c == 0) break;         /* root label → end of name */
-        if (off + (int)c > msglen) return -1;
-
-        if (out > 0 && out < bufsz - 1)
-            buf[out++] = '.';
-
-        int copy = (int)c;
-        if (out + copy >= bufsz) copy = bufsz - out - 1;
-        if (copy > 0) {
-            memcpy(buf + out, msg + off, copy);
-            out += copy;
-        }
-        buf[out] = '\0';
-        off += c;
-    }
-
-    return jumped ? resume : off;
-}
+#include "dns_wire.h"
+#include "bytes.h"
 
 /* ── Public API ──────────────────────────────────────────── */
 
 int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
     if (len < 12) return 0;
 
-    uint16_t flags   = dns_u16(msg + 2);
+    uint16_t flags   = be16(msg + 2);
     int      is_resp = (flags >> 15) & 1;
-    int      qdcount = (int)dns_u16(msg + 4);
-    int      ancount = (int)dns_u16(msg + 6);
+    int      qdcount = (int)be16(msg + 4);
+    int      ancount = (int)be16(msg + 6);
 
     /* reject obviously-broken counts */
     if (qdcount > 32 || ancount > 64) return 0;
@@ -78,14 +27,14 @@ int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
 
     /* first question name is what we searched for */
     if (qdcount > 0) {
-        int noff = read_name(msg, len, off, qname, sizeof(qname));
+        int noff = dns_read_name(msg, len, off, qname, sizeof(qname));
         if (noff < 0 || noff + 4 > len) return 0;
         off = noff + 4;   /* skip QTYPE + QCLASS */
     }
     /* skip remaining questions */
     for (int q = 1; q < qdcount; q++) {
         char tmp[256];
-        int noff = read_name(msg, len, off, tmp, sizeof(tmp));
+        int noff = dns_read_name(msg, len, off, tmp, sizeof(tmp));
         if (noff < 0 || noff + 4 > len) return 0;
         off = noff + 4;
     }
@@ -102,11 +51,11 @@ int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
 
     for (int i = 0; i < ancount; i++) {
         char rname[256];
-        int noff = read_name(msg, len, off, rname, sizeof(rname));
+        int noff = dns_read_name(msg, len, off, rname, sizeof(rname));
         if (noff < 0 || noff + 10 > len) break;
 
-        uint16_t type  = dns_u16(msg + noff);
-        uint16_t rdlen = dns_u16(msg + noff + 8);   /* skip TYPE(2)+CLASS(2)+TTL(4) */
+        uint16_t type  = be16(msg + noff);
+        uint16_t rdlen = be16(msg + noff + 8);   /* skip TYPE(2)+CLASS(2)+TTL(4) */
         int      rdata = noff + 10;
         if (rdata + (int)rdlen > len) break;
 

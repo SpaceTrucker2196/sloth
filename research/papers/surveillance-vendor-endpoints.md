@@ -16,7 +16,8 @@ Body-worn cameras and ALPR platforms are cloud products. The camera (or
 its dock, or an analyst's workstation) speaks TLS to a vendor-operated
 evidence platform, and the ClientHello carries the server name in
 cleartext. sloth already parses SNI from ClientHellos it overhears
-(`src/sni_snoop.c`, landing in `tls_log_entry_t.host`), so the detector
+(`tls_log_parse()` in `src/tls_log.c`, landing in
+`tls_log_entry_t.host`), so the detector
 is a watchlist lookup, not new capture.
 
 The watchlist rows are not inferred from product names. Each is a

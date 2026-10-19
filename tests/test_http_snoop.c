@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "http_snoop.h"
+#include "http_log.h"
 
 /* Helpers */
 static int snoop(const char *req, char *host, int hostsz) {
@@ -236,13 +237,28 @@ static void test_host_no_space_after_colon(void) {
 
 /* ── Entry point ────────────────────────────────────────────── */
 
-/* #138: Host is stored through netstr_copy(). Mutation-proved: the
- * memcpy restored in http_snoop.c reddens it. */
+/* #138: Host is stored through netstr_copy(). Since #131 http_snoop()
+ * is http_log_parse(); the memcpy restored there reddens this. */
 static void test_host_control_octets_marked(void) {
     char host[64];
     const char *req = "GET / HTTP/1.1\r\nHost: ex\x1b[2Jample.com\r\n\r\n";
     ASSERT_EQ(1, snoop(req, host, sizeof(host)));
     ASSERT_STR("ex?[2Jample.com", host);
+}
+
+/* #131 divergence: RFC 9110 §9.1 makes the method token
+ * case-sensitive. The old test-only parser matched "GET " exactly; the
+ * shipped one compared case-insensitively and logged `get` as a
+ * request. Mutation-proved: is_method() back on ci_eq() reddens both
+ * assertions; the uppercase control shows it is the case that differs. */
+static void test_lowercase_method_rejected(void) {
+    char host[64] = "";
+    const char *req = "get / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    ASSERT_EQ(0, snoop(req, host, sizeof(host)));
+    http_log_entry_t e;
+    ASSERT_EQ(0, http_log_parse((const uint8_t *)req, (int)strlen(req), NULL, &e));
+    ASSERT_EQ(1, snoop("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n",
+                       host, sizeof(host)));
 }
 
 void run_http_snoop_tests(void) {
@@ -278,4 +294,5 @@ void run_http_snoop_tests(void) {
     RUN_TEST(test_hostname_prefix_does_not_alias_host);
     RUN_TEST(test_host_no_space_after_colon);
     RUN_TEST(test_host_control_octets_marked);
+    RUN_TEST(test_lowercase_method_rejected);
 }

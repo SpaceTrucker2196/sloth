@@ -9,6 +9,8 @@
 #include "netstr.h"
 #include "dns.h"
 #include "stab.h"
+#include "dns_wire.h"
+#include "bytes.h"
 
 /* ── Internal state ──────────────────────────────────────── */
 
@@ -39,39 +41,17 @@ STAB_DECL_AGE(g_svcs, mdns_service_t, MAX_MDNS_SERVICES, last_seen,
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static uint16_t u16be(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
-
-/* Identical to dns_snoop's read_name — handles compression pointers. */
+/* Every mDNS name — instance, service type, SRV target, the owner name
+ * an A/AAAA record is matched on — is read here, so C0/DEL become '?'
+ * once, at the source (#138), and the comparisons below run on the same
+ * marked text the table stores. The wire decoding itself is
+ * dns_read_name()'s (#131); it copies raw, so the marking stays here. */
 static int read_name(const uint8_t *msg, int msglen, int off,
                      char *buf, int bufsz) {
-    int out = 0, jumped = 0, resume = -1, hops = 0;
-    buf[0] = '\0';
-    for (;;) {
-        if (off < 0 || off >= msglen) return -1;
-        uint8_t c = msg[off];
-        if ((c & 0xC0) == 0xC0) {
-            if (off + 1 >= msglen) return -1;
-            if (!jumped) resume = off + 2;
-            off = ((c & 0x3F) << 8) | msg[off + 1];
-            jumped = 1;
-            if (++hops > 20) return -1;
-            continue;
-        }
-        if (c & 0x80) return -1;
-        off++;
-        if (c == 0) break;
-        if (off + (int)c > msglen) return -1;
-        if (out > 0 && out < bufsz - 1) buf[out++] = '.';
-        int copy = (int)c < bufsz - out - 1 ? (int)c : bufsz - out - 1;
-        /* netstr_copy (#138): every mDNS name — instance, SRV target —
-         * is assembled here, so C0/DEL become '?' once, at the source. */
-        if (copy > 0) out += (int)netstr_copy(buf + out, (size_t)(bufsz - out), msg + off, (size_t)copy);
-        buf[out] = '\0';
-        off += c;
-    }
-    return jumped ? resume : off;
+    char raw[256];
+    int  next = dns_read_name(msg, msglen, off, raw, (int)sizeof(raw));
+    netstr_copy(buf, (size_t)bufsz, (const uint8_t *)raw, strlen(raw));
+    return next;
 }
 
 /* Extract _proto._transport from a name such as "Dev._http._tcp.local".
@@ -115,9 +95,9 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count,
         int noff = read_name(msg, len, *off, rname, sizeof(rname));
         if (noff < 0 || noff + 10 > len) return updated;
 
-        uint16_t type  = u16be(msg + noff);
+        uint16_t type  = be16(msg + noff);
         /* CLASS field: strip cache-flush bit (0x8000) per RFC 6762 §11 */
-        uint16_t rdlen = u16be(msg + noff + 8);
+        uint16_t rdlen = be16(msg + noff + 8);
         int      rdata = noff + 10;
         if (rdata + (int)rdlen > len) return updated;
 
@@ -139,7 +119,7 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count,
             if (read_name(msg, len, rdata + 6, host, sizeof(host)) >= 0) {
                 mdns_service_t *e = find_or_create(rname, now);
                 if (e) {
-                    e->port = u16be(msg + rdata + 4);
+                    e->port = be16(msg + rdata + 4);
                     snprintf(e->host, sizeof(e->host), "%.63s", host);
                     if (!e->service[0])
                         extract_service(rname, e->service, sizeof(e->service));
@@ -192,10 +172,10 @@ static int process_rrs(const uint8_t *msg, int len, int *off, int count,
 int mdns_snoop_at(const uint8_t *msg, int len, time_t now) {
     if (len < 12) return 0;
 
-    int qdcount = (int)u16be(msg + 4);
-    int ancount = (int)u16be(msg + 6);
-    int nscount = (int)u16be(msg + 8);
-    int arcount = (int)u16be(msg + 10);
+    int qdcount = (int)be16(msg + 4);
+    int ancount = (int)be16(msg + 6);
+    int nscount = (int)be16(msg + 8);
+    int arcount = (int)be16(msg + 10);
 
     if (qdcount > 32 || ancount > 64 || nscount > 64 || arcount > 64) return 0;
 

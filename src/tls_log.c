@@ -10,6 +10,8 @@
 #include "sha256.h"
 #include "jsonl.h"
 #include "sensor_health.h"
+#include "bytes.h"
+#include "sni_snoop.h"
 
 static tls_log_entry_t g_log[MAX_TLS_LOG];
 static int             g_head  = 0;
@@ -17,10 +19,6 @@ static int             g_count = 0;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── TLS ClientHello parser ──────────────────────────────── */
-
-static uint16_t u16be(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
 
 static const char *ver_string(uint16_t v) {
     switch (v) {
@@ -126,7 +124,7 @@ int tls_log_parse(const uint8_t *data, int len,
     if (data[0] != 0x16) return 0;   /* handshake record */
     if (data[1] != 0x03) return 0;   /* major version == 3 */
 
-    uint16_t rec_len = u16be(data + 3);
+    uint16_t rec_len = be16(data + 3);
     if ((int)rec_len < 4 || 5 + (int)rec_len > len) return 0;
 
     /* ── Handshake header (4 bytes) ── */
@@ -160,7 +158,7 @@ int tls_log_parse(const uint8_t *data, int len,
 
     /* legacy_version: save for fallback */
     if (rem < 2) return 0;
-    uint16_t legacy_ver = u16be(ch + off);
+    uint16_t legacy_ver = be16(ch + off);
     off += 2;
 
     /* JA3 section 1: TLS version (legacy_version, decimal). */
@@ -175,18 +173,24 @@ int tls_log_parse(const uint8_t *data, int len,
     /* session_id */
     if (off + 1 > rem) return 0;
     int sid = ch[off++];
-    if (off + sid > rem) return 0;
+    /* legacy_session_id<0..32> (RFC 8446 §4.1.2; RFC 5246 §7.4.1.2).
+     * A longer one is not a ClientHello this parser can lay out: every
+     * offset after it would be read from the wrong field. The tested
+     * sni_snoop() enforced this and the shipped parser did not (#131). */
+    if (sid > 32 || off + sid > rem) return 0;
     off += sid;
 
     /* cipher_suites */
     if (off + 2 > rem) return 0;
-    int cs = (int)u16be(ch + off); off += 2;
-    if (off + cs > rem) return 0;
+    int cs = (int)be16(ch + off); off += 2;
+    /* cipher_suites<2..2^16-2> (RFC 8446 §4.1.2): an empty list cannot
+     * negotiate anything. The other half of the #131 divergence. */
+    if (cs < 2 || off + cs > rem) return 0;
     /* JA3 section 2: cipher suites (decimal), GREASE filtered. Same
      * pass populates the JA4 cipher collector (non-GREASE, observed
      * order — sort happens later during JA4_b assembly). */
     for (int i = 0; i + 1 < cs; i += 2) {
-        uint16_t c = u16be(ch + off + i);
+        uint16_t c = be16(ch + off + i);
         if (is_grease(c)) continue;
         ja3_emit(ja3_str, sizeof(ja3_str), &ja3_pos, &ja3_leading, c);
         if (ja4_nciphers < (int)(sizeof(ja4_ciphers)/sizeof(ja4_ciphers[0])))
@@ -204,7 +208,7 @@ int tls_log_parse(const uint8_t *data, int len,
 
     /* extensions */
     if (off + 2 > rem) return 0;
-    int ext_total = (int)u16be(ch + off); off += 2;
+    int ext_total = (int)be16(ch + off); off += 2;
     if (off + ext_total > rem) return 0;
     int ext_end = off + ext_total;
 
@@ -220,8 +224,8 @@ int tls_log_parse(const uint8_t *data, int len,
     char fmts_buf[64];     int fmts_pos   = 0; int fmts_lead   = 0; fmts_buf[0]   = 0;
 
     while (off + 4 <= ext_end) {
-        uint16_t etype = u16be(ch + off);
-        uint16_t elen  = u16be(ch + off + 2);
+        uint16_t etype = be16(ch + off);
+        uint16_t elen  = be16(ch + off + 2);
         off += 4;
         if (off + (int)elen > ext_end) break;
 
@@ -236,10 +240,10 @@ int tls_log_parse(const uint8_t *data, int len,
 
         /* signature_algorithms (0x000d): list_len(2) + uint16[]. */
         if (etype == 0x000d && elen >= 2) {
-            int sig_list = (int)u16be(ch + off);
+            int sig_list = (int)be16(ch + off);
             int si       = 2;
             while (si + 1 < sig_list + 2 && si + 1 <= (int)elen) {
-                uint16_t sa = u16be(ch + off + si);
+                uint16_t sa = be16(ch + off + si);
                 if (!is_grease(sa)
                     && ja4_nsigalgs < (int)(sizeof(ja4_sigalgs)/sizeof(ja4_sigalgs[0])))
                     ja4_sigalgs[ja4_nsigalgs++] = sa;
@@ -252,7 +256,7 @@ int tls_log_parse(const uint8_t *data, int len,
          * so we can emit JA4's 2-char ALPN summary. Full list not
          * retained. */
         if (etype == 0x0010 && elen >= 3) {
-            int alpn_list = (int)u16be(ch + off);
+            int alpn_list = (int)be16(ch + off);
             int ai        = 2;
             int last_seen = 0;
             while (ai < 2 + alpn_list && ai < (int)elen) {
@@ -267,9 +271,9 @@ int tls_log_parse(const uint8_t *data, int len,
 
         if (etype == 0x0000 && elen >= 5 && sni[0] == '\0') {
             /* server_name list: list_len(2) + name_type(1) + name_len(2) + name */
-            uint16_t list_len  = u16be(ch + off);
+            uint16_t list_len  = be16(ch + off);
             if (list_len + 2 <= elen && ch[off + 2] == 0x00) {
-                int nlen = (int)u16be(ch + off + 3);
+                int nlen = (int)be16(ch + off + 3);
                 if (nlen > 0 && nlen + 5 <= (int)elen) {
                     int sz = nlen < 63 ? nlen : 63;
                     netstr_copy(sni, sizeof(sni), ch + off + 5, (size_t)sz);   /* #138 */
@@ -283,7 +287,7 @@ int tls_log_parse(const uint8_t *data, int len,
             has_sv   = 1;
             best_ver = 0;
             while (vi + 1 <= vlen && vi + 1 <= (int)elen) {
-                uint16_t v = u16be(ch + off + vi);
+                uint16_t v = be16(ch + off + vi);
                 /* RFC 8701: skip GREASE values so a leading 0x?a?a
                  * doesn't win over 0x0304. */
                 if (!is_grease(v) && v > best_ver) best_ver = v;
@@ -291,10 +295,10 @@ int tls_log_parse(const uint8_t *data, int len,
             }
         } else if (etype == 0x000a && elen >= 2) {
             /* supported_groups (curves): list_len(2) + uint16[]. */
-            int list_len = (int)u16be(ch + off);
+            int list_len = (int)be16(ch + off);
             int gi       = 2;
             while (gi + 1 < list_len + 2 && gi + 1 <= (int)elen) {
-                uint16_t g = u16be(ch + off + gi);
+                uint16_t g = be16(ch + off + gi);
                 if (!is_grease(g))
                     ja3_emit(curves_buf, sizeof(curves_buf),
                              &curves_pos, &curves_lead, g);
@@ -394,6 +398,22 @@ int tls_log_parse(const uint8_t *data, int len,
              sec_a, sec_b_hex, sec_c_hex);
 
     out->ts = time(NULL);
+    return 1;
+}
+
+/* The connection-table SNI entry point, kept as a wrapper so its
+ * byte-pointer callers and tests run the shipped parser (#131). Until
+ * #131 this was a separate ClientHello walker in src/sni_snoop.c that
+ * only the tests linked, so its suite proved a parser production never
+ * called. host is tls_log_entry_t.host, already marked by netstr_copy;
+ * a name longer than that field (63) arrives truncated there. */
+int sni_snoop(const uint8_t *data, int len, char *host, int hostsz)
+{
+    if (hostsz <= 0) return 0;
+    host[0] = '\0';
+    tls_log_entry_t e;
+    if (!tls_log_parse(data, len, NULL, NULL, &e) || !e.host[0]) return 0;
+    snprintf(host, (size_t)hostsz, "%s", e.host);
     return 1;
 }
 

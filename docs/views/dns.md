@@ -22,9 +22,14 @@ explicitly opted into asking.
 
 Per entry: source IP, qname (query name), qtype (`A`, `AAAA`, `PTR`, `MX`,
 `NS`, `CNAME`, `TXT`, `SRV`), the first A/AAAA answer or `NXDOMAIN`, and
-the Q/R flag. The independent parser in `src/dns_log.c` (own
-`read_name()`, own compression-pointer handling) means a malformed
-packet here won't poison the DNS resolver cache used elsewhere.
+the Q/R flag. `src/dns_log.c` walks the message itself but decodes
+names through `dns_read_name()` in `src/dns_wire.c` (#131), the one
+RFC 1035 §4.1.4 reader every DNS-family parser shares (`dns_snoop`,
+`mdns_snoop`, `nbns_snoop`). A compression loop ends after 20 pointers
+followed, and the reserved label types `01`/`10` are refused rather
+than read as lengths. The qname is marked (`netstr_copy`, #138) when it
+is stored here, and again when `dns_snoop` stores it in the passive DNS
+cache.
 
 ## View
 

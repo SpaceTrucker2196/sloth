@@ -419,6 +419,53 @@ static void test_query_name_control_octets_marked(void) {
     ASSERT_STR("DESK?TOP?", s.nbns_names[0].name);
 }
 
+/* #131: names are stepped over by dns_skip_name(). The walker it
+ * replaced took any octet without the pointer bits for a label length,
+ * so a 0x40 (reserved label type 01, RFC 1035 §4.1.4) after the encoded
+ * NetBIOS label was read as a 64-octet scope label and the record after
+ * it was believed. The 63-octet scope label is the legal control: same
+ * frame, one length octet and one fewer filler octet. Built in RFC 1002
+ * §4.2.15 order: encoded name, scope label, root, RR fields, NB rdata.
+ * Mutation-proved: `c & 0xC0` -> `c & 0x80` in dns_skip_name's
+ * reserved-type test reddens the refusal. */
+static int make_scoped_response(uint8_t scope_len, uint8_t *buf, int bufsz) {
+    if (bufsz < 34 + 1 + scope_len + 1 + 16) return 0;
+    memset(buf, 0, (size_t)bufsz);
+    buf[0] = 0x01; buf[1] = 0x23;
+    buf[2] = 0x85; buf[3] = 0x00;          /* QR=1, AA=1, RD=1 */
+    buf[6] = 0x00; buf[7] = 0x01;          /* ANCOUNT=1 */
+    nb_encode("SCOPED", 0x20, buf + 12);   /* its root octet is overwritten */
+    int o = 12 + 33;
+    buf[o++] = scope_len;
+    memset(buf + o, 'a', scope_len); o += scope_len;
+    buf[o++] = 0x00;                       /* root */
+    buf[o++] = 0x00; buf[o++] = 0x20;      /* NB */
+    buf[o++] = 0x00; buf[o++] = 0x01;      /* IN */
+    buf[o++] = 0; buf[o++] = 0; buf[o++] = 0x0e; buf[o++] = 0x10;
+    buf[o++] = 0x00; buf[o++] = 0x06;      /* RDLENGTH */
+    buf[o++] = 0x60; buf[o++] = 0x00;      /* NB flags */
+    buf[o++] = 192; buf[o++] = 0; buf[o++] = 2; buf[o++] = 9;
+    return o;
+}
+
+static void test_reserved_label_type_in_answer_name_refused(void) {
+    reset();
+    uint8_t buf[160];
+    char info[64] = "";
+    int len = make_scoped_response(63, buf, sizeof buf);
+    ASSERT_EQ(1, nbns_snoop(buf, len, info, sizeof(info)));
+    ASSERT(strstr(info, "192.0.2.9") != NULL);
+
+    reset();
+    info[0] = '\0';
+    len = make_scoped_response(64, buf, sizeof buf);
+    ASSERT_EQ(0, nbns_snoop(buf, len, info, sizeof(info)));
+    ASSERT_STR(info, "");
+    TEST_STATE(s); memset(&s, 0, sizeof(s));
+    nbns_snapshot(&s);
+    ASSERT_EQ(0, s.nbns_count);
+}
+
 void run_nbns_snoop_tests(void) {
     TEST_SUITE("nbns_snoop protocol");
     RUN_TEST(test_query_adds_entry);
@@ -445,4 +492,5 @@ void run_nbns_snoop_tests(void) {
     RUN_TEST(test_nbns_table_full_refuses_fresh_and_tallies);
     RUN_TEST(test_nbns_table_full_reclaims_stale_after_age);
     RUN_TEST(test_query_name_control_octets_marked);
+    RUN_TEST(test_reserved_label_type_in_answer_name_refused);
 }

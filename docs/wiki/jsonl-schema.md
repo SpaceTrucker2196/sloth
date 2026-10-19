@@ -12,9 +12,9 @@ same encoding, line-delimited by `\n`. This page is the contract
 downstream consumers (SIEMs, the planned iOS dashboard, ad-hoc
 scripts) code against.
 
-**Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`.
+**Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-19 (#132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured).
+**Last updated**: 2026-10-19 (#132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131
 
 ---
 
@@ -1057,6 +1057,17 @@ signature / syslog MSGID), and it does not count towards `seq` itself.
   field carrying them is available on request (not shipped). Separately,
   C0 and DEL in name-class fields are now `?` from ingest, so a
   `qname` that once logged as `"a\u001bb"` now logs as `"a?b"`.
+- **Informational, 2026-10-19 (#131): fewer records, no field change.**
+  Three inputs that used to produce a record no longer do, because the
+  parser that emits them now enforces a rule the spec states:
+  `dns` — a name using the reserved label types `01`/`10` (RFC 1035
+  §4.1.4; a length octet `0x40`–`0xBF`) is refused instead of being
+  read as a 64–191-octet label, by the one shared reader in
+  `src/dns_wire.c`; `tls` — a ClientHello whose `legacy_session_id` is
+  longer than 32 octets or whose `cipher_suites` list is empty (RFC
+  8446 §4.1.2); `http` — a request line whose method is not one of the
+  nine in upper case (`get` is not `GET`, RFC 9110 §9.1). Every record
+  that is still emitted is byte-identical to before.
 - New record types may appear; consumers should ignore unknown
   `type` values gracefully.
 - New optional fields may appear on existing records; consumers

@@ -529,6 +529,27 @@ static void test_snoop_non_aaaa_record_with_rdlen_16_not_injected(void) {
     ASSERT(strstr(info, "2001:db8") == NULL);
 }
 
+/* #131: dns_read_name() copies label octets raw (the readers it
+ * replaced did too), so the qname dns_snoop hands to the passive DNS
+ * cache carried ESC and friends into a name-class store #138 had not
+ * listed. dns_set_resolved() marks it now. Mutation-proved: a raw copy
+ * in place of that netstr_copy reddens the cached-name assertion. */
+static void test_snoop_cached_name_control_octets_marked(void) {
+    dns_reset();
+    char info[64];
+    const uint8_t pkt[] = {
+        0x12,0x34, 0x81,0x80, 0x00,0x01, 0x00,0x01, 0x00,0x00, 0x00,0x00,
+        0x03,'e',0x1b,'x', 0x03,'c','o','m', 0x00,       /* "e\x1bx.com" */
+        0x00,0x01, 0x00,0x01,
+        0xC0,0x0C, 0x00,0x01, 0x00,0x01, 0x00,0x00,0x01,0x2C,
+        0x00,0x04, 192,0,2,7,
+    };
+    ASSERT_EQ(dns_snoop(pkt, (int)sizeof(pkt), info, sizeof(info)), 1);
+    const char *host = dns_lookup_cached("192.0.2.7", nb_, sizeof(nb_));
+    ASSERT(host != NULL);
+    if (host) ASSERT_STR(host, "e?x.com");
+}
+
 /* ── Entry point ─────────────────────────────────────────── */
 
 void run_dns_snoop_tests(void) {
@@ -568,4 +589,5 @@ void run_dns_snoop_tests(void) {
     RUN_TEST(test_snoop_non_aaaa_record_with_rdlen_16_not_injected);
     RUN_TEST(test_snoop_compression_chain_20_hops_succeeds);
     RUN_TEST(test_snoop_compression_chain_21_hops_rejected);
+    RUN_TEST(test_snoop_cached_name_control_octets_marked);
 }

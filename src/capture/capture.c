@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "capture/capture.h"
+#include "bytes.h"
 #include "flood_window.h"   /* injectable wall clock for freshness (#91) */
 #include "captive_portal.h"
 #include "dns.h"
@@ -545,12 +546,6 @@ static int           g_ring_head;
 static int           g_ring_count;
 static uint64_t      g_ring_total;
 
-/* ── Byte helpers ─────────────────────────────────────────── */
-
-static uint16_t u16be(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
-
 /* ── Protocol decoders ────────────────────────────────────── */
 
 /* The try_* observers below take the TCP payload, never the segment:
@@ -740,8 +735,8 @@ static int port_is(const packet_info_t *pkt, uint16_t port) {
  * offset below 5 words or past the segment leaves the row as ports and
  * flags only — there is no payload to hand anyone. */
 static void decode_tcp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    pkt->src_port = u16be(tp + 0);
-    pkt->dst_port = u16be(tp + 2);
+    pkt->src_port = be16(tp + 0);
+    pkt->dst_port = be16(tp + 2);
     decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
 
     const int doff = (tp[12] >> 4) * 4;
@@ -769,16 +764,16 @@ static void decode_tcp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
  * the v4 and v6 decoders each carried a copy, and the v6 copy had
  * already lost the Kerberos and SNMP arms. */
 static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    pkt->src_port = u16be(tp + 0);
-    pkt->dst_port = u16be(tp + 2);
+    pkt->src_port = be16(tp + 0);
+    pkt->dst_port = be16(tp + 2);
     const uint8_t *pay     = tp + 8;
     const int      pay_len = tlen - 8;
 
     if (pay_len <= 0) {
-        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", be16(tp + 4));
     } else if (port_is(pkt, 53)) {
         if (!dns_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
-            snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+            snprintf(pkt->info, sizeof(pkt->info), "UDP %u", be16(tp + 4));
         dns_log_entry_t dqe;
         if (dns_log_parse(pay, pay_len, pkt->src, &dqe)) {
             dns_log_record(&dqe);
@@ -841,7 +836,7 @@ static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
                      pkt->dst_port == 161 || pkt->dst_port == 162
                      ? pkt->dst_port : pkt->src_port);
     } else {
-        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", be16(tp + 4));
     }
 }
 
@@ -910,7 +905,7 @@ static int l4_from_ipv4(const uint8_t *p, int len, int snapped,
     inet_ntop(AF_INET, p + 12, pkt->src, sizeof(pkt->src));
     inet_ntop(AF_INET, p + 16, pkt->dst, sizeof(pkt->dst));
 
-    const int total = u16be(p + 2);
+    const int total = be16(p + 2);
     if (total != 0) {
         if (total < ihl) {
             sh_parse_fault_note(SH_PF_IP_TRUNCATED);
@@ -923,7 +918,7 @@ static int l4_from_ipv4(const uint8_t *p, int len, int snapped,
             sh_parse_fault_note(SH_PF_IP_TRUNCATED);
     }
 
-    if ((u16be(p + 6) & 0x1fff) != 0) {
+    if ((be16(p + 6) & 0x1fff) != 0) {
         sh_parse_fault_note(SH_PF_IP_FRAGMENT);
         snprintf(pkt->info, sizeof(pkt->info), "IPv4 frag");
         return 0;
@@ -961,7 +956,7 @@ static int l4_from_ipv6(const uint8_t *p, int len, int snapped,
     inet_ntop(AF_INET6, p + 8,  pkt->src, sizeof(pkt->src));
     inet_ntop(AF_INET6, p + 24, pkt->dst, sizeof(pkt->dst));
 
-    const int plen = u16be(p + 4);
+    const int plen = be16(p + 4);
     if (plen != 0) {
         if (40 + plen < len)
             len = 40 + plen;
@@ -982,7 +977,7 @@ static int l4_from_ipv6(const uint8_t *p, int len, int snapped,
         } else if (nh == 44) {
             hlen = 8;
             if (off + hlen > len) break;
-            if ((u16be(p + off + 2) >> 3) != 0) {
+            if ((be16(p + off + 2) >> 3) != 0) {
                 pkt->proto = p[off];
                 sh_parse_fault_note(SH_PF_IP_FRAGMENT);
                 snprintf(pkt->info, sizeof(pkt->info), "IPv6 frag");
@@ -1048,15 +1043,15 @@ static int decode_frame(const frame_view_t *f, packet_info_t *pkt) {
 
     if (dlt == DLT_EN10MB) {
         if (caplen < 14) return 0;
-        ethertype = u16be(data + 12);
+        ethertype = be16(data + 12);
         offset    = 14;
     } else if (dlt == MY_DLT_LINUX_SLL) {
         if (caplen < 16) return 0;
-        ethertype = u16be(data + 14);
+        ethertype = be16(data + 14);
         offset    = 16;
     } else if (dlt == MY_DLT_LINUX_SLL2) {
         if (caplen < SLL2_HDRLEN) return 0;
-        ethertype = u16be(data + 0);
+        ethertype = be16(data + 0);
         offset    = SLL2_HDRLEN;
     } else if (dlt == DLT_IEEE802_11_RADIO) {
         /* The monitor radio (#72). Until this existed the two capture
@@ -1099,7 +1094,7 @@ static int decode_frame(const frame_view_t *f, packet_info_t *pkt) {
 
     /* strip 802.1Q VLAN tag */
     if (ethertype == 0x8100 && offset + 4 <= caplen) {
-        ethertype = u16be(data + offset + 2);
+        ethertype = be16(data + offset + 2);
         offset   += 4;
     }
 

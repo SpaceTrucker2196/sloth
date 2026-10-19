@@ -1,6 +1,7 @@
 #include <string.h>
 #include "runner.h"
 #include "sni_snoop.h"
+#include "tls_log.h"
 #include "dns.h"
 
 /*
@@ -401,8 +402,8 @@ static void test_sni_empty_name_rejected(void) {
 
 /* ── Entry point ─────────────────────────────────────────── */
 
-/* #138: same rule on the connection-table SNI path. Mutation-proved:
- * the memcpy restored in sni_snoop.c reddens it. */
+/* #138: same rule on the connection-table SNI path. Since #131 that
+ * path is tls_log_parse(); the memcpy restored there reddens this. */
 static void test_sni_control_octets_marked(void) {
     uint8_t f[sizeof pkt_sni_example];
     memcpy(f, pkt_sni_example, sizeof f);
@@ -416,6 +417,71 @@ static void test_sni_control_octets_marked(void) {
     char host[64];
     ASSERT_EQ(sni_snoop(f, (int)sizeof f, host, sizeof(host)), 1);
     ASSERT_STR(host, "?xample.co?");
+}
+
+/* ── #131: the divergences between the two ClientHello walkers ──
+ *
+ * sni_snoop() is a wrapper over tls_log_parse() now, so these run the
+ * shipped parser. Running the suite through it showed two rules only
+ * the old test-only walker enforced; the shipped one adopted both.
+ *
+ * Built field by field in RFC 8446 §4.1.2 order (record §5.1,
+ * handshake §4, server_name RFC 6066 §3) with the two lengths under
+ * test as parameters, so each case differs from its control in one
+ * field. Returns the frame length. */
+static int build_ch(uint8_t *f, int sid_len, int cs_len) {
+    static const char name[] = "a.example";
+    const int nl = (int)sizeof name - 1;
+    uint8_t body[200];
+    int o = 0;
+    body[o++] = 0x03; body[o++] = 0x03;                  /* legacy_version */
+    memset(body + o, 0x11, 32); o += 32;                 /* random */
+    body[o++] = (uint8_t)sid_len;                        /* legacy_session_id */
+    memset(body + o, 0x5a, (size_t)sid_len); o += sid_len;
+    body[o++] = (uint8_t)(cs_len >> 8); body[o++] = (uint8_t)cs_len;
+    for (int i = 0; i < cs_len; i += 2) { body[o++] = 0x00; body[o++] = 0x2f; }
+    body[o++] = 1; body[o++] = 0x00;                     /* compression: null */
+    const int ext_len = 4 + 2 + 1 + 2 + nl;
+    body[o++] = 0; body[o++] = (uint8_t)ext_len;          /* extensions */
+    body[o++] = 0x00; body[o++] = 0x00;                  /* server_name */
+    body[o++] = 0; body[o++] = (uint8_t)(ext_len - 4);
+    body[o++] = 0; body[o++] = (uint8_t)(1 + 2 + nl);     /* ServerNameList */
+    body[o++] = 0x00;                                    /* host_name */
+    body[o++] = 0; body[o++] = (uint8_t)nl;
+    memcpy(body + o, name, (size_t)nl); o += nl;
+
+    int n = 0;
+    f[n++] = 0x16; f[n++] = 0x03; f[n++] = 0x01;         /* record */
+    f[n++] = (uint8_t)((o + 4) >> 8); f[n++] = (uint8_t)(o + 4);
+    f[n++] = 0x01;                                       /* client_hello */
+    f[n++] = 0; f[n++] = (uint8_t)(o >> 8); f[n++] = (uint8_t)o;
+    memcpy(f + n, body, (size_t)o); n += o;
+    return n;
+}
+
+/* legacy_session_id<0..32>. Mutation-proved: dropping `sid > 32` from
+ * tls_log_parse reddens the 33 case; the 32 case pins the edge. */
+static void test_sni_session_id_over_32_rejected(void) {
+    uint8_t f[256]; char host[64];
+    int n = build_ch(f, 32, 2);
+    ASSERT_EQ(sni_snoop(f, n, host, sizeof host), 1);
+    ASSERT_STR(host, "a.example");
+    n = build_ch(f, 33, 2);
+    ASSERT_EQ(sni_snoop(f, n, host, sizeof host), 0);
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, n, NULL, NULL, &e), 0);
+}
+
+/* cipher_suites<2..2^16-2>. Mutation-proved: dropping `cs < 2` from
+ * tls_log_parse reddens the empty-list case. */
+static void test_sni_empty_cipher_suites_rejected(void) {
+    uint8_t f[256]; char host[64];
+    int n = build_ch(f, 0, 2);
+    ASSERT_EQ(sni_snoop(f, n, host, sizeof host), 1);
+    n = build_ch(f, 0, 0);
+    ASSERT_EQ(sni_snoop(f, n, host, sizeof host), 0);
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, n, NULL, NULL, &e), 0);
 }
 
 void run_sni_snoop_tests(void) {
@@ -448,4 +514,8 @@ void run_sni_snoop_tests(void) {
     RUN_TEST(test_sni_non_host_name_type_rejected);
     RUN_TEST(test_sni_empty_name_rejected);
     RUN_TEST(test_sni_control_octets_marked);
+
+    TEST_SUITE("sni snoop: shipped-parser divergences (#131)");
+    RUN_TEST(test_sni_session_id_over_32_rejected);
+    RUN_TEST(test_sni_empty_cipher_suites_rejected);
 }

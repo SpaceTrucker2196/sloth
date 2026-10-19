@@ -9,6 +9,8 @@
 #include "nbns_snoop.h"
 #include "dns.h"
 #include "stab.h"
+#include "dns_wire.h"
+#include "bytes.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
@@ -47,20 +49,6 @@ static void decode_nb_name(const uint8_t *enc, char *out, int outsz,
     netstr_copy(out, (size_t)outsz, raw, (size_t)len);   /* #138 */
 }
 
-/* Skip a DNS-encoded name; returns pointer past the final byte, or NULL. */
-static const uint8_t *skip_name(const uint8_t *p, const uint8_t *end) {
-    while (p < end) {
-        uint8_t b = *p;
-        if (b == 0x00) return p + 1;
-        if ((b & 0xC0) == 0xC0) {
-            if (p + 2 > end) return NULL;
-            return p + 2;
-        }
-        p += 1 + b;
-    }
-    return NULL;
-}
-
 /* ── Table helpers ───────────────────────────────────────── */
 
 /* NULL when the table is full and no row is NBNS_NAME_AGE_S stale;
@@ -82,10 +70,10 @@ int nbns_snoop_at(const uint8_t *msg, int len, char *info, int infosz,
                   time_t now) {
     if (len < 12) return 0;
 
-    uint16_t flags   = (uint16_t)((msg[2] << 8) | msg[3]);
+    uint16_t flags   = be16(msg + 2);
     int      is_resp = (flags >> 15) & 1;
-    uint16_t qdcount = (uint16_t)((msg[4] << 8) | msg[5]);
-    uint16_t ancount = (uint16_t)((msg[6] << 8) | msg[7]);
+    uint16_t qdcount = be16(msg + 4);
+    uint16_t ancount = be16(msg + 6);
 
     if (qdcount > 8 || ancount > 8) return 0;
 
@@ -100,8 +88,11 @@ int nbns_snoop_at(const uint8_t *msg, int len, char *info, int infosz,
             decode_nb_name(p + 1, name, sizeof(name), &sfx);
             got_name = name[0] != '\0';
         }
-        const uint8_t *after = skip_name(p, end);
-        if (!after || after + 4 > end) return 0;
+        /* RFC 1002 §4.1: NBNS names are DNS names (§4.1.1 allows
+         * compression), so the shared walker steps over them. */
+        int na = dns_skip_name(msg, len, (int)(p - msg));
+        if (na < 0 || na + 4 > len) return 0;
+        const uint8_t *after = msg + na;
         p = after + 4; /* skip QTYPE + QCLASS */
 
         if (!is_resp && got_name) {
@@ -124,13 +115,14 @@ int nbns_snoop_at(const uint8_t *msg, int len, char *info, int infosz,
             decode_nb_name(p + 1, name, sizeof(name), &sfx);
             got_name = name[0] != '\0';
         }
-        const uint8_t *after = skip_name(p, end);
-        if (!after || after + 10 > end) break;
+        int na = dns_skip_name(msg, len, (int)(p - msg));
+        if (na < 0 || na + 10 > len) break;
+        const uint8_t *after = msg + na;
 
-        uint16_t       rtype  = (uint16_t)((after[0] << 8) | after[1]);
-        uint16_t       rdlen  = (uint16_t)((after[8] << 8) | after[9]);
+        uint16_t       rtype  = be16(after);
+        uint16_t       rdlen  = be16(after + 8);
         const uint8_t *rdata  = after + 10;
-        if (rdata + rdlen > end) break;
+        if (na + 10 + (int)rdlen > len) break;
 
         /* NB record (0x0020): 2-byte flags + 4-byte IPv4 */
         if (rtype == 0x0020 && rdlen >= 6 && got_name) {

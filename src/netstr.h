@@ -26,9 +26,11 @@
  * The name-class stores that call netstr_copy — add a field here when
  * it joins them: SSID (dot11_ie_ssid_copy, shared by beacon, probe,
  * association and RRM), DNS qname (dns_log), NBNS name, DHCP option 12
- * hostname, TLS SNI (tls_log, sni_snoop), QUIC host, HTTP Host and
- * User-Agent (http_snoop, http_log), and every mDNS name (mdns_snoop
- * read_name).
+ * hostname, TLS SNI (tls_log; sni_snoop wraps it), QUIC host, HTTP
+ * Host and User-Agent (http_log; http_snoop wraps it), every mDNS name
+ * (mdns_snoop read_name), and the passive DNS cache's host
+ * (dns_set_resolved). dns_read_name() itself copies raw (#131): the
+ * marking belongs to the store, not to the wire reader.
  *
  * The per-site filters that predate this (snmp_snoop's reject, the
  * printable-ASCII credential and WPS copies) are stricter than either

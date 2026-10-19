@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: JA3 is a stable MD5 hash of a TLS ClientHello's negotiation parameters — version, cipher suites, extensions, supported groups, EC point formats. Same client library + version → same JA3 across hosts. Sloth computes JA3 for every observed ClientHello on TCP/443.
 
-**Sources**: `docs/views/tls.md`, `src/tls_log.c`, `src/md5.c`.
+**Sources**: `docs/views/tls.md`, `src/tls_log.c`, `src/md5.c`, RFC 8446 §4.1.2.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -37,6 +37,16 @@ test vectors.
 src, dst, host (SNI), TLS version (`1.3` / `1.2` / `1.1` / `1.0` /
 unknown), 32-char hex JA3. The view shows a 12-char prefix; full hash
 is available for export.
+
+One parser, `tls_log_parse()`, reads every ClientHello: the TLS log,
+the JA3/JA4 fingerprints and the connection table's SNI
+(`sni_snoop()`, a wrapper since #131) all come from the same walk. A
+ClientHello whose `legacy_session_id` is longer than 32 octets or whose
+`cipher_suites` list is empty is not one RFC 8446 §4.1.2 allows, and is
+not fingerprinted — every later field would be read from the wrong
+offset, so its JA3 would describe bytes the client never meant as
+cipher suites. Until #131 the shipped parser accepted both, while the
+test-only parser that `test_sni_snoop.c` exercised refused them.
 
 ## Why it's useful
 

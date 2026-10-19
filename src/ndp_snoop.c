@@ -4,6 +4,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include "ndp_snoop.h"
+#include "bytes.h"
 
 /* Tracker state. Tiny: at most MAX_NDP_RAS distinct router source IPs.
  * Each RA observation either updates an existing entry (same src_ip,
@@ -13,10 +14,6 @@ static int             g_n  = 0;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Helpers ──────────────────────────────────────────────── */
-
-static uint16_t u16be(const uint8_t *p) {
-    return (uint16_t)(((unsigned)p[0] << 8) | p[1]);
-}
 
 static int find_or_alloc(const char *src_ip) {
     for (int i = 0; i < g_n; i++) {
@@ -58,7 +55,7 @@ int ndp_snoop_ra(const char *src_ip, const uint8_t *payload, int len) {
 
     uint8_t  cur_hop_limit  = payload[4];
     uint8_t  flags          = payload[5];
-    uint16_t router_lifetime = u16be(payload + 6);
+    uint16_t router_lifetime = be16(payload + 6);
     /* Reachable Time (payload+8..11) and Retrans Timer (payload+12..15)
      * are not retained — they aren't relevant to rogue-RA detection. */
 

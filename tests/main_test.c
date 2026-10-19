@@ -61,6 +61,7 @@ void run_rtt_tests(void);
 void run_tree_tests(void);
 void run_scan_tests(void);
 void run_dns_snoop_tests(void);
+void run_dns_wire_tests(void);
 void run_sni_snoop_tests(void);
 void run_mdns_snoop_tests(void);
 void run_http_snoop_tests(void);
@@ -233,6 +234,7 @@ int main(void) {
     run_tree_tests();
     run_scan_tests();
     run_dns_snoop_tests();
+    run_dns_wire_tests();
     run_sni_snoop_tests();
     run_mdns_snoop_tests();
     run_http_snoop_tests();

@@ -10,6 +10,7 @@
 #include "sloth_clock.h"
 #include "observe.h"
 #include "services.h"
+#include "netstr.h"
 
 /* ── Tunables ────────────────────────────────────────────── */
 
@@ -244,9 +245,11 @@ void dns_set_resolved(const char *ip, const char *host) {
     int idx = cache_find(ip);
     if (idx < 0) idx = cache_evict();
     strncpy(g_cache[idx].ip,   ip,   sizeof(g_cache[idx].ip)   - 1);
-    strncpy(g_cache[idx].host, host, sizeof(g_cache[idx].host) - 1);
     g_cache[idx].ip[sizeof(g_cache[idx].ip) - 1]     = '\0';
-    g_cache[idx].host[sizeof(g_cache[idx].host) - 1] = '\0';
+    /* A name-class store (#138): dns_snoop hands over the qname straight
+     * from dns_read_name(), which copies label octets raw (#131). */
+    netstr_copy(g_cache[idx].host, sizeof(g_cache[idx].host),
+                (const uint8_t *)host, strlen(host));
     g_cache[idx].state = DNS_RESOLVED;
     g_cache[idx].ts    = sloth_wall();
     pthread_mutex_unlock(&g_mu);

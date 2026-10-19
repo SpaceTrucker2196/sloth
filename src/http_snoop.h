@@ -6,7 +6,10 @@
 /* Parse an HTTP/1.x request payload starting at the TCP payload.
    If a Host header is found, writes the hostname (port stripped) into
    host[hostsz] and returns 1.  Returns 0 if the payload is not an HTTP
-   request or no Host header is present. */
+   request or no Host header is present.
+   Both functions here are defined in src/http_log.c (#131): http_snoop()
+   is a wrapper over http_log_parse(), the parser production runs, so
+   its tests exercise the shipped code. */
 int http_snoop(const uint8_t *data, int len, char *host, int hostsz);
 
 /* Scan an HTTP/1.x request payload for cleartext credential exposures

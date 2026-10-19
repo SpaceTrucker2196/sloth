@@ -37,7 +37,7 @@ static int ci_startswith(const char *s, int slen, const char *prefix, int plen) 
     return 1;
 }
 
-/* Minimal base64 decoder — same shape as the one in http_snoop.c. */
+/* Minimal base64 decoder — same shape as the one in http_log.c. */
 static int b64_decode(const char *in, int inlen, char *out, int outsz) {
     static const int8_t T[128] = {
         ['A']= 0,['B']= 1,['C']= 2,['D']= 3,['E']= 4,['F']= 5,['G']= 6,['H']= 7,

@@ -42,8 +42,7 @@ CORE_COMMON_SRCS = \
        src/bandwidth.c     \
        src/dns.c           \
        src/dns_snoop.c     \
-       src/sni_snoop.c     \
-       src/http_snoop.c    \
+       src/dns_wire.c      \
        src/ftp_snoop.c     \
        src/pop3_snoop.c    \
        src/imap_snoop.c    \
