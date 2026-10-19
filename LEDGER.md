@@ -222,3 +222,4 @@
 | f5e0ecd | 2026-10-15T23:24:46Z | claude-opus-5-5 | 28 | 15122 | 9107679 | 754919 | 8.1634 | batched .github/agents follow-ups: fuzz runs decode_frame in CI, one cppcheck command, AGENTS recipes current (#119) |
 | cfbf6a8 | 2026-10-19T05:57:18Z | claude-opus-5-5 | 36 | 12034 | 12600120 | 1541485 | 15.0927 | S8 test build ships config, offscreen ncurses, one suite (#116) |
 | 4f73e23 | 2026-10-19T06:09:36Z | claude-opus-5-5 | 22 | 7359 | 8078191 | 14804 | 1.8813 | dependency floors, SBOM fallback, libs on sensor_health (#142) |
+| 9131b8e | 2026-10-19T06:38:11Z | claude-opus-5-5 | 38 | 15137 | 14851432 | 23927 | 3.4646 | #142 CI half: pinned runners, SBOM job, release attestation |
