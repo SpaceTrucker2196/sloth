@@ -107,7 +107,12 @@ static void test_draw_empty_no_crash(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_stats_draw(&s);
-    ASSERT(1);
+    /* Uptime reads the real clock and is not asserted. */
+    ASSERT_LINE_HAS(0, "Session Statistics");
+    ASSERT_SCREEN_HAS("(no interfaces)");
+    ASSERT_SCREEN_HAS("Connections (0 total)");
+    ASSERT_SCREEN_HAS("(no connections tracked)");
+    ASSERT_SCREEN_HAS("Captured: 0");
 }
 
 static void test_draw_with_ifaces_no_crash(void) {
@@ -120,7 +125,14 @@ static void test_draw_with_ifaces_no_crash(void) {
     s.ifaces[0].rx_bytes = 6000000;
     s.ifaces[0].tx_bytes = 2500000;
     view_stats_draw(&s);
-    ASSERT(1);
+    /* Session columns are the delta from the baseline, not the totals:
+     * 1,000,000 B in, 500,000 B out, no packets either way. Seen to fail
+     * with the baseline subtraction removed (eth0 then reads its total). */
+    int y = runner_screen_find(" eth0 ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "976.56 KB       488.28 KB       0             0");
+    ASSERT_LINE_HAS(runner_screen_find(" lo "), "0 B             0 B");
+    ASSERT_SCREEN_LACKS("(no interfaces)");
 }
 
 static void test_draw_with_conns_no_crash(void) {
@@ -134,7 +146,9 @@ static void test_draw_with_conns_no_crash(void) {
     s.conn_count = 5;
     stats_take_baseline(&s);
     view_stats_draw(&s);
-    ASSERT(1);
+    /* 3 of 5 TCP: twelve of the bar's twenty cells. */
+    ASSERT_SCREEN_HAS("Connections (5 total)");
+    ASSERT_SCREEN_HAS("[############========]  TCP: 3  UDP: 2");
 }
 
 /* ── Entry point ─────────────────────────────────────────── */
