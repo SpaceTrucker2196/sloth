@@ -3748,3 +3748,14 @@ and `eapol_log.c` are gone. View gains `proto`, `dot11_frame_depad()`,
 `dot11_frame_tid/amsdu/ccmp_pn()` and a test-only decode counter. No
 behaviour change: the suite and `make replay-check` are unchanged.
 Page: [[architecture]] (802.11 frame view).
+
+## 2026-10-19 — #129: Multi-Link Element Presence Bitmap read per 802.11be
+
+`mle_parse()` read Multi-Link Control bit 4 as "MLD MAC Address
+Present" and refused a Basic MLE with it clear. In the Basic variant
+bit 4 is **Link ID Info Present** and the MLD MAC is unconditional, so
+every client (non-AP) MLD in a (Re)Association Request was dropped.
+Verified against hostapd `ieee802_11_defs.h` and Wireshark
+`packet-ieee80211.c` (the IEEE 802.11be-2024 text itself was not read).
+Updated [[jsonl-schema]] (`wifi_mld` semantics: client MLDs now
+appear) and [[mac-randomisation]] (MLD bullet).

@@ -8,10 +8,15 @@
  *
  * Element body, starting at the ext ID byte:
  *   ExtID(1) = 107
- *   Multi-Link Control(2)   bits 0-2 Type, bit 4 MLD MAC present
+ *   Multi-Link Control(2)   bits 0-2 Type, bits 4-15 Presence Bitmap;
+ *                           Basic variant: bit 4 Link ID Info Present,
+ *                           bit 5 BSS Params Change Count, bit 6 Medium
+ *                           Sync Delay, bit 7 EML Capa, bit 8 MLD Capa,
+ *                           bit 9 AP MLD ID (#129)
  *   Common Info Length(1)   covers itself and everything after it
- *   MLD MAC Address(6)
- *   ... optional Common Info fields
+ *   MLD MAC Address(6)      unconditional in the Basic variant
+ *   Link ID Info(1)         when Presence Bitmap bit 4 is set
+ *   ... further optional Common Info fields, in bitmap order
  *   Per-STA Profile subelements (ID 0)
  *
  * Per-STA Profile body:
@@ -84,24 +89,39 @@ static int put_per_sta_profile(uint8_t *b, int off, int link_id,
 #define CIPH_CCMP128   4
 #define CIPH_GCMP256   9
 
-/* Build a Basic-variant MLE. `common_extra` pads the Common Info with
- * optional fields the parser must skip via the declared length. */
-static int build_mle(uint8_t *b, int type, int mld_present,
+/* Link ID value the builder writes into Link ID Info (bits 0-3) when
+ * asked to. A non-zero sentinel, so a parser that read this octet as
+ * the first byte of Link Info would see subelement ID 2, not ID 0. */
+#define COMMON_LINK_ID 2
+
+/* Build a Basic-variant MLE, fields appended in clause order.
+ *
+ * `link_id_present` sets Presence Bitmap bit 4 (Link ID Info Present,
+ * #129) AND appends the 1-octet Link ID Info after the MLD MAC — the
+ * two always travel together, the way an AP MLD's Beacon carries them.
+ * Clear, it is the (Re)Association Request shape a non-AP MLD sends.
+ *
+ * `common_extra` pads the Common Info with filler octets the parser
+ * must skip via the declared length; no bitmap bit claims them, which
+ * is the "later amendment added a field" case. */
+static int build_mle(uint8_t *b, int type, int link_id_present,
                      const uint8_t *mld, int common_extra) {
     int off = 0;
     b[off++] = MLE_EXT_ID;
-    uint16_t ctl = (uint16_t)((type & 0x07) | (mld_present ? 0x0010 : 0));
+    uint16_t ctl = (uint16_t)((type & 0x07) | (link_id_present ? 0x0010 : 0));
     b[off++] = (uint8_t)(ctl & 0xff);
     b[off++] = (uint8_t)(ctl >> 8);
-    b[off++] = (uint8_t)(1 + 6 + common_extra);   /* Common Info Length */
-    memcpy(b + off, mld, 6); off += 6;
+    int lenpos = off++;                           /* Common Info Length */
+    memcpy(b + off, mld, 6); off += 6;            /* MLD MAC, unconditional */
+    if (link_id_present) b[off++] = COMMON_LINK_ID;   /* Link ID Info */
     for (int i = 0; i < common_extra; i++) b[off++] = 0x5a;  /* filler */
+    b[lenpos] = (uint8_t)(off - lenpos);          /* counts itself */
     return off;
 }
 
 static void test_basic_mle_yields_the_mld_mac(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
     ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);
@@ -110,7 +130,7 @@ static void test_basic_mle_yields_the_mld_mac(void) {
 
 static void test_per_sta_profiles_yield_link_macs(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 1, LNK2);
     sloth_mld_t m;
@@ -129,7 +149,7 @@ static void test_common_info_length_is_how_link_info_is_found(void) {
      * have that failure mode. Here the parser must skip 5 bytes it has
      * no interpretation for and still find the profile. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 5);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 5);
     n = put_per_sta(b, n, 2, LNK3);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -144,22 +164,111 @@ static void test_non_basic_variants_rejected(void) {
      * decoding it at all. */
     uint8_t b[128];
     for (int type = 1; type <= 3; type++) {
-        int n = build_mle(b, type, 1, MLD, 0);
+        int n = build_mle(b, type, 0, MLD, 0);
         sloth_mld_t m;
         ASSERT_EQ(mle_parse(b, n, &m), 0);
     }
 }
 
-static void test_mld_mac_absent_rejected(void) {
-    uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 0 /* presence bit clear */, MLD, 0);
+/* ── Presence Bitmap bit 4 is Link ID Info Present (#129) ── */
+
+/* A non-AP MLD's (Re)Association Request: Basic MLE, Presence Bitmap
+ * all clear, Common Info = Length + MLD MAC only. Bytes spelled out
+ * rather than built, so the test does not share a formula with the
+ * builder it is checking. Until #129 the parser read bit 4 as "MLD MAC
+ * Address Present" and refused this frame — which is why the
+ * association-request path never recorded a client MLD. */
+static const uint8_t CLIENT_MLE[] = {
+    107,                                /* Element ID Extension: Multi-Link */
+    0x00, 0x00,                         /* Control: Type 0 Basic, bitmap 0 */
+    7,                                  /* Common Info Length: self + MAC */
+    0x02, 0xaa, 0x00, 0x00, 0x00, 0x01, /* MLD MAC Address (= MLD) */
+    /* Per-STA Profile subelement */
+    0, 9,                               /* ID 0, length 9 */
+    0x21, 0x00,                         /* STA Control: link 1, MAC present */
+    7,                                  /* STA Info Length */
+    0x02, 0xaa, 0x00, 0x00, 0x00, 0x22, /* STA MAC Address (= LNK2) */
+};
+
+static void test_basic_mle_with_empty_presence_bitmap_yields_the_mld_mac(void) {
     sloth_mld_t m;
-    ASSERT_EQ(mle_parse(b, n, &m), 0);
+    ASSERT_EQ(mle_parse(CLIENT_MLE, 10, &m), 1);
+    ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);
+    ASSERT_EQ(m.link_count, 0);
+    ASSERT_EQ(m.malformed_common_info_len, 0);
+}
+
+static void test_client_mle_links_are_decoded(void) {
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(CLIENT_MLE, (int)sizeof(CLIENT_MLE), &m), 1);
+    ASSERT_EQ(m.link_count, 1);
+    ASSERT(memcmp(m.link_mac[0], LNK2, 6) == 0);
+    ASSERT_EQ((int)m.link_id[0], 1);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+}
+
+static void test_client_mld_reaches_the_canonical_lookup(void) {
+    /* The operator-visible consequence: a Wi-Fi 7 handset's per-link
+     * address now collapses to its MLD identity. */
+    mle_clear();
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(CLIENT_MLE, (int)sizeof(CLIENT_MLE), &m), 1);
+    mle_observe(&m, 1000);
+    uint8_t canon[6] = { 0 };
+    ASSERT_EQ(mle_canonical(LNK2, canon), 1);
+    ASSERT(memcmp(canon, MLD, 6) == 0);
+    ASSERT_EQ(mle_count(), 1);
+    mle_clear();
+}
+
+/* An AP MLD's Beacon shape: bit 4 set, Common Info Length 8, the Link
+ * ID Info octet after the MLD MAC, then a Per-STA Profile. The link
+ * must be found after the Link ID octet, not on it. */
+static const uint8_t AP_MLE_LINK_ID[] = {
+    107,                                /* Element ID Extension: Multi-Link */
+    0x10, 0x00,                         /* Control: Basic, bit 4 Link ID Info */
+    8,                                  /* Common Info Length: self+MAC+LinkID */
+    0x02, 0xaa, 0x00, 0x00, 0x00, 0x01, /* MLD MAC Address (= MLD) */
+    0x02,                               /* Link ID Info: link 2 (bits 0-3) */
+    /* Per-STA Profile subelement */
+    0, 9,                               /* ID 0, length 9 */
+    0x20, 0x00,                         /* STA Control: link 0, MAC present */
+    7,                                  /* STA Info Length */
+    0x02, 0xaa, 0x00, 0x00, 0x00, 0x11, /* STA MAC Address (= LNK1) */
+};
+
+static void test_link_id_info_present_link_decoded_at_right_offset(void) {
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(AP_MLE_LINK_ID, (int)sizeof(AP_MLE_LINK_ID), &m), 1);
+    ASSERT(memcmp(m.mld_mac, MLD, 6) == 0);
+    ASSERT_EQ(m.malformed_common_info_len, 0);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ(m.link_count, 1);
+    ASSERT(memcmp(m.link_mac[0], LNK1, 6) == 0);
+    ASSERT_EQ((int)m.link_id[0], 0);
+}
+
+static void test_ap_mle_with_full_common_info_finds_link_info(void) {
+    /* A typical AP MLD Common Info: Link ID Info(1) + BSS Parameters
+     * Change Count(1) + Medium Sync Delay(2) + EML Capabilities(2) +
+     * MLD Capabilities(2). The builder appends Link ID Info; the other
+     * seven octets ride as filler the declared length steps over. */
+    uint8_t b[128];
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 7);
+    ASSERT_EQ((int)b[1], 0x10);            /* only bit 4 set by builder */
+    ASSERT_EQ((int)b[3], 1 + 6 + 1 + 7);   /* declared Common Info Length */
+    ASSERT_EQ((int)b[10], COMMON_LINK_ID); /* Link ID Info follows MLD MAC */
+    n = put_per_sta(b, n, 3, LNK3);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.link_count, 1);
+    ASSERT(memcmp(m.link_mac[0], LNK3, 6) == 0);
+    ASSERT_EQ((int)m.link_id[0], 3);
 }
 
 static void test_wrong_ext_id_rejected(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[0] = 106;                    /* EHT Operation, not Multi-Link */
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 0);
@@ -168,14 +277,14 @@ static void test_wrong_ext_id_rejected(void) {
 static void test_group_addressed_mld_rejected(void) {
     uint8_t b[128];
     static const uint8_t BAD[6] = { 0x01, 0, 0, 0, 0, 1 };
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, BAD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, BAD, 0);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 0);
 }
 
 static void test_link_overflow_flagged(void) {
     uint8_t b[160];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 1, LNK2);
     n = put_per_sta(b, n, 2, LNK3);
@@ -188,7 +297,7 @@ static void test_link_overflow_flagged(void) {
 
 static void test_truncated_bodies_are_safe(void) {
     uint8_t b[160];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     for (int cut = 1; cut < n; cut++) {
         sloth_mld_t m;
@@ -207,7 +316,7 @@ static void test_link_id_15_flagged(void) {
     /* hostapd's links[] storage has no slot 15 — the out-of-bounds
      * write CVE-2026-58374 names exactly this value. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 15, LNK1);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -219,7 +328,7 @@ static void test_link_id_14_is_the_valid_boundary(void) {
     /* 0-14 is the sanctioned range. The boundary itself must not be
      * mistaken for the invalid value one above it. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 14, LNK1);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -231,7 +340,7 @@ static void test_duplicate_link_id_flagged(void) {
     /* Two Per-STA Profiles naming the same link_id inside one MLE —
      * a conformant MLD never does this; it names the same link twice. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 0, LNK2);
     sloth_mld_t m;
@@ -242,7 +351,7 @@ static void test_duplicate_link_id_flagged(void) {
 
 static void test_distinct_link_ids_not_flagged(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 1, LNK2);
     n = put_per_sta(b, n, 2, LNK3);
@@ -256,13 +365,13 @@ static void test_malformed_link_id_persists_across_clean_frames(void) {
      * by a hundred clean ones must still read as having happened. */
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 15, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -281,9 +390,9 @@ static void test_malformed_link_id_persists_across_clean_frames(void) {
 static void test_common_info_len_too_small_flagged(void) {
     /* The field covers itself (1) plus the mandatory MLD MAC (6): 7 is
      * the structural floor. A declared value under that cannot even
-     * describe what presence bit 4 says is there. */
+     * describe the MLD MAC the Basic variant always carries. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[3] = 3;   /* declared Common Info Length, below the floor of 7 */
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -297,7 +406,7 @@ static void test_common_info_len_overruns_element_flagged(void) {
      * bounds is the buffer-overread shape itself: trusting it blindly
      * to find Link Info would read past the frame. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[3] = 200;   /* far past n */
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -309,7 +418,7 @@ static void test_common_info_len_7_is_the_valid_floor(void) {
     /* The boundary itself must parse clean, not be mistaken for the
      * invalid value just below it. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);   /* common_len = 7 */
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);   /* common_len = 7 */
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
     ASSERT_EQ(m.malformed_common_info_len, 0);
@@ -318,13 +427,13 @@ static void test_common_info_len_7_is_the_valid_floor(void) {
 static void test_malformed_common_info_len_persists_across_clean_frames(void) {
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[3] = 3;
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -351,7 +460,7 @@ static void test_subelem_len_overruns_element_by_one_flagged(void) {
      * the shape a length-confusion bug is most likely to have, and the
      * one an "approximately in bounds" check would wave through. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     int p = n;
     n = put_per_sta(b, n, 0, LNK1);
     b[p + 1] = 10;              /* declared body length; 9 is the truth */
@@ -374,7 +483,7 @@ static void test_subelem_header_in_last_two_octets_flagged(void) {
      * `at + 2 >= len` routed this case down the tail branch and left the
      * suite green; this test is what turns that red. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[n++] = 0x00;              /* subelement ID: Per-STA Profile */
     b[n++] = 0x05;              /* declared body length; 0 octets follow */
     sloth_mld_t m;
@@ -386,7 +495,7 @@ static void test_subelem_header_in_last_two_octets_flagged(void) {
 
 static void test_subelem_len_overruns_element_by_many_flagged(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     int p = n;
     n = put_per_sta(b, n, 0, LNK1);
     b[p + 1] = 200;
@@ -407,7 +516,7 @@ static void test_subelem_chain_sum_overrun_flagged(void) {
      * the link the valid subelement carried is still evidence worth
      * keeping. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     int p = n;
     n = put_per_sta(b, n, 1, LNK2);
@@ -427,7 +536,7 @@ static void test_subelem_header_truncated_at_element_boundary_flagged(void) {
      * subelement's mandatory 2-byte ID/length header already reaches
      * one byte past the element the sender declared. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[n++] = MLE_SUBELEM_PER_STA;   /* ID present, length byte missing */
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -441,7 +550,7 @@ static void test_subelem_exact_fit_not_flagged(void) {
      * the element's last byte is conformant, and the link it carries
      * proves the walk ran rather than bailing early. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 1, LNK2);
     sloth_mld_t m;
@@ -456,7 +565,7 @@ static void test_zero_length_subelement_not_flagged(void) {
      * else. Legal, carries nothing, and must neither fire nor stall the
      * walk — the chain still has to advance past it. */
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[n++] = 9;    /* some subelement ID sloth has no interpretation for */
     b[n++] = 0;    /* ...declaring no body */
     n = put_per_sta(b, n, 0, LNK1);
@@ -470,7 +579,7 @@ static void test_zero_length_subelement_not_flagged(void) {
 static void test_malformed_subelem_len_persists_across_clean_frames(void) {
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     int p = n;
     n = put_per_sta(b, n, 0, LNK1);
     b[p + 1] = 10;
@@ -478,7 +587,7 @@ static void test_malformed_subelem_len_persists_across_clean_frames(void) {
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -498,7 +607,7 @@ static void test_malformed_subelem_len_persists_across_clean_frames(void) {
 static void test_observe_and_canonical_lookup(void) {
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     n = put_per_sta(b, n, 1, LNK2);
     sloth_mld_t m;
@@ -527,13 +636,13 @@ static void test_links_merge_across_frames(void) {
      * than not having it at all. */
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 1, LNK2);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -548,7 +657,7 @@ static void test_links_merge_across_frames(void) {
 static void test_repeat_observation_does_not_duplicate_links(void) {
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
@@ -566,14 +675,14 @@ static void test_repeat_observation_does_not_duplicate_links(void) {
 static void test_conflicting_link_id_address_flags_collision(void) {
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
     /* Same MLD MAC, same link_id, a different affiliated address. */
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK2);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -598,13 +707,13 @@ static void test_new_link_id_not_flagged_as_collision(void) {
      * link_id, not seen before, is a normal merge. */
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 1, LNK2);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
@@ -621,7 +730,7 @@ static void test_repeated_same_binding_not_flagged_as_collision(void) {
      * new link either. */
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
@@ -639,18 +748,18 @@ static void test_mac_collision_persists_across_clean_frames(void) {
      * a later clean frame does not erase an earlier collision. */
     mle_clear();
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK2);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     mle_parse(b, n, &m);
     mle_observe(&m, 1002);
@@ -665,17 +774,17 @@ static void test_distinct_mlds_isolate_collision_counts(void) {
     mle_clear();
     static const uint8_t MLD2[6] = { 0x02, 0xaa, 0x00, 0x00, 0x00, 0x02 };
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK1);
     sloth_mld_t m;
     mle_parse(b, n, &m);
     mle_observe(&m, 1000);
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 0, LNK2);
     mle_parse(b, n, &m);
     mle_observe(&m, 1001);
 
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD2, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD2, 0);
     n = put_per_sta(b, n, 0, LNK3);
     mle_parse(b, n, &m);
     mle_observe(&m, 1002);
@@ -704,7 +813,7 @@ static void test_distinct_mlds_isolate_collision_counts(void) {
 
 static void test_cross_link_cipher_and_pmf_downgrade_flagged(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
     sloth_mld_t m;
@@ -729,7 +838,7 @@ static void test_cross_link_cipher_and_pmf_downgrade_flagged(void) {
  * cannot raise the alert by itself. */
 static void test_pmf_mismatch_alone_is_recorded_not_a_downgrade(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_CCMP128, 1, 1);
     n = put_per_sta_profile(b, n, 2, CIPH_CCMP128, 0, 1);
     sloth_mld_t m;
@@ -750,7 +859,7 @@ static void test_pmf_mismatch_alone_is_recorded_not_a_downgrade(void) {
  * here is even a misconfiguration. */
 static void test_conformant_tri_band_ap_does_not_fire(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_CCMP128, 0, 1);  /* MFPC, !MFPR */
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
     n = put_per_sta_profile(b, n, 2, CIPH_CCMP128, 1, 1);  /* MFPR */
@@ -770,7 +879,7 @@ static void test_conformant_tri_band_ap_does_not_fire(void) {
  * links needs two links. */
 static void test_repeated_link_id_suppresses_the_posture_read(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 3, CIPH_TKIP,     0, 1);
     n = put_per_sta_profile(b, n, 3, CIPH_GCMP256,  1, 1);
     sloth_mld_t m;
@@ -788,7 +897,7 @@ static void test_repeated_link_id_suppresses_the_posture_read(void) {
  * detail string. */
 static void test_both_mismatches_keep_separate_link_pairs(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);  /* strong, MFPR */
     n = put_per_sta_profile(b, n, 1, CIPH_TKIP,    1, 1);  /* weak,   MFPR */
     n = put_per_sta_profile(b, n, 2, CIPH_GCMP256, 0, 1);  /* strong, !MFPR */
@@ -811,7 +920,7 @@ static void test_both_mismatches_keep_separate_link_pairs(void) {
  * rank table is exercised at its other end. */
 static void test_cipher_strength_mismatch_alone_flagged(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_TKIP,    1, 1);
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 1, 1);
     sloth_mld_t m;
@@ -825,7 +934,7 @@ static void test_cipher_strength_mismatch_alone_flagged(void) {
 
 static void test_identical_per_link_rsne_not_flagged(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     n = put_per_sta_profile(b, n, 1, CIPH_GCMP256, 1, 1);
     sloth_mld_t m;
@@ -838,7 +947,7 @@ static void test_identical_per_link_rsne_not_flagged(void) {
  * means "same as the AP", never "no encryption". */
 static void test_link_without_an_rsne_inherits_and_is_not_flagged(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     n = put_per_sta_profile(b, n, 1, 0,            0, 1);   /* no RSNE */
     sloth_mld_t m;
@@ -850,7 +959,7 @@ static void test_link_without_an_rsne_inherits_and_is_not_flagged(void) {
  * (if any) is not that link's full posture. */
 static void test_partial_profile_not_read_for_posture(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 0);
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 0);
     sloth_mld_t m;
@@ -860,7 +969,7 @@ static void test_partial_profile_not_read_for_posture(void) {
 
 static void test_single_link_rsne_not_flagged(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_TKIP, 0, 1);
     sloth_mld_t m;
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -872,7 +981,7 @@ static void test_single_link_rsne_not_flagged(void) {
  * nothing to read past either. */
 static void test_zero_length_sta_profile_not_flagged(void) {
     uint8_t b[64];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     for (int k = 0; k < 2; k++) {
         b[n++] = 0;              /* subelement ID 0 */
         b[n++] = 3;              /* control(2) + STA Info Length(1) */
@@ -898,7 +1007,7 @@ static void test_zero_length_sta_profile_not_flagged(void) {
  * dereference. Measured, not assumed (#104 slice 5). */
 static void test_sta_info_len_past_subelement_end_is_safe(void) {
     uint8_t b[128];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     for (int k = 0; k < 2; k++) {
         b[n++] = 0;
         b[n++] = 3;
@@ -929,7 +1038,7 @@ static void test_sta_info_len_past_subelement_end_is_safe(void) {
  * downgrade here. */
 static void test_untiled_sta_profile_is_not_read_and_not_a_fault(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     const int weak = n;
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
@@ -953,7 +1062,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
     sloth_mld_t m;
 
     /* Common Info Length 6: below the 7 that holds itself + MLD MAC. */
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     b[3] = 6;
     sh_parse_fault_reset();
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -961,7 +1070,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
     ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
 
     /* Per-STA subelement claiming one octet more than is there. */
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     int sub = n;
     n = put_per_sta(b, n, 1, LNK1);
     b[sub + 1]++;
@@ -972,7 +1081,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
     ASSERT_EQ((int)sh_parse_fault_count(SH_PF_IE_OVERRUN), 0);
 
     /* Link ID 15, outside the 0-14 hostapd can store. */
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 15, LNK1);
     sh_parse_fault_reset();
     ASSERT_EQ(mle_parse(b, n, &m), 1);
@@ -981,7 +1090,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
 
     /* Link ID 15 and then an overrunning subelement: two rules, one
      * element, one count. */
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 15, LNK1);
     sub = n;
     n = put_per_sta(b, n, 2, LNK2);
@@ -993,7 +1102,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
     ASSERT_EQ((int)sh_parse_fault_count(SH_PF_MLE_MALFORMED), 1);
 
     /* Two clean links: nothing. */
-    n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta(b, n, 1, LNK1);
     n = put_per_sta(b, n, 2, LNK2);
     sh_parse_fault_reset();
@@ -1007,7 +1116,7 @@ static void test_malformed_mle_reaches_the_parse_fault_tally(void) {
  * table was written becomes an alert on a conformant AP. */
 static void test_unrecognised_cipher_suite_is_not_ranked_weak(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, 99, 1, 1);   /* not in the table */
     n = put_per_sta_profile(b, n, 1, CIPH_GCMP256, 1, 1);
     sloth_mld_t m;
@@ -1025,7 +1134,7 @@ static void test_unrecognised_cipher_suite_is_not_ranked_weak(void) {
  * Mutation-proved: dropping `|| r.truncated` from sta_profile_rsn()
  * reddens the second downgrade assertion. */
 static int mle_with_pmkid_count_on_link1(uint8_t *b, uint8_t pmkid_count) {
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     int sub = n;
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
@@ -1056,7 +1165,7 @@ static void test_truncated_per_sta_rsne_is_not_read_for_posture(void) {
  * willing to draw a posture conclusion from. */
 static void test_downgrade_not_claimed_on_an_overrunning_chain(void) {
     uint8_t b[256];
-    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(b, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
     n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
     b[n++] = 0;        /* a third subelement whose body runs past the end */
@@ -1071,7 +1180,7 @@ static void test_downgrade_not_claimed_on_an_overrunning_chain(void) {
 static void test_cross_link_downgrade_persists_across_clean_frames(void) {
     mle_clear();
     uint8_t bad[256];
-    int n = build_mle(bad, MLE_TYPE_BASIC, 1, MLD, 0);
+    int n = build_mle(bad, MLE_TYPE_BASIC, 0, MLD, 0);
     n = put_per_sta_profile(bad, n, 0, CIPH_GCMP256, 1, 1);
     n = put_per_sta_profile(bad, n, 1, CIPH_CCMP128, 0, 1);
     sloth_mld_t m;
@@ -1079,7 +1188,7 @@ static void test_cross_link_downgrade_persists_across_clean_frames(void) {
     mle_observe(&m, 1000);
 
     uint8_t good[256];
-    int g = build_mle(good, MLE_TYPE_BASIC, 1, MLD, 0);
+    int g = build_mle(good, MLE_TYPE_BASIC, 0, MLD, 0);
     g = put_per_sta_profile(good, g, 0, CIPH_GCMP256, 1, 1);
     g = put_per_sta_profile(good, g, 1, CIPH_GCMP256, 1, 1);
     for (int i = 0; i < 2; i++) {
@@ -1103,7 +1212,11 @@ void run_mle_tests(void) {
     RUN_TEST(test_per_sta_profiles_yield_link_macs);
     RUN_TEST(test_common_info_length_is_how_link_info_is_found);
     RUN_TEST(test_non_basic_variants_rejected);
-    RUN_TEST(test_mld_mac_absent_rejected);
+    RUN_TEST(test_basic_mle_with_empty_presence_bitmap_yields_the_mld_mac);
+    RUN_TEST(test_client_mle_links_are_decoded);
+    RUN_TEST(test_client_mld_reaches_the_canonical_lookup);
+    RUN_TEST(test_link_id_info_present_link_decoded_at_right_offset);
+    RUN_TEST(test_ap_mle_with_full_common_info_finds_link_info);
     RUN_TEST(test_wrong_ext_id_rejected);
     RUN_TEST(test_group_addressed_mld_rejected);
     RUN_TEST(test_link_overflow_flagged);

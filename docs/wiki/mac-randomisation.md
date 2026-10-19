@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/seqnum.md`, `docs/views/pnl.md`, `docs/views/probe.md`, `include/seqnum_track.h`, `src/seqnum_track.c`, `tests/test_seqnum_track.c`, issue #94.
 
-**Last updated**: 2026-09-25 (#94 — correlation honesty).
+**Last updated**: 2026-10-19 (#129 — client MLDs now resolved).
 
 ---
 
@@ -147,6 +147,11 @@ purpose. See [[retention]].
   time — and this now cuts both ways: hopping makes trails look
   interleaved, which the exclusivity test rejects.
 - Wi-Fi 7 MLDs structurally — independent sequence spaces per link.
+  The Multi-Link Element supplies the mapping instead (`wifi_mld` in
+  [[jsonl-schema]]): per-link addresses resolve to the MLD MAC. Until
+  #129 that covered AP MLDs only; a client MLD's association-request
+  MLE was refused by a misread Presence Bitmap bit, so a Wi-Fi 7
+  handset's links stayed separate devices.
 
 ## How it pairs with other views
 

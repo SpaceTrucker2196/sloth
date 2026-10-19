@@ -81,17 +81,37 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
      * not one, which is worse than not decoding it at all. */
     if (type != MLE_TYPE_BASIC) return 0;
 
-    /* Presence bit 4 (Control bit 4) is MLD MAC Address Present. The
-     * Basic variant effectively always sets it, but a frame that does
-     * not is one we cannot take an identity from. */
-    if (!(ctl & 0x0010)) return 0;
+    /* Control bits 4-15 are the Presence Bitmap, and in the Basic
+     * variant bit 4 is Link ID Info Present — NOT "MLD MAC Address
+     * Present" (#129). The Basic MLE's MLD MAC Address is unconditional:
+     * the first subfield of Common Info after Common Info Length.
+     * "MLD MAC Address Present" is a Probe Request / Reconfiguration
+     * variant bit, and those variants are refused above.
+     *
+     * Until #129 this function refused a Basic MLE with bit 4 clear.
+     * AP MLDs set it in Beacon/Probe Response, so the AP side worked;
+     * a non-AP MLD's (Re)Association Request MLE leaves it clear, so
+     * the client path in src/assoc_track.c never recorded a client MLD.
+     *
+     * Bit assignments from hostapd src/common/ieee802_11_defs.h
+     * (BASIC_MULTI_LINK_CTRL_PRES_LINK_ID 0x0010, then BSS Parameters
+     * Change Count 0x0020, Medium Synchronization Delay 0x0040, EML
+     * Capabilities 0x0080, MLD Capabilities 0x0100, AP MLD ID 0x0200)
+     * and Wireshark epan/dissectors/packet-ieee80211.c ("Link ID Info
+     * Present" mask 0x0010; Common Info reads MLD MAC unconditionally,
+     * then Link ID Info when present). The two agree; the paywalled
+     * IEEE 802.11be-2024 text itself was not read.
+     *
+     * The Link ID Info octet is not decoded here: Link Info is found
+     * through the declared Common Info Length below, which already
+     * steps over it and every other optional field the bitmap names. */
 
     int common_off = 3;                 /* after ExtID + Control */
 
-    /* The MLD MAC Address always sits at this fixed offset once the
-     * presence bit above is set — its position does not depend on the
-     * Common Info Length value at all, so reading it is safe whatever
-     * that attacker-controlled byte claims. `len >= 10` (checked above)
+    /* The MLD MAC Address always sits at this fixed offset in a Basic
+     * MLE — its position does not depend on the Common Info Length
+     * value or the Presence Bitmap, so reading it is safe whatever
+     * those attacker-controlled bytes claim. `len >= 10` (checked above)
      * guarantees the six bytes exist regardless of what follows. */
     memcpy(out->mld_mac, ie_body + common_off + 1, 6);
     if (!mac_is_usable(out->mld_mac)) return 0;
