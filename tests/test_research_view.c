@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sqlite3.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "coverage.h"
 #include "query.h"
@@ -49,12 +50,19 @@ static void test_no_alerts_is_no_rows(void) {
     research_coverage_snapshot(&s, NULL);
     ASSERT_EQ(s.research_cov_count, 0);
     ASSERT_EQ(s.research_open, 0);
-    view_research_draw(&s);            /* must not crash on empty */
+    view_research_draw(&s);
+    ASSERT_LINE_HAS(0, "Research corpus: not loaded");
 }
 
 static void test_null_state_is_safe(void) {
+    /* A NULL state is ignored, and so is a NULL corpus: the snapshot of
+     * a real state with one alert still lands. ASan is what would catch
+     * the NULL being dereferenced. */
     research_coverage_snapshot(NULL, NULL);
-    ASSERT(1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    add_alert(&s, ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, "B", 1);
+    research_coverage_snapshot(&s, NULL);
+    ASSERT_EQ(s.research_cov_count, 1);
 }
 
 static void test_one_row_per_kind_not_per_alert(void) {
@@ -401,11 +409,22 @@ static void test_draw_at_every_selection(void) {
     add_alert(&s, ALERT_TYPE_PORT_SCAN,  ALERT_SEV_WARN, "B", 1);
     add_alert(&s, ALERT_TYPE_DNS_TUNNEL, ALERT_SEV_LOW,  "C", 1);
     research_coverage_snapshot(&s, NULL);
-    for (int i = 0; i < s.research_cov_count; i++) {
+    static const char *const kind[] = {
+        "ALERT_TYPE_EVIL_TWIN", "ALERT_TYPE_PORT_SCAN", "ALERT_TYPE_DNS_TUNNEL",
+    };
+    ASSERT_EQ(s.research_cov_count, 3);
+    for (int i = 0; i < s.research_cov_count && i < 3; i++) {
         s.research_sel = i;
+        tui_test_erase();
         view_research_draw(&s);
+        /* The '>' cursor and the detail pane both follow the selection. */
+        char want[64];
+        snprintf(want, sizeof(want), "sources for %s", kind[i]);
+        ASSERT_SCREEN_HAS(want);
+        int y = runner_screen_find(kind[i]);
+        ASSERT(y >= 0);
+        ASSERT_EQ(runner_find_col(y, ">"), 0);
     }
-    ASSERT(1);
 }
 
 void run_research_view_tests(void);
