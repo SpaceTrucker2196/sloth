@@ -1,8 +1,10 @@
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "deauth_snoop.h"
@@ -781,7 +783,9 @@ static void test_snapshot_clamps_sel(void) {
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_deauth_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Deauth/Disassoc events: 0");
+    ASSERT(!runner_line_has(0, "BTM steers"));
+    ASSERT_SCREEN_HAS("(no deauth/disassoc frames seen on monitor iface)");
 }
 
 static void test_view_draw_normal(void) {
@@ -792,7 +796,15 @@ static void test_view_draw_normal(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     deauth_snapshot(&s);
     view_deauth_draw(&s);
-    ASSERT(1);
+    /* The Last column is an age against the wall clock while the
+     * records use the test clock, so it is not asserted. */
+    ASSERT_LINE_HAS(0, "Deauth/Disassoc events: 2");
+    ASSERT_SCREEN_LACKS("(no deauth/disassoc frames");
+    int a = runner_screen_find("Unspecified");
+    int b = runner_screen_find("4WHS-timeout");
+    ASSERT(a >= 0 && b >= 0);
+    ASSERT_LINE_HAS(b, "ff:ff:ff:ff:ff:ff");
+    ASSERT_LINE_HAS(a, "DEAUTH");
 }
 
 static void test_view_draw_with_flood(void) {
@@ -929,7 +941,21 @@ static void test_view_draw_btm_table_full(void) {
     for (int i = 0; i < MAX_BTM_PAIRS; i++) seed_btm_row(&s, i % 5);
     ASSERT_EQ(s.btm_steer_count, MAX_BTM_PAIRS);
     view_deauth_draw(&s);
-    ASSERT(1);
+    /* Every pair is accounted for: the rows that fit, plus the
+     * "... N more" line for the rest, and nothing past the last row. */
+    ASSERT_LINE_HAS(0, "BTM steers: 128");
+    int shown = 0, more = -1;
+    char line[4096];
+    for (int y = 0; y < tui_test_rows(); y++) {
+        tui_test_line(y, line, sizeof(line));
+        if (strstr(line, "12:00:00:00:00:bc")) shown++;
+        const char *m = strstr(line, "... ");
+        if (m) more = atoi(m + 4);
+    }
+    ASSERT(shown > 0);
+    ASSERT(more > 0);
+    ASSERT_EQ(shown + more, MAX_BTM_PAIRS);
+    ASSERT(shown < tui_test_rows());
 }
 
 /* ── view_deauth_key tests ───────────────────────────────── */
