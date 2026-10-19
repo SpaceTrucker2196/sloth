@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/procs.h"
 
@@ -137,7 +138,8 @@ void test_procs_draw_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Processes: 0");
+    ASSERT_SCREEN_HAS("(no connections)");
 }
 
 void test_procs_draw_with_data(void) {
@@ -148,7 +150,13 @@ void test_procs_draw_with_data(void) {
     push_conn(&s, 200, "sshd",  PROTO_TCP, 22);
     push_conn(&s,   0, "",      PROTO_UDP, 53);
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Processes: 3");
+    /* Two curl conns fold into one row listing both ports. */
+    ASSERT_LINE_HAS(runner_screen_find("curl"), "100      2     2     0");
+    ASSERT_LINE_HAS(runner_screen_find("curl"), "443 80");
+    ASSERT_LINE_HAS(runner_screen_find("sshd"), "200      1     1     0");
+    /* The unresolved bucket sorts last. */
+    ASSERT(runner_screen_find("(unresolved)") > runner_screen_find("sshd"));
 }
 
 /* ── detail panel key handler tests ──────────────────── */
@@ -212,11 +220,18 @@ void test_proc_detail_blocks_nav(void) {
 void test_proc_detail_draw_no_crash(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
-    push_conn(&s, 99, "test", PROTO_TCP, 443);
+    /* A PID above any pid_max, so /proc has no entry for it and the
+     * pane renders the same on every host — a real PID would print
+     * whatever that host's process happens to be. */
+    push_conn(&s, 2147483646, "test", PROTO_TCP, 443);
     s.proc_sel    = 0;
     s.proc_detail = 1;
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "PROCESS DETAIL");
+    ASSERT_SCREEN_HAS("Name:    test");
+    ASSERT_SCREEN_HAS("PID:     2147483646");
+    ASSERT_SCREEN_HAS("CONNECTIONS (1)");
+    ASSERT_SCREEN_HAS(":https");
 }
 
 void test_proc_detail_draw_back_to_list(void) {
