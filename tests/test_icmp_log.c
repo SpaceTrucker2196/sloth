@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "icmp_log.h"
 #include "views/icmp.h"
@@ -206,7 +207,9 @@ static void test_view_draw_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_icmp_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "ICMP messages: 0");
+    ASSERT_LINE_HAS(1, "Seq/Code");
+    ASSERT_SCREEN_HAS("(no ICMP messages seen)");
 }
 
 static void test_view_draw_populated(void) {
