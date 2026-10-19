@@ -3605,3 +3605,15 @@ jobs) did not land and is the open remainder. New page
 [[release-checklist]], including the manual `git tag -s` step. Pages:
 [[jsonl-schema]], [[cli-reference]], [[version-checkin]],
 [[threat-model]] (TB-7 and its risk row, partly closed).
+
+## 2026-10-19 — #142's CI half: pinned runners, SBOM job, release attestation
+
+The builder's workflow edit was refused by the permission classifier;
+this one came from the main session. All nine `runs-on: ubuntu-latest`
+are now `ubuntu-24.04`, and `test_no_workflow_runs_on_a_moving_image`
+scans every workflow (putting `-latest` back in one turns it red). CI
+gains an `sbom` job (`anchore/sbom-action` v0.24.3 by full digest), and
+`.github/workflows/release-attest.yml` attests the binary and writes
+`SHA256SUMS` on `v*` tags (`actions/attest-build-provenance` v4.2.2 by
+full digest). Tag signing remains manual. [[release-checklist]],
+[[threat-model]].

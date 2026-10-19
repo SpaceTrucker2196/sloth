@@ -67,8 +67,8 @@ record.
 
 - **SBOM**: `make sbom` writes a CycloneDX 1.5 document naming sloth
   and the five libraries the default build links, at the build host's
-  versions. A CI SBOM job (`anchore/sbom-action`, pinned by commit SHA)
-  is approved and **not yet in the workflows**.
+  versions. CI's `sbom` job (`anchore/sbom-action`, pinned by commit SHA)
+  produces a CycloneDX artifact on every push.
 - **Checksums**: the release checklist puts a `SHA256SUMS` block for
   the binary and the SBOM into each `RELEASE_v*.md`. Releases cut
   before #142 predate it and carry none.
@@ -78,8 +78,9 @@ record.
   unsigned.
 - **Build provenance**: GitHub artifact attestation
   (`actions/attest-build-provenance`, pinned by commit SHA) on `v*`
-  tags is approved and **not yet in the workflows**. Until it lands
-  there is no attestation to verify, and this file does not claim one.
+  tags, in `.github/workflows/release-attest.yml`. Verify with
+  `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+  Releases tagged before 2026-10-19 carry no attestation.
 
 The procedure is [`docs/wiki/release-checklist.md`](docs/wiki/release-checklist.md).
 

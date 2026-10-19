@@ -148,11 +148,8 @@ static int comment_names_a_version(const char *c) {
  * value (`[self-hosted, ubuntu-latest]`) is caught too: the check is
  * for the label anywhere in the value, not for the value's shape.
  *
- * Only the classifier is asserted today. The whole-tree assertion —
- * every `runs-on:` in .github/ free of `-latest` — cannot pass until
- * the workflows themselves move to `ubuntu-24.04`, and that edit did
- * not land with #142's first slice; it is the follow-up that turns
- * this into a guard. A test that is red on arrival is not shipped.
+ * The whole-tree assertion below went live with the workflow edit that
+ * moved every runner to `ubuntu-24.04` (#142's CI half).
  */
 static int runs_on_is_latest(const char *line, int *is_runs_on) {
     const char *p = line;
@@ -348,10 +345,44 @@ static void test_runner_classifier_refuses_moving_images(void) {
     ASSERT_EQ(ro, 0);
 }
 
+static void test_no_workflow_runs_on_a_moving_image(void) {
+    DIR *d = opendir(CP_DIR);
+    struct dirent *e;
+    int files = 0, runs_on = 0, moving = 0;
+    ASSERT(d != NULL);
+    if (!d) return;
+    while ((e = readdir(d)) != NULL) {
+        char path[512];
+        if (!is_workflow_file(e->d_name)) continue;
+        snprintf(path, sizeof(path), "%s/%.200s", CP_DIR, e->d_name);
+        char *buf = slurp(path);
+        if (!buf) continue;
+        files++;
+        int lineno = 0;
+        for (char *line = buf, *next; line && *line; line = next) {
+            next = strchr(line, '\n');
+            if (next) *next++ = '\0';
+            lineno++;
+            int ro = 0;
+            if (runs_on_is_latest(line, &ro)) {
+                moving++;
+                fprintf(stderr, "    moving runner image %s:%d: %s\n", path, lineno, line);
+            }
+            runs_on += ro;
+        }
+        free(buf);
+    }
+    closedir(d);
+    ASSERT_GE(files, CP_MIN_FILES);
+    ASSERT_GE(runs_on, files);      /* every workflow has a runs-on */
+    ASSERT_EQ(moving, 0);
+}
+
 void run_ci_pin_tests(void) {
     TEST_SUITE("CI action pins (#95)");
     RUN_TEST(test_classifier_separates_pinned_from_moving);
     RUN_TEST(test_every_workflow_action_is_digest_pinned);
     TEST_SUITE("CI runner images (#142)");
     RUN_TEST(test_runner_classifier_refuses_moving_images);
+    RUN_TEST(test_no_workflow_runs_on_a_moving_image);
 }

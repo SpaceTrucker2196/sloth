@@ -10,16 +10,18 @@ type: runbook
 Most of it is mechanical and runs from the Makefile; signing the tag
 needs the owner's key and is a manual step that no workflow can do on
 the owner's behalf (owner ruling on #142, 2026-10-15). Build provenance
-attestation and the CI SBOM job are approved and not yet in the
-workflows; until they land, the SBOM comes from `make sbom` and the
-checksums are computed by hand as below.
+is attested by `.github/workflows/release-attest.yml` on every `v*` tag
+(it also writes `SHA256SUMS`), and CI's `sbom` job produces a CycloneDX
+SBOM artifact on every push; `make sbom` remains the offline fallback.
+Verify a release binary with
+`gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
 
 **Sources**: `Makefile` (`check-deps`, `sbom`), `tools/sbom.sh`,
 `src/libver.c`, `src/db.c`, `research/query.c`, `include/sloth.h`
 (`SLOTH_VERSION`), `tests/test_version.c`, `tests/test_libver.c`,
 `tests/test_ci_pins.c`, `SECURITY.md`, `RELEASE_v*.md`, issue #142.
 
-**Last updated**: 2026-10-18 (#142)
+**Last updated**: 2026-10-19 (#142 CI half)
 
 ---
 

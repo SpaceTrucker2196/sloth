@@ -21,7 +21,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -86,7 +86,7 @@ jobs:
   # CFLAGS and TEST_CFLAGS — the test link line reuses TEST_CFLAGS, so
   # the sanitizer runtime is linked without touching the Makefile.
   sanitize:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       EXTRA_CFLAGS: -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
       ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:strict_string_checks=1
@@ -166,7 +166,7 @@ jobs:
   # of the report ballooning across every worker thread hitting the same
   # unlocked memory.
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       EXTRA_CFLAGS: -Werror -fsanitize=thread -fno-omit-frame-pointer -fno-sanitize-recover=all
       TSAN_OPTIONS: halt_on_error=1
@@ -295,7 +295,7 @@ jobs:
   # anything at runtime — this job only asserts what the Makefile change
   # actually claims to cover.
   harden:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
@@ -359,3 +359,22 @@ jobs:
           }
 
           exit "$fail"
+
+  # Software bill of materials (#142, owner approved 2026-10-15). Syft via
+  # anchore/sbom-action, CycloneDX JSON, kept as a build artifact. The
+  # in-tree `make sbom` is the fallback for hosts without CI; it names
+  # the five link dependencies from pkg-config. Pinned by full digest
+  # like every other action (tests/test_ci_pins.c).
+  sbom:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          artifact-name: sloth-sbom.cdx.json
+

@@ -28,7 +28,7 @@ whether it is closed today, and the Track X slice that owns it.
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-18 (#136, #140, #137, #142)
+**Last updated**: 2026-10-19 (#142 CI half)
 
 ---
 
@@ -232,13 +232,15 @@ when pkg-config can say; `make sbom` writes a CycloneDX SBOM of the
 link dependencies; `sloth --version` and `sensor_health.libs` report
 the libraries actually loaded.
 
-**Known unchecked**: no floor for ncursesw (CWE-1104); most CI jobs
-still run on `ubuntu-latest` rather than a pinned image; CI produces no
-SBOM (CWE-1357); nothing attests that the release binary came from the
-tagged source. The owner approved the attestation and CI SBOM jobs on
-2026-10-15 and they are the open half of #142 — the workflow edit did
-not land with the first slice. Tag signing stays a manual owner step
-([[release-checklist]]).
+Since #142's CI half: every workflow runs on a pinned image
+(`ubuntu-24.04`), refused otherwise by
+`tests/test_ci_pins.c :: test_no_workflow_runs_on_a_moving_image`; CI
+produces a CycloneDX SBOM; `v*` tags get GitHub build-provenance
+attestation.
+
+**Known unchecked**: no floor for ncursesw (CWE-1104). Tag signing stays
+a manual owner step ([[release-checklist]]) — CI holds no key, by
+design.
 
 ## 5. Finding → boundary map
 

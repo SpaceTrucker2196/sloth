@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   code-review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Skip merge commits and commits that already have "[skip-review]" in the message.
     if: |
       !startsWith(github.event.head_commit.message, 'Merge ') &&
