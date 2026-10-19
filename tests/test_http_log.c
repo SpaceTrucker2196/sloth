@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "http_log.h"
 #include "sensor_health.h"
@@ -192,12 +193,13 @@ static void test_snapshot_clamps_sel_at_boundary_and_empty(void) {
     ASSERT_EQ(s.http_log_sel, 0);
 }
 
-/* ── view_http_draw smoke tests ──────────────────────────── */
+/* ── view_http_draw ───────────────────────────────────────── */
 
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_http_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "HTTP requests: 0");
+    ASSERT_SCREEN_HAS("(no HTTP requests seen");
 }
 
 static void test_view_draw_populated(void) {
@@ -210,7 +212,12 @@ static void test_view_draw_populated(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     http_log_snapshot(&s);
     view_http_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "HTTP requests: 2");
+    int post = runner_screen_find("auth.svc.local");
+    int get  = runner_screen_find("api.example.com");
+    ASSERT(post >= 0 && post < get);          /* newest first */
+    ASSERT_LINE_HAS(post, "192.168.1.10     POST     auth.svc.local            /login");
+    ASSERT_LINE_HAS(get,  "192.168.1.5      GET      api.example.com           /v1/users");
 }
 
 /* ── view_http_key tests ─────────────────────────────────── */
