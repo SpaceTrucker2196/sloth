@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/conns.h"
 
@@ -275,26 +276,33 @@ void test_draw_scan_banner_and_rates(void) {
     }
     snprintf(s.scan_entries[0].ip, sizeof(s.scan_entries[0].ip), "%s", s.conns[0].remote_addr);
 
-    FILE *devnull = fopen("/dev/null", "w");
-    FILE *old_stdout = stdout;
-    if (devnull) stdout = devnull;
-
+    /* Port names come from the host's services database, so no
+     * assertion here reads one; addresses, the banner and the rate
+     * columns are sloth's own. */
     s.conn_filter = CONN_FILTER_ALL;
     s.conn_sort = CONN_SORT_STATE;
     s.dns_enabled = 1;
     conn_rebuild_idx(&s);
     view_conns_draw(&s);
+    ASSERT_LINE_HAS(0, "Conns: 3  filter: ALL");
+    /* The banner lists the first four flagged IPs and counts the rest. */
+    ASSERT_LINE_HAS(1, "[SCAN ALERT]  5 suspicious IPs: 203.0.113.10(10)");
+    ASSERT_LINE_HAS(1, "198.51.100.13(13)    +1 more");
+    int y = runner_screen_find("203.0.113.10:");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, " !!  TCP    ESTABLISHED      301  curl");
+    ASSERT_LINE_HAS(y, "2.0K\xe2\x86\x93 1.0K\xe2\x86\x91");
+    ASSERT_SCREEN_HAS("8.8.8.8:");
 
     s.conn_filter = CONN_FILTER_TCP;
     s.dns_enabled = 0;
     conn_rebuild_idx(&s);
+    tui_test_erase();
     view_conns_draw(&s);
-
-    if (devnull) {
-        stdout = old_stdout;
-        fclose(devnull);
-    }
-    ASSERT(1);
+    /* The TCP filter drops the UDP conn and says so in the count. */
+    ASSERT_LINE_HAS(0, "Conns: 2/3  filter: TCP");
+    ASSERT_SCREEN_LACKS("8.8.8.8:");
+    ASSERT_SCREEN_HAS("2001:db8::1:");
 }
 
 void run_conns_tests(void) {
