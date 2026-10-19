@@ -1,8 +1,21 @@
 #include <string.h>
+#include <stdlib.h>
 #include "runner.h"
+#include "sloth.h"
 #include "dot11_frame.h"
 #include "dot11_data.h"
 #include "frame_build.h"
+#include "radiotap.h"        /* RT_F_DATAPAD */
+#include "capture/probe.h"   /* the real on_probe_frame() under WITH_PCAP */
+#include "pm_forge.h"
+#include "queue_evict.h"
+#include "fragattack.h"
+#include "eapol_log.h"
+#include "deauth_snoop.h"
+#include "assoc_track.h"
+#include "beacon_snoop.h"
+#include "action_snoop.h"
+#include "ctrl_frames.h"
 
 /*
  * The one-decode 802.11 frame view — issue #122.
@@ -454,6 +467,520 @@ static void test_fcs_is_the_802_3_crc(void) {
     ASSERT_EQ(buf[12], 0xcb);
 }
 
+/* ── Observers take the view (#130) ───────────────────────────────────
+ *
+ * Every 802.11 observer now has a view entry, which on_probe_frame()
+ * calls, and keeps its (dot11, len) entry as a wrapper for the tests
+ * and fuzz harnesses. One case per module: both entries over the same
+ * hand-built frame, each against the same LITERAL expectation taken
+ * from the clause, never from the other entry — so a view entry that
+ * drifted from the byte entry, or both drifting together, goes red.
+ *
+ * Data observers get a QoS+HTC frame (the §9.2.4.1.10 case) and a WDS
+ * frame (Table 9-26's four-address row, which has no single BSSID).
+ * Management observers get +HTC and a frame with both DS bits set,
+ * which a management header ignores: it is still three-address, 24 or
+ * 28 octets (§9.3.3.1), so the expectation there is the SAME output. */
+
+static const uint8_t M_A4[6] = {0x02, 0x00, 0x5e, 0x00, 0x00, 0x05};
+#define OBS_T 1700000000   /* a sentinel capture time, not a clock read */
+
+/* One frame, both entries. `via` 0 is the byte wrapper, 1 the view. */
+typedef struct { const uint8_t *p; int n; } obs_frame_t;
+
+static void obs_decode(const obs_frame_t *fr, dot11_frame_t *v) {
+    dot11_frame_decode(fr->p, fr->n, NULL, v);
+}
+
+/* A data frame with QoS Control (TID 5), the stated DS bits and
+ * optional Address 4 / HT Control, then `body`. */
+static int obs_data(uint8_t *buf, int cap, uint8_t ds, int a4, int htc,
+                    uint8_t extra, const uint8_t *a1, const uint8_t *a2,
+                    const uint8_t *a3, uint16_t seq_ctl,
+                    const uint8_t *body, int body_n) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 8;
+    h.flags = (uint8_t)(ds | extra | (htc ? FB_ORDER : 0));
+    h.a1 = a1; h.a2 = a2; h.a3 = a3; h.a4 = M_A4; h.seq_ctl = seq_ctl;
+    h.a4_present = a4; h.qos_present = 1; h.qos = 0x0005;
+    h.htc_present = htc;
+    fb_dot11_hdr(&b, &h);
+    if (body && body_n > 0) fb_bytes(&b, body, body_n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_pm_forge_view_and_bytes_agree(void) {
+    uint8_t f[96];
+    /* STA -> AP (ToDS): A1 BSSID, A2 the station. */
+    int n = obs_data(f, sizeof f, FB_TODS, 0, 1, 0, M_AP, M_STA, M_DA,
+                     0x0100, NULL, 0);
+    ASSERT_EQ(n, 30);                         /* 24 + QoS 2 + HTC 4 */
+    obs_frame_t fr = { f, n };
+    for (int via = 0; via < 2; via++) {
+        pm_forge_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) pm_forge_observe_frame(&v, OBS_T, 0);
+        else     pm_forge_observe(f, n, OBS_T, 0);
+        pm_forge_t e;
+        ASSERT_EQ(pm_forge_lookup(M_STA, &e), 1);
+        ASSERT_EQ(memcmp(e.bssid, M_AP, 6), 0);
+        ASSERT_EQ(e.last_pm0_data_tid, 5);
+    }
+    /* WDS: no single station to attribute a PwrMgt declaration to. */
+    n = obs_data(f, sizeof f, FB_TODS | FB_FROMDS, 1, 1, 0, M_AP, M_STA,
+                 M_DA, 0x0100, NULL, 0);
+    ASSERT_EQ(n, 36);
+    fr.n = n;
+    for (int via = 0; via < 2; via++) {
+        pm_forge_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) pm_forge_observe_frame(&v, OBS_T, 0);
+        else     pm_forge_observe(f, n, OBS_T, 0);
+        pm_forge_t e;
+        ASSERT_EQ(pm_forge_lookup(M_STA, &e), 0);
+        ASSERT_EQ(pm_forge_count(), 0);
+    }
+    pm_forge_clear();
+}
+
+static void test_queue_evict_view_and_bytes_agree(void) {
+    uint8_t f[96];
+    /* AP -> STA (FromDS): A1 the station, A2 the BSSID. Sequence 0x55. */
+    int n = obs_data(f, sizeof f, FB_FROMDS, 0, 1, 0, M_STA, M_AP, M_SA,
+                     0x0550, NULL, 0);
+    obs_frame_t fr = { f, n };
+    for (int via = 0; via < 2; via++) {
+        queue_evict_clear();
+        queue_evict_note_session_change(M_AP, M_STA, QUEUE_EVICT_SRC_ASSOC,
+                                        OBS_T, 0);
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) queue_evict_observe_downlink_frame(&v, OBS_T, 1000);
+        else     queue_evict_observe_downlink(f, n, OBS_T, 1000);
+        queue_evict_t e;
+        ASSERT_EQ(queue_evict_lookup(M_AP, M_STA, &e), 1);
+        ASSERT_EQ((int)e.burst_frames, 1);
+        ASSERT_EQ(e.burst_last_seq, 0x55);
+    }
+    /* WDS: not AP -> STA, so not a released downlink frame. */
+    n = obs_data(f, sizeof f, FB_TODS | FB_FROMDS, 1, 1, 0, M_STA, M_AP,
+                 M_SA, 0x0550, NULL, 0);
+    fr.n = n;
+    for (int via = 0; via < 2; via++) {
+        queue_evict_clear();
+        queue_evict_note_session_change(M_AP, M_STA, QUEUE_EVICT_SRC_ASSOC,
+                                        OBS_T, 0);
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) queue_evict_observe_downlink_frame(&v, OBS_T, 1000);
+        else     queue_evict_observe_downlink(f, n, OBS_T, 1000);
+        queue_evict_t e;
+        ASSERT_EQ(queue_evict_lookup(M_AP, M_STA, &e), 1);
+        ASSERT_EQ((int)e.burst_frames, 0);
+    }
+    queue_evict_clear();
+}
+
+static void test_fragattack_view_and_bytes_agree(void) {
+    /* A Protected first fragment, STA -> AP, with a CCMP header whose
+     * PN only the view's body offset (30, past HT Control) reads. */
+    uint8_t body[8 + 16];
+    fb_t bb; fb_init(&bb, body, sizeof body);
+    fb_ccmp_hdr(&bb, 0x000000000102ull, 0);
+    fb_ciphertext(&bb, 16);
+    ASSERT(fb_ok(&bb));
+    uint8_t f[96];
+    int n = obs_data(f, sizeof f, FB_TODS, 0, 1,
+                     FB_PROTECTED | FB_MOREFRAG, M_AP, M_STA, M_DA,
+                     0x0070, body, bb.len);
+    obs_frame_t fr = { f, n };
+    for (int via = 0; via < 2; via++) {
+        frag_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        ASSERT(dot11_frame_ccmp_pn(&v) == 0x0102);
+        if (via) frag_observe_frame(&v, OBS_T);
+        else     frag_observe(f, n, OBS_T);
+        int i = frag_find(M_AP);
+        ASSERT(i >= 0);
+        frag_bss_t row;
+        ASSERT_EQ(frag_bss_copy(i, &row), 1);
+        ASSERT_EQ((int)row.protected_frames, 1);
+        ASSERT_EQ(frag_session_count(), 1);
+    }
+    /* WDS crosses two BSSes and is not attributed to a guessed one. */
+    n = obs_data(f, sizeof f, FB_TODS | FB_FROMDS, 1, 1,
+                 FB_PROTECTED | FB_MOREFRAG, M_AP, M_STA, M_DA, 0x0070,
+                 body, bb.len);
+    fr.n = n;
+    for (int via = 0; via < 2; via++) {
+        frag_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) frag_observe_frame(&v, OBS_T);
+        else     frag_observe(f, n, OBS_T);
+        ASSERT_EQ(frag_bss_count(), 0);
+    }
+    frag_clear();
+}
+
+/* EAPOL-Key M1 (§12.7.2 Figure 12-32): Key Information Pairwise | ACK,
+ * descriptor version 2, a nonce, no MIC, no Key Data. */
+static int obs_eapol_m1(uint8_t *out, int cap) {
+    fb_t b; fb_init(&b, out, cap);
+    fb_llc_snap(&b, 0x888E);
+    fb_u8(&b, 0x02); fb_u8(&b, 0x03);         /* version 2, EAPOL-Key */
+    fb_be16(&b, 95);                          /* body length */
+    fb_u8(&b, 0x02);                          /* RSN descriptor */
+    fb_be16(&b, (1 << 7) | (1 << 3) | 0x02);  /* ACK | Pairwise | v2 */
+    fb_be16(&b, 16);                          /* Key Length */
+    for (int i = 0; i < 8; i++)  fb_u8(&b, 0);            /* Replay */
+    for (int i = 0; i < 32; i++) fb_u8(&b, (uint8_t)(0x40 + i)); /* ANonce */
+    for (int i = 0; i < 16 + 8 + 8 + 16; i++) fb_u8(&b, 0); /* IV RSC Rsvd MIC */
+    fb_be16(&b, 0);                           /* Key Data Length */
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_eapol_view_and_bytes_agree(void) {
+    uint8_t body[128];
+    int bn = obs_eapol_m1(body, sizeof body);
+    ASSERT_EQ(bn, 8 + 99);
+    uint8_t f[192];
+    /* AP -> STA: A1 the station, A2 the BSSID. */
+    int n = obs_data(f, sizeof f, FB_FROMDS, 0, 1, 0, M_STA, M_AP, M_AP,
+                     0, body, bn);
+    obs_frame_t fr = { f, n };
+    for (int via = 0; via < 2; via++) {
+        eapol_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        int rc = via ? eapol_observe_frame(&v, -40, 6, OBS_T, 0)
+                     : eapol_observe_dot11(f, n, -40, 6, OBS_T, 0);
+        ASSERT_EQ(rc, 1);
+        sloth_state_t *s = calloc(1, sizeof(*s));
+        ASSERT(s != NULL);
+        if (!s) return;
+        eapol_snapshot(s);
+        ASSERT_EQ(s->eapol_count, 1);
+        ASSERT_EQ(s->eapol_events[0].msg_num, 1);
+        ASSERT_EQ(memcmp(s->eapol_events[0].bssid,   M_AP,  6), 0);
+        ASSERT_EQ(memcmp(s->eapol_events[0].sta_mac, M_STA, 6), 0);
+        free(s);
+    }
+    /* WDS: no single BSSID to file a handshake under. */
+    n = obs_data(f, sizeof f, FB_TODS | FB_FROMDS, 1, 1, 0, M_STA, M_AP,
+                 M_AP, 0, body, bn);
+    fr.n = n;
+    for (int via = 0; via < 2; via++) {
+        eapol_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        int rc = via ? eapol_observe_frame(&v, -40, 6, OBS_T, 0)
+                     : eapol_observe_dot11(f, n, -40, 6, OBS_T, 0);
+        ASSERT_EQ(rc, 0);
+        ASSERT_EQ(eapol_event_count(), 0);
+    }
+    eapol_clear();
+}
+
+/* A management frame, A1 = DA, A2 = SA, A3 = BSSID, with the stated
+ * flags and HT Control, then `body`. */
+static int obs_mgmt(uint8_t *buf, int cap, uint8_t sub, uint8_t flags,
+                    int htc, uint16_t seq_ctl, const uint8_t *body, int bn) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_mgmt(&b, sub, (uint8_t)(flags | (htc ? FB_ORDER : 0)),
+            M_DA, M_SA, M_AP, seq_ctl, htc);
+    if (body && bn > 0) fb_bytes(&b, body, bn);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_deauth_view_and_bytes_agree(void) {
+    static const uint8_t reason[2] = { 0x07, 0x00 };   /* Class 3 frame */
+    for (int ds = 0; ds < 2; ds++) {
+        uint8_t f[64];
+        int n = obs_mgmt(f, sizeof f, 12, ds ? (FB_TODS | FB_FROMDS) : 0,
+                         1, 0x1230, reason, 2);
+        ASSERT_EQ(n, 30);
+        obs_frame_t fr = { f, n };
+        for (int via = 0; via < 2; via++) {
+            deauth_frame_t d;
+            dot11_frame_t v; obs_decode(&fr, &v);
+            int rc = via ? deauth_parse_frame(&v, &d) : deauth_parse(f, n, &d);
+            ASSERT_EQ(rc, 1);
+            ASSERT_EQ(d.reason_valid, 1);
+            ASSERT_EQ(d.reason, 7);
+            ASSERT_EQ(d.seq, 0x123);
+            ASSERT_EQ(d.frag, 0);
+            ASSERT_EQ(d.subtype, 12);
+            ASSERT_EQ(memcmp(d.dst,   M_DA, 6), 0);
+            ASSERT_EQ(memcmp(d.src,   M_SA, 6), 0);
+            ASSERT_EQ(memcmp(d.bssid, M_AP, 6), 0);
+        }
+    }
+}
+
+static void test_assoc_request_view_and_bytes_agree(void) {
+    uint8_t body[32];
+    fb_t bb; fb_init(&bb, body, sizeof body);
+    fb_le16(&bb, 0x0431);                     /* Capability Information */
+    fb_le16(&bb, 10);                         /* Listen Interval */
+    fb_ssid(&bb, "test-ssid");
+    ASSERT(fb_ok(&bb));
+    for (int ds = 0; ds < 2; ds++) {
+        uint8_t f[96];
+        int n = obs_mgmt(f, sizeof f, 0, ds ? (FB_TODS | FB_FROMDS) : 0,
+                         1, 0, body, bb.len);
+        obs_frame_t fr = { f, n };
+        for (int via = 0; via < 2; via++) {
+            assoc_req_t r;
+            dot11_frame_t v; obs_decode(&fr, &v);
+            int rc = via ? assoc_request_parse_frame(&v, &r)
+                         : assoc_request_parse(f, n, &r);
+            ASSERT_EQ(rc, 1);
+            ASSERT_EQ(r.is_reassoc, 0);
+            ASSERT_EQ(r.listen_interval, 10);
+            ASSERT_EQ(r.capability_info, 0x0431);
+            ASSERT(strcmp(r.requested_ssid, "test-ssid") == 0);
+            ASSERT_EQ(memcmp(r.sta,   M_SA, 6), 0);
+            ASSERT_EQ(memcmp(r.bssid, M_AP, 6), 0);
+        }
+    }
+}
+
+static void test_beacon_view_and_bytes_agree(void) {
+    uint8_t body[48];
+    fb_t bb; fb_init(&bb, body, sizeof body);
+    fb_beacon_fixed(&bb, 0x0000000000abcdefull, 100, 0x0001);
+    fb_ssid(&bb, "test-ssid");
+    ASSERT(fb_ok(&bb));
+    for (int ds = 0; ds < 2; ds++) {
+        uint8_t f[96];
+        int n = obs_mgmt(f, sizeof f, 8, ds ? (FB_TODS | FB_FROMDS) : 0,
+                         1, 0, body, bb.len);
+        obs_frame_t fr = { f, n };
+        for (int via = 0; via < 2; via++) {
+            char ssid[33], enc[10]; uint8_t bssid[6]; int ch = -1;
+            uint16_t bms = 0; beacon_rsn_t rsn;
+            dot11_frame_t v; obs_decode(&fr, &v);
+            int rc = via
+                ? beacon_parse_frame(&v, -40, ssid, bssid, &ch, enc, &bms, &rsn)
+                : beacon_parse(f, n, -40, ssid, bssid, &ch, enc, &bms, &rsn);
+            ASSERT_EQ(rc, 1);
+            ASSERT(strcmp(ssid, "test-ssid") == 0);
+            ASSERT_EQ(memcmp(bssid, M_AP, 6), 0);
+            ASSERT_EQ(bms, 102);              /* 100 TU * 1024 / 1000 */
+            ASSERT(strcmp(enc, "OPEN") == 0);
+            ASSERT_EQ(rsn.has_tsf, 1);
+            ASSERT(rsn.tsf == 0xabcdefull);
+        }
+    }
+}
+
+static void test_action_view_and_bytes_agree(void) {
+    /* Spectrum Management / Channel Switch Announcement (§9.6.2.6):
+     * Category 0, Action 4, then the CSA element (tag 37): mode 1, new
+     * channel 11, count 5. A2 (the transmitter) differs from A3 (the
+     * BSS it speaks for), so the recorded roles are checkable. */
+    static const uint8_t body[] = { 0x00, 0x04, 37, 3, 0x01, 11, 5 };
+    for (int ds = 0; ds < 2; ds++) {
+        uint8_t f[64];
+        int n = obs_mgmt(f, sizeof f, 13, ds ? (FB_TODS | FB_FROMDS) : 0,
+                         1, 0, body, (int)sizeof body);
+        obs_frame_t fr = { f, n };
+        for (int via = 0; via < 2; via++) {
+            csa_clear();
+            dot11_frame_t v; obs_decode(&fr, &v);
+            if (via) action_observe_frame(&v, OBS_T);
+            else     action_observe(f, n, OBS_T);
+            sloth_csa_event_t e;
+            ASSERT_EQ(csa_latest(M_AP, OBS_T, 60, &e), 1);
+            ASSERT_EQ(e.new_channel, 11);
+            ASSERT_EQ(e.switch_count, 5);
+            ASSERT_EQ(memcmp(e.ta, M_SA, 6), 0);
+        }
+    }
+    csa_clear();
+}
+
+static void test_ctrl_view_and_bytes_agree(void) {
+    /* Block Ack Request (§9.3.1.7): RA, TA, BAR Control with TID 3 in
+     * B12-B15, then Starting Sequence Control with SSN 100. Order and
+     * both DS bits are set: a control frame has no HT Control or
+     * Address 4 to add, so the layout must not move. */
+    uint8_t f[32];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_ctrl_hdr(&b, 8, FB_ORDER | FB_TODS | FB_FROMDS, 0x002c, M_AP, M_STA);
+    fb_le16(&b, 0x3000);
+    fb_le16(&b, (uint16_t)(100 << 4));
+    ASSERT(fb_ok(&b));
+    obs_frame_t fr = { f, b.len };
+    for (int via = 0; via < 2; via++) {
+        ctrl_clear();
+        dot11_frame_t v; obs_decode(&fr, &v);
+        if (via) ctrl_observe_frame(&v, 6, OBS_T);
+        else     ctrl_observe(f, b.len, 6, OBS_T);
+        sloth_bar_state_t s;
+        ASSERT_EQ(bar_find(M_AP, M_STA, 3, &s), 1);
+        ASSERT_EQ((int)s.total_bars, 1);
+        ASSERT_EQ(s.last_ssn, 100);
+    }
+    ctrl_clear();
+}
+
+/* dot11_frame_depad() — the view carried onto the depadded copy. */
+static void test_depad_moves_the_view_without_a_decode(void) {
+    uint8_t f[64];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_hdr_t h; memset(&h, 0, sizeof(h));
+    h.type = 2; h.subtype = 8; h.flags = FB_FROMDS;
+    h.a1 = M_STA; h.a2 = M_AP; h.a3 = M_SA; h.qos_present = 1;
+    fb_dot11_hdr(&b, &h);                     /* 26 octets */
+    fb_datapad_to4(&b, 0);                    /* + 2 pad */
+    fb_llc_snap(&b, 0x0800);
+    ASSERT(fb_ok(&b));
+    ASSERT_EQ(b.len, 36);
+    const dot11_rt_hints_t pad = { 0, 1, 0 };
+    dot11_frame_t v;
+    ASSERT_EQ(dot11_frame_decode(f, b.len, &pad, &v), 1);
+    ASSERT_EQ(v.body_off, 28);
+
+    uint8_t copy[64];
+    dot11_frame_decode_count_arm(1);
+    ASSERT_EQ(dot11_frame_depad(&v, copy, sizeof copy, &v), 1);
+    ASSERT_EQ((int)dot11_frame_decode_count(), 0);
+    dot11_frame_decode_count_arm(0);
+    ASSERT(v.p == copy);
+    ASSERT_EQ(v.len, 34);
+    ASSERT_EQ(v.hdr_len, 26);
+    ASSERT_EQ(v.body_off, 26);
+    ASSERT_EQ(v.body_len, 8);
+    ASSERT(v.a1 == copy + 4 && v.a2 == copy + 10 && v.a3 == copy + 16);
+    ASSERT(v.da == copy + 4 && v.bssid == copy + 10 && v.sa == copy + 16);
+    ASSERT_EQ(memcmp(v.bssid, M_AP, 6), 0);
+    ASSERT_EQ(copy[26], 0xAA);                /* LLC right after the header */
+    int off; uint16_t et;
+    ASSERT_EQ(dot11_frame_payload(&v, &off, &et), DOT11_DATA_OK);
+    ASSERT_EQ(off, 34);
+    ASSERT_EQ(et, 0x0800);
+
+    /* Nothing to remove: the view is left exactly as decoded. */
+    dot11_frame_t w, keep;
+    ASSERT_EQ(dot11_frame_decode(copy, 34, NULL, &w), 1);
+    keep = w;
+    ASSERT_EQ(dot11_frame_depad(&w, f, sizeof f, &w), 0);
+    ASSERT(memcmp(&w, &keep, sizeof w) == 0);
+    /* Does not fit: refused, view unchanged. */
+    ASSERT_EQ(dot11_frame_decode(f, 36, &pad, &w), 1);
+    keep = w;
+    ASSERT_EQ(dot11_frame_depad(&w, copy, 33, &w), 0);
+    ASSERT(memcmp(&w, &keep, sizeof w) == 0);
+}
+
+/* ── One decode per frame, observers included (#130) ──────────────────
+ *
+ * The structural claim: on_probe_frame() decodes a frame once and every
+ * observer reads that view. Each type below reaches a different set of
+ * observers; the decode counter must advance by exactly one per frame.
+ * A single observer called through its byte wrapper instead of its view
+ * entry makes it two, which is how this was mutation-checked. */
+
+static int obs_rt(uint8_t *buf, int cap, uint8_t rt_flags,
+                  const uint8_t *frame, int n) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_rt_t rt; memset(&rt, 0, sizeof(rt));
+    rt.has_flags = rt_flags != 0; rt.flags = rt_flags;
+    fb_radiotap(&b, rt_flags ? &rt : NULL);
+    fb_bytes(&b, frame, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static sloth_state_t g_obs_s;
+
+static void test_probe_path_decodes_each_frame_once(void) {
+    enum { NF = 12 };
+    static uint8_t raw[NF][256], wrapped[NF][300];
+    int rn[NF];
+    int k = 0;
+
+    uint8_t bcn[48];
+    fb_t bb; fb_init(&bb, bcn, sizeof bcn);
+    fb_beacon_fixed(&bb, 1, 100, 0x0001);
+    fb_ssid(&bb, "test-ssid");
+    rn[k] = obs_mgmt(raw[k], 256, 8, 0, 1, 0, bcn, bb.len); k++;    /* beacon */
+    uint8_t pr[16]; fb_t pb; fb_init(&pb, pr, sizeof pr);
+    fb_ssid(&pb, "test-ssid");
+    rn[k] = obs_mgmt(raw[k], 256, 4, 0, 0, 0x0010, pr, pb.len); k++; /* probe req */
+    uint8_t ar[32]; fb_t ab; fb_init(&ab, ar, sizeof ar);
+    fb_le16(&ab, 0x0431); fb_le16(&ab, 10); fb_ssid(&ab, "test-ssid");
+    rn[k] = obs_mgmt(raw[k], 256, 0, 0, 1, 0, ar, ab.len); k++;     /* assoc req */
+    uint8_t rs[32]; fb_t rb; fb_init(&rb, rs, sizeof rs);
+    fb_assoc_resp_fixed(&rb, 0x0431, 0, 1); fb_ssid(&rb, "test-ssid");
+    rn[k] = obs_mgmt(raw[k], 256, 1, 0, 0, 0, rs, rb.len); k++;     /* assoc resp */
+    static const uint8_t auth[6] = { 0, 0, 1, 0, 0, 0 };
+    rn[k] = obs_mgmt(raw[k], 256, 11, 0, 0, 0, auth, 6); k++;       /* auth */
+    static const uint8_t rsn7[2] = { 7, 0 };
+    rn[k] = obs_mgmt(raw[k], 256, 12, 0, 1, 0, rsn7, 2); k++;       /* deauth */
+    static const uint8_t csa[] = { 0x00, 0x04, 37, 3, 0x01, 11, 5 };
+    rn[k] = obs_mgmt(raw[k], 256, 13, 0, 1, 0, csa, (int)sizeof csa); k++;
+    uint8_t m1[128];
+    int m1n = obs_eapol_m1(m1, sizeof m1);
+    rn[k] = obs_data(raw[k], 256, FB_FROMDS, 0, 1, 0, M_STA, M_AP, M_AP,
+                     0, m1, m1n); k++;                              /* EAPOL */
+    rn[k] = obs_data(raw[k], 256, FB_TODS | FB_FROMDS, 1, 0, 0, M_STA,
+                     M_AP, M_AP, 0, m1, m1n); k++;                  /* WDS */
+    /* QoS data on a DATAPAD radio: 26-octet header + 2 pad octets. */
+    {
+        fb_t b; fb_init(&b, raw[k], 256);
+        fb_hdr_t h; memset(&h, 0, sizeof(h));
+        h.type = 2; h.subtype = 8; h.flags = FB_FROMDS;
+        h.a1 = M_STA; h.a2 = M_AP; h.a3 = M_AP; h.qos_present = 1;
+        fb_dot11_hdr(&b, &h);
+        fb_datapad_to4(&b, 0);
+        fb_bytes(&b, m1, m1n);
+        rn[k] = fb_ok(&b) ? b.len : -1; k++;
+    }
+    {   /* Block Ack Request */
+        fb_t b; fb_init(&b, raw[k], 256);
+        fb_ctrl_hdr(&b, 8, 0, 0, M_AP, M_STA);
+        fb_le16(&b, 0x3000); fb_le16(&b, (uint16_t)(100 << 4));
+        rn[k] = fb_ok(&b) ? b.len : -1; k++;
+    }
+    {   /* ACK: RA only */
+        fb_t b; fb_init(&b, raw[k], 256);
+        fb_ctrl_hdr(&b, 13, 0, 0, M_AP, NULL);
+        rn[k] = fb_ok(&b) ? b.len : -1; k++;
+    }
+    ASSERT_EQ(k, NF);
+
+    const uint8_t *fs[NF]; int ls[NF];
+    for (int i = 0; i < NF; i++) {
+        ASSERT(rn[i] > 0);
+        ls[i] = obs_rt(wrapped[i], 300, i == 9 ? RT_F_DATAPAD : 0,
+                       raw[i], rn[i]);
+        ASSERT(ls[i] > 0);
+        fs[i] = wrapped[i];
+    }
+
+    memset(&g_obs_s, 0, sizeof(g_obs_s));
+    probe_clear();
+    eapol_clear();
+    csa_clear();
+    ctrl_clear();
+    dot11_frame_decode_count_arm(1);
+    const int got = probe_test_dispatch(&g_obs_s, fs, ls, NULL, NULL, NF);
+    const unsigned long decodes = dot11_frame_decode_count();
+    dot11_frame_decode_count_arm(0);
+    ASSERT_EQ(got, NF);
+    ASSERT_EQ((int)decodes, NF);
+
+    /* And the frames reached their observers: this is not a count of
+     * frames dropped before anything looked at them. */
+    ASSERT_EQ(eapol_event_count(), 2);        /* plain + DATAPAD M1 */
+    sloth_csa_event_t e;
+    ASSERT_EQ(csa_latest(M_AP, 0x7fffffff, 0x7fffffff, &e), 1);
+    sloth_bar_state_t bar;
+    ASSERT_EQ(bar_find(M_AP, M_STA, 3, &bar), 1);
+    probe_clear();
+    eapol_clear();
+    csa_clear();
+    ctrl_clear();
+}
+
 void run_dot11_frame_tests(void) {
     TEST_SUITE("802.11 frame view: header length (#122)");
     RUN_TEST(test_header_length_table);
@@ -479,4 +1006,17 @@ void run_dot11_frame_tests(void) {
     RUN_TEST(test_flags_are_decoded_bit_for_bit);
     RUN_TEST(test_builder_refuses_to_overrun_its_buffer);
     RUN_TEST(test_fcs_is_the_802_3_crc);
+
+    TEST_SUITE("802.11 observers take the view (#130)");
+    RUN_TEST(test_pm_forge_view_and_bytes_agree);
+    RUN_TEST(test_queue_evict_view_and_bytes_agree);
+    RUN_TEST(test_fragattack_view_and_bytes_agree);
+    RUN_TEST(test_eapol_view_and_bytes_agree);
+    RUN_TEST(test_deauth_view_and_bytes_agree);
+    RUN_TEST(test_assoc_request_view_and_bytes_agree);
+    RUN_TEST(test_beacon_view_and_bytes_agree);
+    RUN_TEST(test_action_view_and_bytes_agree);
+    RUN_TEST(test_ctrl_view_and_bytes_agree);
+    RUN_TEST(test_depad_moves_the_view_without_a_decode);
+    RUN_TEST(test_probe_path_decodes_each_frame_once);
 }

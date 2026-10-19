@@ -19,8 +19,19 @@ int dot11_fcs_strip_len(int caplen, int origlen, int fcs_present) {
     return strip > 0 ? strip : 0;
 }
 
+static int           g_count_armed;
+static unsigned long g_count;
+
+void dot11_frame_decode_count_arm(int on) {
+    g_count_armed = on ? 1 : 0;
+    g_count       = 0;
+}
+
+unsigned long dot11_frame_decode_count(void) { return g_count; }
+
 int dot11_frame_decode(const uint8_t *p, int len,
                        const dot11_rt_hints_t *rt, dot11_frame_t *out) {
+    if (g_count_armed) g_count++;
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     out->p        = p;
@@ -38,6 +49,7 @@ int dot11_frame_decode(const uint8_t *p, int len,
     if (!p || len < 2) return 0;
 
     const uint8_t fc0 = p[0], fc1 = p[1];
+    out->proto      = (uint8_t)(fc0 & 0x03);
     out->type       = (uint8_t)((fc0 >> 2) & 0x03);
     out->subtype    = (uint8_t)((fc0 >> 4) & 0x0f);
     out->fc1        = fc1;
@@ -156,6 +168,74 @@ int dot11_frame_decode(const uint8_t *p, int len,
     out->body_len = len - out->body_off;
     if (out->body_len < 0) out->body_len = 0;
     return 1;
+}
+
+/* Moves one pointer that aliased the old frame onto the copy. Only
+ * header fields are ever aliased, and the header is copied unchanged,
+ * so the offset is the same in both. */
+static const uint8_t *rebase(const uint8_t *ptr, const uint8_t *from,
+                             const uint8_t *to) {
+    return ptr ? to + (ptr - from) : NULL;
+}
+
+int dot11_frame_depad(const dot11_frame_t *in, uint8_t *buf, size_t cap,
+                      dot11_frame_t *out) {
+    if (!in || !out) return 0;
+    if (out != in) *out = *in;
+    if (!buf || !in->p || in->hdr_len < 0) return 0;
+    if (in->body_off <= in->hdr_len || in->body_off > in->len) return 0;
+    const int pad    = in->body_off - in->hdr_len;
+    const int newlen = in->len - pad;
+    if ((size_t)newlen > cap) return 0;
+
+    const uint8_t *from = in->p;
+    memcpy(buf, from, (size_t)in->hdr_len);
+    memcpy(buf + in->hdr_len, from + in->body_off,
+           (size_t)(in->len - in->body_off));
+
+    out->p        = buf;
+    out->len      = newlen;
+    out->body_off = in->hdr_len;
+    out->body_len = newlen - in->hdr_len;
+    out->a1    = rebase(in->a1,    from, buf);
+    out->a2    = rebase(in->a2,    from, buf);
+    out->a3    = rebase(in->a3,    from, buf);
+    out->a4    = rebase(in->a4,    from, buf);
+    out->bssid = rebase(in->bssid, from, buf);
+    out->sa    = rebase(in->sa,    from, buf);
+    out->da    = rebase(in->da,    from, buf);
+    out->ta    = rebase(in->ta,    from, buf);
+    out->ra    = rebase(in->ra,    from, buf);
+    return 1;
+}
+
+int dot11_frame_tid(const dot11_frame_t *f) {
+    if (!f || !f->p || f->type != 2) return -1;
+    if (!f->has_qos) return 0;     /* non-QoS: implicit single queue */
+    return f->tid;                 /* -1 when QoS Control is cut off */
+}
+
+int dot11_frame_amsdu(const dot11_frame_t *f) {
+    if (!f || !f->p || f->type != 2 || !f->has_qos) return -1;
+    return f->amsdu;
+}
+
+int64_t dot11_frame_ccmp_pn(const dot11_frame_t *f) {
+    if (!f || !f->p || f->type != 2 || !f->protected_) return -1;
+    if (f->hdr_len < 0 || f->body_len < 8) return -1;
+    const uint8_t *iv = f->p + f->body_off;
+
+    /* Without the Extended IV bit these eight bytes are a WEP IV or an
+     * original-TKIP one, neither of which carries a 48-bit PN. Reading
+     * them anyway would invent a number that looks like evidence. */
+    if (!(iv[3] & 0x20)) return -1;
+
+    return (int64_t)((uint64_t)iv[0]              |
+                     ((uint64_t)iv[1] <<  8)      |
+                     ((uint64_t)iv[4] << 16)      |
+                     ((uint64_t)iv[5] << 24)      |
+                     ((uint64_t)iv[6] << 32)      |
+                     ((uint64_t)iv[7] << 40));
 }
 
 int dot11_frame_body(const dot11_frame_t *f,

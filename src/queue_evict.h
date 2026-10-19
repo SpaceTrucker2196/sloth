@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "dot11_frame.h"
+
 /* ── Transmit-queue release after a session change ──
  *  #107 shape B, Framing Frames (CVE-2022-47522).
  *
@@ -143,6 +145,9 @@ void queue_evict_note_session_change(const uint8_t bssid[6],
  * air. Capture thread. */
 void queue_evict_observe_downlink(const uint8_t *dot11, int len,
                                   time_t now_sec, long now_usec);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+void queue_evict_observe_downlink_frame(const dot11_frame_t *f,
+                                        time_t now_sec, long now_usec);
 
 /* Copy the row for this pair into *out under the lock. 1 when found. */
 int  queue_evict_lookup(const uint8_t bssid[6], const uint8_t sta[6],

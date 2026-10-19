@@ -8,7 +8,7 @@
 #include "mle.h"
 #include "beacon_snoop.h"
 #include "sensor_health.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "bytes.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
@@ -22,7 +22,7 @@ static pthread_mutex_t g_mu  = PTHREAD_MUTEX_INITIALIZER;
  *   ReassocReq §9.3.3.8: the same, plus current AP address(6) */
 #define ASSOC_REQ_FIXED    4
 #define REASSOC_REQ_FIXED  10
-/* The management header is 24 or 28 octets: dot11_mgmt_hdr_len() owns
+/* The management header is 24 or 28 octets: the frame view's hdr_len owns
  * that, because the +HTC/Order bit adds an HT Control field between
  * Sequence Control and the body. This file used a fixed 24 until
  * 2026-10-14, so an (Re)Association Request carrying that bit had its
@@ -76,21 +76,39 @@ static uint32_t parse_rates(const uint8_t *ies, int len) {
     return bits;
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     if (!dot11 || !out) return 0;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return assoc_request_parse_frame(&f, out);
+}
+
+int assoc_request_parse_frame(const dot11_frame_t *f, assoc_req_t *out) {
+    if (!f || !f->p || !out) return 0;
     memset(out, 0, sizeof(*out));
+    const uint8_t *dot11 = f->p;
+    const int      len   = f->len;
     if (len < 2) return 0;
 
-    /* Subtype 0 = AssocReq, subtype 2 = ReassocReq; type 0, proto 0.
-     * FC0 = (subtype<<4) → 0x00 and 0x20 respectively. Compared whole
-     * so a nonzero protocol version is rejected rather than parsed. */
-    uint8_t fc0 = dot11[0];
+    /* Subtype 0 = AssocReq, subtype 2 = ReassocReq; type 0, proto 0 —
+     * what comparing FC octet 0 whole against 0x00/0x20 used to check,
+     * so a nonzero protocol version is still rejected rather than
+     * parsed.
+     *
+     * Protected is not consulted, as it never was here: (Re)Association
+     * Request is not a robust management frame (IEEE 802.11-2020
+     * defines those as Disassociation, Deauthentication and robust
+     * Action frames only), so a PMF link sends its body in the clear and a
+     * set bit has no ciphertext to refuse. */
+    if (f->proto != 0 || f->type != 0) return 0;
     int is_reassoc;
-    if      (fc0 == 0x00) is_reassoc = 0;
-    else if (fc0 == 0x20) is_reassoc = 1;
+    if      (f->subtype == 0) is_reassoc = 0;
+    else if (f->subtype == 2) is_reassoc = 1;
     else return 0;
 
-    int hdr = dot11_mgmt_hdr_len(dot11, len);
+    int hdr = f->hdr_len;
     if (hdr < 0) return 0;
 
     int fixed = is_reassoc ? REASSOC_REQ_FIXED : ASSOC_REQ_FIXED;
@@ -99,8 +117,8 @@ int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
     out->is_reassoc = is_reassoc;
     /* A request travels STA → AP: addr2 is the client, addr3 the BSSID.
      * The mirror of the response case, where addr1 is the client. */
-    memcpy(out->sta,   dot11 + 10, 6);
-    memcpy(out->bssid, dot11 + 16, 6);
+    memcpy(out->sta,   f->sa,    6);
+    memcpy(out->bssid, f->bssid, 6);
     out->capability_info = (uint16_t)(dot11[hdr]     |
                                       ((uint16_t)dot11[hdr + 1] << 8));
     out->listen_interval = (uint16_t)(dot11[hdr + 2] |

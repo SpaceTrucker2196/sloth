@@ -42,7 +42,11 @@ typedef struct {
     const uint8_t *p;
     int            len;          /* bytes of frame AFTER the FCS strip */
 
-    uint8_t type, subtype, fc1;
+    /* proto is Frame Control B0-B1, the Protocol Version (§9.2.4.1.2).
+     * Every frame sloth can interpret carries 0; the observers that
+     * used to compare FC octet 0 whole (0x80, 0xD0, 0x00/0x20) did so
+     * to refuse anything else, and test this field instead (#130). */
+    uint8_t proto, type, subtype, fc1;
     unsigned to_ds:1, from_ds:1, more_frag:1, retry:1,
              pwr_mgmt:1, more_data:1, protected_:1, order:1;
 
@@ -87,6 +91,35 @@ typedef struct {
 int dot11_frame_decode(const uint8_t *p, int len,
                        const dot11_rt_hints_t *rt, dot11_frame_t *out);
 
+/* Re-point a decoded view at a copy of its frame with the datapad
+ * octets removed — issue #130.
+ *
+ * on_probe_frame() hands the data-frame observers the frame as it was
+ * on the air, pad taken out, because the EAPOL collector writes those
+ * bytes verbatim into a DLT_IEEE802_11 pcap. Until #130 the observers
+ * re-decoded that copy themselves; now they take a view, so the copy
+ * needs one, and decoding it again is exactly the second decode this
+ * issue removes. Nothing about the header changes when pad that sits
+ * AFTER it is dropped, so the view is carried over and only the
+ * pointers and the body geometry move.
+ *
+ * Copies the frame into `buf` and fills `*out` when `in` has a readable
+ * header, a pad (body_off > hdr_len) and the depadded frame fits in
+ * `cap`. Returns 0 and leaves `*out` an unchanged copy of `*in` when
+ * there is nothing to remove or it does not fit. `in` and `out` may be
+ * the same view. */
+int dot11_frame_depad(const dot11_frame_t *in, uint8_t *buf, size_t cap,
+                      dot11_frame_t *out);
+
+/* Test hook (#130): count calls to dot11_frame_decode() while armed.
+ * Arming resets the count. The structural claim this exists to check
+ * is "on_probe_frame() decodes each frame exactly once", observers
+ * included; a test arms it around probe_test_dispatch(). Disarmed, the
+ * cost is one load of a flag nothing writes outside a test, so the
+ * monitor and capture threads both reading it is not a race. */
+void          dot11_frame_decode_count_arm(int on);
+unsigned long dot11_frame_decode_count(void);
+
 /* The frame body after the MAC header (and any datapad). Returns 1 and
  * fills *body / *blen, or 0 when the header was not readable or the
  * frame is Protected — the body is ciphertext and is not handed out. */
@@ -100,6 +133,22 @@ int dot11_frame_body(const dot11_frame_t *f,
  * output may be NULL; both are zeroed on failure. */
 int dot11_frame_payload(const dot11_frame_t *f,
                         int *payload_off, uint16_t *ethertype);
+
+/* The data-frame questions three observers used to ask of raw bytes
+ * through the dot11_data wrappers, each of which decoded the frame
+ * again (#130). The wrappers now call these, so the answers exist once.
+ *
+ * dot11_frame_tid: the TID of a data frame — 0 for a non-QoS one, which
+ *   has a single implicit queue; -1 for a non-data frame or a QoS
+ *   Control field `len` does not reach.
+ * dot11_frame_amsdu: the A-MSDU Present bit (QoS Control B7) — 1/0, or
+ *   -1 when the frame has no QoS Control or `len` does not reach it.
+ * dot11_frame_ccmp_pn: the 48-bit CCMP/GCMP packet number of a
+ *   Protected data frame (§12.5.3.2), or -1 when the frame is not one,
+ *   the header is incomplete, or the Extended IV bit is clear. */
+int     dot11_frame_tid(const dot11_frame_t *f);
+int     dot11_frame_amsdu(const dot11_frame_t *f);
+int64_t dot11_frame_ccmp_pn(const dot11_frame_t *f);
 
 /* How many trailing bytes of a captured frame are FCS. When radiotap
  * says the FCS is present it is the last 4 octets of the ORIGINAL

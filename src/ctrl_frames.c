@@ -23,7 +23,7 @@ typedef struct {
 } ctrl_chan_t;
 
 /* Defined below, beside the rest of the Bl0ck state. */
-static void bar_observe(const uint8_t *dot11, int len, time_t now);
+static void bar_observe(const dot11_frame_t *f, time_t now);
 
 static ctrl_src_t      g_src[CTRL_MAX_SOURCES];
 static int             g_src_n;
@@ -65,35 +65,47 @@ static ctrl_chan_t *chan_slot(int channel) {
     return &g_chan[slot];
 }
 
-/* Which control subtypes carry a transmitter address, and where.
+/* Which control subtypes this module attributes to a transmitter.
  *
- * RTS and the Block-Ack pair put TA at offset 10, after RA. PS-Poll's
- * layout differs: the BSSID sits where RA would be and TA follows at
- * 10 anyway. CTS and ACK have neither — they end after RA.
+ * RTS and the Block-Ack pair carry TA after RA. PS-Poll's layout
+ * differs: the BSSID sits where RA would be and TA follows anyway. CTS
+ * and ACK have neither — they end after RA. CF-End does carry A2, but
+ * it is the BSSID rather than a station and is not attributed.
  *
- * Returns the TA offset, or -1 when the frame carries no transmitter. */
-static int ta_offset(int subtype, int len) {
-    switch (subtype) {
+ * The position is the view's (A2, §9.3.1); this only decides whether
+ * to use it. Returns NULL when the frame carries no transmitter or
+ * `len` does not reach it. */
+static const uint8_t *ctrl_ta(const dot11_frame_t *f) {
+    switch (f->subtype) {
     case CTRL_SUB_RTS:
     case CTRL_SUB_BLOCKACK_REQ:
     case CTRL_SUB_BLOCKACK:
     case CTRL_SUB_PS_POLL:
-        return len >= 16 ? 10 : -1;
+        return f->ta;
     default:
-        return -1;          /* CTS, ACK, CF-End: RA only */
+        return NULL;        /* CTS, ACK, CF-End: RA only */
     }
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 void ctrl_observe(const uint8_t *dot11, int len, int channel, time_t now) {
-    if (!dot11 || len < 10) return;
-    /* FC byte 0: bits 2-3 type, bits 4-7 subtype. Type 1 is control. */
-    int type = (dot11[0] >> 2) & 0x03;
-    if (type != 1) return;
-    int sub = (dot11[0] >> 4) & 0x0f;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    ctrl_observe_frame(&f, channel, now);
+}
 
-    /* Duration/ID at bytes 2-3, little-endian: the NAV reservation this
-     * frame is asking every other radio to honour. */
-    int nav = dot11[2] | (dot11[3] << 8);
+void ctrl_observe_frame(const dot11_frame_t *f, int channel, time_t now) {
+    /* Not hdr_len: an RTS cut below its 16 octets is still a control
+     * frame on this channel and is counted, as it always was. */
+    if (!f || !f->p || f->len < 10) return;
+    if (f->type != 1) return;                   /* control frames only */
+    int sub = f->subtype;
+
+    /* Duration/ID at octets 2-3, little-endian: the NAV reservation this
+     * frame is asking every other radio to honour. Not Frame Control,
+     * and the view does not carry it, so it is read here. */
+    int nav = f->p[2] | (f->p[3] << 8);
 
     pthread_mutex_lock(&g_mu);
 
@@ -104,11 +116,10 @@ void ctrl_observe(const uint8_t *dot11, int len, int channel, time_t now) {
         c->last_seen = now;
     }
 
-    if (sub == CTRL_SUB_BLOCKACK_REQ) bar_observe(dot11, len, now);
+    if (sub == CTRL_SUB_BLOCKACK_REQ) bar_observe(f, now);
 
-    int off = ta_offset(sub, len);
-    if (off >= 0) {
-        const uint8_t *ta = dot11 + off;
+    const uint8_t *ta = ctrl_ta(f);
+    if (ta) {
         /* A group-addressed transmitter is not a transmitter. */
         if (!(ta[0] & 0x01)) {
             ctrl_src_t *s = src_slot(ta, now);
@@ -163,8 +174,9 @@ static sloth_bar_state_t *bar_slot(const uint8_t bssid[6],
  * BAR layout after the header: BAR Control(2), then the Block Ack
  * Starting Sequence Control(2) — fragment number in bits 0-3, the
  * starting sequence number in bits 4-15. */
-static void bar_observe(const uint8_t *dot11, int len, time_t now) {
-    if (len < 20) return;
+static void bar_observe(const dot11_frame_t *f, time_t now) {
+    if (f->len < 20) return;
+    const uint8_t *dot11 = f->p;
     uint16_t ctl = (uint16_t)(dot11[16] | (dot11[17] << 8));
     /* Multi-TID BARs carry a list rather than one TID and are rare
      * enough that guessing at their layout would risk inventing jumps.
@@ -175,8 +187,8 @@ static void bar_observe(const uint8_t *dot11, int len, time_t now) {
     uint16_t ssc = (uint16_t)(dot11[18] | (dot11[19] << 8));
     uint16_t ssn = (uint16_t)(ssc >> 4);
 
-    const uint8_t *ra = dot11 + 4;    /* the peer being asked to advance */
-    const uint8_t *ta = dot11 + 10;   /* who the BAR claims to be from   */
+    const uint8_t *ra = f->ra;   /* the peer being asked to advance */
+    const uint8_t *ta = f->ta;   /* who the BAR claims to be from   */
     if ((ta[0] & 0x01) || (ra[0] & 0x01)) return;
 
     sloth_bar_state_t *b = bar_slot(ra, ta, tid, now);

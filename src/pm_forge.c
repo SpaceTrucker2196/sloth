@@ -2,7 +2,7 @@
 #include <pthread.h>
 
 #include "pm_forge.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "beacon_snoop.h"
 #include "sensor_health.h"
 
@@ -29,26 +29,38 @@ static pm_forge_t *entry_for(const uint8_t sta[6], time_t now) {
     return &g_tbl[slot];
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 void pm_forge_observe(const uint8_t *dot11, int len,
                      time_t now_sec, long now_usec) {
-    if (!dot11 || len < 24) return;
-    if (((dot11[0] >> 2) & 0x03) != 2) return;   /* not a data frame */
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    pm_forge_observe_frame(&f, now_sec, now_usec);
+}
 
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
+void pm_forge_observe_frame(const dot11_frame_t *f,
+                            time_t now_sec, long now_usec) {
+    if (!f || !f->p || f->len < 24) return;
+    if (f->type != 2) return;                   /* not a data frame */
+
     /* Only a station transmitting to its AP carries a PwrMgt
      * declaration worth tracking here — the AP never sets this bit,
      * and a WDS/mesh (addr4) frame has no single station to attribute
      * it to. */
-    if (!to_ds || from_ds) return;
+    if (!f->to_ds || f->from_ds) return;
 
-    uint8_t bssid[6], sta[6];
-    if (!dot11_data_addrs(dot11, len, bssid, sta, NULL)) return;
+    /* STA -> AP (Table 9-26): A1 is the BSSID, A2 the station. Both
+     * are inside the 24 octets checked above. */
+    const uint8_t *bssid = f->bssid;
+    const uint8_t *sta   = f->sa;
+    if (!bssid || !sta) return;
 
-    int sub        = (dot11[0] >> 4) & 0x0f;
-    int pm         = (dot11[1] >> 4) & 0x01;
-    int no_payload = (sub & 0x04) ? 1 : 0;   /* Null / QoS-Null family */
-    int tid        = dot11_data_tid(dot11, len);
+    int pm         = f->pwr_mgmt;
+    int no_payload = (f->subtype & 0x04) ? 1 : 0;   /* Null / QoS-Null family */
+    /* A non-QoS frame has the one implicit queue, TID 0; a QoS Control
+     * field cut off by the capture reads as that queue too, as it did
+     * when this came from dot11_data_tid(). */
+    int tid        = f->has_qos ? f->tid : 0;
     if (tid < 0) tid = 0;
 
     int64_t now_us = (int64_t)now_sec * 1000000 + (now_usec > 0 ? now_usec : 0);

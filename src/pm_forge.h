@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <time.h>
 
+#include "dot11_frame.h"
+
 /* ── PM-bit forgery (#107 shape A, Framing Frames CVE-2022-47522) ──
  *
  * Vanhoef & Bhupathiraju show that an AP decides whether to *buffer*
@@ -65,6 +67,9 @@ typedef struct {
  * thread. */
 void pm_forge_observe(const uint8_t *dot11, int len,
                       time_t now_sec, long now_usec);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+void pm_forge_observe_frame(const dot11_frame_t *f,
+                            time_t now_sec, long now_usec);
 
 /* Copy the entry for `sta` into *out under the lock. Returns 1 when found. */
 int  pm_forge_lookup(const uint8_t sta[6], pm_forge_t *out);

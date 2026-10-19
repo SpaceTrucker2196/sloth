@@ -6,6 +6,7 @@
 #include "sloth.h"
 #include "reg_ie.h"
 #include "rsn_ie.h"
+#include "dot11_frame.h"
 
 /* Cipher / AKM / MFP info extracted from the RSN IE of a beacon, plus
  * AP fingerprint info extracted from tag-221 vendor-specific IEs. The
@@ -223,6 +224,11 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                  char ssid_out[33], uint8_t bssid_out[6],
                  int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
                  beacon_rsn_t *rsn_out);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+int beacon_parse_frame(const dot11_frame_t *f, int8_t signal,
+                       char ssid_out[33], uint8_t bssid_out[6],
+                       int *channel_out, char enc_out[10],
+                       uint16_t *beacon_ms_out, beacon_rsn_t *rsn_out);
 
 /* Record or update an AP in the internal table (thread-safe). rsn may
  * be NULL — fields default to empty / mfp=0 in that case.

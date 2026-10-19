@@ -106,19 +106,22 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
  * EAPOL frame (legal) from a plaintext data frame (CVE-2020-26143).
  * The header arithmetic is still dot11_data.c's; only the eight-byte
  * SNAP check is repeated. */
-static int first_frag_ethertype(const uint8_t *dot11, int len) {
-    if (dot11_frag_num(dot11, len) != 0) return -1;
+static int first_frag_ethertype(const dot11_frame_t *f) {
+    if (f->frag_num != 0) return -1;
 
     /* An A-MSDU body is subframes, not one LLC-encapsulated packet, so
      * there is no single EtherType to read. Plaintext A-MSDU on a
      * protected network is CVE-2020-26144 and its own detector.
      * Via the helper rather than a local copy of the QoS Control offset
      * arithmetic — see dot11_data_payload(). */
-    if (dot11_amsdu_present(dot11, len) == 1) return -1;
+    if (dot11_frame_amsdu(f) == 1) return -1;
 
-    int hdr = dot11_data_header_len(dot11, len);
-    if (hdr < 0 || hdr + 8 > len) return -1;
-    const uint8_t *llc = dot11 + hdr;
+    /* hdr_len, not dot11_frame_payload(): the Protected and fragment
+     * rules here are this detector's own (see above), and the body is
+     * read where the header ends, as it always was here. */
+    int hdr = f->type == 2 ? f->hdr_len : -1;
+    if (hdr < 0 || hdr + 8 > f->len) return -1;
+    const uint8_t *llc = f->p + hdr;
     if (llc[0] != 0xaa || llc[1] != 0xaa || llc[2] != 0x03) return -1;
     return (llc[6] << 8) | llc[7];
 }
@@ -136,15 +139,15 @@ static int first_frag_ethertype(const uint8_t *dot11, int len) {
  * frame. Only the first subframe is read: it is the one a spoofed
  * EAPOL claim would occupy, and the ones after it are unreachable
  * without trusting the very length field this bug is about. */
-static int first_amsdu_subframe_ethertype(const uint8_t *dot11, int len) {
-    if (dot11_frag_num(dot11, len) != 0) return -1;
-    if (dot11_amsdu_present(dot11, len) != 1) return -1;
+static int first_amsdu_subframe_ethertype(const dot11_frame_t *f) {
+    if (f->frag_num != 0) return -1;
+    if (dot11_frame_amsdu(f) != 1) return -1;
 
-    int hdr = dot11_data_header_len(dot11, len);
+    int hdr = f->type == 2 ? f->hdr_len : -1;
     if (hdr < 0) return -1;
     int llc = hdr + 14;   /* subframe DA(6) + SA(6) + Length(2) */
-    if (llc + 8 > len) return -1;
-    const uint8_t *p = dot11 + llc;
+    if (llc + 8 > f->len) return -1;
+    const uint8_t *p = f->p + llc;
     if (p[0] != 0xaa || p[1] != 0xaa || p[2] != 0x03) return -1;
     return (p[6] << 8) | p[7];
 }
@@ -455,27 +458,28 @@ static int mpdu_note(const uint8_t bssid[6], const uint8_t ta[6],
     return 0;
 }
 
-static void observe_locked(const uint8_t *dot11, int len, time_t now) {
-    if (!dot11 || len < 24) return;
-    if (((dot11[0] >> 2) & 0x03) != 2) return;      /* data frames only */
+static void observe_locked(const dot11_frame_t *f, time_t now) {
+    if (!f || !f->p || f->len < 24) return;
+    if (f->type != 2) return;                       /* data frames only */
 
-    int sub = (dot11[0] >> 4) & 0x0f;
     /* Null / QoS-Null carry no body. They are sent unprotected as a
      * matter of course — they are how a station signals power-save
      * state — so counting them would fire on every idle client. */
-    if (sub & 0x04) return;
+    if (f->subtype & 0x04) return;
 
-    uint8_t bssid[6], sa[6], da[6];
-    int rc = dot11_data_addrs(dot11, len, bssid, sa, da);
     /* A four-address frame crosses two BSSes and has no single BSSID.
      * Skipped rather than attributed to a guess. */
-    if (rc != 1) return;
+    if (f->has_addr4 || !f->bssid || !f->sa || !f->da) return;
+    const uint8_t *bssid = f->bssid, *sa = f->sa, *da = f->da;
 
-    int protected_bit = (dot11[1] & 0x40) != 0;
-    int fn   = dot11_frag_num(dot11, len);
-    int more = dot11_more_frags(dot11, len);
-    if (fn < 0 || more < 0) return;
+    int protected_bit = f->protected_;
+    int fn   = f->frag_num;
+    int more = f->more_frag;
+    if (fn < 0) return;
     int fragmented = (fn > 0) || (more == 1);
+    /* Sequence Control as transmitted, rebuilt from the two fields the
+     * view split it into: both are inside the 24 octets checked above. */
+    const uint16_t sc = (uint16_t)((f->seq_num << 4) | f->frag_num);
 
     frag_bss_t *b = bss_get(bssid, now);
 
@@ -483,13 +487,12 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
      * no witnessed key install — the CCMP PN it keys on is itself proof
      * the frame is protected — and it is the one detector here that
      * only ever looks at encrypted frames. */
-    int64_t pn = dot11_ccmp_pn(dot11, len);
-    int amsdu  = dot11_amsdu_present(dot11, len);
+    int64_t pn = dot11_frame_ccmp_pn(f);
+    int amsdu  = dot11_frame_amsdu(f);
     if (pn >= 0 && amsdu >= 0) {
         /* addr2 is the transmitter in every frame long enough to have
          * one, independent of the DS bits. */
-        uint16_t sc = (uint16_t)(dot11[22] | (dot11[23] << 8));
-        if (mpdu_note(bssid, dot11 + 10, pn, sc, amsdu, now)) {
+        if (mpdu_note(bssid, f->ta, pn, sc, amsdu, now)) {
             b->amsdu_flip++;
             memcpy(b->last_sa, sa, 6);
             memcpy(b->last_da, da, 6);
@@ -517,9 +520,9 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
      * match and mean nothing. Unicast only, for the same reason: a
      * group address can never equal the BSSID, so including broadcast
      * would fire on a shape the CVE does not describe. */
-    if ((dot11[1] & 0x03) && !dot11_is_group_addr(da) &&
+    if ((f->to_ds || f->from_ds) && !dot11_is_group_addr(da) &&
         !mac_eq(sa, bssid) && !mac_eq(da, bssid) &&
-        first_frag_ethertype(dot11, len) == ETHERTYPE_EAPOL) {
+        first_frag_ethertype(f) == ETHERTYPE_EAPOL) {
         b->eapol_relay++;
         memcpy(b->last_sa, sa, 6);
         memcpy(b->last_da, da, 6);
@@ -529,11 +532,10 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
     /* Session bookkeeping runs before the protected/plaintext branch
      * below and regardless of it — see frag_track's comment. */
     if (fragmented) {
-        int tid = dot11_data_tid(dot11, len);
+        int tid = dot11_frame_tid(f);
         if (tid >= 0)
             frag_track(b, bssid, sa, da, (uint8_t)tid, fn, more,
-                      protected_bit, pn,
-                      (uint16_t)(dot11[22] | (dot11[23] << 8)), now);
+                      protected_bit, pn, sc, now);
     }
 
     if (protected_bit) {
@@ -568,7 +570,7 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
          * aggregated, so a subframe claiming to be one has no benign
          * reading, unlike the plain-unicast branch below where EAPOL is
          * an expected exemption. */
-        int et = first_amsdu_subframe_ethertype(dot11, len);
+        int et = first_amsdu_subframe_ethertype(f);
         if (et != ETHERTYPE_EAPOL) return;
         b->amsdu_eapol_spoof++;
     } else {
@@ -579,7 +581,7 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
          * and calling it an attack because we cannot see what it is
          * would be a guess dressed as a detection. Counted only when
          * the frame says what it carries. */
-        int et = first_frag_ethertype(dot11, len);
+        int et = first_frag_ethertype(f);
         if (et < 0 || et == ETHERTYPE_EAPOL) return;
         b->plaintext_unicast++;
     }
@@ -589,9 +591,17 @@ static void observe_locked(const uint8_t *dot11, int len, time_t now) {
     b->last_hit = now;
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 void frag_observe(const uint8_t *dot11, int len, time_t now) {
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    frag_observe_frame(&f, now);
+}
+
+void frag_observe_frame(const dot11_frame_t *f, time_t now) {
     pthread_mutex_lock(&g_mu);
-    observe_locked(dot11, len, now);
+    observe_locked(f, now);
     pthread_mutex_unlock(&g_mu);
 }
 

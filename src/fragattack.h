@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* FragAttacks — issue #75, slice 1.
  *
@@ -242,6 +243,8 @@ typedef struct {
  * that is not a data frame. `now` is passed rather than read so the
  * ordering rule above is testable. */
 void frag_observe(const uint8_t *dot11, int len, time_t now);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+void frag_observe_frame(const dot11_frame_t *f, time_t now);
 
 /* Record that (bssid, sta) completed a (re)association — issue #75
  * slice 2. Called from the same probe.c site that already feeds

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* 802.11 Action frames (management subtype 13) — issue #59.
  *
@@ -128,6 +129,10 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out);
  * Request into the per-(BSSID, STA) steering table below. Thread-safe
  * (capture thread). */
 void action_observe(const uint8_t *dot11, int len, time_t now);
+/* The same, on a frame on_probe_frame() has already decoded (#130). The
+ * CSA, RRM and BTM parsers below are reached from here on the view; the
+ * (dot11, len) forms of them are wrappers kept for the tests. */
+void action_observe_frame(const dot11_frame_t *f, time_t now);
 
 /* ── BTM steering table (#59 slice 2) ──────────────────────
  *

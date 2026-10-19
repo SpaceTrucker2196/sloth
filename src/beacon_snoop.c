@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include "sloth.h"
 #include "beacon_snoop.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "sensor_health.h"
 #include "bytes.h"
 #include "dot11_ie.h"
@@ -718,13 +718,37 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
     return 1;
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
                  char ssid_out[33], uint8_t bssid_out[6],
                  int *channel_out, char enc_out[10], uint16_t *beacon_ms_out,
                  beacon_rsn_t *rsn_out)
 {
-    /* FC byte 0: type=0b00 (management), subtype=0b1000 (beacon) → 0x80 */
-    if (len < 2 || dot11[0] != 0x80) return 0;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return beacon_parse_frame(&f, signal, ssid_out, bssid_out, channel_out,
+                              enc_out, beacon_ms_out, rsn_out);
+}
+
+int beacon_parse_frame(const dot11_frame_t *f, int8_t signal,
+                       char ssid_out[33], uint8_t bssid_out[6],
+                       int *channel_out, char enc_out[10],
+                       uint16_t *beacon_ms_out, beacon_rsn_t *rsn_out)
+{
+    if (!f || !f->p) return 0;
+    const uint8_t *dot11 = f->p;
+    const int      len   = f->len;
+    /* Management (type 0), Beacon (subtype 8), protocol version 0 —
+     * what comparing FC octet 0 whole against 0x80 used to check.
+     *
+     * Protected is not consulted, as it never was here: a Beacon is
+     * not a robust management frame (see assoc_track.c) and is
+     * never encrypted, so there is no ciphertext case to refuse; a
+     * forged beacon with the bit set is parsed like any other, which
+     * is what the beacon detectors are for. */
+    if (len < 2 || f->proto != 0 || f->type != 0 || f->subtype != 8)
+        return 0;
 
     /* Management header (24, or 28 with HT Control under the +HTC/Order
      * bit) + the 12 fixed octets: Timestamp(8), Beacon Interval(2),
@@ -732,11 +756,11 @@ int beacon_parse(const uint8_t *dot11, int len, int8_t signal,
      * beacon carrying +HTC had its interval, Privacy bit and entire IE
      * list read four octets early — SSID, RSN and the vendor/IE-order
      * fingerprints all come out of that walk. */
-    int hdr = dot11_mgmt_hdr_len(dot11, len);
+    int hdr = f->hdr_len;
     if (hdr < 0 || len < hdr + 12) return 0;
 
-    /* BSSID at bytes 16-21 */
-    memcpy(bssid_out, dot11 + 16, 6);
+    /* BSSID is Address 3 (§9.3.3.1) */
+    memcpy(bssid_out, f->bssid, 6);
 
     /* Beacon interval: little-endian TUs (1 TU = 1024 µs), after the
      * 8-octet Timestamp. */

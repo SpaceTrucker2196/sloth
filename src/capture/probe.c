@@ -375,14 +375,18 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         return;
     }
 
-    /* ── One decode for this frame (#122) ───────────────────────
+    /* ── One decode for this frame (#122, #130) ─────────────────
      *
      * Type, subtype, flags, header length, body offset and the address
-     * roles are read once here and nowhere else in this function. The
-     * observers below keep their (dot11, len) entry points for now —
-     * their own tests and the fuzz harnesses are written against them
-     * — and re-derive what they need through the dot11_data wrappers,
-     * which are themselves the same view. */
+     * roles are read once here, and every observer below takes this
+     * view rather than the bytes. Until #130 each observer re-decoded
+     * the frame from (dot11, len), through the dot11_data wrappers or
+     * with its own Frame Control arithmetic — three styles, and the
+     * Protected decision made per file. Their (dot11, len) entry points
+     * remain as wrappers for the tests and fuzz harnesses; this
+     * callback calls none of them. tests/test_dot11_frame.c counts
+     * dot11_frame_decode() calls per dispatched frame and holds it at
+     * one. */
     const dot11_rt_hints_t hints = { rt.fcs_present, rt.datapad, rt.bad_fcs };
     dot11_frame_t fr;
     const int     full = dot11_frame_decode(dot11, dot11_len, &hints, &fr);
@@ -449,7 +453,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * control frame there is would be dropped by a check written
          * for management headers. Parsing lives in ctrl_frames.c
          * because this file is absent from TEST_SRCS. */
-        ctrl_observe(dot11, dot11_len, channel, fts);
+        ctrl_observe_frame(&fr, channel, fts);
         return;
     }
 
@@ -481,28 +485,23 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          *
          * Static, not automatic: this callback runs on the one monitor
          * thread (or synchronously under probe_test_dispatch), and a
-         * 64 KiB stack buffer per frame buys nothing. */
+         * 64 KiB stack buffer per frame buys nothing.
+         *
+         * dot11_frame_depad() moves the view onto the copy rather than
+         * decoding the copy again (#130): the header is unchanged by
+         * dropping pad that follows it, so only the pointers move. With
+         * no pad, or no readable header, `fr` is left as decoded. */
         static uint8_t depad[65536];
-        if (full && fr.body_off > fr.hdr_len && fr.body_off <= dot11_len &&
-            dot11_len - (fr.body_off - fr.hdr_len) <= (int)sizeof depad) {
-            const int pad = fr.body_off - fr.hdr_len;
-            memcpy(depad, dot11, (size_t)fr.hdr_len);
-            memcpy(depad + fr.hdr_len, dot11 + fr.body_off,
-                   (size_t)(dot11_len - fr.body_off));
-            dot11      = depad;
-            dot11_len -= pad;
-        }
+        dot11_frame_depad(&fr, depad, sizeof depad, &fr);
         /* Capture time, not processing time: the handshake pcap's
          * record headers carry it (#92). */
-        eapol_observe_dot11(dot11, dot11_len, signal, channel,
-                            fts, (long)fv.ts_usec);
-        frag_observe(dot11, dot11_len, fts);
-        pm_forge_observe(dot11, dot11_len, fts, (long)fv.ts_usec);
+        eapol_observe_frame(&fr, signal, channel, fts, (long)fv.ts_usec);
+        frag_observe_frame(&fr, fts);
+        pm_forge_observe_frame(&fr, fts, (long)fv.ts_usec);
         /* #107 shape B. Only counts against a (BSSID, STA) some session
          * change already opened a window for, so the common case —
          * every data frame on the air — costs one direction test. */
-        queue_evict_observe_downlink(dot11, dot11_len, fts,
-                                     (long)fv.ts_usec);
+        queue_evict_observe_downlink_frame(&fr, fts, (long)fv.ts_usec);
         return;
     }
     if (type != 0) return;  /* management frames only beyond this point */
@@ -511,8 +510,8 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         /* Beacon frame — passive AP discovery */
         char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;
         beacon_rsn_t rsn;
-        if (beacon_parse(dot11, dot11_len, signal, ssid, bssid, &channel,
-                         enc, &bms, &rsn)) {
+        if (beacon_parse_frame(&fr, signal, ssid, bssid, &channel,
+                               enc, &bms, &rsn)) {
             beacon_record(bssid, ssid, signal, channel, enc, bms, &rsn);
             /* A CSA in a beacon is broadcast to every associated client
              * at once (#63). addr2 is passed separately from addr3 even
@@ -595,7 +594,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     if (sub == 10 || sub == 12) {
         /* Disassoc (10) or Deauth (12) */
         deauth_frame_t df;
-        if (deauth_parse(dot11, dot11_len, &df)) {
+        if (deauth_parse_frame(&fr, &df)) {
             /* Stamped here, not inside the parser: deauth_parse()
              * memsets its output, so a stamp before the call is erased
              * and one after the record is too late. */
@@ -640,7 +639,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * records the AP granting. Parsing lives in assoc_track.c for
          * the same testability reason as the Action dispatch below. */
         assoc_req_t req;
-        if (assoc_request_parse(dot11, dot11_len, &req))
+        if (assoc_request_parse_frame(&fr, &req))
             assoc_request_observe(&req, signal, channel);
         return;
     }
@@ -651,7 +650,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * dropped. Parsing lives in action_snoop.c rather than here:
          * this file is compiled only under WITH_PCAP and is absent from
          * TEST_SRCS, so logic placed here cannot be tested. */
-        action_observe(dot11, dot11_len, fts);
+        action_observe_frame(&fr, fts);
         return;
     }
 

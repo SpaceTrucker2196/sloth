@@ -4,6 +4,7 @@
 #include "queue_evict.h"
 #include "tune.h"
 #include "dot11_data.h"
+#include "dot11_frame.h"
 #include "sensor_health.h"
 
 static queue_evict_t   g_tbl[MAX_QUEUE_EVICT_ENTRIES];
@@ -78,33 +79,42 @@ void queue_evict_note_session_change(const uint8_t bssid[6],
     pthread_mutex_unlock(&g_mu);
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 void queue_evict_observe_downlink(const uint8_t *dot11, int len,
                                   time_t now_sec, long now_usec) {
-    if (!dot11 || len < 24) return;
-    if (((dot11[0] >> 2) & 0x03) != 2) return;   /* not a data frame */
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    queue_evict_observe_downlink_frame(&f, now_sec, now_usec);
+}
 
-    int to_ds   =  dot11[1]       & 0x01;
-    int from_ds = (dot11[1] >> 1) & 0x01;
+void queue_evict_observe_downlink_frame(const dot11_frame_t *f,
+                                        time_t now_sec, long now_usec) {
+    if (!f || !f->p || f->len < 24) return;
+    if (f->type != 2) return;                   /* not a data frame */
+
     /* AP -> STA only (IEEE 802.11-2020 §9.3.2.1 Table 9-26). A released
      * queue travels downstream; an uplink frame in the same window is
      * the station talking, which is not evidence about the AP's buffer.
      * The four-address (WDS/mesh) case is excluded by the same test. */
-    if (to_ds || !from_ds) return;
+    if (f->to_ds || !f->from_ds) return;
 
     /* A retransmission delivers nothing that was not already delivered,
      * so it cannot be a distinct released frame. The Retry bit is
      * IEEE 802.11-2020 §9.2.4.1.6. Checked before the addresses are
-     * parsed because it is the cheapest discriminator available. */
-    if (dot11[1] & 0x08) return;
+     * read because it is the cheapest discriminator available. */
+    if (f->retry) return;
 
-    int sub = (dot11[0] >> 4) & 0x0f;
     /* Null / QoS-Null family: no payload, so nothing was delivered.
      * These are how an AP polls and keeps a session alive, and counting
      * them would let housekeeping reach the threshold on its own. */
-    if (sub & 0x04) return;
+    if (f->subtype & 0x04) return;
 
-    uint8_t bssid[6], sa[6], da[6];
-    if (dot11_data_addrs(dot11, len, bssid, sa, da) != 1) return;
+    /* FromDS only: A1 is the station (DA), A2 the BSSID, both inside the
+     * 24 octets checked above. */
+    const uint8_t *bssid = f->bssid;
+    const uint8_t *da    = f->da;
+    if (!bssid || !da) return;
     /* Group-addressed downlink traffic is buffered against the BSS's
      * own DTIM schedule, not against one station's queue, so it says
      * nothing about the pair this module tracks.
@@ -138,7 +148,7 @@ void queue_evict_observe_downlink(const uint8_t *dot11, int len,
              * and the sequence number is the authoritative identity of an
              * MSDU — so the Retry-bit test above and this are belt and
              * braces on the same question rather than duplicates. */
-            const int seq = dot11_seq_num(dot11, len);
+            const int seq = f->seq_num;
             if (seq >= 0 && seq == e->burst_last_seq) {
                 pthread_mutex_unlock(&g_mu);
                 return;

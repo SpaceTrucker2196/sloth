@@ -15,7 +15,7 @@
 #include "beacon_snoop.h"
 #include "assoc_track.h"
 #include "alerts.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "bytes.h"
 #include "sensor_health.h"
 #include "tune.h"
@@ -483,19 +483,37 @@ static int parse_eapol_key(const uint8_t *p, size_t len, size_t *out_span,
 
 /* ── 802.11 frame walker ─────────────────────────────────── */
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 int eapol_observe_dot11(const uint8_t *d, int len,
                          int8_t signal, int channel,
                          time_t now, long ts_usec)
+{
+    dot11_frame_t f;
+    dot11_frame_decode(d, len, NULL, &f);
+    return eapol_observe_frame(&f, signal, channel, now, ts_usec);
+}
+
+int eapol_observe_frame(const dot11_frame_t *f,
+                        int8_t signal, int channel,
+                        time_t now, long ts_usec)
 {
     /* The timestamp is caller input and ends up in an exported pcap
      * record header, where ts_usec must be below 1000000; anything
      * else is not a timestamp, so it is not written through. */
     uint32_t usec = (ts_usec >= 0 && ts_usec <= 999999)
                   ? (uint32_t)ts_usec : 0;
+    if (!f || !f->p) return 0;
+    /* The frame as it was on the air: the bytes below are buffered
+     * verbatim into the handshake pcap, so a caller holding a datapad
+     * capture removes the pad first (dot11_frame_depad()), and the body
+     * is read where the MAC header ends. */
+    const uint8_t *d   = f->p;
+    const int      len = f->len;
     if (len < 32) return 0;
-    if (((d[0] >> 2) & 0x03) != 2) return 0;   /* data frame */
-    int to_ds   = (d[1] >> 0) & 1;
-    int from_ds = (d[1] >> 1) & 1;
+    if (f->type != 2) return 0;                 /* data frame */
+    int to_ds   = f->to_ds;
+    int from_ds = f->from_ds;
 
     /* The header length comes from the shared view (#122), not from a
      * private formula. The copy that lived here added HT Control for
@@ -505,7 +523,7 @@ int eapol_observe_dot11(const uint8_t *d, int len,
      * frame carrying that one bit had its LLC header read four bytes
      * late and the handshake was silently missed. In bounds throughout,
      * so no sanitiser or fuzz target could see it. */
-    int hdr = dot11_data_header_len(d, len);
+    int hdr = f->hdr_len;
     if (hdr < 0 || len < hdr + 8 + 4) return 0;   /* LLC(8) + at-least EAPOL hdr */
 
     /* LLC SNAP: AA AA 03 00 00 00 + ethertype */
@@ -519,10 +537,11 @@ int eapol_observe_dot11(const uint8_t *d, int len,
      * owns. M1/M3 are AP->STA, so the station is the DA; M2/M4 are
      * STA->AP, so the station is the SA. WDS (no single BSSID) and
      * IBSS (no AP) are skipped as before. */
-    uint8_t bssid[6], sta[6], sa[6], da[6];
+    uint8_t bssid[6], sta[6];
     if (to_ds == from_ds) return 0;                  /* WDS or ad-hoc */
-    if (dot11_data_addrs(d, len, bssid, sa, da) != 1) return 0;
-    memcpy(sta, to_ds ? sa : da, 6);
+    if (!f->bssid || !f->sa || !f->da) return 0;
+    memcpy(bssid, f->bssid, 6);
+    memcpy(sta, to_ds ? f->sa : f->da, 6);
 
     /* EAPOL frame: version(1) type(1) length(2) then payload. Type 0 is
      * an EAP-Packet (the 802.1X inner conversation); type 3 is EAPOL-Key

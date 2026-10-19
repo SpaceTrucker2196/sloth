@@ -3735,3 +3735,16 @@ toward the spec: session_id > 32 and empty cipher_suites (RFC 8446
 `be16` from `src/bytes.h`. `fuzz_dns_read_name` drives the reader
 directly. Pages: [[jsonl-schema]] (versioning note),
 [[ja3-fingerprinting]].
+
+## 2026-10-19 — #130: observers consume the frame view
+
+Every 802.11 observer gained a view entry (`*_frame(const dot11_frame_t
+*f, ...)`) and `on_probe_frame()` calls only those, so a monitor frame
+is decoded once end to end — the byte entry points are wrappers kept
+for tests and fuzzing. The per-file Frame Control decoders in
+`fragattack.c`, `pm_forge.c`, `queue_evict.c`, `deauth_snoop.c`,
+`assoc_track.c`, `action_snoop.c`, `beacon_snoop.c`, `ctrl_frames.c`
+and `eapol_log.c` are gone. View gains `proto`, `dot11_frame_depad()`,
+`dot11_frame_tid/amsdu/ccmp_pn()` and a test-only decode counter. No
+behaviour change: the suite and `make replay-check` are unchanged.
+Page: [[architecture]] (802.11 frame view).

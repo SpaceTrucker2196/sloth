@@ -4,7 +4,7 @@
 
 #include "action_snoop.h"
 #include "beacon_snoop.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "bytes.h"          /* le16, tlv_next (#126) */
 #include "sensor_health.h"  /* parse-fault tally (#126) */
 #include "dot11_ie.h"       /* SSID copy (#127) */
@@ -13,19 +13,23 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
 }
 
-/* Offset of the Action frame body. Every parser below derives its own
- * fixed-field offsets from this one call, so none of them can drift
- * from the others the way three copies of a constant did. */
-static int action_body_off(const uint8_t *dot11, int len) {
-    return dot11_mgmt_hdr_len(dot11, len);
-}
-
 /* The Action body starts after the management header, whose length is
- * 24 or 28 — dot11_mgmt_hdr_len() owns that, because the +HTC/Order bit
- * adds an HT Control field. This file hardcoded 24 until 2026-10-14 and
- * so read Category out of HT Control on any Action frame carrying that
- * bit, which silently declined the frame in every detector below.
- * Category and Action occupy the first two body bytes. */
+ * 24 or 28 — the frame view's hdr_len owns that, because the +HTC/Order
+ * bit adds an HT Control field. This file hardcoded 24 until 2026-10-14
+ * and so read Category out of HT Control on any Action frame carrying
+ * that bit, which silently declined the frame in every detector below.
+ * Category and Action occupy the first two body bytes.
+ *
+ * Since #130 every parser here takes the view on_probe_frame() decoded,
+ * and the public (dot11, len) entry points are wrappers that decode
+ * once and call the view form — so Frame Control is read in
+ * dot11_frame.c and nowhere in this file. Before, one Action frame was
+ * decoded up to four times on its way through action_observe(). */
+
+static int  category_frame(const dot11_frame_t *f, uint8_t *action_out);
+static int  btm_req_frame(const dot11_frame_t *f, sloth_btm_req_t *out);
+static int  csa_frame(const dot11_frame_t *f, time_t now);
+static int  rrm_frame(const dot11_frame_t *f, time_t now);
 
 /* Neighbor Report element (tag 52) — IEEE 802.11-2020 §9.4.2.36.
  * BSSID(6) + BSSID Info(4) + Operating Class(1) + Channel(1) + PHY(1).
@@ -80,13 +84,21 @@ static int             g_ring_i;
 static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
 
 int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out) {
-    if (!dot11 || len < 2) return ACTION_PARSE_NOT_ACTION;
-    /* Subtype 13, type 0, protocol version 0 → FC byte 0 == 0xD0.
-     * Compared whole rather than masked so a protocol-version-nonzero
-     * frame (which we cannot interpret) is rejected rather than parsed.
-     * Note this check does NOT see the +HTC bit, which lives in byte 1 —
-     * so it never excluded the frames the old fixed offset mis-read. */
-    if (dot11[0] != 0xD0) return ACTION_PARSE_NOT_ACTION;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return category_frame(&f, action_out);
+}
+
+static int category_frame(const dot11_frame_t *f, uint8_t *action_out) {
+    if (!f->p || f->len < 2) return ACTION_PARSE_NOT_ACTION;
+    /* Subtype 13, type 0, protocol version 0 — what comparing FC octet
+     * 0 whole against 0xD0 used to check. The protocol version is
+     * tested so a frame we cannot interpret is rejected rather than
+     * parsed. Note this does NOT see the +HTC bit, which lives in
+     * octet 1 — so it never excluded the frames the old fixed offset
+     * mis-read. */
+    if (f->proto != 0 || f->type != 0 || f->subtype != 13)
+        return ACTION_PARSE_NOT_ACTION;
     /* Protected Frame (FC B14) before anything in the body is read. On
      * a PMF link every robust category — Spectrum, RRM, SA Query, WNM —
      * travels as CCMP/GCMP ciphertext (§12.5.3): the octet where the
@@ -97,24 +109,32 @@ int action_parse_category(const uint8_t *dot11, int len, uint8_t *action_out) {
      * SA Queries on the same link were counted under whatever PN0 they
      * carried. deauth_parse() has declined ciphertext the same way since
      * #88; this is the Action-frame half of that rule (#124). */
-    if (dot11[1] & 0x40) return ACTION_PARSE_PROTECTED;
-    int hdr = action_body_off(dot11, len);
-    if (hdr < 0 || len < hdr + 2) return ACTION_PARSE_NOT_ACTION;
-    if (action_out) *action_out = dot11[hdr + 1];
-    return dot11[hdr];
+    if (f->protected_) return ACTION_PARSE_PROTECTED;
+    int hdr = f->hdr_len;
+    if (hdr < 0 || f->len < hdr + 2) return ACTION_PARSE_NOT_ACTION;
+    if (action_out) *action_out = f->p[hdr + 1];
+    return f->p[hdr];
 }
 
 int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
     if (!out) return 0;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return btm_req_frame(&f, out);
+}
+
+static int btm_req_frame(const dot11_frame_t *f, sloth_btm_req_t *out) {
     memset(out, 0, sizeof(*out));
 
     uint8_t action = 0;
-    int cat = action_parse_category(dot11, len, &action);
+    int cat = category_frame(f, &action);
     if (cat != ACTION_CAT_WNM || action != WNM_ACT_BTM_REQUEST) return 0;
+    const uint8_t *dot11 = f->p;
+    const int      len   = f->len;
 
     /* Fixed fields: category, action, dialog token, request mode,
      * disassoc timer (2), validity interval. */
-    int hdr = action_body_off(dot11, len);
+    int hdr = f->hdr_len;
     if (hdr < 0) return 0;
     int off = hdr + 2;
     if (off + 5 > len) return 0;
@@ -124,8 +144,8 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
     out->disassoc_timer    = le16(dot11 + off); off += 2;
     out->validity_interval = dot11[off++];
 
-    memcpy(out->target_sta, dot11 + 4,  6);   /* addr1 = DA  */
-    memcpy(out->bssid,      dot11 + 16, 6);   /* addr3 = BSSID */
+    memcpy(out->target_sta, f->da,    6);     /* addr1 = DA  */
+    memcpy(out->bssid,      f->bssid, 6);     /* addr3 = BSSID */
 
     /* Optional fields, in the order the standard fixes them. Both are
      * skipped rather than stored: neither carries a signal this
@@ -316,9 +336,18 @@ void action_mfp_clear(void) {
     pthread_mutex_unlock(&g_mfpv_mu);
 }
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 void action_observe(const uint8_t *dot11, int len, time_t now) {
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    action_observe_frame(&f, now);
+}
+
+void action_observe_frame(const dot11_frame_t *f, time_t now) {
+    if (!f) return;
     uint8_t action = 0;
-    int cat = action_parse_category(dot11, len, &action);
+    int cat = category_frame(f, &action);
     if (cat == ACTION_PARSE_PROTECTED) {
         /* Nothing below can run on ciphertext. The MFP-violation path is
          * unaffected — it only ever applied to frames with the bit
@@ -340,9 +369,9 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
     /* Management frames are always three-address: addr1 = DA/RA,
      * addr2 = SA/TA, addr3 = BSSID (§9.3.3.1). No DS-bit table to
      * consult, unlike a data frame. */
-    if (len >= 24) {
-        const uint8_t *da    = dot11 + 4;
-        const uint8_t *bssid = dot11 + 16;
+    if (f->len >= 24) {
+        const uint8_t *da    = f->da;
+        const uint8_t *bssid = f->bssid;
 
         /* CVE-2019-16275: an individually addressed robust Action frame
          * with the Protected bit clear, on a BSS whose own beacon says
@@ -353,7 +382,7 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
          * so reading that bit on a broadcast answers a question it was
          * never asked. */
         if (action_category_is_robust((uint8_t)cat) &&
-            !(dot11[1] & 0x40) && !(da[0] & 0x01) &&
+            !f->protected_ && !(da[0] & 0x01) &&
             beacon_find_mfp(bssid) == 2)
             mfp_violation_note(bssid, (uint8_t)cat, now);
 
@@ -363,7 +392,7 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
          * a storm shows up in both. */
         if (cat == ACTION_CAT_SA_QUERY) {
             /* The station is whichever address is not the BSSID. */
-            const uint8_t *ta = dot11 + 10;
+            const uint8_t *ta = f->ta;
             const uint8_t *sta = mac_eq(ta, bssid) ? da : ta;
             if (!(sta[0] & 0x01)) saq_observe(bssid, sta, now);
         }
@@ -374,13 +403,13 @@ void action_observe(const uint8_t *dot11, int len, time_t now) {
      * #63 CSA), and the count is what those issues start from. */
     if (cat == ACTION_CAT_SPECTRUM &&
         action == SPECTRUM_ACT_CHANNEL_SWITCH) {
-        csa_parse_action(dot11, len, now);
+        csa_frame(f, now);
         return;
     }
-    if (cat == ACTION_CAT_RRM) { rrm_parse_action(dot11, len, now); return; }
+    if (cat == ACTION_CAT_RRM) { rrm_frame(f, now); return; }
     if (cat != ACTION_CAT_WNM || action != WNM_ACT_BTM_REQUEST) return;
     sloth_btm_req_t req;
-    if (action_parse_btm_req(dot11, len, &req)) btm_observe(&req, now);
+    if (btm_req_frame(f, &req)) btm_observe(&req, now);
 }
 
 /* ── Channel Switch Announcement ring (#63) ──────────────── */
@@ -418,14 +447,22 @@ void csa_observe(const uint8_t bssid[6], const uint8_t *ta,
 }
 
 int csa_parse_action(const uint8_t *dot11, int len, time_t now) {
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return csa_frame(&f, now);
+}
+
+static int csa_frame(const dot11_frame_t *f, time_t now) {
     uint8_t action = 0;
-    int cat = action_parse_category(dot11, len, &action);
+    int cat = category_frame(f, &action);
     if (cat != ACTION_CAT_SPECTRUM ||
         action != SPECTRUM_ACT_CHANNEL_SWITCH) return 0;
+    const uint8_t *dot11 = f->p;
+    const int      len   = f->len;
 
     /* Body after Category + Action is one or more elements. Tag 37 is
      * the announcement; tag 60 carries it with an operating class. */
-    int hdr = action_body_off(dot11, len);
+    int hdr = f->hdr_len;
     if (hdr < 0) return 0;
     int off = hdr + 2;
     int mode = 0, chan = 0, count = 0, opclass = 0, found = 0;
@@ -448,7 +485,7 @@ int csa_parse_action(const uint8_t *dot11, int len, time_t now) {
     /* addr2 is the real transmitter and addr3 the BSS it claims to
      * speak for. Keeping both is the whole spoof signal: in a genuine
      * announcement they are the same address. */
-    csa_observe(dot11 + 16, dot11 + 10, chan, opclass, mode, count,
+    csa_observe(f->bssid, f->ta, chan, opclass, mode, count,
                 CSA_SRC_ACTION, 0, now);
     return 1;
 }
@@ -547,24 +584,32 @@ static sloth_rrm_pair_t *rrm_slot(const uint8_t bssid[6],
 }
 
 int rrm_parse_action(const uint8_t *dot11, int len, time_t now) {
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return rrm_frame(&f, now);
+}
+
+static int rrm_frame(const dot11_frame_t *f, time_t now) {
     uint8_t action = 0;
-    int cat = action_parse_category(dot11, len, &action);
+    int cat = category_frame(f, &action);
     if (cat != ACTION_CAT_RRM) return 0;
     if (action != RRM_ACT_MEASUREMENT_REQUEST &&
         action != RRM_ACT_MEASUREMENT_REPORT) return 0;
+    const uint8_t *dot11 = f->p;
+    const int      len   = f->len;
 
     /* AP -> STA for a request: addr1 is the client being asked, addr3
      * the BSS asking. A report travels the other way, but is recorded
      * against the same pair — the conversation is what matters, not
      * which end spoke last. */
     const uint8_t *sta   = (action == RRM_ACT_MEASUREMENT_REQUEST)
-                           ? dot11 + 4 : dot11 + 10;
-    const uint8_t *bssid = dot11 + 16;
+                           ? f->da : f->sa;
+    const uint8_t *bssid = f->bssid;
     if ((sta[0] & 0x01) || (bssid[0] & 0x01)) return 0;
 
     /* Category(1) Action(1) DialogToken(1), then Measurement Request
      * or Report elements (tag 38 / 39). */
-    int hdr = action_body_off(dot11, len);
+    int hdr = f->hdr_len;
     if (hdr < 0) return 0;
     int off = hdr + 3;
     if (action == RRM_ACT_MEASUREMENT_REQUEST) off += 2;  /* + repetitions */

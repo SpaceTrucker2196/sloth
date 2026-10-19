@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#118, #141, #132)
+**Last updated**: 2026-10-19 (#118, #141, #132, #130)
 
 ---
 
@@ -92,12 +92,32 @@ docs/views/*.md            -- per-view deep dives
   as hints, and read type, subtype, flags, header length, body offset
   and the Table 9-26 address roles out of the resulting `dot11_frame_t`.
   The §9.2.4.1.10 rule (Order means HT Control only in management and
-  QoS data frames) lives in that one function. The byte-pointer helpers
-  in `src/dot11_data.h` are wrappers over it, kept because the
-  observers (`eapol_log.c`, `fragattack.c`, `pm_forge.c`,
-  `queue_evict.c`, `deauth_snoop.c`, `action_snoop.c`, `assoc_track.c`,
-  `ctrl_frames.c`) still take `(dot11, len)` and their tests and fuzz
-  harnesses are written against that. Tests build frames with
+  QoS data frames) lives in that one function. Since #130 every observer
+  takes the view: `eapol_observe_frame`, `frag_observe_frame`,
+  `pm_forge_observe_frame`, `queue_evict_observe_downlink_frame`,
+  `beacon_parse_frame`, `deauth_parse_frame`,
+  `assoc_request_parse_frame`, `action_observe_frame` and
+  `ctrl_observe_frame` are what `on_probe_frame()` calls, and none of
+  them reads Frame Control — type, subtype, the DS bits, Retry, PwrMgt
+  and Protected all come from the view, and the protocol-version check
+  three parsers did by comparing FC octet 0 whole is the view's `proto`.
+  The data-frame questions (TID, A-MSDU bit, CCMP PN) are
+  `dot11_frame_tid/amsdu/ccmp_pn()`. The old `(dot11, len)` entry
+  points, and the byte-pointer helpers in `src/dot11_data.h`, remain as
+  wrappers that decode once and call the view form, because the unit
+  tests and fuzz harnesses are written against them. A DATAPAD data
+  frame is handed on as the on-air frame through `dot11_frame_depad()`,
+  which moves the view onto the depadded copy without decoding it again.
+  `tests/test_dot11_frame.c` arms a decode counter around
+  `probe_test_dispatch()` and holds it at one decode per frame, every
+  frame type included; `grep -n '(dot11\[0\] >> 2)\|dot11\[1\] &
+  0x40\|dot11\[22\]' src/` is empty. Protected handling stays per
+  observer and is now read from `f->protected_`: deauth/disassoc and
+  Action decline the ciphertext body (they are the robust management
+  frames), the data observers branch on it as before, and Beacon and
+  (Re)Association Request — never robust, never encrypted — ignore it
+  as they always did. Detector output is unchanged; `make replay-check`
+  matched the golden without regeneration. Tests build frames with
   `tests/frame_build.h`, which appends optional fields only when the
   test states them. Two consequences an operator can see: the monitor
   packets band's per-frame length excludes the FCS when radiotap says

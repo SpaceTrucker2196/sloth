@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* One parsed deauth (subtype 12) or disassoc (subtype 10) frame.
  * Everything a frame *says* is kept apart from what can be concluded
@@ -33,6 +34,8 @@ typedef struct {
  * with a header but no reason is accepted with truncated = 1 and
  * reason_valid = 0 — it was on the air, its reason is unknown. */
 int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+int deauth_parse_frame(const dot11_frame_t *f, deauth_frame_t *out);
 
 /* Record one parsed frame (thread-safe). Clock comes from
  * flood_mono_ms() / flood_wall(). */

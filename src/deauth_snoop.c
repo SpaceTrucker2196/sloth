@@ -4,7 +4,7 @@
 #include "sloth.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
-#include "dot11_data.h"
+#include "dot11_frame.h"
 #include "tune.h"
 
 /* deauth.flood_thresh / deauth.flood_window_s (#120). Read per frame:
@@ -54,17 +54,21 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── 802.11 frame parser ─────────────────────────────────── */
 
+/* The byte entry point stays for the tests and fuzz harnesses written
+ * against it (#130); it decodes once and hands the view on. */
 int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out)
 {
-    if (len < 24) return 0;
+    dot11_frame_t f;
+    dot11_frame_decode(dot11, len, NULL, &f);
+    return deauth_parse_frame(&f, out);
+}
 
-    uint8_t fc0  = dot11[0];
-    uint8_t fc1  = dot11[1];
-    uint8_t type = (fc0 >> 2) & 0x03;
-    uint8_t sub  = (fc0 >> 4) & 0x0f;
+int deauth_parse_frame(const dot11_frame_t *f, deauth_frame_t *out)
+{
+    if (!f || !f->p || f->len < 24) return 0;
 
-    if (type != 0) return 0;                /* management only */
-    if (sub != 10 && sub != 12) return 0;   /* disassoc or deauth only */
+    if (f->type != 0) return 0;                         /* management only */
+    if (f->subtype != 10 && f->subtype != 12) return 0; /* disassoc or deauth only */
 
     /* +HTC: the Order bit in a management frame announces a 4-octet HT
      * Control field between Sequence Control and the body (IEEE
@@ -72,22 +76,21 @@ int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out)
      * wrong and the "reason" is HT Control bytes.
      *
      * This file had it right and the other three management parsers did
-     * not, so the expression moved to dot11_mgmt_hdr_len() and they all
-     * call it now — the divergence is the reason it is a function. */
-    int hdr = dot11_mgmt_hdr_len(dot11, len);
+     * not, so the rule moved to one place — dot11_mgmt_hdr_len() first,
+     * the frame view's hdr_len since #122 — and they all read it there. */
+    int hdr = f->hdr_len;
     if (hdr < 0) return 0;
 
     memset(out, 0, sizeof(*out));
-    memcpy(out->dst,   dot11 + 4,  6);
-    memcpy(out->src,   dot11 + 10, 6);
-    memcpy(out->bssid, dot11 + 16, 6);
-    out->subtype    = sub;
-    out->fc_flags   = fc1;
-    out->retry      = (fc1 & 0x08) ? 1 : 0;
-    out->protected_ = (fc1 & 0x40) ? 1 : 0;
-    uint16_t sc = (uint16_t)(dot11[22] | ((uint16_t)dot11[23] << 8));
-    out->frag = (uint8_t)(sc & 0x0f);
-    out->seq  = (uint16_t)(sc >> 4);
+    memcpy(out->dst,   f->da,    6);     /* addr1 */
+    memcpy(out->src,   f->sa,    6);     /* addr2 */
+    memcpy(out->bssid, f->bssid, 6);     /* addr3 (§9.3.3.1) */
+    out->subtype    = f->subtype;
+    out->fc_flags   = f->fc1;
+    out->retry      = f->retry;
+    out->protected_ = f->protected_;
+    out->frag = (uint8_t)f->frag_num;
+    out->seq  = (uint16_t)f->seq_num;
 
     /* Protected Frame first. On a PMF link an individually addressed
      * deauth/disassoc body is CCMP/GCMP ciphertext (12.5.3): the two
@@ -95,8 +98,8 @@ int deauth_parse(const uint8_t *dot11, int len, deauth_frame_t *out)
      * reason. Group-addressed ones use BIP, leave the reason in clear
      * and do not set this bit. */
     if (out->protected_) return 1;
-    if (len < hdr + 2) { out->truncated = 1; return 1; }
-    out->reason       = (uint16_t)(dot11[hdr] | ((uint16_t)dot11[hdr + 1] << 8));
+    if (f->len < hdr + 2) { out->truncated = 1; return 1; }
+    out->reason       = (uint16_t)(f->p[hdr] | ((uint16_t)f->p[hdr + 1] << 8));
     out->reason_valid = 1;
     return 1;
 }

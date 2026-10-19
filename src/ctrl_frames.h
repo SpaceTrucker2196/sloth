@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* 802.11 control frames (type 1) — issue #64.
  *
@@ -107,6 +108,8 @@ int  bar_pair_count(void);
  * radiotap. `channel` is the channel it was heard on (0 = unknown).
  * Ignores anything that is not type 1. Thread-safe. */
 void ctrl_observe(const uint8_t *dot11, int len, int channel, time_t now);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+void ctrl_observe_frame(const dot11_frame_t *f, int channel, time_t now);
 
 /* Per-channel totals across every control subtype, including the ones
  * with no source address. Returns 0 when the channel is untracked. */

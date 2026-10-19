@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* Client↔AP association tracker.
  *
@@ -45,6 +46,8 @@ void assoc_clear(void);
  * downgrade — a STA requesting SAE with MFP required that ends up on
  * PSK has been moved, and neither half shows it alone (#60). */
 int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out);
+/* The same, on a frame on_probe_frame() has already decoded (#130). */
+int assoc_request_parse_frame(const dot11_frame_t *f, assoc_req_t *out);
 
 /* Record a parsed request. Keyed by (BSSID, STA); the most recent ask
  * replaces any earlier one, since a client that re-requests with new

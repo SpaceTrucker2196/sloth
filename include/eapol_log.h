@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* EAPOL-Key / WPA 4-way handshake capture.
  *
@@ -52,6 +53,13 @@
 int  eapol_observe_dot11(const uint8_t *dot11, int len,
                           int8_t signal, int channel,
                           time_t ts_sec, long ts_usec);
+/* The same, on a frame on_probe_frame() has already decoded (#130). The
+ * view must carry the frame as it was on the air — no datapad, see
+ * dot11_frame_depad() — because its bytes are what the handshake pcap
+ * records. */
+int  eapol_observe_frame(const dot11_frame_t *f,
+                         int8_t signal, int channel,
+                         time_t ts_sec, long ts_usec);
 
 /* How long after its M1 a handshake attempt may still be paired with an
  * M2 (#97 / T12).

@@ -99,36 +99,19 @@ int dot11_data_tid(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
     dot11_frame_t f;
     dot11_frame_decode(dot11, len, NULL, &f);
-    if (f.type != 2) return -1;
-    if (!f.has_qos) return 0;      /* non-QoS: implicit single queue */
-    return f.tid;                  /* -1 when QoS Control is cut off */
+    return dot11_frame_tid(&f);
 }
 
 int dot11_amsdu_present(const uint8_t *dot11, int len) {
     if (!dot11 || len < 2) return -1;
     dot11_frame_t f;
     dot11_frame_decode(dot11, len, NULL, &f);
-    if (f.type != 2 || !f.has_qos) return -1;   /* no QoS Control field */
-    return f.amsdu;
+    return dot11_frame_amsdu(&f);
 }
 
 int64_t dot11_ccmp_pn(const uint8_t *dot11, int len) {
     if (!dot11 || len < 24) return -1;
     dot11_frame_t f;
     dot11_frame_decode(dot11, len, NULL, &f);
-    if (f.type != 2 || !f.protected_) return -1;
-    if (f.hdr_len < 0 || f.body_len < 8) return -1;
-    const uint8_t *iv = f.p + f.body_off;
-
-    /* Without the Extended IV bit these eight bytes are a WEP IV or an
-     * original-TKIP one, neither of which carries a 48-bit PN. Reading
-     * them anyway would invent a number that looks like evidence. */
-    if (!(iv[3] & 0x20)) return -1;
-
-    return (int64_t)((uint64_t)iv[0]              |
-                     ((uint64_t)iv[1] <<  8)      |
-                     ((uint64_t)iv[4] << 16)      |
-                     ((uint64_t)iv[5] << 24)      |
-                     ((uint64_t)iv[6] << 32)      |
-                     ((uint64_t)iv[7] << 40));
+    return dot11_frame_ccmp_pn(&f);
 }
