@@ -93,7 +93,9 @@ static void draw_detail(const sloth_state_t *s) {
                       (unsigned)p->raw_len);
 
     if (p->raw_len == 0) {
-        tui_dim(); TPRINT("  (no raw bytes \xe2\x80\x94 build with WITH_PCAP=1)\n");
+        /* This block is compiled only WITH_PCAP, so the old "build with
+         * WITH_PCAP=1" hint could never have been the reason (#116). */
+        tui_dim(); TPRINT("  (no raw bytes kept for this packet)\n");
     } else {
         int total = (int)p->raw_len;
         for (int off = 0; off < total; off += 16) {

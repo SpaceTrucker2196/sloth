@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/packets.h"
 
@@ -253,7 +254,10 @@ void test_filter_draw_in_filter_mode(void) {
     view_packets_key(&s, '/');
     view_packets_key(&s, 'u');
     view_packets_draw(&s);
-    ASSERT(1);
+    /* The prompt sits on its own row between the status line and the
+     * header, with the edit cursor after what was typed. */
+    ASSERT_LINE_HAS(1, "Filter> u_");
+    ASSERT_LINE_HAS(2, "Time         Source");
 }
 
 /* ── Draw smoke test ─────────────────────────────────────── */
@@ -262,7 +266,9 @@ void test_draw_no_crash_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_packets_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Packets: 0");
+    ASSERT_SCREEN_HAS("(no packets captured");
+    ASSERT_SCREEN_LACKS("Filter>");
 }
 
 void test_draw_no_crash_with_packets(void) {
@@ -272,7 +278,17 @@ void test_draw_no_crash_with_packets(void) {
     s.pkt_paused = 1;
     s.pkt_sel    = 2;
     view_packets_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Packets: 5  [PAUSED]");
+    for (int i = 0; i < 5; i++) {
+        char info[16];
+        snprintf(info, sizeof(info), "TCP SYN %d", i);
+        int y = runner_screen_find(info);
+        ASSERT(y >= 0);
+        /* Paused, so the selection is drawn: row 2 alone is reverse. */
+        ASSERT_EQ(tui_test_is_reverse(y, 1), i == 2 ? 1 : 0);
+    }
+    ASSERT_LINE_HAS(runner_screen_find("TCP SYN 3"),
+                    "10.0.0.3:0             \xe2\x86\x92  8.8.8.3:0");
 }
 
 /* ── Detail panel ────────────────────────────────────────── */
@@ -345,8 +361,36 @@ void test_detail_draw_no_crash(void) {
     s.pkt_paused = 1;
     s.pkt_sel    = 1;
     s.pkt_detail = 1;
+    s.pkt_detail_idx = 1;      /* what [Enter] on row 1 sets */
     view_packets_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "PACKET DETAIL");
+    ASSERT_SCREEN_HAS("Source:   10.0.0.1");
+    ASSERT_SCREEN_HAS("Info:     TCP SYN 1");
+    ASSERT_SCREEN_HAS("HEX DUMP (0 bytes)");
+    ASSERT_SCREEN_HAS("(no raw bytes kept for this packet)");
+}
+
+/* The hex dump, one 16-byte row: offset, two groups of eight, ASCII
+ * with non-printables as dots. */
+static void test_detail_draw_hex_dump(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    push_packets(&s, 1);
+    static const uint8_t b[18] = {
+        0x45, 0x00, 0x00, 0x3c, 0x1c, 0x46, 0x40, 0x00,
+        0x40, 0x06, 'G',  'E',  'T',  ' ',  '/',  0x7f,
+        0x0d, 0x0a,
+    };
+    memcpy(s.packets[0].raw, b, sizeof(b));
+    s.packets[0].raw_len = (uint16_t)sizeof(b);
+    s.pkt_paused = 1;
+    s.pkt_detail = 1;
+    s.pkt_detail_idx = 0;
+    view_packets_draw(&s);
+    ASSERT_SCREEN_HAS("HEX DUMP (18 bytes)");
+    ASSERT_SCREEN_HAS("0000  45 00 00 3c 1c 46 40 00  40 06 47 45 54 20 2f 7f  E..<.F@.@.GET /.");
+    ASSERT_SCREEN_HAS("0010  0d 0a");
+    ASSERT_SCREEN_LACKS("no raw bytes");
 }
 
 /* Seed n monitor frames, newest-first as mon_frame_snapshot stores
@@ -431,7 +475,19 @@ static void test_merged_draw_no_crash(void) {
     push_packets(&s, 4);
     push_mon_frames(&s, 4, 1010);
     view_packets_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Packets: 8  mon: wlan1mon (4 frames, grey rows)");
+    /* Monitor rows carry the sanctioned dark-grey pair (CP_MON_ROW*);
+     * IP rows do not. Seen to fail with the mon row's tui_mon_*() calls
+     * replaced by their plain counterparts. */
+    int ip  = runner_screen_find("TCP SYN 3");
+    int mon = runner_screen_find("Beacon 0dBm");
+    ASSERT(ip >= 0 && mon >= 0);
+    ASSERT_LINE_HAS(mon, "80211");
+    ASSERT_LINE_HAS(mon, "[wlan1mon]");
+    int mp = tui_test_pair(mon, runner_find_col(mon, "Beacon"));
+    int ipp = tui_test_pair(ip, runner_find_col(ip, "TCP SYN"));
+    ASSERT(mp >= CP_MON_ROW && mp <= CP_MON_ROW_BRIGHT);
+    ASSERT(!(ipp >= CP_MON_ROW && ipp <= CP_MON_ROW_BRIGHT));
 }
 
 void run_packets_tests(void) {
@@ -476,6 +532,7 @@ void run_packets_tests(void) {
     RUN_TEST(test_detail_close_on_esc);
     RUN_TEST(test_detail_blocks_nav);
     RUN_TEST(test_detail_draw_no_crash);
+    RUN_TEST(test_detail_draw_hex_dump);
 
     TEST_SUITE("packets/merged monitor timeline");
     RUN_TEST(test_merged_timeline_order);
