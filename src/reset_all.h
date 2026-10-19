@@ -96,6 +96,7 @@
     X(twins_clear) \
     X(wifi_baseline_clear) \
     X(wired_attach_clear) \
+    X(view_procs_fold_clear) \
     X(wps_track_clear)
 
 void sloth_reset_all(void);

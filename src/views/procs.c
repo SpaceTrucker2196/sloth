@@ -174,6 +174,11 @@ static int is_folded(int pid) {
     return 0;
 }
 
+void view_procs_fold_clear(void) {
+    memset(g_folded_pids, 0, sizeof(g_folded_pids));
+    g_folded_n = 0;
+}
+
 static void toggle_folded(int pid) {
     for (int i = 0; i < g_folded_n; i++) {
         if (g_folded_pids[i] == pid) {

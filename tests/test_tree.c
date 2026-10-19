@@ -4,6 +4,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "views/procs.h"
+#include "tui.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -45,13 +46,17 @@ static void test_aggregate_zeros_ppid_depth(void) {
     ASSERT_EQ(out[0].depth, 0);
 }
 
-/* ── Draw smoke tests ────────────────────────────────────── */
+/* ── Draw ─────────────────────────────────────────────────── *
+ * ASSERT(1) smoke tests until #116; they read the screen now. The two
+ * real-PID cases assert the tree's shape and never a PID, which is the
+ * host's. */
 
 static void test_tree_draw_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Processes: 0");
+    ASSERT_SCREEN_HAS("(no connections)");
 }
 
 static void test_tree_draw_single(void) {
@@ -59,7 +64,11 @@ static void test_tree_draw_single(void) {
     memset(&s, 0, sizeof(s));
     push(&s, 100, "sshd", PROTO_TCP);
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Processes: 1");
+    int y = runner_screen_find("sshd");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "  100      1     1     0");
+    ASSERT_SCREEN_LACKS("(no connections)");
 }
 
 static void test_tree_draw_multiple_roots(void) {
@@ -69,7 +78,11 @@ static void test_tree_draw_multiple_roots(void) {
     push(&s, 200, "sshd",   PROTO_TCP);
     push(&s, 300, "chrome", PROTO_TCP);
     view_procs_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Processes: 3");
+    /* Three roots, none indented under another. */
+    ASSERT(runner_find_col(runner_screen_find("nginx"), "nginx") == 1);
+    ASSERT(runner_find_col(runner_screen_find("sshd"), "sshd") == 1);
+    ASSERT(runner_find_col(runner_screen_find("chrome"), "chrome") == 1);
 }
 
 static void test_tree_draw_unresolved(void) {
@@ -78,7 +91,10 @@ static void test_tree_draw_unresolved(void) {
     push(&s, 0, "", PROTO_TCP);
     push(&s, 0, "", PROTO_UDP);
     view_procs_draw(&s);
-    ASSERT(1);
+    /* pid 0 rows fold into one "(unresolved)" row, PID column "-". */
+    int y = runner_screen_find("(unresolved)");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "-      2     1     1");
 }
 
 /* ── Real parent-child test using getpid()/getppid() ─────── */
@@ -86,7 +102,8 @@ static void test_tree_draw_unresolved(void) {
 static void test_tree_real_parent_child(void) {
     pid_t self   = getpid();
     pid_t parent = getppid();
-    if (self == parent) { ASSERT(1); return; }  /* degenerate, skip */
+    ASSERT_NE(self, parent);      /* no process is its own parent */
+    if (self == parent) return;
 
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
@@ -102,7 +119,13 @@ static void test_tree_real_parent_child(void) {
     proc_stat_t agg[MAX_PROCS];
     int n = procs_aggregate(&s, agg, MAX_PROCS);
     ASSERT(n >= 2);
-    ASSERT(1);   /* smoke: no crash */
+    /* The child is drawn under the parent, indented one level. */
+    int py = runner_screen_find("parent_proc");
+    int cy = runner_screen_find("child_proc");
+    ASSERT(py >= 0);
+    ASSERT_EQ(cy, py + 1);
+    ASSERT_LINE_HAS(py, "[-]");
+    ASSERT_EQ(runner_find_col(cy, "child_proc"), 3);
 }
 
 /* ── Navigation tests ────────────────────────────────────── */
@@ -185,7 +208,8 @@ static void test_tree_enter_real_child_folds(void) {
        (which has getpid() as a child in the list) should toggle fold. */
     pid_t self   = getpid();
     pid_t parent = getppid();
-    if (self == parent) { ASSERT(1); return; }
+    ASSERT_NE(self, parent);      /* no process is its own parent */
+    if (self == parent) return;
 
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
@@ -201,12 +225,20 @@ static void test_tree_enter_real_child_folds(void) {
     /* draw to populate g_vis_count */
     view_procs_draw(&s);
 
+    ASSERT_LINE_HAS(runner_screen_find("parent "), "[-]");
+    ASSERT_SCREEN_HAS("  child ");
+
     view_procs_key(&s, '\r');  /* fold/unfold */
     /* now draw again to see new vis_count */
+    tui_test_erase();
     view_procs_draw(&s);       /* rebuilds vis */
 
-    /* Smoke: no crash */
-    ASSERT(1);
+    /* Folded: the marker flips, the child row is gone, and the header
+     * counts visible over total. Seen to fail with the Enter fold toggle
+     * removed from view_procs_key(). */
+    ASSERT_LINE_HAS(0, "Processes: 1/2");
+    ASSERT_LINE_HAS(runner_screen_find("parent "), "[+]");
+    ASSERT_SCREEN_LACKS("  child ");
 }
 
 /* ── Detail close ────────────────────────────────────────── */

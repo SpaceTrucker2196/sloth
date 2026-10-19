@@ -24,4 +24,8 @@ typedef struct {
 int  procs_aggregate(const sloth_state_t *s, proc_stat_t *out, int max);
 void view_procs_draw(const sloth_state_t *s);
 void view_procs_key(sloth_state_t *s, int key);
+/* Unfold every folded tree node. The fold set lives for the session;
+ * this exists for the reset registry (#114), so a fold one test makes
+ * is not still applied in the next (#116). */
+void view_procs_fold_clear(void);
 #endif
