@@ -362,6 +362,22 @@ static void test_view_key_clear(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+/* #138: a label may carry any octet (RFC 2181 §11); the stored qname
+ * maps C0/DEL to '?'. Mutation-proved: the qname store back to
+ * snprintf("%s") reddens it. */
+static void test_qname_control_octets_marked(void) {
+    static const uint8_t name[] = {
+        0x04,'t',0x0a,'s',0x1b,
+        0x07,'e','x','a','m','p','l','e',
+        0x00
+    };
+    uint8_t buf[64];
+    int len = build_query(buf, sizeof(buf), name, (int)sizeof(name), 1);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "192.168.1.5", &e), 1);
+    ASSERT_STR(e.qname, "t?s?.example");
+}
+
 void run_dns_log_tests(void) {
     TEST_SUITE("dns_log parse");
     RUN_TEST(test_parse_query_a);
@@ -390,4 +406,5 @@ void run_dns_log_tests(void) {
     TEST_SUITE("view_dns key");
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+    RUN_TEST(test_qname_control_octets_marked);
 }

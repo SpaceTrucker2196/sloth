@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 
 #include "sloth.h"
+#include "netstr.h"
 #include "nbns_snoop.h"
 #include "dns.h"
 #include "stab.h"
@@ -43,8 +44,7 @@ static void decode_nb_name(const uint8_t *enc, char *out, int outsz,
     int len = 15;
     while (len > 0 && raw[len - 1] == ' ') len--;
     if (len >= outsz) len = outsz - 1;
-    if (len > 0) memcpy(out, raw, (size_t)len);
-    out[len] = '\0';
+    netstr_copy(out, (size_t)outsz, raw, (size_t)len);   /* #138 */
 }
 
 /* Skip a DNS-encoded name; returns pointer past the final byte, or NULL. */

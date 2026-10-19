@@ -21,14 +21,14 @@ whether it is closed today, and the Track X slice that owns it.
 `decode_ipv4`), `src/capture/probe.c` (`on_probe_frame`),
 `src/secure_file.c`, `src/privdrop.c`, `src/discovery.c`, `src/eapol_log.c`,
 `src/alert_pcap.c`, `src/db.c`, `research/query.c`, `src/data_socket.c`,
-`src/jsonl.c` (`json_escape`), `src/formatter.c` (`cef_escape_field`,
+`src/netstr.c`, `src/tui.c` (`tui_printf`), `src/jsonl.c` (`json_escape`), `src/formatter.c` (`cef_escape_field`,
 `cef_escape_ext`, `syslog_sd_escape`), `src/inventory.c`, `src/posture.c`,
 `src/wifi_snapshot.c`, `src/views/dashboard_bands.c`,
 `packaging/systemd/sloth-sensor.service`, `Makefile`,
 `.github/workflows/ci.yml`, `SECURITY.md`, `MISSION.md` §2, issues #133,
 #134, #139 and the #143 tracking index.
 
-**Last updated**: 2026-10-19 (#142 CI half)
+**Last updated**: 2026-10-19 (#138: TB-5 choke point)
 
 ---
 
@@ -176,21 +176,42 @@ notice).
 JSON, CEF, syslog, Markdown and the snapshot file. This is the boundary
 where A1 data becomes A3 and A4 risk.
 
-**Enforced today**: per-field ingest filters where the field was
-noticed — SSID (`src/beacon_snoop.c`, C0 and DEL dropped), cleartext
-credentials, MQTT and SSH identifiers, inventory SSIDs; `json_escape()`
-escapes `"`, `\`, and every byte below `0x20`; the CEF and syslog
-escapers quote their own delimiters.
+**Enforced today** (#138, `src/netstr.h`):
 
-**Known unchecked**: there is no choke point — a new field reaches the
-terminal unfiltered until someone notices (CWE-150; #77 found four WPS
-strings doing exactly that in the ANSI build). `json_escape()` passes
-every byte `>= 0x80` through, so a non-UTF-8 SSID produces a record that
-is not valid JSON text (CWE-838, CWE-116). `cef_escape_*()` and
-`syslog_sd_escape()` map CR and LF to space and pass every other C0
-byte, including ESC, into a line a SIEM will display (CWE-117).
-Owner: #138 (`netstr` choke point, valid-UTF-8 `json_escape`); the
-manifest/roster/baseline raw prints are #137's.
+- *Render.* Every view's text reaches the terminal through one function
+  — `TPRINT` is `tui_printf()`, and `t_puts` / `t_putn` and the views'
+  former direct `printw` / `addstr` calls go through the same path. It
+  formats into a buffer and runs `display_sanitize()`: an invalid UTF-8
+  octet becomes `?`, and so does each C0 code point other than `\n`,
+  DEL, C1 (U+0080..U+009F) and the bidi controls U+202A..U+202E /
+  U+2066..U+2069. Both backends: ncurses (which acts on `\r \b \t`)
+  and the ANSI fallback (which acted on everything).
+- *Ingest, name-class fields.* SSID (once, in `dot11_ie_ssid_copy()`, so
+  beacon, probe, association and RRM paths share it), DNS `qname`, NBNS
+  name, DHCP hostname, TLS and SNI host, QUIC host, HTTP Host and
+  User-Agent, and every mDNS name are stored through `netstr_copy()`: C0
+  and DEL become `?`, octets above 0x7f are kept (an SSID is opaque
+  octets and `--my-ssid` / baseline matching compare it exactly). This
+  is what stops a data `\n` that the render layer cannot tell from a
+  format-literal one.
+- *Export.* `json_escape()` output is always valid UTF-8 (invalid octet
+  → `\ufffd`; DEL, C1 and U+2028/9 `\u`-escaped). The CEF and syslog
+  escapers map C0, DEL and C1 — raw, UTF-8-encoded, or as a JSON
+  `\b` / `\f` / `\u00XX` escape — to a space, and the syslog MSG copy
+  of the record loses raw C0/DEL/C1 the same way.
+- The stricter per-field filters that predate this stay: printable
+  ASCII for cleartext credentials, MQTT, SSH, RDP, EAP identities and
+  the WPS strings; SNMP rejects.
+
+**Known unchecked**: a string drawn with `mvprintw` / `mvaddstr` (the
+dashboard's glyph rules and a handful of literal status lines) does not pass
+through `tui_printf`; none of those carries network data today, and a
+new one that did would bypass the render layer. Fields outside the
+name class are stored raw and rely on the render and export layers.
+Those catch everything except `\n`, which `display_sanitize()` must
+keep because it cannot tell a data newline from a format-literal one —
+so a `\n` in, say, an HTTP path can still end a row early. The ingest
+list in `src/netstr.h` is where such a field gets added.
 
 ### TB-6 — operator-file parsers
 
@@ -257,7 +278,7 @@ does on the date above, not what the issue said when it was filed —
 | `db.c` side-file TOCTOU; `SQLITE_OPEN_NOFOLLOW` behind `#ifdef` | TB-3 | ADV-2 | 367 | **Narrowed** by #134: `NOFOLLOW` is now a compile-time requirement. The side-file check remains advisory by nature (sqlite creates the files). | #134 (X1) |
 | `alert_pcap.c` used non-reentrant `localtime()` from the capture thread | A1 | — (correctness) | 663 | **Closed** by #134: `localtime_r`. Three `localtime()` calls remain in `src/views/dashboard_bands.c`, all on the UI thread, which is now the only caller. | #134 (X1) |
 | Loopback TCP by default; 16 global slots; idle peers held forever | TB-4 | ADV-2 | 306, 770 | **Open.** `MAX_CLIENTS 16`, no per-peer cap; stall timer only while bytes are queued. | #135 (X2), #136 (X3) |
-| Terminal escapes in stored strings; `json_escape` passes `>= 0x80`; CEF/syslog strip CR/LF only | TB-5 | ADV-1 (stored) | 150, 116, 117, 838 | **Open.** Per-field filters exist where someone looked; no choke point. | #138 (X5) |
+| Terminal escapes in stored strings; `json_escape` passes `>= 0x80`; CEF/syslog strip CR/LF only | TB-5 | ADV-1 (stored) | 150, 116, 117, 838 | **Closed** by #138: `tui_printf()` + `display_sanitize()` on every view's output, `netstr_copy()` on name-class stores, `json_escape()` always valid UTF-8, CEF/syslog map C0/DEL/C1 to space. Residual: a `\n` in a non-name-class field still ends a row. | #138 (X5) |
 | `caplen` cast to `int`; `probe.c` private radiotap length; no IPv4 Total-Length clamp | TB-1 | ADV-1 | 1284, 125 | **Open.** Both entry points cast; `decode_ipv4()` never reads Total Length. | #141 (X8), #132 (P10b) |
 | `research.db` opened without `DEFENSIVE` / `TRUSTED_SCHEMA` off | TB-6 | ADV-3 | 20 | **Closed** by #137: `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extensions, `SQLITE_LIMIT_LENGTH` 1 MiB, each read back; catalogue probe refuses a `research` VIEW and any trigger. `--db` gets `DEFENSIVE`. | #137 (X4) |
 | Manifest / roster / baseline fields printed raw | TB-6 → TB-5 | ADV-3 (and ADV-1 via baseline) | 117 | **Closed** by #137: manifest C0/DEL → `err=1`; roster echo bounded and sanitised; snapshot SSID/label escaped, `strtol` with range on read. | #137 (X4) |

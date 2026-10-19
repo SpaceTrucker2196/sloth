@@ -236,6 +236,15 @@ static void test_host_no_space_after_colon(void) {
 
 /* ── Entry point ────────────────────────────────────────────── */
 
+/* #138: Host is stored through netstr_copy(). Mutation-proved: the
+ * memcpy restored in http_snoop.c reddens it. */
+static void test_host_control_octets_marked(void) {
+    char host[64];
+    const char *req = "GET / HTTP/1.1\r\nHost: ex\x1b[2Jample.com\r\n\r\n";
+    ASSERT_EQ(1, snoop(req, host, sizeof(host)));
+    ASSERT_STR("ex?[2Jample.com", host);
+}
+
 void run_http_snoop_tests(void) {
     TEST_SUITE("http_snoop");
 
@@ -268,4 +277,5 @@ void run_http_snoop_tests(void) {
     RUN_TEST(test_host_with_hostsz_two);
     RUN_TEST(test_hostname_prefix_does_not_alias_host);
     RUN_TEST(test_host_no_space_after_colon);
+    RUN_TEST(test_host_control_octets_marked);
 }

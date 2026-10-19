@@ -455,31 +455,31 @@ void view_procs_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == vis_sel) {
             tui_sel();
-            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
+            tui_printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
                    p->conn_count, p->tcp_count, p->udp_count,
                    tx_buf, rx_buf, port_buf);
             tui_reset();
         } else if (p->pid == -1) {
             tui_dim();
-            printw(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
+            tui_printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
                    p->conn_count, p->tcp_count, p->udp_count,
                    tx_buf, rx_buf, port_buf);
             tui_normal();
         } else {
             if (p->depth > 0) tui_dim(); else tui_bright();
-            printw(" %-15.15s", ind_name);
-            tui_dim();    printw(" %-3s", fold_ind);
-            tui_dim();    printw("  %6s", pid_str);
-            tui_bright(); printw("  %5d", p->conn_count);
-            tui_normal(); printw("  %4d  %4d", p->tcp_count, p->udp_count);
+            tui_printf(" %-15.15s", ind_name);
+            tui_dim();    tui_printf(" %-3s", fold_ind);
+            tui_dim();    tui_printf("  %6s", pid_str);
+            tui_bright(); tui_printf("  %5d", p->conn_count);
+            tui_normal(); tui_printf("  %4d  %4d", p->tcp_count, p->udp_count);
             /* TX / RX — bright on traffic, dim on idle. */
             if (p->tx_bytes > 0) tui_bright(); else tui_dim();
-            printw("  %7s", tx_buf);
+            tui_printf("  %7s", tx_buf);
             if (p->rx_bytes > 0) tui_bright(); else tui_dim();
-            printw("  %7s", rx_buf);
-            tui_dim();    printw("  %s\n", port_buf);
+            tui_printf("  %7s", rx_buf);
+            tui_dim();    tui_printf("  %s\n", port_buf);
             tui_normal();
         }
 #else

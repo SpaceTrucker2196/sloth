@@ -401,6 +401,23 @@ static void test_sni_empty_name_rejected(void) {
 
 /* ── Entry point ─────────────────────────────────────────── */
 
+/* #138: same rule on the connection-table SNI path. Mutation-proved:
+ * the memcpy restored in sni_snoop.c reddens it. */
+static void test_sni_control_octets_marked(void) {
+    uint8_t f[sizeof pkt_sni_example];
+    memcpy(f, pkt_sni_example, sizeof f);
+    int at = -1;
+    for (int i = 0; i + 11 <= (int)sizeof f; i++)
+        if (memcmp(f + i, "example.com", 11) == 0) { at = i; break; }
+    ASSERT(at > 0);
+    if (at <= 0) return;
+    f[at + 0] = 0x0d;
+    f[at + 10] = 0x7f;
+    char host[64];
+    ASSERT_EQ(sni_snoop(f, (int)sizeof f, host, sizeof(host)), 1);
+    ASSERT_STR(host, "?xample.co?");
+}
+
 void run_sni_snoop_tests(void) {
     TEST_SUITE("sni snoop extraction");
     RUN_TEST(test_sni_extracts_example_com);
@@ -430,4 +447,5 @@ void run_sni_snoop_tests(void) {
     RUN_TEST(test_sni_hostsz_zero_rejected);
     RUN_TEST(test_sni_non_host_name_type_rejected);
     RUN_TEST(test_sni_empty_name_rejected);
+    RUN_TEST(test_sni_control_octets_marked);
 }

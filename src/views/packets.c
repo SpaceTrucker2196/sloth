@@ -158,7 +158,7 @@ static void draw_mon_row(const sloth_state_t *s, const mon_frame_t *f,
     int pad = COLS - 1;
     if (pad > (int)sizeof(line) - 1) pad = (int)sizeof(line) - 1;
     if (pad < 1) pad = 1;
-    printw("%-*.*s\n", pad, pad, line);
+    tui_printf("%-*.*s\n", pad, pad, line);
 #else
     printf("%-140.140s\n", line);
 #endif
@@ -286,7 +286,7 @@ void view_packets_draw(const sloth_state_t *s) {
         else            tui_normal();
 
         /* Time + leading whitespace. */
-        printw(" %04u.%06u  ",
+        tui_printf(" %04u.%06u  ",
                (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec);
 
         /* Src column: hostname (from host_cache) or IP, then :port. */
@@ -303,22 +303,22 @@ void view_packets_draw(const sloth_state_t *s) {
             int hot_sev = tui_alert_hot_check(p->src);
             if (hot_sev >= 0) {
                 tui_alert_hot_attr(hot_sev);
-                addstr(host_trunc);
+                tui_addstr(host_trunc);
             } else {
                 tui_brand_addstr(host_trunc, cat);
             }
             if (row == sel) tui_sel(); else tui_normal();
-            addstr(buf);
+            tui_addstr(buf);
             src_used = host_room + port_n;
         } else {
             tui_ip_addstr(p->src, cat);
             if (row == sel) tui_sel(); else tui_normal();
-            printw(":%-5u", (unsigned)p->src_port);
+            tui_printf(":%-5u", (unsigned)p->src_port);
             src_used = (int)strlen(p->src) + 1 + 5;
         }
         while (src_used++ < 21) addch(' ');
 
-        printw("  " "\xe2\x86\x92" "  "); /* → */
+        tui_printf("  " "\xe2\x86\x92" "  "); /* → */
 
         /* Dst — same logic. */
         char dst_host[HOST_CACHE_HOSTLEN];
@@ -334,17 +334,17 @@ void view_packets_draw(const sloth_state_t *s) {
             int hot_sev = tui_alert_hot_check(p->dst);
             if (hot_sev >= 0) {
                 tui_alert_hot_attr(hot_sev);
-                addstr(host_trunc);
+                tui_addstr(host_trunc);
             } else {
                 tui_brand_addstr(host_trunc, cat);
             }
             if (row == sel) tui_sel(); else tui_normal();
-            addstr(buf);
+            tui_addstr(buf);
             dst_used = host_room + port_n;
         } else {
             tui_ip_addstr(p->dst, cat);
             if (row == sel) tui_sel(); else tui_normal();
-            printw(":%-5u", (unsigned)p->dst_port);
+            tui_printf(":%-5u", (unsigned)p->dst_port);
             dst_used = (int)strlen(p->dst) + 1 + 5;
         }
         while (dst_used++ < 21) addch(' ');
@@ -358,14 +358,14 @@ void view_packets_draw(const sloth_state_t *s) {
                 region[0] != 'M')                tui_bright();
             else                                  tui_dim();
         }
-        printw("  %-3s", r_show);
+        tui_printf("  %-3s", r_show);
 
         if (row == sel) tui_sel(); else tui_normal();
-        printw("  %5d  %5u  ", p->proto, (unsigned)p->len);
+        tui_printf("  %5d  %5u  ", p->proto, (unsigned)p->len);
 
         /* Info — earth-tone palette (same as dashboard). */
         if (row != sel) tui_info_color(p->info);
-        printw("%-28.28s", p->info);
+        tui_printf("%-28.28s", p->info);
 
         /* Hex dump + ASCII — Fallout palette per byte for hex, then a
          * 2-col gap, then the ASCII translation. Each byte costs
@@ -382,11 +382,11 @@ void view_packets_draw(const sloth_state_t *s) {
                 unsigned byte = (unsigned)p->raw[b];
                 if (row != sel)
                     attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
-                printw("%02x ", byte);
+                tui_printf("%02x ", byte);
             }
             if (row == sel) tui_sel();
             else            tui_dim();
-            printw("  ");
+            tui_printf("  ");
             for (int b = 0; b < bytes; b++) {
                 unsigned char c = p->raw[b];
                 int printable = (c >= 32 && c < 127);
@@ -407,12 +407,12 @@ void view_packets_draw(const sloth_state_t *s) {
                 unsigned byte = (unsigned)p->raw[b];
                 if (row != sel)
                     attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
-                printw("%02x ", byte);
+                tui_printf("%02x ", byte);
             }
         }
         if (row == sel) tui_reset();
         else            tui_normal();
-        printw("\n");
+        tui_printf("\n");
         (void)yrow; (void)yrow2;
 #else
         if (row == sel) tui_sel();

@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 
 #include "sloth.h"
+#include "netstr.h"
 #include "dhcp_snoop.h"
 #include "sensor_health.h"
 #include "dns.h"
@@ -111,8 +112,7 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
         if (tag == OPT_MSGTYPE && olen >= 1)
             msg_type = p[0];
         else if (tag == OPT_HOSTNAME && olen > 0 && olen < 64) {
-            memcpy(hostname, p, olen);
-            hostname[olen] = '\0';
+            netstr_copy(hostname, sizeof(hostname), p, olen);   /* #138 */
         }
         else if (tag == OPT_SERVER_ID && olen == 4) {
             inet_ntop(AF_INET, p, server_ip, sizeof(server_ip));

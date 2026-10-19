@@ -720,6 +720,21 @@ static void test_flow_table_eviction_is_counted(void) {
     http_log_clear();
 }
 
+/* #138: Host and User-Agent are stored through netstr_copy().
+ * Mutation-proved: each memcpy restored in http_log.c reddens its
+ * assertion. */
+static void test_parse_host_and_ua_control_octets_marked(void) {
+    const char *req =
+        "GET / HTTP/1.1\r\n"
+        "Host: a\x1b" "b.example\r\n"
+        "User-Agent: Moz\x08\x08X\x7f\r\n"
+        "\r\n";
+    http_log_entry_t e;
+    ASSERT_EQ(http_log_parse(u8(req), (int)strlen(req), "192.168.1.5", &e), 1);
+    ASSERT_STR(e.host, "a?b.example");
+    ASSERT_STR(e.user_agent, "Moz??X?");
+}
+
 void run_http_log_tests(void) {
     TEST_SUITE("http_log");
     RUN_TEST(test_parse_get);
@@ -766,4 +781,5 @@ void run_http_log_tests(void) {
     RUN_TEST(test_pipelining_is_left_unpaired);
     RUN_TEST(test_pairing_consumes_the_request);
     RUN_TEST(test_flow_table_eviction_is_counted);
+    RUN_TEST(test_parse_host_and_ua_control_octets_marked);
 }

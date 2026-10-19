@@ -262,31 +262,31 @@ void view_conns_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->conn_sel) {
             tui_sel();
-            printw(" %-21.21s  %-21.21s  %-2s  %-5s  %-13s  %5s  %-14.14s  %-16s %-8s  %-7s  %s\n",
+            tui_printf(" %-21.21s  %-21.21s  %-2s  %-5s  %-13s  %5s  %-14.14s  %-16s %-8s  %-7s  %s\n",
                    local, remote, cc ? cc : "", proto, state, pid_str,
                    c->pid > 0 ? c->proc : "", rate_col, spark, rtt_s, retx_s);
             tui_reset();
         } else {
             tui_normal();
-            printw(" %-21.21s  %-21.21s  ", local, remote);
+            tui_printf(" %-21.21s  %-21.21s  ", local, remote);
             if (cc_scan) tui_bright(); else tui_dim();
-            printw("%-2s  ", cc);
-            tui_normal(); printw("%-5s  ", proto);
+            tui_printf("%-2s  ", cc);
+            tui_normal(); tui_printf("%-5s  ", proto);
             phos_tcp_state(c->proto, c->state);
-            printw("%-13s", state);
+            tui_printf("%-13s", state);
             tui_dim();
-            printw("  %5s  ", pid_str);
-            if (c->pid > 0) { tui_bright(); printw("%-14.14s", c->proc); }
-            else            { tui_dim();    printw("%-14s", ""); }
+            tui_printf("  %5s  ", pid_str);
+            if (c->pid > 0) { tui_bright(); tui_printf("%-14.14s", c->proc); }
+            else            { tui_dim();    tui_printf("%-14s", ""); }
             if (bw && (bw->rx_rate > 0 || bw->tx_rate > 0)) tui_bright();
             else tui_dim();
-            printw("  %-16s ", rate_col);
-            tui_dim(); printw("%-8s  ", spark);
+            tui_printf("  %-16s ", rate_col);
+            tui_dim(); tui_printf("%-8s  ", spark);
             if (c->rtt_us > 0) tui_bright(); else tui_dim();
-            printw("%-7s  ", rtt_s);
+            tui_printf("%-7s  ", rtt_s);
             if (c->retrans > 0) tui_bright(); else tui_dim();
-            printw("%s", retx_s);
-            tui_normal(); printw("\n");
+            tui_printf("%s", retx_s);
+            tui_normal(); tui_printf("\n");
         }
 #else
         if (row == s->conn_sel) {

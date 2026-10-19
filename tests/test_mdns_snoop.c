@@ -607,6 +607,16 @@ static void test_mdns_snoop_stamps_wall_clock(void) {
     ASSERT(g_st.mdns_services[0].last_seen <= time(NULL));
 }
 
+/* #138: every mDNS name is assembled in read_name(), which now copies
+ * labels through netstr_copy(). Mutation-proved: the memcpy restored
+ * there reddens it. */
+static void test_instance_control_octets_marked(void) {
+    uint8_t pkt[128];
+    int n = build_ptr(pkt, "cam\n\x1b" "1");
+    ASSERT_EQ(mdns_snoop_at(pkt, n, 1000), 1);
+    ASSERT_EQ(mdns_has_instance("cam??1"), 1);
+}
+
 void run_mdns_snoop_tests(void) {
     printf("\n--- mDNS snoop ---\n");
     RUN_TEST(test_too_short);
@@ -642,4 +652,5 @@ void run_mdns_snoop_tests(void) {
     RUN_TEST(test_mdns_table_full_reclaims_stale_after_age);
     RUN_TEST(test_mdns_long_instance_name_dedups_to_one_row);
     RUN_TEST(test_mdns_snoop_stamps_wall_clock);
+    RUN_TEST(test_instance_control_octets_marked);
 }

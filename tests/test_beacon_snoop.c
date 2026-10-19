@@ -1061,12 +1061,11 @@ static void test_parse_wps_vendor_string_strips_del(void) {
     ASSERT_STR(rsn.wps_model_number, "v1.0");
 }
 
-/* Bytes >= 0x80 are dropped too, and the reason is the forensic log
- * rather than the terminal: json_escape() in src/jsonl.c escapes every
- * byte below 0x20 but passes the high range through unmodified, so a
- * high byte here would emit a JSON string that is not valid UTF-8.
- * Filtering at the parser fixes that for these four fields without
- * touching json_escape, which every other emitter shares. */
+/* Bytes >= 0x80 are dropped too. The original reason was the forensic
+ * log: json_escape() used to pass the high range through unmodified,
+ * emitting invalid UTF-8. Since #138 json_escape itself always emits
+ * valid UTF-8, so what this pins now is the WPS fields' own ASCII-only
+ * rule (WFA WPS 2.0 §12), not the log's validity. */
 static void test_parse_wps_vendor_string_strips_high_bytes(void) {
     static const uint8_t body[] = { 'R', 0x80, 'T', 0xff, 'L', 0xc3, 0xa9 };
     uint8_t f[WPS_ATTR_FRAME_MAX];
@@ -3654,6 +3653,42 @@ static void test_reg_envelope_does_not_survive_slot_reuse(void) {
     ASSERT_EQ((int)r->triplet_count, 0);
 }
 
+/* #138: the SSID is stored through netstr_copy() at the one choke point,
+ * dot11_ie_ssid_copy(). '\n' (which ncurses acts on — a row-spoofing
+ * SSID) and DEL become '?'. Mutation-proved: restoring the memcpy in
+ * dot11_ie_ssid_copy() reddens this and the probe / association /
+ * RRM equivalents in test_capture_path.c and test_action_snoop.c. */
+static void test_parse_ssid_control_octets_stored_as_marks(void) {
+    uint8_t f[BEACON_HDR_LEN + 2 + 4];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00;        /* SSID tag */
+    f[BEACON_HDR_LEN + 1] = 4;
+    f[BEACON_HDR_LEN + 2] = 'x';
+    f[BEACON_HDR_LEN + 3] = 0x0a;
+    f[BEACON_HDR_LEN + 4] = 'y';
+    f[BEACON_HDR_LEN + 5] = 0x7f;
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms, NULL), 1);
+    ASSERT_STR(ssid, "x?y?");
+}
+
+/* High octets are an SSID's own business (§9.4.2.2 does not require
+ * UTF-8): they are stored as received, not marked. */
+static void test_parse_ssid_high_octets_kept(void) {
+    uint8_t f[BEACON_HDR_LEN + 2 + 3];
+    fill_hdr(f, BSSID_A, 100, 0x0000);
+    f[BEACON_HDR_LEN + 0] = 0x00;
+    f[BEACON_HDR_LEN + 1] = 3;
+    f[BEACON_HDR_LEN + 2] = 0xff;
+    f[BEACON_HDR_LEN + 3] = 'N';
+    f[BEACON_HDR_LEN + 4] = 0xe9;
+
+    char ssid[33]; uint8_t bssid[6]; int ch; char enc[10]; uint16_t bms;
+    ASSERT_EQ(beacon_parse(f, (int)sizeof(f), -60, ssid, bssid, &ch, enc, &bms, NULL), 1);
+    ASSERT_STR(ssid, "\xff" "N\xe9");
+}
+
 void run_beacon_snoop_tests(void) {
     TEST_SUITE("beacon: shared IE walker (B3b)");
     RUN_TEST(test_ies_direct_ssid_and_channel);
@@ -3850,4 +3885,6 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_reg_malformed_counts_accumulate_across_frames);
     RUN_TEST(test_reg_shorter_country_leaves_no_triplet_tail);
     RUN_TEST(test_reg_envelope_does_not_survive_slot_reuse);
+    RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
+    RUN_TEST(test_parse_ssid_high_octets_kept);
 }

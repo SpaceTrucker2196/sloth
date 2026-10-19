@@ -4,6 +4,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "netstr.h"
 #include "http_log.h"
 #include "sha256.h"
 #include "jsonl.h"
@@ -428,15 +429,13 @@ int http_log_parse(const uint8_t *data, int len, const char *src_ip,
                 if (hcolon) hvrem = (int)(hcolon - hv);
                 if (hvrem > 0) {
                     int hsz = hvrem < 63 ? hvrem : 63;
-                    memcpy(host, hv, (size_t)hsz);
-                    host[hsz] = '\0';
+                    netstr_copy(host, sizeof(host), (const uint8_t *)hv, (size_t)hsz);   /* #138 */
                 }
             } else if (name_len == 10 && ci_eq(p, 10, "user-agent", 10)
                        && !ua[0]) {
                 if (vrem > 0) {
                     int usz = vrem < 63 ? vrem : 63;
-                    memcpy(ua, val, (size_t)usz);
-                    ua[usz] = '\0';
+                    netstr_copy(ua, sizeof(ua), (const uint8_t *)val, (size_t)usz);   /* #138 */
                 }
             } else if (name_len == 15
                        && ci_eq(p, 15, "accept-language", 15)) {

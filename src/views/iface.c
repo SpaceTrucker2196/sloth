@@ -530,7 +530,7 @@ void view_iface_draw(const sloth_state_t *s) {
     if (vp < 0) vp = 0;
 
     tui_dim();
-    printw("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
+    tui_printf("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
            "Interface", "Mode", "Vendor", "RX", "TX",
            HIST_LEN + 2, "RX history", "Total RX", "Total TX");
     tui_normal();
@@ -560,7 +560,7 @@ void view_iface_draw(const sloth_state_t *s) {
             if (h && !hidden) make_sparkline(h, 1, spark, HIST_LEN);
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
-            printw("  %c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s\n",
+            tui_printf("  %c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s\n",
                    pfx, f->name, mode, vendor,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
@@ -575,39 +575,39 @@ void view_iface_draw(const sloth_state_t *s) {
             tui_reset();
         } else if (hidden) {
             tui_dim();
-            printw("  h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
+            tui_printf("  h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
             tui_reset();
         } else {
             if (is_scan || f->mode == IFACE_MODE_MONITOR) tui_bright();
             else tui_normal();
-            printw("  %c%-9s %-4s %-12.12s",
+            tui_printf("  %c%-9s %-4s %-12.12s",
                    pfx, f->name, mode, vendor);
             /* RX rate */
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
-            printw(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
+            tui_printf(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             /* TX rate */
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
-            printw(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
+            tui_printf(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
             /* sparkline: per-char intensity */
             if (h) print_sparkline_heat(h, 1, HIST_LEN);
-            else { tui_dim(); printw("%*s", HIST_LEN, ""); }
+            else { tui_dim(); tui_printf("%*s", HIST_LEN, ""); }
             /* totals */
             tui_dim();
-            printw("] %-9s %-9s",
+            tui_printf("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
-            if (is_scan) { tui_bright(); printw("%s", scanbuf); }
-            else if (deselected) { tui_dim(); printw("  (deselected)"); }
-            else if (excluded)   { tui_dim(); printw("  (excluded)"); }
-            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printw("  [monitor]"); }
-            else if (ssidbuf[0]) { tui_bright(); printw("%s", ssidbuf); }
-            printw("\n");
+            if (is_scan) { tui_bright(); tui_printf("%s", scanbuf); }
+            else if (deselected) { tui_dim(); tui_printf("  (deselected)"); }
+            else if (excluded)   { tui_dim(); tui_printf("  (excluded)"); }
+            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); tui_printf("  [monitor]"); }
+            else if (ssidbuf[0]) { tui_bright(); tui_printf("%s", ssidbuf); }
+            tui_printf("\n");
             tui_normal();
         }
     }
 
     if (s->iface_count == 0) {
-        tui_dim(); printw("  (no interfaces found)\n"); tui_normal();
+        tui_dim(); tui_printf("  (no interfaces found)\n"); tui_normal();
     }
 
     /* Sensor health (#91 slice 3) — under the rows, above the key hints,
@@ -616,7 +616,7 @@ void view_iface_draw(const sloth_state_t *s) {
     {
         char hbuf[160];
         iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
-        tui_dim(); printw("%s\n", hbuf); tui_normal();
+        tui_dim(); tui_printf("%s\n", hbuf); tui_normal();
     }
 
     tui_dim();

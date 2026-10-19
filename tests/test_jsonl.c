@@ -2231,6 +2231,67 @@ static void test_write_failure_counted(void) {
     unlink(p);
 }
 
+/* #138: an RFC 3629 validator written out here, independent of the
+ * decoder json_escape uses, so the check is not the code checking
+ * itself. 1 when every octet of s is part of a well-formed sequence. */
+static int test_is_valid_utf8(const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        unsigned char c = *p;
+        int n; unsigned lo = 0x80, hi = 0xbf;
+        if (c < 0x80) { p++; continue; }
+        else if (c >= 0xc2 && c <= 0xdf) n = 1;
+        else if (c == 0xe0) { n = 2; lo = 0xa0; }
+        else if (c == 0xed) { n = 2; hi = 0x9f; }
+        else if (c >= 0xe1 && c <= 0xef) n = 2;
+        else if (c == 0xf0) { n = 3; lo = 0x90; }
+        else if (c == 0xf4) { n = 3; hi = 0x8f; }
+        else if (c >= 0xf1 && c <= 0xf3) n = 3;
+        else return 0;
+        if (p[1] < lo || p[1] > hi) return 0;
+        for (int i = 2; i <= n; i++)
+            if (p[i] < 0x80 || p[i] > 0xbf) return 0;
+        p += n + 1;
+    }
+    return 1;
+}
+
+/* #138: json_escape's output is always valid UTF-8. An invalid octet is
+ * U+FFFD; DEL and C1 (U+009B is CSI) leave as \u escapes. Mutation-
+ * proved: passing every octet >= 0x7f through unchanged (the pre-#138
+ * behaviour) reddens all three assertions. */
+static void test_json_escape_output_is_valid_utf8(void) {
+    open_fresh();
+    dns_log_entry_t e; memset(&e, 0, sizeof(e));
+    e.ts = 1700000007;
+    snprintf(e.qname, sizeof(e.qname), "%s", "\xff\xc2\x9b\x7f");
+    jsonl_emit_dns(&e);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"\\ufffd\\u009b\\u007f\""));
+    ASSERT(test_is_valid_utf8(body));
+    ASSERT(strchr(body, 0x7f) == NULL);
+}
+
+/* Valid UTF-8 is not touched (it parsed before and parses to the same
+ * value), and U+2028 / U+2029 are escaped because a JavaScript consumer
+ * reads them as line ends. */
+static void test_json_escape_keeps_text_escapes_line_separators(void) {
+    open_fresh();
+    dns_log_entry_t e; memset(&e, 0, sizeof(e));
+    e.ts = 1700000008;
+    snprintf(e.qname, sizeof(e.qname), "%s", "caf\xc3\xa9\xe2\x80\xa8x\xe2\x80\xa9");
+    jsonl_emit_dns(&e);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"caf\xc3\xa9\\u2028x\\u2029\""));
+    ASSERT(test_is_valid_utf8(body));
+}
+
 void run_jsonl_tests(void) {
     TEST_SUITE("jsonl open/close");
     RUN_TEST(test_open_close);
@@ -2327,4 +2388,6 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_dns_log_record_writes_jsonl);
     RUN_TEST(test_btm_steer_record);
     RUN_TEST(test_btm_steer_empty_emits_nothing);
+    RUN_TEST(test_json_escape_output_is_valid_utf8);
+    RUN_TEST(test_json_escape_keeps_text_escapes_line_separators);
 }

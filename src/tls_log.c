@@ -4,6 +4,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "sloth.h"
+#include "netstr.h"
 #include "tls_log.h"
 #include "md5.h"
 #include "sha256.h"
@@ -271,8 +272,7 @@ int tls_log_parse(const uint8_t *data, int len,
                 int nlen = (int)u16be(ch + off + 3);
                 if (nlen > 0 && nlen + 5 <= (int)elen) {
                     int sz = nlen < 63 ? nlen : 63;
-                    memcpy(sni, ch + off + 5, (size_t)sz);
-                    sni[sz] = '\0';
+                    netstr_copy(sni, sizeof(sni), ch + off + 5, (size_t)sz);   /* #138 */
                 }
             }
             (void)list_len;

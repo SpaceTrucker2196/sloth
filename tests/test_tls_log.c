@@ -564,6 +564,24 @@ static void test_view_key_clear(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+/* #138: SNI host_name octets (RFC 6066 §3) are stored through
+ * netstr_copy(). The fixture's "example.com" is edited in a copy.
+ * Mutation-proved: the memcpy restored in tls_log.c reddens it. */
+static void test_parse_sni_control_octets_marked(void) {
+    uint8_t f[sizeof tls13_sni];
+    memcpy(f, tls13_sni, sizeof f);
+    int at = -1;
+    for (int i = 0; i + 11 <= (int)sizeof f; i++)
+        if (memcmp(f + i, "example.com", 11) == 0) { at = i; break; }
+    ASSERT(at > 0);
+    if (at <= 0) return;
+    f[at + 2] = 0x0a;          /* "ex\nm\x1ble.com" */
+    f[at + 4] = 0x1b;
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, (int)sizeof f, "192.168.1.5", "93.184.216.34", &e), 1);
+    ASSERT_STR(e.host, "ex?m?le.com");
+}
+
 void run_tls_log_tests(void) {
     TEST_SUITE("tls_log parse");
     RUN_TEST(test_parse_tls13_sni);
@@ -600,4 +618,5 @@ void run_tls_log_tests(void) {
     TEST_SUITE("view_tls key");
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+    RUN_TEST(test_parse_sni_control_octets_marked);
 }

@@ -135,19 +135,19 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == sel) {
             tui_sel();
-            printw(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
+            tui_printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
                    bssid, methods, wk, r->identity_leaks, tls_s, last);
             tui_reset();
         } else {
-            tui_bright(); printw(" %-17s", bssid);
-            tui_normal(); printw("  %-20.20s", methods);
+            tui_bright(); tui_printf(" %-17s", bssid);
+            tui_normal(); tui_printf("  %-20.20s", methods);
             if (r->weak_method) tui_bright(); else tui_dim();
-            printw("  %-4s", wk);
+            tui_printf("  %-4s", wk);
             if (r->identity_leaks > 0) tui_bright(); else tui_dim();
-            printw("  %5d", r->identity_leaks);
+            tui_printf("  %5d", r->identity_leaks);
             if (r->nocert_sessions > 0) tui_heat(1.0); else tui_dim();
-            printw("  %-5s", tls_s);
-            tui_dim();    printw("  %s\n", last);
+            tui_printf("  %-5s", tls_s);
+            tui_dim();    tui_printf("  %s\n", last);
             tui_normal();
         }
 #else

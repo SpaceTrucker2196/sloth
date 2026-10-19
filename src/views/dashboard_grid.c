@@ -52,13 +52,13 @@ void draw_wifi_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         clipline(y0 + 2 + i, x, w, "");
         move(y0 + 2 + i, x);
         attrset(COLOR_PAIR(CP_NORMAL));
-        addstr("  ");
+        tui_addstr("  ");
         const char *ssid = a->ssid[0] ? a->ssid : "(hidden)";
         char buf[40];
         snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
         tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
         attrset(COLOR_PAIR(CP_NORMAL));
-        printw(" %4d %3d", a->signal_dbm, a->channel);
+        tui_printf(" %4d %3d", a->signal_dbm, a->channel);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
@@ -125,14 +125,14 @@ void draw_radio_clients_panel(const sloth_state_t *s,
         int xc = x;
         move(y0 + 2 + i, xc);
         attrset(COLOR_PAIR(CP_NORMAL));
-        printw("  %-17s ", mac);
+        tui_printf("  %-17s ", mac);
         xc += 2 + 17 + 1;
 
         /* vendor: dim for "?" / "(random)", bright for known */
         move(y0 + 2 + i, xc);
         if (is_random || vendor[0] == '?') attrset(COLOR_PAIR(CP_DIM));
         else                                attrset(COLOR_PAIR(CP_BRIGHT));
-        printw("%-14.14s ", vendor);
+        tui_printf("%-14.14s ", vendor);
         xc += 14 + 1;
 
         /* SSID column - coloured via hash palette */
@@ -153,13 +153,13 @@ void draw_radio_clients_panel(const sloth_state_t *s,
         else if (p->signal_dbm >= -65) attrset(COLOR_PAIR(CP_NORMAL));
         else if (p->signal_dbm >= -80) attrset(COLOR_PAIR(CP_HEAT_MID));
         else                            attrset(COLOR_PAIR(CP_HEAT_HI));
-        printw("%4d ", p->signal_dbm);
+        tui_printf("%4d ", p->signal_dbm);
         xc += 4 + 1;
 
         /* dist: dim, since it's a rough estimate */
         move(y0 + 2 + i, xc);
         attrset(COLOR_PAIR(CP_DIM));
-        printw("%-5s", dist_buf);
+        tui_printf("%-5s", dist_buf);
     }
     for (int i = n; i < rows; i++) {
         attrset(COLOR_PAIR(CP_NORMAL));
@@ -233,15 +233,15 @@ void draw_beacon_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
          * in the first cell was always overwritten and the badge never
          * showed - only the red SSID did. Found when #116 first read the
          * dashboard back. */
-        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr(" !"); }
-        else     { attrset(COLOR_PAIR(CP_NORMAL));    addstr("  "); }
+        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); tui_addstr(" !"); }
+        else     { attrset(COLOR_PAIR(CP_NORMAL));    tui_addstr("  "); }
         const char *ssid = b->ssid[0] ? b->ssid : "(hidden)";
         char buf[40];
         snprintf(buf, sizeof(buf), "%-*.*s", ssid_w, ssid_w, ssid);
-        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); addstr(buf); }
+        if (hot) { attrset(COLOR_PAIR(CP_HEAT_PEAK)); tui_addstr(buf); }
         else     tui_ssid_addstr(buf, (int)PKT_CAT_OTHER);
         attrset(COLOR_PAIR(CP_NORMAL));
-        printw(" %4d %3d", b->signal_dbm, b->channel);
+        tui_printf(" %4d %3d", b->signal_dbm, b->channel);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x, w, "");
 }
@@ -376,7 +376,7 @@ void draw_stats_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         attrset(COLOR_PAIR(CP_NORMAL));
         /* overprint the value to the right of the label */
         move(y0 + 1 + i, x + 2 + 9 + 1);
-        addstr(rows_data[i].val);
+        tui_addstr(rows_data[i].val);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 1 + i, x, w, "");
 }
@@ -405,7 +405,7 @@ void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         int xc = x;
         move(y0 + 2 + i, xc);
         tui_pkt_bg_cat(cat);
-        printw("  %-3s %-5.5s ",
+        tui_printf("  %-3s %-5.5s ",
                e->is_resp ? "R" : "Q", e->qtype);
         xc += 12;
         /* qname column — brand-coloured (Google rainbow, Firefox orange, …) */
@@ -429,7 +429,7 @@ void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
             if (is_nx)           tui_pkt_bg_cat(cat), attrset(COLOR_PAIR(CP_HEAT_HI));
             else if (e->is_resp) tui_pkt_bg_cat(cat), attrset(COLOR_PAIR(CP_BRIGHT));
             else                 tui_pkt_bg_cat(cat);
-            printw("%.*s", answer_w, e->answer[0] ? e->answer : "-");
+            tui_printf("%.*s", answer_w, e->answer[0] ? e->answer : "-");
         }
     }
     for (int i = n; i < rows; i++) {
@@ -459,7 +459,7 @@ void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         int xc = x;
         move(y0 + 2 + i, xc);
         tui_pkt_bg_cat(cat);
-        printw("  %-3s ", e->is_v6 ? "v6" : "v4");
+        tui_printf("  %-3s ", e->is_v6 ? "v6" : "v4");
         xc += 6;
         /* src IP coloured */
         move(y0 + 2 + i, xc);
@@ -479,7 +479,7 @@ void draw_icmp_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         else if (is_req) attrset(COLOR_PAIR(CP_BRIGHT));
         else             tui_pkt_bg_cat(cat);
         move(y0 + 2 + i, xc);
-        printw("%.*s", desc_w, e->desc);
+        tui_printf("%.*s", desc_w, e->desc);
     }
     for (int i = n; i < rows; i++) {
         tui_pkt_bg_cat(cat);

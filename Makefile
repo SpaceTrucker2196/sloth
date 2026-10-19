@@ -115,6 +115,7 @@ CORE_COMMON_SRCS = \
        src/dot11_frame.c     \
        src/dot11_ie.c        \
        src/rsn_ie.c          \
+       src/netstr.c          \
        src/mle.c             \
        src/tool_fingerprint.c \
        src/captive_portal.c  \

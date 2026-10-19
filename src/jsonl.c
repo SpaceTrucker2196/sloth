@@ -6,6 +6,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "netstr.h"
 #include "tune.h"
 #include "capture/probe.h"
 #include "alerts.h"
@@ -166,24 +167,46 @@ static void appendf(char *buf, int sz, int *off, const char *fmt, ...) {
 
 /* Append RFC 8259-compatible escaping of `s` into `out` (size `sz`),
  * advancing *off. Truncates silently. Used by all emitters. */
+/* JSON string body (RFC 8259 §7). Output is always valid UTF-8 (#138):
+ * the input is decoded per RFC 3629 (netstr_utf8_decode), and
+ *   - each octet that does not start a well-formed sequence → \ufffd;
+ *   - C0, DEL and C1 (U+0000..U+001F, U+007F..U+009F) → \u00XX — C1 is
+ *     legal raw in JSON, but U+009B is CSI to a terminal that tails the
+ *     log, so it leaves here as six ASCII octets;
+ *   - U+2028 / U+2029 → \u2028 / \u2029 (raw, they end a line in
+ *     JavaScript and some log viewers).
+ * Every string that parsed before parses to the same value now; what
+ * changes is that invalid input no longer reaches the consumer raw.
+ * Worst case is still 6 output octets per input octet. */
 static void json_escape(const char *s, char *out, int sz, int *off) {
     if (!s) s = "";
     if (*off > sz - 1) *off = sz - 1;
-    for (; *s && *off + 6 < sz; s++) {
-        unsigned char c = (unsigned char)*s;
-        switch (c) {
+    const uint8_t *p = (const uint8_t *)s;
+    size_t left = strlen(s);
+    while (left > 0 && *off + 6 < sz) {
+        uint32_t cp = 0;
+        int len = netstr_utf8_decode(p, left, &cp);
+        if (len == 0) {
+            appendf(out, sz, off, "\\ufffd");
+            p++; left--;
+            continue;
+        }
+        switch (cp) {
             case '"':  out[(*off)++] = '\\'; out[(*off)++] = '"';  break;
             case '\\': out[(*off)++] = '\\'; out[(*off)++] = '\\'; break;
             case '\n': out[(*off)++] = '\\'; out[(*off)++] = 'n';  break;
             case '\r': out[(*off)++] = '\\'; out[(*off)++] = 'r';  break;
             case '\t': out[(*off)++] = '\\'; out[(*off)++] = 't';  break;
             default:
-                if (c < 0x20) {
-                    appendf(out, sz, off, "\\u%04x", c);
+                if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)
+                    || cp == 0x2028 || cp == 0x2029) {
+                    appendf(out, sz, off, "\\u%04x", (unsigned)cp);
                 } else {
-                    out[(*off)++] = (char)c;
+                    memcpy(out + *off, p, (size_t)len);
+                    *off += len;
                 }
         }
+        p += len; left -= (size_t)len;
     }
     out[*off] = '\0';
 }

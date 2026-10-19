@@ -168,6 +168,34 @@ static void test_malformed_returns_neg(void) {
     ASSERT_EQ(formatter_transform("{\"ts\":1}", out, sizeof(out)), -1);
 }
 
+/* #138 (CWE-117/150): a control in a value reaches CEF / syslog as one
+ * space whatever shape it arrives in — raw ESC, a \u001b escape, a raw
+ * UTF-8 C1 (CSI) or a \u009b escape. Mutation-proved: ctl_token()
+ * returning 0 reddens both. */
+static const char *CTL_JSONL =
+    "{\"type\":\"dns\",\"qname\":\"a\x1b" "b\\u001bc\xc2\x9b" "d\\u009be\"}";
+
+static void test_cef_extension_controls_become_spaces(void) {
+    formatter_set(OUT_FMT_CEF);
+    char out[1024];
+    ASSERT(formatter_transform(CTL_JSONL, out, sizeof(out)) > 0);
+    ASSERT(strstr(out, "qname=a b c d e") != NULL);
+    ASSERT(strchr(out, 0x1b) == NULL);
+}
+
+static void test_syslog_controls_become_spaces(void) {
+    formatter_set(OUT_FMT_SYSLOG);
+    char out[2048];
+    ASSERT(formatter_transform(CTL_JSONL, out, sizeof(out)) > 0);
+    ASSERT(strstr(out, "qname=\"a b c d e\"") != NULL);
+    /* MSG (the record verbatim) loses its raw controls too. Mutation-
+     * proved separately: copying MSG octets unchanged in format_syslog()
+     * reddens the ESC assertion and nothing else. */
+    ASSERT(strchr(out, 0x1b) == NULL);
+    ASSERT(strstr(out, "\xc2\x9b") == NULL);
+    formatter_set(OUT_FMT_JSONL);
+}
+
 void run_formatter_tests(void) {
     TEST_SUITE("formatter: name parsing");
     RUN_TEST(test_parse_name_jsonl);
@@ -193,4 +221,6 @@ void run_formatter_tests(void) {
 
     /* Restore default for any later tests that look at the global. */
     formatter_set(OUT_FMT_JSONL);
+    RUN_TEST(test_cef_extension_controls_become_spaces);
+    RUN_TEST(test_syslog_controls_become_spaces);
 }

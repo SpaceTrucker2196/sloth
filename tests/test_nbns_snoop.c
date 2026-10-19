@@ -404,6 +404,21 @@ static void test_nbns_table_full_reclaims_stale_after_age(void) {
     ASSERT_EQ((int)sh_evict_count(SH_EVICT_NBNS_NAME), 0);       /* a reclaim is not a loss */
 }
 
+/* #138: the decoded NetBIOS name (RFC 1001 §14.1, any octet) is stored
+ * through netstr_copy(). Mutation-proved: the memcpy restored in
+ * nbns_snoop.c reddens it. */
+static void test_query_name_control_octets_marked(void) {
+    reset();
+    uint8_t buf[64];
+    int len = make_query("DESK\x1bTOP\n", 0x00, buf, sizeof(buf));
+    char info[64] = "";
+    ASSERT_EQ(1, nbns_snoop(buf, len, info, sizeof(info)));
+    TEST_STATE(s); memset(&s, 0, sizeof(s));
+    nbns_snapshot(&s);
+    ASSERT_EQ(1, s.nbns_count);
+    ASSERT_STR("DESK?TOP?", s.nbns_names[0].name);
+}
+
 void run_nbns_snoop_tests(void) {
     TEST_SUITE("nbns_snoop protocol");
     RUN_TEST(test_query_adds_entry);
@@ -429,4 +444,5 @@ void run_nbns_snoop_tests(void) {
     RUN_TEST(test_draw_selected_row);
     RUN_TEST(test_nbns_table_full_refuses_fresh_and_tallies);
     RUN_TEST(test_nbns_table_full_reclaims_stale_after_age);
+    RUN_TEST(test_query_name_control_octets_marked);
 }

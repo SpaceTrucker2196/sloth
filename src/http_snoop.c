@@ -1,5 +1,6 @@
 #include <string.h>
 #include "http_snoop.h"
+#include "netstr.h"
 #include "cleartext_creds.h"
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -70,8 +71,7 @@ int http_snoop(const uint8_t *data, int len, char *host, int hostsz) {
             if (vrem <= 0) return 0;
             /* copy, truncate to buffer */
             if (vrem >= hostsz) vrem = hostsz - 1;
-            memcpy(host, val, (size_t)vrem);
-            host[vrem] = '\0';
+            netstr_copy(host, (size_t)hostsz, (const uint8_t *)val, (size_t)vrem);   /* #138 */
             return 1;
         }
 

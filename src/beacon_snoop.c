@@ -41,12 +41,12 @@ static void note_new_bssid(time_t now) {
  * The alphabet is bounded for the same reason the length is: every byte
  * is attacker-chosen. WFA WPS 2.0 §12 defines all four of these
  * attributes as ASCII strings, so anything outside 0x20..0x7e is
- * already not a conforming value, and in the ANSI-fallback builds
- * (WITH_NCURSES=0, `make embedded`) TPRINT is plain printf — a raw
- * control byte reaching src/views/beacon.c would be an escape sequence
- * on the operator's terminal, not a glyph. Filtering here also keeps
- * the four JSONL fields inside ASCII, which json_escape's >= 0x80
- * passthrough would otherwise emit as invalid UTF-8.
+ * already not a conforming value. When this filter landed (#77), TPRINT
+ * in the ANSI-fallback builds was plain printf and json_escape passed
+ * octets >= 0x80 through; since #138 both sanitise for every field
+ * (src/netstr.h), so this ASCII-only alphabet is now the stricter
+ * per-field rule on top of that floor, kept because the spec asks for
+ * ASCII.
  *
  * Strip rather than reject: these are forensic fingerprint fields, and
  * discarding the whole string on one bad byte would let a hostile AP

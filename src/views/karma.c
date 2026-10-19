@@ -80,13 +80,13 @@ void view_karma_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->karma_sel) {
             tui_sel();
-            printw(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
                    bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
                    last, tool);
             tui_reset();
         } else {
-            tui_bright(); printw(" %-17s", bssid);
-            tui_normal(); printw("  %5d", k->ssid_count);
+            tui_bright(); tui_printf(" %-17s", bssid);
+            tui_normal(); tui_printf("  %5d", k->ssid_count);
             /* Bright on the count that actually corroborates (#90), not
              * on a union hit — drawing the operator's eye to a
              * coincidence is what this column used to do. The column
@@ -98,17 +98,17 @@ void view_karma_draw(const sloth_state_t *s) {
              * cell's colour pair off the offscreen screen (#116). */
             if (k->pnl_best >= KARMA_PNL_CORROB_MIN) tui_bright();
             else tui_dim();
-            printw("  %4d", k->pnl_overlap);
+            tui_printf("  %4d", k->pnl_overlap);
             if (k->pnl_jaccard_ppm >= 700000) tui_bright(); else tui_dim();
-            printw("  %-4s", jac);
+            tui_printf("  %-4s", jac);
             if (k->ie_uniform) tui_bright(); else tui_dim();
-            printw("  %-2s", ie);
+            tui_printf("  %-2s", ie);
             if (k->deauth_chain) tui_bright(); else tui_dim();
-            printw("  %-5s", chain);
-            tui_bright(); printw("  %5d", k->score);
-            tui_dim();    printw("  %s", last);
-            if (tool[0]) { tui_bright(); printw("%s", tool); }
-            printw("\n");
+            tui_printf("  %-5s", chain);
+            tui_bright(); tui_printf("  %5d", k->score);
+            tui_dim();    tui_printf("  %s", last);
+            if (tool[0]) { tui_bright(); tui_printf("%s", tool); }
+            tui_printf("\n");
             tui_normal();
         }
 #else

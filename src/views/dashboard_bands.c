@@ -243,36 +243,36 @@ void draw_conn_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
         move(y0 + 2 + (i - top), xc);
         if (i == s->conn_sel) tui_sel();
         else                  attrset(COLOR_PAIR(CP_NORMAL));
-        printw("  ");
+        tui_printf("  ");
         xc += 2;
         /* local IP (coloured) */
         if (i != s->conn_sel) tui_ip_addstr(c->local_addr, cat);
-        else                  addstr(c->local_addr);
+        else                  tui_addstr(c->local_addr);
         if (i == s->conn_sel) tui_sel();
         else                  attrset(COLOR_PAIR(CP_NORMAL));
         {
             int llen = (int)strlen(c->local_addr);
-            printw(":%-5u", (unsigned)c->local_port);
+            tui_printf(":%-5u", (unsigned)c->local_port);
             int pad = 21 - (llen + 1 + 5);
             for (int j = 0; j < pad; j++) addch(' ');
         }
         xc += 21;
         move(y0 + 2 + (i - top), xc);
-        printw(" " G_ARROW " ");
+        tui_printf(" " G_ARROW " ");
         xc += 3;
         if (i != s->conn_sel) tui_ip_addstr(c->remote_addr, cat);
-        else                  addstr(c->remote_addr);
+        else                  tui_addstr(c->remote_addr);
         if (i == s->conn_sel) tui_sel();
         else                  attrset(COLOR_PAIR(CP_NORMAL));
         {
             int rlen = (int)strlen(c->remote_addr);
-            printw(":%-5u", (unsigned)c->remote_port);
+            tui_printf(":%-5u", (unsigned)c->remote_port);
             int pad = 25 - (rlen + 1 + 5);
             if (pad > 0) for (int j = 0; j < pad; j++) addch(' ');
         }
         xc += 25;
         move(y0 + 2 + (i - top), xc);
-        printw(" %-5s %5d %5d  %-*.*s",
+        tui_printf(" %-5s %5d %5d  %-*.*s",
                proto_short(c->proto),
                c->state, c->pid, proc_w, proc_w, c->proc);
 
@@ -444,7 +444,7 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
         int xc = x0;
         move(y0 + 2 + i, xc);
         attrset(COLOR_PAIR(CP_NORMAL));
-        addstr("  ");
+        tui_addstr("  ");
         xc += 2;
 
         /* IP — coloured + bold if cross-panel */
@@ -466,7 +466,7 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
             if (region && region[0] != '-' && region[0] != 'L' &&
                 region[0] != 'M') attrset(COLOR_PAIR(CP_BRIGHT));
             else                  attrset(COLOR_PAIR(CP_DIM));
-            printw("%-3s ", r_show);
+            tui_printf("%-3s ", r_show);
         }
         xc += 4;
 
@@ -481,7 +481,7 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
             int hot_sev = tui_alert_hot_check(e->ip);
             if (hot_sev >= 0) {
                 tui_alert_hot_attr(hot_sev);
-                addstr(buf);
+                tui_addstr(buf);
             } else {
                 tui_brand_addstr(buf, (int)PKT_CAT_OTHER);
             }
@@ -495,11 +495,11 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
         /* owner — dim if unknown */
         if (e->owner[0]) attrset(COLOR_PAIR(CP_BRIGHT));
         else             attrset(COLOR_PAIR(CP_DIM));
-        printw("%-*.*s", owner_w, owner_w, e->owner[0] ? e->owner : "?");
+        tui_printf("%-*.*s", owner_w, owner_w, e->owner[0] ? e->owner : "?");
         xc += owner_w;
 
         attrset(COLOR_PAIR(CP_NORMAL));
-        printw(" %-7s %4d", age, e->conn_count);
+        tui_printf(" %-7s %4d", age, e->conn_count);
 
         /* Cumulative bytes — tx then rx. Bright when there's traffic,
          * dim "0B" when the conn is idle. */
@@ -508,10 +508,10 @@ void draw_top_hosts_panel(const sloth_state_t *s, int y0, int h,
         fmt_bytes(e->rx_bytes, rx_buf, sizeof(rx_buf));
         if (e->tx_bytes > 0) attrset(COLOR_PAIR(CP_BRIGHT));
         else                 attrset(COLOR_PAIR(CP_DIM));
-        printw(" %7s", tx_buf);
+        tui_printf(" %7s", tx_buf);
         if (e->rx_bytes > 0) attrset(COLOR_PAIR(CP_BRIGHT));
         else                 attrset(COLOR_PAIR(CP_DIM));
-        printw(" %7s", rx_buf);
+        tui_printf(" %7s", rx_buf);
     }
     for (int i = n; i < rows; i++) clipline(y0 + 2 + i, x0, w, "");
 }
@@ -560,7 +560,7 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     int row_end = x0 + w;
     int x = x0;
     move(y, x); x += 2;
-    tui_pkt_bg_cat(cat); printw("  %-8s  ", ts_buf); x += 10;  /* "  HH:MM:SS  " is 12 cols */
+    tui_pkt_bg_cat(cat); tui_printf("  %-8s  ", ts_buf); x += 10;  /* "  HH:MM:SS  " is 12 cols */
 
     /* src column: 21 cols wide */
     /* src column: 21 cols. Same hostname-resolution logic as the dst
@@ -584,22 +584,22 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         int hot_sev = tui_alert_hot_check(p->src);
         if (hot_sev >= 0) {
             tui_alert_hot_attr(hot_sev);
-            addstr(host_trunc);
+            tui_addstr(host_trunc);
         } else {
             tui_brand_addstr(host_trunc, cat);
         }
         tui_pkt_bg_cat(cat);
-        addstr(port_buf);
+        tui_addstr(port_buf);
     } else {
         tui_ip_addstr(p->src, cat);
         tui_pkt_bg_cat(cat);
-        printw(":%-5u", (unsigned)p->src_port);
+        tui_printf(":%-5u", (unsigned)p->src_port);
         int used = (int)strlen(p->src) + 1 + 5;
         while (used++ < src_w) addch(' ');
     }
     x += src_w;
 
-    move(y, x); tui_pkt_bg_cat(cat); printw(" " G_ARROW " "); x += 3;
+    move(y, x); tui_pkt_bg_cat(cat); tui_printf(" " G_ARROW " "); x += 3;
 
     /* dst column: 21 cols. If we've observed a DNS A/AAAA answer that
      * names this IP, show the qname (brand-coloured) instead of the
@@ -623,23 +623,23 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         int hot_sev = tui_alert_hot_check(p->dst);
         if (hot_sev >= 0) {
             tui_alert_hot_attr(hot_sev);
-            addstr(host_trunc);
+            tui_addstr(host_trunc);
         } else {
             tui_brand_addstr(host_trunc, cat);
         }
         tui_pkt_bg_cat(cat);
-        addstr(port_buf);
+        tui_addstr(port_buf);
     } else {
         tui_ip_addstr(p->dst, cat);
         tui_pkt_bg_cat(cat);
-        printw(":%-5u", (unsigned)p->dst_port);
+        tui_printf(":%-5u", (unsigned)p->dst_port);
         int used = (int)strlen(p->dst) + 1 + 5;
         while (used++ < dst_w) addch(' ');
     }
     x += dst_w;
 
     /* proto column */
-    move(y, x); tui_pkt_bg_cat(cat); printw("  %-5s  ", proto_short(p->proto)); x += 9;
+    move(y, x); tui_pkt_bg_cat(cat); tui_printf("  %-5s  ", proto_short(p->proto)); x += 9;
 
     /* info column: capped at info_max so the hex dump has room. If we
      * captured no raw bytes for this packet, info gets the full
@@ -659,7 +659,7 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
     tui_info_color(p->info);
     /* %-*.*s pads + truncates to exactly info_w columns so hex starts
      * at a predictable x. */
-    printw("%-*.*s", info_w, info_w, p->info);
+    tui_printf("%-*.*s", info_w, info_w, p->info);
     x += info_w;
 
     /* Hex dump + ASCII fill the remaining width. Each byte costs
@@ -676,10 +676,10 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         for (int b = 0; b < bytes; b++) {
             unsigned byte = (unsigned)p->raw[b];
             attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
-            printw("%02x ", byte);
+            tui_printf("%02x ", byte);
         }
         tui_pkt_bg_cat(cat);
-        printw("  ");
+        tui_printf("  ");
         for (int b = 0; b < bytes; b++) {
             unsigned char c = p->raw[b];
             addch((c >= 32 && c < 127) ? c : '.');
@@ -691,7 +691,7 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
         for (int b = 0; b < hex_bytes; b++) {
             unsigned byte = (unsigned)p->raw[b];
             attrset(COLOR_PAIR(CP_INFO_BASE + (byte & 7)));
-            printw("%02x ", byte);
+            tui_printf("%02x ", byte);
         }
     }
 }
@@ -808,8 +808,8 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
          * is dim so it reads as backdrop. */
         attrset(COLOR_PAIR(CP_DIM));
         move(y, cx);
-        for (int b = 0; b < filled;       b++) addstr("\xe2\x96\x88");  /* █ */
-        for (int b = filled; b < bar_w;   b++) addstr("\xe2\x96\x91");  /* ░ */
+        for (int b = 0; b < filled;       b++) tui_addstr("\xe2\x96\x88");  /* █ */
+        for (int b = filled; b < bar_w;   b++) tui_addstr("\xe2\x96\x91");  /* ░ */
         addch(' ');
 
         /* Step 2: overlay bright label + count on top of the bar.
@@ -822,7 +822,7 @@ static void draw_info_bargraph_row(const sloth_state_t *s,
         tui_info_color(label);
         attron(A_BOLD);
         move(y, cx);
-        addnstr(overlay, overlay_w);
+        tui_addnstr(overlay, overlay_w);
         attroff(A_BOLD);
     }
 }

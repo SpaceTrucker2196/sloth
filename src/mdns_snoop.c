@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "mdns_snoop.h"
+#include "netstr.h"
 #include "dns.h"
 #include "stab.h"
 
@@ -64,7 +65,9 @@ static int read_name(const uint8_t *msg, int msglen, int off,
         if (off + (int)c > msglen) return -1;
         if (out > 0 && out < bufsz - 1) buf[out++] = '.';
         int copy = (int)c < bufsz - out - 1 ? (int)c : bufsz - out - 1;
-        if (copy > 0) { memcpy(buf + out, msg + off, (size_t)copy); out += copy; }
+        /* netstr_copy (#138): every mDNS name — instance, SRV target —
+         * is assembled here, so C0/DEL become '?' once, at the source. */
+        if (copy > 0) out += (int)netstr_copy(buf + out, (size_t)(bufsz - out), msg + off, (size_t)copy);
         buf[out] = '\0';
         off += c;
     }

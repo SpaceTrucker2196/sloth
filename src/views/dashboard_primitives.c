@@ -96,7 +96,7 @@ void draw_sparkline_at(int y, int x, int width,
         else if (lvl <= 4)  attrset(COLOR_PAIR(CP_HEAT_MID));
         else if (lvl <= 6)  attrset(COLOR_PAIR(CP_HEAT_HI));
         else                attrset(COLOR_PAIR(CP_HEAT_PEAK));
-        addstr(glyph[lvl]);
+        tui_addstr(glyph[lvl]);
     }
 }
 
@@ -135,7 +135,7 @@ void draw_sparkline_solid_at(int y, int x, int width,
         }
         if (lvl == 0) attrset(COLOR_PAIR(CP_DIM));
         else          attrset(COLOR_PAIR(color_pair));
-        addstr(glyph[lvl]);
+        tui_addstr(glyph[lvl]);
     }
 }
 
@@ -150,7 +150,7 @@ void clipline(int y, int x, int w, const char *fmt, ...) {
     int n = (int)strlen(buf);
     if (n > w) n = w;
     move(y, x);
-    addnstr(buf, n);
+    tui_addnstr(buf, n);
     for (int i = n; i < w; i++) addch(' ');
 }
 
@@ -167,7 +167,7 @@ static void panel_title_ex(int y, int x, int w, const char *name,
     move(y, x);
     int filled = 0;
     int len = (int)strlen(name);
-    if (filled + 2 <= w) { addstr(G_HORIZ); addstr(G_HORIZ); filled += 2; }
+    if (filled + 2 <= w) { tui_addstr(G_HORIZ); tui_addstr(G_HORIZ); filled += 2; }
     if (filled     <  w) { addch(' '); filled++; }
     /* Title text — bright + bold for extra pop; inverted if focused. */
     attr_t name_attr = COLOR_PAIR(CP_BRIGHT) | A_BOLD;
@@ -177,14 +177,14 @@ static void panel_title_ex(int y, int x, int w, const char *name,
         addch((chtype)(unsigned char)name[i]);
     attrset(COLOR_PAIR(CP_DIM));
     if (filled < w - reserve) { addch(' '); filled++; }
-    while (filled < w - reserve) { addstr(G_HORIZ); filled++; }
+    while (filled < w - reserve) { tui_addstr(G_HORIZ); filled++; }
     if (passive && filled + reserve <= w) {
         /* "─ P ─" at the right edge, P in dim. */
-        addstr(G_HORIZ); filled++;
+        tui_addstr(G_HORIZ); filled++;
         addch(' ');      filled++;
         addch('P');      filled++;
         addch(' ');      filled++;
-        addstr(G_HORIZ); filled++;
+        tui_addstr(G_HORIZ); filled++;
     }
 }
 

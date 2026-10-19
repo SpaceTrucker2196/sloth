@@ -3670,3 +3670,18 @@ Refusals land in the #126 parse-fault tally as a new appended kind,
 `tests/test_frame_edge.c`, three capture-path cases, and
 `tests/fuzz/fuzz_frame_edge.c`. The IPv4 Total Length clamp the issue
 also named is #132's. Pages: [[architecture]], [[jsonl-schema]].
+
+## 2026-10-19 — one render/export sanitisation choke point (#138)
+
+`src/netstr.{c,h}`: `display_sanitize()` (UTF-8 aware; invalid octet,
+C0 except `\n`, DEL, C1 and the bidi controls → `?`) runs on every
+string `TPRINT` (now `tui_printf()`), `t_puts`/`t_putn` and the views'
+former direct `printw`/`addstr` emit, in both backends.
+`netstr_copy()` (C0/DEL → `?`, high octets kept) is the ingest copy for
+name-class fields — the SSID once, in `dot11_ie_ssid_copy()`, plus
+qname, NBNS, DHCP hostname, SNI, QUIC host, HTTP Host/UA and mDNS
+names. `json_escape()` output is always valid UTF-8 (`�` for an
+invalid octet; DEL, C1, U+2028/9 `\u`-escaped) — informational, not a
+break: every value that parsed before parses the same. CEF and syslog
+map C0/DEL/C1 to a space. Pages: [[jsonl-schema]] (common envelope,
+versioning note), [[threat-model]] (TB-5 closed, residual stated).

@@ -35,9 +35,10 @@ int dot11_ie_find_ext(const uint8_t *ies, int len, uint8_t ext_id,
                       const uint8_t **body, int *blen);
 
 /* SSID element body → C string (§9.4.2.2: 0..32 octets). Copies
- * min(blen, 32) octets verbatim and NUL-terminates. Returns 1 when the
- * element claimed more than 32 octets — invalid, and a fuzz signal. The
- * bytes are not filtered here; display paths sanitise. */
+ * min(blen, 32) octets through netstr_copy() (#138): C0 and DEL become
+ * '?', a NUL ends the string (a hidden SSID reads as ""), octets above
+ * 0x7f are kept as they are. Returns 1 when the element claimed more
+ * than 32 octets — invalid, and a fuzz signal. */
 int dot11_ie_ssid_copy(const uint8_t *body, int blen, char out[33]);
 
 /* The first SSID element of a list. `out` is "" when there is none.

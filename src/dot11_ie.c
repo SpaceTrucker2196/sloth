@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "dot11_ie.h"
+#include "netstr.h"
 #include "bytes.h"
 #include "sensor_health.h"
 
@@ -38,8 +39,11 @@ int dot11_ie_find_ext(const uint8_t *ies, int len, uint8_t ext_id,
 int dot11_ie_ssid_copy(const uint8_t *body, int blen, char out[33]) {
     int n = blen < 32 ? blen : 32;
     if (n < 0 || !body) n = 0;
-    if (n) memcpy(out, body, (size_t)n);
-    out[n] = '\0';
+    /* netstr_copy, not memcpy (#138): every stored SSID passes through
+     * here, and a raw \n or \r in one moved the cursor on render. C0 and
+     * DEL become '?'; high octets are kept, so --my-ssid and the
+     * baseline still match a non-UTF-8 SSID octet for octet. */
+    netstr_copy(out, 33, body, (size_t)n);
     return blen > 32;
 }
 

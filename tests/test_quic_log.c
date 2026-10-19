@@ -242,6 +242,18 @@ static void test_view_key_clear(void) {
 
 /* ── Suite entry point ───────────────────────────────────── */
 
+/* #138: the QUIC host comes from the host cache, which is fed by names
+ * already scrubbed at ingest; the store marks C0/DEL as well so a
+ * future caller cannot bypass it. Mutation-proved: the snprintf
+ * restored in quic_log.c reddens it. */
+static void test_parse_host_control_octets_marked(void) {
+    uint8_t buf[32];
+    int len = make_quic_initial(0x00000001u, 0x00, 4, buf, sizeof(buf));
+    quic_log_entry_t e;
+    ASSERT_EQ(quic_log_parse(buf, len, "10.0.0.1", "8.8.8.8", "dns\r.google\x7f", &e), 1);
+    ASSERT_STR(e.host, "dns?.google?");
+}
+
 void run_quic_log_tests(void) {
     TEST_SUITE("quic_log parse");
     RUN_TEST(test_parse_v1);
@@ -266,4 +278,5 @@ void run_quic_log_tests(void) {
     TEST_SUITE("view_quic key");
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
+    RUN_TEST(test_parse_host_control_octets_marked);
 }

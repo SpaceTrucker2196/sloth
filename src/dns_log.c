@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include "sloth.h"
+#include "netstr.h"
 #include "dns_log.h"
 #include "jsonl.h"
 #include "host_cache.h"
@@ -90,7 +91,8 @@ int dns_log_parse(const uint8_t *msg, int len,
 
     memset(out, 0, sizeof(*out));
     if (src_ip) snprintf(out->src, sizeof(out->src), "%s", src_ip);
-    snprintf(out->qname, sizeof(out->qname), "%s", qname);
+    /* Name-class field: C0/DEL → '?' at ingest (#138). */
+    netstr_copy(out->qname, sizeof(out->qname), (const uint8_t *)qname, strlen(qname));
     snprintf(out->qtype, sizeof(out->qtype), "%s", qtype_str(qtype));
     out->is_resp = is_resp;
     out->ts      = time(NULL);

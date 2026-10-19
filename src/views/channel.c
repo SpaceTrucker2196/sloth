@@ -169,7 +169,7 @@ void view_channel_draw(const sloth_state_t *s) {
             char buf[24];
             snprintf(buf, sizeof(buf), "  %-20.20s", c->top_ssid);
             if (i != s->channel_sel) tui_ssid_addstr(buf, 0);
-            else { tui_sel(); printw("%s", buf); }
+            else { tui_sel(); tui_printf("%s", buf); }
 #else
             if (i == s->channel_sel) tui_sel(); else tui_bright();
             TPRINT("  %-20.20s", c->top_ssid);

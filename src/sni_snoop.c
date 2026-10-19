@@ -1,5 +1,6 @@
 #include <string.h>
 #include "sni_snoop.h"
+#include "netstr.h"
 
 /*
  * TLS record and handshake layout (RFC 5246, RFC 8446):
@@ -109,8 +110,7 @@ int sni_snoop(const uint8_t *data, int len, char *host, int hostsz) {
             int name_len = (int)u16(ch + off + 3);
             if (name_len <= 0 || off + 5 + name_len > ext_end) break;
             int copy = name_len < hostsz - 1 ? name_len : hostsz - 1;
-            memcpy(host, ch + off + 5, (size_t)copy);
-            host[copy] = '\0';
+            netstr_copy(host, (size_t)hostsz, ch + off + 5, (size_t)copy);   /* #138 */
             return 1;
         }
 

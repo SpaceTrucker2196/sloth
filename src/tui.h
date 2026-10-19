@@ -5,12 +5,34 @@
 
 #ifdef WITH_NCURSES
 #  include <curses.h>
-#  define TPRINT printw
-#else
-#  define TPRINT printf
 #endif
 
 #include <stdio.h>
+
+/* Every view's formatted output (#138). TPRINT used to be printw, or
+ * printf in the ANSI build — which wrote attacker-chosen SSIDs, DNS
+ * names and SNI hosts to the terminal byte for byte, ESC and CSI
+ * included (CWE-150). It now formats into a buffer, runs
+ * display_sanitize() (src/netstr.h) over the result and only then
+ * emits it, so the ~1000 call sites need no change of their own.
+ * The format attribute keeps the -Wformat checking printw/printf gave;
+ * it is GNU syntax, hence the guard. */
+#if defined(__GNUC__)
+void tui_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#else
+void tui_printf(const char *fmt, ...);
+#endif
+#define TPRINT tui_printf
+
+/* addstr / addnstr through the same sanitiser, for the ncurses-only
+ * view code that wrote with curses directly. n is in octets. */
+void tui_addstr(const char *s);
+void tui_addnstr(const char *s, int n);
+
+/* The ANSI backend's string sink, compiled in every build so the
+ * test binary (built WITH_NCURSES) can drive it: writes at most n
+ * octets of s (n < 0: all of it) to fp after display_sanitize(). */
+void tui_fputs_sanitized(FILE *fp, const char *s, int n);
 
 void tui_init(void);
 void tui_cleanup(void);

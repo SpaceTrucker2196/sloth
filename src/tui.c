@@ -3,6 +3,8 @@
 #define NCURSES_WIDECHAR 1
 
 #include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <wchar.h>
@@ -22,6 +24,7 @@
 #include "tui.h"
 #include "persist_health.h"
 #include "tui_palette.h"
+#include "netstr.h"
 #include "views/iface.h"
 #include "views/conns.h"
 #include "views/wifi.h"
@@ -59,6 +62,82 @@
 #include "views/fragattack.h"
 
 
+/* ── Sanitised emission (#138) ───────────────────────────── *
+ *
+ * The one place a view's text reaches the terminal. Each string is
+ * copied into a bounded buffer and run through display_sanitize()
+ * before addstr / fputs see it: ncurses renders most C0 as ^X but acts
+ * on \r \b \t, and the ANSI backend acted on all of it. A string longer
+ * than the stack buffer goes to the heap rather than being cut, since a
+ * truncated row would be a rendering change of its own. */
+#define T_EMIT_STACK 1024
+
+/* Sanitised copy of s[0..n) (n < 0: to the NUL). Returns buf, a heap
+ * block the caller frees (*heap set), or NULL when that allocation fails. */
+static char *t_sanitized_copy(const char *s, int n, char *buf, size_t bufsz,
+                              int *heap) {
+    /* Bounded scan when n is given: addnstr() reads at most n octets,
+     * so the replacement must not walk past them looking for a NUL. */
+    size_t len = 0;
+    if (n < 0) len = strlen(s);
+    else while (len < (size_t)n && s[len]) len++;
+    char *p = buf;
+    *heap = 0;
+    if (len + 1 > bufsz) {
+        p = malloc(len + 1);
+        if (!p) return NULL;
+        *heap = 1;
+    }
+    memcpy(p, s, len);
+    p[len] = '\0';
+    display_sanitize(p);
+    return p;
+}
+
+void tui_fputs_sanitized(FILE *fp, const char *s, int n) {
+    if (!fp || !s) return;
+    char buf[T_EMIT_STACK];
+    int heap;
+    char *p = t_sanitized_copy(s, n, buf, sizeof buf, &heap);
+    if (!p) return;
+    fputs(p, fp);
+    if (heap) free(p);
+}
+
+#ifdef WITH_NCURSES
+static void t_emit(const char *s, int n) {
+    if (!s) return;
+    char buf[T_EMIT_STACK];
+    int heap;
+    char *p = t_sanitized_copy(s, n, buf, sizeof buf, &heap);
+    if (!p) return;
+    addstr(p);
+    if (heap) free(p);
+}
+#else
+static void t_emit(const char *s, int n) { tui_fputs_sanitized(stdout, s, n); }
+#endif
+
+void tui_addstr(const char *s)         { t_emit(s, -1); }
+void tui_addnstr(const char *s, int n) { t_emit(s, n); }
+
+void tui_printf(const char *fmt, ...) {
+    char buf[T_EMIT_STACK];
+    va_list ap;
+    va_start(ap, fmt);
+    int need = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (need < 0) return;
+    if ((size_t)need < sizeof buf) { t_emit(buf, -1); return; }
+    char *big = malloc((size_t)need + 1);
+    if (!big) { t_emit(buf, -1); return; }   /* the truncated form, still sanitised */
+    va_start(ap, fmt);
+    vsnprintf(big, (size_t)need + 1, fmt, ap);
+    va_end(ap);
+    t_emit(big, -1);
+    free(big);
+}
+
 /* ── Backend-neutral output primitives ───────────────────── *
  *
  * The colour helpers below (IP / SSID / brand / alert-hot) are shared by
@@ -71,8 +150,8 @@
 
 static void t_pair(int pair)      { attrset(COLOR_PAIR(pair)); }
 static void t_pair_bold(int pair) { attrset(COLOR_PAIR(pair) | A_BOLD); }
-static void t_puts(const char *s) { addstr(s); }
-static void t_putn(const char *s, int n) { addnstr(s, n); }
+static void t_puts(const char *s) { t_emit(s, -1); }
+static void t_putn(const char *s, int n) { t_emit(s, n); }
 static void t_putc(char c)        { addch((chtype)(unsigned char)c); }
 
 #else
@@ -93,8 +172,8 @@ static void t_pair_attr(int pair, int bold) {
 
 static void t_pair(int pair)      { t_pair_attr(pair, 0); }
 static void t_pair_bold(int pair) { t_pair_attr(pair, 1); }
-static void t_puts(const char *s) { fputs(s, stdout); }
-static void t_putn(const char *s, int n) { printf("%.*s", n, s); }
+static void t_puts(const char *s) { tui_fputs_sanitized(stdout, s, -1); }
+static void t_putn(const char *s, int n) { tui_fputs_sanitized(stdout, s, n); }
 static void t_putc(char c)        { fputc(c, stdout); }
 
 #endif /* WITH_NCURSES */
@@ -857,7 +936,7 @@ static int draw_tabbar(const sloth_state_t *s) {
     tui_bright();
     static const char *banner = " sloth v" SLOTH_VERSION;
     int banner_w = (int)strlen(banner);
-    printw("%s", banner);
+    tui_printf("%s", banner);
     x = banner_w;
 
     /* #96: a sink that cannot persist is a sensor-level fault, so the
@@ -874,7 +953,7 @@ static int draw_tabbar(const sloth_state_t *s) {
     char persist[96];
     if (persist_badge(&s->persist_health, persist, sizeof(persist)) > 0) {
         tui_heat(1.0);
-        printw("  %s", persist);
+        tui_printf("  %s", persist);
         x += (int)strlen(persist) + 2;
         tui_bright();
     }
@@ -886,9 +965,9 @@ static int draw_tabbar(const sloth_state_t *s) {
             y++; x = 0;
             move(y, x);
         }
-        tui_dim();   printw("  ");
+        tui_dim();   tui_printf("  ");
         if (i == (int)s->active_view) tui_sel(); else tui_dim();
-        printw(" %s ", view_label((view_t)i));
+        tui_printf(" %s ", view_label((view_t)i));
         x += lbl_w;
     }
     tui_normal();

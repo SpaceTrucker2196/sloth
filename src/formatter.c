@@ -137,12 +137,50 @@ static int walk_object(const char *json, kv_cb cb, void *ud) {
  * extensions, `=` and `\` need escaping. Newlines are forbidden in
  * the body — we replace with `\n`. */
 
+/* Length of a control token at s[i..end) that a CEF / syslog consumer
+ * must not receive, or 0 (#138, CWE-117/150). The value is the text of
+ * a JSON string, so a control can arrive in three shapes: a raw C0 or
+ * DEL octet, a UTF-8-encoded C1 (0xC2 0x80..0x9F; U+009B is CSI), or a
+ * JSON escape naming one (\b, \f, \u0000..\u001f, \u007f..\u009f).
+ * Each collapses to one space. \n \r \t keep their existing handling
+ * in the callers, which also lands on a space. */
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int ctl_token(const char *s, int i, int end) {
+    unsigned char c = (unsigned char)s[i];
+    if (c < 0x20 || c == 0x7f) return 1;
+    if (c == 0xc2 && i + 1 < end) {
+        unsigned char d = (unsigned char)s[i + 1];
+        if (d >= 0x80 && d <= 0x9f) return 2;
+    }
+    if (c == '\\' && i + 1 < end) {
+        char nx = s[i + 1];
+        if (nx == 'b' || nx == 'f') return 2;
+        if (nx == 'u' && i + 5 < end) {
+            int v = 0;
+            for (int k = 2; k < 6; k++) {
+                int h = hexval(s[i + k]);
+                if (h < 0) return 0;
+                v = (v << 4) | h;
+            }
+            if (v < 0x20 || (v >= 0x7f && v <= 0x9f)) return 6;
+        }
+    }
+    return 0;
+}
+
 static int cef_escape_field(const char *s, int n, char *out, int out_sz) {
     int o = 0;
     for (int i = 0; i < n && o + 2 < out_sz; i++) {
         char c = s[i];
+        int ctl = ctl_token(s, i, n);
+        if (ctl) { out[o++] = ' '; i += ctl - 1; continue; }
         if (c == '|' || c == '\\') { out[o++] = '\\'; }
-        if (c == '\n' || c == '\r') c = ' ';
         out[o++] = c;
     }
     out[o] = '\0';
@@ -165,8 +203,9 @@ static int cef_escape_ext(const char *s, int n, char *out, int out_sz) {
             if (nx == '"') { out[o++] = '"'; i++; continue; }
             if (nx == '\\'){ out[o++] = '\\'; i++; continue; }
         }
+        int ctl = ctl_token(s, i, end);
+        if (ctl) { out[o++] = ' '; i += ctl - 1; continue; }
         if (c == '=' || c == '\\') { out[o++] = '\\'; }
-        if (c == '\n' || c == '\r') c = ' ';
         out[o++] = c;
     }
     out[o] = '\0';
@@ -276,8 +315,9 @@ static int syslog_sd_escape(const char *s, int n, char *out, int out_sz) {
             if (nx == '"')  { out[o++] = '\\'; out[o++] = '"';  i++; continue; }
             if (nx == '\\') { out[o++] = '\\'; out[o++] = '\\'; i++; continue; }
         }
+        int ctl = ctl_token(s, i, end);
+        if (ctl) { out[o++] = ' '; i += ctl - 1; continue; }
         if (c == '"' || c == '\\' || c == ']') { out[o++] = '\\'; }
-        if (c == '\n' || c == '\r') c = ' ';
         out[o++] = c;
     }
     out[o] = '\0';
@@ -352,9 +392,27 @@ static int format_syslog(const char *jsonl, char *out, int out_sz) {
     int pid = (int)getpid();
     /* PRI 134 = facility 16 (local0) * 8 + severity 6 (info). */
     int n = snprintf(out, (size_t)out_sz,
-                     "<134>1 %s %s sloth %d %s [sloth@32473%s] %s",
-                     ts, hostname, pid, cx.type, sd_body, jsonl);
+                     "<134>1 %s %s sloth %d %s [sloth@32473%s] ",
+                     ts, hostname, pid, cx.type, sd_body);
     if (n < 0 || n >= out_sz) return -1;
+    /* MSG is the record verbatim, minus raw control octets (#138): a
+     * raw C0, DEL or UTF-8-encoded C1 inside a JSON string is invalid
+     * JSON anyway, so a space loses no fidelity and keeps the record on
+     * one line. Escaped forms (\u001b) are text and stay. sloth's own
+     * json_escape never emits a raw one; this covers any other feed. */
+    int mlen = (int)strlen(jsonl);
+    if (n + mlen >= out_sz) return -1;
+    for (int i = 0; i < mlen; i++) {
+        unsigned char c = (unsigned char)jsonl[i];
+        if (c == 0xc2 && i + 1 < mlen
+            && (unsigned char)jsonl[i + 1] >= 0x80
+            && (unsigned char)jsonl[i + 1] <= 0x9f) {
+            out[n++] = ' '; out[n++] = ' '; i++;
+            continue;
+        }
+        out[n++] = (c < 0x20 || c == 0x7f) ? ' ' : (char)c;
+    }
+    out[n] = '\0';
     return n;
 }
 

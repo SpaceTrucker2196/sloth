@@ -1509,6 +1509,19 @@ static void test_action_short_frames_are_safe(void) {
     action_mfp_clear(); saq_clear(); beacon_clear();
 }
 
+/* #138: the RRM Beacon Request SSID subelement is stored through
+ * dot11_ie_ssid_copy(). Mutation: see test_beacon_snoop.c. */
+static void test_rrm_ssid_control_octets_marked(void) {
+    rrm_clear();
+    uint8_t f[128];
+    int n = build_rrm_req(f, AP_A, RRM_STA, 6, 0, "corp\n\x7fwifi");
+    ASSERT_EQ(rrm_parse_action(f, n, 1000), 1);
+    sloth_rrm_pair_t p;
+    ASSERT_EQ(rrm_find(AP_A, RRM_STA, &p), 1);
+    ASSERT_STR(p.last_ssid, "corp??wifi");
+    rrm_clear();
+}
+
 void run_action_snoop_tests(void) {
     TEST_SUITE("action frame category demux (#59)");
     RUN_TEST(test_category_read);
@@ -1598,4 +1611,5 @@ void run_action_snoop_tests(void) {
     RUN_TEST(test_protected_count_snapshots_and_clears);
     RUN_TEST(test_unprotected_frames_do_not_count_as_protected);
     RUN_TEST(test_action_short_frames_are_safe);
+    RUN_TEST(test_rrm_ssid_control_octets_marked);
 }

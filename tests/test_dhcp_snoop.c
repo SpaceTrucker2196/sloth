@@ -395,6 +395,24 @@ static void test_clear_key_resets_state(void) {
 
 /* ── Entry point ────────────────────────────────────────── */
 
+/* #138: option 12 (RFC 2132 §3.14) is stored through netstr_copy().
+ * Mutation-proved: the memcpy restored in dhcp_snoop.c reddens it. */
+static void test_hostname_control_octets_marked(void) {
+    reset();
+    dhcp_args_t a = {
+        .op = 2, .mac = {0xAA,0xBB,0xCC,0x11,0x22,0x34},
+        .yiaddr = (192u<<24)|(168u<<16)|(1u<<8)|51u,
+        .msg_type = 5, .hostname = "evil\rhost\x1b"
+    };
+    uint8_t buf[300]; char info[64] = "";
+    int len = build_dhcp(&a, buf, sizeof(buf));
+    ASSERT_EQ(1, dhcp_snoop(buf, len, info, sizeof(info)));
+    TEST_STATE(s); memset(&s, 0, sizeof(s));
+    dhcp_snoop_snapshot(&s);
+    ASSERT_EQ(1, s.dhcp_event_count);
+    ASSERT_STR("evil?host?", s.dhcp_events[0].hostname);
+}
+
 void run_dhcp_snoop_tests(void) {
     TEST_SUITE("dhcp_snoop protocol");
     RUN_TEST(test_ack_fills_ip_and_hostname);
@@ -419,4 +437,5 @@ void run_dhcp_snoop_tests(void) {
     RUN_TEST(test_draw_with_entries);
     RUN_TEST(test_nav_down_up);
     RUN_TEST(test_clear_key_resets_state);
+    RUN_TEST(test_hostname_control_octets_marked);
 }

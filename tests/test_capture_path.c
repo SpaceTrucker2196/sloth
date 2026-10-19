@@ -2677,6 +2677,43 @@ static void test_libver_reports_the_loaded_libpcap(void) {
     ASSERT(strncmp(buf, want, strlen(want)) == 0);
 }
 
+/* #138: both SSID stores in on_probe_frame() go through
+ * dot11_ie_ssid(), so '\n' / '\r' / DEL / ESC in an SSID reach the PNL
+ * and the association table as '?'. Mutation: see test_beacon_snoop.c. */
+static void test_probe_request_ssid_control_octets_marked(void) {
+    static const uint8_t sa[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x79 };
+    uint8_t f[RT_HDR + 24 + 2 + 4];
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); probe_pnl_clear();
+    int n = mon_probe_req(f, sa, "x\ny\x7f", 0);
+    ASSERT_EQ(n, (int)sizeof f);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    probe_pnl_snapshot(&g_s);
+    ASSERT_EQ(g_s.pnl_count, 1);
+    ASSERT_STR(g_s.pnl_clients[0].ssids[0], "x?y?");
+    probe_pnl_clear();
+}
+
+static void test_assoc_response_ssid_control_octets_marked(void) {
+    uint8_t f[RT_HDR + 24 + 6 + 2 + 4];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    fb_ie(&b, 0, "x\ry\x1b", 4);
+    ASSERT(fb_ok(&b));
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); assoc_clear();
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    assoc_snapshot(&g_s);
+    ASSERT_EQ(g_s.assoc_count, 1);
+    ASSERT_STR(g_s.assocs[0].ssid, "x?y?");
+    assoc_clear();
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -2775,6 +2812,8 @@ void run_capture_path_tests(void) {
     TEST_SUITE("capture path: the packet ring is a snapshot (#111)");
     RUN_TEST(test_ring_wraps_with_head_count_total_preserved);
     RUN_TEST(test_ring_snapshot_is_stable_under_writer);
+    RUN_TEST(test_probe_request_ssid_control_octets_marked);
+    RUN_TEST(test_assoc_response_ssid_control_octets_marked);
 }
 #else
 void run_capture_path_tests(void);

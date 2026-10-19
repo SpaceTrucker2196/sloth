@@ -128,38 +128,38 @@ void view_twins_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->twin_episode_sel) {
             tui_sel();
-            printw(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
+            tui_printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
                    "  %-5s  %-6s  %s\n",
                    e->ssid, real_mac, twin_mac, e->enc, conf, cls_s, wired_s,
                    swing, flags, age);
             tui_reset();
         } else {
-            tui_bright(); printw(" %-18.18s", e->ssid);
-            tui_dim();    printw("  %-17s", real_mac);
+            tui_bright(); tui_printf(" %-18.18s", e->ssid);
+            tui_dim();    tui_printf("  %-17s", real_mac);
             /* Bright on the B column only when the pair is attributed —
              * there it really is the suspected rogue. On an
              * unattributed pair the two halves are peers and colouring
              * one of them would accuse whichever BSSID sorted higher. */
             if (e->attributed) tui_bright(); else tui_dim();
-            printw("  %-17s", twin_mac);
-            tui_dim();    printw("  %-6.6s", e->enc);
-            tui_normal(); printw("  %-4s", conf);
+            tui_printf("  %-17s", twin_mac);
+            tui_dim();    tui_printf("  %-6.6s", e->enc);
+            tui_normal(); tui_printf("  %-4s", conf);
             /* Bright only on a class that names an impersonator. A
              * `neighbor` or `declared` row is the detector saying "not
              * your problem" and should not compete for attention. */
             if (e->ap_class == (uint8_t)TWIN_CLASS_IMPERSONATOR) tui_bright();
             else                                                 tui_dim();
-            printw("  %-8.8s", cls_s);
+            tui_printf("  %-8.8s", cls_s);
             /* Never bright on `?`, which is every row until a
              * correlator exists: highlighting a column sloth has no
              * answer for would advertise the absence as a finding. */
             if (e->wired_attach == (uint8_t)WIRED_ATTACH_ATTACHED) tui_bright();
             else                                                   tui_dim();
-            printw("  %-5.5s", wired_s);
-            tui_normal(); printw("  %-5s", swing);
+            tui_printf("  %-5.5s", wired_s);
+            tui_normal(); tui_printf("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
-            printw("  %-6s", flags);
-            tui_dim();    printw("  %s\n", age);
+            tui_printf("  %-6s", flags);
+            tui_dim();    tui_printf("  %s\n", age);
             tui_normal();
         }
 #else
