@@ -489,12 +489,13 @@ static void test_snapshot_clamps_sel(void) {
     ASSERT_EQ(s.beacon_sel, 0);
 }
 
-/* ── view_beacon_draw smoke tests ────────────────────────── */
+/* ── view_beacon_draw ─────────────────────────────────────── */
 
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
-    view_beacon_draw(&s);   /* must not crash */
-    ASSERT(1);
+    view_beacon_draw(&s);
+    ASSERT_LINE_HAS(0, "Passive beacons: 0");
+    ASSERT_SCREEN_HAS("(no beacons seen");
 }
 
 static void test_view_draw_populated(void) {
@@ -505,7 +506,15 @@ static void test_view_draw_populated(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
     view_beacon_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Passive beacons: 2");
+    int a = runner_screen_find("HomeNet ");
+    int b = runner_screen_find("de:ad:be:ef:00:01");
+    ASSERT(a >= 0 && b >= 0);
+    ASSERT_LINE_HAS(a, "aa:bb:cc:11:22:33   -55  6        WPA2");
+    /* An SSID literally named "Hidden" is a name, not the hidden flag. */
+    ASSERT_LINE_HAS(b, "Hidden ");
+    ASSERT_LINE_HAS(b, "-70  11       WPA3");
+    ASSERT_SCREEN_LACKS("(hidden)");
 }
 
 static void test_view_draw_hidden_ssid(void) {
@@ -515,7 +524,7 @@ static void test_view_draw_hidden_ssid(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
     view_beacon_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(runner_screen_find("aa:bb:cc:11:22:33"), "(hidden)");
 }
 
 /* ── view_beacon_key tests ───────────────────────────────── */
