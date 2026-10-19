@@ -223,3 +223,7 @@
 | cfbf6a8 | 2026-10-19T05:57:18Z | claude-opus-5-5 | 36 | 12034 | 12600120 | 1541485 | 15.0927 | S8 test build ships config, offscreen ncurses, one suite (#116) |
 | 4f73e23 | 2026-10-19T06:09:36Z | claude-opus-5-5 | 22 | 7359 | 8078191 | 14804 | 1.8813 | dependency floors, SBOM fallback, libs on sensor_health (#142) |
 | 9131b8e | 2026-10-19T06:38:11Z | claude-opus-5-5 | 38 | 15137 | 14851432 | 23927 | 3.4646 | #142 CI half: pinned runners, SBOM job, release attestation |
+| 3b88e1c | 2026-10-19T07:45:53Z | claude-opus-5-5 | 34 | 14714 | 13661945 | 28522 | 3.2550 | batch B #118 |
+| 363addb | 2026-10-19T07:46:25Z | claude-opus-5-5 | 6 | 1253 | 2605257 | 2498 | 0.5661 | batch B #141 |
+| aac509d | 2026-10-19T08:12:38Z | claude-opus-5-5 | 34 | 11519 | 13198608 | 22955 | 3.0539 | batch B #138 |
+| 4f8b956 | 2026-10-19T08:14:57Z | claude-opus-5-5 | 24 | 8496 | 10803731 | 17655 | 2.4720 | batch B #119 |
