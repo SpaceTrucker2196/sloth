@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "dns_log.h"
 #include "views/dns_log.h"
@@ -280,12 +281,13 @@ static void test_snapshot_empty_resets_sel_to_zero(void) {
     ASSERT_EQ(s.dns_log_sel, 0);
 }
 
-/* ── view_dns_draw smoke tests ───────────────────────────── */
+/* ── view_dns_draw ────────────────────────────────────────── */
 
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_dns_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "DNS log: 0");
+    ASSERT_SCREEN_HAS("(no DNS packets seen");
 }
 
 static void test_view_draw_populated(void) {
@@ -300,7 +302,25 @@ static void test_view_draw_populated(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dns_log_snapshot(&s);
     view_dns_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "DNS log: 3");
+    /* Newest first. The Time column is local time and not asserted. */
+    int q  = runner_screen_find("reddit.com");
+    int nx = runner_screen_find("ghost.local");
+    int a  = runner_screen_find("google.com");
+    ASSERT(q >= 0 && q < nx && nx < a);
+    ASSERT_LINE_HAS(q,  "192.168.1.5      Q  AAAA");
+    ASSERT_LINE_HAS(nx, "NXDOMAIN");
+    ASSERT_LINE_HAS(a,  "R  A ");
+    /* The Answer column lines up under its header on the selected row
+     * (row 0, the query) and on the plain rows alike. The plain rows
+     * carry a two-cell DGA-flag slot after the name that the header and
+     * the selected row did not, so their answers sat two columns right
+     * of "Answer". Seen to fail with the header's slot removed. */
+    int col = runner_find_col(1, "Answer");
+    ASSERT(col > 0);
+    ASSERT_EQ(runner_find_col(a, "142.250.80.46"), col);
+    ASSERT_EQ(runner_find_col(nx, "NXDOMAIN"), col);
+    ASSERT_EQ(runner_find_col(q, "-"), col);
 }
 
 /* ── view_dns_key tests ──────────────────────────────────── */

@@ -25,9 +25,13 @@ void view_dns_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     tui_dim();
-    TPRINT(" %-8s  %-15s  %s  %-5s  %-28s  %s\n",
+    /* "%-28s    %s": the name, the two-cell DGA-flag slot every row
+     * carries after it, then the answer. The header and the selected
+     * row used to leave the slot out, so plain rows' answers sat two
+     * columns right of "Answer" (#116). */
+    TPRINT(" %-8s  %-15s  %s  %-5s  %-28s    %s\n",
            "Time", "Src", "Q", "Type", "Name", "Answer");
-    TPRINT(" %-8s  %-15s  %s  %-5s  %-28s  %s\n",
+    TPRINT(" %-8s  %-15s  %s  %-5s  %-28s    %s\n",
            "--------", "---------------", "-",
            "-----", "----------------------------", "------");
     tui_normal();
@@ -63,10 +67,11 @@ void view_dns_draw(const sloth_state_t *s) {
 
         if (row == s->dns_log_sel) {
             tui_sel();
-            TPRINT(" %-8s  %-15.15s  %c  %-5.5s  %-28.28s  %s\n",
+            TPRINT(" %-8s  %-15.15s  %c  %-5.5s  %-28.28s%s  %s\n",
                    ts_buf, e->src,
                    e->is_resp ? 'R' : 'Q',
                    e->qtype, e->qname,
+                   dga_is_suspicious(e->qname) ? " *" : "  ",
                    e->answer[0] ? e->answer : "-");
             tui_reset();
         } else {
