@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <time.h>
 #include "sloth.h"
+#include "sloth_clock.h"
 #include "tui.h"
 #include "wifi_chanhop.h"
 #include "wifi_snapshot.h"
@@ -150,9 +151,7 @@ static void on_signal(int sig) { (void)sig; g_quit = 1; }
 static void chanhop_drive(sloth_state_t *s) {
     static uint64_t last_total = 0;
     if (!g_hop_enabled || s->probe_iface[0] == '\0') return;
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    uint64_t now_ms = sloth_mono_ms();
     /* #91: the monitor radio's own frame counter, not s->pkt_total.
      * The general capture counter includes every other interface, so a
      * busy wired management port used to lengthen the dwell of whatever
@@ -734,7 +733,11 @@ int main(int argc, char **argv) {
     int         monitor_only = 0;        /* --monitor-only (#35) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
-    time_t      session_start = time(NULL);
+    time_t      session_start = sloth_wall();
+    /* The wall stamp above is evidence (the DB session row, the posture
+     * report header). The baseline settle delay below is a duration and
+     * must not move when NTP steps the wall clock. */
+    uint64_t    session_start_ms = sloth_mono_ms();
     /* NO_COLOR (no-color.org): any non-empty value disables colour.
      * Read before the flags so an explicit --no-color is redundant
      * rather than conflicting. */
@@ -1287,7 +1290,7 @@ int main(int argc, char **argv) {
         /* Sweep once here, then daily from the poll loop. At startup
          * because a sensor that is restarted more often than once a day
          * would otherwise never age anything out. */
-        int swept = eapol_sweep(time(NULL));
+        int swept = eapol_sweep(sloth_wall());
         if (eapol_retention_days() > 0)
             fprintf(stderr,
                     "sloth: handshake export %s — CRACKABLE MATERIAL, "
@@ -1474,16 +1477,16 @@ int main(int argc, char **argv) {
         /* #23: once the RF picture has had time to settle, freeze it as the
          * session baseline so drift (new/gone/changed APs) can be reported. */
         if (g_state.probe_iface[0] && !wifi_baseline_ready() &&
-            time(NULL) - session_start >= 30)
+            sloth_mono_ms() - session_start_ms >= 30000u)
             wifi_baseline_capture(&g_state);
         data_socket_tick();
         /* Daily retention sweep over the handshake export (#87). A time
          * comparison on every poll until the window rolls over; a no-op
          * entirely when nothing is being collected. */
-        eapol_maintain(time(NULL));
+        eapol_maintain(sloth_wall());
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
-        updater_tick(time(NULL));
+        updater_tick(sloth_wall());
         updater_snapshot(&g_state);
         /* --ticks (#119): the last tick still emits and draws; only the
          * wait after it is skipped, since nothing follows to wait for. */
@@ -1566,7 +1569,7 @@ int main(int argc, char **argv) {
      * carries the path, so it is not printed twice. */
     if (snapshot_out) {
         if (wifi_snapshot_write(&g_state, snapshot_out, site_label,
-                                (long)time(NULL)) == 0)
+                                (long)sloth_wall()) == 0)
             fprintf(stderr, "sloth: site snapshot -> %s (%d APs)\n",
                     snapshot_out, g_state.beacon_count);
         else
@@ -1577,7 +1580,7 @@ int main(int argc, char **argv) {
     dns_cleanup();
     g_platform.cleanup();
     jsonl_close();
-    db_session_end(time(NULL));
+    db_session_end(sloth_wall());
     db_close();
     discovery_unpublish();
     data_socket_cleanup();

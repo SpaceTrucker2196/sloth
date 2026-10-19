@@ -94,6 +94,8 @@ static const char *const cs_migrated[] = {
     "src/platform/bsd.c",
     "src/data_socket.c",
     "src/bandwidth.c",
+    "src/jsonl.c",
+    "src/main.c",
 };
 
 /* The counter must see calls before its zero means anything. */
@@ -180,6 +182,26 @@ static void test_test_set_swaps_and_null_restores(void) {
     ASSERT(wall - libc >= -1 && wall - libc <= 1);
 }
 
+/* The rate code (bandwidth, interface counters) divides a counter
+ * delta by elapsed seconds taken from sloth_mono_ts(). It must be the
+ * same clock as sloth_mono_ms(), split on the millisecond, or an
+ * injected clock would move one and not the other. 12345 ms is chosen
+ * so both the seconds and the sub-second part are non-zero and a
+ * swapped or mis-scaled field cannot pass. */
+static void test_mono_ts_is_mono_ms_split(void) {
+    g_mono = 12345; g_wall = WALL0;
+    sloth_clock_test_set(fake_mono, fake_wall);
+    struct timespec ts = { 0, 0 };
+    sloth_mono_ts(&ts);
+    ASSERT_EQ((long)ts.tv_sec, 12L);
+    ASSERT_EQ((long)ts.tv_nsec, 345000000L);
+    g_mono = 999;
+    sloth_mono_ts(&ts);
+    ASSERT_EQ((long)ts.tv_sec, 0L);
+    ASSERT_EQ((long)ts.tv_nsec, 999000000L);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* The #88 names and the #109 names are one seam, not two: a module
  * still on flood_wall() and one already on sloth_wall() must agree
  * under an injected clock, or the taint fix would re-create the bug it
@@ -204,6 +226,7 @@ void run_clock_seam_tests(void) {
     RUN_TEST(test_migrated_files_have_no_direct_clock_calls);
     RUN_TEST(test_real_clocks_by_default);
     RUN_TEST(test_test_set_swaps_and_null_restores);
+    RUN_TEST(test_mono_ts_is_mono_ms_split);
     RUN_TEST(test_flood_forwards_share_the_seam);
     sloth_clock_test_set(NULL, NULL);
 }

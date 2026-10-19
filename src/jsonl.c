@@ -6,6 +6,7 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "sloth_clock.h"
 #include "netstr.h"
 #include "tune.h"
 #include "capture/probe.h"
@@ -613,7 +614,7 @@ static void fmt_bssid_lower(char out[20], const uint8_t b[6]) {
 
 void jsonl_emit_twin_episodes(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->twin_episode_count; i++) {
         const twin_episode_t *e = &s->twin_episodes[i];
         char buf[LINEBUF]; int off = 0;
@@ -655,7 +656,7 @@ void jsonl_emit_twin_episodes(const sloth_state_t *s) {
 
 void jsonl_emit_connections(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->conn_count; i++) {
         const conn_t *c = &s->conns[i];
         char  buf[LINEBUF]; int off = 0;
@@ -693,7 +694,7 @@ void jsonl_emit_connections(const sloth_state_t *s) {
 
 void jsonl_emit_ifaces(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->iface_count; i++) {
         const iface_stat_t *e = &s->ifaces[i];
         char buf[LINEBUF]; int off = 0;
@@ -718,7 +719,7 @@ void jsonl_emit_ifaces(const sloth_state_t *s) {
 
 void jsonl_emit_arp(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->arp_count; i++) {
         const arp_entry_t *e = &s->arp_entries[i];
         char buf[LINEBUF]; int off = 0;
@@ -733,7 +734,7 @@ void jsonl_emit_arp(const sloth_state_t *s) {
 
 void jsonl_emit_dhcp_leases(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->dhcp_count; i++) {
         const dhcp_lease_t *e = &s->dhcp_leases[i];
         char buf[LINEBUF]; int off = 0;
@@ -748,7 +749,7 @@ void jsonl_emit_dhcp_leases(const sloth_state_t *s) {
 
 void jsonl_emit_wifi_aps(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->ap_count; i++) {
         const wifi_ap_t *e = &s->aps[i];
         char buf[LINEBUF]; int off = 0;
@@ -766,7 +767,7 @@ void jsonl_emit_wifi_aps(const sloth_state_t *s) {
 
 void jsonl_emit_wifi_stas(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->wifi_sta_count; i++) {
         const wifi_sta_t *e = &s->wifi_stas[i];
         char buf[LINEBUF]; int off = 0;
@@ -786,7 +787,7 @@ void jsonl_emit_wifi_stas(const sloth_state_t *s) {
 
 void jsonl_emit_top_hosts(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->top_host_count; i++) {
         const top_host_t *e = &s->top_hosts[i];
         char buf[LINEBUF]; int off = 0;
@@ -808,7 +809,7 @@ void jsonl_emit_top_hosts(const sloth_state_t *s) {
 
 void jsonl_emit_devices(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->device_count; i++) {
         const device_t *e = &s->devices[i];
         char buf[LINEBUF]; int off = 0;
@@ -832,7 +833,7 @@ void jsonl_emit_devices(const sloth_state_t *s) {
 
 void jsonl_emit_beacons(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *e = &s->beacon_aps[i];
         char buf[LINEBUF]; int off = 0;
@@ -948,7 +949,7 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
 
 void jsonl_emit_deauths(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->deauth_count; i++) {
         const deauth_event_t *e = &s->deauth_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -978,7 +979,7 @@ void jsonl_emit_deauths(const sloth_state_t *s) {
 
 void jsonl_emit_probe_clients(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->probe_count; i++) {
         const probe_client_t *e = &s->probe_clients[i];
         char buf[LINEBUF]; int off = 0;
@@ -1002,7 +1003,7 @@ void jsonl_emit_probe_clients(const sloth_state_t *s) {
 
 void jsonl_emit_pnl_clients(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->pnl_count; i++) {
         const pnl_client_t *e = &s->pnl_clients[i];
 
@@ -1047,7 +1048,7 @@ void jsonl_emit_pnl_clients(const sloth_state_t *s) {
 
 void jsonl_emit_seqnum_clients(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->seqnum_count; i++) {
         const seqnum_client_t *e = &s->seqnum_clients[i];
 
@@ -1079,7 +1080,7 @@ void jsonl_emit_seqnum_clients(const sloth_state_t *s) {
 
 void jsonl_emit_seqnum_correlations(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->seqnum_correlation_count; i++) {
         const seqnum_correlation_t *e = &s->seqnum_correlations[i];
         char buf[LINEBUF]; int off = 0;
@@ -1111,7 +1112,7 @@ void jsonl_emit_seqnum_correlations(const sloth_state_t *s) {
 
 void jsonl_emit_channels(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->channel_count; i++) {
         const channel_summary_t *e = &s->channels[i];
         char buf[LINEBUF]; int off = 0;
@@ -1149,7 +1150,7 @@ void jsonl_emit_channels(const sloth_state_t *s) {
  * association follows — which is exactly the case worth seeing. */
 void jsonl_emit_assoc_reqs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->assoc_req_count; i++) {
         const assoc_req_t *e = &s->assoc_reqs[i];
         char buf[LINEBUF]; int off = 0;
@@ -1181,7 +1182,7 @@ void jsonl_emit_assoc_reqs(const sloth_state_t *s) {
  * roaming policy. `imminent_count` is the subset the alert acts on. */
 void jsonl_emit_btm_steers(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->btm_steer_count; i++) {
         const btm_steer_t *e = &s->btm_steers[i];
         char buf[LINEBUF]; int off = 0;
@@ -1213,7 +1214,7 @@ void jsonl_emit_btm_steers(const sloth_state_t *s) {
  * it, and `ta` versus `bssid` is the forgery signal. */
 void jsonl_emit_csa_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->csa_count; i++) {
         const sloth_csa_event_t *e = &s->csa_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -1238,7 +1239,7 @@ void jsonl_emit_csa_events(const sloth_state_t *s) {
  * was attempted. */
 void jsonl_emit_rrm_pairs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->rrm_pair_count; i++) {
         const sloth_rrm_pair_t *e = &s->rrm_pairs[i];
         char buf[LINEBUF]; int off = 0;
@@ -1263,7 +1264,7 @@ void jsonl_emit_rrm_pairs(const sloth_state_t *s) {
  * lets a consumer stop counting one handset as three devices. */
 void jsonl_emit_mlds(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->mld_count; i++) {
         const sloth_mld_t *e = &s->mlds[i];
         char buf[LINEBUF]; int off = 0;
@@ -1293,7 +1294,7 @@ void jsonl_emit_mlds(const sloth_state_t *s) {
  * has to pass the others. */
 void jsonl_emit_cp_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->cp_event_count; i++) {
         const cp_event_t *e = &s->cp_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -1311,7 +1312,7 @@ void jsonl_emit_cp_events(const sloth_state_t *s) {
 
 void jsonl_emit_assocs(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->assoc_count; i++) {
         const assoc_t *e = &s->assocs[i];
         char buf[LINEBUF]; int off = 0;
@@ -1333,7 +1334,7 @@ void jsonl_emit_assocs(const sloth_state_t *s) {
 
 void jsonl_emit_eapol_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->eapol_count; i++) {
         const eapol_event_t *e = &s->eapol_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -1364,7 +1365,7 @@ void jsonl_emit_eapol_events(const sloth_state_t *s) {
 
 void jsonl_emit_mdns_services(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->mdns_count; i++) {
         const mdns_service_t *e = &s->mdns_services[i];
         char buf[LINEBUF]; int off = 0;
@@ -1382,7 +1383,7 @@ void jsonl_emit_mdns_services(const sloth_state_t *s) {
 
 void jsonl_emit_nbns_names(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->nbns_count; i++) {
         const nbns_name_t *e = &s->nbns_names[i];
         char buf[LINEBUF]; int off = 0;
@@ -1398,7 +1399,7 @@ void jsonl_emit_nbns_names(const sloth_state_t *s) {
 
 void jsonl_emit_ssdp_devices(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->ssdp_count; i++) {
         const ssdp_device_t *e = &s->ssdp_devices[i];
         char buf[LINEBUF]; int off = 0;
@@ -1416,7 +1417,7 @@ void jsonl_emit_ssdp_devices(const sloth_state_t *s) {
 
 void jsonl_emit_onvif_devices(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->onvif_count; i++) {
         const onvif_device_t *e = &s->onvif_devices[i];
         char buf[LINEBUF]; int off = 0;
@@ -1436,7 +1437,7 @@ void jsonl_emit_onvif_devices(const sloth_state_t *s) {
 
 void jsonl_emit_scan_entries(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->scan_count; i++) {
         const scan_entry_t *e = &s->scan_entries[i];
         char buf[LINEBUF]; int off = 0;
@@ -1471,7 +1472,7 @@ void jsonl_emit_packets(sloth_state_t *s) {
      * connects later streams forward (tail -f) instead of getting a
      * backlog dump. */
     if (!any_sink()) { s->pkt_jsonl_emitted = s->pkt_total; return; }
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     uint64_t pending = s->pkt_total - s->pkt_jsonl_emitted;
     /* If more than a ring's worth arrived between ticks, the oldest were
      * overwritten and are unrecoverable — emit only the survivors. */
@@ -1500,7 +1501,7 @@ void jsonl_emit_packets(sloth_state_t *s) {
 
 void jsonl_emit_processes(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     /* Procs view aggregates over s->conns; reuse the same aggregator
      * the view itself calls so the wire shape exactly matches what an
      * operator sees in [5]. Stack-allocated buffer (~6 KB at the
@@ -1534,7 +1535,7 @@ void jsonl_emit_processes(const sloth_state_t *s) {
 
 void jsonl_emit_ndp_ras(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->ndp_ra_count; i++) {
         const ndp_ra_event_t *e = &s->ndp_ras[i];
         char buf[LINEBUF]; int off = 0;
@@ -1561,7 +1562,7 @@ void jsonl_emit_ndp_ras(const sloth_state_t *s) {
 
 void jsonl_emit_smb_sessions(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->smb_session_count; i++) {
         const smb_session_t *e = &s->smb_sessions[i];
         char buf[LINEBUF]; int off = 0;
@@ -1580,7 +1581,7 @@ void jsonl_emit_smb_sessions(const sloth_state_t *s) {
 
 void jsonl_emit_kerb_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->kerb_event_count; i++) {
         const kerb_event_t *e = &s->kerb_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -1603,7 +1604,7 @@ void jsonl_emit_kerb_events(const sloth_state_t *s) {
 
 void jsonl_emit_ldap_events(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->ldap_event_count; i++) {
         const ldap_event_t *e = &s->ldap_events[i];
         char buf[LINEBUF]; int off = 0;
@@ -1622,7 +1623,7 @@ void jsonl_emit_ldap_events(const sloth_state_t *s) {
 
 void jsonl_emit_bgp_sessions(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->bgp_session_count; i++) {
         const bgp_session_t *e = &s->bgp_sessions[i];
         char buf[LINEBUF]; int off = 0;
@@ -1642,7 +1643,7 @@ void jsonl_emit_bgp_sessions(const sloth_state_t *s) {
 
 void jsonl_emit_ssh_flows(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->ssh_flow_count; i++) {
         const ssh_flow_t *e = &s->ssh_flows[i];
         char buf[LINEBUF]; int off = 0;
@@ -1660,7 +1661,7 @@ void jsonl_emit_ssh_flows(const sloth_state_t *s) {
 
 void jsonl_emit_rdp_flows(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->rdp_flow_count; i++) {
         const rdp_flow_t *e = &s->rdp_flows[i];
         char buf[LINEBUF]; int off = 0;
@@ -1679,7 +1680,7 @@ void jsonl_emit_rdp_flows(const sloth_state_t *s) {
 
 void jsonl_emit_snmp_flows(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->snmp_flow_count; i++) {
         const snmp_flow_t *e = &s->snmp_flows[i];
         char buf[LINEBUF]; int off = 0;
@@ -1704,7 +1705,7 @@ void jsonl_emit_snmp_flows(const sloth_state_t *s) {
 
 void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->mqtt_flow_count; i++) {
         const mqtt_flow_t *e = &s->mqtt_flows[i];
         char buf[LINEBUF]; int off = 0;
@@ -1726,7 +1727,7 @@ void jsonl_emit_mqtt_flows(const sloth_state_t *s) {
 
 void jsonl_emit_sensors(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->sensor_count; i++) {
         const sensor_t *sn = &s->sensors[i];
         char buf[LINEBUF]; int off = 0;
@@ -1748,7 +1749,7 @@ void jsonl_emit_sensors(const sloth_state_t *s) {
  * (bitmask), the strongest signal heard and which radio heard it. */
 void jsonl_emit_wifi_merged(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
     for (int i = 0; i < s->wifi_merged.count; i++) {
         const wifi_merged_t *e = &s->wifi_merged.ents[i];
         char buf[LINEBUF]; int off = 0;
@@ -1833,7 +1834,7 @@ static void health_kv(char *buf, int *off, const char *prefix,
 
 void jsonl_emit_sensor_health(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
-    time_t now = time(NULL);
+    time_t now = sloth_wall();
 
     /* chan_requested == 0 means the hopper has never ticked, which is not
      * a failure — only a request that was never confirmed is. */
