@@ -1,5 +1,6 @@
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/conns.h"
 
@@ -92,13 +93,32 @@ static void test_sort_rtt_enum_value(void) {
     ASSERT_EQ((int)CONN_SORT_COUNT, 6);
 }
 
-/* ── Draw smoke tests ────────────────────────────────────── */
+/* ── Draw ─────────────────────────────────────────────────── *
+ * ASSERT(1) smoke tests until #116. RTT and Retx are the last two
+ * columns, so a row is asserted on its tail. */
+
+/* RTT then Retx, as the row ends: "%-7s  %s". */
+static void assert_tail(const char *rtt, const char *retx) {
+    char want[32];
+    snprintf(want, sizeof(want), "%-7s  %s", rtt, retx);
+    int y = runner_screen_find("10.0.0.1:");
+    if (y < 0) y = runner_screen_find(":mdns");
+    ASSERT(y >= 0);
+    char line[4096];
+    tui_test_line(y, line, sizeof(line));
+    size_t n = strlen(line), w = strlen(want);
+    int ok = n >= w && strcmp(line + n - w, want) == 0;
+    if (!ok) fprintf(stderr, "    row ends |%s|, want |%s|\n", line, want);
+    ASSERT(ok);
+}
 
 static void test_draw_no_conns(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_conns_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Conns: 0");
+    ASSERT_LINE_HAS(1, "RTT      Retx");
+    ASSERT_SCREEN_HAS("(no connections)");
 }
 
 static void test_draw_tcp_with_rtt(void) {
@@ -108,8 +128,26 @@ static void test_draw_tcp_with_rtt(void) {
     s.conn_sort   = CONN_SORT_STATE;
     s.conn_filter = CONN_FILTER_ALL;
     conn_rebuild_idx(&s);
+    s.conn_sel = -1;           /* unselected: the plain path colours RTT */
     view_conns_draw(&s);
     ASSERT_EQ(s.conn_count, 1);
+    assert_tail("12.5ms", "3");
+    /* A measured RTT is bright, an unknown one dim. */
+    int y = runner_screen_find("10.0.0.1:");
+    ASSERT_EQ(tui_test_pair(y, runner_find_col(y, "12.5ms")), CP_BRIGHT);
+}
+
+static void test_draw_rtt_units(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    add_tcp(&s, 443, 750, 0);
+    conn_rebuild_idx(&s);
+    view_conns_draw(&s);
+    assert_tail("750us", "--");
+    tui_test_erase();
+    s.conns[0].rtt_us = 2500000;
+    view_conns_draw(&s);
+    assert_tail("2.50s", "--");
 }
 
 static void test_draw_tcp_no_rtt(void) {
@@ -117,8 +155,13 @@ static void test_draw_tcp_no_rtt(void) {
     memset(&s, 0, sizeof(s));
     add_tcp(&s, 22, 0, 0);   /* unknown RTT */
     conn_rebuild_idx(&s);
+    s.conn_sel = -1;
     view_conns_draw(&s);
-    ASSERT(1);
+    assert_tail("--", "--");
+    int y = runner_screen_find("10.0.0.1:");
+    char line[4096];
+    tui_test_line(y, line, sizeof(line));
+    ASSERT_EQ(tui_test_pair(y, (int)strlen(line) - 11), CP_DIM);
 }
 
 static void test_draw_udp_no_rtt(void) {
@@ -127,7 +170,8 @@ static void test_draw_udp_no_rtt(void) {
     add_udp(&s, 5353);
     conn_rebuild_idx(&s);
     view_conns_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(runner_screen_find(":mdns"), "UDP");
+    assert_tail("--", "--");
 }
 
 static void test_draw_mixed_conns(void) {
@@ -210,6 +254,7 @@ void run_rtt_tests(void) {
     TEST_SUITE("rtt/draw");
     RUN_TEST(test_draw_no_conns);
     RUN_TEST(test_draw_tcp_with_rtt);
+    RUN_TEST(test_draw_rtt_units);
     RUN_TEST(test_draw_tcp_no_rtt);
     RUN_TEST(test_draw_udp_no_rtt);
     RUN_TEST(test_draw_mixed_conns);
