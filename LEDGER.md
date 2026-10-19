@@ -232,3 +232,4 @@
 | 2f94da0 | 2026-10-19T09:07:41Z | claude-opus-5-5 | 2 | 532 | 937648 | 944 | 0.2057 | batch C #130 |
 | 95e9eed | 2026-10-19T09:52:14Z | claude-opus-5-5 | 32 | 12801 | 13262534 | 21991 | 3.0846 | Move the snoopers, logs and platform rate code onto sloth_clock (refs #109) |
 | f665297 | 2026-10-19T09:52:52Z | claude-opus-5-5 | 4 | 808 | 1922534 | 1680 | 0.4141 | Move fragattack and the last find_or_alloc tables onto stab_t (refs #110) |
+| c7ab52e | 2026-10-19T18:03:42Z | claude-fable-5-1, claude-opus-5-5 | 996 | 72048 | 12505254 | 399781 | 16.7976 | Add a Wi-Fi SIGINT guide for non-specialists to the wiki |
