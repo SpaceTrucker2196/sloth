@@ -10,6 +10,8 @@
 #include "sloth.h"
 #include "jsonl.h"
 #include "sensor_health.h"
+#include "dns.h"
+#include <sqlite3.h>
 #include "capture/capture.h"
 #include "alert_pcap.h"
 #include "tls_log.h"
@@ -1414,6 +1416,99 @@ static void test_sensor_health_parse_faults_do_not_re_emit(void) {
     sh_parse_fault_reset();
 }
 
+/* #121: process memory rides the record — appended after the parse-fault
+ * breakout so no earlier field moved, in a fixed order, and closing the
+ * object. The issue's acceptance shape: present, and rss_kb > 0 on the
+ * test binary (a sign, never a value — CI hosts differ). */
+static const char *const k_mem_keys[] = {
+    "\"rss_kb\":", "\"rss_hwm_kb\":", "\"sqlite_mem_kb\":",
+    "\"sqlite_mem_hwm_kb\":", "\"malloc_kb\":", "\"fd_count\":",
+    "\"resolver_calls\":",
+};
+#define N_MEM_KEYS ((int)(sizeof(k_mem_keys) / sizeof(k_mem_keys[0])))
+
+static long long field_ll(const char *body, const char *key) {
+    const char *p = strstr(body, key);
+    if (!p) return -999;
+    return strtoll(p + strlen(key), NULL, 10);
+}
+
+static void test_emit_sensor_health_memory_fields(void) {
+    open_fresh();
+    dns_resolver_stats_reset();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    const char *prev = strstr(body, "\"parse_fault_tls_malformed\":");
+    ASSERT(prev != NULL);
+    for (int i = 0; i < N_MEM_KEYS; i++) {
+        const char *at = strstr(body, k_mem_keys[i]);
+        if (!at) fprintf(stderr, "    sensor_health lacks %s\n", k_mem_keys[i]);
+        ASSERT(at != NULL);
+        if (at && prev) ASSERT(prev < at);
+        if (at) prev = at;
+    }
+    /* resolver_calls is the last field: nothing but its number follows. */
+    if (prev) {
+        const char *close = strchr(prev, '}');
+        ASSERT(close != NULL);
+        if (close) ASSERT(memchr(prev, ',', (size_t)(close - prev)) == NULL);
+    }
+    ASSERT_GT(field_ll(body, "\"rss_kb\":"), 0LL);
+    ASSERT_GE(field_ll(body, "\"rss_hwm_kb\":"), field_ll(body, "\"rss_kb\":"));
+    ASSERT_GE(field_ll(body, "\"sqlite_mem_kb\":"), 0LL);
+    ASSERT_GE(field_ll(body, "\"fd_count\":"), 1LL);    /* the -o file itself */
+    ASSERT_EQ(field_ll(body, "\"resolver_calls\":"), 0LL);
+}
+
+/* …and NOT in the change-only signature. Every one of them moves on a
+ * healthy sensor: signing over any would emit this record once a second
+ * (AGENTS.md, "Change-only emission must bucket its continuous values").
+ * Between two emits the test moves fd_count and sqlite_mem_kb by
+ * sentinels it plants and checks that they did move — so the suppression
+ * is not passing because nothing changed — then expects one line. The
+ * same movement beside a real table loss gives two, which proves the
+ * second emit was reachable. */
+static void test_sensor_health_memory_does_not_re_emit(void) {
+    open_fresh();
+    sh_evict_reset();
+    sloth_state_t s; seed_health(&s);
+
+    sh_mem_t m0, m1;
+    sh_mem_sample(&m0);
+    jsonl_emit_sensor_health(&s);          /* first record: always news */
+    int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    void *sq = sqlite3_malloc(4 << 20);
+    char *heap = malloc(16u << 20);
+    ASSERT(fd >= 0 && sq != NULL && heap != NULL);
+    if (heap) memset(heap, 0x5a, 16u << 20);      /* move rss too */
+    sh_mem_sample(&m1);
+    ASSERT_NE(m1.fd_count, m0.fd_count);
+    ASSERT_NE(m1.sqlite_mem_kb, m0.sqlite_mem_kb);
+    jsonl_emit_sensor_health(&s);          /* memory moved only: suppressed */
+    jsonl_close();
+    char *quiet = slurp(tmp_path);
+    ASSERT(quiet != NULL);
+    if (quiet) ASSERT_EQ(count_lines(quiet), 1);
+
+    open_fresh();
+    jsonl_emit_sensor_health(&s);
+    sh_evict_note(SH_EVICT_DEVICE);        /* a real lost observation */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *loss = slurp(tmp_path);
+    ASSERT(loss != NULL);
+    if (loss) ASSERT_EQ(count_lines(loss), 2);
+
+    free(heap);
+    sqlite3_free(sq);
+    if (fd >= 0) close(fd);
+    sh_evict_reset();
+}
+
 /* #91 2026-10-13: the same split, asserted for the two kinds added on
  * that date. Classifying either as a flow ring would drop it out of
  * sh_evict_total_tables() and therefore out of the signature — it would
@@ -2152,6 +2247,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
     RUN_TEST(test_emit_sensor_health_parse_faults);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
+    RUN_TEST(test_emit_sensor_health_memory_fields);
+    RUN_TEST(test_sensor_health_memory_does_not_re_emit);
     RUN_TEST(test_sensor_health_new_table_kinds_move_the_signature);
     RUN_TEST(test_emit_sensor_health_reports_pcap_export_failures);
     RUN_TEST(test_emit_sensor_health_reports_jsonl_write_failures);

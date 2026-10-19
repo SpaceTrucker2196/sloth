@@ -3543,3 +3543,16 @@ WITH_PCAP; the process tree's fold set had no reset, so one test's fold
 leaked into the next (`view_procs_fold_clear()` joins `SLOTH_RESETS`).
 `test_procs.c`'s detail case used PID 99 and printed the host's process;
 it uses a PID above any `pid_max` now. Pages: [[mutation-testing]].
+
+## 2026-10-18 — process memory on `sensor_health` (#121)
+
+The production sensor reached 7.7 GB RSS over twelve days on the
+pre-2026-10-14 binary and the stream never said so. `sensor_health`
+now carries `rss_kb`, `rss_hwm_kb`, `sqlite_mem_kb`,
+`sqlite_mem_hwm_kb`, `malloc_kb`, `fd_count` and `resolver_calls`,
+appended after the parse-fault breakout, `-1` for "not measured", and
+outside the change-only signature (sampled only after a line is already
+going out). Read-only samples of the new binary on the issue showed
+RSS flat (+720 kB over 2 h 18 m, `[heap]` +8 kB, no NSS mapped), so
+the growth lived in code the 2026-10-14 fixes removed; these fields are
+what would show a recurrence. [[jsonl-schema]].

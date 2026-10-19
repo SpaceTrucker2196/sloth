@@ -2042,6 +2042,25 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, key,
                (long long)sh_parse_fault_count((sh_parse_fault_t)k));
     }
+    /* Process memory (#121). Appended after the parse-fault breakout, so
+     * every earlier field keeps its name and position. Sampled HERE —
+     * after jsonl_changed() has already decided this line goes out — so
+     * the figures cannot reach `sig` by accident and a suppressed tick
+     * pays for no /proc read. They are the definition of a value that
+     * moves without news: rss and malloc drift on every tick of a
+     * healthy sensor, fd_count steps on each socket client, so signing
+     * over any of them would emit this record once a second. A leak
+     * shows as a slope across heartbeats, which is what a 300 s cadence
+     * is enough to see. -1 is "not measured" (sensor_health.h). */
+    sh_mem_t mem;
+    sh_mem_sample(&mem);
+    kv_int(buf, LINEBUF, &off, "rss_kb",            mem.rss_kb);
+    kv_int(buf, LINEBUF, &off, "rss_hwm_kb",        mem.rss_hwm_kb);
+    kv_int(buf, LINEBUF, &off, "sqlite_mem_kb",     mem.sqlite_mem_kb);
+    kv_int(buf, LINEBUF, &off, "sqlite_mem_hwm_kb", mem.sqlite_mem_hwm_kb);
+    kv_int(buf, LINEBUF, &off, "malloc_kb",         mem.malloc_kb);
+    kv_int(buf, LINEBUF, &off, "fd_count",          mem.fd_count);
+    kv_int(buf, LINEBUF, &off, "resolver_calls",    mem.resolver_calls);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

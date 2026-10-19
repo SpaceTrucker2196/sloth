@@ -17,6 +17,10 @@
 #include "http_log.h"
 #include "ntp_log.h"
 #include "icmp_log.h"
+#include "dns.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <sqlite3.h>
 
 /* ── Table-overflow accounting — issue #91 slice 3 ──────────
  *
@@ -899,6 +903,223 @@ static void test_schema_doc_lists_every_parse_fault_kind(void) {
     free(doc);
 }
 
+/* ── Process memory sample (#121) ──────────────────────────────
+ *
+ * The parse is pinned against hand-built status text in the shape
+ * proc_pid_status(5) documents, so field extraction is proven without
+ * trusting whatever this host's kernel prints. The live block then
+ * checks the sampler against sentinels the test plants itself (an fd
+ * it opens, SQLite memory it allocates), never an absolute figure: a
+ * CI VM's RSS is not a number a test can know. */
+
+/* Copy into an allocation of exactly `n` bytes with no terminator, so
+ * a parser reading one byte past `len` is an ASan failure, not luck. */
+static char *exact_copy(const char *text, int n) {
+    char *b = malloc((size_t)n);
+    if (b) memcpy(b, text, (size_t)n);
+    return b;
+}
+
+static void test_mem_parse_status_reads_rss_and_hwm(void) {
+    /* VmPeak and VmSize come first and carry larger values; a
+     * prefix-loose match would pick them up instead. */
+    static const char st[] =
+        "Name:\tsloth\n"
+        "State:\tS (sleeping)\n"
+        "VmPeak:\t  912340 kB\n"
+        "VmSize:\t  901112 kB\n"
+        "VmHWM:\t   49124 kB\n"
+        "VmRSS:\t   48580 kB\n"
+        "RssAnon:\t   39576 kB\n"
+        "Threads:\t3\n";
+    int n = (int)sizeof(st) - 1;
+    char *b = exact_copy(st, n);
+    ASSERT(b != NULL);
+    if (!b) return;
+    long long rss = 0, hwm = 0;
+    sh_mem_parse_status(b, n, &rss, &hwm);
+    ASSERT_EQ(rss, 48580LL);
+    ASSERT_EQ(hwm, 49124LL);
+    free(b);
+}
+
+static void test_mem_parse_status_absent_is_unmeasured(void) {
+    /* A kernel thread's status has no Vm* lines at all. -1, not 0: a 0
+     * would read as "measured, nothing resident". */
+    static const char st[] = "Name:\tkworker/0:1\nState:\tI (idle)\nThreads:\t1\n";
+    long long rss = 0, hwm = 0;
+    sh_mem_parse_status(st, (int)sizeof(st) - 1, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+    ASSERT_EQ(hwm, -1LL);
+    rss = hwm = 0;
+    sh_mem_parse_status(NULL, 10, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+    ASSERT_EQ(hwm, -1LL);
+    rss = hwm = 0;
+    sh_mem_parse_status(st, 0, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+    ASSERT_EQ(hwm, -1LL);
+}
+
+static void test_mem_parse_status_rejects_non_numbers(void) {
+    static const char bad[] = "VmRSS:\t -5 kB\nVmHWM:\tabc kB\n";
+    long long rss = 0, hwm = 0;
+    sh_mem_parse_status(bad, (int)sizeof(bad) - 1, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+    ASSERT_EQ(hwm, -1LL);
+    /* A key sharing the prefix, or holding it mid-line, is not the
+     * field: the colon is part of the key, and keys start a line. The
+     * first line is shaped so a five-byte "VmRSS" match would land
+     * exactly on the digits. */
+    static const char lookalike[] = "VmRSSx\t 77 kB\nXVmHWM:\t 88 kB\n";
+    rss = hwm = 0;
+    sh_mem_parse_status(lookalike, (int)sizeof(lookalike) - 1, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+    ASSERT_EQ(hwm, -1LL);
+    /* Twenty digits overflow a long long: refused, not wrapped. */
+    static const char huge[] = "VmRSS:\t99999999999999999999 kB\n";
+    rss = 0;
+    sh_mem_parse_status(huge, (int)sizeof(huge) - 1, &rss, &hwm);
+    ASSERT_EQ(rss, -1LL);
+}
+
+static void test_mem_parse_status_stops_at_len(void) {
+    /* The figure lies past `len`; the read must not reach it. The exact
+     * allocation makes an over-read a sanitiser failure as well. */
+    static const char st[] = "VmHWM:\t 12 kB\nVmRSS:\t 4096 kB\n";
+    int cut = (int)(strstr(st, "4096") - st);   /* ends at "VmRSS:\t " */
+    char *b = exact_copy(st, cut);
+    ASSERT(b != NULL);
+    if (!b) return;
+    long long rss = 0, hwm = 0;
+    sh_mem_parse_status(b, cut, &rss, &hwm);
+    ASSERT_EQ(hwm, 12LL);
+    ASSERT_EQ(rss, -1LL);
+    free(b);
+}
+
+static void test_mem_sample_reads_this_process(void) {
+    sh_mem_t m;
+    sh_mem_sample(&m);
+    /* Signs and orderings, not values: a live process has resident
+     * pages, and one status read reports VmHWM >= VmRSS by construction
+     * (the kernel folds current RSS into the peak it prints). */
+    ASSERT_GT(m.rss_kb, 0LL);
+    ASSERT_GE(m.rss_hwm_kb, m.rss_kb);
+    ASSERT_GE(m.fd_count, 0LL);
+    ASSERT_GE(m.sqlite_mem_kb, 0LL);          /* the test build has SQLite */
+    ASSERT_GE(m.sqlite_mem_hwm_kb, m.sqlite_mem_kb);
+}
+
+static void test_mem_sample_counts_an_opened_fd(void) {
+    sh_mem_t before, after, closed;
+    sh_mem_sample(&before);
+    int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT(fd >= 0);
+    if (fd < 0) return;
+    sh_mem_sample(&after);
+    ASSERT_EQ(after.fd_count - before.fd_count, 1LL);
+    /* open() returns the lowest free slot, so 0..fd are all open and the
+     * count is at least fd + 1 — a floor that catches undercounting.
+     * Excluding the sampler's own directory descriptor is a constant
+     * offset that no delta can see and no ceiling can pin without
+     * knowing every descriptor the runner holds; it is not claimed. */
+    ASSERT_GE(after.fd_count, (long long)fd + 1);
+    close(fd);
+    sh_mem_sample(&closed);
+    ASSERT_EQ(closed.fd_count, before.fd_count);
+}
+
+static void test_mem_sample_follows_sqlite_allocator(void) {
+    sh_mem_t before, after, freed;
+    sh_mem_sample(&before);
+    void *p = sqlite3_malloc(4 << 20);
+    ASSERT(p != NULL);
+    if (!p) return;
+    sh_mem_sample(&after);
+    ASSERT_GE(after.sqlite_mem_kb - before.sqlite_mem_kb, 4096LL);
+    ASSERT_GE(after.sqlite_mem_hwm_kb, after.sqlite_mem_kb);
+    sqlite3_free(p);
+    sh_mem_sample(&freed);
+    /* Current falls back; the high-water mark keeps the peak. */
+    ASSERT_LT(freed.sqlite_mem_kb, after.sqlite_mem_kb);
+    ASSERT_GE(freed.sqlite_mem_hwm_kb, after.sqlite_mem_kb);
+}
+
+#if defined(__SANITIZE_ADDRESS__)
+#define SH_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SH_TEST_ASAN 1
+#endif
+#endif
+
+static void test_mem_sample_follows_glibc_malloc(void) {
+    sh_mem_t before;
+    sh_mem_sample(&before);
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    ASSERT_GE(before.malloc_kb, 0LL);
+#ifndef SH_TEST_ASAN
+    /* 8 MiB is past glibc's mmap threshold, so it lands in hblkhd
+     * whether or not it is touched. */
+    sh_mem_t after;
+    char *p = malloc(8u << 20);
+    ASSERT(p != NULL);
+    if (!p) return;
+    p[0] = 1;
+    sh_mem_sample(&after);
+    ASSERT_GE(after.malloc_kb - before.malloc_kb, 8192LL);
+    free(p);
+#else
+    /* Under ASan the sanitiser owns malloc and mallinfo2() never sees a
+     * block this test allocates, so only presence is checkable here;
+     * the delta is asserted by the unsanitised run. */
+    fprintf(stderr, "    (ASan build: malloc_kb delta not checkable)\n");
+#endif
+#else
+    ASSERT_EQ(before.malloc_kb, -1LL);
+#endif
+}
+
+static void test_mem_sample_reports_resolver_counter(void) {
+    /* No test performs a real getnameinfo(3) — the suite is passive and
+     * offline — so this pins the wiring to src/dns.c's counter at its
+     * one reachable value: 0 after a reset, under a request the default
+     * policy suppresses. A non-zero value is not exercised here. */
+    dns_resolver_reset_policy();
+    dns_resolver_stats_reset();
+    char host[DNS_NAME_MAX];
+    (void)dns_resolve("192.0.2.1", host, sizeof(host));
+    sh_mem_t m;
+    sh_mem_sample(&m);
+    dns_resolver_stats_t ds;
+    dns_resolver_stats(&ds);
+    ASSERT_GE((long long)ds.resolve_requests, 1LL);
+    ASSERT_EQ(m.resolver_calls, (long long)ds.getnameinfo_calls);
+    ASSERT_EQ(m.resolver_calls, 0LL);
+    dns_resolver_stats_reset();
+}
+
+static const char *const k_mem_fields[] = {
+    "rss_kb", "rss_hwm_kb", "sqlite_mem_kb", "sqlite_mem_hwm_kb",
+    "malloc_kb", "fd_count", "resolver_calls",
+};
+
+static void test_schema_doc_lists_every_memory_field(void) {
+    char *doc = slurp_text("docs/wiki/jsonl-schema.md");
+    ASSERT(doc != NULL);
+    if (!doc) return;
+    for (size_t i = 0; i < sizeof(k_mem_fields) / sizeof(k_mem_fields[0]); i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "`%s`", k_mem_fields[i]);
+        int found = strstr(doc, key) != NULL;
+        if (!found)
+            fprintf(stderr, "    jsonl-schema.md does not document %s\n", key);
+        ASSERT(found);
+    }
+    free(doc);
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -938,6 +1159,18 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_beacon_ie_overrun_reaches_the_parse_fault_tally);
     RUN_TEST(test_beacon_clean_ies_add_no_parse_fault);
     RUN_TEST(test_beacon_one_byte_tail_is_tallied_not_scored);
+
+    TEST_SUITE("sensor health — process memory sample (#121)");
+    RUN_TEST(test_mem_parse_status_reads_rss_and_hwm);
+    RUN_TEST(test_mem_parse_status_absent_is_unmeasured);
+    RUN_TEST(test_mem_parse_status_rejects_non_numbers);
+    RUN_TEST(test_mem_parse_status_stops_at_len);
+    RUN_TEST(test_mem_sample_reads_this_process);
+    RUN_TEST(test_mem_sample_counts_an_opened_fd);
+    RUN_TEST(test_mem_sample_follows_sqlite_allocator);
+    RUN_TEST(test_mem_sample_follows_glibc_malloc);
+    RUN_TEST(test_mem_sample_reports_resolver_counter);
+    RUN_TEST(test_schema_doc_lists_every_memory_field);
 
     sh_evict_reset();   /* leave the tally clean for later suites */
     sh_parse_fault_reset();

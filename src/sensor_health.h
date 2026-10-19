@@ -214,4 +214,48 @@ int sh_parse_fault_is_wired(sh_parse_fault_t kind);
 /* Zero the parse-fault tally. For tests only, like sh_evict_reset(). */
 void sh_parse_fault_reset(void);
 
+/* ── Process memory sample (#121) ─────────────────────────────────
+ *
+ * The production sensor once reached 7.7 GB RSS over twelve days and
+ * nothing in the stream said so: the figure came from systemd's
+ * accounting at stop. These are the numbers that would have shown the
+ * slope while it was happening, and which subsystem it was in — the
+ * kernel's view (rss), SQLite's own allocator, glibc's heap, the fd
+ * table, and the one call (getnameinfo, through NSS) that loads code
+ * sloth does not control.
+ *
+ * Every field reads -1 for "not measured" — built without SQLite, a
+ * libc without mallinfo2(), /proc unreadable — never 0, which would
+ * read as "measured, empty".
+ *
+ * Own process only. Nothing here opens another pid's /proc.
+ *
+ * NOT in the change-only signature. Every one of these moves on a live
+ * sensor without anything having gone wrong, so signing over them would
+ * turn the record into the per-tick firehose AGENTS.md forbids. They
+ * ride the 300 s heartbeat (and any other transition's line), which is
+ * the sampling rate a leak of MB/hour needs. src/jsonl.c samples only
+ * after the change check has passed, so a suppressed tick costs no
+ * /proc read. */
+typedef struct {
+    long long rss_kb;            /* VmRSS, kB                              */
+    long long rss_hwm_kb;        /* VmHWM — peak RSS, kB                   */
+    long long sqlite_mem_kb;     /* sqlite3_memory_used() / 1024           */
+    long long sqlite_mem_hwm_kb; /* sqlite3_memory_highwater(0) / 1024     */
+    long long malloc_kb;         /* mallinfo2 uordblks + hblkhd, kB        */
+    long long fd_count;          /* open descriptors, the sampler's own excluded */
+    long long resolver_calls;    /* getnameinfo(3) calls, lifetime (src/dns.c) */
+} sh_mem_t;
+
+/* Fill *out from this process. Never fails; unmeasurable fields are -1. */
+void sh_mem_sample(sh_mem_t *out);
+
+/* Pull VmRSS / VmHWM (kB) out of /proc/self/status text. Split out so
+ * the parse is tested against hand-built text rather than whatever the
+ * host's kernel happens to print. `len` bounds the read; the text need
+ * not be NUL-terminated. A field that is absent or not a number leaves
+ * its output at -1 (a kernel thread has no VmRSS line at all). */
+void sh_mem_parse_status(const char *text, int len,
+                         long long *rss_kb, long long *hwm_kb);
+
 #endif /* SENSOR_HEALTH_H */

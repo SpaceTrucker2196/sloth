@@ -74,6 +74,9 @@ readdirCalled:src/platform/linux_dhcp.c
 # returning. Reached only from the main thread (startup, then the poll
 # loop via eapol_sweep_due()) and only under the module mutex.
 readdirCalled:src/eapol_log.c
+# #121's fd count: count_fds() opendir()s /proc/self/fd into a local DIR*
+# and closedir()s it before returning; nothing else ever sees that stream.
+readdirCalled:src/sensor_health.c
 readdirCalled:research/ingest/main.c
 
 # ── False positives, checked by hand ────────────────────────────────────

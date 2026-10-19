@@ -1,6 +1,16 @@
 #include <pthread.h>
 #include <string.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+#ifdef WITH_SQLITE
+#include <sqlite3.h>
+#endif
 #include "sensor_health.h"
+#include "dns.h"
 
 /* Table-overflow tally — contract and rationale in sensor_health.h.
  *
@@ -188,4 +198,96 @@ void sh_parse_fault_reset(void) {
     pthread_mutex_lock(&g_pf_mu);
     memset(g_pf, 0, sizeof(g_pf));
     pthread_mutex_unlock(&g_pf_mu);
+}
+
+/* ── Process memory sample (#121) — contract in sensor_health.h ── */
+
+/* Value of one "Key:   1234 kB" line, or -1. Digits only: the kernel
+ * prints a non-negative decimal, and anything else is not a figure. */
+static long long status_value(const char *p, const char *end) {
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    if (p >= end || *p < '0' || *p > '9') return -1;
+    long long v = 0;
+    while (p < end && *p >= '0' && *p <= '9') {
+        if (v > (0x7fffffffffffffffLL - 9) / 10) return -1;
+        v = v * 10 + (*p - '0');
+        p++;
+    }
+    return v;
+}
+
+void sh_mem_parse_status(const char *text, int len,
+                         long long *rss_kb, long long *hwm_kb) {
+    *rss_kb = -1;
+    *hwm_kb = -1;
+    if (!text || len <= 0) return;
+    const char *p = text, *end = text + len;
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        const char *eol = nl ? nl : end;
+        size_t n = (size_t)(eol - p);
+        if (n > 6 && memcmp(p, "VmRSS:", 6) == 0)
+            *rss_kb = status_value(p + 6, eol);
+        else if (n > 6 && memcmp(p, "VmHWM:", 6) == 0)
+            *hwm_kb = status_value(p + 6, eol);
+        p = nl ? nl + 1 : end;
+    }
+}
+
+static void sample_status(sh_mem_t *out) {
+    out->rss_kb = out->rss_hwm_kb = -1;
+    int fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    /* VmRSS and VmHWM sit in the first few hundred bytes; a status page
+     * longer than this buffer loses only fields that come after them. */
+    char buf[8192];
+    int len = 0;
+    for (;;) {
+        ssize_t r = read(fd, buf + len, sizeof(buf) - (size_t)len);
+        if (r <= 0) break;
+        len += (int)r;
+        if (len == (int)sizeof(buf)) break;
+    }
+    close(fd);
+    sh_mem_parse_status(buf, len, &out->rss_kb, &out->rss_hwm_kb);
+}
+
+static long long count_fds(void) {
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) return -1;
+    long long n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] >= '0' && e->d_name[0] <= '9') n++;
+    closedir(d);
+    /* The directory stream holds one descriptor of its own while it is
+     * being read, and it is not the process's. */
+    return n > 0 ? n - 1 : 0;
+}
+
+void sh_mem_sample(sh_mem_t *out) {
+    memset(out, 0, sizeof(*out));
+    sample_status(out);
+#ifdef WITH_SQLITE
+    out->sqlite_mem_kb     = (long long)(sqlite3_memory_used() / 1024);
+    out->sqlite_mem_hwm_kb = (long long)(sqlite3_memory_highwater(0) / 1024);
+#else
+    out->sqlite_mem_kb = out->sqlite_mem_hwm_kb = -1;
+#endif
+    /* mallinfo2() arrived in glibc 2.33; the older mallinfo() truncates
+     * to int and wraps past 2 GiB — the very size this field is for. In
+     * use = arena chunks handed out (uordblks) plus direct mmap chunks
+     * (hblkhd); free-but-retained arena memory is the gap between this
+     * and rss. Under ASan the sanitiser owns malloc and this reports
+     * only what glibc itself still serves. */
+#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    struct mallinfo2 mi = mallinfo2();
+    out->malloc_kb = (long long)((mi.uordblks + mi.hblkhd) / 1024);
+#else
+    out->malloc_kb = -1;
+#endif
+    out->fd_count = count_fds();
+    dns_resolver_stats_t ds;
+    dns_resolver_stats(&ds);
+    out->resolver_calls = (long long)ds.getnameinfo_calls;
 }
