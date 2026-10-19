@@ -1046,10 +1046,16 @@ static void test_mem_sample_follows_sqlite_allocator(void) {
     ASSERT_GE(freed.sqlite_mem_hwm_kb, after.sqlite_mem_kb);
 }
 
-#if defined(__SANITIZE_ADDRESS__)
+/* Any sanitizer that replaces the allocator hides this test's malloc
+ * from glibc's mallinfo2(). ASan was the only one covered at first; the
+ * CI TSan job then failed the growth assertion on 93cbfd0 because TSan
+ * intercepts malloc too. MSan does the same. (The macro keeps its name
+ * so the call sites below read unchanged.) */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define SH_TEST_ASAN 1
 #elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(memory_sanitizer)
 #define SH_TEST_ASAN 1
 #endif
 #endif
