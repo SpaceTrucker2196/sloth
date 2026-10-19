@@ -72,6 +72,7 @@ void run_ssdp_snoop_tests(void);
 void run_onvif_discovery_tests(void);
 void run_beacon_snoop_tests(void);
 void run_reg_ie_tests(void);
+void run_ble_snoop_tests(void);           /* tests/test_ble_snoop.c (#144 slice 1) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -367,6 +368,7 @@ int main(void) {
     run_capture_path_tests();
     run_poll_capture_path_tests();
     run_replay_tests();
+    run_ble_snoop_tests();
 
     tui_offscreen_end();
     RUNNER_SUMMARY();
