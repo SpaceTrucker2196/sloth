@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "tls_log.h"
 #include "views/tls.h"
@@ -492,12 +493,13 @@ static void test_snapshot_clamps_sel_at_boundary_and_empty(void) {
     ASSERT_EQ(s.tls_log_sel, 0);
 }
 
-/* ── view_tls_draw smoke tests ───────────────────────────── */
+/* ── view_tls_draw ────────────────────────────────────────── */
 
 static void test_view_draw_empty(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     view_tls_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "TLS connections: 0");
+    ASSERT_SCREEN_HAS("(no TLS ClientHello frames seen");
 }
 
 static void test_view_draw_populated(void) {
@@ -510,7 +512,14 @@ static void test_view_draw_populated(void) {
     sloth_state_t s; memset(&s, 0, sizeof(s));
     tls_log_snapshot(&s);
     view_tls_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "TLS connections: 2");
+    int g = runner_screen_find("google.com");
+    int e = runner_screen_find("example.com");
+    ASSERT(g >= 0 && g < e);                  /* newest first */
+    ASSERT_LINE_HAS(g, "TLS 1.2");
+    ASSERT_LINE_HAS(g, "142.250.80.46");
+    ASSERT_LINE_HAS(e, "TLS 1.3");
+    ASSERT_LINE_HAS(e, "93.184.216.34");
 }
 
 /* ── view_tls_key tests ──────────────────────────────────── */
