@@ -18,7 +18,7 @@ typedef enum {
 /* MITRE ATT&CK technique ID for an alert type, e.g. "T1046". Returns
  * "" for alert types that describe a posture or sloth's own state
  * rather than adversary behaviour, and for anything out of range.
- * Defined in src/alerts.c so tests can compile against the table
+ * Defined in src/alerts/engine.c so tests can compile against the table
  * directly. */
 const char *alert_technique(alert_type_t type);
 

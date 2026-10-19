@@ -41,11 +41,13 @@ the suite gets stronger.
 ## How to run
 
 ```sh
-# Default: mutate src/alerts.c with all five operator families.
+# Default: mutate the alert engine and its five rule files
+# (src/alerts/engine.c, rules_{wired,wifi_mgmt,twin,enterprise,mle}.c)
+# with all five operator families.
 make mutate
 
 # Pass-through flags via MUTATE_FLAGS.
-make mutate MUTATE_FLAGS="--files src/alerts.c src/threat_intel.c"
+make mutate MUTATE_FLAGS="--files src/alerts/rules_wired.c src/threat_intel.c"
 make mutate MUTATE_FLAGS="--operators rel const"
 make mutate MUTATE_FLAGS="--files src/dga.c --limit 50 --seed 7"
 make mutate MUTATE_FLAGS="--report /tmp/mutate.txt"
@@ -55,8 +57,13 @@ make mutate MUTATE_FLAGS="--keep-sandbox"   # leaves tmpdir for inspection
 Direct invocation:
 
 ```sh
-python3 .github/scripts/mutate.py --files src/alerts.c
+python3 .github/scripts/mutate.py --files src/alerts/rules_twin.c
 ```
+
+`src/alerts.c` was split by domain in #118; the default target list
+moved with it. `src/alerts/rules_table.c` is deliberately not in it: it
+holds only the order the rules run in, which no operator here mutates
+and `tests/test_alert_rules.c` pins directly.
 
 The harness:
 
@@ -90,7 +97,7 @@ preprocessor lines so mutations only land on executable code.
 | `rel`    | Relational / equality swaps: `>` ↔ `>=`, `<` ↔ `<=`, `==` ↔ `!=`. | `if (count > THRESH)` → `if (count >= THRESH)` | Off-by-one detector. Catches threshold tests that fire one step too early or too late. |
 | `arith`  | `+` ↔ `-` on binary infix integer arithmetic (skips `++`, `--`, `+=`, unary, `->`). | `i + 1` → `i - 1` | Index/threshold computation errors. |
 | `bool`   | `&&` ↔ `\|\|`. | `a && b` → `a \|\| b` | Logic-shape regressions in rule predicates and validators. |
-| `const`  | Integer literals ±1. Skips `0`, values ≥ 1024 (buffer sizes), hex/binary literals. | `MAX_TRIES = 5` → `4` or `6` | Threshold drift in alert rules — the highest-value class on `src/alerts.c`. |
+| `const`  | Integer literals ±1. Skips `0`, values ≥ 1024 (buffer sizes), hex/binary literals. | `MAX_TRIES = 5` → `4` or `6` | Threshold drift in alert rules — the highest-value class on `src/alerts/`. |
 | `return` | `return N;` (N ≠ 0) → `return 0;`. | `return 1;` → `return 0;` | Boolean / error-code return-path regressions. |
 
 Operators were chosen for high signal-per-mutant: each one tests a
@@ -110,6 +117,8 @@ What's **not** mutated (yet):
 ---
 
 ## Reading the report
+
+A run from before #118, when the rules were one file:
 
 ```
 == Mutation summary ==
@@ -185,7 +194,7 @@ A default file ships in-tree at
 and is loaded automatically. To use a custom file:
 
 ```sh
-make mutate MUTATE_FLAGS="--files src/alerts.c \
+make mutate MUTATE_FLAGS="--files src/alerts/engine.c \
                           --ignore-file path/to/custom.txt"
 ```
 
@@ -206,7 +215,7 @@ used**:
 Examples:
 
 ```
-src/alerts.c:23:const:6:7        # exact single mutation
+src/alerts/engine.c:23:const:6:7 # exact single mutation
 src/ip_owner.c:22-94:*:*:*       # any mutation on lines 22-94
 src/jsonl.c:107:bool:||:&&       # one specific bool flip on line 107
 ```
@@ -283,6 +292,12 @@ function-parameter array (`void f(uint8_t mac[6])` is identical to
 `void f(uint8_t *mac)`). `const 6 → 7` on such a parameter is a
 no-op. Examples in `src/alerts.c`:
 `mac_to_str` line 23, `rule_arp_spoof` line 193.
+
+The `src/alerts.c` entries in `mutate-equivalents.txt` were line-number
+keyed and already pointed at the wrong lines before #118 split the file;
+since the split they match nothing. Rewriting them against
+`src/alerts/*.c` belongs to the batched `.github` change (the #118
+slice could not edit that file).
 
 **Stack-buffer sizing literals.** Mutations like `char buf[20]` →
 `char buf[19]` or `char buf[21]` rarely change behaviour: snprintf
@@ -364,7 +379,7 @@ A few things to know before extending the harness:
 - **`#ifdef PLATFORM_LINUX` blocks.** Mutations inside Linux-only
   blocks will always survive on Darwin (the test build doesn't set
   `PLATFORM_LINUX`). Run the harness on Linux for full coverage; on
-  Darwin, target files that aren't platform-gated (`src/alerts.c`,
+  Darwin, target files that aren't platform-gated (`src/alerts/`,
   `src/threat_intel.c`, the snoop/log files).
 
 ---
@@ -373,7 +388,8 @@ A few things to know before extending the harness:
 
 Highest-value files to mutate, in order:
 
-1. `src/alerts.c` — alert rule thresholds. Off-by-one in `>` vs `>=`
+1. `src/alerts/` — the engine and the rule files, the default target.
+   Alert rule thresholds. Off-by-one in `>` vs `>=`
    is exactly the kind of bug that would silently mis-classify
    traffic. Test gaps here directly degrade the [[alerts]] guarantee.
 2. `src/threat_intel.c` — IOC matcher. Wrong-result mutants are

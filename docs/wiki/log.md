@@ -3617,3 +3617,25 @@ gains an `sbom` job (`anchore/sbom-action` v0.24.3 by full digest), and
 `SHA256SUMS` on `v*` tags (`actions/attest-build-provenance` v4.2.2 by
 full digest). Tag signing remains manual. [[release-checklist]],
 [[threat-model]].
+
+## 2026-10-19 — `src/alerts.c` split by domain behind an ordered rule table (#118)
+
+The 5,370-line `src/alerts.c` is now `src/alerts/`: `engine.c` (the
+incident ring, `fire()` and its variants, eviction, side table, taint
+tracker, snapshot, pcap export, `alerts_update()`), `rules_table.c`
+(the rule order and nothing else), and five rule files — `rules_wired.c`
+(25 rules), `rules_wifi_mgmt.c` (21), `rules_twin.c` (12),
+`rules_enterprise.c` (5), `rules_mle.c` (5). `alerts_update()`'s
+hand-written sequence of 68 calls became a loop over
+`g_alert_rules[]`, copied verbatim; rule bodies moved unchanged.
+`src/alerts.h` did not change. New `tests/test_alert_rules.c` holds the
+table to the rule definitions (every rule run exactly once) and pins
+the order dependencies by name: `rule_deauth_flood` and
+`rule_evil_twin` before `rule_evil_twin_attack_chain`, and
+`wifi_downgrade_update()` before the loop. `make mutate` defaults to
+the engine and the five rule files. Not moved, because this slice could
+not edit them: `.github/scripts/mutate-equivalents.txt` and
+`docs_drift.py` / `docs-drift.yml` still name `src/alerts.c`, and so
+does `agents/AGENTS.md`'s "How to add an alert rule". Pages:
+[[alerts]], [[mutation-testing]], [[architecture]], [[threat-intel]],
+[[jsonl-schema]], [[where-exploits-happen]], [[btm-abuse]].

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-18 (#116)
+**Last updated**: 2026-10-19 (#118)
 
 ---
 
@@ -74,8 +74,10 @@ docs/views/*.md            -- per-view deep dives
   one is present (it used to include the four trailer octets), and a
   (re)association response of 30–35 octets now reaches the assoc
   tracker (a stale 36-octet floor dropped them).
-- **Alert engine** — `src/alerts.c` runs each rule every poll, dedupes by
-  stable key, fires JSONL + per-alert pcap. See [[alerts]].
+- **Alert engine** — `src/alerts/engine.c` runs every rule each poll in
+  the order of `src/alerts/rules_table.c`, dedupes by stable key, fires
+  JSONL + per-alert pcap. The rules live in `src/alerts/rules_<domain>.c`
+  (#118). See [[alerts]].
 - **Clock seam** (`src/sloth_clock.h`, #109) — `sloth_wall()` for
   evidence (timestamps, export) and `sloth_mono_ms()` for durations
   (windows, TTLs, cooldowns); `sloth_clock_test_set()` swaps either for
@@ -235,7 +237,7 @@ from it:
 | List | Row | Expanded into |
 |---|---|---|
 | `include/sloth_views.def` | `X(ID, "label", "key", slug)` | `view_t` + `VIEW_COUNT`; `view_label()` (`"[key] label"`, assembled at compile time) and `view_for_key()` in `src/view_labels.c`; the draw dispatch in `src/tui.c` (`view_<slug>_draw`); the per-view key dispatch (`view_<slug>_key`) and the global view-select in `src/main.c` |
-| `include/sloth_alerts.def` | `X(ID, "T1xxx" or "")` | `alert_type_t` + `ALERT_TYPE_COUNT`; the `alert_type_name()` and `alert_technique()` tables in `src/alerts.c` |
+| `include/sloth_alerts.def` | `X(ID, "T1xxx" or "")` | `alert_type_t` + `ALERT_TYPE_COUNT`; the `alert_type_name()` and `alert_technique()` tables in `src/alerts/engine.c` |
 
 Row order is the enum order. For views that is the Tab cycle and the
 help card's order; for alert types the values are carried by the JSONL

@@ -276,10 +276,14 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
 1. Add one `X(NAME, "NAME", "T1xxx")` line to `include/sloth_alerts.def`
    (empty technique only under the documented exceptions), then
    `make docs-counts`.
-2. Write a `rule_<name>(state, now)` function in `src/alerts.c` that
-   calls `fire(...)`.
-3. Add the call from `alerts_update()`; build its key with the
-   `akey_*` builder (#112), never `snprintf` of a remote string.
+2. Write a `rule_<name>(state, now)` function in the domain file under
+   `src/alerts/` (`rules_wired.c`, `rules_wifi_mgmt.c`, `rules_twin.c`,
+   `rules_enterprise.c`, `rules_mle.c`) that calls `fire(...)`; build its
+   key with the `akey_*` builder (#112), never `snprintf` of a remote
+   string.
+3. Add its row to `src/alerts/rules_table.c` — the table order is the
+   run order, and `test_rule_order_dependencies` pins the pairs that
+   matter.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`
    to `fire()` so per-alert pcap export works.
 5. Add a row to the rule table in `docs/views/alerts.md`.

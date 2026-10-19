@@ -800,7 +800,7 @@ typedef struct {
      * wired_attach_t (src/wired_attach.h) and stays UNKNOWN unless a
      * correlator that can see the wire is registered: RF cannot
      * establish wired attachment, so it gets its own axis rather than a
-     * fourth class value, and no rule in src/alerts.c can set it.
+     * fourth class value, and no rule in src/alerts/ can set it.
      *
      * Plain uint8_t for the same reason as `inventory` above — sloth.h
      * does not include module headers from src/. */
@@ -848,7 +848,7 @@ typedef struct {
     int          resolved;         /* 1 once alert.resolve has been emitted */
     /* Earlier incidents on this key, as far as the engine's side table
      * remembers it (#112): 0 for the first, 1 for the first re-open,
-     * and so on. Carried in src/alerts.c's g_side, which outlives the
+     * and so on. Carried in src/alerts/engine.c's g_side, which outlives the
      * engine slot. Exported as `reopen_count` on the `alert.*` events,
      * omitted at 0. A count, not a guarantee: the side table is LRU
      * bounded, so a key quiet for long enough under pressure starts

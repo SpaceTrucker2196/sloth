@@ -69,7 +69,7 @@ int  bd_autocorr_stats(const char *remote_ip, uint16_t port,
  *   0 : not a beacon
  *   1 : v1 hit (classic low-jitter, stddev/mean ≤ BD_MAX_JITTER_RATIO)
  *   2 : v2 hit (autocorrelation; up to ~40% jitter)
- * Callers (alerts.c) treat any non-zero return as fire-worthy; the
+ * Callers (src/alerts/rules_wired.c) treat any non-zero return as fire-worthy; the
  * specific value lets the detail string label which detector matched. */
 int  bd_is_strong(const char *remote_ip, uint16_t port);
 

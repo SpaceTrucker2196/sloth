@@ -334,7 +334,7 @@ int wps_lock_history(const beacon_ap_t *ap, wps_lock_evt_t *out, int max);
  * they strictly alternate: an entry whose destination is unlocked was
  * necessarily preceded by one into locked. That is the same definition
  * of "cycle" the lifetime wps_lock_cycles counter uses, and it lives
- * here rather than in alerts.c so the WPS_LOCKOUT_CYCLING rule and the
+ * here rather than in src/alerts/ so the WPS_LOCKOUT_CYCLING rule and the
  * beacon detail screen cannot disagree about the number they show the
  * operator. */
 int wps_lock_cycles_in_window(const beacon_ap_t *ap, time_t now,

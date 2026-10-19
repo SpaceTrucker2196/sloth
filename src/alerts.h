@@ -33,10 +33,10 @@ void alerts_test_key_hash_mask(uint64_t mask);
  * provenance of any subsequent handshake against the tainted BSSID.
  *
  * Entries expire after EVIL_TWIN_TAINT_TTL_SECS. The tracker is
- * read-only outside alerts.c; the API is exposed here so eapol_log.c
+ * read-only outside src/alerts/; the API is exposed here so eapol_log.c
  * can query it without taking a dep on alert internals.
  *
- * Thread-safe: the table sits behind a leaf mutex private to alerts.c,
+ * Thread-safe: the table sits behind a leaf mutex private to src/alerts/engine.c,
  * because the query runs on the probe thread while the alert engine
  * marks from the main loop (#95). The lock is never held while calling
  * out, so these may be called with any other module lock held. */
@@ -260,7 +260,7 @@ const char  *twin_class_label(twin_class_t c);
  * few times over a session accumulates the same count as an active
  * PineAP lure. Severity therefore escalates to CRIT only when
  * something ties the pattern to this *specific* candidate rather than
- * coincidence — see rule_karma_ap() in alerts.c for which signals
+ * coincidence — see rule_karma_ap() in src/alerts/rules_twin.c for which signals
  * qualify. `confidence` is the separate, non-gating number: how sure
  * sloth is, not how bad it would be if true. */
 #define KARMA_W_SSID_THRESH   20   /* base: SSID count met the threshold */

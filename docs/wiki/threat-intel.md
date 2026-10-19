@@ -19,12 +19,13 @@ type: reference
 in tests and so an operator has a template to extend. Swap them for your
 own feed before production.
 
-**Sources**: `src/threat_intel.c`, `src/alerts.c`
+**Sources**: `src/threat_intel.c`, `src/alerts/rules_wired.c`
 (`rule_threat_domain`, `rule_threat_ip`), `src/views/help.c`,
 `docs/views/alerts.md`, `docs/views/dns.md`,
 `docs/views/connections.md`, issue #96.
 
-**Last updated**: 2026-09-23 (#96 — synthetic status labelled in code,
+**Last updated**: 2026-10-19 (#118 — the two rules moved to
+`src/alerts/rules_wired.c`; #96 labelled the synthetic status in code,
 UI and docs).
 
 ---

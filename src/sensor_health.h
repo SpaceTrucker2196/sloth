@@ -51,7 +51,7 @@
  * complete picture of this protocol right now", which is a real
  * question and was previously unanswerable. */
 typedef enum {
-    SH_EVICT_ALERT = 0,     /* src/alerts.c — oldest incident dropped (resolved first) */
+    SH_EVICT_ALERT = 0,     /* src/alerts/engine.c — oldest incident dropped (resolved first) */
     SH_EVICT_TOP_HOST,      /* src/top_hosts.c — oldest/quietest remote IP dropped */
     SH_EVICT_PNL_CLIENT,    /* src/probe_pnl.c — oldest client dropped from the PNL table */
     SH_EVICT_PNL_SSID,      /* src/probe_pnl.c — oldest SSID dropped from one client's list */
@@ -67,7 +67,7 @@ typedef enum {
     SH_EVICT_PROBE_CLIENT,  /* src/capture/probe.c — least-recently-seen probing client dropped */
     SH_EVICT_PM_FORGE,      /* src/pm_forge.c — least-recently-seen PM-state entry dropped (#107) */
     SH_EVICT_QUEUE_EVICT,   /* src/queue_evict.c — least-recently-seen (BSSID,STA) eviction-window row dropped (#107) */
-    SH_EVICT_PCAP_COOLDOWN, /* src/alerts.c — oldest per-alert-pcap export cooldown row dropped (#96) */
+    SH_EVICT_PCAP_COOLDOWN, /* src/alerts/engine.c — oldest per-alert-pcap export cooldown row dropped (#96) */
     /* The six per-protocol flow rings: plain circular buffers, so the
      * oldest record is overwritten by an append onto a full ring. */
     SH_EVICT_DNS_LOG,       /* src/dns_log.c  — oldest DNS record overwritten */
@@ -104,7 +104,7 @@ typedef enum {
     SH_EVICT_MQTT_FLOW,     /* src/mqtt_snoop.c — least-recently-seen (client,broker) dropped */
     SH_EVICT_MDNS_SERVICE,  /* src/mdns_snoop.c — a NEW service instance refused, none stale (REFUSE_AGING) */
     SH_EVICT_NBNS_NAME,     /* src/nbns_snoop.c — a NEW NetBIOS name refused, none stale (REFUSE_AGING) */
-    SH_EVICT_ARP_HIST,      /* src/alerts.c     — least-recently-seen IP dropped from the ARP-spoof baseline */
+    SH_EVICT_ARP_HIST,      /* src/alerts/rules_wired.c — least-recently-seen IP dropped from the ARP-spoof baseline */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 

@@ -15,7 +15,7 @@
  *
  * Generated from this list: alert_type_t and ALERT_TYPE_COUNT
  * (sloth_alert.h), alert_type_name() and alert_technique()
- * (src/alerts.c). The prose rule count in the docs is rewritten from it
+ * (src/alerts/engine.c). The prose rule count in the docs is rewritten from it
  * by `make docs-counts`.
  *
  * Mapping policy, carried over from the switch this list replaced: each

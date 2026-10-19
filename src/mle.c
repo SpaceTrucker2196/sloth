@@ -343,7 +343,7 @@ int mle_parse(const uint8_t *ie_body, int len, sloth_mld_t *out) {
          * carries its own link pair. It no longer sets
          * cross_link_cipher_downgrade on its own, so it cannot raise the
          * alert by itself; the rule reports it as context when the
-         * cipher arm fires, and src/alerts.c states that the standard
+         * cipher arm fires, and src/alerts/rules_mle.c states that the standard
          * permits the asymmetry.
          *
          * The two arms also keep SEPARATE link pairs now. They used to

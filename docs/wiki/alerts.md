@@ -10,13 +10,37 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-10-19.
 
 ---
 
 ## Engine
 
-- File: `src/alerts.c`.
+- Files: `src/alerts/` (#118). `engine.c` is the engine — the
+  incident ring, `fire()` and its variants, eviction, the side table,
+  the tainted-BSSID tracker, snapshot, per-alert pcap export and
+  `alerts_update()`. The rules live by domain:
+
+  | File | Rules |
+  |---|---|
+  | `rules_wired.c` | IP side: scans, the DNS family, threat intel, ARP and rogue DHCP/RA, protocol brute force, cleartext credentials, weak TLS, HTTP attack signatures, ICMP tunnelling, beaconing, camera WS-Discovery and cloud SNI |
+  | `rules_wifi_mgmt.c` | 802.11 management/control plane and the sensor's radio: the floods, BTM, CSA, RRM, RTS, SA Query, MFP, Block Ack, malformed management frames, probe floods, recon, transit, unknown devices, RF degradation, no monitor radio, PM forgery, queue release, TPC |
+  | `rules_twin.c` | impersonation: the evil-twin family, SSID confusion, KARMA, open/camera setup SSIDs, captive portal, WPA downgrade, SAE, FragAttacks — and the pair scoring the Twins view shares |
+  | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
+  | `rules_mle.c` | the five 802.11be Multi-Link Element rules |
+
+  `src/alerts.h` is the public API and did not change.
+- **Rule order is a table (#118).** `alerts_update()` derives the
+  Wi-Fi posture (`wifi_downgrade_update()`), then runs
+  `g_alert_rules[]` from `src/alerts/rules_table.c` in order. The
+  order is the one the hand-written call sequence had, copied verbatim,
+  and it is load-bearing: JSONL events within one tick reach the stream
+  in this order; `rule_evil_twin_attack_chain` taints the rogue half of
+  a pair and `rule_evil_twin`, earlier in the table, reads that taint
+  on the next tick; `rule_deauth_flood` runs before the chain rule
+  whose finding cites the flood. `tests/test_alert_rules.c` pins those
+  pairs by name and fails if a rule defined under `src/alerts/` is
+  missing from the table or listed twice.
 - Dedup key examples: `scan:<ip>`, `threat-d:<domain>`, `threat-ip:<ip>:<port>`.
 - New-key path: JSONL `alert` line + `alert.create` + (optional) pcap
   dump of the matching packets via `src/alert_pcap.c`. See
@@ -463,15 +487,21 @@ the TTL window.
 
 ## Adding a rule
 
-Per `CLAUDE.md` "How to add an alert rule":
+Per `agents/AGENTS.md` "How to add an alert rule" (updated for #118):
 
 1. Append `X(<NAME>, "T1xxx")` to `include/sloth_alerts.def` — at the
    end, since enum values are carried by JSONL and the SQLite store. That
    one row is the enum value, `alert_type_name()` and `alert_technique()`
    (#117). A `""` technique needs a comment on the row saying which
    exemption it is, and a citing document either way.
-2. Write `rule_<name>(state, now)` in `src/alerts.c` that calls `fire(...)`.
-3. Wire the call from `alerts_update()`.
+2. Write `void rule_<name>(const sloth_state_t *s, time_t now)` in the
+   `src/alerts/rules_<domain>.c` it belongs to, calling `fire(...)`
+   (prototypes for the engine's entry points are in
+   `src/alerts/engine_internal.h`), and declare it in
+   `src/alerts/rules.h`.
+3. Add `R(rule_<name>)` to `src/alerts/rules_table.c` — at the end
+   unless it depends on another rule's output in the same tick.
+   `test_rule_table_is_complete` goes red until it is there.
 4. If the alert has a known target IP, pass `match_ip` + `match_port`
    to `fire()` so per-alert pcap works.
 5. Add a row to the rule table in `docs/views/alerts.md`.

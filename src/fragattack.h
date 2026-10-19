@@ -264,7 +264,7 @@ void frag_note_association(const uint8_t bssid[6], const uint8_t sta[6],
  *                   introspection, where nothing writes concurrently.
  *   frag_bss_copy() copies the row out under the lock. This is what a
  *                   reader on main uses while the capture thread is
- *                   live (rule_fragattack in alerts.c). */
+ *                   live (rule_fragattack in src/alerts/rules_twin.c). */
 int              frag_bss_count(void);
 const frag_bss_t *frag_bss_at(int i);
 /* Copy row i into *out under the lock. Returns 1 on success, 0 when i

@@ -14,9 +14,9 @@ the repo into a sandbox tmpdir and mutates there.
 
 Run via `make mutate` or directly:
 
-    python3 .github/scripts/mutate.py --files src/alerts.c
-    python3 .github/scripts/mutate.py --files src/alerts.c --operators rel const
-    python3 .github/scripts/mutate.py --files src/alerts.c --limit 20 --seed 1
+    python3 .github/scripts/mutate.py --files src/alerts/rules_wired.c
+    python3 .github/scripts/mutate.py --files src/alerts/engine.c --operators rel const
+    python3 .github/scripts/mutate.py --files src/alerts/rules_twin.c --limit 20 --seed 1
 
 Background: see issue #4 and docs/wiki/mutation-testing.md.
 """
@@ -318,7 +318,7 @@ def _code_mask_for_file(src: str) -> list[list[bool]]:
 
 @dataclass
 class Mutant:
-    file: str          # path relative to repo root, e.g. "src/alerts.c"
+    file: str          # path relative to repo root, e.g. "src/alerts/engine.c"
     line_no: int       # 1-based
     site: Site
 
@@ -393,7 +393,7 @@ def load_ignore_file(path: Path) -> list:
 
     Format: one entry per non-blank, non-comment line:
 
-        src/alerts.c:23:const:6:7        # exact single mutation
+        src/alerts/engine.c:23:const:6:7 # exact single mutation
         src/ip_owner.c:22-94:*:*:*       # any mutation on lines 22-94
 
     The line field is either a single integer `N` or a range `M-N`
@@ -505,11 +505,25 @@ def make_sandbox(repo: Path) -> Path:
     return tmp
 
 
+ALERT_FILES = [
+    "src/alerts/engine.c",
+    "src/alerts/rules_wired.c",
+    "src/alerts/rules_wifi_mgmt.c",
+    "src/alerts/rules_twin.c",
+    "src/alerts/rules_enterprise.c",
+    "src/alerts/rules_mle.c",
+]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    # The alert engine and its rule files (#118 split src/alerts.c).
+    # rules_table.c is left out: it holds only the rule order, which no
+    # operator here mutates, and test_alert_rules.c pins it directly.
     parser.add_argument(
-        "--files", nargs="+", default=["src/alerts.c"],
-        help="repo-relative source files to mutate (default: src/alerts.c)",
+        "--files", nargs="+", default=ALERT_FILES,
+        help="repo-relative source files to mutate (default: the alert "
+             "engine and rule files under src/alerts/)",
     )
     parser.add_argument(
         "--operators", nargs="+", default=list(OPERATORS.keys()),

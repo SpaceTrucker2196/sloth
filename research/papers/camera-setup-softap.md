@@ -27,7 +27,7 @@ what the operator does next, so it belongs in the alert.
 
 ## Per-vendor SSID shapes
 
-Each row of `g_camera_setup_ssid_pats[]` in `src/alerts.c` appears here
+Each row of `g_camera_setup_ssid_pats[]` in `src/alerts/rules_twin.c` appears here
 with the document it came from. A prefix that could not be sourced to a
 vendor document was not shipped — see the last section.
 

@@ -81,7 +81,7 @@ readdirCalled:research/ingest/main.c
 # ── False positives, checked by hand ────────────────────────────────────
 # Bucket arrays filled field-by-field when a slot is claimed; the flagged
 # reads are sizeof() operands and snprintf() destinations of that claim.
-legacyUninitvar:src/alerts.c
+legacyUninitvar:src/alerts/rules_wired.c
 # rows_data[rc].val is the snprintf() destination, written before read.
 legacyUninitvar:src/views/dashboard_grid.c
 # order[0] is read only when top > 0, which implies g_info_n > 0 and the

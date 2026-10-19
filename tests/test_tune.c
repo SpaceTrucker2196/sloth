@@ -273,7 +273,7 @@ static void test_print_list_covers_every_knob(void) {
 }
 
 static void test_a_tuned_threshold_reaches_the_detector_macro(void) {
-    /* The point of the whole slice: the macro src/alerts.c compiles
+    /* The point of the whole slice: the macro src/alerts/ compiles
        against must follow the knob. KARMA_SSID_THRESH is the one a
        header exposes, so it can be read from a test. */
     tune_reset();

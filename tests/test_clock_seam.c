@@ -45,7 +45,12 @@ static int cs_count(const char *hay, const char *needle) {
 /* Files that read only sloth_wall() / sloth_mono_ms(). src/sloth_clock.c
  * is the one place the libc calls belong and is deliberately absent. */
 static const char *const cs_migrated[] = {
-    "src/alerts.c",
+    "src/alerts/engine.c",
+    "src/alerts/rules_mle.c",
+    "src/alerts/rules_enterprise.c",
+    "src/alerts/rules_wired.c",
+    "src/alerts/rules_wifi_mgmt.c",
+    "src/alerts/rules_twin.c",
     "src/flood_window.c",
     "src/alert_pcap.c",
     "src/dns.c",

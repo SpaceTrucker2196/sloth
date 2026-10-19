@@ -531,7 +531,7 @@ static time_t g_last_frame_wall = 0;   /* host clock at arrival, 0 = never */
 /* The wired packet ring (#111). on_packet() used to write
  * g_state->packets[] directly under g_mu, which protected the writer
  * from nothing: every reader -- views/packets.c, bandwidth.c,
- * pcap_write.c, ip_color.c, alerts.c, jsonl.c, alert_pcap.c -- is on
+ * pcap_write.c, ip_color.c, alerts/, jsonl.c, alert_pcap.c -- is on
  * main and never took the lock, because the lock was this module's
  * private static. The ring now lives here and main gets a copy once per
  * poll through capture_ring_snapshot(), the same copy pattern

@@ -7,7 +7,7 @@
 
 /* FragAttacks tracker — issue #75 slice 5.
  *
- * Seven detectors (src/fragattack.c, src/alerts.c) have been shipping
+ * Seven detectors (src/fragattack.c, src/alerts/rules_twin.c) have been shipping
  * since slice 1 with nowhere an operator could see the running count
  * without grepping alert history. This is that surface: one row per
  * BSSID with a live per-CVE breakdown for the selection, the same
@@ -47,7 +47,7 @@ static uint32_t findings_total(const frag_bss_row_t *r) {
 }
 
 /* One row of the detail breakdown: display title, CVE(s), the counter
- * to read. Matches src/alerts.c's fire() titles and docs/views/alerts.md
+ * to read. Matches src/alerts/rules_twin.c's fire() titles and docs/views/alerts.md
  * exactly, so a row here and a row in [v] Alerts or [f] Research name
  * the same thing. */
 static void draw_detail_row(const char *title, const char *cve,

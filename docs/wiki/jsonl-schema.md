@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/data_socket.c`, `src/sensor_health.c`.
 
-**Last updated**: 2026-10-18.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -309,7 +309,7 @@ impersonation is an over-the-air behaviour, so RF can evidence it.
 Wired attachment is not decidable from RF at all — a Pineapple on an
 LTE uplink and a rogue bridged onto the access VLAN emit
 indistinguishable beacons — so it gets its own field, and no rule in
-`src/alerts.c` can set it. The only writer is a correlator registered
+`src/alerts/` can set it. The only writer is a correlator registered
 through `src/wired_attach.h` (a switch CAM reader, a controller export,
 a DHCP correlator), and nothing in-tree registers one yet.
 

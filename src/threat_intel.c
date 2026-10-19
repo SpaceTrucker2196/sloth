@@ -17,7 +17,7 @@
  * write, which MISSION.md §2 forbids. The synthetic status is stated in
  * three operator-visible places and all three must stay in sync (#96):
  * this comment, the "demo IOC" marker in the alert detail written by
- * rule_threat_domain / rule_threat_ip in src/alerts.c, and the
+ * rule_threat_domain / rule_threat_ip in src/alerts/rules_wired.c, and the
  * "Embedded data" section of the help view (src/views/help.c). Docs:
  * docs/wiki/threat-intel.md. */
 

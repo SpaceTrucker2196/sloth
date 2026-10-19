@@ -26,7 +26,7 @@
  * the export.
  *
  * Deliberately NOT tunable: the RECON_CONF_* confidence weights in
- * src/alerts.c. Those decide how much a corroborator is worth, not
+ * src/alerts/rules_wifi_mgmt.c. Those decide how much a corroborator is worth, not
  * when a rule fires — retuning them rewrites what a confidence
  * percentage means in the export, which is #89/#90 territory and not
  * an operator dial.

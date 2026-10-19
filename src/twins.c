@@ -6,7 +6,7 @@
 #include "wired_attach.h"
 
 /* The attribution ladder that used to live here as choose_sides() moved
- * to src/alerts.c as twin_choose_sides() in #89 slice 3 — the rule and
+ * to src/alerts/rules_twin.c as twin_choose_sides() in #89 slice 3 — the rule and
  * this view already share twin_evidence_score, and keeping a second
  * copy of "which half is accused" is how the alert and the view start
  * disagreeing about a pair. Ranking and rationale: src/alerts.h. */

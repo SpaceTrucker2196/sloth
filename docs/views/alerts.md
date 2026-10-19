@@ -5,7 +5,7 @@ threat-intel hits, periodic beaconing.
 
 ## Engine
 
-A small dedup-by-key ring (`src/alerts.c`) — each rule scans the
+A small dedup-by-key ring (`src/alerts/engine.c`) — each rule (`src/alerts/rules_*.c`) scans the
 current state every poll, builds a stable key (e.g. `scan:<ip>`,
 `threat-d:<domain>`), and either bumps an existing alert or appends a
 fresh one. New keys also get a JSONL `alert` line and (if `--pcap-dir`
@@ -122,7 +122,7 @@ below):
 ## Rules
 
 Every rule maps to a canonical MITRE ATT&CK technique (populated by
-`alert_technique()` in `src/alerts.c` and emitted as a `"technique"`
+`alert_technique()` in `src/alerts/engine.c` and emitted as a `"technique"`
 field in the JSONL log). Posture alerts that don't correspond to
 adversary behaviour map to the empty string and the JSONL field is
 omitted.

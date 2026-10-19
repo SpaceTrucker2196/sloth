@@ -39,7 +39,7 @@
  * target over the monitor-decode seam).
  *
  * eapol_observe_dot11() reaches real module-static tables (eap_track,
- * wps_track, assoc_track, alerts.c) — all bounded, all zero-initialised,
+ * wps_track, assoc_track, src/alerts/) — all bounded, all zero-initialised,
  * no sloth_state_t needed. Nothing is ever written to disk:
  * crackable-material export is gated behind --collect-handshakes
  * (src/eapol_log.c's g_collect), which defaults off and nothing here

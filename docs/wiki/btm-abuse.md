@@ -54,7 +54,7 @@ its false positives come from real networks doing real steering.
 
 Parsing lives in [`src/action_snoop.c`](../../src/action_snoop.c),
 dispatched from `probe.c` on management subtype 13. The rule is
-`rule_btm_abuse` in [`src/alerts.c`](../../src/alerts.c).
+`rule_btm_abuse` in [`src/alerts/rules_wifi_mgmt.c`](../../src/alerts/rules_wifi_mgmt.c).
 
 Two structures, because the operator and the rule ask different
 questions:

@@ -9,7 +9,7 @@
  * sloth_reset_all() so every test starts from the same clean slate
  * whether its author asked for that or not.
  *
- * Never resets `g_incident_seq` (src/alerts.c) — that counter is
+ * Never resets `g_incident_seq` (src/alerts/engine.c) — that counter is
  * monotonic for the whole process lifetime by design (an incident ID
  * must never repeat within a run), so a blanket reset would silently
  * defeat any test that proves IDs never collide.

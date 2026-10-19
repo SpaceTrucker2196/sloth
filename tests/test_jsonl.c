@@ -799,7 +799,7 @@ static void test_emit_alert_omits_evidence_when_none_cited(void) {
 
 /* The emitter clamps to ALERT_EVIDENCE_IDS even if evidence_id_count
  * somehow claims more than the array actually holds — defensive, since
- * the only production writer (stamp_evidence in alerts.c) already
+ * the only production writer (stamp_evidence in src/alerts/engine.c) already
  * clamps ev_n before this point, but the emitter must not trust that a
  * second caller always will. Without the clamp this reads 12 untouched
  * array slots past evidence_id_count, which are zero-initialised by

@@ -133,7 +133,13 @@ CORE_COMMON_SRCS = \
        src/karma_detect.c    \
        src/views/karma.c     \
        src/views/rogue_radius.c \
-       src/alerts.c          \
+       src/alerts/engine.c   \
+       src/alerts/rules_table.c \
+       src/alerts/rules_mle.c \
+       src/alerts/rules_enterprise.c \
+       src/alerts/rules_wired.c \
+       src/alerts/rules_wifi_mgmt.c \
+       src/alerts/rules_twin.c \
        src/tune.c src/fs_capacity.c            \
        src/views/alerts.c    \
        src/md5.c             \
@@ -622,7 +628,7 @@ $(NOFLAGS_BIN): $(NOFLAGS_OBJS) $(NOFLAGS_CORE_LIB)
 # scaffolding beyond the bytes themselves. fuzz_eapol_observe lands
 # second, over eapol_observe_dot11() (src/eapol_log.c), which reaches
 # parse_eapol_key() plus the shared eap_track/wps_track/assoc_track/
-# alerts.c machinery it feeds — named as a follow-up because
+# src/alerts/ machinery it feeds — named as a follow-up because
 # parse_eapol_key is `static` and reaching it means fuzzing the whole
 # 802.11-data-frame-to-EAPOL-key shape, not the key field alone. Like
 # fuzz_deauth_parse it takes the frame directly with no libpcap in
@@ -665,7 +671,7 @@ $(NOFLAGS_BIN): $(NOFLAGS_OBJS) $(NOFLAGS_CORE_LIB)
 #
 # The archive also carries the test build's stand-ins — tests/*.c that are
 # neither a suite nor the runner: the fake platform and the scenarios.
-# eapol_observe_dot11() reaches alerts.c and from there code that draws,
+# eapol_observe_dot11() reaches src/alerts/ and from there code that draws,
 # so the fuzz targets resolve tui_* against src/tui.c's ANSI backend —
 # the fuzz flags carry no WITH_NCURSES, so no fuzz binary links ncurses
 # (the null renderer that used to stand in here went with #116). A target
