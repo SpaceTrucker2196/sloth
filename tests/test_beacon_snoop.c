@@ -992,10 +992,9 @@ static void test_record_wps_vendor_strings_preserved_on_bare_rerecord(void) {
  * transmitting, so the four tests below are the hostile-input half of
  * the five above (whose inputs are all conforming printable ASCII).
  * wps_attr_str() filters to 0x20..0x7e: WFA WPS 2.0 §12 defines these
- * attributes as ASCII strings, and in the ANSI-fallback builds
- * (WITH_NCURSES=0, `make embedded`) TPRINT is plain printf, so a
- * surviving control byte would be an escape sequence on the operator's
- * terminal rather than a glyph. */
+ * attributes as ASCII strings - a stricter rule than the #138 render
+ * floor (TPRINT is tui_printf in every build and already turns control
+ * octets into '?'), and the one this filter enforces. */
 #define WPS_ATTR_FRAME_MAX (BEACON_HDR_LEN + 2 + 2 + 4 + 4 + 247)
 
 /* One beacon carrying exactly one WPS string attribute, so each test

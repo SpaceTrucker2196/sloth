@@ -135,12 +135,6 @@ static void test_netstr_copy_stops_at_nul_and_bounds(void) {
     ASSERT_EQ(d[0], 'Z');
 }
 
-static void test_netstr_scrub_in_place(void) {
-    char s[] = "a\rb\x1b" "c\xc3\xa9";
-    netstr_scrub(s);
-    ASSERT_STR(s, "a?b?c\xc3\xa9");
-}
-
 /* ── render: both backends ────────────────────────────────── */
 
 /* The ANSI sink. The test binary is built WITH_NCURSES, so the ANSI
@@ -194,9 +188,56 @@ static void test_tui_printf_long_row_is_not_cut(void) {
     ASSERT(strchr(screen, 'E') != NULL);
 }
 
+/* Guard for #138's own claim: every view prints through tui_printf (or
+ * TPRINT, which is it), so no network string reaches the terminal
+ * unsanitised in EITHER backend. The first version converted only the
+ * ncurses branches; 75 bare printf calls stayed in the ANSI #else
+ * branches - exactly the CWE-150 surface the issue names - and the
+ * review found them. This scan fails on any bare printf/puts/fputs in
+ * src/views/, so that cannot recur. putchar is allowed: its only use
+ * filters to printable ASCII first. */
+#include <dirent.h>
+static void test_no_view_prints_around_the_choke_point(void) {
+    DIR *d = opendir("src/views");
+    ASSERT(d != NULL);
+    if (!d) return;
+    struct dirent *e;
+    int files = 0, raw = 0;
+    while ((e = readdir(d)) != NULL) {
+        size_t n = strlen(e->d_name);
+        if (n < 3 || strcmp(e->d_name + n - 2, ".c") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof path, "src/views/%.200s", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        files++;
+        char line[1024];
+        int ln = 0;
+        while (fgets(line, sizeof line, f)) {
+            ln++;
+            static const char *bad[] = { "printf(", "puts(", "fputs(" };
+            for (size_t k = 0; k < sizeof bad / sizeof bad[0]; k++) {
+                for (char *p = strstr(line, bad[k]); p; p = strstr(p + 1, bad[k])) {
+                    char prev = (p == line) ? ' ' : p[-1];
+                    if ((prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+                        (prev >= '0' && prev <= '9') || prev == '_')
+                        continue;            /* tui_printf, snprintf, ... */
+                    fprintf(stderr, "    raw %s in %s:%d\n", bad[k], path, ln);
+                    raw++;
+                }
+            }
+        }
+        fclose(f);
+    }
+    closedir(d);
+    ASSERT(files >= 30);                     /* the scan reached the views */
+    ASSERT_EQ(raw, 0);
+}
+
 void run_netstr_tests(void) {
     TEST_SUITE("netstr — render/ingest sanitisation choke point (#138)");
     RUN_TEST(test_display_sanitize_replaces_esc);
+    RUN_TEST(test_no_view_prints_around_the_choke_point);
     RUN_TEST(test_display_sanitize_replaces_utf8_c1_csi);
     RUN_TEST(test_display_sanitize_keeps_first_code_point_after_c1);
     RUN_TEST(test_display_sanitize_invalid_octets_each_become_one_mark);
@@ -208,7 +249,6 @@ void run_netstr_tests(void) {
     RUN_TEST(test_netstr_copy_maps_c0_and_del);
     RUN_TEST(test_netstr_copy_keeps_high_octets);
     RUN_TEST(test_netstr_copy_stops_at_nul_and_bounds);
-    RUN_TEST(test_netstr_scrub_in_place);
     RUN_TEST(test_ansi_sink_writes_no_escape);
     RUN_TEST(test_tui_printf_sanitizes_on_screen);
     RUN_TEST(test_tui_printf_long_row_is_not_cut);

@@ -114,16 +114,16 @@ void view_arp_draw(const sloth_state_t *s) {
 #else
         if (row == s->arp_sel) {
             tui_sel();
-            printf(" %-15s  %-17s  %-16.16s  %-12.12s  %-6s  %s",
+            tui_printf(" %-15s  %-17s  %-16.16s  %-12.12s  %-6s  %s",
                    e->ip, mac, hstr, vstr, expiry, e->iface);
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else {
-            tui_bright(); printf(" %-15s", e->ip);
-            tui_dim();    printf("  %-17s", mac);
+            tui_bright(); tui_printf(" %-15s", e->ip);
+            tui_dim();    tui_printf("  %-17s", mac);
             if (hostname) { tui_bright(); } else { tui_dim(); }
-            printf("  %-16.16s", hstr);
-            tui_normal(); printf("  %-12.12s", vstr);
-            tui_dim();    printf("  %-6s  %s\n", expiry, e->iface);
+            tui_printf("  %-16.16s", hstr);
+            tui_normal(); tui_printf("  %-12.12s", vstr);
+            tui_dim();    tui_printf("  %-6s  %s\n", expiry, e->iface);
             tui_normal();
         }
 #endif

@@ -160,7 +160,7 @@ static void draw_mon_row(const sloth_state_t *s, const mon_frame_t *f,
     if (pad < 1) pad = 1;
     tui_printf("%-*.*s\n", pad, pad, line);
 #else
-    printf("%-140.140s\n", line);
+    tui_printf("%-140.140s\n", line);
 #endif
     tui_reset();
 }
@@ -418,7 +418,7 @@ void view_packets_draw(const sloth_state_t *s) {
         if (row == sel) tui_sel();
         else            tui_normal();
         const char *region_str = geo_lookup_str(p->dst);
-        printf(" %04u.%06u  %-21.21s:%-5u  ->  %-21.21s:%-5u  %-3s  %5d  %5u  %.40s",
+        tui_printf(" %04u.%06u  %-21.21s:%-5u  ->  %-21.21s:%-5u  %-3s  %5d  %5u  %.40s",
                (unsigned)(p->ts_sec % 10000), (unsigned)p->ts_usec,
                p->src, (unsigned)p->src_port,
                p->dst, (unsigned)p->dst_port,
@@ -426,16 +426,16 @@ void view_packets_draw(const sloth_state_t *s) {
                p->proto, (unsigned)p->len, p->info);
         if (p->raw_len > 0) {
             int n = p->raw_len < 16 ? (int)p->raw_len : 16;
-            printf("  ");
+            tui_printf("  ");
             for (int b = 0; b < n; b++)
-                printf("%02x ", (unsigned)p->raw[b]);
-            printf(" ");
+                tui_printf("%02x ", (unsigned)p->raw[b]);
+            tui_printf(" ");
             for (int b = 0; b < n; b++) {
                 unsigned char c = p->raw[b];
                 putchar((c >= 32 && c < 127) ? (int)c : '.');
             }
         }
-        printf("\n");
+        tui_printf("\n");
         if (row == sel) tui_reset();
 #endif
     }

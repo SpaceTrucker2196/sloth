@@ -199,7 +199,7 @@ int main(void) {
 
     /* Views draw through the shipped renderer (#116): an ncurses SCREEN
      * whose output goes to /dev/null, read back with tui_test_line().
-     * Without it every TPRINT is printw onto no window, so a failure
+     * Without it every TPRINT (tui_printf: sanitise, then addstr) draws onto no window, so a failure
      * here fails the run rather than letting each view test pass on an
      * empty screen. */
     if (tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS) != 0) {

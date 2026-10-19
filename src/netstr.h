@@ -44,10 +44,6 @@
  * every other octet is copied unchanged. dstsz 0 writes nothing.
  * Returns the number of octets written, excluding the NUL. */
 size_t netstr_copy(char *dst, size_t dstsz, const uint8_t *src, size_t n);
-
-/* The same mapping over a C string, in place. */
-void netstr_scrub(char *s);
-
 /* One UTF-8 scalar value at s[0..n) per RFC 3629 §4: rejects overlong
  * forms, surrogates (U+D800..U+DFFF) and anything above U+10FFFF.
  * Returns its length (1..4) and stores the code point, or 0 when s[0]

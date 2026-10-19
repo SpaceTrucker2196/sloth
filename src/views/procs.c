@@ -485,30 +485,30 @@ void view_procs_draw(const sloth_state_t *s) {
 #else
         if (row == vis_sel) {
             tui_sel();
-            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s",
+            tui_printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s",
                    ind_name, fold_ind, pid_str,
                    p->conn_count, p->tcp_count, p->udp_count,
                    tx_buf, rx_buf, port_buf);
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else if (p->pid == -1) {
             tui_dim();
-            printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
+            tui_printf(" %-15.15s %-3s  %6s  %5d  %4d  %4d  %7s  %7s  %s\n",
                    ind_name, fold_ind, pid_str,
                    p->conn_count, p->tcp_count, p->udp_count,
                    tx_buf, rx_buf, port_buf);
             tui_normal();
         } else {
             if (p->depth > 0) tui_dim(); else tui_bright();
-            printf(" %-15.15s", ind_name);
-            tui_dim();    printf(" %-3s", fold_ind);
-            tui_dim();    printf("  %6s", pid_str);
-            tui_bright(); printf("  %5d", p->conn_count);
-            tui_normal(); printf("  %4d  %4d", p->tcp_count, p->udp_count);
+            tui_printf(" %-15.15s", ind_name);
+            tui_dim();    tui_printf(" %-3s", fold_ind);
+            tui_dim();    tui_printf("  %6s", pid_str);
+            tui_bright(); tui_printf("  %5d", p->conn_count);
+            tui_normal(); tui_printf("  %4d  %4d", p->tcp_count, p->udp_count);
             if (p->tx_bytes > 0) tui_bright(); else tui_dim();
-            printf("  %7s", tx_buf);
+            tui_printf("  %7s", tx_buf);
             if (p->rx_bytes > 0) tui_bright(); else tui_dim();
-            printf("  %7s", rx_buf);
-            tui_dim();    printf("  %s\n", port_buf);
+            tui_printf("  %7s", rx_buf);
+            tui_dim();    tui_printf("  %s\n", port_buf);
             tui_normal();
         }
 #endif

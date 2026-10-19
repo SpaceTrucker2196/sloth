@@ -114,12 +114,12 @@ void view_karma_draw(const sloth_state_t *s) {
 #else
         if (row == s->karma_sel) {
             tui_sel();
-            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s",
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s",
                    bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
                    last, tool);
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else {
-            printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
                    bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
                    last, tool);
         }

@@ -740,8 +740,9 @@ void tui_init(void) {
  * The suite used to link a no-op renderer and build every view with
  * TPRINT as printf, a configuration no operator runs. This gives it the
  * shipped one instead: a real ncurses SCREEN whose terminal output goes
- * to /dev/null, read back cell by cell. TPRINT is printw onto stdscr
- * either way, so what a test reads is what `sloth` would have drawn.
+ * to /dev/null, read back cell by cell. TPRINT is tui_printf (sanitise,
+ * then addstr) onto stdscr either way, so what a test reads is what
+ * `sloth` would have drawn.
  *
  * use_env(FALSE) keeps LINES/COLUMNS from the caller's environment out
  * of the geometry; resize_term() then sets the size the test asked for.

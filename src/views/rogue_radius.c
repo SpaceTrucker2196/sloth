@@ -153,11 +153,11 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
 #else
         if (row == sel) {
             tui_sel();
-            printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s",
+            tui_printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s",
                    bssid, methods, wk, r->identity_leaks, tls_s, last);
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else {
-            printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
+            tui_printf(" %-17s  %-20.20s  %-4s  %5d  %-5s  %s\n",
                    bssid, methods, wk, r->identity_leaks, tls_s, last);
         }
 #endif

@@ -628,10 +628,10 @@ void view_iface_draw(const sloth_state_t *s) {
 #else
     /* ── ANSI fallback ── */
     tui_dim();
-    printf("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
+    tui_printf("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
            "Interface", "Mode", "Vendor", "RX", "TX",
            HIST_LEN + 2, "RX history", "Total RX", "Total TX");
-    printf("  %s\n",
+    tui_printf("  %s\n",
            "--------------------------------------------------------------------"
            "-----------------------");
     tui_normal();
@@ -662,7 +662,7 @@ void view_iface_draw(const sloth_state_t *s) {
             if (h && !hidden) make_sparkline(h, 1, spark, HIST_LEN);
             else memset(spark, ' ', HIST_LEN), spark[HIST_LEN] = '\0';
             tui_sel();
-            printf(" >%c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s",
+            tui_printf(" >%c%-9s %-4s %-12.12s %-10s %-10s [%s] %-9s %-9s%s",
                    pfx, f->name, mode, vendor,
                    hidden ? "   hidden" : fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)),
                    hidden ? ""          : fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)),
@@ -674,48 +674,48 @@ void view_iface_draw(const sloth_state_t *s) {
                    : deselected? "  (deselected)"
                    : excluded  ? "  (excluded)"
                    : (f->mode == IFACE_MODE_MONITOR ? "  [monitor]" : ssidbuf));
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else if (hidden) {
             tui_dim();
-            printf("   h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
+            tui_printf("   h%-9s %-4s %-12.12s  (hidden)\n", f->name, mode, vendor);
             tui_normal();
         } else {
             if (is_scan || f->mode == IFACE_MODE_MONITOR) tui_bright();
             else tui_normal();
-            printf("  %c%-9s %-4s %-12.12s",
+            tui_printf("  %c%-9s %-4s %-12.12s",
                    pfx, f->name, mode, vendor);
             if (f->rx_rate > 0) tui_bright(); else tui_dim();
-            printf(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
+            tui_printf(" %-10s", fmt_rate(f->rx_rate, rx_r, (int)sizeof(rx_r)));
             if (f->tx_rate > 0) tui_bright(); else tui_dim();
-            printf(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
+            tui_printf(" %-10s [", fmt_rate(f->tx_rate, tx_r, (int)sizeof(tx_r)));
             if (h) print_sparkline_heat(h, 1, HIST_LEN);
-            else { tui_dim(); printf("%*s", HIST_LEN, ""); }
+            else { tui_dim(); tui_printf("%*s", HIST_LEN, ""); }
             tui_dim();
-            printf("] %-9s %-9s",
+            tui_printf("] %-9s %-9s",
                    fmt_bytes(f->rx_bytes, rx_b, (int)sizeof(rx_b)),
                    fmt_bytes(f->tx_bytes, tx_b, (int)sizeof(tx_b)));
-            if (is_scan) { tui_bright(); printf("%s", scanbuf); }
-            else if (deselected) { tui_dim(); printf("  (deselected)"); }
-            else if (excluded)   { tui_dim(); printf("  (excluded)"); }
-            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); printf("  [monitor]"); }
-            else if (ssidbuf[0]) { tui_bright(); printf("%s", ssidbuf); }
-            printf("\n");
+            if (is_scan) { tui_bright(); tui_printf("%s", scanbuf); }
+            else if (deselected) { tui_dim(); tui_printf("  (deselected)"); }
+            else if (excluded)   { tui_dim(); tui_printf("  (excluded)"); }
+            else if (f->mode == IFACE_MODE_MONITOR) { tui_bright(); tui_printf("  [monitor]"); }
+            else if (ssidbuf[0]) { tui_bright(); tui_printf("%s", ssidbuf); }
+            tui_printf("\n");
             tui_normal();
         }
     }
 
     if (s->iface_count == 0) {
-        tui_dim(); printf("  (no interfaces found)\n"); tui_normal();
+        tui_dim(); tui_printf("  (no interfaces found)\n"); tui_normal();
     }
 
     {
         char hbuf[160];
         iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
-        tui_dim(); printf("%s\n", hbuf); tui_normal();
+        tui_dim(); tui_printf("%s\n", hbuf); tui_normal();
     }
 
     tui_dim();
-    printf("\n  ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s\n",
+    tui_printf("\n  ↑↓ navigate  t hide  y deselect data  m scan  Enter detail  %d iface%s\n",
            s->iface_count, s->iface_count == 1 ? "" : "s");
     tui_normal();
 #endif

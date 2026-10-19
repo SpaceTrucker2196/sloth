@@ -17,14 +17,6 @@ size_t netstr_copy(char *dst, size_t dstsz, const uint8_t *src, size_t n) {
     return o;
 }
 
-void netstr_scrub(char *s) {
-    if (!s) return;
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
-        if (c < 0x20 || c == 0x7f) *s = '?';
-    }
-}
-
 int netstr_utf8_decode(const uint8_t *s, size_t n, uint32_t *cp) {
     if (!s || n == 0) return 0;
     uint8_t b0 = s[0];

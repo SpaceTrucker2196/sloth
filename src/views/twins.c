@@ -165,28 +165,28 @@ void view_twins_draw(const sloth_state_t *s) {
 #else
         if (row == s->twin_episode_sel) {
             tui_sel();
-            printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
+            tui_printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
                    "  %-5s  %-6s  %s",
                    e->ssid, real_mac, twin_mac, e->enc, conf, cls_s, wired_s,
                    swing, flags, age);
-            tui_reset(); printf("\n");
+            tui_reset(); tui_printf("\n");
         } else {
-            tui_bright(); printf(" %-18.18s", e->ssid);
-            tui_dim();    printf("  %-17s", real_mac);
+            tui_bright(); tui_printf(" %-18.18s", e->ssid);
+            tui_dim();    tui_printf("  %-17s", real_mac);
             if (e->attributed) tui_bright(); else tui_dim();
-            printf("  %-17s", twin_mac);
-            tui_dim();    printf("  %-6.6s", e->enc);
-            tui_normal(); printf("  %-4s", conf);
+            tui_printf("  %-17s", twin_mac);
+            tui_dim();    tui_printf("  %-6.6s", e->enc);
+            tui_normal(); tui_printf("  %-4s", conf);
             if (e->ap_class == (uint8_t)TWIN_CLASS_IMPERSONATOR) tui_bright();
             else                                                 tui_dim();
-            printf("  %-8.8s", cls_s);
+            tui_printf("  %-8.8s", cls_s);
             if (e->wired_attach == (uint8_t)WIRED_ATTACH_ATTACHED) tui_bright();
             else                                                   tui_dim();
-            printf("  %-5.5s", wired_s);
-            tui_normal(); printf("  %-5s", swing);
+            tui_printf("  %-5.5s", wired_s);
+            tui_normal(); tui_printf("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
-            printf("  %-6s", flags);
-            tui_dim();    printf("  %s\n", age);
+            tui_printf("  %-6s", flags);
+            tui_dim();    tui_printf("  %s\n", age);
             tui_normal();
         }
 #endif
