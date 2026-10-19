@@ -181,7 +181,7 @@ typedef enum {
     SH_PF_RADIOTAP_BAD = 0, /* src/capture/probe.c — radiotap_parse() refused the header */
     SH_PF_DOT11_RUNT,       /* src/capture/probe.c — 802.11 frame shorter than FC+duration+addr1 */
     SH_PF_IE_OVERRUN,       /* an element / subelement / KDE walk ended in TLV_OVERRUN (src/bytes.h) */
-    SH_PF_RSN_MALFORMED,    /* reserved for #128 (RSN element parsed once) — not yet wired */
+    SH_PF_RSN_MALFORMED,    /* src/beacon_snoop.c — rsn_ie_parse() found an RSNE field cut off (#128) */
     SH_PF_MLE_MALFORMED,    /* src/mle.c — a Multi-Link element failed one of its three bounds rules */
     SH_PF_IP_TRUNCATED,     /* reserved for #132 (IPv4 Total Length) — not yet wired */
     SH_PF_IP_FRAGMENT,      /* reserved for #132 (fragments) — not yet wired */

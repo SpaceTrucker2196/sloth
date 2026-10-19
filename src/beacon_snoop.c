@@ -10,6 +10,7 @@
 #include "sensor_health.h"
 #include "bytes.h"
 #include "dot11_ie.h"
+#include "rsn_ie.h"
 #include "wifi_oui_attacker.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
@@ -76,46 +77,6 @@ int beacon_recent_new_bssids(time_t now, int window_s) {
 }
 
 /* ── 802.11 beacon parser ────────────────────────────────── */
-
-/* Cipher OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.2). */
-static const char *cipher_name(uint8_t t) {
-    switch (t) {
-    case 0:  return "GROUP";
-    case 1:  return "WEP-40";
-    case 2:  return "TKIP";
-    case 4:  return "CCMP";
-    case 5:  return "WEP-104";
-    case 6:  return "BIP";
-    case 8:  return "GCMP";
-    case 9:  return "GCMP-256";
-    case 10: return "CCMP-256";
-    default: return "?";
-    }
-}
-
-/* AKM OUI 00-0F-AC type names (IEEE 802.11 §9.4.2.25.3). */
-static const char *akm_name(uint8_t t) {
-    switch (t) {
-    case 1:  return "802.1X";
-    case 2:  return "PSK";
-    case 3:  return "FT-802.1X";
-    case 4:  return "FT-PSK";
-    case 5:  return "802.1X-SHA256";
-    case 6:  return "PSK-SHA256";
-    case 8:  return "SAE";
-    case 9:  return "FT-SAE";
-    case 11: return "Suite-B";
-    case 12: return "Suite-B-192";
-    case 18: return "OWE";
-    case 19: return "FT-PSK-SHA384";
-    /* WPA3 R3 / 802.11be. Named here because the transition-mode rule
-     * treats PSK alongside SAE-EXT-KEY as a downgrade path exactly as
-     * it treats PSK alongside plain SAE (#62). */
-    case 24: return "SAE-EXT-KEY";
-    case 25: return "FT-SAE-EXT-KEY";
-    default: return "?";
-    }
-}
 
 /* Family labels for a suite bitmap. Ordered strongest-lane-first so a
  * transition-mode BSS reads "SAE+PSK" rather than "PSK+SAE" — the
@@ -515,79 +476,55 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
             }
 
         } else if (tag == 48 && tln >= 8) {
-            /* RSN (WPA2/WPA3). Layout (after tag+len):
-             *   2 ver | 4 group cipher | 2 N pw | 4N pairwise |
-             *   2 M akm | 4M akm | 2 RSN capabilities */
+            /* RSN (WPA2/WPA3), decoded by the one RSNE parser (#128).
+             * An element with an undefined Version still marks the BSS
+             * as RSN-protected — it is not open — but carries no suites
+             * this build can read. */
             rsn_found = 1;
-            int off = 2;                                /* skip version */
-            /* Group cipher: 4 bytes OUI(3) + type(1) */
-            if (rsn_out && off + 4 <= (int)tln) {
-                if (ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac) {
-                    snprintf(rsn_out->group, sizeof(rsn_out->group),
-                             "%s", cipher_name(ie[2+off+3]));
-                }
+            rsn_ie_t r;
+            rsn_ie_parse(ie + 2, (int)tln, &r);
+            /* One predicate for the label and the bitmap. Testing AKM
+             * 8/9 here while akm_bits counted 24/25 as SAE is how an
+             * SAE-EXT-KEY-only BSS came to read "WPA2" (#128). */
+            if (RSN_AKM_FAMILY_SAE(r.akm_bits)) sae_found = 1;
+            if (r.truncated) {
+                sh_parse_fault_note(SH_PF_RSN_MALFORMED);
+                if (rsn_out) rsn_out->truncated_rsn++;
             }
-            off += 4;
-            if (off + 2 <= (int)tln) {
-                uint16_t pw = (uint16_t)(ie[2+off] | ((uint16_t)ie[2+off+1] << 8));
-                off += 2;
-                /* Pairwise list — the first suite feeds the display
-                 * string (most beacons advertise one, and that is the
-                 * primary cipher); every suite feeds the bitmap, which
-                 * is what "was TKIP also on offer?" needs (#60). Bounds
-                 * are rechecked per entry because `pw` comes off the
-                 * air and may overstate the list. */
-                for (int k = 0; k < (int)pw && off + k*4 + 4 <= (int)tln; k++) {
-                    const uint8_t *sel = ie + 2 + off + k*4;
-                    if (!(sel[0]==0x00 && sel[1]==0x0f && sel[2]==0xac)) continue;
-                    if (!rsn_out) continue;
-                    if (k == 0)
-                        snprintf(rsn_out->pairwise, sizeof(rsn_out->pairwise),
-                                 "%s", cipher_name(sel[3]));
-                    if (sel[3] < 32)
-                        rsn_out->pairwise_bits |= RSN_SUITE_BIT(sel[3]);
-                }
-                off += pw * 4;
-                if (off + 2 <= (int)tln) {
-                    uint16_t akm = (uint16_t)(ie[2+off] | ((uint16_t)ie[2+off+1] << 8));
-                    off += 2;
-                    /* AKM list — join up to 3 names. SAE detection
-                     * keeps the legacy "WPA3" enc tag working. */
-                    int akm_taken = 0;
-                    for (int k = 0; k < (int)akm && off + 4 <= (int)tln; k++, off += 4) {
-                        if (!(ie[2+off]==0x00 && ie[2+off+1]==0x0f && ie[2+off+2]==0xac))
-                            continue;
-                        uint8_t t = ie[2+off+3];
-                        if (t == 8 || t == 9) sae_found = 1;
-                        /* Every suite lands in the bitmap even when the
-                         * display string is already full at three — the
-                         * fourth AKM is exactly the one a crowded
-                         * transition-mode BSS hides (#60, #62). */
-                        if (rsn_out && t < 32)
-                            rsn_out->akm_bits |= RSN_SUITE_BIT(t);
-                        if (rsn_out && akm_taken < 3) {
-                            const char *nm = akm_name(t);
-                            int cur = (int)strlen(rsn_out->akm);
-                            int sz  = (int)sizeof(rsn_out->akm);
-                            int rem = sz - cur - 1;
-                            if (rem > 0) {
-                                snprintf(rsn_out->akm + cur, rem + 1,
-                                         "%s%s", akm_taken ? "," : "", nm);
-                                akm_taken++;
-                            }
-                        }
-                    }
-                    /* RSN Capabilities: 2 bytes after the AKM list.
-                     *   bit 6 = MFPR (required)
-                     *   bit 7 = MFPC (capable) */
-                    if (rsn_out && off + 2 <= (int)tln) {
-                        uint16_t caps = (uint16_t)(ie[2+off] |
-                                                   ((uint16_t)ie[2+off+1] << 8));
-                        int mfpr = (caps >> 6) & 1;
-                        int mfpc = (caps >> 7) & 1;
-                        rsn_out->mfp = mfpr ? 2 : (mfpc ? 1 : 0);
+            if (rsn_out) {
+                if (r.has_group && RSN_SEL_STD(r.group_sel))
+                    snprintf(rsn_out->group, sizeof(rsn_out->group), "%s",
+                             rsn_cipher_name(RSN_SEL_TYPE(r.group_sel)));
+                /* The first pairwise suite feeds the display string
+                 * (most beacons advertise one, and that is the primary
+                 * cipher); every suite feeds the bitmap, which is what
+                 * "was TKIP also on offer?" needs (#60). */
+                if (r.pairwise_count > 0 && RSN_SEL_STD(r.first_pairwise_sel))
+                    snprintf(rsn_out->pairwise, sizeof(rsn_out->pairwise),
+                             "%s", rsn_cipher_name(
+                                       RSN_SEL_TYPE(r.first_pairwise_sel)));
+                rsn_out->pairwise_bits |= r.pairwise_bits;
+                /* Every suite lands in the bitmap even when the display
+                 * string is already full at three — the fourth AKM is
+                 * exactly the one a crowded transition-mode BSS hides
+                 * (#60, #62). */
+                rsn_out->akm_bits |= r.akm_bits;
+                int akm_taken = 0;
+                for (int k = 0; k < r.akm_count && akm_taken < 3; k++) {
+                    uint32_t sel = be32(r.akm + 4 * k);
+                    if (!RSN_SEL_STD(sel)) continue;
+                    const char *nm = rsn_akm_name(RSN_SEL_TYPE(sel));
+                    int cur = (int)strlen(rsn_out->akm);
+                    int sz  = (int)sizeof(rsn_out->akm);
+                    int rem = sz - cur - 1;
+                    if (rem > 0) {
+                        snprintf(rsn_out->akm + cur, rem + 1,
+                                 "%s%s", akm_taken ? "," : "", nm);
+                        akm_taken++;
                     }
                 }
+                if (r.has_caps)
+                    rsn_out->mfp = r.mfpr ? 2 : (r.mfpc ? 1 : 0);
             }
 
         } else if (tag == 221 && tln >= 4) {

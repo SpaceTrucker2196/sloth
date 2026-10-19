@@ -3,6 +3,7 @@
 
 #include "mle.h"
 #include "bytes.h"
+#include "rsn_ie.h"
 #include "sensor_health.h"
 
 static sloth_mld_t     g_mld[SLOTH_MLD_MAX];
@@ -15,26 +16,6 @@ static int mac_is_usable(const uint8_t m[6]) {
     return 0;
 }
 
-/* Pairwise-cipher strength rank for a 00-0F-AC suite type (IEEE
- * 802.11-2020 Table 9-149). Only the *ordering* is load-bearing: the
- * cross-link rule asks whether two radios of one MLD offer the same
- * strength, never what the absolute strength is. 0 means "not a suite
- * whose strength we are willing to rank" — suite 0 is Use-Group-Cipher
- * and anything else is a selector newer than this table, and ranking an
- * unknown suite as weak would turn every future cipher into an alert. */
-static int cipher_rank(uint8_t t) {
-    switch (t) {
-    case 1:  return 1;   /* WEP-40  */
-    case 2:  return 1;   /* TKIP    */
-    case 5:  return 1;   /* WEP-104 */
-    case 4:  return 2;   /* CCMP-128 */
-    case 8:  return 2;   /* GCMP-128 */
-    case 9:  return 3;   /* GCMP-256 */
-    case 10: return 3;   /* CCMP-256 */
-    default: return 0;
-    }
-}
-
 /* Extract the strongest pairwise cipher and the MFPR bit from the RSNE
  * in an element list. Returns 1 only when the chain tiles `len`
  * **exactly** and carries a readable RSNE.
@@ -45,40 +26,27 @@ static int cipher_rank(uint8_t t) {
  * a chain that does not add up is worse than no posture at all, and the
  * bounds faults in this element already have their own three rules.
  *
- * RSNE layout after tag+len (IEEE 802.11-2020 §9.4.2.24):
- *   2 ver | 4 group | 2 N | 4N pairwise | 2 M | 4M AKM | 2 RSN caps
- * RSN Capabilities bit 6 is MFPR (required), bit 7 MFPC (capable). */
+ * The RSNE itself is decoded by rsn_ie_parse() (#128) — this file kept
+ * its own copy, with its own cipher-rank table and an unvalidated AKM
+ * skip, until then. An RSNE with an undefined Version, a truncated
+ * field, or no RSN Capabilities is unusable here: Capabilities is
+ * optional in the element's grammar, and a link that omits it has not
+ * said MFPR=0, it has said nothing. */
 static int sta_profile_rsn(const uint8_t *p, int len,
                            int *best_rank, int *mfpr) {
     int found = 0, rank = 0, req = 0;
 
     tlv_it_t it;
-    uint16_t tag; int tln; const uint8_t *r;
+    uint16_t tag; int tln; const uint8_t *body;
     tlv_init(&it, p, len);
-    while (tlv_next(&it, &tag, &tln, &r) == TLV_OK) {
+    while (tlv_next(&it, &tag, &tln, &body) == TLV_OK) {
         if (tag == 48 && tln >= 8) {
-            int o = 2 + 4;                       /* version + group cipher */
-            if (o + 2 > (int)tln) return 0;
-            int pw = r[o] | (r[o + 1] << 8);
-            o += 2;
-            /* `pw` comes off the air and may overstate the list, so the
-             * bound is rechecked per entry rather than once. */
-            for (int k = 0; k < pw; k++) {
-                if (o + 4 > (int)tln) return 0;
-                if (r[o] == 0x00 && r[o + 1] == 0x0f && r[o + 2] == 0xac) {
-                    int cr = cipher_rank(r[o + 3]);
-                    if (cr > rank) rank = cr;
-                }
-                o += 4;
-            }
-            if (o + 2 > (int)tln) return 0;
-            int akm = r[o] | (r[o + 1] << 8);
-            o += 2 + akm * 4;
-            /* RSN Capabilities is optional in the element's grammar. A
-             * link that omits it has not said MFPR=0, it has said
-             * nothing, so the element is unusable for this comparison. */
-            if (o + 2 > (int)tln) return 0;
-            req = (r[o] >> 6) & 1;
+            rsn_ie_t r;
+            if (!rsn_ie_parse(body, tln, &r) || r.truncated || !r.has_caps)
+                return 0;
+            int cr = rsn_cipher_rank_best(r.pairwise_bits);
+            if (cr > rank) rank = cr;
+            req   = r.mfpr;
             found = 1;
         }
     }

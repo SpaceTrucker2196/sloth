@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "sloth.h"
 #include "reg_ie.h"
+#include "rsn_ie.h"
 
 /* Cipher / AKM / MFP info extracted from the RSN IE of a beacon, plus
  * AP fingerprint info extracted from tag-221 vendor-specific IEs. The
@@ -84,7 +85,10 @@ typedef struct {
      * per frame by beacon_parse; accumulated per BSSID by beacon_record.
      *   ie_overruns   an IE claimed a length that ran off the frame end
      *   oversize_ssid SSID IE length > 32 (invalid per 802.11)
-     *   truncated_rsn RSN IE (tag 48) present but too short to be valid */
+     *   truncated_rsn RSN IE (tag 48) present but too short to be valid
+     *                 (< 8 octets), or one whose declared suite/PMKID
+     *                 count or fixed field ran past its length (#128,
+     *                 rsn_ie_t.truncated) */
     int  ie_overruns;
     int  oversize_ssid;
     int  truncated_rsn;
@@ -164,32 +168,9 @@ typedef struct {
     reg_ie_t reg;
 } beacon_rsn_t;
 
-/* Suite-type bit for a 00-0F-AC selector (IEEE 802.11-2020 Table 9-151
- * for AKM, Table 9-149 for ciphers). */
-#define RSN_SUITE_BIT(t)  (1u << (t))
-
-/* AKM families worth naming, because the downgrade rules ask about the
- * family rather than one selector. Keep these in sync with akm_name(). */
-#define RSN_AKM_PSK          RSN_SUITE_BIT(2)
-#define RSN_AKM_FT_PSK       RSN_SUITE_BIT(4)
-#define RSN_AKM_PSK_SHA256   RSN_SUITE_BIT(6)
-#define RSN_AKM_SAE          RSN_SUITE_BIT(8)
-#define RSN_AKM_FT_SAE       RSN_SUITE_BIT(9)
-#define RSN_AKM_OWE          RSN_SUITE_BIT(18)
-#define RSN_AKM_SAE_EXT      RSN_SUITE_BIT(24)
-#define RSN_AKM_FT_SAE_EXT   RSN_SUITE_BIT(25)
-
-/* Any PSK-based AKM — the WPA2 lane of a transition-mode BSS. */
-#define RSN_AKM_PSK_FAMILY \
-    (RSN_AKM_PSK | RSN_AKM_FT_PSK | RSN_AKM_PSK_SHA256)
-
-/* Any SAE-based AKM — the WPA3 lane. */
-#define RSN_AKM_SAE_FAMILY \
-    (RSN_AKM_SAE | RSN_AKM_FT_SAE | RSN_AKM_SAE_EXT | RSN_AKM_FT_SAE_EXT)
-
-/* Pairwise ciphers the posture rules care about. */
-#define RSN_CIPHER_TKIP      RSN_SUITE_BIT(2)
-#define RSN_CIPHER_CCMP      RSN_SUITE_BIT(4)
+/* RSN_SUITE_BIT, the RSN_AKM_* families and RSN_CIPHER_* live in
+ * rsn_ie.h with the one RSNE parser that produces the bitmaps (#128);
+ * included above so every reader of beacon_rsn_t still sees them. */
 
 /* Short display label for an AKM suite bitmap — "SAE", "PSK",
  * "SAE+PSK" for a transition-mode BSS, "802.1X", "OWE", "open" when no

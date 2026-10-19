@@ -3639,3 +3639,18 @@ not edit them: `.github/scripts/mutate-equivalents.txt` and
 does `agents/AGENTS.md`'s "How to add an alert rule". Pages:
 [[alerts]], [[mutation-testing]], [[architecture]], [[threat-intel]],
 [[jsonl-schema]], [[where-exploits-happen]], [[btm-abuse]].
+
+## 2026-10-19 — RSN element parsed once; SAE-EXT-KEY is WPA3 (#128)
+
+`src/rsn_ie.c` is the one RSNE (§9.4.2.24) parser: every field
+including PMKIDs and the Group Management Cipher, a Version check, and
+`truncated` set when a declared count or a fixed field runs past the
+element (the suites that fit are kept). `beacon_parse_ies()` and mle.c's
+per-STA-profile reader both use it; mle.c's private cipher-rank table is
+gone. **Contract change**: `enc` on `beacon`, `wifi_ap` and
+`twin_episode` is now `WPA3` for a BSS offering only SAE-EXT-KEY (AKM
+24/25), which logged `WPA2` before — the label now uses the same
+`RSN_AKM_FAMILY_SAE` predicate as `akm_bits`. The reserved
+`parse_fault_rsn_malformed` is wired, and `fuzz_truncated_rsn` also
+counts an overrunning count. Pages: [[jsonl-schema]]; per-view doc
+`docs/views/beacons.md`.

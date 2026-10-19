@@ -1015,6 +1015,41 @@ static void test_unrecognised_cipher_suite_is_not_ranked_weak(void) {
     ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
 }
 
+/* #128: the per-STA RSNE goes through rsn_ie_parse(), and an RSNE with
+ * a field cut off is unusable for posture even when RSN Capabilities —
+ * all the old reader looked at — arrived intact. Link 1 below appends a
+ * PMKID Count (§9.4.2.24) to its RSNE: 0 is a well-formed element and
+ * the cross-link downgrade is read; 1 with no PMKID following is a
+ * truncation, and the same two links then yield no finding.
+ *
+ * Mutation-proved: dropping `|| r.truncated` from sta_profile_rsn()
+ * reddens the second downgrade assertion. */
+static int mle_with_pmkid_count_on_link1(uint8_t *b, uint8_t pmkid_count) {
+    int n = build_mle(b, MLE_TYPE_BASIC, 1, MLD, 0);
+    n = put_per_sta_profile(b, n, 0, CIPH_GCMP256, 1, 1);
+    int sub = n;
+    n = put_per_sta_profile(b, n, 1, CIPH_CCMP128, 0, 1);
+    int rsne = n - 22;                  /* tag(1) len(1) body(20) */
+    b[n++] = pmkid_count;
+    b[n++] = 0x00;
+    b[rsne + 1] = (uint8_t)(b[rsne + 1] + 2);
+    b[sub + 1]  = (uint8_t)(b[sub + 1] + 2);
+    return n;
+}
+
+static void test_truncated_per_sta_rsne_is_not_read_for_posture(void) {
+    uint8_t b[256];
+    sloth_mld_t m;
+    int n = mle_with_pmkid_count_on_link1(b, 0);
+    ASSERT_EQ(b[n - 24], 48);
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 1);
+    n = mle_with_pmkid_count_on_link1(b, 1);
+    ASSERT_EQ(mle_parse(b, n, &m), 1);
+    ASSERT_EQ(m.malformed_subelem_len, 0);
+    ASSERT_EQ(m.cross_link_cipher_downgrade, 0);
+}
+
 /* A frame that already tripped MLE_SUBELEM_OVERRUN is not read for
  * posture: the two profiles before the bad subelement do disagree, but
  * a chain whose declared lengths do not add up is not evidence we are
@@ -1125,6 +1160,7 @@ void run_mle_tests(void) {
     RUN_TEST(test_untiled_sta_profile_is_not_read_and_not_a_fault);
     RUN_TEST(test_malformed_mle_reaches_the_parse_fault_tally);
     RUN_TEST(test_unrecognised_cipher_suite_is_not_ranked_weak);
+    RUN_TEST(test_truncated_per_sta_rsne_is_not_read_for_posture);
     RUN_TEST(test_downgrade_not_claimed_on_an_overrunning_chain);
     RUN_TEST(test_cross_link_downgrade_persists_across_clean_frames);
 }

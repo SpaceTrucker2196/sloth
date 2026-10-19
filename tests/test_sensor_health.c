@@ -783,7 +783,7 @@ static void test_parse_fault_wired_set(void) {
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RADIOTAP_BAD),  1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DOT11_RUNT),    1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IE_OVERRUN),    1);
-    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RSN_MALFORMED), 0);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_RSN_MALFORMED), 1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_MLE_MALFORMED), 1);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_TRUNCATED),  0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_IP_FRAGMENT),   0);

@@ -203,6 +203,31 @@ static inline void fb_rsn(fb_t *b, uint8_t group, uint8_t pairwise,
     fb_ie(b, 48, body, p);
 }
 
+/* RSNE (§9.4.2.24) with lists, for the cases fb_rsn() cannot state: a
+ * transition-mode AKM pair, several pairwise suites. Same clause order
+ * and IEEE OUI; every count written is the number of suites written. */
+static inline void fb_rsn_lists(fb_t *b, uint8_t group,
+                                const uint8_t *pairwise, int npw,
+                                const uint8_t *akm, int nakm,
+                                uint16_t rsn_caps) {
+    uint8_t body[64];
+    fb_t e;
+    fb_init(&e, body, (int)sizeof body);
+    fb_le16(&e, 1);                                           /* version */
+    fb_u8(&e, 0x00); fb_u8(&e, 0x0f); fb_u8(&e, 0xac); fb_u8(&e, group);
+    fb_le16(&e, (uint16_t)npw);
+    for (int i = 0; i < npw; i++) {
+        fb_u8(&e, 0x00); fb_u8(&e, 0x0f); fb_u8(&e, 0xac); fb_u8(&e, pairwise[i]);
+    }
+    fb_le16(&e, (uint16_t)nakm);
+    for (int i = 0; i < nakm; i++) {
+        fb_u8(&e, 0x00); fb_u8(&e, 0x0f); fb_u8(&e, 0xac); fb_u8(&e, akm[i]);
+    }
+    fb_le16(&e, rsn_caps);
+    if (e.overflow) { b->overflow = 1; return; }
+    fb_ie(b, 48, body, e.len);
+}
+
 /* ── Data frame body pieces ───────────────────────────────────────── */
 
 /* LLC/SNAP with the RFC 1042 encapsulation OUI 00-00-00 and a

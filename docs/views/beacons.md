@@ -16,6 +16,20 @@ Per AP: SSID, BSSID (6-byte MAC), signal (dBm), channel, encryption
 (`OPEN` / `WEP` / `WPA` / `WPA2` / `WPA3`), beacon interval (ms),
 last-seen, frame count.
 
+**Encryption label (#128).** `WPA3` means the RSN element offers an
+SAE-family AKM: SAE (8), FT-SAE (9), SAE-EXT-KEY (24) or
+FT-SAE-EXT-KEY (25) — one predicate, `RSN_AKM_FAMILY_SAE`, shared with
+the `akm_bits` bitmap and the `AKM` column. Before #128 the label tested
+only 8 and 9, so a BSS offering SAE-EXT-KEY alone (WPA3 R3, the AKM
+Wi-Fi 7 uses) read `WPA2` while its `AKM` column said `SAE-EXT-KEY`.
+Rules that rank on the label (`WPA_DOWNGRADE`, the evil-twin
+comparison) now rank such a BSS as WPA3. `WPA2` is any other RSN
+element, including one with an undefined Version, which is decoded no
+further. The RSN element is parsed by `src/rsn_ie.c`, once, for the
+beacon path, the managed-mode scan path and the Multi-Link per-STA
+profile reader alike; a Pairwise/AKM/PMKID count that overruns the
+element keeps the suites that fit and counts in `fuzz_truncated_rsn`.
+
 When the AP advertises a **QBSS Load** element (802.11e, tag 11), sloth
 also records its self-reported occupancy: associated **station count**
 and **channel utilisation** (0–255, a fraction of 255 — e.g. 128 ≈ 50 %

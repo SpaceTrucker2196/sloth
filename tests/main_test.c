@@ -147,6 +147,7 @@ void run_sensors_tests(void);
 void run_sensor_health_tests(void);
 void run_bytes_tests(void);
 void run_dot11_ie_tests(void);
+void run_rsn_ie_tests(void);
 void run_stab_tests(void);
 void run_evidence_ring_tests(void);
 void run_persist_health_tests(void);
@@ -315,6 +316,7 @@ int main(void) {
     run_sensor_health_tests();
     run_bytes_tests();
     run_dot11_ie_tests();
+    run_rsn_ie_tests();
     run_stab_tests();
     run_evidence_ring_tests();
     run_persist_health_tests();
