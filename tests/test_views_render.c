@@ -273,6 +273,7 @@ static int smoke_count_in(const char *path) {
 /* Converted files: none may reintroduce a smoke assert. */
 static const char *const CONVERTED[] = {
     "tests/test_dashboard.c",
+    "tests/test_probe.c",
     "tests/test_views_render.c",
 };
 
@@ -287,7 +288,7 @@ static void test_no_smoke_asserts_in_converted_files(void) {
 
 /* What remains across tests/, as a ceiling that only moves down. Lower
  * it in the commit that converts a file; never raise it. */
-#define SMOKE_CEILING 98
+#define SMOKE_CEILING 83
 
 static void test_smoke_asserts_do_not_grow(void) {
     DIR *d = opendir("tests");

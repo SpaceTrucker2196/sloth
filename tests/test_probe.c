@@ -3,6 +3,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "views/probe.h"
+#include "tui.h"
 #include "capture/probe.h"
 #include "fake_platform.h"
 #include "scenarios.h"
@@ -44,13 +45,39 @@ static void inject_aged(sloth_state_t *s, const char *mac_str,
     c->frame_count = frames;
 }
 
-/* ── Draw smoke tests ────────────────────────────────────── */
+/* ── Draw ─────────────────────────────────────────────────── *
+ *
+ * These were ASSERT(1) smoke tests until #116 gave the suite a screen to
+ * read. Each now asserts what the view put in the cells. Ages that feed
+ * the "(N active)" count (< 5 s) are seeded with seconds of margin, so a
+ * slow CI step cannot move a row across the line; no test asserts the
+ * Seen column, which reads the real clock. */
+
+/* Row of the first line naming `needle`, asserted present. */
+static int row_of(const char *needle) {
+    int y = runner_screen_find(needle);
+    if (y < 0) {
+        fprintf(stderr, "    no row with \"%s\"\n", needle);
+        tui_test_dump(stderr);
+    }
+    ASSERT(y >= 0);
+    return y;
+}
+
+/* Colour pair of the Pkts cell on row y: the last digit of `count`
+ * just before the Presence column. */
+static int pkts_pair(int y, const char *count_then_presence) {
+    int col = runner_find_col(y, count_then_presence);
+    ASSERT(col >= 0);
+    return col < 0 ? -1 : tui_test_pair(y, col);
+}
 
 static void test_probe_draw_empty_no_crash(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_probe_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Probe clients: 0");
+    ASSERT_LINE_HAS(1, "MAC                Vendor        Signal   Ch   Seen   Pkts");
 }
 
 static void test_probe_draw_no_iface_message(void) {
@@ -58,7 +85,19 @@ static void test_probe_draw_no_iface_message(void) {
     memset(&s, 0, sizeof(s));
     s.probe_iface[0] = '\0';
     view_probe_draw(&s);
-    ASSERT(1);  /* smoke: no crash */
+    ASSERT_LINE_HAS(0, "(no monitor interface)");
+    ASSERT_SCREEN_HAS("(no monitor-mode interface found");
+    ASSERT_SCREEN_LACKS("(listening");
+}
+
+static void test_probe_draw_listening_message(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
+    view_probe_draw(&s);
+    ASSERT_LINE_HAS(0, "iface: wlan1mon");
+    ASSERT_SCREEN_HAS("(listening");
+    ASSERT_SCREEN_LACKS("(no monitor-mode interface found");
 }
 
 static void test_probe_draw_with_clients(void) {
@@ -70,6 +109,10 @@ static void test_probe_draw_with_clients(void) {
     inject_client(&s, "de:ad:be:ef:00:01", "office",  -55, 11);
     view_probe_draw(&s);
     ASSERT_EQ(s.probe_count, 3);
+    ASSERT_LINE_HAS(0, "Probe clients: 3");
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "homenet");
+    ASSERT_LINE_HAS(row_of("11:22:33:44:55:66"), "(wildcard)");
+    ASSERT_LINE_HAS(row_of("de:ad:be:ef:00:01"), "office");
 }
 
 static void test_probe_draw_wildcard_ssid(void) {
@@ -78,7 +121,7 @@ static void test_probe_draw_wildcard_ssid(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_client(&s, "aa:bb:cc:dd:ee:ff", "", -70, 6);
     view_probe_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:ff"), "(wildcard)");
 }
 
 /* ── Active count ────────────────────────────────────────── */
@@ -87,13 +130,13 @@ static void test_probe_active_count_all_fresh(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
-    /* all 3 within 5 seconds */
-    inject_aged(&s, "aa:bb:cc:dd:ee:01", "a", -55, 6, 1, 1);
-    inject_aged(&s, "aa:bb:cc:dd:ee:02", "b", -60, 6, 3, 2);
-    inject_aged(&s, "aa:bb:cc:dd:ee:03", "c", -65, 6, 4, 3);
+    /* all 3 well within 5 seconds */
+    inject_aged(&s, "aa:bb:cc:dd:ee:01", "a", -55, 6, 0, 1);
+    inject_aged(&s, "aa:bb:cc:dd:ee:02", "b", -60, 6, 1, 2);
+    inject_aged(&s, "aa:bb:cc:dd:ee:03", "c", -65, 6, 2, 3);
     ASSERT_EQ(s.probe_count, 3);
-    view_probe_draw(&s);  /* smoke: renders active count */
-    ASSERT(1);
+    view_probe_draw(&s);
+    ASSERT_LINE_HAS(0, "Probe clients: 3  (3 active)");
 }
 
 static void test_probe_active_count_mixed(void) {
@@ -103,9 +146,9 @@ static void test_probe_active_count_mixed(void) {
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "fresh",  -50, 6,  2, 5);  /* active */
     inject_aged(&s, "aa:bb:cc:dd:ee:02", "medium", -60, 6, 10, 3);  /* not active */
     inject_aged(&s, "aa:bb:cc:dd:ee:03", "stale",  -70, 6, 60, 1);  /* not active */
-    /* view_probe_draw counts active internally; smoke-verify no crash */
     view_probe_draw(&s);
     ASSERT_EQ(s.probe_count, 3);
+    ASSERT_LINE_HAS(0, "Probe clients: 3  (1 active)");
 }
 
 static void test_probe_active_count_none(void) {
@@ -114,8 +157,10 @@ static void test_probe_active_count_none(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "stale", -60, 6, 30, 5);
     inject_aged(&s, "aa:bb:cc:dd:ee:02", "stale", -65, 6, 45, 2);
-    view_probe_draw(&s);  /* no "(N active)" should appear — no crash */
-    ASSERT(1);
+    view_probe_draw(&s);
+    /* Seen to fail with the `active > 0` guard dropped: "(0 active)". */
+    ASSERT_LINE_HAS(0, "Probe clients: 2");
+    ASSERT(!runner_line_has(0, "active"));
 }
 
 /* ── Signal bar extremes ─────────────────────────────────── */
@@ -126,7 +171,7 @@ static void test_probe_signal_floor(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "weak", -95, 6, 0, 1);
     view_probe_draw(&s);  /* -95 dBm → 0 bars filled */
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "\xe2\x96\x91\xe2\x96\x91\xe2\x96\x91\xe2\x96\x91\xe2\x96\x91\xe2\x96\x91");
 }
 
 static void test_probe_signal_ceiling(void) {
@@ -135,7 +180,7 @@ static void test_probe_signal_ceiling(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "strong", -25, 6, 0, 1);
     view_probe_draw(&s);  /* -25 dBm → 6 bars filled */
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88");
 }
 
 static void test_probe_signal_mid(void) {
@@ -144,7 +189,7 @@ static void test_probe_signal_mid(void) {
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "mid", -60, 6, 0, 1);
     view_probe_draw(&s);  /* -60 dBm → 3 bars (50%) */
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x91\xe2\x96\x91\xe2\x96\x91");
 }
 
 /* ── Frame count heat thresholds ─────────────────────────── */
@@ -154,8 +199,10 @@ static void test_probe_frame_heat_zero(void) {
     memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "x", -60, 6, 0, 0);
+    s.probe_sel = -1;   /* the selected row is reverse video, not heat */
     view_probe_draw(&s);  /* 0 frames → frac = 0, cold tui_heat */
-    ASSERT(1);
+    int y = row_of("aa:bb:cc:dd:ee:01");
+    ASSERT_EQ(pkts_pair(y, "0  resident"), CP_HEAT_LO);
 }
 
 static void test_probe_frame_heat_half(void) {
@@ -163,8 +210,10 @@ static void test_probe_frame_heat_half(void) {
     memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "x", -60, 6, 0, 25);
+    s.probe_sel = -1;   /* the selected row is reverse video, not heat */
     view_probe_draw(&s);  /* 25 frames → frac = 0.5 */
-    ASSERT(1);
+    int y = row_of("aa:bb:cc:dd:ee:01");
+    ASSERT_EQ(pkts_pair(y, "25  resident"), CP_HEAT_HI);
 }
 
 static void test_probe_frame_heat_max(void) {
@@ -172,8 +221,10 @@ static void test_probe_frame_heat_max(void) {
     memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "x", -60, 6, 0, 50);
+    s.probe_sel = -1;   /* the selected row is reverse video, not heat */
     view_probe_draw(&s);  /* 50 frames → frac = 1.0 */
-    ASSERT(1);
+    int y = row_of("aa:bb:cc:dd:ee:01");
+    ASSERT_EQ(pkts_pair(y, "50  resident"), CP_HEAT_PEAK);
 }
 
 static void test_probe_frame_heat_overflow(void) {
@@ -181,8 +232,10 @@ static void test_probe_frame_heat_overflow(void) {
     memset(&s, 0, sizeof(s));
     snprintf(s.probe_iface, sizeof(s.probe_iface), "wlan1mon");
     inject_aged(&s, "aa:bb:cc:dd:ee:01", "x", -60, 6, 0, 200);
+    s.probe_sel = -1;   /* the selected row is reverse video, not heat */
     view_probe_draw(&s);  /* >50 frames → clamped to frac = 1.0, no crash */
-    ASSERT(1);
+    int y = row_of("aa:bb:cc:dd:ee:01");
+    ASSERT_EQ(pkts_pair(y, "200  resident"), CP_HEAT_PEAK);
 }
 
 /* ── Named vs wildcard SSID ──────────────────────────────── */
@@ -194,7 +247,8 @@ static void test_probe_named_ssid(void) {
     inject_client(&s, "aa:bb:cc:dd:ee:01", "TargetNetwork", -55, 6);
     ASSERT(s.probe_clients[0].ssid[0] != '\0');
     view_probe_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "TargetNetwork");
+    ASSERT_SCREEN_LACKS("(wildcard)");
 }
 
 static void test_probe_wildcard_ssid(void) {
@@ -204,7 +258,7 @@ static void test_probe_wildcard_ssid(void) {
     inject_client(&s, "aa:bb:cc:dd:ee:01", "", -55, 6);
     ASSERT(s.probe_clients[0].ssid[0] == '\0');
     view_probe_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:01"), "(wildcard)");
 }
 
 static void test_probe_mixed_ssid(void) {
@@ -233,6 +287,9 @@ static void test_probe_sel_at_top(void) {
     s.probe_sel = 0;
     view_probe_draw(&s);
     ASSERT_EQ(s.probe_count, 40);
+    int y = row_of("aa:bb:cc:00:00:00");
+    ASSERT_EQ(tui_test_is_reverse(y, 1), 1);
+    ASSERT_EQ(tui_test_is_reverse(y == 3 ? 4 : 3, 1), 0);
 }
 
 static void test_probe_sel_at_middle(void) {
@@ -247,6 +304,9 @@ static void test_probe_sel_at_middle(void) {
     s.probe_sel = 20;
     view_probe_draw(&s);
     ASSERT_EQ(s.probe_count, 40);
+    int y = row_of("aa:bb:cc:01:04:14");
+    ASSERT_EQ(tui_test_is_reverse(y, 1), 1);
+    ASSERT_EQ(tui_test_is_reverse(y == 3 ? 4 : 3, 1), 0);
 }
 
 static void test_probe_sel_at_bottom(void) {
@@ -261,6 +321,9 @@ static void test_probe_sel_at_bottom(void) {
     s.probe_sel = 39;
     view_probe_draw(&s);
     ASSERT_EQ(s.probe_count, 40);
+    int y = row_of("aa:bb:cc:02:07:27");
+    ASSERT_EQ(tui_test_is_reverse(y, 1), 1);
+    ASSERT_EQ(tui_test_is_reverse(y == 3 ? 4 : 3, 1), 0);
 }
 
 /* ── Key handler tests ───────────────────────────────────── */
@@ -340,7 +403,9 @@ static void test_probe_monitor_scenario_draw(void) {
     ASSERT_EQ(s.probe_count, 8);
     ASSERT(s.probe_iface[0] != '\0');
     view_probe_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Probe clients: 8");
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:07"), "TargetSSID");
+    ASSERT_LINE_HAS(row_of("aa:bb:cc:dd:ee:08"), "IoT_Device");
 }
 
 static void test_probe_monitor_scenario_iface(void) {
@@ -430,6 +495,7 @@ void run_probe_tests(void) {
     TEST_SUITE("probe draw");
     RUN_TEST(test_probe_draw_empty_no_crash);
     RUN_TEST(test_probe_draw_no_iface_message);
+    RUN_TEST(test_probe_draw_listening_message);
     RUN_TEST(test_probe_draw_with_clients);
     RUN_TEST(test_probe_draw_wildcard_ssid);
 
