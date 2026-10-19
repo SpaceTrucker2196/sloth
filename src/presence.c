@@ -1,6 +1,7 @@
 /* Presence classification. Contract and reasoning in presence.h (#53). */
 
 #include "presence.h"
+#include "tune.h"
 
 /* Copy the ring's live samples into chronological order.
  *
@@ -36,7 +37,7 @@ static int ordered_samples(const rssi_ring_t *ring, time_t now,
 int presence_has_transit_shape(const rssi_ring_t *ring, time_t now) {
     int8_t s[RSSI_WIN_SAMPLES];
     int n = ordered_samples(ring, now, s, RSSI_WIN_SAMPLES);
-    if (n < PRESENCE_MIN_SAMPLES) return 0;
+    if (n < (int)tune_val(TUNE_PRESENCE_MIN_SAMPLES)) return 0;
 
     /* Strongest sample is the closest approach. RSSI is negative, so
      * "strongest" is the greatest value. */
@@ -64,7 +65,8 @@ int presence_has_transit_shape(const rssi_ring_t *ring, time_t now) {
 
     int rise = s[peak] - before;
     int fall = s[peak] - after;
-    return rise >= PRESENCE_SWING_DBM && fall >= PRESENCE_SWING_DBM;
+    const int swing = (int)tune_val(TUNE_PRESENCE_SWING_DBM);
+    return rise >= swing && fall >= swing;
 }
 
 presence_class_t presence_classify(const rssi_ring_t *ring,
@@ -76,12 +78,12 @@ presence_class_t presence_classify(const rssi_ring_t *ring,
     /* Transit is the strong claim and is checked first, because a
      * device that demonstrably passed by should not be reported as a
      * visitor merely for having been audible either side of the pass. */
-    if (dwell <= PRESENCE_TRANSIENT_MAX_S &&
+    if (dwell <= tune_val(TUNE_PRESENCE_TRANSIENT_MAX_S) &&
         presence_has_transit_shape(ring, now))
         return PRESENCE_TRANSIENT;
 
-    if (dwell >= PRESENCE_RESIDENT_MIN_S) return PRESENCE_RESIDENT;
-    if (dwell >= PRESENCE_VISITOR_MIN_S)  return PRESENCE_VISITOR;
+    if (dwell >= tune_val(TUNE_PRESENCE_RESIDENT_MIN_S)) return PRESENCE_RESIDENT;
+    if (dwell >= tune_val(TUNE_PRESENCE_VISITOR_MIN_S))  return PRESENCE_VISITOR;
 
     /* Short dwell with no transit evidence. It may be a device that
      * just arrived, or one heard once while the radio was hopping —

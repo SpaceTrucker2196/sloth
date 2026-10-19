@@ -83,6 +83,53 @@ typedef enum {
        Neither is a detector threshold. See the rows in tune.c. */
     TUNE_SOCKET_MAX_PER_PEER,
     TUNE_SOCKET_IDLE_SECS,
+    /* #120: the five runtime flags that parsed with atoi() or a private
+       strtol, now aliases onto these rows so the flag and --tune share
+       one validation and both reach `tuned`. Retention and cadence, not
+       detector thresholds — see the rows in tune.c. */
+    TUNE_CORRELATE_RETAIN_SECS,
+    TUNE_HANDSHAKE_RETENTION_DAYS,
+    TUNE_DB_INTERVAL_SECS,
+    TUNE_DB_RETAIN_DAYS,
+    TUNE_DB_MAX_MB,
+    /* #120: the compile-time detector thresholds that were still
+       #defines outside this registry. The #define stays as the shipped
+       default (tune.c reads it); the use site reads the knob. */
+    TUNE_SCAN_PORT_THRESH,
+    TUNE_DEAUTH_FLOOD_THRESH,
+    TUNE_DEAUTH_FLOOD_WINDOW_S,
+    TUNE_BEACON_FLOOD_THRESH,
+    TUNE_BEACON_FLOOD_WINDOW_S,
+    TUNE_AUTH_FLOOD_THRESH,
+    TUNE_AUTH_FLOOD_WINDOW_S,
+    TUNE_ASSOC_FLOOD_THRESH,
+    TUNE_ASSOC_FLOOD_WINDOW_S,
+    TUNE_PROBE_FLOOD_FRAMES,
+    TUNE_PROBE_FLOOD_WINDOW_S,
+    TUNE_BTM_ABUSE_THRESH,
+    TUNE_BTM_ABUSE_WINDOW_S,
+    TUNE_SAQ_FLOOD_THRESH,
+    TUNE_SAQ_FLOOD_WINDOW_S,
+    TUNE_RTS_FLOOD_RATE,
+    TUNE_RTS_FLOOD_SUSTAIN_S,
+    TUNE_BD_MIN_SAMPLES,
+    TUNE_BD_MIN_INTERVAL_S,
+    TUNE_BD_MAX_JITTER_PCT,
+    TUNE_BD_MIN_SAMPLES_V2,
+    TUNE_BD_MIN_CONCENTRATION_PCT,
+    TUNE_QUEUE_EVICT_WINDOW_MS,
+    TUNE_QUEUE_EVICT_MIN_FRAMES,
+    TUNE_QUEUE_EVICT_REPORT_SECS,
+    TUNE_TRANSIT_GAP_SECS,
+    TUNE_TRANSIT_WINDOW_SECS,
+    TUNE_TRANSIT_RECUR_THRESH,
+    TUNE_PRESENCE_SWING_DBM,
+    TUNE_PRESENCE_TRANSIENT_MAX_S,
+    TUNE_PRESENCE_VISITOR_MIN_S,
+    TUNE_PRESENCE_RESIDENT_MIN_S,
+    TUNE_PRESENCE_MIN_SAMPLES,
+    TUNE_SEQNUM_CORR_SEQ_WINDOW,
+    TUNE_SEQNUM_CORR_DT_MAX_S,
     TUNE_COUNT
 } tune_id_t;
 
@@ -114,6 +161,14 @@ void tune_print_list(FILE *out);
 /* Comma-joined "name=value" for the knobs off default, "" when none.
    Truncates cleanly at n. Feeds sensor_health's `tuned`. */
 void tune_format_non_default(char *buf, size_t n);
+
+/* Parse `value` strictly and set knob `id` — the --tune validation for
+   a flag that aliases one row (#120). Returns 0, or -1 with a reason in
+   err that names the knob (missing value, non-numeric, trailing
+   garbage, out of range); on -1 the previous value stands. This is what
+   replaced atoi() behind --correlate-retain, --db-* and --wps-*: "10x"
+   and "" are refused, not read as 10 and 0. */
+int tune_set_value(tune_id_t id, const char *value, char *err, size_t errsz);
 
 /* Set by id, bypassing name lookup. Returns 1 when accepted, 0 when out
    of range and the previous value stands — the 1/0 shape the

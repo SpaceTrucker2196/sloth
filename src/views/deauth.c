@@ -5,6 +5,7 @@
 #include "tui.h"
 #include "views/deauth.h"
 #include "deauth_snoop.h"
+#include "tune.h"
 
 #define DEAUTH_PAGE 30
 
@@ -101,7 +102,8 @@ void view_deauth_draw(const sloth_state_t *s) {
             mac_fmt(bss, v->bssid);
             TPRINT(" -- %s in %s: %d frames, peak %d/%ds",
                    is_broadcast(v->victim) ? "BROADCAST" : vic, bss,
-                   v->frames, v->peak_win, DEAUTH_FLOOD_WIN_SECS);
+                   v->frames, v->peak_win,
+                   (int)tune_val(TUNE_DEAUTH_FLOOD_WINDOW_S));
             break;  /* show first flooded victim only */
         }
         TPRINT("\n");
@@ -231,6 +233,9 @@ static void draw_btm_section(const sloth_state_t *s, int rows) {
     time_t now = time(NULL);
     int shown = rows - 3;
     if (shown > s->btm_steer_count) shown = s->btm_steer_count;
+    /* The same knob rule_btm_abuse fires on (#120), so the heat that
+     * marks a row as forcing and the alert cannot disagree. */
+    const int btm_thresh = (int)tune_val(TUNE_BTM_ABUSE_THRESH);
     for (int i = 0; i < shown; i++) {
         const btm_steer_t *b = &s->btm_steers[i];
 
@@ -248,7 +253,7 @@ static void draw_btm_section(const sloth_state_t *s, int rows) {
 
         /* Heat tracks the forcing count, not the total: a chatty AP
          * doing legitimate steering should not read as an attack. */
-        if (b->imminent_count >= BTM_ABUSE_THRESH) tui_heat(1.0);
+        if (b->imminent_count >= btm_thresh)       tui_heat(1.0);
         else if (b->imminent_count)                tui_heat(0.6);
         else                                       tui_normal();
         TPRINT(" %-17.17s", ap);
@@ -256,7 +261,7 @@ static void draw_btm_section(const sloth_state_t *s, int rows) {
         TPRINT("  %-17.17s", sta);
         tui_normal();
         TPRINT("  %5d", b->req_count);
-        if (b->imminent_count >= BTM_ABUSE_THRESH) tui_heat(1.0);
+        if (b->imminent_count >= btm_thresh)       tui_heat(1.0);
         else if (b->imminent_count)                tui_heat(0.6);
         else                                       tui_dim();
         TPRINT("  %5d", b->imminent_count);

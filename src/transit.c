@@ -4,6 +4,7 @@
 
 #include "transit.h"
 #include "mle.h"
+#include "tune.h"
 
 static transit_device_t g_dev[MAX_TRANSIT_DEVICES];
 static int              g_count;
@@ -51,7 +52,7 @@ void transit_observe(const uint8_t mac[6], time_t ts, int8_t peak_rssi) {
         time_t last = d->pass_ts[d->pass_n - 1];
         long gap = (long)(ts - last);
         if (gap < 0) gap = -gap;
-        if (gap < TRANSIT_GAP_SECS) return;
+        if (gap < tune_val(TUNE_TRANSIT_GAP_SECS)) return;
     }
 
     if (d->pass_n < MAX_TRANSIT_PASSES) {
@@ -87,10 +88,11 @@ void transit_snapshot(sloth_state_t *s, time_t now) {
     /* Drop devices whose most recent pass has left the window. The
      * table is a live picture, not an archive — the durable record is
      * the SQLite sink. */
+    const long window = tune_val(TUNE_TRANSIT_WINDOW_SECS);
     int i = 0;
     while (i < g_count) {
         long age = (long)(now - g_dev[i].last_seen);
-        if (age > TRANSIT_WINDOW_SECS)
+        if (age > window)
             g_dev[i] = g_dev[--g_count];
         else
             i++;

@@ -5,6 +5,7 @@
 #include "scan.h"
 #include "views/conns.h"
 #include "runner.h"
+#include "tune.h"
 
 static void make_state(sloth_state_t *s) {
     memset(s, 0, sizeof(*s));
@@ -321,6 +322,30 @@ static void test_draw_with_banner(void) {
     view_conns_draw(&s);
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void test_scan_port_threshold_is_tunable(void) {
+    tune_reset();
+    sloth_state_t s; make_state(&s);
+    for (int p = 1024; p < 1029; p++)          /* 5 ports; default 8 */
+        add_tcp_conn(&s, "198.51.100.9", (uint16_t)p);
+    scan_update(&s);
+    ASSERT_EQ(scan_is_flagged(&s, "198.51.100.9"), 0);
+    char err[160];
+    ASSERT_EQ(tune_set("scan.port_thresh=5", err, sizeof(err)), 0);
+    make_state(&s);
+    for (int p = 1024; p < 1029; p++)
+        add_tcp_conn(&s, "198.51.100.9", (uint16_t)p);
+    scan_update(&s);
+    ASSERT(scan_is_flagged(&s, "198.51.100.9") >= 5);
+    tune_reset();
+}
+
 void run_scan_tests(void) {
     TEST_SUITE("scan");
     RUN_TEST(test_below_threshold_not_flagged);
@@ -350,4 +375,5 @@ void run_scan_tests(void) {
     RUN_TEST(test_no_listener_no_scan);
     RUN_TEST(test_draw_no_scan);
     RUN_TEST(test_draw_with_banner);
+    RUN_TEST(test_scan_port_threshold_is_tunable);
 }

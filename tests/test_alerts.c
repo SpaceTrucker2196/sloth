@@ -32,6 +32,8 @@
 #include "pm_forge.h"
 #include "queue_evict.h"
 #include "eap_parse.h"
+#include "ctrl_frames.h"
+#include "tune.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -9572,6 +9574,333 @@ static void test_tpc_absent_detail_names_the_country_when_known(void) {
     ownership_clear();
 }
 
+/* ── #120: the remaining thresholds, read through --tune ─────────
+ *
+ * One test per migrated knob. Each seeds a count (or a spread) that
+ * the shipped default does NOT fire on, asserts that, moves the knob
+ * past the seeded value, and asserts the rule now fires. The first
+ * half is what makes the second mean anything: a rule that fired
+ * either way would pass the second assertion with the knob unread.
+ *
+ * The mutation each was seen to fail under: the use site reading the
+ * header #define instead of tune_val() (the knob moves, the rule does
+ * not). */
+
+static time_t g_t120_wall;
+static time_t t120_wall(void) { return g_t120_wall; }
+
+/* alerts_update() at a chosen evidence-clock second. */
+static void t120_update_at(sloth_state_t *s, time_t when) {
+    g_t120_wall = when;
+    sloth_clock_test_set(NULL, t120_wall);
+    alerts_update(s);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void t120_set(const char *spec) {
+    char err[160] = "";
+    ASSERT_EQ(tune_set(spec, err, sizeof(err)), 0);
+}
+
+static void test_beacon_flood_threshold_is_tunable(void) {
+    alerts_clear(); beacon_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < 10; i++) {          /* well under the default 40 */
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x12, 0x00, (uint8_t)i };
+        beacon_record(b, "Lab", -40, 6, "OPEN", 100, NULL);
+    }
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BEACON_FLOOD), -1);
+    t120_set("beacon.flood_thresh=8");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_BEACON_FLOOD) >= 0);
+    beacon_clear(); tune_reset();
+}
+
+static void test_beacon_flood_window_is_tunable(void) {
+    alerts_clear(); beacon_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    for (int i = 0; i < BEACON_FLOOD_THRESH + 5; i++) {
+        uint8_t b[6] = { 0x02, 0x00, 0x00, 0x13,
+                         (uint8_t)(i >> 8), (uint8_t)(i & 0xff) };
+        beacon_record(b, "Lab", -40, 6, "OPEN", 100, NULL);
+    }
+    /* beacon_record stamps the real clock; judge the burst 15 s later,
+       relative to that, never at an absolute second. */
+    time_t later = time(NULL) + 15;
+    t120_update_at(&s, later);              /* default window 10 s */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BEACON_FLOOD), -1);
+    t120_set("beacon.flood_window_s=30");
+    t120_update_at(&s, later);
+    int idx = find_alert(&s, ALERT_TYPE_BEACON_FLOOD);
+    ASSERT(idx >= 0);
+    /* The detail reports the window the rule actually used. */
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "in 30s") != NULL);
+    beacon_clear(); tune_reset();
+}
+
+static void test_auth_flood_threshold_is_tunable(void) {
+    alerts_clear(); auth_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x31 };
+    time_t now = time(NULL);
+    for (int i = 0; i < 10; i++) auth_observe(ap, now);   /* default 30 */
+    t120_update_at(&s, now);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_AUTH_FLOOD), -1);
+    t120_set("auth.flood_thresh=10");
+    t120_update_at(&s, now);
+    ASSERT(find_alert(&s, ALERT_TYPE_AUTH_FLOOD) >= 0);
+    auth_clear(); tune_reset();
+}
+
+static void test_auth_flood_window_is_tunable(void) {
+    alerts_clear(); auth_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x32 };
+    time_t t0 = time(NULL);
+    for (int i = 0; i < AUTH_FLOOD_THRESH + 5; i++) auth_observe(ap, t0);
+    t120_update_at(&s, t0 + 20);            /* default window 5 s */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_AUTH_FLOOD), -1);
+    t120_set("auth.flood_window_s=30");
+    t120_update_at(&s, t0 + 20);
+    int idx = find_alert(&s, ALERT_TYPE_AUTH_FLOOD);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "in 30s") != NULL);
+    auth_clear(); tune_reset();
+}
+
+/* assoc_request_observe() stamps sloth_wall(), so the seam pins it. */
+static void t120_feed_assoc_at(const uint8_t ap[6], int n, time_t t) {
+    g_t120_wall = t;
+    sloth_clock_test_set(NULL, t120_wall);
+    feed_assoc_reqs(ap, n, 4);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_assoc_flood_threshold_is_tunable(void) {
+    alerts_clear(); assoc_flood_clear(); assoc_request_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x33 };
+    time_t t0 = time(NULL);
+    t120_feed_assoc_at(ap, 8, t0);          /* default 21 */
+    t120_update_at(&s, t0);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ASSOC_FLOOD), -1);
+    t120_set("assoc.flood_thresh=8");
+    t120_update_at(&s, t0);
+    ASSERT(find_alert(&s, ALERT_TYPE_ASSOC_FLOOD) >= 0);
+    assoc_flood_clear(); assoc_request_clear(); tune_reset();
+}
+
+static void test_assoc_flood_window_is_tunable(void) {
+    alerts_clear(); assoc_flood_clear(); assoc_request_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t ap[6] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x34 };
+    time_t t0 = time(NULL);
+    t120_feed_assoc_at(ap, ASSOC_FLOOD_THRESH + 5, t0);
+    t120_update_at(&s, t0 + 120);           /* default window 60 s */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_ASSOC_FLOOD), -1);
+    t120_set("assoc.flood_window_s=300");
+    t120_update_at(&s, t0 + 120);
+    int idx = find_alert(&s, ALERT_TYPE_ASSOC_FLOOD);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT(strstr(s.alerts[idx].detail, "in 300s") != NULL);
+    assoc_flood_clear(); assoc_request_clear(); tune_reset();
+}
+
+static void test_btm_abuse_threshold_is_tunable(void) {
+    alerts_clear(); btm_clear(); ownership_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, 2, 1, NULL);   /* default 4 */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BTM_ABUSE), -1);
+    t120_set("btm.abuse_thresh=2");
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_BTM_ABUSE) >= 0);
+    btm_clear(); tune_reset();
+}
+
+static void test_btm_abuse_window_is_tunable(void) {
+    alerts_clear(); btm_clear(); ownership_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    add_beacon_ap(&s, BTM_AP, "corp-wifi");
+    feed_btm_reqs(BTM_AP, BTM_STA, BTM_ABUSE_THRESH + 1, 1, NULL);
+    time_t later = time(NULL) + 120;        /* default window 60 s */
+    t120_update_at(&s, later);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_BTM_ABUSE), -1);
+    t120_set("btm.abuse_window_s=600");
+    t120_update_at(&s, later);
+    ASSERT(find_alert(&s, ALERT_TYPE_BTM_ABUSE) >= 0);
+    btm_clear(); tune_reset();
+}
+
+static void test_sa_query_flood_threshold_is_tunable(void) {
+    alerts_clear(); saq_clear(); tune_reset();
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x11,0x22,0x35};
+    uint8_t sta[6]   = {0x12,0x22,0x33,0x44,0x55,0x35};
+    uint8_t f[64];
+    time_t now = time(NULL);
+    for (int i = 0; i < 4; i++) {           /* default 12 */
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta);
+        action_observe(f, n, now);
+    }
+    sloth_state_t s; seed_state(&s);
+    t120_update_at(&s, now);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD), -1);
+    t120_set("saq.flood_thresh=4");
+    t120_update_at(&s, now);
+    ASSERT(find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD) >= 0);
+    saq_clear(); tune_reset();
+}
+
+static void test_sa_query_flood_window_is_tunable(void) {
+    alerts_clear(); saq_clear(); tune_reset();
+    uint8_t bssid[6] = {0xaa,0xbb,0xcc,0x11,0x22,0x36};
+    uint8_t sta[6]   = {0x12,0x22,0x33,0x44,0x55,0x36};
+    uint8_t f[64];
+    time_t t0 = time(NULL);
+    for (int i = 0; i < SAQ_FLOOD_THRESH; i++) {
+        int n = aq_frame(f, ACTION_CAT_SA_QUERY, bssid, sta);
+        action_observe(f, n, t0);
+    }
+    sloth_state_t s; seed_state(&s);
+    t120_update_at(&s, t0 + 30);            /* default window 10 s */
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD), -1);
+    t120_set("saq.flood_window_s=60");
+    t120_update_at(&s, t0 + 30);
+    ASSERT(find_alert(&s, ALERT_TYPE_SA_QUERY_FLOOD) >= 0);
+    saq_clear(); tune_reset();
+}
+
+/* RTS per IEEE 802.11-2020 §9.3.1.2: FC(2) Duration(2) RA(6) TA(6). */
+static void t120_feed_rts(const uint8_t ta[6], int n, time_t start, time_t end) {
+    static const uint8_t ra[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x36 };
+    uint8_t f[16];
+    memset(f, 0, sizeof(f));
+    f[0] = (uint8_t)((CTRL_SUB_RTS << 4) | (1 << 2));   /* type 1 */
+    f[2] = 0x2c; f[3] = 0x01;                           /* NAV 300 us */
+    memcpy(f + 4,  ra, 6);
+    memcpy(f + 10, ta, 6);
+    for (int i = 0; i < n; i++) {
+        time_t t = (n == 1) ? start
+                            : start + (time_t)((end - start) * i / (n - 1));
+        ctrl_observe(f, (int)sizeof(f), 6, t);
+    }
+}
+
+static void test_rts_flood_rate_is_tunable(void) {
+    alerts_clear(); ctrl_clear(); tune_reset();
+    static const uint8_t ta[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x37 };
+    t120_feed_rts(ta, 50 * 6, 1000, 1006);  /* 50/s; default 500/s */
+    sloth_state_t s; seed_state(&s);
+    t120_update_at(&s, 1006);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RTS_FLOOD), -1);
+    t120_set("rts.flood_rate=40");
+    t120_update_at(&s, 1006);
+    ASSERT(find_alert(&s, ALERT_TYPE_RTS_FLOOD) >= 0);
+    ctrl_clear(); tune_reset();
+}
+
+static void test_rts_flood_sustain_is_tunable(void) {
+    alerts_clear(); ctrl_clear(); tune_reset();
+    static const uint8_t ta[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x38 };
+    /* Twice the rate, but held 3 s against the 5 s sustain floor. */
+    t120_feed_rts(ta, RTS_FLOOD_RATE * 2 * 3, 1000, 1003);
+    sloth_state_t s; seed_state(&s);
+    t120_update_at(&s, 1003);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RTS_FLOOD), -1);
+    t120_set("rts.flood_sustain_s=2");
+    t120_update_at(&s, 1003);
+    ASSERT(find_alert(&s, ALERT_TYPE_RTS_FLOOD) >= 0);
+    ctrl_clear(); tune_reset();
+}
+
+/* The probe window detector runs when a frame is noted, so the knob is
+ * moved before the frames are seen, as it is in a real run (--tune is
+ * parsed before capture starts). */
+static void test_probe_flood_frames_is_tunable(void) {
+    alerts_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x39};
+    seed_probe_client(&s, mac, 12, 4);      /* default 30 per 5 s */
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+    t120_set("probe.flood_frames=10");
+    seed_state(&s);
+    seed_probe_client(&s, mac, 12, 4);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_PROBE_FLOOD) >= 0);
+    tune_reset();
+}
+
+static void test_probe_flood_window_is_tunable(void) {
+    alerts_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x3a};
+    /* 40 probes over 20 s: 2/s, so no 5 s window holds 30 of them. */
+    seed_probe_client(&s, mac, 40, 20);
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_PROBE_FLOOD), -1);
+    t120_set("probe.flood_window_s=30");
+    seed_state(&s);
+    seed_probe_client(&s, mac, 40, 20);
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_PROBE_FLOOD) >= 0);
+    tune_reset();
+}
+
+static void test_recurring_transit_threshold_is_tunable(void) {
+    alerts_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x3b};
+    time_t now = time(NULL);
+    seed_transit(&s, mac, 2, now);          /* default 3 */
+    t120_update_at(&s, now);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
+    t120_set("transit.recur_thresh=2");
+    t120_update_at(&s, now);
+    ASSERT(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT) >= 0);
+    tune_reset();
+}
+
+static void test_recurring_transit_window_is_tunable(void) {
+    alerts_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0x3c};
+    time_t now = time(NULL);
+    /* Three passes 90 min apart: the first is 3 h back, outside the
+       2 h default, so only two count. */
+    transit_device_t *d = &s.transits[s.transit_count++];
+    memset(d, 0, sizeof(*d));
+    memcpy(d->mac, mac, 6);
+    for (int i = 0; i < 3; i++) d->pass_ts[d->pass_n++] = now - (2 - i) * 5400;
+    d->first_seen = d->pass_ts[0];
+    d->last_seen  = now;
+    d->best_rssi  = -44;
+    t120_update_at(&s, now);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT), -1);
+    t120_set("transit.window_secs=14400");
+    t120_update_at(&s, now);
+    ASSERT(find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT) >= 0);
+    tune_reset();
+}
+
+static void test_queue_evict_report_window_is_tunable(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); queue_evict_clear();
+    beacon_clear(); tune_reset();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x3d};
+    static const uint8_t sta[6]   = {0x02,0xa7,0x00,0x00,0x00,0x3d};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    qevict_seed_release(bssid, sta);
+    t120_update_at(&s, 1002 + QUEUE_EVICT_REPORT_SECS + 60);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_QUEUE_EVICT), -1);
+    t120_set("queue_evict.report_secs=3600");
+    t120_update_at(&s, 1002 + QUEUE_EVICT_REPORT_SECS + 60);
+    ASSERT(find_alert(&s, ALERT_TYPE_QUEUE_EVICT) >= 0);
+    alerts_clear(); queue_evict_clear(); tune_reset();
+}
+
 void run_alerts_tests(void) {
     TEST_SUITE("alerts rule firing");
     RUN_TEST(test_port_scan_fires);
@@ -10065,4 +10394,21 @@ void run_alerts_tests(void) {
     RUN_TEST(test_tpc_absent_quiet_with_no_first_seen);
     RUN_TEST(test_tpc_absent_is_one_alert_per_bssid);
     RUN_TEST(test_tpc_absent_detail_names_the_country_when_known);
+    RUN_TEST(test_beacon_flood_threshold_is_tunable);
+    RUN_TEST(test_beacon_flood_window_is_tunable);
+    RUN_TEST(test_auth_flood_threshold_is_tunable);
+    RUN_TEST(test_auth_flood_window_is_tunable);
+    RUN_TEST(test_assoc_flood_threshold_is_tunable);
+    RUN_TEST(test_assoc_flood_window_is_tunable);
+    RUN_TEST(test_btm_abuse_threshold_is_tunable);
+    RUN_TEST(test_btm_abuse_window_is_tunable);
+    RUN_TEST(test_sa_query_flood_threshold_is_tunable);
+    RUN_TEST(test_sa_query_flood_window_is_tunable);
+    RUN_TEST(test_rts_flood_rate_is_tunable);
+    RUN_TEST(test_rts_flood_sustain_is_tunable);
+    RUN_TEST(test_probe_flood_frames_is_tunable);
+    RUN_TEST(test_probe_flood_window_is_tunable);
+    RUN_TEST(test_recurring_transit_threshold_is_tunable);
+    RUN_TEST(test_recurring_transit_window_is_tunable);
+    RUN_TEST(test_queue_evict_report_window_is_tunable);
 }

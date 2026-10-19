@@ -8,6 +8,7 @@
 #include "sloth.h"
 #include "transit.h"
 #include "mle.h"
+#include "tune.h"
 
 #define T0 1700000000L
 #define MIN 60L
@@ -295,6 +296,43 @@ static void test_canonical_falls_back_to_seqnum_without_an_mle(void) {
     mle_clear();
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void test_transit_gap_is_tunable(void) {
+    transit_clear(); tune_reset();
+    transit_observe(MAC_A, T0, -50);
+    transit_observe(MAC_A, T0 + 120, -50);       /* 2 min; default gap 5 */
+    ASSERT_EQ(transit_pass_count(MAC_A, T0 + 120, TRANSIT_WINDOW_SECS), 1);
+    char err[160];
+    ASSERT_EQ(tune_set("transit.gap_secs=60", err, sizeof(err)), 0);
+    transit_clear();
+    transit_observe(MAC_A, T0, -50);
+    transit_observe(MAC_A, T0 + 120, -50);
+    ASSERT_EQ(transit_pass_count(MAC_A, T0 + 120, TRANSIT_WINDOW_SECS), 2);
+    tune_reset();
+}
+
+/* The snapshot drops a device whose last pass left the window. */
+static void test_transit_snapshot_window_is_tunable(void) {
+    transit_clear(); tune_reset();
+    transit_observe(MAC_A, T0, -50);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    transit_snapshot(&s, T0 + 3 * 3600);         /* 3 h; default 2 h */
+    ASSERT_EQ(s.transit_count, 0);
+    char err[160];
+    ASSERT_EQ(tune_set("transit.window_secs=14400", err, sizeof(err)), 0);
+    transit_observe(MAC_A, T0, -50);
+    memset(&s, 0, sizeof(s));
+    transit_snapshot(&s, T0 + 3 * 3600);
+    ASSERT_EQ(s.transit_count, 1);
+    tune_reset();
+}
+
 void run_transit_tests(void) {
     TEST_SUITE("transit: pass coalescing");
     RUN_TEST(test_burst_of_observations_is_one_pass);
@@ -325,4 +363,6 @@ void run_transit_tests(void) {
     TEST_SUITE("MLO canonical identity (#67)");
     RUN_TEST(test_canonical_prefers_the_mld_assertion);
     RUN_TEST(test_canonical_falls_back_to_seqnum_without_an_mle);
+    RUN_TEST(test_transit_gap_is_tunable);
+    RUN_TEST(test_transit_snapshot_window_is_tunable);
 }

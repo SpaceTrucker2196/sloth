@@ -5,8 +5,12 @@
 #include "deauth_snoop.h"
 #include "flood_window.h"
 #include "dot11_data.h"
+#include "tune.h"
 
-#define WIN_MS  ((uint32_t)DEAUTH_FLOOD_WIN_SECS  * 1000u)
+/* deauth.flood_thresh / deauth.flood_window_s (#120). Read per frame:
+ * tune_val() is an array index. */
+#define WIN_MS  ((uint32_t)tune_val(TUNE_DEAUTH_FLOOD_WINDOW_S) * 1000u)
+#define THRESH  ((int)tune_val(TUNE_DEAUTH_FLOOD_THRESH))
 #define HOLD_MS ((uint32_t)DEAUTH_FLOOD_HOLD_SECS * 1000u)
 #define AGE_MS  ((uint64_t)DEAUTH_AGE_SECS        * 1000u)
 
@@ -191,7 +195,7 @@ void deauth_record(const deauth_frame_t *f)
 
     if (dup) { pthread_mutex_unlock(&g_mu); return; }
 
-    if (flood_window_note(&o->win, now_ms, DEAUTH_FLOOD_THRESH, WIN_MS))
+    if (flood_window_note(&o->win, now_ms, THRESH, WIN_MS))
         e->flood_last = wall;
 
     vic_t *v = vic_find_or_add(f->bssid, victim_of(f->src, f->dst, f->bssid), wall);
@@ -202,7 +206,7 @@ void deauth_record(const deauth_frame_t *f)
     if (f->reason_valid) { v->v.reason = f->reason; v->v.reason_valid = 1; }
     v->v.last_seen = wall;
     v->last_ms     = now_ms;
-    if (flood_window_note(&v->win, now_ms, DEAUTH_FLOOD_THRESH, WIN_MS))
+    if (flood_window_note(&v->win, now_ms, THRESH, WIN_MS))
         v->v.flood_last = wall;
     int in_win = flood_window_count(&v->win, now_ms, WIN_MS);
     if (in_win > v->v.peak_win) v->v.peak_win = in_win;

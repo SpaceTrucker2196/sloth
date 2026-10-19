@@ -471,6 +471,10 @@ static void print_usage(const char *argv0) {
             "                     sensor_health (tuned) and the health\n"
             "                     strip, so a detuned sensor and a quiet\n"
             "                     one do not read alike.\n"
+            "                     --correlate-retain, --handshake-retention,\n"
+            "                     --db-interval-secs, --db-retain-days,\n"
+            "                     --db-max-mb and --wps-* are aliases for\n"
+            "                     knobs and are validated the same way.\n"
             "  --tune-list        print every knob with default, current\n"
             "                     value and unit, then exit.\n"
             "  --allow-active     opt in to the two active behaviours sloth has:\n"
@@ -672,6 +676,17 @@ static void print_usage(const char *argv0) {
             argv0);
 }
 
+/* A flag that is an alias for one --tune row (#120). The value goes
+ * through the registry's own strict parse, so "--db-max-mb 5x" exits 2
+ * with the knob named instead of running with atoi()'s 5, and the moved
+ * value reaches sensor_health's `tuned` the way --tune's does. */
+static int tune_alias(const char *flag, tune_id_t id, const char *value) {
+    char terr[160];
+    if (tune_set_value(id, value, terr, sizeof(terr)) == 0) return 1;
+    fprintf(stderr, "sloth: %s %s (see --tune-list)\n", flag, terr);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
@@ -707,6 +722,11 @@ int main(int argc, char **argv) {
         const char *nc = getenv("NO_COLOR");
         if (nc && nc[0]) tui_set_color(0);
     }
+    /* Seed the --tune registry here, on the main thread, before any
+     * capture thread can be its first reader. Since #120 the capture
+     * path reads knobs per frame (deauth, probe, SA Query, queue
+     * eviction), and the registry seeds lazily on first read. */
+    (void)tune_non_default();
     for (int i = 1; i < argc; i++) {
         if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--out")) && i + 1 < argc) {
             jsonl_path = argv[++i];
@@ -717,17 +737,11 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--collect-handshakes")) {
             collect_hs = 1;
         } else if (!strcmp(argv[i], "--handshake-retention") && i + 1 < argc) {
-            char *endp = NULL;
-            long v = strtol(argv[++i], &endp, 10);
-            if (endp == argv[i] || *endp != '\0' || v < 0 ||
-                v > EAPOL_MAX_RETENTION_DAYS ||
-                eapol_set_retention_days((int)v) != 0) {
-                fprintf(stderr,
-                        "bad --handshake-retention %s (expected whole days "
-                        "0..%d; 0 = keep forever)\n",
-                        argv[i], EAPOL_MAX_RETENTION_DAYS);
+            /* Whole days 0..EAPOL_MAX_RETENTION_DAYS, 0 = keep forever:
+             * the bounds of the handshake.retention_days row. */
+            if (!tune_alias("--handshake-retention",
+                            TUNE_HANDSHAKE_RETENTION_DAYS, argv[++i]))
                 return 2;
-            }
         } else if (!strcmp(argv[i], "--data-socket")) {
             /* Optional value. An explicit spec wins if the next token
              * doesn't look like another flag. Bare, it means the unix:
@@ -808,41 +822,40 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--no-correlate")) {
             seqnum_corr_set_enabled(0);
         } else if (!strcmp(argv[i], "--correlate-retain") && i + 1 < argc) {
-            int secs = atoi(argv[++i]);
-            if (secs < 1) {
-                fprintf(stderr, "sloth: --correlate-retain needs a positive "
-                                "number of seconds\n");
+            if (!tune_alias("--correlate-retain",
+                            TUNE_CORRELATE_RETAIN_SECS, argv[++i]))
                 return 2;
-            }
-            seqnum_corr_set_retain_secs(secs);
         } else if (!strcmp(argv[i], "--wps-pin-brute-cycles") && i + 1 < argc) {
-            if (!alerts_set_wps_pin_brute_cycles(atoi(argv[++i]))) {
-                fprintf(stderr, "sloth: --wps-pin-brute-cycles needs a "
-                                "positive cycle count\n");
+            /* Already registry aliases since #82's reconciliation; #120
+             * only swaps their atoi() for the registry's parse, so "5x"
+             * is refused rather than read as 5. */
+            if (!tune_alias("--wps-pin-brute-cycles",
+                            TUNE_WPS_PIN_BRUTE_CYCLES, argv[++i]))
                 return 2;
-            }
         } else if (!strcmp(argv[i], "--wps-lockout-cycles") && i + 1 < argc) {
-            if (!alerts_set_wps_lockout_cycles(atoi(argv[++i]))) {
-                fprintf(stderr, "sloth: --wps-lockout-cycles needs a "
-                                "positive cycle count\n");
+            if (!tune_alias("--wps-lockout-cycles",
+                            TUNE_WPS_LOCKOUT_CYCLES, argv[++i]))
                 return 2;
-            }
         } else if (!strcmp(argv[i], "--wps-pbc-concurrent") && i + 1 < argc) {
-            if (!alerts_set_wps_pbc_concurrent(atoi(argv[++i]))) {
-                fprintf(stderr, "sloth: --wps-pbc-concurrent needs a "
-                                "positive session count\n");
+            if (!tune_alias("--wps-pbc-concurrent",
+                            TUNE_WPS_PBC_CONCURRENT, argv[++i]))
                 return 2;
-            }
         } else if (!strcmp(argv[i], "--no-discovery")) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
             db_path = argv[++i];
         } else if (!strcmp(argv[i], "--db-interval-secs") && i + 1 < argc) {
-            db_set_interval(atoi(argv[++i]));
+            /* atoi() before #120: "abc" read as 0, which db_set_* turned
+             * into the default without a word. Now a startup error. */
+            if (!tune_alias("--db-interval-secs",
+                            TUNE_DB_INTERVAL_SECS, argv[++i]))
+                return 2;
         } else if (!strcmp(argv[i], "--db-retain-days") && i + 1 < argc) {
-            db_set_retain_days(atoi(argv[++i]));
+            if (!tune_alias("--db-retain-days", TUNE_DB_RETAIN_DAYS, argv[++i]))
+                return 2;
         } else if (!strcmp(argv[i], "--db-max-mb") && i + 1 < argc) {
-            db_set_max_mb(atoi(argv[++i]));
+            if (!tune_alias("--db-max-mb", TUNE_DB_MAX_MB, argv[++i]))
+                return 2;
         } else if (!strcmp(argv[i], "--with-research") && i + 1 < argc) {
             /* Additive by construction (#73): a corpus that is missing,
              * unreadable or carrying the wrong schema logs a warning

@@ -4,6 +4,7 @@
 
 #include "sloth.h"
 #include "scan.h"
+#include "tune.h"
 
 /* ── Routable-IP filter ──────────────────────────────────
    Skip RFC1918, loopback, link-local, and multicast — only
@@ -93,7 +94,7 @@ void scan_update(sloth_state_t *s) {
         }
         if (!dup && e->port_count < MAX_SCAN_PORTS) {
             e->ports[e->port_count++] = c->local_port;
-            if (e->port_count >= SCAN_PORT_THRESH)
+            if (e->port_count >= (int)tune_val(TUNE_SCAN_PORT_THRESH))
                 e->flagged = 1;
         }
     }

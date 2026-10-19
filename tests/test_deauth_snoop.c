@@ -10,6 +10,7 @@
 #include "deauth_snoop.h"
 #include "flood_window.h"
 #include "views/deauth.h"
+#include "tune.h"
 
 /*
  * Frames here are built byte by byte from IEEE 802.11-2020, never from
@@ -1186,6 +1187,52 @@ static void test_an_evicted_slot_passes_on_no_ids(void) {
     flood_test_set_clock(NULL, NULL);
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void test_deauth_flood_threshold_is_tunable(void) {
+    clock_reset(); deauth_clear(); tune_reset();
+    for (int i = 0; i < 3; i++)                 /* default 5 */
+        rec(SRC_A, BCAST, BSSID_A, 1, 12);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_flood_active, 0);
+    char err[160];
+    ASSERT_EQ(tune_set("deauth.flood_thresh=3", err, sizeof(err)), 0);
+    deauth_clear();
+    for (int i = 0; i < 3; i++)
+        rec(SRC_A, BCAST, BSSID_A, 1, 12);
+    snap(&s);
+    ASSERT_EQ(s.deauth_flood_active, 1);
+    tune_reset();
+    flood_test_set_clock(NULL, NULL);
+}
+
+static void test_deauth_flood_window_is_tunable(void) {
+    clock_reset(); deauth_clear(); tune_reset();
+    /* Six distinct frames 2 s apart: no 5 s window holds five. */
+    for (int i = 0; i < 6; i++) {
+        feed(12, 0, BCAST, SRC_A, BSSID_A, g_seq++, 1);
+        tick_ms(2000);
+    }
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_flood_active, 0);
+    char err[160];
+    ASSERT_EQ(tune_set("deauth.flood_window_s=12", err, sizeof(err)), 0);
+    deauth_clear();
+    for (int i = 0; i < 6; i++) {
+        feed(12, 0, BCAST, SRC_A, BSSID_A, g_seq++, 1);
+        tick_ms(2000);
+    }
+    snap(&s);
+    ASSERT_EQ(s.deauth_flood_active, 1);
+    tune_reset();
+    flood_test_set_clock(NULL, NULL);
+}
+
 void run_deauth_snoop_tests(void) {
     TEST_SUITE("deauth_snoop");
     RUN_TEST(test_parse_deauth);
@@ -1249,4 +1296,6 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_a_fresh_aggregate_inherits_no_ids);
     RUN_TEST(test_an_evicted_slot_passes_on_no_ids);
     flood_test_set_clock(NULL, NULL);
+    RUN_TEST(test_deauth_flood_threshold_is_tunable);
+    RUN_TEST(test_deauth_flood_window_is_tunable);
 }

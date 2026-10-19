@@ -53,7 +53,7 @@ single mode driven by flags.
 | `--pcap-dir` | `DIR` | off | On a critical alert with a known flow, write the matching packets to a fresh pcap under `DIR`. Dir `0700`, files `0600`. → [[pcap-export]] |
 | `--eapol-dir` | `DIR` | off | Append captured PMKIDs / 4-way handshakes to `DIR/eapol.22000` (hashcat 22000) **and** a per-handshake `DIR/<bssid>_<sta>.pcap`. **Crackable material** — strict perms, refused not repaired. **Requires `--collect-handshakes`**: without it this flag exits `2` and no directory is created. → [[wifi-sigint]] |
 | `--collect-handshakes` | — | **off** | Opt in to writing crackable material to disk. A PMKID or a paired M1+M2 supports offline password guessing, so exporting one is a separate decision from observing one. Gates the `.22000` lines and the per-handshake pcaps **only** — detection, alerting, the `[e]` view and the JSONL/DB records are unaffected. sloth never cracks anything itself (MISSION §2.2). → [[retention]] |
-| `--handshake-retention` | `DAYS` | `7` | Age-out window for the artifacts above. Swept at startup and once a day while running; artifacts last written before the window are deleted. `0` = keep forever. Whole-file granularity by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window. A failed delete is counted and shown in the `[e]` header, never silent. → [[retention]] |
+| `--handshake-retention` | `DAYS` | `7` | Age-out window for the artifacts above. Swept at startup and once a day while running; artifacts last written before the window are deleted. `0` = keep forever. Alias for `--tune handshake.retention_days` (#120). Whole-file granularity by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window. A failed delete is counted and shown in the `[e]` header, never silent. → [[retention]] |
 | `--report` | `FILE.md` | off | On exit, write a Markdown posture report (alerts by severity + MITRE technique, cleartext creds, high-risk devices). → [[posture-report]] |
 | `--report-json` | `FILE.json` | off | Same rollup, structured for SIEM diff. |
 
@@ -72,10 +72,41 @@ single mode driven by flags.
 | `--iface` | `NAME` | all | Restrict the stream to `NAME` (repeatable, max `MAX_IFACES`). Logical only — OS iface state untouched. |
 | `--monitor-only` | — | off | Restrict capture to the auto-discovered monitor interface. **Fail-closed**: exits non-zero if none found or it can't be enforced. |
 | `--hop` | — | off | Passive channel-hopping: retune sloth's own monitor interface across a 2.4/5 GHz list, dwelling on activity. One of two kernel-state writes. Needs monitor mode + `CAP_NET_ADMIN`. No frame transmitted. → [[monitor-mode]] |
-| `--tune NAME=VALUE` | name=value | — | Move one knob in the registry — a detector threshold, one of the three storage floors, one of the two per-alert-pcap export policy knobs (#96), or one of the two data-socket hygiene knobs (#135). **`socket.max_per_peer`** (default 4, 1..16) caps how many of the data socket's 16 client slots one peer may hold at once — a uid on `unix:` (`SO_PEERCRED`), an address on `tcp:`, and one shared capped bucket for any peer the kernel cannot identify; over the cap the connection is closed at accept and counted in `sensor_health.socket_peer_refused`. **`socket.idle_secs`** (default 900 = three JSONL heartbeats, 0 = never) closes a client that has made no progress for that long whatever its queue holds; the old 30 s stall rule only ran while bytes were queued. See [[data-socket-exposure]] §4.1. **`pcap.min_severity`** defaults to `2` (CRIT only), which is what `--help` has always claimed and the export never checked; `0` keeps every alert carrying a `match_ip`, the pre-#96 behaviour. **`pcap.key_cooldown_secs`** defaults to `3600`: the same alert key exports at most once an hour, because an alert evicted from the engine and re-fired is the same finding, not new evidence. `0` disables it. Together those two are the "full capture" escape — set both to 0 and nothing is filtered. `storage.min_free_pct` defaults to **5 and is ON**: sloth refuses a new `--pcap-dir` write when free inodes or free bytes fall under that share of the filesystem. `storage.min_free_mb` and `storage.min_free_inodes` are absolute overrides, `0` = none. The default is relative because an absolute one cannot suit two filesystems of different size — the floor that protects a 30M-inode host would refuse every write on a small one. Set `storage.min_free_pct=0` and leave the others at 0 for the pre-guard behaviour. See [[retention]]. **Repeatable.** An unknown name, a non-integer, or a value outside the knob's range **exits 2** — a threshold the operator believes they set but did not is worse than no knob, so a bad `--tune` never falls back to the default. Any knob off its default is reported in `sensor_health` (`tuned`, `tuned_count`) and as a fault-only `tuned N/M` token on the Interfaces health strip, so a detuned sensor and a quiet segment do not read alike (#82). |
+| `--tune NAME=VALUE` | name=value | — | Move one knob in the registry — a detector threshold, one of the three storage floors, one of the two per-alert-pcap export policy knobs (#96), or one of the two data-socket hygiene knobs (#135). **`socket.max_per_peer`** (default 4, 1..16) caps how many of the data socket's 16 client slots one peer may hold at once — a uid on `unix:` (`SO_PEERCRED`), an address on `tcp:`, and one shared capped bucket for any peer the kernel cannot identify; over the cap the connection is closed at accept and counted in `sensor_health.socket_peer_refused`. **`socket.idle_secs`** (default 900 = three JSONL heartbeats, 0 = never) closes a client that has made no progress for that long whatever its queue holds; the old 30 s stall rule only ran while bytes were queued. See [[data-socket-exposure]] §4.1. **`pcap.min_severity`** defaults to `2` (CRIT only), which is what `--help` has always claimed and the export never checked; `0` keeps every alert carrying a `match_ip`, the pre-#96 behaviour. **`pcap.key_cooldown_secs`** defaults to `3600`: the same alert key exports at most once an hour, because an alert evicted from the engine and re-fired is the same finding, not new evidence. `0` disables it. Together those two are the "full capture" escape — set both to 0 and nothing is filtered. `storage.min_free_pct` defaults to **5 and is ON**: sloth refuses a new `--pcap-dir` write when free inodes or free bytes fall under that share of the filesystem. `storage.min_free_mb` and `storage.min_free_inodes` are absolute overrides, `0` = none. The default is relative because an absolute one cannot suit two filesystems of different size — the floor that protects a 30M-inode host would refuse every write on a small one. Set `storage.min_free_pct=0` and leave the others at 0 for the pre-guard behaviour. See [[retention]]. **Repeatable.** An unknown name, a non-integer, or a value outside the knob's range **exits 2** — a threshold the operator believes they set but did not is worse than no knob, so a bad `--tune` never falls back to the default. Any knob off its default is reported in `sensor_health` (`tuned`, `tuned_count`) and as a fault-only `tuned N/M` token on the Interfaces health strip, so a detuned sensor and a quiet segment do not read alike (#82). Since #120 the registry also holds the detector thresholds that were still compile-time `#define`s — `scan.port_thresh`, `deauth.flood_thresh`/`flood_window_s`, `beacon.flood_*`, `auth.flood_*`, `assoc.flood_*`, `probe.flood_frames`/`flood_window_s`, `btm.abuse_*`, `saq.flood_*`, `rts.flood_rate`/`flood_sustain_s`, `bd.*` (beaconing; the two ratios as whole percent), `queue_evict.*`, `transit.*`, `presence.*`, `seqnum.corr_seq_window`/`corr_dt_max_s` — each defaulting to the value it had as a `#define`; where a count lives in a fixed ring, the knob's upper bound is the ring size, so a threshold cannot be raised past what the detector can hold. The table below lists them. |
 | `--tune-list` | — | — | Print every knob with its default, current value and unit, then exit 0. The registry is the contract: adding a tunable adds a row there, not a new flag — which is why the storage floors are knobs and not `--min-free-mb`. |
 | `--allow-active` | — | off | Opt in to the two active behaviours: (1) reverse-DNS PTR queries on cache miss; (2) nl80211 **passive** scan triggers (no SSID list, no probe transmitted). Prints one stderr line naming what it enabled; never silent. |
 | `--strict` | — | off | Lock: refuses any later attempt to enable active behaviour this run (`--strict --allow-active` exits non-zero). Suppresses the mDNS advert. **Refuses a routable `--data-socket` (exit 2), even with `--data-socket-allow-remote`** — loopback and `unix:` are unaffected (#84, 2026-10-06). Does **not** refuse `--hop`. Records operator intent where `ps(1)`/audit can see it. |
+
+#### Knobs added by #120
+
+Defaults are the shipped values; ranges are inclusive and a value outside one exits 2. `--tune-list` is authoritative.
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `correlate.retain_secs` | 300 | 1..604800 | `--correlate-retain` |
+| `handshake.retention_days` | 7 | 0..36500 | `--handshake-retention` (0 = forever) |
+| `db.interval_secs` | 1 | 1..86400 | `--db-interval-secs` |
+| `db.retain_days` | 30 | 1..36500 | `--db-retain-days` |
+| `db.max_mb` | 512 | 0..4194304 | `--db-max-mb` (0 = unlimited) |
+| `scan.port_thresh` | 8 | 2..64 | distinct local service ports from one IP → `PORT_SCAN` |
+| `deauth.flood_thresh` / `deauth.flood_window_s` | 5 / 5 | 2..32 / 1..600 | distinct deauth/disassoc frames per sliding window |
+| `beacon.flood_thresh` / `beacon.flood_window_s` | 40 / 10 | 2..256 / 1..3600 | new BSSIDs per window |
+| `auth.flood_thresh` / `auth.flood_window_s` | 30 / 5 | 2..512 / 1..3600 | auth frames to one BSSID per window |
+| `assoc.flood_thresh` / `assoc.flood_window_s` | 21 / 60 | 2..256 / 1..3600 | (re)assoc requests to one BSSID per window |
+| `probe.flood_frames` / `probe.flood_window_s` | 30 / 5 | 2..32 / 1..600 | probe requests from one TA per sliding window |
+| `btm.abuse_thresh` / `btm.abuse_window_s` | 4 / 60 | 2..256 / 1..3600 | disassoc-imminent BTM requests per (BSSID, STA) |
+| `saq.flood_thresh` / `saq.flood_window_s` | 12 / 10 | 2..48 / 1..3600 | SA Query frames per (BSSID, STA) |
+| `rts.flood_rate` / `rts.flood_sustain_s` | 500 / 5 | 1..100000 / 1..3600 | RTS/s from one TA, held for N s |
+| `bd.min_samples` / `bd.min_interval_s` / `bd.max_jitter_pct` | 5 / 10 / 25 | 3..16 / 1..86400 / 1..100 | beaconing v1 (low jitter) |
+| `bd.min_samples_v2` / `bd.min_concentration_pct` | 12 / 60 | 3..16 / 1..100 | beaconing v2 (gap concentration) |
+| `queue_evict.window_ms` / `queue_evict.min_frames` / `queue_evict.report_secs` | 100 / 3 / 900 | 1..10000 / 2..1000 / 1..86400 | queue-release detection (#107) |
+| `transit.gap_secs` / `transit.window_secs` / `transit.recur_thresh` | 300 / 7200 / 3 | 1..86400 / 60..604800 / 2..16 | recurring transit (#54) |
+| `presence.swing_dbm` / `presence.min_samples` | 8 / 3 | 1..100 / 3..16 | transit-shaped RSSI trajectory |
+| `presence.transient_max_s` / `presence.visitor_min_s` / `presence.resident_min_s` | 120 / 120 / 900 | 1..86400 / 1..86400 / 1..604800 | presence dwell classes |
+| `seqnum.corr_seq_window` / `seqnum.corr_dt_max_s` | 64 / 30 | 1..4095 / 1..3600 | seqnum correlation seam |
+
+`--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
+
 
 **Startup diagnostic — unresolved allow-list names (#85).** An
 `--iface`/`--monitor-only` name that does not resolve at launch is not
@@ -139,7 +170,7 @@ notice). → [[deployment]], [[monitor-mode]]
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
 | `--no-correlate` | — | on (correlation enabled) | Disable longitudinal device correlation. Seqnum `[j]` still shows each MAC's own trail, but no pair is linked and no `seqnum_correlation` record is exported/stored. → [[mac-randomisation]] |
-| `--correlate-retain` | `SECS` | `300` | Evidence window: a pair is reported only while **both** addresses were heard inside this window, counted from now. |
+| `--correlate-retain` | `SECS` | `300` | Evidence window: a pair is reported only while **both** addresses were heard inside this window, counted from now. Alias for `--tune correlate.retain_secs` (1..604800); a non-integer such as `30s` exits 2 (#120). Clearing the `[j]` table no longer resets it. |
 
 ### WPS alert thresholds (#82)
 
@@ -157,7 +188,7 @@ of zero fires on every observation. → [[alerts]]
 | `--wps-lockout-cycles` | `N` | `2` | Completed AP-Setup-Locked lock→unlock cycles on one BSSID within **1 h** before `WPS_LOCKOUT_CYCLING` fires. An AP that locks once and stays locked never fires. |
 | `--wps-pbc-concurrent` | `N` | `2` | Concurrent WPS Push-Button enrollees on one BSSID inside the **120 s** walk time that `WPS_PBC_RACE` fires *above* — the default means the third concurrent enrollee alerts. |
 
-The three `--wps-*` flags above are **aliases** for the `wps.pin_brute_cycles`, `wps.lockout_cycles` and `wps.pbc_concurrent` knobs in the `--tune` registry; they shipped first and still work unchanged. Either spelling sets one value, `--tune-list` shows it, and — the part that was broken until 2026-10-05 — either spelling is recorded in `sensor_health`'s `tuned` and in the health strip, so a WPS threshold raised by flag can no longer silence a detector without appearing in the export.
+The three `--wps-*` flags above are **aliases** for the `wps.pin_brute_cycles`, `wps.lockout_cycles` and `wps.pbc_concurrent` knobs in the `--tune` registry; they shipped first and still work unchanged. Either spelling sets one value, `--tune-list` shows it, and — the part that was broken until 2026-10-05 — either spelling is recorded in `sensor_health`'s `tuned` and in the health strip, so a WPS threshold raised by flag can no longer silence a detector without appearing in the export. Since #120 they parse through the registry too: `--wps-pin-brute-cycles 5x` exits 2 instead of being read as 5.
 
 
 The windows are deliberately **not** flags: 60 s is the rate the
@@ -174,6 +205,8 @@ would be measuring something the protocol does not do.
 | `--db-interval-secs` | `N` | `1` | Seconds between DB write ticks. Raise on slow storage. |
 | `--db-retain-days` | `N` | `30` | Age-out window for observation rows. Tiered: entities keep 3×, alerts/credential exposures keep 12×. → [[retention]] |
 | `--db-max-mb` | `N` | `512` | Size target (MiB), a pruning trigger not a hard cap. `0` = unlimited. Oldest observation rows go first; entity/alert/credential rows never dropped. |
+
+The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` and `db.max_mb` in the `--tune` registry (#120). Until then they were read with `atoi()`: `--db-retain-days abc` became 0, which silently meant "default", and `--db-max-mb 5x` became 5. Each is now validated like `--tune` — a non-integer or an out-of-range value exits 2 naming the knob — and a moved value appears in `sensor_health.tuned`. `--db-interval-secs 0` and `--db-retain-days 0`, which used to fall back to the default, are now refused (ranges start at 1); `--db-max-mb 0` still means unlimited.
 
 ### Inventory & ownership — trust anchors
 
@@ -316,7 +349,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 | Code | Meaning |
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back). |
 
 ## Build variants (Makefile)
 

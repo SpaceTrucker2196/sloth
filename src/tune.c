@@ -5,6 +5,21 @@
 
 #include "tune.h"
 
+/* The headers that own the #defines the #120 rows default to. The
+ * #define stays the shipped value and the single place it is written;
+ * the row reads it rather than restating the number, so the two cannot
+ * drift apart. */
+#include "sloth.h"
+#include "action_snoop.h"
+#include "beacon_detect.h"
+#include "ctrl_frames.h"
+#include "db.h"
+#include "eapol_log.h"
+#include "presence.h"
+#include "queue_evict.h"
+#include "seqnum_track.h"
+#include "transit.h"
+
 /* Indexed by tune_id_t — the order here must match the enum, which
  * g_specs_match_enum_order in tests/test_tune.c pins by name so a
  * reordering cannot silently remap a detector's threshold onto another
@@ -124,6 +139,76 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * one reconnect, not lost data. */
     { "socket.max_per_peer",        4,   1,   16,     "concurrent data-socket clients one peer may hold (16 = no per-peer cap)" },
     { "socket.idle_secs",           900, 0,   86400,  "seconds without progress before a data-socket client is closed, 0 for never" },
+    /* ── #120: the five flags that parsed with atoi() ─────────────
+     *
+     * Retention and cadence, not detector thresholds. The flags are now
+     * aliases onto these rows via tune_set_value(), so "--db-max-mb 5x"
+     * is refused instead of read as 5 and "--db-retain-days abc" is
+     * refused instead of read as 0 (which silently meant "default").
+     *
+     * Bounds keep each shipped contract where one was published:
+     * handshake.retention_days is exactly what --handshake-retention
+     * already accepted (0 = keep forever, 100 y cap); db.max_mb keeps 0
+     * as "unlimited". correlate.retain_secs and the two db windows had
+     * no upper bound at all — atoi() accepted anything — so the caps
+     * here are new, and wide: a week of correlation evidence, a century
+     * of rows, a day between writes. */
+    { "correlate.retain_secs",      SEQNUM_CORR_RETAIN_S, 1, 604800, "seconds a seqnum correlation's evidence stays current" },
+    { "handshake.retention_days",   EAPOL_DEFAULT_RETENTION_DAYS, 0, EAPOL_MAX_RETENTION_DAYS, "days exported crackable material is kept, 0 for forever" },
+    { "db.interval_secs",           DB_DEFAULT_INTERVAL_S, 1, 86400, "seconds between --db write ticks" },
+    { "db.retain_days",             DB_DEFAULT_RETAIN_DAYS, 1, 36500, "days observation rows are kept in --db (entities 3x, findings 12x)" },
+    { "db.max_mb",                  DB_DEFAULT_MAX_MB, 0, 4194304, "MiB size target for --db, 0 for unlimited" },
+    /* ── #120: compile-time detector thresholds ───────────────────
+     *
+     * Each default IS the #define it replaced at the use site. Where a
+     * count is stored in a fixed ring, `hi` is that ring's size: a
+     * threshold above the number of events the detector can hold would
+     * never fire, which is a way to disable a rule rather than tune it.
+     * The 256 / 512 literals are rings private to beacon_snoop.c
+     * (BEACON_NEW_TS_RING), assoc_track.c (ASSOC_REQ_RING),
+     * action_snoop.c (BTM_EVT_RING) and auth_track.c (AUTH_RING). */
+    { "scan.port_thresh",           SCAN_PORT_THRESH, 2, MAX_SCAN_PORTS, "distinct local service ports from one IP" },
+    { "deauth.flood_thresh",        DEAUTH_FLOOD_THRESH, 2, FLOOD_WIN_CAP, "distinct deauth/disassoc frames per window" },
+    { "deauth.flood_window_s",      DEAUTH_FLOOD_WIN_SECS, 1, 600, "seconds (sliding)" },
+    { "beacon.flood_thresh",        BEACON_FLOOD_THRESH, 2, 256, "distinct new BSSIDs per window" },
+    { "beacon.flood_window_s",      BEACON_FLOOD_WIN_SECS, 1, 3600, "seconds" },
+    { "auth.flood_thresh",          AUTH_FLOOD_THRESH, 2, 512, "auth frames to one BSSID per window" },
+    { "auth.flood_window_s",        AUTH_FLOOD_WIN_SECS, 1, 3600, "seconds" },
+    { "assoc.flood_thresh",         ASSOC_FLOOD_THRESH, 2, 256, "(re)assoc requests to one BSSID per window" },
+    { "assoc.flood_window_s",       ASSOC_FLOOD_WIN_SECS, 1, 3600, "seconds" },
+    { "probe.flood_frames",         PROBE_FLOOD_FRAMES, 2, FLOOD_WIN_CAP, "probe requests from one TA per window" },
+    { "probe.flood_window_s",       PROBE_FLOOD_WIN_SECS, 1, 600, "seconds (sliding)" },
+    { "btm.abuse_thresh",           BTM_ABUSE_THRESH, 2, 256, "disassoc-imminent BTM requests per (BSSID, STA) per window" },
+    { "btm.abuse_window_s",         BTM_ABUSE_WIN_SECS, 1, 3600, "seconds" },
+    { "saq.flood_thresh",           SAQ_FLOOD_THRESH, 2, SAQ_FLOOD_THRESH * 4, "SA Query frames per (BSSID, STA) per window" },
+    { "saq.flood_window_s",         SAQ_FLOOD_WIN_SECS, 1, 3600, "seconds" },
+    { "rts.flood_rate",             RTS_FLOOD_RATE, 1, 100000, "RTS frames per second from one TA" },
+    { "rts.flood_sustain_s",        RTS_FLOOD_SUSTAIN_S, 1, 3600, "seconds the rate must be held" },
+    /* Beaconing (C2) detector. The two ratios are whole percent because
+     * the registry is integer-only; BD_*_RATIO are defined from these,
+     * and 25/100.0 and 60/100.0 are the same doubles 0.25 and 0.60
+     * were. Sample counts cap at BD_MAX_SAMPLES, the per-flow ring. */
+    { "bd.min_samples",             BD_MIN_SAMPLES, 3, BD_MAX_SAMPLES, "samples before the v1 low-jitter test" },
+    { "bd.min_interval_s",          BD_MIN_INTERVAL_S, 1, 86400, "seconds; shorter mean/median periods are heartbeats" },
+    { "bd.max_jitter_pct",          BD_MAX_JITTER_PCT, 1, 100, "v1: stddev/mean, percent" },
+    { "bd.min_samples_v2",          BD_MIN_SAMPLES_V2, 3, BD_MAX_SAMPLES, "samples before the v2 concentration test" },
+    { "bd.min_concentration_pct",   BD_MIN_CONCENTRATION_PCT, 1, 100, "v2: gaps within 30% of the median, percent" },
+    { "queue_evict.window_ms",      QUEUE_EVICT_WINDOW_MS, 1, 10000, "ms after a session change that counts as a release" },
+    { "queue_evict.min_frames",     QUEUE_EVICT_MIN_FRAMES, 2, 1000, "distinct downlink frames in that window" },
+    { "queue_evict.report_secs",    QUEUE_EVICT_REPORT_SECS, 1, 86400, "seconds a release stays reportable" },
+    { "transit.gap_secs",           TRANSIT_GAP_SECS, 1, 86400, "seconds between observations that make separate passes" },
+    { "transit.window_secs",        TRANSIT_WINDOW_SECS, 60, 604800, "seconds passes are counted over" },
+    { "transit.recur_thresh",       TRANSIT_RECUR_THRESH, 2, MAX_TRANSIT_PASSES, "passes in the window" },
+    /* Presence classification. No ordering is enforced between the
+     * dwell thresholds: visitor above resident only makes VISITOR
+     * unreachable, which is the operator's call, not a crash. */
+    { "presence.swing_dbm",         PRESENCE_SWING_DBM, 1, 100, "dB rise and fall around a transit peak" },
+    { "presence.transient_max_s",   PRESENCE_TRANSIENT_MAX_S, 1, 86400, "max dwell, seconds, for a transit verdict" },
+    { "presence.visitor_min_s",     PRESENCE_VISITOR_MIN_S, 1, 86400, "dwell seconds for VISITOR" },
+    { "presence.resident_min_s",    PRESENCE_RESIDENT_MIN_S, 1, 604800, "dwell seconds for RESIDENT" },
+    { "presence.min_samples",       PRESENCE_MIN_SAMPLES, 3, RSSI_WIN_SAMPLES, "RSSI samples before a trajectory claim" },
+    { "seqnum.corr_seq_window",     SEQNUM_CORR_SEQ_WINDOW, 1, 4095, "forward sequence-number advance across a MAC change" },
+    { "seqnum.corr_dt_max_s",       SEQNUM_CORR_DT_MAX_S, 1, 3600, "seconds between the two trails" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets
@@ -179,13 +264,21 @@ int tune_set(const char *spec, char *err, size_t errsz) {
         return -1;
     }
 
+    return tune_set_value((tune_id_t)idx, eq + 1, err, errsz);
+}
+
+int tune_set_value(tune_id_t id, const char *vs, char *err, size_t errsz) {
+    if (id < 0 || id >= TUNE_COUNT) {
+        if (err && errsz) snprintf(err, errsz, "no such knob");
+        return -1;
+    }
+    seed();
     /* strtol, then insist the whole tail was consumed: "10x" and "" are
      * rejected rather than read as 10 and 0. An operator who mistypes a
      * threshold must not get a silently different one. */
-    const char *vs = eq + 1;
-    if (!*vs) {
+    if (!vs || !*vs) {
         if (err && errsz)
-            snprintf(err, errsz, "%s: missing value", g_specs[idx].name);
+            snprintf(err, errsz, "%s: missing value", g_specs[id].name);
         return -1;
     }
     errno = 0;
@@ -194,16 +287,16 @@ int tune_set(const char *spec, char *err, size_t errsz) {
     if (errno == ERANGE || !end || *end != '\0') {
         if (err && errsz)
             snprintf(err, errsz, "%s: '%.40s' is not an integer",
-                     g_specs[idx].name, vs);
+                     g_specs[id].name, vs);
         return -1;
     }
-    if (v < g_specs[idx].lo || v > g_specs[idx].hi) {
+    if (v < g_specs[id].lo || v > g_specs[id].hi) {
         if (err && errsz)
             snprintf(err, errsz, "%s: %ld out of range [%ld, %ld]",
-                     g_specs[idx].name, v, g_specs[idx].lo, g_specs[idx].hi);
+                     g_specs[id].name, v, g_specs[id].lo, g_specs[id].hi);
         return -1;
     }
-    g_val[idx] = v;
+    g_val[id] = v;
     return 0;
 }
 

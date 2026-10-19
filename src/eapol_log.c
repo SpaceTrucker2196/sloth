@@ -18,6 +18,7 @@
 #include "dot11_data.h"
 #include "bytes.h"
 #include "sensor_health.h"
+#include "tune.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -116,7 +117,10 @@ static sfile_fail_t g_fail;
  * which is what makes the first eapol_maintain() call the startup
  * sweep. */
 static int          g_collect        = 0;
-static int          g_retention_days = EAPOL_DEFAULT_RETENTION_DAYS;
+/* The retention window is the handshake.retention_days row of the --tune
+ * registry (#120): --handshake-retention is an alias, and a moved window
+ * reaches sensor_health's `tuned`. Written only at startup, before the
+ * sweep can run, so it needs no share of g_mu. */
 static time_t       g_last_sweep     = 0;
 
 #define EAPOL_SECS_PER_DAY 86400
@@ -924,17 +928,11 @@ int eapol_collect_enabled(void) {
 
 int eapol_set_retention_days(int days) {
     if (days < 0 || days > EAPOL_MAX_RETENTION_DAYS) return -1;
-    pthread_mutex_lock(&g_mu);
-    g_retention_days = days;
-    pthread_mutex_unlock(&g_mu);
-    return 0;
+    return tune_set_id(TUNE_HANDSHAKE_RETENTION_DAYS, days) ? 0 : -1;
 }
 
 int eapol_retention_days(void) {
-    pthread_mutex_lock(&g_mu);
-    int d = g_retention_days;
-    pthread_mutex_unlock(&g_mu);
-    return d;
+    return (int)tune_val(TUNE_HANDSHAKE_RETENTION_DAYS);
 }
 
 /* Names this module writes, and only those. An operator file sharing the
@@ -951,9 +949,10 @@ static int is_export_artifact(const char *name) {
 
 /* Caller holds g_mu. */
 static int sweep_locked(time_t now) {
-    if (g_out_fd < 0 || g_retention_days <= 0) return 0;
+    const int retention_days = eapol_retention_days();
+    if (g_out_fd < 0 || retention_days <= 0) return 0;
 
-    time_t window = (time_t)g_retention_days * EAPOL_SECS_PER_DAY;
+    time_t window = (time_t)retention_days * EAPOL_SECS_PER_DAY;
     if (now <= window) return 0;      /* nothing can predate the epoch+window */
     time_t cutoff = now - window;
 
@@ -1009,7 +1008,7 @@ static int sweep_locked(time_t now) {
             snprintf(err, sizeof(err),
                      "%.100s: could not delete past the %d-day handshake "
                      "retention window: %s",
-                     e->d_name, g_retention_days, strerror(errno));
+                     e->d_name, retention_days, strerror(errno));
             sfile_fail(&g_fail, "eapol", err);
             continue;
         }

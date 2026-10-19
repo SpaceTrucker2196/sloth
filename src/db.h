@@ -90,6 +90,7 @@ typedef struct {
 } db_akm_regression_t;
 
 /* Retention defaults. See db_set_retain_days / db_set_max_mb. */
+#define DB_DEFAULT_INTERVAL_S   1
 #define DB_DEFAULT_RETAIN_DAYS 30
 #define DB_DEFAULT_MAX_MB     512
 

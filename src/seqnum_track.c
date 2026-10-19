@@ -5,6 +5,7 @@
 #include "seqnum_track.h"
 #include "sloth_clock.h"
 #include "sensor_health.h"
+#include "tune.h"
 
 static seqnum_client_t g_tbl[MAX_SEQNUM_CLIENTS];
 static int             g_n   = 0;
@@ -15,15 +16,20 @@ static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
 }
 
 static int g_corr_enabled = 1;
-static int g_corr_retain  = SEQNUM_CORR_RETAIN_S;
+/* Retention is the correlate.retain_secs row of the --tune registry
+ * (#120); --correlate-retain is an alias. The seam window and gap are
+ * seqnum.corr_seq_window / seqnum.corr_dt_max_s. */
+#define CORR_RETAIN    ((int)tune_val(TUNE_CORRELATE_RETAIN_SECS))
+#define CORR_SEQ_WIN   ((int)tune_val(TUNE_SEQNUM_CORR_SEQ_WINDOW))
+#define CORR_DT_MAX_S  ((long)tune_val(TUNE_SEQNUM_CORR_DT_MAX_S))
 
 void seqnum_corr_set_enabled(int on) { g_corr_enabled = on ? 1 : 0; }
 int  seqnum_corr_enabled(void)       { return g_corr_enabled; }
 
 void seqnum_corr_set_retain_secs(int secs) {
-    if (secs >= 1) g_corr_retain = secs;
+    if (secs >= 1) (void)tune_set_id(TUNE_CORRELATE_RETAIN_SECS, secs);
 }
-int  seqnum_corr_retain_secs(void) { return g_corr_retain; }
+int  seqnum_corr_retain_secs(void) { return CORR_RETAIN; }
 
 void seqnum_track_observe(const uint8_t mac[6], uint16_t seqnum)
 {
@@ -102,7 +108,7 @@ static int seq_fwd(uint16_t from, uint16_t to) {
  * wrapped, been reordered, or belongs to more than one radio. */
 static int hist_runs_forward(const seqnum_client_t *c) {
     for (int i = c->hist_n - 1; i > 0; i--) {
-        if (seq_fwd(c->hist[i], c->hist[i - 1]) > SEQNUM_CORR_SEQ_WINDOW)
+        if (seq_fwd(c->hist[i], c->hist[i - 1]) > CORR_SEQ_WIN)
             return 0;
     }
     return 1;
@@ -208,14 +214,14 @@ static int try_direction(const seqnum_client_t *x, const seqnum_client_t *y,
     if (HIST_NEWEST_TS(x) > HIST_OLDEST_TS(y)) return 0;
 
     long dt_ms = (long)(HIST_OLDEST_TS(y) - HIST_NEWEST_TS(x)) * 1000;
-    if (dt_ms > (long)SEQNUM_CORR_DT_MAX_S * 1000) return 0;
+    if (dt_ms > CORR_DT_MAX_S * 1000) return 0;
 
     /* Direction: the counter continued forward across the seam. Zero is
      * excluded — the later address repeating the earlier one's last
      * sequence number is a duplicate value, not a continuation, and in a
      * dense room duplicates are the commonest coincidence there is. */
     int fwd = seq_fwd(HIST_NEWEST(x), HIST_OLDEST(y));
-    if (fwd < 1 || fwd > SEQNUM_CORR_SEQ_WINDOW) return 0;
+    if (fwd < 1 || fwd > CORR_SEQ_WIN) return 0;
 
     if (!hist_runs_forward(x) || !hist_runs_forward(y)) return 0;
 
@@ -259,8 +265,8 @@ static int try_correlate(const seqnum_client_t *a, const seqnum_client_t *b,
  * past this raises the table horizon with it, so a longer window is
  * never starved of the candidates it is supposed to consider. */
 static int client_retain_secs(void) {
-    return g_corr_retain > SEQNUM_CLIENT_RETAIN_S
-         ? g_corr_retain : SEQNUM_CLIENT_RETAIN_S;
+    const int retain = CORR_RETAIN;
+    return retain > SEQNUM_CLIENT_RETAIN_S ? retain : SEQNUM_CLIENT_RETAIN_S;
 }
 
 /* Drop records nobody has heard from inside the horizon. Caller holds
@@ -300,7 +306,7 @@ int seqnum_corr_candidate_pairs(time_t now, int *out_accepted,
         for (int j = i + 1; j < g_n; j++) {
             corr_evidence_t ev; int a_earlier;
             compared++;
-            if (!try_correlate(&g_tbl[i], &g_tbl[j], now, g_corr_retain,
+            if (!try_correlate(&g_tbl[i], &g_tbl[j], now, CORR_RETAIN,
                                &ev, &a_earlier)) continue;
             accepted++;
             if (ev.confidence > max_conf) max_conf = ev.confidence;
@@ -349,7 +355,7 @@ void seqnum_snapshot_at(sloth_state_t *s, time_t now)
         for (int i = 0; i < n && corr_n < MAX_SEQNUM_CORRELATIONS; i++) {
             for (int j = i + 1; j < n && corr_n < MAX_SEQNUM_CORRELATIONS; j++) {
                 corr_evidence_t ev; int a_earlier = 1;
-                if (!try_correlate(&g_tbl[i], &g_tbl[j], now, g_corr_retain,
+                if (!try_correlate(&g_tbl[i], &g_tbl[j], now, CORR_RETAIN,
                                    &ev, &a_earlier)) continue;
                 seqnum_correlation_t *c = &s->seqnum_correlations[corr_n++];
                 memset(c, 0, sizeof(*c));
@@ -401,7 +407,11 @@ void seqnum_clear(void) {
     g_n = 0;
     memset(g_tbl, 0, sizeof(g_tbl));
     g_corr_enabled = 1;
-    g_corr_retain  = SEQNUM_CORR_RETAIN_S;
+    /* Retention is no longer reset here (#120). It is operator
+     * configuration in the --tune registry, and this function is also
+     * the seqnum view's [c] key: clearing the table must not quietly
+     * put --correlate-retain back to its default. Tests reset it with
+     * tune_reset(), which the per-test reset registry already runs. */
     pthread_mutex_unlock(&g_mu);
 }
 

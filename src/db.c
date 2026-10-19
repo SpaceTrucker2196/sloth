@@ -24,8 +24,8 @@
 #include "ownership.h"
 #include "presence.h"
 #include "secure_file.h"
+#include "tune.h"
 
-#define DB_DEFAULT_INTERVAL_S 1
 /* Maintenance is hourly: pruning is a scan over every table, and the
  * thing it defends against (a disk filling over days) does not move
  * fast enough to need checking at poll rate. */
@@ -39,9 +39,10 @@ static sqlite3 *g_db;
 static db_akm_regression_t g_akm_reg[DB_MAX_AKM_REGRESSIONS];
 static int                 g_akm_reg_n;
 static int      g_disabled;      /* set once on error — fail-open */
-static int      g_interval  = DB_DEFAULT_INTERVAL_S;
-static int      g_retain_days = DB_DEFAULT_RETAIN_DAYS;
-static int      g_max_mb      = DB_DEFAULT_MAX_MB;
+/* Cadence, retention and size target live in the --tune registry
+ * (db.interval_secs / db.retain_days / db.max_mb, #120), so the
+ * --db-* flags and --tune share one validation and a moved value
+ * reaches sensor_health's `tuned`. The setters below are aliases. */
 static time_t   g_last_tick;
 static time_t   g_last_maint;
 static int      g_over_ceiling_reported;
@@ -811,15 +812,16 @@ int db_is_defensive(void) {
 }
 
 void db_set_interval(int secs) {
-    g_interval = secs > 0 ? secs : DB_DEFAULT_INTERVAL_S;
+    (void)tune_set_id(TUNE_DB_INTERVAL_SECS,
+                      secs > 0 ? secs : DB_DEFAULT_INTERVAL_S);
 }
-int db_interval(void) { return g_interval; }
+int db_interval(void) { return (int)tune_val(TUNE_DB_INTERVAL_SECS); }
 
 int db_due(time_t now) {
     if (!db_is_open()) return 0;
     if (g_last_tick == 0) return 1;               /* first tick always */
     if (now < g_last_tick) return 1;              /* clock stepped back */
-    return (now - g_last_tick) >= g_interval;
+    return (now - g_last_tick) >= tune_val(TUNE_DB_INTERVAL_SECS);
 }
 
 /* ── per-table writers ───────────────────────────────────── */
@@ -1551,12 +1553,15 @@ static void write_detector_evidence(const sloth_state_t *s, time_t now) {
 /* ── retention and the size ceiling ──────────────────────── */
 
 void db_set_retain_days(int days) {
-    g_retain_days = days > 0 ? days : DB_DEFAULT_RETAIN_DAYS;
+    (void)tune_set_id(TUNE_DB_RETAIN_DAYS,
+                      days > 0 ? days : DB_DEFAULT_RETAIN_DAYS);
 }
-int db_retain_days(void) { return g_retain_days; }
+int db_retain_days(void) { return (int)tune_val(TUNE_DB_RETAIN_DAYS); }
 
-void db_set_max_mb(int mb) { g_max_mb = mb >= 0 ? mb : DB_DEFAULT_MAX_MB; }
-int  db_max_mb(void)       { return g_max_mb; }
+void db_set_max_mb(int mb) {
+    (void)tune_set_id(TUNE_DB_MAX_MB, mb >= 0 ? mb : DB_DEFAULT_MAX_MB);
+}
+int  db_max_mb(void)       { return (int)tune_val(TUNE_DB_MAX_MB); }
 
 /* Scalar integer PRAGMA / SELECT. -1 on any failure, which callers
  * treat as "don't know" and skip the guard rather than guessing. */
@@ -1611,9 +1616,10 @@ void db_maintain(time_t now) {
     if (!db_is_open()) return;
 
     long long day = DB_SECS_PER_DAY;
-    time_t obs_cutoff  = (time_t)(now - (long long)g_retain_days * day);
-    time_t ent_cutoff  = (time_t)(now - (long long)g_retain_days * day * 3);
-    time_t find_cutoff = (time_t)(now - (long long)g_retain_days * day * 12);
+    const int retain_days = db_retain_days();
+    time_t obs_cutoff  = (time_t)(now - (long long)retain_days * day);
+    time_t ent_cutoff  = (time_t)(now - (long long)retain_days * day * 3);
+    time_t find_cutoff = (time_t)(now - (long long)retain_days * day * 12);
 
     if (!exec("BEGIN IMMEDIATE", "maint begin")) { db_fail("maint begin"); return; }
     prune_tier(TIER_OBSERVATION, NELEMS(TIER_OBSERVATION), obs_cutoff);
@@ -1629,8 +1635,9 @@ void db_maintain(time_t now) {
     /* Size ceiling. Only observation rows are eligible: a sensor that
      * fills its disk should lose telemetry, not the findings the disk
      * was being kept for. */
-    if (g_max_mb <= 0) { g_last_maint = now; return; }
-    long long ceiling = (long long)g_max_mb * 1024 * 1024;
+    const int max_mb = db_max_mb();
+    if (max_mb <= 0) { g_last_maint = now; return; }
+    long long ceiling = (long long)max_mb * 1024 * 1024;
 
     for (int round = 0; round < 64; round++) {
         long long size = db_size_bytes();
@@ -1659,7 +1666,7 @@ void db_maintain(time_t now) {
                 fprintf(stderr,
                         "sloth: db over --db-max-mb (%lld MiB > %d MiB) with no "
                         "prunable telemetry left; findings are never dropped\n",
-                        size / (1024 * 1024), g_max_mb);
+                        size / (1024 * 1024), max_mb);
                 g_over_ceiling_reported = 1;
             }
             break;

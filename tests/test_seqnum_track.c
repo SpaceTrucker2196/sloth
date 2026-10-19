@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "seqnum_track.h"
 #include "views/seqnum.h"
+#include "tune.h"
 
 static void mac(uint8_t out[6], uint8_t la, uint8_t b1, uint8_t b2,
                                   uint8_t b3, uint8_t b4, uint8_t b5) {
@@ -477,6 +478,81 @@ static void test_strong_reading_requires_an_anchor_address(void) {
     ASSERT_EQ(seqnum_corr_is_strong(NULL), 0);
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void test_seqnum_corr_seq_window_is_tunable(void) {
+    seqnum_clear(); tune_reset();
+    uint8_t a[6]; mac(a, 0x00, 0x11, 0x22, 0x33, 0x44, 0x71);
+    uint8_t b[6]; mac(b, 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x71);
+    seqnum_track_observe_at(a, 100, T0);
+    seqnum_track_observe_at(b, 180, T0);         /* +80; default 64 */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 1);
+    ASSERT_EQ(s.seqnum_correlation_count, 0);
+    char err[160];
+    ASSERT_EQ(tune_set("seqnum.corr_seq_window=100", err, sizeof(err)), 0);
+    memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 1);
+    ASSERT_EQ(s.seqnum_correlation_count, 1);
+    tune_reset();
+}
+
+static void test_seqnum_corr_dt_max_is_tunable(void) {
+    seqnum_clear(); tune_reset();
+    uint8_t a[6]; mac(a, 0x00, 0x11, 0x22, 0x33, 0x44, 0x72);
+    uint8_t b[6]; mac(b, 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x72);
+    seqnum_track_observe_at(a, 100, T0);
+    seqnum_track_observe_at(b, 101, T0 + 60);    /* 60 s; default 30 */
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 61);
+    ASSERT_EQ(s.seqnum_correlation_count, 0);
+    char err[160];
+    ASSERT_EQ(tune_set("seqnum.corr_dt_max_s=120", err, sizeof(err)), 0);
+    memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 61);
+    ASSERT_EQ(s.seqnum_correlation_count, 1);
+    tune_reset();
+}
+
+/* --correlate-retain is the correlate.retain_secs row: the flag's setter
+ * and --tune are one value, and the snapshot honours whichever wrote
+ * last. */
+static void test_correlate_retain_is_the_registry_row(void) {
+    seqnum_clear(); tune_reset();
+    char err[160];
+    ASSERT_EQ(tune_set("correlate.retain_secs=10", err, sizeof(err)), 0);
+    ASSERT_EQ(seqnum_corr_retain_secs(), 10);
+    seqnum_corr_set_retain_secs(40);
+    ASSERT_EQ((long long)tune_val(TUNE_CORRELATE_RETAIN_SECS), 40);
+    uint8_t a[6]; mac(a, 0x00, 0x11, 0x22, 0x33, 0x44, 0x73);
+    uint8_t b[6]; mac(b, 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x73);
+    seqnum_track_observe_at(a, 100, T0);
+    seqnum_track_observe_at(b, 101, T0);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seqnum_snapshot_at(&s, T0 + 30);             /* inside 40, past 10 */
+    ASSERT_EQ(s.seqnum_correlation_count, 1);
+    tune_reset();
+}
+
+/* The seqnum view's [c] key calls seqnum_clear(). Before #120 that also
+ * put the retention window back to 300 s, so an operator who started
+ * with --correlate-retain 30 and cleared the table was silently running
+ * on ten times the retention they chose. Seen red with the reset line
+ * restored in seqnum_clear(). */
+static void test_clear_keeps_the_configured_retention(void) {
+    seqnum_clear(); tune_reset();
+    seqnum_corr_set_retain_secs(30);
+    seqnum_clear();
+    ASSERT_EQ(seqnum_corr_retain_secs(), 30);
+    tune_reset();
+    ASSERT_EQ(seqnum_corr_retain_secs(), SEQNUM_CORR_RETAIN_S);
+}
+
 void run_seqnum_track_tests(void) {
     TEST_SUITE("seqnum_track");
     RUN_TEST(test_empty);
@@ -502,4 +578,8 @@ void run_seqnum_track_tests(void) {
     RUN_TEST(test_strong_reading_requires_an_anchor_address);
     RUN_TEST(test_view_never_claims_identity);
     RUN_TEST(test_view_states_when_correlation_is_off);
+    RUN_TEST(test_seqnum_corr_seq_window_is_tunable);
+    RUN_TEST(test_seqnum_corr_dt_max_is_tunable);
+    RUN_TEST(test_correlate_retain_is_the_registry_row);
+    RUN_TEST(test_clear_keeps_the_configured_retention);
 }

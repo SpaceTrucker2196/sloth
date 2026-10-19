@@ -9,6 +9,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "presence.h"
+#include "tune.h"
 
 #define NOW 1700000000L
 
@@ -268,6 +269,78 @@ static void test_labels(void) {
     ASSERT_STR(presence_label((presence_class_t)99), "?");
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void t120_tune(const char *spec) {
+    char err[160] = "";
+    ASSERT_EQ(tune_set(spec, err, sizeof(err)), 0);
+}
+
+static void test_presence_swing_is_tunable(void) {
+    tune_reset();
+    rssi_ring_t r;
+    int small[] = { -70, -65, -70 };               /* 5 dB; default 8 */
+    ring_from(&r, small, 3, NOW);
+    ASSERT_EQ(presence_has_transit_shape(&r, NOW), 0);
+    t120_tune("presence.swing_dbm=5");
+    ASSERT_EQ(presence_has_transit_shape(&r, NOW), 1);
+    tune_reset();
+}
+
+/* The floor is already the minimum that can express rise-peak-fall, so
+ * this knob only moves up: four samples asked, three given. */
+static void test_presence_min_samples_is_tunable(void) {
+    tune_reset();
+    rssi_ring_t r;
+    int pass[] = { -80, -60, -80 };
+    ring_from(&r, pass, 3, NOW);
+    ASSERT_EQ(presence_has_transit_shape(&r, NOW), 1);
+    t120_tune("presence.min_samples=4");
+    ASSERT_EQ(presence_has_transit_shape(&r, NOW), 0);
+    tune_reset();
+}
+
+static void test_presence_transient_max_is_tunable(void) {
+    tune_reset();
+    rssi_ring_t r;
+    const int pass[] = { -85, -72, -58, -45, -44, -60, -75, -88 };
+    ring_from(&r, pass, 8, NOW);
+    /* 200 s dwell: past the 120 s transient ceiling. */
+    ASSERT_NE((int)presence_classify(&r, NOW - 200, NOW, NOW),
+              (int)PRESENCE_TRANSIENT);
+    t120_tune("presence.transient_max_s=300");
+    ASSERT_EQ((int)presence_classify(&r, NOW - 200, NOW, NOW),
+              (int)PRESENCE_TRANSIENT);
+    tune_reset();
+}
+
+static void test_presence_visitor_min_is_tunable(void) {
+    tune_reset();
+    rssi_ring_t r; memset(&r, 0, sizeof(r));
+    ASSERT_EQ((int)presence_classify(&r, NOW - 60, NOW, NOW),
+              (int)PRESENCE_UNKNOWN);               /* default 120 s */
+    t120_tune("presence.visitor_min_s=60");
+    ASSERT_EQ((int)presence_classify(&r, NOW - 60, NOW, NOW),
+              (int)PRESENCE_VISITOR);
+    tune_reset();
+}
+
+static void test_presence_resident_min_is_tunable(void) {
+    tune_reset();
+    rssi_ring_t r; memset(&r, 0, sizeof(r));
+    ASSERT_EQ((int)presence_classify(&r, NOW - 600, NOW, NOW),
+              (int)PRESENCE_VISITOR);               /* default 900 s */
+    t120_tune("presence.resident_min_s=600");
+    ASSERT_EQ((int)presence_classify(&r, NOW - 600, NOW, NOW),
+              (int)PRESENCE_RESIDENT);
+    tune_reset();
+}
+
 void run_presence_tests(void) {
     TEST_SUITE("presence: transit shape");
     RUN_TEST(test_vehicle_pass_has_transit_shape);
@@ -296,4 +369,9 @@ void run_presence_tests(void) {
     RUN_TEST(test_negative_dwell_is_safe);
     RUN_TEST(test_dwell_boundaries);
     RUN_TEST(test_labels);
+    RUN_TEST(test_presence_swing_is_tunable);
+    RUN_TEST(test_presence_min_samples_is_tunable);
+    RUN_TEST(test_presence_transient_max_is_tunable);
+    RUN_TEST(test_presence_visitor_min_is_tunable);
+    RUN_TEST(test_presence_resident_min_is_tunable);
 }

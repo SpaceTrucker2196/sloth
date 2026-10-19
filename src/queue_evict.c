@@ -2,6 +2,7 @@
 #include <pthread.h>
 
 #include "queue_evict.h"
+#include "tune.h"
 #include "dot11_data.h"
 #include "sensor_health.h"
 
@@ -130,7 +131,8 @@ void queue_evict_observe_downlink(const uint8_t *dot11, int len,
          * cannot be part of what that change released, whatever order
          * the two reached this function in. */
         if (e->event_us > 0 && now_us >= e->event_us &&
-            (now_us - e->event_us) <= (int64_t)QUEUE_EVICT_WINDOW_MS * 1000) {
+            (now_us - e->event_us) <=
+                (int64_t)tune_val(TUNE_QUEUE_EVICT_WINDOW_MS) * 1000) {
             /* Distinct frames only. A retry with the Retry bit clear is
              * unusual but not impossible (some drivers rebuild the frame),
              * and the sequence number is the authoritative identity of an
@@ -145,12 +147,14 @@ void queue_evict_observe_downlink(const uint8_t *dot11, int len,
             e->burst_frames++;
             if (e->burst_frames == 1) e->burst_first_us = now_us;
             e->burst_last_us = now_us;
-            if (e->burst_frames == QUEUE_EVICT_MIN_FRAMES) {
+            const uint32_t min_frames =
+                (uint32_t)tune_val(TUNE_QUEUE_EVICT_MIN_FRAMES);
+            if (e->burst_frames == min_frames) {
                 e->release_count++;
                 e->last_release_ts  = now_sec;
                 e->last_release_src = e->event_src;
             }
-            if (e->burst_frames >= QUEUE_EVICT_MIN_FRAMES) {
+            if (e->burst_frames >= min_frames) {
                 e->last_release_frames = e->burst_frames;
                 /* Span of the burst itself, not of the window: how fast
                  * the frames arrived is the part that separates a queue

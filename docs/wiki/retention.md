@@ -22,7 +22,7 @@ pcap and report artifacts still have no retention at all.
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
 
-**Last updated**: 2026-10-14 (sloth 1.8.4).
+**Last updated**: 2026-10-18.
 
 ---
 
@@ -60,9 +60,17 @@ there is nothing to retain.
 The ordering is the point: *what fired* outlives *who was here*, which
 outlives *the individual observations that established it*.
 
-`--db-retain-days 0` does **not** disable retention — a value of zero or
-less is replaced by the 30-day default (`db_set_retain_days`). There is
-no "keep everything" setting for the age-out pass.
+`--db-retain-days 0` does **not** disable retention. Since #120 it is
+refused at startup (exit 2): the flag is an alias for the
+`db.retain_days` knob in the `--tune` registry, whose range is
+`1..36500`. Before that the flag was read with `atoi()` and a zero —
+or a typo such as `abc` — was silently replaced by the 30-day default.
+There is no "keep everything" setting for the age-out pass. The same
+change makes `--db-interval-secs`, `--db-max-mb`,
+`--handshake-retention` and `--correlate-retain` registry aliases: each
+is validated like `--tune`, and a moved value shows in
+`sensor_health.tuned`, so a sensor retaining less than the default says
+so in its own export.
 
 ### 2.1 Age is measured from `last_seen`, not from first record
 

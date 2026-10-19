@@ -2,6 +2,7 @@
 #include <string.h>
 #include <math.h>
 #include "beacon_detect.h"
+#include "tune.h"
 
 static bd_track_t tracks[BD_MAX_TRACKS];
 static int        track_count;
@@ -123,7 +124,10 @@ int bd_stats(const char *remote_ip, uint16_t port,
 static int bd_concentration_compute(const time_t *samples, int n,
                                     double *out_median,
                                     double *out_concentration) {
-    if (n < BD_MIN_SAMPLES_V2) return 0;
+    if (n < (int)tune_val(TUNE_BD_MIN_SAMPLES_V2)) return 0;
+    /* The knob's floor is 3, but it is a runtime value now (#120): a
+     * median needs at least one gap, and this keeps that local. */
+    if (n < 2 || n > BD_MAX_SAMPLES) return 0;
 
     long gaps[BD_MAX_SAMPLES];
     int gn = 0;
@@ -145,7 +149,7 @@ static int bd_concentration_compute(const time_t *samples, int n,
         sorted[j + 1] = key;
     }
     double median = (double)sorted[gn / 2];
-    if (median < (double)BD_MIN_INTERVAL_S) return 0;
+    if (median < (double)tune_val(TUNE_BD_MIN_INTERVAL_S)) return 0;
 
     double lo = median * 0.70;
     double hi = median * 1.30;
@@ -184,10 +188,10 @@ int bd_is_strong(const char *remote_ip, uint16_t port) {
      * default and any C2 framework that hasn't dialed up jitter. */
     double mean = 0.0, jitter = 0.0;
     int n = bd_stats(remote_ip, port, &mean, &jitter);
-    if (n >= BD_MIN_SAMPLES &&
-        mean >= (double)BD_MIN_INTERVAL_S &&
+    if (n >= (int)tune_val(TUNE_BD_MIN_SAMPLES) &&
+        mean >= (double)tune_val(TUNE_BD_MIN_INTERVAL_S) &&
         mean > 0.0 &&
-        jitter / mean <= BD_MAX_JITTER_RATIO) {
+        jitter / mean <= (double)tune_val(TUNE_BD_MAX_JITTER_PCT) / 100.0) {
         return 1;
     }
 
@@ -198,7 +202,8 @@ int bd_is_strong(const char *remote_ip, uint16_t port) {
     int npts = collect_sorted(t, pts);
     double period = 0.0, concentration = 0.0;
     if (bd_concentration_compute(pts, npts, &period, &concentration)) {
-        if (concentration >= BD_MIN_CONCENTRATION) return 2;
+        if (concentration >=
+            (double)tune_val(TUNE_BD_MIN_CONCENTRATION_PCT) / 100.0) return 2;
     }
     return 0;
 }

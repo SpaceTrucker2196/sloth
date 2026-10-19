@@ -4,6 +4,17 @@
 #include "tune.h"
 #include "karma_detect.h"
 #include "alerts.h"        /* the --wps-* aliases folded onto the registry */   /* KARMA_SSID_THRESH, the macro the knob feeds */
+/* The owners of the #defines the #120 rows default to. */
+#include "sloth.h"
+#include "action_snoop.h"
+#include "beacon_detect.h"
+#include "ctrl_frames.h"
+#include "db.h"
+#include "eapol_log.h"
+#include "presence.h"
+#include "queue_evict.h"
+#include "seqnum_track.h"
+#include "transit.h"
 
 /* ── Operator-tunable thresholds — issue #82 ──────────────────
  *
@@ -63,6 +74,29 @@ static void test_specs_match_enum_order(void) {
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
     ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
     ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");
+    /* #120 appended these; the first and last of each group pin the
+       run between them. */
+    ASSERT_STR(tune_spec(TUNE_CORRELATE_RETAIN_SECS)->name, "correlate.retain_secs");
+    ASSERT_STR(tune_spec(TUNE_HANDSHAKE_RETENTION_DAYS)->name, "handshake.retention_days");
+    ASSERT_STR(tune_spec(TUNE_DB_INTERVAL_SECS)->name, "db.interval_secs");
+    ASSERT_STR(tune_spec(TUNE_DB_RETAIN_DAYS)->name, "db.retain_days");
+    ASSERT_STR(tune_spec(TUNE_DB_MAX_MB)->name, "db.max_mb");
+    ASSERT_STR(tune_spec(TUNE_SCAN_PORT_THRESH)->name, "scan.port_thresh");
+    ASSERT_STR(tune_spec(TUNE_DEAUTH_FLOOD_WINDOW_S)->name, "deauth.flood_window_s");
+    ASSERT_STR(tune_spec(TUNE_PROBE_FLOOD_FRAMES)->name, "probe.flood_frames");
+    ASSERT_STR(tune_spec(TUNE_RTS_FLOOD_SUSTAIN_S)->name, "rts.flood_sustain_s");
+    ASSERT_STR(tune_spec(TUNE_BD_MIN_CONCENTRATION_PCT)->name, "bd.min_concentration_pct");
+    ASSERT_STR(tune_spec(TUNE_QUEUE_EVICT_REPORT_SECS)->name, "queue_evict.report_secs");
+    ASSERT_STR(tune_spec(TUNE_PRESENCE_MIN_SAMPLES)->name, "presence.min_samples");
+    ASSERT_STR(tune_spec(TUNE_SEQNUM_CORR_DT_MAX_S)->name, "seqnum.corr_dt_max_s");
+    /* Every name is unique — two rows answering to one name would make
+       --tune set whichever the lookup met first. */
+    int dupes = 0;
+    for (int i = 0; i < TUNE_COUNT; i++)
+        for (int j = i + 1; j < TUNE_COUNT; j++)
+            if (strcmp(tune_spec((tune_id_t)i)->name,
+                       tune_spec((tune_id_t)j)->name) == 0) dupes++;
+    ASSERT_EQ(dupes, 0);
     /* Every row has a name, a unit, and a default inside its own
        bounds — a row whose default is out of range could never be
        restored by the operator. */
@@ -223,7 +257,7 @@ static void test_print_list_covers_every_knob(void) {
     fclose(f);
     f = fopen(path, "r");
     ASSERT(f != NULL);
-    char all[8192];
+    char all[32768];
     size_t n = fread(all, 1, sizeof(all) - 1, f);
     all[n] = '\0';
     fclose(f);
@@ -336,6 +370,177 @@ static void test_tune_set_id_rejects_out_of_range_and_bad_ids(void) {
     tune_reset();
 }
 
+
+/* ── #120: the remaining thresholds and the five atoi() flags ──── */
+
+/* Each row defaults to the #define it replaced at the use site, by
+ * construction (tune.c reads the macro). Pinned anyway, because the
+ * alternative failure — a row typed in by hand that drifted — is
+ * invisible: every detector would still run, on the wrong number. */
+static void test_issue120_rows_default_to_their_macros(void) {
+    tune_reset();
+    ASSERT_EQ((long long)tune_val(TUNE_CORRELATE_RETAIN_SECS), SEQNUM_CORR_RETAIN_S);
+    ASSERT_EQ((long long)tune_val(TUNE_HANDSHAKE_RETENTION_DAYS), EAPOL_DEFAULT_RETENTION_DAYS);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_INTERVAL_SECS), DB_DEFAULT_INTERVAL_S);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_RETAIN_DAYS), DB_DEFAULT_RETAIN_DAYS);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_MAX_MB), DB_DEFAULT_MAX_MB);
+    ASSERT_EQ((long long)tune_val(TUNE_SCAN_PORT_THRESH), SCAN_PORT_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_DEAUTH_FLOOD_THRESH), DEAUTH_FLOOD_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_DEAUTH_FLOOD_WINDOW_S), DEAUTH_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_BEACON_FLOOD_THRESH), BEACON_FLOOD_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_BEACON_FLOOD_WINDOW_S), BEACON_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_AUTH_FLOOD_THRESH), AUTH_FLOOD_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_AUTH_FLOOD_WINDOW_S), AUTH_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_ASSOC_FLOOD_THRESH), ASSOC_FLOOD_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_ASSOC_FLOOD_WINDOW_S), ASSOC_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_PROBE_FLOOD_FRAMES), PROBE_FLOOD_FRAMES);
+    ASSERT_EQ((long long)tune_val(TUNE_PROBE_FLOOD_WINDOW_S), PROBE_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_BTM_ABUSE_THRESH), BTM_ABUSE_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_BTM_ABUSE_WINDOW_S), BTM_ABUSE_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_SAQ_FLOOD_THRESH), SAQ_FLOOD_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_SAQ_FLOOD_WINDOW_S), SAQ_FLOOD_WIN_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_RTS_FLOOD_RATE), RTS_FLOOD_RATE);
+    ASSERT_EQ((long long)tune_val(TUNE_RTS_FLOOD_SUSTAIN_S), RTS_FLOOD_SUSTAIN_S);
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MIN_SAMPLES), BD_MIN_SAMPLES);
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MIN_INTERVAL_S), BD_MIN_INTERVAL_S);
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MAX_JITTER_PCT), BD_MAX_JITTER_PCT);
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MIN_SAMPLES_V2), BD_MIN_SAMPLES_V2);
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MIN_CONCENTRATION_PCT), BD_MIN_CONCENTRATION_PCT);
+    ASSERT_EQ((long long)tune_val(TUNE_QUEUE_EVICT_WINDOW_MS), QUEUE_EVICT_WINDOW_MS);
+    ASSERT_EQ((long long)tune_val(TUNE_QUEUE_EVICT_MIN_FRAMES), QUEUE_EVICT_MIN_FRAMES);
+    ASSERT_EQ((long long)tune_val(TUNE_QUEUE_EVICT_REPORT_SECS), QUEUE_EVICT_REPORT_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_TRANSIT_GAP_SECS), TRANSIT_GAP_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_TRANSIT_WINDOW_SECS), TRANSIT_WINDOW_SECS);
+    ASSERT_EQ((long long)tune_val(TUNE_TRANSIT_RECUR_THRESH), TRANSIT_RECUR_THRESH);
+    ASSERT_EQ((long long)tune_val(TUNE_PRESENCE_SWING_DBM), PRESENCE_SWING_DBM);
+    ASSERT_EQ((long long)tune_val(TUNE_PRESENCE_TRANSIENT_MAX_S), PRESENCE_TRANSIENT_MAX_S);
+    ASSERT_EQ((long long)tune_val(TUNE_PRESENCE_VISITOR_MIN_S), PRESENCE_VISITOR_MIN_S);
+    ASSERT_EQ((long long)tune_val(TUNE_PRESENCE_RESIDENT_MIN_S), PRESENCE_RESIDENT_MIN_S);
+    ASSERT_EQ((long long)tune_val(TUNE_PRESENCE_MIN_SAMPLES), PRESENCE_MIN_SAMPLES);
+    ASSERT_EQ((long long)tune_val(TUNE_SEQNUM_CORR_SEQ_WINDOW), SEQNUM_CORR_SEQ_WINDOW);
+    ASSERT_EQ((long long)tune_val(TUNE_SEQNUM_CORR_DT_MAX_S), SEQNUM_CORR_DT_MAX_S);
+    /* The percent forms are the same doubles the ratios were. */
+    ASSERT(BD_MAX_JITTER_RATIO == 0.25);
+    ASSERT(BD_MIN_CONCENTRATION == 0.60);
+    ASSERT_EQ(tune_non_default(), 0);
+}
+
+/* A count held in a fixed ring caps at the ring: a threshold above what
+ * the detector can store would never fire, which disables a rule
+ * rather than tuning it. */
+static void test_issue120_ring_bounded_caps(void) {
+    tune_reset();
+    ASSERT_EQ((long long)tune_spec(TUNE_DEAUTH_FLOOD_THRESH)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_PROBE_FLOOD_FRAMES)->hi, FLOOD_WIN_CAP);
+    ASSERT_EQ((long long)tune_spec(TUNE_SCAN_PORT_THRESH)->hi, MAX_SCAN_PORTS);
+    ASSERT_EQ((long long)tune_spec(TUNE_SAQ_FLOOD_THRESH)->hi, SAQ_FLOOD_THRESH * 4);
+    ASSERT_EQ((long long)tune_spec(TUNE_BD_MIN_SAMPLES)->hi, BD_MAX_SAMPLES);
+    ASSERT_EQ((long long)tune_spec(TUNE_BD_MIN_SAMPLES_V2)->hi, BD_MAX_SAMPLES);
+    ASSERT_EQ((long long)tune_spec(TUNE_TRANSIT_RECUR_THRESH)->hi, MAX_TRANSIT_PASSES);
+    ASSERT_EQ((long long)tune_spec(TUNE_PRESENCE_MIN_SAMPLES)->hi, RSSI_WIN_SAMPLES);
+    char err[160] = "";
+    ASSERT_EQ(tune_set("deauth.flood_thresh=33", err, sizeof(err)), -1);
+    ASSERT(strstr(err, "out of range") != NULL);
+}
+
+/* tune_set_value() is what the five flags parse through now. Every
+ * input atoi() would have read as some other number is refused, the
+ * error names the knob, and nothing moves. */
+static void test_set_value_refuses_what_atoi_accepted(void) {
+    tune_reset();
+    char err[160];
+    static const char *bad[] = { "5x", "", "abc", " ", "1e3", "0x10",
+                                 "99999999999999999999" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        err[0] = '\0';
+        ASSERT_EQ(tune_set_value(TUNE_DB_MAX_MB, bad[i], err, sizeof(err)), -1);
+        ASSERT(strstr(err, "db.max_mb") != NULL);
+    }
+    ASSERT_EQ(tune_set_value(TUNE_DB_MAX_MB, NULL, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "missing value") != NULL);
+    ASSERT_EQ(tune_set_value((tune_id_t)TUNE_COUNT, "5", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value((tune_id_t)-1, "5", NULL, 0), -1);
+    ASSERT_EQ(tune_non_default(), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_MAX_MB), DB_DEFAULT_MAX_MB);
+}
+
+static void test_set_value_enforces_each_flags_bounds(void) {
+    tune_reset();
+    char err[160] = "";
+    /* --db-retain-days 0 used to mean "default" via atoi; it is now out
+       of range, said so, rather than quietly read as 30. */
+    ASSERT_EQ(tune_set_value(TUNE_DB_RETAIN_DAYS, "0", err, sizeof(err)), -1);
+    ASSERT(strstr(err, "out of range") != NULL);
+    ASSERT_EQ(tune_set_value(TUNE_DB_INTERVAL_SECS, "0", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value(TUNE_CORRELATE_RETAIN_SECS, "0", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value(TUNE_CORRELATE_RETAIN_SECS, "-5", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value(TUNE_HANDSHAKE_RETENTION_DAYS, "-1", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value(TUNE_HANDSHAKE_RETENTION_DAYS, "36501", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set_value(TUNE_WPS_PIN_BRUTE_CYCLES, "0", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_non_default(), 0);
+    /* The meaningful zeroes the shipped flags published still work. */
+    ASSERT_EQ(tune_set_value(TUNE_DB_MAX_MB, "0", err, sizeof(err)), 0);           /* unlimited */
+    ASSERT_EQ(tune_set_value(TUNE_HANDSHAKE_RETENTION_DAYS, "0", err, sizeof(err)), 0); /* forever */
+    ASSERT_EQ(tune_set_value(TUNE_HANDSHAKE_RETENTION_DAYS, "36500", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set_value(TUNE_WPS_PIN_BRUTE_CYCLES, "1", err, sizeof(err)), 0);
+    tune_reset();
+}
+
+/* The defect class #82's WPS reconciliation closed, closed for the five:
+ * a value moved by flag must reach `tuned`, or a sensor retaining a
+ * tenth of the default looks stock in its own export. */
+static void test_flag_rows_reach_the_tuned_record(void) {
+    tune_reset();
+    char err[160];
+    ASSERT_EQ(tune_set_value(TUNE_DB_MAX_MB, "64", err, sizeof(err)), 0);
+    ASSERT_EQ(eapol_set_retention_days(2), 0);
+    seqnum_corr_set_retain_secs(30);
+    char buf[512];
+    tune_format_non_default(buf, sizeof(buf));
+    ASSERT(strstr(buf, "db.max_mb=64") != NULL);
+    ASSERT(strstr(buf, "handshake.retention_days=2") != NULL);
+    ASSERT(strstr(buf, "correlate.retain_secs=30") != NULL);
+    ASSERT_EQ(tune_non_default(), 3);
+    tune_reset();
+}
+
+/* --handshake-retention and --tune handshake.retention_days are one
+ * value, and the module's own validation is unchanged. */
+static void test_handshake_retention_is_the_registry_row(void) {
+    tune_reset();
+    char err[160];
+    ASSERT_EQ(tune_set("handshake.retention_days=14", err, sizeof(err)), 0);
+    ASSERT_EQ(eapol_retention_days(), 14);
+    ASSERT_EQ(eapol_set_retention_days(3), 0);
+    ASSERT_EQ((long long)tune_val(TUNE_HANDSHAKE_RETENTION_DAYS), 3);
+    ASSERT_EQ(eapol_set_retention_days(-1), -1);
+    ASSERT_EQ(eapol_retention_days(), 3);              /* previous stands */
+    tune_reset();
+    ASSERT_EQ(eapol_retention_days(), EAPOL_DEFAULT_RETENTION_DAYS);
+}
+
+#ifdef WITH_SQLITE
+static void test_db_flags_are_the_registry_rows(void) {
+    tune_reset();
+    char err[160];
+    ASSERT_EQ(tune_set("db.retain_days=7", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("db.max_mb=64", err, sizeof(err)), 0);
+    ASSERT_EQ(tune_set("db.interval_secs=10", err, sizeof(err)), 0);
+    ASSERT_EQ(db_retain_days(), 7);
+    ASSERT_EQ(db_max_mb(), 64);
+    ASSERT_EQ(db_interval(), 10);
+    /* The setters keep their published shape: 0 / negative restore the
+       default (retain, interval), 0 is unlimited (max_mb). */
+    db_set_retain_days(0);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_RETAIN_DAYS), DB_DEFAULT_RETAIN_DAYS);
+    db_set_max_mb(0);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_MAX_MB), 0);
+    db_set_interval(-3);
+    ASSERT_EQ((long long)tune_val(TUNE_DB_INTERVAL_SECS), DB_DEFAULT_INTERVAL_S);
+    tune_reset();
+}
+#endif
+
 void run_tune_tests(void) {
     TEST_SUITE("tune: operator-tunable detector thresholds (#82)");
     RUN_TEST(test_defaults_are_the_shipped_values);
@@ -358,4 +563,14 @@ void run_tune_tests(void) {
     RUN_TEST(test_wps_flag_path_reaches_the_tamper_record);
     RUN_TEST(test_wps_setters_keep_their_published_contract);
     RUN_TEST(test_tune_set_id_rejects_out_of_range_and_bad_ids);
+    TEST_SUITE("tune: remaining thresholds and the atoi() flags (#120)");
+    RUN_TEST(test_issue120_rows_default_to_their_macros);
+    RUN_TEST(test_issue120_ring_bounded_caps);
+    RUN_TEST(test_set_value_refuses_what_atoi_accepted);
+    RUN_TEST(test_set_value_enforces_each_flags_bounds);
+    RUN_TEST(test_flag_rows_reach_the_tuned_record);
+    RUN_TEST(test_handshake_retention_is_the_registry_row);
+#ifdef WITH_SQLITE
+    RUN_TEST(test_db_flags_are_the_registry_rows);
+#endif
 }

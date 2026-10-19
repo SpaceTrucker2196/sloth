@@ -3,6 +3,7 @@
 #include "sloth.h"
 #include "beacon_detect.h"
 #include "alerts.h"
+#include "tune.h"
 
 /* ── Helpers ─────────────────────────────────────────── */
 
@@ -410,6 +411,84 @@ static void test_alert_detail_labels_v2(void) {
     if (has_v1) ASSERT(!has_v2);
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void t120_tune(const char *spec) {
+    char err[160] = "";
+    ASSERT_EQ(tune_set(spec, err, sizeof(err)), 0);
+}
+
+static void t120_series(const char *ip, const long *gaps, int ngaps) {
+    time_t t = 1700000000;
+    bd_observe(ip, 443, t);
+    for (int i = 0; i < ngaps; i++) bd_observe(ip, 443, t += gaps[i]);
+}
+
+static void test_bd_min_samples_is_tunable(void) {
+    bd_clear(); tune_reset();
+    static const long g[] = { 30, 30, 30 };        /* 4 samples; default 5 */
+    t120_series("203.0.113.70", g, 3);
+    ASSERT_EQ(bd_is_strong("203.0.113.70", 443), 0);
+    t120_tune("bd.min_samples=4");
+    ASSERT_EQ(bd_is_strong("203.0.113.70", 443), 1);
+    tune_reset();
+}
+
+static void test_bd_min_interval_is_tunable(void) {
+    bd_clear(); tune_reset();
+    static const long g[] = { 4, 4, 4, 4 };        /* default floor 10 s */
+    t120_series("203.0.113.71", g, 4);
+    ASSERT_EQ(bd_is_strong("203.0.113.71", 443), 0);
+    t120_tune("bd.min_interval_s=4");
+    ASSERT_EQ(bd_is_strong("203.0.113.71", 443), 1);
+    tune_reset();
+}
+
+static void test_bd_max_jitter_is_tunable(void) {
+    bd_clear(); tune_reset();
+    /* gaps 40,20,40,20: mean 30, population stddev 10, ratio 0.333 —
+       over the 25% default, and too few samples for v2. */
+    static const long g[] = { 40, 20, 40, 20 };
+    t120_series("203.0.113.72", g, 4);
+    ASSERT_EQ(bd_is_strong("203.0.113.72", 443), 0);
+    t120_tune("bd.max_jitter_pct=34");
+    ASSERT_EQ(bd_is_strong("203.0.113.72", 443), 1);
+    tune_reset();
+}
+
+static void test_bd_min_samples_v2_is_tunable(void) {
+    bd_clear(); tune_reset();
+    /* 8 samples, 7 gaps: five at the 60 s median, one at 10, one at
+       110. Concentration 5/7 = 0.71 passes v2; stddev/mean = 0.45
+       fails v1. Only the v2 sample floor (default 12) stands between
+       this and a v2 hit. */
+    static const long g[] = { 60, 60, 60, 60, 60, 10, 110 };
+    t120_series("203.0.113.73", g, 7);
+    ASSERT_EQ(bd_is_strong("203.0.113.73", 443), 0);
+    t120_tune("bd.min_samples_v2=8");
+    ASSERT_EQ(bd_is_strong("203.0.113.73", 443), 2);
+    tune_reset();
+}
+
+static void test_bd_min_concentration_is_tunable(void) {
+    bd_clear(); tune_reset();
+    /* 13 samples, 12 gaps: six at the 60 s median, three at 10 and
+       three at 110. Concentration exactly 0.50, under the 60% default;
+       stddev/mean 0.59 keeps v1 out of it. */
+    static const long g[] = { 60, 10, 60, 110, 60, 10,
+                              60, 110, 60, 10, 60, 110 };
+    t120_series("203.0.113.74", g, 12);
+    ASSERT_EQ(bd_is_strong("203.0.113.74", 443), 0);
+    t120_tune("bd.min_concentration_pct=50");
+    ASSERT_EQ(bd_is_strong("203.0.113.74", 443), 2);
+    tune_reset();
+}
+
 void run_beacon_detect_tests(void) {
     TEST_SUITE("beacon_detect stats");
     RUN_TEST(test_no_track_returns_zero);
@@ -437,4 +516,9 @@ void run_beacon_detect_tests(void) {
     RUN_TEST(test_v2_does_not_fire_on_uniform_random);
     RUN_TEST(test_v1_low_jitter_returns_kind_1);
     RUN_TEST(test_alert_detail_labels_v2);
+    RUN_TEST(test_bd_min_samples_is_tunable);
+    RUN_TEST(test_bd_min_interval_is_tunable);
+    RUN_TEST(test_bd_max_jitter_is_tunable);
+    RUN_TEST(test_bd_min_samples_v2_is_tunable);
+    RUN_TEST(test_bd_min_concentration_is_tunable);
 }

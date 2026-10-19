@@ -764,7 +764,8 @@ static void rule_deauth_flood(const sloth_state_t *s, time_t now) {
                  "victim=%s bssid=%s observed %d frames, peak %d in %ds, "
                  "reason=%s, %d stream%s%s; sender unverified, "
                  "disruption not confirmed",
-                 tgt, bss, v->frames, v->peak_win, DEAUTH_FLOOD_WIN_SECS,
+                 tgt, bss, v->frames, v->peak_win,
+                 (int)tune_val(TUNE_DEAUTH_FLOOD_WINDOW_S),
                  rsn, v->streams, v->streams == 1 ? "" : "s",
                  mine ? " - YOUR network" : "");
         /* The first wireless detection to cite its own frames (#92).
@@ -784,12 +785,14 @@ static void rule_beacon_flood(const sloth_state_t *s, time_t now) {
      * first-seen BSSIDs, not the table size, so a merely-dense area (many
      * stable APs) doesn't trip it. */
     (void)s;
-    int n = beacon_recent_new_bssids(now, BEACON_FLOOD_WIN_SECS);
-    if (n < BEACON_FLOOD_THRESH) return;
+    const int win    = (int)tune_val(TUNE_BEACON_FLOOD_WINDOW_S);
+    const int thresh = (int)tune_val(TUNE_BEACON_FLOOD_THRESH);
+    int n = beacon_recent_new_bssids(now, win);
+    if (n < thresh) return;
     char detail[ALERT_DETAIL_LEN];
     snprintf(detail, sizeof(detail),
              "%d new BSSIDs in %ds (mdk-style beacon flood)",
-             n, BEACON_FLOOD_WIN_SECS);
+             n, win);
     fire(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN,
          "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
 }
@@ -800,8 +803,10 @@ static void rule_auth_flood(const sloth_state_t *s, time_t now) {
      * trip it — only a genuine outlier does. */
     (void)s;
     uint8_t bssid[6];
-    int n = auth_flood_bssid(now, AUTH_FLOOD_WIN_SECS, AUTH_FLOOD_THRESH, bssid);
-    if (n < AUTH_FLOOD_THRESH) return;
+    const int win    = (int)tune_val(TUNE_AUTH_FLOOD_WINDOW_S);
+    const int thresh = (int)tune_val(TUNE_AUTH_FLOOD_THRESH);
+    int n = auth_flood_bssid(now, win, thresh, bssid);
+    if (n < thresh) return;
     char bss[20];
     mac_to_str(bssid, bss, sizeof(bss));
     char key[ALERT_KEY_LEN];
@@ -810,7 +815,7 @@ static void rule_auth_flood(const sloth_state_t *s, time_t now) {
     snprintf(key,    sizeof(key),    "authflood:%s", bss);
     snprintf(detail, sizeof(detail),
              "%d auth frames to %s in %ds (assoc-table DoS)%s",
-             n, bss, AUTH_FLOOD_WIN_SECS, mine ? " - YOUR network" : "");
+             n, bss, win, mine ? " - YOUR network" : "");
     fire(ALERT_TYPE_AUTH_FLOOD,
          mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
          "AUTH_FLOOD", detail, key, NULL, 0, now);
@@ -830,9 +835,10 @@ static void rule_assoc_flood(const sloth_state_t *s, time_t now) {
     (void)s;
     uint8_t bssid[6];
     int distinct = 0;
-    int n = assoc_flood_bssid(now, ASSOC_FLOOD_WIN_SECS, ASSOC_FLOOD_THRESH,
-                              bssid, &distinct);
-    if (n < ASSOC_FLOOD_THRESH) return;
+    const int win    = (int)tune_val(TUNE_ASSOC_FLOOD_WINDOW_S);
+    const int thresh = (int)tune_val(TUNE_ASSOC_FLOOD_THRESH);
+    int n = assoc_flood_bssid(now, win, thresh, bssid, &distinct);
+    if (n < thresh) return;
 
     char bss[20];
     mac_to_str(bssid, bss, sizeof(bss));
@@ -843,7 +849,7 @@ static void rule_assoc_flood(const sloth_state_t *s, time_t now) {
     snprintf(detail, sizeof(detail),
              "%d assoc reqs to %s from %d STA%s in %ds%s%s",
              n, bss, distinct, distinct == 1 ? "" : "s",
-             ASSOC_FLOOD_WIN_SECS,
+             win,
              distinct > 3 ? " (spoofed-MAC flood)" : " (few sources)",
              mine ? " - YOUR network" : "");
     fire(ALERT_TYPE_ASSOC_FLOOD,
@@ -1164,9 +1170,10 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
 static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
     uint8_t bssid[6], sta[6];
     int total = 0;
-    int imminent = btm_forcing_pair(now, BTM_ABUSE_WIN_SECS, BTM_ABUSE_THRESH,
-                                    bssid, sta, &total);
-    if (imminent < BTM_ABUSE_THRESH) return;
+    const int win    = (int)tune_val(TUNE_BTM_ABUSE_WINDOW_S);
+    const int thresh = (int)tune_val(TUNE_BTM_ABUSE_THRESH);
+    int imminent = btm_forcing_pair(now, win, thresh, bssid, sta, &total);
+    if (imminent < thresh) return;
 
     char bss[20], stastr[20];
     mac_to_str(bssid, bss,    sizeof(bss));
@@ -1218,7 +1225,7 @@ static void rule_btm_abuse(const sloth_state_t *s, time_t now) {
     snprintf(detail, sizeof(detail),
              "BTM force: %.17s -> %.17s %d/%d req %ds, candidates=%.40s, "
              "evil-twin=%s%s%s%s%s",
-             bss, stastr, imminent, total, BTM_ABUSE_WIN_SECS,
+             bss, stastr, imminent, total, win,
              cand[0] ? cand : "none",
              twin_target ? "yes" : "no",
              no_beacon ? ", source never beaconed" : "",
@@ -1712,7 +1719,8 @@ static void rule_sa_query_flood(const sloth_state_t *s, time_t now) {
     (void)s;
     uint8_t bssid[6], sta[6];
     int count = 0;
-    if (!saq_flood_pair(now, SAQ_FLOOD_WIN_SECS, SAQ_FLOOD_THRESH,
+    const int win = (int)tune_val(TUNE_SAQ_FLOOD_WINDOW_S);
+    if (!saq_flood_pair(now, win, (int)tune_val(TUNE_SAQ_FLOOD_THRESH),
                         bssid, sta, &count)) return;
 
     char bss[20], stastr[20];
@@ -1723,7 +1731,7 @@ static void rule_sa_query_flood(const sloth_state_t *s, time_t now) {
     snprintf(detail, sizeof(detail),
              "%d SA-Query frames in %ds between %.17s and %.17s"
              " - the AP is refusing spoofed disassociations",
-             count, SAQ_FLOOD_WIN_SECS, bss, stastr);
+             count, win, bss, stastr);
     /* CRIT: a legitimate exchange is a handful of frames over a few
      * hundred milliseconds (§11.13). Sustained means the AP is fending
      * something off, and MFP is doing its job — which is worth telling
@@ -1762,7 +1770,8 @@ static void rule_rts_flood(const sloth_state_t *s, time_t now) {
     (void)s;
     uint8_t ta[6];
     int max_nav = 0, dur = 0;
-    int n = ctrl_rts_flood(now, 60, RTS_FLOOD_RATE, RTS_FLOOD_SUSTAIN_S,
+    int n = ctrl_rts_flood(now, 60, (int)tune_val(TUNE_RTS_FLOOD_RATE),
+                           (int)tune_val(TUNE_RTS_FLOOD_SUSTAIN_S),
                            ta, &max_nav, &dur);
     if (n <= 0) return;
 
@@ -2462,18 +2471,21 @@ static void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
  * and pause between scans, so 6+/s for 5 s is solidly anomalous. The
  * lifetime frame_count / first_seen / last_seen say nothing about rate:
  * 30 probes over 300 s and 30 over 5 s look identical through them. */
-#define PROBE_FLOOD_MIN_RATE ((double)PROBE_FLOOD_FRAMES / PROBE_FLOOD_WIN_SECS)
-
 static void rule_probe_flood(const sloth_state_t *s, time_t now) {
+    /* probe.flood_frames / probe.flood_window_s (#120). The rate is
+     * derived from the pair the window detector was run with, so moving
+     * either knob moves the predicate here with it. */
+    const int    win_s    = (int)tune_val(TUNE_PROBE_FLOOD_WINDOW_S);
+    const double min_rate = (double)tune_val(TUNE_PROBE_FLOOD_FRAMES) / win_s;
     for (int i = 0; i < s->probe_count; i++) {
         const probe_client_t *p = &s->probe_clients[i];
         if (!p->flood) continue;                        /* decayed / never */
         /* The rate predicate itself, on the window's evidence: the
          * frames that met the threshold, averaged over the full window
          * they had to fit in. */
-        double win_rate = (double)p->burst_frames / PROBE_FLOOD_WIN_SECS;
-        if (win_rate < PROBE_FLOOD_MIN_RATE)            continue;
-        if (p->burst_span_ms >= PROBE_FLOOD_WIN_SECS * 1000u) continue;
+        double win_rate = (double)p->burst_frames / win_s;
+        if (win_rate < min_rate)                                 continue;
+        if (p->burst_span_ms >= (uint32_t)win_s * 1000u)         continue;
         double span_s = p->burst_span_ms / 1000.0;
         double rate   = p->burst_frames / (span_s > 0.001 ? span_s : 0.001);
         char mac_buf[20];
@@ -2488,7 +2500,7 @@ static void rule_probe_flood(const sloth_state_t *s, time_t now) {
                  "%s sent %d probes in %.1fs (%.1f/s, >= %.0f/s over %ds)"
                  " - active recon / stuck client",
                  mac_buf, p->burst_frames, span_s, rate,
-                 PROBE_FLOOD_MIN_RATE, PROBE_FLOOD_WIN_SECS);
+                 min_rate, win_s);
         /* LOW: a probe-happy client is recon noise — same tier as
          * port-scan. Real harm is in PNL leakage, not the probing. */
         fire(ALERT_TYPE_PROBE_FLOOD, ALERT_SEV_LOW,
@@ -2659,15 +2671,17 @@ static void rule_my_network_recon(const sloth_state_t *s, time_t now) {
  * conclusion, and the detail line carries the pass count and closest
  * approach so the operator can judge. */
 static void rule_recurring_transit(const sloth_state_t *s, time_t now) {
+    const long window = tune_val(TUNE_TRANSIT_WINDOW_SECS);
+    const int  thresh = (int)tune_val(TUNE_TRANSIT_RECUR_THRESH);
     for (int i = 0; i < s->transit_count; i++) {
         const transit_device_t *d = &s->transits[i];
         int passes = 0;
         for (int k = 0; k < d->pass_n; k++) {
             long age = (long)(now - d->pass_ts[k]);
             if (age < 0) age = 0;
-            if (age <= TRANSIT_WINDOW_SECS) passes++;
+            if (age <= window) passes++;
         }
-        if (passes < TRANSIT_RECUR_THRESH) continue;
+        if (passes < thresh) continue;
 
         char mac_buf[20];
         mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
@@ -3807,7 +3821,8 @@ static void rule_queue_evict(const sloth_state_t *s, time_t now) {
          * doing it keeps re-firing with a rising count, which is what
          * the alert engine's own dedup is for. */
         if (q->last_release_ts <= 0 ||
-            now - q->last_release_ts > QUEUE_EVICT_REPORT_SECS) continue;
+            now - q->last_release_ts > tune_val(TUNE_QUEUE_EVICT_REPORT_SECS))
+            continue;
 
         /* Shape A for the same station, close enough in time to be
          * about the same session. Absolute difference on purpose: the

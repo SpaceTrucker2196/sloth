@@ -3556,3 +3556,22 @@ going out). Read-only samples of the new binary on the issue showed
 RSS flat (+720 kB over 2 h 18 m, `[heap]` +8 kB, no NSS mapped), so
 the growth lived in code the 2026-10-14 fixes removed; these fields are
 what would show a recurrence. [[jsonl-schema]].
+
+## 2026-10-18 — the remaining thresholds into the `--tune` registry (#120)
+
+Forty rows appended to `src/tune.c`. Five are the flags that parsed
+with `atoi()` or a private `strtol` — `--correlate-retain`,
+`--handshake-retention`, `--db-interval-secs`, `--db-retain-days`,
+`--db-max-mb` — now aliases through `tune_set_value()`, so `5x` and
+`abc` exit 2 naming the knob instead of becoming 5 and "default"; the
+`--wps-*` aliases lost their `atoi()` the same way. The other
+thirty-five are the detector thresholds that were still `#define`s
+(`scan.*`, `deauth.flood_*`, `beacon.flood_*`, `auth.flood_*`,
+`assoc.flood_*`, `probe.flood_*`, `btm.abuse_*`, `saq.flood_*`,
+`rts.flood_*`, `bd.*`, `queue_evict.*`, `transit.*`, `presence.*`,
+`seqnum.corr_*`). The `#define` stays as the default and the row reads
+it; the use site reads the knob. Ring-backed counts cap at the ring.
+`sensor_health.tuned` reports them with no schema change. Clearing the
+`[j]` seqnum table no longer resets `--correlate-retain`. Pages:
+[[cli-reference]], [[jsonl-schema]], [[retention]].
+

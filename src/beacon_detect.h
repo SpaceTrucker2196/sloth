@@ -14,7 +14,12 @@
 #define BD_MIN_SAMPLES       5
 #define BD_MIN_INTERVAL_S   10   /* drop chatty heartbeats below this */
 #define BD_GAP_S             5   /* same-session window for update() */
-#define BD_MAX_JITTER_RATIO  0.25 /* v1: stddev/mean must be <= this */
+/* v1: stddev/mean must be <= this. Held as a whole percent so the
+ * --tune registry (#120), which is integer-only, can carry it as
+ * bd.max_jitter_pct; 25/100.0 is exactly 0.25, so the boundary the
+ * tests pin did not move. */
+#define BD_MAX_JITTER_PCT    25
+#define BD_MAX_JITTER_RATIO  (BD_MAX_JITTER_PCT / 100.0)
 
 /* v2 thresholds. Robust gap-concentration test: rather than measure
  * stddev/mean (which inflates fast under jitter and rules out the
@@ -35,7 +40,8 @@
  * BD_MIN_SAMPLES_V2 = 12 keeps the per-flow false-positive rate
  * under 0.1% on uniform-random gap distributions at the 0.60
  * threshold. */
-#define BD_MIN_CONCENTRATION 0.60
+#define BD_MIN_CONCENTRATION_PCT 60   /* bd.min_concentration_pct (#120) */
+#define BD_MIN_CONCENTRATION (BD_MIN_CONCENTRATION_PCT / 100.0)
 #define BD_MIN_SAMPLES_V2     12
 
 typedef struct {

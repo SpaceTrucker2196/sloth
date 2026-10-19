@@ -2,6 +2,7 @@
 #include "runner.h"
 #include "queue_evict.h"
 #include "sensor_health.h"
+#include "tune.h"
 
 /*
  * Transmit-queue release after a session change — #107 shape B,
@@ -521,6 +522,54 @@ static void test_snapshot_and_src_names(void) {
     ASSERT_EQ(queue_evict_count(), 0);
 }
 
+/* ── #120: this module's thresholds read through --tune ──────
+ *
+ * Each case seeds what the shipped default does not act on, asserts
+ * that, moves the knob past it and asserts the behaviour follows. Seen
+ * red with the use site reading the header #define instead of
+ * tune_val(). */
+
+static void test_queue_evict_min_frames_is_tunable(void) {
+    setup(); tune_reset();
+    queue_evict_note_session_change(BSSID, STA_A, QUEUE_EVICT_SRC_REASSOC,
+                                    1000, 0);
+    downlink_burst(BSSID, STA_A, 2, 10, 10);     /* default 3 */
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(BSSID, STA_A, &e), 1);
+    ASSERT_EQ((int)e.release_count, 0);
+
+    char err[160];
+    ASSERT_EQ(tune_set("queue_evict.min_frames=2", err, sizeof(err)), 0);
+    setup();
+    queue_evict_note_session_change(BSSID, STA_A, QUEUE_EVICT_SRC_REASSOC,
+                                    1000, 0);
+    downlink_burst(BSSID, STA_A, 2, 10, 10);
+    ASSERT_EQ(queue_evict_lookup(BSSID, STA_A, &e), 1);
+    ASSERT_EQ((int)e.release_count, 1);
+    ASSERT_EQ((int)e.last_release_frames, 2);
+    tune_reset();
+}
+
+static void test_queue_evict_window_is_tunable(void) {
+    setup(); tune_reset();
+    queue_evict_note_session_change(BSSID, STA_A, QUEUE_EVICT_SRC_REASSOC,
+                                    1000, 0);
+    downlink_burst(BSSID, STA_A, 5, 150, 10);    /* 150 ms; default 100 */
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(BSSID, STA_A, &e), 1);
+    ASSERT_EQ((int)e.release_count, 0);
+
+    char err[160];
+    ASSERT_EQ(tune_set("queue_evict.window_ms=500", err, sizeof(err)), 0);
+    setup();
+    queue_evict_note_session_change(BSSID, STA_A, QUEUE_EVICT_SRC_REASSOC,
+                                    1000, 0);
+    downlink_burst(BSSID, STA_A, 5, 150, 10);
+    ASSERT_EQ(queue_evict_lookup(BSSID, STA_A, &e), 1);
+    ASSERT_EQ((int)e.release_count, 1);
+    tune_reset();
+}
+
 void run_queue_evict_tests(void) {
     TEST_SUITE("queue_evict — queued-frame release (#107 shape B)");
     RUN_TEST(test_retried_frames_do_not_reach_the_threshold);
@@ -546,4 +595,6 @@ void run_queue_evict_tests(void) {
     RUN_TEST(test_short_and_non_data_frames_are_ignored);
     RUN_TEST(test_table_full_evicts_the_stalest_and_counts_it);
     RUN_TEST(test_snapshot_and_src_names);
+    RUN_TEST(test_queue_evict_min_frames_is_tunable);
+    RUN_TEST(test_queue_evict_window_is_tunable);
 }

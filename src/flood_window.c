@@ -1,5 +1,6 @@
 #include "sloth.h"
 #include "flood_window.h"
+#include "tune.h"
 
 /* ── Window ──────────────────────────────────────────────── */
 
@@ -47,17 +48,18 @@ int flood_window_active(const flood_window_t *w, uint64_t now_ms,
 
 /* ── Probe-request flood ─────────────────────────────────── */
 
-#define PROBE_WIN_MS  ((uint32_t)PROBE_FLOOD_WIN_SECS  * 1000u)
+/* probe.flood_frames / probe.flood_window_s (#120). */
+#define PROBE_WIN_MS  ((uint32_t)tune_val(TUNE_PROBE_FLOOD_WINDOW_S) * 1000u)
 #define PROBE_HOLD_MS ((uint32_t)PROBE_FLOOD_HOLD_SECS * 1000u)
 
 void probe_flood_note(probe_client_t *c, uint64_t now_ms, time_t wall) {
     flood_window_t *w = &c->burst_win;
-    if (!flood_window_note(w, now_ms, PROBE_FLOOD_FRAMES, PROBE_WIN_MS))
+    const int k = (int)tune_val(TUNE_PROBE_FLOOD_FRAMES);
+    if (!flood_window_note(w, now_ms, k, PROBE_WIN_MS))
         return;
-    /* Evidence for the rule and the operator: the PROBE_FLOOD_FRAMES
+    /* Evidence for the rule and the operator: the k
      * requests that met the threshold, and how far apart the first and
      * last of them were. */
-    int k = PROBE_FLOOD_FRAMES;
     int idx = ((int)w->head - k) % FLOOD_WIN_CAP;
     if (idx < 0) idx += FLOOD_WIN_CAP;
     c->burst_frames  = k;
