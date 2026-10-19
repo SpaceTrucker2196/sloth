@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#118, #141)
+**Last updated**: 2026-10-19 (#118, #141, #132)
 
 ---
 
@@ -69,8 +69,20 @@ docs/views/*.md            -- per-view deep dives
   `on_probe_frame()` and `decode_frame()`'s `DLT_IEEE802_11_RADIO` arm
   make, so the two radio entry points cannot disagree on what a valid
   header is. libpcap-free, so it is unit-tested and fuzzed
-  (`fuzz_frame_edge`) without `WITH_PCAP`. The IPv4 Total Length clamp
-  is not here; it belongs to the IP rework (#132).
+  (`fuzz_frame_edge`) without `WITH_PCAP`. The IP length clamp is not
+  here; it is the next stage's.
+- **IP to transport, once** (`src/capture/capture.c`, #132) — behind the
+  edge gate, `l4_from_ipv4()` / `l4_from_ipv6()` reduce an IP packet to
+  its transport segment and `decode_l4()` is the one TCP/UDP/ICMP
+  dispatch for both versions; until #132 each IP version carried its own
+  copy and the IPv6 one had silently lost Kerberos and SNMP. The IP
+  length field (Total Length / Payload Length) clamps the segment, so
+  link-layer padding never reaches a payload parser; a non-first
+  fragment is labelled `IPv4 frag` / `IPv6 frag` and not parsed; IPv6
+  extension headers (0, 43, 60, 51, 44) are walked. `decode_tcp()`
+  reads the data offset once and the `try_*` observers take the
+  payload, not the segment. Faults count as `parse_fault_ip_truncated`
+  / `parse_fault_ip_fragment` ([[jsonl-schema]]).
 - **802.11 frame view** (`src/dot11_frame.h`, #122) — each monitor frame
   is decoded **once**: `probe.c :: on_probe_frame()` and the
   `DLT_IEEE802_11_RADIO` arm of `capture.c :: decode_frame()` strip the

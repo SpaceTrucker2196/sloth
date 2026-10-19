@@ -22,6 +22,13 @@ distinct community strings against one destination — the
 exact shape of `snmpwalk -c <wordlist>` and the metasploit
 `auxiliary/scanner/snmp/snmp_login` module.
 
+Both IP versions feed it. Until #132 only IPv4 did: the IPv6 UDP
+dispatch in `capture.c` was a separate copy that had lost the SNMP
+arm, so a sweep over IPv6 produced no `snmp_flow` and no alert. There
+is now one dispatch for both.
+
+**Last updated**: 2026-10-19 (#132: SNMP over IPv6)
+
 ## What we detect
 
 SNMPv1/v2c message envelope:

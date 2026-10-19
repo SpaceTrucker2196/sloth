@@ -190,6 +190,8 @@ int sh_parse_fault_is_wired(sh_parse_fault_t kind) {
     case SH_PF_IE_OVERRUN:
     case SH_PF_RSN_MALFORMED:
     case SH_PF_MLE_MALFORMED:
+    case SH_PF_IP_TRUNCATED:
+    case SH_PF_IP_FRAGMENT:
     case SH_PF_FRAME_EDGE:
         return 1;
     default:

@@ -3698,3 +3698,20 @@ gains `--target {test,replay-check,all}`. Created [[replay-integration]]
 (linked from [[index]]); updated [[cli-reference]] (Replay group, exit
 code 1, build targets), [[jsonl-schema]] (`capture_iface` /
 `monitor_iface` = `replay`), [[mutation-testing]] (`--target`).
+
+## 2026-10-19 — #132: one transport dispatch; IP length, fragments, IPv6 extension headers
+
+`src/capture/capture.c`: `l4_from_ipv4()` / `l4_from_ipv6()` reduce an
+IP packet to its transport segment, `decode_l4()` is the one
+TCP/UDP/ICMP dispatch for both versions (IPv6 gains the Kerberos/88 and
+SNMP/161-162 arms its copy had lost), and `decode_tcp()` reads the data
+offset once for the thirteen `try_*` observers. IPv4 Total Length and
+IPv6 Payload Length clamp the segment, so Ethernet padding no longer
+reaches the payload parsers; a non-first fragment is labelled
+`IPv4 frag` / `IPv6 frag` and not parsed; IPv6 Hop-by-Hop, Routing,
+Destination Options, AH and Fragment headers are walked, and
+`packet.proto` is the protocol the walk ends on. The reserved
+parse-fault kinds `ip_truncated` and `ip_fragment` are now measured.
+Pages: [[jsonl-schema]] (`packet.info` values, the two kinds),
+[[architecture]], [[kerberos-snoop]], [[snmp-snoop]];
+`docs/views/packets.md`.

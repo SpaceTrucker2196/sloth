@@ -15,6 +15,13 @@ narrow: detect each Kerberos message type via the outer ASN.1
 `KERB_PREAUTH_BURST` when a single source produces a clean burst
 of `KDC_ERR_PREAUTH_FAILED` responses (password spray).
 
+Both IP versions feed it. Until #132 UDP/88 over IPv6 did not: the
+IPv6 UDP dispatch in `capture.c` was a separate copy that had lost the
+Kerberos arm (TCP/88 was unaffected). There is now one dispatch for
+both.
+
+**Last updated**: 2026-10-19 (#132: UDP/88 over IPv6)
+
 Deeper Kerberos visibility — username/principal extraction,
 AS-REP roasting detection, and kerberoasting service-ticket
 tracking — is documented out of scope at the bottom of this

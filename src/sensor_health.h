@@ -183,8 +183,8 @@ typedef enum {
     SH_PF_IE_OVERRUN,       /* an element / subelement / KDE walk ended in TLV_OVERRUN (src/bytes.h) */
     SH_PF_RSN_MALFORMED,    /* src/beacon_snoop.c — rsn_ie_parse() found an RSNE field cut off (#128) */
     SH_PF_MLE_MALFORMED,    /* src/mle.c — a Multi-Link element failed one of its three bounds rules */
-    SH_PF_IP_TRUNCATED,     /* reserved for #132 (IPv4 Total Length) — not yet wired */
-    SH_PF_IP_FRAGMENT,      /* reserved for #132 (fragments) — not yet wired */
+    SH_PF_IP_TRUNCATED,     /* src/capture/capture.c — IPv4 Total Length / IPv6 Payload Length or extension header past the packet (#132) */
+    SH_PF_IP_FRAGMENT,      /* src/capture/capture.c — a non-first IPv4/IPv6 fragment, labelled and not parsed (#132) */
     SH_PF_DNS_NAME_BAD,     /* reserved for #131 (DNS name reader once) — not yet wired */
     SH_PF_TLS_MALFORMED,    /* reserved for #131 (TLS parser under test) — not yet wired */
     SH_PF_FRAME_EDGE,       /* src/capture/frame_edge.c — a pcap record header refused at the edge (#141) */

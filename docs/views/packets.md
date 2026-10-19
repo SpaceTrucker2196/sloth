@@ -36,6 +36,30 @@ inline-decoded info string (e.g. `"GET example.com"`,
 `"TLS 1.3 google.com"`, `"DNS A google.com"`), and the first 64 bytes
 of raw frame for detail rendering and per-alert pcap export.
 
+How the IP layer is read (#132):
+
+- **The IP length field bounds the packet, not the frame.** IPv4 Total
+  Length and IPv6 Payload Length clamp what the payload parsers see, so
+  the zero padding Ethernet adds to a short packet is never parsed as
+  the datagram's tail. A Total Length below the header length shows as
+  `IPv4 bad len` with nothing past the addresses decoded.
+- **Non-first fragments are labelled, not parsed.** A fragment with a
+  non-zero offset carries no TCP/UDP header; the row shows
+  `IPv4 frag` or `IPv6 frag`, ports 0, and the protocol of the
+  fragmented datagram. sloth does not reassemble. The first fragment
+  (offset 0) is decoded as usual.
+- **IPv6 extension headers are walked** — Hop-by-Hop, Routing,
+  Destination Options, AH and an offset-0 Fragment header — so `Proto`
+  is what the packet carries (an MLD report behind a Router Alert is
+  `58`, not `0`). ESP, No Next Header (59) and unknown headers show as
+  `IPv6 nh=N`.
+- **One transport dispatch for both IP versions**, so IPv6 Kerberos
+  (88) and SNMP (161/162) are decoded exactly as IPv4's are.
+
+Both length and fragment cases are also counted in `sensor_health`'s
+`parse_fault_ip_truncated` / `parse_fault_ip_fragment`
+([jsonl-schema](../wiki/jsonl-schema.md)).
+
 ## View
 
 ```
@@ -92,6 +116,9 @@ Press Enter on a paused packet for the hex panel:
 - **Wide port-scan signature**: many SYN packets to many local ports
   from one source IP triggers
   [PORT_SCAN](alerts.md#port_scan).
+- **`IPv4 frag` / `IPv6 frag` rows with no offset-0 fragment beside
+  them**, or tiny overlapping fragments: classic IDS-evasion shape.
+  Ordinary fragmentation on a small-MTU path shows complete sets.
 - **Unusual proto numbers** that survive the IPv4/IPv6 filter —
   e.g. proto 4 (IP-in-IP), proto 47 (GRE) showing up unexpectedly
   could indicate tunnelling.

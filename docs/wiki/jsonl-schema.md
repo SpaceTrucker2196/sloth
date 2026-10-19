@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`.
 
-**Last updated**: 2026-10-19 (#138: string fields are always valid UTF-8).
+**Last updated**: 2026-10-19 (#132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured).
 
 ---
 
@@ -642,7 +642,7 @@ pattern as they are converted.
 | `nbns_name`          | `name`+`ip`       | `name`, `ip`, `suffix`, `last_seen` |
 | `ssdp_device`        | `usn`             | `ip`, `kind` (the SSDP `NT`/`ST` value; renamed from `type` to avoid colliding with the envelope's `type` field), `usn`, `location`, `nts`, `last_seen` |
 | `scan_entry`         | `ip`              | `ip`, `port_count`, `first_seen`, `last_seen`, `flagged`, `ports[]` |
-| `packet`             | `(ts_sec, ts_usec, src, dst)` | `ts_sec`, `ts_usec`, `src`, `dst`, `src_port`, `dst_port`, `proto`, `len`, `info`. Raw frame bytes are intentionally not emitted. |
+| `packet`             | `(ts_sec, ts_usec, src, dst)` | `ts_sec`, `ts_usec`, `src`, `dst`, `src_port`, `dst_port`, `proto`, `len`, `info`. Raw frame bytes are intentionally not emitted. Additive values of `info` since #132: `IPv4 frag` / `IPv6 frag` for a non-first fragment (ports 0, not parsed — sloth does not reassemble; `proto` is the fragmented datagram's protocol) and `IPv4 bad len` for a Total Length below the header length; both also count in `sensor_health`'s `parse_fault_ip_fragment` / `parse_fault_ip_truncated`. For IPv6, `proto` is the protocol after any Hop-by-Hop / Routing / Destination Options / AH / first-Fragment extension headers, no longer the fixed header's Next Header, so an MLD report behind a Router Alert is `58`, not `0`. `kerb_event` and `snmp_flow` now also arrive from IPv6 traffic. |
 | `process`            | `pid`             | `pid` (-1 = unresolved bucket), `proc`, `ppid`, `depth`, `conn_count`, `tcp_count`, `udp_count`, `tx_bytes`, `rx_bytes`, `tx_rate`, `rx_rate`, `ports[]`. Synthesis record — aggregated from `connections` by PID; lets consumers reproduce the Processes view without re-implementing the aggregation. |
 | `ndp_ra`             | `src_ip`          | `src_ip` (IPv6 source — usually link-local), `src_mac` + optional (present iff RA carried a Source Link-Layer Address option), `cur_hop_limit`, `flags`, `router_lifetime` (seconds; 0 = NOT a default router), `prefixes[]` (formatted `addr/len`), `first_seen`, `last_seen`, `count`. IPv6 NDP Router Advertisement tracker — feeds the `ROGUE_RA` alert. NS/NA neighbor cache is not yet emitted; see `docs/wiki/ipv6-ndp.md` for the scope decision. |
 | `smb_session`        | `(client_ip, server_ip, server_port)` | `client_ip`, `server_ip`, `server_port` (445 or 139), `dialect` (`SMB1` or `SMB2`; sticky to `SMB1` once observed), `first_seen`, `last_seen`, `count`. Feeds the `SMB1_USE` alert — sessions with `dialect == "SMB1"` are CRIT-flagged because SMBv1 has been deprecated since 2017 (EternalBlue / WannaCry). See `docs/wiki/smb-snoop.md`. |
@@ -868,9 +868,9 @@ end, and most of them stopped silently. They share one iterator (every walk #126
 this tally. The kinds, and this is the whole parse-fault set:
 `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`,
 `mle_malformed`, `ip_truncated`, `ip_fragment`, `dns_name_bad`,
-`tls_malformed`, `frame_edge`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`, `mle_malformed`, `frame_edge`. The others are reserved by
-the issue that introduced the tally and are wired by the slices that
-rewrite those parsers (#131 DNS/TLS, #132 IP); until then
+`tls_malformed`, `frame_edge`. Measured in this build: `radiotap_bad`, `dot11_runt`, `ie_overrun`, `rsn_malformed`, `mle_malformed`, `ip_truncated`, `ip_fragment`, `frame_edge`. The others are reserved by
+the issue that introduced the tally and are wired by the slice that
+rewrites those parsers (#131 DNS/TLS); until then
 their field is emitted and reads 0 because nothing measures it, not
 because nothing failed. The test
 `tests/test_sensor_health.c :: test_schema_doc_lists_every_parse_fault_kind`
@@ -928,6 +928,26 @@ holds both lists to the build.
   CVE-2026-58374 that `MLE_*` alerts already report per MLD. One count
   per element however many rules it broke. A subelement overrun counts
   here and not in `ie_overrun`.
+- `ip_truncated` (#132) — an IP packet whose own length field
+  disagrees with what arrived, on the IP capture stream
+  (`src/capture/capture.c`): an IPv4 Total Length below the header's
+  IHL (the row's `info` reads `IPv4 bad len` and nothing past the
+  addresses is parsed); an IPv4 Total Length or IPv6 Payload Length
+  past the captured bytes when the capture itself was **not** snapped
+  (a frame cut by the snaplen is expected to be short and is not
+  counted); or an IPv6 extension header that runs past the packet's
+  end. The length field only ever shortens what is parsed — trailing
+  link-layer padding is dropped, never handed to a payload parser — so
+  a lying length cannot widen a read. A length of 0 (BIG TCP / IPv6
+  jumbogram) is read as "not stated" and not counted.
+- `ip_fragment` (#132) — a non-first IPv4 or IPv6 fragment (Fragment
+  Offset != 0). Not malformed: such a fragment carries no transport
+  header, sloth does not reassemble, and until #132 its first octets
+  were parsed as TCP or UDP and invented ports and records. It is now
+  labelled (`info` `IPv4 frag` / `IPv6 frag`) and counted instead. A
+  steady figure is normal on a network with a small path MTU; a burst
+  of fragments with no first fragment beside it is the shape of
+  fragment-overlap evasion and is worth a capture.
 - `frame_edge` (#141) — a libpcap record header refused at the pcap
   edge, before any byte of the frame is read, by
   `src/capture/frame_edge.c :: frame_view_init()`: a capture length of

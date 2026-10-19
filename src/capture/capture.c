@@ -505,7 +505,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "onvif_discovery.h"
-#include "sensor_health.h"     /* SH_PF_FRAME_EDGE (#141) */
+#include "sensor_health.h"     /* SH_PF_FRAME_EDGE (#141), SH_PF_IP_* (#132) */
 #include "http_snoop.h"
 #include "ftp_snoop.h"
 #include "pop3_snoop.h"
@@ -553,20 +553,21 @@ static uint16_t u16be(const uint8_t *p) {
 
 /* ── Protocol decoders ────────────────────────────────────── */
 
-/* Try to decode TLS SNI from a TCP segment. Updates pkt->info and
-   calls dns_set_resolved if an SNI hostname is found. */
-/* Try to decode HTTP Host header from a TCP segment. */
-static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+/* The try_* observers below take the TCP payload, never the segment:
+ * the data offset is read and bounded once, in decode_tcp() (#132),
+ * instead of once per observer — thirteen copies of one bounds check
+ * is thirteen places for it to differ. Each keeps only its own
+ * protocol's minimum length. */
+
+/* HTTP request Host header, or a response (#71). */
+static void try_http(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 16) return;
     http_log_entry_t entry;
 
     /* Responses first (#71): a response and a request cannot be
      * confused — one starts "HTTP/1.x", the other a method — and trying
      * the request parser on a response wastes the pass. */
-    if (http_log_parse_response(tp + tcp_hdr, pay_len, pkt->src, &entry)) {
+    if (http_log_parse_response(pay, pay_len, pkt->src, &entry)) {
         snprintf(entry.dst, sizeof(entry.dst), "%s", pkt->dst);
         entry.src_port = pkt->src_port;
         entry.dst_port = pkt->dst_port;
@@ -587,7 +588,7 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
         return;
     }
 
-    if (!http_log_parse(tp + tcp_hdr, pay_len, pkt->src, &entry)) return;
+    if (!http_log_parse(pay, pay_len, pkt->src, &entry)) return;
     snprintf(entry.dst, sizeof(entry.dst), "%s", pkt->dst);
     entry.src_port = pkt->src_port;
     entry.dst_port = pkt->dst_port;
@@ -596,62 +597,44 @@ static void try_http(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     http_log_record(&entry);
     /* Same payload pass: look for Authorization: Basic and record any
      * cleartext credential exposure. Username only — see #16 phase 3. */
-    http_snoop_scan_creds(tp + tcp_hdr, pay_len,
-                          pkt->src, pkt->dst, pkt->dst_port);
+    http_snoop_scan_creds(pay, pay_len, pkt->src, pkt->dst, pkt->dst_port);
 }
 
 /* FTP command-channel observer on TCP/21. Records USER<->PASS
  * exposures via the cleartext_creds ring. #16 phase 3. */
-static void try_ftp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_ftp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 5) return;
-    if (ftp_snoop(tp + tcp_hdr, pay_len,
-                  pkt->src, pkt->dst, pkt->dst_port))
+    if (ftp_snoop(pay, pay_len, pkt->src, pkt->dst, pkt->dst_port))
         snprintf(pkt->info, sizeof(pkt->info), "FTP");
 }
 
 /* POP3 on TCP/110 — same shape as FTP (USER/PASS lines). */
-static void try_pop3(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_pop3(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 5) return;
-    if (pop3_snoop(tp + tcp_hdr, pay_len,
-                   pkt->src, pkt->dst, pkt->dst_port))
+    if (pop3_snoop(pay, pay_len, pkt->src, pkt->dst, pkt->dst_port))
         snprintf(pkt->info, sizeof(pkt->info), "POP3");
 }
 
 /* IMAP on TCP/143 — tagged LOGIN with optional quoting. */
-static void try_imap(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_imap(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 8) return;
-    if (imap_snoop(tp + tcp_hdr, pay_len,
-                   pkt->src, pkt->dst, pkt->dst_port))
+    if (imap_snoop(pay, pay_len, pkt->src, pkt->dst, pkt->dst_port))
         snprintf(pkt->info, sizeof(pkt->info), "IMAP");
 }
 
 /* SMTP on TCP/25/587 — AUTH PLAIN in one shot. */
-static void try_smtp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_smtp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 5) return;
-    if (smtp_snoop(tp + tcp_hdr, pay_len,
-                   pkt->src, pkt->dst, pkt->dst_port))
+    if (smtp_snoop(pay, pay_len, pkt->src, pkt->dst, pkt->dst_port))
         snprintf(pkt->info, sizeof(pkt->info), "SMTP");
 }
 
-static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+/* TLS ClientHello SNI, on any port. Updates pkt->info and calls
+ * dns_set_resolved if an SNI hostname is found. */
+static void try_sni(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 9) return;
     tls_log_entry_t entry;
-    if (!tls_log_parse(tp + tcp_hdr, pay_len, pkt->src, pkt->dst, &entry)) return;
+    if (!tls_log_parse(pay, pay_len, pkt->src, pkt->dst, &entry)) return;
     if (entry.host[0]) dns_set_resolved(pkt->dst, entry.host);
     /* A sentinel host reached over TLS at a private address is a portal
      * terminating the connection (#69). Independent of the body check —
@@ -666,102 +649,66 @@ static void try_sni(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     tls_log_record(&entry);
 }
 
-static void try_smb(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_smb(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 4) return;
     if (smb_snoop_observe(pkt->src, pkt->src_port,
-                          pkt->dst, pkt->dst_port,
-                          tp + tcp_hdr, pay_len)) {
+                          pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "SMB");
-    }
 }
 
 /* Kerberos over TCP/88 — payload starts with a 4-byte length prefix
- * then the ASN.1 message. UDP path is handled directly in the
- * decode_ipv4 / decode_ipv6 UDP branch. */
-static void try_kerb_tcp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+ * then the ASN.1 message. The UDP path is decode_udp()'s. */
+static void try_kerb_tcp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 1) return;
     if (kerb_snoop_observe(pkt->src, pkt->src_port,
-                           pkt->dst, pkt->dst_port,
-                           tp + tcp_hdr, pay_len)) {
+                           pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "Kerberos");
-    }
 }
 
 /* LDAP over TCP/389 (default) or TCP/3268 (Global Catalog). TLS
  * variants 636 / 3269 are opaque past the handshake and not
  * observed. */
-static void try_ldap(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_ldap(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 2) return;
     if (ldap_snoop_observe(pkt->src, pkt->src_port,
-                           pkt->dst, pkt->dst_port,
-                           tp + tcp_hdr, pay_len)) {
+                           pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "LDAP");
-    }
 }
 
 /* BGP over TCP/179. The 19-byte marker + length + type header is
  * distinctive enough that we can match on it directly. */
-static void try_bgp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_bgp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 19) return;
     if (bgp_snoop_observe(pkt->src, pkt->src_port,
-                          pkt->dst, pkt->dst_port,
-                          tp + tcp_hdr, pay_len)) {
+                          pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "BGP");
-    }
 }
 
 /* RDP X.224 Connection Request on TCP/3389 — TPKT envelope
  * (version 0x03) wrapping a Class 0 CR TPDU (code 0xE0). */
-static void try_rdp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_rdp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 11) return;
     if (rdp_snoop_observe(pkt->src, pkt->src_port,
-                          pkt->dst, pkt->dst_port,
-                          tp + tcp_hdr, pay_len)) {
+                          pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "RDP");
-    }
 }
 
 /* MQTT on TCP/1883. Fixed header is one type byte + 1-4 byte
  * Remaining Length varint, so the protocol is tag-recognisable. */
-static void try_mqtt(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_mqtt(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 2) return;
     if (mqtt_snoop_observe(pkt->src, pkt->src_port,
-                           pkt->dst, pkt->dst_port,
-                           tp + tcp_hdr, pay_len)) {
+                           pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "MQTT");
-    }
 }
 
 /* SSH banner on TCP/22. Matches the cleartext "SSH-protoversion-..."
  * exchange that precedes the encrypted key exchange. */
-static void try_ssh(const uint8_t *tp, int tlen, packet_info_t *pkt) {
-    int tcp_hdr = (tp[12] >> 4) * 4;
-    if (tcp_hdr < 20 || tcp_hdr > tlen) return;
-    int pay_len = tlen - tcp_hdr;
+static void try_ssh(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
     if (pay_len < 6) return;
     if (ssh_snoop_observe(pkt->src, pkt->src_port,
-                          pkt->dst, pkt->dst_port,
-                          tp + tcp_hdr, pay_len)) {
+                          pkt->dst, pkt->dst_port, pay, pay_len))
         snprintf(pkt->info, sizeof(pkt->info), "SSH");
-    }
 }
 
 static void decode_tcp_flags(uint8_t flags, char *buf, int sz) {
@@ -784,239 +731,135 @@ static void decode_icmp(uint8_t type, uint8_t code, char *buf, int sz) {
     }
 }
 
-static void decode_ipv4(const uint8_t *p, int len, packet_info_t *pkt) {
-    if (len < 20) return;
-    int ihl = (p[0] & 0x0f) * 4;
-    if (ihl < 20 || ihl > len) return;
+static int port_is(const packet_info_t *pkt, uint16_t port) {
+    return pkt->src_port == port || pkt->dst_port == port;
+}
 
-    pkt->proto = p[9];
-    inet_ntop(AF_INET, p + 12, pkt->src, sizeof(pkt->src));
-    inet_ntop(AF_INET, p + 16, pkt->dst, sizeof(pkt->dst));
+/* TCP (RFC 9293 §3.1). Ports and flags from the fixed header; the data
+ * offset is read here once and the observers get the payload. A data
+ * offset below 5 words or past the segment leaves the row as ports and
+ * flags only — there is no payload to hand anyone. */
+static void decode_tcp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    pkt->src_port = u16be(tp + 0);
+    pkt->dst_port = u16be(tp + 2);
+    decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
 
-    const uint8_t *tp   = p + ihl;
-    int            tlen = len - ihl;
+    const int doff = (tp[12] >> 4) * 4;
+    if (doff < 20 || doff > tlen) return;
+    const uint8_t *pay     = tp + doff;
+    const int      pay_len = tlen - doff;
 
-    if (pkt->proto == 6 && tlen >= 20) {
-        pkt->src_port = u16be(tp + 0);
-        pkt->dst_port = u16be(tp + 2);
-        decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
-        try_sni(tp, tlen, pkt);
-        if (pkt->dst_port == 80 || pkt->src_port == 80 ||
-            pkt->dst_port == 8080 || pkt->src_port == 8080 ||
-            pkt->dst_port == 8000 || pkt->src_port == 8000)
-            try_http(tp, tlen, pkt);
-        if (pkt->dst_port == 21 || pkt->src_port == 21)
-            try_ftp(tp, tlen, pkt);
-        if (pkt->dst_port == 110 || pkt->src_port == 110)
-            try_pop3(tp, tlen, pkt);
-        if (pkt->dst_port == 143 || pkt->src_port == 143)
-            try_imap(tp, tlen, pkt);
-        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
-            pkt->dst_port == 587 || pkt->src_port == 587)
-            try_smtp(tp, tlen, pkt);
-        if (pkt->dst_port == 445 || pkt->src_port == 445 ||
-            pkt->dst_port == 139 || pkt->src_port == 139)
-            try_smb(tp, tlen, pkt);
-        if (pkt->dst_port == 88 || pkt->src_port == 88)
-            try_kerb_tcp(tp, tlen, pkt);
-        if (pkt->dst_port == 389  || pkt->src_port == 389 ||
-            pkt->dst_port == 3268 || pkt->src_port == 3268)
-            try_ldap(tp, tlen, pkt);
-        if (pkt->dst_port == 179 || pkt->src_port == 179)
-            try_bgp(tp, tlen, pkt);
-        if (pkt->dst_port == 22 || pkt->src_port == 22)
-            try_ssh(tp, tlen, pkt);
-        if (pkt->dst_port == 3389 || pkt->src_port == 3389)
-            try_rdp(tp, tlen, pkt);
-        if (pkt->dst_port == 1883 || pkt->src_port == 1883)
-            try_mqtt(tp, tlen, pkt);
-    } else if (pkt->proto == 17 && tlen >= 8) {
-        pkt->src_port = u16be(tp + 0);
-        pkt->dst_port = u16be(tp + 2);
-        if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
-            if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
-            dns_log_entry_t dqe;
-            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe)) {
-                dns_log_record(&dqe);
-                /* A connectivity-check host resolving into private or
-                 * CGNAT space is a portal answering for it (#69). */
-                int cp = cp_check_dns(dqe.qname, dqe.answer);
-                if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
-                                  dqe.answer, time(NULL));
-            }
-        } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
-            mdns_snoop(tp + 8, tlen - 8);
-            snprintf(pkt->info, sizeof(pkt->info), "mDNS");
-        } else if ((pkt->src_port == 137 || pkt->dst_port == 137) && tlen > 8) {
-            if (!nbns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "NBNS");
-        } else if ((pkt->src_port == 67 || pkt->dst_port == 67 ||
-                    pkt->src_port == 68 || pkt->dst_port == 68) && tlen > 8) {
-            if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "DHCP");
-        } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
-            const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            char        hbuf[DNS_NAME_MAX];
-            const char *host   = capture_quic_hostname(remote, hbuf, sizeof(hbuf));
-            quic_log_entry_t qe;
-            if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
-                               host && host[0] ? host : NULL, &qe)) {
-                snprintf(pkt->info, sizeof(pkt->info), "QUIC %.58s",
-                         qe.host[0] ? qe.host : qe.ver);
-                quic_log_record(&qe);
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
-            }
-        } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
-            if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "SSDP");
-        } else if ((pkt->src_port == 3702 || pkt->dst_port == 3702) && tlen > 8) {
-            if (!onvif_ws_discovery_snoop(pkt->src, tp + 8, tlen - 8,
-                                          pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "WSD");
-        } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
-            ntp_log_entry_t ne;
-            if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {
-                snprintf(pkt->info, sizeof(pkt->info),
-                         "NTP v%u %.6s str=%u", ne.version, ne.mode, ne.stratum);
-                ntp_log_record(&ne);
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "NTP");
-            }
-        } else if ((pkt->src_port == 88 || pkt->dst_port == 88) && tlen > 8) {
-            if (kerb_snoop_observe(pkt->src, pkt->src_port,
-                                    pkt->dst, pkt->dst_port,
-                                    tp + 8, tlen - 8)) {
-                snprintf(pkt->info, sizeof(pkt->info), "Kerberos");
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "UDP 88");
-            }
-        } else if ((pkt->src_port == 161 || pkt->dst_port == 161 ||
-                    pkt->src_port == 162 || pkt->dst_port == 162) && tlen > 8) {
-            if (snmp_snoop_observe(pkt->src, pkt->src_port,
-                                    pkt->dst, pkt->dst_port,
-                                    tp + 8, tlen - 8)) {
-                snprintf(pkt->info, sizeof(pkt->info), "SNMP");
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "UDP %u",
-                         pkt->dst_port == 161 || pkt->dst_port == 162
-                         ? pkt->dst_port : pkt->src_port);
-            }
-        } else {
+    try_sni(pay, pay_len, pkt);
+    if (port_is(pkt, 80) || port_is(pkt, 8080) || port_is(pkt, 8000))
+        try_http(pay, pay_len, pkt);
+    if (port_is(pkt, 21))                        try_ftp(pay, pay_len, pkt);
+    if (port_is(pkt, 110))                       try_pop3(pay, pay_len, pkt);
+    if (port_is(pkt, 143))                       try_imap(pay, pay_len, pkt);
+    if (port_is(pkt, 25) || port_is(pkt, 587))   try_smtp(pay, pay_len, pkt);
+    if (port_is(pkt, 445) || port_is(pkt, 139))  try_smb(pay, pay_len, pkt);
+    if (port_is(pkt, 88))                        try_kerb_tcp(pay, pay_len, pkt);
+    if (port_is(pkt, 389) || port_is(pkt, 3268)) try_ldap(pay, pay_len, pkt);
+    if (port_is(pkt, 179))                       try_bgp(pay, pay_len, pkt);
+    if (port_is(pkt, 22))                        try_ssh(pay, pay_len, pkt);
+    if (port_is(pkt, 3389))                      try_rdp(pay, pay_len, pkt);
+    if (port_is(pkt, 1883))                      try_mqtt(pay, pay_len, pkt);
+}
+
+/* UDP (RFC 768). The one UDP dispatch for both IP versions: until #132
+ * the v4 and v6 decoders each carried a copy, and the v6 copy had
+ * already lost the Kerberos and SNMP arms. */
+static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
+    pkt->src_port = u16be(tp + 0);
+    pkt->dst_port = u16be(tp + 2);
+    const uint8_t *pay     = tp + 8;
+    const int      pay_len = tlen - 8;
+
+    if (pay_len <= 0) {
+        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+    } else if (port_is(pkt, 53)) {
+        if (!dns_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
             snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+        dns_log_entry_t dqe;
+        if (dns_log_parse(pay, pay_len, pkt->src, &dqe)) {
+            dns_log_record(&dqe);
+            /* A connectivity-check host resolving into private or
+             * CGNAT space is a portal answering for it (#69). */
+            int cp = cp_check_dns(dqe.qname, dqe.answer);
+            if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
+                              dqe.answer, time(NULL));
         }
-    } else if (pkt->proto == 1 && tlen >= 2) {
+    } else if (port_is(pkt, 5353)) {
+        mdns_snoop(pay, pay_len);
+        snprintf(pkt->info, sizeof(pkt->info), "mDNS");
+    } else if (port_is(pkt, 137)) {
+        if (!nbns_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
+            snprintf(pkt->info, sizeof(pkt->info), "NBNS");
+    } else if (port_is(pkt, 67) || port_is(pkt, 68)) {
+        if (!dhcp_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
+            snprintf(pkt->info, sizeof(pkt->info), "DHCP");
+    } else if (port_is(pkt, 443)) {
+        const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
+        char        hbuf[DNS_NAME_MAX];
+        const char *host   = capture_quic_hostname(remote, hbuf, sizeof(hbuf));
+        quic_log_entry_t qe;
+        if (quic_log_parse(pay, pay_len, pkt->src, pkt->dst,
+                           host && host[0] ? host : NULL, &qe)) {
+            snprintf(pkt->info, sizeof(pkt->info), "QUIC %.58s",
+                     qe.host[0] ? qe.host : qe.ver);
+            quic_log_record(&qe);
+        } else {
+            snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
+        }
+    } else if (port_is(pkt, 1900)) {
+        if (!ssdp_snoop(pkt->src, pay, pay_len, pkt->info, sizeof(pkt->info)))
+            snprintf(pkt->info, sizeof(pkt->info), "SSDP");
+    } else if (port_is(pkt, 3702)) {
+        if (!onvif_ws_discovery_snoop(pkt->src, pay, pay_len,
+                                      pkt->info, sizeof(pkt->info)))
+            snprintf(pkt->info, sizeof(pkt->info), "WSD");
+    } else if (port_is(pkt, 123)) {
+        ntp_log_entry_t ne;
+        if (ntp_log_parse(pay, pay_len, pkt->src, pkt->dst, &ne)) {
+            snprintf(pkt->info, sizeof(pkt->info),
+                     "NTP v%u %.6s str=%u", ne.version, ne.mode, ne.stratum);
+            ntp_log_record(&ne);
+        } else {
+            snprintf(pkt->info, sizeof(pkt->info), "NTP");
+        }
+    } else if (port_is(pkt, 88)) {
+        if (kerb_snoop_observe(pkt->src, pkt->src_port,
+                               pkt->dst, pkt->dst_port, pay, pay_len))
+            snprintf(pkt->info, sizeof(pkt->info), "Kerberos");
+        else
+            snprintf(pkt->info, sizeof(pkt->info), "UDP 88");
+    } else if (port_is(pkt, 161) || port_is(pkt, 162)) {
+        if (snmp_snoop_observe(pkt->src, pkt->src_port,
+                               pkt->dst, pkt->dst_port, pay, pay_len))
+            snprintf(pkt->info, sizeof(pkt->info), "SNMP");
+        else
+            snprintf(pkt->info, sizeof(pkt->info), "UDP %u",
+                     pkt->dst_port == 161 || pkt->dst_port == 162
+                     ? pkt->dst_port : pkt->src_port);
+    } else {
+        snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
+    }
+}
+
+/* THE transport dispatch (#132). `proto` is the upper-layer protocol
+ * after any IPv6 extension headers; `tp` is bounded by the IP length
+ * field, not by the frame, so link-layer padding never reaches it. */
+static void decode_l4(int proto, int is_v6, const uint8_t *tp, int tlen,
+                      packet_info_t *pkt) {
+    if (proto == 6 && tlen >= 20) {
+        decode_tcp(tp, tlen, pkt);
+    } else if (proto == 17 && tlen >= 8) {
+        decode_udp(tp, tlen, pkt);
+    } else if (!is_v6 && proto == 1 && tlen >= 2) {
         decode_icmp(tp[0], tp[1], pkt->info, sizeof(pkt->info));
         icmp_log_entry_t ie;
         if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 0, &ie))
             icmp_log_record(&ie);
-    } else {
-        snprintf(pkt->info, sizeof(pkt->info), "IP proto %d", pkt->proto);
-    }
-}
-
-static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
-    if (len < 40) return;
-    pkt->proto = p[6];
-    inet_ntop(AF_INET6, p + 8,  pkt->src, sizeof(pkt->src));
-    inet_ntop(AF_INET6, p + 24, pkt->dst, sizeof(pkt->dst));
-
-    const uint8_t *tp   = p + 40;
-    int            tlen = len - 40;
-
-    if (pkt->proto == 6 && tlen >= 20) {
-        pkt->src_port = u16be(tp + 0);
-        pkt->dst_port = u16be(tp + 2);
-        decode_tcp_flags(tp[13], pkt->info, sizeof(pkt->info));
-        try_sni(tp, tlen, pkt);
-        if (pkt->dst_port == 80 || pkt->src_port == 80 ||
-            pkt->dst_port == 8080 || pkt->src_port == 8080 ||
-            pkt->dst_port == 8000 || pkt->src_port == 8000)
-            try_http(tp, tlen, pkt);
-        if (pkt->dst_port == 21 || pkt->src_port == 21)
-            try_ftp(tp, tlen, pkt);
-        if (pkt->dst_port == 110 || pkt->src_port == 110)
-            try_pop3(tp, tlen, pkt);
-        if (pkt->dst_port == 143 || pkt->src_port == 143)
-            try_imap(tp, tlen, pkt);
-        if (pkt->dst_port == 25 || pkt->src_port == 25 ||
-            pkt->dst_port == 587 || pkt->src_port == 587)
-            try_smtp(tp, tlen, pkt);
-        if (pkt->dst_port == 445 || pkt->src_port == 445 ||
-            pkt->dst_port == 139 || pkt->src_port == 139)
-            try_smb(tp, tlen, pkt);
-        if (pkt->dst_port == 88 || pkt->src_port == 88)
-            try_kerb_tcp(tp, tlen, pkt);
-        if (pkt->dst_port == 389  || pkt->src_port == 389 ||
-            pkt->dst_port == 3268 || pkt->src_port == 3268)
-            try_ldap(tp, tlen, pkt);
-        if (pkt->dst_port == 179 || pkt->src_port == 179)
-            try_bgp(tp, tlen, pkt);
-        if (pkt->dst_port == 22 || pkt->src_port == 22)
-            try_ssh(tp, tlen, pkt);
-        if (pkt->dst_port == 3389 || pkt->src_port == 3389)
-            try_rdp(tp, tlen, pkt);
-        if (pkt->dst_port == 1883 || pkt->src_port == 1883)
-            try_mqtt(tp, tlen, pkt);
-    } else if (pkt->proto == 17 && tlen >= 8) {
-        pkt->src_port = u16be(tp + 0);
-        pkt->dst_port = u16be(tp + 2);
-        if ((pkt->src_port == 53 || pkt->dst_port == 53) && tlen > 8) {
-            if (!dns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
-            dns_log_entry_t dqe;
-            if (dns_log_parse(tp + 8, tlen - 8, pkt->src, &dqe)) {
-                dns_log_record(&dqe);
-                /* A connectivity-check host resolving into private or
-                 * CGNAT space is a portal answering for it (#69). */
-                int cp = cp_check_dns(dqe.qname, dqe.answer);
-                if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
-                                  dqe.answer, time(NULL));
-            }
-        } else if ((pkt->src_port == 5353 || pkt->dst_port == 5353) && tlen > 8) {
-            mdns_snoop(tp + 8, tlen - 8);
-            snprintf(pkt->info, sizeof(pkt->info), "mDNS");
-        } else if ((pkt->src_port == 137 || pkt->dst_port == 137) && tlen > 8) {
-            if (!nbns_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "NBNS");
-        } else if ((pkt->src_port == 67 || pkt->dst_port == 67 ||
-                    pkt->src_port == 68 || pkt->dst_port == 68) && tlen > 8) {
-            if (!dhcp_snoop(tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "DHCP");
-        } else if ((pkt->src_port == 443 || pkt->dst_port == 443) && tlen > 8) {
-            const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;
-            char        hbuf[DNS_NAME_MAX];
-            const char *host   = capture_quic_hostname(remote, hbuf, sizeof(hbuf));
-            quic_log_entry_t qe;
-            if (quic_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst,
-                               host && host[0] ? host : NULL, &qe)) {
-                snprintf(pkt->info, sizeof(pkt->info), "QUIC %.58s",
-                         qe.host[0] ? qe.host : qe.ver);
-                quic_log_record(&qe);
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "UDP 443");
-            }
-        } else if ((pkt->src_port == 1900 || pkt->dst_port == 1900) && tlen > 8) {
-            if (!ssdp_snoop(pkt->src, tp + 8, tlen - 8, pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "SSDP");
-        } else if ((pkt->src_port == 3702 || pkt->dst_port == 3702) && tlen > 8) {
-            if (!onvif_ws_discovery_snoop(pkt->src, tp + 8, tlen - 8,
-                                          pkt->info, sizeof(pkt->info)))
-                snprintf(pkt->info, sizeof(pkt->info), "WSD");
-        } else if ((pkt->src_port == 123 || pkt->dst_port == 123) && tlen > 8) {
-            ntp_log_entry_t ne;
-            if (ntp_log_parse(tp + 8, tlen - 8, pkt->src, pkt->dst, &ne)) {
-                snprintf(pkt->info, sizeof(pkt->info),
-                         "NTP v%u %.6s str=%u", ne.version, ne.mode, ne.stratum);
-                ntp_log_record(&ne);
-            } else {
-                snprintf(pkt->info, sizeof(pkt->info), "NTP");
-            }
-        } else {
-            snprintf(pkt->info, sizeof(pkt->info), "UDP %u", u16be(tp + 4));
-        }
-    } else if (pkt->proto == 58 && tlen >= 2) {
+    } else if (is_v6 && proto == 58 && tlen >= 2) {
         snprintf(pkt->info, sizeof(pkt->info), "ICMPv6 type=%u", tp[0]);
         icmp_log_entry_t ie;
         if (icmp_log_parse(tp, tlen, pkt->src, pkt->dst, 1, &ie))
@@ -1028,9 +871,155 @@ static void decode_ipv6(const uint8_t *p, int len, packet_info_t *pkt) {
             ndp_snoop_ra(pkt->src, tp, tlen);
             snprintf(pkt->info, sizeof(pkt->info), "NDP RA");
         }
+    } else if (is_v6) {
+        snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%d", proto);
     } else {
-        snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%d", pkt->proto);
+        snprintf(pkt->info, sizeof(pkt->info), "IP proto %d", proto);
     }
+}
+
+/* IPv4 (RFC 791 §3.1) down to its transport segment. Returns 1 with
+ * *tp / *tlen set, 0 when there is no segment to parse.
+ *
+ * Total Length bounds the packet, not the frame (#132): Ethernet pads
+ * a short packet to 46 octets of payload, and before this the padding
+ * was handed to the payload parsers as if it were the datagram's tail.
+ * The clamp only ever shortens — a Total Length past the captured bytes
+ * widens nothing — and that case is tallied as ip_truncated unless the
+ * capture itself was snapped (`snapped`: caplen < wire length), where a
+ * short packet is expected rather than malformed.
+ *
+ * A Total Length of 0 is read as "not stated", not as malformed: Linux
+ * BIG TCP puts 0 there for a GSO packet over 64 KiB, which a passive
+ * tap on the sending host does see. Such a packet is parsed to the
+ * captured length, as every packet was before.
+ *
+ * A non-first fragment (offset != 0) carries no transport header — its
+ * first octets are payload at an arbitrary offset into the datagram —
+ * so parsing it as TCP or UDP invented ports and produced bogus
+ * records. It is labelled and tallied, not parsed: sloth does not
+ * reassemble. The first fragment (offset 0, MF set) is parsed, because
+ * its transport header is real and the observers bound their reads. */
+static int l4_from_ipv4(const uint8_t *p, int len, int snapped,
+                        packet_info_t *pkt, const uint8_t **tp, int *tlen) {
+    if (len < 20) return 0;
+    int ihl = (p[0] & 0x0f) * 4;
+    if (ihl < 20 || ihl > len) return 0;
+
+    pkt->proto = p[9];
+    inet_ntop(AF_INET, p + 12, pkt->src, sizeof(pkt->src));
+    inet_ntop(AF_INET, p + 16, pkt->dst, sizeof(pkt->dst));
+
+    const int total = u16be(p + 2);
+    if (total != 0) {
+        if (total < ihl) {
+            sh_parse_fault_note(SH_PF_IP_TRUNCATED);
+            snprintf(pkt->info, sizeof(pkt->info), "IPv4 bad len");
+            return 0;
+        }
+        if (total < len)
+            len = total;
+        else if (total > len && !snapped)
+            sh_parse_fault_note(SH_PF_IP_TRUNCATED);
+    }
+
+    if ((u16be(p + 6) & 0x1fff) != 0) {
+        sh_parse_fault_note(SH_PF_IP_FRAGMENT);
+        snprintf(pkt->info, sizeof(pkt->info), "IPv4 frag");
+        return 0;
+    }
+
+    *tp   = p + ihl;
+    *tlen = len - ihl;
+    return 1;
+}
+
+/* IPv6 (RFC 8200 §3) down to its transport segment, walking the
+ * extension headers (§4). Same contract and length policy as
+ * l4_from_ipv4(), with Payload Length in place of Total Length; a
+ * Payload Length of 0 is a jumbogram (RFC 2675) or BIG TCP and is
+ * parsed to the captured length.
+ *
+ * Walked: Hop-by-Hop (0), Routing (43) and Destination Options (60),
+ * 8 * (Hdr Ext Len + 1) octets (§4.3, §4.4, §4.6); AH (51, RFC 4302
+ * §2.2), 4 * (Payload Len + 2); Fragment (44, §4.5), 8 octets, where a
+ * non-zero Fragment Offset ends the walk exactly as an IPv4 non-first
+ * fragment does. Anything else — No Next Header (59), ESP (50),
+ * Mobility (135), an unknown value — ends the walk and decode_l4()
+ * labels it "IPv6 nh=N". Before #132 there was no walk: an MLD report
+ * behind its Hop-by-Hop Router Alert never reached the ICMPv6 arm, and
+ * the bytes after any extension header were parsed as whatever p[6]
+ * named.
+ *
+ * pkt->proto is the protocol the walk ended on, not p[6]: the field
+ * means "what this packet carries", and an extension header is not
+ * that. Every header advances the walk by at least 8 octets inside a
+ * length below 64 KiB, so the loop terminates. */
+static int l4_from_ipv6(const uint8_t *p, int len, int snapped,
+                        packet_info_t *pkt, const uint8_t **tp, int *tlen) {
+    if (len < 40) return 0;
+    inet_ntop(AF_INET6, p + 8,  pkt->src, sizeof(pkt->src));
+    inet_ntop(AF_INET6, p + 24, pkt->dst, sizeof(pkt->dst));
+
+    const int plen = u16be(p + 4);
+    if (plen != 0) {
+        if (40 + plen < len)
+            len = 40 + plen;
+        else if (40 + plen > len && !snapped)
+            sh_parse_fault_note(SH_PF_IP_TRUNCATED);
+    }
+
+    int nh  = p[6];
+    int off = 40;
+    for (;;) {
+        int hlen;
+        if (nh == 0 || nh == 43 || nh == 60) {
+            if (off + 2 > len) break;
+            hlen = 8 * (p[off + 1] + 1);
+        } else if (nh == 51) {
+            if (off + 2 > len) break;
+            hlen = 4 * (p[off + 1] + 2);
+        } else if (nh == 44) {
+            hlen = 8;
+            if (off + hlen > len) break;
+            if ((u16be(p + off + 2) >> 3) != 0) {
+                pkt->proto = p[off];
+                sh_parse_fault_note(SH_PF_IP_FRAGMENT);
+                snprintf(pkt->info, sizeof(pkt->info), "IPv6 frag");
+                return 0;
+            }
+        } else {
+            pkt->proto = (uint8_t)nh;
+            *tp   = p + off;
+            *tlen = len - off;
+            return 1;
+        }
+        if (off + hlen > len) break;
+        nh   = p[off];
+        off += hlen;
+    }
+
+    /* An extension header that runs past the packet's own end. */
+    pkt->proto = (uint8_t)nh;
+    if (!snapped) sh_parse_fault_note(SH_PF_IP_TRUNCATED);
+    snprintf(pkt->info, sizeof(pkt->info), "IPv6 nh=%d", nh);
+    return 0;
+}
+
+static void decode_ipv4(const uint8_t *p, int len, int snapped,
+                        packet_info_t *pkt) {
+    const uint8_t *tp   = NULL;
+    int            tlen = 0;
+    if (l4_from_ipv4(p, len, snapped, pkt, &tp, &tlen))
+        decode_l4(pkt->proto, 0, tp, tlen, pkt);
+}
+
+static void decode_ipv6(const uint8_t *p, int len, int snapped,
+                        packet_info_t *pkt) {
+    const uint8_t *tp   = NULL;
+    int            tlen = 0;
+    if (l4_from_ipv6(p, len, snapped, pkt, &tp, &tlen))
+        decode_l4(pkt->proto, 1, tp, tlen, pkt);
 }
 
 /* SLL2 header layout (per pcap-linktype(7)):
@@ -1053,6 +1042,9 @@ static int decode_frame(const frame_view_t *f, packet_info_t *pkt) {
     const int      dlt    = f->dlt;
     int       offset    = 0;
     uint16_t  ethertype = 0;
+    /* Read before the radiotap arm shortens caplen by the FCS: a frame
+     * the capture cut short is allowed an IP length past its end (#132). */
+    const int snapped   = (uint32_t)f->caplen < f->origlen;
 
     if (dlt == DLT_EN10MB) {
         if (caplen < 14) return 0;
@@ -1118,8 +1110,8 @@ static int decode_frame(const frame_view_t *f, packet_info_t *pkt) {
     const uint8_t *payload = data + offset;
     int            plen    = caplen - offset;
 
-    if      (ethertype == 0x0800) { decode_ipv4(payload, plen, pkt); return 1; }
-    else if (ethertype == 0x86DD) { decode_ipv6(payload, plen, pkt); return 1; }
+    if      (ethertype == 0x0800) { decode_ipv4(payload, plen, snapped, pkt); return 1; }
+    else if (ethertype == 0x86DD) { decode_ipv6(payload, plen, snapped, pkt); return 1; }
     /* ARP and the rest are dropped on purpose. */
     return 0;
 }

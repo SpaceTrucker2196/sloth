@@ -25,6 +25,9 @@
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
 #include "libver.h"         /* loaded-libpcap report (#142) */
 #include "capture/frame_edge.h" /* FRAME_CAPLEN_MAX (#141) */
+#include "http_log.h"       /* IP-layer cases reach the payload parsers (#132) */
+#include "kerb_snoop.h"
+#include "snmp_snoop.h"
 
 /* ── Real pcap_dispatch → on_packet path — issue #95 ─────────
  *
@@ -2714,6 +2717,418 @@ static void test_assoc_response_ssid_control_octets_marked(void) {
     assoc_clear();
 }
 
+/* ── IP to transport, once — issue #132 ──────────────────────
+ *
+ * Frames built field by field per RFC 791 §3.1 (IPv4), RFC 8200 §3-§4
+ * (IPv6 and its extension headers), RFC 4302 §2 (AH), RFC 768 (UDP)
+ * and RFC 9293 §3.1 (TCP). Every case that asserts something is NOT
+ * parsed has a positive control beside it: the same bytes with the one
+ * field flipped are parsed, so the absence is the field's doing and
+ * not a frame the parsers would have refused anyway. */
+
+static const uint8_t I132_MAC_A[6] = { 0x02, 0x00, 0x5e, 0x00, 0x53, 0x01 };
+static const uint8_t I132_MAC_B[6] = { 0x02, 0x00, 0x5e, 0x00, 0x53, 0x02 };
+
+/* RFC 1035 §4.1 query: ID, RD, QDCOUNT 1, QNAME "printer.lan", A, IN. */
+static const uint8_t I132_DNS_Q[] = {
+    0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    7, 'p', 'r', 'i', 'n', 't', 'e', 'r', 3, 'l', 'a', 'n', 0,
+    0x00, 0x01, 0x00, 0x01 };
+
+static const char I132_GET[] =
+    "GET /index.html HTTP/1.1\r\nHost: intranet.example\r\n\r\n";
+
+/* IPv4 header, IHL 5. `total` is written as given — the tests are about
+ * what the decoder does when it disagrees with the frame. `frag` is the
+ * whole flags + Fragment Offset word (offset in 8-octet units). */
+static void i132_ipv4(fb_t *b, int total, uint16_t frag, uint8_t proto) {
+    fb_u8(b, 0x45); fb_u8(b, 0);
+    fb_be16(b, (uint16_t)total);
+    fb_be16(b, 0x4242);                   /* Identification */
+    fb_be16(b, frag);
+    fb_u8(b, 64); fb_u8(b, proto);
+    fb_be16(b, 0);                        /* checksum: not verified */
+    fb_bytes(b, "\xc0\xa8\x01\x0a", 4);   /* 192.168.1.10 */
+    fb_bytes(b, "\xc0\xa8\x01\x01", 4);   /* 192.168.1.1  */
+}
+
+/* IPv6 fixed header (RFC 8200 §3), documentation prefix 2001:db8::/32. */
+static void i132_ipv6(fb_t *b, int payload_len, uint8_t next_header) {
+    fb_be16(b, 0x6000); fb_be16(b, 0x0000);   /* version 6, TC 0, flow 0 */
+    fb_be16(b, (uint16_t)payload_len);
+    fb_u8(b, next_header);
+    fb_u8(b, 64);                             /* Hop Limit */
+    fb_bytes(b, "\x20\x01\x0d\xb8\x00\x00\x00\x00"
+                "\x00\x00\x00\x00\x00\x00\x00\x0a", 16);
+    fb_bytes(b, "\x20\x01\x0d\xb8\x00\x00\x00\x00"
+                "\x00\x00\x00\x00\x00\x00\x00\x01", 16);
+}
+
+static void i132_udp(fb_t *b, uint16_t sport, uint16_t dport,
+                     const void *pay, int n) {
+    fb_be16(b, sport); fb_be16(b, dport);
+    fb_be16(b, (uint16_t)(8 + n)); fb_be16(b, 0);
+    fb_bytes(b, pay, n);
+}
+
+/* TCP with `opt_words` 32-bit option words (NOP-filled), PSH|ACK. */
+static void i132_tcp(fb_t *b, uint16_t sport, uint16_t dport, int opt_words,
+                     const void *pay, int n) {
+    fb_be16(b, sport); fb_be16(b, dport);
+    fb_be16(b, 0); fb_be16(b, 1);             /* seq */
+    fb_be16(b, 0); fb_be16(b, 1);             /* ack */
+    fb_u8(b, (uint8_t)((5 + opt_words) << 4));
+    fb_u8(b, 0x18);
+    fb_be16(b, 65535); fb_be16(b, 0); fb_be16(b, 0);
+    for (int i = 0; i < opt_words * 4; i++) fb_u8(b, 0x01);  /* NOP */
+    fb_bytes(b, pay, n);
+}
+
+static int i132_dispatch(const uint8_t *f, int len, int orig) {
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { len };
+    int os[1] = { orig };
+    memset(&g_s, 0, sizeof(g_s));
+    return capture_test_dispatch(&g_s, DLT_EN10MB, fs, ls, os, 1);
+}
+
+static int i132_dns_records(void) {
+    dns_log_snapshot(&g_s);
+    return g_s.dns_log_count;
+}
+
+static int i132_http_records(void) {
+    http_log_snapshot(&g_s);
+    return g_s.http_log_count;
+}
+
+/* IPv4 TCP/80 GET with the given flags/offset word. */
+static int i132_v4_http(uint8_t *f, int cap, uint16_t frag) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    const int n = (int)sizeof I132_GET - 1;
+    i132_ipv4(&b, 20 + 20 + n, frag, 6);
+    i132_tcp(&b, 51000, 80, 0, I132_GET, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_ipv4_non_first_fragment_is_not_parsed_as_tcp(void) {
+    uint8_t f[256];
+    /* Control: offset 0 — the bytes are a real TCP header and GET. */
+    int n = i132_v4_http(f, sizeof f, 0x0000);
+    ASSERT(n > 0);
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_http_records(), 1);
+    ASSERT_EQ(g_s.packets[0].dst_port, 80);
+
+    /* Fragment Offset 185 (1480 octets in): the same bytes are now the
+       middle of some datagram. Mutation-proved: dropping the
+       `frag_off != 0` test in l4_from_ipv4() records the GET. */
+    n = i132_v4_http(f, sizeof f, 185);
+    http_log_clear();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_IP_FRAGMENT);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_http_records(), 0);
+    ASSERT_EQ((long long)g_s.pkt_total, 1);       /* the row is kept */
+    ASSERT_STR(g_s.packets[0].info, "IPv4 frag");
+    ASSERT_EQ(g_s.packets[0].proto, IPPROTO_TCP);
+    ASSERT_EQ(g_s.packets[0].src_port, 0);
+    ASSERT_EQ(g_s.packets[0].dst_port, 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_FRAGMENT) - pf0), 1);
+    http_log_clear();
+}
+
+static void test_ipv4_first_fragment_is_still_parsed(void) {
+    /* MF set, offset 0: the transport header is real. Not a fault. */
+    uint8_t f[256];
+    int n = i132_v4_http(f, sizeof f, 0x2000);
+    http_log_clear();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_IP_FRAGMENT);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_http_records(), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_FRAGMENT) - pf0), 0);
+    http_log_clear();
+}
+
+/* IPv4 UDP/53 carrying the query. `total_override` >= 0 replaces the
+ * Total Length the frame actually has (20 + 8 + 29). */
+static int i132_v4_dns(uint8_t *f, int cap, int total_override) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    const int n = (int)sizeof I132_DNS_Q;
+    i132_ipv4(&b, total_override >= 0 ? total_override : 20 + 8 + n, 0, 17);
+    i132_udp(&b, 40000, 53, I132_DNS_Q, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_ipv4_bytes_past_total_length_are_not_payload(void) {
+    uint8_t f[256];
+    /* Control: Total Length covers the query. */
+    int n = i132_v4_dns(f, sizeof f, -1);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+
+    /* Total Length 28: IP + an empty UDP datagram. The query bytes are
+       now link-layer trailer — what Ethernet padding is. Mutation-
+       proved: removing the `len = total` clamp records the query. */
+    n = i132_v4_dns(f, sizeof f, 28);
+    dns_log_clear();
+    uint64_t pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 0);
+    ASSERT_EQ(g_s.packets[0].dst_port, 53);       /* UDP header still read */
+    ASSERT_STR(g_s.packets[0].info, "UDP 37");    /* the UDP Length field */
+    /* Padding is normal, not a fault. */
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 0);
+    dns_log_clear();
+}
+
+static void test_ipv4_total_length_below_the_header_is_a_fault(void) {
+    uint8_t f[256];
+    int n = i132_v4_dns(f, sizeof f, 19);
+    dns_log_clear();
+    uint64_t pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 0);
+    ASSERT_STR(g_s.packets[0].info, "IPv4 bad len");
+    ASSERT_STR(g_s.packets[0].src, "192.168.1.10");   /* addresses kept */
+    ASSERT_EQ(g_s.packets[0].dst_port, 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 1);
+    dns_log_clear();
+}
+
+static void test_ipv4_total_length_past_the_frame_counts_unless_snapped(void) {
+    uint8_t f[256];
+    int n = i132_v4_dns(f, sizeof f, 1400);
+    /* Whole frame captured, header claims more: a truncated packet. The
+       captured part is still parsed — the clamp only ever shortens. */
+    dns_log_clear();
+    uint64_t pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 1);
+
+    /* The capture snapped the frame (wire length 1414): a short packet
+       is expected. Mutation-proved: dropping `&& !snapped` counts it. */
+    dns_log_clear();
+    pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, n, 14 + 1400), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 0);
+    dns_log_clear();
+}
+
+static void test_ipv4_zero_total_length_is_read_as_unstated(void) {
+    /* BIG TCP / TSO: 0 is "not stated". Parsed to the captured length,
+       not counted. */
+    uint8_t f[256];
+    int n = i132_v4_dns(f, sizeof f, 0);
+    dns_log_clear();
+    uint64_t pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 0);
+    dns_log_clear();
+}
+
+static void test_tcp_data_offset_is_honoured_once(void) {
+    /* Three option words (data offset 8): the GET starts 32 octets in.
+       Mutation-proved: reading the payload at a fixed 20 in
+       decode_tcp() hands the parsers NOPs and records nothing. */
+    uint8_t f[256];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    const int n = (int)sizeof I132_GET - 1;
+    i132_ipv4(&b, 20 + 32 + n, 0, 6);
+    i132_tcp(&b, 51000, 80, 3, I132_GET, n);
+    ASSERT(fb_ok(&b));
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, b.len, b.len), 1);
+    ASSERT_EQ(i132_http_records(), 1);
+    ASSERT_STR(g_s.http_log[0].host, "intranet.example");
+    http_log_clear();
+}
+
+/* IPv6 + `ext` (already-encoded extension headers, ending in UDP's 17)
+ * + UDP/53 query. `first_nh` is the fixed header's Next Header. */
+static int i132_v6_dns(uint8_t *f, int cap, uint8_t first_nh,
+                       const uint8_t *ext, int ext_len, int plen_override) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x86DD);
+    const int n = (int)sizeof I132_DNS_Q;
+    i132_ipv6(&b, plen_override >= 0 ? plen_override : ext_len + 8 + n,
+              first_nh);
+    if (ext_len) fb_bytes(&b, ext, ext_len);
+    i132_udp(&b, 40000, 53, I132_DNS_Q, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_ipv6_hop_by_hop_is_walked_to_udp(void) {
+    /* Hop-by-Hop (§4.3): Next Header 17, Hdr Ext Len 0 (8 octets), one
+       PadN option (type 1, length 4) filling the rest. Mutation-proved:
+       dropping 0 from the walked set leaves the query unparsed. */
+    static const uint8_t hbh[8] = { 17, 0, 0x01, 0x04, 0, 0, 0, 0 };
+    uint8_t f[256];
+    int n = i132_v6_dns(f, sizeof f, 0, hbh, 8, -1);
+    ASSERT(n > 0);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_STR(g_s.dns_log[0].src, "2001:db8::a");
+    ASSERT_EQ(g_s.packets[0].proto, IPPROTO_UDP);  /* what it carries */
+    ASSERT_EQ(g_s.packets[0].dst_port, 53);
+    dns_log_clear();
+}
+
+static void test_ipv6_routing_then_destination_options_are_walked(void) {
+    /* Routing (§4.4, Hdr Ext Len 1 = 16 octets) → Destination Options
+       (§4.6, 8 octets) → UDP. Two headers, two different lengths. */
+    static const uint8_t ext[24] = {
+        60, 1, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  /* Routing */
+        17, 0, 0x01, 0x04, 0, 0, 0, 0 };                     /* DestOpt */
+    uint8_t f[256];
+    int n = i132_v6_dns(f, sizeof f, 43, ext, 24, -1);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    dns_log_clear();
+}
+
+static void test_ipv6_ah_length_is_in_four_octet_units(void) {
+    /* AH (RFC 4302 §2.2) with a 96-bit ICV: 12 fixed + 12 ICV = 24
+       octets, Payload Len = 24/4 - 2 = 4. Mutation-proved: using the
+       8 * (len + 1) rule for AH skips 40 octets and finds no query. */
+    uint8_t ah[24];
+    memset(ah, 0, sizeof ah);
+    ah[0] = 17; ah[1] = 4;                  /* Next Header, Payload Len */
+    ah[7] = 0x01;                           /* SPI 1 */
+    ah[11] = 0x01;                          /* Sequence Number 1 */
+    uint8_t f[256];
+    int n = i132_v6_dns(f, sizeof f, 51, ah, 24, -1);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    dns_log_clear();
+}
+
+static void test_ipv6_non_first_fragment_is_not_parsed(void) {
+    /* Fragment header (§4.5): Next Header 17, reserved, Offset|Res|M,
+       Identification. Control: offset 0, M clear (an atomic fragment)
+       is walked through to the query. */
+    uint8_t fr[8] = { 17, 0, 0x00, 0x00, 0, 0, 0x13, 0x37 };
+    uint8_t f[256];
+    int n = i132_v6_dns(f, sizeof f, 44, fr, 8, -1);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+
+    /* Offset 185 (185 << 3 in the high 13 bits). Mutation-proved:
+       ignoring the offset walks into the bytes and records the query. */
+    fr[2] = (uint8_t)((185 << 3) >> 8);
+    fr[3] = (uint8_t)((185 << 3) & 0xff);
+    n = i132_v6_dns(f, sizeof f, 44, fr, 8, -1);
+    dns_log_clear();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_IP_FRAGMENT);
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 0);
+    ASSERT_STR(g_s.packets[0].info, "IPv6 frag");
+    ASSERT_EQ(g_s.packets[0].proto, IPPROTO_UDP);
+    ASSERT_EQ(g_s.packets[0].dst_port, 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_FRAGMENT) - pf0), 1);
+    dns_log_clear();
+}
+
+static void test_ipv6_bytes_past_payload_length_are_not_payload(void) {
+    /* Payload Length 8: an empty UDP datagram, the query is trailer.
+       The control is test_ipv6_hop_by_hop_is_walked_to_udp's shape with
+       no extension; asserted here too so the case stands alone. */
+    uint8_t f[256];
+    int n = i132_v6_dns(f, sizeof f, 17, NULL, 0, -1);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+
+    n = i132_v6_dns(f, sizeof f, 17, NULL, 0, 8);
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 0);
+    ASSERT_EQ(g_s.packets[0].dst_port, 53);
+    dns_log_clear();
+}
+
+static void test_ipv6_extension_header_past_the_packet_is_a_fault(void) {
+    /* Hop-by-Hop claiming 48 octets (Hdr Ext Len 5) in a packet that
+       carries 8 of them before it ends. */
+    static const uint8_t hbh[8] = { 17, 5, 0x01, 0x04, 0, 0, 0, 0 };
+    uint8_t f[256];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x86DD);
+    i132_ipv6(&b, 8, 0);
+    fb_bytes(&b, hbh, 8);
+    ASSERT(fb_ok(&b));
+    uint64_t pt0 = sh_parse_fault_count(SH_PF_IP_TRUNCATED);
+    ASSERT_EQ(i132_dispatch(f, b.len, b.len), 1);
+    ASSERT_STR(g_s.packets[0].info, "IPv6 nh=0");
+    ASSERT_EQ(g_s.packets[0].dst_port, 0);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_IP_TRUNCATED) - pt0), 1);
+}
+
+static void test_ipv6_udp_kerberos_reaches_kerb_snoop(void) {
+    /* Defect K: the IPv6 UDP dispatch was a copy without the Kerberos
+       arm. AS-REQ is [APPLICATION 10] (RFC 4120 §5.4.1), outer tag 0x6A.
+       Mutation-proved: restricting the 88 arm to IPv4 sources leaves
+       kerb_event_count at 0. */
+    uint8_t asreq[18];
+    asreq[0] = 0x6A; asreq[1] = 0x10;
+    memset(asreq + 2, 0, 16);
+    uint8_t f[256];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x86DD);
+    i132_ipv6(&b, 8 + (int)sizeof asreq, 17);
+    i132_udp(&b, 49152, 88, asreq, (int)sizeof asreq);
+    ASSERT(fb_ok(&b));
+    kerb_snoop_clear();
+    ASSERT_EQ(i132_dispatch(f, b.len, b.len), 1);
+    ASSERT_STR(g_s.packets[0].info, "Kerberos");
+    kerb_snoop_snapshot(&g_s);
+    ASSERT_EQ(g_s.kerb_event_count, 1);
+    ASSERT_STR(g_s.kerb_events[0].src_ip, "2001:db8::a");
+    ASSERT_EQ(g_s.kerb_events[0].as_req_count, 1);
+    kerb_snoop_clear();
+}
+
+static void test_ipv6_udp_snmp_reaches_snmp_snoop(void) {
+    /* SNMPv1 GetRequest (RFC 1157 §4.1): SEQUENCE { INTEGER 0,
+       OCTET STRING "public", GetRequest-PDU [0] { request-id,
+       error-status, error-index, empty varbind list } }. */
+    static const uint8_t get[] = {
+        0x30, 0x19,
+        0x02, 0x01, 0x00,
+        0x04, 0x06, 'p', 'u', 'b', 'l', 'i', 'c',
+        0xA0, 0x0C,
+        0x02, 0x02, 0x12, 0x34,
+        0x02, 0x01, 0x00,
+        0x02, 0x01, 0x00,
+        0x30, 0x00 };
+    uint8_t f[256];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x86DD);
+    i132_ipv6(&b, 8 + (int)sizeof get, 17);
+    i132_udp(&b, 49152, 161, get, (int)sizeof get);
+    ASSERT(fb_ok(&b));
+    snmp_snoop_clear();
+    ASSERT_EQ(i132_dispatch(f, b.len, b.len), 1);
+    ASSERT_STR(g_s.packets[0].info, "SNMP");
+    snmp_snoop_snapshot(&g_s);
+    ASSERT_EQ(g_s.snmp_flow_count, 1);
+    ASSERT_STR(g_s.snmp_flows[0].src_ip, "2001:db8::a");
+    ASSERT_EQ(g_s.snmp_flows[0].get_count, 1);
+    ASSERT_STR(g_s.snmp_flows[0].last_community, "public");
+    snmp_snoop_clear();
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -2814,6 +3229,23 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_ring_snapshot_is_stable_under_writer);
     RUN_TEST(test_probe_request_ssid_control_octets_marked);
     RUN_TEST(test_assoc_response_ssid_control_octets_marked);
+
+    TEST_SUITE("capture path: IP to transport, once (#132)");
+    RUN_TEST(test_ipv4_non_first_fragment_is_not_parsed_as_tcp);
+    RUN_TEST(test_ipv4_first_fragment_is_still_parsed);
+    RUN_TEST(test_ipv4_bytes_past_total_length_are_not_payload);
+    RUN_TEST(test_ipv4_total_length_below_the_header_is_a_fault);
+    RUN_TEST(test_ipv4_total_length_past_the_frame_counts_unless_snapped);
+    RUN_TEST(test_ipv4_zero_total_length_is_read_as_unstated);
+    RUN_TEST(test_tcp_data_offset_is_honoured_once);
+    RUN_TEST(test_ipv6_hop_by_hop_is_walked_to_udp);
+    RUN_TEST(test_ipv6_routing_then_destination_options_are_walked);
+    RUN_TEST(test_ipv6_ah_length_is_in_four_octet_units);
+    RUN_TEST(test_ipv6_non_first_fragment_is_not_parsed);
+    RUN_TEST(test_ipv6_bytes_past_payload_length_are_not_payload);
+    RUN_TEST(test_ipv6_extension_header_past_the_packet_is_a_fault);
+    RUN_TEST(test_ipv6_udp_kerberos_reaches_kerb_snoop);
+    RUN_TEST(test_ipv6_udp_snmp_reaches_snmp_snoop);
 }
 #else
 void run_capture_path_tests(void);
