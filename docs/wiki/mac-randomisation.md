@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/seqnum.md`, `docs/views/pnl.md`, `docs/views/probe.md`, `include/seqnum_track.h`, `src/seqnum_track.c`, `tests/test_seqnum_track.c`, issue #94.
 
-**Last updated**: 2026-10-19 (#129 — client MLDs now resolved).
+**Last updated**: 2026-10-19 (sequence-number randomisation on current iOS/Android recorded; #129 — client MLDs now resolved).
 
 ---
 
@@ -46,10 +46,22 @@ upper 12 bits are a per-station sequence number that increments on
 each transmitted frame. The counter lives at the chipset level, below
 the OS's MAC-randomisation logic.
 
-Every popular stack (iOS, Android, macOS, Windows, Linux) emits a
-**monotonic** sequence counter across MAC rotations. Two "different"
-MACs whose trails fall on the same forward-running counter are
-**consistent with** one physical radio.
+When this primitive was designed, every popular stack (iOS, Android,
+macOS, Windows, Linux) emitted a **monotonic** sequence counter across
+MAC rotations (Vanhoef et al., AsiaCCS 2016). That is no longer true of
+current phones, and the page has to say so plainly: Apple's Platform
+Security Guide states that since iOS 16.1 / macOS 13.1 the sequence
+number is re-randomised whenever the random address changes and for
+each new scan while unassociated, and the Android Compatibility
+Definition (§7.4.2 [C-1-7]–[C-1-10], a MUST since Android 12) requires a fresh random sequence
+number per scan. Fenske et al. (PoPETs 2021) measured the shift and
+found it tied to hardware release year rather than OS version. The
+primitive still works on older stacks, many Android handsets in the
+field, and most IoT radios; against a current iPhone or a compliant
+current Android phone, expect it to produce **no** pairs, and treat a
+pair it does produce with extra suspicion. Two "different" MACs whose
+trails fall on the same forward-running counter are **consistent with**
+one physical radio.
 
 The counter is also only 12 bits — 4096 positions — and that is the half
 of the primitive that used to go unsaid. Independent radios in a busy
@@ -139,8 +151,14 @@ purpose. See [[retention]].
 
 ## What this misses
 
-- Devices that explicitly randomise the seqnum (rare; mostly custom
-  firmware, research builds, certain patched Linux drivers).
+- Devices that randomise the seqnum — which, since 2022–2024, is the
+  **common** case for new phones, not the rare one: iOS 16.1+ (Apple
+  Platform Security Guide, "Wi-Fi privacy") and Android 12-compliant
+  handsets (CDD §7.4.2) re-randomise per address change or per scan, and
+  Fenske et al. (PoPETs 2021) already saw it on iPhone X–12 and on newer
+  Android hardware regardless of OS version. Earlier wording here
+  called this "rare; mostly custom firmware", which was true of the
+  2016 measurements this page was written from and is not true now.
 - Devices that go quiet across the rotation for longer than the 30 s
   seam.
 - Cross-channel correlations when the sniffer is on one channel at a

@@ -18,9 +18,15 @@ rotating its MAC, with a score and the evidence window behind it.
 Every 802.11 frame carries a 16-bit **Sequence Control** field; the
 upper 12 bits are a per-station sequence number that increments on each
 transmitted frame. The counter lives at the chipset level — below the
-OS's MAC-randomisation logic. Most popular stacks (iOS, Android, macOS,
-Windows, Linux) do **not** reset or randomise the seqnum across a MAC
-rotation; they emit a monotonic counter across "different" MACs.
+OS's MAC-randomisation logic. When this view was built, most popular
+stacks (iOS, Android, macOS, Windows, Linux) did **not** reset or
+randomise the seqnum across a MAC rotation; they emitted a monotonic
+counter across "different" MACs. Current phones mostly do: Apple
+randomises it per address change and per scan since iOS 16.1 (Apple
+Platform Security Guide, "Wi-Fi privacy"), and the Android CDD
+(§7.4.2, a MUST since Android 12) requires a fresh random sequence number per scan. The view
+therefore finds pairs among older handsets and IoT radios and should
+find none for a current iPhone — see [[mac-randomisation]].
 
 That is the leak. It is also only 12 bits — 4096 positions — which is
 the part that matters for how the finding is phrased. Two independent
@@ -181,8 +187,10 @@ and the wall-clock span the pair was decided over.
 
 ## What this misses
 
-- Devices that randomise the seqnum (rare; custom firmware, research
-  builds, some patched Linux drivers).
+- Devices that randomise the seqnum — now the common case for new
+  phones (iOS 16.1+, Android 12-compliant handsets; Fenske et al.,
+  PoPETs 2021 tie it to hardware release year), not the rare one this
+  line used to claim.
 - Devices quiet across the rotation for longer than the 30 s seam.
 - Cross-channel correlations when the sniffer sees one channel at a time
   — and this cuts both ways: channel hopping makes trails look
