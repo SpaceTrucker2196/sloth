@@ -231,13 +231,17 @@ The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` an
 
 ### Replay — savefiles instead of interfaces (#119)
 
-Owner ruling 2026-10-15. For CI and for re-reading a capture after the
-fact: the whole pipeline (decoders, alert engine, every sink) runs on
-libpcap savefiles, with no interface opened. → [[replay-integration]]
+Owner ruling 2026-10-15. A **regression and CI harness**: the whole
+pipeline (decoders, alert engine, every sink) runs on libpcap
+savefiles, with no interface opened. It is not a forensic replay of a
+long capture: detection windows run on wall-clock arrival, so every
+record in the files arrives at replay time and rate/flood/scan alerts
+from a capture spanning hours are not evidence. Decoding, parsing and
+per-frame detectors behave as live. → [[replay-integration]]
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length. Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only` or `--hop`, which name live capture, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
+| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length in what is exported; detection windows use arrival time (see above). Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only` or `--hop`, which name live capture, and with `--allow-active`, which would resolve addresses read from the files, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
 | `--ticks` | `N` | off (run until quit) | Exit `0` after `N` poll ticks, `1..1000000`; anything else exits 2. The last tick still emits; only the wait after it is skipped. With `--replay --headless` this makes a batch job: replay, tick, flush the sinks and reports, exit. |
 
 ### Runtime & meta

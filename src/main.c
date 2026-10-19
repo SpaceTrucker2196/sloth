@@ -1038,6 +1038,17 @@ int main(int argc, char **argv) {
                             "do not apply\n");
             return 2;
         }
+        /* --allow-active would send PTR queries for addresses read out of
+         * the savefile - a replay that transmits on the analyst's own
+         * network about someone else's capture. A replay stays passive
+         * (MISSION section 2), so the combination is refused, not
+         * silently narrowed (#119 review). */
+        if (allow_active) {
+            fprintf(stderr, "sloth: --replay is passive: --allow-active "
+                            "would resolve addresses read from the "
+                            "savefile; drop one of the two\n");
+            return 2;
+        }
     }
 
     /* socket_is_remote is only consulted when have_data_socket is set,

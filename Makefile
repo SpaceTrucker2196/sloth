@@ -623,6 +623,9 @@ replay-run: $(TARGET) $(REPLAY_GEN)
 
 replay-check: replay-run
 	diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl
+	@./$(TARGET) --headless --replay /nonexistent.pcap --allow-active >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --replay --allow-active exited $$rc, want 2 (refused)" >&2; exit 1; fi
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run

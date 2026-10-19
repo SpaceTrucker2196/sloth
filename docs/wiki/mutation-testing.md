@@ -56,7 +56,7 @@ make mutate MUTATE_FLAGS="--keep-sandbox"   # leaves tmpdir for inspection
 # Choose the oracle (#119). sloth_test never runs src/main.c, so a
 # main.c mutant judged by `make test` can only survive:
 make mutate MUTATE_FLAGS="--files src/main.c --target replay-check"
-make mutate MUTATE_FLAGS="--files src/alerts.c --target all"   # both gates
+make mutate MUTATE_FLAGS="--files src/alerts/rules_wifi_mgmt.c --target all"   # both gates
 ```
 
 `--target` is `test` (default, `sloth_test`), `replay-check` (the shipped

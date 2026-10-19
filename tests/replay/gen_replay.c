@@ -13,15 +13,17 @@
  * Every frame is assembled from tests/frame_build.h, field by field per
  * its clause. Addresses are documentation values only: RFC 5737 IPv4
  * blocks, locally-administered MACs (02:00:5e:...), and SSIDs that name
- * no real network. The two IOC hits are against sloth's own synthetic
- * demo list in src/threat_intel.c, not a real indicator.
+ * no real network. The one IOC hit (THREAT_DOMAIN) is against sloth's
+ * own synthetic demo list in src/threat_intel.c, not a real indicator;
+ * THREAT_IP reads the platform conn table, which a replay empties, so
+ * the SYN to the IOC address only feeds the packet ring.
  *
  * BASE_TS stamps the first frame; the rest follow it a second apart.
- * It defaults to now because sloth ages its tables against the wall
- * clock (a beacon last heard in 2023 is gone before the first tick), so
- * a fixed epoch would replay into empty tables. The timestamps are
- * stripped by normalise.sh — the golden depends on what was seen, never
- * on when. The file is written with src/pcap_format.c, the writer the
+ * Detection windows and table ageing run on the wall-clock arrival
+ * time, not on the record's own timestamp, so the record times do not
+ * change what the golden pins: replaying a 2023-stamped file gives a
+ * byte-identical normalised output (checked by the #119 review). The
+ * timestamps are stripped by normalise.sh regardless. The file is written with src/pcap_format.c, the writer the
  * four production sinks use, so the generator needs no libpcap.
  *
  * Exit 0 on success, 1 on a write failure, 2 on usage. */

@@ -98,10 +98,11 @@ behaviour change arrives as a diff of records in the PR that made it.
 - It does **not** pin which tick a record came from. Records carry no
   tick number, so there is no boundary to sort within; the whole stream
   is sorted.
-- Wall-clock-dependent behaviour is exercised only at "now": the
-  generator stamps frames from the current time because sloth ages its
-  tables against the wall clock, and a fixed historical epoch would
-  replay into empty tables. The output was checked identical across
+- Record timestamps do not drive detection: windows and table ageing
+  run on wall-clock arrival, so every replayed frame arrives "now". A
+  2023-stamped input gives a byte-identical golden. The flip side is in
+  [[cli-reference]]: a long real capture replayed lands in one window,
+  so rate and flood alerts from it are not evidence. The output was checked identical across
   repeated runs and at `--refresh-ms` 100 and 1000 before the golden was
   first committed.
 
@@ -130,7 +131,7 @@ make mutate MUTATE_FLAGS="--files src/main.c --target replay-check --limit 20"
 ```
 
 The gate's own mutation proof (#119): changing the deauth-flood rule's
-non-owned severity from WARN to LOW in `src/alerts.c` turns
+non-owned severity from WARN to LOW in `src/alerts/rules_wifi_mgmt.c` turns
 `make replay-check` red on the `DEAUTH_FLOOD` records; restoring it
 turns it green.
 
