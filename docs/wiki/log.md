@@ -3808,3 +3808,19 @@ fact-checked against its source before being written; 21 candidate
 claims were dropped for lacking an openable source and are not on the
 page. Linked from [[index]] (read-first list and WiFi SIGINT section),
 [[how-wifi-works]] and [[wifi-sigint-techniques]].
+
+## 2026-10-19 — Wi-Fi SIGINT guide: every phone radio
+
+Added §3 to [[wifi-sigint-guide]] ("What your phone itself transmits:
+iOS and Android", 3.1–3.4): Wi-Fi scanning, joined, hotspot, AWDL,
+Aware/Direct/RTT and the Control Center "off" semantics; Bluetooth LE
+Continuity frames, address rotation and its leaks, action-triggered
+frames, Quick Share / Fast Pair / Find Hub / Android Information
+Service; cellular, Wi-Fi Calling, UWB, NFC, satellite, Thread, Airplane
+Mode and power-off; a summary table of identifier, rotation and switch.
+Sources 87–117 added. Later sections renumbered 4–8. Recorded that
+sequence-number randomisation is now the common case on current phones
+(iOS 16.1+, Android 12-compliant handsets) in [[mac-randomisation]] and
+`docs/views/seqnum.md`, replacing the "rare; custom firmware" wording.
+Five researcher/fact-checker pairs (99 claims kept, 36 dropped) and five
+review lenses (51 findings, all applied) preceded the commit.

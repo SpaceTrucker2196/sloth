@@ -19,7 +19,7 @@ the Wi-Fi it watches:
 - [[monitor-mode]] — the capability that unlocks the Wi-Fi frame classes, what it gathers, its limits.
 - [[where-exploits-happen]] — the 802.11 attack surface mapped to the join sequence and to each detector.
 - [[wifi-sigint-techniques]] — common passive Wi-Fi SIGINT techniques, defender-side.
-- [[wifi-sigint-guide]] — for the non-specialist: the radio cloud around a person — routers, phones, cars, body cameras, plate readers, Bluetooth — what a listener can infer, and the limits.
+- [[wifi-sigint-guide]] — for the non-specialist: the radio cloud around a person — routers, phones (every iOS and Android radio emission), cars, body cameras, plate readers, Bluetooth — what a listener can infer, and the limits.
 - [[cli-reference]] — every flag, argument, keybinding, env var and exit code.
 - [[wifi-state-of-the-art]] — living overview of Wi-Fi tech and security research (Wi-Fi 7 / 8).
 
@@ -48,7 +48,7 @@ the Wi-Fi it watches:
 ## WiFi SIGINT
 
 - [[wifi-sigint]] — overview of the v1.1 SIGINT view set.
-- [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits (sourced, 86 references).
+- [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits, with every radio emission of a current iPhone and Android phone (sourced, 117 references).
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each

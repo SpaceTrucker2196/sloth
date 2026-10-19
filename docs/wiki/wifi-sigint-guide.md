@@ -13,7 +13,8 @@ pocket; your car, your printer, your earbuds and the camera on the
 lamp post all carry radios that say something about themselves without
 being asked. None of this needs to be decrypted, joined or provoked —
 it only needs to be *heard*. This page explains, for a non-specialist,
-what is in that cloud, how much can be inferred by only listening, and
+what is in that cloud, every radio a current iPhone or Android phone
+transmits with, how much can be inferred by only listening, and
 exactly where the limits are. Every factual claim here names its source; where a primary document
 could not be opened and an abstract, summary or indexed copy stands in,
 the Sources entry says so, and where the evidence is community
@@ -209,9 +210,8 @@ else in the frame:
   share of captured probes sent from a real hardware address had
   fallen from 81.6 % (2016) to 56.0 % (2019–20), and that newer
   hardware increasingly randomises the counter too [23].
-  ([[mac-randomisation]] still describes counter randomisation as rare
-  and confined to custom firmware; [23] is the later measurement and
-  that page has not yet been reconciled with it.)
+  ([[mac-randomisation]] now records this; its earlier wording called
+  counter randomisation rare and confined to custom firmware.)
 - **Timing.** Probes come in tight bursts — in one public dataset just
   over 98 % of consecutive probes from a device were under 65 ms apart
   — so burst shape is a weak fingerprint that a random address does
@@ -240,7 +240,485 @@ group's movements [26] — the data came from an app on the volunteers'
 own phones, but it shows how completely "which networks can I see"
 stands in for "where am I".
 
-## 3. Your car is a radio station
+## 3. What your phone itself transmits: iOS and Android
+
+A current phone carries up to eight transmitters. Most of what the rest
+of this page describes comes from two of them, but the list is longer
+than people think, and so is the list of things that are *not*
+emissions. The table is the summary; the subsections are the
+evidence. Where something was measured, the text gives the OS version and year;
+the Android Bluetooth items are read from current AOSP and Google
+source code and help pages, not measured on the air. Phones change, and
+most of the iPhone Bluetooth measurements are from 2019–2020.
+
+| Radio | Transmits when | Who can hear it | sloth sees it? |
+|---|---|---|---|
+| Wi-Fi | scanning, connected, hotspot, AirDrop/AWDL, Wi-Fi Direct/Aware, ranging | anyone in Wi-Fi range (tens to a few hundred metres) | yes — Probe `[7]`, PNL `[k]`, Seqnum `[j]`, Beacons `[b]` |
+| Bluetooth LE | continuously on an iPhone; on Android when sharing, finding or an app asks | anyone in BLE range (measured 38–65 m for the two iPhones, 38–67 m across nine Apple devices [66]) | decoder only today (#144) |
+| Bluetooth Classic | while discoverable, and inside links to car/headset | nearby, but hopping and hard to attribute | no |
+| Cellular | registration, periodic check-in (~hourly), any data, calls | the tower, kilometres away; a fake tower | no |
+| UWB | only during a ranging session (keys, Precision Finding) | metres | no |
+| NFC | reader polling while unlocked; card emulation only answers a reader | centimetres | no |
+| Satellite | only when you start an SOS or message | a satellite — Globalstar's (iPhone), or a partner operator's via Skylo (Pixel) [112] | no |
+| Thread (iPhone 15 Pro, 16; not 16e) | undocumented | — | no |
+| GPS | **never** — receive only | — | — |
+
+### 3.1 iPhone
+
+**Wi-Fi: scanning.** When Wi-Fi is on and the phone is not joined to a
+network it sends probe requests. Apple randomises the sender address
+for these scans — from iOS 8 while asleep, and from iOS 9 for
+"location and auto-join scans", which the 2016 measurement showed
+means the screen-on case too [21, 87]. Apple states one exception in
+the same document: "Wi-Fi scans that happen while trying to connect to
+a preferred Wi-Fi network aren't randomized" — so the probes a phone
+sends while joining a remembered network can carry its hardware
+address [87]. Two things in the frame are not random. Since iOS 10 every probe carries an Apple vendor element whose data
+field "never changes across devices"; the 2017 study says its arrival
+"made identification of iOS 10 Apple devices trivial regardless of the
+use of MAC address randomization", without naming which device [22];
+and the capability elements bin the phone to a hardware generation,
+because Apple uses one signature set per generation [23]. The
+12-bit sequence counter that the Seqnum view correlates is, on a
+current iPhone, randomised: Apple states that since iOS 16.1 the
+counter is re-randomised whenever the random address changes and for
+each new scan while unassociated (Apple also randomises the PHY
+scrambler seed per probe request, but gives no version for that), and
+lab tests run in 2019–2020 (published 2021) already saw random
+counters on iPhone X through 12 running iOS 13.4–14.2 [23, 87]. **Sequence-number correlation is
+therefore expected to fail against current iPhone probe traffic**; it
+still works on older stacks and many Android and IoT radios.
+([[mac-randomisation]] and `docs/views/seqnum.md` described the
+monotonic counter as universal until this change; both now carry the
+correction.) Some probes still
+carry a network name: the 2016 study saw an iPad 2 on iOS 9.1 broadcast remembered names on
+waking from sleep, and 30–36 % of all devices in
+its datasets named at least one network [21]; no source measures the
+share for current iPhones.
+
+**Wi-Fi: joined to a network.** The per-network private address is in
+§2. Once joined, the phone also answers Bonjour (mDNS) queries and
+sends DHCP requests carrying its hostname — "Janes-iPhone" is Apple's
+default pattern — but that is traffic inside the network, encrypted
+over the air on a WPA network and visible to the network's operator,
+not to a passer-by [89, 88]. Renaming the device (Settings > General >
+About > Name) is the only control, and the Personal Hotspot shares the
+same name [88].
+
+**Wi-Fi: Personal Hotspot.** With "Allow Others to Join" on, the
+iPhone is an access point and beacons like any other, under a network
+name that *is the device name* [88] — so a default-named phone
+beacons its owner's given name across ordinary Wi-Fi range. The
+hotspot's hardware address is random per session on iOS 17 (reported
+by Rye & Levin, not by Apple) [25], so the name persists and the
+address does not. Separately, a hotspot-capable iPhone answers over
+BLE when another device on the same Apple Account opens its Wi-Fi
+settings, sending battery level, network type (LTE, 3G…) and signal
+bars in the clear (see Instant Hotspot below) [94].
+
+**Wi-Fi: AWDL — the AirDrop radio.** Apple devices run a second,
+peer-to-peer Wi-Fi protocol, AWDL, whenever AirDrop, AirPlay or a
+Continuity hand-off is active. In that state the phone broadcasts
+802.11 action frames "in the clear multiple times per second" on
+channels 6, 44 and 149, and the 2019 analysis found they carry the
+hostname (in a four-location field measurement — an airport departure
+gate, a public library, a metro train and a university food court —
+more than 75 % of hostnames contained a person's name), the phone's *real* hardware address, the
+BSSID of the access point it is on, a device class and a protocol
+version that maps to an OS version [89]. Worse, the interface can be
+switched on from outside: an iPhone with AirDrop set to Everyone
+starts emitting these frames when any nearby device sends an AirDrop
+BLE advertisement, and in the default Contacts Only mode it does so if
+the advertised contact hashes match — which the researchers
+brute-forced with a $20 micro:bit in a median of 10 seconds against an
+iPhone 8 (iOS 12) with only ten contacts in its address book [89].
+Since iOS 16.2 the Everyone option is "Everyone for 10 Minutes": after
+ten minutes it reverts to Contacts Only, or to Receiving Off if the
+phone is not signed in to an Apple Account [115].
+All of this was measured on iOS 12 in 2018; whether Apple has since
+removed the hostname or real address from AWDL frames is not verified
+by any source read for this page. The authors' mitigation stands as
+written: "the only way to thwart user tracking is to disable AirDrop
+completely" [89]. Provoking AWDL is an active technique and
+`MISSION.md` §2 forbids sloth from doing it; sloth only ever sees AWDL
+frames something else caused.
+
+**Wi-Fi: Wi-Fi Aware (iOS 26).** iOS 26 adds the Wi-Fi Alliance's
+Aware/NAN discovery protocol on iPhone 12 and later, app-driven: an app
+must declare the services it publishes or subscribes to, and Apple says
+it may use the framework "in both foreground and background states";
+Apple does not say whether anything is emitted when no app is doing so
+[92]. Apple's Accessory Design Guidelines bind peer devices to Wi-Fi
+Aware Specification v4.0, say the 5 GHz band is not used when the
+country is unknown, let the BSSID and MAC fields of the infrastructure
+attribute be zeroed "to improve privacy", and show a pairing-mode
+service frame carrying a vendor name, model name and
+"pairingName=Joe's iPhone" in the clear [92]. Nothing Apple publishes
+states the iPhone's own discovery cadence or address rotation, and
+sloth has no NAN parser.
+
+**Wi-Fi: what "off" means.** Tapping Wi-Fi in Control Center does not
+turn the radio off. Apple's own page: the device "immediately
+disconnects", while "AirDrop, AirPlay, Apple Pencil, Apple Watch,
+Continuity features, like Handoff and Instant Hotspot, Location
+Services, Unlock with Apple Watch" keep using Wi-Fi, and auto-join to
+nearby networks resumes on its own when you "walk or drive to a new
+location", at "5 a.m. local time", or on restart [91]. The real switch is Settings > Wi-Fi.
+Location Services uses Wi-Fi scanning too, and Apple's Platform
+Security Guide lists scans made "to assist Location Services for apps
+that use geofences, such as location-based reminders" among the ones
+sent from a random address — subject to the same preferred-network
+exception as above [87].
+
+**Bluetooth LE: the continuous one.** This is the emission most people
+do not know about. From iOS 12, an iPhone sends a *Nearby Info*
+advertisement "at a rate of over 200 frames per minute" for as long as
+Bluetooth is enabled and the phone is on, locked or unlocked [94, 66].
+Its one status byte says what the phone is doing — idle, screen on,
+playing video, in a call, or "user driving a vehicle" — a flag says
+whether Wi-Fi is on, a bit marks the one device per account sharing
+its location, and the frame's shape gives away the iOS major version
+[94, 66]. Measured reach in the 2020 paper's range test: for the two iPhones (6
+and 8), 50–51 m indoors with no wall, 38–42 m through three 15 cm
+plasterboard walls, 62–65 m outdoors; across all nine Apple devices
+tested, 49–52 / 38–47 / 61–67 m [66]. Neither
+Airplane Mode nor the Control Center Bluetooth button stopped it on
+iOS 11/12; "the only way to stop transmission of all Continuity
+messages is to disable Bluetooth from the Settings Menu" [94].
+
+**Bluetooth LE: the address, and how it leaks anyway.** The random Bluetooth address rotates every 15 minutes: Apple states
+that interval for Apple Watch [95], and the 2019–2020 measurements
+found the same schedule on iPhones running iOS 9 through 12.3 [94,
+66]. The 2019–2020
+measurements found four ways that is undone: the Nearby Info payload
+stays constant for a frame or two *after* the address changes, so a
+listener present at the rotation chains old to new [94, 66]; AirDrop
+and Hey Siri frames use a random address that "never changes until the
+user turns off then on the Bluetooth interface" — observed unchanged
+for more than seven days [66]; AirPrint and AirPlay frames, sent when
+you print or start a stream, used the chip's fixed public address
+[66]; and a phone in power-saving mode held one address for more than
+four days [66]. Becker et al.'s address-carry-over method followed
+Apple devices for up to 53 minutes [57].
+
+**Bluetooth LE: the action-triggered frames.** Each of these is sent
+when you do something, and each says something:
+
+- *Handoff* — on opening, using or closing a Handoff-enabled app, when
+  the account has two or more devices. Encrypted payload, but a 2-byte
+  counter that increments on each action and "is not affected by MAC
+  address randomization": a week-long study of five users' counters
+  found per-user growth regular enough that the authors expect a
+  device's counter to be predictable days to a week ahead [94]. Off:
+  Settings > General > AirPlay & Continuity ("AirPlay & Handoff" on
+  older iOS) [91].
+- *Nearby Action* — on setting up a speaker, sharing a Wi-Fi password,
+  answering a call and a dozen other actions. For Wi-Fi password
+  sharing and iOS Setup it carries device class, model, colour, OS
+  version, and 24-bit hashes of the owner's e-mail addresses and phone
+  numbers; the researchers estimate that every number in a country's phone-number
+  format (France, 10^9 values) can be tested against such a hash in
+  about eight minutes on a laptop CPU, registered French mobiles in
+  under a minute, and all existing e-mail addresses worldwide within an
+  hour. The
+  Wi-Fi-password variant also carries a hash of the network name being
+  joined. Apple's own guide confirms the trigger [66, 95].
+- *AirDrop* — while the share sheet is open: 16-bit hashes of the
+  sender's contact identifiers, which a US phone number can be
+  recovered from "on a PC within seconds" [90, 95]; every receiver in
+  Everyone mode then answers over AWDL (above).
+- *Wi-Fi Settings* / *Instant Hotspot* — while you are on the Wi-Fi
+  settings page, if another device on your account can share
+  cellular. The frame carries an identifier derived from the account
+  that all your devices share and that rotates once every 24 hours, so
+  it links your devices to each other and is replayable for a day; the
+  hotspot phone's reply carries battery, network type and signal bars
+  unencrypted [94, 66, 95].
+- *Hey Siri* — on each voice command: a 16-bit perceptual hash of what
+  was said, matched in the lab against a 100-command dictionary, from
+  the non-rotating address above [66].
+- *Find My* — one advertisement every two seconds when the phone has no
+  internet connection, carrying a public key that is replaced about
+  every 15 minutes, so address and payload change together and nothing
+  names the device [67, 95]. It keeps going after the phone is turned
+  off: Apple's iPhone User Guide says a supported iPhone can be
+  located "for up to 24 hours after it's turned off, or up to 5 hours
+  when it's in power reserve mode" [96]. Off: Settings > [your name] > Find My > Find My iPhone > Find My
+  network, *before* powering down [96].
+
+**Bluetooth: the rest.** Connected links to a Watch, AirPods, car or
+hearing aid are encrypted and carry a per-connection access code
+rather than a device address, so a listener sees that a link exists
+and its rhythm, not whose it is [98, 95]. Bluetooth Classic has no
+advertising; the fixed Classic address is exposed only while the
+phone is discoverable, and Apple does not document when that is
+[98]. Anyone who *connects* can read the "Model Number String" (e.g.
+`iPhone9,1`) from the phone's GATT table — the question-and-answer
+side of BLE, available once two devices are connected — with no prompt
+[94]. The Control Center Bluetooth
+button, like the Wi-Fi one, only disconnects accessories and turns
+itself back on at 5 AM; Airplane Mode "turns off all radios except for
+Bluetooth" [91, 97]. Exposure Notification (2020) is marked deprecated as of iOS 27 ("No
+longer supported") and should be treated as historical [73, 116]. Around the
+phone, its accessories talk too: AirPods constantly announce model,
+colour, in-ear state, battery and lid-open count; an Apple Watch
+that has lost its phone announces that; HomeKit devices announce a
+state counter [66].
+
+### 3.2 Android
+
+**Wi-Fi: scanning.** With Wi-Fi on, the phone disconnected and the screen on, the framework
+scans on a 20, 40, 80, 160-second back-off schedule, each
+scan a burst of probe requests across the channels within
+milliseconds, all from one address; with the screen off the Wi-Fi
+chip keeps looking for saved networks on its own (initial interval
+20 s moving, 60 s stationary), and whether those offload scans
+transmit or only listen is not stated [101]. The address has been
+random while unassociated since Android 8 [19], and the Compatibility Definition has required one random address *and*
+a random starting sequence number per scan, re-randomised between
+scans, since Android 12 (the same text was a recommendation in Android
+11) [100] — so on a compliant Android 12+ phone the counter links
+probes inside one burst but not across bursts, and the 2021 study found
+sequence randomisation "adopted consistently by newer devices of all
+types", tied to hardware year rather than OS version [23]. What does
+not change: the capability elements, which still bin the phone to a
+manufacturer and generation — "nearly all modern devices" send
+non-generic signatures [23] — although the WPS element that once
+carried a unique identifier is gone since Android 8 [23]. Directed
+probes naming a network are sent only for networks the user marked
+hidden on Android 9+, but Android 8 and earlier treated every
+manually-added network as hidden and probed for those names — all of
+them or a subset, one name per probe — in every burst, which is why
+23.2 % of probes in the November 2021 capture still carried a name
+[17]. Forgetting the network stops it. Vendor stacks differ:
+some Samsung models on Android 8–9 fixed the first byte of the random
+address, and some probed from the hardware address, before full
+randomisation on Android 10 [23]; near a Passpoint (carrier-roaming) hotspot, several Android models sent
+the pre-join network query (ANQP) from the hardware address [23].
+
+**Wi-Fi: joined to a network.** Since Android 10 the connected address
+is a random one generated from the network profile, the same every
+time the phone returns, not reset by forgetting and re-adding, and
+"remains the same until a factory reset" [19]; a per-network
+non-persistent option (Android 12+) re-randomises only at a new
+connection after the lease has lapsed and four hours have passed, or
+after 24 hours [19]. Inside the network, DHCP requests carry a vendor
+class naming the OS version (`android-dhcp-10`) and, on the Samsung
+and OnePlus models tested, a hostname that is the phone model [23].
+
+**Wi-Fi: hotspot.** Beacons like any access point, with no client, until the default
+ten-minute auto-shutdown [101]. The hotspot address is random since
+Android 10 [19] and, for configurations created on Android 13 and
+later, regenerated every time the hotspot is enabled [101]; Rye &
+Levin observed Android 14 phones choosing a random BSSID [25].
+
+**Wi-Fi: Direct, Aware and ranging.** Three further Wi-Fi emissions
+exist only while an app is using them. *Wi-Fi Direct* discovery
+(Quick Share, casting, printing) is a probe exchange carrying the P2P
+device name, and a phone that becomes group owner beacons as a
+`DIRECT-xx` access point for the session, with addresses AOSP requires
+to be randomised [102, 9]. *Wi-Fi Aware* (Android 8+) puts the phone in a cluster that transmits
+discovery beacons and service-discovery frames on channel 6, 44 or
+149, under an address AOSP rotates every 30 minutes by default and the
+Compatibility Definition caps at 30 minutes [100, 102]. *Wi-Fi RTT* (Android
+9+) sends fine-timing-measurement requests to ranging-capable access
+points without joining them, from a random address [102]. None of them
+runs when no app asks.
+
+**Wi-Fi: what "off" means.** Switching Wi-Fi off does not stop Wi-Fi
+scans if Settings > Location > Location services > **Wi-Fi scanning**
+is on: that setting lets apps and the system "issue startScan and
+fetch scan results even when Wi-Fi is turned off" [101]. Whether those
+scans transmit probes or only listen is not stated. App-triggered
+scans are throttled to four per two minutes per foreground app [102].
+
+**Bluetooth LE: the address.** Any address an Android phone puts on
+the air while advertising or scanning must rotate at a randomised
+interval between 5 and 15 minutes — a Compatibility Definition
+requirement [100]. The Classic address and the identity address kept
+for bonded peers do not rotate; apps cannot read the real address
+without a privileged permission [103].
+
+**Bluetooth LE: scanning is not silent.** The AOSP Bluetooth stack's
+scanner defaults to *active* scanning, so whenever the phone scans —
+Bluetooth settings open, Fast Pair, Quick Share, Find Hub, any app —
+it transmits a scan request to each advertiser it hears, carrying its
+current random address [103]. And a separate **Bluetooth scanning**
+setting under Location services allows "apps and services to scan for
+nearby devices at any time, even when Bluetooth is off" [103]. The
+2019 study found the Android phones it tested immune to address
+carry-over precisely because "the tested Android phones never send out
+manufacturer-specific data or other potentially device-identifying
+data in regular intervals" [57]; that predates Quick Share and Find
+Hub, and whether a current phone's continuous Quick Share payload
+rotates in step with its address has not been measured by any
+published work found — an open question, not a finding.
+
+**Bluetooth LE: what the phone advertises.**
+
+- *Quick Share, sending* — a frame under the Fast Pair service UUID
+  with a fixed model ID (`FC:12:8E`) whose notify type means "The sender
+  is in the foreground, actively trying to send a file to another
+  device", plus a one-byte salt and an eight-byte hash; recognisable as
+  such regardless of address rotation [104].
+- *Quick Share, receiving* — a visibility advertisement whose layout
+  includes the device name only in Everyone mode (its absence signals
+  contacts-only). In the "Your devices" mode the phone is visible to
+  your other devices even with the screen off; "Everyone" reverts
+  after ten minutes [104].
+- *Fast Pair* — nothing: the phone is the seeker and only scans; the
+  earbuds advertise [72].
+- *Find Hub (Find My Device) network* — as a crowd scanner the phone
+  listens and reports over the internet, which is not a radio emission
+  [105]. As a *findable* device, Google says a compatible phone can be
+  located "even when they're offline", which implies the phone itself
+  advertises a rotating identifier; Google has published the frame
+  format only for accessory tags, not for phones [105]. Pixel 8 and later can be found "if they're powered off or the battery
+  is dead" — a beacon that outlives the off switch; the launch post
+  gives neither a duration nor the settings that must have been on
+  beforehand [105].
+- *Android Information Service* (Android 14+) — not an advertisement
+  but a fingerprint handed to anyone who connects: a GATT
+  characteristic returning the Android API level, readable without
+  authentication while the phone is discoverable [106].
+- *Exposure Notification* — historical (2020) [73]. *LE Audio /
+  Auracast* — extended and periodic advertisements plus an audio
+  stream while audio sharing is on, on phones that support it [100].
+  *Nearby Connections* — app-defined advertisements whose service hash
+  is constant per app across rotations [104].
+
+**Bluetooth Classic.** Discoverable — answering inquiries with the
+fixed address, device class and name — only while the Bluetooth
+settings screen is open or an app has asked for a discoverable window
+(default 120 s) [103]. Wireless Android Auto pairs over Bluetooth before moving to Wi-Fi —
+see §4 for what Google states and what is press reporting [34].
+
+### 3.3 The radios both phones share
+
+**Cellular.** The loudest radio in the phone, in round numbers: about 200 mW (power
+class 3, 23 dBm) for LTE/5G handsets and up to 2 W for GSM where 2G
+still exists, with design reach of 35 km (GSM)
+to about 100 km (LTE's longest access preamble) [110]. It transmits
+when the phone registers — the permanent SIM identity (IMSI) goes in
+the clear only when the phone has no valid temporary identity, and a
+network may demand the IMSI *before* security is established, which is
+the hook a fake tower uses; the hardware IMEI is only handed over
+inside the protected Security Mode exchange once the network has
+authenticated [107]; when the idle
+phone checks in on its periodic timer (default 54 minutes, set by the
+operator) [107]; when it answers a page — which Shaik et al. showed a Facebook message
+or a WhatsApp typing notification is enough to trigger, silently — or
+when any app sends data [108]; and, once
+connected, when the network orders it to report neighbouring-cell
+signal strengths, which a rogue base station can use to trilaterate
+it [108]. On a 5G *standalone* network the SIM identity is normally not sent in
+the clear: the phone sends an encrypted SUCI that only the home
+operator can open. The same specification allows a "null-scheme" SUCI,
+which is the IMSI in all but name, when the operator has not
+provisioned the public key, has configured the null scheme, or during
+an unauthenticated emergency call [107] — so the protection is only as
+good as the operator's provisioning. A cell-site simulator can log the IMSI of
+every phone that registers with it, pinpoint phones, and, if it can
+downgrade them to 2G, intercept calls and texts; the EFF notes such
+devices often disrupt service "within as much as a 500-meter radius"
+[109]. Defences: 5G-standalone networks; Android 12+ Settings > Network &
+Internet > SIMs > Allow 2G, off — with the toggle's own caveat that
+"for emergency calls, 2G is always allowed"; on iPhone, Lockdown Mode
+(iOS 16+) turns off 2G and 3G [109]; and Airplane Mode [97]. A phone with no
+SIM still registers, by IMEI, the moment an emergency call is placed —
+emergency calling works without a SIM by design [107].
+
+**Wi-Fi Calling** is not a new radio, but before the encrypted tunnel
+to the carrier comes up the phone resolves a DNS name built from the
+SIM's operator code (`epdg.epc.mnc<MNC>.mcc<MCC>.pub.3gppnetwork.org`),
+so every phone on a network with Wi-Fi Calling on tells that network
+which carrier it belongs to [107, 114].
+
+**UWB** (iPhone 11 and later, except the SE, 16e and 17e; Pixel 6 Pro
+and later Pro/Fold models, some Samsung and Motorola) does not beacon: it is a two-way ranging session,
+set up over Bluetooth or another channel, that runs while a feature
+needs it — Precision Finding, car keys, Nearby Interaction apps —
+with centimetre accuracy and short range [111]. A UWB car key derives a
+per-session ranging key from a Bluetooth handshake, so what goes on
+the air is a session secret, not a device serial [95].
+
+**NFC** works at a few centimetres. Card emulation (Apple Pay, Google
+Wallet, transit, car key at the door) generates no field of its own
+and only answers a reader; on iPhone, Express Cards keep answering for
+a time after the battery can no longer run iOS, but not after a
+deliberate shutdown [95]. Reader polling — the phone generating its
+own field to look for tags — runs in the background on iPhone XS and
+later while the phone is in use, and on Android, which is "usually looking for NFC tags when the screen
+is unlocked, unless NFC is disabled in the device's Settings menu"
+[117]. Neither document says what, if anything, the polling field
+carries about the phone.
+
+**Satellite** (iPhone 14+ via Globalstar; Pixel 9 and later and some
+Samsung via Skylo) transmits only when you start an SOS, message or
+Find My update outdoors with a clear view of the sky; an iPhone SOS
+carries the questionnaire answers, Medical ID, location including
+elevation and battery level; Apple's only timing statement is that you
+"need to be outside with a clear view of the sky and horizon" to
+connect at all [112].
+
+**Thread.** iPhone 15 Pro, iPhone 16 and later models whose spec sheet
+lists "Thread networking technology" carry an IEEE 802.15.4 Thread
+radio; the iPhone 16e's sheet does not [113]. Apple's only developer surface manages Thread network
+credentials; no Apple document read describes the phone transmitting on
+it in normal use, and there is no user switch. Undocumented is the
+honest word.
+
+**Airplane Mode and power-off.** Airplane Mode is not radio silence: Apple's article says it "turns off
+all radios except for Bluetooth", so Bluetooth keeps running unless
+you turn it off yourself — and if you do, "your device turns off
+Bluetooth the next time that you turn on Airplane Mode"; Wi-Fi can
+likewise be switched back on inside Airplane Mode [97]. Android's
+article describes the same remembering for Wi-Fi and Bluetooth [97]. For actual silence while the
+phone runs: Airplane Mode plus Settings > Wi-Fi off plus Settings >
+Bluetooth off. After power-off, both platforms keep the finding beacon
+alive — up to 24 hours on a supported iPhone [96], and on Pixel 8 and
+later for a duration Google's launch post does not give [105] — unless the finding network was turned off
+first.
+
+**Receive-only, and therefore not emissions.** GPS/GNSS (one-way; the
+fix leaves the phone over cellular or Wi-Fi, never over GPS);
+listening for cellular pages, system information and emergency
+broadcasts; measuring neighbouring cells while idle; passive Wi-Fi
+scanning for beacons and passive BLE scanning for advertisements —
+which is what sloth itself does — and NFC card emulation until a
+reader's field arrives [93, 98, 113]. Two common misreadings follow
+from this: "the phone has GPS so it can be tracked" (GPS cannot be
+tracked; the *report* of the fix can), and "the phone is listening for
+Bluetooth so it is visible" (a passive scanner is silent; an *active*
+scanner, which Android defaults to, is not).
+
+### 3.4 One table: what identifies you, and the switch
+
+| Emission | What it gives away | Rotates? | Switch |
+|---|---|---|---|
+| Wi-Fi probe (both) | "an Apple device of generation X" / "a Samsung of generation Y"; names of hidden or legacy-saved networks | address yes, except iOS scans made while joining a remembered network [87]; element fingerprint no | Settings > Wi-Fi off (iOS); Wi-Fi off **and** Wi-Fi scanning off (Android) |
+| Wi-Fi sequence counter | links probes across address changes on older stacks | randomised on iOS 16.1+ and Android 12-compliant phones | none |
+| Connected Wi-Fi address | a stable pseudonym per network — fixed on secured networks, rotating every two weeks on open ones (iOS 18+); until factory reset (Android) | per network | Private address / randomised MAC per network |
+| Hotspot beacon | iPhone: the device name, often the owner's name; both: that a hotspot is on | address per session | Personal Hotspot / Hotspot off |
+| AWDL (iPhone) | hostname, real hardware address, your AP's BSSID, OS version (2018 data) | no — the payload carries the real address | AirDrop > Receiving Off |
+| Nearby Info (iPhone) | phone activity, Wi-Fi on/off, iOS version, 200+/min | 15 min, with lag | Settings > Bluetooth off only |
+| Handoff counter (iPhone) | a counter that survives address rotation | no | Handoff off |
+| AirDrop / Nearby Action hashes (iPhone) | contact phone numbers, reversible | per account, not per rotation | don't open the share sheet; otherwise only Settings > Bluetooth off |
+| Instant Hotspot ID (iPhone) | links all devices on one account; replayable 24 h | daily | Bluetooth off in Settings |
+| Find My / Find Hub beacon (both) | that a findable phone is here; nothing stable | ~15 min (Apple); unpublished for phones (Google) | Find My network / Find Hub network off, before shutdown |
+| Quick Share (Android) | "about to share"; device name in Everyone mode | address 5–15 min; payload rotation unmeasured | visibility to Your devices / avoid Everyone |
+| BLE scan request (Android default) | that a scanner with address X is here | 5–15 min | Bluetooth off **and** Bluetooth scanning off |
+| Cellular registration | IMSI (LTE, first attach or on demand); IMEI only inside the protected exchange; encrypted SUCI on 5G standalone | temporary identity rotated by network | Airplane Mode; Allow 2G off / Lockdown Mode against fake towers |
+| Wi-Fi Calling DNS | your carrier, to the LAN | — | Wi-Fi Calling off |
+| Satellite SOS | location, Medical ID, battery — only when you start it | — | none needed — it transmits only when you start it |
+
+**Where sloth sees it:** the Wi-Fi rows are Probe `[7]`, PNL `[k]`,
+Seqnum `[j]` and Beacons `[b]`. The Bluetooth rows are what the #144
+decoder will feed once a sensor registers it ([[non-ip-sensors]]);
+nothing in the cellular, UWB, NFC, satellite or Thread rows is visible
+to a Wi-Fi monitor at all.
+
+## 4. Your car is a radio station
 
 A modern car carries several radios, and they are not all the same
 kind. Only the 802.11 ones are visible to a Wi-Fi monitor such as
@@ -321,7 +799,7 @@ rolling-code burst at 315 MHz (US/Japan) or 433.92 MHz (Europe) and by
 regulation must stop within five seconds of the button being released
 [36]. Both are outside 802.11 entirely.
 
-### Tesla's Bluetooth phone key (BLE — decodable, see §6)
+### Tesla's Bluetooth phone key (BLE — decodable, see §7)
 
 Martin Herfurt's Project TEMPA (CanSecWest 2022) documents that a Tesla
 Model 3 with Phone Key advertises over Bluetooth LE with a device name
@@ -346,7 +824,7 @@ the Presence column (`passing` / `visitor` / `resident`) is built
 precisely for telling a vehicle moving through range from a device
 that stayed (`docs/views/probe.md`).
 
-## 4. Body-worn cameras: what Axon documents, and what it does not
+## 5. Body-worn cameras: what Axon documents, and what it does not
 
 Police body cameras are cloud products with several radios. Axon is
 used here because it publishes the most, not because it is unusual.
@@ -423,7 +901,7 @@ is in `research/papers/surveillance-vendor-endpoints.md`: a domain the
 vendor tells its customers to allow-list is checkable by anyone; a
 guessed on-air signature carrying a vendor's name is not.
 
-## 5. Plate readers and other street furniture
+## 6. Plate readers and other street furniture
 
 ### Flock Safety: vendor documents vs. what people have heard
 
@@ -526,7 +1004,7 @@ reason it ships no Axon one; the community prefixes above, with their
 measured false-positive rates, are exactly the kind of row the
 research-corpus rule keeps out until a source exists.
 
-## 6. The Bluetooth around you
+## 7. The Bluetooth around you
 
 Bluetooth LE devices advertise on three channels with a payload of up
 to 31 bytes, structured as small typed records: flags, service UUIDs,
@@ -586,7 +1064,7 @@ Pair and SmartTag frames are not classifiable today [75]. The design
 for the rest, including the explicit ban on active scanning, is
 [[non-ip-sensors]].
 
-## 7. From signals to inferences
+## 8. From signals to inferences
 
 This is the section that turns "I heard a radio" into something a
 person would care about. Each step below is real, published, and
@@ -839,10 +1317,41 @@ or peer-reviewed paper.
 84. Autoriteit Persoonsgegevens, Enschede decision, 30 April 2021, as reported by Pinsent Masons Out-Law.
 85. FTC press release, "Retail Tracking Firm Settles FTC Charges It Misled Consumers About Opt Out Choices", 23 April 2015.
 86. *Joffe v. Google, Inc.*, 729 F.3d 1262 (9th Cir. 2013), amended 746 F.3d 920; cert. denied 2014.
+87. Apple Platform Security Guide, "Wi-Fi privacy" (scan address randomisation, with the stated exception for scans made while joining a preferred network; sequence-number randomisation "introduced in iOS 16.1, iPadOS 16.1, macOS 13.1, tvOS 16.1, watchOS 9.1, and visionOS 1"; scrambler-seed randomisation, no version given).
+88. Apple Support 111785, "Connect to the Personal Hotspot of an iPhone or iPad" ("To change the name of the Personal Hotspot, change the name of the device providing the hotspot: Open Settings, tap General, tap About, then tap Name").
+89. Stute, Narain, Mariotto, Heinrich, Kreitschmann, Noubir, Hollick, "A Billion Open Interfaces for Eve and Mallory: MitM, DoS, and Tracking Attacks on iOS and macOS Through Apple Wireless Direct Link", USENIX Security 2019 (AWDL channels, action-frame contents, BLE-triggered activation, hostname survey; measured on iOS 12, 2018).
+90. Heinrich, Hollick, Schneider, Stute, Weinert, "PrivateDrop: Practical Privacy-Preserving Authentication for Apple AirDrop", USENIX Security 2021.
+91. Apple Support 102412, "Use Bluetooth and Wi-Fi in Control Center" (what the toggles keep running; auto-join resumes at 5 a.m., on relocation or restart); Apple Support, "Use Handoff" (Settings > General > AirPlay & Continuity).
+92. Apple Developer Documentation, Wi-Fi Aware framework (introduced iOS 26.0; iPhone 12 and later; "in both foreground and background states"); Apple Accessory Design Guidelines, 2026-09-21 edition, ch. 56 "Wi-Fi Aware" (Spec v4.0; 5 GHz skipped for country XZ; BSSID/MAC fields may be zeroed; pairing TXT keys vendorName/modelName/pairingName).
+93. Apple Support 102647, "Turn Location Services and GPS on or off", and 102515, "Location Services & Privacy".
+94. Martin, Alpuche, Bodeman, Brown, Fenske, Foppe, Mayberry, Rye, Sipes, Teplov, "Handoff All Your Privacy – A Review of Apple's Bluetooth Low Energy Continuity Protocol", PoPETs 2019(4) (message types, Nearby Info rate and action codes, Handoff counter, Instant Hotspot contents, Airplane Mode / Control Center finding, GATT model string; measured on iOS 10–12).
+95. Apple Platform Security Guide, sections "Handoff security", "AirDrop security", "Instant Hotspot security", "Wi-Fi password sharing security", "Find My security", "Locating missing devices", "System security for watchOS" (15-minute BLE address rotation), "Bluetooth security", "Car key transactions", "Express Cards with power reserve".
+96. Apple iPhone User Guide, "Add your iPhone to Find My" ("up to 24 hours after it's turned off, or up to 5 hours when it's in power reserve mode"); Apple Newsroom, iOS 15 announcement, 7 June 2021.
+97. Apple Support HT204234, "Use Airplane Mode" (updated 11 Feb 2026: "turns off all radios except for Bluetooth"); Google Android Help, Airplane mode.
+98. Bluetooth Core Specification 6.0: Vol 3 Part C §4.1 (discoverability), Vol 2 Part B §6.5.1.4 (FHS packet), Vol 6 Part B §4.4.3 (passive vs active scanning, SCAN_REQ), §4.5 and §2.1.2 (connection events, access address).
+99. Apple Developer Documentation, Core NFC, "Adding support for background tag reading" (iPhone XS and later; conditions).
+100. Android Compatibility Definition Document §7.4.2 ([C-1-7]–[C-1-10] probe address and sequence number per scan — MUST since the Android 12 CDD, STRONGLY RECOMMENDED in the Android 11 CDD, unchanged through Android 15; [C-SR-2] hotspot BSSID; §7.4.2.3 [C-1-4] Aware address rotation ≤ 30 min; §7.4.2.5 [C-1-3] RTT address) and §7.4.3 ([C-3-5] RPA timeout 5–15 min; [C-8-1]–[C-8-3] LE Audio broadcast source).
+101. AOSP `packages/modules/Wifi`: `ServiceWifiResources/res/values/config.xml` (connectivity scan schedule 20/40/80/160 s, disconnected and screen on; PNO 20 s moving / 60 s stationary; `config_wifiFrameworkSoftApShutDownTimeoutMilliseconds` 600000), `WifiManager.java` (scan-always-available: "even when Wi-Fi is turned off"), `SoftApConfiguration.java` (Builder default `RANDOMIZATION_NON_PERSISTENT` when `SdkLevel.isAtLeastT()`, "re-generated every time the AP is re-enabled").
+102. developer.android.com: "Wi-Fi Direct (peer-to-peer) overview", "Wi-Fi Aware overview", "Wi-Fi location: ranging with RTT", "Wi-Fi scanning overview" (throttling); AOSP "Wi-Fi Direct", "Wi-Fi RTT" (address randomisation) and "Wi-Fi Aware" (`NanConfigRequest.macAddressRandomizationIntervalSec`, default 30 minutes); Linux `include/net/cfg80211.h` NAN band configuration (channel 6 / 44 / 149).
+103. AOSP `packages/modules/Bluetooth` `system/gd/hci/le_scanning_manager.cc` (`LeScanType::ACTIVE` default); `packages/apps/Settings` `res/values/strings.xml` ("Bluetooth scanning … even when Bluetooth is off") and `bluetooth/AlwaysDiscoverable.java` (settings page holds SCAN_MODE_CONNECTABLE_DISCOVERABLE open); `BluetoothAdapter.java` `ACTION_REQUEST_DISCOVERABLE` ("the default duration is 120 seconds, and maximum duration is capped at 300 seconds") and `getAddress()` (`LOCAL_MAC_ADDRESS` permission).
+104. google/nearby: `sharing/internal/api/fast_init_ble_beacon.h` (UUID 0xFE2C, model ID FC:12:8E, 26-byte layout), `sharing/fast_initiation/nearby_fast_initiation.h` (kNotify / kSilent semantics), `sharing/advertisement.h` (visibility advertisement layout), `connections/implementation/mediums/ble/ble_advertisement.h`; Google Android Help, "Use Quick Share" (visibility modes).
+105. Google Security Blog and The Keyword, 8 April 2024, Find My Device network launch ("even when they're offline"; Pixel 8 "powered off or the battery is dead"; aggregation by default); Google Find Hub Network Accessory Specification (tag frame format, scope: accessories).
+106. AOSP, "Android OS identification" (Android Information Service GATT, Android 14+).
+107. 3GPP TS 24.301 (EPS attach, identification procedure, T3412 default 54 min, emergency attach by IMEI, IMEISV in Security Mode Complete); TS 33.501 §6.12 (SUCI; null-scheme cases); TS 22.101 §10.1 (emergency calls without SIM); TS 23.003 §19.3.2 and §19.4.2.9.2 (ePDG FQDN, EAP-AKA realm).
+108. Shaik, Borgaonkar, Asokan, Niemi, Seifert, "Practical Attacks Against Privacy and Availability in 4G/LTE Mobile Communication Systems", NDSS 2016.
+109. EFF Street-Level Surveillance, "Cell-Site Simulators / IMSI Catchers"; Apple Support, "About Lockdown Mode" (2G/3G disabled); AOSP `packages/apps/Settings` `res/values/strings.xml` (`enable_2g_title` "Allow 2G", `enable_2g_summary` "For emergency calls, 2G is always allowed.").
+110. Transmit power and reach: 3GPP TS 36.101 Table 6.2.2-1 (UE power class 3 = 23 dBm); Wikipedia "GSM" (2 W / 1 W handset limits; 35 km), "Timing advance", and LTE PRACH preamble format 3 (~100 km) — the Wikipedia items are tertiary, order-of-magnitude only.
+111. Apple Developer Documentation, Nearby Interaction (background ranging conditions; iOS 18.4 Live Activity); Apple Support HT212274, Ultra Wideband availability; FiRa Consortium (500 MHz channels, Channel 9 mandatory); Android Developers, "Ultra-wideband (UWB) communication" (device list, 10 cm, foreground requirement).
+112. Apple Support, "Use Emergency SOS via satellite on your iPhone" (iPhone 14 or later; Globalstar; contents of an SOS; timing); Google The Keyword, 13 Aug 2024 (Pixel 9 Satellite SOS); Skylo certified-device list and FAQ (partners Terrestar Solutions, Viasat, Ligado Networks, EchoStar) (reported); Wikipedia "Globalstar" (1,414 km orbit — tertiary).
+113. Apple, iPhone 15 Pro and iPhone 16 Technical Specifications ("Thread networking technology"; GNSS constellations); Apple Newsroom, 12 Sep 2023; Apple Developer Documentation, ThreadNetwork framework.
+114. Apple Support HT203032, "Make a call with Wi-Fi Calling".
+115. Apple Support 119857, "How to use AirDrop on iPhone and iPad" ("In iOS 16.2 and later, the setting called Everyone for 10 Minutes changes after 10 minutes"; reverts to Contacts Only when signed in, Receiving Off when not); Apple, "About iOS 16 Updates", iOS 16.2 entry.
+116. Apple Developer Documentation, ExposureNotification framework, `ENManager` (iOS 12.5–27.0, Deprecated, "No longer supported").
+117. Android Developers, "NFC basics" (tag discovery while the screen is unlocked unless NFC is off).
 
 ## Related pages
 
-- [[how-wifi-works]] — the protocol reference behind §1 and §2.
+- [[how-wifi-works]] — the protocol reference behind §1, §2 and the Wi-Fi parts of §3.
 - [[wifi-sigint-techniques]] — the same material for an analyst, technique by technique.
 - [[wifi-sigint]] — the v1.1 view set (PNL, EAPOL, Seqnum, Assoc).
 - [[mac-randomisation]] — the sequence-number primitive and its limits on use.
