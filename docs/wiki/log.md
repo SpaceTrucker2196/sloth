@@ -3685,3 +3685,16 @@ invalid octet; DEL, C1, U+2028/9 `\u`-escaped) — informational, not a
 break: every value that parsed before parses the same. CEF and syslog
 map C0/DEL/C1 to a space. Pages: [[jsonl-schema]] (common envelope,
 versioning note), [[threat-model]] (TB-5 closed, residual stated).
+
+## 2026-10-19 — #119: `--replay` / `--ticks` and the `replay-check` gate
+
+The remaining half of #119 (owner ruling 2026-10-15). New flags
+`--replay FILE[,FILE]` and `--ticks N`; `make replay-check` runs the
+shipped `sloth` on savefiles that `tests/replay/gen_replay.c` builds at
+run time from `tests/frame_build.h` arrays, normalises the JSONL and
+diffs it against the committed `tests/replay/golden.jsonl`. CI gains a
+`replay` job and a sanitized replay step in `sanitize`; `mutate.py`
+gains `--target {test,replay-check,all}`. Created [[replay-integration]]
+(linked from [[index]]); updated [[cli-reference]] (Replay group, exit
+code 1, build targets), [[jsonl-schema]] (`capture_iface` /
+`monitor_iface` = `replay`), [[mutation-testing]] (`--target`).

@@ -678,8 +678,8 @@ does not know the type ignores it, as it would any other.
 
 | Field | Meaning |
 |-------|---------|
-| `capture_iface` | device the IP data-stream handle is bound to (`any`, or a fallback device name); `""` = capture never opened |
-| `monitor_iface` | the 802.11 monitor radio; `""` = none found |
+| `capture_iface` | device the IP data-stream handle is bound to (`any`, or a fallback device name); `""` = capture never opened; `replay` = an Ethernet/Linux-cooked `--replay` file is the source (#119) |
+| `monitor_iface` | the 802.11 monitor radio; `""` = none found; `replay` = a radiotap `--replay` file is the source (#119) |
 | `monitor_err` | last monitor open/retarget error, `""` = none |
 | `chan_requested` | channel `--hop` last asked the radio for; `0` = the hopper has never ticked |
 | `chan_confirmed` | channel the platform last **acknowledged** — where the radio actually is |

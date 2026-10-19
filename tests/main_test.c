@@ -192,6 +192,7 @@ void run_reset_registry_tests(void);
 void run_views_render_tests(void);
 void run_capture_path_tests(void);        /* tests/test_capture_path.c (#95) */
 void run_poll_capture_path_tests(void);   /* tests/test_poll.c (#113) */
+void run_replay_tests(void);              /* tests/test_replay.c (#119) */
 
 int main(void) {
     printf("sloth test suite\n");
@@ -363,6 +364,7 @@ int main(void) {
     run_views_render_tests();
     run_capture_path_tests();
     run_poll_capture_path_tests();
+    run_replay_tests();
 
     tui_offscreen_end();
     RUNNER_SUMMARY();

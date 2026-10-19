@@ -1268,10 +1268,20 @@ uint8_t *capture_test_savefile(int dlt, const uint8_t *const *frames,
 int capture_test_dispatch(sloth_state_t *s, int dlt,
                           const uint8_t *const *frames, const int *lens,
                           const int *orig_lens, int n) {
+    return capture_dispatch_frames(s, dlt, frames, lens, orig_lens, NULL, n);
+}
+
+/* The body capture_test_dispatch() always had, with the timestamps
+ * exposed: --replay (#119) carries each record's own ts_sec through,
+ * where the test seam lets them default to synthetic ones. */
+int capture_dispatch_frames(sloth_state_t *s, int dlt,
+                            const uint8_t *const *frames, const int *lens,
+                            const int *orig_lens, const uint32_t *ts_secs,
+                            int n) {
     if (!s) return -1;
     size_t total = 0;
     uint8_t *img = capture_test_savefile(dlt, frames, lens, orig_lens,
-                                         NULL, n, &total);
+                                         ts_secs, n, &total);
     if (!img) return -1;
 
     FILE *fp = fmemopen(img, total, "rb");

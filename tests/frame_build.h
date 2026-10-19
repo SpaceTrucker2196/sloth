@@ -341,4 +341,142 @@ static inline int fb_radiotap(fb_t *b, const fb_rt_t *rt) {
     return hlen;
 }
 
+/* ── Wired: Ethernet II, IPv4, UDP, TCP, ICMP ─────────────────────── */
+
+/* Added for the --replay generator (#119), whose wired savefile needs
+ * whole frames rather than the parser-local fragments the capture-path
+ * tests build. Same discipline as above: fields in header order, every
+ * value one the caller chose, and the checksums computed per their RFC
+ * rather than left zero, so a frame here is one a real stack would
+ * accept — the replay is an integration input, not a parser probe. */
+
+/* Ethernet II (IEEE 802.3 clause 3.2, DIX framing): DA, SA, EtherType.
+ * No FCS — libpcap hands frames over without one on EN10MB. */
+static inline void fb_eth(fb_t *b, const uint8_t da[6], const uint8_t sa[6],
+                          uint16_t ethertype) {
+    fb_mac(b, da);
+    fb_mac(b, sa);
+    fb_be16(b, ethertype);
+}
+
+/* RFC 1071 one's-complement sum over `n` bytes, folded, NOT inverted,
+ * starting from `acc` so a pseudo-header can be summed first. */
+static inline uint32_t fb_csum_add(uint32_t acc, const uint8_t *p, int n) {
+    for (int i = 0; i + 1 < n; i += 2) acc += (uint32_t)((p[i] << 8) | p[i + 1]);
+    if (n & 1) acc += (uint32_t)(p[n - 1] << 8);
+    return acc;
+}
+static inline uint16_t fb_csum_fold(uint32_t acc) {
+    while (acc >> 16) acc = (acc & 0xffff) + (acc >> 16);
+    return (uint16_t)~acc;
+}
+
+/* IPv4 header (RFC 791 §3.1), IHL 5, no options, DF clear, TTL 64.
+ * `payload_len` is what will follow; the header checksum is computed
+ * here because every field it covers is now known. Returns the offset
+ * of the header in the buffer, for the transport checksum. */
+static inline int fb_ipv4(fb_t *b, uint8_t proto, const uint8_t src[4],
+                          const uint8_t dst[4], int payload_len, uint16_t id) {
+    int at = b->len;
+    fb_u8(b, 0x45);
+    fb_u8(b, 0x00);
+    fb_be16(b, (uint16_t)(20 + payload_len));
+    fb_be16(b, id);
+    fb_be16(b, 0x0000);
+    fb_u8(b, 64);
+    fb_u8(b, proto);
+    fb_be16(b, 0x0000);                 /* checksum, patched below */
+    fb_bytes(b, src, 4);
+    fb_bytes(b, dst, 4);
+    if (!b->overflow) {
+        uint16_t c = fb_csum_fold(fb_csum_add(0, b->buf + at, 20));
+        b->buf[at + 10] = (uint8_t)(c >> 8);
+        b->buf[at + 11] = (uint8_t)(c & 0xff);
+    }
+    return at;
+}
+
+/* TCP/UDP checksum over the RFC 793 §3.1 / RFC 768 pseudo-header plus
+ * the segment at `seg` (length `n`), written big-endian at `seg + at`. */
+static inline void fb_l4_csum(fb_t *b, int ip_at, int seg, int n, int at) {
+    if (b->overflow) return;
+    uint8_t ph[12];
+    memcpy(ph, b->buf + ip_at + 12, 8);           /* src, dst */
+    ph[8] = 0; ph[9] = b->buf[ip_at + 9];         /* zero, protocol */
+    ph[10] = (uint8_t)(n >> 8); ph[11] = (uint8_t)(n & 0xff);
+    uint16_t c = fb_csum_fold(fb_csum_add(fb_csum_add(0, ph, 12),
+                                          b->buf + seg, n));
+    if (c == 0 && b->buf[ip_at + 9] == 17) c = 0xffff;   /* RFC 768 */
+    b->buf[seg + at]     = (uint8_t)(c >> 8);
+    b->buf[seg + at + 1] = (uint8_t)(c & 0xff);
+}
+
+/* Ethernet + IPv4 + UDP (RFC 768) carrying `payload`. */
+static inline void fb_eth_ipv4_udp(fb_t *b, const uint8_t da[6],
+                                   const uint8_t sa[6], const uint8_t src[4],
+                                   const uint8_t dst[4], uint16_t sport,
+                                   uint16_t dport, const void *payload, int n,
+                                   uint16_t ip_id) {
+    fb_eth(b, da, sa, 0x0800);
+    int ip = fb_ipv4(b, 17, src, dst, 8 + n, ip_id);
+    int seg = b->len;
+    fb_be16(b, sport);
+    fb_be16(b, dport);
+    fb_be16(b, (uint16_t)(8 + n));
+    fb_be16(b, 0x0000);
+    fb_bytes(b, payload, n);
+    fb_l4_csum(b, ip, seg, 8 + n, 6);
+}
+
+/* TCP flag bits (RFC 793 §3.1, RFC 9293 §3.1). */
+#define FB_TCP_FIN 0x01
+#define FB_TCP_SYN 0x02
+#define FB_TCP_PSH 0x08
+#define FB_TCP_ACK 0x10
+
+/* Ethernet + IPv4 + TCP, data offset 5 (no options), window 65535. */
+static inline void fb_eth_ipv4_tcp(fb_t *b, const uint8_t da[6],
+                                   const uint8_t sa[6], const uint8_t src[4],
+                                   const uint8_t dst[4], uint16_t sport,
+                                   uint16_t dport, uint32_t seq, uint32_t ack,
+                                   uint8_t flags, const void *payload, int n,
+                                   uint16_t ip_id) {
+    fb_eth(b, da, sa, 0x0800);
+    int ip = fb_ipv4(b, 6, src, dst, 20 + n, ip_id);
+    int seg = b->len;
+    fb_be16(b, sport);
+    fb_be16(b, dport);
+    fb_be16(b, (uint16_t)(seq >> 16)); fb_be16(b, (uint16_t)seq);
+    fb_be16(b, (uint16_t)(ack >> 16)); fb_be16(b, (uint16_t)ack);
+    fb_u8(b, 5 << 4);
+    fb_u8(b, flags);
+    fb_be16(b, 65535);
+    fb_be16(b, 0x0000);                 /* checksum */
+    fb_be16(b, 0x0000);                 /* urgent pointer */
+    fb_bytes(b, payload, n);
+    fb_l4_csum(b, ip, seg, 20 + n, 16);
+}
+
+/* Ethernet + IPv4 + ICMP echo (RFC 792: type 8 request, 0 reply). */
+static inline void fb_eth_ipv4_icmp_echo(fb_t *b, const uint8_t da[6],
+                                         const uint8_t sa[6],
+                                         const uint8_t src[4],
+                                         const uint8_t dst[4], uint8_t type,
+                                         uint16_t ident, uint16_t seqno,
+                                         uint16_t ip_id) {
+    fb_eth(b, da, sa, 0x0800);
+    (void)fb_ipv4(b, 1, src, dst, 8, ip_id);
+    int at = b->len;
+    fb_u8(b, type);
+    fb_u8(b, 0);
+    fb_be16(b, 0x0000);
+    fb_be16(b, ident);
+    fb_be16(b, seqno);
+    if (!b->overflow) {
+        uint16_t c = fb_csum_fold(fb_csum_add(0, b->buf + at, 8));
+        b->buf[at + 2] = (uint8_t)(c >> 8);
+        b->buf[at + 3] = (uint8_t)(c & 0xff);
+    }
+}
+
 #endif /* SLOTH_FRAME_BUILD_H */

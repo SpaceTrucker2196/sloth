@@ -449,6 +449,17 @@ int capture_test_dispatch(sloth_state_t *s, int dlt,
                           const uint8_t *const *frames, const int *lens,
                           const int *orig_lens, int n);
 
+/* capture_test_dispatch() with per-frame capture timestamps (NULL gives
+   the seam's synthetic ones). The one non-test caller is --replay
+   (#119, src/capture/replay.c), which hands each savefile record's own
+   ts_sec through so a replayed frame is stamped with when it was
+   captured, not when it was replayed. Otherwise the same contract:
+   the real on_packet(), synchronous, frames taken as-is. */
+int capture_dispatch_frames(sloth_state_t *s, int dlt,
+                            const uint8_t *const *frames, const int *lens,
+                            const int *orig_lens, const uint32_t *ts_secs,
+                            int n);
+
 /* Install the allow-list policy snapshot that on_packet() consults, or
    NULL to clear it. Without this the seam dispatches with an empty
    policy, which tests the decoders but never the scope boundary #85

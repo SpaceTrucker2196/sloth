@@ -17,6 +17,12 @@ Run via `make mutate` or directly:
     python3 .github/scripts/mutate.py --files src/alerts/rules_wired.c
     python3 .github/scripts/mutate.py --files src/alerts/engine.c --operators rel const
     python3 .github/scripts/mutate.py --files src/alerts/rules_twin.c --limit 20 --seed 1
+    python3 .github/scripts/mutate.py --files src/main.c --target replay-check
+
+`--target` picks the oracle (#119): `test` (sloth_test, the default),
+`replay-check` (the shipped binary replaying generated savefiles against
+tests/replay/golden.jsonl — the only gate that runs src/main.c), or
+`all` (both).
 
 Background: see issue #4 and docs/wiki/mutation-testing.md.
 """
@@ -434,27 +440,47 @@ def load_ignore_file(path: Path) -> list:
     return rules
 
 
-def run_make_test(workdir: Path, timeout_s: float) -> tuple[bool, str]:
+# Which oracle judges a mutant (#119). `test` is sloth_test, which has its
+# own main() and links none of src/main.c, so a main.c mutant could only
+# ever survive it. `replay-check` is the shipped `sloth` replaying the
+# generated savefiles against tests/replay/golden.jsonl: the one gate that
+# executes main()'s argv handling and poll loop. `all` runs both, in that
+# order, and a mutant survives only if both stay green.
+TARGETS = {
+    "test":         ["test"],
+    "replay-check": ["replay-check"],
+    "all":          ["test", "replay-check"],
+}
+
+
+def run_make_test(workdir: Path, timeout_s: float,
+                  targets: list[str] | None = None) -> tuple[bool, str]:
     """Returns (passed, short_stderr_tail).
 
-    We use `make -B test` because mtime granularity on some filesystems
+    We use `make -B <target>` because mtime granularity on some filesystems
     (notably APFS via Python's write_text on macOS) lets a mutated
     source share the same second as the freshly built test binary,
     which make then treats as up-to-date and skips the rebuild.
     -B forces unconditional rebuild — exactly what mutation testing
     requires.
+
+    With more than one target each runs in turn and the first red one
+    kills the mutant; the timeout applies per target.
     """
-    try:
-        r = subprocess.run(
-            ["make", "-B", "test"],
-            cwd=workdir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            timeout=timeout_s,
-        )
-        return r.returncode == 0, r.stderr.decode("utf-8", "replace")[-400:]
-    except subprocess.TimeoutExpired:
-        return False, "TIMEOUT"
+    for target in targets or ["test"]:
+        try:
+            r = subprocess.run(
+                ["make", "-B", target],
+                cwd=workdir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "TIMEOUT"
+        if r.returncode != 0:
+            return False, r.stderr.decode("utf-8", "replace")[-400:]
+    return True, ""
 
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -543,6 +569,13 @@ def main() -> int:
         help="per-mutant timeout as multiple of baseline test time",
     )
     parser.add_argument(
+        "--target", choices=list(TARGETS.keys()), default="test",
+        help="the make target(s) that judge each mutant: test "
+             "(sloth_test, the default), replay-check (the shipped sloth "
+             "against tests/replay/golden.jsonl; use it for src/main.c), "
+             "or all (both, both must stay green to survive)",
+    )
+    parser.add_argument(
         "--keep-sandbox", action="store_true",
         help="don't delete sandbox tmpdir on exit",
     )
@@ -589,6 +622,8 @@ def main() -> int:
     print(f"repo:      {repo}")
     print(f"files:     {', '.join(args.files)}")
     print(f"operators: {', '.join(args.operators)}")
+    targets = TARGETS[args.target]
+    print(f"oracle:    make {' && make '.join(targets)}")
     if ignore_rules:
         print(f"ignore:    {len(ignore_rules)} entries from {args.ignore_file}")
     sys.stdout.flush()
@@ -600,14 +635,15 @@ def main() -> int:
 
     try:
         # 2. Baseline. Must be green; time it.
-        print("baseline:  building & running make test ...", end=" ", flush=True)
+        print(f"baseline:  building & running make {args.target} ...",
+              end=" ", flush=True)
         t0 = time.monotonic()
-        ok, err = run_make_test(sandbox, timeout_s=300)
+        ok, err = run_make_test(sandbox, timeout_s=300, targets=targets)
         baseline_s = time.monotonic() - t0
         if not ok:
             print("FAIL")
             print(err)
-            print("baseline `make test` is not green; aborting.")
+            print(f"baseline `make {args.target}` is not green; aborting.")
             return 3
         print(f"OK ({baseline_s:.1f}s)")
 
@@ -648,7 +684,7 @@ def main() -> int:
                 continue
             target = sandbox / m.file
             apply_mutation(target, m)
-            ok, err = run_make_test(sandbox, timeout_s=timeout)
+            ok, err = run_make_test(sandbox, timeout_s=timeout, targets=targets)
             # Restore just this file.
             target.write_text(originals[m.file])
 

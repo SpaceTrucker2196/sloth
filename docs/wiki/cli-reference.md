@@ -25,7 +25,7 @@ only that each flag and key is here.
 (`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
 the status badges.
 
-**Last updated**: 2026-10-18.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -33,7 +33,7 @@ the status badges.
 
 ```
 sloth [output] [handshakes] [stream] [wifi] [correlation] [db]
-      [inventory] [posture] [runtime] [--help] [--version]
+      [inventory] [posture] [replay] [runtime] [--help] [--version]
 ```
 
 Run as root (or with `CAP_NET_ADMIN` + `CAP_NET_RAW`) for capture. A
@@ -229,6 +229,17 @@ The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` an
 | `--with-research` | `research.db` | off | Load the research corpus so `--report` cites the source behind each fired alert. Opened as an untrusted database: `DEFENSIVE`, `TRUSTED_SCHEMA=0`, no extensions; a file whose `research` is not the FTS5 table, or that holds a view or trigger, is refused (#137). Additive: unreadable or refused corpus warns and continues. → [[research-corpus]] |
 | `--check-manifest` | `FILE` | off | Read a locally-populated release manifest (JSON); show "update available" in Help when `latest` > `SLOTH_VERSION`. sloth never fetches — populate `FILE` via cron/systemd. A control byte in `latest` or `url` fails the manifest (#137). → [[manifest-format]] |
 
+### Replay — savefiles instead of interfaces (#119)
+
+Owner ruling 2026-10-15. For CI and for re-reading a capture after the
+fact: the whole pipeline (decoders, alert engine, every sink) runs on
+libpcap savefiles, with no interface opened. → [[replay-integration]]
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length. Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only` or `--hop`, which name live capture, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
+| `--ticks` | `N` | off (run until quit) | Exit `0` after `N` poll ticks, `1..1000000`; anything else exits 2. The last tick still emits; only the wait after it is skipped. With `--replay --headless` this makes a batch job: replay, tick, flush the sinks and reports, exit. |
+
 ### Runtime & meta
 
 | Flag | Arg | Default | Effect |
@@ -348,7 +359,8 @@ only a configured `storage.*` floor refuses anything in advance. See
 
 | Code | Meaning |
 |------|---------|
-| `0` | Clean exit (incl. `--version`, `--help`). |
+| `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
+| `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
 | `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back). |
 
 ## Build variants (Makefile)
@@ -367,6 +379,9 @@ make test            # sloth_test — no root/tty/net; built WITH_NCURSES + WITH
 make test-capture-path  # alias for `make test`, kept one release (#116)
 make sloth_test_noflags # the suite without ncurses/pcap — link-only, never run
 make mutate          # mutation-test the suite (opt-in, offline)
+make replay-check    # run `sloth --replay` on generated savefiles, diff
+                     #   the normalised JSONL against tests/replay/golden.jsonl (#119)
+make replay-golden   # rewrite the golden from the current tree (review the diff)
 ```
 
 All six build variants must be warning-clean; CI enforces `-Werror`

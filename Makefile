@@ -188,6 +188,10 @@ CORE_COMMON_SRCS += src/capture/capture.c
 # The pcap-edge gate (#141) is libpcap-free so the test and fuzz builds
 # link it whatever WITH_PCAP says; both capture callbacks call it first.
 CORE_COMMON_SRCS += src/capture/frame_edge.c
+# --replay (#119). Same split as capture.c: the route table, the list
+# parser and the empty platform are pure and built everywhere; the
+# savefile reader sits inside WITH_PCAP.
+CORE_COMMON_SRCS += src/capture/replay.c
 CORE_COMMON_SRCS += src/fragattack.c
 CORE_COMMON_SRCS += src/views/research.c
 CORE_COMMON_SRCS += src/views/fragattack.c
@@ -573,6 +577,57 @@ test: $(TEST_BIN)
 test-capture-path: test
 	@echo "test-capture-path: the capture path is part of 'make test' since #116;" \
 	      "this alias goes away next release"
+
+# ── Headless replay integration (#119) ──────────────────────────────────────
+# The one gate that runs the shipped `sloth` binary: main()'s argv
+# handling, the poll loop, the alert engine and the JSONL and SQLite
+# sinks, end to end. `sloth_test` has its own main() and links none of
+# that; before this, CI only ever linked `sloth`.
+#
+# Inputs are generated, never committed (agents/AGENTS.md, "No pcap
+# fixtures"): gen_replay writes two savefiles from tests/frame_build.h
+# byte arrays into REPLAY_DIR, sloth replays them for REPLAY_TICKS
+# ticks, and normalise.sh strips what varies per run and per host. What
+# is committed is tests/replay/golden.jsonl, the normalised output, so a
+# behaviour change is a reviewable diff of records in the PR that made
+# it. `make replay-golden` rewrites the golden from the current tree;
+# run it only when the diff `make replay-check` shows is the intended
+# one, and say so in the commit.
+#
+# --refresh-ms 100 only shortens the wait between ticks. The normalised
+# output was checked identical at 100 and 1000 ms before this was set.
+REPLAY_DIR    ?= build/replay
+REPLAY_TICKS  ?= 3
+REPLAY_GEN     = $(REPLAY_DIR)/gen_replay
+REPLAY_RUN     = $(REPLAY_DIR)/run
+REPLAY_GOLDEN  = tests/replay/golden.jsonl
+# The generator is a host tool: its own sources plus the shared savefile
+# writer, compiled with the test flags (it is test code, and -Werror and
+# the sanitizers reach it through EXTRA_CFLAGS like everything else).
+REPLAY_GEN_SRCS = $(wildcard tests/replay/*.c) src/pcap_format.c
+
+$(REPLAY_GEN): $(REPLAY_GEN_SRCS) src/pcap_format.h tests/frame_build.h
+	@mkdir -p $(@D)
+	$(CC) $(TEST_CFLAGS) $(TEST_INCS) -o $@ $(filter %.c,$^)
+
+.PHONY: replay-run replay-check replay-golden
+replay-run: $(TARGET) $(REPLAY_GEN)
+	rm -rf $(REPLAY_RUN)
+	mkdir -p $(REPLAY_RUN)
+	$(REPLAY_GEN) $(REPLAY_RUN)
+	./$(TARGET) --headless \
+	    --replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap \
+	    -o $(REPLAY_RUN)/out.jsonl --db $(REPLAY_RUN)/replay.db \
+	    --ticks $(REPLAY_TICKS) --refresh-ms 100
+	sh tests/replay/normalise.sh < $(REPLAY_RUN)/out.jsonl > $(REPLAY_RUN)/norm.jsonl
+
+replay-check: replay-run
+	diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl
+	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
+
+replay-golden: replay-run
+	cp $(REPLAY_RUN)/norm.jsonl $(REPLAY_GOLDEN)
+	@echo "replay-golden: wrote $$(wc -l < $(REPLAY_GOLDEN)) records; review the diff before committing"
 
 # Headers are dependencies too. Without them a header-only change — a
 # new struct field, a bumped constant — leaves the test binary stale,

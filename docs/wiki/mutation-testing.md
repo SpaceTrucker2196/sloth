@@ -52,7 +52,18 @@ make mutate MUTATE_FLAGS="--operators rel const"
 make mutate MUTATE_FLAGS="--files src/dga.c --limit 50 --seed 7"
 make mutate MUTATE_FLAGS="--report /tmp/mutate.txt"
 make mutate MUTATE_FLAGS="--keep-sandbox"   # leaves tmpdir for inspection
+
+# Choose the oracle (#119). sloth_test never runs src/main.c, so a
+# main.c mutant judged by `make test` can only survive:
+make mutate MUTATE_FLAGS="--files src/main.c --target replay-check"
+make mutate MUTATE_FLAGS="--files src/alerts.c --target all"   # both gates
 ```
+
+`--target` is `test` (default, `sloth_test`), `replay-check` (the shipped
+`sloth` replaying generated savefiles against the committed golden —
+[[replay-integration]]), or `all` (both in turn; a mutant survives only
+if both stay green). The baseline runs the same oracle, and the
+per-mutant timeout applies per target.
 
 Direct invocation:
 
@@ -431,6 +442,7 @@ where the suite already had failures.
 - [[alerts]] — the alert engine, the first mutation target.
 - [[architecture]] — code-tree layout for picking the next target.
 - [[platform-vtable]] — why some files won't mutate cleanly on macOS.
+- [[replay-integration]] — the `replay-check` oracle behind `--target`.
 - [`../../agents/dark-factory.md`](../../agents/dark-factory.md) §3.3 — why "tests are
   the ground truth" requires this harness.
 

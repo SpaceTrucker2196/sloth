@@ -119,6 +119,7 @@ the Wi-Fi it watches:
 ## Factory infrastructure
 
 - [[mutation-testing]] — verifying the test suite itself; `make mutate` harness.
+- [[replay-integration]] — `--replay`/`--ticks` and `make replay-check`: the CI gate that executes the shipped binary.
 - [[docs-drift-judge]] — LLM-as-judge GitHub Action that audits
   per-view docs against their source files.
 

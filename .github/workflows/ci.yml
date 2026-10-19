@@ -115,9 +115,10 @@ jobs:
       # __asan_report_*. The consequence is what makes this a gap and not a
       # curiosity — `src/main.c`, the libpcap capture path and the ncurses
       # renderer live only in `sloth`, never in `sloth_test`, so the step
-      # above has never covered a line of them. Linking is the whole
-      # assertion: MISSION.md §2 forbids running sloth against an interface,
-      # and CI has none, so nothing here executes the binary.
+      # above has never covered a line of them. Linking was the whole
+      # assertion until #119: MISSION.md §2 forbids running sloth against
+      # an interface, and CI has none. The replay step after these two
+      # executes it anyway, on generated savefiles instead of an interface.
       #
       # `embedded` too, because it reaches the same rule through a
       # sub-make — the path by which a $(MAKE) recursion could drop flags.
@@ -147,6 +148,38 @@ jobs:
         env:
           EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
         run: make clean && make embedded
+
+      # The shipped binary, executed (#119): `sloth --replay` over the
+      # generated savefiles, diffed against tests/replay/golden.jsonl,
+      # with main(), the poll loop and every sink instrumented. Same
+      # flags as the link check plus -fno-sanitize-recover=all, so a UBSan
+      # report aborts the run; the job's ASAN_OPTIONS keep leak detection
+      # on, which makes sloth's shutdown path part of what is checked.
+      # -Werror is dropped for the reason given on the link check above.
+      - name: Replay under ASan + UBSan
+        env:
+          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+        run: make clean && make replay-check REPLAY_DIR="$RUNNER_TEMP/replay"
+
+  # Headless replay integration (#119, owner approved 2026-10-15). The one
+  # job that runs the shipped `sloth`: --replay feeds it two savefiles that
+  # tests/replay/gen_replay.c builds at run time from tests/frame_build.h
+  # byte arrays (no capture is committed — AGENTS.md "No pcap fixtures"),
+  # --ticks 3 ends the run, and tests/replay/normalise.sh strips what
+  # varies per run and per host before the diff against the committed
+  # tests/replay/golden.jsonl. A change in what sloth reports is therefore
+  # a red job here and a reviewable golden diff in the PR that intends it
+  # (`make replay-golden`). Built with the workflow's -Werror.
+  replay:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Install dependencies
+        run: sudo apt-get install -y libncurses-dev libpcap-dev libsqlite3-dev
+
+      - name: Replay generated savefiles against the golden
+        run: make replay-check REPLAY_DIR="$RUNNER_TEMP/replay"
 
   # ThreadSanitizer (#95). The evil-twin taint table (#95/6730997), the
   # RF-quality counters (#95/21d3c52) and the DNS caller-owned buffer

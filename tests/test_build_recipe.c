@@ -457,6 +457,91 @@ static void test_ci_cppcheck_is_the_make_target(void) {
     free(ci);
 }
 
+/* ── the replay gate (#119) ── */
+
+/* Cut `ci` at the start of the job after `name`, returning the job's text
+ * (NUL-terminated in place) or NULL. A job is a two-space-indented key. */
+static char *ci_job(char *ci, const char *name) {
+    char head[64];
+    snprintf(head, sizeof head, "\n  %s:\n", name);
+    char *job = strstr(ci, head);
+    if (!job) return NULL;
+    char *p = job + strlen(head);
+    for (;;) {
+        char *nl = strstr(p, "\n  ");
+        if (!nl) break;
+        /* The next line indented exactly two, starting a key: next job.
+         * A `#` comment at that depth is the prose above the next job. */
+        if (nl[3] != ' ' && nl[3] != '\n') { *nl = '\0'; break; }
+        p = nl + 1;
+    }
+    return job;
+}
+
+/* The shipped binary has to be executed by CI, not only linked: a job
+ * that runs the replay gate, and the sanitize job running it again
+ * instrumented. Proved red by renaming the job and, separately, by
+ * deleting the sanitize step. */
+static void test_ci_runs_the_replay_gate(void) {
+    char *ci = slurp_path(".github/workflows/ci.yml");
+    ASSERT(ci != NULL);
+    if (!ci) return;
+    char *copy = malloc(strlen(ci) + 1);
+    ASSERT(copy != NULL);
+    if (!copy) { free(ci); return; }
+    strcpy(copy, ci);
+
+    char *rj = ci_job(ci, "replay");
+    ASSERT(rj != NULL);
+    ASSERT(rj && strstr(rj, "run: make replay-check") != NULL);
+    ASSERT(rj && strstr(rj, "runs-on: ubuntu-24.04") != NULL);
+
+    char *sj = ci_job(copy, "sanitize");
+    ASSERT(sj != NULL);
+    ASSERT(sj && strstr(sj, "make replay-check") != NULL);
+    ASSERT(sj && strstr(sj, "-fsanitize=address,undefined") != NULL);
+    free(copy);
+    free(ci);
+}
+
+/* The Makefile half: replay-check diffs against the committed golden,
+ * replay-golden rewrites it, and the inputs come from the generator
+ * rather than from anything under tests/ ending in .pcap. */
+static void test_replay_targets_diff_a_committed_golden(void) {
+    char *mk = slurp_makefile();
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    ASSERT(strstr(mk, "\nreplay-check: replay-run\n") != NULL);
+    ASSERT(strstr(mk, "diff -u $(REPLAY_GOLDEN) $(REPLAY_RUN)/norm.jsonl") != NULL);
+    ASSERT(strstr(mk, "\nreplay-golden: replay-run\n") != NULL);
+    ASSERT(strstr(mk, "$(REPLAY_GEN) $(REPLAY_RUN)\n") != NULL);
+    ASSERT(strstr(mk, "--replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap") != NULL);
+    free(mk);
+    char *g = slurp_path("tests/replay/golden.jsonl");
+    ASSERT(g != NULL);
+    /* Floor, not a count: the golden must hold records, and at least the
+     * three alerts the generated frames are built to raise. */
+    ASSERT(g && strstr(g, "\"title\":\"DEAUTH_FLOOD\"") != NULL);
+    ASSERT(g && strstr(g, "\"title\":\"THREAT_DOMAIN\"") != NULL);
+    ASSERT(g && strstr(g, "\"title\":\"CLEARTEXT_CRED\"") != NULL);
+    ASSERT(g && strstr(g, "\"capture_iface\":\"replay\"") != NULL);
+    free(g);
+}
+
+/* mutate.py can judge a mutant by the replay gate — the only oracle that
+ * runs src/main.c — and the per-mutant run uses the chosen oracle, not a
+ * hard-coded `make test`. */
+static void test_mutate_offers_the_replay_oracle(void) {
+    char *py = slurp_path(".github/scripts/mutate.py");
+    ASSERT(py != NULL);
+    if (!py) return;
+    ASSERT(strstr(py, "\"replay-check\": [\"replay-check\"]") != NULL);
+    ASSERT(strstr(py, "\"--target\", choices=list(TARGETS.keys())") != NULL);
+    ASSERT(strstr(py, "run_make_test(sandbox, timeout_s=timeout, targets=targets)") != NULL);
+    ASSERT(strstr(py, "[\"make\", \"-B\", \"test\"]") == NULL);
+    free(py);
+}
+
 void run_build_recipe_tests(void) {
     TEST_SUITE("build recipe (#95)");
     RUN_TEST(test_scanner_distinguishes_flagged_from_bare);
@@ -470,4 +555,8 @@ void run_build_recipe_tests(void) {
     RUN_TEST(test_no_variable_spells_out_a_test_file);
     RUN_TEST(test_object_dir_is_per_config);
     RUN_TEST(test_ci_cppcheck_is_the_make_target);
+    TEST_SUITE("replay gate (#119)");
+    RUN_TEST(test_ci_runs_the_replay_gate);
+    RUN_TEST(test_replay_targets_diff_a_committed_golden);
+    RUN_TEST(test_mutate_offers_the_replay_oracle);
 }

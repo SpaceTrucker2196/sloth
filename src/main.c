@@ -122,6 +122,7 @@
 #endif
 #include "capture/capture.h"   /* likewise — and #57's scope check needs it
                                   in the no-pcap build too */
+#include "capture/replay.h"    /* --replay / --ticks (#119) */
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -350,6 +351,7 @@ static void print_usage(const char *argv0) {
             "       [--with-research research.db]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
+            "       [--replay FILE[,FILE]] [--ticks N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
             "                     events to FILE (created 0600 if it doesn't\n"
             "                     exist; an existing FILE must already be\n"
@@ -601,6 +603,19 @@ static void print_usage(const char *argv0) {
             "                     alerting and every sink (-o,\n"
             "                     --data-socket, --db, --report) run\n"
             "                     exactly as normal.\n"
+            "  --replay FILE[,FILE]\n"
+            "                     read libpcap savefiles instead of opening\n"
+            "                     any interface (max 8). Ethernet and Linux\n"
+            "                     cooked files feed the IP path, radiotap\n"
+            "                     files the 802.11 monitor path. No host\n"
+            "                     state is read: interfaces, sockets, ARP,\n"
+            "                     DHCP and Wi-Fi scan come back empty, so\n"
+            "                     the output describes the files alone.\n"
+            "                     Refused with --iface, --monitor-only and\n"
+            "                     --hop, which name live capture.\n"
+            "  --ticks N          exit 0 after N poll ticks (1..1000000).\n"
+            "                     With --replay --headless this is a batch\n"
+            "                     run: replay, tick, flush the sinks, exit.\n"
             "  --no-color         suppress colour escape sequences but\n"
             "                     keep drawing. Also honoured via the\n"
             "                     NO_COLOR environment variable.\n"
@@ -717,6 +732,8 @@ int main(int argc, char **argv) {
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
+    const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
+    long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = time(NULL);
     /* NO_COLOR (no-color.org): any non-empty value disables colour.
      * Read before the flags so an explicit --no-color is redundant
@@ -894,6 +911,18 @@ int main(int argc, char **argv) {
             return 0;
         } else if (!strcmp(argv[i], "--headless")) {
             headless = 1;
+        } else if (!strcmp(argv[i], "--replay") && i + 1 < argc) {
+            replay_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--ticks") && i + 1 < argc) {
+            /* Strict, like --tune: a batch job that ran forever because
+             * "3x" parsed as 0 would hang the CI step it was written for. */
+            char *end = NULL;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end || end == argv[i] || v < 1 || v > 1000000) {
+                fprintf(stderr, "sloth: --ticks %s: want 1..1000000\n", argv[i]);
+                return 2;
+            }
+            max_ticks = v;
         } else if (!strcmp(argv[i], "--no-color") ||
                    !strcmp(argv[i], "--no-colour")) {
             tui_set_color(0);
@@ -981,6 +1010,35 @@ int main(int argc, char **argv) {
     if (collect_hs && !eapol_dir)
         fprintf(stderr, "sloth: --collect-handshakes without --eapol-dir: "
                         "no destination, so nothing is exported\n");
+
+    /* --replay (#119): the input is the files, so the flags that scope or
+     * steer a live capture have nothing to act on. Refused rather than
+     * ignored — an --iface that silently did nothing would read as a
+     * replay filtered to that interface. Whole-command-line, like the
+     * --eapol-dir check above. */
+    char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
+    int  replay_count = 0;
+    if (replay_arg) {
+#ifndef WITH_PCAP
+        fprintf(stderr, "sloth: --replay needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+#endif
+        replay_count = replay_split_list(replay_arg, replay_paths,
+                                         REPLAY_MAX_FILES);
+        if (replay_count < 0) {
+            fprintf(stderr, "sloth: --replay %s: want FILE[,FILE], at most "
+                            "%d files, no empty names\n",
+                    replay_arg, REPLAY_MAX_FILES);
+            return 2;
+        }
+        if (allow_iface_count || monitor_only || g_hop_enabled) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not "
+                            "interfaces: --iface, --monitor-only and --hop "
+                            "do not apply\n");
+            return 2;
+        }
+    }
 
     /* socket_is_remote is only consulted when have_data_socket is set,
      * so the spec parser is never handed a NULL. */
@@ -1105,10 +1163,38 @@ int main(int argc, char **argv) {
     for (int i = 0; i < allow_iface_count; i++)
         iface_allow_add(&g_state, allow_ifaces[i]);
 
+    if (replay_count > 0) replay_platform_install();
     g_platform.init();
 #ifdef WITH_PCAP
-    capture_open(&g_state);
-    probe_open(&g_state);
+    /* --replay (#119) takes the place of steps 2-3: every file is opened
+     * and routed here, before any sink, so a missing or undecodable file
+     * is a refusal that leaves nothing behind — the same ordering #85
+     * gave scope. The files are read further down, where the workers
+     * would start. "replay" stands in for the interface names, and is
+     * what sensor_health reports as the source. */
+    replay_src_t replay_srcs[REPLAY_MAX_FILES];
+    if (replay_count > 0) {
+        for (int i = 0; i < replay_count; i++) {
+            char rerr[512 + REPLAY_PATH_MAX];
+            if (replay_check(replay_paths[i], &replay_srcs[i], rerr,
+                             (int)sizeof(rerr)) != 0) {
+                fprintf(stderr, "sloth: --replay %s\n", rerr);
+                g_platform.cleanup();
+                return 1;
+            }
+            if (replay_srcs[i].route == REPLAY_ROUTE_MONITOR) {
+                snprintf(g_state.probe_iface, sizeof(g_state.probe_iface),
+                         "replay");
+            } else if (!g_state.pkt_iface[0]) {
+                snprintf(g_state.pkt_iface, sizeof(g_state.pkt_iface),
+                         "replay");
+                g_state.pkt_linktype = replay_srcs[i].dlt;
+            }
+        }
+    } else {
+        capture_open(&g_state);
+        probe_open(&g_state);
+    }
     /* First-launch UX (#25): when a monitor interface is present, open on
      * the RF-aware dashboard rather than the interface list. */
     if (g_state.probe_iface[0])
@@ -1141,7 +1227,7 @@ int main(int argc, char **argv) {
             g_platform.cleanup();
             return 1;
         }
-        if (v == CAPTURE_SCOPE_NO_CAPTURE)
+        if (v == CAPTURE_SCOPE_NO_CAPTURE && replay_count == 0)
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
 
@@ -1291,6 +1377,23 @@ int main(int argc, char **argv) {
     /* #85: both workers start here, after the scope policy was sealed
      * and every sink is open; nothing above this point can have decoded
      * a packet. */
+    /* --replay (#119) decodes here instead, for the same reason: every
+     * sink is open and the evidence ring exists. Synchronously, on this
+     * thread and before the first tick, so tick 1 sees every file in
+     * full and a run is a function of its inputs, not of how the decode
+     * raced the poll loop. A file that fails part-way is fatal: a report
+     * on a truncated replay would not say it was one. */
+    for (int i = 0; i < replay_count; i++) {
+        char rerr[512 + REPLAY_PATH_MAX];
+        long nf = replay_run(&g_state, &replay_srcs[i], rerr, (int)sizeof(rerr));
+        if (nf < 0) {
+            fprintf(stderr, "sloth: --replay %s\n", rerr);
+            return 1;
+        }
+        fprintf(stderr, "sloth: replayed %ld frame(s) from %s (%s path)\n",
+                nf, replay_srcs[i].path,
+                replay_srcs[i].route == REPLAY_ROUTE_MONITOR ? "802.11" : "IP");
+    }
     capture_run();
     /* #85: an allow-listed name that did not resolve is failed closed,
      * which is right, but the only reports of it were the Interfaces
@@ -1342,7 +1445,8 @@ int main(int argc, char **argv) {
         tui_init();
     }
 
-    int first_poll = 1;
+    int  first_poll = 1;
+    long ticks_done = 0;
     while (!g_quit) {
         poll_data(&g_state);
         if (first_poll) {
@@ -1370,7 +1474,11 @@ int main(int argc, char **argv) {
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(time(NULL));
         updater_snapshot(&g_state);
+        /* --ticks (#119): the last tick still emits and draws; only the
+         * wait after it is skipped, since nothing follows to wait for. */
+        int last_tick = max_ticks > 0 && ++ticks_done >= max_ticks;
         if (headless) {
+            if (last_tick) break;
             /* No draw, no key read, no termios. Just wait out the poll
              * interval — honouring the wake fd so an alert still shortens
              * the cycle exactly as it does interactively. */
@@ -1378,6 +1486,7 @@ int main(int argc, char **argv) {
             event_wake_drain();
         } else {
             tui_draw(&g_state);
+            if (last_tick) break;
             int ch = tui_poll_key(g_state.poll_ms, event_wake_fd());
             event_wake_drain();
             handle_key(&g_state, ch);
