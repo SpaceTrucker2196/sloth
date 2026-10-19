@@ -1,5 +1,6 @@
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "views/arp.h"
 
@@ -21,13 +22,14 @@ static void inject_entry(sloth_state_t *s, const char *ip,
     }
 }
 
-/* ── Draw smoke tests ────────────────────────────────────── */
+/* ── Draw ─────────────────────────────────────────────────── */
 
 static void test_arp_draw_empty(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
     view_arp_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "ARP neighbors: 0");
+    ASSERT_SCREEN_HAS("(ARP table empty");
 }
 
 static void test_arp_draw_with_entries(void) {
@@ -38,6 +40,8 @@ static void test_arp_draw_with_entries(void) {
     inject_entry(&s, "192.168.1.200", "aa:bb:cc:dd:ee:ff", "eth0");
     view_arp_draw(&s);
     ASSERT_EQ(s.arp_count, 3);
+    ASSERT_LINE_HAS(0, "ARP neighbors: 3");
+    ASSERT_LINE_HAS(runner_screen_find("192.168.1.200 "), "aa:bb:cc:dd:ee:ff");
 }
 
 static void test_arp_draw_known_vendor(void) {
@@ -45,7 +49,13 @@ static void test_arp_draw_known_vendor(void) {
     memset(&s, 0, sizeof(s));
     inject_entry(&s, "10.0.0.1", "dc:a6:32:00:00:01", "wlan0");
     view_arp_draw(&s);
-    ASSERT(1);  /* smoke: Raspberry Pi vendor shown */
+    /* dc:a6:32 is a Raspberry Pi Trading OUI; the vendor column names it
+     * and the interface column follows. */
+    int y = runner_screen_find("10.0.0.1 ");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "dc:a6:32:00:00:01");
+    ASSERT_LINE_HAS(y, "Raspberry Pi");
+    ASSERT_LINE_HAS(y, "wlan0");
 }
 
 /* ── Navigation tests ────────────────────────────────────── */
