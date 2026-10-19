@@ -1483,11 +1483,22 @@ static void test_emit_sensor_health_memory_fields(void) {
         if (at && prev) ASSERT(prev < at);
         if (at) prev = at;
     }
-    /* resolver_calls is the last field: nothing but its number follows. */
+    /* The memory block is appended as a unit: the only field that may
+     * follow resolver_calls is `libs` (#142, appended after #121), and
+     * libs is the record's last field. Asserting "resolver_calls is
+     * last" broke the moment a later slice appended its own field,
+     * which is exactly what append-only is supposed to allow. */
     if (prev) {
-        const char *close = strchr(prev, '}');
-        ASSERT(close != NULL);
-        if (close) ASSERT(memchr(prev, ',', (size_t)(close - prev)) == NULL);
+        const char *libs = strstr(prev, "\"libs\":");
+        ASSERT(libs != NULL);
+        const char *comma = strchr(prev, ',');
+        ASSERT(comma != NULL && libs != NULL && comma + 1 == libs);
+        /* libs is a string (its value can itself contain commas), so
+         * "last" means: the octet after its closing quote is '}'. */
+        const char *q = libs ? libs + strlen("\"libs\":\"") : NULL;
+        while (q && *q && *q != '"') q += (*q == '\\' && q[1]) ? 2 : 1;
+        ASSERT(q != NULL && *q == '"');
+        if (q && *q == '"') ASSERT(q[1] == '}');
     }
     ASSERT_GT(field_ll(body, "\"rss_kb\":"), 0LL);
     ASSERT_GE(field_ll(body, "\"rss_hwm_kb\":"), field_ll(body, "\"rss_kb\":"));

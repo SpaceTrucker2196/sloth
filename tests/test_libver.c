@@ -110,9 +110,11 @@ static void test_format_carries_both_libraries(void) {
     snprintf(want, sizeof(want), "pcap: %s; sqlite: %s",
              libver_pcap(), libver_sqlite());
     ASSERT_STR(buf, want);
-#ifndef WITH_PCAP
-    /* sloth_test is built without WITH_PCAP; the capture-path binary
-     * checks the linked case against pcap_lib_version(). */
+#ifdef WITH_PCAP
+    /* sloth_test is built WITH_PCAP since #116: the linked library's
+     * own string, never the "none" a pcap-less build reports. */
+    ASSERT(strcmp(libver_pcap(), "none") != 0);
+#else
     ASSERT_STR(libver_pcap(), "none");
 #endif
     /* Truncates rather than overrunning. */
@@ -120,7 +122,12 @@ static void test_format_carries_both_libraries(void) {
     memset(tiny, 'X', sizeof(tiny));
     libver_format(tiny, sizeof(tiny));
     ASSERT_EQ(tiny[sizeof(tiny) - 1], '\0');
-    ASSERT_STR(tiny, "pcap: n");
+    /* The truncated form is the full form's first 7 octets, whatever
+     * the linked pcap reports. It used to be the literal "pcap: n" -
+     * true only while sloth_test was built without WITH_PCAP, which
+     * #116 ended. */
+    ASSERT(strncmp(tiny, want, sizeof(tiny) - 1) == 0);
+    ASSERT_EQ((int)strlen(tiny), (int)sizeof(tiny) - 1);
 }
 
 /* tools/sbom.sh, the `make sbom` fallback. Driven with a stand-in
