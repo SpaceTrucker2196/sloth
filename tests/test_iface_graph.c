@@ -1,5 +1,6 @@
 #include <string.h>
 #include "runner.h"
+#include "tui.h"
 #include "sloth.h"
 #include "history.h"
 #include "views/iface.h"
@@ -88,14 +89,17 @@ static void test_graph_draw_no_crash_no_ifaces(void) {
     memset(&s, 0, sizeof(s));
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "(no interfaces)");
 }
 
 static void test_graph_draw_no_crash_no_history(void) {
     sloth_state_t s = make_state(1);
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "eth0  [Esc] back");
+    /* No samples: the axis floors at 1B/s and no column is filled. */
+    ASSERT_SCREEN_HAS("RX  (peak: 1B/s)");
+    ASSERT_SCREEN_LACKS("\xe2\x96\x88");
 }
 
 static void test_graph_draw_no_crash_with_history(void) {
@@ -103,7 +107,13 @@ static void test_graph_draw_no_crash_with_history(void) {
     push_history(&s, "eth0", 10);
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    /* Ten samples rising 1..10 MB/s: the peak labels the top of the
+     * axis, the newest column (rightmost) is full height. */
+    ASSERT_SCREEN_HAS("RX  (peak: 10.0MB/s)");
+    ASSERT_SCREEN_HAS("TX  (peak: 3.0MB/s)");
+    int y = runner_screen_find("10.0MB/s \xe2\x94\xa4");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "\xe2\x96\x88\xe2\x96\x88");
 }
 
 static void test_graph_draw_no_crash_full_history(void) {
@@ -111,7 +121,12 @@ static void test_graph_draw_no_crash_full_history(void) {
     push_history(&s, "eth0", HIST_LEN + 5);  /* overfill ring */
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    /* Overfilled by 5: the peak is the last sample written, and the
+     * oldest five fell off the ring rather than wrapping in. */
+    char want[64];
+    snprintf(want, sizeof(want), "RX  (peak: %.1fMB/s)",
+             (double)(HIST_LEN + 5));   /* rates render in 10^6 B */
+    ASSERT_SCREEN_HAS(want);
 }
 
 static void test_graph_draw_second_iface(void) {
@@ -120,14 +135,19 @@ static void test_graph_draw_second_iface(void) {
     s.iface_sel  = 1;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "wlan0  [Esc] back");
+    ASSERT_SCREEN_LACKS("eth0  [Esc] back");
+    ASSERT_SCREEN_HAS("RX  (peak: 15.0MB/s)");
 }
 
 static void test_normal_draw_not_affected(void) {
     sloth_state_t s = make_state(2);
     s.iface_graph = 0;
     view_iface_draw(&s);  /* normal table view */
-    ASSERT(1);
+    ASSERT_LINE_HAS(0, "Interface  Mode Vendor");
+    ASSERT_LINE_HAS(runner_screen_find(" eth0 "), "1.0MB/s");
+    ASSERT_LINE_HAS(runner_screen_find(" wlan0 "), "2.0MB/s");
+    ASSERT_SCREEN_LACKS("[Esc] back");
 }
 
 /* ── Detail stats field tests ────────────────────────────── */
@@ -151,7 +171,9 @@ static void test_detail_draw_with_errors(void) {
     s.ifaces[0].speed_mbps = 1000;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Speed: 1 Gbps   MTU: 1500");
+    /* tx_drops is 0, which reads as unknown, not as a clean zero. */
+    ASSERT_SCREEN_HAS("Errors rx: 3 drop: 7  tx: 1 drop: --");
 }
 
 static void test_detail_draw_no_errors(void) {
@@ -160,7 +182,8 @@ static void test_detail_draw_no_errors(void) {
     s.ifaces[0].speed_mbps = 10000;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Speed: 10 Gbps   MTU: 9000");
+    ASSERT_SCREEN_HAS("Errors: --");
 }
 
 static void test_detail_draw_unknown_speed_mtu(void) {
@@ -169,7 +192,7 @@ static void test_detail_draw_unknown_speed_mtu(void) {
     s.ifaces[0].mtu        = 0;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Speed: --   MTU: --");
 }
 
 static void test_detail_draw_with_packets(void) {
@@ -180,7 +203,9 @@ static void test_detail_draw_with_packets(void) {
     s.ifaces[0].tx_packets = 200000;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Total RX: 524.3MB");
+    ASSERT_SCREEN_HAS("TX: 104.9MB");
+    ASSERT_SCREEN_HAS("pkts rx/tx: 500.0KB / 200.0KB");
 }
 
 static void test_detail_gigabit_speed_label(void) {
@@ -188,7 +213,8 @@ static void test_detail_gigabit_speed_label(void) {
     s.ifaces[0].speed_mbps = 1000;
     s.iface_graph = 1;
     view_iface_draw(&s);
-    ASSERT(1);
+    ASSERT_SCREEN_HAS("Speed: 1 Gbps");
+    ASSERT_SCREEN_LACKS("1000 Mbps");
 }
 
 /* ── Scan interface indicator tests ──────────────────────── */
@@ -229,7 +255,10 @@ static void test_scan_indicator_draw_selected(void) {
     s.iface_sel = 0;
     memcpy(s.probe_iface, "eth0", 5);
     view_iface_draw(&s);   /* selected row should show [scanning] */
-    ASSERT(1);
+    int y = runner_screen_find("seth0");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "[scanning]");
+    ASSERT_EQ(tui_test_is_reverse(y, 2), 1);
 }
 
 static void test_scan_indicator_draw_unselected(void) {
@@ -237,14 +266,22 @@ static void test_scan_indicator_draw_unselected(void) {
     s.iface_sel = 0;
     memcpy(s.probe_iface, "wlan0", 6);  /* wlan0 is row 1, not selected */
     view_iface_draw(&s);   /* unselected row with 's' prefix */
-    ASSERT(1);
+    int y = runner_screen_find("swlan0");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "[scanning]");
+    ASSERT_EQ(tui_test_is_reverse(y, 2), 0);
+    ASSERT_SCREEN_LACKS("seth0");
 }
 
 static void test_scan_indicator_no_probe_iface(void) {
     sloth_state_t s = make_state(2);
     s.probe_iface[0] = '\0';
     view_iface_draw(&s);   /* no scan marker anywhere */
-    ASSERT(1);
+    /* Seen to fail with the probe_iface match forced true. */
+    ASSERT_SCREEN_HAS(" eth0 ");
+    ASSERT_SCREEN_LACKS("[scanning]");
+    ASSERT_SCREEN_LACKS("seth0");
+    ASSERT_SCREEN_LACKS("swlan0");
 }
 
 /* ── Entry point ─────────────────────────────────────────── */
@@ -258,7 +295,8 @@ static void test_scan_bar_renders(void) {
     s.scan_chan_count = 3;
     s.scan_cur_idx = 1;                /* currently on channel 6 */
     view_iface_draw(&s);
-    ASSERT(1);
+    /* The current hop channel is bracketed; the others are not. */
+    ASSERT_LINE_HAS(runner_screen_find("swlan0"), "ch: 1 [6] 11");
 }
 
 /* #25: with a monitor radio present, every other interface is hidden;
