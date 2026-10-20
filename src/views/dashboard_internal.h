@@ -81,6 +81,7 @@ void panel_title            (int y, int x, int w, const char *name, int panel_id
 void panel_title_passive    (int y, int x, int w, const char *name, int panel_id);
 
 int  crit_alerts_count      (const sloth_state_t *s);
+void draw_persist_badge     (const sloth_state_t *s, int y, int x_lo, int x_hi);
 
 void draw_iface_band         (const sloth_state_t *s, int y0, int h, int x0, int w);
 void draw_monitor_band       (const sloth_state_t *s, int y0, int h, int x0, int w);

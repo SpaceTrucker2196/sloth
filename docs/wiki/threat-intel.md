@@ -24,7 +24,7 @@ own feed before production.
 `docs/views/alerts.md`, `docs/views/dns.md`,
 `docs/views/connections.md`, issue #96.
 
-**Last updated**: 2026-10-19 (#118 — the two rules moved to
+**Last updated**: 2026-10-19 (#118 — `rule_threat_domain` and `rule_threat_ip` moved to
 `src/alerts/rules_wired.c`; #96 labelled the synthetic status in code,
 UI and docs).
 

@@ -635,6 +635,172 @@ static void test_mission_counts_match_build(void) {
     free(t);
 }
 
+/* ── Word-form counts (#96 close-out) ─────────────────────────────────
+ *
+ * Every guard above reads digits. "the six rules" is a count too, and it
+ * sat in the frontmatter of docs/wiki/alerts.md and in docs/wiki/sloth.md
+ * while the build carried 75 — invisible to a grammar that only knows
+ * "<N> rules". A reader cannot tell a v1.0 memory from a current claim,
+ * and the generated marker (<!-- count:rules -->) exists precisely so
+ * nobody hand-types the number.
+ *
+ * So the rule here is blunter than the digit check: a number word from
+ * two to twenty immediately before "rules" or "views" fails, whatever
+ * its value, in every docs/wiki page, README.md and MISSION.md. The live
+ * counts are far outside that range and moving, so there is nothing to
+ * compare against — say "the rules", or use the marker.
+ *
+ * docs/wiki/log.md is exempt for the reason test_wiki_counts_match_build
+ * gives: it is history, and history stays true.
+ *
+ * A number word can also count a subset that is not the build's shape at
+ * all. Those are named below with the page, the phrase and how many
+ * times it occurs, so a new occurrence of the same phrase still fails and
+ * a reworded one leaves a stale entry that fails too. */
+
+static const char *const dc_number_words[] = {
+    "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+    "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+};
+
+static int is_number_word(const char *w) {
+    for (size_t i = 0;
+         i < sizeof(dc_number_words) / sizeof(dc_number_words[0]); i++)
+        if (!strcmp(w, dc_number_words[i])) return 1;
+    return 0;
+}
+
+/* Calls back with "<number> <noun>" (lowercased) for every number word
+ * directly followed by "rules" or "views"; returns how many. Words are
+ * read by next_word(), so markup and line breaks between the two do not
+ * hide a claim, and an HTML comment is a separator. */
+static int scan_word_counts(const char *t,
+                            void (*hit)(const char *phrase, void *ctx),
+                            void *ctx) {
+    char prev[32] = "", w[32];
+    int n = 0;
+    const char *p = t;
+    for (;;) {
+        p = next_word(p, w, sizeof(w), NULL);
+        if (!w[0]) break;
+        if ((!strcmp(w, "rules") || !strcmp(w, "views")) &&
+            is_number_word(prev)) {
+            char phrase[72];
+            snprintf(phrase, sizeof(phrase), "%s %s", prev, w);
+            if (hit) hit(phrase, ctx);
+            n++;
+        }
+        snprintf(prev, sizeof(prev), "%s", w);
+    }
+    return n;
+}
+
+static void test_word_count_scanner(void) {
+    ASSERT_EQ(scan_word_counts("alert engine + the six rules.", NULL, NULL), 1);
+    /* Sentence case, emphasis and a line break do not hide it. */
+    ASSERT_EQ(scan_word_counts("**Six**\n_views_ here", NULL, NULL), 1);
+    ASSERT_EQ(scan_word_counts("Twenty rules, two views", NULL, NULL), 2);
+    /* Digits are the digit grammar's job; a qualifier between number
+     * and noun, a singular noun and a word outside the range are not
+     * this check's shape. */
+    ASSERT_EQ(scan_word_counts("the 75 rules", NULL, NULL), 0);
+    ASSERT_EQ(scan_word_counts("six alert rules", NULL, NULL), 0);
+    ASSERT_EQ(scan_word_counts("one view, one rule", NULL, NULL), 0);
+    ASSERT_EQ(scan_word_counts("thirty rules", NULL, NULL), 0);
+    ASSERT_EQ(scan_word_counts("sixth rules", NULL, NULL), 0);
+    ASSERT_EQ(scan_word_counts("", NULL, NULL), 0);
+}
+
+typedef struct {
+    const char *page;    /* basename under docs/wiki, or a root file */
+    const char *phrase;  /* "<number> <noun>", lowercase */
+    int         times;   /* exact occurrences on that page */
+} dc_word_allow_t;
+
+/* Subsets that are not the build's shape. Each is exact, so the list
+ * cannot quietly cover a new sentence. */
+static const dc_word_allow_t dc_word_allow[] = {
+    /* The four views v1.1 added (PNL, EAPOL, Seqnum, Assoc): a fixed
+     * historical set, tabulated on the page, not VIEW_COUNT. Summary,
+     * heading and "The four views compose". */
+    { "wifi-sigint.md",       "four views",  3 },
+    /* The fingerprint matcher's three matching rules (wildcard,
+     * confidence, unverified cap) — not alert rules. */
+    { "tool-fingerprints.md", "three rules", 1 },
+};
+#define DC_WORD_ALLOW_N \
+    ((int)(sizeof(dc_word_allow) / sizeof(dc_word_allow[0])))
+
+typedef struct {
+    const char *page;
+    int allowed_seen[DC_WORD_ALLOW_N];
+    int stale;
+} dc_word_ctx_t;
+
+static void word_count_hit(const char *phrase, void *vctx) {
+    dc_word_ctx_t *ctx = vctx;
+    for (int i = 0; i < DC_WORD_ALLOW_N; i++) {
+        if (!strcmp(ctx->page, dc_word_allow[i].page) &&
+            !strcmp(phrase, dc_word_allow[i].phrase)) {
+            ctx->allowed_seen[i]++;
+            return;
+        }
+    }
+    ctx->stale++;
+    fprintf(stderr, "    %s: \"%s\" is a spelled-out count; "
+                    "drop the number or use a <!-- count: --> marker\n",
+            ctx->page, phrase);
+}
+
+static void check_word_counts(const char *path, const char *page,
+                              int *allow_checked) {
+    char *t = slurp(path);
+    ASSERT(t != NULL);
+    if (!t) return;
+    dc_word_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.page = page;
+    scan_word_counts(t, word_count_hit, &ctx);
+    free(t);
+    ASSERT_EQ(ctx.stale, 0);
+    for (int i = 0; i < DC_WORD_ALLOW_N; i++) {
+        if (strcmp(page, dc_word_allow[i].page) != 0) continue;
+        if (ctx.allowed_seen[i] != dc_word_allow[i].times)
+            fprintf(stderr, "    %s: \"%s\" allowed %d time(s), found %d\n",
+                    page, dc_word_allow[i].phrase, dc_word_allow[i].times,
+                    ctx.allowed_seen[i]);
+        ASSERT_EQ(ctx.allowed_seen[i], dc_word_allow[i].times);
+        (*allow_checked)++;
+    }
+}
+
+static void test_no_word_form_counts(void) {
+    int allow_checked = 0, pages = 0;
+    check_word_counts("README.md",  "README.md",  &allow_checked);
+    check_word_counts("MISSION.md", "MISSION.md", &allow_checked);
+    DIR *d = opendir("docs/wiki");
+    ASSERT(d != NULL);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 4 || strcmp(e->d_name + nl - 3, ".md") != 0) continue;
+        if (!strcmp(e->d_name, "log.md")) continue;   /* history */
+        char path[512];
+        snprintf(path, sizeof(path), "docs/wiki/%.200s", e->d_name);
+        check_word_counts(path, e->d_name, &allow_checked);
+        pages++;
+    }
+    closedir(d);
+    /* The walk found the wiki, and every allow-list entry names a page
+       that exists — an entry for a renamed page would otherwise be
+       skipped rather than checked. */
+    ASSERT_GE(pages, 40);
+    ASSERT_EQ(allow_checked, DC_WORD_ALLOW_N);
+}
+#undef DC_WORD_ALLOW_N
+
 static void test_security_names_only_current_version(void) {
     char *t = slurp("SECURITY.md");
     ASSERT(t != NULL);
@@ -2350,6 +2516,8 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_wiki_counts_match_build);
     RUN_TEST(test_agent_docs_counts_match_build);
     RUN_TEST(test_mission_counts_match_build);
+    RUN_TEST(test_word_count_scanner);
+    RUN_TEST(test_no_word_form_counts);
     RUN_TEST(test_security_names_only_current_version);
     RUN_TEST(test_help_card_agrees_with_build);
     RUN_TEST(test_usage_text_agrees_with_build);

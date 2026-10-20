@@ -6,11 +6,11 @@ type: reference
 
 # Dashboard
 
-**Summary**: The `[o]` view tiles seven bands vertically into one terminal. Bands grow proportionally with available rows; minimum recommended terminal is 100×33.
+**Summary**: The `[o]` view tiles seven bands vertically into one terminal. Bands grow proportionally with available rows; the tile needs at least 102×41 (smaller terminals get a one-line notice). It is the startup view and has no tab bar, so it carries the `!persist` storage-failure badge itself.
 
-**Sources**: `docs/views/dashboard.md`, `docs/views/top_hosts.md` (embedded in dashboard.md), `CLAUDE.md`.
+**Sources**: `docs/views/dashboard.md`, `docs/views/top_hosts.md` (embedded in dashboard.md), `src/views/dashboard.c` (`view_dashboard_draw`: `min_cols`, `min_lines`), `src/views/dashboard_bands.c` (`draw_persist_badge`), `CLAUDE.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-19 (#96 — `!persist` badge; minimum size corrected from the code).
 
 ---
 
@@ -29,6 +29,25 @@ DNS log  | ICMP log                        (H, 50/50)
 
 Bands sum to LINES exactly — spare rows from the integer divide go to
 conn / packets so the bottom band always reaches the last line.
+
+**Minimum size.** `view_dashboard_draw()` computes it: 102 columns (the
+Interfaces band needs 70 and gets 70% of the width inside a 1-column
+margin) and 41 rows (five `H` bands of at least 4 rows, two `2H` bands,
+the Interfaces band and the margins). Below either it draws one line —
+`Dashboard: terminal too small (need >=102 cols, >=41 rows; this is
+WxH)` — instead of the tile. This page said 100×33 until 2026-10-19;
+that figure does not hold the tile.
+
+## Storage-failure badge
+
+When an export sink has failed a write, the `!persist jsonl:N pcap:N
+eapol:N` badge ([[cli-reference]] § Status badges) is drawn right-aligned
+on the **Interfaces** title rule at full alert heat, failing sinks only.
+Every other view carries it on the tab bar; the dashboard has no tab
+bar, and it is the startup view, so it draws the badge itself. It
+overprints the rule rather than taking a row, so no band moves; on a
+terminal too small for the tile it sits under the "too small" notice.
+Healthy sinks: no badge at all.
 
 ## Top hosts panel
 

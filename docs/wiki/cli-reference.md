@@ -22,8 +22,9 @@ only that each flag and key is here.
 **Sources**: `src/main.c` (`print_usage`, `main` argv loop, `handle_key`),
 `include/sloth_views.def` (expanded by `src/view_labels.c`),
 `include/sloth.h`; `src/persist_health.c`
-(`persist_badge`) and `src/tui.c` (`draw_tabbar`, both front ends) for
-the status badges.
+(`persist_badge`), `src/tui.c` (`draw_tabbar`, both front ends) and
+`src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
+badges.
 
 **Last updated**: 2026-10-19.
 
@@ -328,12 +329,15 @@ How `persist_badge()` (`src/persist_health.c`) formats it:
   stream, per sink as `storage_jsonl_failures`,
   `storage_pcap_failures` and `storage_eapol_failures`
   ([[jsonl-schema]]).
-- **Where it is not drawn.** Under ncurses, `tui_draw()` gives the
-  dashboard (`[o]`) the entire screen and draws no tab bar there — and
-  the dashboard is the startup view, so the badge is seen only after a
-  switch to a detail view. The ANSI fallback (`WITH_NCURSES=0`) draws
-  the bar on every view, dashboard included. A badge that is absent
-  therefore means "healthy" only on a view that has a tab bar.
+- **Where it is drawn.** On the tab bar of every view that has one,
+  in both front ends. Under ncurses the dashboard (`[o]`, the startup
+  view) has no tab bar — `tui_draw()` gives it the whole screen — so
+  it draws the same badge right-aligned on its **Interfaces** title
+  rule, and under its "terminal too small" notice when the terminal
+  cannot hold the tile (`draw_persist_badge`,
+  `src/views/dashboard_bands.c`). Until 2026-10-19 it did not, and the
+  badge was seen only after a switch to a detail view. The ANSI
+  fallback (`WITH_NCURSES=0`) draws the bar on every view.
 
 The badge is the only signal **on the tab bar**, but not the only one
 anywhere — three others carry the same fact, and an integrator should

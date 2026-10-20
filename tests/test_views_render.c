@@ -184,6 +184,95 @@ static void test_the_dashboard_draws_no_tab_bar(void) {
     ASSERT_SCREEN_HAS("\xe2\x94\x80\xe2\x94\x80 Interfaces \xe2\x94\x80");
 }
 
+/* #96: the cannot-persist badge on the dashboard. tui_draw() gives
+ * VIEW_DASH — the startup view — the whole screen and no tab bar, so the
+ * badge the bar carries was invisible there until the dashboard drew it
+ * itself, on the Interfaces title rule (row 1, below the top margin).
+ *
+ * Present when a sink has failed: seen to fail with the
+ * draw_persist_badge() call removed from draw_iface_band(), and with it
+ * moved to the row below the title (the row assertion). */
+static void test_the_dashboard_shows_the_persist_badge(void) {
+    sloth_state_t *s = fresh(VIEW_DASH);
+    s->persist_health.jsonl = 3;
+    s->persist_health.eapol = 2;
+    tui_draw(s);
+    int y = runner_screen_find("!persist jsonl:3 eapol:2");
+    ASSERT_EQ(y, 1);
+    if (y < 0) { tui_test_dump(stderr); return; }
+    ASSERT_LINE_HAS(y, "\xe2\x94\x80\xe2\x94\x80 Interfaces \xe2\x94\x80");
+    /* The alert grade, as on the tab bar. */
+    ASSERT_EQ(tui_test_pair(y, runner_find_col(y, "!persist")), CP_HEAT_PEAK);
+    /* Still no tab bar: the badge came from the dashboard, not from a
+     * bar drawn over it. */
+    ASSERT_SCREEN_LACKS(" sloth v" SLOTH_VERSION);
+}
+
+/* Absent on a healthy run, so its presence means something is wrong.
+ * Seen to fail with draw_persist_badge() falling back to the bare
+ * "!persist" prefix when persist_badge() returns 0. */
+static void test_the_dashboard_shows_no_badge_when_healthy(void) {
+    tui_draw(fresh(VIEW_DASH));
+    ASSERT_SCREEN_HAS("\xe2\x94\x80\xe2\x94\x80 Interfaces \xe2\x94\x80");
+    ASSERT_SCREEN_LACKS("!persist");
+}
+
+/* The badge overprints the title rule and takes no row: every row but
+ * the title row is identical with and without it, so the band layout
+ * does not move. Seen to fail with the badge drawn one row lower. */
+static void test_the_persist_badge_does_not_move_the_bands(void) {
+    static char base[TEST_SCREEN_ROWS][1024];
+    char got[1024];
+    tui_draw(fresh(VIEW_DASH));
+    int rows = tui_test_rows();
+    if (rows > TEST_SCREEN_ROWS) rows = TEST_SCREEN_ROWS;
+    for (int y = 0; y < rows; y++)
+        if (tui_test_line(y, base[y], sizeof(base[y])) < 0) base[y][0] = '\0';
+
+    sloth_state_t *s = fresh(VIEW_DASH);
+    s->persist_health.alert_pcap = 1;
+    tui_draw(s);
+    ASSERT_EQ(runner_screen_find("!persist pcap:1"), 1);
+    int differ = 0;
+    for (int y = 0; y < rows; y++) {
+        if (y == 1) continue;
+        if (tui_test_line(y, got, sizeof(got)) < 0) got[0] = '\0';
+        if (strcmp(got, base[y]) != 0) {
+            fprintf(stderr, "    row %d moved:\n      was |%s|\n      now |%s|\n",
+                    y, base[y], got);
+            differ++;
+        }
+    }
+    ASSERT_EQ(differ, 0);
+}
+
+/* At the smallest terminal that tiles (102x41, the min_cols / min_lines
+ * view_dashboard_draw() computes) the badge fits on the 70% Interfaces
+ * title; below it — 100x33, the figure the docs used to call the
+ * minimum — the dashboard draws only its "too small" notice, and the
+ * badge goes under that rather than vanishing with the tile. Seen to
+ * fail with the too-small branch's draw_persist_badge() call removed. */
+static void test_the_persist_badge_survives_small_terminals(void) {
+    sloth_state_t *s = fresh(VIEW_DASH);
+    s->persist_health.jsonl = 12345;
+    s->persist_health.alert_pcap = 678;
+    s->persist_health.eapol = 9;
+
+    ASSERT_EQ(tui_init_offscreen(41, 102), 0);
+    tui_draw(s);
+    ASSERT_SCREEN_LACKS("terminal too small");
+    ASSERT_EQ(runner_screen_find("!persist jsonl:12345 pcap:678 eapol:9"), 1);
+    ASSERT_LINE_HAS(1, "\xe2\x94\x80\xe2\x94\x80 Interfaces \xe2\x94\x80");
+    ASSERT_SCREEN_HAS("Packets (live)");
+
+    ASSERT_EQ(tui_init_offscreen(33, 100), 0);
+    tui_draw(s);
+    ASSERT_SCREEN_HAS("Dashboard: terminal too small");
+    ASSERT_SCREEN_HAS("!persist jsonl:12345 pcap:678 eapol:9");
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 /* At 100 columns the 35 labels cannot share a row: draw_tabbar() wraps
  * and every label still lands above the rule, none split across a wrap
  * (a split label is found by neither half). */
@@ -343,6 +432,10 @@ void run_views_render_tests(void) {
     RUN_TEST(test_every_view_selects_its_own_tab);
     RUN_TEST(test_every_view_body_comes_from_its_own_draw);
     RUN_TEST(test_the_dashboard_draws_no_tab_bar);
+    RUN_TEST(test_the_dashboard_shows_the_persist_badge);
+    RUN_TEST(test_the_dashboard_shows_no_badge_when_healthy);
+    RUN_TEST(test_the_persist_badge_does_not_move_the_bands);
+    RUN_TEST(test_the_persist_badge_survives_small_terminals);
     RUN_TEST(test_the_tab_bar_wraps_without_splitting_a_label);
     RUN_TEST(test_channel_view_renders_a_seeded_row);
     RUN_TEST(test_eapol_view_renders_a_seeded_row);

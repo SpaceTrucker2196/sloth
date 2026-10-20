@@ -17,8 +17,35 @@
 #include "ip_owner.h"
 #include "host_cache.h"
 #include "geo.h"
+#include "persist_health.h"
 
 #ifdef WITH_NCURSES
+
+/* The cannot-persist badge (#96), right-aligned so it ends at x_hi - 1,
+ * never starting left of x_lo. The tab bar carries it on every other
+ * view, but tui_draw() gives the dashboard the whole screen and draws
+ * no bar — and the dashboard is the startup view — so without this the
+ * default front end hid a storage failure until the operator happened
+ * to switch away. It overprints a title rule rather than taking a row,
+ * so the band heights are the same with and without it. Truncated from
+ * the right when the space is short (the "!persist" prefix is what
+ * matters); skipped only when even that does not fit. */
+void draw_persist_badge(const sloth_state_t *s, int y, int x_lo, int x_hi) {
+    char badge[96];
+    if (persist_badge(&s->persist_health, badge, sizeof(badge)) <= 0)
+        return;
+    int room = x_hi - x_lo - 2;              /* one blank each side */
+    int len  = (int)strlen(badge);
+    if (len > room) len = room;
+    if (len < (int)strlen("!persist")) return;
+    int x = x_hi - len - 2;
+    tui_heat(1.0);
+    move(y, x);
+    addch(' ');
+    tui_addnstr(badge, len);
+    addch(' ');
+    tui_normal();
+}
 
 static int iface_spark_w(int w) {
     /* Fill the rest of the row after the text columns. No HIST_LEN cap —
@@ -38,6 +65,9 @@ void draw_iface_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
     int end_x = tx_x + spark_w;
 
     panel_title(y0, x0, w, "Interfaces", DASH_PANEL_IFACE);
+    /* After "── Interfaces " (2 + 1 + 10 + 1 columns) and one rule
+     * glyph; one rule glyph kept at the right edge too. */
+    draw_persist_badge(s, y0, x0 + 15, x0 + w - 1);
 
     attrset(COLOR_PAIR(CP_DIM));
     clipline(y0 + 1, x0, IFACE_FIXED_W,

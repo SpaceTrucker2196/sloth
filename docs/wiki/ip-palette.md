@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/dashboard.md`, `docs/views/dns.md`, `docs/views/beacons.md`, `docs/views/tls.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-19 (dashboard minimum corrected from the code).
 
 ---
 
@@ -114,9 +114,9 @@ leave it untestable.
 
 ## Minimum geometry
 
-- Dashboard minimum: 100×33.
-- Below that, the seven-band tiling collapses and some panels go
-  unreadable.
+- Dashboard minimum: 102×41, as `view_dashboard_draw()` computes it ([[dashboard]]).
+- Below that the tile is not drawn at all: the view prints one
+  "terminal too small" line (with the `!persist` badge under it, if any).
 
 ## Related pages
 

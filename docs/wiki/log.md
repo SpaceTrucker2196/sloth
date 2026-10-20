@@ -3990,3 +3990,25 @@ and must be moved aside; JSONL is appended to in the older, additive
 shape; snapshot, research DB, pcaps and reports carry over; the shipped
 unit's flags all exist at v1.8.4. Step 10 no longer calls the
 attestation workflow pending — it landed in `9131b8e`.
+
+## 2026-10-19 — #96 close-out: word-form counts, dashboard `!persist` badge
+
+Removed the last spelled-out counts that described the build: "the six
+rules" in the [[alerts]] frontmatter and in [[sloth]], and "Three rules
+return `""`" in [[alerts]] § Exposure rules, which named three of the
+five cited-but-techniqueless kinds; the two-rule note in
+[[threat-intel]]'s Last-updated line now names the rules.
+`tests/test_docs_consistency.c :: test_no_word_form_counts` fails on a
+number word (two..twenty) directly before "rules" or "views" in any wiki
+page but this log, README.md or MISSION.md; two subset counts that are
+not the build's shape ([[wifi-sigint]]'s v1.1 "four views",
+[[tool-fingerprints]]' "three rules" of matching) are allowed by exact
+page, phrase and occurrence count.
+
+The `!persist` storage-failure badge now shows on the ncurses dashboard,
+the startup view, which has no tab bar: right-aligned on the Interfaces
+title rule, and under the "terminal too small" notice. [[retention]] §6
+no longer records the gap; [[cli-reference]] § Status badges and
+[[dashboard]] describe where it is drawn. The dashboard minimum size in
+[[dashboard]] and [[ip-palette]] is corrected from 100×33 to the 102×41
+`view_dashboard_draw()` computes.

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `docs/views/README.md`, all `docs/views/*.md`.
 
-**Last updated**: 2026-10-18.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -61,5 +61,5 @@ periodicity detector.
 
 - [[architecture]] — code-tree layout and seams.
 - [[views-catalog]] — full keybinding-to-view map.
-- [[alerts]] — alert engine + the six rules.
+- [[alerts]] — alert engine and its rules (one per `ALERT_TYPE_*`).
 - [[dashboard]] — composite view layout.

@@ -945,13 +945,12 @@ static int draw_tabbar(const sloth_state_t *s) {
      * badge rides the tab bar rather than any one view, in the alert
      * grade.
      *
-     * "every view shares" is what this comment used to claim and it was
-     * wrong: tui_draw() returns early for VIEW_DASH so the dashboard
-     * draws no tab bar at all, and VIEW_DASH is the startup view. Under
-     * ncurses the operator therefore sees this only after switching to a
-     * detail view. The ANSI fallback below has no such hole. Corrected
-     * here as well as in persist_health.h because a reader checking the
-     * claim looks at the renderer, not the header. */
+     * The bar is not on every screen: tui_draw() returns early for
+     * VIEW_DASH, the startup view, which draws no tab bar. The
+     * dashboard therefore draws the same badge itself, on its
+     * Interfaces title rule (draw_persist_badge in
+     * src/views/dashboard_bands.c). The ANSI fallback below draws the
+     * bar on every view. */
     char persist[96];
     if (persist_badge(&s->persist_health, persist, sizeof(persist)) > 0) {
         tui_heat(1.0);

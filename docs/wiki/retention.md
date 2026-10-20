@@ -22,7 +22,7 @@ pcap and report artifacts still have no retention at all.
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87).
 
-**Last updated**: 2026-10-18.
+**Last updated**: 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -343,18 +343,23 @@ media or the file with a tool built for that; sloth does not claim to.
 
 Recorded here rather than implied away:
 
-- **A failing sink is visible — except from the dashboard.**
+- **A failing sink is visible on every view, dashboard included.**
   `persist_health_poll()` (`src/persist_health.c`, polled once per tick
   from `src/main.c`) snapshots the three sinks' lifetime write-failure
   counts, and `persist_badge()` renders `!persist jsonl:N pcap:N
   eapol:N` — failing sinks only — on the tab bar at full alert heat in
   both front ends (`draw_tabbar` in `src/tui.c`, ncurses and ANSI).
-  The hole is the ncurses dashboard: `tui_draw()` returns early for
-  `VIEW_DASH` so the whole screen belongs to the tile and no tab bar is
-  drawn, and `VIEW_DASH` is the startup view — so under the default
-  front end the badge is seen only once the operator switches to a
-  detail view. The ANSI fallback draws the bar on every view, dashboard
-  included. Format and caveats: [[cli-reference]] § Status badges.
+  This bullet used to record a hole: under ncurses `tui_draw()` returns
+  early for `VIEW_DASH`, the startup view, and draws no tab bar, so the
+  badge was seen only after a switch to a detail view. Closed on
+  2026-10-19 (#96): the dashboard draws the same badge itself, on the
+  Interfaces title rule, and under its "terminal too small" notice when
+  the terminal cannot hold the tile (`draw_persist_badge` in
+  `src/views/dashboard_bands.c`). It overprints the rule rather than
+  taking a row, so the band layout is unchanged;
+  `tests/test_views_render.c` pins presence, absence when healthy, the
+  unchanged rows and both small-terminal cases. Format and caveats:
+  [[cli-reference]] § Status badges.
 - **`--pcap-dir` keeps what is worth keeping, and can be opened all
   the way up.** Two `--tune` knobs decide what reaches disk:
   `pcap.min_severity` (default `2`, CRIT only) and

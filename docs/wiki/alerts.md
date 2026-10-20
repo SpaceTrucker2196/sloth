@@ -1,6 +1,6 @@
 ---
 name: alerts
-description: Alert engine internals — dedup-by-key ring, the six rules, severity levels, per-alert pcap hook
+description: Alert engine internals — dedup-by-key ring, the rule set (one rule per ALERT_TYPE_*), severity levels, per-alert pcap hook
 type: reference
 ---
 
@@ -405,17 +405,21 @@ Full row, including the false-positive cases, in
 `research/papers/surveillance-vendor-endpoints.md`.
 ### Exposure rules — no ATT&CK technique, on purpose
 
-Three rules return `""` from `alert_technique()` while still carrying a
-cited basis: `OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1)
-and `CAM_SETUP_SSID` (#106 slice 2). What they report is a third
+`OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1) and
+`CAM_SETUP_SSID` (#106 slice 2) return `""` from `alert_technique()`
+while still carrying a cited basis. What they report is a third
 party's device exposing itself — an unconfigured SoftAP, a camera
 announcing itself over unauthenticated multicast, a camera still in
 setup mode. **Nobody has to be present for any of them to fire**, so
 assigning T1046, T1669 or T1557 would claim an adversary step sloth did
-not observe.
+not observe. They are not the whole set of cited-but-techniqueless
+kinds: `SURV_CLOUD_SNI` (#105, above) and `TPC_ABSENT_HIGH_BAND` (#101,
+[[wifi-sigint]]) are on the same list for a posture rather than an
+exposure, and that list in the test named below is the authority — this
+page said "three" while it held five.
 
 This is not the `NO_MONITOR_MODE` case, which has no source to cite at
-all. These three have sources, they are just not ATT&CK IDs, and
+all. These have sources, they are just not ATT&CK IDs, and
 `tests/test_research_corpus.c ::
 test_uncitable_kinds_with_a_real_basis_are_still_cited` names each kind
 explicitly and fails if its citing document disappears.

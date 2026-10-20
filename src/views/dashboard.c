@@ -194,6 +194,9 @@ void view_dashboard_draw(const sloth_state_t *s) {
                "(need >=%d cols, >=%d rows; this is %dx%d)\n",
                min_cols, min_lines, cols, lines);
         tui_normal();
+        /* The badge outranks the layout: a terminal too small for the
+         * tile is still one an operator may be watching. */
+        draw_persist_badge(s, 1, 0, cols);
         return;
     }
 
