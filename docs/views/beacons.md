@@ -286,9 +286,9 @@ vendors but emitting the same element order, or a known AP whose order
 changes mid-session.
 
 Additive JSONL fields on the `beacon` record: `ie_order_hash`,
-`ie_order_count` (elements that entered the hash). Monitor-mode only,
-not shown in the TUI and not persisted to `--db` — the same placement
-as `vendor_ies_hash`.
+`ie_order_count` (elements that entered the hash). Monitor-mode only
+and not persisted to `--db`, the same placement as `vendor_ies_hash`.
+The detail screen shows it under `STACK MEASUREMENTS` (see below).
 
 ## Beacon TBTT jitter (#77)
 
@@ -341,7 +341,7 @@ TU, Marauder-class firmware jitters 8-40 TU"; no source for those
 numbers could be verified here, and `agents/AGENTS.md` requires a
 detector to cite what it detects from. The measurement is
 spec-grounded, the attribution is not, so only the measurement lands —
-no alert rule, no TUI row, no signature table. What it supports today
+no alert rule, no list-view column, no signature table. What it supports today
 is comparison: an AP whose jitter changes mid-session, or a BSSID whose
 scheduling discipline does not match the gear it claims to be.
 
@@ -350,10 +350,35 @@ Additive JSONL fields on the `beacon` record: `tbtt_jitter_us`
 `tbtt_jitter_resets`. The sample count is what keeps a `0` stddev from
 reading as "perfectly scheduled" when it really means "not enough
 beacons yet". Monitor-mode only — the managed-mode nl80211 path is
-handed an IE blob with no frame and so has no timestamp — not shown in
-the TUI, and not persisted to `--db` for the same reason as the WPS
-strings above: a new column bumps the schema and invalidates every
-prior database file.
+handed an IE blob with no frame and so has no timestamp — and not
+persisted to `--db` for the same reason as the WPS strings above: a
+new column bumps the schema and invalidates every prior database file.
+
+### On the detail screen
+
+Both measurements render on the `[b]` detail screen (Enter on a row),
+in a `STACK MEASUREMENTS` block under `RADIO`. Neither ever prints a
+bare `0`, because a zero means something different for each:
+
+```
+ ── STACK MEASUREMENTS ──
+  IE order:    0x1a2b3c4d  (14 elements; JSONL ie_order_hash 439041101)
+  TBTT jitter: 312 us stddev over 48 samples  2 TSF resets
+  (measurements only: no threshold until a capture backs one)
+```
+
+- `ie_order_hash` `0` renders as `not decoded (no elements, or the
+  frame overran)`. The decimal form beside the hex is the value the
+  JSONL record carries, so the screen and a log can be matched.
+- With fewer than `TBTT_JITTER_MIN_SAMPLES` (2) residuals the jitter
+  renders as `not measured (n/2 samples; …)`. With two or more, `0 us`
+  is printed and is a real reading.
+- The reset clause appears only when `tbtt_jitter_resets` is non-zero.
+
+The block draws no verdict and no colour heat. The capture-gated
+follow-up (known-stack hash table, jitter threshold, verdict layer) is
+written up in
+[`attack-hardware-fingerprints.md`](../wiki/attack-hardware-fingerprints.md).
 
 ## View
 

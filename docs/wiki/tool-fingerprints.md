@@ -282,3 +282,6 @@ two-flag row.
 - [`docs/views/alerts.md`](../views/alerts.md) — `KARMA_AP`.
 - [`docs/wiki/enterprise-rogue.md`](enterprise-rogue.md) — `eaphammer`
   and `hostapd-wpe` from the 802.1X side.
+- [`docs/wiki/attack-hardware-fingerprints.md`](attack-hardware-fingerprints.md) — the
+  #77 stack measurements, and the capture-gated stack table and verdict
+  layer this table would feed.

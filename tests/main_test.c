@@ -174,6 +174,8 @@ void run_observe_tests(void);
 void run_privdrop_tests(void);
 void run_wifi_scan_trigger_tests(void);
 void run_eap_parse_tests(void);
+void run_wsc_vendor_str_tests(void);
+void run_beacon_stack_detail_tests(void);
 void run_eap_track_tests(void);
 void run_formatter_tests(void);
 void run_ndp_snoop_tests(void);
@@ -353,6 +355,8 @@ int main(void) {
     run_privdrop_tests();
     run_wifi_scan_trigger_tests();
     run_eap_parse_tests();
+    run_wsc_vendor_str_tests();
+    run_beacon_stack_detail_tests();
     run_eap_track_tests();
     run_formatter_tests();
     run_ndp_snoop_tests();

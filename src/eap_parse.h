@@ -114,6 +114,18 @@ const char *eap_type_name(int type);
 #define WSC_ATTR_MESSAGE_TYPE  0x1022   /* 1 byte, WSC_MSG_*           */
 #define WSC_ATTR_UUID_E        0x1047   /* 16 bytes                    */
 
+/* WSC 2.0 §12 vendor-string attributes (#77). Each is an ASCII string
+ * whose maximum length the attribute table fixes; M1 carries the
+ * Enrollee's, M2 the Registrar's. The same four IDs ride in the WPS
+ * beacon IE (src/beacon_snoop.c); here they come from the registration
+ * exchange itself, which identifies both ends rather than only the AP. */
+#define WSC_ATTR_MANUFACTURER  0x1021   /* <= 64 B */
+#define WSC_ATTR_MODEL_NAME    0x1023   /* <= 32 B */
+#define WSC_ATTR_MODEL_NUMBER  0x1024   /* <= 32 B */
+#define WSC_ATTR_SERIAL_NUMBER 0x1042   /* <= 32 B */
+#define WSC_MANUFACTURER_MAX   64
+#define WSC_MODEL_STR_MAX      32
+
 /* WSC 2.0 §12 Message Type values (attribute 0x1022). */
 #define WSC_MSG_M1    0x04
 #define WSC_MSG_M2    0x05
@@ -162,6 +174,19 @@ typedef struct {
     uint8_t uuid_e[16];
     int     has_mac;
     uint8_t mac[6];
+    /* Vendor strings (#77), measurement only — no rule reads them.
+     * Filtered to printable ASCII (0x20..0x7e) at this boundary, since
+     * every byte is chosen by the transmitter and §12 defines all four
+     * as ASCII; "" when absent or when nothing printable survived. A
+     * value longer than its §12 maximum is cut at that maximum and
+     * `vendor_str_clamped` is set, so a consumer can tell the stored
+     * form is not the whole attribute. Latest occurrence wins if a
+     * message repeats one. */
+    char    manufacturer[WSC_MANUFACTURER_MAX + 1];
+    char    model_name[WSC_MODEL_STR_MAX + 1];
+    char    model_number[WSC_MODEL_STR_MAX + 1];
+    char    serial_number[WSC_MODEL_STR_MAX + 1];
+    int     vendor_str_clamped;
 } eap_wsc_info_t;
 
 /* Parse an EAP packet starting at its Code byte as EAP-WSC. Returns 1

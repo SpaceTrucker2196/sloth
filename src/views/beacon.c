@@ -166,6 +166,65 @@ static void draw_wps_sessions(const beacon_ap_t *ap) {
         TPRINT("  ... and %d more session%s\n",
                n - shown, n - shown == 1 ? "" : "s");
     }
+/* Stack-measurement block (#77): the IE-order hash and the TBTT jitter
+ * that the JSONL `beacon` record has carried since 874f6b9 / a56903a,
+ * surfaced here with the same zero-reading rules the schema documents.
+ * Both raw zeros are ambiguous on their own, so neither is printed as a
+ * bare 0:
+ *
+ *   - ie_order_hash 0 means "not decoded" (no elements, or the frame
+ *     overran), never a hash value.
+ *   - a 0 µs stddev is a real reading only with at least
+ *     TBTT_JITTER_MIN_SAMPLES residuals behind it; with fewer it means
+ *     "not enough beacons yet", which a bare 0 would misstate as a
+ *     perfectly scheduled AP.
+ *
+ * Measurement only. No threshold or verdict is drawn: the jitter has no
+ * sourced number to compare against and the order hash has no
+ * known-stack table (both wait on rig captures; see
+ * docs/wiki/attack-hardware-fingerprints.md). Kept in its own function
+ * so the #82 timeline work on this screen does not interleave with it. */
+static void draw_detail_stack_measures(const beacon_ap_t *ap) {
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 STACK MEASUREMENTS \xe2\x94\x80\xe2\x94\x80\n");
+
+    tui_dim(); TPRINT("  IE order:    ");
+    if (ap->fp.ie_order_hash) {
+        tui_normal();
+        TPRINT("0x%08x", (unsigned)ap->fp.ie_order_hash);
+        tui_dim();
+        TPRINT("  (%u element%s; JSONL ie_order_hash %u)",
+               (unsigned)ap->fp.ie_order_count,
+               ap->fp.ie_order_count == 1 ? "" : "s",
+               (unsigned)ap->fp.ie_order_hash);
+    } else {
+        tui_dim();
+        TPRINT("not decoded (no elements, or the frame overran)");
+    }
+    TPRINT("\n");
+
+    uint32_t sd = 0;
+    int have = beacon_tbtt_jitter(&ap->tbtt, &sd, NULL);
+    tui_dim(); TPRINT("  TBTT jitter: ");
+    if (have) {
+        tui_normal();
+        TPRINT("%u us", (unsigned)sd);
+        tui_dim();
+        TPRINT(" stddev over %u samples", (unsigned)ap->tbtt.samples);
+    } else {
+        tui_dim();
+        TPRINT("not measured (%u/%d samples; needs beacons carrying the "
+               "AP's TSF)", (unsigned)ap->tbtt.samples,
+               TBTT_JITTER_MIN_SAMPLES);
+    }
+    if (ap->tbtt.resets) {
+        tui_dim();
+        TPRINT("  %u TSF reset%s", (unsigned)ap->tbtt.resets,
+               ap->tbtt.resets == 1 ? "" : "s");
+    }
+    TPRINT("\n");
+    tui_dim();
+    TPRINT("  (measurements only: no threshold until a capture backs one)\n");
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter
@@ -224,6 +283,8 @@ static void draw_beacon_detail(const sloth_state_t *s) {
     tui_dim(); TPRINT("  Vendor:      ");
     if (ap->vendor[0]) tui_bright(); else tui_dim();
     TPRINT("%s\n", ap->vendor[0] ? ap->vendor : "?");
+
+    draw_detail_stack_measures(ap);
 
     /* Security */
     tui_dim();

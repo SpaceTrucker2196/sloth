@@ -142,6 +142,48 @@ const char *eap_type_name(int type) {
 #define WSC_OFF_FLAGS       13
 #define WSC_HDR_LEN         14
 
+/* Copy one WSC vendor-string attribute (#77). The bound is the
+ * destination, i.e. the §12 maximum, applied to the input index: an
+ * attribute longer than its maximum is malformed, and taking only its
+ * first `max` octets keeps a hostile length from pushing later bytes
+ * into the field. Non-printable octets are dropped rather than mapped,
+ * matching the beacon-IE path (wps_attr_str in src/beacon_snoop.c). */
+static void wsc_vendor_str(char *dst, int max, const uint8_t *v, int alen,
+                           int *clamped) {
+    int take = alen;
+    if (take > max) { take = max; *clamped = 1; }
+    int j = 0;
+    for (int i = 0; i < take; i++) {
+        unsigned char c = v[i];
+        if (c >= 0x20 && c < 0x7f) dst[j++] = (char)c;
+    }
+    dst[j] = '\0';
+}
+
+/* Returns 1 when `type` is one of the four vendor-string attributes
+ * (and has been stored), 0 otherwise. Kept apart from the fixed-size
+ * attribute chain in wsc_walk_tlvs so the two concerns stay separable. */
+static int wsc_take_vendor_str(uint16_t type, const uint8_t *v, int alen,
+                               eap_wsc_info_t *out) {
+    int *cl = &out->vendor_str_clamped;
+    switch (type) {
+    case WSC_ATTR_MANUFACTURER:
+        wsc_vendor_str(out->manufacturer, WSC_MANUFACTURER_MAX, v, alen, cl);
+        return 1;
+    case WSC_ATTR_MODEL_NAME:
+        wsc_vendor_str(out->model_name, WSC_MODEL_STR_MAX, v, alen, cl);
+        return 1;
+    case WSC_ATTR_MODEL_NUMBER:
+        wsc_vendor_str(out->model_number, WSC_MODEL_STR_MAX, v, alen, cl);
+        return 1;
+    case WSC_ATTR_SERIAL_NUMBER:
+        wsc_vendor_str(out->serial_number, WSC_MODEL_STR_MAX, v, alen, cl);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* WSC attributes: 2-octet type, 2-octet length, big-endian (WSC 2.0
  * §12) — the shared iterator's 2+2 form (#127). A header or value that
  * does not fit ends the walk, sets `truncated` and is tallied as an
@@ -152,6 +194,7 @@ static void wsc_walk_tlvs(const uint8_t *b, int n, eap_wsc_info_t *out) {
     out->tlvs_walked = 1;
     tlv_init16(&it, b, n, 1);
     while (tlv_next(&it, &type, &alen, &v) == TLV_OK) {
+        if (wsc_take_vendor_str(type, v, alen, out)) continue;
         /* Fixed-size attributes with the wrong length are ignored, not
          * trusted: a short UUID-E copied as 16 bytes would read the next
          * attribute's header into the identifier. */

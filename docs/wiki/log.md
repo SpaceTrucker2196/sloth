@@ -4274,3 +4274,16 @@ guesses (new `guess_n` in `src/wps_track.c`), since one missed M4 in a
 successful online brute force reads as an M3 abandon. The short title
 `WPS_PIXIE_SUCCESS` is documented as deliberate (`ALERT_TITLE_LEN` is
 20). Tests now hold every `attempt_close()` guard, each seen red.
+## 2026-10-20 — #77 last no-hardware slices: `[b]` stack measurements, WSC M1/M2 vendor strings
+
+The `[b]` detail screen gains a `STACK MEASUREMENTS` block showing
+`ie_order_hash` and TBTT jitter. Neither prints a bare 0: a 0 hash
+renders as "not decoded", and a jitter with fewer than two residuals
+renders as "not measured (n/2 samples)". A real 0 µs is printed as a
+reading. `eap_wsc_parse()` now reads the WSC 2.0 §12 Manufacturer /
+Model Name / Model Number / Serial Number attributes from M1/M2 into
+`eap_wsc_info_t`. They are filtered to printable ASCII, clamped at the
+§12 maxima, and measurement only (no rule, no output). New page
+[[attack-hardware-fingerprints]] documents both and carries the refile
+text for the capture-gated remainder (known-stack table, two-radio
+Pineapple pattern, verdict layer, jitter threshold).

@@ -70,6 +70,10 @@ the Wi-Fi it watches:
 - [[tool-fingerprints]] — naming the attacker's tool from passive
   beacon characteristics (#68). Ships with an **empty** signature
   table, and explains why that is the honest state.
+- [[attack-hardware-fingerprints]] — #77's stack measurements (IE-order
+  hash, TBTT jitter, WPS/WSC vendor strings) and their zero-reading
+  rules on `[b]`; plus the capture-gated remainder, written up ready to
+  refile.
 - [[enterprise-rogue]] — the two halves of the WPA-Enterprise problem:
   `ROGUE_RADIUS` (#31, the AP) and `PEAP_NO_SERVER_CERT` (#65,
   CVE-2023-52160, your own fleet).
