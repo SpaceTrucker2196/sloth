@@ -3901,3 +3901,13 @@ routable socket still binds under it (refused since 2026-10-06), and
 `tests/test_docs_consistency.c` now pins MISSION §2's flags to the ones
 `src/main.c` parses, both ways, for `--allow-active`, `--strict` and
 `--hop`.
+
+## 2026-10-19 — data-socket exposure drops the "carve-out" framing (#84)
+
+[[data-socket-exposure]]'s mDNS note called the Avahi advertisement a
+"carve-out (MISSION.md §2)". The charter rewrite retired that framing;
+§2 rule 1 covers the advertisement as an opt-in, announced
+network-using service, and the note now says so. The site hero's "Every
+exception opt-in and announced" was narrowed to every network-using
+option, since §2 names promiscuous mode as the one write that is
+neither.

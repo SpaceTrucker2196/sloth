@@ -56,7 +56,8 @@ static void test_tightening_is_always_allowed(void) {
 
 static void test_discovery_allowed_by_default(void) {
     observe_reset_policy();
-    /* The default profile leaves MISSION §2.1's opt-out carve-out alone:
+    /* The default profile leaves discovery (MISSION §2 rule 1: an
+     * opt-in, announced network-using service) alone:
      * discovery already needs a routable data-socket bind, so it cannot
      * fire on a default run, and suppressing it here would break
      * sloth-ios discovery for a deployment that asked for it. */
@@ -209,10 +210,10 @@ static void test_profile_strict_plus_allow_active_is_refused(void) {
 }
 
 static void test_profile_strict_permits_hop(void) {
-    /* Asserted positively. --hop is MISSION §2.1's first carve-out and
-       --strict does not refuse it; README's WiFi SIGINT section records
-       whether it should as an OPEN owner decision. So a future flip is a
-       deliberate edit to this assertion, not silent drift. */
+    /* Asserted positively. --strict does not refuse --hop; that is the
+       owner's ruling of 2026-09-30 on #84 ("--hop remains allowed under
+       strict"), recorded in README's WiFi SIGINT section. So a future
+       flip is a deliberate edit to this assertion, not silent drift. */
     observe_profile_t p = resolve((observe_profile_req_t){
         .strict = 1, .hop = 1 });
     ASSERT_EQ(OBSERVE_PROFILE_OK, p.refusal);

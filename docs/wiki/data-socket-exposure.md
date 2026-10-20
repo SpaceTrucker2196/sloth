@@ -17,7 +17,7 @@ carry the stream off-host without putting it on the wire yourself.
 `src/tune.c`, `src/jsonl.c`, `src/discovery.c`, `src/secure_file.c`,
 `packaging/`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-10-19.
 
 ---
 
@@ -176,7 +176,8 @@ so that exposure is something an operator *typed*, not something they
 inherited from a default.
 
 > **Note.** A routable bind is also what enables the mDNS
-> advertisement carve-out ([`MISSION.md`](../../MISSION.md) §2): sloth
+> advertisement, an opt-in network-using service under
+> [`MISSION.md`](../../MISSION.md) §2 rule 1: sloth
 > drops an Avahi service file so the sloth-ios client can find the
 > socket. Loopback and `unix:` sockets never advertise. Suppress it
 > entirely with `--no-discovery` — or with `--strict`, which refuses it

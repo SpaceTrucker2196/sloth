@@ -44,7 +44,7 @@ int  observe_active_allowed(void);
  * (MISSION.md §2 rule 1: an opt-in, announced network-using service)?
  *
  * This deliberately tracks the strict LOCK, not active_allowed. The
- * plain default leaves the carve-out alone: discovery already requires
+ * plain default leaves the advertisement alone: discovery already requires
  * the operator to bind the data socket to a routable address and to pass
  * --data-socket-allow-remote, so it cannot fire on a default run at all,
  * and silently dropping it would break sloth-ios discovery for a
