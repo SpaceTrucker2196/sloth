@@ -27,7 +27,7 @@ type: reference
   | `rules_wifi_mgmt.c` | 802.11 management/control plane and the sensor's radio: the floods, BTM, CSA, RRM, RTS, SA Query, MFP, Block Ack, malformed management frames, probe floods, recon, transit, unknown devices, RF degradation, no monitor radio, PM forgery, queue release, TPC |
   | `rules_twin.c` | impersonation: the evil-twin family, SSID confusion, KARMA, open/camera setup SSIDs, captive portal, WPA downgrade, SAE, FragAttacks — and the pair scoring the Twins view shares |
   | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
-  | `rules_mle.c` | the five 802.11be Multi-Link Element rules |
+  | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
 - **Rule order is a table (#118).** `alerts_update()` derives the
@@ -382,6 +382,32 @@ the headline rules per tier:
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`
+
+### Multi-Link rules keyed by BSSID (#104)
+
+| Kind | Sev | Fires on |
+|---|---|---|
+| `MLE_RECONFIG_NO_MLO` | WARN | a Reconfiguration Multi-Link element in a Beacon or Probe Response from a BSSID that has never sent a Basic Multi-Link element, the frame itself included |
+| `MLE_PR_BEACON_DIFF` | WARN | a Probe Response whose own Basic MLE names a different MLD MAC or own Link ID than the same BSSID's newest Beacon within 30 s |
+
+The five earlier MLE rules key on the MLD MAC an element asserts
+(`sloth_mld_t`); these two need the BSSID that sent the frame, so they
+read a separate 64-row table, `sloth_mle_bss_t`, filled by
+`src/mle.c :: mle_bss_observe_frame()` from Beacons and Probe
+Responses. A row is created only for a BSSID that sent some Multi-Link
+element.
+
+Both are shaped by what a **conformant** AP MLD sends, read from
+hostapd's builders: it puts a Reconfiguration MLE in the same Beacon as
+its Basic MLE, so the first rule counts the frame's own Basic MLE; and
+its multi-link Probe Response carries Per-STA Profiles, an extra Basic
+MLE with an AP MLD ID for another MLD, and a moving BSS Parameters
+Change Count, none of which a Beacon has, so the second compares only
+the MLD MAC and the own Link ID. Both cite their frames from the
+evidence ring and say *corroborates*, not *confirms*. Not caught: a
+Reconfiguration MLE forged from the cloned BSSID of a real AP MLD. See
+`research/ieee/802.11be-2024-9.4.2.322-bss-mle-consistency.md` and the
+rows in `docs/views/alerts.md`.
 
 ### Surveillance-vendor endpoints (#105)
 

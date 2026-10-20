@@ -4187,3 +4187,22 @@ last extension. Bound is now `i + 2`. Effect on output before the fix: a
 straddling read could report TLS 1.3 for a 1.2 hello and add a bogus curve
 or signature algorithm to the JA3/JA4 fingerprints. Regression tests in
 `tests/test_tls_log.c` fail in a plain build without the fix.
+
+## 2026-10-20 — #104 slice 6: MLE_RECONFIG_NO_MLO and MLE_PR_BEACON_DIFF
+
+[[alerts]] gains a "Multi-Link rules keyed by BSSID" section and
+[[wifi-state-of-the-art]] a paragraph on the MLE detector family. Two
+WARN kinds, both T1669, read a new per-BSSID table (`sloth_mle_bss_t`,
+`src/mle.c :: mle_bss_observe_frame()`) fed from Beacons and Probe
+Responses: a Reconfiguration MLE from a BSSID that never sent a Basic
+MLE, and a Probe Response whose own Basic MLE names another MLD MAC or
+own Link ID than the same BSSID's Beacon within 30 s. Only fields both
+frame types carry are compared, so hostapd's multi-link Probe Response
+(Per-STA Profiles, a leading AP-MLD-ID Basic MLE for another MLD) stays
+quiet. Also fixed: `beacon_parse_ies()` kept the last ext-107 element,
+so a Beacon carrying Basic then Reconfiguration MLE dropped the AP MLD
+from the roster; it now keeps the first Basic one. Citation
+`research/ieee/802.11be-2024-9.4.2.322-bss-mle-consistency.md`
+(hostapd, Wireshark, mac80211; the paywalled clause itself not read).
+`MLE_SWITCH_RATE` is dropped per the #145 ruling; #104 closes on this
+slice.

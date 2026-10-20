@@ -225,3 +225,7 @@ X(TPC_ABSENT_HIGH_BAND, "") /* non-compliance, not adversary technique (#101) */
 X(CAM_SETUP_SSID, "") /* exposure, not adversary technique (#106 slice 2) */
 /* unicast downlink burst released within 100 ms of a (BSSID,STA) session change — Framing Frames, CVE-2022-47522 (#107 shape B) */
 X(QUEUE_EVICT, "T1557") /* AiTM — buffered frames released across a session change, Framing Frames (#107) */
+/* Reconfiguration Multi-Link element from a BSSID that has never advertised a Basic MLE — IEEE 802.11be-2024 9.4.2.322 (#104 slice 6) */
+X(MLE_RECONFIG_NO_MLO, "T1669") /* Wi-Fi Networks — a forged AP-MLD reconfiguration announcement from a BSS that is not part of one */
+/* Probe Response's own Basic MLE names a different MLD MAC or Link ID than the same BSSID's Beacon — IEEE 802.11be-2024 9.4.2.322 (#104 slice 6) */
+X(MLE_PR_BEACON_DIFF, "T1669") /* Wi-Fi Networks — a second transmitter answering probes for one BSSID under another MLD identity */

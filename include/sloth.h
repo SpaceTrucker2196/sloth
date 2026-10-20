@@ -2029,6 +2029,72 @@ typedef struct {
     time_t   cross_link_cipher_downgrade_last_seen;
 } sloth_mld_t;
 
+/* ── Per-BSSID Multi-Link advertisement (#104 slice 6) ─────
+ *
+ * sloth_mld_t is keyed by MLD MAC, the identity an MLD asserts. Two
+ * findings need the other key, the BSSID that sent the frame: whether
+ * this BSS has ever advertised that it belongs to an AP MLD at all, and
+ * whether the MLD identity in its Probe Responses is the one in its
+ * Beacons. A row exists only for a BSSID that has sent a Multi-Link
+ * element of some variant, so a legacy AP never takes one.
+ *
+ * Only what both Beacon and Probe Response carry is kept for the
+ * comparison: the Basic MLE's MLD MAC Address (unconditional in that
+ * variant) and its Link ID Info (Presence Bitmap bit 4). The link SET
+ * is deliberately not kept. A Beacon carries no Per-STA Profiles while
+ * a multi-link Probe Response carries complete ones, so comparing link
+ * sets would fire on every Wi-Fi 7 AP that answers an ML probe. See
+ * research/ieee/802.11be-2024-9.4.2.322-bss-mle-consistency.md. */
+#define SLOTH_MLE_BSS_MAX        64
+/* How old a Beacon's identity may be and still be compared with a
+ * Probe Response. The issue's proposed window (#104), not a cited
+ * value. It is a freshness bound, not a detection threshold: it limits
+ * how long an AP MLD that was legitimately reconfigured can be held to
+ * its previous identity, and one mismatch inside it is the finding. */
+#define MLE_PR_BEACON_WIN_SECS   30
+
+typedef struct {
+    uint8_t  bssid[6];
+    time_t   first_seen;
+    time_t   last_seen;
+    /* A Basic MLE has been seen from this BSSID, in a Beacon or a Probe
+     * Response: the BSS has advertised that it is affiliated with an AP
+     * MLD. Never cleared while the row lives. */
+    uint8_t  basic_mle_seen;
+
+    /* The newest Beacon's own-MLD identity: its first Basic MLE with no
+     * AP MLD ID. One that carries an AP MLD ID describes an AP MLD of a
+     * multiple-BSSID set, which need not be this BSS's own. */
+    uint8_t  beacon_ident;          /* the fields below are valid */
+    uint8_t  beacon_mld_mac[6];
+    uint8_t  beacon_has_link_id;
+    uint8_t  beacon_link_id;
+    time_t   beacon_ident_ts;
+    uint64_t beacon_ev;             /* evidence-ring id of that Beacon, 0 if none */
+
+    /* MLE_RECONFIG_NO_MLO: a Reconfiguration MLE from a BSSID that, as
+     * of that frame and the frame itself included, had never advertised
+     * a Basic MLE. Lifetime count, sticky like the sibling MLE rules. */
+    uint32_t reconfig_no_mlo_total;
+    uint8_t  reconfig_no_mlo_subtype;  /* 8 Beacon, 5 Probe Response */
+    time_t   reconfig_no_mlo_last_seen;
+    uint64_t reconfig_no_mlo_ev;
+
+    /* MLE_PR_BEACON_DIFF: a Probe Response whose own-MLD identity
+     * disagrees with the Beacon identity above, inside
+     * MLE_PR_BEACON_WIN_SECS. What differed, and both sides of it. */
+    uint32_t pr_beacon_diff_total;
+    uint8_t  diff_mld_mac;          /* the MLD MAC Addresses differ */
+    uint8_t  diff_link_id;          /* both carry Link ID Info, and it differs */
+    uint8_t  diff_beacon_mld_mac[6];
+    uint8_t  diff_beacon_link_id;
+    uint8_t  diff_pr_mld_mac[6];
+    uint8_t  diff_pr_link_id;
+    time_t   pr_beacon_diff_last_seen;
+    uint64_t diff_beacon_ev;
+    uint64_t diff_pr_ev;
+} sloth_mle_bss_t;
+
 /* ── 802.11k Radio Measurement survey (#61) ────────────────
  *
  * An RRM Beacon Request asks a client to scan and report back what it
@@ -2790,6 +2856,9 @@ typedef struct {
     /* Wi-Fi 7 Multi-Link Devices (#67). */
     sloth_mld_t          mlds[SLOTH_MLD_MAX];
     int                  mld_count;
+    /* Per-BSSID Multi-Link advertisement (#104 slice 6). */
+    sloth_mle_bss_t      mle_bss[SLOTH_MLE_BSS_MAX];
+    int                  mle_bss_count;
     /* Captive-portal interception events (#69), newest first. */
     cp_event_t           cp_events[CP_MAX_EVENTS];
     int                  cp_event_count;

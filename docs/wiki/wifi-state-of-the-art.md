@@ -17,7 +17,7 @@ the art in WiFi tech in this repo" page.
 research corpus under `research/` (`research/papers/`, `research/cve/`).
 Web-sourced items carry a date and a link.
 
-**Last updated**: 2026-10-13.
+**Last updated**: 2026-10-20.
 
 ---
 
@@ -42,6 +42,18 @@ capture ([[monitor-mode]]) sees only a fraction of a Wi-Fi 7 conversation.
 Full visibility increasingly needs multiple synchronised monitor radios.
 This is the biggest capture-side shift since 6 GHz and is worth tracking
 in sloth's roadmap.
+
+MLO also adds a management surface of its own, the Multi-Link element,
+and sloth's #104 detectors watch it from what it can hear: the parsing
+shapes behind CVE-2026-58374 (`MLE_INVALID_LINK_ID`,
+`MLE_COMMON_INFO_LEN_BAD`, `MLE_SUBELEM_OVERRUN`), contested MLD
+identity (`MLD_MAC_COLLISION`), a weaker link inside one MLD
+(`MLE_CROSS_LINK_CIPHER_DOWNGRADE`), a link-removal announcement from a
+BSS that never claimed to be part of an AP MLD (`MLE_RECONFIG_NO_MLO`) —
+clients act on that announcement by tearing the link down, so it is a
+way off a link with no deauthentication frame — and a BSSID whose Probe
+Responses name a different AP MLD than its Beacons
+(`MLE_PR_BEACON_DIFF`). See [[alerts]].
 
 ### Wi-Fi 8 (802.11bn / UHR) — in draft
 

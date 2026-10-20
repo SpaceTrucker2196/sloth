@@ -518,6 +518,10 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     }
     if (type != 0) return;  /* management frames only beyond this point */
 
+    /* Per-BSSID Multi-Link advertisement (#104 slice 6): Beacons and
+     * Probe Responses both, before either branch can return. */
+    if (sub == 8 || sub == 5) mle_bss_observe_frame(&fr, fts);
+
     if (sub == 8) {
         /* Beacon frame — passive AP discovery */
         char    ssid[33]; uint8_t bssid[6]; int channel; char enc[10]; uint16_t bms;

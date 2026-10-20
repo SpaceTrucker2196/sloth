@@ -14,6 +14,7 @@
 #include "rsn_ie.h"
 #include "wifi_oui_attacker.h"
 #include "ev_cite.h"
+#include "mle.h"       /* MLE_TYPE_BASIC */
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
@@ -372,10 +373,21 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                     }
                 }
             }
-            if (ext == 107 && rsn_out) {
+            if (ext == 107 && rsn_out && !rsn_out->mle_body &&
+                tln >= 3 && (ie[3] & 0x07) == MLE_TYPE_BASIC) {
                 /* Multi-Link Element (#67). The body is handed on so
                  * the capture path can take the MLD identity out of it;
-                 * parsing an identity is not a shared-parser concern. */
+                 * parsing an identity is not a shared-parser concern.
+                 *
+                 * The FIRST Basic-variant one only (#104 slice 6). A
+                 * frame can carry several MLEs: hostapd's
+                 * hostapd_eid_eht_ml_beacon() follows the Basic MLE with
+                 * a Reconfiguration MLE while an affiliated AP is being
+                 * removed. Until this slice the last ext-107 element won,
+                 * so during exactly that window the Basic MLE was
+                 * replaced by one mle_parse() refuses and the AP MLD
+                 * dropped out of the roster. Type is Multi-Link Control
+                 * bits 0-2, at ie[3]. */
                 rsn_out->mle_body = ie + 2;
                 rsn_out->mle_len  = tln;
             }

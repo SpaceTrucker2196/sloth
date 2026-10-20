@@ -8,6 +8,11 @@
 
 static sloth_mld_t     g_mld[SLOTH_MLD_MAX];
 static int             g_mld_n;
+/* Per-BSSID Multi-Link advertisement (#104 slice 6), under the same
+ * lock: both tables are written from the monitor thread and read by
+ * one snapshot. */
+static sloth_mle_bss_t g_bss[SLOTH_MLE_BSS_MAX];
+static int             g_bss_n;
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static int mac_is_usable(const uint8_t m[6]) {
@@ -465,6 +470,9 @@ void mle_snapshot(sloth_state_t *s) {
     int n = g_mld_n;
     memcpy(s->mlds, g_mld, (size_t)n * sizeof(g_mld[0]));
     s->mld_count = n;
+    int b = g_bss_n;
+    memcpy(s->mle_bss, g_bss, (size_t)b * sizeof(g_bss[0]));
+    s->mle_bss_count = b;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -475,9 +483,174 @@ int mle_count(void) {
     return n;
 }
 
+int mle_bss_count(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_bss_n;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
 void mle_clear(void) {
     pthread_mutex_lock(&g_mu);
     memset(g_mld, 0, sizeof(g_mld));
     g_mld_n = 0;
+    memset(g_bss, 0, sizeof(g_bss));
+    g_bss_n = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
+/* ── Per-BSSID Multi-Link advertisement (#104 slice 6) ──────────────
+ *
+ * What one Beacon or Probe Response says about its BSS's Multi-Link
+ * membership, gathered over every Multi-Link element in the frame. A
+ * frame can legitimately carry more than one: hostapd's
+ * hostapd_eid_eht_ml_beacon() emits the Basic MLE and then, while an
+ * affiliated AP is being removed, a Reconfiguration MLE, and its Probe
+ * Response builder emits the requested AP MLD's Basic MLE (with AP MLD
+ * ID) ahead of its own (without). */
+typedef struct {
+    int     basic;        /* any Basic MLE, well-formed or not */
+    int     reconf;       /* any Reconfiguration MLE */
+    int     own;          /* the identity below was read */
+    uint8_t mld_mac[6];
+    int     has_link_id;
+    uint8_t link_id;
+} mle_frame_scan_t;
+
+static void mle_frame_scan(const uint8_t *ies, int n, mle_frame_scan_t *o) {
+    memset(o, 0, sizeof(*o));
+    tlv_it_t it;
+    uint16_t tag; int tln; const uint8_t *e;
+    tlv_init(&it, ies, n);
+    while (tlv_next(&it, &tag, &tln, &e) == TLV_OK) {
+        /* Element ID Extension: ExtID(1), then Multi-Link Control(2). The
+         * Type subfield is the one thing every variant shares at a fixed
+         * position, which is why it is all a Reconfiguration MLE is read
+         * for: its Common Info layout is variant-specific and its
+         * Presence Bitmap bits are not the Basic variant's. */
+        if (tag != 255 || tln < 3 || e[0] != MLE_EXT_ID) continue;
+        const uint16_t ctl  = (uint16_t)(e[1] | (e[2] << 8));
+        const int      type = ctl & 0x0007;
+        if (type == MLE_TYPE_RECONFIG) { o->reconf = 1; continue; }
+        if (type != MLE_TYPE_BASIC) continue;
+        o->basic = 1;
+        /* The identity is the first Basic MLE WITHOUT an AP MLD ID. With
+         * one, the element describes an AP MLD of a multiple-BSSID set
+         * (hostapd sets it for the requested MLD of an ML probe), so its
+         * MLD MAC need not be this BSS's own and is never compared. */
+        if (o->own || (ctl & MLE_BASIC_PRES_AP_MLD_ID)) continue;
+        /* ExtID(1) Control(2) CommonInfoLength(1) MLD MAC(6) [LinkID(1)].
+         * A Common Info Length that cannot hold the MAC, or that runs
+         * past the element, is MLE_COMMON_INFO_LEN_BAD's finding; an
+         * identity is not taken from it. */
+        if (tln < 10) continue;
+        const int cil = e[3];
+        if (cil < 7 || 3 + cil > tln) continue;
+        if (!mac_is_usable(e + 4)) continue;
+        memcpy(o->mld_mac, e + 4, 6);
+        o->own = 1;
+        /* Link ID Info is the first optional Common Info subfield, so
+         * its offset does not depend on any other presence bit. */
+        if ((ctl & MLE_BASIC_PRES_LINK_ID) && cil >= 8) {
+            o->has_link_id = 1;
+            o->link_id = (uint8_t)(e[10] & 0x0f);
+        }
+    }
+}
+
+/* Caller holds g_mu. */
+static sloth_mle_bss_t *bss_slot(const uint8_t bssid[6], time_t now) {
+    for (int i = 0; i < g_bss_n; i++)
+        if (memcmp(g_bss[i].bssid, bssid, 6) == 0) return &g_bss[i];
+    int idx;
+    if (g_bss_n < SLOTH_MLE_BSS_MAX) {
+        idx = g_bss_n++;
+    } else {
+        /* Least recently heard. An AP MLD beacons ten times a second, so
+         * the row a flood of one-off BSSIDs evicts is never a live one
+         * for long — and losing a row loses only history, which the
+         * same-frame Basic MLE check below does not depend on. */
+        idx = 0;
+        for (int i = 1; i < SLOTH_MLE_BSS_MAX; i++)
+            if (g_bss[i].last_seen < g_bss[idx].last_seen) idx = i;
+    }
+    memset(&g_bss[idx], 0, sizeof(g_bss[idx]));
+    memcpy(g_bss[idx].bssid, bssid, 6);
+    g_bss[idx].first_seen = now;
+    return &g_bss[idx];
+}
+
+void mle_bss_observe_frame(const dot11_frame_t *f, time_t now) {
+    if (!f || f->proto != 0 || f->type != 0) return;
+    if (f->subtype != 8 && f->subtype != 5) return;
+    if (!f->bssid || !mac_is_usable(f->bssid)) return;
+    const uint8_t *body; int blen;
+    /* Timestamp(8) Beacon Interval(2) Capability(2), in both frames
+     * (IEEE 802.11-2020 §9.3.3.2 / §9.3.3.10). */
+    if (!dot11_frame_body(f, &body, &blen) || blen < 12) return;
+
+    mle_frame_scan_t sc;
+    mle_frame_scan(body + 12, blen - 12, &sc);
+    if (!sc.basic && !sc.reconf) return;
+
+    const int beacon = (f->subtype == 8);
+    pthread_mutex_lock(&g_mu);
+    sloth_mle_bss_t *e = bss_slot(f->bssid, now);
+    e->last_seen = now;
+    if (sc.basic) e->basic_mle_seen = 1;
+
+    /* MLE_RECONFIG_NO_MLO. A Reconfiguration MLE announces a change to
+     * an AP MLD's affiliated APs, so only an AP affiliated with an AP MLD
+     * has one to send — and that AP carries a Basic MLE in its Beacons
+     * and Probe Responses, the same frames the Reconfiguration MLE rides
+     * in (hostapd emits the two together). The Basic MLE seen in THIS
+     * frame counts, set just above, so a conformant AP MLD whose history
+     * sloth lacks — first frame heard, or its row evicted — does not
+     * fire. */
+    if (sc.reconf && !e->basic_mle_seen) {
+        e->reconfig_no_mlo_total++;
+        e->reconfig_no_mlo_subtype   = f->subtype;
+        e->reconfig_no_mlo_last_seen = now;
+        e->reconfig_no_mlo_ev        = f->event_id;
+    }
+
+    if (sc.own && beacon) {
+        e->beacon_ident       = 1;
+        memcpy(e->beacon_mld_mac, sc.mld_mac, 6);
+        e->beacon_has_link_id = (uint8_t)sc.has_link_id;
+        e->beacon_link_id     = sc.link_id;
+        e->beacon_ident_ts    = now;
+        e->beacon_ev          = f->event_id;
+    } else if (sc.own && e->beacon_ident) {
+        /* MLE_PR_BEACON_DIFF. Both frames are the same BSS describing its
+         * own AP MLD membership, so the MLD MAC and this BSS's own Link
+         * ID cannot differ between them. Per-STA Profiles, AP MLD ID,
+         * BSS Parameters Change Count and the capability subfields are
+         * NOT compared: the first two legitimately appear only in a
+         * multi-link Probe Response, the third moves on every critical
+         * update. Both directions of the age test, so a replayed or
+         * reordered capture cannot compare against a Beacon from the
+         * future by underflow. */
+        const time_t age = now >= e->beacon_ident_ts
+                         ? now - e->beacon_ident_ts
+                         : e->beacon_ident_ts - now;
+        if (age <= MLE_PR_BEACON_WIN_SECS) {
+            const int mac_diff = memcmp(sc.mld_mac, e->beacon_mld_mac, 6) != 0;
+            const int lid_diff = sc.has_link_id && e->beacon_has_link_id &&
+                                 sc.link_id != e->beacon_link_id;
+            if (mac_diff || lid_diff) {
+                e->pr_beacon_diff_total++;
+                e->diff_mld_mac = (uint8_t)mac_diff;
+                e->diff_link_id = (uint8_t)lid_diff;
+                memcpy(e->diff_beacon_mld_mac, e->beacon_mld_mac, 6);
+                e->diff_beacon_link_id = e->beacon_link_id;
+                memcpy(e->diff_pr_mld_mac, sc.mld_mac, 6);
+                e->diff_pr_link_id = sc.link_id;
+                e->pr_beacon_diff_last_seen = now;
+                e->diff_beacon_ev = e->beacon_ev;
+                e->diff_pr_ev     = f->event_id;
+            }
+        }
+    }
     pthread_mutex_unlock(&g_mu);
 }

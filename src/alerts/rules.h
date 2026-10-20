@@ -103,4 +103,6 @@ void rule_mle_common_info_len_bad(const sloth_state_t *s, time_t now);
 void rule_mle_subelem_overrun(const sloth_state_t *s, time_t now);
 void rule_mld_mac_collision(const sloth_state_t *s, time_t now);
 void rule_mle_cross_link_cipher_downgrade(const sloth_state_t *s, time_t now);
+void rule_mle_reconfig_no_mlo(const sloth_state_t *s, time_t now);
+void rule_mle_pr_beacon_diff(const sloth_state_t *s, time_t now);
 #endif

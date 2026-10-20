@@ -7,6 +7,7 @@
 #include <time.h>
 #include "rules.h"
 #include "engine_internal.h"
+#include "alert_key.h"
 
 /* Multi-Link Element Per-STA Profile link_id out of range or repeated —
  * CVE-2026-58374 / w1.fi 2026-1 (#104). hostapd_process_ml_assoc_req()'s
@@ -192,5 +193,109 @@ void rule_mle_cross_link_cipher_downgrade(const sloth_state_t *s,
                  pmf_note);
         fire(ALERT_TYPE_MLE_CROSS_LINK_CIPHER_DOWNGRADE, ALERT_SEV_WARN,
              "MLE_CROSS_LINK_CIPHER_DOWNGRADE", detail, key, NULL, 0, now);
+    }
+}
+
+/* Reconfiguration Multi-Link element from a BSSID that has never
+ * advertised a Basic MLE (#104 slice 6, IEEE 802.11be-2024 §9.4.2.322,
+ * MITRE T1669).
+ *
+ * A Reconfiguration MLE announces that an AP MLD is changing its set of
+ * affiliated APs — in a Beacon or Probe Response, that an affiliated AP
+ * is about to be removed, with a countdown. Clients act on it by moving
+ * off the link. Only an AP affiliated with an AP MLD has such a change
+ * to announce, and that AP states its membership with a Basic MLE in the
+ * same frames. A BSSID that sends the announcement without ever having
+ * made the claim is not describing itself: the shape is a forged
+ * announcement aimed at steering clients off a link.
+ *
+ * WARN, and the detail says "corroborates", not "confirms": sloth hears
+ * the frame, not what any client did about it. Sticky per BSSID like the
+ * sibling MLE rules, and cites the frame from the evidence ring. */
+void rule_mle_reconfig_no_mlo(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mle_bss_count; i++) {
+        const sloth_mle_bss_t *b = &s->mle_bss[i];
+        if (!b->reconfig_no_mlo_total) continue;
+
+        char bssid[20];
+        mac_to_str(b->bssid, bssid, sizeof(bssid));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "mle_reconfig_no_mlo");
+        akey_mac(&k, b->bssid);
+        if (!akey_end(&k)[0]) continue;
+        snprintf(detail, sizeof(detail),
+                 "BSSID %s sent a Reconfiguration Multi-Link element in a "
+                 "%s without ever advertising a Basic Multi-Link element "
+                 "(%u such frame(s) seen) - corroborates a forged AP MLD "
+                 "reconfiguration, does not confirm one - IEEE 802.11be-2024 "
+                 "9.4.2.322",
+                 bssid,
+                 b->reconfig_no_mlo_subtype == 5 ? "Probe Response" : "Beacon",
+                 (unsigned)b->reconfig_no_mlo_total);
+        const uint64_t ev[1] = { b->reconfig_no_mlo_ev };
+        fire_ev(ALERT_TYPE_MLE_RECONFIG_NO_MLO, ALERT_SEV_WARN,
+                ev, ev[0] ? 1 : 0,
+                "MLE_RECONFIG_NO_MLO", detail, key, NULL, 0, now);
+    }
+}
+
+/* A BSSID's Probe Response names a different AP MLD than its Beacon
+ * (#104 slice 6, IEEE 802.11be-2024 §9.4.2.322, MITRE T1669).
+ *
+ * Both frames are one BSS describing its own membership of an AP MLD,
+ * so the two fields both carry for that — the Basic MLE's MLD MAC
+ * Address and the BSS's own Link ID — cannot differ between them while
+ * the AP MLD is unchanged. Two answers for one BSSID inside
+ * MLE_PR_BEACON_WIN_SECS is the shape of a second transmitter answering
+ * probes under that BSSID with another MLD identity.
+ *
+ * What is NOT compared is the point of the rule's shape: Per-STA
+ * Profiles (a multi-link Probe Response carries complete ones, a Beacon
+ * none), an AP MLD ID (present only in some Probe Responses), and the
+ * BSS Parameters Change Count (moves on every critical update). See
+ * src/mle.c. WARN; the detail names both sides and does not say which
+ * is genuine, because sloth cannot tell. */
+void rule_mle_pr_beacon_diff(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->mle_bss_count; i++) {
+        const sloth_mle_bss_t *b = &s->mle_bss[i];
+        if (!b->pr_beacon_diff_total) continue;
+
+        char bssid[20], bmac[20], pmac[20];
+        mac_to_str(b->bssid, bssid, sizeof(bssid));
+        mac_to_str(b->diff_beacon_mld_mac, bmac, sizeof(bmac));
+        mac_to_str(b->diff_pr_mld_mac, pmac, sizeof(pmac));
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "mle_pr_beacon_diff");
+        akey_mac(&k, b->bssid);
+        if (!akey_end(&k)[0]) continue;
+        char what[112];
+        if (b->diff_mld_mac && b->diff_link_id)
+            snprintf(what, sizeof(what),
+                     "MLD %s link_id %u in its Beacon but MLD %s link_id %u",
+                     bmac, (unsigned)b->diff_beacon_link_id,
+                     pmac, (unsigned)b->diff_pr_link_id);
+        else if (b->diff_mld_mac)
+            snprintf(what, sizeof(what),
+                     "MLD %s in its Beacon but MLD %s", bmac, pmac);
+        else
+            snprintf(what, sizeof(what),
+                     "link_id %u in its Beacon but link_id %u",
+                     (unsigned)b->diff_beacon_link_id,
+                     (unsigned)b->diff_pr_link_id);
+        snprintf(detail, sizeof(detail),
+                 "BSSID %s names %s in a Probe Response within %ds "
+                 "(%u such frame(s) seen) - corroborates a second "
+                 "transmitter for this BSSID, not which one is genuine - "
+                 "IEEE 802.11be-2024 9.4.2.322",
+                 bssid, what, MLE_PR_BEACON_WIN_SECS,
+                 (unsigned)b->pr_beacon_diff_total);
+        uint64_t ev[2];
+        int ev_n = 0;
+        if (b->diff_beacon_ev) ev[ev_n++] = b->diff_beacon_ev;
+        if (b->diff_pr_ev)     ev[ev_n++] = b->diff_pr_ev;
+        fire_ev(ALERT_TYPE_MLE_PR_BEACON_DIFF, ALERT_SEV_WARN, ev, ev_n,
+                "MLE_PR_BEACON_DIFF", detail, key, NULL, 0, now);
     }
 }

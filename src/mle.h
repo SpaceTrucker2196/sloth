@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "dot11_frame.h"
 
 /* Multi-Link Element decode — issue #67, IEEE 802.11be §9.4.2.312.
  *
@@ -59,6 +60,28 @@ int  mle_canonical(const uint8_t mac[6], uint8_t out[6]);
 
 void mle_snapshot(sloth_state_t *s);
 int  mle_count(void);
+/* Clears the MLD roster and the per-BSSID table below. */
 void mle_clear(void);
+
+/* ── Per-BSSID Multi-Link advertisement (#104 slice 6) ──
+ *
+ * Type subfield values (Multi-Link Control bits 0-2) and the two Basic
+ * variant Presence Bitmap bits this reads, as bits of the whole 16-bit
+ * Multi-Link Control word. From hostapd src/common/ieee802_11_defs.h
+ * (MULTI_LINK_CONTROL_TYPE_RECONF 2, BASIC_MULTI_LINK_CTRL_PRES_LINK_ID
+ * 0x0010, BASIC_MULTI_LINK_CTRL_PRES_AP_MLD_ID 0x0200), which labels
+ * them IEEE 802.11be-2024 §9.4.2.322 Figure 9-1074n/o; Wireshark's
+ * dissector agrees. */
+#define MLE_TYPE_RECONFIG          2
+#define MLE_BASIC_PRES_LINK_ID     0x0010
+#define MLE_BASIC_PRES_AP_MLD_ID   0x0200
+
+/* Record what a Beacon (subtype 8) or Probe Response (subtype 5) says
+ * about its BSS's Multi-Link membership. Any other frame, a Protected
+ * one, or one with no Multi-Link element is ignored, and creates no
+ * row. Thread-safe; the caller is the monitor thread. */
+void mle_bss_observe_frame(const dot11_frame_t *f, time_t now);
+
+int  mle_bss_count(void);
 
 #endif /* MLE_H */

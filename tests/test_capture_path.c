@@ -16,6 +16,7 @@
 #include "sloth_clock.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
+#include "mle.h"            /* per-BSSID Multi-Link table (#104 slice 6) */
 #include "auth_track.h"     /* auth_observe_ev() wiring (#92 slice 4) */
 #include "pm_forge.h"      /* the frame view's event_id reaches it (#92 slice 4) */
 #include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
@@ -2686,6 +2687,56 @@ static void test_beacons_are_cited_by_their_ring_ids(void) {
     evidence_ring_shutdown();
 }
 
+/* #104 slice 6: on_probe_frame() hands Beacons AND Probe Responses to
+ * mle_bss_observe_frame(), with the frame view's event_id. radiotap +
+ * management header + Timestamp(8) Interval(2) Capability(2) + SSID +
+ * a Basic Multi-Link element (ext 107) in the hostapd layout: Control
+ * 0x01b0 (Link ID Info, BSS Params Change Count, EML Capa, MLD Capa),
+ * Common Info Length 13, MLD MAC, Link ID 1, BPCC, EML(2), MLD Capa(2). */
+static int mle_mgmt(uint8_t *f, int cap, int subtype, uint8_t mld_last) {
+    static const uint8_t bssid[6] = { 0x02, 0xbb, 0x00, 0x00, 0x06, 0x01 };
+    static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    static const uint8_t sta[6]   = { 0x02, 0xcc, 0x00, 0x00, 0x06, 0x01 };
+    fb_t b; fb_init(&b, f, cap);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, (uint8_t)subtype, 0, subtype == 8 ? bcast : sta,
+            bssid, bssid, 0x0010, 0);
+    fb_beacon_fixed(&b, 0x1000, 100, 0x0011);
+    fb_ssid(&b, "mlo");
+    const uint8_t mle[] = {
+        0xb0, 0x01, 13,
+        0x02, 0xaa, 0x00, 0x00, 0x06, mld_last,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00 };
+    fb_ie_ext(&b, 107, mle, (int)sizeof mle);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_probe_response_mle_reaches_the_bss_table_with_ids(void) {
+    evidence_setup();
+    mle_clear();
+    uint8_t a[128], p[128];
+    int an = mle_mgmt(a, (int)sizeof a, 8, 0x01);
+    int pn = mle_mgmt(p, (int)sizeof p, 5, 0x02);
+    ASSERT(an > 0 && pn > 0);
+    const uint8_t *fs[2] = { a, p };
+    int ls[2] = { an, pn };
+    const uint32_t ts[2] = { 1700000000u, 1700000001u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    mle_snapshot(&g_s);
+    ASSERT_EQ(g_s.mle_bss_count, 1);
+    if (g_s.mle_bss_count == 1) {
+        const sloth_mle_bss_t *r = &g_s.mle_bss[0];
+        ASSERT_EQ((int)r->pr_beacon_diff_total, 1);
+        ASSERT_EQ((long long)r->diff_beacon_ev, (long long)(before + 1));
+        ASSERT_EQ((long long)r->diff_pr_ev, (long long)(before + 2));
+        ASSERT_EQ((long)r->pr_beacon_diff_last_seen, 1700000001L);
+    }
+    mle_clear();
+    evidence_ring_shutdown();
+}
+
 /* The ordinary-retransmission case, through the REAL pcap_dispatch
  * callback rather than by calling the module directly. One MSDU the AP
  * keeps retrying must not reach the release threshold, because on a
@@ -3503,6 +3554,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_pm_contradiction_cites_the_ring_ids_of_its_pair);
     RUN_TEST(test_auth_frames_are_cited_by_their_ring_ids);
     RUN_TEST(test_beacons_are_cited_by_their_ring_ids);
+    RUN_TEST(test_probe_response_mle_reaches_the_bss_table_with_ids);
     RUN_TEST(test_a_retried_downlink_burst_records_no_release);
     RUN_TEST(test_a_refused_reassoc_opens_no_window);
     RUN_TEST(test_a_deauth_attributes_the_station_in_both_directions);

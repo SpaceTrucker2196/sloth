@@ -59,6 +59,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_mle_subelem_overrun),
     R(rule_mld_mac_collision),
     R(rule_mle_cross_link_cipher_downgrade),
+    R(rule_mle_reconfig_no_mlo),
+    R(rule_mle_pr_beacon_diff),
     R(rule_ssid_confusion),
     R(rule_mgmt_fuzz),
     R(rule_rogue_radius),
