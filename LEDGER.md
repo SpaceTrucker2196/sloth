@@ -237,3 +237,4 @@
 | 95077cc | 2026-10-20T02:05:15Z | claude-fable-5-1, claude-opus-5-5 | 472 | 31565 | 10551926 | 1024160 | 23.9557 | ci: fail the build if sloth ever links a TLS library (refs #100) |
 | 7d3b186 | 2026-10-20T03:52:19Z | claude-opus-5-5 | 96 | 13115 | 17649852 | 515099 | 7.9134 | Wave 0 of #145: close-out slices #143 #84 #85 #90 #95 #96 integrated |
 | 8a7c8e3 | 2026-10-20T04:05:26Z | claude-opus-5-5 | 16 | 3382 | 4323674 | 6517 | 0.9846 | Pin the wall clock in the posture reproducibility test |
+| 36af584 | 2026-10-20T16:43:23Z | claude-opus-5-5 | 54 | 24104 | 12604453 | 1105400 | 11.8464 | Wave 1 of #145: #92 exporter + citations, #91 retune reason/dwell/bench |
