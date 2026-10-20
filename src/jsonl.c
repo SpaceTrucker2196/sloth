@@ -1785,8 +1785,9 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
  * but the signature is chosen carefully. `ps_recv` climbs on every tick
  * of a working sensor, so signing over it would mean a line per second
  * forever and the suppression would be decorative. The signature is
- * therefore the *qualitative* health — liveness, exit reasons, whether
- * the channel pair agrees, whether a retune has failed and why — plus
+ * therefore the *qualitative* health — liveness, exit reasons, which hop
+ * slots have ever refused, whether any retune was ever acknowledged,
+ * whether one has failed and every reason seen so far — plus
  * the cumulative drop/ifdrop
  * counters and the eviction tally, all of which moving is genuinely
  * news. A healthy sensor emits one line per JSONL_HEARTBEAT_SECS; a
@@ -1868,8 +1869,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     struct {
         int      cap_open, cap_run, cap_exit;
         int      mon_open, mon_run, mon_exit;
-        int      retune_fail_any, chan_ever_confirmed, retune_errno;
-        uint32_t chan_refused_mask;
+        int      retune_fail_any, chan_ever_confirmed;
+        uint32_t chan_refused_mask, retune_reason_mask;
         uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
         int      storage_fail;
         int      scope_state, scope_req, scope_enf;
@@ -1924,7 +1925,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
      * record on every retry for the life of the run. Two-state band
      * instead; the count itself rides every emitted line. */
     sig.retune_fail_any     = s->chan_retune_failures > 0;
-    sig.retune_errno        = s->chan_retune_last_errno;
+    /* The reasons ever seen, not the last one: two persistent refusals
+     * with different causes alternate the last errno every rotation. */
+    sig.retune_reason_mask  = s->chan_retune_reason_mask
+                            | (s->chan_retune_last_errno
+                               ? 1u << chanhop_retune_reason_bit(s->chan_retune_last_errno)
+                               : 0u);
     sig.chan_ever_confirmed = s->chan_confirmed != 0;
     sig.chan_refused_mask   = s->chan_refused_mask;
     sig.cap_drop    = s->cap_health.ps_drop;

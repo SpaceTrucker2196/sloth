@@ -764,8 +764,10 @@ the common case exact.
 healthy sensor emits one line per 300 s heartbeat, and any degradation
 emits immediately. The signature covers liveness, exit reasons,
 which `--hop` rotation slots have ever refused a retune, whether any
-retune has ever been acknowledged, whether any has failed and its
-`chan_retune_reason`, the cumulative
+retune has ever been acknowledged, whether any has failed and the set
+of failure reasons seen so far (not the last one: two persistent
+refusals with different causes alternate `chan_retune_reason` every
+rotation, and signing over it emitted ~160 lines a minute), the cumulative
 drop/ifdrop counters and
 the eviction total and the five `scope*` state fields, `scope_dropped`
 included — a scope boundary starting to refuse frames is exactly the

@@ -208,6 +208,9 @@ void chanhop_record_retune_err(int requested_channel, int err,
  * can switch on it, and a stable value under a persistent failure so
  * it can sit in the change-only signature. Never NULL. */
 const char *chanhop_retune_reason(int err);
+/* The bucket chanhop_retune_reason() names, as a bit index (0 = none,
+ * "other" last), for the sticky reason mask in sloth_state_t. */
+int chanhop_retune_reason_bit(int err);
 
 /* One poll's worth of hopping, against g_platform (#91): attribute
  * `mon_frames` (monitor-radio frames since the last call) to the

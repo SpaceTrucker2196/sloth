@@ -1337,7 +1337,7 @@ static void test_sensor_health_first_failure_and_new_reason_re_emit(void) {
  * --hop list holding one channel the regdomain or driver will not take
  * (EINVAL) is normal, and each rotation then goes ack, refusal, ack -
  * so requested/confirmed agreement flips twice a rotation. Signing over
- * that bit emitted 160 lines in 60 s here. Driven through the real
+ * that bit emitted 97 lines in 60 s here. Driven through the real
  * hopper and the fake platform rather than hand-set fields, because the
  * flip only exists in the interleaving chanhop_service() produces. */
 static time_t g_hop_wall;
@@ -1380,6 +1380,47 @@ static void test_sensor_health_one_refused_hop_channel_does_not_churn(void) {
     ASSERT(body != NULL);
     ASSERT(contains(body, "\"chan_retune_reason\":\"EINVAL\""));
     ASSERT(contains(body, "\"chan_confirmed_ok\":"));
+    fake_net_reset();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* #91 second review: two persistent refusals with DIFFERENT reasons -
+ * EINVAL from the regdomain on channel 11, EBUSY from the driver on
+ * every other channel - alternate the last errno twice a rotation.
+ * Signing over the last errno emitted 161 lines in 60 s here; the
+ * signature now carries the set of reasons ever seen, so the run
+ * reports each reason once. */
+static void test_sensor_health_two_refusal_reasons_do_not_churn(void) {
+    g_hop_wall = 1700000000;
+    sloth_clock_test_set(NULL, hop_wall);
+    open_fresh();
+    fake_net_reset();
+    sloth_state_t s; seed_health(&s);
+    chanhop_t h;
+    static const int chans[] = { 1, 6, 11 };
+    ASSERT_EQ(chanhop_init(&h, chans, 3), 3);
+    g_fake_net.set_channel_rc  = -EBUSY;
+    g_fake_net.refuse_freq_mhz = 2462;           /* channel 11 */
+    g_fake_net.refuse_rc       = -EINVAL;
+    int errno_flips = 0, last_errno = 0;
+    for (uint64_t t = 0; t < 60000; t += 250) {
+        g_hop_wall = 1700000000 + (time_t)(t / 1000);
+        chanhop_service(&h, &s, t, 2);
+        if (last_errno && s.chan_retune_last_errno != last_errno) errno_flips++;
+        last_errno = s.chan_retune_last_errno;
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    /* The scenario really is the alternating one. */
+    ASSERT(s.chan_retune_failures >= 40);
+    ASSERT(errno_flips >= 20);
+    ASSERT_EQ((long long)s.chan_retune_reason_mask,
+              (long long)((1u << chanhop_retune_reason_bit(EBUSY)) |
+                          (1u << chanhop_retune_reason_bit(EINVAL))));
+    /* One line per new fact: the first refusal (EBUSY, slot 0), the
+     * second slot refusing, the third slot refusing with the new reason
+     * EINVAL - at most the three slots, never one per rotation. */
+    ASSERT(count_file_lines(tmp_path) <= 4);
     fake_net_reset();
     sloth_clock_test_set(NULL, NULL);
 }
@@ -2599,6 +2640,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_sensor_health_retune_count_alone_does_not_re_emit);
     RUN_TEST(test_sensor_health_healthy_hopping_does_not_re_emit);
     RUN_TEST(test_sensor_health_one_refused_hop_channel_does_not_churn);
+    RUN_TEST(test_sensor_health_two_refusal_reasons_do_not_churn);
     RUN_TEST(test_sensor_health_new_refusing_channel_re_emits);
     RUN_TEST(test_sensor_health_first_ever_ack_re_emits);
     RUN_TEST(test_sensor_health_first_failure_and_new_reason_re_emit);

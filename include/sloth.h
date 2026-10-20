@@ -2714,6 +2714,14 @@ typedef struct {
      * rotation. That stability is what lets the sensor_health
      * change-only signature carry it (#91). */
     uint32_t       chan_refused_mask;
+    /* Every retune-failure reason seen, one bit per
+     * chanhop_retune_reason_bit() bucket, published by chanhop_service().
+     * Sticky for the same reason as the mask above: two persistent
+     * refusals with different causes (EINVAL from the regdomain on one
+     * slot, EBUSY from the driver on another) alternate the last errno
+     * twice a rotation, and signing over that brought the firehose back.
+     * A reason never seen before is still news (#91 review). */
+    uint32_t       chan_retune_reason_mask;
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* Capture-worker liveness and drop accounting (#91 slice 2).

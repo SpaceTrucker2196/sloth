@@ -231,6 +231,22 @@ const char *chanhop_retune_reason(int err) {
     }
 }
 
+int chanhop_retune_reason_bit(int err) {
+    switch (err) {
+    case 0:          return 0;
+    case EPERM:      return 1;
+    case EACCES:     return 2;
+    case EBUSY:      return 3;
+    case EINVAL:     return 4;
+    case ENODEV:     return 5;
+    case ENOENT:     return 6;
+    case EOPNOTSUPP: return 7;
+    case ETIMEDOUT:  return 8;
+    case EIO:        return 9;
+    default:         return 10;
+    }
+}
+
 void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
                      uint32_t mon_frames) {
     if (!h || !s) return;
@@ -249,6 +265,8 @@ void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
         chanhop_record_retune_err(requested, err, &s->chan_requested,
                                   &s->chan_confirmed, &s->chan_retune_failures,
                                   &s->chan_retune_last_errno);
+        if (err)
+            s->chan_retune_reason_mask |= 1u << chanhop_retune_reason_bit(err);
     }
     /* Which slots have ever refused. Recomputed rather than OR-ed in on
      * each refusal so the mask cannot drift from the per-slot tally. */
