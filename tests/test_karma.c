@@ -375,6 +375,85 @@ static void test_view_legend_states_the_corroboration_rule(void) {
     }
 }
 
+/* A full page and its legend fit the documented minimum terminal,
+ * 100x33, drawn through tui_draw() so the tab bar's wrapped rows count
+ * against the budget the way they do in the running program.
+ *
+ * Two faults, both #90's: the page was LINES - 5, which left out the
+ * two-line legend, so a full table pushed the legend - the line saying
+ * a tool name is a hypothesis - off the bottom; and the tool suffix was
+ * not fitted to COLS, so at 100 columns every attributed row wrapped
+ * and took a second screen line. The fixture is the worst case the
+ * view can be handed: more candidates than fit, every top SSID at its
+ * 32-octet maximum, a seven-digit age, and attributions as long as
+ * tool_attribution_format() makes them (a 20-character label).
+ *
+ * Seen to fail three ways, each then restored: KARMA_CHROME set to 3
+ * (the legend uncounted; it lands below the screen), the row's `room`
+ * set to 1000 (no fitting; rows reach the last column and wrap), and
+ * karma_fit_tail()'s label-shortening branch removed (the bracket is
+ * clipped and the "? provisional" marker lost). */
+static void test_view_full_page_fits_a_100x33_terminal(void) {
+    static sloth_state_t s;
+    seed(&s);
+    s.active_view = VIEW_KARMA;
+    time_t now = time(NULL);
+    s.karma_count = MAX_KARMA_APS;
+    for (int i = 0; i < s.karma_count; i++) {
+        karma_ap_t *k = &s.karma_aps[i];
+        const uint8_t b[6] = {0x24,0x6f,0x28,0x00,0x00,(uint8_t)i};
+        memcpy(k->bssid, b, 6);
+        k->ssid_count      = 12;
+        k->pnl_overlap     = 9;
+        k->pnl_best        = 9;
+        k->pnl_jaccard_ppm = 1000000;
+        k->ie_uniform      = 1;
+        k->deauth_chain    = 1;
+        k->score           = 99;
+        k->last_seen       = now - 1234567;
+        snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
+        snprintf(k->tool, sizeof(k->tool), "%s",
+                 (i & 1) ? "Twenty-char-label-XX/high? provisional"
+                         : "ESP32 Marauder/med? provisional");
+    }
+    s.karma_sel = 3;          /* the reverse-video branch draws too */
+
+    ASSERT_EQ(tui_init_offscreen(33, 100), 0);
+    tui_test_erase();
+    tui_draw(&s);
+
+    char line[4096];
+    int over = 0, rows = 0, unmarked = 0;
+    for (int y = 0; y < 33; y++) {
+        if (tui_test_line(y, line, sizeof(line)) < 0) break;
+        /* tui_draw()'s rule under the tab bar is the one full-width
+         * line by design. */
+        if (strncmp(line, "\xe2\x94\x80", 3) == 0) continue;
+        int cells = 0;
+        for (const char *p = line; *p; p++)
+            if (((unsigned char)*p & 0xC0) != 0x80) cells++;
+        /* A row that reached the last column wrapped (or would have). */
+        if (cells >= 100) over++;
+        if (strstr(line, "24:6f:28:00:00:")) {
+            rows++;
+            if (!strstr(line, "? provisional]")) unmarked++;
+        }
+    }
+    int leg = runner_screen_find(" PNL = SSIDs");
+    if (over || unmarked || leg != 31) tui_test_dump(stderr);
+    ASSERT_EQ(over, 0);
+    ASSERT(rows > 0);
+    ASSERT_EQ(unmarked, 0);
+    /* The legend's two lines are the screen's last two: the page is
+     * neither too long (legend pushed off) nor short (rows wasted). */
+    ASSERT_EQ(leg, 31);
+    ASSERT_LINE_HAS(32, "UNVERIFIED signature");
+    ASSERT_LINE_HAS(32, "a hypothesis, not an identification");
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 static void test_ranking(void) {
     sloth_state_t s; seed(&s);
     uint8_t weak[6]   = {0x00,0x11,0x22,0x33,0x44,0x01};
@@ -522,6 +601,7 @@ void run_karma_tests(void) {
     RUN_TEST(test_tool_attribution_marked_provisional);
     RUN_TEST(test_view_legend_states_the_corroboration_rule);
     RUN_TEST(test_view_pnl_column_still_shows_the_union);
+    RUN_TEST(test_view_full_page_fits_a_100x33_terminal);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
 }

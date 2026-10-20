@@ -84,11 +84,27 @@ the same underlying signals, not a mirror of the alert's severity.
  00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
  24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Corp (4s)  [ESP32 Marauder/med? provisional]
  PNL = SSIDs in client probe lists, >=2 on one station; chain = deauth-then-lure on shared victim
- [tool/conf? provisional] = UNVERIFIED signature, no capture behind it - a hypothesis, not an identification
+ [tool/conf? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
 ```
 
 The BSSID is bright; PNL and chain go bright when non-zero to draw the
 operator's eye.
+
+**Fit at the 100x33 minimum** (#90). The page is sized from the row the
+view starts on (under however many rows the tab bar wrapped onto) less
+five lines: the status line, the two header lines and the two-line
+legend. The legend used to be left out of that budget, so a full table
+pushed it off the bottom — the line saying a tool name is a hypothesis.
+Each row's tail is fitted to the terminal width so it never reaches the
+last column and wraps: the top SSID gives way first, down to 8
+characters, then the tool *label*; the `/conf? provisional` part of the
+attribution is kept whole while any of the label fits, because that is
+the part that says the name is unverified. At 100 columns with a long
+SSID and an old age that can leave a row reading
+`ABCDEFGH (1234567s)  [ES/med? provisional]`; the full attribution is
+in the `KARMA_AP` alert detail and on a wider terminal. Pinned by
+`tests/test_karma.c :: test_view_full_page_fits_a_100x33_terminal`,
+which draws through `tui_draw()` on a 100x33 offscreen screen.
 
 ## What's normal
 

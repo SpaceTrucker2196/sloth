@@ -10,15 +10,75 @@
 #include "karma_detect.h"
 
 #define KARMA_PAGE 30
+/* Lines the view draws around the candidate rows: status, the two
+ * header lines, and the two-line legend. The legend used to be left out
+ * of the page budget, so a full page pushed it off the bottom of the
+ * screen - the half of the view that says a tool name is a hypothesis. */
+#define KARMA_CHROME 5
+/* Shortest top-SSID prefix a row keeps before the tool attribution
+ * starts giving up its label (the SSID is the observation; the tool is
+ * a hypothesis about it). */
+#define KARMA_SSID_MIN 8
 
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+/* Fit a row's tail - "<top SSID> (<age>)" and the optional
+ * "  [<tool attribution>]" - into `room` cells, so the row never reaches
+ * the last column and wraps. At the 100-column minimum a full-length
+ * SSID, its age and the longest attribution need ~30 cells more than
+ * the row has.
+ *
+ * What gives way, in order: the SSID down to KARMA_SSID_MIN, then the
+ * tool label. The "/conf? provisional" tail of the attribution is kept
+ * whole for as long as anything of the label fits, because that word is
+ * what tells the operator the name is unverified (#90); only below that
+ * is the bracket clipped outright. Bytes are counted, not cells: the
+ * sanitiser never lengthens a string and no glyph is wider than the
+ * octets that encode it, so the byte count bounds the width. */
+static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
+                           char *last, size_t last_sz,
+                           char *tool, size_t tool_sz) {
+    char full[64] = "";
+    if (k->tool[0]) snprintf(full, sizeof(full), "  [%s]", k->tool);
+    int t_len    = (int)strlen(full);
+    int age_len  = (int)strlen(age) + 3;              /* " (" age ")" */
+    int ssid_len = 0;
+    while (ssid_len < 24 && k->top_ssid[ssid_len]) ssid_len++;
+    int ssid_w   = ssid_len;
+    if (ssid_w + age_len + t_len > room) {
+        ssid_w = room - age_len - t_len;
+        if (ssid_w < KARMA_SSID_MIN) ssid_w = KARMA_SSID_MIN;
+        if (ssid_w > ssid_len) ssid_w = ssid_len;
+    }
+    snprintf(last, last_sz, "%.*s (%s)", ssid_w, k->top_ssid, age);
+    int l_len = (int)strlen(last);
+    if (l_len > room) {                  /* narrower than any sane row */
+        l_len = room > 0 ? room : 0;
+        last[l_len] = '\0';
+    }
+    int rem = room - l_len;
+    tool[0] = '\0';
+    if (!full[0] || rem <= 0) return;
+    if (t_len <= rem) { snprintf(tool, tool_sz, "%s", full); return; }
+    const char *slash = strrchr(k->tool, '/');
+    int tail_len = slash ? (int)strlen(slash) : 0;
+    int label_w  = rem - 4 - tail_len;               /* "  [" + "]" */
+    if (slash && label_w >= 1) {
+        snprintf(tool, tool_sz, "  [%.*s%s]", label_w, k->tool, slash);
+        return;
+    }
+    snprintf(tool, tool_sz, "%.*s", rem, full);
+}
+
 void view_karma_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
-    int page = LINES - 5;
+    /* Counted from the row the view starts on, under however many rows
+     * the tab bar wrapped onto (several at 100 columns), not from the
+     * top of the screen. */
+    int page = LINES - getcury(stdscr) - KARMA_CHROME;
     if (page < 1) page = 1;
 #else
     int page = KARMA_PAGE;
@@ -64,19 +124,28 @@ void view_karma_draw(const sloth_state_t *s) {
     time_t now = sloth_wall();
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
-        char bssid[20], chain[6], age[12], last[48], jac[16], tool[56];
+        char bssid[20], chain[6], age[24], last[64], jac[16], tool[64];
         const char *ie = k->ie_uniform ? "Y" : "-";
         fmt_mac(k->bssid, bssid, sizeof(bssid));
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
         snprintf(jac, sizeof(jac), "%d%%", (k->pnl_jaccard_ppm + 5000) / 10000);
         if (k->last_seen == 0) snprintf(age, sizeof(age), "?");
         else snprintf(age, sizeof(age), "%lds", (long)(now - k->last_seen));
-        snprintf(last, sizeof(last), "%.24s (%s)", k->top_ssid, age);
         /* Same bracketed attribution the KARMA_AP alert detail carries
          * (#90), including its "? provisional" suffix for a signature
-         * with no capture behind it. */
-        tool[0] = '\0';
-        if (k->tool[0]) snprintf(tool, sizeof(tool), "  [%s]", k->tool);
+         * with no capture behind it - fitted to the terminal width,
+         * since a row that wraps shoves every row below it down and the
+         * legend off the screen. */
+#ifdef WITH_NCURSES
+        int prefix = snprintf(NULL, 0,
+                              " %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  ",
+                              bssid, k->ssid_count, k->pnl_overlap, jac, ie,
+                              chain, k->score);
+        int room = COLS - 1 - prefix;
+#else
+        int room = (int)sizeof(last) + (int)sizeof(tool);
+#endif
+        karma_fit_tail(k, age, room, last, sizeof(last), tool, sizeof(tool));
 
 #ifdef WITH_NCURSES
         if (row == s->karma_sel) {
@@ -133,8 +202,8 @@ void view_karma_draw(const sloth_state_t *s) {
     TPRINT(" PNL = SSIDs in client probe lists, >=%d on one station;"
            " chain = deauth-then-lure on shared victim\n",
            KARMA_PNL_CORROB_MIN);
-    TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture"
-           " behind it - a hypothesis, not an identification\n");
+    TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture:"
+           " a hypothesis, not an identification\n");
     tui_normal();
 }
 

@@ -3911,3 +3911,14 @@ network-using service, and the note now says so. The site hero's "Every
 exception opt-in and announced" was narrowed to every network-using
 option, since §2 names promiscuous mode as the one write that is
 neither.
+
+## 2026-10-19 — #90: `[y]` KARMA view fits 100x33
+
+The `[y]` view's page budget now counts its two-line legend and starts
+from the row the view begins on, so a full table no longer pushes the
+legend (the "a hypothesis, not an identification" line) off a 100x33
+screen. Rows fit the width instead of wrapping: the top SSID shrinks
+first, then the tool label, keeping the `/conf? provisional` tail whole.
+The second legend line was 108 columns and is shortened to 97. Detail in
+`docs/views/karma.md` (*Fit at the 100x33 minimum*); see [[alerts]] for
+the `KARMA_AP` rule it mirrors.
