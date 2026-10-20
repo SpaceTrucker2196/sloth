@@ -78,6 +78,11 @@ int  assoc_request_downgrade_count(void);
 int  assoc_flood_bssid(time_t now, int window_s, int thresh,
                        uint8_t out_bssid[6], int *distinct_stas);
 void assoc_flood_clear(void);
+/* The event IDs of the newest requests to `bssid` inside the window,
+ * oldest first, at most `max`; returns how many. What rule_assoc_flood()
+ * cites (#92 slice 4). */
+int  assoc_flood_evidence(const uint8_t bssid[6], time_t now, int window_s,
+                          uint64_t *out, int max);
 
 /* Test introspection. */
 int  assoc_count(void);

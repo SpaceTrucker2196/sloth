@@ -16,6 +16,7 @@
 #include "sloth_clock.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
+#include "auth_track.h"     /* auth_observe_ev() wiring (#92 slice 4) */
 #include "pm_forge.h"      /* the frame view's event_id reaches it (#92 slice 4) */
 #include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
 #include "assoc_track.h"    /* the grant a short assoc response must still record (#122) */
@@ -2577,6 +2578,30 @@ static void test_a_pm_contradiction_cites_the_ring_ids_of_its_pair(void) {
     evidence_ring_shutdown();
 }
 
+/* Authentication frames reach auth_track through auth_observe_ev(),
+ * not the frame view, so the stamp is a separate argument in
+ * on_probe_frame() and needs its own pin. Subtype 11, addr3 = BSSID
+ * (IEEE 802.11-2020 Sec 9.3.3.1, 9.3.3.12). */
+static void test_auth_frames_are_cited_by_their_ring_ids(void) {
+    evidence_setup();
+    auth_clear();
+    uint8_t a[64], b[64];
+    int an = qe_mgmt(a, 0xB0, QE_BSSID, QE_STA, QE_BSSID, 30);
+    int bn = qe_mgmt(b, 0xB0, QE_BSSID, QE_STA, QE_BSSID, 30);
+    const uint8_t *fs[2] = { a, b };
+    int ls[2] = { an, bn };
+    const uint32_t ts[2] = { 1700000000u, 1700000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    uint64_t ids[8];
+    ASSERT_EQ(auth_flood_evidence(QE_BSSID, 1700000000, 5, ids, 8), 2);
+    ASSERT_EQ((long long)ids[0], (long long)(before + 1));
+    ASSERT_EQ((long long)ids[1], (long long)(before + 2));
+    auth_clear();
+    evidence_ring_shutdown();
+}
+
 /* The ordinary-retransmission case, through the REAL pcap_dispatch
  * callback rather than by calling the module directly. One MSDU the AP
  * keeps retrying must not reach the release threshold, because on a
@@ -3391,6 +3416,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_granted_reassoc_plus_a_burst_records_a_release);
     RUN_TEST(test_a_release_cites_the_ring_ids_of_its_frames);
     RUN_TEST(test_a_pm_contradiction_cites_the_ring_ids_of_its_pair);
+    RUN_TEST(test_auth_frames_are_cited_by_their_ring_ids);
     RUN_TEST(test_a_retried_downlink_burst_records_no_release);
     RUN_TEST(test_a_refused_reassoc_opens_no_window);
     RUN_TEST(test_a_deauth_attributes_the_station_in_both_directions);

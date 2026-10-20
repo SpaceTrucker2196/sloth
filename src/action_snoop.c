@@ -8,6 +8,7 @@
 #include "bytes.h"          /* le16, tlv_next (#126) */
 #include "sensor_health.h"  /* parse-fault tally (#126) */
 #include "dot11_ie.h"       /* SSID copy (#127) */
+#include "ev_cite.h"        /* citation order (#92 slice 4) */
 
 static int mac_eq(const uint8_t a[6], const uint8_t b[6]) {
     return memcmp(a, b, 6) == 0;
@@ -73,10 +74,11 @@ static pthread_mutex_t g_btm_mu = PTHREAD_MUTEX_INITIALIZER;
 #define BTM_EVT_RING  256
 
 typedef struct {
-    uint8_t bssid[6];
-    uint8_t sta[6];
-    int     imminent;
-    time_t  ts;
+    uint8_t  bssid[6];
+    uint8_t  sta[6];
+    int      imminent;
+    time_t   ts;
+    uint64_t event_id;     /* #92 slice 4; 0 = none retained */
 } btm_evt_t;
 
 static btm_evt_t       g_ring[BTM_EVT_RING];
@@ -125,6 +127,7 @@ int action_parse_btm_req(const uint8_t *dot11, int len, sloth_btm_req_t *out) {
 
 static int btm_req_frame(const dot11_frame_t *f, sloth_btm_req_t *out) {
     memset(out, 0, sizeof(*out));
+    out->event_id = f->event_id;
 
     uint8_t action = 0;
     int cat = category_frame(f, &action);
@@ -187,12 +190,15 @@ static int btm_req_frame(const dot11_frame_t *f, sloth_btm_req_t *out) {
 /* ── SA Query storms (#76) ──────────────────────────────────────────── */
 
 typedef struct {
-    uint8_t bssid[6];
-    uint8_t sta[6];
-    time_t  ts[SAQ_FLOOD_THRESH * 4];
-    int     head;
-    int     n;
-    time_t  last_seen;
+    uint8_t  bssid[6];
+    uint8_t  sta[6];
+    time_t   ts[SAQ_FLOOD_THRESH * 4];
+    /* Parallel to ts[] (#92 slice 4): the frame each stamp came from, so
+     * a citation is always a frame the window counted. */
+    uint64_t ev[SAQ_FLOOD_THRESH * 4];
+    int      head;
+    int      n;
+    time_t   last_seen;
 } saq_pair_t;
 
 static saq_pair_t      g_saq[SAQ_MAX_PAIRS];
@@ -202,7 +208,7 @@ static pthread_mutex_t g_saq_mu = PTHREAD_MUTEX_INITIALIZER;
 #define SAQ_RING ((int)(sizeof(((saq_pair_t *)0)->ts) / sizeof(time_t)))
 
 static void saq_observe(const uint8_t bssid[6], const uint8_t sta[6],
-                        time_t now) {
+                        time_t now, uint64_t event_id) {
     pthread_mutex_lock(&g_saq_mu);
     saq_pair_t *p = NULL;
     for (int i = 0; i < g_saq_n; i++)
@@ -228,6 +234,7 @@ static void saq_observe(const uint8_t bssid[6], const uint8_t sta[6],
      * or a network that saw a legitimate burst an hour ago carries it
      * forever and the threshold means nothing. */
     p->ts[p->head] = now;
+    p->ev[p->head] = event_id;
     p->head = (p->head + 1) % SAQ_RING;
     if (p->n < SAQ_RING) p->n++;
     p->last_seen = now;
@@ -254,6 +261,28 @@ int saq_flood_pair(time_t now, int window_s, int thresh,
     pthread_mutex_unlock(&g_saq_mu);
     if (out_count) *out_count = best;
     return best >= thresh ? best : 0;
+}
+
+int saq_flood_evidence(const uint8_t bssid[6], const uint8_t sta[6],
+                       time_t now, int window_s, uint64_t *out, int max) {
+    if (!bssid || !sta || !out || max <= 0) return 0;
+    int k = 0;
+    pthread_mutex_lock(&g_saq_mu);
+    for (int i = 0; i < g_saq_n; i++) {
+        const saq_pair_t *p = &g_saq[i];
+        if (!mac_eq(p->bssid, bssid) || !mac_eq(p->sta, sta)) continue;
+        /* Newest first from the write cursor, same window test as
+         * saq_flood_pair(). */
+        for (int step = 1; step <= p->n && k < max; step++) {
+            int slot = (p->head - step + SAQ_RING) % SAQ_RING;
+            if (now - p->ts[slot] > window_s || now < p->ts[slot]) continue;
+            if (p->ev[slot]) out[k++] = p->ev[slot];
+        }
+        break;
+    }
+    pthread_mutex_unlock(&g_saq_mu);
+    ev_cite_reverse(out, k);
+    return k;
 }
 
 int saq_pair_count(void) { return g_saq_n; }
@@ -394,7 +423,7 @@ void action_observe_frame(const dot11_frame_t *f, time_t now) {
             /* The station is whichever address is not the BSSID. */
             const uint8_t *ta = f->ta;
             const uint8_t *sta = mac_eq(ta, bssid) ? da : ta;
-            if (!(sta[0] & 0x01)) saq_observe(bssid, sta, now);
+            if (!(sta[0] & 0x01)) saq_observe(bssid, sta, now, f->event_id);
         }
     }
 
@@ -798,13 +827,14 @@ static int mac_is_usable(const uint8_t m[6]) {
 }
 
 static void ring_record(const uint8_t bssid[6], const uint8_t sta[6],
-                        int imminent, time_t now) {
+                        int imminent, time_t now, uint64_t event_id) {
     pthread_mutex_lock(&g_ring_mu);
     btm_evt_t *e = &g_ring[g_ring_i];
     memcpy(e->bssid, bssid, 6);
     memcpy(e->sta,   sta,   6);
     e->imminent = imminent;
     e->ts       = now;
+    e->event_id = event_id;
     g_ring_i = (g_ring_i + 1) % BTM_EVT_RING;
     pthread_mutex_unlock(&g_ring_mu);
 }
@@ -814,7 +844,7 @@ void btm_observe(const sloth_btm_req_t *req, time_t now) {
     if (!mac_is_usable(req->bssid) || !mac_is_usable(req->target_sta)) return;
 
     int imminent = (req->request_mode & BTM_REQ_DISASSOC_IMM) ? 1 : 0;
-    ring_record(req->bssid, req->target_sta, imminent, now);
+    ring_record(req->bssid, req->target_sta, imminent, now, req->event_id);
 
     pthread_mutex_lock(&g_btm_mu);
 
@@ -893,6 +923,24 @@ int btm_forcing_pair(time_t now, int window_s, int thresh,
     pthread_mutex_unlock(&g_ring_mu);
     if (total_out) *total_out = best_total;
     return best;
+}
+
+int btm_forcing_evidence(const uint8_t bssid[6], const uint8_t sta[6],
+                         time_t now, int window_s, uint64_t *out, int max) {
+    if (!bssid || !sta || !out || max <= 0) return 0;
+    int k = 0;
+    pthread_mutex_lock(&g_ring_mu);
+    for (int step = 1; step <= BTM_EVT_RING && k < max; step++) {
+        const btm_evt_t *e =
+            &g_ring[(g_ring_i - step + BTM_EVT_RING) % BTM_EVT_RING];
+        if (!e->ts || now - e->ts > window_s || !e->imminent) continue;
+        if (memcmp(e->bssid, bssid, 6) != 0) continue;
+        if (memcmp(e->sta,   sta,   6) != 0) continue;
+        if (e->event_id) out[k++] = e->event_id;
+    }
+    pthread_mutex_unlock(&g_ring_mu);
+    ev_cite_reverse(out, k);
+    return k;
 }
 
 int btm_find(const uint8_t bssid[6], const uint8_t sta[6], btm_steer_t *out) {

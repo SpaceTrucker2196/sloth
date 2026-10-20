@@ -31,6 +31,9 @@
 #include "beacon_snoop.h"
 #include "pm_forge.h"
 #include "queue_evict.h"
+#include "auth_track.h"
+#include "assoc_track.h"
+#include "action_snoop.h"
 #include "ev_cite.h"
 
 TEST_STATE(g_s);
@@ -300,6 +303,173 @@ static void test_queue_evict_later_change_keeps_release_citations(void) {
     }
 }
 
+/* ── Management-frame floods and the Action-frame detectors ── */
+
+/* A management header (IEEE 802.11-2020 §9.3.3.1): FC, Duration,
+ * A1 = DA, A2 = SA, A3 = BSSID, Sequence Control. */
+static int mgmt_hdr(uint8_t *f, int subtype, const uint8_t a1[6],
+                    const uint8_t a2[6], const uint8_t a3[6], int seq) {
+    memset(f, 0, 24);
+    f[0] = (uint8_t)(subtype << 4);          /* type 0, protocol 0 */
+    memcpy(f + 4,  a1, 6);
+    memcpy(f + 10, a2, 6);
+    memcpy(f + 16, a3, 6);
+    f[22] = (uint8_t)((seq & 0x0f) << 4);
+    f[23] = (uint8_t)((seq >> 4) & 0xff);
+    return 24;
+}
+
+static void test_auth_flood_alert_cites_the_newest_counted_frames(void) {
+    pin_wall(5000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x55,0x01};
+    static const uint8_t OTHER[6] = {0x00,0x22,0x33,0x44,0x55,0x02};
+    /* 32 auth frames at one AP inside the 5 s window, with one frame to
+       a different AP in among the newest — it is not this flood's
+       evidence. auth_observe_ev() is the call on_probe_frame() makes for
+       an Authentication frame (subtype 11), with addr3 as the BSSID. */
+    for (int i = 0; i < 32; i++) {
+        auth_observe_ev(BSSID, 4998 + i / 16, (uint64_t)(1001 + i));
+        if (i == 28) auth_observe_ev(OTHER, 4999, 9999);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_AUTH_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 1025, 1026, 1027, 1028,
+                                         1029, 1030, 1031, 1032 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+}
+
+/* (Re)Association Request (§9.3.3.6): Capability Information, Listen
+ * Interval, then an SSID element. */
+static int assoc_req(uint8_t *f, const uint8_t bssid[6], const uint8_t sta[6],
+                     int seq) {
+    int n = mgmt_hdr(f, 0, bssid, sta, bssid, seq);
+    f[n++] = 0x31; f[n++] = 0x04;            /* capabilities */
+    f[n++] = 0x0a; f[n++] = 0x00;            /* listen interval */
+    f[n++] = 0x00; f[n++] = 3;               /* SSID element */
+    memcpy(f + n, "net", 3); n += 3;
+    return n;
+}
+
+static void test_assoc_flood_alert_cites_the_newest_requests(void) {
+    pin_wall(6000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x66,0x01};
+    static const uint8_t OTHER[6] = {0x00,0x22,0x33,0x44,0x66,0x02};
+    uint8_t f[64];
+    for (int i = 0; i < 24; i++) {
+        uint8_t sta[6] = {0x02,0x10,0x00,0x00,0x00,(uint8_t)i};
+        int len = assoc_req(f, BSSID, sta, i);
+        dot11_frame_t v = view_of(f, len, (uint64_t)(2001 + i));
+        assoc_req_t req;
+        ASSERT(assoc_request_parse_frame(&v, &req));
+        assoc_request_observe(&req, -40, 6);
+        if (i == 20) {
+            len = assoc_req(f, OTHER, sta, 99);
+            v = view_of(f, len, 9998);
+            if (assoc_request_parse_frame(&v, &req))
+                assoc_request_observe(&req, -40, 6);
+        }
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_ASSOC_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 2017, 2018, 2019, 2020,
+                                         2021, 2022, 2023, 2024 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+}
+
+/* WNM BSS Transition Management Request (§9.6.13.9): Category 10,
+ * Action 7, Dialog Token, Request Mode, Disassociation Timer (2),
+ * Validity Interval. AP -> STA, so A1 = the station. */
+static int btm_req(uint8_t *f, const uint8_t bssid[6], const uint8_t sta[6],
+                   int mode, int seq) {
+    int n = mgmt_hdr(f, 13, sta, bssid, bssid, seq);
+    f[n++] = 10; f[n++] = 7; f[n++] = (uint8_t)seq;
+    f[n++] = (uint8_t)mode;
+    f[n++] = 0x0a; f[n++] = 0x00;
+    f[n++] = 0xff;
+    return n;
+}
+
+static void test_btm_abuse_alert_cites_only_the_imminent_requests(void) {
+    pin_wall(7000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x77,0x01};
+    static const uint8_t STA[6]   = {0x02,0x20,0x00,0x00,0x00,0x01};
+    uint8_t f[64];
+    for (int i = 0; i < 4; i++) {
+        int len = btm_req(f, BSSID, STA, BTM_REQ_DISASSOC_IMM, i);
+        dot11_frame_t v = view_of(f, len, (uint64_t)(3001 + i));
+        action_observe_frame(&v, 6990 + i);
+        if (i == 2) {
+            /* An ordinary steer, no Disassociation Imminent: counted in
+               the total, never toward the threshold, so not evidence. */
+            len = btm_req(f, BSSID, STA, BTM_REQ_PREF_CANDIDATE, 50);
+            v = view_of(f, len, 3100);
+            action_observe_frame(&v, 6993);
+        }
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 3001, 3002, 3003, 3004 };
+        assert_cites(&g_s.alerts[i], body, want, 4);
+    }
+}
+
+/* SA Query Request (§9.6.9): Category 8, Action 0, Transaction ID (2).
+ * Sent by the AP, so A1 = the station and A2 = A3 = the BSSID. */
+static int saq_frame(uint8_t *f, const uint8_t bssid[6], const uint8_t sta[6],
+                     int seq) {
+    int n = mgmt_hdr(f, 13, sta, bssid, bssid, seq);
+    f[n++] = 8; f[n++] = 0;
+    f[n++] = (uint8_t)seq; f[n++] = 0x00;
+    return n;
+}
+
+static void test_sa_query_flood_alert_cites_the_pairs_frames(void) {
+    pin_wall(8000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x88,0x01};
+    static const uint8_t STA[6]   = {0x02,0x30,0x00,0x00,0x00,0x01};
+    static const uint8_t STA2[6]  = {0x02,0x30,0x00,0x00,0x00,0x02};
+    uint8_t f[64];
+    /* The same AP querying another station is another pair, and it is
+       heard FIRST so its row is the one a lookup that ignored the pair
+       would land on. */
+    int len = saq_frame(f, BSSID, STA2, 60);
+    dot11_frame_t v = view_of(f, len, 4500);
+    action_observe_frame(&v, 7995);
+    for (int i = 0; i < 12; i++) {
+        len = saq_frame(f, BSSID, STA, i);
+        v = view_of(f, len, (uint64_t)(4001 + i));
+        action_observe_frame(&v, 7995 + i / 4);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_SA_QUERY_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 4005, 4006, 4007, 4008,
+                                         4009, 4010, 4011, 4012 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+}
+
 /* ── ev_cite ring ───────────────────────────────────────── */
 
 static void test_ev_cite_keeps_newest_oldest_first(void) {
@@ -328,4 +498,8 @@ void run_evidence_cite_tests(void) {
     RUN_TEST(test_pm_forge_shared_null_is_cited_once);
     RUN_TEST(test_queue_evict_alert_cites_session_change_and_burst);
     RUN_TEST(test_queue_evict_later_change_keeps_release_citations);
+    RUN_TEST(test_auth_flood_alert_cites_the_newest_counted_frames);
+    RUN_TEST(test_assoc_flood_alert_cites_the_newest_requests);
+    RUN_TEST(test_btm_abuse_alert_cites_only_the_imminent_requests);
+    RUN_TEST(test_sa_query_flood_alert_cites_the_pairs_frames);
 }

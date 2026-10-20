@@ -4072,3 +4072,13 @@ it; the bounded per-row ring is `src/ev_cite.h`. A later session change
 with one stray frame keeps the reported release's citations, and a
 repeated sequence number cites nothing. [[pcap-export]] § Which alerts
 cite frames, [[jsonl-schema]] and [[alerts]] updated.
+
+## 2026-10-20 — #92 slice 4: flood and Action-frame rules cite their frames
+
+`AUTH_FLOOD`, `ASSOC_FLOOD`, `BTM_ABUSE` and `SA_QUERY_FLOOD` now cite
+the evidence-ring IDs of the frames they counted. Each tracker already
+kept one entry per frame; it now keeps that frame's id beside the
+timestamp, and the citation query walks the same window the count used.
+`BTM_ABUSE` cites only the Disassociation-Imminent Requests, the ones
+its threshold counts. [[pcap-export]] § Which alerts cite frames and
+[[alerts]] § Engine updated.

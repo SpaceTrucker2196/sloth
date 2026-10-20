@@ -125,6 +125,14 @@ ones that take bare fields get it through an `_ev` entry point.
 | `DEAUTH_FLOOD` | the newest distinct deauth/disassoc frames at the (BSSID, victim) | `deauth_victim_t`, 8 |
 | `PM_FORGE` (#107) | the contradicting pairs: the PM=1 Null/QoS-Null and the PM=0 data frame that broke it, newest pairs first | `pm_forge_t`, 8 |
 | `QUEUE_EVICT` (#107) | the (re)association response or deauth/disassoc that changed the session, then the newest frames of the released burst | `queue_evict_t`, 8 — copied from the pending burst only once it reaches the threshold, so a later change with one stray frame keeps the reported release's citations |
+| `AUTH_FLOOD` | the newest Authentication frames to the flooded BSSID inside the window | the module's event ring (512), walked newest first |
+| `ASSOC_FLOOD` | the newest (Re)Association Requests to the BSSID inside the window | the module's event ring (256) |
+| `BTM_ABUSE` | the newest BTM Requests to the pair that carried Disassociation Imminent — the ones the threshold counts; an ordinary steer is not cited | the BTM event ring (256) |
+| `SA_QUERY_FLOOD` | the pair's newest SA Query frames inside the window — the AP's answers, which is what the rule hears | per-pair timestamp ring, one id beside each stamp |
+
+The flood rings were already keyed by frame, so their citations need no
+new storage beyond one id per entry: the query walks the same window
+the count used, so a cited frame is always one that was counted.
 
 The shared ring is `src/ev_cite.h`: 0 is never stored, an ID already
 held is not stored twice (one Null behind two contradictions), and the

@@ -641,7 +641,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
          * We don't decode the algorithm here — the flood signal is the
          * per-AP rate. addr3 (dot11+16) is the BSSID being authenticated
          * to; a burst there means an association-table exhaustion DoS. */
-        auth_observe(fr.bssid, fts);
+        auth_observe_ev(fr.bssid, fts, ev);
         return;
     }
 

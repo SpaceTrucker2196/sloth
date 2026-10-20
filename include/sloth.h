@@ -1815,6 +1815,9 @@ typedef struct {
     uint32_t prev_akm_bits;       /* the ask this one replaced */
     int      prev_mfp;
     time_t   ts;
+    /* Evidence-ring event ID of the request frame (#92 slice 4), copied
+     * from the frame view by assoc_request_parse_frame(); 0 = none. */
+    uint64_t event_id;
 } assoc_req_t;
 
 /* Downgrade observed across successive requests from one STA to one

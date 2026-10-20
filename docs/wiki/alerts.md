@@ -41,6 +41,12 @@ type: reference
   whose finding cites the flood. `tests/test_alert_rules.c` pins those
   pairs by name and fails if a rule defined under `src/alerts/` is
   missing from the table or listed twice.
+- **Frame citations (#92).** The no-IP wireless rules whose triggering
+  frames are monitor frames hand the alert the evidence-ring IDs of
+  those frames (`fire_ev()`, or `fire_inv()` when the rule also reports
+  a confidence), and the JSONL records carry them as `evidence_id_N`.
+  Which rules, and what each cites, is [[pcap-export]] § Which alerts
+  cite frames.
 - Dedup key examples: `scan:<ip>`, `threat-d:<domain>`, `threat-ip:<ip>:<port>`.
 - New-key path: JSONL `alert` line + `alert.create` + (optional) pcap
   dump of the matching packets via `src/alert_pcap.c`. See

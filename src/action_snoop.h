@@ -83,6 +83,9 @@ typedef struct {
     int      candidate_count;
     int      candidates_truncated;  /* list exceeded the bound */
     time_t   ts;
+    /* Evidence-ring event ID of the Request frame (#92 slice 4), copied
+     * from the frame view by the parser; 0 = none retained. */
+    uint64_t event_id;
 } sloth_btm_req_t;
 
 /* Read the Category (and WNM/RRM Action) byte from an Action frame.
@@ -170,6 +173,14 @@ void btm_observe(const sloth_btm_req_t *req, time_t now);
 int  btm_forcing_pair(time_t now, int window_s, int thresh,
                       uint8_t out_bssid[6], uint8_t out_sta[6],
                       int *total_out);
+
+/* The event IDs of the newest Disassociation-Imminent Requests for the
+ * pair inside the window, oldest first, at most `max`; returns how many.
+ * Imminent only, because those are the frames btm_forcing_pair() counts
+ * toward the threshold: a plain steer did not trip the alert and is not
+ * its evidence (#92 slice 4). */
+int  btm_forcing_evidence(const uint8_t bssid[6], const uint8_t sta[6],
+                          time_t now, int window_s, uint64_t *out, int max);
 
 /* Look up the durable row for a pair. Returns 1 and fills *out on hit. */
 int  btm_find(const uint8_t bssid[6], const uint8_t sta[6],
@@ -275,6 +286,10 @@ void rrm_clear(void);
  * `thresh`. Writes the pair and its count. */
 int  saq_flood_pair(time_t now, int window_s, int thresh,
                     uint8_t out_bssid[6], uint8_t out_sta[6], int *out_count);
+/* The event IDs of the pair's newest SA Query frames inside the window,
+ * oldest first, at most `max`; returns how many (#92 slice 4). */
+int  saq_flood_evidence(const uint8_t bssid[6], const uint8_t sta[6],
+                        time_t now, int window_s, uint64_t *out, int max);
 int  saq_pair_count(void);
 void saq_clear(void);
 

@@ -118,9 +118,13 @@ void rule_auth_flood(const sloth_state_t *s, time_t now) {
     snprintf(detail, sizeof(detail),
              "%d auth frames to %s in %ds (assoc-table DoS)%s",
              n, bss, win, mine ? " - YOUR network" : "");
-    fire(ALERT_TYPE_AUTH_FLOOD,
-         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-         "AUTH_FLOOD", detail, key, NULL, 0, now);
+    /* The newest counted frames (#92 slice 4): an auth frame has no IP,
+     * so the evidence ring is the route back to the flood's bytes. */
+    uint64_t ev[ALERT_EVIDENCE_IDS];
+    int ev_n = auth_flood_evidence(bssid, now, win, ev, ALERT_EVIDENCE_IDS);
+    fire_ev(ALERT_TYPE_AUTH_FLOOD,
+            mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+            ev, ev_n, "AUTH_FLOOD", detail, key, NULL, 0, now);
 }
 
 void rule_assoc_flood(const sloth_state_t *s, time_t now) {
@@ -154,9 +158,11 @@ void rule_assoc_flood(const sloth_state_t *s, time_t now) {
              win,
              distinct > 3 ? " (spoofed-MAC flood)" : " (few sources)",
              mine ? " - YOUR network" : "");
-    fire(ALERT_TYPE_ASSOC_FLOOD,
-         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-         "ASSOC_FLOOD", detail, key, NULL, 0, now);
+    uint64_t ev[ALERT_EVIDENCE_IDS];   /* #92 slice 4 — see rule_auth_flood */
+    int ev_n = assoc_flood_evidence(bssid, now, win, ev, ALERT_EVIDENCE_IDS);
+    fire_ev(ALERT_TYPE_ASSOC_FLOOD,
+            mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+            ev, ev_n, "ASSOC_FLOOD", detail, key, NULL, 0, now);
 }
 
 /* Has this BSSID ever been heard beaconing? A legitimate AP steering
@@ -254,9 +260,14 @@ void rule_btm_abuse(const sloth_state_t *s, time_t now) {
     /* CRIT when the destination is a known rogue (the forcing has an
      * identified landing site), or when the operator has told us this
      * network or this client is theirs. */
-    fire(ALERT_TYPE_BTM_ABUSE,
-         (twin_target || mine || rostered) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-         "BTM_ABUSE", detail, key, NULL, 0, now);
+    /* The Disassociation-Imminent Requests the threshold counted (#92
+     * slice 4). */
+    uint64_t ev[ALERT_EVIDENCE_IDS];
+    int ev_n = btm_forcing_evidence(bssid, sta, now, win, ev,
+                                    ALERT_EVIDENCE_IDS);
+    fire_ev(ALERT_TYPE_BTM_ABUSE,
+            (twin_target || mine || rostered) ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+            ev, ev_n, "BTM_ABUSE", detail, key, NULL, 0, now);
 }
 
 
@@ -404,8 +415,13 @@ void rule_sa_query_flood(const sloth_state_t *s, time_t now) {
      * hundred milliseconds (§11.13). Sustained means the AP is fending
      * something off, and MFP is doing its job — which is worth telling
      * the operator precisely because nothing else will. */
-    fire(ALERT_TYPE_SA_QUERY_FLOOD, ALERT_SEV_CRIT,
-         "SA_QUERY_FLOOD", detail, key, NULL, 0, now);
+    /* The AP's answers, not the attacker's questions — the frames this
+     * rule actually heard and counted (#92 slice 4). */
+    uint64_t ev[ALERT_EVIDENCE_IDS];
+    int ev_n = saq_flood_evidence(bssid, sta, now, win, ev,
+                                  ALERT_EVIDENCE_IDS);
+    fire_ev(ALERT_TYPE_SA_QUERY_FLOOD, ALERT_SEV_CRIT,
+            ev, ev_n, "SA_QUERY_FLOOD", detail, key, NULL, 0, now);
 }
 
 /* Unprotected robust action frame on an MFP-required BSS — issue #76,

@@ -10,6 +10,7 @@
 #include "sensor_health.h"
 #include "dot11_frame.h"
 #include "bytes.h"
+#include "ev_cite.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -88,6 +89,7 @@ int assoc_request_parse(const uint8_t *dot11, int len, assoc_req_t *out) {
 int assoc_request_parse_frame(const dot11_frame_t *f, assoc_req_t *out) {
     if (!f || !f->p || !out) return 0;
     memset(out, 0, sizeof(*out));
+    out->event_id = f->event_id;
     const uint8_t *dot11 = f->p;
     const int      len   = f->len;
     if (len < 2) return 0;
@@ -167,7 +169,7 @@ static pthread_mutex_t g_req_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* Defined with the flood window below; every observed request feeds it. */
 static void flood_record(const uint8_t bssid[6], const uint8_t sta[6],
-                         time_t now);
+                         time_t now, uint64_t event_id);
 
 void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     (void)signal; (void)channel;   /* recorded with the grant, not the ask */
@@ -185,7 +187,7 @@ void assoc_request_observe(const assoc_req_t *req, int8_t signal, int channel) {
     /* Every request feeds the flood window, including repeats from one
      * STA — the rate is the signal there, independent of whether the
      * ask changed. */
-    flood_record(req->bssid, req->sta, now);
+    flood_record(req->bssid, req->sta, now, req->event_id);
 
     /* Corroborate the client's PHY tier in the PNL (#60). Done here,
      * before any assoc_track lock is taken, so the two modules never
@@ -291,9 +293,10 @@ int assoc_request_count(void) {
 #define ASSOC_REQ_RING 256
 
 typedef struct {
-    uint8_t bssid[6];
-    uint8_t sta[6];
-    time_t  ts;
+    uint8_t  bssid[6];
+    uint8_t  sta[6];
+    time_t   ts;
+    uint64_t event_id;     /* #92 slice 4; 0 = none retained */
 } assoc_req_evt_t;
 
 static assoc_req_evt_t g_ring[ASSOC_REQ_RING];
@@ -301,12 +304,13 @@ static int             g_ring_i;
 static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void flood_record(const uint8_t bssid[6], const uint8_t sta[6],
-                         time_t now) {
+                         time_t now, uint64_t event_id) {
     pthread_mutex_lock(&g_ring_mu);
     assoc_req_evt_t *e = &g_ring[g_ring_i];
     memcpy(e->bssid, bssid, 6);
     memcpy(e->sta,   sta,   6);
-    e->ts = now;
+    e->ts       = now;
+    e->event_id = event_id;
     g_ring_i = (g_ring_i + 1) % ASSOC_REQ_RING;
     pthread_mutex_unlock(&g_ring_mu);
 }
@@ -351,6 +355,25 @@ int assoc_flood_bssid(time_t now, int window_s, int thresh,
     pthread_mutex_unlock(&g_ring_mu);
     if (distinct_stas) *distinct_stas = best_distinct;
     return best;
+}
+
+int assoc_flood_evidence(const uint8_t bssid[6], time_t now, int window_s,
+                         uint64_t *out, int max) {
+    if (!bssid || !out || max <= 0) return 0;
+    int k = 0;
+    pthread_mutex_lock(&g_ring_mu);
+    /* Same window test as assoc_flood_bssid(), so a cited request is
+     * always one that was counted. */
+    for (int step = 1; step <= ASSOC_REQ_RING && k < max; step++) {
+        const assoc_req_evt_t *e =
+            &g_ring[(g_ring_i - step + ASSOC_REQ_RING) % ASSOC_REQ_RING];
+        if (!e->ts || now - e->ts > window_s) continue;
+        if (memcmp(e->bssid, bssid, 6) != 0) continue;
+        if (e->event_id) out[k++] = e->event_id;
+    }
+    pthread_mutex_unlock(&g_ring_mu);
+    ev_cite_reverse(out, k);
+    return k;
 }
 
 void assoc_flood_clear(void) {
