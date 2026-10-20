@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-19.
+**Last updated**: 2026-10-20 (#92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -53,7 +53,7 @@ single mode driven by flags.
 | `--out-format` | `FORMAT` | `jsonl` | Format for `-o` **and** `--data-socket`. One of `jsonl`, `cef` (ArcSight CEF), `syslog` (RFC 5424, PRI 134). |
 | `--pcap-dir` | `DIR` | off | On a critical alert with a known flow, write the matching packets to a fresh pcap under `DIR`. Dir `0700`, files `0600`. → [[pcap-export]] |
 | `--eapol-dir` | `DIR` | off | Append captured PMKIDs / 4-way handshakes to `DIR/eapol.22000` (hashcat 22000) **and** a per-handshake `DIR/<bssid>_<sta>.pcap`. **Crackable material** — strict perms, refused not repaired. **Requires `--collect-handshakes`**: without it this flag exits `2` and no directory is created. → [[wifi-sigint]] |
-| `--collect-handshakes` | — | **off** | Opt in to writing crackable material to disk. A PMKID or a paired M1+M2 supports offline password guessing, so exporting one is a separate decision from observing one. Gates the `.22000` lines and the per-handshake pcaps **only** — detection, alerting, the `[e]` view and the JSONL/DB records are unaffected. sloth never cracks anything itself (MISSION §2.2). → [[retention]] |
+| `--collect-handshakes` | — | **off** | Opt in to writing crackable material to disk. A PMKID or a paired M1+M2 supports offline password guessing, so exporting one is a separate decision from observing one. Gates the `.22000` lines, the per-handshake pcaps and (#92) the per-alert **evidence** pcaps — the raw 802.11 frames a deauth-flood alert cites, written to `--eapol-dir` as `<incident_id>-<event_id>-<RULE>.pcap` under `pcap.min_severity` and `pcap.key_cooldown_secs` — **only**: detection, alerting, the `[e]` view and the JSONL/DB records are unaffected. The flag is named for handshakes but also gates that frame-level evidence, because a raw frame carries the same EAPOL/PMKID material (owner ruling 2026-10-08); `--pcap-dir` alone never writes 802.11 frames. sloth never cracks anything itself (MISSION §2.2). → [[retention]] |
 | `--handshake-retention` | `DAYS` | `7` | Age-out window for the artifacts above. Swept at startup and once a day while running; artifacts last written before the window are deleted. `0` = keep forever. Alias for `--tune handshake.retention_days` (#120). Whole-file granularity by mtime, so `eapol.22000` goes only once nothing has been appended for the whole window. A failed delete is counted and shown in the `[e]` header, never silent. → [[retention]] |
 | `--report` | `FILE.md` | off | On exit, write a Markdown posture report (alerts by severity + MITRE technique, cleartext creds, high-risk devices). → [[posture-report]] |
 | `--report-json` | `FILE.json` | off | Same rollup, structured for SIEM diff. |

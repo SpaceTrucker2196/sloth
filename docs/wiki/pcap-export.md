@@ -6,11 +6,11 @@ type: reference
 
 # Pcap export
 
-**Summary**: Three independent pcap-export paths — per-alert (driven by `--pcap-dir`), manual from the packets view (`w` key), and per-EAPOL-handshake (driven by `--eapol-dir`) — plus a fourth, memory-only path: the 802.11 evidence ring, which retains whole monitor frames and is the only route from a wireless alert back to the frames that caused it.
+**Summary**: Four pcap-export paths — per-alert from the packet ring (driven by `--pcap-dir`), manual from the packets view (`w` key), per-EAPOL-handshake (driven by `--eapol-dir`), and per-alert **evidence** from the 802.11 evidence ring (driven by `--collect-handshakes` + `--eapol-dir`), the only route from a wireless alert back to the frames that caused it.
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
 
-**Last updated**: 2026-10-14 (#122: EAPOL collector takes its header length and roles from the shared 802.11 view; StrictlyOrdered non-QoS frames no longer missed).
+**Last updated**: 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name). Previously 2026-10-14 (#122).
 
 ---
 
@@ -88,7 +88,8 @@ is 802.11 management and carries no IP. Before this existed, every
 wireless detection shipped with zero supporting packets, and the general
 ring would not have helped — it keeps only `min(caplen, 64)` bytes.
 
-- Memory only. No flag, nothing written to disk by this path.
+- The ring itself is memory only and has no flag; what reaches disk is
+  the alert evidence pcap below, behind `--collect-handshakes`.
 - `src/evidence_ring.c` retains the **whole** captured frame including
   the radiotap header, fed from `on_probe_frame()` behind the same
   framing guards as the rest of the monitor path — a frame too short to
@@ -127,25 +128,68 @@ Two deliberate choices:
   previous sequence number is the same MPDU (IEEE 802.11-2020
   10.3.2.14); the row does not count it as a frame, so it adds no ID.
 
-### What is not wired yet
+### Alert → disk: the evidence pcap (#92 slices 1+2)
 
-Being explicit, because the gap is the interesting part:
+An alert that cites evidence-ring frames now writes them out.
+`dump_new_alert_pcaps()` (`src/alerts/engine.c`) picks the exporter per
+incident: `evidence_id_count > 0` goes to `evidence_export_pcap()`,
+otherwise a `match_ip` goes to `alert_pcap_dump()` (§1). Before this the
+loop skipped any alert without a `match_ip`, so a DEAUTH_FLOOD CRIT —
+IDs on the alert, every flag set — wrote zero frames.
 
-- **Nothing writes evidence frames to disk.** `src/evidence_export.c`
-  exists and refuses to write unless `--collect-handshakes` is set,
-  creating through the same pinned dirfd and 0600/`O_EXCL` path as the
-  EAPOL export — but it has **no production caller**. Today only the
-  test suite reaches it.
-- **The IDs are not exported.** `evidence_ids` is on `alert_t` and in
-  no JSONL record and no `--db` column; the only consumer is C code.
-- **No evidence filenames, no manifest, no `storage_error` event.** All
-  still open on #92.
-- **A failed evidence export leaves a misleading artifact.**
-  `src/evidence_export.h` promises "nothing partial is left behind", but
-  all three failure paths only `close(fd)`: the file stays under its
-  final name, zero-length or truncated. The §"Permissions and failures"
-  claim below ("partial files are removed") is true of `alert_pcap.c`,
-  `pcap_write.c` and `eapol_log.c`, and **not** of `evidence_export.c`.
+- **Gate** (owner ruling 2026-10-08, option B): `--collect-handshakes`
+  **and** `--eapol-dir`. Not `--pcap-dir`: a raw 802.11 frame carries
+  EAPOL/PMKID material, and an operator who set `--pcap-dir` for IP
+  alerts must not start collecting crackable bytes on upgrade. A closed
+  gate is not a failure — nothing is counted, nothing retries.
+- **Policy**: the same `pcap.min_severity` floor (default CRIT) and the
+  same per-key `pcap.key_cooldown_secs` (default 3600) as §1, on the
+  same per-key side row. A WARN deauth flood (not your BSSID) writes
+  nothing until it escalates; a key that re-fires inside the cooldown
+  names the file its earlier incident wrote.
+- **Name**: `<incident_id>-<event_id>-<RULE>.pcap`, e.g.
+  `22bdad5846ecd3fb-13-DEAUTH_FLOOD.pcap` — the incident (#98), the
+  first evidence-ring event ID it cites, and the alert kind. Inside
+  `--eapol-dir`, so it inherits 0600, symlink-safe creation and the
+  `--handshake-retention` sweep (evidence expires on the handshake
+  clock — caveat 3 of the ruling).
+- **Content**: DLT 127 (radiotap + 802.11), every cited frame the ring
+  still holds, each with its own capture time and caplen/origlen. IDs
+  that have aged out are skipped; if **all** have, no file is written
+  and the incident is done (nothing to retry).
+- **Outcome on the alert**: `pcap_path` (the full path, or the bare name
+  if it would not fit in 255 bytes — never a truncated path) and
+  `pcap_write_failures`, on the `alert.*` lifecycle events
+  ([[jsonl-schema]]). A failed write leaves `pcap_dumped` at 0 and
+  retries next tick, as §1 does. The failure is also counted with the
+  EAPOL export's own (`eapol_export_failures()`: one stderr line, the
+  `[e]` view count, the `!persist` badge); a closed gate is not. The
+  first event to carry `pcap_path`
+  is the one after the export: `alert.create` goes out before the
+  export runs in the same tick.
+- **Not covered**: the `storage.min_free_*` floors are checked by the
+  `--pcap-dir` writer only, not by this one.
+
+**No partial file under a final name** (slice 2). The exporter writes
+`.<name>.tmp` (`O_EXCL`, same pinned dirfd), fsyncs it, closes it, and
+then — under the EAPOL module's lock, only if nothing is at `<name>` —
+`renameat()`s it into place and fsyncs the directory. Every failure
+path (header write, buffer allocation, a record mid-file, fsync, close,
+commit, an existing name) unlinks the temp, so `<name>` is either a
+complete export or absent. Until slice 2, three of those paths only
+closed the descriptor and left a zero-length or truncated file under
+the final name. A temp left by a crash is cleared before the next
+export of that name and is in any case a dotted `.tmp`, which the
+retention sweep already expires. Pinned per path by
+`tests/test_evidence_alert.c` through a fault seam
+(`evidence_export_test_fault()`), not a full disk.
+
+### Still open on #92
+
+- **A hashed per-session manifest** over every file under `--eapol-dir`
+  and `--pcap-dir` (slice 3).
+- **Citations beyond DEAUTH_FLOOD**, one detector per slice (slice 4).
+  Until then every other wireless alert still exports nothing.
 
 ## File writer
 
@@ -174,7 +218,7 @@ offline-crackable. Modes do not depend on the umask:
 |---|---|---|---|
 | `--pcap-dir DIR` | 0700 | 0600 | exclusive, suffixed on collision |
 | `w` in Packets | cwd — not checked; pin it with `WorkingDirectory=` | 0600 | exclusive, suffixed on collision |
-| `--eapol-dir DIR` | 0700 | 0600 | `eapol.22000` append; per-handshake pcap atomic replace |
+| `--eapol-dir DIR` | 0700 | 0600 | `eapol.22000` append; per-handshake pcap atomic replace; alert evidence pcap temp + fsync + no-clobber rename |
 
 `--pcap-dir` and `--eapol-dir` are created 0700 when absent. An
 **existing** directory must be owned by sloth's effective uid with no
@@ -187,7 +231,8 @@ existing file sloth would reuse must itself be private.
 Write failures are reported, not swallowed: the first prints one
 `sloth: <alert pcap|eapol> export failed: …` line to stderr and every
 one is counted (the EAPOL view shows its count). Partial files are
-removed; a failed per-handshake replace keeps the previous capture.
+removed — for the evidence export, never created under the final name
+at all; a failed per-handshake replace keeps the previous capture.
 Details for the handshake export: [`docs/views/eapol.md`](../views/eapol.md#export-handling-87).
 
 ## Related pages

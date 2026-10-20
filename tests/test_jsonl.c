@@ -845,6 +845,30 @@ static void test_emit_alert_event_omits_pcap_fields_without_match_ip(void) {
     ASSERT(!contains(body, "pcap_write_failures"));
 }
 
+/* #92 slice 1: an alert with no match_ip but cited evidence-ring frames
+ * is exported by the evidence exporter, so its outcome must reach the
+ * stream through the same two keys. Before slice 1 both were gated on
+ * match_ip alone, which was right only while nothing else exported. */
+static void test_emit_alert_event_carries_pcap_fields_for_evidence(void) {
+    open_fresh();
+    alert_t a; fill_deauth_alert(&a);
+    a.evidence_ids[0] = 301;
+    a.evidence_id_count = 1;
+    snprintf(a.pcap_path, sizeof(a.pcap_path),
+             "/var/lib/sloth/eapol/deadbeefdeadbeef-301-DEAUTH_FLOOD.pcap");
+    a.pcap_write_failures = 1;
+    jsonl_emit_alert_event(&a, "alert.update", a.last_seen, -1, NULL);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"pcap_path\":\"/var/lib/sloth/eapol/"
+                          "deadbeefdeadbeef-301-DEAUTH_FLOOD.pcap\""));
+    ASSERT(contains(body, "\"pcap_write_failures\":1"));
+    /* Still no flow fields: the evidence path does not invent one. */
+    ASSERT(!contains(body, "match_ip"));
+}
+
 /* ── escaping ────────────────────────────────────────────── */
 
 static void test_json_escapes_quotes_and_backslash(void) {
@@ -2319,6 +2343,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_alert_omits_evidence_when_none_cited);
     RUN_TEST(test_emit_alert_evidence_clamped_to_array_size);
     RUN_TEST(test_emit_alert_event_carries_pcap_path);
+    RUN_TEST(test_emit_alert_event_carries_pcap_fields_for_evidence);
     RUN_TEST(test_emit_alert_event_carries_pcap_write_failures);
     RUN_TEST(test_emit_alert_event_omits_pcap_fields_without_match_ip);
     RUN_TEST(test_emit_connections_tcp_and_udp);

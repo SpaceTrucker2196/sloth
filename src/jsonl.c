@@ -553,11 +553,16 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
     if (a->match_ip[0]) {
         kv_str(buf, LINEBUF, &off, "match_ip", a->match_ip);
         kv_int(buf, LINEBUF, &off, "match_port", (int)a->match_port);
-        /* Per-export outcome (#92) — meaningless without a match_ip,
-         * since that's the only case alert_pcap_dump() ever runs for.
-         * pcap_path omitted until export actually writes a file;
-         * pcap_write_failures omitted at 0 so a clean export doesn't
-         * grow the line for nothing. */
+    }
+    if (a->match_ip[0] || a->evidence_id_count) {
+        /* Per-export outcome (#92) — meaningful only for an alert one of
+         * the two exporters can run for: a match_ip (alert_pcap_dump(),
+         * --pcap-dir) or cited evidence-ring frames (the evidence export,
+         * --collect-handshakes + --eapol-dir, slice 1). pcap_path omitted
+         * until export actually writes a file; pcap_write_failures
+         * omitted at 0 so a clean export doesn't grow the line for
+         * nothing. Same two keys for both exporters, so a consumer has
+         * one place to look for an incident's frames. */
         if (a->pcap_path[0])
             kv_str(buf, LINEBUF, &off, "pcap_path", a->pcap_path);
         if (a->pcap_write_failures)

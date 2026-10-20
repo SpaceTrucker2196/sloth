@@ -17,8 +17,11 @@
  *
  * So this ring keeps the **whole captured frame, radiotap included**,
  * and is addressed by a monotonic event ID rather than by a flow. An
- * alert records the IDs of the frames that triggered it; an exporter
- * (a later slice of #92) pulls those IDs back out.
+ * alert records the IDs of the frames that triggered it; the exporter
+ * (src/evidence_export.h, called by the alert engine since #92 slice 1,
+ * behind --collect-handshakes) pulls those IDs back out. Everything
+ * below about "memory-only" is about THIS module: the ring still opens
+ * no file; the exporter is the one gated place frame bytes leave it.
  *
  * Memory-only, by construction: **nothing here writes a file, and no
  * frame byte ever reaches one.** That matters beyond tidiness. Full

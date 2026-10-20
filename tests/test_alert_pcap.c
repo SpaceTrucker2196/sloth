@@ -431,7 +431,7 @@ static void test_a_refired_finding_does_not_export_twice(void) {
     sloth_state_t s; ap_seed_threat(&s);
     alerts_update(&s);
     ASSERT_EQ(ap87_entries(), 1);           /* CRIT, exported once */
-    char first_path[80] = "";
+    char first_path[ALERT_PCAP_PATH_LEN] = "";
     int i = find_threat_ip(&s);
     ASSERT(i >= 0);
     if (i >= 0) snprintf(first_path, sizeof(first_path), "%s", s.alerts[i].pcap_path);

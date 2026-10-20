@@ -43,13 +43,33 @@
  *      the incident they belong to is closed. The alternative was no
  *      sweep at all, which is the gap #87 closed.
  *
- * ── What it does not do ──
+ * ── Who calls it ──
  *
- * Nothing here decides WHICH frames matter: the caller supplies event
- * IDs. Wiring the alert engine to record the IDs that triggered it is a
- * separate slice, deliberately — the gate was the blocked question, and
- * bundling the two is how an earlier #92 slice came to claim more than
- * it delivered. */
+ * The alert engine (#92 slice 1): dump_new_alert_pcaps() in
+ * src/alerts/engine.c exports every incident that carries evidence IDs,
+ * under the same severity floor and per-key cooldown #96 put on IP
+ * alert pcaps, named by evidence_export_alert_name(). Nothing here
+ * decides WHICH frames matter: the detector picks the IDs and fire_inv()
+ * stamps them. */
+
+/* Is export possible right now — the gate open AND a directory set?
+ * For a caller that must not count "switched off" as a failure. */
+int evidence_export_enabled(void);
+
+/* "<incident_id>-<event_id>-<rule>.pcap": the incident (#98), the first
+ * evidence-ring event ID the incident cites, and the alert kind. All
+ * three are needed for the name to identify the file: one incident can
+ * be exported once, a key re-fired after a cooldown is a new incident,
+ * and the rule makes a directory listing readable without JSONL.
+ * `incident_id` must be lowercase hex (what incident_id_make() writes)
+ * and `event_id` non-zero; `rule` is reduced to [A-Za-z0-9_]. Returns
+ * 0, or -1 with out = "" when an input is malformed or it does not fit. */
+int evidence_export_alert_name(const char *incident_id, uint64_t event_id,
+                               const char *rule, char *out, size_t outsz);
+
+/* "<--eapol-dir>/<name>" for reporting (pcap_path). 0, or -1 with
+ * out = "" when export is off or the path does not fit. */
+int evidence_export_path(const char *name, char *out, size_t outsz);
 
 /* Write the frames for `ids` (n of them) as a libpcap savefile named
    `name` in the gated export directory.
@@ -69,14 +89,41 @@
  * (sfile_open(), #134), so a caller-supplied name cannot leave the
  * pinned directory.
  *
- * Returns frames written (>= 0), or -1 with a reason in `err`:
- * the gate is closed, no export directory, bad arguments, a name that
- * is not bare, the file already exists, or a write failed. On -1
- * nothing partial is left behind that a reader could mistake for a
- * complete export. */
+ * Returns frames written (>= 1), 0 when every ID had been evicted (no
+ * file is created: a header with no records is not evidence of
+ * anything), or -1 with a reason in `err`: the gate is closed, no
+ * export directory, bad arguments, a name that is not bare, the file
+ * already exists, or a write failed.
+ *
+ * ── Nothing partial under the final name (#92 slice 2) ──
+ *
+ * The frames go to ".<name>.tmp" (O_EXCL, same pinned directory), are
+ * fsync'ed, and only then renamed to `name` — and only if nothing is
+ * there. Every failure path, header, allocation, record, fsync and
+ * commit, unlinks the temp. So a file under `name` is always a complete
+ * export, and a reader never has to guess whether a short file is a
+ * truncated one. Until this, three of those paths only closed the
+ * descriptor and left a zero-length or truncated file at the final
+ * name, while this comment promised the opposite. A temp that survives
+ * a crash is a dotted .tmp, which eapol_sweep() expires. */
 int evidence_export_pcap(const char *name,
                          const uint64_t *ids, int n,
                          int *skipped,
                          char *err, size_t errsz);
+
+/* Test seam: make the nth occurrence of one failure point fail, so each
+ * cleanup path is driven without a full disk. WRITE counts write(2)
+ * calls through write_all() — 1 is the global header, 2 and 3 the first
+ * record's header and body. ALLOC, FSYNC and COMMIT fail on their first
+ * occurrence whatever nth says. Cleared after it fires, and by
+ * EVX_FAULT_NONE. Not reachable from the CLI. */
+typedef enum {
+    EVX_FAULT_NONE = 0,
+    EVX_FAULT_WRITE,
+    EVX_FAULT_ALLOC,
+    EVX_FAULT_FSYNC,
+    EVX_FAULT_COMMIT,
+} evx_fault_t;
+void evidence_export_test_fault(evx_fault_t where, int nth);
 
 #endif /* SLOTH_EVIDENCE_EXPORT_H */

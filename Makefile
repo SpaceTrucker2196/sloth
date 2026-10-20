@@ -197,6 +197,7 @@ CORE_COMMON_SRCS += src/views/research.c
 CORE_COMMON_SRCS += src/views/fragattack.c
 CORE_COMMON_SRCS += research/coverage.c
 CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
+CORE_COMMON_SRCS += src/evidence_ring.c src/evidence_export.c
 CORE_COMMON_SRCS += src/geo.c
 CORE_COMMON_SRCS += src/ble_snoop.c
 CORE_COMMON_SRCS += src/scan.c
@@ -220,15 +221,13 @@ LINUX_PLATFORM_SRCS = src/platform/linux_parse.c   \
 LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
 
 # probe.c exists only with WITH_PCAP: without it probe.h's inline stubs
-# stand in. The evidence ring (#92) is fed only by on_probe_frame(), so a
-# no-pcap build would link an arena nothing can ever fill; the exporter
-# goes with it for the same reason — it reads the ring and nothing else
-# fills the ring. Neither has a libpcap dependency of its own, which is
-# what lets the ordinary (WITH_PCAP-less) test binary unit-test both: the
-# test build drops probe.c alone.
-PCAP_CORE_SRCS      = src/capture/probe.c        \
-                      src/evidence_ring.c        \
-                      src/evidence_export.c
+# stand in. The evidence ring and its exporter (#92) used to sit here
+# too, on the grounds that only on_probe_frame() fills the ring. Since
+# #92 slice 1 the alert engine calls the exporter, and the engine is in
+# every build — so both are in CORE_COMMON_SRCS now. In a no-pcap build
+# the ring is never initialised (main.c calls evidence_ring_init_default()
+# only under WITH_PCAP), so it holds no arena and costs code, not memory.
+PCAP_CORE_SRCS      = src/capture/probe.c
 
 # Embedded SQLite sink (#42). The research corpus (#73) is an FTS5 index,
 # so it goes wherever SQLite goes. query.h stubs to no-ops without it, and

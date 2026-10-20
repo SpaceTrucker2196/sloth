@@ -155,6 +155,46 @@ int  eapol_collect_enabled(void);
    Returns an fd the caller closes, or -1 with a reason in err. */
 int  eapol_export_create(const char *name, char *err, size_t errsz);
 
+/* The other half of a temp-then-rename export through the same pinned
+   descriptor (#92 slice 2), for a caller that created `tmp` with
+   eapol_export_create().
+
+   eapol_export_commit() moves `tmp` to `name` — but only if nothing is
+   at `name` already, so an export never replaces evidence on disk. The
+   existence check and renameat() run under this module's lock against a
+   0700 directory only sloth writes; the residual window is another
+   process running as sloth's own uid, which could equally unlink the
+   file afterwards. The directory is fsync'ed after the rename, best
+   effort: the file itself was fsync'ed by the caller, and a directory
+   fsync that fails does not make the bytes any less complete. Refused,
+   like create, when the gate has closed in between. Does NOT remove
+   `tmp` on failure — the caller owns that, through discard.
+
+   eapol_export_discard() unlinks `tmp`, best effort and silent: it is
+   the cleanup on a failure path that has already been reported, and a
+   second error about the cleanup would bury the first. A temp that
+   cannot be removed (the gate closed and took the descriptor) is a
+   dotted .tmp, which eapol_sweep() expires with everything else.
+
+   eapol_export_ready() is the gate AND a destination — whether a
+   create could succeed right now — for a caller that must not count
+   "export is switched off" as a failure. eapol_export_path() writes
+   "<--eapol-dir>/<name>" into out for reporting; 0, or -1 when export
+   is off or the path does not fit (out is then "").
+
+   All four take bare names only, the same rule as create. */
+int  eapol_export_commit(const char *tmp, const char *name,
+                         char *err, size_t errsz);
+void eapol_export_discard(const char *tmp);
+int  eapol_export_ready(void);
+int  eapol_export_path(const char *name, char *out, size_t outsz);
+
+/* Count a failed write by another module into this directory (today
+ * the evidence export) in eapol_export_failures() / eapol_export_error(),
+ * so it reaches the [e] view and the !persist badge like a failed
+ * handshake write does, rather than being lost with the caller's err. */
+void eapol_export_note_failure(const char *who, const char *msg);
+
 /* Retention window for exported crackable material, in days. Default 7;
  * 0 keeps artifacts until the operator removes them.
  *

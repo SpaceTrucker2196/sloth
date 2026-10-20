@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 
 #include "evidence_export.h"
 #include "evidence_ring.h"
 #include "eapol_log.h"
 #include "pcap_format.h"
+#include "secure_file.h"
 
 /* The savefile layout lives in src/pcap_format.h, shared with the three
  * other sinks that write one. This file used to carry its own copy and
@@ -16,10 +18,31 @@
  * shared writer is little-endian everywhere, so an evidence export now
  * hashes the same on any host that recorded it. */
 
+/* Test seam (header). One armed fault at a time; the alert engine and
+ * this file run on the poll thread, so it needs no lock. */
+static evx_fault_t g_fault;
+static int         g_fault_nth;
+static int         g_write_calls;
+
+void evidence_export_test_fault(evx_fault_t where, int nth) {
+    g_fault       = where;
+    g_fault_nth   = nth < 1 ? 1 : nth;
+    g_write_calls = 0;
+}
+
+/* True once, at the armed point. */
+static int fault_hit(evx_fault_t where) {
+    if (g_fault != where) return 0;
+    if (where == EVX_FAULT_WRITE && ++g_write_calls < g_fault_nth) return 0;
+    g_fault = EVX_FAULT_NONE;
+    return 1;
+}
+
 /* write(2) until done or it genuinely fails. A short write on a regular
  * file is legal and is not an error; treating one as failure would
  * discard a good export under memory pressure. */
 static int write_all(int fd, const uint8_t *buf, size_t n) {
+    if (fault_hit(EVX_FAULT_WRITE)) return -1;
     size_t off = 0;
     while (off < n) {
         ssize_t w = write(fd, buf + off, n - off);
@@ -28,6 +51,49 @@ static int write_all(int fd, const uint8_t *buf, size_t n) {
         off += (size_t)w;
     }
     return 0;
+}
+
+int evidence_export_enabled(void) { return eapol_export_ready(); }
+
+int evidence_export_path(const char *name, char *out, size_t outsz) {
+    return eapol_export_path(name, out, outsz);
+}
+
+int evidence_export_alert_name(const char *incident_id, uint64_t event_id,
+                               const char *rule, char *out, size_t outsz) {
+    if (!out || !outsz) return -1;
+    out[0] = '\0';
+    if (!incident_id || !incident_id[0] || event_id == 0 || !rule || !rule[0])
+        return -1;
+    for (const char *c = incident_id; *c; c++)
+        if (!isxdigit((unsigned char)*c) || isupper((unsigned char)*c))
+            return -1;
+    /* The kind name is generated from sloth_alerts.def and is already
+     * [A-Z0-9_]; reduced anyway, because this string becomes a file
+     * name and that is not a property the .def promises. */
+    char slug[48];
+    size_t k = 0;
+    for (; rule[k] && k + 1 < sizeof(slug); k++) {
+        unsigned char c = (unsigned char)rule[k];
+        slug[k] = (isalnum(c) || c == '_') ? (char)c : '_';
+    }
+    slug[k] = '\0';
+    int n = snprintf(out, outsz, "%s-%llu-%s.pcap", incident_id,
+                     (unsigned long long)event_id, slug);
+    if (n <= 0 || (size_t)n >= outsz) { out[0] = '\0'; return -1; }
+    return 0;
+}
+
+/* Every failure after the temp exists ends here: report, close if still
+ * open, unlink the temp. `why` NULL keeps a reason already in err. */
+static int fail_tmp(int fd, const char *tmp, const char *why,
+                    char *err, size_t errsz) {
+    if (err && errsz && why) snprintf(err, errsz, "%s", why);
+    if (fd >= 0) close(fd);
+    eapol_export_discard(tmp);
+    eapol_export_note_failure("evidence",
+                              why ? why : (err && errsz ? err : "failed"));
+    return -1;
 }
 
 int evidence_export_pcap(const char *name,
@@ -54,16 +120,38 @@ int evidence_export_pcap(const char *name,
         return -1;
     }
 
-    int fd = eapol_export_create(name, err, errsz);
-    if (fd < 0) return -1;
+    /* The temp is ".<name>.tmp" — the shape eapol_sweep() already
+     * expires, so a crash mid-write cannot leave crackable bytes past
+     * the retention window. A temp already at that name is our own,
+     * left by such a crash (only sloth writes this 0700 directory), and
+     * is cleared first so O_EXCL does not refuse every later attempt.
+     * A '/' is refused here as well as by sfile_open(), because the
+     * stale-temp discard runs before sfile_open() ever sees the name. */
+    if (strchr(name, '/') != NULL) {
+        if (err && errsz) snprintf(err, errsz, "not a bare file name");
+        return -1;
+    }
+    char tmp[160];
+    int tn = snprintf(tmp, sizeof(tmp), ".%s.tmp", name);
+    if (tn <= 0 || (size_t)tn >= sizeof(tmp)) {
+        if (err && errsz) snprintf(err, errsz, "name too long");
+        return -1;
+    }
+    eapol_export_discard(tmp);
+    char cerr[SFILE_ERR_MAX] = "";
+    int fd = eapol_export_create(tmp, cerr, sizeof(cerr));
+    if (fd < 0) {
+        if (err && errsz) snprintf(err, errsz, "%s", cerr);
+        /* A closed gate is the caller's question, not a failed write;
+         * only a refused create past the gate is counted. */
+        if (eapol_export_ready()) eapol_export_note_failure("evidence", cerr);
+        return -1;
+    }
 
     uint8_t gh[PCAP_FILE_HDR_LEN];
     pcap_fmt_file_hdr(gh, PCAP_DLT_RADIOTAP, PCAP_SNAPLEN_LARGE);
-    if (write_all(fd, gh, sizeof(gh)) != 0) {
-        if (err && errsz) snprintf(err, errsz, "write failed (header)");
-        close(fd);
-        return -1;
-    }
+    if (write_all(fd, gh, sizeof(gh)) != 0)
+        return fail_tmp(fd, tmp, "write failed (header)", err, errsz);
 
     /* One heap buffer reused across records rather than a stack array
      * sized to the ring's maximum: the cap is a tuning constant that has
@@ -71,12 +159,9 @@ int evidence_export_pcap(const char *name,
      * for the next increase. */
     size_t cap = evidence_ring_capacity();
     if (cap == 0) cap = 4096;
-    uint8_t *frame = malloc(cap);
-    if (!frame) {
-        if (err && errsz) snprintf(err, errsz, "out of memory");
-        close(fd);
-        return -1;
-    }
+    uint8_t *frame = fault_hit(EVX_FAULT_ALLOC) ? NULL : malloc(cap);
+    if (!frame)
+        return fail_tmp(fd, tmp, "out of memory", err, errsz);
 
     int written = 0, missed = 0;
     for (int i = 0; i < n; i++) {
@@ -93,22 +178,37 @@ int evidence_export_pcap(const char *name,
                          (uint32_t)got, rec.orig_len);
         if (write_all(fd, rh, sizeof(rh)) != 0 ||
             write_all(fd, frame, (size_t)got) != 0) {
-            if (err && errsz) snprintf(err, errsz, "write failed (record)");
             free(frame);
-            close(fd);
-            return -1;
+            return fail_tmp(fd, tmp, "write failed (record)", err, errsz);
         }
         written++;
     }
-
     free(frame);
+    if (skipped) *skipped = missed;
+
+    if (written == 0) {
+        /* Every cited frame had aged out. Not a failure — there is
+         * nothing to retry for — and not a file either. */
+        close(fd);
+        eapol_export_discard(tmp);
+        return 0;
+    }
+
+    /* Durable before it is visible: a rename that reaches the disk
+     * ahead of the data is exactly the truncated-under-the-final-name
+     * file this ordering exists to rule out. */
+    if (fault_hit(EVX_FAULT_FSYNC) || fsync(fd) != 0)
+        return fail_tmp(fd, tmp, "fsync failed", err, errsz);
     if (close(fd) != 0) {
         /* A close failure can be the first report of a write that never
          * reached the filesystem, so it is an error rather than a
          * nicety — the same reason sfile_fclose() reports it. */
-        if (err && errsz) snprintf(err, errsz, "close failed");
-        return -1;
+        return fail_tmp(-1, tmp, "close failed", err, errsz);
     }
-    if (skipped) *skipped = missed;
+
+    if (fault_hit(EVX_FAULT_COMMIT))
+        return fail_tmp(-1, tmp, "commit failed (injected)", err, errsz);
+    if (eapol_export_commit(tmp, name, err, errsz) != 0)
+        return fail_tmp(-1, tmp, NULL, err, errsz);
     return written;
 }

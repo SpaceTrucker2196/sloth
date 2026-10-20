@@ -689,6 +689,7 @@ const char *device_risk_label(device_risk_level_t l);
 #define ALERT_UPDATE_MIN_MS     ((uint64_t)ALERT_UPDATE_MIN_S    * 1000u)
 #define ALERT_INCIDENT_ID_LEN    17   /* 16 hex chars + NUL */
 #define ALERT_EVENT_ID_LEN       23   /* "<incident>-<4-digit seq>" + NUL */
+#define ALERT_PCAP_PATH_LEN     256   /* see alert_t.pcap_path */
 
 /* Three-tier alert severity. Numeric values are stable and consumed by
  * the JSONL `sev` field — never change them. Render colour:
@@ -729,10 +730,24 @@ typedef struct {
      * (#92): a disk-full or permission error is transient the same way
      * jsonl.c's is, so dump_new_alert_pcaps() retries next tick instead
      * of losing the evidence for good. pcap_write_failures counts those
-     * attempts; pcap_path is the exported file once one exists. */
+     * attempts; pcap_path is the exported file once one exists.
+     *
+     * Two exporters fill these, chosen per incident (#92 slice 1): an
+     * alert citing evidence-ring frames (evidence_id_count > 0) goes to
+     * evidence_export_pcap() under --collect-handshakes + --eapol-dir;
+     * otherwise one with a match_ip goes to alert_pcap_dump() under
+     * --pcap-dir. Same fields, same severity floor, same per-key
+     * cooldown — one "where are this incident's frames" answer.
+     *
+     * ALERT_PCAP_PATH_LEN holds either export directory (both pinned as
+     * 256-byte strings) plus a realistic name. It was 80 until the
+     * evidence names (incident + event ID + kind, ~60 bytes) arrived:
+     * at 80, any directory over ~20 characters truncated the path into
+     * one that names nothing. A path that still does not fit is
+     * recorded as the bare file name, never as a truncated path. */
     int          pcap_dumped;
     int          pcap_write_failures;
-    char         pcap_path[80];
+    char         pcap_path[ALERT_PCAP_PATH_LEN];
     /* MITRE ATT&CK technique ID (e.g. "T1110.001") — populated from a
      * fixed lookup on alert_type by fire(). Empty for alerts that
      * describe operator/host posture rather than an adversary

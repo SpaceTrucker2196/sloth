@@ -167,7 +167,13 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         return 0;
     }
 
-    if (out_path && out_sz > 0)
-        snprintf(out_path, (size_t)out_sz, "%s/%s", g_dir, name);
+    if (out_path && out_sz > 0) {
+        /* A path that does not fit is reported as the bare name, which
+         * is still true relative to --pcap-dir; a truncated path would
+         * name a file that does not exist (alert_t.pcap_path). */
+        int pn = snprintf(out_path, (size_t)out_sz, "%s/%s", g_dir, name);
+        if (pn < 0 || pn >= out_sz)
+            snprintf(out_path, (size_t)out_sz, "%s", name);
+    }
     return written;
 }

@@ -915,6 +915,79 @@ int eapol_export_create(const char *name, char *err, size_t errsz) {
     return sfile_open(dirfd, name, SFILE_EXCL, err, errsz);
 }
 
+/* Bare-name rule for the helpers below. sfile_open() applies it to
+ * create; renameat/unlinkat do not, so it is repeated here rather than
+ * trusted to the caller (CWE-22, #134). */
+static int bare_name(const char *n) {
+    return n && n[0] && strcmp(n, ".") != 0 && strcmp(n, "..") != 0 &&
+           strchr(n, '/') == NULL;
+}
+
+int eapol_export_commit(const char *tmp, const char *name,
+                        char *err, size_t errsz) {
+    if (!bare_name(tmp) || !bare_name(name)) {
+        if (err && errsz) snprintf(err, errsz, "not a bare file name");
+        return -1;
+    }
+    pthread_mutex_lock(&g_mu);
+    int rc = -1;
+    struct stat st;
+    if (!g_collect || g_out_fd < 0) {
+        if (err && errsz)
+            snprintf(err, errsz, "--collect-handshakes closed before commit");
+    } else if (fstatat(g_out_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+        if (err && errsz)
+            snprintf(err, errsz, "%s: already exists", name);
+    } else if (errno != ENOENT) {
+        if (err && errsz)
+            snprintf(err, errsz, "%s: cannot check the name is free: %s",
+                     name, strerror(errno));
+    } else if (renameat(g_out_fd, tmp, g_out_fd, name) != 0) {
+        if (err && errsz)
+            snprintf(err, errsz, "%s: rename failed: %s", name, strerror(errno));
+    } else {
+        if (fsync(g_out_fd) != 0) { /* best effort; see the header */ }
+        rc = 0;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
+void eapol_export_discard(const char *tmp) {
+    if (!bare_name(tmp)) return;
+    pthread_mutex_lock(&g_mu);
+    if (g_out_fd >= 0) (void)unlinkat(g_out_fd, tmp, 0);
+    pthread_mutex_unlock(&g_mu);
+}
+
+void eapol_export_note_failure(const char *who, const char *msg) {
+    pthread_mutex_lock(&g_mu);
+    sfile_fail(&g_fail, who ? who : "eapol", msg);
+    pthread_mutex_unlock(&g_mu);
+}
+
+int eapol_export_ready(void) {
+    pthread_mutex_lock(&g_mu);
+    int ok = g_collect && g_out_fd >= 0;
+    pthread_mutex_unlock(&g_mu);
+    return ok;
+}
+
+int eapol_export_path(const char *name, char *out, size_t outsz) {
+    if (!out || !outsz) return -1;
+    out[0] = '\0';
+    if (!bare_name(name)) return -1;
+    pthread_mutex_lock(&g_mu);
+    int rc = -1;
+    if (g_collect && g_out_fd >= 0 && g_out_dir[0]) {
+        int n = snprintf(out, outsz, "%s/%s", g_out_dir, name);
+        if (n > 0 && (size_t)n < outsz) rc = 0;
+        else out[0] = '\0';
+    }
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
 /* ── The crackable-material gate and its retention sweep (#87) ─────── */
 
 void eapol_set_collect_enabled(int on) {

@@ -4027,3 +4027,20 @@ summing the three counters in an `int`; the total is now summed wide
 and saturated at `INT_MAX`.
 [[cli-reference]] § Status badges, [[dashboard]] and [[retention]] §6
 updated.
+
+## 2026-10-20 — Alert evidence reaches disk; no partial evidence files (#92 slices 1+2)
+
+`dump_new_alert_pcaps()` now exports an incident's cited evidence-ring
+frames through `evidence_export_pcap()` — gated on `--collect-handshakes`
+and `--eapol-dir` per the 2026-10-08 ruling, under the same
+`pcap.min_severity` floor and per-key cooldown as IP alert pcaps — as
+`<incident_id>-<event_id>-<RULE>.pcap`. A DEAUTH_FLOOD CRIT used to
+write zero frames because the loop skipped every alert without a
+`match_ip`. `pcap_path` / `pcap_write_failures` on `alert.*` events now
+also appear for evidence-citing alerts (additive), and `alert_t.pcap_path`
+grew from 80 to 256 bytes so a real directory no longer truncates it.
+The exporter writes temp → fsync → no-clobber `renameat`, unlinking the
+temp on every failure path, so nothing zero-length or truncated is left
+under a final name. The ring and exporter moved to `CORE_COMMON_SRCS`
+because the engine, which every build links, now calls them. Pages:
+[[pcap-export]], [[jsonl-schema]], [[cli-reference]].

@@ -15,6 +15,8 @@
 #include "tool_fingerprint.h"
 #include "jsonl.h"
 #include "alert_pcap.h"
+#include "evidence_export.h"
+#include "secure_file.h"   /* SFILE_ERR_MAX */
 #include "wired_attach.h"
 #include "event_wake.h"
 #include "sloth_clock.h"
@@ -246,7 +248,7 @@ typedef struct {
     char     key[ALERT_KEY_LEN];
     time_t   last_pcap_export;      /* wall time of the last real file; 0 = none */
     int      pcap_write_failures;
-    char     pcap_path[80];
+    char     pcap_path[ALERT_PCAP_PATH_LEN];
     char     last_incident_id[ALERT_INCIDENT_ID_LEN];
     time_t   last_first_seen;
     uint32_t reopen_count;
@@ -718,15 +720,60 @@ static void snapshot(sloth_state_t *s) {
     if (s->alert_sel < 0) s->alert_sel = 0;
 }
 
-/* For any engine entry that has match_ip set and hasn't yet had its
- * packets dumped, walk s->packets[] and write a per-alert pcap.
+/* Export an incident's cited evidence-ring frames (#92 slice 1).
+ *
+ * Same contract as alert_pcap_dump(): frames written (> 0), 0 when
+ * nothing is left to write (every cited frame aged out of the ring, so
+ * no file and nothing to retry), -1 on a failure worth retrying. The
+ * name is evidence_export_alert_name()'s, and the path recorded is
+ * under --eapol-dir — or the bare name when that does not fit, never a
+ * truncated path. */
+static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
+    char name[128], err[SFILE_ERR_MAX];
+    path[0] = '\0';
+    /* "DEAUTH_FLOOD", not "ALERT_TYPE_DEAUTH_FLOOD": the kind as JSONL's
+     * `title` and the docs name it, without the C enum's prefix. */
+    const char *rule = alert_type_name(a->type);
+    if (!rule) rule = "UNKNOWN";
+    static const char pfx[] = "ALERT_TYPE_";
+    if (strncmp(rule, pfx, sizeof(pfx) - 1) == 0) rule += sizeof(pfx) - 1;
+    if (evidence_export_alert_name(a->incident_id, a->evidence_ids[0],
+                                   rule,
+                                   name, sizeof(name)) != 0)
+        return -1;
+    int n = a->evidence_id_count;
+    if (n > ALERT_EVIDENCE_IDS) n = ALERT_EVIDENCE_IDS;
+    int written = evidence_export_pcap(name, a->evidence_ids, n, NULL,
+                                       err, sizeof(err));
+    if (written > 0 && evidence_export_path(name, path, pathsz) != 0)
+        snprintf(path, pathsz, "%s", name);
+    return written;
+}
+
+/* For any engine entry that has frames to export and hasn't yet had
+ * them dumped, write a per-alert pcap. Two sources, one policy:
+ *
+ *   - an alert citing evidence-ring IDs (evidence_id_count > 0) writes
+ *     those raw 802.11 frames through evidence_export_pcap(), gated as
+ *     the 2026-10-08 owner ruling on #92 says: --collect-handshakes AND
+ *     --eapol-dir, because a raw frame carries EAPOL/PMKID material.
+ *     Not --pcap-dir: an operator who set that months ago for IP alerts
+ *     would otherwise start collecting crackable bytes on upgrade.
+ *   - otherwise an alert with a match_ip walks s->packets[] through
+ *     alert_pcap_dump(), gated on --pcap-dir.
+ *
+ * An alert with both whose evidence gate is closed falls back to the IP
+ * path; one with both and the gate open writes the evidence, which is
+ * the stronger record. Before this, a DEAUTH_FLOOD CRIT had evidence
+ * IDs and no match_ip, so it was skipped here and wrote zero frames
+ * even with every flag set.
  *
  * A failed write (-1) does NOT set pcap_dumped (#92): the export
  * keeps retrying on the next tick, the same "a full disk may drain"
  * philosophy jsonl.c's emit_line() already applies, rather than
  * permanently losing this incident's evidence to one transient error.
- * Zero packets matched (0, no failure) IS terminal — the ring already
- * doesn't hold anything for this alert and never will retroactively. */
+ * Zero frames (0, no failure) IS terminal — the ring already doesn't
+ * hold anything for this alert and never will retroactively. */
 /* ── Per-alert pcap export policy (#96) ───────────────────
  *
  * `pcap_dumped` on the alert says "export has nothing left to do for
@@ -759,13 +806,16 @@ static int pcap_cooldown_active(const alert_side_t *sd, time_t now, int secs) {
 }
 
 static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
-    if (!alert_pcap_enabled()) return;
+    const int ip_on = alert_pcap_enabled();
+    const int ev_on = evidence_export_enabled();
+    if (!ip_on && !ev_on) return;
     const int min_sev = (int)tune_val(TUNE_PCAP_MIN_SEVERITY);
     const int cool    = (int)tune_val(TUNE_PCAP_KEY_COOLDOWN_SECS);
     for (int i = 0; i < engine_count; i++) {
         alert_t *a = &engine[i];
         if (a->pcap_dumped) continue;
-        if (!a->match_ip[0]) continue;
+        const int ev = ev_on && a->evidence_id_count > 0;
+        if (!ev && !(ip_on && a->match_ip[0])) continue;
         /* Severity first: it is the cheapest test and the one that
          * makes this feature match what `--help` has always claimed. */
         if ((int)a->sev < min_sev) continue;
@@ -777,7 +827,9 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
             a->pcap_dumped = 1;
             continue;
         }
-        int written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+        int written = ev
+            ? dump_alert_evidence(a, a->pcap_path, sizeof(a->pcap_path))
+            : alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
