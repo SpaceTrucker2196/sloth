@@ -4158,3 +4158,20 @@ chain of custody. Manifest failures count on the sink's existing
 per-alert and `w` pcaps now declare snaplen 64, what the wired ring
 keeps, instead of 65535. The embedded SHA-256 gained the FIPS 180-4
 896-bit vector.
+
+## 2026-10-20 — #92 slice 3 review: manifest hashing leaves the EAPOL lock
+
+[[pcap-export]] §5. The three `--eapol-dir` sinks now pin a committed
+file under the EAPOL lock (open + size + dup'd dirfd) and hash, append
+and fsync its manifest line after releasing it, so the poll thread no
+longer waits on the capture thread's hash of a growing `eapol.22000`.
+The pin hashes only the committed size of the committed inode, so a
+later append or replace cannot make a line describe bytes it did not
+commit. Measured with a new `make bench` program: a 16 MiB 22000 file
+costs ~80 ms per line on an i7 laptop, all of it now outside the lock
+but still on the capture thread — the page says so. A manifest whose
+failed append cannot be cut back is abandoned for `-N` rather than
+appended to after the fragment. New tests: the `--eapol-dir` manifest
+failure on the EAPOL counter, a failed handshake rename not listed, a
+failed fsync spending its `seq`, the clamp on a corrupt ring
+`raw_len`, an unnamed kind omitting `rule`.

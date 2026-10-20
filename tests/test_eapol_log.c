@@ -1977,6 +1977,68 @@ static void test_export_failed_22000_append_is_not_listed(void) {
     perm_cleanup();
 }
 
+/* #92 slice 3: a manifest failure on a handshake sink is this sink's
+ * failure — eapol_export_failures(), behind storage_eapol_failures and
+ * !persist — and leaves the file it would have described in place. The
+ * first record of a PMKID frame is the 22000 append, so the armed fault
+ * lands on it; the handshake pcap after it is still listed. Seen red
+ * with the sfile_fail() in manifest_settle() removed. */
+static void test_export_manifest_failure_counted_on_eapol(void) {
+    perm_setup();
+    evidence_manifest_reset();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    int fails = eapol_export_failures();
+    evidence_manifest_test_fail_next();
+    drive_pmkid();
+    ASSERT_EQ(eapol_export_failures(), fails + 1);
+    ASSERT(strstr(eapol_export_error(), "manifest") != NULL);
+    char p22[160];
+    perm_path(p22, sizeof(p22), "eapol.22000");
+    ASSERT_GT(size_of(p22), 0L);                /* the append stands */
+    static mf_line_t l[8];
+    int bad = -1, tail = -1;
+    char mname[200], mpath[400];
+    ASSERT_EQ(mf_count(g_perm_dir, mname, sizeof(mname)), 1);
+    snprintf(mpath, sizeof(mpath), "%s/%s", g_perm_dir, mname);
+    ASSERT_EQ(mf_read_path(mpath, l, 8, &bad, &tail), 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 0);                          /* no half line */
+    ASSERT_STR(l[0].file, HS_PCAP);
+    ASSERT_EQ(l[0].seq, 1LL);
+    perm_cleanup();
+}
+
+/* #92 slice 3: a handshake pcap that failed to rename into place is not
+ * listed. The previous capture is still at the name, so without the
+ * early return a line would hash it as if this capture had committed.
+ * Seen red with that return removed (a third handshake_pcap line). */
+static void test_export_failed_handshake_rename_is_not_listed(void) {
+    perm_setup();
+    evidence_manifest_reset();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    static mf_line_t l[8];
+    ASSERT_EQ(mf_read_dir(g_perm_dir, l, 8, NULL), 2);
+    int fails = eapol_export_failures();
+
+    eapol_clear();
+    eapol_test_fail_handshake_rename(1);
+    drive_pmkid();
+    ASSERT_EQ(eapol_export_failures(), fails + 1);
+    ASSERT(strstr(eapol_export_error(), "rename failed") != NULL);
+    int bad = -1;
+    int n = mf_read_dir(g_perm_dir, l, 8, &bad);
+    ASSERT_EQ(n, 3);                             /* + the 22000 append */
+    ASSERT_EQ(bad, 0);
+    int hs = 0;
+    for (int i = 0; i < (n < 0 ? 0 : n); i++)
+        hs += strcmp(l[i].file, HS_PCAP) == 0;
+    ASSERT_EQ(hs, 1);
+    ASSERT_STR(l[2].file, "eapol.22000");
+    eapol_test_fail_handshake_rename(0);
+    perm_cleanup();
+}
+
 /* #92 slice 3: both handshake sinks list every committed file in the
  * directory's session manifest, marked reconstructed — the pcap is
  * M1..M4 in message order, the 22000 lines are derived — with a hash
@@ -2578,6 +2640,8 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_export_pcap_replace_does_not_follow_symlink);
     RUN_TEST(test_export_manifest_lists_both_handshake_sinks);
     RUN_TEST(test_export_failed_22000_append_is_not_listed);
+    RUN_TEST(test_export_manifest_failure_counted_on_eapol);
+    RUN_TEST(test_export_failed_handshake_rename_is_not_listed);
     RUN_TEST(test_export_write_failure_visible);
     RUN_TEST(test_export_failure_reaches_sensor_health);
 

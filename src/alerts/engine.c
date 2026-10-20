@@ -743,8 +743,13 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     path[0] = '\0';
     /* "DEAUTH_FLOOD", not "ALERT_TYPE_DEAUTH_FLOOD": the kind as JSONL's
      * `title` and the docs name it, without the C enum's prefix. */
+    /* alert_type_name() is "" for a kind outside the .def, never NULL,
+     * and evidence_export_alert_name() refuses an empty rule — so a
+     * kind sloth cannot name gets no evidence file and no manifest
+     * line. alert_pcap.c, which needs no rule in its file name, writes
+     * the file and omits the manifest's `rule` key: one convention,
+     * "absent, not a placeholder", in both alert sinks. */
     const char *rule = alert_type_name(a->type);
-    if (!rule) rule = "UNKNOWN";
     static const char pfx[] = "ALERT_TYPE_";
     if (strncmp(rule, pfx, sizeof(pfx) - 1) == 0) rule += sizeof(pfx) - 1;
     if (evidence_export_alert_name(a->incident_id, a->evidence_ids[0],

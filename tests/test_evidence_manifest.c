@@ -18,6 +18,8 @@
 #include "sloth_clock.h"
 #include "secure_file.h"
 #include "manifest_check.h"
+#include "sha256.h"
+#include <fcntl.h>
 
 /* ── The per-session hashed manifest (#92 slice 3) ──────────────────
  *
@@ -309,9 +311,17 @@ static void test_manifest_failure_is_counted_not_blocking(void) {
     teardown();
 }
 
-/* What a crash mid-append leaves is a prefix of the file. Every prefix,
- * at every byte, must parse as complete lines plus at most one
- * fragment — never a complete line that is not JSON. */
+/* The line format and the reader contract, not the writer's crash
+ * behaviour: every byte-prefix of a finished manifest must read as
+ * complete JSON lines plus at most one dropped fragment. That holds for
+ * any writer of newline-terminated JSON, so it pins that sloth's lines
+ * are that (one object per line, no embedded newline) and that the
+ * reader in manifest_check.h drops a tail the way a consumer must.
+ * sloth's own write path is not exercised during the cut. What the
+ * writer guarantees — one whole-line pwrite, a failed append cut back,
+ * a manifest abandoned when the cut-back fails — is pinned by
+ * test_manifest_failure_is_counted_not_blocking (rollback) and
+ * test_stuck_fragment_abandons_the_manifest (no rollback). */
 static void test_every_crash_prefix_parses(void) {
     setup();
     char p[512];
@@ -631,6 +641,247 @@ static void test_record_refuses_non_files(void) {
     teardown();
 }
 
+/* A failed append whose cut-back also fails (EIO after ENOSPC) leaves
+ * half a line in the manifest. That manifest is abandoned: the next
+ * file is listed in a fresh "-2" manifest instead of being appended
+ * after the fragment, where it would have been glued to it and become
+ * unparseable. The fragment is the old file's tail and only it is lost.
+ * Seen red without the close_slot() in the rollback-failed branch (one
+ * manifest, whose second line does not parse). */
+static void test_stuck_fragment_abandons_the_manifest(void) {
+    setup();
+    evidence_manifest_test_force_suffix(1, 0xabc);
+    char p1[512], p2[512], p3[512];
+    ASSERT_EQ(dump_one("ONE", p1, sizeof(p1)), 2);
+    char m1[200], m1p[400];
+    ASSERT_EQ(mf_count(g_dir, m1, sizeof(m1)), 1);
+    snprintf(m1p, sizeof(m1p), "%s/%s", g_dir, m1);
+    int before = alert_pcap_failures();
+
+    evidence_manifest_test_fault(EVM_FAULT_APPEND_STUCK);
+    ASSERT_EQ(dump_one("TWO", p2, sizeof(p2)), 2);   /* evidence kept */
+    struct stat st;
+    ASSERT_EQ(stat(p2, &st), 0);
+    ASSERT_EQ(alert_pcap_failures(), before + 1);
+    ASSERT(strstr(alert_pcap_error(), "abandoned") != NULL);
+
+    static mf_line_t l[8];
+    int bad = -1, tail = -1;
+    ASSERT_EQ(mf_read_path(m1p, l, 8, &bad, &tail), 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 1);                 /* the fragment, as a crash tail */
+
+    ASSERT_EQ(dump_one("THREE", p3, sizeof(p3)), 2);
+    ASSERT_EQ(alert_pcap_failures(), before + 1);
+    ASSERT_EQ(mf_count(g_dir, NULL, 0), 2);
+    /* The old manifest is exactly as the failure left it. */
+    ASSERT_EQ(mf_read_path(m1p, l, 8, &bad, &tail), 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 1);
+    char m2p[400];
+    snprintf(m2p, sizeof(m2p),
+             "%s/" EVM_PREFIX "20231114T221320Z-0000000000000abc-2" EVM_EXT,
+             g_dir);
+    ASSERT_EQ(mf_read_path(m2p, l, 8, &bad, &tail), 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 0);
+    ASSERT_STR(l[0].file, base(p3));
+    check_line_is_the_file(&l[0], p3);
+    teardown();
+}
+
+/* An fsync that fails after the whole line was written leaves that line
+ * — it is complete and true — and spends its seq, so the next line does
+ * not reuse the number. Seen red with the seq++ in the fsync branch
+ * removed (seqs 1, 2, 2). */
+static void test_fsync_failure_spends_its_seq(void) {
+    setup();
+    char p1[512], p2[512], p3[512];
+    ASSERT_EQ(dump_one("ONE", p1, sizeof(p1)), 2);
+    int before = alert_pcap_failures();
+    evidence_manifest_test_fault(EVM_FAULT_FSYNC);
+    ASSERT_EQ(dump_one("TWO", p2, sizeof(p2)), 2);
+    ASSERT_EQ(alert_pcap_failures(), before + 1);
+    ASSERT(strstr(alert_pcap_error(), "fsync") != NULL);
+    ASSERT_EQ(dump_one("THREE", p3, sizeof(p3)), 2);
+
+    static mf_line_t l[8];
+    int bad = -1, tail = -1;
+    char mname[200], mpath[400];
+    ASSERT_EQ(mf_count(g_dir, mname, sizeof(mname)), 1);
+    snprintf(mpath, sizeof(mpath), "%s/%s", g_dir, mname);
+    ASSERT_EQ(mf_read_path(mpath, l, 8, &bad, &tail), 3);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 0);
+    ASSERT_EQ(l[0].seq, 1LL);
+    ASSERT_EQ(l[1].seq, 2LL);
+    ASSERT_EQ(l[2].seq, 3LL);
+    ASSERT_STR(l[1].file, base(p2));
+    check_line_is_the_file(&l[1], p2);
+    teardown();
+}
+
+/* The pin is what lets the EAPOL sinks hash after releasing their lock
+ * without the line going false. Pinned size: a later append is not
+ * hashed. Pinned inode: a later rename over the name is not hashed.
+ * Seen red hashing to EOF (size and hash of the longer file) and with
+ * the pin reopening by name (the replacement's hash). */
+static void test_pin_holds_the_committed_bytes(void) {
+    setup();
+    char err[SFILE_ERR_MAX];
+    int dfd = sfile_private_dir(g_dir, err, sizeof(err));
+    ASSERT(dfd >= 0);
+    if (dfd < 0) { teardown(); return; }
+    static const char first[] = "WPA*01*first\n";
+    static const char more[]  = "WPA*01*later\n";
+    char path[400];
+    snprintf(path, sizeof(path), "%s/eapol.22000", g_dir);
+    FILE *f = fopen(path, "wb");
+    ASSERT(f != NULL);
+    if (f) { fwrite(first, 1, sizeof(first) - 1, f); fclose(f); }
+
+    evm_pin_t pin;
+    ASSERT_EQ(evidence_manifest_pin(dfd, "eapol.22000", &pin,
+                                    err, sizeof(err)), 0);
+    f = fopen(path, "ab");                    /* the next append */
+    ASSERT(f != NULL);
+    if (f) { fwrite(more, 1, sizeof(more) - 1, f); fclose(f); }
+    evm_meta_t m = { EVM_SINK_HASHCAT_22000, NULL, NULL };
+    ASSERT_EQ(evidence_manifest_record_pinned(&pin, &m, err, sizeof(err)), 0);
+    ASSERT_EQ(pin.fd, -1);                    /* consumed */
+    ASSERT_EQ(pin.dirfd, -1);
+
+    char want[65];
+    sha256_hex((const uint8_t *)first, sizeof(first) - 1, want);
+    static mf_line_t l[4];
+    ASSERT_EQ(mf_read_dir(g_dir, l, 4, NULL), 1);
+    ASSERT_EQ(l[0].size, (long long)(sizeof(first) - 1));
+    ASSERT_STR(l[0].sha256, want);
+
+    /* Replaced by rename after the pin, the way a fresher handshake
+     * pcap supersedes the last. */
+    char hs[400], tmp[400];
+    snprintf(hs, sizeof(hs), "%s/hs.pcap", g_dir);
+    snprintf(tmp, sizeof(tmp), "%s/.hs.tmp", g_dir);
+    f = fopen(hs, "wb");
+    if (f) { fwrite("old", 1, 3, f); fclose(f); }
+    ASSERT_EQ(evidence_manifest_pin(dfd, "hs.pcap", &pin, err, sizeof(err)), 0);
+    f = fopen(tmp, "wb");
+    if (f) { fwrite("new!", 1, 4, f); fclose(f); }
+    ASSERT_EQ(rename(tmp, hs), 0);
+    m.sink = EVM_SINK_HANDSHAKE_PCAP;
+    ASSERT_EQ(evidence_manifest_record_pinned(&pin, &m, err, sizeof(err)), 0);
+    sha256_hex((const uint8_t *)"old", 3, want);
+    ASSERT_EQ(mf_read_dir(g_dir, l, 4, NULL), 2);
+    ASSERT_STR(l[1].file, "hs.pcap");
+    ASSERT_EQ(l[1].size, 3LL);
+    ASSERT_STR(l[1].sha256, want);
+
+    /* A file that shrank under its pin is refused, not listed short. */
+    ASSERT_EQ(evidence_manifest_pin(dfd, "eapol.22000", &pin,
+                                    err, sizeof(err)), 0);
+    ASSERT_EQ(truncate(path, 4), 0);
+    ASSERT_EQ(evidence_manifest_record_pinned(&pin, &m, err, sizeof(err)), -1);
+    ASSERT(strstr(err, "shrank") != NULL);
+    ASSERT_EQ(mf_read_dir(g_dir, l, 4, NULL), 2);
+
+    /* Unpin is idempotent, and a failed pin leaves nothing to release. */
+    evidence_manifest_unpin(&pin);
+    ASSERT_EQ(evidence_manifest_pin(dfd, "absent", &pin, err, sizeof(err)), -1);
+    ASSERT_EQ(pin.fd, -1);
+    ASSERT_EQ(pin.dirfd, -1);
+    evidence_manifest_unpin(&pin);
+    close(dfd);
+    teardown();
+}
+
+/* The wired ring never stores more than 64 bytes (capture.c), so the
+ * per-record clamp only acts on a corrupt raw_len — seeded here, since
+ * capture.c cannot produce one. Seen red with the clamp removed
+ * (incl_len 100, past the header's snaplen). */
+static void test_alert_pcap_clamps_a_corrupt_raw_len(void) {
+    setup();
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    uint8_t f[1600];
+    int n = build_tcp(f, sizeof(f), 1460);
+    ring_push(&s, f, n, 1700000000);
+    s.packets[0].raw_len = 100;               /* > sizeof(raw) */
+    alert_t a;
+    ip_alert(&a, "THREAT_IP");
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, (int)sizeof(path)), 1);
+    FILE *fp = fopen(path, "rb");
+    ASSERT(fp != NULL);
+    if (!fp) { teardown(); return; }
+    uint8_t b[512];
+    size_t got = fread(b, 1, sizeof(b), fp);
+    fclose(fp);
+    ASSERT_EQ((long)got, 24L + 16 + 64);
+    ASSERT_EQ((long long)le32(b + 24 + 8), 64LL);
+    ASSERT_EQ((long long)le32(b + 24 + 12), 1514LL);
+    teardown();
+}
+
+/* A kind outside the .def has no name: the manifest omits `rule`, as it
+ * does for a file with no alert, rather than carry a placeholder. The
+ * engine's evidence sink cannot reach this case (it needs the name for
+ * its file name and refuses without one; engine.c says so). Seen red
+ * with the record() emitting `rule` unconditionally. */
+static void test_unnamed_kind_omits_rule(void) {
+    setup();
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    uint8_t f[1600];
+    int n = build_tcp(f, sizeof(f), 0);
+    ring_push(&s, f, n, 1700000000);
+    alert_t a;
+    ip_alert(&a, "?");
+    a.type = (alert_type_t)ALERT_TYPE_COUNT;
+    char path[512];
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, (int)sizeof(path)), 1);
+    static mf_line_t l[2];
+    ASSERT_EQ(mf_read_dir(g_dir, l, 2, NULL), 1);
+    ASSERT_EQ(l[0].has_rule, 0);
+    ASSERT_EQ(l[0].has_incident, 1);
+    teardown();
+}
+
+/* --eapol-dir: a manifest failure on the evidence pcap is counted on the
+ * EAPOL sink's counter (storage_eapol_failures, !persist), the file is
+ * still committed, and no half line is left. Seen red with the
+ * sfile_fail() in eapol_log.c's manifest_settle() removed. The handshake
+ * sinks share that path; test_eapol_log.c drives it from a 22000 append. */
+static void test_eapol_dir_manifest_failure_is_counted(void) {
+    setup();
+    alert_pcap_set_dir(NULL);
+    open_eapol(g_dir);
+    uint64_t ids[2];
+    seed_ring(ids, 2);
+    char err[SFILE_ERR_MAX];
+    ASSERT_EQ(evidence_export_pcap("one.pcap", ids, 1, NULL, err, sizeof(err)), 1);
+    int before = eapol_export_failures();
+    evidence_manifest_test_fail_next();
+    ASSERT_EQ(evidence_export_pcap("two.pcap", ids, 2, NULL, err, sizeof(err)), 2);
+    ASSERT_EQ(eapol_export_failures(), before + 1);
+    ASSERT(strstr(eapol_export_error(), "manifest") != NULL);
+    char path[400];
+    snprintf(path, sizeof(path), "%s/two.pcap", g_dir);
+    struct stat st;
+    ASSERT_EQ(stat(path, &st), 0);            /* committed regardless */
+
+    char mname[200], mpath[400];
+    ASSERT_EQ(mf_count(g_dir, mname, sizeof(mname)), 1);
+    snprintf(mpath, sizeof(mpath), "%s/%s", g_dir, mname);
+    static mf_line_t l[4];
+    int bad = -1, tail = -1;
+    ASSERT_EQ(mf_read_path(mpath, l, 4, &bad, &tail), 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT_EQ(tail, 0);
+    ASSERT_STR(l[0].file, "one.pcap");
+    teardown();
+}
+
 static void test_sink_names_and_reconstructed(void) {
     ASSERT_STR(evidence_manifest_sink_name(EVM_SINK_ALERT_PCAP), "alert_pcap");
     ASSERT_STR(evidence_manifest_sink_name(EVM_SINK_EVIDENCE_PCAP), "evidence_pcap");
@@ -662,5 +913,11 @@ void run_evidence_manifest_tests(void) {
     RUN_TEST(test_each_directory_lists_its_own_files);
     RUN_TEST(test_sweep_expires_the_manifest_and_a_new_one_starts);
     RUN_TEST(test_record_refuses_non_files);
+    RUN_TEST(test_stuck_fragment_abandons_the_manifest);
+    RUN_TEST(test_fsync_failure_spends_its_seq);
+    RUN_TEST(test_pin_holds_the_committed_bytes);
+    RUN_TEST(test_alert_pcap_clamps_a_corrupt_raw_len);
+    RUN_TEST(test_unnamed_kind_omits_rule);
+    RUN_TEST(test_eapol_dir_manifest_failure_is_counted);
     RUN_TEST(test_sink_names_and_reconstructed);
 }

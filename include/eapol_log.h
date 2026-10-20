@@ -300,4 +300,9 @@ int  eapol_reject_count(eapol_reject_t why);
  * CVE-2020-24587) in src/fragattack.c. */
 int  eapol_key_generation(const uint8_t bssid[6], const uint8_t sta[6]);
 
+/* Test seam (#92 slice 3): the next per-handshake pcap rename fails,
+ * so a test can show a capture that never reached its name is not
+ * listed in the manifest. Not reachable from the CLI. */
+void eapol_test_fail_handshake_rename(int on);
+
 #endif /* SLOTH_EAPOL_LOG_H */

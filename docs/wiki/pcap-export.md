@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -285,11 +285,11 @@ working directory and is not in any manifest.
 |---|---|
 | `v` | format version, 1 |
 | `session` | the run, as in the file name |
-| `seq` | line number within this manifest, from 1 — a gap means a line went missing |
+| `seq` | line number within this manifest, from 1 — a gap means a line went missing. A line whose fsync failed stays (it is complete) and keeps its number; the next line takes the next one |
 | `file` | name relative to the manifest's own directory |
 | `size`, `sha256` | byte count and SHA-256 of the file as committed |
 | `sink` | which writer, table above |
-| `incident_id`, `rule` | the alert the file belongs to (#98 incident, kind without `ALERT_TYPE_`); **absent**, not empty, when there is none (handshake pcap, 22000, a direct evidence export) |
+| `incident_id`, `rule` | the alert the file belongs to (#98 incident, kind without `ALERT_TYPE_`); **absent**, not empty and not a placeholder, when there is none (handshake pcap, 22000, a direct evidence export) or the kind has no name — both alert sinks follow this one rule |
 | `reconstructed` | table above |
 | `written_at`, `written_at_epoch` | when the line was written, sloth's wall clock, UTC |
 
@@ -314,18 +314,32 @@ working directory and is not in any manifest.
   name — the bytes a verifier will read — rather than what sloth handed
   `write(2)`, and it is one hashing path for four writers that write
   four ways (stdio, raw `write`, temp + rename, append). The cost is one
-  read of a file still in the page cache.
+  read of a file still in the page cache — measured below.
+- **Pinned under the lock, hashed after it.** The three `--eapol-dir`
+  sinks commit under the EAPOL lock, two of them on the capture thread.
+  There they only *pin* the committed file — open it through the dirfd,
+  take its size, dup the dirfd: a few syscalls, no read — and the hash,
+  the append and the fsync run after the lock is released. The pin keeps
+  the line true: the open descriptor is the inode that was committed, so
+  a later rename over the name cannot be hashed in its place, and only
+  the pinned size is hashed, so a later `eapol.22000` append is not
+  counted in this line. A file that shrank under its pin is not listed.
 - **eapol.22000 appends**, so each of its lines hashes the whole file as
   it stood after that append; the newest line is the current file.
 - **Handshake pcaps replace-latest** (#145 default, unchanged), so a
   later line for the same name supersedes the earlier one, whose hash
   then names bytes that are no longer on disk. That is expected, not
   tampering.
-- **Crash shape.** Each line is written whole at the end of the file
-  and fsync'ed before the call returns, so a crash leaves a valid
-  prefix: every newline-terminated line parses; at most a final
+- **Crash shape.** Each line is one `pwrite` of the whole line at the
+  end of the file, fsync'ed before the call returns, so a crash leaves
+  a valid prefix: every newline-terminated line parses; at most a final
   fragment does not. A failed append is truncated back off, so a half
-  line never sits in front of the next good one.
+  line never sits in front of the next good one. If the truncate fails
+  too, that manifest is **abandoned** — closed, never appended to again
+  — and the next file is listed in a fresh `…-2.jsonl` of the same
+  session (`seq` restarts at 1 there): the fragment stays as the old
+  file's tail, which a reader drops like a crash tail, instead of
+  gluing itself to the next good line.
 - **Failures are counted, never blocking.** A manifest that cannot be
   created, hashed or appended is counted as a write failure of the sink
   whose directory it is — `storage_pcap_failures` or
@@ -346,6 +360,33 @@ working directory and is not in any manifest.
   and the manifest tests cross-check each file's hash against
   `sha256sum(1)` where the host has it.
 
+**What it costs.** `make bench` (`tests/bench/bench_manifest.c`) times
+one `eapol.22000` line, split into the part under the EAPOL lock and
+the part after it. i7-8665U, `-O2`, 20 iterations, medians:
+
+| `eapol.22000` size (≈ PMKID lines) | under lock (pin) | after unlock (hash + append + fsync), tmpfs | same, ext4 on NVMe |
+|---|---|---|---|
+| 4 KiB (≈ 10) | 0.001 ms | 0.02 ms | 2.8 ms |
+| 1 MiB (≈ 3,000) | 0.002 ms | 5.0 ms | 7.3 ms |
+| 16 MiB (≈ 50,000) | 0.004 ms | 80.6 ms | 81.4 ms |
+
+The embedded SHA-256 runs at about 200 MB/s on that host; expect it
+several times slower on an ARM sensor, and an SD card's fsync in the
+tens of milliseconds. Two things follow. The lock is no longer the
+problem: nothing else waiting on the EAPOL lock (the poll thread's
+snapshot, an evidence export) waits on a hash. But the capture thread
+still does the hash itself, between frames, once per PMKID or completed
+handshake — and `eapol.22000` grows without bound while handshakes keep
+arriving, because each append refreshes its mtime and the retention
+sweep is by mtime. A sensor that collects for weeks without rotating
+`--eapol-dir` will spend tens to hundreds of milliseconds of capture
+time per new handshake. Moving the hash to its own thread would remove
+that; it is not done, because a handshake is a rare event next to the
+frame rate, and a writer thread is a lifetime and shutdown problem this
+slice did not need. The pcap sinks hash files of kilobytes and are not
+a measurable cost. Point `BENCH_DIR` at the sensor's own `--eapol-dir`
+filesystem to measure it there.
+
 ### What a hash does not establish
 
 **A hash is not chain of custody.** It shows that a file's bytes are
@@ -363,10 +404,14 @@ that external copy, not against the one still on the sensor. The
 manifest makes that procedure cheap; it does not replace it.
 
 Pinned by `tests/test_evidence_manifest.c` (both alert sinks, session
-naming and collisions, a shared directory, every crash prefix, the
-sweep, failure accounting), `tests/test_eapol_log.c` (both handshake
-sinks, a failed 22000 append) and `tests/test_evidence_alert.c` (the
-engine hands the incident and rule through).
+naming and collisions, a shared directory, the line format against
+every byte-prefix, the sweep, failure accounting on both directories'
+counters, a failed rollback abandoning the manifest, a failed fsync
+spending its seq, the pin's size and inode), `tests/test_eapol_log.c`
+(both handshake sinks, a failed 22000 append, a manifest failure on
+the EAPOL counter, a handshake pcap whose rename failed) and
+`tests/test_evidence_alert.c` (the engine hands the incident and rule
+through).
 
 ### Still open on #92
 

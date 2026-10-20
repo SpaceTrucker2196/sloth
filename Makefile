@@ -587,6 +587,9 @@ test-capture-path: test
 # -O0 test build. Deliberately not a `make test` dependency: it reports a
 # time and a slow runner is not a defect. It does fail when a table is
 # short of capacity. The recorded figure lives in docs/wiki/ring-buffers.md.
+# tests/bench/bench_manifest.c (#92 slice 3) times one manifest line
+# against a growing eapol.22000, under and outside the EAPOL lock;
+# recorded in docs/wiki/pcap-export.md §5.
 # The binary lives under $(OBJDIR) like the objects it links: a shared
 # build/bench/ would let `make bench` in one configuration see its own
 # objects older than a binary last linked by another, and run that one.

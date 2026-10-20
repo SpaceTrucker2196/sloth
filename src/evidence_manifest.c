@@ -11,11 +11,13 @@
 #include "sha256.h"
 #include "sloth_clock.h"
 
-/* See the header for the format and the design. Everything here runs
- * under g_mu: callers are the capture thread (handshake and hashcat
- * writes, inside the EAPOL module's own lock) and the poll thread (both
- * alert pcaps). Lock order is caller's lock, then g_mu; nothing here
- * calls back out, so the order cannot invert. */
+/* See the header for the format and the design. Slot and session state
+ * is under g_mu; hashing is not, so two sinks hash in parallel and only
+ * the append is serialised. Callers: the capture thread (handshake and
+ * hashcat writes, after the EAPOL lock is released) and the poll thread
+ * (both alert pcaps). A caller that does hold its own lock here takes
+ * g_mu second; nothing here calls back out, so the order cannot
+ * invert. */
 
 /* One open manifest per directory this session has written into. Four
  * is two sinks with headroom: --pcap-dir and --eapol-dir are the only
@@ -43,7 +45,7 @@ static uint64_t        g_clock;            /* LRU counter, not time   */
 static char            g_session[EVM_SESSION_MAX];
 static int             g_force_on;
 static uint64_t        g_force_suffix;
-static int             g_fail_next;
+static evm_fault_t      g_fault;
 
 static const char *const SINK_NAMES[EVM_SINK_COUNT] = {
     "alert_pcap", "evidence_pcap", "handshake_pcap", "hashcat_22000",
@@ -121,7 +123,7 @@ void evidence_manifest_reset(void) {
     for (int i = 0; i < EVM_SLOTS; i++) close_slot(&g_slots[i]);
     g_session[0] = '\0';
     g_clock = 0;
-    g_fail_next = 0;
+    g_fault = EVM_FAULT_NONE;
     g_force_on = 0;
     g_force_suffix = 0;
     pthread_mutex_unlock(&g_mu);
@@ -134,10 +136,14 @@ void evidence_manifest_test_force_suffix(int on, uint64_t suffix) {
     pthread_mutex_unlock(&g_mu);
 }
 
-void evidence_manifest_test_fail_next(void) {
+void evidence_manifest_test_fault(evm_fault_t f) {
     pthread_mutex_lock(&g_mu);
-    g_fail_next = 1;
+    g_fault = f;
     pthread_mutex_unlock(&g_mu);
+}
+
+void evidence_manifest_test_fail_next(void) {
+    evidence_manifest_test_fault(EVM_FAULT_APPEND);
 }
 
 static int bare(const char *n) {
@@ -145,12 +151,35 @@ static int bare(const char *n) {
            strchr(n, '/') == NULL;
 }
 
-/* SHA-256 and length of `name` as it is under `dirfd` now. Read through
- * the pinned descriptor with O_NOFOLLOW and refused unless it is a
- * regular file, so what is hashed is the file the sink committed and
- * not whatever a link would lead to. */
-static int hash_file(int dirfd, const char *name, char hex[65],
-                     uint64_t *size, char *err, size_t errsz) {
+static void pin_clear(evm_pin_t *pin) {
+    pin->dirfd = -1;
+    pin->fd = -1;
+    pin->size = 0;
+    pin->name[0] = '\0';
+}
+
+void evidence_manifest_unpin(evm_pin_t *pin) {
+    if (!pin) return;
+    if (pin->fd >= 0) close(pin->fd);
+    if (pin->dirfd >= 0) close(pin->dirfd);
+    pin_clear(pin);
+}
+
+/* Opened through the pinned descriptor with O_NOFOLLOW and refused
+ * unless it is a regular file, so what is hashed is the file the sink
+ * committed and not whatever a link would lead to. No read here: this
+ * runs under the caller's lock. */
+int evidence_manifest_pin(int dirfd, const char *name, evm_pin_t *pin,
+                          char *err, size_t errsz) {
+    char ebuf[SFILE_ERR_MAX];
+    if (!err || !errsz) { err = ebuf; errsz = sizeof(ebuf); }
+    err[0] = '\0';
+    if (!pin) return -1;
+    pin_clear(pin);
+    if (dirfd < 0 || !bare(name) || strlen(name) >= sizeof(pin->name)) {
+        snprintf(err, errsz, "manifest: bad arguments");
+        return -1;
+    }
     int fd = openat(dirfd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) {
         snprintf(err, errsz, "%s: cannot reopen to hash: %s",
@@ -163,24 +192,48 @@ static int hash_file(int dirfd, const char *name, char hex[65],
         close(fd);
         return -1;
     }
+    int dfd = fcntl(dirfd, F_DUPFD_CLOEXEC, 0);
+    if (dfd < 0) {
+        snprintf(err, errsz, "%s: cannot hold the directory: %s",
+                 name, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    pin->dirfd = dfd;
+    pin->fd = fd;
+    pin->size = (uint64_t)st.st_size;
+    snprintf(pin->name, sizeof(pin->name), "%s", name);
+    return 0;
+}
+
+/* SHA-256 of the pinned file's first pin->size bytes. pread from 0, so
+ * the descriptor's offset does not matter and a later append — past
+ * pin->size — is not read. A file that shrank under the pin is refused:
+ * the bytes this line would describe are gone. */
+static int hash_pinned(const evm_pin_t *pin, char hex[65],
+                       char *err, size_t errsz) {
     sha256_ctx_t c;
     sha256_init(&c);
     uint8_t buf[8192];
-    uint64_t total = 0;
-    for (;;) {
-        ssize_t r = read(fd, buf, sizeof(buf));
+    uint64_t off = 0;
+    while (off < pin->size) {
+        size_t want = sizeof(buf);
+        if (pin->size - off < want) want = (size_t)(pin->size - off);
+        ssize_t r = pread(pin->fd, buf, want, (off_t)off);
         if (r < 0) {
             if (errno == EINTR) continue;
             snprintf(err, errsz, "%s: read failed while hashing: %s",
-                     name, strerror(errno));
-            close(fd);
+                     pin->name, strerror(errno));
             return -1;
         }
-        if (r == 0) break;
+        if (r == 0) {
+            snprintf(err, errsz, "%s: shrank while hashing — not listed",
+                     pin->name);
+            return -1;
+        }
         sha256_update(&c, buf, (size_t)r);
-        total += (uint64_t)r;
+        off += (uint64_t)r;
     }
-    close(fd);
     uint8_t d[32];
     sha256_final(&c, d);
     static const char hx[] = "0123456789abcdef";
@@ -189,7 +242,6 @@ static int hash_file(int dirfd, const char *name, char hex[65],
         hex[i * 2 + 1] = hx[d[i] & 0xf];
     }
     hex[64] = '\0';
-    *size = total;
     return 0;
 }
 
@@ -299,17 +351,36 @@ int evidence_manifest_record(int dirfd, const char *name,
     char ebuf[SFILE_ERR_MAX];
     if (!err || !errsz) { err = ebuf; errsz = sizeof(ebuf); }
     err[0] = '\0';
-    if (dirfd < 0 || !bare(name) || !meta) {
+    if (!meta) {
         snprintf(err, errsz, "manifest: bad arguments");
+        return -1;
+    }
+    evm_pin_t pin;
+    if (evidence_manifest_pin(dirfd, name, &pin, err, errsz) != 0) return -1;
+    return evidence_manifest_record_pinned(&pin, meta, err, errsz);
+}
+
+int evidence_manifest_record_pinned(evm_pin_t *pin, const evm_meta_t *meta,
+                                    char *err, size_t errsz) {
+    char ebuf[SFILE_ERR_MAX];
+    if (!err || !errsz) { err = ebuf; errsz = sizeof(ebuf); }
+    err[0] = '\0';
+    if (!pin || pin->fd < 0 || pin->dirfd < 0 || !meta) {
+        snprintf(err, errsz, "manifest: bad arguments");
+        evidence_manifest_unpin(pin);
         return -1;
     }
 
     char hex[65];
-    uint64_t size = 0;
-    if (hash_file(dirfd, name, hex, &size, err, errsz) != 0) return -1;
+    uint64_t size = pin->size;
+    if (hash_pinned(pin, hex, err, errsz) != 0) {
+        evidence_manifest_unpin(pin);
+        return -1;
+    }
+    const int dirfd = pin->dirfd;
 
-    char fname[160], inc[80], rule[80];
-    json_str(fname, sizeof(fname), name);
+    char fname[EVM_FILE_MAX * 6 + 8], inc[80], rule[80];
+    json_str(fname, sizeof(fname), pin->name);
     json_str(inc,   sizeof(inc),   meta->incident_id ? meta->incident_id : "");
     json_str(rule,  sizeof(rule),  meta->rule ? meta->rule : "");
 
@@ -322,7 +393,7 @@ int evidence_manifest_record(int dirfd, const char *name,
 
     struct tm tmv;
     struct tm *t = gmtime_r(&now, &tmv);
-    char line[1024];
+    char line[2048];
     int n = snprintf(line, sizeof(line),
         "{\"v\":1,\"session\":\"%s\",\"seq\":%llu,\"file\":\"%s\","
         "\"size\":%llu,\"sha256\":\"%s\",\"sink\":\"%s\"",
@@ -359,8 +430,9 @@ int evidence_manifest_record(int dirfd, const char *name,
     }
     off_t end = mst.st_size;
     int bad;
-    if (g_fail_next) {
-        g_fail_next = 0;
+    evm_fault_t fault = g_fault;
+    g_fault = EVM_FAULT_NONE;
+    if (fault == EVM_FAULT_APPEND || fault == EVM_FAULT_APPEND_STUCK) {
         /* Half a line, as a full disk would leave it, so the rollback
          * below is exercised and not only the error report. */
         (void)pwrite_all(s->fd, line, (size_t)n / 2, end);
@@ -371,12 +443,32 @@ int evidence_manifest_record(int dirfd, const char *name,
     }
     if (bad) {
         snprintf(err, errsz, "%s: write failed: %s", s->name, strerror(errno));
-        if (ftruncate(s->fd, end) != 0) { /* reported above already */ }
+        int cut;
+        if (fault == EVM_FAULT_APPEND_STUCK) { errno = EIO; cut = -1; }
+        else cut = ftruncate(s->fd, end);
+        if (cut != 0) {
+            /* The fragment stays. Appending after it would glue it to
+             * the next good line and make that one unparseable, so this
+             * manifest is finished: the slot closes, and the next record
+             * creates "-N" (open_manifest skips the taken name). The
+             * fragment is then this file's tail, which a reader drops
+             * exactly like a crash tail. */
+            size_t el = strlen(err);
+            if (el < errsz)
+                snprintf(err + el, errsz - el,
+                         "; rollback failed (%s) — manifest abandoned",
+                         strerror(errno));
+            close_slot(s);
+        }
         goto out;
     }
-    if (fsync(s->fd) != 0) {
+    if (fault == EVM_FAULT_FSYNC || fsync(s->fd) != 0) {
         /* The line may or may not be durable; say so rather than
-         * pretend. It stays: it is complete, and it is true. */
+         * pretend. It stays: it is complete, and it is true. So its seq
+         * is spent — the next line must not reuse it, or two lines
+         * would share a number and a reader would take one for a
+         * duplicate. */
+        if (fault == EVM_FAULT_FSYNC) errno = EIO;
         snprintf(err, errsz, "%s: fsync failed: %s", s->name, strerror(errno));
         s->seq++;
         goto out;
@@ -385,6 +477,7 @@ int evidence_manifest_record(int dirfd, const char *name,
     rc = 0;
 out:
     pthread_mutex_unlock(&g_mu);
+    evidence_manifest_unpin(pin);
     return rc;
 }
 

@@ -249,17 +249,78 @@ static void hex_str(const char *s, char *out) {
     out[i*2] = '\0';
 }
 
-/* Caller holds g_mu (so g_out_fd is the pinned directory the file was
- * just committed into). A manifest failure is this sink's write failure
- * for the badge and sensor_health, and leaves the file it describes
- * alone (src/evidence_manifest.h). */
-static void manifest_note(const char *name, evm_sink_t sink,
+/* Manifest lines owed for files committed under g_mu (#92 slice 3).
+ * The file is pinned under the lock and hashed and listed after it is
+ * released (src/evidence_manifest.h, "Pinned, then hashed outside the
+ * caller's lock"): eapol.22000 is re-read whole on every append and the
+ * manifest is fsync'ed per line, and neither belongs on the capture
+ * thread with every other EAPOL caller — the poll thread's snapshot
+ * included — waiting on g_mu behind it. Two is the most one call
+ * commits: a 22000 line and the handshake pcap beside it. */
+#define MF_OWED_MAX 2
+typedef struct {
+    int         n;
+    evm_pin_t   pin[MF_OWED_MAX];
+    evm_sink_t  sink[MF_OWED_MAX];
+    const char *incident_id[MF_OWED_MAX];
+    const char *rule[MF_OWED_MAX];
+} mf_owed_t;
+
+/* Caller holds g_mu, so g_out_fd is the pinned directory the file was
+ * just committed into; the pin holds a dup of it, so closing the gate
+ * after the unlock cannot leave the committed file unlisted. A manifest
+ * failure is this sink's write failure for the badge and sensor_health,
+ * and leaves the file it describes alone. `incident_id` and `rule` must
+ * outlive manifest_settle(). */
+static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
                           const char *incident_id, const char *rule) {
     if (g_out_fd < 0) return;
     char err[SFILE_ERR_MAX];
-    evm_meta_t m = { sink, incident_id, rule };
-    if (evidence_manifest_record(g_out_fd, name, &m, err, sizeof(err)) != 0)
+    if (q->n >= MF_OWED_MAX) {
+        snprintf(err, sizeof(err), "%s: manifest queue full — not listed", name);
         sfile_fail(&g_fail, "eapol manifest", err);
+        return;
+    }
+    /* Not isolated by a test: the file was committed through this same
+     * descriptor a moment ago under this lock, so the pin's open fails
+     * only on descriptor exhaustion. The queue-full branch above is
+     * unreachable by construction (two notes per call at most). */
+    if (evidence_manifest_pin(g_out_fd, name, &q->pin[q->n],
+                              err, sizeof(err)) != 0) {
+        sfile_fail(&g_fail, "eapol manifest", err);
+        return;
+    }
+    q->sink[q->n] = sink;
+    q->incident_id[q->n] = incident_id;
+    q->rule[q->n] = rule;
+    q->n++;
+}
+
+/* Caller does NOT hold g_mu: the hash and the fsync happen here. The
+ * failure count is taken under the lock again, before this returns, so
+ * a caller that reads eapol_export_failures() next sees it. */
+static void manifest_settle(mf_owed_t *q) {
+    for (int i = 0; i < q->n; i++) {
+        char err[SFILE_ERR_MAX];
+        evm_meta_t m = { q->sink[i], q->incident_id[i], q->rule[i] };
+        if (evidence_manifest_record_pinned(&q->pin[i], &m,
+                                            err, sizeof(err)) != 0) {
+            pthread_mutex_lock(&g_mu);
+            sfile_fail(&g_fail, "eapol manifest", err);
+            pthread_mutex_unlock(&g_mu);
+        }
+    }
+    q->n = 0;
+}
+
+/* Test seam: the next handshake-pcap rename fails, as if renameat(2)
+ * had (EROFS, EIO). Under g_mu. */
+static int g_fault_hs_rename;
+
+void eapol_test_fail_handshake_rename(int on) {
+    pthread_mutex_lock(&g_mu);
+    g_fault_hs_rename = on ? 1 : 0;
+    pthread_mutex_unlock(&g_mu);
 }
 
 static int write_all(int fd, const char *buf, size_t n) {
@@ -285,7 +346,8 @@ static int write_all(int fd, const char *buf, size_t n) {
  * failed write is rolled back to the previous length so a full disk
  * leaves no half line, and is reported. */
 static void append_22000_line_for_bssid(const char *line,
-                                        const uint8_t bssid[6]) {
+                                        const uint8_t bssid[6],
+                                        mf_owed_t *owed) {
     /* The gate is re-checked here, not only at eapol_set_output_dir():
      * this is the last statement before crackable material becomes a
      * file, and that is where the cheapest possible check belongs. */
@@ -326,7 +388,8 @@ static void append_22000_line_for_bssid(const char *line,
      * one run-spanning file, so "what is eapol.22000 now" is the only
      * statement a hash of it can make (#92 slice 3). A failed append was
      * rolled back above and gets no line. */
-    if (!bad) manifest_note("eapol.22000", EVM_SINK_HASHCAT_22000, NULL, NULL);
+    if (!bad) manifest_note(owed, "eapol.22000", EVM_SINK_HASHCAT_22000,
+                            NULL, NULL);
 }
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
@@ -341,7 +404,7 @@ static void append_22000_line_for_bssid(const char *line,
  * A failed write (full disk) leaves the previous capture intact, and
  * rename() replaces whatever sits at the name — a planted symlink
  * included — rather than writing through it. */
-static void write_handshake_pcap(const pending_t *p) {
+static void write_handshake_pcap(const pending_t *p, mf_owed_t *owed) {
     /* Same gate as the 22000 append: a replayable handshake pcap is the
      * same crackable material in another container. */
     if (!g_collect || g_out_fd < 0) return;
@@ -377,18 +440,28 @@ static void write_handshake_pcap(const pending_t *p) {
         sfile_fail(&g_fail, "eapol", err);
         return;
     }
-    if (renameat(g_out_fd, tmp, g_out_fd, name) != 0) {
+    int rn;
+    if (g_fault_hs_rename) {
+        g_fault_hs_rename = 0;
+        errno = EIO;
+        rn = -1;
+    } else {
+        rn = renameat(g_out_fd, tmp, g_out_fd, name);
+    }
+    if (rn != 0) {
         snprintf(err, sizeof(err), "%s: rename failed: %s",
                  name, strerror(errno));
         unlinkat(g_out_fd, tmp, 0);
         sfile_fail(&g_fail, "eapol", err);
+        /* Not listed: whatever is at `name` now is the previous capture,
+         * and a line here would hash it as if this one had committed. */
         return;
     }
     /* reconstructed: true — M1..M4 in message order, assembled by sloth,
      * not frames in the order they were heard. Replace-latest (#145
      * default) means a later line for the same name supersedes this one,
      * and the earlier hash then names bytes no longer on disk. */
-    manifest_note(name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL);
+    manifest_note(owed, name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL);
 }
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
@@ -593,6 +666,8 @@ int eapol_observe_frame(const dot11_frame_t *f,
     if (msg == 0) return 0;
 
     /* ── Update state machine + log ────────────────────── */
+    mf_owed_t owed;
+    owed.n = 0;
     pthread_mutex_lock(&g_mu);
 
     eapol_event_t ev;
@@ -781,9 +856,9 @@ int eapol_observe_frame(const dot11_frame_t *f,
         snprintf(line, sizeof(line),
                  "WPA*01*%s*%s*%s*%s***",
                  pmkid_hex, bssid_hex, sta_hex, essid_hex);
-        append_22000_line_for_bssid(line, ev.bssid);
+        append_22000_line_for_bssid(line, ev.bssid, &owed);
         /* Also dump per-(BSSID, STA) pcap with the buffered M1. */
-        write_handshake_pcap(p);
+        write_handshake_pcap(p, &owed);
     }
 
     /* One 22000 record per attempt: a retransmitted M2 carries the same
@@ -820,13 +895,14 @@ int eapol_observe_frame(const dot11_frame_t *f,
                  "WPA*02*%s*%s*%s*%s*%s*%s*%02x",
                  mic_hex, bssid_hex, sta_hex, essid_hex,
                  anonce_hex, eapol_hex, mp);
-        append_22000_line_for_bssid(line, ev.bssid);
+        append_22000_line_for_bssid(line, ev.bssid, &owed);
         p->exported = 1;
         /* Per-handshake pcap with M1+M2 (and any later M3/M4). */
-        write_handshake_pcap(p);
+        write_handshake_pcap(p, &owed);
     }
 
     pthread_mutex_unlock(&g_mu);
+    manifest_settle(&owed);
     return 1;
 }
 
@@ -956,6 +1032,8 @@ int eapol_export_commit(const char *tmp, const char *name,
         if (err && errsz) snprintf(err, errsz, "not a bare file name");
         return -1;
     }
+    mf_owed_t owed;
+    owed.n = 0;
     pthread_mutex_lock(&g_mu);
     int rc = -1;
     struct stat st;
@@ -976,11 +1054,15 @@ int eapol_export_commit(const char *tmp, const char *name,
     } else {
         if (fsync(g_out_fd) != 0) { /* best effort; see the header */ }
         rc = 0;
-        /* Under the same lock as the rename, so a gate that closes
-         * between the two cannot leave a committed file unlisted. */
-        manifest_note(name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule);
+        /* Pinned under the same lock as the rename, so a gate that
+         * closes between the two cannot leave a committed file
+         * unlisted; hashed after it, so the capture thread is not
+         * waiting on g_mu while this file is read and the manifest
+         * fsync'ed. */
+        manifest_note(&owed, name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule);
     }
     pthread_mutex_unlock(&g_mu);
+    manifest_settle(&owed);
     return rc;
 }
 

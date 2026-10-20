@@ -162,7 +162,10 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
 
         /* incl_len is what the ring stored, orig_len what was on the
          * wire; the clamp is the snaplen above, so no record can claim
-         * more bytes than follow it or more than the header allows. */
+         * more bytes than follow it or more than the header allows.
+         * capture.c never stores more than 64, so the clamp only acts on
+         * a corrupt raw_len; test_alert_pcap_clamps_a_corrupt_raw_len
+         * seeds one to show it does. */
         uint32_t incl = p->raw_len;
         if (incl > PCAP_SNAPLEN_WIRED_RING) incl = PCAP_SNAPLEN_WIRED_RING;
         pcap_fmt_put_rec(f, p->ts_sec, p->ts_usec, p->raw, incl,
@@ -192,6 +195,9 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         const char *tn = alert_type_name(a->type);
         static const char pfx[] = "ALERT_TYPE_";
         if (tn && strncmp(tn, pfx, sizeof(pfx) - 1) == 0) tn += sizeof(pfx) - 1;
+        /* "" for a kind outside the .def: the manifest then omits
+         * `rule` rather than carry a placeholder (engine.c's evidence
+         * sink follows the same rule). */
         snprintf(rule, sizeof(rule), "%s", tn ? tn : "");
         evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule };
         if (evidence_manifest_record(g_dirfd, name, &m, err, sizeof(err)) != 0)

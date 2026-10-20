@@ -44,8 +44,27 @@
  *
  * Lines are appended as files commit and each is fsync'ed before the
  * call returns, so a crash leaves a valid prefix: every newline-
- * terminated line parses. A failed append is truncated back off, so a
- * half line never sits in front of the next good one.
+ * terminated line parses. Each line is one pwrite of the whole line at
+ * the end of the file; a failed append is truncated back off, so a
+ * half line never sits in front of the next good one. If the cut-back
+ * fails too, the manifest is abandoned — closed, never written again —
+ * and the next line starts a fresh manifest under the next "-N" name:
+ * the fragment is then the old file's last bytes, which a reader drops
+ * like a crash tail, and not glued to the front of a good line.
+ *
+ * ── Pinned, then hashed outside the caller's lock ──
+ *
+ * The EAPOL sinks commit on the capture thread under the EAPOL lock.
+ * Hashing a file and fsyncing the manifest there would stall frame
+ * processing behind disk I/O — eapol.22000 grows across runs and each
+ * append re-reads all of it. So a caller pins the committed file under
+ * its lock (evidence_manifest_pin: open it through the dirfd, take its
+ * size, dup the dirfd — a few syscalls, no read) and hashes and appends
+ * after it unlocks (evidence_manifest_record_pinned). The pin is what
+ * keeps the line true: the open descriptor is the inode that was
+ * committed, so a later rename over the name cannot substitute another
+ * file, and only the pinned size is hashed, so a later append to
+ * eapol.22000 cannot add bytes this line did not commit.
  *
  * ── What it is not ──
  *
@@ -108,6 +127,32 @@ int evidence_manifest_record(int dirfd, const char *name,
                              const evm_meta_t *meta,
                              char *err, size_t errsz);
 
+/* A committed file held for hashing after the caller's lock is
+ * released. `dirfd` is a dup of the sink's directory descriptor, `fd`
+ * the file opened through it, `size` its length at pin time. */
+#define EVM_FILE_MAX 160
+typedef struct {
+    int      dirfd;
+    int      fd;
+    uint64_t size;
+    char     name[EVM_FILE_MAX];
+} evm_pin_t;
+
+/* Pin `name` under `dirfd`: O_NOFOLLOW, regular files only, no read.
+ * 0, or -1 with a reason in err and *pin left unpinned (fds -1). */
+int evidence_manifest_pin(int dirfd, const char *name, evm_pin_t *pin,
+                          char *err, size_t errsz);
+
+/* Hash the pinned file's first pin->size bytes and append its line to
+ * the session manifest in the pinned directory. Always unpins. 0, or
+ * -1 with a reason in err — the caller counts it. */
+int evidence_manifest_record_pinned(evm_pin_t *pin, const evm_meta_t *meta,
+                                    char *err, size_t errsz);
+
+/* Release a pin without recording. Safe on an unpinned or zeroed pin
+ * whose fds are -1. */
+void evidence_manifest_unpin(evm_pin_t *pin);
+
 /* This session's manifest name in `dirfd`'s directory, if one has been
  * created: 0, or -1 with out = "". */
 int evidence_manifest_name(int dirfd, char *out, size_t outsz);
@@ -122,9 +167,20 @@ void evidence_manifest_reset(void);
 
 /* Test seams. force_suffix makes the next session use `suffix` instead
  * of a random one (on = 0 restores random), so a test can make two
- * sessions collide. fail_next makes the next record fail at its append,
- * after the manifest exists. Neither is reachable from the CLI. */
+ * sessions collide. test_fault arms one failure for the next record,
+ * after the manifest exists:
+ *   APPEND        half the line is written, then ENOSPC; rolled back.
+ *   APPEND_STUCK  the same, and the rollback ftruncate fails too.
+ *   FSYNC         the whole line is written, then fsync fails.
+ * fail_next is APPEND. None is reachable from the CLI. */
+typedef enum {
+    EVM_FAULT_NONE = 0,
+    EVM_FAULT_APPEND,
+    EVM_FAULT_APPEND_STUCK,
+    EVM_FAULT_FSYNC,
+} evm_fault_t;
 void evidence_manifest_test_force_suffix(int on, uint64_t suffix);
+void evidence_manifest_test_fault(evm_fault_t f);
 void evidence_manifest_test_fail_next(void);
 
 #endif /* SLOTH_EVIDENCE_MANIFEST_H */
