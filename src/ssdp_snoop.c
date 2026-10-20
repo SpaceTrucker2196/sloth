@@ -113,12 +113,13 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
     if (!is_notify && !is_msearch) return 0;
 
     char nt[80]  = ""; char nts[32]  = ""; char usn[96] = "";
-    char loc[96] = ""; char st[80]   = "";
+    char loc[96] = ""; char st[80]   = ""; char srv[96] = "";
     get_hdr(msg, len, "NT",       nt,  sizeof(nt));
     get_hdr(msg, len, "NTS",      nts, sizeof(nts));
     get_hdr(msg, len, "USN",      usn, sizeof(usn));
     get_hdr(msg, len, "LOCATION", loc, sizeof(loc));
     get_hdr(msg, len, "ST",       st,  sizeof(st));
+    get_hdr(msg, len, "SERVER",   srv, sizeof(srv));
 
     /* Determine NTS short string */
     const char *nts_short = "search";
@@ -138,6 +139,7 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
     snprintf(e->usn,      sizeof(e->usn),       "%s", usn);
     snprintf(e->location, sizeof(e->location),  "%s", loc);
     snprintf(e->nts,      sizeof(e->nts),       "%s", nts_short);
+    if (srv[0]) snprintf(e->server, sizeof(e->server), "%s", srv);
     e->last_seen = sloth_wall();
     pthread_mutex_unlock(&g_mu);
 

@@ -144,6 +144,7 @@ CORE_COMMON_SRCS = \
        src/alerts/rules_wired.c \
        src/alerts/rules_wifi_mgmt.c \
        src/alerts/rules_twin.c \
+       src/alerts/rules_camera.c \
        src/tune.c src/fs_capacity.c            \
        src/views/alerts.c    \
        src/md5.c             \
@@ -207,6 +208,7 @@ CORE_COMMON_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
 CORE_COMMON_SRCS += src/ble_snoop.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
+CORE_COMMON_SRCS += src/camera_vendor.c
 CORE_COMMON_SRCS += src/privdrop.c
 CORE_COMMON_SRCS += src/poll.c
 

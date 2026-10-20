@@ -274,6 +274,13 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * A shape, not an adversary action, so no technique. */
         "ALERT_TYPE_COUNTRY_ABSENT",
         "ALERT_TYPE_DFS_MASKING",
+        /* #106 slice A: a camera's own mDNS / SSDP announcement and
+         * its transmitter's registry block. Cited by the IANA service
+         * registry, the UPnP DCPs + UDA 1.0, and the IEEE RA listing;
+         * no adversary step, so no technique. */
+        "ALERT_TYPE_CAM_MDNS_SERVICE",
+        "ALERT_TYPE_CAM_SSDP_DEVICE",
+        "ALERT_TYPE_CAM_SETUP_OUI",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

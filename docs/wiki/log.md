@@ -4358,3 +4358,16 @@ over 4096 slots, so two live keys sharing a slot no longer evict each
 other and re-emit every tick ([[jsonl-schema]] is unchanged: same
 records, fewer duplicates). Documented in [[wifi-sigint]] and
 `docs/views/beacons.md`.
+## 2026-10-20 — #106 slice A: camera identity from mDNS, SSDP and the transmitter OUI
+
+Three new WARN kinds, each on the empty-technique exposure list and each
+reading a table sloth already keeps against the new embedded
+`src/camera_vendor.c`. `CAM_MDNS_SERVICE` matches DNS-SD types IANA
+registers for camera video (`axis-video`, `cctv`) plus `rtsp`, reported
+as a protocol rather than a camera. `CAM_SSDP_DEVICE` matches a NOTIFY
+for UPnP `DigitalSecurityCamera:1`, or `Basic:1` only with a
+camera-vendor SERVER product token; `ssdp_device_t` gains `server`,
+kept across a byebye. `CAM_SETUP_OUI` matches a beaconing BSSID in a
+camera vendor's IEEE MA-L block with the U/L bit masked, and carries
+`randomized-local` when that bit was set. Sources in
+`research/papers/camera-vendor-identity.md`; [[alerts]] has the summary.

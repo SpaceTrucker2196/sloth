@@ -185,6 +185,11 @@ typedef struct {
     char   location[96];   /* LOCATION: URL, "" = unknown           */
     char   nts[16];        /* "alive", "byebye", "search"          */
     time_t last_seen;
+    /* SERVER: header, "" = never seen (#106 slice A). UDA 1.0 §1.1.2
+     * puts the product name here; CAM_SSDP_DEVICE reads it to tell a
+     * camera's Basic:1 root from anything else's. Sticky: a byebye
+     * carries no SERVER and must not erase what an alive said. */
+    char   server[96];
 } ssdp_device_t;
 
 /* ── WS-Discovery / ONVIF devices (#106 slice 1) ──────────

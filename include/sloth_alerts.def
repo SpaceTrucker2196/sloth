@@ -259,3 +259,16 @@ X(COUNTRY_ABSENT, "") /* non-compliance heuristic, not adversary technique (#101
  * see research/regulatory/dfs-15.407-en301893.md. */
 /* new BSSID first heard on a DFS channel with no CSA leading there — 47 CFR 15.407(h), EN 301 893 §4.2.6, heuristic (#101 slice A) */
 X(DFS_MASKING, "") /* heuristic shape, not adversary technique (#101) */
+/* The next three are #106 slice A, in the same position as
+ * CAM_WS_DISCOVERY and CAM_SETUP_SSID: each is a camera's own
+ * announcement, read off traffic sloth did not solicit. T1046
+ * (Network Service Discovery) would claim an enumeration step sloth
+ * never takes. Basis cited in research/papers/camera-vendor-identity.md:
+ * the IANA Service Name registry, the UPnP Forum DCPs and UDA 1.0, and
+ * the IEEE RA MA-L listing. */
+/* mDNS service type IANA registers for camera video (axis-video, cctv) or RTSP — IANA service-names registry (#106 slice A) */
+X(CAM_MDNS_SERVICE, "") /* exposure, not adversary technique (#106 slice A) */
+/* SSDP NOTIFY for UPnP DigitalSecurityCamera:1, or Basic:1 with a camera-vendor SERVER product token — UPnP DCP 2005 / UDA 1.0 §1.1.2 (#106 slice A) */
+X(CAM_SSDP_DEVICE, "") /* exposure, not adversary technique (#106 slice A) */
+/* beaconing BSSID in a camera vendor's IEEE MA-L block, U/L bit masked — IEEE RA registry, IEEE 802-2014 §8.2 (#106 slice A) */
+X(CAM_SETUP_OUI, "") /* exposure, not adversary technique (#106 slice A) */

@@ -485,8 +485,9 @@ Full row, including the false-positive cases, in
 `research/papers/surveillance-vendor-endpoints.md`.
 ### Exposure rules — no ATT&CK technique, on purpose
 
-`OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1) and
-`CAM_SETUP_SSID` (#106 slice 2) return `""` from `alert_technique()`
+`OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1),
+`CAM_SETUP_SSID` (#106 slice 2) and the three camera-identity rules
+below (#106 slice A) return `""` from `alert_technique()`
 while still carrying a cited basis. What they report is a third
 party's device exposing itself — an unconfigured SoftAP, a camera
 announcing itself over unauthenticated multicast, a camera still in
@@ -527,6 +528,28 @@ Two kinds in `src/alerts/rules_regulatory.c`, both labelled
 Sources: `research/ieee/802.11d-country-element.md`,
 `research/regulatory/dfs-15.407-en301893.md`. Full rows in
 [`docs/views/alerts.md`](../views/alerts.md).
+### Camera identity: mDNS, SSDP, OUI (#106 slice A)
+
+Three more on the same exposure list, each reading a table sloth
+already keeps against `src/camera_vendor.c` (embedded, #145 ruling 8):
+
+- **`CAM_MDNS_SERVICE`** — a DNS-SD service type IANA registers for
+  camera video (`axis-video`, `cctv`), or `rtsp`, which the detail
+  reports as a protocol rather than a camera. Vendor-specific types
+  nobody registered or documented are not matched.
+- **`CAM_SSDP_DEVICE`** — a NOTIFY for UPnP `DigitalSecurityCamera:1`,
+  or `Basic:1` only when the SERVER product token names a camera
+  vendor. M-SEARCH is the asker's want and is skipped.
+- **`CAM_SETUP_OUI`** — a beaconing BSSID in a camera vendor's IEEE
+  MA-L block, compared with the U/L bit masked; a match on a locally
+  administered address carries `randomized-local` in the detail.
+
+All three WARN on first sighting with one alert per device and a rising
+count. They corroborate and never confirm: an OUI names who the IEEE
+assigned the block to and a SERVER string is the firmware's own claim,
+so each detail says what was and was not observed. Sources, and what was
+considered and left out (Ubiquiti, TP-Link, Wyze; unregistered mDNS
+types), in `research/papers/camera-vendor-identity.md`.
 
 ### Tunable thresholds (#82)
 

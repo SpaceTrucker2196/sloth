@@ -54,6 +54,11 @@ void rule_threat_domain(const sloth_state_t *s, time_t now);
 void rule_threat_ip(const sloth_state_t *s, time_t now);
 void rule_beaconing(const sloth_state_t *s, time_t now);
 
+/* src/alerts/rules_camera.c (#106 slice A) */
+void rule_cam_mdns_service(const sloth_state_t *s, time_t now);
+void rule_cam_ssdp_device(const sloth_state_t *s, time_t now);
+void rule_cam_setup_oui(const sloth_state_t *s, time_t now);
+
 /* src/alerts/rules_wifi_mgmt.c */
 void rule_deauth_flood(const sloth_state_t *s, time_t now);
 void rule_beacon_flood(const sloth_state_t *s, time_t now);
