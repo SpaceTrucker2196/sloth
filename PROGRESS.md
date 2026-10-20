@@ -100,6 +100,44 @@ non-blocking and stateless.
 
 ## Recently landed
 
+### 2026-10-20 — #149: RF-quality counters keyed by (channel, band)
+**Commits**: `ba01e61`
+**Touched**: `src/rf_quality.{c,h}`, `src/radiotap.{c,h}`,
+`src/capture/probe.c`, `tests/test_rf_quality.c`,
+`tests/test_radiotap.c`, `tests/test_capture_path.c`,
+`docs/views/channel.md`
+**Why**: daily triage filed #146-150 as splits off the 2026-10-19
+resolution plan (#145) plus one fresh UI issue. Of those, #149 was the
+only one buildable today without an owner call or a lab: 5 GHz and
+6 GHz channel numbers overlap, so `rf_quality.c`'s single counter per
+channel *number* pooled two physically different radio channels — a
+degraded band's retry ratio diluted by an unrelated healthy one, and a
+quiet band's window kept artificially fresh by the other band's
+traffic. Fixed by keying on `(channel, band)` with `band` read from the
+frame's own radiotap frequency (exact, never a guess from an IE that
+may be absent).
+**Follow-ups**: #149 also named `channel_summary_t` (the `[m]` Channel
+view's `APs`/`Top SSID` columns) as needing the same re-key. Left
+alone deliberately — its only band signal is `channel_source`, which
+positively confirms 6 GHz but has no positive signal for "not 6 GHz",
+and the existing promote-only merge-under-ambiguity behaviour is
+itself a deliberate, tested design (`tests/test_channel.c`). Fixing it
+honestly needs either a cited protocol basis for treating another
+`channel_source` value as a reliable negative-6-GHz signal, or
+threading real frequency onto `beacon_ap_t` (touches the DB schema and
+JSONL) — an owner call either way, not a same-day re-key.
+Also triaged, not landed: **#146** (two time-gated measurements, one
+needs 2026-12-13, the other needs the owner to restart
+`sloth-sensor.service`) and **#147** (OTA/host-egress validation,
+needs a lab with two radios) are owner/infra-gated, not agent work.
+**#148** (BEACONING fires one finding per track per tick) is
+buildable but asks an open design question — coalesce vs. stay
+per-destination — better answered on its own issue than folded into
+today's slice. **#150** (24 list views size their page from a fixed
+`LINES - N` constant, clipping the table/legend at the documented
+100x33 minimum) is valid and buildable but large (24 view files, one
+fit test each); deferred to a future run rather than split thin here.
+
 ### 2026-08-24/25 — the 802.11 backlog, closed
 **Commits**: `d3a07c2` (agents policy), `9434cf8` (roadmap re-verify),
 `ef15e24`, `3aceecf`, `4052fa3` (#59), `10dc6bf` (#60), `dd736de` (#62),
