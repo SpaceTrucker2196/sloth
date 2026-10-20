@@ -46,12 +46,14 @@ means a different thing for each:
 ```
  ── STACK MEASUREMENTS (no threshold until a capture backs one) ──
   IE order:    0x1a2b3c4d  (14 elements; JSONL ie_order_hash 439041101)
-  TBTT jitter: 312 us stddev over 48 samples  2 baseline resets (TSF back / BI change / gap)
+  TBTT jitter: 312 us stddev over 48 samples
+  TBTT basis:  2 baseline resets (TSF back / BI change / gap)
 ```
 
-and for an AP heard twice (the first beacon only sets the baseline, so
-an AP heard once reads `0/2`), or seen only through the managed-mode
-scan, which is handed an IE blob with no frame and so no Timestamp:
+and for an AP heard twice on the monitor radio (the first beacon only
+sets the baseline, so an AP heard once reads `0/2`). An AP seen only
+through the managed-mode scan always reads `0/2`: that path is handed an
+IE blob with no frame and so no Timestamp, and nothing is sampled:
 
 ```
   IE order:    not decoded (no elements, or the frame overran)
@@ -61,7 +63,7 @@ scan, which is handed an IE blob with no frame and so no Timestamp:
 The hash is shown in hex and in the decimal form the JSONL record uses,
 so an operator can grep a log for the value on screen. The reset clause
 only appears when a baseline has been discarded, and it counts every
-cause: a TSF that ran backwards, a changed Beacon Interval, or a gap
+cause, on its own row so the worst-case line still fits 100 columns: a TSF that ran backwards, a changed Beacon Interval, or a gap
 past `BEACON_AGE_SECS`. A hopping capture radio or an AP at the edge of
 range builds up gap rebases on its own, so the count says nothing about
 the AP by itself and carries no verdict.

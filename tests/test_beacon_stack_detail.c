@@ -124,9 +124,9 @@ static void test_stack_block_jitter_value_and_resets(void) {
  *
  * Measured at 100 columns the tab bar wraps to six rows plus the rule,
  * so the view starts on row 7. An empty-state AP takes 29 view rows
- * without the block (36 lines in all), the block adds 4, so 40 is the
- * shortest screen that holds everything and 39 the tallest that must
- * drop the block. */
+ * without the block (36 lines in all), the block reserves 5 (its resets
+ * row included), so 41 is the shortest screen that holds everything and
+ * 40 the tallest that must drop the block. */
 static void draw_detail_at(int rows) {
     seed(&g_s);
     g_s.active_view = VIEW_BEACON;
@@ -142,7 +142,7 @@ static void draw_detail_at(int rows) {
 }
 
 static void test_stack_block_drawn_when_it_fits(void) {
-    draw_detail_at(40);
+    draw_detail_at(41);
     int miss = runner_screen_find("STACK MEASUREMENTS") < 0 ||
                runner_screen_find("[Enter / Esc]") < 0;
     ASSERT_SCREEN_HAS("(none yet");
@@ -161,8 +161,31 @@ static void test_stack_block_drawn_when_it_fits(void) {
  * under RADIO (the back hint went off the bottom, and the 40-row case
  * caught the block drawn above the handshakes), and with
  * stack_block_fits() forced to 1 (the back hint went off). */
+/* #77 review: the worst-case text - not measured, plus a ten-digit reset
+ * count - must not wrap at the 100-column minimum. A wrapped row pushes
+ * the back hint off the bottom of the 41-row screen the block measured
+ * as fitting. Seen to fail with the resets appended to the jitter line
+ * again (the hint went off the bottom). */
+static void test_stack_block_worst_case_does_not_wrap(void) {
+    draw_detail_at(41);
+    g_s.beacon_aps[0].tbtt.samples = 0;
+    g_s.beacon_aps[0].tbtt.resets  = 4294967295u;
+    sloth_clock_test_set(NULL, fixed_wall);
+    tui_test_erase();
+    tui_draw(&g_s);
+    sloth_clock_test_set(NULL, NULL);
+    int miss = runner_screen_find("[Enter / Esc]") < 0;
+    ASSERT_SCREEN_HAS("TBTT jitter: not measured");
+    ASSERT_SCREEN_HAS("4294967295 baseline resets");
+    ASSERT_SCREEN_HAS("[Enter / Esc] back to beacons list");
+    ASSERT(runner_screen_find("4294967295 baseline resets") >
+           runner_screen_find("TBTT jitter: not measured"));
+    if (miss) tui_test_dump(stderr);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 static void test_stack_block_gives_way_to_handshakes_and_footer(void) {
-    draw_detail_at(39);
+    draw_detail_at(40);
     int miss = runner_screen_find("(none yet") < 0 ||
                runner_screen_find("[Enter / Esc]") < 0;
     ASSERT_SCREEN_HAS("CAPTURED HANDSHAKES");
@@ -194,6 +217,7 @@ void run_beacon_stack_detail_tests(void) {
     RUN_TEST(test_stack_block_jitter_real_zero_is_a_reading);
     RUN_TEST(test_stack_block_jitter_value_and_resets);
     RUN_TEST(test_stack_block_drawn_when_it_fits);
+    RUN_TEST(test_stack_block_worst_case_does_not_wrap);
     RUN_TEST(test_stack_block_gives_way_to_handshakes_and_footer);
     RUN_TEST(test_stack_block_absent_at_100x33);
 }

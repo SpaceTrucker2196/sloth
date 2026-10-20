@@ -166,6 +166,8 @@ static void draw_wps_sessions(const beacon_ap_t *ap) {
         TPRINT("  ... and %d more session%s\n",
                n - shown, n - shown == 1 ? "" : "s");
     }
+}
+
 /* Stack-measurement block (#77): the IE-order hash and the TBTT jitter
  * that the JSONL `beacon` record has carried since 874f6b9 / a56903a,
  * surfaced here with the same zero-reading rules the schema documents.
@@ -190,7 +192,11 @@ static void draw_wps_sessions(const beacon_ap_t *ap) {
  * known-stack table (both wait on rig captures; see
  * docs/wiki/attack-hardware-fingerprints.md). Kept in its own function
  * so the #82 timeline work on this screen does not interleave with it. */
-#define STACK_BLOCK_ROWS 4   /* blank, header, IE order, TBTT jitter */
+/* blank, header, IE order, TBTT jitter, baseline resets. The resets get
+ * their own row: appended to the jitter line, the not-measured hint plus
+ * a reset count reached 134 columns and wrapped at the 100-column minimum,
+ * pushing the back hint off a screen this block had measured as fitting. */
+#define STACK_BLOCK_ROWS 5
 #define DETAIL_FOOTER_ROWS 2 /* blank, back hint */
 
 /* The detail screen does not scroll, so a row drawn past the bottom is
@@ -243,13 +249,13 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
                "consecutive beacons)", (unsigned)ap->tbtt.samples,
                TBTT_JITTER_MIN_SAMPLES);
     }
+    TPRINT("\n");
     if (ap->tbtt.resets) {
         tui_dim();
-        TPRINT("  %u baseline reset%s (TSF back / BI change / gap)",
+        TPRINT("  TBTT basis:  %u baseline reset%s (TSF back / BI change / gap)\n",
                (unsigned)ap->tbtt.resets,
                ap->tbtt.resets == 1 ? "" : "s");
     }
-    TPRINT("\n");
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter

@@ -366,7 +366,8 @@ because a zero means something different for each:
 ```
  ── STACK MEASUREMENTS (no threshold until a capture backs one) ──
   IE order:    0x1a2b3c4d  (14 elements; JSONL ie_order_hash 439041101)
-  TBTT jitter: 312 us stddev over 48 samples  2 baseline resets (TSF back / BI change / gap)
+  TBTT jitter: 312 us stddev over 48 samples
+  TBTT basis:  2 baseline resets (TSF back / BI change / gap)
 ```
 
 - `ie_order_hash` `0` renders as `not decoded (no elements, or the
