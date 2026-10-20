@@ -5861,6 +5861,15 @@ static void test_karma_pmkid_harvest_noted(void) {
     int idx = find_alert(&s, ALERT_TYPE_KARMA_AP);
     ASSERT(idx >= 0);
     ASSERT(strstr(s.alerts[idx].detail, "+PMKID") != NULL);
+    /* Noted, never escalated (#90). A PMKID from this BSSID is what a
+     * legitimate 802.11r / PMK-caching exchange produces too, and a
+     * passive sensor corroborates but never confirms (#145 ruling 2),
+     * so a candidate whose only evidence beyond the SSID count is a
+     * PMKID stays WARN. The fixture has no PNL client, no deauth flood
+     * and no tool match, so nothing else could hold it at WARN or lift
+     * it to CRIT. Seen to fail with `|| pmkid` added to rule_karma_ap()'s
+     * CRIT condition in src/alerts/rules_twin.c. */
+    ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
 }
 
 static void test_karma_pmkid_from_another_bssid_not_credited(void) {
