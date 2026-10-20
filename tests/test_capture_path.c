@@ -560,6 +560,21 @@ static void test_scope_poll_reads_a_dead_worker_as_no_capture(void) {
     scope_poll_case(1, 0, CAPTURE_EXIT_STOPPED);
     ASSERT_EQ(g_s.scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);
 
+    /* Handle open, run flag clear, no exit recorded. capture_run()
+       leaves exactly this when pthread_create() fails, and capture_stop()
+       leaves it between taking the flag and the worker writing STOPPED.
+       The reason alone reads live here, so this is the only case that
+       depends on the run-flag term of capture_worker_live(). */
+    scope_poll_case(1, 0, CAPTURE_EXIT_NONE);
+    ASSERT_EQ(g_s.scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);
+    {
+        capture_health_t h;
+        memset(&h, 0, sizeof(h));
+        capture_health_poll(&h);
+        ASSERT_EQ(h.open, 1);
+        ASSERT_EQ(h.running, 0);
+    }
+
     /* Unwind: no thread exists for capture_stop() to join. */
     capture_test_set_worker(0, 0, CAPTURE_EXIT_NONE);
     capture_test_set_policy(NULL);

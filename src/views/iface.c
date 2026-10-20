@@ -461,8 +461,10 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
                    s->hop_dwell.mean_measured_ms,
                    s->hop_dwell.mean_planned_ms);
     /* #85: a requested scope that is not being served. Fail-closed keeps
-     * out-of-scope traffic out either way; this is what stops a replugged
-     * adapter from going quiet with no explanation. */
+     * out-of-scope traffic off the IP stream either way (the monitor
+     * radio is outside the allow-list); this is what stops a replugged
+     * adapter, or a dead capture worker, from going quiet with no
+     * explanation. */
     const capture_scope_health_t *sc = &s->scope_health;
     if (sc->state == CAPTURE_SCOPE_STATE_DEGRADED)
         strip_addf(buf, sz, &off, "  scope degraded %d/%d",

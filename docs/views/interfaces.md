@@ -258,10 +258,12 @@ scope is not being fully served: one of the two requested interfaces
 was absent at start or has failed closed since (unplug, rename, index
 reuse; see *Headless scoping* below). `scope no-capture` means a scope
 was requested but no live data-stream worker exists — no handle, or the
-capture thread has died behind a still-open one (`cap down <reason>` on
-the same line names why). Until 2026-10-19 a dead worker with its handle
-still open read as enforced. Neither ever means out-of-scope traffic is
-being collected on the IP stream. Both mean in-scope traffic is not. An enforced scope and an unscoped run add nothing to the line.
+capture thread has died behind a still-open one
+(`health: cap down (<reason>)` on the same line names why). Until
+2026-10-19 a dead worker with its handle still open read as enforced.
+Neither ever means out-of-scope traffic is being collected on the IP
+stream. Both mean in-scope traffic is not. An enforced scope and an
+unscoped run add nothing to the line.
 
 The same state feeds the `sensor_health` JSONL record — see
 [`../wiki/jsonl-schema.md`](../wiki/jsonl-schema.md).
