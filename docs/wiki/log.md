@@ -4227,3 +4227,18 @@ a response's source is the resolver. LOW because a lookup is weaker
 than a session; the two rules corroborate each other and neither
 confirms a device. No ATT&CK technique, on the named list in
 `tests/test_research_corpus.c`.
+
+## 2026-10-20 — #105 review fixes for `SURV_DNS` / `SURV_CLOUD_SNI`
+
+[[alerts]]. Three review findings on the family B close-out. A query
+name or SNI longer than the 63 bytes sloth stores was kept as a prefix
+that could end on a watchlist suffix, so
+`<43 x a>.control.verkada.com.evil.example` matched Verkada; the
+parsers now flag a stored name shorter than the wire name
+(`dns_log_entry_t.qname_trunc`, `tls_log_entry_t.host_trunc`, via the
+new `dns_read_name_len()`), and both rules skip flagged rows. Both
+rules' detail now names the smallest hostname the local host used for
+the vendor across the ring, so two names under one key no longer emit
+an `alert.update` per minute for unchanged evidence. And the docs now
+say that a forwarding resolver on the segment is its own asking host
+for `SURV_DNS`.

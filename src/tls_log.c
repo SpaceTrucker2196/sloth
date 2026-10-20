@@ -215,6 +215,7 @@ int tls_log_parse(const uint8_t *data, int len,
 
     /* ── Walk extensions ── */
     char     sni[64] = "";
+    int      sni_trunc = 0;
     uint16_t best_ver = legacy_ver;
     int      has_sv   = 0;
 
@@ -278,6 +279,8 @@ int tls_log_parse(const uint8_t *data, int len,
                 if (nlen > 0 && nlen + 5 <= (int)elen) {
                     int sz = nlen < 63 ? nlen : 63;
                     netstr_copy(sni, sizeof(sni), ch + off + 5, (size_t)sz);   /* #138 */
+                    /* Cut at 63, or stopped at a NUL octet: a prefix. */
+                    sni_trunc = (int)strlen(sni) < nlen;
                 }
             }
             (void)list_len;
@@ -344,6 +347,7 @@ int tls_log_parse(const uint8_t *data, int len,
     if (src_ip) snprintf(out->src, sizeof(out->src), "%s", src_ip);
     if (dst_ip) snprintf(out->dst, sizeof(out->dst), "%s", dst_ip);
     snprintf(out->host,    sizeof(out->host),    "%s", sni);
+    out->host_trunc = (uint8_t)sni_trunc;
     snprintf(out->tls_ver, sizeof(out->tls_ver), "%s", ver_string(best_ver));
     md5_hex((const uint8_t *)ja3_str, (size_t)ja3_pos, out->ja3);
 

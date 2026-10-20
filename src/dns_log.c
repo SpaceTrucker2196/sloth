@@ -53,7 +53,8 @@ int dns_log_parse(const uint8_t *msg, int len,
     if (ancount > 64) return 0;
 
     char qname[DNS_NAME_LEN];
-    int  noff = dns_read_name(msg, len, 12, qname, sizeof(qname));
+    int  qfull = 0;
+    int  noff = dns_read_name_len(msg, len, 12, qname, sizeof(qname), &qfull);
     if (noff < 0 || noff + 4 > len) return 0;
     uint16_t qtype = be16(msg + noff);
 
@@ -61,6 +62,9 @@ int dns_log_parse(const uint8_t *msg, int len,
     if (src_ip) snprintf(out->src, sizeof(out->src), "%s", src_ip);
     /* Name-class field: C0/DEL → '?' at ingest (#138). */
     netstr_copy(out->qname, sizeof(out->qname), (const uint8_t *)qname, strlen(qname));
+    /* Stored text shorter than the wire name: cut at 63 bytes, or
+     * stopped at a NUL octet inside a label. */
+    out->qname_trunc = (uint8_t)(qfull > (int)strlen(out->qname));
     snprintf(out->qtype, sizeof(out->qtype), "%s", qtype_str(qtype));
     out->is_resp = is_resp;
     out->ts      = sloth_wall();

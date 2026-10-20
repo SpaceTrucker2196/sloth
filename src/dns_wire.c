@@ -3,7 +3,13 @@
 
 int dns_read_name(const uint8_t *msg, int msglen, int off,
                   char *buf, int bufsz) {
-    int out = 0, jumped = 0, resume = -1, hops = 0;
+    return dns_read_name_len(msg, msglen, off, buf, bufsz, NULL);
+}
+
+int dns_read_name_len(const uint8_t *msg, int msglen, int off,
+                      char *buf, int bufsz, int *full_len) {
+    int out = 0, jumped = 0, resume = -1, hops = 0, full = 0;
+    if (full_len) *full_len = 0;
     if (!buf || bufsz < 1) return -1;
     buf[0] = '\0';
     if (!msg) return -1;
@@ -22,6 +28,7 @@ int dns_read_name(const uint8_t *msg, int msglen, int off,
         off++;
         if (c == 0) break;         /* root label ends the name */
         if (off + (int)c > msglen) return -1;
+        full += (full > 0) + (int)c;
         if (out > 0 && out < bufsz - 1) buf[out++] = '.';
         int copy = (int)c;
         if (out + copy >= bufsz) copy = bufsz - out - 1;
@@ -29,6 +36,7 @@ int dns_read_name(const uint8_t *msg, int msglen, int off,
         buf[out] = '\0';
         off += c;
     }
+    if (full_len) *full_len = full;
     return jumped ? resume : off;
 }
 

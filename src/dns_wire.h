@@ -38,6 +38,14 @@
 int dns_read_name(const uint8_t *msg, int msglen, int off,
                   char *buf, int bufsz);
 
+/* dns_read_name, also reporting in *full_len the dotted text length
+ * of the whole wire name (labels plus separators), which exceeds
+ * strlen(buf) when the name was cut to fit or carries a NUL octet.
+ * Either way buf then holds a prefix, and a prefix can end on any
+ * suffix — a suffix-matching consumer needs to know. */
+int dns_read_name_len(const uint8_t *msg, int msglen, int off,
+                      char *buf, int bufsz, int *full_len);
+
 /* Step over the name at msg[off] without decoding it. A pointer ends
  * the name in place (off + 2) and is not followed: a skip has no use
  * for the target, and not chasing it means a skip cannot loop. */

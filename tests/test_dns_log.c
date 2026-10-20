@@ -190,6 +190,80 @@ static void test_parse_null_src_ok(void) {
     ASSERT_EQ((int)e.src[0], 0);
 }
 
+/* #105 review: qname holds 63 text bytes, so a longer wire name is
+ * kept as a prefix — and the first 63 bytes of
+ * "<43 x a>.control.verkada.com.evil.example" read as a Verkada host.
+ * qname_trunc records that the stored text is not the whole name.
+ * Names are RFC 1035 §3.1 label sequences built here by hand. */
+static int put_label(uint8_t *w, int o, const char *lab, int n) {
+    w[o++] = (uint8_t)n;
+    memcpy(w + o, lab, (size_t)n);
+    return o + n;
+}
+
+static void test_parse_qname_over_63_sets_trunc(void) {
+    uint8_t name[96]; int o = 0;
+    char a[43]; memset(a, 'a', sizeof a);
+    o = put_label(name, o, a, 43);
+    o = put_label(name, o, "control", 7);
+    o = put_label(name, o, "verkada", 7);
+    o = put_label(name, o, "com", 3);
+    o = put_label(name, o, "evil", 4);
+    o = put_label(name, o, "example", 7);
+    name[o++] = 0x00;
+    uint8_t buf[128];
+    int len = build_query(buf, sizeof(buf), name, o, 1);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)strlen(e.qname), DNS_NAME_LEN - 1);
+    ASSERT(strstr(e.qname, ".control.verkada.com") != NULL);
+    ASSERT_EQ((int)e.qname_trunc, 1);
+}
+
+static void test_parse_qname_of_exactly_63_is_whole(void) {
+    uint8_t name[96]; int o = 0;
+    char a[43]; memset(a, 'a', sizeof a);
+    o = put_label(name, o, a, 43);
+    o = put_label(name, o, "control", 7);
+    o = put_label(name, o, "verkada", 7);
+    o = put_label(name, o, "com", 3);
+    name[o++] = 0x00;
+    uint8_t buf[128];
+    int len = build_query(buf, sizeof(buf), name, o, 1);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)strlen(e.qname), DNS_NAME_LEN - 1);
+    ASSERT_EQ((int)e.qname_trunc, 0);
+}
+
+static void test_parse_qname_with_nul_octet_sets_trunc(void) {
+    /* A label may carry any octet (RFC 2181 §11); netstr_copy stops at
+     * a NUL, so "com\0x" leaves "api.control.verkada.com" stored. */
+    uint8_t name[64]; int o = 0;
+    o = put_label(name, o, "api", 3);
+    o = put_label(name, o, "control", 7);
+    o = put_label(name, o, "verkada", 7);
+    o = put_label(name, o, "com\0x", 5);
+    name[o++] = 0x00;
+    uint8_t buf[96];
+    int len = build_query(buf, sizeof(buf), name, o, 1);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "10.0.0.5", &e), 1);
+    ASSERT_STR(e.qname, "api.control.verkada.com");
+    ASSERT_EQ((int)e.qname_trunc, 1);
+}
+
+static void test_parse_short_qname_is_whole(void) {
+    uint8_t buf[64];
+    int len = build_query(buf, sizeof(buf), NAME_TEST_EXAMPLE, NAME_LEN, 1);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "192.168.1.5", &e), 1);
+    ASSERT_EQ((int)e.qname_trunc, 0);
+}
+
 /* ── ring buffer tests ───────────────────────────────────── */
 
 static dns_log_entry_t make_entry(const char *src, const char *qname,
@@ -390,6 +464,10 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_parse_rejects_short);
     RUN_TEST(test_parse_rejects_no_question);
     RUN_TEST(test_parse_null_src_ok);
+    RUN_TEST(test_parse_qname_over_63_sets_trunc);
+    RUN_TEST(test_parse_qname_of_exactly_63_is_whole);
+    RUN_TEST(test_parse_qname_with_nul_octet_sets_trunc);
+    RUN_TEST(test_parse_short_qname_is_whole);
 
     TEST_SUITE("dns_log ring buffer");
     RUN_TEST(test_record_and_snapshot);

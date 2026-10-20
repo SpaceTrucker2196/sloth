@@ -34,6 +34,7 @@
 #include "eap_parse.h"
 #include "ctrl_frames.h"
 #include "tune.h"
+#include "dns_log.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -7655,7 +7656,11 @@ static void test_surv_dns_ipv6_local_host_is_not_truncated(void) {
 static void test_surv_dns_longest_qname_survives_in_detail(void) {
     /* A 63-byte qname (the dns_log ceiling) next to a 45-byte IPv6
        source and the longest vendor/family must still fit the detail
-       whole, or the finding loses the name it is about. */
+       whole, or the finding loses the name it is about. qname_trunc
+       is 0: this is a wire name of exactly 63 bytes, which the parser
+       tells apart from a longer one cut to 63 (see
+       test_surv_dns_quiet_on_truncated_qname and the wire-built pair
+       below). */
     sloth_state_t s; surv_dns_begin(&s);
     const char *v6 = "2001:db8:85a3:8d3:1319:8a2e:370:7348";
     char q[DNS_NAME_LEN];
@@ -7673,6 +7678,162 @@ static void test_surv_dns_longest_qname_survives_in_detail(void) {
         ASSERT(strstr(s.alerts[i].detail, "not distinguishable") != NULL);
     }
     surv_dns_end();
+}
+
+static void test_surv_dns_quiet_on_truncated_qname(void) {
+    /* The same 63 stored bytes, marked as a prefix of a longer wire
+       name: what "<43 x a>.control.verkada.com.evil.example" leaves in
+       qname. Matching it would report a Verkada lookup nobody made.
+       Seen red by dropping `|| e->qname_trunc` from the rule's guard. */
+    sloth_state_t s; surv_dns_begin(&s);
+    char q[DNS_NAME_LEN];
+    const char *suffix = ".control.verkada.com";
+    size_t pad = (size_t)(DNS_NAME_LEN - 1) - strlen(suffix);
+    memset(q, 'a', pad);
+    memcpy(q + pad, suffix, strlen(suffix) + 1);
+    add_surv_dns(&s, "10.0.0.5", q, 0);
+    s.dns_log[s.dns_log_count - 1].qname_trunc = 1;
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 0);
+    surv_dns_end();
+}
+
+/* Wire-built query (RFC 1035 §4.1.1 header, §3.1 labels) through
+ * dns_log_parse() into the rule, so the parser's flag and the rule's
+ * guard are exercised together. */
+static int surv_wire_query(uint8_t *m, int msz, const char *const *labs,
+                           int nlabs) {
+    static const uint8_t hdr[12] = { 0x12,0x34, 0x01,0x00, 0x00,0x01,
+                                     0x00,0x00, 0x00,0x00, 0x00,0x00 };
+    int o = 0;
+    if (msz < 12) return 0;
+    memcpy(m, hdr, 12); o = 12;
+    for (int i = 0; i < nlabs; i++) {
+        int n = (int)strlen(labs[i]);
+        if (o + 1 + n + 5 > msz) return 0;
+        m[o++] = (uint8_t)n;
+        memcpy(m + o, labs[i], (size_t)n); o += n;
+    }
+    m[o++] = 0x00;
+    m[o++] = 0x00; m[o++] = 0x01;          /* QTYPE A  */
+    m[o++] = 0x00; m[o++] = 0x01;          /* QCLASS IN */
+    return o;
+}
+
+static void test_surv_dns_wire_name_cut_at_63_does_not_fire(void) {
+    sloth_state_t s; surv_dns_begin(&s);
+    char a[44]; memset(a, 'a', 43); a[43] = '\0';
+    const char *labs[] = { a, "control", "verkada", "com", "evil", "example" };
+    uint8_t m[128];
+    int len = surv_wire_query(m, (int)sizeof m, labs, 6);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(m, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)strlen(e.qname), DNS_NAME_LEN - 1);
+    ASSERT_EQ((int)e.qname_trunc, 1);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 0);
+    surv_dns_end();
+}
+
+static void test_surv_dns_wire_name_of_exactly_63_fires(void) {
+    /* The positive control for the test above: same labels minus the
+       attacker's two, so the stored 63 bytes ARE the name. */
+    sloth_state_t s; surv_dns_begin(&s);
+    char a[44]; memset(a, 'a', 43); a[43] = '\0';
+    const char *labs[] = { a, "control", "verkada", "com" };
+    uint8_t m[128];
+    int len = surv_wire_query(m, (int)sizeof m, labs, 4);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(m, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)e.qname_trunc, 0);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 1);
+    surv_dns_end();
+}
+
+static void test_surv_dns_wire_name_with_nul_octet_does_not_fire(void) {
+    /* "com\0x": the stored qname stops at the NUL and reads as
+       api.control.verkada.com, a name that was never asked for. */
+    sloth_state_t s; surv_dns_begin(&s);
+    uint8_t m[64];
+    static const uint8_t q[] = {
+        0x12,0x34, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+        3,'a','p','i', 7,'c','o','n','t','r','o','l',
+        7,'v','e','r','k','a','d','a', 5,'c','o','m',0x00,'x', 0,
+        0x00,0x01, 0x00,0x01
+    };
+    memcpy(m, q, sizeof q);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(m, (int)sizeof q, "10.0.0.5", &e), 1);
+    ASSERT_STR(e.qname, "api.control.verkada.com");
+    ASSERT_EQ((int)e.qname_trunc, 1);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 0);
+    surv_dns_end();
+}
+
+static void test_surv_dns_detail_names_one_stable_qname(void) {
+    /* Two names for one host and vendor, in both row orders. The detail
+       carries the smallest, whichever row fired last, so the incident's
+       signature does not flip between fires of its one key. Seen red by
+       passing e->qname instead of rep->qname to the detail. */
+    const char *lo = "api.control.verkada.com";
+    const char *hi = "relay.prod-us-ohio.control.verkada.com";
+    for (int order = 0; order < 2; order++) {
+        sloth_state_t s; surv_dns_begin(&s);
+        add_surv_dns(&s, "10.0.0.5", order ? hi : lo, 0);
+        add_surv_dns(&s, "10.0.0.5", order ? lo : hi, 0);
+        alerts_update(&s);
+        int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+        ASSERT(i >= 0);
+        if (i >= 0) {
+            ASSERT(strstr(s.alerts[i].detail, lo) != NULL);
+            ASSERT(strstr(s.alerts[i].detail, hi) == NULL);
+        }
+        surv_dns_end();
+    }
+}
+
+static void test_surv_cloud_sni_quiet_on_truncated_host(void) {
+    /* The SNI half of the same prefix problem: host_trunc marks a host
+       cut from a longer SNI. Seen red by dropping `|| e->host_trunc`
+       from the rule's guard. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    char h[64];
+    memset(h, 'a', 63 - 13);
+    memcpy(h + 63 - 13, ".evidence.com", 14);
+    add_tls(&s, "10.0.0.5", "203.0.113.9", h, "TLS 1.3");
+    s.tls_log[s.tls_log_count - 1].host_trunc = 1;
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 0);
+    /* Positive control: the same host, whole, fires. */
+    alerts_clear();
+    s.tls_log[s.tls_log_count - 1].host_trunc = 0;
+    alerts_update(&s);
+    ASSERT_EQ(surv_count(&s), 1);
+}
+
+static void test_surv_cloud_sni_detail_names_one_stable_host(void) {
+    const char *lo = "a1.evidence.com", *hi = "a2.evidence.com";
+    for (int order = 0; order < 2; order++) {
+        alerts_clear();
+        sloth_state_t s; seed_state(&s);
+        add_tls(&s, "10.0.0.5", "203.0.113.9", order ? hi : lo, "TLS 1.3");
+        add_tls(&s, "10.0.0.5", "203.0.113.9", order ? lo : hi, "TLS 1.3");
+        alerts_update(&s);
+        int i = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+        ASSERT(i >= 0);
+        if (i >= 0) {
+            ASSERT(strstr(s.alerts[i].detail, lo) != NULL);
+            ASSERT(strstr(s.alerts[i].detail, hi) == NULL);
+        }
+    }
 }
 
 static void test_surv_dns_has_no_attack_technique(void) {
@@ -9422,6 +9583,51 @@ static void test_lifecycle_update_is_throttled_not_per_poll(void) {
     lc_end();
 }
 
+/* #105 review: SURV_DNS and SURV_CLOUD_SNI fold many names into one
+ * key per host and vendor. With the row's own name in the detail, two
+ * names in the ring flip the signature between fires within a tick,
+ * and every ALERT_UPDATE_MIN_S an alert.update goes out for evidence
+ * that never moved. Measured through the sink, three floors long.
+ * Seen red (alert.update > 0) with the rules' detail fed the row's
+ * name instead of the representative one. */
+static void test_lifecycle_surv_two_names_do_not_churn_updates(void) {
+    lc_begin();
+    sloth_state_t s; seed_state(&s);
+    const char *q[2] = { "relay.prod-us-ohio.control.verkada.com",
+                         "api.control.verkada.com" };
+    for (int k = 0; k < 2; k++) {
+        dns_log_entry_t *e = &s.dns_log[s.dns_log_count++];
+        memset(e, 0, sizeof(*e));
+        snprintf(e->src, sizeof(e->src), "10.0.0.5");
+        snprintf(e->qname, sizeof(e->qname), "%s", q[k]);
+        snprintf(e->qtype, sizeof(e->qtype), "A");
+        e->ts = g_lc_wall;
+    }
+    const char *h[2] = { "a2.evidence.com", "a1.evidence.com" };
+    for (int k = 0; k < 2; k++) {
+        tls_log_entry_t *t = &s.tls_log[s.tls_log_count++];
+        memset(t, 0, sizeof(*t));
+        snprintf(t->src, sizeof(t->src), "10.0.0.5");
+        snprintf(t->dst, sizeof(t->dst), "203.0.113.9");
+        snprintf(t->host, sizeof(t->host), "%s", h[k]);
+        snprintf(t->tls_ver, sizeof(t->tls_ver), "TLS 1.3");
+        t->ts = g_lc_wall;
+    }
+    alerts_update(&s);
+    ASSERT(find_alert(&s, ALERT_TYPE_SURV_DNS) >= 0);
+    ASSERT(find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI) >= 0);
+    for (int r = 0; r < 3; r++) {
+        lc_advance(ALERT_UPDATE_MIN_S + 1);
+        alerts_update(&s);
+    }
+    ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 0);
+    int d = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    int t = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    if (d >= 0) ASSERT_EQ((int)s.alerts[d].observations, 1);
+    if (t >= 0) ASSERT_EQ((int)s.alerts[t].observations, 1);
+    lc_end();
+}
+
 static void test_lifecycle_distinct_keys_are_distinct_incidents(void) {
     /* Two fuzzing BSSIDs — two keys, two incidents, two ids. The
      * lifecycle layer never merges across keys, which is what makes it
@@ -10521,6 +10727,13 @@ void run_alerts_tests(void) {
     RUN_TEST(test_surv_dns_and_sni_are_separate_findings);
     RUN_TEST(test_surv_dns_ipv6_local_host_is_not_truncated);
     RUN_TEST(test_surv_dns_longest_qname_survives_in_detail);
+    RUN_TEST(test_surv_dns_quiet_on_truncated_qname);
+    RUN_TEST(test_surv_dns_wire_name_cut_at_63_does_not_fire);
+    RUN_TEST(test_surv_dns_wire_name_of_exactly_63_fires);
+    RUN_TEST(test_surv_dns_wire_name_with_nul_octet_does_not_fire);
+    RUN_TEST(test_surv_dns_detail_names_one_stable_qname);
+    RUN_TEST(test_surv_cloud_sni_quiet_on_truncated_host);
+    RUN_TEST(test_surv_cloud_sni_detail_names_one_stable_host);
     RUN_TEST(test_surv_dns_has_no_attack_technique);
 
     TEST_SUITE("alerts: WPS PIN brute force (#82 wave 8)");
@@ -10610,6 +10823,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_wps_pin_brute_key_distinguishes_long_prefix_pair);
     RUN_TEST(test_lifecycle_event_ids_are_unique_and_ordered);
     RUN_TEST(test_lifecycle_update_is_throttled_not_per_poll);
+    RUN_TEST(test_lifecycle_surv_two_names_do_not_churn_updates);
     RUN_TEST(test_lifecycle_distinct_keys_are_distinct_incidents);
     RUN_TEST(test_lifecycle_two_twin_pairs_one_ssid_are_two_incidents);
 

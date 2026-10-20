@@ -162,6 +162,27 @@ static void test_read_rejects_bad_arguments(void) {
     ASSERT_STR(buf, "");
 }
 
+/* dns_read_name_len reports the whole name's text length, which is how
+ * a store learns its copy is a prefix (#105 review). Counted across a
+ * pointer, and unaffected by the buffer it was cut into. */
+static void test_read_len_counts_whole_name(void) {
+    uint8_t m[64]; int n = build_two_names(m);
+    char buf[64]; int full = -1;
+    ASSERT_EQ(dns_read_name_len(m, n, 29, buf, sizeof buf, &full), 36);
+    ASSERT_EQ(full, (int)strlen("mail.example.org"));
+    char small[6]; full = -1;
+    ASSERT_EQ(dns_read_name_len(m, n, 12, small, sizeof small, &full), 29);
+    ASSERT_STR(small, "www.e");
+    ASSERT_EQ(full, (int)strlen("www.example.org"));
+}
+
+static void test_read_len_root_is_zero(void) {
+    uint8_t m[13]; memcpy(m, hdr12, 12); m[12] = 0;
+    char buf[8]; int full = -1;
+    ASSERT_EQ(dns_read_name_len(m, 13, 12, buf, sizeof buf, &full), 13);
+    ASSERT_EQ(full, 0);
+}
+
 /* ── dns_skip_name ─────────────────────────────────────────── */
 
 static void test_skip_agrees_with_read(void) {
@@ -206,6 +227,8 @@ void run_dns_wire_tests(void) {
     RUN_TEST(test_read_truncates_into_small_buffer);
     RUN_TEST(test_read_copies_octets_raw);
     RUN_TEST(test_read_rejects_bad_arguments);
+    RUN_TEST(test_read_len_counts_whole_name);
+    RUN_TEST(test_read_len_root_is_zero);
 
     TEST_SUITE("dns_wire skip_name");
     RUN_TEST(test_skip_agrees_with_read);

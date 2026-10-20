@@ -595,12 +595,36 @@ void rule_cam_ws_discovery(const sloth_state_t *s, time_t now) {
  * Basis: the vendors' own network-requirement documents — see
  * research/papers/surveillance-vendor-endpoints.md. */
 void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->tls_log_count; i++) {
+    const char *vend[MAX_TLS_LOG], *fam[MAX_TLS_LOG];
+    int n = s->tls_log_count < MAX_TLS_LOG ? s->tls_log_count : MAX_TLS_LOG;
+    for (int i = 0; i < n; i++) {
         const tls_log_entry_t *e = &s->tls_log[i];
-        if (!e->host[0]) continue;
-        const char *vendor = NULL, *family = NULL;
-        if (!vendor_watchlist_match_domain(e->host, &vendor, &family))
-            continue;
+        vend[i] = fam[i] = NULL;
+        /* host_trunc: a cut SNI is a prefix, and a prefix can end on a
+         * listed suffix while the real name continues elsewhere. */
+        if (!e->host[0] || e->host_trunc) continue;
+        if (!vendor_watchlist_match_domain(e->host, &vend[i], &fam[i]))
+            vend[i] = NULL;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!vend[i]) continue;
+        const tls_log_entry_t *e = &s->tls_log[i];
+        const char *vendor = vend[i];
+        /* The detail's hostname is the smallest one this host used for
+         * this vendor across the ring, not this row's. The key folds
+         * every name into one incident, so a per-row name would change
+         * the detail signature between fires of one key within a tick
+         * and turn the incident into an alert.update per
+         * ALERT_UPDATE_MIN_S for as long as two names sit in the ring
+         * (the change-only emission rule in agents/AGENTS.md). */
+        const tls_log_entry_t *rep = e;
+        const char *family = fam[i];
+        for (int j = 0; j < n; j++) {
+            const tls_log_entry_t *o = &s->tls_log[j];
+            if (!vend[j] || strcmp(vend[j], vendor) != 0 ||
+                strcmp(o->src, e->src) != 0) continue;
+            if (strcmp(o->host, rep->host) < 0) { rep = o; family = fam[j]; }
+        }
 
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
@@ -637,7 +661,7 @@ void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail),
                  "%.45s -> %.40s: TLS to %s %s"
                  " (device upload or portal use, not distinguishable)",
-                 e->src[0] ? e->src : "?", e->host, vendor, family);
+                 e->src[0] ? e->src : "?", rep->host, vendor, family);
         /* match_ip stays the endpoint, not the local host: a per-alert
          * pcap is most useful filtered to the conversation with the
          * vendor, and the local host's other traffic is not evidence
@@ -668,6 +692,15 @@ void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
  * every client behind it into one alert — the merge the SNI rule's
  * re-key was made to stop.
  *
+ * That guard covers responses, not resolvers. The capture path logs
+ * any UDP packet with either port 53, so a forwarding resolver on the
+ * segment (a Pi-hole, a router's dnsmasq) whose upstream query sloth
+ * sees is itself an asking host: it gets its own alert, and that one
+ * does merge every client behind it. The client's own query to the
+ * forwarder, where sloth sees it, still produces the per-client alert
+ * beside it. Not suppressed, because sloth has no list of which local
+ * hosts are resolvers and guessing one would hide a real asker.
+ *
  * LOW, one tier under SURV_CLOUD_SNI's WARN, because a lookup is
  * weaker evidence than a session: link previews, prefetching browsers
  * and filtering resolvers all resolve names nobody then connects to.
@@ -677,12 +710,37 @@ void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
  * Basis: the vendors' own network-requirement documents — see
  * research/papers/surveillance-vendor-endpoints.md. */
 void rule_surv_dns(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->dns_log_count; i++) {
+    const char *vend[MAX_DNS_LOG], *fam[MAX_DNS_LOG];
+    int n = s->dns_log_count < MAX_DNS_LOG ? s->dns_log_count : MAX_DNS_LOG;
+    for (int i = 0; i < n; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
-        if (e->is_resp || !e->qname[0]) continue;
-        const char *vendor = NULL, *family = NULL;
-        if (!vendor_watchlist_match_domain(e->qname, &vendor, &family))
-            continue;
+        vend[i] = fam[i] = NULL;
+        /* qname_trunc: the stored name is a prefix of the wire name
+         * (cut at 63 bytes, or at a NUL octet), and a prefix can end on
+         * a listed suffix while the real name continues under someone
+         * else's domain — any web page can make a browser resolve one.
+         * Not matched, rather than matched on a name nobody queried. */
+        if (e->is_resp || !e->qname[0] || e->qname_trunc) continue;
+        if (!vendor_watchlist_match_domain(e->qname, &vend[i], &fam[i]))
+            vend[i] = NULL;
+    }
+    for (int i = 0; i < n; i++) {
+        if (!vend[i]) continue;
+        const dns_log_entry_t *e = &s->dns_log[i];
+        const char *vendor = vend[i];
+        /* One stable name per incident: the smallest qname this host
+         * asked for this vendor across the ring. See the same block in
+         * rule_surv_cloud_sni — a per-row name changes the detail
+         * signature between fires of one key and costs an alert.update
+         * every ALERT_UPDATE_MIN_S while two names sit in the ring. */
+        const dns_log_entry_t *rep = e;
+        const char *family = fam[i];
+        for (int j = 0; j < n; j++) {
+            const dns_log_entry_t *o = &s->dns_log[j];
+            if (!vend[j] || strcmp(vend[j], vendor) != 0 ||
+                strcmp(o->src, e->src) != 0) continue;
+            if (strcmp(o->qname, rep->qname) < 0) { rep = o; family = fam[j]; }
+        }
 
         /* Vendor + LOCAL host, the SNI rule's key and for its reasons:
          * not the qname, because a vendor hands out per-region and
@@ -700,7 +758,7 @@ void rule_surv_dns(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail),
                  "%.45s looked up %.63s: %s %s"
                  " (DNS lookup only; device or portal use not distinguishable)",
-                 e->src[0] ? e->src : "?", e->qname, vendor, family);
+                 e->src[0] ? e->src : "?", rep->qname, vendor, family);
         /* match_ip is the asking host and 53, the THREAT_DOMAIN shape:
          * a DNS query has no vendor endpoint to filter on, and the
          * per-alert pcap worth having is that host's DNS traffic. */

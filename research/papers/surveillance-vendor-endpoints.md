@@ -124,6 +124,31 @@ one tier under the SNI rule's WARN, and when both fire for one host
 and vendor they corroborate each other. Neither confirms a device; the
 limits below apply to both rules unchanged.
 
+Two edges of the DNS signal, found in review and stated here because
+both are about what the alert can be trusted to mean:
+
+- **A forwarding resolver on the segment is its own asking host.**
+  Skipping responses keeps the resolver out of the key only for
+  responses. The capture path logs any UDP packet with port 53 at
+  either end, so where sloth can see a Pi-hole or a router's dnsmasq
+  forward a client's lookup upstream, that forwarded query has the
+  resolver as its source and produces a second alert keyed on the
+  resolver — one that merges every client behind it. The client's own
+  query to the forwarder, where sloth sees it, still produces the
+  per-client alert beside it. Not suppressed: sloth has no list of
+  which local hosts are resolvers, and guessing would hide a real
+  asker.
+- **A name sloth stored only part of is not matched.** `dns_log` keeps
+  63 bytes of a query name and `tls_log` 63 of an SNI. The stored text
+  of a longer name is a prefix, and a prefix can end on a listed
+  suffix: the first 63 bytes of
+  `<43 x a>.control.verkada.com.evil.example` read as a Verkada host,
+  and any web page can make a browser resolve a name like that. The
+  parsers now flag a stored name that is shorter than the wire name
+  (cut at 63, or stopped at a NUL octet inside a label), and both
+  rules skip flagged rows rather than report a lookup nobody made. A
+  genuine vendor name longer than 63 bytes is missed in exchange.
+
 ## What the detector does not establish
 
 Three limits, all of which the alert text states rather than leaving to

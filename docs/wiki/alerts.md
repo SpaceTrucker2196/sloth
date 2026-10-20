@@ -455,6 +455,24 @@ other; neither confirms a device. Responses are skipped: their source
 is the resolver, which would fold every client behind it into one
 alert.
 
+Three edges, found in review:
+
+- **A forwarding resolver is still an asker.** Skipping responses does
+  not keep a resolver out of the key. Where sloth sees a Pi-hole or a
+  router's dnsmasq forward a lookup upstream, that query's source is
+  the resolver, so it gets its own alert merging every client behind
+  it. The client's own query, where seen, still gives the per-client
+  alert beside it.
+- **A cut name is not matched.** `dns_log` and `tls_log` keep 63 bytes
+  of a name, and the prefix of a longer one can end on a listed suffix
+  (`<43 x a>.control.verkada.com.evil.example` stores as a Verkada
+  host). The parsers flag a stored name shorter than the wire name
+  (`qname_trunc`, `host_trunc`), and both rules skip it.
+- **One name per incident.** The detail carries the smallest name the
+  host used for the vendor across the ring, not each row's, so two
+  names under one key do not turn the incident into an `alert.update`
+  every 60 s for unchanged evidence.
+
 Embedded, not a file: same choice as the IOC list (MISSION.md §3), so
 behaviour stays reproducible from the commit. #105 asked for a
 SIGHUP-reloaded CSV; the owner ruled for the embedded table (#145

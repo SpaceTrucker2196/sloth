@@ -30,12 +30,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         int off  = mlen > 0 ? data[0] % mlen : 0;
         char name[256];
         for (int i = 0; i < 16 && off >= 0 && off < mlen; i++) {
-            int r = dns_read_name(msg, mlen, off, name, (int)sizeof name);
-            n += strnlen(name, sizeof name);
+            int full = -1;
+            int r = dns_read_name_len(msg, mlen, off, name, (int)sizeof name,
+                                      &full);
+            size_t got = strnlen(name, sizeof name);
+            n += got;
             int s = dns_skip_name(msg, mlen, off);
             /* The two walkers must agree on where a name ends whenever
              * the reader accepts it: they share one framing rule. */
             if (r >= 0 && s != r) abort();
+            /* The whole-name length can never be shorter than the text
+             * it was cut to: that is what makes it a truncation test. */
+            if (r >= 0 && (full < 0 || (size_t)full < got)) abort();
             off = s;
         }
     }

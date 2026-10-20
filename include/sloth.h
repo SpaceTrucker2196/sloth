@@ -546,6 +546,12 @@ typedef struct {
     char   qtype[8];            /* "A", "AAAA", "PTR", "MX", "NS", "CNAME", "TXT", "SRV", "?" */
     char   answer[46];          /* first A/AAAA IP, "NXDOMAIN", or "" */
     int    is_resp;             /* 0 = query, 1 = response */
+    /* 1 when qname holds less than the wire name: cut at 63 bytes, or
+     * stopped at a NUL octet inside a label. The stored text is then a
+     * PREFIX, and a prefix can end on any suffix: the first 63 bytes of
+     * "<43 x a>.control.verkada.com.evil.example" read as a Verkada
+     * hostname. A suffix-matching consumer must skip these rows. */
+    uint8_t qname_trunc;
     time_t ts;
 } dns_log_entry_t;
 
@@ -915,6 +921,10 @@ typedef struct {
      * so extension reordering doesn't change the value (unlike JA3). "" if
      * not computed. Roadmap #16 phase 2. */
     char   ja4[48];
+    /* 1 when host holds less than the SNI (cut at 63 bytes, or at a
+     * NUL octet) — a prefix, so a suffix match on it proves nothing
+     * (see dns_log_entry_t.qname_trunc). */
+    uint8_t host_trunc;
     time_t ts;
 } tls_log_entry_t;
 

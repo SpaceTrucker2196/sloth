@@ -688,6 +688,93 @@ static void test_parse_sni_control_octets_marked(void) {
     ASSERT_STR(e.host, "ex?m?le.com");
 }
 
+/* A TLS 1.3 ClientHello carrying `name` (nlen octets) as its one
+ * server_name entry, laid out per RFC 8446 §4.1.2 and RFC 6066 §3
+ * exactly as tls13_sni above, with every length computed from nlen. */
+static int build_ch_sni(uint8_t *f, int fsz, const uint8_t *name, int nlen) {
+    int exts = 4 + 5 + nlen + 7;           /* SNI ext + supported_versions */
+    int body = 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2 + exts;
+    int need = 5 + 4 + body;
+    if (need > fsz) return 0;
+    int o = 0;
+    f[o++] = 0x16; f[o++] = 0x03; f[o++] = 0x01;
+    f[o++] = (uint8_t)((4 + body) >> 8); f[o++] = (uint8_t)(4 + body);
+    f[o++] = 0x01; f[o++] = 0x00;
+    f[o++] = (uint8_t)(body >> 8); f[o++] = (uint8_t)body;
+    f[o++] = 0x03; f[o++] = 0x03;                 /* legacy_version */
+    memset(f + o, 0, 32); o += 32;                /* random */
+    f[o++] = 0x00;                                /* session_id_len */
+    f[o++] = 0x00; f[o++] = 0x02; f[o++] = 0x00; f[o++] = 0x2f;
+    f[o++] = 0x01; f[o++] = 0x00;                 /* null compression */
+    f[o++] = (uint8_t)(exts >> 8); f[o++] = (uint8_t)exts;
+    f[o++] = 0x00; f[o++] = 0x00;                 /* server_name */
+    f[o++] = (uint8_t)((5 + nlen) >> 8); f[o++] = (uint8_t)(5 + nlen);
+    f[o++] = (uint8_t)((3 + nlen) >> 8); f[o++] = (uint8_t)(3 + nlen);
+    f[o++] = 0x00;                                /* host_name */
+    f[o++] = (uint8_t)(nlen >> 8); f[o++] = (uint8_t)nlen;
+    memcpy(f + o, name, (size_t)nlen); o += nlen;
+    f[o++] = 0x00; f[o++] = 0x2b; f[o++] = 0x00; f[o++] = 0x03;
+    f[o++] = 0x02; f[o++] = 0x03; f[o++] = 0x04;  /* TLS 1.3 */
+    return o;
+}
+
+/* #105 review: host holds the SNI's first 63 bytes, so a longer name
+ * is stored as a prefix that can end on a watchlist suffix
+ * ("<44 x a>.evidence.com" from "...evidence.com.evil.example").
+ * host_trunc is what lets SURV_CLOUD_SNI refuse to match it. */
+static void test_parse_sni_over_63_sets_host_trunc(void) {
+    uint8_t name[96];
+    const char *tail = ".evidence.com.evil.example";
+    int pad = 63 - 13;                     /* 13 = strlen(".evidence.com") */
+    memset(name, 'a', (size_t)pad);
+    memcpy(name + pad, tail, strlen(tail));
+    int nlen = pad + (int)strlen(tail);
+    uint8_t f[192];
+    int len = build_ch_sni(f, (int)sizeof f, name, nlen);
+    ASSERT(len > 0);
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, len, "10.0.0.5", "203.0.113.9", &e), 1);
+    ASSERT_EQ((int)strlen(e.host), 63);
+    ASSERT(strstr(e.host, ".evidence.com") != NULL);
+    ASSERT_EQ((int)e.host_trunc, 1);
+}
+
+static void test_parse_sni_of_exactly_63_is_whole(void) {
+    uint8_t name[63];
+    memset(name, 'a', sizeof name - 13);
+    memcpy(name + sizeof name - 13, ".evidence.com", 13);
+    uint8_t f[160];
+    int len = build_ch_sni(f, (int)sizeof f, name, (int)sizeof name);
+    ASSERT(len > 0);
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, len, "10.0.0.5", "203.0.113.9", &e), 1);
+    ASSERT_EQ((int)strlen(e.host), 63);
+    ASSERT_EQ((int)e.host_trunc, 0);
+}
+
+static void test_parse_sni_with_nul_octet_sets_host_trunc(void) {
+    /* RFC 6066 §3 forbids a NUL in host_name; netstr_copy stops at
+     * one, so the stored host is again a prefix of the wire value. */
+    static const uint8_t name[] = {
+        'e','v','i','d','e','n','c','e','.','c','o','m',
+        0x00, '.','e','v','i','l'
+    };
+    uint8_t f[128];
+    int len = build_ch_sni(f, (int)sizeof f, name, (int)sizeof name);
+    ASSERT(len > 0);
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(f, len, "10.0.0.5", "203.0.113.9", &e), 1);
+    ASSERT_STR(e.host, "evidence.com");
+    ASSERT_EQ((int)e.host_trunc, 1);
+}
+
+static void test_parse_short_sni_is_whole(void) {
+    tls_log_entry_t e;
+    ASSERT_EQ(tls_log_parse(tls13_sni, (int)sizeof(tls13_sni),
+                            "192.168.1.5", "93.184.216.34", &e), 1);
+    ASSERT_EQ((int)e.host_trunc, 0);
+}
+
 void run_tls_log_tests(void) {
     TEST_SUITE("tls_log parse");
     RUN_TEST(test_parse_tls13_sni);
@@ -728,4 +815,8 @@ void run_tls_log_tests(void) {
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
     RUN_TEST(test_parse_sni_control_octets_marked);
+    RUN_TEST(test_parse_sni_over_63_sets_host_trunc);
+    RUN_TEST(test_parse_sni_of_exactly_63_is_whole);
+    RUN_TEST(test_parse_sni_with_nul_octet_sets_host_trunc);
+    RUN_TEST(test_parse_short_sni_is_whole);
 }
