@@ -392,7 +392,12 @@ static void test_view_legend_states_the_corroboration_rule(void) {
  * (the legend uncounted; it lands below the screen), the row's `room`
  * set to 1000 (no fitting; rows reach the last column and wrap), and
  * karma_fit_tail()'s label-shortening branch removed (the bracket is
- * clipped and the "? provisional" marker lost). */
+ * clipped and the "? provisional" marker lost).
+ *
+ * A clipped label ends in "~", or "[ES/med? ...]" passes for a whole
+ * tool name: unclipped_cut is seen to fail with the "~" dropped from the
+ * kept-some format, and again with the bare-marker branch printing a
+ * one-letter stub instead, each then restored. */
 static void test_view_full_page_fits_a_100x33_terminal(void) {
     static sloth_state_t s;
     seed(&s);
@@ -410,7 +415,10 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
         k->ie_uniform      = 1;
         k->deauth_chain    = 1;
         k->score           = 99;
-        k->last_seen       = now - 1234567;
+        /* Even rows a one-digit age, so the label keeps some of
+         * itself (the "~" branch); odd rows the seven-digit age, so it
+         * keeps none (the bare-marker branch). */
+        k->last_seen       = (i & 1) ? now - 1234567 : now - 4;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345");
         snprintf(k->tool, sizeof(k->tool), "%s",
@@ -424,7 +432,8 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
     tui_draw(&s);
 
     char line[4096];
-    int over = 0, rows = 0, unmarked = 0;
+    int over = 0, rows = 0, unmarked = 0, unclipped_cut = 0;
+    int kept_some = 0, kept_none = 0;
     for (int y = 0; y < 33; y++) {
         if (tui_test_line(y, line, sizeof(line)) < 0) break;
         /* tui_draw()'s rule under the tab bar is the one full-width
@@ -438,13 +447,24 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
         if (strstr(line, "24:6f:28:00:00:")) {
             rows++;
             if (!strstr(line, "? provisional]")) unmarked++;
+            /* A label that is not whole must say it was cut. */
+            if (!strstr(line, "[ESP32 Marauder/") &&
+                !strstr(line, "[Twenty-char-label-XX/") &&
+                !strstr(line, "~/"))
+                unclipped_cut++;
+            if (strstr(line, "[ESP32 M~/med? provisional]")) kept_some++;
+            if (strstr(line, "[~/high? provisional]"))       kept_none++;
         }
     }
     int leg = runner_screen_find(" PNL = SSIDs");
-    if (over || unmarked || leg != 31) tui_test_dump(stderr);
+    if (over || unmarked || unclipped_cut || leg != 31)
+        tui_test_dump(stderr);
     ASSERT_EQ(over, 0);
     ASSERT(rows > 0);
     ASSERT_EQ(unmarked, 0);
+    ASSERT_EQ(unclipped_cut, 0);
+    ASSERT(kept_some > 0);
+    ASSERT(kept_none > 0);
     /* The legend's two lines are the screen's last two: the page is
      * neither too long (legend pushed off) nor short (rows wasted). */
     ASSERT_EQ(leg, 31);

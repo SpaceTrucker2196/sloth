@@ -3932,3 +3932,13 @@ means *corroborated*. `signature_version` and the boolean `validated`
 stay as shipped. `tests/test_alerts.c ::
 test_karma_pmkid_harvest_noted` now pins that a PMKID alone leaves the
 candidate at WARN.
+
+## 2026-10-19 — #90: a clipped `[y]` tool label is marked
+
+A tool label the `[y]` KARMA view had to shorten to fit 100 columns now
+ends in `~` (`[ESP32 M~/med? provisional]`), and below three kept
+characters only the marker is left (`[~/med? provisional]`), so a stub
+like `ES` is never read as the whole name of some other tool. The
+`docs/views/karma.md` mockup is redrawn as the row renders at 100
+columns. The same top-of-screen page budget in the other list views is
+tracked in #150.

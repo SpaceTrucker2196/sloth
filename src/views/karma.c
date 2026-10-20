@@ -19,6 +19,9 @@
  * starts giving up its label (the SSID is the observation; the tool is
  * a hypothesis about it). */
 #define KARMA_SSID_MIN 8
+/* Fewest label characters worth printing in front of the "~" that marks
+ * a clipped tool label; a shorter stub could pass for a whole name. */
+#define KARMA_LABEL_MIN 3
 
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -34,8 +37,9 @@ static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
  * What gives way, in order: the SSID down to KARMA_SSID_MIN, then the
  * tool label. The "/conf? provisional" tail of the attribution is kept
  * whole for as long as anything of the label fits, because that word is
- * what tells the operator the name is unverified (#90); only below that
- * is the bracket clipped outright. Bytes are counted, not cells: the
+ * what tells the operator the name is unverified (#90); a clipped label
+ * ends in "~" so a stub is never read as a name. Only below that is the
+ * bracket clipped outright. Bytes are counted, not cells: the
  * sanitiser never lengthens a string and no glyph is wider than the
  * octets that encode it, so the byte count bounds the width. */
 static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
@@ -67,7 +71,14 @@ static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
     int tail_len = slash ? (int)strlen(slash) : 0;
     int label_w  = rem - 4 - tail_len;               /* "  [" + "]" */
     if (slash && label_w >= 1) {
-        snprintf(tool, tool_sz, "  [%.*s%s]", label_w, k->tool, slash);
+        /* A clipped label is marked: "[ES/med? ...]" reads as the whole
+         * name of some tool, not a cut "ESP32 Marauder". Below
+         * KARMA_LABEL_MIN kept characters the stub says nothing, so
+         * only the marker is left. */
+        if (label_w > KARMA_LABEL_MIN)
+            snprintf(tool, tool_sz, "  [%.*s~%s]", label_w - 1, k->tool, slash);
+        else
+            snprintf(tool, tool_sz, "  [~%s]", slash);
         return;
     }
     snprintf(tool, tool_sz, "%.*s", rem, full);

@@ -82,7 +82,7 @@ the same underlying signals, not a mirror of the alert's severity.
  BSSID              SSIDs  PNL   J%    IE  chain  score  Top SSID / last
  -----------------  -----  ----  ----  --  -----  -----  ---------------
  00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
- 24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Corp (4s)  [ESP32 Marauder/med? provisional]
+ 24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Cor (4s)  [ESP32 M~/med? provisional]
  PNL = SSIDs in client probe lists, >=2 on one station; chain = deauth-then-lure on shared victim
  [tool/conf? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
 ```
@@ -99,9 +99,12 @@ Each row's tail is fitted to the terminal width so it never reaches the
 last column and wraps: the top SSID gives way first, down to 8
 characters, then the tool *label*; the `/conf? provisional` part of the
 attribution is kept whole while any of the label fits, because that is
-the part that says the name is unverified. At 100 columns with a long
-SSID and an old age that can leave a row reading
-`ABCDEFGH (1234567s)  [ES/med? provisional]`; the full attribution is
+the part that says the name is unverified. A clipped label ends in `~`
+so a stub is never read as the name of some other tool, and below three
+kept characters only the `~` is left. The mockup above is drawn at 100
+columns, so its second row (`ACME-Corp`, `ESP32 Marauder`) shows the fit.
+With a long SSID and an old age a row can read
+`ABCDEFGH (1234567s)  [~/med? provisional]`; the full attribution is
 in the `KARMA_AP` alert detail and on a wider terminal. Pinned by
 `tests/test_karma.c :: test_view_full_page_fits_a_100x33_terminal`,
 which draws through `tui_draw()` on a 100x33 offscreen screen.
