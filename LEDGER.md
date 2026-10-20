@@ -234,3 +234,5 @@
 | f665297 | 2026-10-19T09:52:52Z | claude-opus-5-5 | 4 | 808 | 1922534 | 1680 | 0.4141 | Move fragattack and the last find_or_alloc tables onto stab_t (refs #110) |
 | c7ab52e | 2026-10-19T18:03:42Z | claude-fable-5-1, claude-opus-5-5 | 996 | 72048 | 12505254 | 399781 | 16.7976 | Add a Wi-Fi SIGINT guide for non-specialists to the wiki |
 | 8c9adf7 | 2026-10-19T19:00:55Z | claude-fable-5-1 | 586 | 59629 | 6972858 | 127298 | 12.5061 | Add every iOS and Android radio emission to the Wi-Fi SIGINT guide |
+| 95077cc | 2026-10-20T02:05:15Z | claude-fable-5-1, claude-opus-5-5 | 472 | 31565 | 10551926 | 1024160 | 23.9557 | ci: fail the build if sloth ever links a TLS library (refs #100) |
+| 7d3b186 | 2026-10-20T03:52:19Z | claude-opus-5-5 | 96 | 13115 | 17649852 | 515099 | 7.9134 | Wave 0 of #145: close-out slices #143 #84 #85 #90 #95 #96 integrated |
