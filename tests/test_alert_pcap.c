@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include "evidence_manifest.h"
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
@@ -158,13 +159,18 @@ static int ap87_mode(const char *path) {
     return (int)(st.st_mode & 07777);
 }
 
+/* Evidence files only. The session manifest (#92 slice 3) sits in the
+ * same directory and has its own assertions in test_evidence_manifest.c;
+ * counting it here would make every "nothing partial was left" check
+ * depend on whether an earlier export in the test created one. */
 static int ap87_entries(void) {
     DIR *d = opendir(g_ap87);
     if (!d) return -1;
     int n = 0;
     struct dirent *e;
     while ((e = readdir(d)) != NULL)
-        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") &&
+            !evidence_manifest_is_name(e->d_name)) n++;
     closedir(d);
     return n;
 }

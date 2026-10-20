@@ -51,6 +51,7 @@
     X(eap_track_clear) \
     X(eapol_clear) \
     X(evidence_ring_reset) \
+    X(evidence_manifest_reset) \
     X(evil_twin_taint_clear) \
     X(frag_clear) \
     X(host_cache_clear) \

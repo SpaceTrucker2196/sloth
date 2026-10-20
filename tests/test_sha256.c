@@ -2,8 +2,11 @@
 #include "runner.h"
 #include "sha256.h"
 
-/* RFC 6234 §8.5 published test vectors. Confirms the SHA-256
- * implementation is correct end-to-end before we lean on it for JA4. */
+/* FIPS 180-4 / NIST CAVP example vectors (the same messages RFC 6234
+ * §8.5 reproduces): the empty string, "abc", the 448-bit and 896-bit
+ * messages and one million 'a'. Confirms the embedded SHA-256 before
+ * JA4 leans on it and before the #92 evidence manifest does — that one
+ * puts its output on disk as a claim about evidence files. */
 
 static void test_sha256_empty(void) {
     char hex[65];
@@ -29,6 +32,20 @@ static void test_sha256_two_block(void) {
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 }
 
+static void test_sha256_896_bit(void) {
+    /* FIPS 180-4 SHA-256 example: the 896-bit (112-byte) message, which
+     * ends 48 bytes into its second block, so the length goes in a
+     * third block. */
+    const char *msg =
+        "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+        "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    ASSERT_EQ((int)strlen(msg), 112);
+    char hex[65];
+    sha256_hex((const uint8_t *)msg, strlen(msg), hex);
+    ASSERT_STR(hex,
+        "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1");
+}
+
 static void test_sha256_million_a(void) {
     /* Third RFC 6234 vector — one million 'a's exercises the streaming
      * update path (many transform blocks + trailing partial). */
@@ -52,9 +69,10 @@ static void test_sha256_million_a(void) {
 }
 
 void run_sha256_tests(void) {
-    TEST_SUITE("sha256 — RFC 6234 vectors");
+    TEST_SUITE("sha256 — FIPS 180-4 / CAVP vectors");
     RUN_TEST(test_sha256_empty);
     RUN_TEST(test_sha256_abc);
     RUN_TEST(test_sha256_two_block);
+    RUN_TEST(test_sha256_896_bit);
     RUN_TEST(test_sha256_million_a);
 }

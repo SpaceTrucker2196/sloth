@@ -23,6 +23,7 @@
 #include "eap_track.h"
 #include "eapol_log.h"
 #include "evidence_ring.h"
+#include "evidence_manifest.h"
 #include "fragattack.h"
 #include "host_cache.h"
 #include "http_log.h"

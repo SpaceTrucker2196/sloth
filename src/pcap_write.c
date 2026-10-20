@@ -41,8 +41,10 @@ int pcap_export(const sloth_state_t *s, char *path_out, int path_sz) {
                                  err, sizeof(err));
     if (!f) return -1;
 
+    /* The same ring as the per-alert pcap, so the same 64-byte truth
+     * (PCAP_SNAPLEN_WIRED_RING, #145). */
     pcap_fmt_put_file_hdr(f, pcap_fmt_dlt_or_default(s->pkt_linktype),
-                          PCAP_SNAPLEN_FRAME);
+                          PCAP_SNAPLEN_WIRED_RING);
 
     /* walk ring buffer oldest-first */
     int start = (s->pkt_count < MAX_PACKETS) ? 0

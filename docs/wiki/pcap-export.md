@@ -6,11 +6,11 @@ type: reference
 
 # Pcap export
 
-**Summary**: Four pcap-export paths — per-alert from the packet ring (driven by `--pcap-dir`), manual from the packets view (`w` key), per-EAPOL-handshake (driven by `--eapol-dir`), and per-alert **evidence** from the 802.11 evidence ring (driven by `--collect-handshakes` + `--eapol-dir`), the only route from a wireless alert back to the frames that caused it.
+**Summary**: Four pcap-export paths — per-alert from the packet ring (driven by `--pcap-dir`), manual from the packets view (`w` key), per-EAPOL-handshake (driven by `--eapol-dir`), and per-alert **evidence** from the 802.11 evidence ring (driven by `--collect-handshakes` + `--eapol-dir`), the only route from a wireless alert back to the frames that caused it. Every file sloth commits under `--pcap-dir` and `--eapol-dir` is listed, with its SHA-256, in a per-session manifest in that directory (§5).
 
-**Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
+**Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -26,6 +26,17 @@ type: reference
   `_2`, `_3` … suffix instead of overwriting each other.
 - Clearing alerts (`c` in the Alerts view) resets dedup state, so a
   future hit re-arms and opens a new file.
+- **64 bytes per packet, and the header says so** (#145 owner default).
+  The packets come from the wired ring, which stores `min(caplen, 64)`
+  bytes of each frame (`src/capture/capture.c`). The file header
+  declares snaplen **64**; each record's `incl_len` is the stored length
+  and `orig_len` the length on the wire, so a 1514-byte frame reads as
+  64 captured of 1514 and Wireshark marks it truncated. Until #92 slice
+  3 the header claimed 65535 — a capture depth the file never had. The
+  ring was not widened: the default is to keep 64 B per entry and be
+  truthful about it. Pinned by
+  `tests/test_evidence_manifest.c :: test_alert_pcap_snaplen_is_the_ring_depth`
+  on hand-built Ethernet/IPv4/TCP frames.
 
 ## 2. Manual packet-window export
 
@@ -47,6 +58,9 @@ type: reference
   starts sloth there.
 - Useful for ad-hoc carving when you've narrowed via `/` to a flow of
   interest.
+- Same ring as §1, so the same truthful header: snaplen 64, `incl_len`
+  stored, `orig_len` as on the wire. Not in any manifest — it is not
+  written under `--pcap-dir` or `--eapol-dir`.
 
 ## 3. Per-EAPOL-handshake export
 
@@ -236,12 +250,129 @@ retention sweep already expires. Pinned per path by
 `tests/test_evidence_alert.c` through a fault seam
 (`evidence_export_test_fault()`), not a full disk.
 
+## 5. The hashed per-session manifest (#92 slice 3)
+
+Every file sloth commits under `--pcap-dir` and `--eapol-dir` gets one
+line in a JSON Lines manifest in the same directory:
+`sloth-manifest-<YYYYmmddTHHMMSSZ>-<16 hex>.jsonl`. The timestamp is
+when the run started (UTC); the suffix is 64 bits from `/dev/urandom`
+(pid and the monotonic clock if that cannot be read). Code:
+`src/evidence_manifest.{c,h}`.
+
+**Which files.** All four sinks that write into those directories:
+
+| `sink` | Directory | File | `reconstructed` |
+|---|---|---|---|
+| `alert_pcap` | `--pcap-dir` | `alert_<time>_<title>.pcap` (§1) | `false` |
+| `evidence_pcap` | `--eapol-dir` | `<incident>-<event>-<RULE>.pcap` (§4) | `false` |
+| `handshake_pcap` | `--eapol-dir` | `<bssid>_<sta>.pcap` (§3) | `true` |
+| `hashcat_22000` | `--eapol-dir` | `eapol.22000` (§3) | `true` |
+
+`reconstructed: true` marks what sloth assembled rather than copied:
+the handshake pcap is M1..M4 in message order, not in the order they
+were heard, and the 22000 lines are derived from them. The two alert
+pcaps are captured frames in capture order (the IP one truncated to 64
+bytes, which its header says). The `w` export (§2) writes to the
+working directory and is not in any manifest.
+
+**One line:**
+
+```json
+{"v":1,"session":"20231114T221320Z-9f2c41d07a5be3c8","seq":1,"file":"22bdad5846ecd3fb-13-DEAUTH_FLOOD.pcap","size":1342,"sha256":"…64 hex…","sink":"evidence_pcap","incident_id":"22bdad5846ecd3fb","rule":"DEAUTH_FLOOD","reconstructed":false,"written_at":"2023-11-14T22:13:20Z","written_at_epoch":1700000000}
+```
+
+| Field | Meaning |
+|---|---|
+| `v` | format version, 1 |
+| `session` | the run, as in the file name |
+| `seq` | line number within this manifest, from 1 — a gap means a line went missing |
+| `file` | name relative to the manifest's own directory |
+| `size`, `sha256` | byte count and SHA-256 of the file as committed |
+| `sink` | which writer, table above |
+| `incident_id`, `rule` | the alert the file belongs to (#98 incident, kind without `ALERT_TYPE_`); **absent**, not empty, when there is none (handshake pcap, 22000, a direct evidence export) |
+| `reconstructed` | table above |
+| `written_at`, `written_at_epoch` | when the line was written, sloth's wall clock, UTC |
+
+**Decisions, and why:**
+
+- **One manifest per directory, not one per run.** A relative name only
+  means something next to its directory. A directory copied off the
+  sensor carries its own manifest and nothing in it points elsewhere.
+  `--pcap-dir` and `--eapol-dir` set to the same directory (same
+  device and inode) share one manifest, so no two files describe one
+  directory differently.
+- **Created lazily, exclusively.** The manifest appears with the first
+  committed file, `O_EXCL` through the sink's pinned directory
+  descriptor with the same `secure_file` rules (0600, no symlink
+  follow). A run that writes nothing leaves no manifest. A name already
+  taken — two runs starting in the same second with the same suffix,
+  which takes a failed random source — moves to `-2`, `-3` …; a
+  manifest is never appended to by a second run.
+- **Hash by re-reading after commit.** The file is reopened through the
+  same dirfd (`O_NOFOLLOW`, regular files only) after it is closed or
+  renamed into place, and read back. That hashes what is under the final
+  name — the bytes a verifier will read — rather than what sloth handed
+  `write(2)`, and it is one hashing path for four writers that write
+  four ways (stdio, raw `write`, temp + rename, append). The cost is one
+  read of a file still in the page cache.
+- **eapol.22000 appends**, so each of its lines hashes the whole file as
+  it stood after that append; the newest line is the current file.
+- **Handshake pcaps replace-latest** (#145 default, unchanged), so a
+  later line for the same name supersedes the earlier one, whose hash
+  then names bytes that are no longer on disk. That is expected, not
+  tampering.
+- **Crash shape.** Each line is written whole at the end of the file
+  and fsync'ed before the call returns, so a crash leaves a valid
+  prefix: every newline-terminated line parses; at most a final
+  fragment does not. A failed append is truncated back off, so a half
+  line never sits in front of the next good one.
+- **Failures are counted, never blocking.** A manifest that cannot be
+  created, hashed or appended is counted as a write failure of the sink
+  whose directory it is — `storage_pcap_failures` or
+  `storage_eapol_failures` in `sensor_health`, the `!persist` badge, one
+  stderr line naming `manifest` — and the evidence file it would have
+  described is left exactly as written. A failed **export** writes no
+  line: nothing was committed.
+- **Retention.** Under `--eapol-dir` the manifest is swept with
+  everything else. Its mtime is its newest line, so it expires only once
+  every file it lists has — and it names BSSID/STA pairs that should not
+  outlive the files. A manifest swept mid-run is replaced by a fresh one
+  (same name) on the next commit, not appended to as an unlinked inode.
+  `--pcap-dir` has no sweep; its manifest stays.
+- **SHA-256 is embedded** (`src/sha256.c`, the `md5.c` house style;
+  sloth links no crypto library, and CI enforces that). Verified against
+  the FIPS 180-4 / NIST CAVP example vectors — empty string, `abc`, the
+  448- and 896-bit messages, one million `a` — in `tests/test_sha256.c`,
+  and the manifest tests cross-check each file's hash against
+  `sha256sum(1)` where the host has it.
+
+### What a hash does not establish
+
+**A hash is not chain of custody.** It shows that a file's bytes are
+the bytes sloth hashed when it wrote the line — nothing more. It does
+not show who held the file since, that the manifest itself is the one
+sloth wrote, or that the clock in `written_at` was right. sloth can
+rewrite its own manifest as easily as any other file in that directory,
+and so can anything running as sloth's uid or as root. The manifest is
+not signed and its lines are not chained.
+
+What custody needs is a procedure around the files: copy the manifest
+off the sensor as soon as it matters (to write-once storage, a ticket,
+an email), record who did it and when, and verify later copies against
+that external copy, not against the one still on the sensor. The
+manifest makes that procedure cheap; it does not replace it.
+
+Pinned by `tests/test_evidence_manifest.c` (both alert sinks, session
+naming and collisions, a shared directory, every crash prefix, the
+sweep, failure accounting), `tests/test_eapol_log.c` (both handshake
+sinks, a failed 22000 append) and `tests/test_evidence_alert.c` (the
+engine hands the incident and rule through).
+
 ### Still open on #92
 
-- **A hashed per-session manifest** over every file under `--eapol-dir`
-  and `--pcap-dir` (slice 3).
-- **Citations beyond DEAUTH_FLOOD**, one detector per slice (slice 4).
-  Until then every other wireless alert still exports nothing.
+Nothing the 2026-10-19 plan (#145) named. Caveats that stand:
+reconstructed handshakes stay replace-latest; the wired ring stays 64 B
+per entry; the manifest is unsigned (above).
 
 ## File writer
 
@@ -271,6 +402,7 @@ offline-crackable. Modes do not depend on the umask:
 | `--pcap-dir DIR` | 0700 | 0600 | exclusive, suffixed on collision |
 | `w` in Packets | cwd — not checked; pin it with `WorkingDirectory=` | 0600 | exclusive, suffixed on collision |
 | `--eapol-dir DIR` | 0700 | 0600 | `eapol.22000` append; per-handshake pcap atomic replace; alert evidence pcap temp + fsync + no-clobber rename |
+| `sloth-manifest-*.jsonl` (§5) | the sink's dir | 0600 | exclusive, `-N` on collision; appended + fsync'ed per line |
 
 `--pcap-dir` and `--eapol-dir` are created 0700 when absent. An
 **existing** directory must be owned by sloth's effective uid with no

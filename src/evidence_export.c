@@ -117,6 +117,7 @@ static int candidate_name(const char *name, int k, char *out, size_t outsz) {
 static int export_impl(const char *name,
                        const uint64_t *ids, int n,
                        int *skipped, int unique,
+                       const char *incident_id, const char *rule,
                        char *name_out, size_t name_outsz,
                        char *err, size_t errsz) {
     if (name_out && name_outsz) name_out[0] = '\0';
@@ -238,7 +239,8 @@ static int export_impl(const char *name,
     for (int k = 1; k <= tries; k++) {
         if (candidate_name(name, k, cand, sizeof(cand)) != 0)
             return fail_tmp(-1, tmp, "name too long", err, errsz);
-        int rc = eapol_export_commit(tmp, cand, err, errsz);
+        int rc = eapol_export_commit(tmp, cand, incident_id, rule,
+                                     err, errsz);
         if (rc == 0) {
             if (name_out && name_outsz)
                 snprintf(name_out, name_outsz, "%s", cand);
@@ -259,14 +261,16 @@ int evidence_export_pcap(const char *name,
                          const uint64_t *ids, int n,
                          int *skipped,
                          char *err, size_t errsz) {
-    return export_impl(name, ids, n, skipped, 0, NULL, 0, err, errsz);
+    return export_impl(name, ids, n, skipped, 0, NULL, NULL, NULL, 0,
+                       err, errsz);
 }
 
 int evidence_export_pcap_unique(const char *name,
                                 const uint64_t *ids, int n,
                                 int *skipped,
+                                const char *incident_id, const char *rule,
                                 char *name_out, size_t name_outsz,
                                 char *err, size_t errsz) {
-    return export_impl(name, ids, n, skipped, 1, name_out, name_outsz,
-                       err, errsz);
+    return export_impl(name, ids, n, skipped, 1, incident_id, rule,
+                       name_out, name_outsz, err, errsz);
 }

@@ -189,9 +189,16 @@ int  eapol_export_create(const char *name, char *err, size_t errsz);
    "<--eapol-dir>/<name>" into out for reporting; 0, or -1 when export
    is off or the path does not fit (out is then "").
 
+   A successful commit also appends `name` to this session's hashed
+   manifest in the directory (#92 slice 3), with `incident_id` and
+   `rule` (either may be NULL) as the alert it belongs to; a manifest
+   failure is counted with this module's export failures and does not
+   undo the commit.
+
    All four take bare names only, the same rule as create. */
 #define EAPOL_COMMIT_EXISTS (-2)
 int  eapol_export_commit(const char *tmp, const char *name,
+                         const char *incident_id, const char *rule,
                          char *err, size_t errsz);
 void eapol_export_discard(const char *tmp);
 int  eapol_export_ready(void);

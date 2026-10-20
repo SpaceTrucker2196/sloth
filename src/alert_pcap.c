@@ -10,10 +10,18 @@
 #include "pcap_format.h"
 #include "tune.h"
 #include "secure_file.h"
+#include "evidence_manifest.h"
 
 /* pcap-on-alert: when a rule fires with a concrete match_ip (and optional
  * match_port), dump every packet currently in the s->packets[] ring whose
  * src or dst matches, into a fresh per-alert pcap file. */
+
+/* The header's snaplen is a claim about every record in the file; it
+ * is only true while the ring entry it is read from is exactly that
+ * size. Fails to compile the day packet_info_t.raw changes, rather than
+ * shipping a file that lies again. */
+typedef char alert_pcap_raw_is_snaplen[
+    sizeof(((packet_info_t *)0)->raw) == PCAP_SNAPLEN_WIRED_RING ? 1 : -1];
 
 /* g_dirfd pins the directory validated at set time (#87); files are
  * created relative to it. g_dir is kept to build the reported path. */
@@ -139,8 +147,10 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
                                  err, sizeof(err));
     if (!f) { sfile_fail(&g_fail, "alert pcap", err); return -1; }
 
+    /* snaplen 64, not 65535: the ring holds at most 64 bytes of each
+     * packet, and a reader takes the header at its word (#145). */
     pcap_fmt_put_file_hdr(f, pcap_fmt_dlt_or_default(s->pkt_linktype),
-                          PCAP_SNAPLEN_FRAME);
+                          PCAP_SNAPLEN_WIRED_RING);
 
     int start = (s->pkt_count < MAX_PACKETS) ? 0 : s->pkt_head;
     int written = 0;
@@ -150,9 +160,13 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         if (p->raw_len == 0) continue;
         if (!packet_matches(p, a))     continue;
 
-        pcap_fmt_put_rec(f, p->ts_sec, p->ts_usec,
-                         p->raw, p->raw_len,
-                         p->len ? (uint32_t)p->len : (uint32_t)p->raw_len);
+        /* incl_len is what the ring stored, orig_len what was on the
+         * wire; the clamp is the snaplen above, so no record can claim
+         * more bytes than follow it or more than the header allows. */
+        uint32_t incl = p->raw_len;
+        if (incl > PCAP_SNAPLEN_WIRED_RING) incl = PCAP_SNAPLEN_WIRED_RING;
+        pcap_fmt_put_rec(f, p->ts_sec, p->ts_usec, p->raw, incl,
+                         p->len ? (uint32_t)p->len : incl);
         written++;
     }
     if (sfile_fclose(f, name, err, sizeof(err)) != 0) {
@@ -165,6 +179,23 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
         /* Empty pcap is noise — remove it. */
         unlinkat(g_dirfd, name, 0);
         return 0;
+    }
+
+    /* One manifest line per committed file (#92 slice 3). After the
+     * empty-file unlink above, so a file that does not exist is never
+     * listed, and after the close, so the hash is of the final bytes.
+     * A failure is counted here like any other write failure of this
+     * sink, and does not undo the pcap: the evidence is on disk either
+     * way, and the manifest is the record of it, not a condition. */
+    {
+        char rule[48];
+        const char *tn = alert_type_name(a->type);
+        static const char pfx[] = "ALERT_TYPE_";
+        if (tn && strncmp(tn, pfx, sizeof(pfx) - 1) == 0) tn += sizeof(pfx) - 1;
+        snprintf(rule, sizeof(rule), "%s", tn ? tn : "");
+        evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule };
+        if (evidence_manifest_record(g_dirfd, name, &m, err, sizeof(err)) != 0)
+            sfile_fail(&g_fail, "alert pcap manifest", err);
     }
 
     if (out_path && out_sz > 0) {

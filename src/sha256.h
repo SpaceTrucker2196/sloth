@@ -4,9 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Minimal SHA-256 (RFC 6234) — matches the src/md5.c house style.
- * Used for JA4 fingerprint hashing (roadmap #16 phase 2). Not for any
- * security-sensitive purpose. */
+/* Minimal SHA-256 (FIPS 180-4, RFC 6234) — matches the src/md5.c house
+ * style; sloth links no crypto library. Used for JA4 fingerprint hashing
+ * (roadmap #16 phase 2) and for the #92 evidence manifest's per-file
+ * digests (src/evidence_manifest.h), which are an integrity record and
+ * not a secret: no key, no signature. Verified against the FIPS 180-4 /
+ * CAVP example vectors in tests/test_sha256.c. */
 
 typedef struct {
     uint32_t state[8];

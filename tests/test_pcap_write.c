@@ -47,6 +47,23 @@ static void test_export_empty_ring(void) {
     ASSERT_EQ((int)sz, 24);  /* global header only */
 }
 
+/* #145: the ring keeps 64 bytes of each packet, so the header says 64,
+ * not 65535 — a file must not claim a capture depth it never had. */
+static void test_export_snaplen_is_the_ring_depth(void) {
+    sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    char path[128] = "";
+    pcap_export(&s, path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    ASSERT(f != NULL);
+    if (!f) return;
+    fseek(f, 16, SEEK_SET);
+    uint32_t snaplen = read_u32le(f);
+    fclose(f);
+    remove(path);
+    ASSERT_EQ((long long)snaplen, 64LL);
+}
+
 static void test_export_magic(void) {
     sloth_state_t s;
     memset(&s, 0, sizeof(s));
@@ -266,6 +283,7 @@ static void test_export_private_and_exclusive(void) {
 void run_pcap_write_tests(void) {
     TEST_SUITE("pcap_export/header");
     RUN_TEST(test_export_empty_ring);
+    RUN_TEST(test_export_snaplen_is_the_ring_depth);
     RUN_TEST(test_export_magic);
     RUN_TEST(test_export_default_dlt);
     RUN_TEST(test_export_custom_dlt);

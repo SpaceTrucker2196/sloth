@@ -112,7 +112,12 @@ int evidence_export_pcap(const char *name,
                          int *skipped,
                          char *err, size_t errsz);
 
-/* evidence_export_pcap(), except that a name already on disk is not a
+/* Both writers append the committed file to the directory's hashed
+ * manifest (#92 slice 3, src/evidence_manifest.h); this one also
+ * records the alert it belongs to, `incident_id` and `rule` (either
+ * may be NULL).
+ *
+ * evidence_export_pcap(), except that a name already on disk is not a
  * refusal: the export commits under "<stem>-2<ext>", "<stem>-3<ext>" ..
  * up to EVX_UNIQUE_MAX, and the name actually used is written to
  * name_out ("" on failure). The alert engine uses this one.
@@ -135,6 +140,7 @@ int evidence_export_pcap(const char *name,
 int evidence_export_pcap_unique(const char *name,
                                 const uint64_t *ids, int n,
                                 int *skipped,
+                                const char *incident_id, const char *rule,
                                 char *name_out, size_t name_outsz,
                                 char *err, size_t errsz);
 

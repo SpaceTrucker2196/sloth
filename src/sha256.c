@@ -1,8 +1,9 @@
-/* SHA-256 — RFC 6234 reference implementation.
+/* SHA-256 — RFC 6234 reference implementation of FIPS 180-4.
  *
  * Same house style as src/md5.c: single-TU, no external dependencies,
- * verified against the RFC 6234 test vectors in tests/test_sha256.c.
- * Used only for the JA4 fingerprint hash (roadmap #16 phase 2). */
+ * verified against the FIPS 180-4 / CAVP example vectors in
+ * tests/test_sha256.c. Used for the JA4 fingerprint hash (roadmap #16
+ * phase 2) and the evidence manifest's file digests (#92 slice 3). */
 
 #include <string.h>
 #include "sha256.h"

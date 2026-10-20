@@ -101,6 +101,7 @@
 #include "persist_health.h"
 #include "poll.h"
 #include "formatter.h"
+#include "evidence_manifest.h"
 #include "alert_pcap.h"
 #include "data_socket.h"
 #include "ownership.h"
@@ -1239,6 +1240,11 @@ int main(int argc, char **argv) {
         if (pd_msg[0]) fprintf(stderr, "%s\n", pd_msg);
     }
     dns_init();
+
+    /* The run's manifest session (#92 slice 3): every hashed manifest
+     * this process writes under --pcap-dir / --eapol-dir is named for
+     * this moment. Nothing is created until a file is committed. */
+    evidence_manifest_session_begin(sloth_wall());
 
     /* Export directories first: a refused one is a startup error, and
      * failing here — before the DB records a session — leaves nothing

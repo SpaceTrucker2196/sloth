@@ -5,6 +5,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include "evidence_manifest.h"
+#include "manifest_check.h"
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
@@ -44,13 +46,18 @@ static const uint8_t VICTIM[6] = {0x12,0x34,0x56,0x78,0x9a,0xbc};
 static const uint8_t BSSID[6]  = {0x02,0x00,0x5e,0x00,0x53,0x01};
 #define BSSID_STR "02:00:5e:00:53:01"
 
+/* Evidence files only. The session manifest (#92 slice 3) sits in the
+ * same directory and has its own assertions in test_evidence_manifest.c;
+ * counting it here would make every "nothing partial was left" check
+ * depend on whether an earlier export in the test created one. */
 static int dir_entries(const char *dir) {
     DIR *d = opendir(dir);
     if (!d) return -1;
     int n = 0;
     struct dirent *e;
     while ((e = readdir(d)) != NULL)
-        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") &&
+            !evidence_manifest_is_name(e->d_name)) n++;
     closedir(d);
     return n;
 }
@@ -222,6 +229,22 @@ static void test_deauth_crit_writes_its_frames(void) {
     struct stat st;
     ASSERT_EQ(stat(a->pcap_path, &st), 0);
     ASSERT_EQ((int)(st.st_mode & 0777), 0600);
+
+    /* #92 slice 3: the engine hands the exporter the incident and the
+     * rule, and the manifest line carries both beside the file's hash.
+     * Seen red with the engine passing NULL for either. */
+    static mf_line_t l[4];
+    int bad = -1;
+    ASSERT_EQ(mf_read_dir(g_dir, l, 4, &bad), 1);
+    ASSERT_EQ(bad, 0);
+    const char *leaf = strrchr(a->pcap_path, '/');
+    ASSERT_STR(l[0].file, leaf ? leaf + 1 : a->pcap_path);
+    ASSERT_STR(l[0].incident_id, a->incident_id);
+    ASSERT_STR(l[0].rule, "DEAUTH_FLOOD");
+    ASSERT_STR(l[0].sink, "evidence_pcap");
+    char hex[65];
+    ASSERT_EQ(mf_hash_path(a->pcap_path, hex, NULL), 0);
+    ASSERT_STR(l[0].sha256, hex);
     teardown();
 }
 

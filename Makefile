@@ -198,6 +198,7 @@ CORE_COMMON_SRCS += src/views/fragattack.c
 CORE_COMMON_SRCS += research/coverage.c
 CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
 CORE_COMMON_SRCS += src/evidence_ring.c src/evidence_export.c
+CORE_COMMON_SRCS += src/evidence_manifest.c
 CORE_COMMON_SRCS += src/geo.c
 CORE_COMMON_SRCS += src/ble_snoop.c
 CORE_COMMON_SRCS += src/scan.c

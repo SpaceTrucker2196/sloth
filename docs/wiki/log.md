@@ -4143,3 +4143,18 @@ unchanged ([[jsonl-schema]] § Cadence). A test drives
 from the file, not from the 16 KiB `slurp()` window. A positive
 `set_channel()` return is now covered as `EIO`. `make bench` binaries
 moved under the per-config `build/<cfg>/bench/`.
+
+## 2026-10-20 — #92 slice 3: hashed per-session manifest; truthful wired-ring snaplen
+
+[[pcap-export]] gains §5. Every file sloth commits under `--pcap-dir`
+and `--eapol-dir` (IP alert pcaps, evidence pcaps, handshake pcaps,
+`eapol.22000`) gets a line in `sloth-manifest-<start>-<suffix>.jsonl`
+in that directory: name, size, SHA-256 re-read after commit, sink,
+incident and rule where there is one, written-at, and `reconstructed`.
+One manifest per directory per run, `O_EXCL`, each line fsync'ed;
+swept with `--eapol-dir`. The page says plainly that a hash is not
+chain of custody. Manifest failures count on the sink's existing
+`storage_*_failures` ([[jsonl-schema]]); no new field, no flag. The
+per-alert and `w` pcaps now declare snaplen 64, what the wired ring
+keeps, instead of 65535. The embedded SHA-256 gained the FIPS 180-4
+896-bit vector.

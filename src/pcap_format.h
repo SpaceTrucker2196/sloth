@@ -54,6 +54,13 @@
  * sites. */
 #define PCAP_SNAPLEN_FRAME  65535u    /* IP and 802.11 frame sinks */
 #define PCAP_SNAPLEN_LARGE  262144u   /* the evidence ring (#92) */
+/* The wired packet ring (s->packets[]) keeps min(caplen, 64) bytes per
+ * packet (src/capture/capture.c), so a file written from it can never
+ * hold more than 64 bytes of any frame. Its two writers - the per-alert
+ * pcap and the `w` export - declared 65535 until #92 slice 3, claiming
+ * a capture depth the file never had. Owner default (#145): keep 64 B
+ * per entry and say so in the header. */
+#define PCAP_SNAPLEN_WIRED_RING 64u
 
 /* Link types, by their libpcap DLT_ numbers. Named here so a build
  * without libpcap still has them: pcap.h is where these normally come

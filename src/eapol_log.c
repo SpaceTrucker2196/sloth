@@ -10,6 +10,7 @@
 #include "eapol_log.h"
 #include "pcap_format.h"
 #include "secure_file.h"
+#include "evidence_manifest.h"
 #include "eap_track.h"
 #include "wps_track.h"
 #include "beacon_snoop.h"
@@ -248,6 +249,19 @@ static void hex_str(const char *s, char *out) {
     out[i*2] = '\0';
 }
 
+/* Caller holds g_mu (so g_out_fd is the pinned directory the file was
+ * just committed into). A manifest failure is this sink's write failure
+ * for the badge and sensor_health, and leaves the file it describes
+ * alone (src/evidence_manifest.h). */
+static void manifest_note(const char *name, evm_sink_t sink,
+                          const char *incident_id, const char *rule) {
+    if (g_out_fd < 0) return;
+    char err[SFILE_ERR_MAX];
+    evm_meta_t m = { sink, incident_id, rule };
+    if (evidence_manifest_record(g_out_fd, name, &m, err, sizeof(err)) != 0)
+        sfile_fail(&g_fail, "eapol manifest", err);
+}
+
 static int write_all(int fd, const char *buf, size_t n) {
     while (n > 0) {
         ssize_t w = write(fd, buf, n);
@@ -306,7 +320,13 @@ static void append_22000_line_for_bssid(const char *line,
         snprintf(err, sizeof(err), "eapol.22000: write failed: %s",
                  strerror(errno));
         sfile_fail(&g_fail, "eapol", err);
+        bad = 1;
     }
+    /* The manifest line hashes the whole file after this append: it is
+     * one run-spanning file, so "what is eapol.22000 now" is the only
+     * statement a hash of it can make (#92 slice 3). A failed append was
+     * rolled back above and gets no line. */
+    if (!bad) manifest_note("eapol.22000", EVM_SINK_HASHCAT_22000, NULL, NULL);
 }
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
@@ -362,7 +382,13 @@ static void write_handshake_pcap(const pending_t *p) {
                  name, strerror(errno));
         unlinkat(g_out_fd, tmp, 0);
         sfile_fail(&g_fail, "eapol", err);
+        return;
     }
+    /* reconstructed: true — M1..M4 in message order, assembled by sloth,
+     * not frames in the order they were heard. Replace-latest (#145
+     * default) means a later line for the same name supersedes this one,
+     * and the earlier hash then names bytes no longer on disk. */
+    manifest_note(name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL);
 }
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
@@ -924,6 +950,7 @@ static int bare_name(const char *n) {
 }
 
 int eapol_export_commit(const char *tmp, const char *name,
+                        const char *incident_id, const char *rule,
                         char *err, size_t errsz) {
     if (!bare_name(tmp) || !bare_name(name)) {
         if (err && errsz) snprintf(err, errsz, "not a bare file name");
@@ -949,6 +976,9 @@ int eapol_export_commit(const char *tmp, const char *name,
     } else {
         if (fsync(g_out_fd) != 0) { /* best effort; see the header */ }
         rc = 0;
+        /* Under the same lock as the rename, so a gate that closes
+         * between the two cannot leave a committed file unlisted. */
+        manifest_note(name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule);
     }
     pthread_mutex_unlock(&g_mu);
     return rc;
@@ -1028,6 +1058,10 @@ static int is_export_artifact(const char *name) {
     size_t n = strlen(name);
     if (strcmp(name, "eapol.22000") == 0) return 1;
     if (n > 5 && strcmp(name + n - 5, ".pcap") == 0) return 1;
+    /* A manifest (#92 slice 3) is swept on the same window: its mtime is
+     * its newest line, so it expires only once everything it lists has,
+     * and it names BSSID/STA pairs that should not outlive the files. */
+    if (evidence_manifest_is_name(name)) return 1;
     if (name[0] == '.' && n > 5 && strcmp(name + n - 4, ".tmp") == 0) return 1;
     return 0;
 }

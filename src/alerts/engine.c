@@ -755,7 +755,8 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     if (n > ALERT_EVIDENCE_IDS) n = ALERT_EVIDENCE_IDS;
     char used[sizeof(name) + 8];
     int written = evidence_export_pcap_unique(name, a->evidence_ids, n,
-                                              NULL, used, sizeof(used),
+                                              NULL, a->incident_id, rule,
+                                              used, sizeof(used),
                                               err, sizeof(err));
     if (written > 0 && evidence_export_path(used, path, pathsz) != 0)
         snprintf(path, pathsz, "%s", used);

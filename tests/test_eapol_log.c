@@ -7,6 +7,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include "evidence_manifest.h"
+#include "manifest_check.h"
 #include "runner.h"
 #include "sensor_health.h"
 #include "sloth.h"
@@ -1731,13 +1733,18 @@ static long size_of(const char *path) {
     return (long)st.st_size;
 }
 
+/* Evidence files only. The session manifest (#92 slice 3) sits in the
+ * same directory and has its own assertions in test_evidence_manifest.c;
+ * counting it here would make every "nothing partial was left" check
+ * depend on whether an earlier export in the test created one. */
 static int dir_entries(const char *path) {
     DIR *d = opendir(path);
     if (!d) return -1;
     int n = 0;
     struct dirent *e;
     while ((e = readdir(d)) != NULL)
-        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") &&
+            !evidence_manifest_is_name(e->d_name)) n++;
     closedir(d);
     return n;
 }
@@ -1875,6 +1882,8 @@ static void test_export_write_failure_visible(void) {
     long pcap_before = size_of(pcap), log_before = size_of(log22);
     ASSERT_GT(pcap_before, 0);
     ASSERT_EQ(eapol_export_failures(), 0);
+    static mf_line_t ml[8];
+    ASSERT_EQ(mf_read_dir(g_perm_dir, ml, 8, NULL), 2);
 
     struct rlimit old, lim;
     getrlimit(RLIMIT_FSIZE, &old);
@@ -1898,6 +1907,131 @@ static void test_export_write_failure_visible(void) {
     ASSERT_EQ(size_of(pcap), pcap_before);
     ASSERT_EQ(size_of(log22), log_before);
     ASSERT_EQ(dir_entries(g_perm_dir), 2);
+    /* #92 slice 3: the manifest still holds the first round's two
+     * lines and the newest line for the pcap still hashes the file that
+     * is there. That neither failed write is listed is NOT isolated
+     * here — the 8-byte limit refuses the manifest append as well — so
+     * test_export_failed_22000_append_is_not_listed carries that claim. */
+    int bad = -1;
+    ASSERT_EQ(mf_read_dir(g_perm_dir, ml, 8, &bad), 2);
+    ASSERT_EQ(bad, 0);
+    char hex[65];
+    const mf_line_t *hl = mf_find(ml, 2, HS_PCAP);
+    ASSERT(hl != NULL);
+    ASSERT_EQ(mf_hash_path(pcap, hex, NULL), 0);
+    if (hl) ASSERT_STR(hl->sha256, hex);
+    perm_cleanup();
+}
+
+/* #92 slice 3: a failed eapol.22000 append is not listed. Isolated from
+ * the manifest's own write by sizing RLIMIT_FSIZE between the two: the
+ * hashcat file is grown past 1 KiB first and the manifest session is
+ * restarted, so the limit refuses the 22000 append (it lands past the
+ * limit) and admits the new manifest's first line (it starts at 0).
+ * test_export_write_failure_visible cannot show this — its 8-byte limit
+ * refuses the manifest append too, so the gate on `bad` was green there
+ * with or without it. Seen red with that gate removed. */
+static void test_export_failed_22000_append_is_not_listed(void) {
+    perm_setup();
+    evidence_manifest_reset();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    char p22[160];
+    perm_path(p22, sizeof(p22), "eapol.22000");
+    for (int i = 0; i < 64 && size_of(p22) < 1024; i++) {
+        eapol_clear();
+        drive_pmkid();
+    }
+    long before = size_of(p22);
+    ASSERT_GE(before, 1024L);
+    /* A fresh, empty manifest, and the growing session's set aside so
+     * the one read below is the new session's. */
+    evidence_manifest_reset();
+    char old_m[200], old_p[400];
+    ASSERT_EQ(mf_count(g_perm_dir, old_m, sizeof(old_m)), 1);
+    snprintf(old_p, sizeof(old_p), "%s/%s", g_perm_dir, old_m);
+    ASSERT_EQ(unlink(old_p), 0);
+    int fails = eapol_export_failures();
+
+    struct rlimit old, lim;
+    getrlimit(RLIMIT_FSIZE, &old);
+    lim = old;
+    lim.rlim_cur = (rlim_t)before;
+    void (*prev)(int) = signal(SIGXFSZ, SIG_IGN);
+    eapol_clear();
+    setrlimit(RLIMIT_FSIZE, &lim);
+    drive_pmkid();
+    setrlimit(RLIMIT_FSIZE, &old);
+    signal(SIGXFSZ, prev);
+
+    ASSERT_EQ(size_of(p22), before);          /* rolled back */
+    ASSERT_GT(eapol_export_failures(), fails);
+    /* The handshake pcap is small enough to commit under the limit and
+     * is listed; the refused append is not. */
+    static mf_line_t l[8];
+    int bad = -1;
+    int n = mf_read_dir(g_perm_dir, l, 8, &bad);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(bad, 0);
+    ASSERT(mf_find(l, n < 0 ? 0 : n, "eapol.22000") == NULL);
+    ASSERT(mf_find(l, n < 0 ? 0 : n, HS_PCAP) != NULL);
+    perm_cleanup();
+}
+
+/* #92 slice 3: both handshake sinks list every committed file in the
+ * directory's session manifest, marked reconstructed — the pcap is
+ * M1..M4 in message order, the 22000 lines are derived — with a hash
+ * that matches the file as it is on disk. eapol.22000 appends, so its
+ * newest line hashes the whole file after the newest append; the
+ * per-handshake pcap is replaced, so its newest line is the one that
+ * describes what is there. */
+static void test_export_manifest_lists_both_handshake_sinks(void) {
+    perm_setup();
+    evidence_manifest_reset();
+    ASSERT_EQ(eapol_set_output_dir(g_perm_dir), 0);
+    drive_pmkid();
+    static mf_line_t l[8];
+    int bad = -1;
+    ASSERT_EQ(mf_read_dir(g_perm_dir, l, 8, &bad), 2);
+    ASSERT_EQ(bad, 0);
+    char p22[160], ppc[160], hex[65], sys[65];
+    long long sz = -1;
+    perm_path(p22, sizeof(p22), "eapol.22000");
+    perm_path(ppc, sizeof(ppc), HS_PCAP);
+
+    const mf_line_t *a = mf_find(l, 2, "eapol.22000");
+    const mf_line_t *b = mf_find(l, 2, HS_PCAP);
+    ASSERT(a != NULL);
+    ASSERT(b != NULL);
+    if (!a || !b) { perm_cleanup(); return; }
+    ASSERT_STR(a->sink, "hashcat_22000");
+    ASSERT_EQ(a->reconstructed, 1);
+    ASSERT_EQ(a->has_incident, 0);
+    ASSERT_EQ(mf_hash_path(p22, hex, &sz), 0);
+    ASSERT_STR(a->sha256, hex);
+    ASSERT_EQ(a->size, sz);
+    if (mf_sha256sum(p22, sys)) ASSERT_STR(a->sha256, sys);
+    ASSERT_STR(b->sink, "handshake_pcap");
+    ASSERT_EQ(b->reconstructed, 1);
+    ASSERT_EQ(mf_hash_path(ppc, hex, &sz), 0);
+    ASSERT_STR(b->sha256, hex);
+    ASSERT_EQ(b->size, sz);
+    if (mf_sha256sum(ppc, sys)) ASSERT_STR(b->sha256, sys);
+    long long first22 = a->size;
+
+    eapol_clear();
+    drive_pmkid();                       /* append + replace */
+    ASSERT_EQ(mf_read_dir(g_perm_dir, l, 8, &bad), 4);
+    ASSERT_EQ(bad, 0);
+    a = mf_find(l, 4, "eapol.22000");
+    b = mf_find(l, 4, HS_PCAP);
+    ASSERT(a != NULL && b != NULL);
+    if (!a || !b) { perm_cleanup(); return; }
+    ASSERT_GT(a->size, first22);
+    ASSERT_EQ(mf_hash_path(p22, hex, NULL), 0);
+    ASSERT_STR(a->sha256, hex);
+    ASSERT_EQ(mf_hash_path(ppc, hex, NULL), 0);
+    ASSERT_STR(b->sha256, hex);
+    ASSERT_EQ(l[3].seq, 4LL);
     perm_cleanup();
 }
 
@@ -2442,6 +2576,8 @@ void run_eapol_log_tests(void) {
     RUN_TEST(test_export_refuses_permissive_existing_22000);
     RUN_TEST(test_export_refuses_symlinked_22000);
     RUN_TEST(test_export_pcap_replace_does_not_follow_symlink);
+    RUN_TEST(test_export_manifest_lists_both_handshake_sinks);
+    RUN_TEST(test_export_failed_22000_append_is_not_listed);
     RUN_TEST(test_export_write_failure_visible);
     RUN_TEST(test_export_failure_reaches_sensor_health);
 
