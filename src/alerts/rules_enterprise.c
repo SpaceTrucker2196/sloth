@@ -318,18 +318,31 @@ void rule_wps_pixie_probe(const sloth_state_t *s, time_t now) {
  * network credentials, per the slides' "E -> R M7"), M8 or Done, within
  * --tune wps.pixie_success_window_s after a run that stopped at M3.
  *
- * Deliberately reads the abandoned *shape*, not the WPS_PIXIE_PROBE
- * verdict: the silence window does not apply here. pixiewps recovers a
- * weak-PRNG PIN in seconds, and a tool that reruns with it at once
- * leaves no minute of silence — so gating on the probe rule would miss
- * the most direct form of the attack, where the completion itself is
- * the corroboration. Any station counts as the completer, because the
- * rerun need not use the MAC that probed.
+ * What this does and does not see. reaver -K (t6x fork, read at
+ * f9b5e15) runs pixiewps synchronously while it processes M3; on
+ * success it swaps the cracked PIN into the same exchange and carries
+ * on to M4..M8 - one continuous attempt, no M3 abandon, so neither
+ * Pixie rule fires on it. The two-run sequence this rule reads is what
+ * the failure paths leave: pixiewps outlasting reaver's receive timeout
+ * (silent NACK, exit, "Send pin with -p") and the PIN used in a later
+ * run, or any offline crack of saved M1/M3 material run separately.
  *
- * CRIT — the ruling's "HIGH"; sloth's scale tops out at CRIT. If it is
- * right, the PSK is gone and changing it is the only remedy; if it is
- * wrong, it is a legitimate enrolment that followed a receiver gap, and
- * the detail names both runs so an operator can tell which. */
+ * Reads the abandoned *shape*, not the WPS_PIXIE_PROBE verdict: the
+ * silence window does not apply, because a rerun with the PIN can
+ * start at once and must not be missed for lack of a quiet minute. Any
+ * station counts as the completer, because the rerun need not use the
+ * MAC that probed.
+ *
+ * CRIT - the ruling's "HIGH"; sloth's scale tops out at CRIT. If it is
+ * right, the PSK is gone and changing it is the only remedy. If it is
+ * wrong it is either a legitimate enrolment after a receiver gap, or an
+ * online brute force that succeeded after the sensor missed one M4 -
+ * the CRIT still stands there, only the attribution is wrong, so the
+ * detail says so when the probing session also shows refused M4
+ * guesses (guess_n).
+ *
+ * Title "WPS_PIXIE_SUCCESS", not the kind name: ALERT_TITLE_LEN is 20
+ * and the kind name is 24, so it would be cut mid-word. */
 void rule_wps_pixie_likely_success(const sloth_state_t *s, time_t now) {
     (void)s;
     wps_session_t sess[MAX_WPS_SESSIONS];
@@ -364,13 +377,24 @@ void rule_wps_pixie_likely_success(const sloth_state_t *s, time_t now) {
         akey_mac(&k, sess[c].bssid);
         akey_mac(&k, sess[c].sta);
         if (!akey_end(&k)[0]) continue;
-        snprintf(detail, sizeof(detail),
-                 "WPS registration %s -> %s reached the credentials "
-                 "(M7/M8/Done) %lds after a run from %s stopped at M3 - "
-                 "Pixie-Dust likely succeeded, Bongard 2014; corroborated "
-                 "by sequence, not confirmed: treat the PSK as exposed%s",
-                 sta, bss, (long)(sess[c].cred_ts - probe_m3), psta,
-                 mine ? " - YOUR network" : "");
+        if (sess[probe].guess_n > 0)
+            snprintf(detail, sizeof(detail),
+                     "WPS registration %s -> %s reached the credentials "
+                     "%lds after a run from %s stopped at M3; that station "
+                     "also sent refused M4 guesses, so this may be an "
+                     "online PIN brute force, not Pixie-Dust; corroborated, "
+                     "not confirmed: treat the PSK as exposed%s",
+                     sta, bss, (long)(sess[c].cred_ts - probe_m3), psta,
+                     mine ? " - YOUR network" : "");
+        else
+            snprintf(detail, sizeof(detail),
+                     "WPS registration %s -> %s reached the credentials "
+                     "(M7/M8/Done) %lds after a run from %s stopped at M3 - "
+                     "Pixie-Dust likely succeeded, Bongard 2014; "
+                     "corroborated by sequence, not confirmed: treat the "
+                     "PSK as exposed%s",
+                     sta, bss, (long)(sess[c].cred_ts - probe_m3), psta,
+                     mine ? " - YOUR network" : "");
         fire(ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS, ALERT_SEV_CRIT,
              "WPS_PIXIE_SUCCESS", detail, key, NULL, 0, now);
     }

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-20 (#82: the two Pixie-Dust rules).
+**Last updated**: 2026-10-20 (#82: the two Pixie-Dust rules; what they do not see).
 
 ---
 
@@ -560,11 +560,27 @@ sloth reads the two steps.
   never M4, M5..M8 or Done, then went silent. M4 is the registrar's
   next message and carries R-Hash1, the online guess; a registrar that
   took M3 (E-Hash1/E-Hash2) and sent no M4 wanted only what an offline
-  crack needs.
-- **`WPS_PIXIE_LIKELY_SUCCESS`** (CRIT) — a registration at the same AP
-  that reached M7/M8/Done, from any station, after such a run. Not
-  gated on the silence: the cracked PIN is usually used within
-  seconds.
+  crack needs. In practice it catches **failed, timed-out or deferred**
+  offline attempts.
+- **`WPS_PIXIE_LIKELY_SUCCESS`** (CRIT, title `WPS_PIXIE_SUCCESS` —
+  the kind name does not fit `ALERT_TITLE_LEN`) — a registration at
+  the same AP that reached M7/M8/Done, from any station, after such a
+  run. Not gated on the silence, because the run with the PIN can
+  start at once. If the probing station also sent refused M4 guesses,
+  the detail says it may be an online PIN brute force that got past a
+  missed M4 rather than Pixie-Dust; the CRIT stands either way.
+
+**What these rules do not see.** A successful `reaver -K` finishes in
+one exchange: reaver (t6x fork, read at `f9b5e15`) runs `pixiewps`
+while it handles M3 and, on success, swaps the cracked PIN in and sends
+M4..M8 on the same run. On the air that is an ordinary M1..M8
+enrolment with no M3 abandon, so neither rule fires. The probe shape is
+what reaver leaves when `pixiewps` fails (NACK, exit) or outlasts the
+receive timeout (silent NACK, exit, *"Send pin with -p"*); the success
+rule reads that run followed by a later one with the PIN. `bully` and
+OneShot were not checked. A possible follow-up is the timing reaver
+does leave: an M3→M4 gap of the `pixiewps` runtime, seconds, against
+an online round trip's fraction of one.
 
 `src/wps_track.c` keeps the per-attempt view this needs: the Mn bits of
 the current attempt (M1 to the next M1), when its M3 arrived, the newest

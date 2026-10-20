@@ -107,8 +107,8 @@ typedef struct {
      * (always sends M4, because R-Hash1 in M4 is the guess).
      *
      *   attempt_bits   Mn bits (1<<n) seen since the newest M1, plus
- *                  bit 0 for a Done in this attempt (no Mn uses it)
- *                  and bit 9 once cred_ts is stamped for it
+     *                  bit 0 for a Done in this attempt (no Mn uses it)
+     *                  and bit 9 once cred_ts is stamped for it
      *   attempt_m3_ts  when M3 arrived in the current attempt; 0 none
      *   abandon_m3_ts  M3 time of the newest *closed* attempt that
      *                  reached M3 and never M4..M8 — closed meaning a
@@ -116,6 +116,12 @@ typedef struct {
      *   abandon_quiet_s  silence between that attempt's last frame and
      *                  the M1 that closed it
      *   abandon_n      lifetime count of such closed attempts
+     *   guess_n        lifetime count of closed attempts that reached
+     *                  M4 and not the credentials: refused online PIN
+     *                  guesses. Lets WPS_PIXIE_LIKELY_SUCCESS say when
+     *                  the "abandoned" run sat inside an online brute
+     *                  force, where one missed M4 makes a refused guess
+     *                  look like an M3 abandon.
      *   cred_ts        when the newest attempt first reached M7, M8 or
      *                  Done — the enrollee has opened both commitments
      *                  and M7 carries the credentials (WSC 2.0 §7.7;
@@ -127,6 +133,7 @@ typedef struct {
     time_t   abandon_m3_ts;
     int      abandon_quiet_s;
     int      abandon_n;
+    int      guess_n;
     time_t   cred_ts;
     /* Opcode timeline, ring of WPS_EVT_RING; read through
      * wps_track_events() so the modular indexing lives in one place. */

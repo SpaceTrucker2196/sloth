@@ -57,9 +57,45 @@ get the credentials."* A registration at the same AP that reaches M7
 (*"E -> R M7 … Ekwk(E-S2 || Credentials)"*: the enrollee has accepted
 both PIN halves and sends the network credentials), M8 or Done within
 `--tune wps.pixie_success_window_s` (24 h default) after an M3-abandoned
-run. CRIT. The silence window does not gate this one: the cracked PIN
-can be used seconds later, and the completion is itself the
-corroboration.
+run. CRIT. The silence window does not gate this one: the run with the
+PIN can start at once.
+
+## How the dominant tool meets these rules
+
+Checked against reaver's source, not inferred (t6x/reaver-wps-fork-t6x
+at `f9b5e15`, 2025-10-31). `src/exchange.c` sends M4 on receipt of M3
+whenever M2 was sent, with no Pixie condition; `wps_registrar.c` calls
+`pixie_attack()` while processing M3; `src/pixie.c` on success calls
+`set_pin()` and replaces `wps->dev_password` with the cracked PIN, so
+the same exchange's M4 already carries the right R-Hash1 and the run
+goes on to M8. So:
+
+- **`reaver -K` success is one continuous M1..M8 attempt** and neither
+  rule fires on it. It looks like an ordinary enrolment.
+- `WPS_PIXIE_PROBE` matches reaver when `pixiewps` **fails**
+  (`send_wsc_nack(); exit(1)`) or **outlasts the receive timeout**
+  (a silent NACK, then `exit(0)` with *"Send pin with -p"*), and any
+  offline crack run separately from saved M1/M3. That is, it detects
+  failed, timed-out or deferred attempts.
+- `WPS_PIXIE_LIKELY_SUCCESS` matches the second half of the deferred
+  case: the later run with `-p PIN`.
+
+`bully` and OneShot were not checked and nothing here claims either
+way. The signal reaver's success does leave is timing: M4 waits for
+`pixiewps`, seconds, where an online run answers M3 within one EAP
+round trip. A rule on that gap is a follow-up, not built; it would need
+its own threshold and source.
+
+## Misattribution
+
+An online brute force (VU#723755) where the sensor missed a single M4
+records that refused guess as an M3 abandon — with about a second of
+quiet, so `WPS_PIXIE_PROBE` stays silent — and when the brute force
+later succeeds `WPS_PIXIE_LIKELY_SUCCESS` fires. The CRIT is right (the
+PSK is gone) but the attack is not Pixie-Dust. The tracker counts
+closed attempts that reached M4 without the credentials (`guess_n`),
+and when the probing station has any, the detail says it may be an
+online brute force rather than Pixie-Dust.
 
 ## What it does not let sloth say
 
@@ -71,7 +107,9 @@ Therefore many brands are affected / Many vendors use different
 chipset"*. So both rules report a **sequence that corroborates** the
 attack — never a confirmed compromise (owner standard, #145 ruling 2).
 The benign trigger for both is a receiver gap: a channel-hopping radio
-that left after M3 of a legitimate enrolment sees the same shape.
+that left after M3 of a legitimate enrolment sees the same shape. The
+success rule has a second, misattributed trigger, above: a successful
+online brute force with one missed M4.
 
 ## The weak-RNG chipset watchlist is struck
 

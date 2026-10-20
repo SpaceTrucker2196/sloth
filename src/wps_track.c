@@ -65,7 +65,8 @@ static wps_session_t *session_for(const uint8_t bssid[6],
 
 /* Caller holds g_mu. Close the current attempt on a re-arming M1:
  * an attempt that reached M3 and nothing past it, and did not finish,
- * is recorded as abandoned with the silence that followed it. */
+ * is recorded as abandoned with the silence that followed it; one that
+ * sent M4 and did not reach the credentials is a refused guess. */
 static void attempt_close(wps_session_t *ss, time_t now) {
     if (ss->attempt_m3_ts &&
         (ss->attempt_bits & WPS_BITS_M1_M3) == WPS_BITS_M1_M3 &&
@@ -77,6 +78,9 @@ static void attempt_close(wps_session_t *ss, time_t now) {
         ss->abandon_quiet_s = (int)q;
         ss->abandon_n++;
     }
+    if ((ss->attempt_bits & (1u << 4)) &&
+        !(ss->attempt_bits & WPS_BIT_CRED_STAMPED))
+        ss->guess_n++;
     ss->attempt_bits  = 0;
     ss->attempt_m3_ts = 0;
 }

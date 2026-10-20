@@ -4258,3 +4258,19 @@ AP; `tests/fuzz/fuzz_eap_wsc_parse.c` fuzzes `eap_wsc_parse()` and the
 session machine behind it. The weak-RNG chipset watchlist is struck:
 the source maps no observable identifier to any flawed generator, so no
 row has a primary source (#145 ruling 2).
+
+## 2026-10-20 — Pixie Dust review: what the rules do not see (#82)
+
+A review read reaver's source (t6x fork at `f9b5e15`) and found the
+first slice's "reaver -K reruns at once" wrong: reaver runs `pixiewps`
+while it handles M3 and, on success, sends M4..M8 in the same exchange,
+so a successful `reaver -K` is one ordinary-looking M1..M8 run and
+neither Pixie rule fires on it. `WPS_PIXIE_PROBE` catches failed,
+timed-out or deferred offline attempts; `WPS_PIXIE_LIKELY_SUCCESS` the
+later run with the PIN. `docs/views/alerts.md`, `alerts.md` and the
+research document now say so. The success detail now says "may be an
+online PIN brute force" when the probing station also sent refused M4
+guesses (new `guess_n` in `src/wps_track.c`), since one missed M4 in a
+successful online brute force reads as an M3 abandon. The short title
+`WPS_PIXIE_SUCCESS` is documented as deliberate (`ALERT_TITLE_LEN` is
+20). Tests now hold every `attempt_close()` guard, each seen red.

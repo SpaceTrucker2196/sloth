@@ -126,9 +126,11 @@ static void test_m3_without_m4_is_the_shape(void) {
 
 static void test_m4_in_the_attempt_is_not_the_shape(void) {
     /* The online brute force always sends M4 — R-Hash1 is the guess —
-       so an attempt that reached M4 is VU#723755, not Bongard. Seen
-       red by dropping WPS_BITS_PAST_M3 from both checks in
-       wps_track.c. */
+       so an attempt that reached M4 is VU#723755, not Bongard. This
+       holds the current-attempt check in wps_track_m3_abandon(): seen
+       red by dropping WPS_BITS_PAST_M3 from that check. The same guard
+       in attempt_close(), on an attempt a later M1 has closed, is held
+       by test_lockout_paced_online_brute_is_not_abandoned. */
     wps_track_clear();
     px_probe_run(PB, SA, 1000);
     px_msg(PB, SA, WSC_MSG_M4, 1002);
@@ -181,6 +183,74 @@ static void test_a_rearming_m1_closes_the_attempt_with_its_silence(void) {
     ASSERT_EQ((long long)m3, 1001);
     ASSERT_EQ(q, 89);
     wps_track_clear();
+}
+
+/* One refused online guess: M1, M2, M3, M4 (R-Hash1, the guess), and
+ * the enrollee's NACK. */
+static void px_guess_run(const uint8_t b[6], const uint8_t s[6], time_t t) {
+    px_probe_run(b, s, t);
+    px_msg(b, s, WSC_MSG_M4, t + 1);
+    px_feed(b, s, WSC_OP_NACK, WSC_MSG_NACK, t + 2);
+}
+
+static void test_lockout_paced_online_brute_is_not_abandoned(void) {
+    /* reaver waiting out an AP lockout: each refused guess is closed by
+       the next M1 well past the 60 s silence, then a run succeeds. Every
+       closed attempt sent M4, so none is an M3 abandon and neither
+       Pixie rule may fire. Seen red by dropping WPS_BITS_PAST_M3 from
+       attempt_close(): abandon_n becomes 3, the 88 s gap trips
+       WPS_PIXIE_PROBE and the completion trips the success rule. */
+    px_begin(1700000000);
+    time_t t0 = g_wall - 1000;
+    px_guess_run(PB, SA, t0);
+    px_guess_run(PB, SA, t0 + 90);
+    px_guess_run(PB, SA, t0 + 180);
+    px_full_run(PB, SA, t0 + 270);
+    wps_session_t w;
+    ASSERT_EQ(wps_track_session(PB, SA, &w), 1);
+    ASSERT_EQ(w.abandon_n, 0);
+    ASSERT_EQ(w.guess_n, 3);
+    ASSERT_EQ(wps_track_m3_abandon(&w, g_wall, NULL, NULL), 0);
+    px_update();
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS), -1);
+    px_end();
+}
+
+static void test_closed_m3_without_m1_is_not_abandoned(void) {
+    /* First heard mid-run at M3, then a re-arming M1 that completes.
+       The closed attempt never showed where it began, so it is not the
+       shape. Seen red by dropping the WPS_BITS_M1_M3 term from
+       attempt_close(). */
+    px_begin(1700000000);
+    time_t t0 = g_wall - 1000;
+    px_msg(PB, SA, WSC_MSG_M3, t0);
+    px_full_run(PB, SA, t0 + 90);
+    wps_session_t w;
+    ASSERT_EQ(wps_track_session(PB, SA, &w), 1);
+    ASSERT_EQ(w.abandon_n, 0);
+    px_update();
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS), -1);
+    px_end();
+}
+
+static void test_closed_done_after_m3_is_not_abandoned(void) {
+    /* M1, M2, M3, Done (M4..M8 missed), then a re-arming M1 that
+       completes. A run that finished was not abandoned. Seen red by
+       dropping the Done bit (0x1) from attempt_close(). */
+    px_begin(1700000000);
+    time_t t0 = g_wall - 1000;
+    px_probe_run(PB, SA, t0);
+    px_feed(PB, SA, WSC_OP_DONE, WSC_MSG_DONE, t0 + 2);
+    px_full_run(PB, SA, t0 + 90);
+    wps_session_t w;
+    ASSERT_EQ(wps_track_session(PB, SA, &w), 1);
+    ASSERT_EQ(w.abandon_n, 0);
+    px_update();
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS), -1);
+    px_end();
 }
 
 static void test_cred_ts_is_the_first_credential_frame(void) {
@@ -307,8 +377,13 @@ static void test_pixie_success_fires_on_a_later_full_run(void) {
     ASSERT(i >= 0);
     if (i >= 0) {
         ASSERT_EQ((int)g_s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        /* The short form docs/views/alerts.md records: the kind name
+           does not fit ALERT_TITLE_LEN. */
+        ASSERT_STR(g_s.alerts[i].title, "WPS_PIXIE_SUCCESS");
         ASSERT_STR(g_s.alerts[i].key,
                    "wpspixieok:3c:84:6a:77:88:99:02:be:ef:00:00:02");
+        ASSERT(strstr(g_s.alerts[i].detail,
+                      "Pixie-Dust likely succeeded") != NULL);
         /* Both runs are named, so an operator can judge the pairing. */
         ASSERT(strstr(g_s.alerts[i].detail, "02:be:ef:00:00:01") != NULL);
         ASSERT(strstr(g_s.alerts[i].detail, "02:be:ef:00:00:02") != NULL);
@@ -321,15 +396,88 @@ static void test_pixie_success_fires_on_a_later_full_run(void) {
 }
 
 static void test_pixie_success_needs_no_silence(void) {
-    /* The tool reruns with the cracked PIN seconds later, from the
-       same MAC: the probe rule cannot fire (2 s of quiet), and the
-       success rule must not depend on it. */
+    /* An abandoned run, then a run with the PIN two seconds later from
+       the same MAC - an offline crack that finished fast and a rerun
+       started at once. The probe rule cannot fire (2 s of quiet), and
+       the success rule must not depend on it. This is not reaver -K's
+       success path, which finishes in one exchange (see
+       test_reaver_k_success_in_one_exchange_is_not_seen). */
     px_begin(1700000000);
     px_probe_run(PB, SA, g_wall - 30);       /* M3 at wall - 29 */
     px_full_run(PB, SA, g_wall - 27);        /* M1 re-arms 2 s later */
     px_update();
     ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
     ASSERT(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS) >= 0);
+    px_end();
+}
+
+static void test_reaver_k_success_in_one_exchange_is_not_seen(void) {
+    /* The documented gap. reaver -K runs pixiewps while it handles M3
+       and, on success, sends M4 with the cracked PIN in the same
+       exchange: one M1..M8+Done attempt with no abandon, which is an
+       ordinary enrolment on the air. Neither rule fires. Seen red by
+       deleting the whole past-M3-or-Done term from
+       wps_track_m3_abandon()'s current-attempt check, so the run reads
+       as its own abandon; dropping WPS_BITS_PAST_M3 alone leaves this
+       green, because the run's Done bit still rejects it. */
+    px_begin(1700000000);
+    px_full_run(PB, SA, g_wall - 200);
+    px_update();
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS), -1);
+    px_end();
+}
+
+static void test_pixie_success_names_the_newest_probe(void) {
+    /* Two abandoned runs from different stations, then one completion
+       from a third. The detail names the newer run. Seen red by
+       dropping `m3 > probe_m3` from the selection, which keeps the
+       first qualifying (older) run. */
+    static const uint8_t SC[6] = { 0x02, 0xbe, 0xef, 0x00, 0x00, 0x03 };
+    px_begin(1700000000);
+    px_probe_run(PB, SA, g_wall - 7200);     /* M3 at wall - 7199 */
+    px_probe_run(PB, SB, g_wall - 3600);     /* M3 at wall - 3599 */
+    px_full_run(PB, SC, g_wall - 20);        /* M7 at wall - 14 */
+    px_update();
+    int i = px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(g_s.alerts[i].detail, "from 02:be:ef:00:00:02") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, "02:be:ef:00:00:01") == NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, "3585s") != NULL);
+    }
+    ASSERT_EQ(px_count(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS), 1);
+    px_end();
+}
+
+static void test_pixie_success_names_an_online_brute_with_a_missed_m4(void) {
+    /* An unpaced online brute force where the sensor missed one M4:
+       the second guess reads as an M3 abandon (1 s quiet, so the probe
+       rule stays silent), and the third run succeeds. The CRIT stands -
+       the PSK is gone - but the attribution must not be Pixie-Dust
+       alone. Seen red by deleting the guess_n increment in
+       attempt_close(). */
+    px_begin(1700000000);
+    time_t t0 = g_wall - 100;
+    px_guess_run(PB, SA, t0);                /* M4 heard: a guess   */
+    px_probe_run(PB, SA, t0 + 3);            /* M4 missed           */
+    px_feed(PB, SA, WSC_OP_NACK, WSC_MSG_NACK, t0 + 5);
+    px_full_run(PB, SA, t0 + 6);
+    wps_session_t w;
+    ASSERT_EQ(wps_track_session(PB, SA, &w), 1);
+    ASSERT_EQ(w.abandon_n, 1);
+    ASSERT_EQ(w.guess_n, 1);
+    px_update();
+    ASSERT_EQ(px_find(&g_s, ALERT_TYPE_WPS_PIXIE_PROBE), -1);
+    int i = px_find(&g_s, ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(g_s.alerts[i].detail, "online PIN brute force") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail,
+                      "Pixie-Dust likely succeeded") == NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, "not confirmed") != NULL);
+    }
     px_end();
 }
 
@@ -635,6 +783,9 @@ void run_wps_pixie_tests(void) {
     RUN_TEST(test_m4_in_the_attempt_is_not_the_shape);
     RUN_TEST(test_m3_heard_without_m1_is_not_the_shape);
     RUN_TEST(test_done_after_m3_is_not_abandoned);
+    RUN_TEST(test_lockout_paced_online_brute_is_not_abandoned);
+    RUN_TEST(test_closed_m3_without_m1_is_not_abandoned);
+    RUN_TEST(test_closed_done_after_m3_is_not_abandoned);
     RUN_TEST(test_a_rearming_m1_closes_the_attempt_with_its_silence);
     RUN_TEST(test_cred_ts_is_the_first_credential_frame);
     RUN_TEST(test_event_ring_is_oldest_first_and_clamped);
@@ -649,6 +800,9 @@ void run_wps_pixie_tests(void) {
     TEST_SUITE("wps pixie — WPS_PIXIE_LIKELY_SUCCESS (#82)");
     RUN_TEST(test_pixie_success_fires_on_a_later_full_run);
     RUN_TEST(test_pixie_success_needs_no_silence);
+    RUN_TEST(test_reaver_k_success_in_one_exchange_is_not_seen);
+    RUN_TEST(test_pixie_success_names_the_newest_probe);
+    RUN_TEST(test_pixie_success_names_an_online_brute_with_a_missed_m4);
     RUN_TEST(test_pixie_success_respects_the_window);
     RUN_TEST(test_pixie_success_window_is_tunable);
     RUN_TEST(test_pixie_success_ignores_an_abandon_after_the_completion);
