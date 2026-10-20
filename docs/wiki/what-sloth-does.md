@@ -8,7 +8,7 @@ type: reference
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99, single binary. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->35<!-- /count --> views and <!-- count:rules -->77<!-- /count --> alert rules. It never
+the air and surfaces it through <!-- count:views -->35<!-- /count --> views and <!-- count:rules -->80<!-- /count --> alert rules. It never
 injects a frame onto a network it monitors; everything else that uses
 the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
@@ -57,7 +57,7 @@ Grouped three ways. Full keybinding map: [[views-catalog]].
 
 The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 
-## What it decides (<!-- count:rules -->77<!-- /count --> alert rules)
+## What it decides (<!-- count:rules -->80<!-- /count --> alert rules)
 
 One rule per `ALERT_TYPE_*`, each with a cited basis (a CVE, CERT
 advisory, MITRE technique, IEEE clause, or paper — the repo enforces the
