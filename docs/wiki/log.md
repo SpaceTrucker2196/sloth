@@ -3837,3 +3837,13 @@ behaviour, eviction victim and snapshot order are unchanged; the replay
 golden differs only by the two keys. Updated [[jsonl-schema]] (field
 list, example, counted list, meaning) and [[ring-buffers]] (the
 "still hand-written" list).
+
+## 2026-10-19 — recorded mutation run: views, probe.c, main.c (#143)
+
+[[mutation-testing]] gains "Recorded run: views, probe, main": one
+`make mutate` run at `6542fd1` per area, sampled with `--seed 143` —
+`src/views/*.c` 8/55 killed (14.5%), `src/capture/probe.c` 12/25
+(48.0%), `src/main.c` under `--target replay-check` 5/60 (8.3%) — with
+the exact commands, the confidence interval for each sample, and where
+the survivors cluster. The "don't waste cycles" note on `main.c` now
+names its replay-check oracle.

@@ -17,7 +17,7 @@ Level-5 autonomy claim in [`MISSION.md`](../../MISSION.md).
 **Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
 
-**Last updated**: 2026-10-19.
+**Last updated**: 2026-10-19 (#143: recorded run over views, probe.c, main.c).
 
 ---
 
@@ -420,7 +420,9 @@ Don't waste cycles mutating:
   a low rate on pure layout and a useful one on the decisions — which
   row is selected, which colour a column takes, which message an empty
   table shows. `src/capture/probe.c` is in `make test` too since #116.
-- `src/main.c` — orchestration glue, still not linked into any test.
+- `src/main.c` — orchestration glue, not linked into `sloth_test`;
+  `--target replay-check` is its only oracle (#119), and the 2026-10-19
+  run below kills 8% of a sample with it.
 - `src/platform/*.c` — kernel-facing, not run by tests.
 
 ---
@@ -434,6 +436,58 @@ survived count, and the date.
 A baseline is only meaningful if `make` and `make test` are clean at
 the SHA recorded next to it. Don't trust a kill-rate from a tree
 where the suite already had failures.
+
+### Recorded run: views, probe, main (2026-10-19, #143)
+
+The first recorded run over the three areas this page used to call
+not worth mutating. Tree `6542fd1` (`make test` 24620/0,
+`make replay-check` 45 records match). Each area is a random sample
+(`--limit`, `--seed 143`), not the full site list, so each rate is an
+estimate; the bracket is the 95% Wilson interval for that sample size.
+Wall time for the three runs was 43 min on 8 cores, sharing the host
+with another build for part of it.
+
+```sh
+make -j8 mutate MUTATE_FLAGS="--files src/views/*.c --limit 55 --seed 143"
+make -j8 mutate MUTATE_FLAGS="--files src/capture/probe.c --limit 25 --seed 143"
+make -j8 mutate MUTATE_FLAGS="--files src/main.c --target replay-check --limit 60 --seed 143"
+```
+
+| area | oracle | sites | sampled | killed | survived | kill rate (95% CI) |
+|---|---|---:|---:|---:|---:|---|
+| `src/views/*.c` (38 files) | `make test` | 5280 | 55 | 8 | 47 | 14.5% (7.6–26.2%) |
+| `src/capture/probe.c` | `make test` | 280 | 25 | 12 | 13 | 48.0% (30.0–66.5%) |
+| `src/main.c` | `make replay-check` | 484 | 60 | 5 | 55 | 8.3% (3.6–18.1%) |
+
+No mutant was killed by a build break or a timeout, and none matched
+`mutate-equivalents.txt`, so every kill is an assertion or a golden
+diff and every survivor is unclassified — some will be equivalent
+(a `const 1 -> 2` on a column pad the tests do not measure), most are
+untested decisions.
+
+What the numbers say:
+
+- **Views.** The kills are decisions (`packets.c:515` `&&`->`||`,
+  `procs.c:23`, `stats.c:120`, `tls.c:105` boundary flips) and two
+  constants in `dhcp_snoop.c` the render tests read back. Survivors
+  cluster in the dashboard (`dashboard.c` 6, `dashboard_grid.c` 4,
+  `dashboard_bands.c` 4 of 47): layout arithmetic the render tests
+  draw but do not assert cell by cell.
+- **probe.c.** All 12 kills are in the frame-dispatch path
+  (lines 320–812), which `tests/test_capture_path.c` drives end to end.
+  Survivors include `probe.c:93/95` and `:168` (`==`->`!=`) and
+  `:637` (`||`->`&&`): branch conditions no test reaches.
+- **main.c.** Replay exercises argv handling and the headless poll
+  loop, and the five kills are there (`main.c:793–851`, `:1134`,
+  `:1153`). The 55 survivors are mostly argv branches for options the
+  replay recipe does not pass (`main.c:801–1028`) and the interactive
+  side a headless replay never runs — signal handler, channel-hop
+  tick, key and filter-prompt handling (`main.c:145–296`) — plus
+  `main.c:787` `return 2` -> `return 0` on the `--data-socket`
+  refusal path, which replay never reaches.
+
+The survivor lists are in the run output; re-running the commands
+above at the same tree and seed reproduces them.
 
 ---
 
