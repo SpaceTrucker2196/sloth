@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include "runner.h"
 #include "tui.h"
@@ -194,6 +195,111 @@ static void test_parse_tls13_supported_versions_skips_grease(void) {
     ASSERT_EQ(r, 1);
     ASSERT_STR(e.tls_ver, "TLS 1.3");
     ASSERT_STR(e.host,    "example.com");
+}
+
+/* ── uint16 list walks stop at the extension boundary ──────────────
+ *
+ * supported_versions, supported_groups and signature_algorithms are
+ * lists of 16-bit values. Each walk read a pair at index i while checking
+ * only i + 1 <= elen, so an odd-length extension let the last read take
+ * one byte from whatever follows - the next extension's type, or past the
+ * buffer when the extension is last (found by fuzz_tls_log_parse in CI on
+ * 48e3dfe: heap-buffer-overflow in be16, tls_log.c:291). Each case below
+ * lays the next extension's first byte where a straddling read would
+ * pick it up, so the bug shows in a plain build too, not only under ASan.
+ */
+static int tls_build_hello(uint8_t *out, int cap, const uint8_t *ext, int ext_len) {
+    static const uint8_t head[] = {
+        0x03, 0x03,                                     /* legacy_version */
+        0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,               /* random */
+        0x00,                                           /* session id */
+        0x00, 0x02, 0x00, 0x2f,                         /* one cipher */
+        0x01, 0x00,                                     /* null compression */
+    };
+    int ch_len = (int)sizeof(head) + 2 + ext_len;
+    int total  = 5 + 4 + ch_len;
+    if (total > cap) return -1;
+    uint8_t *p = out;
+    *p++ = 0x16; *p++ = 0x03; *p++ = 0x01;
+    *p++ = (uint8_t)((ch_len + 4) >> 8); *p++ = (uint8_t)(ch_len + 4);
+    *p++ = 0x01; *p++ = 0x00;
+    *p++ = (uint8_t)(ch_len >> 8); *p++ = (uint8_t)ch_len;
+    memcpy(p, head, sizeof(head)); p += sizeof(head);
+    *p++ = (uint8_t)(ext_len >> 8); *p++ = (uint8_t)ext_len;
+    memcpy(p, ext, (size_t)ext_len);
+    return total;
+}
+
+static void test_supported_versions_walk_stops_at_the_extension(void) {
+    /* supported_versions, elen 4: list_len 4 claims two versions, but only
+     * 0x0303 and a lone 0x03 are inside; the next extension's type starts
+     * with 0x04. A straddling read sees 0x0304 and reports TLS 1.3. */
+    static const uint8_t ext[] = {
+        0x00, 0x2b, 0x00, 0x04,   0x04, 0x03, 0x03, 0x03,
+        0x04, 0x00, 0x00, 0x00,                 /* unknown ext 0x0400, empty */
+    };
+    uint8_t buf[128]; tls_log_entry_t e;
+    int n = tls_build_hello(buf, (int)sizeof(buf), ext, (int)sizeof(ext));
+    ASSERT(n > 0);
+    ASSERT_EQ(tls_log_parse(buf, n, NULL, NULL, &e), 1);
+    ASSERT_STR(e.tls_ver, "TLS 1.2");
+}
+
+static void test_supported_versions_last_extension_stays_in_bounds(void) {
+    /* The same odd tail as the LAST bytes of the buffer, in an exactly
+     * sized heap copy, so ASan sees any read past it - the CI crash shape. */
+    static const uint8_t ext[] = { 0x00, 0x2b, 0x00, 0x04, 0x04, 0x03, 0x03, 0x03 };
+    uint8_t tmp[128]; tls_log_entry_t e;
+    int n = tls_build_hello(tmp, (int)sizeof(tmp), ext, (int)sizeof(ext));
+    ASSERT(n > 0);
+    uint8_t *exact = malloc((size_t)n);
+    ASSERT(exact != NULL);
+    if (!exact) return;
+    memcpy(exact, tmp, (size_t)n);
+    ASSERT_EQ(tls_log_parse(exact, n, NULL, NULL, &e), 1);
+    ASSERT_STR(e.tls_ver, "TLS 1.2");
+    free(exact);
+}
+
+/* For the two lists that only reach the JA3/JA4 hashes, compare a
+ * straddling hello with an honest twin that lists the in-bounds values
+ * only: the fingerprints must agree. */
+static void test_groups_and_sigalgs_walks_stop_at_the_extension(void) {
+    /* supported_groups, elen 5: list_len 4, 0x001d, then a lone 0x00 and
+     * the next extension's 0x17 - a straddling read adds curve 0x0017. */
+    static const uint8_t groups_bad[] = {
+        0x00, 0x0a, 0x00, 0x05,   0x00, 0x04, 0x00, 0x1d, 0x00,
+        0x17, 0x00, 0x00, 0x00,
+    };
+    static const uint8_t groups_ok[] = {
+        0x00, 0x0a, 0x00, 0x05,   0x00, 0x02, 0x00, 0x1d, 0x00,
+        0x17, 0x00, 0x00, 0x00,
+    };
+    /* signature_algorithms, same shape: 0x0403, then 0x05 + next 0x01. */
+    static const uint8_t sigs_bad[] = {
+        0x00, 0x0d, 0x00, 0x05,   0x00, 0x04, 0x04, 0x03, 0x05,
+        0x01, 0x00, 0x00, 0x00,
+    };
+    static const uint8_t sigs_ok[] = {
+        0x00, 0x0d, 0x00, 0x05,   0x00, 0x02, 0x04, 0x03, 0x05,
+        0x01, 0x00, 0x00, 0x00,
+    };
+    uint8_t a[128], b[128]; tls_log_entry_t ea, eb;
+    int na = tls_build_hello(a, (int)sizeof(a), groups_bad, (int)sizeof(groups_bad));
+    int nb = tls_build_hello(b, (int)sizeof(b), groups_ok,  (int)sizeof(groups_ok));
+    ASSERT(na > 0 && nb > 0);
+    ASSERT_EQ(tls_log_parse(a, na, NULL, NULL, &ea), 1);
+    ASSERT_EQ(tls_log_parse(b, nb, NULL, NULL, &eb), 1);
+    ASSERT(ea.ja3[0] != '\0');
+    ASSERT_STR(ea.ja3, eb.ja3);
+    na = tls_build_hello(a, (int)sizeof(a), sigs_bad, (int)sizeof(sigs_bad));
+    nb = tls_build_hello(b, (int)sizeof(b), sigs_ok,  (int)sizeof(sigs_ok));
+    ASSERT(na > 0 && nb > 0);
+    ASSERT_EQ(tls_log_parse(a, na, NULL, NULL, &ea), 1);
+    ASSERT_EQ(tls_log_parse(b, nb, NULL, NULL, &eb), 1);
+    ASSERT(ea.ja4[0] != '\0');
+    ASSERT_STR(ea.ja4, eb.ja4);
 }
 
 /* ── JA3 fingerprint tests ───────────────────────────────── */
@@ -593,6 +699,9 @@ void run_tls_log_tests(void) {
     RUN_TEST(test_parse_rejects_truncated);
     RUN_TEST(test_parse_null_ips_ok);
     RUN_TEST(test_parse_tls13_supported_versions_skips_grease);
+    RUN_TEST(test_supported_versions_walk_stops_at_the_extension);
+    RUN_TEST(test_supported_versions_last_extension_stays_in_bounds);
+    RUN_TEST(test_groups_and_sigalgs_walks_stop_at_the_extension);
     RUN_TEST(test_ja4_shape_matches_foxio_spec);
     RUN_TEST(test_ja4_is_deterministic);
     RUN_TEST(test_ja4_stable_across_extension_reorder);

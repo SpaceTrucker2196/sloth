@@ -243,7 +243,7 @@ int tls_log_parse(const uint8_t *data, int len,
         if (etype == 0x000d && elen >= 2) {
             int sig_list = (int)be16(ch + off);
             int si       = 2;
-            while (si + 1 < sig_list + 2 && si + 1 <= (int)elen) {
+            while (si + 2 <= sig_list + 2 && si + 2 <= (int)elen) {
                 uint16_t sa = be16(ch + off + si);
                 if (!is_grease(sa)
                     && ja4_nsigalgs < (int)(sizeof(ja4_sigalgs)/sizeof(ja4_sigalgs[0])))
@@ -282,12 +282,15 @@ int tls_log_parse(const uint8_t *data, int len,
             }
             (void)list_len;
         } else if (etype == 0x002b && elen >= 1) {
-            /* supported_versions */
+            /* supported_versions. Every uint16 walk here reads the pair at
+             * i and i + 1, so the bound is i + 2 against both the list
+             * length and elen; i + 1 let an odd-length extension take one
+             * byte past itself (fuzz_tls_log_parse, CI on 48e3dfe). */
             int vlen = ch[off];
             int vi   = 1;
             has_sv   = 1;
             best_ver = 0;
-            while (vi + 1 <= vlen && vi + 1 <= (int)elen) {
+            while (vi + 2 <= vlen + 1 && vi + 2 <= (int)elen) {
                 uint16_t v = be16(ch + off + vi);
                 /* RFC 8701: skip GREASE values so a leading 0x?a?a
                  * doesn't win over 0x0304. */
@@ -298,7 +301,7 @@ int tls_log_parse(const uint8_t *data, int len,
             /* supported_groups (curves): list_len(2) + uint16[]. */
             int list_len = (int)be16(ch + off);
             int gi       = 2;
-            while (gi + 1 < list_len + 2 && gi + 1 <= (int)elen) {
+            while (gi + 2 <= list_len + 2 && gi + 2 <= (int)elen) {
                 uint16_t g = be16(ch + off + gi);
                 if (!is_grease(g))
                     ja3_emit(curves_buf, sizeof(curves_buf),

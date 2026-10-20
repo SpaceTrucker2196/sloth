@@ -4175,3 +4175,15 @@ appended to after the fragment. New tests: the `--eapol-dir` manifest
 failure on the EAPOL counter, a failed handshake rename not listed, a
 failed fsync spending its `seq`, the clamp on a corrupt ring
 `raw_len`, an unnamed kind omitting `rule`.
+
+## 2026-10-20 — TLS ClientHello list walks bounded at the extension
+
+CI fuzzing (fuzz_tls_log_parse, run on 48e3dfe) found a heap-buffer-overflow:
+the supported_versions, supported_groups and signature_algorithms walks in
+`src/tls_log.c` read a 16-bit pair at index i while checking only
+`i + 1 <= elen`, so an odd-length extension let the last read take one byte
+past itself - the next extension's type, or past the buffer when it was the
+last extension. Bound is now `i + 2`. Effect on output before the fix: a
+straddling read could report TLS 1.3 for a 1.2 hello and add a bogus curve
+or signature algorithm to the JA3/JA4 fingerprints. Regression tests in
+`tests/test_tls_log.c` fail in a plain build without the fix.
