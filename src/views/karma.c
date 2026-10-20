@@ -77,8 +77,9 @@ static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
          * only the marker is left. */
         if (label_w > KARMA_LABEL_MIN)
             snprintf(tool, tool_sz, "  [%.*s~%s]", label_w - 1, k->tool, slash);
-        else
-            snprintf(tool, tool_sz, "  [~%s]", slash);
+        else    /* k->tool is 48 bytes; the bound only satisfies -Wformat-truncation */
+            snprintf(tool, tool_sz, "  [~%.*s]",
+                     tail_len < 59 ? tail_len : 59, slash);
         return;
     }
     snprintf(tool, tool_sz, "%.*s", rem, full);
