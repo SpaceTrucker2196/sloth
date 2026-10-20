@@ -46,7 +46,10 @@ on the **Interfaces** title rule at full alert heat, failing sinks only.
 Every other view carries it on the tab bar; the dashboard has no tab
 bar, and it is the startup view, so it draws the badge itself. It
 overprints the rule rather than taking a row, so no band moves; on a
-terminal too small for the tile it sits under the "too small" notice.
+terminal too small for the tile it sits on the row after the "too
+small" notice, below it even when a narrow terminal wraps the notice.
+Short of room, it drops whole `sink:N` tokens and ends in `+` rather
+than cutting a count.
 Healthy sinks: no badge at all.
 
 ## Top hosts panel

@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <string.h>
 #include "runner.h"
 #include "sloth.h"
@@ -56,6 +57,19 @@ static void test_badge_truncates_safely(void) {
     ASSERT_STR(one, "");
 }
 
+/* Found by the sanitised run of the dashboard truncation test: an int
+ * sum of three INT_MAX counters overflowed. The total saturates, and
+ * the badge still names every sink. Seen to fail with the plain int
+ * sum restored (the return assertion went red on the wrapped sum). */
+static void test_badge_total_saturates(void) {
+    persist_health_t p = { .jsonl = INT_MAX, .alert_pcap = INT_MAX,
+                           .eapol = INT_MAX };
+    char buf[96];
+    ASSERT_EQ(persist_badge(&p, buf, sizeof(buf)), INT_MAX);
+    ASSERT_STR(buf, "!persist jsonl:2147483647 pcap:2147483647 "
+                       "eapol:2147483647");
+}
+
 static void test_badge_null_arguments(void) {
     persist_health_t p;
     memset(&p, 0, sizeof(p));
@@ -85,6 +99,7 @@ void run_persist_health_tests(void) {
     RUN_TEST(test_badge_names_only_failing_sinks);
     RUN_TEST(test_badge_all_sinks_in_stable_order);
     RUN_TEST(test_badge_truncates_safely);
+    RUN_TEST(test_badge_total_saturates);
     RUN_TEST(test_badge_null_arguments);
     RUN_TEST(test_poll_mirrors_module_counters);
 }

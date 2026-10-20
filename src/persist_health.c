@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 
 #include "persist_health.h"
@@ -15,8 +16,13 @@ void persist_health_poll(persist_health_t *p) {
 int persist_badge(const persist_health_t *p, char *buf, size_t sz) {
     if (buf && sz) buf[0] = '\0';
     if (!p || !buf || !sz) return 0;
-    int total = p->jsonl + p->alert_pcap + p->eapol;
-    if (total <= 0) return 0;
+    /* Summed wide and saturated: lifetime counters near INT_MAX
+     * overflow an int sum. That is UB, and the wrapped value can go
+     * negative (two INT_MAX sinks wrap to -2), which would read as
+     * "healthy" and hide the badge. */
+    long long sum = (long long)p->jsonl + p->alert_pcap + p->eapol;
+    if (sum <= 0) return 0;
+    int total = sum > INT_MAX ? INT_MAX : (int)sum;
     size_t off = (size_t)snprintf(buf, sz, "!persist");
     /* snprintf never returns negative here (fixed format); clamp so a
      * tiny buffer degrades to truncation, not an out-of-bounds off. */

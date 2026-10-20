@@ -4012,3 +4012,18 @@ no longer records the gap; [[cli-reference]] § Status badges and
 [[dashboard]] describe where it is drawn. The dashboard minimum size in
 [[dashboard]] and [[ip-palette]] is corrected from 100×33 to the 102×41
 `view_dashboard_draw()` computes.
+
+## 2026-10-19 — #96 review: dashboard `!persist` badge edge cases
+
+Review fixes on the dashboard badge. A badge too long for the
+Interfaces title is now cut between whole `sink:N` tokens and marked
+`+`, never mid-number (a raw character cut had turned `eapol:2147483647`
+into `eapol:2147`). On a terminal too small for the tile the badge goes
+on the row after the "too small" notice, which wraps below ~76 columns,
+instead of overprinting it on row 1. The layout-unchanged test's
+comment now names the mutation that actually made its row diff fail.
+The sanitised run of the new truncation test found `persist_badge()`
+summing the three counters in an `int`; the total is now summed wide
+and saturated at `INT_MAX`.
+[[cli-reference]] § Status badges, [[dashboard]] and [[retention]] §6
+updated.

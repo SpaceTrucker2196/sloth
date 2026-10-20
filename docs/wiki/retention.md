@@ -358,7 +358,8 @@ Recorded here rather than implied away:
   `src/views/dashboard_bands.c`). It overprints the rule rather than
   taking a row, so the band layout is unchanged;
   `tests/test_views_render.c` pins presence, absence when healthy, the
-  unchanged rows and both small-terminal cases. Format and caveats:
+  unchanged rows, both small-terminal cases, a wrapped notice, and
+  truncation by whole `sink:N` tokens (never mid-count). Format and caveats:
   [[cli-reference]] § Status badges.
 - **`--pcap-dir` keeps what is worth keeping, and can be opened all
   the way up.** Two `--tune` knobs decide what reaches disk:

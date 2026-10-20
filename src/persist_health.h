@@ -29,8 +29,9 @@
 void persist_health_poll(persist_health_t *p);
 
 /* Write the badge ("!persist jsonl:3 pcap:1 eapol:2") into buf,
- * listing only failing sinks. Returns the total failure count; 0
- * means healthy and buf is set to "". Truncation-safe for any sz > 0. */
+ * listing only failing sinks. Returns the total failure count,
+ * saturated at INT_MAX; 0 means healthy and buf is set to "".
+ * Truncation-safe for any sz > 0. */
 int  persist_badge(const persist_health_t *p, char *buf, size_t sz);
 
 #endif /* PERSIST_HEALTH_H */

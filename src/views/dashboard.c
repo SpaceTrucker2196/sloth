@@ -195,8 +195,13 @@ void view_dashboard_draw(const sloth_state_t *s) {
                min_cols, min_lines, cols, lines);
         tui_normal();
         /* The badge outranks the layout: a terminal too small for the
-         * tile is still one an operator may be watching. */
-        draw_persist_badge(s, 1, 0, cols);
+         * tile is still one an operator may be watching. It goes on the
+         * row the cursor reached after the notice, not a fixed row 1:
+         * below ~76 columns the notice wraps onto row 1 and a badge
+         * there would overprint it. */
+        int badge_y = getcury(stdscr);
+        if (badge_y < 1) badge_y = 1;
+        if (badge_y < lines) draw_persist_badge(s, badge_y, 0, cols);
         return;
     }
 

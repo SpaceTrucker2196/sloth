@@ -338,6 +338,12 @@ How `persist_badge()` (`src/persist_health.c`) formats it:
   `src/views/dashboard_bands.c`). Until 2026-10-19 it did not, and the
   badge was seen only after a switch to a detail view. The ANSI
   fallback (`WITH_NCURSES=0`) draws the bar on every view.
+- **Truncated by whole sinks on the dashboard.** When the Interfaces
+  title is too short for every failing sink, the dashboard drops
+  whole `sink:N` tokens from the right and ends the badge with `+`
+  (`!persist jsonl:3 pcap:1+` means at least one more sink failed),
+  never cutting a count to its leading digits. If not even one token
+  fits, it shows the bare `!persist`.
 
 The badge is the only signal **on the tab bar**, but not the only one
 anywhere — three others carry the same fact, and an integrator should

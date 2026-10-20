@@ -219,7 +219,11 @@ static void test_the_dashboard_shows_no_badge_when_healthy(void) {
 
 /* The badge overprints the title rule and takes no row: every row but
  * the title row is identical with and without it, so the band layout
- * does not move. Seen to fail with the badge drawn one row lower. */
+ * does not move. The row diff was seen to fail (rows 2..8 "moved")
+ * with view_dashboard_draw() starting the Interfaces band one row lower
+ * whenever persist_health has a failure. Drawing the badge itself one
+ * row lower does NOT exercise it: the iface rows drawn afterwards cover
+ * it, and only the row-1 find assertion catches that. */
 static void test_the_persist_badge_does_not_move_the_bands(void) {
     static char base[TEST_SCREEN_ROWS][1024];
     char got[1024];
@@ -270,6 +274,47 @@ static void test_the_persist_badge_survives_small_terminals(void) {
     ASSERT_SCREEN_HAS("Dashboard: terminal too small");
     ASSERT_SCREEN_HAS("!persist jsonl:12345 pcap:678 eapol:9");
 
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* A badge too long for its space is cut between whole "sink:N"
+ * tokens and marked '+', never mid-number: a count cut to its leading
+ * digits would be a wrong number on a safety signal. At 102x41 the
+ * Interfaces title has room for two INT_MAX-sized tokens, not three.
+ * Seen to fail with the cut made at the raw character count (the
+ * line then held a partial "eapol:" token). */
+static void test_a_truncated_persist_badge_keeps_whole_tokens(void) {
+    sloth_state_t *s = fresh(VIEW_DASH);
+    s->persist_health.jsonl      = 2147483647;
+    s->persist_health.alert_pcap = 2147483647;
+    s->persist_health.eapol      = 2147483647;
+    ASSERT_EQ(tui_init_offscreen(41, 102), 0);
+    tui_draw(s);
+    int y = runner_screen_find("!persist jsonl:2147483647 pcap:2147483647+ ");
+    ASSERT_EQ(y, 1);
+    if (y < 0) tui_test_dump(stderr);
+    ASSERT_SCREEN_LACKS("eapol");
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* Below ~76 columns the "too small" notice wraps onto row 1; the badge
+ * goes on the row after it instead of overprinting the wrapped tail.
+ * At 40 columns the tail fills most of row 1, under where a
+ * right-aligned badge there would sit. Seen to fail with the badge
+ * pinned back to row 1: both the row assertion and the intact-tail
+ * assertion went red (row 1 read "02 cols, >=41 rows; th !persist
+ * jsonl:4"). */
+static void test_the_persist_badge_clears_a_wrapped_notice(void) {
+    sloth_state_t *s = fresh(VIEW_DASH);
+    s->persist_health.jsonl = 4;
+    ASSERT_EQ(tui_init_offscreen(33, 40), 0);
+    tui_test_erase();
+    tui_draw(s);
+    ASSERT_SCREEN_HAS("Dashboard: terminal too small");
+    ASSERT_SCREEN_HAS("this is 40x33)");
+    int y = runner_screen_find("!persist jsonl:4");
+    ASSERT_EQ(y, 2);
+    if (y != 2) tui_test_dump(stderr);
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
@@ -436,6 +481,8 @@ void run_views_render_tests(void) {
     RUN_TEST(test_the_dashboard_shows_no_badge_when_healthy);
     RUN_TEST(test_the_persist_badge_does_not_move_the_bands);
     RUN_TEST(test_the_persist_badge_survives_small_terminals);
+    RUN_TEST(test_a_truncated_persist_badge_keeps_whole_tokens);
+    RUN_TEST(test_the_persist_badge_clears_a_wrapped_notice);
     RUN_TEST(test_the_tab_bar_wraps_without_splitting_a_label);
     RUN_TEST(test_channel_view_renders_a_seeded_row);
     RUN_TEST(test_eapol_view_renders_a_seeded_row);

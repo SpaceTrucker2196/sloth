@@ -29,20 +29,35 @@
  * to switch away. It overprints a title rule rather than taking a row,
  * so the band heights are the same with and without it. Truncated from
  * the right when the space is short (the "!persist" prefix is what
- * matters); skipped only when even that does not fit. */
+ * matters); skipped only when even that does not fit. A cut is made
+ * only between whole "sink:N" tokens, marked by a trailing '+': cutting
+ * at a character count could turn "jsonl:12345" into "jsonl:12", a
+ * wrong failure count on a safety signal, which is worse than leaving
+ * the sink off. */
 void draw_persist_badge(const sloth_state_t *s, int y, int x_lo, int x_hi) {
     char badge[96];
     if (persist_badge(&s->persist_health, badge, sizeof(badge)) <= 0)
         return;
+    const int prefix = (int)strlen("!persist");
     int room = x_hi - x_lo - 2;              /* one blank each side */
     int len  = (int)strlen(badge);
-    if (len > room) len = room;
-    if (len < (int)strlen("!persist")) return;
-    int x = x_hi - len - 2;
+    int more = 0;
+    if (len > room) {
+        /* Keep the longest run of whole tokens that leaves a column for
+         * the '+': badge[len] must be the space that ends a token. */
+        more = 1;
+        len  = room - 1;
+        while (len > prefix && badge[len] != ' ') len--;
+        if (len < prefix || badge[len] != ' ') len = prefix;
+        if (len + more > room) more = 0;     /* the bare prefix, no '+' */
+    }
+    if (len + more > room) return;
+    int x = x_hi - len - more - 2;
     tui_heat(1.0);
     move(y, x);
     addch(' ');
     tui_addnstr(badge, len);
+    if (more) addch('+');
     addch(' ');
     tui_normal();
 }
