@@ -4059,3 +4059,16 @@ all aged out now falls back to `--pcap-dir` when it also has a
 `match_ip`, instead of being marked done with nothing written. The
 bare-name fallback for a path over 255 bytes is now tested in both
 exporters. Pages: [[pcap-export]], [[jsonl-schema]].
+
+## 2026-10-20 — #92 slice 4: PM_FORGE and QUEUE_EVICT cite their frames
+
+#107's last slice. `PM_FORGE` now cites the contradicting pair (the
+PM=1 Null/QoS-Null and the PM=0 data frame on another TID), and
+`QUEUE_EVICT` the session-change frame plus the released burst, as
+`evidence_count` / `evidence_id_N` on the `alert` and `alert.*`
+records. `on_probe_frame()` stamps the evidence-ring ID on the decoded
+frame view (`dot11_frame_t.event_id`) so every frame observer can read
+it; the bounded per-row ring is `src/ev_cite.h`. A later session change
+with one stray frame keeps the reported release's citations, and a
+repeated sequence number cites nothing. [[pcap-export]] § Which alerts
+cite frames, [[jsonl-schema]] and [[alerts]] updated.

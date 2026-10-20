@@ -754,8 +754,11 @@ typedef struct {
      * technique (e.g. NO_MONITOR_MODE). */
     char         technique[16];
     /* Evidence-ring event IDs this incident cites, oldest first (#92).
-     * Empty for every rule that has no frames to cite — today only the
-     * deauth-flood family fills it.
+     * Empty for every rule that has no frames to cite. Filled by the
+     * no-IP wireless rules whose triggering frames are monitor frames;
+     * docs/wiki/pcap-export.md § Which alerts cite frames is the list,
+     * kept there rather than here so this comment cannot go stale the
+     * way its "only the deauth-flood family" predecessor did.
      *
      * Stamped on the alert rather than looked up at read time so the
      * citations exist at the moment the incident opens, inside

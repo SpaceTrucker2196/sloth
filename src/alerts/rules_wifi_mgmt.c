@@ -23,6 +23,16 @@
 #include "queue_evict.h"
 #include "rules.h"
 #include "engine_internal.h"
+#include "wired_attach.h"
+#include "sloth_compat.h"
+
+/* Every detector's citation array hands over whole: the engine clamps to
+ * ALERT_EVIDENCE_IDS, and a detector keeping more than that would lose
+ * its newest ids silently (#92 slice 4). */
+SLOTH_STATIC_ASSERT(PM_FORGE_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
+                    pm_forge_cites_within_the_alert);
+SLOTH_STATIC_ASSERT(QUEUE_EVICT_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
+                    queue_evict_cites_within_the_alert);
 
 /* Deauth/disassoc flood (#88). Fires per (BSSID, victim) impact
  * aggregate while its sliding window is flooded: at least
@@ -1083,8 +1093,14 @@ void rule_pm_forge(const sloth_state_t *s, time_t now) {
                  "Framing Frames queue manipulation, CVE-2022-47522%s",
                  sta, bss, tbl[i].contradiction_count,
                  mine ? " - YOUR network" : "");
-        fire(ALERT_TYPE_PM_FORGE, mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
-             "PM_FORGE", detail, key, NULL, 0, now);
+        /* Cites the frame pairs that formed the contradiction (#92):
+         * a data frame has no flow sloth can export on for this — the
+         * queue manipulation is the 802.11 header — so the evidence
+         * ring is the only route back to the bytes. */
+        uint64_t ev[PM_FORGE_EVIDENCE_IDS];
+        int ev_n = pm_forge_evidence(&tbl[i], ev, PM_FORGE_EVIDENCE_IDS);
+        fire_ev(ALERT_TYPE_PM_FORGE, mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+                ev, ev_n, "PM_FORGE", detail, key, NULL, 0, now);
     }
 }
 
@@ -1200,8 +1216,15 @@ void rule_queue_evict(const sloth_state_t *s, time_t now) {
                      queue_evict_src_name(q->last_release_src),
                      q->release_count,
                      mine ? " - YOUR network" : "");
-        fire_conf(ALERT_TYPE_QUEUE_EVICT, sev, conf,
-                  "QUEUE_EVICT", detail, key, NULL, 0, now);
+        /* The session-change frame and the released burst (#92). The
+         * confidence ladder above is the reason this is fire_inv() and
+         * not fire_ev(): an uncorroborated release is reported at 25 %,
+         * and dropping that to cite frames would trade one honesty for
+         * another. */
+        fire_inv(ALERT_TYPE_QUEUE_EVICT, sev, conf, NULL,
+                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, NULL,
+                 q->release_ids, q->release_id_count,
+                 "QUEUE_EVICT", detail, key, NULL, 0, now);
     }
 }
 

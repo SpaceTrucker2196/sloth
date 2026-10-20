@@ -6,6 +6,7 @@
 #include "dot11_data.h"
 #include "dot11_frame.h"
 #include "sensor_health.h"
+#include "ev_cite.h"
 
 static queue_evict_t   g_tbl[MAX_QUEUE_EVICT_ENTRIES];
 static int             g_count;
@@ -56,6 +57,13 @@ static int64_t stamp_us(time_t sec, long usec) {
 void queue_evict_note_session_change(const uint8_t bssid[6],
                                      const uint8_t sta[6], int src,
                                      time_t now_sec, long now_usec) {
+    queue_evict_note_session_change_ev(bssid, sta, src, now_sec, now_usec, 0);
+}
+
+void queue_evict_note_session_change_ev(const uint8_t bssid[6],
+                                        const uint8_t sta[6], int src,
+                                        time_t now_sec, long now_usec,
+                                        uint64_t event_id) {
     if (!bssid || !sta) return;
     /* A broadcast deauth ends every session on the BSS at once and
      * names none of them; attributing it to ff:ff:ff:ff:ff:ff would
@@ -75,6 +83,10 @@ void queue_evict_note_session_change(const uint8_t bssid[6],
     /* A new session change starts a new burst, so the previous burst's
      * last sequence number must not suppress this one's first frame. */
     e->burst_last_seq = -1;
+    e->event_ev       = event_id;
+    memset(e->burst_ids, 0, sizeof(e->burst_ids));
+    e->burst_id_n     = 0;
+    e->burst_id_head  = 0;
     e->last_seen      = now_sec;
     pthread_mutex_unlock(&g_mu);
 }
@@ -155,6 +167,11 @@ void queue_evict_observe_downlink_frame(const dot11_frame_t *f,
             }
             e->burst_last_seq = seq;
             e->burst_frames++;
+            /* After the duplicate bail, so a repeat cites nothing. One
+             * slot short of the array: slot 0 of the published list is
+             * the session-change frame. */
+            ev_cite_push(e->burst_ids, QUEUE_EVICT_EVIDENCE_IDS - 1,
+                         &e->burst_id_n, &e->burst_id_head, f->event_id);
             if (e->burst_frames == 1) e->burst_first_us = now_us;
             e->burst_last_us = now_us;
             const uint32_t min_frames =
@@ -171,6 +188,15 @@ void queue_evict_observe_downlink_frame(const dot11_frame_t *f,
                  * being drained from traffic trickling in. */
                 e->last_release_span_ms =
                     (int)((e->burst_last_us - e->burst_first_us) / 1000);
+                memset(e->release_ids, 0, sizeof(e->release_ids));
+                int k = 0;
+                if (e->event_ev) e->release_ids[k++] = e->event_ev;
+                k += ev_cite_flatten(e->burst_ids,
+                                     QUEUE_EVICT_EVIDENCE_IDS - 1,
+                                     e->burst_id_n, e->burst_id_head,
+                                     e->release_ids + k,
+                                     QUEUE_EVICT_EVIDENCE_IDS - k);
+                e->release_id_count = (uint8_t)k;
             }
         }
     }

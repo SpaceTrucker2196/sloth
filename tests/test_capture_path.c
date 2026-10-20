@@ -16,6 +16,7 @@
 #include "sloth_clock.h"
 #include "deauth_snoop.h"   /* the one detector that cites evidence IDs (#92) */
 #include "queue_evict.h"
+#include "pm_forge.h"      /* the frame view's event_id reaches it (#92 slice 4) */
 #include "probe_pnl.h"      /* the PNL the +HTC offset feeds */
 #include "assoc_track.h"    /* the grant a short assoc response must still record (#122) */
 #include "frame_build.h"    /* spec-derived 802.11 builder (#122) */
@@ -2494,6 +2495,88 @@ static void test_a_granted_reassoc_plus_a_burst_records_a_release(void) {
     queue_evict_clear();
 }
 
+/* #92 slice 4: the release cites the frames the callback retained —
+ * the reassociation response through queue_evict_note_session_change_ev()
+ * and the burst through the frame view's event_id. Both stamps live in
+ * on_probe_frame(), which only this file reaches. */
+static void test_a_release_cites_the_ring_ids_of_its_frames(void) {
+    evidence_setup();
+    queue_evict_clear();
+
+    uint8_t r[128], d0[128], d1[128], d2[128];
+    int rn = qe_reassoc_resp(r, 0);
+    int dn = qe_downlink_seq(d0, 30);
+    qe_downlink_seq(d1, 31);
+    qe_downlink_seq(d2, 32);
+    const uint8_t *fs[4] = { r, d0, d1, d2 };
+    int ls[4] = { rn, dn, dn, dn };
+    const uint32_t ts[4] = { 1700000000u, 1700000000u, 1700000000u,
+                             1700000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 4), 4);
+
+    queue_evict_t e;
+    ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+    ASSERT_EQ((int)e.release_count, 1);
+    ASSERT_EQ((int)e.release_id_count, 4);
+    for (int i = 0; i < 4; i++)
+        ASSERT_EQ((long long)e.release_ids[i], (long long)(before + 1 + i));
+    /* And the first one resolves to the reassociation response itself. */
+    evidence_rec_t rec;
+    static uint8_t out[128];
+    ASSERT_EQ(evidence_ring_get(e.release_ids[0], &rec, out, sizeof(out)), rn);
+    ASSERT_EQ(memcmp(out, r, (size_t)rn), 0);
+    queue_evict_clear();
+    evidence_ring_shutdown();
+}
+
+/* PM-bit forgery through the same callback: the contradiction cites the
+ * PM=1 QoS-Null and the PM=0 QoS data frame by the IDs the ring issued.
+ * STA->AP framing per IEEE 802.11-2020 Table 9-26 (ToDS, A1 = BSSID). */
+static int pmf_frame(uint8_t *f, int sub, int pm, int tid, int seq) {
+    const int dot11_len = 26, total = RT_HDR + dot11_len;
+    memset(f, 0, (size_t)total);
+    f[2] = (uint8_t)RT_HDR;
+    uint8_t *d = f + RT_HDR;
+    d[0] = (uint8_t)((sub << 4) | (2 << 2));
+    d[1] = (uint8_t)(0x01 | (pm ? 0x10 : 0));
+    memcpy(d + 4,  QE_BSSID, 6);
+    memcpy(d + 10, QE_STA,   6);
+    memcpy(d + 16, QE_BSSID, 6);
+    d[22] = (uint8_t)((seq & 0x0f) << 4);
+    d[23] = (uint8_t)((seq >> 4) & 0xff);
+    d[24] = (uint8_t)(tid & 0x0f);
+    return total;
+}
+
+static void test_a_pm_contradiction_cites_the_ring_ids_of_its_pair(void) {
+    evidence_setup();
+    pm_forge_clear();
+    beacon_clear();
+    /* The AP's beacon interval bounds the contradiction window. */
+    beacon_record(QE_BSSID, "qevt", -50, 6, "WPA2", 100, NULL);
+
+    uint8_t a[64], b[64];
+    int an = pmf_frame(a, 0xC, 1, 0, 40);   /* QoS-Null, PM=1, TID 0 */
+    int bn = pmf_frame(b, 0x8, 0, 5, 41);   /* QoS data, PM=0, TID 5 */
+    const uint8_t *fs[2] = { a, b };
+    int ls[2] = { an, bn };
+    const uint32_t ts[2] = { 1700000000u, 1700000000u };   /* 1 ms apart */
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    pm_forge_t pf;
+    ASSERT_EQ(pm_forge_lookup(QE_STA, &pf), 1);
+    ASSERT_EQ((int)pf.contradiction_count, 1);
+    uint64_t ids[PM_FORGE_EVIDENCE_IDS];
+    ASSERT_EQ(pm_forge_evidence(&pf, ids, PM_FORGE_EVIDENCE_IDS), 2);
+    ASSERT_EQ((long long)ids[0], (long long)(before + 1));
+    ASSERT_EQ((long long)ids[1], (long long)(before + 2));
+    pm_forge_clear();
+    beacon_clear();
+    evidence_ring_shutdown();
+}
+
 /* The ordinary-retransmission case, through the REAL pcap_dispatch
  * callback rather than by calling the module directly. One MSDU the AP
  * keeps retrying must not reach the release threshold, because on a
@@ -3306,6 +3389,8 @@ void run_capture_path_tests(void) {
 
     TEST_SUITE("queued-frame release wiring (#107 shape B)");
     RUN_TEST(test_a_granted_reassoc_plus_a_burst_records_a_release);
+    RUN_TEST(test_a_release_cites_the_ring_ids_of_its_frames);
+    RUN_TEST(test_a_pm_contradiction_cites_the_ring_ids_of_its_pair);
     RUN_TEST(test_a_retried_downlink_burst_records_no_release);
     RUN_TEST(test_a_refused_reassoc_opens_no_window);
     RUN_TEST(test_a_deauth_attributes_the_station_in_both_directions);

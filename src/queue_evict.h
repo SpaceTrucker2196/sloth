@@ -73,6 +73,12 @@
  * re-firing with a rising count rather than ageing out. */
 #define QUEUE_EVICT_REPORT_SECS 900
 
+/* Evidence-ring event IDs a release cites (#92 slice 4): the frame that
+ * changed the session, then the newest frames of the burst that
+ * followed it. Eight is ALERT_EVIDENCE_IDS; rule_queue_evict() asserts
+ * the two agree. */
+#define QUEUE_EVICT_EVIDENCE_IDS 8
+
 /* What changed the station's session. The distinction is reported
  * rather than acted on: the reassociation route and the
  * post-disconnect route have different consequences (frames released
@@ -123,6 +129,19 @@ typedef struct {
     uint32_t last_release_frames;
     int      last_release_span_ms;
 
+    /* Citations, split the same way as the burst and the release above
+     * and for the same reason: the pending burst's ids (`event_ev` plus
+     * a ring of the burst's frames) are reset by every session change,
+     * and are copied into `release_ids` only while the burst is at or
+     * past the threshold — so a later change with one stray frame does
+     * not take away the citations of the release being reported.
+     * `release_ids` is flat, oldest first, session-change frame first. */
+    uint64_t event_ev;
+    uint64_t burst_ids[QUEUE_EVICT_EVIDENCE_IDS];
+    uint8_t  burst_id_n, burst_id_head;
+    uint64_t release_ids[QUEUE_EVICT_EVIDENCE_IDS];
+    uint8_t  release_id_count;
+
     time_t   first_seen;
     time_t   last_seen;
     uint8_t  in_use;
@@ -135,6 +154,13 @@ typedef struct {
 void queue_evict_note_session_change(const uint8_t bssid[6],
                                      const uint8_t sta[6], int src,
                                      time_t now_sec, long now_usec);
+/* The same, citing the frame that changed the session by its
+ * evidence-ring event ID (0 = none retained). The form above passes 0;
+ * on_probe_frame() calls this one. */
+void queue_evict_note_session_change_ev(const uint8_t bssid[6],
+                                        const uint8_t sta[6], int src,
+                                        time_t now_sec, long now_usec,
+                                        uint64_t event_id);
 
 /* Feed one 802.11 data-type frame (type == 2) starting at Frame
  * Control, stamped from its own capture timestamp. Counts only

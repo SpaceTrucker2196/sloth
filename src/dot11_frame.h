@@ -74,6 +74,15 @@ typedef struct {
     int seq_num, frag_num, tid, amsdu;
 
     int fcs_stripped, bad_fcs;
+
+    /* Evidence-ring event ID of the capture this view decodes (#92), 0
+     * when nothing was retained. dot11_frame_decode() leaves it 0 — the
+     * decoder has no ring — and on_probe_frame() stamps it once, after
+     * evidence_ring_note(), so every frame observer can cite the frame
+     * it was handed without each growing an event-id parameter.
+     * dot11_frame_depad() copies the view, so the stamp survives the
+     * datapad strip. */
+    uint64_t event_id;
 } dot11_frame_t;
 
 /* Decode the MAC header of the `len` bytes at `p`. `rt` may be NULL.

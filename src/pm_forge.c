@@ -5,6 +5,7 @@
 #include "dot11_frame.h"
 #include "beacon_snoop.h"
 #include "sensor_health.h"
+#include "ev_cite.h"
 
 static pm_forge_t      g_tbl[MAX_PM_FORGE_ENTRIES];
 static int             g_count;
@@ -74,6 +75,7 @@ void pm_forge_observe_frame(const dot11_frame_t *f,
         if (pm) {
             e->last_pm1_null_us  = now_us;
             e->last_pm1_null_tid = tid;
+            e->last_pm1_null_ev  = f->event_id;
         }
     } else if (!pm) {
         /* A contradiction is the station transmitting as awake
@@ -89,12 +91,24 @@ void pm_forge_observe_frame(const dot11_frame_t *f,
             if (bms > 0 && (now_us - e->last_pm1_null_us) <= (int64_t)bms * 1000) {
                 e->contradiction_count++;
                 e->last_contradiction_ts = now_sec;
+                /* Both halves: neither frame is a finding alone — the
+                 * contradiction is the pair. */
+                ev_cite_push(e->ev_ids, PM_FORGE_EVIDENCE_IDS,
+                             &e->ev_n, &e->ev_head, e->last_pm1_null_ev);
+                ev_cite_push(e->ev_ids, PM_FORGE_EVIDENCE_IDS,
+                             &e->ev_n, &e->ev_head, f->event_id);
             }
         }
         e->last_pm0_data_us  = now_us;
         e->last_pm0_data_tid = tid;
     }
     pthread_mutex_unlock(&g_mu);
+}
+
+int pm_forge_evidence(const pm_forge_t *e, uint64_t *out, int max) {
+    if (!e) return 0;
+    return ev_cite_flatten(e->ev_ids, PM_FORGE_EVIDENCE_IDS,
+                           e->ev_n, e->ev_head, out, max);
 }
 
 int pm_forge_lookup(const uint8_t sta[6], pm_forge_t *out) {

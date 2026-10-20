@@ -34,6 +34,12 @@
  * acts on it. */
 
 #define MAX_PM_FORGE_ENTRIES 128
+/* Evidence-ring event IDs a row cites (#92 slice 4): the frames that
+ * formed the newest contradictions, the PM=1 Null and the PM=0 data
+ * frame that contradicted it, as a pair. Eight is ALERT_EVIDENCE_IDS —
+ * four contradictions' worth — and rule_pm_forge() asserts the two
+ * agree, so the hand-off cannot truncate. */
+#define PM_FORGE_EVIDENCE_IDS 8
 
 typedef struct {
     uint8_t  sta[6];
@@ -54,10 +60,23 @@ typedef struct {
                                     * Null, within the AP's own beacon
                                     * interval, on a different TID */
     time_t   last_contradiction_ts;
+    /* Event ID of the frame behind last_pm1_null_us, so a contradiction
+     * found later can cite the sleep declaration as well as the frame
+     * that broke it. 0 when the ring retained nothing for it. */
+    uint64_t last_pm1_null_ev;
+    /* Citation ring (src/ev_cite.h): newest ids, deduplicated, read
+     * through pm_forge_evidence() rather than directly, because the
+     * head is wherever the last write left it. */
+    uint64_t ev_ids[PM_FORGE_EVIDENCE_IDS];
+    uint8_t  ev_n, ev_head;
     time_t   first_seen;
     time_t   last_seen;
     uint8_t  in_use;
 } pm_forge_t;
+
+/* The row's cited event IDs, oldest first, at most `max`; returns how
+ * many. Pure function of the row, so it works on a snapshot copy. */
+int  pm_forge_evidence(const pm_forge_t *e, uint64_t *out, int max);
 
 /* Feed one 802.11 data-type frame (type == 2), starting at the Frame
  * Control field, as heard on the monitor radio, stamped from the

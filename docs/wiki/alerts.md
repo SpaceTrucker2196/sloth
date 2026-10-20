@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-19.
+**Last updated**: 2026-10-20.
 
 ---
 
@@ -310,6 +310,12 @@ The window the burst is measured in (100 ms) is a **chosen** bound and
 says so in the header: 802.11 fixes no deadline for flushing a buffered
 frame, so unlike `PM_FORGE`'s beacon-interval window there is nothing
 to derive from the air.
+
+Both `PM_FORGE` and `QUEUE_EVICT` cite the frames they fired on (#92
+slice 4): the contradicting PM=1/PM=0 pair, and the session-change
+frame plus the released burst. Neither has a flow to export on, so the
+evidence-ring IDs in `evidence_id_N` are the only route back to the
+bytes — see [[pcap-export]] § Which alerts cite frames.
 
 ### Records are not conclusions about people
 

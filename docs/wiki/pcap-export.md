@@ -112,11 +112,23 @@ what makes a citation safe to carry on a long-lived alert.
 
 ### Which alerts cite frames
 
-Only the **deauth-flood family** so far. `deauth_victim_t` keeps up to
-`DEAUTH_EVIDENCE_IDS` (8) event IDs per (BSSID, victim) aggregate and
-`rule_deauth_flood()` stamps them onto the alert as
-`evidence_ids[]` / `evidence_id_count`. Every other rule passes none,
-and reads as an empty list.
+The no-IP wireless rules whose triggering frames are monitor frames.
+Each detector keeps a small bounded ring of event IDs next to the state
+it already keeps and hands it to the alert as `evidence_ids[]` /
+`evidence_id_count`; every other rule passes none and reads as an empty
+list. `on_probe_frame()` stamps the ID on the decoded frame view
+(`dot11_frame_t.event_id`), so frame observers read it from there; the
+ones that take bare fields get it through an `_ev` entry point.
+
+| Rule | What it cites | Where the ring lives |
+|------|---------------|----------------------|
+| `DEAUTH_FLOOD` | the newest distinct deauth/disassoc frames at the (BSSID, victim) | `deauth_victim_t`, 8 |
+| `PM_FORGE` (#107) | the contradicting pairs: the PM=1 Null/QoS-Null and the PM=0 data frame that broke it, newest pairs first | `pm_forge_t`, 8 |
+| `QUEUE_EVICT` (#107) | the (re)association response or deauth/disassoc that changed the session, then the newest frames of the released burst | `queue_evict_t`, 8 — copied from the pending burst only once it reaches the threshold, so a later change with one stray frame keeps the reported release's citations |
+
+The shared ring is `src/ev_cite.h`: 0 is never stored, an ID already
+held is not stored twice (one Null behind two contradictions), and the
+list is flattened oldest first.
 
 Two deliberate choices:
 

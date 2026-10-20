@@ -445,10 +445,10 @@ static void emit_signature(char *buf, int *off, const alert_t *a) {
  * event's own `event_id` field is a different, unrelated string
  * (`<incident_id>-<seq>`), and the two must not collide in one object.
  *
- * Omitted entirely when the detector cited nothing: today only the
- * deauth-flood family (#92) ever populates evidence_ids, and a record
- * with `evidence_count` but no ids (or the reverse) would be a claim
- * half made. */
+ * Omitted entirely when the detector cited nothing — most rules have
+ * no frames to cite (docs/wiki/pcap-export.md lists the ones that do),
+ * and a record with `evidence_count` but no ids (or the reverse) would
+ * be a claim half made. */
 static void emit_evidence(char *buf, int *off, const alert_t *a) {
     if (!a->evidence_id_count) return;
     kv_int(buf, LINEBUF, off, "evidence_count", a->evidence_id_count);

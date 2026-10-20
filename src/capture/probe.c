@@ -443,14 +443,21 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      *
      * The event ID is kept: it is how a detector cites this frame. 0
      * means nothing was retained (ring down, or an empty frame), and a
-     * citation of 0 is never stored. Only the deauth/disassoc path
-     * consumes it so far — the other parsers still discard it. */
+     * citation of 0 is never stored.
+     *
+     * Stamped on the frame view so the observers that take `fr` read it
+     * from there (pm_forge, queue_evict, action_snoop's BTM and SA Query
+     * paths, the assoc-request flood window); the ones that take bare
+     * fields get it as an argument below — deauth_record() through
+     * df.event_id, beacon_record_ev(), auth_observe_ev() and
+     * queue_evict_note_session_change_ev(). */
     const uint64_t ev = evidence_ring_note(
                              fv.data, (uint32_t)fv.caplen, fv.origlen,
                              fts, (long)fv.ts_usec,
                              (uint16_t)(rt.freq_mhz > 0 && rt.freq_mhz <= 0xFFFF
                                         ? rt.freq_mhz : 0),
                              signal);
+    fr.event_id = ev;
 
     if (type == 1) {
         /* Control frames (#64). Dispatched *above* the 24-byte guard
@@ -587,11 +594,11 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * security context. Fed from the same status-0 evidence as
              * assoc_observe, for the same reason frag_note_association
              * is. */
-            queue_evict_note_session_change(
+            queue_evict_note_session_change_ev(
                 bssid_p, sta_p,
                 (sub == 3) ? QUEUE_EVICT_SRC_REASSOC
                            : QUEUE_EVICT_SRC_ASSOC,
-                fts, (long)fv.ts_usec);
+                fts, (long)fv.ts_usec, ev);
         }
         return;
     }
@@ -622,9 +629,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * the station sent the frame. A broadcast deauth lands on
              * ff:ff:ff:ff:ff:ff and queue_evict rejects it. */
             const uint8_t *bss_p = fr.a3;
-            queue_evict_note_session_change(
+            queue_evict_note_session_change_ev(
                 bss_p, memcmp(a1, bss_p, 6) == 0 ? a2 : a1,
-                QUEUE_EVICT_SRC_DISCONNECT, fts, (long)fv.ts_usec);
+                QUEUE_EVICT_SRC_DISCONNECT, fts, (long)fv.ts_usec, ev);
         }
         return;
     }
