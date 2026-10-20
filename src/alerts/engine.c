@@ -656,6 +656,14 @@ void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
          match_ip, match_port, sloth_wall());
 }
 
+void alerts_fire_ev_for_test(alert_type_t type, alert_sev_t sev,
+                             const char *key, const char *detail,
+                             const char *match_ip, uint16_t match_port,
+                             const uint64_t *ev_ids, int ev_n) {
+    fire_ev(type, sev, ev_ids, ev_n, "TEST", detail ? detail : "",
+            key ? key : "", match_ip, match_port, sloth_wall());
+}
+
 /* ── Per-type tables ────────────────────────────────────────
  * Both generated from include/sloth_alerts.def (#117), which also
  * carries the technique-mapping policy and the reasoning behind every
@@ -724,10 +732,12 @@ static void snapshot(sloth_state_t *s) {
  *
  * Same contract as alert_pcap_dump(): frames written (> 0), 0 when
  * nothing is left to write (every cited frame aged out of the ring, so
- * no file and nothing to retry), -1 on a failure worth retrying. The
- * name is evidence_export_alert_name()'s, and the path recorded is
- * under --eapol-dir — or the bare name when that does not fit, never a
- * truncated path. */
+ * no file and nothing to retry), -1 on a failure worth retrying — plus
+ * EVX_REFUSED, a failure that retrying cannot clear. The name is
+ * evidence_export_alert_name()'s, suffixed "-N" if an earlier process
+ * already used it (evidence_export_pcap_unique() says how that
+ * happens), and the path recorded is under --eapol-dir — or the bare
+ * name when that does not fit, never a truncated path. */
 static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     char name[128], err[SFILE_ERR_MAX];
     path[0] = '\0';
@@ -743,10 +753,12 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
         return -1;
     int n = a->evidence_id_count;
     if (n > ALERT_EVIDENCE_IDS) n = ALERT_EVIDENCE_IDS;
-    int written = evidence_export_pcap(name, a->evidence_ids, n, NULL,
-                                       err, sizeof(err));
-    if (written > 0 && evidence_export_path(name, path, pathsz) != 0)
-        snprintf(path, pathsz, "%s", name);
+    char used[sizeof(name) + 8];
+    int written = evidence_export_pcap_unique(name, a->evidence_ids, n,
+                                              NULL, used, sizeof(used),
+                                              err, sizeof(err));
+    if (written > 0 && evidence_export_path(used, path, pathsz) != 0)
+        snprintf(path, pathsz, "%s", used);
     return written;
 }
 
@@ -764,14 +776,22 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
  *
  * An alert with both whose evidence gate is closed falls back to the IP
  * path; one with both and the gate open writes the evidence, which is
- * the stronger record. Before this, a DEAUTH_FLOOD CRIT had evidence
- * IDs and no match_ip, so it was skipped here and wrote zero frames
- * even with every flag set.
+ * the stronger record — and if every cited frame has aged out of the
+ * ring (the evidence export returns 0), it still falls back to the IP
+ * path, because --pcap-dir may hold packets the ring no longer does.
+ * No detector sets both today; the fallback is so the first one that
+ * does is not silently left with nothing. Before this, a DEAUTH_FLOOD
+ * CRIT had evidence IDs and no match_ip, so it was skipped here and
+ * wrote zero frames even with every flag set.
  *
  * A failed write (-1) does NOT set pcap_dumped (#92): the export
  * keeps retrying on the next tick, the same "a full disk may drain"
  * philosophy jsonl.c's emit_line() already applies, rather than
  * permanently losing this incident's evidence to one transient error.
+ * EVX_REFUSED is the exception: every candidate name is already taken,
+ * which no later tick changes, so it is counted once and the incident
+ * is done. Retrying it was a per-tick write, fsync, unlink and failure
+ * count for the incident's whole life (#92 review).
  * Zero frames (0, no failure) IS terminal — the ring already doesn't
  * hold anything for this alert and never will retroactively. */
 /* ── Per-alert pcap export policy (#96) ───────────────────
@@ -830,11 +850,14 @@ static void dump_new_alert_pcaps(const sloth_state_t *s, time_t now) {
         int written = ev
             ? dump_alert_evidence(a, a->pcap_path, sizeof(a->pcap_path))
             : alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
+        if (ev && written == 0 && ip_on && a->match_ip[0])
+            written = alert_pcap_dump(s, a, a->pcap_path, sizeof(a->pcap_path));
         if (written < 0) {
             a->pcap_write_failures++;
             a->pcap_path[0] = '\0';
             sd = side_get(a->key, engine_hash[i]);
             if (sd) sd->pcap_write_failures = a->pcap_write_failures;
+            if (written == EVX_REFUSED) a->pcap_dumped = 1;
             continue;
         }
         a->pcap_dumped = 1;

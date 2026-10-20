@@ -170,6 +170,13 @@ int  eapol_export_create(const char *name, char *err, size_t errsz);
    like create, when the gate has closed in between. Does NOT remove
    `tmp` on failure — the caller owns that, through discard.
 
+   Returns 0, EAPOL_COMMIT_EXISTS when the only problem is that `name`
+   is taken, or -1 for anything else. The two are kept apart because
+   they want opposite responses: a taken name never frees itself, so a
+   caller that retries it every tick retries forever (#92 review), while
+   -1 can be a full disk that drains. The caller picks another name for
+   the first and retries the second.
+
    eapol_export_discard() unlinks `tmp`, best effort and silent: it is
    the cleanup on a failure path that has already been reported, and a
    second error about the cleanup would bury the first. A temp that
@@ -183,6 +190,7 @@ int  eapol_export_create(const char *name, char *err, size_t errsz);
    is off or the path does not fit (out is then "").
 
    All four take bare names only, the same rule as create. */
+#define EAPOL_COMMIT_EXISTS (-2)
 int  eapol_export_commit(const char *tmp, const char *name,
                          char *err, size_t errsz);
 void eapol_export_discard(const char *tmp);

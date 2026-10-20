@@ -938,6 +938,7 @@ int eapol_export_commit(const char *tmp, const char *name,
     } else if (fstatat(g_out_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
         if (err && errsz)
             snprintf(err, errsz, "%s: already exists", name);
+        rc = EAPOL_COMMIT_EXISTS;
     } else if (errno != ENOENT) {
         if (err && errsz)
             snprintf(err, errsz, "%s: cannot check the name is free: %s",

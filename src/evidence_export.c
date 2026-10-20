@@ -96,10 +96,30 @@ static int fail_tmp(int fd, const char *tmp, const char *why,
     return -1;
 }
 
-int evidence_export_pcap(const char *name,
-                         const uint64_t *ids, int n,
-                         int *skipped,
-                         char *err, size_t errsz) {
+/* The kth candidate for `name`: k == 1 is the name itself, then
+ * "<stem>-<k><ext>" with the extension split at the last '.'. A '-'
+ * rather than alert_pcap's '_' because the alert-name rule slug is
+ * already [A-Za-z0-9_], so "_2" would read as part of the kind
+ * (DEAUTH_FLOOD_2) while "-2" cannot. */
+static int candidate_name(const char *name, int k, char *out, size_t outsz) {
+    int n;
+    if (k == 1) {
+        n = snprintf(out, outsz, "%s", name);
+    } else {
+        const char *dot = strrchr(name, '.');
+        if (!dot || dot == name) dot = name + strlen(name);
+        n = snprintf(out, outsz, "%.*s-%d%s",
+                     (int)(dot - name), name, k, dot);
+    }
+    return (n > 0 && (size_t)n < outsz) ? 0 : -1;
+}
+
+static int export_impl(const char *name,
+                       const uint64_t *ids, int n,
+                       int *skipped, int unique,
+                       char *name_out, size_t name_outsz,
+                       char *err, size_t errsz) {
+    if (name_out && name_outsz) name_out[0] = '\0';
     if (skipped) *skipped = 0;
     if (!name || !*name || !ids || n <= 0) {
         if (err && errsz) snprintf(err, errsz, "bad arguments");
@@ -208,7 +228,45 @@ int evidence_export_pcap(const char *name,
 
     if (fault_hit(EVX_FAULT_COMMIT))
         return fail_tmp(-1, tmp, "commit failed (injected)", err, errsz);
-    if (eapol_export_commit(tmp, name, err, errsz) != 0)
-        return fail_tmp(-1, tmp, NULL, err, errsz);
-    return written;
+
+    /* A taken name is not transient: nothing frees it, so the unique
+     * variant moves on to "<stem>-2<ext>" and the plain one refuses.
+     * Each candidate is checked and renamed under the EAPOL lock, so
+     * the loop needs no lock of its own. */
+    const int tries = unique ? EVX_UNIQUE_MAX : 1;
+    char cand[sizeof(tmp)];
+    for (int k = 1; k <= tries; k++) {
+        if (candidate_name(name, k, cand, sizeof(cand)) != 0)
+            return fail_tmp(-1, tmp, "name too long", err, errsz);
+        int rc = eapol_export_commit(tmp, cand, err, errsz);
+        if (rc == 0) {
+            if (name_out && name_outsz)
+                snprintf(name_out, name_outsz, "%s", cand);
+            return written;
+        }
+        if (rc != EAPOL_COMMIT_EXISTS)
+            return fail_tmp(-1, tmp, NULL, err, errsz);
+    }
+    if (!unique) return fail_tmp(-1, tmp, NULL, err, errsz);
+    char why[SFILE_ERR_MAX];
+    snprintf(why, sizeof(why), "%s: %d same-named files already exist",
+             name, EVX_UNIQUE_MAX);
+    fail_tmp(-1, tmp, why, err, errsz);
+    return EVX_REFUSED;
+}
+
+int evidence_export_pcap(const char *name,
+                         const uint64_t *ids, int n,
+                         int *skipped,
+                         char *err, size_t errsz) {
+    return export_impl(name, ids, n, skipped, 0, NULL, 0, err, errsz);
+}
+
+int evidence_export_pcap_unique(const char *name,
+                                const uint64_t *ids, int n,
+                                int *skipped,
+                                char *name_out, size_t name_outsz,
+                                char *err, size_t errsz) {
+    return export_impl(name, ids, n, skipped, 1, name_out, name_outsz,
+                       err, errsz);
 }

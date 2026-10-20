@@ -19,6 +19,13 @@ void alerts_clear(void);
 void alerts_fire_for_test(alert_type_t type, alert_sev_t sev,
                           const char *key, const char *detail,
                           const char *match_ip, uint16_t match_port);
+/* Test-only: the same, citing evidence-ring IDs (fire_ev). No detector
+ * fires with both a match_ip and evidence IDs yet; this is how the
+ * engine's handling of that combination is pinned before one does. */
+void alerts_fire_ev_for_test(alert_type_t type, alert_sev_t sev,
+                             const char *key, const char *detail,
+                             const char *match_ip, uint16_t match_port,
+                             const uint64_t *ev_ids, int ev_n);
 /* Test-only: AND every key hash with `mask` (0 → every key collides),
  * to prove find_by_key() still compares the full key. alerts_clear()
  * restores ~0; call this after it. */

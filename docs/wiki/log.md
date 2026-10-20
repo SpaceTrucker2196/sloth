@@ -4044,3 +4044,18 @@ temp on every failure path, so nothing zero-length or truncated is left
 under a final name. The ring and exporter moved to `CORE_COMMON_SRCS`
 because the engine, which every build links, now calls them. Pages:
 [[pcap-export]], [[jsonl-schema]], [[cli-reference]].
+
+## 2026-10-20 — Evidence export review fixes (#92 slices 1+2)
+
+An evidence pcap name is unique within one process only, so a restart
+that re-fires a key in the same wall second can rebuild a name an
+earlier run left on disk. The commit refused it and the engine retried
+every tick, forever: a write, fsync, unlink and counted failure per
+tick, and a `sensor_health` record per tick through `storage_failures`.
+The engine now exports through `evidence_export_pcap_unique()`, which
+commits under `-2` … `-99` and reports the name used; all 99 taken is
+counted once and ends the incident. An alert citing evidence that has
+all aged out now falls back to `--pcap-dir` when it also has a
+`match_ip`, instead of being marked done with nothing written. The
+bare-name fallback for a path over 255 bytes is now tested in both
+exporters. Pages: [[pcap-export]], [[jsonl-schema]].

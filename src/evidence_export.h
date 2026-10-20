@@ -48,7 +48,8 @@
  * The alert engine (#92 slice 1): dump_new_alert_pcaps() in
  * src/alerts/engine.c exports every incident that carries evidence IDs,
  * under the same severity floor and per-key cooldown #96 put on IP
- * alert pcaps, named by evidence_export_alert_name(). Nothing here
+ * alert pcaps, named by evidence_export_alert_name() and written
+ * through evidence_export_pcap_unique(). Nothing here
  * decides WHICH frames matter: the detector picks the IDs and fire_inv()
  * stamps them. */
 
@@ -110,6 +111,32 @@ int evidence_export_pcap(const char *name,
                          const uint64_t *ids, int n,
                          int *skipped,
                          char *err, size_t errsz);
+
+/* evidence_export_pcap(), except that a name already on disk is not a
+ * refusal: the export commits under "<stem>-2<ext>", "<stem>-3<ext>" ..
+ * up to EVX_UNIQUE_MAX, and the name actually used is written to
+ * name_out ("" on failure). The alert engine uses this one.
+ *
+ * Why it exists (#92 review): the alert name is unique only within one
+ * process. incident_id hashes the key, the wall second and a sequence
+ * that restarts at 0, and evidence IDs restart at 1, so a restart that
+ * re-fires the same key in the same wall second — an RTC-less sensor
+ * booting to a saved clock, say, with the earlier file still inside the
+ * retention window — rebuilds the identical name. Under the plain
+ * refusal the engine retried that every tick for the incident's life:
+ * a full write, fsync and unlink per tick, a failure counted per tick,
+ * and sensor_health re-emitted per tick through storage_fail.
+ *
+ * Returns as evidence_export_pcap() does, plus EVX_REFUSED when every
+ * candidate is taken. That one is terminal — retrying cannot free a
+ * name — and is counted once, like any other failure here. */
+#define EVX_UNIQUE_MAX 99
+#define EVX_REFUSED    (-2)
+int evidence_export_pcap_unique(const char *name,
+                                const uint64_t *ids, int n,
+                                int *skipped,
+                                char *name_out, size_t name_outsz,
+                                char *err, size_t errsz);
 
 /* Test seam: make the nth occurrence of one failure point fail, so each
  * cleanup path is driven without a full disk. WRITE counts write(2)

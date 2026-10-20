@@ -500,6 +500,249 @@ static void test_stale_temp_from_a_crash_does_not_block(void) {
     teardown();
 }
 
+/* ── Review fixes (#92 review) ───────────────────────────────────── */
+
+/* A file with known content at g_dir/<name>, standing in for one an
+   earlier process wrote. */
+static void plant(const char *name, const char *body) {
+    char p[400];
+    snprintf(p, sizeof(p), "%s/%s", g_dir, name);
+    FILE *fp = fopen(p, "wb");
+    ASSERT(fp != NULL);
+    if (fp) { fputs(body, fp); fclose(fp); }
+}
+
+static long size_in_dir(const char *name) {
+    char p[400];
+    snprintf(p, sizeof(p), "%s/%s", g_dir, name);
+    struct stat st;
+    return stat(p, &st) == 0 ? (long)st.st_size : -1;
+}
+
+/* The incident's first tick fails (armed write fault), so the name is
+   known before any export succeeds; the test then puts a file there,
+   as an earlier run of the same sensor would have. */
+static int fail_first_tick(sloth_state_t *s, const uint64_t *ids, int n,
+                           char *stem, size_t stemsz) {
+    seed_flood(s, ids, n);
+    evidence_export_test_fault(EVX_FAULT_WRITE, 1);
+    alerts_update(s);
+    int i = find_deauth(s);
+    ASSERT(i >= 0);
+    if (i < 0) return -1;
+    ASSERT_EQ(s->alerts[i].pcap_write_failures, 1);
+    ASSERT_EQ(s->alerts[i].pcap_dumped, 0);
+    snprintf(stem, stemsz, "%s-%llu-DEAUTH_FLOOD", s->alerts[i].incident_id,
+             (unsigned long long)ids[0]);
+    return i;
+}
+
+static void test_name_from_an_earlier_run_gets_a_suffix(void) {
+    /* The alert name is unique within one process only: incident_id is
+       FNV(key, wall second, a sequence that restarts at 0) and evidence
+       IDs restart at 1, so a restart that re-fires the key in the same
+       wall second rebuilds the same name while the earlier file is still
+       inside the retention window. The commit used to refuse that name,
+       the engine took the refusal as transient, and every tick then
+       rewrote, fsynced and unlinked the temp and counted a failure,
+       forever. Now: one file, under "-2", and no further failures. */
+    setup(1, 1);
+    ASSERT(ownership_add_bssid(BSSID_STR));
+    uint64_t ids[2];
+    seed_ring(ids, 2);
+    static sloth_state_t s;
+    char stem[96], taken[112], want[ALERT_PCAP_PATH_LEN];
+    int i = fail_first_tick(&s, ids, 2, stem, sizeof(stem));
+    if (i < 0) { teardown(); return; }
+    snprintf(taken, sizeof(taken), "%s.pcap", stem);
+    plant(taken, "earlier run");
+    const int before = eapol_export_failures();
+
+    for (int t = 0; t < 5; t++) {
+        g_wall += 1;
+        seed_flood(&s, ids, 2);
+        alerts_update(&s);
+    }
+    i = find_deauth(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+        ASSERT_EQ(s.alerts[i].pcap_write_failures, 1);  /* the armed one */
+        snprintf(want, sizeof(want), "%s/%s-2.pcap", g_dir, stem);
+        ASSERT_STR(s.alerts[i].pcap_path, want);
+        ASSERT_EQ(pcap_records(s.alerts[i].pcap_path, NULL), 2);
+    }
+    ASSERT_EQ(eapol_export_failures(), before);
+    /* The earlier run's file is left exactly as it was. */
+    ASSERT_EQ(size_in_dir(taken), (long)strlen("earlier run"));
+    ASSERT_EQ(dir_entries(g_dir), 2);
+    teardown();
+}
+
+static void test_every_name_taken_is_counted_once(void) {
+    /* Past EVX_UNIQUE_MAX candidates the refusal stands — and is then
+       terminal: one failure on the alert and in the EAPOL count, the
+       incident done, nothing retried on later ticks. */
+    setup(1, 1);
+    ASSERT(ownership_add_bssid(BSSID_STR));
+    uint64_t ids[1];
+    seed_ring(ids, 1);
+    static sloth_state_t s;
+    char stem[96], nm[112];
+    int i = fail_first_tick(&s, ids, 1, stem, sizeof(stem));
+    if (i < 0) { teardown(); return; }
+    snprintf(nm, sizeof(nm), "%s.pcap", stem);
+    plant(nm, "x");
+    for (int k = 2; k <= EVX_UNIQUE_MAX; k++) {
+        snprintf(nm, sizeof(nm), "%s-%d.pcap", stem, k);
+        plant(nm, "x");
+    }
+    const int before = eapol_export_failures();
+
+    for (int t = 0; t < 5; t++) {
+        g_wall += 1;
+        seed_flood(&s, ids, 1);
+        alerts_update(&s);
+    }
+    i = find_deauth(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+        ASSERT_EQ(s.alerts[i].pcap_write_failures, 2);  /* armed + refusal */
+        ASSERT_STR(s.alerts[i].pcap_path, "");
+    }
+    ASSERT_EQ(eapol_export_failures(), before + 1);
+    ASSERT_EQ(dir_entries(g_dir), EVX_UNIQUE_MAX);    /* no temp left */
+    teardown();
+}
+
+/* A subdirectory of g_dir long enough that "<it>/<alert file name>"
+   cannot fit in ALERT_PCAP_PATH_LEN, while the directory itself fits
+   the 256-byte buffers both exporters keep it in. */
+static void long_subdir(char *out, size_t outsz) {
+    char leaf[201];
+    memset(leaf, 'd', sizeof(leaf) - 1);
+    leaf[sizeof(leaf) - 1] = '\0';
+    snprintf(out, outsz, "%s/%s", g_dir, leaf);
+    ASSERT(strlen(out) < 256);
+    ASSERT(strlen(out) + 1 + 36 >= ALERT_PCAP_PATH_LEN);
+    ASSERT_EQ(mkdir(out, 0700), 0);
+}
+
+static int exists_under(const char *dir, const char *name) {
+    char p[600];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    struct stat st;
+    return stat(p, &st) == 0;
+}
+
+static void test_evidence_path_too_long_records_the_bare_name(void) {
+    /* pcap_path is the bare name, which is still true relative to
+       --eapol-dir — never a truncated path naming nothing, and never
+       empty while a file was written. */
+    setup(1, 0);
+    char ldir[300];
+    long_subdir(ldir, sizeof(ldir));
+    ASSERT_EQ(eapol_set_output_dir(ldir), 0);
+    ASSERT(ownership_add_bssid(BSSID_STR));
+    uint64_t ids[1];
+    seed_ring(ids, 1);
+    static sloth_state_t s;
+    seed_flood(&s, ids, 1);
+    alerts_update(&s);
+    int i = find_deauth(&s);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        char want[ALERT_PCAP_PATH_LEN];
+        snprintf(want, sizeof(want), "%s-%llu-DEAUTH_FLOOD.pcap",
+                 s.alerts[i].incident_id, (unsigned long long)ids[0]);
+        ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+        ASSERT_STR(s.alerts[i].pcap_path, want);
+        ASSERT(exists_under(ldir, want));
+    }
+    eapol_set_output_dir(NULL);
+    rm_dir(ldir);
+    teardown();
+}
+
+static void seed_ip_packet(sloth_state_t *s, const char *src, const char *dst,
+                           uint16_t sport, uint16_t dport) {
+    packet_info_t *p = &s->packets[s->pkt_head];
+    memset(p, 0, sizeof(*p));
+    snprintf(p->src, sizeof(p->src), "%s", src);
+    snprintf(p->dst, sizeof(p->dst), "%s", dst);
+    p->src_port = sport;
+    p->dst_port = dport;
+    p->ts_sec   = (uint32_t)g_wall;
+    p->len      = 64;
+    p->raw_len  = 32;
+    for (int i = 0; i < 32; i++) p->raw[i] = (uint8_t)(i + 1);
+    s->pkt_head = (s->pkt_head + 1) % MAX_PACKETS;
+    if (s->pkt_count < MAX_PACKETS) s->pkt_count++;
+}
+
+static void test_ip_path_too_long_records_the_bare_name(void) {
+    /* The same rule in the --pcap-dir exporter. */
+    setup(0, 0);
+    char ldir[300];
+    long_subdir(ldir, sizeof(ldir));
+    ASSERT_EQ(alert_pcap_set_dir(ldir), 0);
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    seed_ip_packet(&s, "192.0.2.5", "203.0.113.7", 33445, 443);
+    alert_t a;
+    memset(&a, 0, sizeof(a));
+    snprintf(a.title,    sizeof(a.title),    "THREAT_IP");
+    snprintf(a.match_ip, sizeof(a.match_ip), "203.0.113.7");
+    a.match_port = 443;
+    char path[ALERT_PCAP_PATH_LEN] = "";
+    ASSERT_EQ(alert_pcap_dump(&s, &a, path, (int)sizeof(path)), 1);
+    ASSERT(path[0] != '\0');
+    ASSERT(strchr(path, '/') == NULL);
+    ASSERT(strncmp(path, "alert_", 6) == 0);
+    ASSERT(exists_under(ldir, path));
+    alert_pcap_set_dir(NULL);
+    rm_dir(ldir);
+    teardown();
+}
+
+static void test_aged_out_evidence_falls_back_to_the_ip_path(void) {
+    /* An alert with a match_ip AND evidence IDs, the evidence gate open,
+       every cited frame aged out: the evidence export has nothing, but
+       --pcap-dir can still hold the packets. It used to mark the
+       incident done after the empty evidence export and write nothing. */
+    setup(1, 1);
+    char pdir[64];
+    snprintf(pdir, sizeof(pdir), "/tmp/sloth_evalert_ip_XXXXXX");
+    ASSERT(mkdtemp(pdir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(pdir), 0);
+    uint64_t real[1];
+    seed_ring(real, 1);
+    uint64_t gone[2] = { real[0] + 1000, real[0] + 1001 };
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    seed_ip_packet(&s, "192.0.2.5", "203.0.113.7", 33445, 443);
+    alerts_fire_ev_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT,
+                            "test|both", "both", "203.0.113.7", 443,
+                            gone, 2);
+    alerts_update(&s);
+    int i = -1;
+    for (int k = 0; k < s.alert_count; k++)
+        if (!strcmp(s.alerts[k].key, "test|both")) i = k;
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(s.alerts[i].pcap_dumped, 1);
+        ASSERT_EQ(s.alerts[i].pcap_write_failures, 0);
+        ASSERT(strncmp(s.alerts[i].pcap_path, pdir, strlen(pdir)) == 0);
+        ASSERT_EQ(pcap_records(s.alerts[i].pcap_path, NULL), 1);
+    }
+    ASSERT_EQ(dir_entries(pdir), 1);
+    ASSERT_EQ(dir_entries(g_dir), 0);      /* no evidence file */
+    alert_pcap_set_dir(NULL);
+    rm_dir(pdir);
+    teardown();
+}
+
 static void test_alert_name_format(void) {
     char out[128];
     ASSERT_EQ(evidence_export_alert_name("00ff00ff00ff00ff", 42,
@@ -534,5 +777,10 @@ void run_evidence_alert_tests(void) {
     RUN_TEST(test_commit_failure_leaves_nothing);
     RUN_TEST(test_existing_name_is_kept_and_temp_removed);
     RUN_TEST(test_stale_temp_from_a_crash_does_not_block);
+    RUN_TEST(test_name_from_an_earlier_run_gets_a_suffix);
+    RUN_TEST(test_every_name_taken_is_counted_once);
+    RUN_TEST(test_evidence_path_too_long_records_the_bare_name);
+    RUN_TEST(test_ip_path_too_long_records_the_bare_name);
+    RUN_TEST(test_aged_out_evidence_falls_back_to_the_ip_path);
     RUN_TEST(test_alert_name_format);
 }

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`.
 
-**Last updated**: 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -152,11 +152,27 @@ IDs on the alert, every flag set — wrote zero frames.
   first evidence-ring event ID it cites, and the alert kind. Inside
   `--eapol-dir`, so it inherits 0600, symlink-safe creation and the
   `--handshake-retention` sweep (evidence expires on the handshake
-  clock — caveat 3 of the ruling).
+  clock — caveat 3 of the ruling). The name is unique within one
+  process only — `incident_id`'s sequence and the evidence-ring IDs
+  both restart at launch — so a restart that re-fires the same key in
+  the same wall second (an RTC-less sensor booting to a saved clock)
+  can rebuild a name an earlier run left inside the retention window.
+  The export then commits under `<stem>-2.pcap`, `-3` … up to `-99`
+  (a `-`, not `--pcap-dir`'s `_`, because the rule slug already holds
+  underscores) and reports the name it used; the earlier file is never
+  touched. Only when all 99 are taken is it a failure, and that one is
+  terminal: counted once, the incident done. Until the #92 review the
+  first collision was refused and retried every tick for the incident's
+  life — a full write, fsync and unlink per tick, a failure counted per
+  tick, and `sensor_health` re-emitted per tick through
+  `storage_failures`.
 - **Content**: DLT 127 (radiotap + 802.11), every cited frame the ring
   still holds, each with its own capture time and caplen/origlen. IDs
   that have aged out are skipped; if **all** have, no file is written
-  and the incident is done (nothing to retry).
+  and the incident is done (nothing to retry) — unless it also has a
+  `match_ip` and `--pcap-dir` is set, in which case it falls back to the
+  §1 writer, which may still hold its packets. No detector sets both
+  today.
 - **Outcome on the alert**: `pcap_path` (the full path, or the bare name
   if it would not fit in 255 bytes — never a truncated path) and
   `pcap_write_failures`, on the `alert.*` lifecycle events
