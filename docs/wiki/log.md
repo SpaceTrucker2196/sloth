@@ -3847,3 +3847,22 @@ list, example, counted list, meaning) and [[ring-buffers]] (the
 the exact commands, the confidence interval for each sample, and where
 the survivors cluster. The "don't waste cycles" note on `main.c` now
 names its replay-check oracle.
+
+## 2026-10-19 — deauth stamp fits a 32-bit `time_t` again; review fixes (#143)
+
+Review of the `stab_t` move found that its build-time check
+(`sizeof(time_t) >= sizeof(uint64_t)`) dropped every 32-bit-`time_t`
+target — i386, and armhf without `_TIME_BITS=64` such as Raspberry Pi
+OS bookworm 32-bit — with no owner ruling and no deployment note. The
+check is gone. `src/deauth_snoop.c` rows keep the `uint64_t` monotonic
+`last_ms` for ageing and give `stab_t` an epoch-relative `time_t stamp`,
+rebased to now − 60 s and restamped at every snapshot, so a stamp stays
+under about a minute and fits any `time_t`. 32-bit targets build as
+they did before the slice; the eviction order is unchanged, since a
+rebase shifts every stamp by the same amount. Two tests pin what was
+only claimed: the age-out's upward walk leaves `[E,D,C]` where
+`stab_expire()` would leave `[D,E,C]`, and eviction order survives the
+epoch move. Updated [[ring-buffers]], `docs/views/deauth.md` (128-row
+tables, the two evict counters) and [[mutation-testing]] (`LC_ALL=C`
+on the views command, since the sample depends on glob order, and 43
+min as the cost of a re-run).

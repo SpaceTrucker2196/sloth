@@ -85,6 +85,10 @@ exceeded 5 s, so that sequence did flood.)
   `flood_last` keeps when it last happened; the SQLite `flood` column
   latches (an episode that flooded once stays marked).
 - Rows and aggregates age out after 60 s of monotonic idle time.
+- Each table holds 128 rows; a 129th identity inside the minute evicts
+  the least recently heard row, counted as `evict_deauth_obs` /
+  `evict_deauth_victim` in the `sensor_health` record (see
+  [jsonl-schema](../wiki/jsonl-schema.md)).
 
 ## View
 

@@ -22,7 +22,8 @@
 typedef struct {
     deauth_event_t ev;
     flood_window_t win;
-    time_t         last_ms;     /* monotonic ms (see below), drives ageing and eviction */
+    uint64_t       last_ms;     /* monotonic ms, drives ageing */
+    time_t         stamp;       /* stab_t recency, epoch-relative (see below) */
     uint16_t       last_seq;
 } obs_t;
 
@@ -42,7 +43,8 @@ typedef struct {
 typedef struct {
     deauth_victim_t v;
     flood_window_t  win;
-    time_t          last_ms;    /* monotonic ms, as obs_t */
+    uint64_t        last_ms;    /* as obs_t */
+    time_t          stamp;
     uint64_t        ids[DEAUTH_EVIDENCE_IDS];
     int             id_count;   /* stored, saturating at the array size */
     int             id_head;    /* next slot to write */
@@ -55,14 +57,24 @@ typedef struct {
  * Recency here is the monotonic millisecond clock, not wall seconds:
  * the flood windows are sub-second, and a wall-clock step must neither
  * age out a live row nor pick it for eviction. stab_t's stamp is a
- * time_t, so `last_ms` is declared time_t and carries the monotonic ms
- * count — stab_t only orders and subtracts the stamp, it never reads it
- * as a calendar time. That needs a time_t at least as wide as the
- * uint64_t clock, or the ordering would wrap after 24.8 days of uptime
- * on a 32-bit time_t; the typedef below fails the build there rather
- * than let it. Least-recent-first by strict `<`, lowest slot on a tie:
- * the same victim the hand-written evict_obs()/evict_vic() chose. */
-typedef char deauth_ms_fits_time_t[sizeof(time_t) >= sizeof(uint64_t) ? 1 : -1];
+ * time_t, and a raw uint64_t ms count does not fit one on a 32-bit
+ * time_t (i386, armhf without _TIME_BITS=64) — it would wrap after 24.8
+ * days of uptime and invert the eviction order. So `last_ms` stays the
+ * uint64_t that ageing reads, and `stamp` is that same count minus a
+ * module epoch, which deauth_snapshot() moves up to now - AGE_MS each
+ * tick and restamps every row against. Every live row is younger than
+ * AGE_MS after the age-out pass, so a stamp never exceeds about a
+ * minute plus one tick and fits any time_t. Rebasing subtracts the
+ * same offset from every row, so the order — least recent first by
+ * strict `<`, lowest slot on a tie, the victim the hand-written
+ * evict_obs()/evict_vic() chose — is exactly the order of `last_ms`. */
+static uint64_t g_epoch_ms;
+
+/* A frame whose clock read predates the current epoch (the capture
+ * thread stalled across a snapshot) stamps 0, the oldest possible. */
+static time_t stamp_of(uint64_t now_ms) {
+    return now_ms > g_epoch_ms ? (time_t)(now_ms - g_epoch_ms) : 0;
+}
 
 typedef struct {
     const uint8_t *bssid, *src, *dst;
@@ -90,9 +102,9 @@ static int vic_eq(const void *row, const void *key) {
 }
 
 /* mu NULL: g_mu is held across every get-and-update below. */
-STAB_DECL(g_obs, obs_t, MAX_DEAUTH_ENTRIES, last_ms, STAB_OLDEST,
+STAB_DECL(g_obs, obs_t, MAX_DEAUTH_ENTRIES, stamp, STAB_OLDEST,
           SH_EVICT_DEAUTH_OBS, NULL, obs_eq);
-STAB_DECL(g_vic, vic_t, MAX_DEAUTH_VICTIMS, last_ms, STAB_OLDEST,
+STAB_DECL(g_vic, vic_t, MAX_DEAUTH_VICTIMS, stamp, STAB_OLDEST,
           SH_EVICT_DEAUTH_VICTIM, NULL, vic_eq);
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -159,12 +171,12 @@ static const uint8_t *victim_of(const uint8_t src[6], const uint8_t dst[6],
     return memcmp(dst, bssid, 6) == 0 ? src : dst;
 }
 
-/* stab_get() zeroes a new row and stamps last_ms; the key fields and
+/* stab_get() zeroes a new row and stamps `stamp`; the key fields and
  * first_seen are this module's to fill. */
 static obs_t *obs_get(const deauth_frame_t *f, uint64_t now_ms, time_t wall,
                       int *fresh) {
     obs_key_t k = { f->bssid, f->src, f->dst, f->subtype };
-    obs_t *o = stab_get(&g_obs, &k, (time_t)now_ms, fresh);
+    obs_t *o = stab_get(&g_obs, &k, stamp_of(now_ms), fresh);
     if (*fresh) {
         memcpy(o->ev.src,   f->src,   6);
         memcpy(o->ev.dst,   f->dst,   6);
@@ -179,7 +191,7 @@ static vic_t *vic_get(const uint8_t bssid[6], const uint8_t victim[6],
                       uint64_t now_ms, time_t wall) {
     vic_key_t k = { bssid, victim };
     int fresh;
-    vic_t *v = stab_get(&g_vic, &k, (time_t)now_ms, &fresh);
+    vic_t *v = stab_get(&g_vic, &k, stamp_of(now_ms), &fresh);
     if (fresh) {
         memcpy(v->v.bssid,  bssid,  6);
         memcpy(v->v.victim, victim, 6);
@@ -195,6 +207,13 @@ void deauth_record(const deauth_frame_t *f)
     uint64_t now_ms = sloth_mono_ms();
     time_t   wall   = sloth_wall();
     pthread_mutex_lock(&g_mu);
+
+    /* With nothing stamped yet the epoch is free to move, and moving it
+     * here keeps the first tick's stamps small before any snapshot has
+     * run — a raw boot-relative count would not fit a 32-bit time_t on
+     * a host that has been up for weeks. */
+    if (stab_count(&g_obs) == 0 && stab_count(&g_vic) == 0)
+        g_epoch_ms = now_ms > AGE_MS ? now_ms - AGE_MS : 0;
 
     int fresh;
     /* STAB_OLDEST never refuses, so neither getter returns NULL. */
@@ -214,7 +233,8 @@ void deauth_record(const deauth_frame_t *f)
     e->reason       = f->reason;
     e->reason_valid = f->reason_valid;
     e->last_seen    = wall;
-    o->last_ms      = (time_t)now_ms;
+    o->last_ms      = now_ms;
+    o->stamp        = stamp_of(now_ms);
     o->last_seq     = f->seq;
 
     if (dup) { pthread_mutex_unlock(&g_mu); return; }
@@ -229,7 +249,8 @@ void deauth_record(const deauth_frame_t *f)
      * must not overwrite one that a cleartext frame did state. */
     if (f->reason_valid) { v->v.reason = f->reason; v->v.reason_valid = 1; }
     v->v.last_seen = wall;
-    v->last_ms     = (time_t)now_ms;
+    v->last_ms     = now_ms;
+    v->stamp       = stamp_of(now_ms);
     if (flood_window_note(&v->win, now_ms, THRESH, WIN_MS))
         v->v.flood_last = wall;
     int in_win = flood_window_count(&v->win, now_ms, WIN_MS);
@@ -248,8 +269,8 @@ void deauth_record(const deauth_frame_t *f)
     pthread_mutex_unlock(&g_mu);
 }
 
-static uint64_t idle_ms(uint64_t now_ms, time_t last_ms) {
-    return now_ms > (uint64_t)last_ms ? now_ms - (uint64_t)last_ms : 0;
+static uint64_t idle_ms(uint64_t now_ms, uint64_t last_ms) {
+    return now_ms > last_ms ? now_ms - last_ms : 0;
 }
 
 void deauth_snapshot(sloth_state_t *s)
@@ -266,7 +287,8 @@ void deauth_snapshot(sloth_state_t *s)
      * with stab_expire()'s downward walk: stab_del() moves the last row
      * into the hole exactly as the hand-written loop did, and walking
      * the same direction keeps the surviving rows in the same slots, so
-     * the view and the snapshot order are unchanged. */
+     * the view and the snapshot order are unchanged
+     * (test_age_out_keeps_upward_slot_order). */
     int i = 0;
     while (i < stab_count(&g_obs)) {
         obs_t *o = stab_at(&g_obs, i);
@@ -278,6 +300,18 @@ void deauth_snapshot(sloth_state_t *s)
         vic_t *v = stab_at(&g_vic, i);
         if (idle_ms(now_ms, v->last_ms) > AGE_MS) stab_del(&g_vic, v);
         else i++;
+    }
+
+    /* Rebase after the age-out, when every row has last_ms >= now -
+     * AGE_MS, so no restamped row goes below 0. */
+    g_epoch_ms = now_ms > AGE_MS ? now_ms - AGE_MS : 0;
+    for (i = 0; i < stab_count(&g_obs); i++) {
+        obs_t *o = stab_at(&g_obs, i);
+        o->stamp = stamp_of(o->last_ms);
+    }
+    for (i = 0; i < stab_count(&g_vic); i++) {
+        vic_t *v = stab_at(&g_vic, i);
+        v->stamp = stamp_of(v->last_ms);
     }
 
     /* Flood status is recomputed against now, so it decays with no
@@ -331,5 +365,6 @@ void deauth_clear(void)
     pthread_mutex_lock(&g_mu);
     stab_clear(&g_obs);
     stab_clear(&g_vic);
+    g_epoch_ms = 0;
     pthread_mutex_unlock(&g_mu);
 }

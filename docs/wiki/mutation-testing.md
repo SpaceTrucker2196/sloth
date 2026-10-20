@@ -17,7 +17,7 @@ Level-5 autonomy claim in [`MISSION.md`](../../MISSION.md).
 **Sources**: GitHub issue #4, [`agents/dark-factory.md`](../../agents/dark-factory.md) §3.3,
 `.github/scripts/mutate.py`.
 
-**Last updated**: 2026-10-19 (#143: recorded run over views, probe.c, main.c).
+**Last updated**: 2026-10-19 (#143: recorded run over views, probe.c, main.c; glob order and run cost noted).
 
 ---
 
@@ -444,14 +444,27 @@ not worth mutating. Tree `6542fd1` (`make test` 24620/0,
 `make replay-check` 45 records match). Each area is a random sample
 (`--limit`, `--seed 143`), not the full site list, so each rate is an
 estimate; the bracket is the 95% Wilson interval for that sample size.
-Wall time for the three runs was 43 min on 8 cores, sharing the host
-with another build for part of it.
+Wall time for the three runs was 43 min on 8 cores (views 1175 s,
+probe 748 s, main 672 s), sharing the host with another build for part
+of it. Budget about that much to re-run them: the limits were sized for
+a 40 min cap the run missed. A quicker re-run can lower the views
+`--limit`, but a different limit draws a different sample, so its rate
+is not comparable line for line with the table below.
 
 ```sh
-make -j8 mutate MUTATE_FLAGS="--files src/views/*.c --limit 55 --seed 143"
+LC_ALL=C make -j8 mutate MUTATE_FLAGS="--files src/views/*.c --limit 55 --seed 143"
 make -j8 mutate MUTATE_FLAGS="--files src/capture/probe.c --limit 25 --seed 143"
 make -j8 mutate MUTATE_FLAGS="--files src/main.c --target replay-check --limit 60 --seed 143"
 ```
+
+`LC_ALL=C` matters for the views line only. `mutate.py` shuffles its
+sites in the order `--files` lists them, and that is the order the
+shell expanded `src/views/*.c` in. `make` runs recipes with `/bin/sh`
+(dash here, which sorts the glob bytewise), and that is the order the
+sample below was drawn in. Expanded in `en_US` collation, as bash does
+interactively, the same seed draws a different 55 (`dashboard.c` 2 and
+`dashboard_bands.c` 8 instead of 6 and 4). `probe.c` and `main.c` are
+single files and do not depend on it.
 
 | area | oracle | sites | sampled | killed | survived | kill rate (95% CI) |
 |---|---|---:|---:|---:|---:|---|
@@ -487,7 +500,8 @@ What the numbers say:
   refusal path, which replay never reaches.
 
 The survivor lists are in the run output; re-running the commands
-above at the same tree and seed reproduces them.
+above at the same tree and seed, with the views glob in C order,
+reproduces them.
 
 ---
 

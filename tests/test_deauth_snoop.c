@@ -1296,6 +1296,66 @@ static void test_eviction_is_least_recent_by_monotonic_ms(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* The age-out walks upward and re-examines the slot it just filled,
+ * which is why deauth_snapshot() does not call stab_expire(): with two
+ * rows expiring the two walks leave different slot orders. From
+ * [A,B,C,D,E] with A and B stale, the upward walk moves E into A's slot
+ * and then D into B's, leaving [E,D,C]; stab_expire()'s downward walk
+ * leaves [D,E,C]. The snapshot is slot order, so this is what the view
+ * shows. Seen red with both loops replaced by stab_expire(). */
+static void test_age_out_keeps_upward_slot_order(void) {
+    clock_reset(); deauth_clear(); sh_evict_reset();
+    for (int i = 0; i < 5; i++) { feed_stream(i, (uint16_t)(100 + i)); tick_ms(1); }
+    tick_ms(30 * 1000);
+    for (int i = 2; i < 5; i++) { feed_stream(i, (uint16_t)(200 + i)); tick_ms(1); }
+    tick_ms(31 * 1000);        /* A, B idle > 60 s; C, D, E about 31 s */
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_count, 3);
+    ASSERT_EQ(s.deauth_victim_count, 3);
+    const int want[3] = { 4, 3, 2 };
+    for (int k = 0; k < 3 && k < s.deauth_count; k++) {
+        uint8_t sta[6]; stream_mac(want[k], sta);
+        ASSERT(memcmp(s.deauth_events[k].dst, sta, 6) == 0);
+        ASSERT(memcmp(s.deauth_victims[k].victim, sta, 6) == 0);
+    }
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* stab_t's stamp is epoch-relative so it fits a 32-bit time_t, and the
+ * epoch moves at every snapshot. A row stamped before the move and one
+ * stamped after must still compare by when they were heard. Stream 0 is
+ * heard first, then 1..N-1 thirty seconds later, then a snapshot moves
+ * the epoch, then stream 0 again: stream 1 is now the least recent and
+ * the one a new identity must push out. Seen red with the restamp loops
+ * in deauth_snapshot() removed: stream 0's post-move stamp then sits
+ * below the stale pre-move stamps of 1..N-1 and stream 0 is evicted. */
+static void test_eviction_order_survives_the_epoch_move(void) {
+    clock_reset(); deauth_clear(); sh_evict_reset();
+    for (int i = 0; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(i, (uint16_t)(100 + i));
+        tick_ms(1);
+    }
+    tick_ms(30 * 1000);
+    for (int i = 1; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(i, (uint16_t)(400 + i));
+        tick_ms(1);
+    }
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_count, MAX_DEAUTH_ENTRIES);
+    tick_ms(1);
+    feed_stream(0, 900);
+    tick_ms(1);
+    feed_stream(MAX_DEAUTH_ENTRIES, 901);
+    snap(&s);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 1);
+    ASSERT(has_stream(&s, 0));
+    ASSERT(!has_stream(&s, 1));
+    ASSERT(has_stream(&s, 2));
+    ASSERT(has_stream(&s, MAX_DEAUTH_ENTRIES));
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* ── #120: this module's thresholds read through --tune ──────
  *
  * Each case seeds what the shipped default does not act on, asserts
@@ -1407,6 +1467,8 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_full_tables_tally_their_evictions);
     RUN_TEST(test_aged_out_rows_are_not_evictions);
     RUN_TEST(test_eviction_is_least_recent_by_monotonic_ms);
+    RUN_TEST(test_age_out_keeps_upward_slot_order);
+    RUN_TEST(test_eviction_order_survives_the_epoch_move);
     sloth_clock_test_set(NULL, NULL);
     RUN_TEST(test_deauth_flood_threshold_is_tunable);
     RUN_TEST(test_deauth_flood_window_is_tunable);

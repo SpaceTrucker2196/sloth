@@ -313,9 +313,15 @@ names finds only thin `stab_get()` wrappers (`mdns_snoop.c`,
 third entry here, on the grounds that their recency is a monotonic
 millisecond clock and the `stab_t` stamp is a `time_t`. That did not
 hold up (#143, 2026-10-19): `stab_t` only orders and subtracts the
-stamp, so the rows now declare `time_t last_ms` and store the
-monotonic ms count in it, with a build-time check that `time_t` is at
-least as wide as the `uint64_t` clock. Both tables are STAB_OLDEST,
+stamp. The rows keep the `uint64_t` monotonic `last_ms` that ageing
+reads and add a `time_t stamp` for `stab_t`: the same count minus a
+module epoch that `deauth_snapshot()` moves to now − 60 s every tick,
+restamping each row. Every live row is under a minute old after the
+age-out, so the stamp stays small and fits a 32-bit `time_t` (i386,
+armhf without `_TIME_BITS=64`); a raw ms count would not, and would
+invert the eviction order after 24.8 days of uptime. The rebase
+shifts every stamp by the same amount, so the order is that of
+`last_ms`. Both tables are STAB_OLDEST,
 counted as `evict_deauth_obs` / `evict_deauth_victim`, and evict the
 same row the hand-written loop did (strict `<`, lowest slot on a
 tie). The 60 s age-out walks upward with `stab_del()` instead of
