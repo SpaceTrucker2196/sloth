@@ -10,10 +10,13 @@
  * not block it (XSH 2.4.1). main() installs on_signal() for SIGINT and
  * SIGTERM, and that handler only sets g_quit; it is correct on any
  * thread, but the shutdown it requests is observed by the main loop,
- * and a handler running on a worker interrupts whatever that worker was
- * doing — a blocking pcap_dispatch() returns EINTR, the DNS worker's
- * getnameinfo() is cut short. Blocking both signals in every worker
- * leaves the main thread as the only eligible target.
+ * and a handler running on a worker runs in the middle of whatever that
+ * worker was doing. Whether a given blocking call (pcap_dispatch(), the
+ * DNS worker's getnameinfo()) is then restarted or returns early depends
+ * on SA_RESTART and on the library — not something sloth should have to
+ * reason about per call. Blocking both signals in every worker leaves
+ * the main thread as the only eligible target, so the question never
+ * arises.
  *
  * The mask is set in the creating thread around pthread_create() rather
  * than first thing in the worker, because a new thread inherits its

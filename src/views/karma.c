@@ -61,7 +61,9 @@ static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
     int l_len = (int)strlen(last);
     if (l_len > room) {                  /* narrower than any sane row */
         l_len = room > 0 ? room : 0;
-        last[l_len] = '\0';
+        /* l_len < strlen(last) < last_sz here, but say so: under ASan
+         * gcc loses that bound and -Warray-bounds fires (#95). */
+        if ((size_t)l_len < last_sz) last[l_len] = '\0';
     }
     int rem = room - l_len;
     tool[0] = '\0';

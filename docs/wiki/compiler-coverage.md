@@ -27,7 +27,9 @@ timestamps do make x86-64 / LP64 assumptions, listed below.
 | Job | Compiler | Arch / OS | Flags of note |
 |---|---|---|---|
 | six configs, `make test` | gcc (the runner's default, gcc 13 on Ubuntu 24.04) | x86-64, `ubuntu-24.04` | `-std=c99 -Wall -Wextra -Werror`, `-O2`, `_FORTIFY_SOURCE=3`, PIE |
-| sanitize | same gcc | same | `-fsanitize=address,undefined -fno-sanitize-recover=all` |
+| sanitize | same gcc | same | `-Werror -fsanitize=address,undefined -fno-sanitize-recover=all`; suite, capture path, link check of `sloth` and `embedded`, replay |
+| tsan | same gcc | same | `-Werror -fsanitize=thread`; `make test` and `make test-capture-path` |
+| cppcheck | cppcheck (Ubuntu 24.04 package), not a compiler | same | `make cppcheck`, default `-D` set only |
 | replay | same gcc | same | the shipped `sloth`, run on generated savefiles |
 | fuzz | clang (runner default) with libFuzzer | same | `-fsanitize=fuzzer,address,undefined` |
 | harden | same gcc | same | `readelf` checks on the linked binary |
