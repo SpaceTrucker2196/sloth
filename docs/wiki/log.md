@@ -3942,3 +3942,11 @@ like `ES` is never read as the whole name of some other tool. The
 `docs/views/karma.md` mockup is redrawn as the row renders at 100
 columns. The same top-of-screen page budget in the other list views is
 tracked in #150.
+
+## 2026-10-19 — #95 close-out: reentrant time calls
+
+The last eight non-reentrant time call sites in `src/` (`posture.c`
+`gmtime`, six protocol views and three dashboard bands `localtime`)
+now use `gmtime_r`/`localtime_r` into a local `struct tm`, and their
+`tests/cppcheck.supp` entries are gone. [[threat-model]] X1 row
+updated: no non-reentrant time call remains.

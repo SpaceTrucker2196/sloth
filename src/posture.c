@@ -18,7 +18,8 @@
 #include "wifi_baseline.h"
 
 static void iso_time(char out[32], time_t t) {
-    struct tm *tm = gmtime(&t);
+    struct tm tm_buf;
+    struct tm *tm = gmtime_r(&t, &tm_buf);
     if (tm) strftime(out, 32, "%Y-%m-%dT%H:%M:%SZ", tm);
     else    snprintf(out, 32, "?");
 }

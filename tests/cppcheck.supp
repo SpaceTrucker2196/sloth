@@ -45,21 +45,6 @@ missingIncludeSystem
 # retire this entry instead of carrying it.
 checkLevelNormal:src/main.c
 
-# ── Non-reentrant time functions, main thread only ──────────────────────
-# localtime()/gmtime() return a shared static struct tm. Every call below
-# runs on the main (UI / alerts_update) thread, formats the result before
-# the next call, and no other thread in sloth calls either function.
-# A call moved onto the capture, probe or DNS worker thread must switch
-# to localtime_r()/gmtime_r() and drop its line here.
-gmtimeCalled:src/posture.c
-localtimeCalled:src/views/dashboard_bands.c
-localtimeCalled:src/views/dns_log.c
-localtimeCalled:src/views/http.c
-localtimeCalled:src/views/icmp.c
-localtimeCalled:src/views/ntp.c
-localtimeCalled:src/views/quic.c
-localtimeCalled:src/views/tls.c
-
 # ── readdir() ───────────────────────────────────────────────────────────
 # cppcheck recommends readdir_r(), which glibc deprecated in 2.24 and
 # POSIX.1-2024 marks obsolescent. readdir() is thread-safe when each

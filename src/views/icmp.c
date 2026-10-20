@@ -52,7 +52,8 @@ void view_icmp_draw(const sloth_state_t *s) {
             continue;
 
         char ts_buf[10];
-        struct tm *tm = localtime(&e->ts);
+        struct tm tm_buf;
+        struct tm *tm = localtime_r(&e->ts, &tm_buf);
         if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
         else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 

@@ -381,7 +381,8 @@ void draw_assoc_band(const sloth_state_t *s, int y0, int h, int x0, int w) {
 static void draw_mon_band_row(const sloth_state_t *s, int y, int x0, int w,
                               const mon_frame_t *f) {
     char ts_buf[12], src[20], dst[20];
-    struct tm *tm = localtime(&f->ts);
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&f->ts, &tm_buf);
     if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
     else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
     snprintf(src, sizeof(src), "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -549,7 +550,8 @@ static void draw_packet_row(int y, int x0, int w, const packet_info_t *p) {
 
     char ts_buf[12];
     time_t t = (time_t)p->ts_sec;
-    struct tm *tm = localtime(&t);
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&t, &tm_buf);
     if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
     else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 
@@ -906,7 +908,8 @@ void draw_crit_alerts_band(const sloth_state_t *s,
 
         char ts_buf[12];
         time_t ts = a->last_seen;
-        struct tm *tm = localtime(&ts);
+        struct tm tm_buf;
+        struct tm *tm = localtime_r(&ts, &tm_buf);
         if (tm) strftime(ts_buf, sizeof(ts_buf), "%H:%M:%S", tm);
         else    snprintf(ts_buf, sizeof(ts_buf), "??:??:??");
 
