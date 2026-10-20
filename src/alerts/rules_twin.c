@@ -33,6 +33,31 @@
 #include "alert_key.h"
 #include "rules.h"
 #include "engine_internal.h"
+#include "ev_cite.h"
+#include "sloth_compat.h"
+
+/* ── Frame citations (#92 slice 4) ────────────────────────────
+ *
+ * The twin family and KARMA fire on beacons, which have no IP, so the
+ * evidence ring is the only route from these alerts back to the frames.
+ * Two halves' worth of beacons must fit one alert. */
+SLOTH_STATIC_ASSERT(2 * BEACON_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
+                    a_twin_pair_cites_both_halves_whole);
+SLOTH_STATIC_ASSERT(MAX_AP_SSID_HISTORY <= ALERT_EVIDENCE_IDS,
+                    karma_cites_every_ssid_it_counted);
+
+/* Both halves' newest beacons, `first` before `second`: the pair is the
+ * finding, so neither side alone is its evidence. */
+static int twin_pair_evidence(const beacon_ap_t *first,
+                              const beacon_ap_t *second, uint64_t *out) {
+    uint64_t x[BEACON_EVIDENCE_IDS];
+    int n = 0;
+    int k = beacon_ap_evidence(first, x, BEACON_EVIDENCE_IDS);
+    ev_cite_merge(out, &n, ALERT_EVIDENCE_IDS, x, k);
+    k = beacon_ap_evidence(second, x, BEACON_EVIDENCE_IDS);
+    ev_cite_merge(out, &n, ALERT_EVIDENCE_IDS, x, k);
+    return n;
+}
 
 /* Is this BSSID the rogue half of a detected twin pair? twin_episodes
  * is the materialised evil-twin candidate set (twins_snapshot runs
@@ -857,8 +882,16 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  bssid_str, a->ssid_history_n, pnl_note, chain_note,
                  pmkid_note, tool_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
+        /* The frame that first carried each distinct SSID (#92 slice
+         * 4): the finding is that set, so those are its evidence. */
+        uint64_t evid[ALERT_EVIDENCE_IDS];
+        int ev_n = 0;
+        int hn = a->ssid_history_n < MAX_AP_SSID_HISTORY
+               ? a->ssid_history_n : MAX_AP_SSID_HISTORY;
+        ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS, a->ssid_history_ev, hn);
         fire_inv(ALERT_TYPE_KARMA_AP, sev, confidence, NULL,
-                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row, NULL, 0,
+                 TWIN_CLASS_UNKNOWN, WIRED_ATTACH_UNKNOWN, tool_row,
+                 evid, ev_n,
                  "KARMA_AP", detail, key, NULL, 0, now);
     }
 }
@@ -1259,8 +1292,12 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                          " - %s, conf %d%%%s%s%s",
                          a->ssid, a_bssid, a->enc, b_bssid, b->enc,
                          verdict, conf, note, steer_note, cls_note);
+                /* The weak clone first: it is the half accused. */
+                uint64_t evid[ALERT_EVIDENCE_IDS];
+                int ev_n = twin_pair_evidence(a, b, evid);
                 fire_inv(ALERT_TYPE_EVIL_TWIN, sev, conf,
-                         inventory_hash(), (int)cls, (int)wired, NULL, NULL, 0,
+                         inventory_hash(), (int)cls, (int)wired, NULL,
+                         evid, ev_n,
                          "EVIL_TWIN", detail, key, NULL, 0, now);
                 break;
             }
@@ -1394,8 +1431,11 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                      " - suspected impersonation, conf %d%% - %s%s%s%s",
                      a->ssid, a_bssid, b_bssid, a->enc,
                      ev.confidence, reason, note, steer_note, cls_note);
+            uint64_t evid[ALERT_EVIDENCE_IDS];
+            int ev_n = twin_pair_evidence(a, b, evid);
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
-                     inventory_hash(), (int)cls, (int)wired, NULL, NULL, 0,
+                     inventory_hash(), (int)cls, (int)wired, NULL,
+                     evid, ev_n,
                      "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
@@ -1565,16 +1605,16 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
         if (!a->ssid[0]) continue;
         if (!a->enc[0] || strcmp(a->enc, "OPEN") == 0) continue;
         /* Is BSSID `a` currently being deauth-flooded? */
-        int deauthed = 0;
+        const deauth_victim_t *flood = NULL;
         for (int k = 0; k < s->deauth_victim_count; k++) {
             const deauth_victim_t *v = &s->deauth_victims[k];
             if (!v->flood || !v->flood_last) continue;
             if (memcmp(v->bssid, a->bssid, 6) != 0) continue;
             if (now - v->flood_last > DEAUTH_TWIN_WIN_SECS) continue;
-            deauthed = 1;
+            flood = v;
             break;
         }
-        if (!deauthed) continue;
+        if (!flood) continue;
         /* Find a same-SSID + same-cipher + diff-OUI sibling — that's
          * the rogue half. Loop covers both i<j and j<i so a deauth
          * targeting either AP picks up its twin partner. */
@@ -1602,8 +1642,23 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             snprintf(detail, sizeof(detail),
                      "'%.16s' attack-in-progress: real=%s twin=%s [%.6s]",
                      a->ssid, a_bssid, b_bssid, a->enc);
-            fire(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT,
-                 "EVIL_TWIN", detail, key, NULL, 0, now);
+            /* The chain is two observations, so it cites both: the
+             * twin's newest beacons, then the newest frames of the
+             * deauth flood against the real AP — the half of the flood
+             * the ring is likeliest still to hold. */
+            uint64_t evid[ALERT_EVIDENCE_IDS];
+            int ev_n = 0;
+            uint64_t x[BEACON_EVIDENCE_IDS];
+            int xn = beacon_ap_evidence(b, x, BEACON_EVIDENCE_IDS);
+            ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS, x, xn);
+            int dn = flood->evidence_id_count;
+            if (dn > DEAUTH_EVIDENCE_IDS) dn = DEAUTH_EVIDENCE_IDS;
+            int room = ALERT_EVIDENCE_IDS - ev_n;
+            int skip = dn > room ? dn - room : 0;
+            ev_cite_merge(evid, &ev_n, ALERT_EVIDENCE_IDS,
+                          flood->evidence_ids + skip, dn - skip);
+            fire_ev(ALERT_TYPE_EVIL_TWIN, ALERT_SEV_CRIT, evid, ev_n,
+                    "EVIL_TWIN", detail, key, NULL, 0, now);
             break;
         }
     }

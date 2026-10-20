@@ -129,6 +129,17 @@ ones that take bare fields get it through an `_ev` entry point.
 | `ASSOC_FLOOD` | the newest (Re)Association Requests to the BSSID inside the window | the module's event ring (256) |
 | `BTM_ABUSE` | the newest BTM Requests to the pair that carried Disassociation Imminent — the ones the threshold counts; an ordinary steer is not cited | the BTM event ring (256) |
 | `SA_QUERY_FLOOD` | the pair's newest SA Query frames inside the window — the AP's answers, which is what the rule hears | per-pair timestamp ring, one id beside each stamp |
+| `BEACON_FLOOD` | the first beacon of each of the newest BSSIDs first seen inside the window — the finding is their arrival; a known AP beaconing again is not cited | the new-BSSID timestamp ring (256) |
+| `EVIL_TWIN` (pair branches) | both halves' newest beacons, the accused half first (the OPEN/WEP clone on the weak/strong branch) | `beacon_ap_t.ev_ids`, **4 per AP** |
+| `EVIL_TWIN` (attack chain, `twin-chain:` key) | the twin's newest beacons, then the newest frames of the deauth flood against the real AP — both observations the conclusion rests on; the real AP's beacons are not cited | the twin's `ev_ids` plus `deauth_victim_t` |
+| `KARMA_AP` | the frame that first carried each distinct SSID — the finding is that set, so a repeat of an SSID already counted is not cited | `beacon_ap_t.ssid_history_ev`, parallel to `ssid_history[]` (8) |
+
+The beacon ring is deliberately four, not eight: the AP table is 256
+entries and a beacon arrives about ten times a second, so the newest few
+are the ones the evidence ring still holds and more would be the same
+frame again. Four per half is what lets one alert cite both halves of a
+pair whole. Records from a path with no frame (nl80211 scan results)
+cite nothing.
 
 The flood rings were already keyed by frame, so their citations need no
 new storage beyond one id per entry: the query walks the same window

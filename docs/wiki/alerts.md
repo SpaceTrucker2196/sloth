@@ -46,7 +46,10 @@ type: reference
   those frames (`fire_ev()`, or `fire_inv()` when the rule also reports
   a confidence), and the JSONL records carry them as `evidence_id_N`.
   Which rules, and what each cites, is [[pcap-export]] § Which alerts
-  cite frames.
+  cite frames. The beacon-sourced ones (`BEACON_FLOOD`, `EVIL_TWIN`,
+  `KARMA_AP`) read small rings on the AP record itself
+  (`beacon_ap_t.ev_ids`, `ssid_history_ev`), filled by
+  `beacon_record_ev()`.
 - Dedup key examples: `scan:<ip>`, `threat-d:<domain>`, `threat-ip:<ip>:<port>`.
 - New-key path: JSONL `alert` line + `alert.create` + (optional) pcap
   dump of the matching packets via `src/alert_pcap.c`. See

@@ -1420,6 +1420,30 @@ typedef struct {
      * BSSID, which is not the same claim as "no country" or "no power
      * limit". Check the flag before reading the value. */
     reg_ie_t reg;
+
+    /* Evidence-ring citations (#92 slice 4). Two different questions,
+     * so two stores:
+     *
+     *   ev_ids         the newest BEACON_EVIDENCE_IDS beacons heard
+     *                  from this BSSID — what the evil-twin family
+     *                  cites for each half of a pair. A small ring
+     *                  (src/ev_cite.h; read it through
+     *                  beacon_ap_evidence(), the head moves), because
+     *                  this table is MAX_BEACON_APS entries and a
+     *                  beacon arrives ten times a second: the newest
+     *                  few are the ones the evidence ring still holds,
+     *                  and more would be the same frame again.
+     *   ssid_history_ev  the frame that first carried each distinct
+     *                  SSID, parallel to ssid_history[] — what KARMA_AP
+     *                  cites, since the finding IS the set of SSIDs one
+     *                  radio has advertised.
+     *
+     * 0 means the capture retained nothing for that frame, or the
+     * record came from a path with no frame (nl80211 scan results). */
+#define BEACON_EVIDENCE_IDS 4
+    uint64_t ev_ids[BEACON_EVIDENCE_IDS];
+    uint8_t  ev_n, ev_head;
+    uint64_t ssid_history_ev[MAX_AP_SSID_HISTORY];
 } beacon_ap_t;
 
 /* True when `ap` names `bssid` in its 802.11k Neighbor Report list. */

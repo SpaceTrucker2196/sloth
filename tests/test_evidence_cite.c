@@ -76,12 +76,13 @@ static char *jsonl_body(void) {
     return buf;
 }
 
-/* The `alert` line (legacy record) for `title`, copied out so the
- * assertions below look at that one record and not a neighbour's. */
-static int jsonl_alert_line(const char *body, const char *title,
+/* The `alert` line (legacy record) with this dedup key, copied out so
+ * the assertions below look at that one record and not a neighbour's —
+ * two EVIL_TWIN alerts share a title. */
+static int jsonl_alert_line(const char *body, const char *key,
                             char *out, size_t n) {
-    char needle[64];
-    snprintf(needle, sizeof(needle), "\"title\":\"%s\"", title);
+    char needle[ALERT_KEY_LEN + 16];
+    snprintf(needle, sizeof(needle), "\"key\":\"%s\"", key);
     const char *p = body;
     while ((p = strstr(p, "\"type\":\"alert\"")) != NULL) {
         const char *eol = strchr(p, '\n');
@@ -109,7 +110,7 @@ static void assert_cites(const alert_t *a, const char *body,
     ASSERT(body != NULL);
     if (!body) return;
     char line[4096];
-    ASSERT(jsonl_alert_line(body, a->title, line, sizeof(line)));
+    ASSERT(jsonl_alert_line(body, a->key, line, sizeof(line)));
     char kv[64];
     snprintf(kv, sizeof(kv), "\"evidence_count\":%d", n);
     ASSERT(strstr(line, kv) != NULL);
@@ -470,6 +471,166 @@ static void test_sa_query_flood_alert_cites_the_pairs_frames(void) {
     }
 }
 
+/* ── Beacon-sourced rules ─────────────────────────────────── */
+
+/* beacon_record_ev() is the call on_probe_frame() makes for every
+ * beacon beacon_parse_frame() accepts, with the frame's evidence-ring
+ * id; these seed it directly. The beacon parser itself is pinned
+ * against hand-built frames in tests/test_beacon_snoop.c, and the
+ * callback's stamp in tests/test_capture_path.c. */
+static void beacon_ev(const uint8_t bssid[6], const char *ssid,
+                      const char *enc, uint64_t id) {
+    beacon_record_ev(bssid, ssid, -50, 6, enc, 100, NULL, id);
+}
+
+static int find_alert_key(const sloth_state_t *s, alert_type_t type,
+                          const char *prefix) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == type &&
+            strncmp(s->alerts[i].key, prefix, strlen(prefix)) == 0)
+            return i;
+    return -1;
+}
+
+static void test_beacon_flood_alert_cites_each_new_bssids_first_beacon(void) {
+    pin_wall(9000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t OLD[6] = {0x00,0x33,0x00,0x00,0x00,0xff};
+    beacon_ev(OLD, "Home", "WPA2", 5000);
+    for (int i = 0; i < 45; i++) {
+        uint8_t b[6] = {0x02,0x33,0x00,0x00,0x00,(uint8_t)i};
+        beacon_ev(b, "flood", "OPEN", (uint64_t)(5001 + i));
+        /* A known AP beaconing again is not a new BSSID, so it is not
+           the flood's evidence even when it lands among the newest. */
+        if (i == 41) beacon_ev(OLD, "Home", "WPA2", 5900);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_BEACON_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 5038, 5039, 5040, 5041,
+                                         5042, 5043, 5044, 5045 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+}
+
+/* Weak/strong twin: an OPEN clone of a WPA2 SSID. Each half's newest
+ * BEACON_EVIDENCE_IDS beacons, the accused (weak) half first. */
+static void test_evil_twin_alert_cites_both_halves_beacons(void) {
+    pin_wall(9100);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t WEAK[6]   = {0x02,0x44,0x00,0x00,0x00,0x01};
+    static const uint8_t STRONG[6] = {0x00,0x44,0x00,0x00,0x00,0x02};
+    static const uint8_t OTHER[6]  = {0x00,0x44,0x00,0x00,0x00,0x03};
+    for (int k = 0; k < 5; k++) {
+        beacon_ev(WEAK, "Corp", "OPEN", (uint64_t)(6001 + k));
+        /* A third AP under another name beacons in between. */
+        beacon_ev(OTHER, "Guest", "WPA2", (uint64_t)(6201 + k));
+    }
+    for (int k = 0; k < 3; k++)
+        beacon_ev(STRONG, "Corp", "WPA2", (uint64_t)(6101 + k));
+    beacon_snapshot(&g_s);
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert_key(&g_s, ALERT_TYPE_EVIL_TWIN, "twin:");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* 6001 is the weak half's fifth-newest beacon: past its ring. */
+        static const uint64_t want[] = { 6002, 6003, 6004, 6005,
+                                         6101, 6102, 6103 };
+        assert_cites(&g_s.alerts[i], body, want, 7);
+    }
+}
+
+/* Same-security twin, same SSID and cipher, different vendor OUI. */
+static void test_same_security_twin_alert_cites_both_halves(void) {
+    pin_wall(9200);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t A[6] = {0x00,0x55,0x00,0x00,0x00,0x01};
+    static const uint8_t B[6] = {0x00,0x66,0x00,0x00,0x00,0x02};
+    beacon_ev(A, "Corp", "WPA2", 6301);
+    beacon_ev(A, "Corp", "WPA2", 6302);
+    beacon_ev(B, "Corp", "WPA2", 6401);
+    beacon_snapshot(&g_s);
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert_key(&g_s, ALERT_TYPE_EVIL_TWIN, "twin-fp:");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        const alert_t *a = &g_s.alerts[i];
+        /* The snapshot orders the table by signal, so which half the
+           rule walks from is not fixed here; the set is. */
+        ASSERT_EQ((int)a->evidence_id_count, 3);
+        int seen = 0;
+        for (int k = 0; k < a->evidence_id_count; k++)
+            if (a->evidence_ids[k] == 6301 || a->evidence_ids[k] == 6302 ||
+                a->evidence_ids[k] == 6401) seen++;
+        ASSERT_EQ(seen, 3);
+        ASSERT(body && strstr(body, "\"evidence_count\":3") != NULL);
+    }
+}
+
+/* Attack chain: the deauth flood against the real AP plus the twin's
+ * beacons — both observations the conclusion rests on. */
+static void test_twin_chain_alert_cites_twin_beacons_and_the_flood(void) {
+    pin_wall(9300);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t REAL[6] = {0x00,0x77,0x00,0x00,0x00,0x01};
+    static const uint8_t TWIN[6] = {0x00,0x88,0x00,0x00,0x00,0x02};
+    static const uint8_t STA[6]  = {0x02,0x77,0x00,0x00,0x00,0x09};
+    beacon_ev(REAL, "Corp", "WPA2", 7201);
+    beacon_ev(TWIN, "Corp", "WPA2", 7101);
+    beacon_ev(TWIN, "Corp", "WPA2", 7102);
+    beacon_snapshot(&g_s);
+    deauth_victim_t *v = &g_s.deauth_victims[g_s.deauth_victim_count++];
+    memcpy(v->bssid,  REAL, 6);
+    memcpy(v->victim, STA,  6);
+    v->flood = 1; v->flood_last = 9300; v->frames = 30; v->peak_win = 30;
+    for (int k = 0; k < 8; k++) v->evidence_ids[k] = (uint64_t)(7001 + k);
+    v->evidence_id_count = 8;
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert_key(&g_s, ALERT_TYPE_EVIL_TWIN, "twin-chain:");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* Two twin beacons, then the newest six of the eight flood
+           frames — the real AP's beacon is not the chain's evidence. */
+        static const uint64_t want[] = { 7101, 7102, 7003, 7004,
+                                         7005, 7006, 7007, 7008 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+}
+
+/* KARMA: the frame that first carried each distinct SSID. A repeat of
+ * an SSID already counted is not new evidence of the finding. */
+static void test_karma_alert_cites_the_frame_of_each_distinct_ssid(void) {
+    pin_wall(9400);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    static const uint8_t K[6] = {0x02,0x99,0x00,0x00,0x00,0x01};
+    beacon_ev(K, "alpha",   "OPEN", 8001);
+    beacon_ev(K, "bravo",   "OPEN", 8002);
+    beacon_ev(K, "alpha",   "OPEN", 8010);
+    beacon_ev(K, "charlie", "OPEN", 8003);
+    beacon_ev(K, "charlie", "OPEN", 8011);
+    beacon_ev(K, "delta",   "OPEN", 8004);
+    beacon_ev(K, "delta",   "OPEN", 8012);
+    beacon_snapshot(&g_s);
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 8001, 8002, 8003, 8004 };
+        assert_cites(&g_s.alerts[i], body, want, 4);
+    }
+}
+
 /* ── ev_cite ring ───────────────────────────────────────── */
 
 static void test_ev_cite_keeps_newest_oldest_first(void) {
@@ -502,4 +663,9 @@ void run_evidence_cite_tests(void) {
     RUN_TEST(test_assoc_flood_alert_cites_the_newest_requests);
     RUN_TEST(test_btm_abuse_alert_cites_only_the_imminent_requests);
     RUN_TEST(test_sa_query_flood_alert_cites_the_pairs_frames);
+    RUN_TEST(test_beacon_flood_alert_cites_each_new_bssids_first_beacon);
+    RUN_TEST(test_evil_twin_alert_cites_both_halves_beacons);
+    RUN_TEST(test_same_security_twin_alert_cites_both_halves);
+    RUN_TEST(test_twin_chain_alert_cites_twin_beacons_and_the_flood);
+    RUN_TEST(test_karma_alert_cites_the_frame_of_each_distinct_ssid);
 }

@@ -240,6 +240,23 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                    int8_t signal, int channel,
                    const char *enc, uint16_t beacon_ms,
                    const beacon_rsn_t *rsn);
+/* The same, citing the beacon by its evidence-ring event ID (#92 slice
+ * 4; 0 = none retained). beacon_record() passes 0; on_probe_frame()
+ * calls this one for every beacon it parses. */
+void beacon_record_ev(const uint8_t *bssid, const char *ssid,
+                      int8_t signal, int channel,
+                      const char *enc, uint16_t beacon_ms,
+                      const beacon_rsn_t *rsn, uint64_t event_id);
+
+/* The AP's newest cited beacons, oldest first, at most `max`; returns
+ * how many. Pure function of the record, so it reads a snapshot. */
+int  beacon_ap_evidence(const beacon_ap_t *ap, uint64_t *out, int max);
+
+/* The first beacons of the newest BSSIDs first seen inside the window,
+ * oldest first, at most `max` — what rule_beacon_flood() cites: the
+ * finding is the arrival of new BSSIDs, so the frame that introduced
+ * each is its evidence. Thread-safe. */
+int  beacon_flood_evidence(time_t now, int window_s, uint64_t *out, int max);
 
 /* Copy current table into s->beacon_aps[], aging out stale entries first.
    Sorts by signal strength descending. */

@@ -13,6 +13,7 @@
 #include "dot11_ie.h"
 #include "rsn_ie.h"
 #include "wifi_oui_attacker.h"
+#include "ev_cite.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
@@ -23,12 +24,16 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
  * path; read (with its own lock) by beacon_recent_new_bssids. Sized so a
  * flood well above the alert threshold still fits the window. */
 #define BEACON_NEW_TS_RING 256
-static time_t g_new_bssid_ts[BEACON_NEW_TS_RING];
-static int    g_new_bssid_head;
+static time_t   g_new_bssid_ts[BEACON_NEW_TS_RING];
+/* Parallel to the stamps (#92 slice 4): the beacon that introduced each
+ * new BSSID, so the flood's citation is a frame its count included. */
+static uint64_t g_new_bssid_ev[BEACON_NEW_TS_RING];
+static int      g_new_bssid_head;
 
 /* Caller must hold g_mu. */
-static void note_new_bssid(time_t now) {
+static void note_new_bssid(time_t now, uint64_t event_id) {
     g_new_bssid_ts[g_new_bssid_head] = now;
+    g_new_bssid_ev[g_new_bssid_head] = event_id;
     g_new_bssid_head = (g_new_bssid_head + 1) % BEACON_NEW_TS_RING;
 }
 
@@ -66,6 +71,29 @@ static void wps_attr_str(char *dst, size_t dst_sz,
         if (c >= 0x20 && c < 0x7f) dst[j++] = (char)c;
     }
     dst[j] = '\0';
+}
+
+int beacon_flood_evidence(time_t now, int window_s, uint64_t *out, int max) {
+    if (!out || max <= 0) return 0;
+    int k = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int step = 1; step <= BEACON_NEW_TS_RING && k < max; step++) {
+        int slot = (g_new_bssid_head - step + BEACON_NEW_TS_RING)
+                   % BEACON_NEW_TS_RING;
+        /* The count's own window test, so a cited beacon was counted. */
+        if (!g_new_bssid_ts[slot] || now - g_new_bssid_ts[slot] > window_s)
+            continue;
+        if (g_new_bssid_ev[slot]) out[k++] = g_new_bssid_ev[slot];
+    }
+    pthread_mutex_unlock(&g_mu);
+    ev_cite_reverse(out, k);
+    return k;
+}
+
+int beacon_ap_evidence(const beacon_ap_t *ap, uint64_t *out, int max) {
+    if (!ap) return 0;
+    return ev_cite_flatten(ap->ev_ids, BEACON_EVIDENCE_IDS,
+                           ap->ev_n, ap->ev_head, out, max);
 }
 
 int beacon_recent_new_bssids(time_t now, int window_s) {
@@ -1036,6 +1064,14 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                    const char *enc, uint16_t beacon_ms,
                    const beacon_rsn_t *rsn)
 {
+    beacon_record_ev(bssid, ssid, signal, channel, enc, beacon_ms, rsn, 0);
+}
+
+void beacon_record_ev(const uint8_t *bssid, const char *ssid,
+                      int8_t signal, int channel,
+                      const char *enc, uint16_t beacon_ms,
+                      const beacon_rsn_t *rsn, uint64_t event_id)
+{
     time_t now = sloth_wall();
     pthread_mutex_lock(&g_mu);
 
@@ -1048,6 +1084,8 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
             g_aps[i].last_seen  = now;
             rssi_ring_push(&g_aps[i], signal, now);
             g_aps[i].frame_count++;
+            ev_cite_push(g_aps[i].ev_ids, BEACON_EVIDENCE_IDS,
+                         &g_aps[i].ev_n, &g_aps[i].ev_head, event_id);
             if (ssid[0]) {
                 strncpy(g_aps[i].ssid, ssid, 32);
                 /* Track distinct SSIDs per BSSID for KARMA/Pineapple
@@ -1062,6 +1100,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
                     int hn = g_aps[i].ssid_history_n;
                     snprintf(g_aps[i].ssid_history[hn], 33, "%s", ssid);
                     g_aps[i].ssid_history_fp[hn] = ap_ie_fingerprint(enc, rsn);
+                    g_aps[i].ssid_history_ev[hn] = event_id;
                     g_aps[i].ssid_history_n++;
                 }
             }
@@ -1203,7 +1242,7 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
         sh_evict_note(SH_EVICT_BEACON_AP);   /* #91 wave 6 */
     }
 
-    note_new_bssid(now);   /* beacon-flood rate signal (roadmap B4) */
+    note_new_bssid(now, event_id);   /* beacon-flood rate signal (roadmap B4) */
     memset(&g_aps[slot], 0, sizeof(g_aps[slot]));
     memcpy(g_aps[slot].bssid, bssid, 6);
     strncpy(g_aps[slot].ssid,  ssid, 32);
@@ -1214,9 +1253,12 @@ void beacon_record(const uint8_t *bssid, const char *ssid,
     g_aps[slot].first_seen = now;
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
+    ev_cite_push(g_aps[slot].ev_ids, BEACON_EVIDENCE_IDS,
+                 &g_aps[slot].ev_n, &g_aps[slot].ev_head, event_id);
     if (ssid[0]) {
         snprintf(g_aps[slot].ssid_history[0], 33, "%s", ssid);
         g_aps[slot].ssid_history_fp[0] = ap_ie_fingerprint(enc, rsn);
+        g_aps[slot].ssid_history_ev[0] = event_id;
         g_aps[slot].ssid_history_n = 1;
     }
     if (rsn) {
@@ -1404,6 +1446,7 @@ void beacon_clear(void)
     pthread_mutex_lock(&g_mu);
     g_count = 0;
     memset(g_new_bssid_ts, 0, sizeof(g_new_bssid_ts));
+    memset(g_new_bssid_ev, 0, sizeof(g_new_bssid_ev));
     g_new_bssid_head = 0;
     pthread_mutex_unlock(&g_mu);
 }

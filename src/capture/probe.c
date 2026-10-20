@@ -524,7 +524,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         beacon_rsn_t rsn;
         if (beacon_parse_frame(&fr, signal, ssid, bssid, &channel,
                                enc, &bms, &rsn)) {
-            beacon_record(bssid, ssid, signal, channel, enc, bms, &rsn);
+            beacon_record_ev(bssid, ssid, signal, channel, enc, bms, &rsn, ev);
             /* A CSA in a beacon is broadcast to every associated client
              * at once (#63). addr2 is passed separately from addr3 even
              * though a beacon's are normally identical — a forged one

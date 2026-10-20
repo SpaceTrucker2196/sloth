@@ -4082,3 +4082,15 @@ timestamp, and the citation query walks the same window the count used.
 `BTM_ABUSE` cites only the Disassociation-Imminent Requests, the ones
 its threshold counts. [[pcap-export]] § Which alerts cite frames and
 [[alerts]] § Engine updated.
+
+## 2026-10-20 — #92 slice 4: beacon-sourced rules cite their frames
+
+`BEACON_FLOOD`, `EVIL_TWIN` (both pair branches and the attack chain)
+and `KARMA_AP` now cite evidence-ring IDs. The AP record carries a
+four-entry ring of its newest beacons (`beacon_ap_t.ev_ids`) and the
+frame that first carried each distinct SSID (`ssid_history_ev`); the
+new-BSSID ring keeps each arrival's first beacon. A twin pair cites
+both halves, the chain cites the twin plus the deauth flood, KARMA the
+SSID set. `EVIL_TWIN_PROXIMITY` and `SSID_CONFUSION` are not in this
+slice. [[pcap-export]] § Which alerts cite frames and [[alerts]]
+§ Engine updated.

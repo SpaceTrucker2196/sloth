@@ -95,8 +95,13 @@ void rule_beacon_flood(const sloth_state_t *s, time_t now) {
     snprintf(detail, sizeof(detail),
              "%d new BSSIDs in %ds (mdk-style beacon flood)",
              n, win);
-    fire(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN,
-         "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
+    /* The first beacon of each of the newest BSSIDs (#92 slice 4): the
+     * finding is their arrival, so the frame that introduced each one
+     * is the evidence. */
+    uint64_t ev[ALERT_EVIDENCE_IDS];
+    int ev_n = beacon_flood_evidence(now, win, ev, ALERT_EVIDENCE_IDS);
+    fire_ev(ALERT_TYPE_BEACON_FLOOD, ALERT_SEV_WARN, ev, ev_n,
+            "BEACON_FLOOD", detail, "beacon_flood", NULL, 0, now);
 }
 
 void rule_auth_flood(const sloth_state_t *s, time_t now) {

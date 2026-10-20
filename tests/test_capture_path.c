@@ -2602,6 +2602,51 @@ static void test_auth_frames_are_cited_by_their_ring_ids(void) {
     evidence_ring_shutdown();
 }
 
+/* Beacons reach beacon_snoop through beacon_record_ev(), whose id is an
+ * argument rather than the frame view, so it gets its own pin: the AP
+ * record cites the beacons by the ids the ring issued. Beacon per IEEE
+ * 802.11-2020 Sec 9.3.3.3 - fixed fields, SSID, rates, DS Parameter Set. */
+static int ev_beacon(uint8_t *f, int cap, uint16_t seq_ctl) {
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    static const uint8_t rates[4] = { 0x82, 0x84, 0x8b, 0x96 };
+    static const uint8_t ds[1] = { 6 };
+    fb_t b; fb_init(&b, f, cap);
+    fb_radiotap(&b, NULL);
+    fb_mgmt(&b, 8, 0, bc, RT_AP, RT_AP, seq_ctl, 0);
+    fb_beacon_fixed(&b, 0, 100, 0x0001);
+    fb_ssid(&b, "ev-test-net");
+    fb_ie(&b, 1, rates, (int)sizeof rates);
+    fb_ie(&b, 3, ds, 1);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_beacons_are_cited_by_their_ring_ids(void) {
+    evidence_setup();
+    beacon_clear();
+    uint8_t a[128], b[128];
+    int an = ev_beacon(a, (int)sizeof a, 0x0010);
+    int bn = ev_beacon(b, (int)sizeof b, 0x0020);
+    ASSERT(an > 0 && bn > 0);
+    const uint8_t *fs[2] = { a, b };
+    int ls[2] = { an, bn };
+    const uint32_t ts[2] = { 1700000000u, 1700000000u };
+    uint64_t before = evidence_ring_last_id();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 2), 2);
+
+    const beacon_ap_t *ap = rt_find_ap();
+    ASSERT(ap != NULL);
+    if (ap) {
+        uint64_t ids[BEACON_EVIDENCE_IDS];
+        ASSERT_EQ(beacon_ap_evidence(ap, ids, BEACON_EVIDENCE_IDS), 2);
+        ASSERT_EQ((long long)ids[0], (long long)(before + 1));
+        ASSERT_EQ((long long)ids[1], (long long)(before + 2));
+        /* The first beacon introduced the SSID — KARMA's citation. */
+        ASSERT_EQ((long long)ap->ssid_history_ev[0], (long long)(before + 1));
+    }
+    beacon_clear();
+    evidence_ring_shutdown();
+}
+
 /* The ordinary-retransmission case, through the REAL pcap_dispatch
  * callback rather than by calling the module directly. One MSDU the AP
  * keeps retrying must not reach the release threshold, because on a
@@ -3417,6 +3462,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_release_cites_the_ring_ids_of_its_frames);
     RUN_TEST(test_a_pm_contradiction_cites_the_ring_ids_of_its_pair);
     RUN_TEST(test_auth_frames_are_cited_by_their_ring_ids);
+    RUN_TEST(test_beacons_are_cited_by_their_ring_ids);
     RUN_TEST(test_a_retried_downlink_burst_records_no_release);
     RUN_TEST(test_a_refused_reassoc_opens_no_window);
     RUN_TEST(test_a_deauth_attributes_the_station_in_both_directions);
