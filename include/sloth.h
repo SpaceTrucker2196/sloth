@@ -2701,6 +2701,11 @@ typedef struct {
     int            chan_requested;       /* channel last requested, 0 = none yet */
     int            chan_confirmed;       /* channel the platform actually confirmed, 0 = none yet */
     int            chan_retune_failures; /* lifetime count of failed set_channel() calls */
+    /* Why (#91): the errno of the most recent FAILED retune - the
+     * nl80211 ack's own error for a kernel refusal - kept across later
+     * successes so it names the cause of the count above. 0 = never
+     * failed. chanhop_retune_reason() buckets it for display. */
+    int            chan_retune_last_errno;
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* Capture-worker liveness and drop accounting (#91 slice 2).
@@ -2951,8 +2956,11 @@ typedef struct {
     void (*init)(void);
     void (*cleanup)(void);
     /* Retune sloth's own monitor-mode capture interface to freq_mhz
-     * (issue #22, gated behind --hop). Returns 0 on success, -1 if
-     * unsupported on this platform / build or the retune failed. One of
+     * (issue #22, gated behind --hop). Returns 0 on an acknowledged
+     * retune, or a NEGATIVE ERRNO saying why not (#91): -EOPNOTSUPP
+     * where the platform or build cannot retune, the kernel's own
+     * refusal (-EBUSY, -EINVAL, -EPERM) from the nl80211 ack. It used
+     * to be a bare -1, which read as an errno is -EPERM. One of
      * two kernel-state writes reachable through this vtable — wifi_scan
      * kicks an nl80211 scan trigger when --allow-active permitted it
      * (#84). */

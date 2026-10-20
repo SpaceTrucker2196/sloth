@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +44,8 @@ static int  rp_zero_stas(wifi_sta_t *o, int m)       { (void)o; (void)m; return 
 static int  rp_zero_arp(arp_entry_t *o, int m)       { (void)o; (void)m; return 0; }
 static int  rp_zero_dhcp(dhcp_lease_t *o, int m)     { (void)o; (void)m; return 0; }
 static void rp_nop(void)                             {}
-/* -1, the vtable's "unsupported": there is no radio to retune. */
-static int  rp_no_channel(const char *i, int f)      { (void)i; (void)f; return -1; }
+/* The vtable's "unsupported" (#91): there is no radio to retune. */
+static int  rp_no_channel(const char *i, int f)      { (void)i; (void)f; return -EOPNOTSUPP; }
 
 void replay_platform_install(void) {
     g_platform.get_ifaces        = rp_zero_ifaces;

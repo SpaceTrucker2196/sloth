@@ -1,5 +1,6 @@
 #ifdef PLATFORM_WIN32
 
+#include <errno.h>
 #include "sloth.h"
 
 /* Week 2: GetIfTable2 for interface stats               */
@@ -10,7 +11,12 @@ int win32_get_ifaces(iface_stat_t *out, int max)        { (void)out; (void)max; 
 int win32_get_conns(conn_t *out, int max)               { (void)out; (void)max; return 0; }
 int win32_wifi_scan(wifi_ap_t *out, int max)            { (void)out; (void)max; return 0; }
 int win32_get_wifi_stations(wifi_sta_t *out, int max)   { (void)out; (void)max; return 0; }
-int win32_set_channel(const char *iface, int freq_mhz)  { (void)iface; (void)freq_mhz; return -1; }
+/* Negative errno per the vtable contract (#91); older Windows CRTs
+   lack the POSIX supplement that defines EOPNOTSUPP. */
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP ENOSYS
+#endif
+int win32_set_channel(const char *iface, int freq_mhz)  { (void)iface; (void)freq_mhz; return -EOPNOTSUPP; }
 int win32_get_arp(arp_entry_t *out, int max)            { (void)out; (void)max; return 0; }
 int win32_get_dhcp(dhcp_lease_t *out, int max)          { (void)out; (void)max; return 0; }
 

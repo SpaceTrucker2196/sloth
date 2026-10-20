@@ -1,6 +1,7 @@
 #ifdef PLATFORM_LINUX
 #ifdef WITH_WIFI
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -623,15 +624,37 @@ static size_t nla_put_u32(char *base, size_t off, int type, uint32_t val) {
     return off + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
 }
 
+int linux_wifi_ack_result(const void *buf, long len) {
+    /* The reply to an NLM_F_ACK request is one NLMSG_ERROR whose
+     * `error` is 0 for an ACK or the negated errno of the refusal
+     * (EPERM without CAP_NET_ADMIN, EBUSY while the device is in use,
+     * EINVAL for a frequency the driver will not take). Until #91 the
+     * errno was collapsed to -1 here and the reason was lost. */
+    if (!buf || len < (long)(NLMSG_HDRLEN + sizeof(struct nlmsgerr)))
+        return -EIO;
+    const struct nlmsghdr *rh = (const struct nlmsghdr *)buf;
+    if (rh->nlmsg_type != NLMSG_ERROR) return -EIO;
+    if (rh->nlmsg_len < NLMSG_HDRLEN + sizeof(struct nlmsgerr) ||
+        (long)rh->nlmsg_len > len) return -EIO;
+    struct nlmsgerr e;
+    memcpy(&e, NLMSG_DATA(rh), sizeof(e));
+    if (e.error == 0) return 0;
+    /* The kernel sends a negative errno. Anything else is not a value
+     * this code can name, and must not read as success. */
+    if (e.error < 0 && e.error > -4096) return e.error;
+    return -EIO;
+}
+
 int linux_wifi_set_channel(const char *iface, int freq_mhz) {
-    if (!iface || !iface[0] || freq_mhz <= 0) return -1;
+    if (!iface || !iface[0] || freq_mhz <= 0) return -EINVAL;
     unsigned ifidx = if_nametoindex(iface);
-    if (ifidx == 0) return -1;
+    if (ifidx == 0) return -ENODEV;
 
     int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
-    if (fd < 0) return -1;
+    if (fd < 0) return errno ? -errno : -EIO;
     int family = get_nl80211_id(fd);
-    if (family < 0) { close(fd); return -1; }
+    /* No nl80211 family registered: no cfg80211 driver to ask. */
+    if (family < 0) { close(fd); return -EOPNOTSUPP; }
 
     /* Short recv timeout so a missing ACK never wedges the poll loop. */
     struct timeval tv = { 0, 200000 };
@@ -659,21 +682,21 @@ int linux_wifi_set_channel(const char *iface, int freq_mhz) {
     memset(&sa, 0, sizeof(sa));
     sa.nl_family = AF_NETLINK;
     if (sendto(fd, buf, msg_sz, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        int e = errno ? errno : EIO;
         close(fd);
-        return -1;
+        return -e;
     }
 
-    /* An ACK is an NLMSG_ERROR with error == 0; anything else is a failure
-     * (EPERM without CAP_NET_ADMIN, EBUSY, EINVAL for an unsupported freq). */
     uint8_t rbuf[256];
     ssize_t r = recv(fd, rbuf, sizeof(rbuf), 0);
-    int rc = -1;
-    if (r >= (ssize_t)(NLMSG_HDRLEN + sizeof(struct nlmsgerr))) {
-        struct nlmsghdr *rh = (struct nlmsghdr *)rbuf;
-        if (rh->nlmsg_type == NLMSG_ERROR) {
-            struct nlmsgerr *e = (struct nlmsgerr *)NLMSG_DATA(rh);
-            rc = (e->error == 0) ? 0 : -1;
-        }
+    int rc;
+    if (r < 0) {
+        /* SO_RCVTIMEO expiring is EAGAIN; say what it means. */
+        int e = errno;
+        rc = (e == EAGAIN || e == EWOULDBLOCK) ? -ETIMEDOUT
+                                                : (e ? -e : -EIO);
+    } else {
+        rc = linux_wifi_ack_result(rbuf, (long)r);
     }
     close(fd);
     return rc;

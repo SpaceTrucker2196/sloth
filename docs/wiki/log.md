@@ -4110,3 +4110,21 @@ put first. New tests seed stale frames outside the window for the four
 flood citation queries, and pin the deauth/disassoc ring id on a
 `QUEUE_EVICT` release through the capture callback. [[pcap-export]]
 § Which alerts cite frames updated.
+
+## 2026-10-20 — #91 close-out: retune reason, acknowledged dwell, occupancy bench
+
+`set_channel()` returns the nl80211 ack's errno (negative) instead of
+`-1`; `linux_wifi_ack_result()` decodes the ack and is tested against
+hand-built `NLMSG_ERROR` bytes. The reason reaches the interface health
+strip (`retune-fail N EBUSY`) and `sensor_health` as the additive
+`chan_retune_last_errno` and `chan_retune_reason` ([[jsonl-schema]]).
+`chanhop_tick()` now only proposes; `chanhop_confirm_retune()` commits,
+so a refused retune accrues no visit, dwell or frame on the unreached
+channel and frames attribute to the confirmed one. `chanhop_service()`
+is the poll-loop body moved out of `main.c` and driven in tests through
+`tests/fake_platform.c` with injected `EBUSY` / `EINVAL` / `EPERM`. The
+`sensor_health` signature dropped the raw channel numbers and failure
+count, which made a hopping or refusing sensor emit every poll. `make
+bench` times seqnum correlation and the PNL union at full occupancy;
+the figures are in [[ring-buffers]] § Max-occupancy bench. Hop defaults
+unchanged.

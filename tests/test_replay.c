@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,7 +159,7 @@ static void test_platform_reads_nothing_from_the_host(void) {
     ASSERT_EQ(g_platform.get_wifi_stations(stas, 2), 0);
     ASSERT_EQ(g_platform.get_arp(arps, 2), 0);
     ASSERT_EQ(g_platform.get_dhcp(ls, 2), 0);
-    ASSERT_EQ(g_platform.set_channel("replay", 2437), -1);
+    ASSERT_EQ(g_platform.set_channel("replay", 2437), -EOPNOTSUPP);
 
     g_platform = saved;
     fake_net_reset();

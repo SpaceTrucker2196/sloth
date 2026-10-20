@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@
 #include "dns_log.h"
 #include "ntp_log.h"
 #include "icmp_log.h"
+#include "sloth_clock.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
@@ -1200,6 +1202,122 @@ static void test_emit_sensor_health_confirmed_channel_is_ok(void) {
     ASSERT(contains(body, "\"chan_confirmed_ok\":1"));
 }
 
+/* #91 close-out: the reason travels with the count. */
+static time_t retune_fixed_wall(void) { return 1700000000; }
+
+static void test_emit_sensor_health_retune_reason(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested         = 11;
+    s.chan_confirmed         = 6;
+    s.chan_retune_failures   = 2;
+    s.chan_retune_last_errno = EBUSY;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    char want[64];
+    snprintf(want, sizeof(want), "\"chan_retune_last_errno\":%d", EBUSY);
+    ASSERT(contains(body, want));
+    ASSERT(contains(body, "\"chan_retune_reason\":\"EBUSY\""));
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_emit_sensor_health_retune_reason_none(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"chan_retune_last_errno\":0"));
+    ASSERT(contains(body, "\"chan_retune_reason\":\"none\""));
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A radio refusing every retune fails once per retry. The count climbs
+ * on every one of them; the record must not. */
+static void test_sensor_health_persistent_retune_failure_does_not_churn(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested         = 1;
+    s.chan_confirmed         = 0;
+    s.chan_retune_last_errno = EPERM;
+    for (int i = 1; i <= 20; i++) {
+        s.chan_retune_failures = i;
+        s.chan_requested = (i % 2) ? 1 : 6;   /* the rotation moves on too */
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    /* One line: the first failure. Neither the climbing count nor the
+     * rotation's moving request is news while the cause is unchanged. */
+    ASSERT_EQ(count_lines(body), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Healthy hopping moves the requested and confirmed channel every
+ * dwell - every poll at the default 250 ms. That is the hopper working,
+ * not a transition. */
+static void test_sensor_health_healthy_hopping_does_not_re_emit(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    static const int rot[] = { 1, 6, 11 };
+    for (int i = 0; i < 30; i++) {
+        s.chan_requested = rot[i % 3];
+        s.chan_confirmed = rot[i % 3];
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_sensor_health_retune_count_alone_does_not_re_emit(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested         = 1;
+    s.chan_confirmed         = 0;
+    s.chan_retune_last_errno = EPERM;
+    for (int i = 1; i <= 20; i++) {
+        s.chan_retune_failures = i;
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_sensor_health_first_failure_and_new_reason_re_emit(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested = 1; s.chan_confirmed = 1;
+    jsonl_emit_sensor_health(&s);                 /* healthy */
+    s.chan_retune_failures   = 1;                 /* first failure, but the */
+    s.chan_retune_last_errno = EBUSY;             /* radio already recovered */
+    jsonl_emit_sensor_health(&s);
+    s.chan_retune_failures   = 2;
+    s.chan_retune_last_errno = EINVAL;            /* a different cause */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT_EQ(count_lines(body), 3);
+    ASSERT(contains(body, "\"chan_retune_reason\":\"EINVAL\""));
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* #91: channel 37 is a valid number in both 5 GHz and 6 GHz, so a
  * consumer reading only `channel` cannot tell which band the row is
  * about. `band` is additive and must agree with the [m] Channel view's
@@ -2370,6 +2488,12 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_measures_a_configured_pcap_dir);
     RUN_TEST(test_emit_sensor_health_channel_fields);
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
+    RUN_TEST(test_emit_sensor_health_retune_reason);
+    RUN_TEST(test_emit_sensor_health_retune_reason_none);
+    RUN_TEST(test_sensor_health_persistent_retune_failure_does_not_churn);
+    RUN_TEST(test_sensor_health_retune_count_alone_does_not_re_emit);
+    RUN_TEST(test_sensor_health_healthy_hopping_does_not_re_emit);
+    RUN_TEST(test_sensor_health_first_failure_and_new_reason_re_emit);
     RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
     RUN_TEST(test_emit_sensor_health_eviction_tally);
     RUN_TEST(test_emit_sensor_health_total_includes_flow_rings);

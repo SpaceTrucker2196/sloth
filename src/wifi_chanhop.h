@@ -2,6 +2,7 @@
 #define WIFI_CHANHOP_H
 
 #include <stdint.h>
+#include "sloth.h"
 
 /* Adaptive passive channel scheduler (issue #22).
  *
@@ -10,9 +11,12 @@
  * on each channel and when to move on — spending more airtime where frames
  * are actually arriving while still guaranteeing every channel is revisited.
  *
- * It is pure logic: it never touches hardware. The caller reads
- * chanhop_current_freq() after chanhop_tick() returns 1 and asks the
- * platform to retune the radio — a kernel-state write gated behind
+ * The scheduler itself is pure logic: it never touches hardware. The
+ * caller reads chanhop_target_freq() after chanhop_tick() returns 1,
+ * asks the platform to retune the radio, and reports the result back
+ * through chanhop_confirm_retune() — chanhop_service() below is that
+ * loop, written once so a test can drive it through the fake platform.
+ * Retuning is a kernel-state write gated behind
  * --hop; see src/platform/linux_wifi.h for the others and why this
  * comment no longer gives a total (#84). Keeping the policy hardware-free
  * makes it unit-testable with a synthetic clock and no live radio.
@@ -37,14 +41,28 @@ typedef struct {
      * a whole run is the shape of a retune that silently didn't take. */
     uint32_t visits;     /* dwells begun on this channel */
     uint64_t frames;     /* monitor frames attributed to those dwells */
+    /* Retunes to this channel the platform refused (#91). A refused
+     * channel accrues no visit, dwell or frame — the radio never got
+     * there — so without this a channel the driver always rejects
+     * would simply never appear to have been tried. */
+    uint32_t refusals;
 } chanhop_slot_t;
 
 typedef struct {
     chanhop_slot_t slots[CHANHOP_MAX];
     int      count;
-    int      cur;             /* index of the channel currently dwelt on */
+    int      cur;             /* index of the channel currently dwelt on —
+                               * the last one the platform ACKNOWLEDGED */
     uint64_t dwell_until_ms;  /* monotonic ms when the current dwell ends */
     int      started;
+    /* Retune handshake (#91). The dwell used to be stamped inside
+     * chanhop_tick(), before the caller had even issued the retune, so
+     * a refused retune still credited the unreached channel with a
+     * visit, a dwell and every frame heard afterwards. Now tick only
+     * proposes `pending`; chanhop_confirm_retune() commits it. */
+    int      pending;         /* slot asked for and not yet answered, -1 none */
+    int      next;            /* slot the next proposal targets */
+    int      tuned;           /* 1 once any retune has been acknowledged */
     /* tunables (chanhop_init sets sensible defaults) */
     uint32_t base_dwell_ms;   /* dwell for a quiet channel */
     uint32_t min_dwell_ms;    /* floor */
@@ -117,12 +135,40 @@ typedef struct {
 void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out);
 
 /* Advance the dwell clock. Returns 1 when the caller should retune the
- * radio to chanhop_current_freq() (first call, or the dwell elapsed);
- * 0 to keep listening on the current channel. */
+ * radio to chanhop_target_freq() (first call, the dwell elapsed, or a
+ * proposal is still unanswered); 0 to keep listening where it is.
+ *
+ * Proposes only. Nothing about the dwell, the visit count or frame
+ * attribution moves until chanhop_confirm_retune() reports the result:
+ * the radio has not moved yet when this returns. */
 int chanhop_tick(chanhop_t *h, uint64_t now_ms);
 
+/* Report the outcome of the retune chanhop_tick() asked for (#91).
+ *
+ * ok: the radio is on the target. The dwell that was running closes
+ * out (measured start-of-dwell to now, so time lost to refused retunes
+ * lands inside it), the target becomes current, gets its visit and a
+ * dwell stamped at now_ms, and frames attribute to it from here on.
+ *
+ * !ok: the radio is still where it was. The target gets a refusal and
+ * nothing else; current, its open dwell and frame attribution are
+ * unchanged, and the next proposal skips to the channel after the
+ * refused one after min_dwell_ms — so one channel the driver always
+ * rejects cannot wedge the rotation, and a radio refusing everything
+ * retries at a bounded rate instead of every poll.
+ *
+ * No-op when nothing is pending. */
+void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms);
+
+/* The channel the radio is on: the last acknowledged retune. Before
+ * the first acknowledgement this is slot 0 by construction, which is
+ * why chanhop_export() and frame attribution key on `tuned`. */
 int chanhop_current_channel(const chanhop_t *h);
 int chanhop_current_freq(const chanhop_t *h);
+
+/* The channel chanhop_tick() is asking for; 0 when nothing is pending. */
+int chanhop_target_channel(const chanhop_t *h);
+int chanhop_target_freq(const chanhop_t *h);
 
 /* Copy the channel list (channel numbers) into out[max]; return the count.
  * *cur_idx receives the index of the channel currently dwelt on (-1 if
@@ -144,5 +190,34 @@ int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx);
 void chanhop_record_retune(int requested_channel, int retune_ok,
                             int *requested_out, int *confirmed_out,
                             int *failures_out);
+
+/* The same bookkeeping, carrying the reason (#91). `err` is 0 for an
+ * acknowledged retune or the positive errno the platform reported —
+ * the nl80211 ack's own error for a kernel refusal. *last_errno_out
+ * takes it on failure and keeps it across later successes: it names
+ * the cause of the failures *failures_out is counting, and a radio
+ * that recovered should still say why it had been failing. 0 means no
+ * retune has ever failed. */
+void chanhop_record_retune_err(int requested_channel, int err,
+                               int *requested_out, int *confirmed_out,
+                               int *failures_out, int *last_errno_out);
+
+/* Bucketed name for a retune errno, for the TUI and JSONL: the errno
+ * macro name for the reasons a set_channel() actually returns, "other"
+ * for the rest, "none" for 0. A fixed, small vocabulary so a consumer
+ * can switch on it, and a stable value under a persistent failure so
+ * it can sit in the change-only signature. Never NULL. */
+const char *chanhop_retune_reason(int err);
+
+/* One poll's worth of hopping, against g_platform (#91): attribute
+ * `mon_frames` (monitor-radio frames since the last call) to the
+ * confirmed channel, tick, issue the retune through
+ * g_platform.set_channel, feed the result back, and publish the
+ * requested/confirmed pair, failure count and reason, scan bar,
+ * activity and dwell into `s`. main.c's chanhop_drive() is this plus
+ * the --hop gate and the frame-counter delta; it lives here so a test
+ * can run it against tests/fake_platform.c with an injected errno. */
+void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
+                     uint32_t mon_frames);
 
 #endif /* WIFI_CHANHOP_H */

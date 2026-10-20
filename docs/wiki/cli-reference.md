@@ -398,6 +398,8 @@ make mutate          # mutation-test the suite (opt-in, offline)
 make replay-check    # run `sloth --replay` on generated savefiles, diff
                      #   the normalised JSONL against tests/replay/golden.jsonl (#119)
 make replay-golden   # rewrite the golden from the current tree (review the diff)
+make bench           # time seqnum correlation + PNL union at full table
+                     #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
 ```
 
 All six build variants must be warning-clean; CI enforces `-Werror`

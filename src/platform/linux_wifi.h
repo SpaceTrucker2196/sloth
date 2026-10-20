@@ -23,7 +23,10 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max);
 
 /* Retune `iface` (a monitor-mode interface) to freq_mhz via nl80211
    (NL80211_CMD_SET_CHANNEL). Requires CAP_NET_ADMIN. Returns 0 on an
-   ACKed retune, -1 on any error (bad iface, EPERM, kernel refusal).
+   ACKed retune, or a negative errno (#91): the kernel's refusal from
+   the ack (-EPERM, -EBUSY, -EINVAL ...), -ENODEV for an unknown
+   iface, -EOPNOTSUPP with no nl80211 (or without WITH_WIFI), and
+   -ETIMEDOUT when no ack arrived inside the 200 ms receive timeout.
    A kernel-state write, gated behind --hop, and the narrowest one
    sloth makes: it retunes sloth's own receiver, changing only what
    sloth hears.
@@ -39,6 +42,12 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max);
    keeps going stale, so this comment names them and asserts no total.
    See MISSION.md §2 for the governing rule, and issues #22 and #84. */
 int linux_wifi_set_channel(const char *iface, int freq_mhz);
+
+/* Decode the reply to an NLM_F_ACK request: 0 for an ACK, the kernel's
+   negative errno for a refusal, -EIO for anything that is not a
+   well-formed NLMSG_ERROR. Pure, so the errno plumbing is testable with
+   hand-built bytes and no socket (#91). */
+int linux_wifi_ack_result(const void *buf, long len);
 
 /* ── Scan-trigger policy, limiter and instrumentation (#84) ──
  *

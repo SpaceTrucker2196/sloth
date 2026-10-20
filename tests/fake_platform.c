@@ -50,6 +50,16 @@ static int fake_get_dhcp(dhcp_lease_t *out, int max) {
     (void)out; (void)max; return 0;
 }
 
+static int fake_set_channel(const char *iface, int freq_mhz) {
+    g_fake_net.set_channel_calls++;
+    g_fake_net.set_channel_last_freq = freq_mhz;
+    snprintf(g_fake_net.set_channel_last_iface,
+             sizeof(g_fake_net.set_channel_last_iface), "%s", iface ? iface : "");
+    if (g_fake_net.refuse_freq_mhz && freq_mhz == g_fake_net.refuse_freq_mhz)
+        return g_fake_net.refuse_rc;
+    return g_fake_net.set_channel_rc;
+}
+
 static void fake_init(void)    {}
 static void fake_cleanup(void) {}
 
@@ -63,5 +73,5 @@ platform_ops_t g_platform = {
     fake_get_dhcp,
     fake_init,
     fake_cleanup,
-    NULL,   /* set_channel: tests never retune a radio */
+    fake_set_channel,   /* #91: errno injected through g_fake_net */
 };

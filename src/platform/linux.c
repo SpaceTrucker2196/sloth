@@ -1,5 +1,6 @@
 #ifdef PLATFORM_LINUX
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -138,7 +139,7 @@ int linux_wifi_get_stations(wifi_sta_t *out, int max) {
 }
 int linux_wifi_set_channel(const char *iface, int freq_mhz) {
     (void)iface; (void)freq_mhz;
-    return -1;   /* no nl80211 without WITH_WIFI */
+    return -EOPNOTSUPP;   /* no nl80211 without WITH_WIFI */
 }
 #endif
 

@@ -578,6 +578,28 @@ test-capture-path: test
 	@echo "test-capture-path: the capture path is part of 'make test' since #116;" \
 	      "this alias goes away next release"
 
+# ── Max-occupancy bench (#91) ───────────────────────────────────────────────
+# Times seqnum correlation and the PNL union with their tables full and
+# the early-outs defeated; tests/bench/bench_occupancy.c says how. Linked
+# against this configuration's -O2 core archive and the real renderer and
+# platform objects, so it measures the code `sloth` ships rather than the
+# -O0 test build. Deliberately not a `make test` dependency: it reports a
+# time and a slow runner is not a defect. It does fail when a table is
+# short of capacity. The recorded figure lives in docs/wiki/ring-buffers.md.
+BENCH_SRCS  = $(wildcard tests/bench/bench_*.c)
+BENCH_BINS  = $(BENCH_SRCS:tests/bench/%.c=build/bench/%)
+BENCH_ITERS ?= 50
+BENCH_OBJS  = $(filter-out $(OBJDIR)/src/main.o,$(APP_OBJS))
+
+build/bench/%: tests/bench/%.c $(BENCH_OBJS) $(CORE_LIB) $(OBJDIR)/.flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Iinclude -Isrc -Iresearch -o $@ $< \
+	      $(BENCH_OBJS) $(CORE_LIB) $(LDFLAGS)
+
+.PHONY: bench
+bench: $(BENCH_BINS)
+	@for b in $(BENCH_BINS); do ./$$b $(BENCH_ITERS) || exit 1; done
+
 # ── Headless replay integration (#119) ──────────────────────────────────────
 # The one gate that runs the shipped `sloth` binary: main()'s argv
 # handling, the poll loop, the alert engine and the JSONL and SQLite

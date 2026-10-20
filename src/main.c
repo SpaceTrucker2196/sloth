@@ -158,44 +158,11 @@ static void chanhop_drive(sloth_state_t *s) {
      * channel the radio happened to be parked on — the RF heuristic was
      * being steered by traffic that never touched the air. */
     uint64_t mon_total = mon_frame_total();
-    chanhop_observe(&g_chanhop, (uint32_t)(mon_total - last_total));
+    uint32_t delta = (uint32_t)(mon_total - last_total);
     last_total = mon_total;
-    if (chanhop_tick(&g_chanhop, now_ms)) {
-        /* #91 slice 1: consume the retune result instead of discarding it —
-         * a failed set_channel() used to leave the UI showing the intended
-         * channel with no way to tell "healthy, quiet" from "not actually
-         * listening there". */
-        int requested = chanhop_current_channel(&g_chanhop);
-        int ok = g_platform.set_channel(s->probe_iface,
-                                        chanhop_current_freq(&g_chanhop)) == 0;
-        chanhop_record_retune(requested, ok, &s->chan_requested,
-                              &s->chan_confirmed, &s->chan_retune_failures);
-    }
-    /* Surface the scan state for the interface view's channel bar. */
-    s->scan_chan_count = chanhop_export(&g_chanhop, s->scan_chans,
-                                        (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),
-                                        &s->scan_cur_idx);
-    /* #91: and the hop-activity summary, so "visiting but deaf" is
-     * separable from "not hopping" in the log and the view. Copied
-     * field by field rather than memcpy'd: sloth.h deliberately does
-     * not include wifi_chanhop.h, so the two structs are distinct
-     * types that happen to agree. */
-    chanhop_activity_t ha;
-    chanhop_activity(&g_chanhop, &ha);
-    s->hop_activity.channels        = ha.channels;
-    s->hop_activity.visits          = ha.visits;
-    s->hop_activity.frames          = ha.frames;
-    s->hop_activity.silent_channels = ha.silent_channels;
-    s->hop_activity.cur_visits      = ha.cur_visits;
-    s->hop_activity.cur_frames      = ha.cur_frames;
-    chanhop_dwell_t hd;
-    chanhop_dwell(&g_chanhop, &hd);
-    s->hop_dwell.last_planned_ms    = hd.last_planned_ms;
-    s->hop_dwell.last_measured_ms   = hd.last_measured_ms;
-    s->hop_dwell.worst_overshoot_ms = hd.worst_overshoot_ms;
-    s->hop_dwell.completed          = hd.completed;
-    s->hop_dwell.mean_planned_ms    = hd.mean_planned_ms;
-    s->hop_dwell.mean_measured_ms   = hd.mean_measured_ms;
+    /* Tick, retune, feed the ack back, publish: src/wifi_chanhop.c, so
+     * the loop is testable through the fake platform (#91). */
+    chanhop_service(&g_chanhop, s, now_ms, delta);
 }
 #endif
 

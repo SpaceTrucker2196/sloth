@@ -140,6 +140,25 @@ signal (see `src/wifi_chanhop.c :: chanhop_record_retune()` for the
 pure bookkeeping, kept hardware-free and unit-tested the same way as
 the rest of the scheduler).
 
+**The reason, and no credit for a refused retune (#91 close-out).**
+`set_channel()` now returns the errno the nl80211 ack carried instead of
+a bare `-1` (`-EPERM`, `-EBUSY`, `-EINVAL`; `-ENODEV`, `-EOPNOTSUPP` and
+`-ETIMEDOUT` from the platform layer itself), and the hopper keeps the
+last one as `chan_retune_last_errno`. The scheduler also stopped
+stamping the dwell before the retune was answered: `chanhop_tick()`
+proposes a channel and `chanhop_confirm_retune()` commits it. A refused
+channel gets a refusal and nothing else — no visit, no dwell, no frames;
+the radio stays where it was, its open dwell keeps running (so the
+measured dwell includes the time lost), frames keep attributing to it,
+and the next attempt skips to the channel after the refused one after
+`min_dwell_ms` (100 ms). One channel the driver always rejects cannot
+wedge the rotation, and a radio refusing everything retries at a bounded
+rate. Before the first acknowledged retune nothing is marked on the scan
+bar and no frame is attributed to any channel. The bracket now always
+sits on the acknowledged channel, so `[1?]` reads "on 1, and the last
+request to leave it was refused". Hop defaults are
+unchanged: no DFS, no 6 GHz.
+
 ## Sensor health strip — issue #91 slices 2-3
 
 Under the interface rows, above the key hints, sits one line describing
@@ -222,7 +241,12 @@ counters never see them; without this a radio handing over only garbage
 reads as a quiet channel. Lifetime, shown only when non-zero, not in
 JSONL.
 
-`retune-fail` is the lifetime `chan_retune_failures` from slice 1 above.
+`retune-fail` is the lifetime `chan_retune_failures` from slice 1 above,
+followed by the reason for the most recent failure (`retune-fail 4
+EBUSY`): `EPERM` wants capabilities, `EBUSY` wants the radio's other
+user stopped, `EINVAL` wants the channel list changed, and the bare
+count said none of that. The same reason is `chan_retune_reason` in
+[`sensor_health`](../wiki/jsonl-schema.md).
 
 `evict` is the total over every instrumented bounded table — an
 observation that did not make it in because the table was full. The

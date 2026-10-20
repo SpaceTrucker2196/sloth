@@ -334,6 +334,68 @@ and is already counted as `eap_session`) were outside this pass; the
 uncounted list in [[jsonl-schema]] remains the authority on what is
 measured.
 
+## Max-occupancy bench (#91)
+
+The external review behind #91 named two synthesis passes as
+superlinear and untested at capacity: sequence-number correlation
+(pairwise over the per-MAC table, "roughly O(N²H²)") and the PNL union
+(nested duplicate searches). `make bench` times both with their tables
+full. It is a separate target, not part of `make test`: it reports a
+time, and a slow CI runner is not a defect. It does exit non-zero if a
+table is short of capacity, so a half-full run cannot report a
+reassuring number.
+
+Inputs (`tests/bench/bench_occupancy.c`), shaped to defeat the
+early-outs, so the figures are ceilings:
+
+- **seqnum, no early-out** — 256 randomised MACs evicted, then
+  `MAX_SEQNUM_CLIENTS` (256) more, each with a full 8-entry history.
+  Every pair passes freshness, ordering, the 30 s window and the
+  forward-gap test and then fails trail continuity on the last step, so
+  no pair is accepted, the 32-correlation cap never trips, and all
+  32,640 pairs pay the full cost both ways.
+- **seqnum, rotation** — 32 radios each rotating through 8 addresses,
+  the shape the module exists to find. The cap trips early.
+- **PNL** — `MAX_PNL_CLIENTS` (128) × `MAX_PNL_SSIDS_PER_CLI` (16)
+  distinct SSIDs, so the union's duplicate search never matches early,
+  against `MAX_BEACON_APS` (256) beacons each cycling 8 SSIDs that no
+  PNL contains, so every per-AP scan runs to the end. Timed through
+  `karma_update()` (64 candidates, `MAX_KARMA_APS`) and
+  `rule_karma_ap()` (all 256).
+
+Linked against the shipped configuration's `-O2` core archive, not the
+`-O0` test build.
+
+Measured 2026-10-20, `make bench` (50 iterations), Intel Core i7-8665U
+@ 1.90 GHz, Linux 7.0.12 (Kali) x86_64, gcc 15.3.0, default config
+(`n1p1w1s1`):
+
+| Pass | median | max |
+|------|-------:|----:|
+| `seqnum_snapshot`, no early-out | 1.86 ms | 2.00 ms |
+| `seqnum_snapshot`, rotation shape | 0.19 ms | 0.23 ms |
+| `karma_update` (union + 64 candidates) | 17.9 ms | 19.9 ms |
+| `rule_karma_ap` (256 beacons) | 39.5 ms | 47.3 ms |
+| worst-case sum of medians | **59.2 ms** | |
+
+That was a quiet machine. The same command run straight after the
+full gate matrix, with the CPU still hot, gave 69.6 ms (seqnum 2.3,
+`karma_update` 21.2, `rule_karma_ap` 46.1) — on this laptop part, read
+±20 % between runs as noise, not a regression.
+
+Reading it: the correlation scan the review worried about is not the
+cost — per-pair work is two endpoint reads and one 8-step pass, so the
+whole table is under 2 ms. The PNL side is, at roughly 57 ms of a 1 s
+poll at full occupancy: `pnl_union_size()` is O((N·S)²) string
+compares over 2,048 SSIDs, and `rule_karma_ap()` repeats
+`karma_pnl_union_hits()` and `karma_pnl_client_hits()` — each
+O(8 · N · S) — for every SSID-cycling beacon, on top of the same work
+`karma_update()` already did for the first 64. Six percent of a tick at
+the ceiling, so nothing is changed here; the number is recorded so a
+change to either table's capacity, or a hash set behind the union, can
+be measured against it. Rerun with `make bench BENCH_ITERS=n` and
+replace this table, with the host and command, when either moves.
+
 ## Mutation testing
 
 The pattern's boundary mutations are documented equivalents and

@@ -21,6 +21,7 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "wifi_chanhop.h"     /* chanhop_retune_reason() (#91) */
 #include "libver.h"
 #include "capture/capture.h"
 #include "alert_pcap.h"
@@ -1784,8 +1785,9 @@ void jsonl_emit_wifi_merged(const sloth_state_t *s) {
  * but the signature is chosen carefully. `ps_recv` climbs on every tick
  * of a working sensor, so signing over it would mean a line per second
  * forever and the suppression would be decorative. The signature is
- * therefore the *qualitative* health — liveness, exit reasons, the
- * channel pair, retune failures — plus the cumulative drop/ifdrop
+ * therefore the *qualitative* health — liveness, exit reasons, whether
+ * the channel pair agrees, whether a retune has failed and why — plus
+ * the cumulative drop/ifdrop
  * counters and the eviction tally, all of which moving is genuinely
  * news. A healthy sensor emits one line per JSONL_HEARTBEAT_SECS; a
  * degrading one emits the moment it degrades. */
@@ -1866,7 +1868,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     struct {
         int      cap_open, cap_run, cap_exit;
         int      mon_open, mon_run, mon_exit;
-        int      chan_req, chan_conf, retune_fail, chan_ok;
+        int      retune_fail_any, chan_ok, retune_errno;
         uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
         int      storage_fail;
         int      scope_state, scope_req, scope_enf;
@@ -1897,9 +1899,22 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.mon_open    = s->mon_health.open;
     sig.mon_run     = s->mon_health.running;
     sig.mon_exit    = s->mon_health.exit_reason;
-    sig.chan_req    = s->chan_requested;
-    sig.chan_conf   = s->chan_confirmed;
-    sig.retune_fail = s->chan_retune_failures;
+    /* #91: the channel PAIR, not the channel numbers. With --hop on,
+     * chanhop is the only writer of both and moves them every dwell -
+     * every poll at the default 250 ms - so signing over the numbers
+     * made a healthy hopping sensor emit this record once a second, and
+     * a refusing one too, since the rotation still moves the request.
+     * Whether they agree (chan_ok) is the transition; the numbers ride
+     * every emitted line and the heartbeat. */
+    /* #91: the failure COUNT is an event counter. A radio that refuses
+     * every retune (EPERM without CAP_NET_ADMIN is the common case)
+     * fails once per retry, so signing over the count emitted this
+     * record on every retry for the life of the run. Two-state band plus
+     * the reason instead: the first failure is news, so is a change of
+     * reason, and the count itself rides every emitted line. A failure
+     * after a recovery still re-emits through chan_ok. */
+    sig.retune_fail_any = s->chan_retune_failures > 0;
+    sig.retune_errno    = s->chan_retune_last_errno;
     sig.chan_ok     = chan_ok;
     sig.cap_drop    = s->cap_health.ps_drop;
     sig.cap_ifdrop  = s->cap_health.ps_ifdrop;
@@ -1965,6 +1980,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     kv_int(buf, LINEBUF, &off, "chan_confirmed",       s->chan_confirmed);
     kv_int(buf, LINEBUF, &off, "chan_confirmed_ok",    chan_ok);
     kv_int(buf, LINEBUF, &off, "chan_retune_failures", s->chan_retune_failures);
+    kv_int(buf, LINEBUF, &off, "chan_retune_last_errno", s->chan_retune_last_errno);
+    kv_str(buf, LINEBUF, &off, "chan_retune_reason",
+           chanhop_retune_reason(s->chan_retune_last_errno));
     /* Hop activity (#91). hop_channels == 0 means --hop is off, which is
      * why the visit/frame counters are emitted unconditionally rather
      * than suppressed when zero: absent fields would read as "hopping,

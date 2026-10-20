@@ -1,4 +1,5 @@
 #include "wifi_chanhop.h"
+#include <errno.h>
 #include <string.h>
 
 /* Safe default channel list: the three non-overlapping 2.4 GHz channels
@@ -33,6 +34,7 @@ int chanhop_init(chanhop_t *h, const int *channels, int n) {
     h->min_dwell_ms  = 100;
     h->max_dwell_ms  = 2000;
     h->ms_per_obs    = 8;
+    h->pending       = -1;
 
     if (!channels) return 0;
     for (int i = 0; i < n && h->count < CHANHOP_MAX; i++) {
@@ -51,7 +53,11 @@ int chanhop_init_default(chanhop_t *h) {
 }
 
 void chanhop_observe(chanhop_t *h, uint32_t observations) {
-    if (!h || h->count == 0) return;
+    /* Before the first acknowledged retune the radio is on whatever
+     * channel it was left on, which need not be in the rotation at all;
+     * crediting slot 0 with those frames would make a radio that never
+     * tuned look like it hears channel 1. */
+    if (!h || h->count == 0 || !h->tuned) return;
     h->slots[h->cur].activity += observations;
     h->slots[h->cur].frames   += observations;
 }
@@ -61,41 +67,65 @@ int chanhop_tick(chanhop_t *h, uint64_t now_ms) {
 
     if (!h->started) {
         h->started = 1;
-        h->cur = 0;
-        h->slots[0].visits++;
-        h->dwell_planned_ms = dwell_for(h, h->slots[0].activity);
-        h->dwell_began_ms   = now_ms;
-        h->dwell_until_ms   = now_ms + h->dwell_planned_ms;
+        h->next    = 0;
+        h->pending = 0;
         return 1;   /* first retune: park on the first channel */
     }
 
+    /* An unanswered proposal is asked for again rather than replaced:
+     * advancing past it would skip a channel the radio was never told
+     * about, and the caller has done nothing wrong yet. */
+    if (h->pending >= 0) return 1;
+
     if (now_ms < h->dwell_until_ms) return 0;   /* still dwelling */
 
-    /* Decay the channel we're leaving so `activity` is a rolling window,
-     * not an all-time tally — a channel that was busy an hour ago should
-     * not hold a long dwell forever. */
-    h->slots[h->cur].activity >>= 1;
+    h->pending = h->next;                       /* rotation → guaranteed revisit */
+    return 1;
+}
 
-    /* Close out the dwell that just ended before starting the next.
-     * Measured runs start-of-dwell to start-of-next, so the poll-loop
-     * servicing delay lands inside the figure instead of vanishing. */
-    uint32_t measured = (uint32_t)(now_ms - h->dwell_began_ms);
-    h->last_planned_ms   = h->dwell_planned_ms;
-    h->last_measured_ms  = measured;
-    h->planned_total_ms += h->dwell_planned_ms;
-    h->measured_total_ms += measured;
-    h->dwells_completed++;
-    if (measured > h->dwell_planned_ms) {
-        uint32_t over = measured - h->dwell_planned_ms;
-        if (over > h->worst_overshoot_ms) h->worst_overshoot_ms = over;
+void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms) {
+    if (!h || h->count == 0 || h->pending < 0) return;
+    int t = h->pending;
+    h->pending = -1;
+
+    if (!ok) {
+        /* The radio did not move. Everything that describes where it
+         * is - cur, the open dwell, frame attribution - stays put. */
+        h->slots[t].refusals++;
+        h->next           = (t + 1) % h->count;
+        h->dwell_until_ms = now_ms + h->min_dwell_ms;
+        return;
     }
 
-    h->cur = (h->cur + 1) % h->count;           /* rotation → guaranteed revisit */
-    h->slots[h->cur].visits++;
-    h->dwell_planned_ms = dwell_for(h, h->slots[h->cur].activity);
+    if (h->tuned) {
+        /* Decay the channel we're leaving so `activity` is a rolling
+         * window, not an all-time tally - a channel that was busy an
+         * hour ago should not hold a long dwell forever. */
+        h->slots[h->cur].activity >>= 1;
+
+        /* Close out the dwell that just ended before starting the next.
+         * Measured runs start-of-dwell to start-of-next, so the
+         * poll-loop servicing delay - and any refused retunes in
+         * between - land inside the figure instead of vanishing. */
+        uint32_t measured = (uint32_t)(now_ms - h->dwell_began_ms);
+        h->last_planned_ms   = h->dwell_planned_ms;
+        h->last_measured_ms  = measured;
+        h->planned_total_ms += h->dwell_planned_ms;
+        h->measured_total_ms += measured;
+        h->dwells_completed++;
+        if (measured > h->dwell_planned_ms) {
+            uint32_t over = measured - h->dwell_planned_ms;
+            if (over > h->worst_overshoot_ms) h->worst_overshoot_ms = over;
+        }
+    }
+
+    h->cur   = t;
+    h->tuned = 1;
+    h->next  = (t + 1) % h->count;
+    h->slots[t].visits++;
+    h->dwell_planned_ms = dwell_for(h, h->slots[t].activity);
     h->dwell_began_ms   = now_ms;
     h->dwell_until_ms   = now_ms + h->dwell_planned_ms;
-    return 1;
 }
 
 void chanhop_dwell(const chanhop_t *h, chanhop_dwell_t *out) {
@@ -142,12 +172,24 @@ int chanhop_current_freq(const chanhop_t *h) {
     return h->slots[h->cur].freq_mhz;
 }
 
+int chanhop_target_channel(const chanhop_t *h) {
+    if (!h || h->count == 0 || h->pending < 0) return 0;
+    return h->slots[h->pending].channel;
+}
+
+int chanhop_target_freq(const chanhop_t *h) {
+    if (!h || h->count == 0 || h->pending < 0) return 0;
+    return h->slots[h->pending].freq_mhz;
+}
+
 int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx) {
     if (cur_idx) *cur_idx = -1;
     if (!h || !out || max <= 0) return 0;
     int n = h->count < max ? h->count : max;
     for (int i = 0; i < n; i++) out[i] = h->slots[i].channel;
-    if (cur_idx && h->started && h->cur < n) *cur_idx = h->cur;
+    /* Marked only once a retune has been acknowledged: before that
+     * slot 0 is cur by construction, not because the radio is there. */
+    if (cur_idx && h->tuned && h->cur < n) *cur_idx = h->cur;
     return n;
 }
 
@@ -160,4 +202,77 @@ void chanhop_record_retune(int requested_channel, int retune_ok,
     } else if (failures_out) {
         (*failures_out)++;
     }
+}
+
+void chanhop_record_retune_err(int requested_channel, int err,
+                               int *requested_out, int *confirmed_out,
+                               int *failures_out, int *last_errno_out) {
+    chanhop_record_retune(requested_channel, err == 0,
+                          requested_out, confirmed_out, failures_out);
+    if (err != 0 && last_errno_out) *last_errno_out = err;
+}
+
+const char *chanhop_retune_reason(int err) {
+    /* The reasons NL80211_CMD_SET_CHANNEL and its setup path really
+     * return, plus the two the platform layer synthesises (ETIMEDOUT
+     * for a missing ack, EOPNOTSUPP for no nl80211 / no radio). */
+    switch (err) {
+    case 0:          return "none";
+    case EPERM:      return "EPERM";
+    case EACCES:     return "EACCES";
+    case EBUSY:      return "EBUSY";
+    case EINVAL:     return "EINVAL";
+    case ENODEV:     return "ENODEV";
+    case ENOENT:     return "ENOENT";
+    case EOPNOTSUPP: return "EOPNOTSUPP";
+    case ETIMEDOUT:  return "ETIMEDOUT";
+    case EIO:        return "EIO";
+    default:         return "other";
+    }
+}
+
+void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
+                     uint32_t mon_frames) {
+    if (!h || !s) return;
+    chanhop_observe(h, mon_frames);
+    if (chanhop_tick(h, now_ms)) {
+        /* #91: the vtable returns 0 or a negative errno. A missing
+         * set_channel is a platform that cannot retune, which is what
+         * EOPNOTSUPP says; a stray positive return is a contract
+         * violation and is reported as EIO rather than as success. */
+        int requested = chanhop_target_channel(h);
+        int rc = g_platform.set_channel
+               ? g_platform.set_channel(s->probe_iface, chanhop_target_freq(h))
+               : -EOPNOTSUPP;
+        int err = rc == 0 ? 0 : (rc < 0 ? -rc : EIO);
+        chanhop_confirm_retune(h, err == 0, now_ms);
+        chanhop_record_retune_err(requested, err, &s->chan_requested,
+                                  &s->chan_confirmed, &s->chan_retune_failures,
+                                  &s->chan_retune_last_errno);
+    }
+    /* Surface the scan state for the interface view's channel bar. */
+    s->scan_chan_count = chanhop_export(h, s->scan_chans,
+                                        (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),
+                                        &s->scan_cur_idx);
+    /* The hop-activity summary, so "visiting but deaf" is separable
+     * from "not hopping" in the log and the view. Copied field by field
+     * rather than memcpy'd: sloth.h deliberately does not include
+     * wifi_chanhop.h, so the two structs are distinct types that happen
+     * to agree. */
+    chanhop_activity_t ha;
+    chanhop_activity(h, &ha);
+    s->hop_activity.channels        = ha.channels;
+    s->hop_activity.visits          = ha.visits;
+    s->hop_activity.frames          = ha.frames;
+    s->hop_activity.silent_channels = ha.silent_channels;
+    s->hop_activity.cur_visits      = ha.cur_visits;
+    s->hop_activity.cur_frames      = ha.cur_frames;
+    chanhop_dwell_t hd;
+    chanhop_dwell(h, &hd);
+    s->hop_dwell.last_planned_ms    = hd.last_planned_ms;
+    s->hop_dwell.last_measured_ms   = hd.last_measured_ms;
+    s->hop_dwell.worst_overshoot_ms = hd.worst_overshoot_ms;
+    s->hop_dwell.completed          = hd.completed;
+    s->hop_dwell.mean_planned_ms    = hd.mean_planned_ms;
+    s->hop_dwell.mean_measured_ms   = hd.mean_measured_ms;
 }

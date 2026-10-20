@@ -1,5 +1,6 @@
 #ifdef PLATFORM_BSD
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -145,7 +146,7 @@ int bsd_get_conns(conn_t *out, int max) { (void)out; (void)max; return 0; }
 
 int bsd_wifi_scan(wifi_ap_t *out, int max)          { (void)out; (void)max; return 0; }
 int bsd_get_wifi_stations(wifi_sta_t *out, int max) { (void)out; (void)max; return 0; }
-int bsd_set_channel(const char *iface, int freq_mhz){ (void)iface; (void)freq_mhz; return -1; }
+int bsd_set_channel(const char *iface, int freq_mhz){ (void)iface; (void)freq_mhz; return -EOPNOTSUPP; }
 int bsd_get_arp(arp_entry_t *out, int max)          { (void)out; (void)max; return 0; }
 int bsd_get_dhcp(dhcp_lease_t *out, int max) { (void)out; (void)max; return 0; }
 

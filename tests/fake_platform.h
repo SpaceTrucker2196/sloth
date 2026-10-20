@@ -21,6 +21,17 @@ typedef struct {
     int            probe_count;
     char           probe_iface[16]; /* monitor interface name, "" = none */
 
+    /* Monitor retune (#91). set_channel returns set_channel_rc (0 or a
+       negative errno) for every frequency, except refuse_freq_mhz, which
+       always returns refuse_rc - one channel the driver will not take.
+       Calls and the last arguments are recorded for assertions. */
+    int            set_channel_rc;
+    int            refuse_freq_mhz;
+    int            refuse_rc;
+    int            set_channel_calls;
+    int            set_channel_last_freq;
+    char           set_channel_last_iface[16];
+
     int            tick;   /* incremented by scenario_simulate_step() */
 } fake_net_t;
 

@@ -15,6 +15,7 @@
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_exit_name() for the health strip */
 #include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
+#include "wifi_chanhop.h"      /* chanhop_retune_reason() (#91) */
 
 /* 4-char mode label — MON/WIFI/ETH highlight what a WiFi-SIGINT
  * operator cares about at a glance. UNKNOWN renders as "?". */
@@ -360,10 +361,11 @@ void iface_fmt_scan_bar(const sloth_state_t *s, char *buf, int sz) {
         snprintf(buf, sz, "  [scanning]");
         return;
     }
-    /* Both non-zero and unequal: the last retune sloth asked for has not
-     * been confirmed by the platform, so the radio may still be sitting
-     * on the previous channel — surface that instead of pretending the
-     * bracketed channel is live. */
+    /* Both non-zero and unequal: the last retune sloth asked for was
+     * refused. Since #91's close-out the bracket sits on the channel the
+     * platform last acknowledged — where the radio is — and the `?`
+     * says a request to move off it failed, rather than the bracket
+     * pretending the requested channel is live. */
     int unconfirmed = s->chan_requested != 0 && s->chan_requested != s->chan_confirmed;
     int off = snprintf(buf, sz, "  ch:");
     for (int i = 0; i < s->scan_chan_count && off < sz - 8; i++)
@@ -433,8 +435,15 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
     if (s->mon_health.parse_rejects)
         strip_addf(buf, sz, &off, "  mon rt-reject %llu",
                    (unsigned long long)s->mon_health.parse_rejects);
-    if (s->chan_retune_failures)
+    /* The reason rides with the count (#91): EPERM wants capabilities,
+     * EBUSY wants the other user of the radio stopped, EINVAL wants the
+     * channel list changed, and the bare number said none of that. */
+    if (s->chan_retune_failures) {
         strip_addf(buf, sz, &off, "  retune-fail %d", s->chan_retune_failures);
+        if (s->chan_retune_last_errno)
+            strip_addf(buf, sz, &off, " %s",
+                       chanhop_retune_reason(s->chan_retune_last_errno));
+    }
     /* Synthesis tables only. The per-protocol flow rings joined the
      * tally in #91, and they roll over continuously on a busy segment by
      * design — putting them here would pin a large, permanently rising
