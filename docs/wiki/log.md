@@ -3976,3 +3976,17 @@ do exist — in-place netlink attribute casts (4-octet aligned, including
 64-bit reads), `long` timestamps, no `time_t` width assertion, `int`
 lengths, unaudited `char` signedness in the text-protocol scanners.
 Linked from [[index]].
+
+## 2026-10-19 — #95 close-out: rollback instructions
+
+[[release-checklist]] gains section 5, *Rolling back to the previous
+tag*: fetching and verifying a release (signed tag, `SHA256SUMS` against
+the release notes, `gh attestation verify`), the finding that v1.8.4 and
+earlier have none of the three (unsigned tag, no checksums in the notes,
+no attestation workflow yet) and so can only be rebuilt from the tagged
+commit, and a table of what on-disk state survives a downgrade: the
+`--db` file is refused across a schema change (v5 here, v4 at v1.8.4)
+and must be moved aside; JSONL is appended to in the older, additive
+shape; snapshot, research DB, pcaps and reports carry over; the shipped
+unit's flags all exist at v1.8.4. Step 10 no longer calls the
+attestation workflow pending — it landed in `9131b8e`.

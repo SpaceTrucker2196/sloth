@@ -15,13 +15,17 @@ is attested by `.github/workflows/release-attest.yml` on every `v*` tag
 SBOM artifact on every push; `make sbom` remains the offline fallback.
 Verify a release binary with
 `gh attestation verify ./sloth --repo SpaceTrucker2196/sloth`.
+Rolling back to the previous tag, and what on-disk state survives it,
+is section 5.
 
 **Sources**: `Makefile` (`check-deps`, `sbom`), `tools/sbom.sh`,
 `src/libver.c`, `src/db.c`, `research/query.c`, `include/sloth.h`
 (`SLOTH_VERSION`), `tests/test_version.c`, `tests/test_libver.c`,
-`tests/test_ci_pins.c`, `SECURITY.md`, `RELEASE_v*.md`, issue #142.
+`tests/test_ci_pins.c`, `SECURITY.md`, `RELEASE_v*.md`, `src/db.c`
+(`check_version`), `src/db.h`, `packaging/systemd/sloth-sensor.service`,
+`.github/workflows/release-attest.yml`, issues #95, #142.
 
-**Last updated**: 2026-10-19 (#142 CI half)
+**Last updated**: 2026-10-19 (#95 rollback, #142 CI half)
 
 ---
 
@@ -85,15 +89,74 @@ Verify a release binary with
 9. **Publish the GitHub release** for the tag with the notes from step
    2 and attach `sloth`, the SBOM and `SHA256SUMS`. Publishing triggers
    `mirror-release.yml`, which mirrors the tag and release.
-10. **Provenance — pending.** The owner approved, on #142, a
-    `release-attestation` CI job on `v*` tag pushes using
-    `actions/attest-build-provenance` pinned by full commit SHA, plus
-    an `sbom` job using `anchore/sbom-action` pinned the same way. Neither is in
-    `.github/workflows/` yet: the workflow edit did not land with the
-    first #142 slice. Until it does there is no GitHub attestation to
-    verify, and this checklist does not claim one. When it lands, the
-    verification is `gh attestation verify sloth --repo
-    SpaceTrucker2196/sloth`.
+10. **Provenance.** `.github/workflows/release-attest.yml` (landed in
+    `9131b8e`, #142) builds `sloth`, writes `SHA256SUMS` and attests the
+    binary with `actions/attest-build-provenance` on every `v*` tag push;
+    CI's `sbom` job produces the CycloneDX SBOM with `anchore/sbom-action`
+    on every push. Both are pinned by full commit SHA. No tag has been
+    pushed since it landed, so no released version carries an
+    attestation yet; the first will be the tag after v1.8.4. Verify with
+    `gh attestation verify sloth --repo SpaceTrucker2196/sloth`.
+
+## 5. Rolling back to the previous tag
+
+A sensor is rolled back by replacing the binary, not by any in-place
+downgrade logic — sloth has none. What decides whether the old binary
+starts is the state it finds on disk, so the state section below is the
+part to read first.
+
+### Get and verify the previous release
+
+For a tag cut after `release-attest.yml` landed (`9131b8e`, 2026-10-19),
+that is, every tag after v1.8.4:
+
+```sh
+git fetch --tags
+git tag -v v<prev>                 # owner's signature on the tag (step 8)
+gh release download v<prev> --repo SpaceTrucker2196/sloth \
+    --pattern sloth --pattern SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify ./sloth --repo SpaceTrucker2196/sloth
+```
+
+Compare `SHA256SUMS` with the copy pasted into `RELEASE_v<prev>.md`
+(step 7) as well: the release asset and the notes are two places an
+attacker would have to change. Any of the four checks failing means the
+artefact is not the one that was released — stop rather than build
+around it.
+
+**v1.8.4 and earlier cannot be verified this way.** Checked on
+2026-10-19: the v1.8.4 tag is annotated but carries no signature
+(`git cat-file -p v1.8.4` shows no signature block), `RELEASE_v1.8.4.md`
+has no `## SHA256SUMS` section, and no attestation exists because the
+workflow did not. The only anchor is the tag's commit
+(`d774229`): build from it on the sensor —
+
+```sh
+git checkout v1.8.4 && make clean && make
+```
+
+— and treat that as "built from the tagged source", not as "the
+released binary".
+
+Then install it over the current one (`make install` from that tree, or
+copy the verified binary to `/usr/local/bin/sloth`) and restart the
+unit.
+
+### What state survives the downgrade
+
+| State | Survives? | Why, and what to do |
+|---|---|---|
+| `--db` file (`/var/lib/sloth/sloth.db` in the shipped unit) | **No, if the schema version changed** | `db_open()` refuses any file whose `meta.schema_version` is not exactly the build's `DB_SCHEMA_VERSION` ("db schema vN, this build writes vM — use a separate file") and `main()` exits 1 rather than running without the DB. There is no migration in either direction. This tree writes v5; v1.8.4 writes v4 (the bump is `6031b30`, #90). Under the shipped unit's `Restart=always` the refused start loops until `StartLimitBurst` stops it. **Move the file aside** (`sloth.db`, `sloth.db-wal`, `sloth.db-shm` together) before starting the old binary; it starts a fresh file. Keep the moved one: rolling forward again reads it, and the file the old binary wrote in the meantime will in turn be refused by the newer one. Check before and after with `sqlite3 sloth.db "SELECT value FROM meta WHERE key='schema_version'"` and the `DB_SCHEMA_VERSION` line of each tree's `src/db.h`. |
+| JSONL output (`-o FILE`, `--data-socket`) | **Yes, mixed** | The file is opened append-only, so the old binary keeps appending to it. The schema is additive (fields are added, never renamed or removed — [[jsonl-schema]]), so the old build's records are a subset of the new build's shape for the same type; record types introduced after the old tag simply stop appearing. No record names the sloth version that wrote it, so a consumer that needs to know where the boundary is should rotate the file at the rollback, or note the time. A consumer that relies on a field newer than the old tag sees it go missing. |
+| `--snapshot-out` / `--baseline-in` file | Yes | Same tab-separated line format at v1.8.4 and this tree (only the header-label handling changed). |
+| `--with-research` database | Yes | Carries no version stamp; the ingest that builds it is unchanged between v1.8.4 and this tree. |
+| `--pcap-dir`, alert pcaps, EAPOL / 22000 exports, `--report` outputs | Yes | Write-only artefacts; no build reads them back. |
+| Shipped systemd unit (`make install-service`) | Yes for v1.8.4 | Every flag in `ExecStart` already existed at v1.8.4 (checked against its argument parser), and the unit's `User=sloth` with ambient capabilities does not depend on the in-binary privilege drop. A unit that adds `--user`, `--no-privdrop`, `--replay` or `--ticks` through `SLOTH_ARGS` will fail on v1.8.4, which does not know them. |
+
+This list is from reading the two trees on 2026-10-19, not from running
+a downgrade on a sensor. The next rollback that happens should replace
+"checked against" with "done", or correct it.
 
 ## What is enforced, and where
 
