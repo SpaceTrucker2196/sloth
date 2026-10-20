@@ -185,7 +185,8 @@ static void test_pm_forge_alert_cites_the_contradicting_pair(void) {
 }
 
 /* A second contradiction against the same sleep declaration cites the
- * new data frame and not the Null twice — the dedup in ev_cite_push(). */
+ * new data frame and not the Null twice — the dedup in ev_cite_push().
+ * The re-push moves the Null to its newest use, just before 803. */
 static void test_pm_forge_shared_null_is_cited_once(void) {
     pin_wall(1000);
     jsonl_fresh();
@@ -210,9 +211,50 @@ static void test_pm_forge_shared_null_is_cited_once(void) {
     int i = find_alert(&g_s, ALERT_TYPE_PM_FORGE);
     ASSERT(i >= 0);
     if (i >= 0) {
-        static const uint64_t want[] = { 801, 802, 803 };
+        static const uint64_t want[] = { 802, 801, 803 };
         assert_cites(&g_s.alerts[i], body, want, 3);
     }
+}
+
+/* The Framing Frames shape over a longer run: one spoofed sleep
+ * declaration, then the real station keeps transmitting. Every
+ * contradiction re-pushes the same Null; without ev_cite_push() moving
+ * it to newest, the Null is the oldest entry and the eighth
+ * contradiction evicts it, leaving eight PM=0 frames — none of which is
+ * a finding on its own. */
+static void test_pm_forge_long_run_keeps_the_sleep_declaration(void) {
+    pin_wall(1000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    pm_forge_clear();
+    static const uint8_t BSSID[6] = {0x00,0x11,0x22,0x33,0x44,0x57};
+    static const uint8_t STA[6]   = {0x02,0xaa,0x00,0x00,0x00,0x03};
+    beacon_record(BSSID, "Net", -50, 6, "WPA2", 100, NULL);
+
+    uint8_t f[26]; int len; dot11_frame_t v;
+    len = sta_frame(f, 0xC, 1, BSSID, STA, 0, 1);
+    v = view_of(f, len, 901);
+    pm_forge_observe_frame(&v, 1000, 0);
+    /* Eight QoS data frames on TID 5, 5..40 ms later: all inside the
+       100 ms beacon interval, each one a contradiction of 901. */
+    for (int k = 0; k < 8; k++) {
+        len = sta_frame(f, 0x8, 0, BSSID, STA, 5, 2 + k);
+        v = view_of(f, len, (uint64_t)(910 + k));
+        pm_forge_observe_frame(&v, 1000, (long)(k + 1) * 5000);
+    }
+
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        /* The Null sits where its newest contradiction put it: just
+           before 917. 910, the oldest data frame, is the one evicted. */
+        static const uint64_t want[] = { 911, 912, 913, 914,
+                                         915, 916, 901, 917 };
+        assert_cites(&g_s.alerts[i], body, want, 8);
+    }
+    pm_forge_clear();
 }
 
 /* ── Queued-frame release (#107 shape B) ────────────────── */
@@ -471,6 +513,107 @@ static void test_sa_query_flood_alert_cites_the_pairs_frames(void) {
     }
 }
 
+/* ── The window test in the four flood citation queries ──────
+ *
+ * The walk collects up to ALERT_EVIDENCE_IDS ids, newest first, so once
+ * eight in-window frames carry an id it never reaches anything older
+ * and the window test is invisible. It matters when fewer do — the
+ * evidence ring retained nothing for most of the burst (ring down, or
+ * frames dropped), or the threshold is below eight — because the walk
+ * then reaches back into stale entries from an earlier burst at the
+ * same key. Each test below seeds that: frames with ids from OUTSIDE
+ * the window, then an in-window burst that is enough to fire but
+ * carries few ids. Only the in-window ids may be cited. */
+
+static void test_auth_flood_never_cites_a_frame_outside_the_window(void) {
+    pin_wall(15000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    auth_clear();
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x55,0x11};
+    /* An earlier burst at the same AP, 10 s ago — outside the 5 s
+       window, so not counted and not evidence. */
+    for (int k = 0; k < 3; k++)
+        auth_observe_ev(BSSID, 14990, (uint64_t)(1501 + k));
+    /* 32 frames in the window; the ring kept only the last three. */
+    for (int k = 0; k < 32; k++)
+        auth_observe_ev(BSSID, 14999,
+                        k >= 29 ? (uint64_t)(1601 + (k - 29)) : 0);
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_AUTH_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 1601, 1602, 1603 };
+        assert_cites(&g_s.alerts[i], body, want, 3);
+    }
+    auth_clear();
+}
+
+static void test_btm_abuse_never_cites_a_request_outside_the_window(void) {
+    pin_wall(17000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    btm_clear();
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x77,0x11};
+    static const uint8_t STA[6]   = {0x02,0x20,0x00,0x00,0x00,0x11};
+    uint8_t f[64];
+    /* Two Disassociation-Imminent requests to the same pair 100 s ago,
+       outside the 60 s window. The threshold is four, so the in-window
+       burst alone never fills the eight slots. */
+    for (int k = 0; k < 2; k++) {
+        int len = btm_req(f, BSSID, STA, BTM_REQ_DISASSOC_IMM, 70 + k);
+        dot11_frame_t v = view_of(f, len, (uint64_t)(3501 + k));
+        action_observe_frame(&v, 16900);
+    }
+    for (int k = 0; k < 4; k++) {
+        int len = btm_req(f, BSSID, STA, BTM_REQ_DISASSOC_IMM, 80 + k);
+        dot11_frame_t v = view_of(f, len, (uint64_t)(3601 + k));
+        action_observe_frame(&v, 16990 + k);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_BTM_ABUSE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 3601, 3602, 3603, 3604 };
+        assert_cites(&g_s.alerts[i], body, want, 4);
+    }
+    btm_clear();
+}
+
+static void test_sa_query_flood_never_cites_a_frame_outside_the_window(void) {
+    pin_wall(18000);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    saq_clear();
+    static const uint8_t BSSID[6] = {0x00,0x22,0x33,0x44,0x88,0x11};
+    static const uint8_t STA[6]   = {0x02,0x30,0x00,0x00,0x00,0x11};
+    uint8_t f[64];
+    /* Same pair, 20 s ago: outside the 10 s window. */
+    for (int k = 0; k < 3; k++) {
+        int len = saq_frame(f, BSSID, STA, 90 + k);
+        dot11_frame_t v = view_of(f, len, (uint64_t)(4501 + k));
+        action_observe_frame(&v, 17980);
+    }
+    /* Twelve in the window, the threshold; only the last two have ids. */
+    for (int k = 0; k < 12; k++) {
+        int len = saq_frame(f, BSSID, STA, 100 + k);
+        dot11_frame_t v = view_of(f, len,
+                                  k >= 10 ? (uint64_t)(4601 + (k - 10)) : 0);
+        action_observe_frame(&v, 17995);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_SA_QUERY_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 4601, 4602 };
+        assert_cites(&g_s.alerts[i], body, want, 2);
+    }
+    saq_clear();
+}
+
 /* ── Beacon-sourced rules ─────────────────────────────────── */
 
 /* beacon_record_ev() is the call on_probe_frame() makes for every
@@ -516,6 +659,36 @@ static void test_beacon_flood_alert_cites_each_new_bssids_first_beacon(void) {
     }
 }
 
+/* The fourth window test (see the block above the beacon section). */
+static void test_beacon_flood_never_cites_a_bssid_outside_the_window(void) {
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    beacon_clear();
+    /* Three BSSIDs first heard 20 s ago, outside the 10 s window.
+       beacon_record_ev() stamps arrivals from the wall clock. */
+    pin_wall(19980);
+    for (int k = 0; k < 3; k++) {
+        uint8_t b[6] = {0x02,0x3a,0x00,0x00,0x00,(uint8_t)k};
+        beacon_ev(b, "stale", "OPEN", (uint64_t)(5501 + k));
+    }
+    /* 45 new BSSIDs now; the ring kept only the last two. */
+    pin_wall(20000);
+    for (int k = 0; k < 45; k++) {
+        uint8_t b[6] = {0x02,0x3b,0x00,0x00,0x00,(uint8_t)k};
+        beacon_ev(b, "flood", "OPEN",
+                  k >= 43 ? (uint64_t)(5601 + (k - 43)) : 0);
+    }
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert(&g_s, ALERT_TYPE_BEACON_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 5601, 5602 };
+        assert_cites(&g_s.alerts[i], body, want, 2);
+    }
+    beacon_clear();
+}
+
 /* Weak/strong twin: an OPEN clone of a WPA2 SSID. Each half's newest
  * BEACON_EVIDENCE_IDS beacons, the accused (weak) half first. */
 static void test_evil_twin_alert_cites_both_halves_beacons(void) {
@@ -545,33 +718,63 @@ static void test_evil_twin_alert_cites_both_halves_beacons(void) {
     }
 }
 
-/* Same-security twin, same SSID and cipher, different vendor OUI. */
-static void test_same_security_twin_alert_cites_both_halves(void) {
+/* Same-security twin, same SSID and cipher, different vendor OUI.
+ * Nothing in this pair decides which half is the impostor (no
+ * inventory, no taint, no tool OUI), so the citation takes the
+ * canonical order: the lower BSSID's beacons first. The higher BSSID is
+ * given the stronger signal, so the snapshot's signal sort walks from
+ * it — a rule citing (a, b) as it walked would put 6401 first. */
+static void test_same_security_twin_alert_cites_lower_bssid_first(void) {
     pin_wall(9200);
     jsonl_fresh();
     memset(&g_s, 0, sizeof(g_s));
+    beacon_clear();
     static const uint8_t A[6] = {0x00,0x55,0x00,0x00,0x00,0x01};
     static const uint8_t B[6] = {0x00,0x66,0x00,0x00,0x00,0x02};
-    beacon_ev(A, "Corp", "WPA2", 6301);
-    beacon_ev(A, "Corp", "WPA2", 6302);
-    beacon_ev(B, "Corp", "WPA2", 6401);
+    beacon_record_ev(A, "Corp", -70, 6, "WPA2", 100, NULL, 6301);
+    beacon_record_ev(A, "Corp", -70, 6, "WPA2", 100, NULL, 6302);
+    beacon_record_ev(B, "Corp", -40, 6, "WPA2", 100, NULL, 6401);
     beacon_snapshot(&g_s);
+    ASSERT(g_s.beacon_count == 2 &&
+           memcmp(g_s.beacon_aps[0].bssid, B, 6) == 0);
     alerts_update(&g_s);
     char *body = jsonl_body();
     int i = find_alert_key(&g_s, ALERT_TYPE_EVIL_TWIN, "twin-fp:");
     ASSERT(i >= 0);
     if (i >= 0) {
-        const alert_t *a = &g_s.alerts[i];
-        /* The snapshot orders the table by signal, so which half the
-           rule walks from is not fixed here; the set is. */
-        ASSERT_EQ((int)a->evidence_id_count, 3);
-        int seen = 0;
-        for (int k = 0; k < a->evidence_id_count; k++)
-            if (a->evidence_ids[k] == 6301 || a->evidence_ids[k] == 6302 ||
-                a->evidence_ids[k] == 6401) seen++;
-        ASSERT_EQ(seen, 3);
-        ASSERT(body && strstr(body, "\"evidence_count\":3") != NULL);
+        static const uint64_t want[] = { 6301, 6302, 6401 };
+        assert_cites(&g_s.alerts[i], body, want, 3);
     }
+    beacon_clear();
+}
+
+/* When twin_choose_sides() does decide — here, one half is an Espressif
+ * OUI (24:0a:c4, src/wifi_oui_attacker.c), the ESP32 tooling the
+ * ladder ranks as the impostor — that half is cited first. It is the
+ * HIGHER BSSID and the weaker signal, so neither lo/hi order nor the
+ * walk order would put it first. */
+static void test_same_security_twin_alert_cites_the_accused_half_first(void) {
+    pin_wall(9250);
+    jsonl_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    beacon_clear();
+    static const uint8_t REAL[6] = {0x00,0x55,0x00,0x00,0x00,0x03};
+    static const uint8_t TOOL[6] = {0x24,0x0a,0xc4,0x00,0x00,0x04};
+    beacon_record_ev(REAL, "Corp", -40, 6, "WPA2", 100, NULL, 6501);
+    beacon_record_ev(REAL, "Corp", -40, 6, "WPA2", 100, NULL, 6502);
+    beacon_record_ev(TOOL, "Corp", -70, 6, "WPA2", 100, NULL, 6601);
+    beacon_snapshot(&g_s);
+    ASSERT(g_s.beacon_count == 2 &&
+           memcmp(g_s.beacon_aps[0].bssid, REAL, 6) == 0);
+    alerts_update(&g_s);
+    char *body = jsonl_body();
+    int i = find_alert_key(&g_s, ALERT_TYPE_EVIL_TWIN, "twin-fp:");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        static const uint64_t want[] = { 6601, 6501, 6502 };
+        assert_cites(&g_s.alerts[i], body, want, 3);
+    }
+    beacon_clear();
 }
 
 /* Attack chain: the deauth flood against the real AP plus the twin's
@@ -606,9 +809,12 @@ static void test_twin_chain_alert_cites_twin_beacons_and_the_flood(void) {
     }
 }
 
-/* KARMA: the frame that first carried each distinct SSID. A repeat of
- * an SSID already counted is not new evidence of the finding. */
-static void test_karma_alert_cites_the_frame_of_each_distinct_ssid(void) {
+/* KARMA: one frame per distinct SSID — the newest one carrying it, so
+ * on a long-lived AP the citation is a frame the FIFO evidence ring
+ * still holds rather than the AP's first beacon. A repeat moves that
+ * SSID's citation forward and adds no second one; a repeat with no id
+ * (the ring retained nothing) keeps the older id. */
+static void test_karma_alert_cites_the_newest_frame_of_each_distinct_ssid(void) {
     pin_wall(9400);
     jsonl_fresh();
     memset(&g_s, 0, sizeof(g_s));
@@ -620,13 +826,15 @@ static void test_karma_alert_cites_the_frame_of_each_distinct_ssid(void) {
     beacon_ev(K, "charlie", "OPEN", 8011);
     beacon_ev(K, "delta",   "OPEN", 8004);
     beacon_ev(K, "delta",   "OPEN", 8012);
+    beacon_ev(K, "bravo",   "OPEN", 0);
     beacon_snapshot(&g_s);
     alerts_update(&g_s);
     char *body = jsonl_body();
     int i = find_alert(&g_s, ALERT_TYPE_KARMA_AP);
     ASSERT(i >= 0);
     if (i >= 0) {
-        static const uint64_t want[] = { 8001, 8002, 8003, 8004 };
+        /* ssid_history[] order: alpha, bravo, charlie, delta. */
+        static const uint64_t want[] = { 8010, 8002, 8011, 8012 };
         assert_cites(&g_s.alerts[i], body, want, 4);
     }
 }
@@ -652,20 +860,59 @@ static void test_ev_cite_keeps_newest_oldest_first(void) {
     ASSERT_EQ((long long)out[1], 6LL);
 }
 
+/* An id already held moves to newest instead of staying where it was
+ * first pushed — before the ring has filled and after it has wrapped. */
+static void test_ev_cite_repush_moves_an_id_to_newest(void) {
+    uint64_t ids[4] = {0};
+    uint8_t n = 0, head = 0;
+    uint64_t out[4];
+    ev_cite_push(ids, 4, &n, &head, 1);
+    ev_cite_push(ids, 4, &n, &head, 2);
+    ev_cite_push(ids, 4, &n, &head, 3);
+    ev_cite_push(ids, 4, &n, &head, 1);      /* not full yet */
+    int k = ev_cite_flatten(ids, 4, n, head, out, 4);
+    ASSERT_EQ(k, 3);
+    ASSERT_EQ((long long)out[0], 2LL);
+    ASSERT_EQ((long long)out[1], 3LL);
+    ASSERT_EQ((long long)out[2], 1LL);
+    ev_cite_push(ids, 4, &n, &head, 4);      /* fills: 2 3 1 4 */
+    ev_cite_push(ids, 4, &n, &head, 5);      /* wraps: 3 1 4 5 */
+    ev_cite_push(ids, 4, &n, &head, 1);      /* moves: 3 4 5 1 */
+    k = ev_cite_flatten(ids, 4, n, head, out, 4);
+    ASSERT_EQ(k, 4);
+    ASSERT_EQ((long long)out[0], 3LL);
+    ASSERT_EQ((long long)out[1], 4LL);
+    ASSERT_EQ((long long)out[2], 5LL);
+    ASSERT_EQ((long long)out[3], 1LL);
+    /* And the move did not make room: the next push still evicts 3. */
+    ev_cite_push(ids, 4, &n, &head, 6);
+    k = ev_cite_flatten(ids, 4, n, head, out, 4);
+    ASSERT_EQ(k, 4);
+    ASSERT_EQ((long long)out[0], 4LL);
+    ASSERT_EQ((long long)out[3], 6LL);
+}
+
 void run_evidence_cite_tests(void) {
     TEST_SUITE("evidence citation beyond DEAUTH_FLOOD (#92 slice 4)");
     RUN_TEST(test_ev_cite_keeps_newest_oldest_first);
+    RUN_TEST(test_ev_cite_repush_moves_an_id_to_newest);
     RUN_TEST(test_pm_forge_alert_cites_the_contradicting_pair);
     RUN_TEST(test_pm_forge_shared_null_is_cited_once);
+    RUN_TEST(test_pm_forge_long_run_keeps_the_sleep_declaration);
     RUN_TEST(test_queue_evict_alert_cites_session_change_and_burst);
     RUN_TEST(test_queue_evict_later_change_keeps_release_citations);
     RUN_TEST(test_auth_flood_alert_cites_the_newest_counted_frames);
     RUN_TEST(test_assoc_flood_alert_cites_the_newest_requests);
     RUN_TEST(test_btm_abuse_alert_cites_only_the_imminent_requests);
     RUN_TEST(test_sa_query_flood_alert_cites_the_pairs_frames);
+    RUN_TEST(test_auth_flood_never_cites_a_frame_outside_the_window);
+    RUN_TEST(test_btm_abuse_never_cites_a_request_outside_the_window);
+    RUN_TEST(test_sa_query_flood_never_cites_a_frame_outside_the_window);
     RUN_TEST(test_beacon_flood_alert_cites_each_new_bssids_first_beacon);
+    RUN_TEST(test_beacon_flood_never_cites_a_bssid_outside_the_window);
     RUN_TEST(test_evil_twin_alert_cites_both_halves_beacons);
-    RUN_TEST(test_same_security_twin_alert_cites_both_halves);
+    RUN_TEST(test_same_security_twin_alert_cites_lower_bssid_first);
+    RUN_TEST(test_same_security_twin_alert_cites_the_accused_half_first);
     RUN_TEST(test_twin_chain_alert_cites_twin_beacons_and_the_flood);
-    RUN_TEST(test_karma_alert_cites_the_frame_of_each_distinct_ssid);
+    RUN_TEST(test_karma_alert_cites_the_newest_frame_of_each_distinct_ssid);
 }

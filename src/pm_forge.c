@@ -92,7 +92,11 @@ void pm_forge_observe_frame(const dot11_frame_t *f,
                 e->contradiction_count++;
                 e->last_contradiction_ts = now_sec;
                 /* Both halves: neither frame is a finding alone — the
-                 * contradiction is the pair. */
+                 * contradiction is the pair. Re-pushing a Null the ring
+                 * already holds moves it to newest (ev_cite_push), so
+                 * one sleep declaration behind a long run of
+                 * contradictions stays cited instead of being the
+                 * first id evicted. */
                 ev_cite_push(e->ev_ids, PM_FORGE_EVIDENCE_IDS,
                              &e->ev_n, &e->ev_head, e->last_pm1_null_ev);
                 ev_cite_push(e->ev_ids, PM_FORGE_EVIDENCE_IDS,

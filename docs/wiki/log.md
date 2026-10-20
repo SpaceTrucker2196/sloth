@@ -4094,3 +4094,19 @@ both halves, the chain cites the twin plus the deauth flood, KARMA the
 SSID set. `EVIL_TWIN_PROXIMITY` and `SSID_CONFUSION` are not in this
 slice. [[pcap-export]] § Which alerts cite frames and [[alerts]]
 § Engine updated.
+
+## 2026-10-20 — #92 slice 4: citation fixes from review
+
+`PM_FORGE` kept citing only PM=0 frames on a long run: the shared
+`src/ev_cite.h` ring ignored a re-push of an id it already held, so the
+one PM=1 Null behind a run of contradictions stayed the oldest entry and
+was the first evicted. A re-push now moves the id to newest, which keeps
+the sleep declaration in the list. `KARMA_AP` now cites the newest frame
+carrying each SSID instead of the first, which the evidence ring has
+long since evicted on a long-lived AP. The same-security `EVIL_TWIN`
+branch cites the half `twin_choose_sides()` accuses first, or the lower
+BSSID when nothing decides, instead of whichever half the signal sort
+put first. New tests seed stale frames outside the window for the four
+flood citation queries, and pin the deauth/disassoc ring id on a
+`QUEUE_EVICT` release through the capture callback. [[pcap-export]]
+§ Which alerts cite frames updated.

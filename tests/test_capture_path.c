@@ -2531,6 +2531,45 @@ static void test_a_release_cites_the_ring_ids_of_its_frames(void) {
     evidence_ring_shutdown();
 }
 
+/* The disconnect site in on_probe_frame() passes the ring ID to
+ * queue_evict_note_session_change_ev() as its own argument, separate
+ * from the (re)association site above, so it needs its own pin: a
+ * release after a unicast deauth (subtype 12) or disassoc (subtype 10),
+ * AP -> STA so addr1 is the station (IEEE 802.11-2020 9.3.3.13,
+ * 9.3.3.5), cites that frame first. */
+static void test_a_release_after_a_disconnect_cites_the_disconnect_frame(void) {
+    static const uint8_t subs[2] = { 0xC0, 0xA0 };
+    for (int t = 0; t < 2; t++) {
+        evidence_setup();
+        queue_evict_clear();
+        uint8_t m[128], d0[128], d1[128], d2[128];
+        int mn = qe_mgmt(m, subs[t], QE_STA, QE_BSSID, QE_BSSID, 27);
+        int dn = qe_downlink_seq(d0, 50);
+        qe_downlink_seq(d1, 51);
+        qe_downlink_seq(d2, 52);
+        const uint8_t *fs[4] = { m, d0, d1, d2 };
+        int ls[4] = { mn, dn, dn, dn };
+        const uint32_t ts[4] = { 1700000500u, 1700000500u, 1700000500u,
+                                 1700000500u };
+        uint64_t before = evidence_ring_last_id();
+        ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, 4), 4);
+
+        queue_evict_t e;
+        ASSERT_EQ(queue_evict_lookup(QE_BSSID, QE_STA, &e), 1);
+        ASSERT_EQ(e.event_src, QUEUE_EVICT_SRC_DISCONNECT);
+        ASSERT_EQ((int)e.release_count, 1);
+        ASSERT_EQ((int)e.release_id_count, 4);
+        ASSERT_EQ((long long)e.release_ids[0], (long long)(before + 1));
+        evidence_rec_t rec;
+        static uint8_t out[128];
+        ASSERT_EQ(evidence_ring_get(e.release_ids[0], &rec, out, sizeof(out)),
+                  mn);
+        ASSERT_EQ(memcmp(out, m, (size_t)mn), 0);
+        queue_evict_clear();
+        evidence_ring_shutdown();
+    }
+}
+
 /* PM-bit forgery through the same callback: the contradiction cites the
  * PM=1 QoS-Null and the PM=0 QoS data frame by the IDs the ring issued.
  * STA->AP framing per IEEE 802.11-2020 Table 9-26 (ToDS, A1 = BSSID). */
@@ -2640,8 +2679,8 @@ static void test_beacons_are_cited_by_their_ring_ids(void) {
         ASSERT_EQ(beacon_ap_evidence(ap, ids, BEACON_EVIDENCE_IDS), 2);
         ASSERT_EQ((long long)ids[0], (long long)(before + 1));
         ASSERT_EQ((long long)ids[1], (long long)(before + 2));
-        /* The first beacon introduced the SSID — KARMA's citation. */
-        ASSERT_EQ((long long)ap->ssid_history_ev[0], (long long)(before + 1));
+        /* KARMA's citation for the SSID follows its newest beacon. */
+        ASSERT_EQ((long long)ap->ssid_history_ev[0], (long long)(before + 2));
     }
     beacon_clear();
     evidence_ring_shutdown();
@@ -3460,6 +3499,7 @@ void run_capture_path_tests(void) {
     TEST_SUITE("queued-frame release wiring (#107 shape B)");
     RUN_TEST(test_a_granted_reassoc_plus_a_burst_records_a_release);
     RUN_TEST(test_a_release_cites_the_ring_ids_of_its_frames);
+    RUN_TEST(test_a_release_after_a_disconnect_cites_the_disconnect_frame);
     RUN_TEST(test_a_pm_contradiction_cites_the_ring_ids_of_its_pair);
     RUN_TEST(test_auth_frames_are_cited_by_their_ring_ids);
     RUN_TEST(test_beacons_are_cited_by_their_ring_ids);

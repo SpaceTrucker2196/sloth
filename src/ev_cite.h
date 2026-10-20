@@ -21,9 +21,13 @@
  *     itself a FIFO, so the oldest frames of a long incident are the
  *     ones already gone from it; citing the newest keeps the citations
  *     retrievable.
- *   - An id already in the ring is not stored again, so one frame that
- *     feeds two observations (the PM=1 Null behind two contradictions)
- *     does not crowd out a second frame.
+ *   - An id already in the ring is not stored twice; it is moved to
+ *     the newest position instead. One frame that feeds several
+ *     observations (the PM=1 Null behind a run of contradictions) thus
+ *     neither crowds out a second frame nor ages out while it is still
+ *     being used: without the move, the Null is the oldest entry and is
+ *     the first one evicted, leaving an alert that cites only the PM=0
+ *     half of every pair.
  *   - Flattened oldest-first, so a consumer reading evidence_ids[] in
  *     order never has to know where the head was.
  *
@@ -35,8 +39,17 @@
 static inline void ev_cite_push(uint64_t *ids, int cap,
                                 uint8_t *n, uint8_t *head, uint64_t id) {
     if (id == 0 || cap <= 0) return;
-    for (int i = 0; i < *n && i < cap; i++)
-        if (ids[i] == id) return;
+    int have = *n < cap ? *n : cap;
+    /* Logical index l (0 = oldest) to slot: until the ring first fills,
+     * the head is the count and slots are in order. */
+    for (int l = 0; l < have; l++) {
+        if (ids[have < cap ? l : (*head + l) % cap] != id) continue;
+        for (; l < have - 1; l++)
+            ids[have < cap ? l : (*head + l) % cap] =
+                ids[have < cap ? l + 1 : (*head + l + 1) % cap];
+        ids[have < cap ? have - 1 : (*head + have - 1) % cap] = id;
+        return;
+    }
     ids[*head % cap] = id;
     *head = (uint8_t)((*head + 1) % cap);
     if (*n < cap) (*n)++;

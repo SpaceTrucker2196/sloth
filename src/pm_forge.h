@@ -36,7 +36,9 @@
 #define MAX_PM_FORGE_ENTRIES 128
 /* Evidence-ring event IDs a row cites (#92 slice 4): the frames that
  * formed the newest contradictions, the PM=1 Null and the PM=0 data
- * frame that contradicted it, as a pair. Eight is ALERT_EVIDENCE_IDS —
+ * frame that contradicted it, as a pair; a Null shared by several
+ * contradictions is held once, at the position of its newest use. Eight
+ * is ALERT_EVIDENCE_IDS —
  * four contradictions' worth — and rule_pm_forge() asserts the two
  * agree, so the hand-off cannot truncate. */
 #define PM_FORGE_EVIDENCE_IDS 8

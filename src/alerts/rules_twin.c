@@ -882,8 +882,9 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
                  bssid_str, a->ssid_history_n, pnl_note, chain_note,
                  pmkid_note, tool_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
-        /* The frame that first carried each distinct SSID (#92 slice
-         * 4): the finding is that set, so those are its evidence. */
+        /* The newest frame carrying each distinct SSID (#92 slice 4):
+         * the finding is that set, so one frame per SSID is its
+         * evidence, and the newest is the one the ring still holds. */
         uint64_t evid[ALERT_EVIDENCE_IDS];
         int ev_n = 0;
         int hn = a->ssid_history_n < MAX_AP_SSID_HISTORY
@@ -1431,8 +1432,18 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                      " - suspected impersonation, conf %d%% - %s%s%s%s",
                      a->ssid, a_bssid, b_bssid, a->enc,
                      ev.confidence, reason, note, steer_note, cls_note);
+            /* The accused half first when the attribution ladder
+             * picks one; otherwise the canonical lo/hi order, so the
+             * list does not flip between ticks with the signal sort
+             * that decides which of the two is `a`. */
+            const beacon_ap_t *real = NULL, *twin = NULL;
+            const beacon_ap_t *cite1 = lo, *cite2 = hi;
+            if (twin_choose_sides(a, b, &real, &twin)) {
+                cite1 = twin;
+                cite2 = real;
+            }
             uint64_t evid[ALERT_EVIDENCE_IDS];
-            int ev_n = twin_pair_evidence(a, b, evid);
+            int ev_n = twin_pair_evidence(cite1, cite2, evid);
             fire_inv(ALERT_TYPE_EVIL_TWIN, sev, ev.confidence,
                      inventory_hash(), (int)cls, (int)wired, NULL,
                      evid, ev_n,

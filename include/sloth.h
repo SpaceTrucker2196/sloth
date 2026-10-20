@@ -1433,10 +1433,11 @@ typedef struct {
      *                  beacon arrives ten times a second: the newest
      *                  few are the ones the evidence ring still holds,
      *                  and more would be the same frame again.
-     *   ssid_history_ev  the frame that first carried each distinct
+     *   ssid_history_ev  the newest frame carrying each distinct
      *                  SSID, parallel to ssid_history[] — what KARMA_AP
      *                  cites, since the finding IS the set of SSIDs one
-     *                  radio has advertised.
+     *                  radio has advertised. Newest, not first, for the
+     *                  src/ev_cite.h reason: the AP outlives the ring.
      *
      * 0 means the capture retained nothing for that frame, or the
      * record came from a path with no frame (nl80211 scan results). */

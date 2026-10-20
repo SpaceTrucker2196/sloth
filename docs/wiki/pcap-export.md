@@ -123,16 +123,16 @@ ones that take bare fields get it through an `_ev` entry point.
 | Rule | What it cites | Where the ring lives |
 |------|---------------|----------------------|
 | `DEAUTH_FLOOD` | the newest distinct deauth/disassoc frames at the (BSSID, victim) | `deauth_victim_t`, 8 |
-| `PM_FORGE` (#107) | the contradicting pairs: the PM=1 Null/QoS-Null and the PM=0 data frame that broke it, newest pairs first | `pm_forge_t`, 8 |
+| `PM_FORGE` (#107) | the contradicting pairs: the PM=1 Null/QoS-Null and the PM=0 data frame that broke it, the newest pairs, oldest first; a Null shared by several contradictions is cited once, at its newest use, so a long run never ages the sleep declaration out of the list | `pm_forge_t`, 8 |
 | `QUEUE_EVICT` (#107) | the (re)association response or deauth/disassoc that changed the session, then the newest frames of the released burst | `queue_evict_t`, 8 — copied from the pending burst only once it reaches the threshold, so a later change with one stray frame keeps the reported release's citations |
 | `AUTH_FLOOD` | the newest Authentication frames to the flooded BSSID inside the window | the module's event ring (512), walked newest first |
 | `ASSOC_FLOOD` | the newest (Re)Association Requests to the BSSID inside the window | the module's event ring (256) |
 | `BTM_ABUSE` | the newest BTM Requests to the pair that carried Disassociation Imminent — the ones the threshold counts; an ordinary steer is not cited | the BTM event ring (256) |
 | `SA_QUERY_FLOOD` | the pair's newest SA Query frames inside the window — the AP's answers, which is what the rule hears | per-pair timestamp ring, one id beside each stamp |
 | `BEACON_FLOOD` | the first beacon of each of the newest BSSIDs first seen inside the window — the finding is their arrival; a known AP beaconing again is not cited | the new-BSSID timestamp ring (256) |
-| `EVIL_TWIN` (pair branches) | both halves' newest beacons, the accused half first (the OPEN/WEP clone on the weak/strong branch) | `beacon_ap_t.ev_ids`, **4 per AP** |
+| `EVIL_TWIN` (pair branches) | both halves' newest beacons. Weak/strong branch: the OPEN/WEP clone first. Same-security branch: the half `twin_choose_sides()` accuses first (an inventory-approved or `--my-bssid` radio, an earlier-tainted BSSID or a tool OUI decides it); when nothing decides, the lower BSSID first, so the order never follows the signal sort between ticks | `beacon_ap_t.ev_ids`, **4 per AP** |
 | `EVIL_TWIN` (attack chain, `twin-chain:` key) | the twin's newest beacons, then the newest frames of the deauth flood against the real AP — both observations the conclusion rests on; the real AP's beacons are not cited | the twin's `ev_ids` plus `deauth_victim_t` |
-| `KARMA_AP` | the frame that first carried each distinct SSID — the finding is that set, so a repeat of an SSID already counted is not cited | `beacon_ap_t.ssid_history_ev`, parallel to `ssid_history[]` (8) |
+| `KARMA_AP` | one frame per distinct SSID, the newest one carrying it — the finding is that set, so a repeat of an SSID adds no second citation, it only moves that SSID's citation forward to a frame the ring still holds | `beacon_ap_t.ssid_history_ev`, parallel to `ssid_history[]` (8) |
 
 The beacon ring is deliberately four, not eight: the AP table is 256
 entries and a beacon arrives about ten times a second, so the newest few
@@ -143,11 +143,16 @@ cite nothing.
 
 The flood rings were already keyed by frame, so their citations need no
 new storage beyond one id per entry: the query walks the same window
-the count used, so a cited frame is always one that was counted.
+the count used, so a cited frame is always one that was counted. That
+matters exactly when fewer than eight in-window frames have an id (the
+ring retained nothing for the rest): the walk then reaches back past
+the window, and the window test is what stops it citing a stale frame
+from an earlier burst. `tests/test_evidence_cite.c` seeds that case for
+all four flood queries.
 
 The shared ring is `src/ev_cite.h`: 0 is never stored, an ID already
-held is not stored twice (one Null behind two contradictions), and the
-list is flattened oldest first.
+held is not stored twice but moved to newest (one Null behind a run of
+contradictions), and the list is flattened oldest first.
 
 Two deliberate choices:
 

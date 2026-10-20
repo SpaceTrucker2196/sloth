@@ -1094,6 +1094,12 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
                 int dup = 0;
                 for (int k = 0; k < g_aps[i].ssid_history_n; k++)
                     if (strncmp(g_aps[i].ssid_history[k], ssid, 32) == 0) {
+                        /* KARMA's citation for this SSID follows its
+                         * newest frame (#92 slice 4): the AP lives for
+                         * the whole run, and its first beacon is long
+                         * gone from the FIFO evidence ring by the time
+                         * the alert is read. 0 keeps the older id. */
+                        if (event_id) g_aps[i].ssid_history_ev[k] = event_id;
                         dup = 1; break;
                     }
                 if (!dup && g_aps[i].ssid_history_n < MAX_AP_SSID_HISTORY) {
