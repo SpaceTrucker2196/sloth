@@ -6,6 +6,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "posture.h"
+#include "sloth_clock.h"
 #include "query.h"
 
 /* Roadmap #16 phase 5 — posture report export.
@@ -274,10 +275,17 @@ static void test_repeated_alerts_cited_once(void) {
     rq_close(h);
 }
 
+/* The report header stamps sloth_wall() (posture.c, the session end), so
+ * two real renders straddling a second boundary differ. That made this
+ * test flaky under TSan's slowdown (CI run on 65afe2c). Pin the wall
+ * clock: what is being asserted is the corpus ordering, not the time. */
+static time_t posture_fixed_wall(void) { return 1700000100; }
+
 static void test_report_is_reproducible(void) {
     /* Two renders of the same state and corpus must be identical —
      * that is why rq_for_alert orders by retrieved and path rather than
      * by BM25, which shifts as the corpus grows. */
+    sloth_clock_test_set(NULL, posture_fixed_wall);
     sloth_state_t s; memset(&s, 0, sizeof(s));
     seed_titled_alert(&s, ALERT_TYPE_WPA_DOWNGRADE, "WPA_DOWNGRADE");
     rq_handle_t *h = rq_open("research.db");
@@ -288,6 +296,7 @@ static void test_report_is_reproducible(void) {
     render_with(&s, h, b, sizeof(b));
     ASSERT_EQ(strcmp(a, b), 0);
     rq_close(h);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 static void test_every_alert_type_has_a_name(void) {
