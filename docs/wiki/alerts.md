@@ -413,8 +413,9 @@ rows in `docs/views/alerts.md`.
 
 `SURV_CLOUD_SNI` fires when a host on the monitored segment opens TLS
 whose SNI names a body-cam or ALPR platform's cloud — Axon's evidence
-platform (`evidence.com`, `axon.com`) or Flock Safety
-(`flocksafety.com`). The hostname was already in state from a
+platform (`evidence.com`, `axon.com`), Flock Safety
+(`flocksafety.com`) or Verkada's camera control plane
+(`control.verkada.com`). The hostname was already in state from a
 ClientHello sloth overheard, so the rule is a lookup over the embedded
 table in `src/vendor_watchlist.c` and adds no capture surface.
 
@@ -432,14 +433,19 @@ a hit:
   still gated on owner decisions recorded in that issue.
 - **The table is short because every row needs a primary vendor
   source.** #105 lists roughly two dozen more vendors with candidate
-  domains, all at the issue's own "confidence: low"; none is included.
-  A domain nobody publishes is a guess with a vendor's name attached,
-  which is the overstatement #90 is open about.
+  domains, all at the issue's own "confidence: low". A row ships only
+  for a vendor that publishes its own network-requirements or firewall
+  allow-list document naming the domain (#145 ruling 2), one row per
+  document. Verkada passed that bar (its *Camera Network Settings*
+  page); Ring failed it (its ports page names no domains); the rest
+  had no such document this pass could locate. A domain nobody
+  publishes is a guess with a vendor's name attached, which is the
+  overstatement #90 is open about.
 
 Embedded, not a file: same choice as the IOC list (MISSION.md §3), so
-behaviour stays reproducible from the commit. #105 asks for a
-SIGHUP-reloaded CSV; that is an architecture-contract question the
-owner has not answered and this leaves it open.
+behaviour stays reproducible from the commit. #105 asked for a
+SIGHUP-reloaded CSV; the owner ruled for the embedded table (#145
+ruling 8).
 
 Full row, including the false-positive cases, in
 [`docs/views/alerts.md`](../views/alerts.md); basis in

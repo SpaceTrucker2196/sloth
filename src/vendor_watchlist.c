@@ -13,6 +13,14 @@
  * is open about. So only domains a primary vendor source names are
  * here, and the rest wait for sources.
  *
+ * The bar for a new row (#145 ruling 2): the vendor publishes its own
+ * network-requirements or firewall allow-list document naming the
+ * domain; one row per document, cited with URL and retrieval date in
+ * research/papers/surveillance-vendor-endpoints.md. A vendor whose
+ * public trace is a product name, a marketing site, or a ports-only
+ * page stays out — test_unsourced_domains_are_absent pins the ones
+ * that were checked and failed the bar.
+ *
  * Suffix semantics: each entry matches itself and any subdomain, so
  * "evidence.com" covers "ab4-upload.evidence.com" without the table
  * having to enumerate upload hostnames it cannot know. */
@@ -44,6 +52,18 @@ static const struct {
      * traffic never crosses a monitored segment. A hit here is a host
      * on this network using the platform, not a camera on it. */
     { "flocksafety.com", "flock-safety", "alpr-cloud" },
+    /* Verkada's device-control plane. Verkada's "Camera Network
+     * Settings" page lists the endpoints its cameras need through a
+     * firewall, and every Verkada-operated FQDN in its per-region
+     * allowlists sits under control.verkada.com (api., relay., index.,
+     * firmware., update., *.vnetcap.) except the vconductor.* hosts
+     * under command.verkada.com. control., not the bare verkada.com:
+     * the page's coarse fallback rule is "*.verkada.com", but that
+     * also covers Verkada's marketing site, and a row that broad would
+     * repeat axon.com's known false-positive source on purpose. Verkada
+     * sells fixed cameras with LPR analytics, which is why #105's
+     * scope extension lists it. */
+    { "control.verkada.com", "verkada", "camera-cloud" },
 };
 
 /* Label-boundary suffix match, identical semantics to

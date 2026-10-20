@@ -3,7 +3,7 @@ source_url: https://www.axon.com/resources/axon-cloud-customer-faq
 retrieved: 2026-10-13
 topics: [surveillance, body-worn-camera, alpr, sni, tls, cloud-endpoint, vendor]
 alert_kinds: [ALERT_TYPE_SURV_CLOUD_SNI]
-citation: Axon Enterprise, "Axon Cloud Customer FAQ" (evidence.com to axon.com transition) and "Axon VR — network allowed lists", axon.com/help; Flock Safety, "Transparency Portal", flocksafety.com/articles/transparency-portal
+citation: Axon Enterprise, "Axon Cloud Customer FAQ" (evidence.com to axon.com transition) and "Axon VR — network allowed lists", axon.com/help; Flock Safety, "Transparency Portal", flocksafety.com/articles/transparency-portal; Verkada, "Camera Network Settings", help.verkada.com
 ---
 # Surveillance-vendor cloud endpoints — what a TLS SNI can and cannot say
 
@@ -56,6 +56,50 @@ therefore Flock's service domain, not only a brochure site.
 
 Retrieved 2026-10-13.
 
+### Verkada — `control.verkada.com`
+
+Verkada sells cloud-managed fixed cameras, including models with
+licence-plate analytics, which is why #105's scope extension lists it
+as a Flock-like surveillance vendor. Its help centre page **Camera
+Network Settings** (https://help.verkada.com/verkada-cameras/configuration/camera-network-settings)
+is a firewall allowlist in the sense this table requires: under
+*Firewall settings* it says *"Verkada cameras require access to many
+endpoints to ensure they can communicate with Command and all features
+will be accessible"*, then gives a coarse rule set (`*.verkada.com`,
+`time.cloudflare.com`, `*.amazonaws.com`) and, *"if you prefer a more
+granular allowlist"*, per-region FQDN tables for the US, Europe and
+Australia.
+
+Every Verkada-operated FQDN in those tables is under
+`control.verkada.com` — `api.control.verkada.com`,
+`relay.prod-us-ohio.control.verkada.com`,
+`index.prod.ap.syd.control.verkada.com`,
+`firmware.control.verkada.com`, `update.control.verkada.com`,
+`*.vstream.vnetcap.control.verkada.com` and the rest — except the
+`vconductor.*.command.verkada.com` hosts. The row is therefore
+`control.verkada.com`, one row for one document:
+
+- **Not `verkada.com`.** The page's coarse rule covers it, but it also
+  covers Verkada's marketing site, which would repeat the `axon.com`
+  false-positive source below on purpose. The narrow row loses nothing
+  the camera list names except the vconductor hosts.
+- **Not `command.verkada.com` as a second row.** That is also the
+  operator web application, so it adds portal traffic rather than
+  device traffic, and the ruling is one row per document.
+- **Not the `*.amazonaws.com` entries** (Kinesis Video, S3). They are
+  shared AWS infrastructure: a row there would name Verkada on traffic
+  that is overwhelmingly someone else's.
+
+The same page, and Verkada's general **Required Network Settings**
+page (https://help.verkada.com/command/need-help/required-network-settings),
+state that *"DNS over HTTPS (DoH) is currently not supported"* and that
+devices resolve over UDP port 53, and that Verkada devices are
+incompatible with LANs that require proxies or TLS inspection. Both
+facts matter to a passive sensor: the device's lookups are plaintext
+DNS and its ClientHellos reach the wire unmodified.
+
+Retrieved 2026-10-20.
+
 ## What the detector does not establish
 
 Three limits, all of which the alert text states rather than leaving to
@@ -91,6 +135,42 @@ on this list publishes its on-air fingerprint"*. None is in the table,
 because a domain nobody publishes is a guess carrying a vendor's name.
 They are additions pending a source, not an omission.
 
+The bar, as the owner set it on 2026-10-19 (#145 ruling 2, applied to
+#105): a row ships only for a vendor that publishes a primary
+network-requirements or firewall allow-list document naming the
+domain, one row per document, cited here with URL and retrieval date.
+The close-out pass on 2026-10-20 checked the scope-extension vendors
+against that bar:
+
+- **Verkada** — passes; row added above.
+- **Ring** — fails. Ring's support article on the protocols and ports
+  its devices use (https://ring.com/us/en/support/articles/xws8s/Protocols-and-Ports-Used-by-Ring-Devices,
+  titled *Understanding router security settings*; the old
+  support.ring.com "Network Requirements" URL redirects there) lists
+  ports 443, 80, 53 and 123 and **no domains**. The issue's
+  `*.ring.com` glob is therefore the issue's, not Ring's, and
+  `ring.com` stays absent. Retrieved 2026-10-20.
+- **Flock Safety** — already present on the transparency-portal basis
+  above; Flock's help centre index shows no network-requirements or
+  allowlist page, so no second Flock row.
+- **Rekor** — the issue's `*.rekor.ai` / `*.rekorsystems.com` globs have
+  no Rekor network-requirements document behind them that this pass
+  could locate. Absent.
+- **Motorola Solutions / WatchGuard / Vigilant / Avigilon, Digital Ally,
+  Utility, Reveal, Getac, Panasonic i-PRO, Safe Fleet / COBAN, Zepcam,
+  Genetec, PlateSmart, Leonardo ELSAG, Perceptics, SoundThinking,
+  Wolfcom, PatrolEyes, Hytera, Pinnacle Response** — no publicly
+  reachable network-requirements or allowlist document was located for
+  any of them in this pass. That is "not found", not "does not exist":
+  several of these vendors keep deployment guides behind customer
+  logins. Each stays absent until someone can cite the document.
+- **Axon Outpost / Fusus** — the scope extension already notes these
+  ride the existing `evidence.com` / `axon.com` rows, so no new row.
+
+`tests/test_vendor_watchlist.c :: test_unsourced_domains_are_absent`
+pins the checked-and-failed cases (`ring.com`, the Rekor globs) so a
+later pass has to read this section before adding them.
+
 `axondocs.com` appears in #105's design and is **not** in the table:
 searching for it surfaces no Axon-operated service by that name (the
 near-miss hits are Axxon Soft, an unrelated company). It would have
@@ -124,6 +204,16 @@ it is just not an ATT&CK ID.
   https://flocksafety.com/articles/transparency-portal — retrieved
   2026-10-13; agency portal hostnames corroborated by municipal pages
   (e.g. Clear Creek County CO, Kent County MI).
+- Verkada, *Camera Network Settings*,
+  https://help.verkada.com/verkada-cameras/configuration/camera-network-settings
+  — retrieved 2026-10-20.
+- Verkada, *Required Network Settings*,
+  https://help.verkada.com/command/need-help/required-network-settings
+  — retrieved 2026-10-20 (DoH unsupported; no proxy / TLS inspection).
+- Ring, *Understanding router security settings* (protocols and ports
+  used by Ring devices),
+  https://ring.com/us/en/support/articles/xws8s/Protocols-and-Ports-Used-by-Ring-Devices
+  — retrieved 2026-10-20; cited for the absence of a Ring row.
 - EFF Street Level Surveillance vendor lists, cited by #105's own
   scope-extension comment as the origin of the wider vendor roster that
   this table does not yet include.

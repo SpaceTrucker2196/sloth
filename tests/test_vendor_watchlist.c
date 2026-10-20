@@ -84,6 +84,50 @@ static void test_unsourced_domains_are_absent(void) {
        reasoning in research/papers/surveillance-vendor-endpoints.md
        before adding it back. */
     ASSERT(!vendor_watchlist_match_domain("axondocs.com", NULL, NULL));
+    /* Ring was checked against the bar and failed it: Ring's support
+       article on the protocols and ports its devices use names ports
+       and no domains, so there is no Ring row to cite (retrieved
+       2026-10-20, see the research document). */
+    ASSERT(!vendor_watchlist_match_domain("ring.com", NULL, NULL));
+    ASSERT(!vendor_watchlist_match_domain("fw.ring.com", NULL, NULL));
+    /* #105's scope extension proposes *.rekor.ai and *.rekorsystems.com
+       as SNI globs. No Rekor network-requirements document was found,
+       so they are a proposal, not a row. */
+    ASSERT(!vendor_watchlist_match_domain("rekor.ai", NULL, NULL));
+    ASSERT(!vendor_watchlist_match_domain("api.rekorsystems.com", NULL, NULL));
+}
+
+static void test_verkada_control_plane_matches(void) {
+    /* Hostnames copied from Verkada's "Camera Network Settings"
+       allowlist tables (US, EU and AU regions). */
+    static const char *const hosts[] = {
+        "api.control.verkada.com",
+        "relay.prod-us-ohio.control.verkada.com",
+        "index.prod.ap.syd.control.verkada.com",
+        "x1.vstream.vnetcap.control.verkada.com",
+        "firmware.control.verkada.com",
+    };
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
+        const char *vendor = NULL, *family = NULL;
+        ASSERT(vendor_watchlist_match_domain(hosts[i], &vendor, &family));
+        ASSERT_STR(vendor, "verkada");
+        ASSERT_STR(family, "camera-cloud");
+    }
+}
+
+static void test_verkada_marketing_site_does_not_match(void) {
+    /* The row is control.verkada.com and not verkada.com on purpose:
+       the document's coarse "*.verkada.com" rule would also cover
+       Verkada's marketing site, and the narrower row is what every
+       Verkada-operated camera FQDN on that page falls under except
+       the vconductor.*.command.verkada.com hosts, which are left out
+       rather than given a second row from the same document. */
+    ASSERT(!vendor_watchlist_match_domain("verkada.com", NULL, NULL));
+    ASSERT(!vendor_watchlist_match_domain("www.verkada.com", NULL, NULL));
+    ASSERT(!vendor_watchlist_match_domain("command.verkada.com", NULL, NULL));
+    /* Label boundary on a multi-label row: "xcontrol.verkada.com" ends
+       with the row string but is a different name. */
+    ASSERT(!vendor_watchlist_match_domain("xcontrol.verkada.com", NULL, NULL));
 }
 
 static void test_null_and_empty(void) {
@@ -117,12 +161,14 @@ void run_vendor_watchlist_tests(void) {
     RUN_TEST(test_deep_subdomain_matches);
     RUN_TEST(test_case_insensitive);
     RUN_TEST(test_flock_and_axon_are_distinct_vendors);
+    RUN_TEST(test_verkada_control_plane_matches);
 
     TEST_SUITE("vendor watchlist: non-matches");
     RUN_TEST(test_no_label_boundary_does_not_match);
     RUN_TEST(test_prefix_is_not_a_suffix);
     RUN_TEST(test_unrelated_host_does_not_match);
     RUN_TEST(test_unsourced_domains_are_absent);
+    RUN_TEST(test_verkada_marketing_site_does_not_match);
     RUN_TEST(test_null_and_empty);
 
     TEST_SUITE("vendor watchlist: output contract");

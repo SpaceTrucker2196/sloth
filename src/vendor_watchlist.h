@@ -7,10 +7,10 @@
  * and ALPR platform vendors. Embedded rather than loaded from a file,
  * for the same reason the IOC list in threat_intel.c is embedded
  * (MISSION.md §3): detection behaviour stays reproducible from the
- * commit. #105 asks for data/surveillance_vendors.csv with SIGHUP
- * reload; that is an architecture-contract decision the owner has not
- * answered, so this ships the table the way src/wifi_oui_attacker.c
- * ships its OUI tables and leaves the question open.
+ * commit. #105 asked for data/surveillance_vendors.csv with SIGHUP
+ * reload; the owner ruled against it (#145 ruling 8: watchlist tables
+ * are embedded in-tree, no runtime CSV or SIGHUP path), so this ships
+ * the table the way src/wifi_oui_attacker.c ships its OUI tables.
  *
  * Every row is a domain a primary vendor source names as a service
  * address — see research/papers/surveillance-vendor-endpoints.md. No
