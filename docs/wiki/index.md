@@ -35,7 +35,7 @@ the Wi-Fi it watches:
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the <!-- count:rules -->80<!-- /count --> rules.
+- [[alerts]] — alert engine internals and the <!-- count:rules -->82<!-- /count --> rules.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
@@ -58,6 +58,9 @@ the Wi-Fi it watches:
   storm is the *symptom* of a spoofed-disassoc flood rather than an
   attack in itself, and why "robust category" is an exclusion list
   (#59): the forced roam that leaves no deauth frame behind.
+- [[regulatory-table]] — the compiled-in 5 GHz channel table (#101):
+  FCC 47 CFR 15.407 and ETSI EN 301 893 rows, cited, dated and heuristic;
+  what `DFS_MASKING` reads its DFS set from.
 - [[research-corpus]] — the machine-readable side of the cite-sources
   habit (#73): one document per source, FTS5-indexed, guarded.
 - [[captive-portal]] — connectivity-check interception (#69): the

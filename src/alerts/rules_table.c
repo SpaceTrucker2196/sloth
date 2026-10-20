@@ -97,6 +97,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_cleartext_cred),
     R(rule_threat_ip),
     R(rule_beaconing),
+    R(rule_country_absent),
+    R(rule_dfs_masking),
 };
 
 #undef R

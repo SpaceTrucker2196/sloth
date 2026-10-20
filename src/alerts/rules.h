@@ -67,6 +67,8 @@ void rule_rts_flood(const sloth_state_t *s, time_t now);
 void rule_rrm_survey_abuse(const sloth_state_t *s, time_t now);
 void rule_csa_abuse(const sloth_state_t *s, time_t now);
 void rule_tpc_absent_high_band(const sloth_state_t *s, time_t now);
+void rule_country_absent(const sloth_state_t *s, time_t now);   /* rules_regulatory.c */
+void rule_dfs_masking(const sloth_state_t *s, time_t now);      /* rules_regulatory.c */
 void rule_no_monitor_mode(const sloth_state_t *s, time_t now);
 void rule_probe_flood(const sloth_state_t *s, time_t now);
 void rule_my_network_recon(const sloth_state_t *s, time_t now);

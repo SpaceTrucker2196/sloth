@@ -4300,3 +4300,21 @@ includes gap and Beacon Interval rebases. The unsourced "probably not
 one AP" sentence is removed from [[attack-hardware-fingerprints]]. The
 not-measured hint now names monitor mode and consecutive beacons rather
 than the TSF, which every beacon carries (802.11-2020 §9.4.1.10).
+
+## 2026-10-20 — #101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`, and the regulatory channel table
+
+Two new alert kinds and a new page. `COUNTRY_ABSENT` (LOW, WARN when it
+touches a designated BSSID or SSID) fires on a 5 GHz AP that has sent
+no Country element (IEEE 802.11d, now 802.11-2020 §9.4.2.8), with the
+same time-and-beacons observation floor as `TPC_ABSENT_HIGH_BAND`; its
+detail calls itself a heuristic with no advisory. `DFS_MASKING` (LOW,
+WARN on outside corroboration) fires on a BSSID absent from the RF
+baseline whose `first_seen_channel` — new on `beacon_ap_t`, set once on
+insert — is a DFS channel with no CSA from it or an SSID peer leading
+there. Its DFS set comes from the new compiled-in table
+`src/reg_table.c` (FCC 47 CFR 15.407, ETSI EN 301 893 V2.1.1, dated
+2026-10-20, labelled heuristic), documented on the new
+[[regulatory-table]] page. Both have empty techniques and are on the
+cited-without-technique list in `tests/test_research_corpus.c`, with
+`research/ieee/802.11d-country-element.md` and
+`research/regulatory/dfs-15.407-en301893.md` as their sources.

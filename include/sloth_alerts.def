@@ -242,3 +242,20 @@ X(SURV_DNS, "") /* exposure, not adversary technique (#105) */
 X(WPS_PIXIE_PROBE, "T1110.002") /* Password Cracking — the PIN is recovered offline from M1/M3 */
 /* completed WPS registration after an M3-abandoned run at the same AP — Bongard 2014 (#82) */
 X(WPS_PIXIE_LIKELY_SUCCESS, "T1110.002") /* the cracked PIN, used: the full run Bongard's last step describes */
+/* Deliberately empty, in the TPC_ABSENT_HIGH_BAND position: what
+ * fires is an AP that names no regulatory domain, a configuration
+ * an adversary's kit often has and a stripped legitimate build has
+ * too. T1557.004 (Evil Twin) would assert impersonation from a
+ * missing element. The basis is cited — IEEE 802.11d, now
+ * 802.11-2020 §9.4.2.8, see research/ieee/802.11d-country-element.md
+ * — it is simply not an ATT&CK technique. */
+/* 5 GHz AP advertising no Country element — IEEE 802.11d / 802.11-2020 §9.4.2.8, heuristic (#101 slice A) */
+X(COUNTRY_ABSENT, "") /* non-compliance heuristic, not adversary technique (#101) */
+/* Deliberately empty for the same reason: a BSSID arriving cold on
+ * a DFS channel is a shape, not an observed behaviour, and a
+ * rebooted legitimate AP produces it too. No public advisory names
+ * DFS-masking; the basis is the radar-detection rule that makes the
+ * shape unusual — 47 CFR 15.407(h)(2) and ETSI EN 301 893 §4.2.6,
+ * see research/regulatory/dfs-15.407-en301893.md. */
+/* new BSSID first heard on a DFS channel with no CSA leading there — 47 CFR 15.407(h), EN 301 893 §4.2.6, heuristic (#101 slice A) */
+X(DFS_MASKING, "") /* heuristic shape, not adversary technique (#101) */

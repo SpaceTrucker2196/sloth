@@ -22,6 +22,13 @@ void wifi_baseline_capture(const sloth_state_t *s);
 /* 1 once a baseline has been captured. */
 int  wifi_baseline_ready(void);
 
+/* 1 when `bssid` was in the inventory the baseline froze; 0 when it
+ * was not, or when no baseline has been captured yet. Callers asking
+ * "is this AP new since the RF picture settled" must check
+ * wifi_baseline_ready() first — before a baseline, every AP would read
+ * as new (#101 slice A). */
+int  wifi_baseline_has_bssid(const uint8_t bssid[6]);
+
 /* Populate out[max] with drift of the current inventory vs the baseline;
  * return the count. 0 (no findings) if no baseline yet. */
 int  wifi_baseline_drift(const sloth_state_t *s, drift_finding_t *out, int max);

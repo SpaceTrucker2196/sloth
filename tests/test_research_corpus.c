@@ -267,6 +267,13 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * §9.4.2.16 are exactly what it detects from. */
         "ALERT_TYPE_TPC_ABSENT_HIGH_BAND",
         "ALERT_TYPE_CAM_SETUP_SSID",
+        /* #101 slice A. Both heuristics with no public advisory —
+         * the issue says so for each — but each is built on a clause:
+         * IEEE 802.11d's Country element for the first, the 47 CFR
+         * 15.407(h) / EN 301 893 radar-detection duty for the second.
+         * A shape, not an adversary action, so no technique. */
+        "ALERT_TYPE_COUNTRY_ABSENT",
+        "ALERT_TYPE_DFS_MASKING",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

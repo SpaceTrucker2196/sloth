@@ -56,7 +56,7 @@ type: reference
 
 ## Related pages
 
-- [[alerts]] — the <!-- count:rules -->80<!-- /count --> alert rules and what each one keys on.
+- [[alerts]] — the <!-- count:rules -->82<!-- /count --> alert rules and what each one keys on.
 - [[threat-intel]] — the IOC list and its match semantics.
 - [[ja3-fingerprinting]] — TLS-client identification primitive.
 - [[beacon-detection]] — C2 periodicity detector.

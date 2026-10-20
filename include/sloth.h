@@ -1394,6 +1394,13 @@ typedef struct {
     uint32_t ssid_history_fp[MAX_AP_SSID_HISTORY];
     int      ssid_history_n;
     time_t   first_seen;       /* set on insert; the posture debounce reads it */
+    /* The channel this BSSID was on when the table first heard it
+     * (#101 slice A), set once on insert and never updated — `channel`
+     * above follows the AP, this does not. The DFS-masking rule reads
+     * it: where an AP *started* is the claim, and a later CSA to
+     * somewhere else must not rewrite where it came from. 0 = unknown
+     * (an entry created with no channel). */
+    int      first_seen_channel;
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:
@@ -2265,6 +2272,24 @@ typedef enum {
  * once", and a 5 GHz AP on its default 100 TU interval emits it in
  * roughly 300 ms, so this costs a correct finding nothing. */
 #define TPC_ABSENT_MIN_BEACONS 3
+
+/* COUNTRY_ABSENT (#101 slice A) uses the same two-part observation
+ * floor as TPC_ABSENT_HIGH_BAND, for the same reason: a Country element
+ * that was not heard is also what a radio listening elsewhere produces,
+ * so "absent" needs both time and readings behind it. */
+#define COUNTRY_ABSENT_MIN_OBSERVED_S 60
+#define COUNTRY_ABSENT_MIN_BEACONS    3
+
+/* DFS_MASKING (#101 slice A). A BSSID is only judged after this many
+ * beacons from it, so one misread DS Parameter Set cannot place it on a
+ * DFS channel. And a CSA counts as "leading there" when it was heard no
+ * later than this long after the BSSID's first beacon: both stores are
+ * stamped in whole seconds by different modules, and the last
+ * announcement on the old channel and the first beacon on the new one
+ * routinely share a second, so a strict "before" would drop the case
+ * the exemption exists for. */
+#define DFS_MASK_MIN_BEACONS   3
+#define DFS_MASK_CSA_SLACK_S   2
 
 /* ── BSS Transition Management steering (#59) ──────────────
  *

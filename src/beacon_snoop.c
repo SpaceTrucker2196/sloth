@@ -1280,6 +1280,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
     g_aps[slot].channel    = channel;
     g_aps[slot].beacon_ms  = beacon_ms;
     g_aps[slot].first_seen = now;
+    g_aps[slot].first_seen_channel = channel;   /* #101: never updated */
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
     ev_cite_push(g_aps[slot].ev_ids, BEACON_EVIDENCE_IDS,

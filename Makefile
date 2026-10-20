@@ -200,6 +200,8 @@ CORE_COMMON_SRCS += src/pcap_format.c src/pcap_write.c
 CORE_COMMON_SRCS += src/evidence_ring.c src/evidence_export.c
 CORE_COMMON_SRCS += src/evidence_manifest.c
 CORE_COMMON_SRCS += src/geo.c
+# #101 slice A: the compiled-in 5 GHz channel table and the rules that read it.
+CORE_COMMON_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
 CORE_COMMON_SRCS += src/ble_snoop.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c

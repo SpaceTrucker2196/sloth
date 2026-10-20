@@ -10,7 +10,7 @@ type: project
 
 **Sources**: `docs/views/pnl.md`, `docs/views/eapol.md`, `docs/views/seqnum.md`, `docs/views/assoc.md`, `docs/views/probe.md`, `docs/views/beacons.md`.
 
-**Last updated**: 2026-10-13.
+**Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`, [[regulatory-table]]).
 
 ---
 
@@ -291,8 +291,24 @@ readable from `beacon_ap_t`.
 
 Full row: `docs/views/alerts.md`.
 
+### Slice A: `COUNTRY_ABSENT`, `DFS_MASKING`, the channel table
+
+Two more rules read the retained envelope (`src/alerts/rules_regulatory.c`).
+`COUNTRY_ABSENT` reports a 5 GHz AP whose beacons have never carried a
+Country element — the 802.11d domain claim the TPC rule's detail
+already printed as "absent too" — on any AP in range at LOW, and at
+WARN when it touches something designated. `DFS_MASKING` reports a
+BSSID that arrives after the RF baseline on a DFS channel with no CSA
+leading there; it reads a new per-BSSID field, `first_seen_channel`,
+set once by `beacon_record` on insert, and takes its DFS set from the
+compiled-in table described on [[regulatory-table]]. Both call
+themselves heuristics in their detail text. Channel-in-country
+validation, the 6 GHz regulatory envelope and the observed-vs-claimed
+power observation are other slices.
+
 ## Related pages
 
+- [[regulatory-table]] — the cited, dated 5 GHz channel table `DFS_MASKING` reads.
 - [[mac-randomisation]] — the seqnum deanonymisation primitive in
   depth.
 - [[non-ip-sensors]] — the passive sensor registry each radio joins.

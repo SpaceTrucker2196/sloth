@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-20 (#82: the two Pixie-Dust rules; what they do not see).
+**Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 
 ---
 
@@ -376,7 +376,8 @@ Three tiers, yellow → orange → red, with cross-panel coloring (see
 The full table lives in [`docs/views/alerts.md`](../views/alerts.md);
 the headline rules per tier:
 
-- **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`, `SURV_DNS`
+- **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`, `SURV_DNS`,
+  `COUNTRY_ABSENT`, `DFS_MASKING` (both WARN on corroboration)
 - **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`,
   `SURV_CLOUD_SNI`
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
@@ -492,9 +493,10 @@ announcing itself over unauthenticated multicast, a camera still in
 setup mode. **Nobody has to be present for any of them to fire**, so
 assigning T1046, T1669 or T1557 would claim an adversary step sloth did
 not observe. They are not the whole set of cited-but-techniqueless
-kinds: `SURV_CLOUD_SNI` and `SURV_DNS` (#105, above) and `TPC_ABSENT_HIGH_BAND` (#101,
-[[wifi-sigint]]) are on the same list for a posture rather than an
-exposure, and that list in the test named below is the authority — this
+kinds: `SURV_CLOUD_SNI` and `SURV_DNS` (#105, above), `TPC_ABSENT_HIGH_BAND` (#101,
+[[wifi-sigint]]) and `COUNTRY_ABSENT` / `DFS_MASKING` (#101 slice A,
+below) are on the same list for a posture or a heuristic shape rather
+than an exposure, and that list in the test named below is the authority — this
 page said "three" while it held five.
 
 This is not the `NO_MONITOR_MODE` case, which has no source to cite at
@@ -509,6 +511,21 @@ EZVIZ's AP-mode network are WPA-protected with a key printed on the
 device label, so an OPEN gate would make the most common camera case
 undetectable; the rule reports the provisioning state and records the
 encryption in the detail instead. See the full row in
+[`docs/views/alerts.md`](../views/alerts.md).
+
+### Regulatory heuristics (#101 slice A)
+
+Two kinds in `src/alerts/rules_regulatory.c`, both labelled
+**heuristic** in their detail text because no advisory backs either
+(the issue says so for both):
+
+| Kind | Sev | Fires on |
+|---|---|---|
+| `COUNTRY_ABSENT` | LOW / WARN | a 5 GHz AP (band from `ap_band_label()`) whose beacons have never carried a Country element — IEEE 802.11d, now 802.11-2020 §9.4.2.8. Ungated: a missing domain claim is worth seeing on any AP. WARN when the BSSID is designated, or the SSID is designated from a BSSID that is not. Needs 60 s and 3 beacons of observation; suppressed for `phy == "legacy"` and 6 GHz. A malformed element is named as such, not as absent. |
+| `DFS_MASKING` | LOW / WARN | a BSSID not in the session's RF baseline whose `first_seen_channel` is a DFS channel per [[regulatory-table]], with no CSA naming that channel from the same BSSID or an SSID peer. A rebooted legitimate AP looks the same, so LOW; WARN only when the AP carries a designated SSID from an undesignated BSSID, or is half of an evil-twin episode. Inert before the baseline. |
+
+Sources: `research/ieee/802.11d-country-element.md`,
+`research/regulatory/dfs-15.407-en301893.md`. Full rows in
 [`docs/views/alerts.md`](../views/alerts.md).
 
 ### Tunable thresholds (#82)

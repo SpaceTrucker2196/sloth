@@ -32,6 +32,13 @@ void wifi_baseline_capture(const sloth_state_t *s) {
 
 int wifi_baseline_ready(void) { return g_base_ready; }
 
+int wifi_baseline_has_bssid(const uint8_t bssid[6]) {
+    if (!g_base_ready || !bssid) return 0;
+    for (int k = 0; k < g_base_n; k++)
+        if (memcmp(g_base[k].bssid, bssid, 6) == 0) return 1;
+    return 0;
+}
+
 void wifi_baseline_clear(void) { g_base_n = 0; g_base_ready = 0; }
 
 static void bstr(const uint8_t *b, char *out, int sz) {
