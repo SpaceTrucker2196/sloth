@@ -4335,3 +4335,14 @@ rules judged real stays LOW. `COUNTRY_ABSENT` states its observation
 floors instead of live seconds and beacon counts, which had made every
 tick a new observation and an `alert.update` every 60 s per AP. See
 [[regulatory-table]] and [[alerts]].
+## 2026-10-20 — #101 slice B: 6 GHz regulatory claims, `REG` column, `wifi_regulatory`, power delta
+
+`src/reg_6g.c` parses the HE 6 GHz Operation Information's Regulatory
+Info subfield (802.11ax-2021 §9.4.2.249) and the Transmit Power
+Envelope element (tag 195, §9.4.2.161), retained per BSSID beside the
+802.11d/h envelope. The `[b]` list gains a `REG` column that takes the
+width the fixed columns leave; the detail screen gains a `REGULATORY`
+block with the observed-vs-claimed power delta, shown as an observation
+with its free-space / 0 dBi assumption stated and never as an alert.
+New change-only JSONL record `wifi_regulatory` ([[jsonl-schema]]).
+Documented in [[wifi-sigint]] and `docs/views/beacons.md`.

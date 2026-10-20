@@ -26,6 +26,7 @@
 #include "capture/capture.h"
 #include "alert_pcap.h"
 #include "eapol_log.h"
+#include "reg_obs.h"           /* wifi_regulatory (#101 slice B) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -74,7 +75,7 @@ typedef struct {
 static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 
 /* Snapshot event "kinds" — one per deduped emitter. */
-enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH };
+enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -948,6 +949,143 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
                             k ? "," : "", nb, n->channel, n->phy_type);
         }
         appendf(buf, LINEBUF, &off, "]");
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+/* wifi_regulatory (#101 slice B) — the regulatory envelope each BSSID
+ * claims, as its own record beside `beacon` rather than as more beacon
+ * fields: the beacon record is emitted every tick and carries RSSI, and
+ * this one is change-only, so a consumer tracking claims reads only the
+ * lines where a claim changed.
+ *
+ * Emitted only for a BSSID that ever sent a regulatory element (a
+ * malformed one included); an AP that never did has made no claim, and
+ * a record of zeros would read as one. Every value is the raw field the
+ * element carried, next to its *_present flag — check the flag first.
+ *
+ * The change-only signature holds discrete claim values and nothing
+ * else (agents/AGENTS.md, change-only emission): codes, flags, dB and
+ * dBm integers, the raw TPE octets. The malformed_* counters climb on
+ * every crafted frame, so they enter it only as "any malformed" and
+ * otherwise ride the heartbeat. */
+static const char *reg_env_name(uint8_t env) {
+    switch (env) {
+    case REG_ENV_ABSENT:        return "absent";
+    case REG_ENV_ANY:           return "any";
+    case REG_ENV_INDOOR:        return "indoor";
+    case REG_ENV_OUTDOOR:       return "outdoor";
+    case REG_ENV_NON_COUNTRY:   return "non_country";
+    case REG_ENV_OPCLASS_TABLE: return "opclass_table";
+    default:                    return "unknown";
+    }
+}
+
+static uint64_t wifi_reg_signature(const reg_ie_t *r, const reg_6g_t *g) {
+    uint64_t h = FNV64_OFFSET;
+    h = fnv1a(&r->country_present, 1, h);
+    h = fnv1a(r->country, sizeof(r->country), h);
+    h = fnv1a(&r->env_raw, 1, h);
+    h = fnv1a(&r->triplet_count, 1, h);
+    h = fnv1a(&r->triplets_truncated, 1, h);
+    for (int k = 0; k < r->triplet_count && k < REG_MAX_COUNTRY_TRIPLETS; k++) {
+        const reg_triplet_t *t = &r->triplets[k];
+        uint8_t b[7] = { t->is_operating, t->first_channel, t->num_channels,
+                         (uint8_t)t->max_tx_power_dbm, t->ext_id,
+                         t->operating_class, t->coverage_class };
+        h = fnv1a(b, sizeof(b), h);
+    }
+    uint8_t p[6] = { r->power_constraint_present, r->power_constraint_db,
+                     r->tpc_present, (uint8_t)r->tpc_tx_power_dbm,
+                     (uint8_t)r->tpc_link_margin_db,
+                     (uint8_t)(r->malformed_country ||
+                               r->malformed_power_constraint ||
+                               r->malformed_tpc ||
+                               g->malformed_he6 || g->malformed_tpe) };
+    h = fnv1a(p, sizeof(p), h);
+    uint8_t q[4] = { g->he6_present, g->he6_control_raw, g->tpe_count,
+                     g->tpe_truncated };
+    h = fnv1a(q, sizeof(q), h);
+    for (int k = 0; k < g->tpe_count && k < REG_6G_MAX_TPE; k++) {
+        const reg_tpe_t *e = &g->tpe[k];
+        uint8_t b[3] = { e->info_raw, e->n_values, e->ext_octets };
+        h = fnv1a(b, sizeof(b), h);
+        h = fnv1a(e->values_half_db, e->n_values, h);
+    }
+    return h;
+}
+
+void jsonl_emit_wifi_regulatory(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = sloth_wall();
+    for (int i = 0; i < s->beacon_count; i++) {
+        const beacon_ap_t *e = &s->beacon_aps[i];
+        const reg_ie_t *r = &e->reg;
+        const reg_6g_t *g = &e->reg6g;
+        if (!reg_obs_any(r, g)) continue;
+        if (!jsonl_changed(JD_WIFI_REG, e->bssid, sizeof(e->bssid),
+                           wifi_reg_signature(r, g), now))
+            continue;
+
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "wifi_regulatory", now);
+        kv_mac(buf, LINEBUF, &off, "bssid", e->bssid);
+        kv_int(buf, LINEBUF, &off, "country_present", r->country_present);
+        kv_str(buf, LINEBUF, &off, "country", r->country);
+        kv_str(buf, LINEBUF, &off, "env", reg_env_name(r->env));
+        kv_int(buf, LINEBUF, &off, "env_raw", r->env_raw);
+        kv_int(buf, LINEBUF, &off, "triplets_truncated", r->triplets_truncated);
+        appendf(buf, LINEBUF, &off, ",\"triplets\":[");
+        for (int k = 0; k < r->triplet_count && k < REG_MAX_COUNTRY_TRIPLETS; k++) {
+            const reg_triplet_t *t = &r->triplets[k];
+            if (t->is_operating)
+                appendf(buf, LINEBUF, &off,
+                        "%s{\"ext_id\":%u,\"operating_class\":%u,\"coverage_class\":%u}",
+                        k ? "," : "", (unsigned)t->ext_id,
+                        (unsigned)t->operating_class,
+                        (unsigned)t->coverage_class);
+            else
+                appendf(buf, LINEBUF, &off,
+                        "%s{\"first_channel\":%u,\"num_channels\":%u,\"max_tx_power_dbm\":%d}",
+                        k ? "," : "", (unsigned)t->first_channel,
+                        (unsigned)t->num_channels, (int)t->max_tx_power_dbm);
+        }
+        appendf(buf, LINEBUF, &off, "]");
+        kv_int(buf, LINEBUF, &off, "power_constraint_present",
+               r->power_constraint_present);
+        kv_int(buf, LINEBUF, &off, "power_constraint_db", r->power_constraint_db);
+        kv_int(buf, LINEBUF, &off, "tpc_present", r->tpc_present);
+        kv_int(buf, LINEBUF, &off, "tpc_tx_power_dbm", r->tpc_tx_power_dbm);
+        kv_int(buf, LINEBUF, &off, "tpc_link_margin_db", r->tpc_link_margin_db);
+        kv_int(buf, LINEBUF, &off, "he6_present", g->he6_present);
+        kv_int(buf, LINEBUF, &off, "he6_reg_info", g->he6_reg_info);
+        kv_str(buf, LINEBUF, &off, "he6_reg_info_name",
+               g->he6_present ? reg_6g_info_name(g->he6_reg_info) : "");
+        kv_int(buf, LINEBUF, &off, "tpe_truncated", g->tpe_truncated);
+        appendf(buf, LINEBUF, &off, ",\"tpe\":[");
+        for (int k = 0; k < g->tpe_count && k < REG_6G_MAX_TPE; k++) {
+            const reg_tpe_t *t = &g->tpe[k];
+            appendf(buf, LINEBUF, &off,
+                    "%s{\"interp\":%u,\"interp_name\":\"%s\",\"category\":%u,"
+                    "\"count\":%u,\"reserved\":%u,\"ext_octets\":%u,"
+                    "\"values_half_db\":[",
+                    k ? "," : "", (unsigned)t->interp,
+                    reg_tpe_interp_name(t->interp), (unsigned)t->category,
+                    (unsigned)t->count, (unsigned)t->reserved,
+                    (unsigned)t->ext_octets);
+            for (int v = 0; v < t->n_values && v < REG_TPE_MAX_VALUES; v++)
+                appendf(buf, LINEBUF, &off, "%s%d", v ? "," : "",
+                        (int)t->values_half_db[v]);
+            appendf(buf, LINEBUF, &off, "]}");
+        }
+        appendf(buf, LINEBUF, &off, "]");
+        kv_int(buf, LINEBUF, &off, "malformed_country", r->malformed_country);
+        kv_int(buf, LINEBUF, &off, "malformed_power_constraint",
+               r->malformed_power_constraint);
+        kv_int(buf, LINEBUF, &off, "malformed_tpc", r->malformed_tpc);
+        kv_int(buf, LINEBUF, &off, "malformed_he6", g->malformed_he6);
+        kv_int(buf, LINEBUF, &off, "malformed_tpe", g->malformed_tpe);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2155,6 +2293,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_top_hosts         (s);
     jsonl_emit_devices           (s);
     jsonl_emit_beacons           (s);
+    jsonl_emit_wifi_regulatory   (s);
     jsonl_emit_deauths           (s);
     jsonl_emit_probe_clients     (s);
     jsonl_emit_pnl_clients       (s);

@@ -69,6 +69,8 @@ void jsonl_emit_wifi_stas     (const sloth_state_t *s);
 void jsonl_emit_top_hosts     (const sloth_state_t *s);
 void jsonl_emit_devices       (const sloth_state_t *s);
 void jsonl_emit_beacons       (const sloth_state_t *s);
+/* Change-only, one per BSSID that ever sent a regulatory element (#101). */
+void jsonl_emit_wifi_regulatory(const sloth_state_t *s);
 void jsonl_emit_deauths       (const sloth_state_t *s);
 void jsonl_emit_probe_clients (const sloth_state_t *s);
 void jsonl_emit_pnl_clients   (const sloth_state_t *s);

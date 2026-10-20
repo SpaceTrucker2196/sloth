@@ -11,6 +11,7 @@ type: project
 **Sources**: `docs/views/pnl.md`, `docs/views/eapol.md`, `docs/views/seqnum.md`, `docs/views/assoc.md`, `docs/views/probe.md`, `docs/views/beacons.md`.
 
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`, [[regulatory-table]]).
+**Last updated**: 2026-10-20.
 
 ---
 
@@ -212,7 +213,9 @@ embeds the type, so every translation unit that sees `sloth.h` must
 see it too — including the ones built without `-Isrc`.
 
 **Still mostly inert past storage.** No regulatory table, no
-channel-legality decision, no view, no JSONL field, no SQLite column.
+channel-legality decision, no SQLite column. Slice B below adds the
+operator surfaces — a `REG` column, a detail block and a JSONL record —
+none of which judges anything.
 Reading a claim is not the same as judging it, and the judging half
 needs a versioned regulatory table that these halves must not pre-empt.
 Slice 3 below is the one exception, and it is deliberately the cheapest
@@ -266,8 +269,9 @@ Four things it deliberately is not:
   a posture wrong and the operator has nothing to fix. The issue scopes
   it to a designated network and so does the rule.
 - **Not a 6 GHz rule.** In 6 GHz the power limit rides the Transmit
-  Power Envelope element (tag 195), which sloth does not parse, so the
-  absence of 32 and 35 there is the wrong element missing. The band
+  Power Envelope element (tag 195), so the absence of 32 and 35 there
+  is the wrong element missing. Slice B below parses tag 195; this rule
+  still does not read it. The band
   comes from `ap_band_label()` and `channel_source` (#66, #91), never
   from the channel number — 5 and 6 GHz numbers overlap outright.
 - **Not a judgement about legality.** Whether the power actually in use
@@ -305,6 +309,58 @@ compiled-in table described on [[regulatory-table]]. Both call
 themselves heuristics in their detail text. Channel-in-country
 validation, the 6 GHz regulatory envelope and the observed-vs-claimed
 power observation are other slices.
+### 6 GHz claims and the operator surfaces (slice B)
+
+Two more places carry a regulatory claim, both 802.11ax-2021 and both
+on the 6 GHz side, where the 5 GHz trio above is not the mechanism:
+
+| Field | Where | Clause | What is retained |
+|---|---|---|---|
+| Regulatory Info | HE Operation (255/ext 36), 6 GHz Operation Information, Control B3-B5 | 802.11ax-2021 §9.4.2.249 | 0 Indoor AP, 1 Standard Power AP; 2-7 reserved in that text, kept raw |
+| Transmit Power Envelope | tag 195 | §9.4.2.161 as 802.11ax-2021 amends it | Information octet (Count, Interpretation, Category) and the values, signed, 0.5 dB steps |
+
+`src/reg_6g.c` parses both into a `reg_6g_t`, kept beside `reg_ie_t`
+on `beacon_ap_t` and folded in by `reg_6g_merge()` on the same terms:
+per element, sticky, present flags first. Two traps, both pinned by
+`tests/test_reg_6g.c`:
+
+- **The 6 GHz field moves.** VHT Operation Information (3 octets) and
+  the Max Co-Hosted BSSID Indicator (1) sit in front of it when their
+  Parameters bits are set. Miss either and Control is read from Primary
+  Channel or CCFS0, which yields a plausible reserved value rather than
+  an error.
+- **EIRP and PSD count differently.** EIRP has Count + 1 values (20, 40,
+  80, 160 MHz); PSD has one value at Count 0 and 1, 2, 4 or 8 at Count
+  1-4. Count 2 is three EIRP values but two PSD values. A reserved
+  Interpretation or Count is recorded with no values rather than read
+  at a guessed length. Octets past the values (802.11be's 320 MHz
+  extension) are counted, not decoded and not malformed.
+
+TPE entries are kept per (Interpretation, Category) pair, at most 8,
+the overflow flagged, so a beacon carrying only the regulatory-client
+PSD envelope does not erase the local EIRP one.
+
+What the operator sees, none of it a verdict:
+
+- **`REG` column on `[b]`** — country and environment, then `MAL`,
+  `6G:IN`/`6G:SP`, `TPCn`, `PCn`, `TPEn` while they fit; the column
+  takes the width left after the fixed columns. See
+  [`docs/views/beacons.md`](../views/beacons.md).
+- **`REGULATORY` block on the `[b]` detail screen** — each claim in
+  full, plus the observed-vs-claimed **power delta**: the received
+  level against the TPC Report power (or, failing that, the local EIRP
+  TPE ceiling), compared with free-space loss at 1 m. Positive excess
+  means the AP was heard stronger than a transmitter at the claimed
+  power could produce at a metre. It assumes free-space loss and 0 dBi
+  antennas and the distance is unknown, so it is shown as an
+  observation and never fires an alert — the owner's ruling on #101
+  (plan #145).
+- **`wifi_regulatory` JSONL record** — change-only per BSSID, emitted
+  only once a regulatory element has been parsed from it; see
+  [[jsonl-schema]].
+
+Still not here: the channel-legality table and the rules that read it
+(the other half of #101), and SQLite persistence.
 
 ## Related pages
 

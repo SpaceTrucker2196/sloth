@@ -17,6 +17,7 @@
 #include "wps_track.h"   /* WPS SESSIONS block (#82) */
 #include "eap_parse.h"   /* WSC_OP_* and wsc_msg_name() */
 #include "tune.h"        /* wps.pixie_silence_s */
+#include "reg_obs.h"     /* REG column + power observation (#101 slice B) */
 
 #define BEACON_PAGE 30
 
@@ -256,6 +257,184 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
                (unsigned)ap->tbtt.resets,
                ap->tbtt.resets == 1 ? "" : "s");
     }
+}
+
+/* REG column (#101 slice B). Every other list column is fixed, so REG
+ * takes what the terminal has left after them, between a floor that
+ * still shows a country and its environment ("US/I") and a ceiling past
+ * which the tokens run out. REG_COL_FIXED is the rest of the row: the
+ * leading space, the eleven columns before REG with their separators,
+ * REG's own separator, and "  Last". */
+#define REG_COL_MIN    4
+#define REG_COL_MAX   28
+#define REG_COL_ANSI  14
+#define REG_COL_FIXED (1 + 122 + 2 + 6)
+
+static int reg_column_width(void) {
+#ifdef WITH_NCURSES
+    int w = COLS - 1 - REG_COL_FIXED;
+#else
+    int w = REG_COL_ANSI;
+#endif
+    if (w < REG_COL_MIN) w = REG_COL_MIN;
+    if (w > REG_COL_MAX) w = REG_COL_MAX;
+    return w;
+}
+
+/* The REGULATORY block (#101 slice B): what the AP claims about its
+ * regulatory envelope, and how the received level compares with the
+ * power it claims. Drawn only for an AP that ever sent a regulatory
+ * element, and only when it and the footer fit — the detail screen does
+ * not scroll. Like the stack block, it gives way before the handshake
+ * counts or the back hint do. */
+#define REG_BLOCK_ROWS 9
+
+static int reg_block_fits(void) {
+#ifdef WITH_NCURSES
+    return LINES - getcury(stdscr) >= REG_BLOCK_ROWS + DETAIL_FOOTER_ROWS;
+#else
+    return 1;
+#endif
+}
+
+static const char *env_label(uint8_t env) {
+    switch (env) {
+    case REG_ENV_ANY:           return "any environment";
+    case REG_ENV_INDOOR:        return "indoor";
+    case REG_ENV_OUTDOOR:       return "outdoor";
+    case REG_ENV_NON_COUNTRY:   return "non-country entity";
+    case REG_ENV_OPCLASS_TABLE: return "Annex E table";
+    default:                    return "undefined octet";
+    }
+}
+
+static void draw_detail_regulatory(const beacon_ap_t *ap) {
+    const reg_ie_t *r = &ap->reg;
+    const reg_6g_t *g = &ap->reg6g;
+
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 REGULATORY (claimed by the AP; "
+           "observation, not an alert) \xe2\x94\x80\xe2\x94\x80\n");
+
+    tui_dim(); TPRINT("  Country:     ");
+    if (r->country_present) {
+        char col[REG_COL_MAX + 1];
+        reg_obs_column(r, NULL, 2, col, sizeof(col));  /* the code alone */
+        tui_bright(); TPRINT("%s", col);
+        tui_dim();
+        TPRINT("  %s (0x%02x), %u triplet%s%s", env_label(r->env),
+               (unsigned)r->env_raw, (unsigned)r->triplet_count,
+               r->triplet_count == 1 ? "" : "s",
+               r->triplets_truncated ? " (more dropped)" : "");
+    } else {
+        TPRINT("no Country element heard");
+    }
+    TPRINT("\n");
+
+    tui_dim(); TPRINT("  Power:       ");
+    if (r->power_constraint_present) {
+        tui_normal();
+        TPRINT("constraint %u dB", (unsigned)r->power_constraint_db);
+    } else {
+        TPRINT("no Power Constraint");
+    }
+    tui_dim(); TPRINT("   ");
+    if (r->tpc_present) {
+        tui_normal(); TPRINT("TPC Report %d dBm", (int)r->tpc_tx_power_dbm);
+    } else {
+        TPRINT("no TPC Report");
+    }
+    TPRINT("\n");
+
+    tui_dim(); TPRINT("  6 GHz info:  ");
+    if (g->he6_present) {
+        tui_normal();
+        TPRINT("Regulatory Info %u", (unsigned)g->he6_reg_info);
+        tui_dim();
+        TPRINT(" (%s)",
+               g->he6_reg_info == REG_6G_INDOOR_AP   ? "Indoor AP" :
+               g->he6_reg_info == REG_6G_STANDARD_AP ? "Standard Power AP" :
+               "reserved in 802.11ax-2021");
+    } else {
+        TPRINT("not advertised (no HE 6 GHz Operation Information)");
+    }
+    TPRINT("\n");
+
+    tui_dim(); TPRINT("  TPE:         ");
+    if (g->tpe_count == 0) {
+        TPRINT("no Transmit Power Envelope");
+    } else {
+        /* One row, the first value of each entry: the 20 MHz figure for
+         * EIRP, the first subchannel for PSD. Entries are added while
+         * they fit the terminal, because a wrapped row pushes the back
+         * hint off a screen that does not scroll; the full lists are in
+         * the wifi_regulatory JSONL record. */
+#ifdef WITH_NCURSES
+        size_t room = COLS > 16 + 14 ? (size_t)(COLS - 16 - 14) : 1;
+#else
+        size_t room = 120;
+#endif
+        char line[256] = "";
+        size_t used = 0;
+        int shown = 0;
+        for (int i = 0; i < g->tpe_count && i < REG_6G_MAX_TPE; i++) {
+            const reg_tpe_t *e = &g->tpe[i];
+            char ent[64];
+            if (e->n_values)
+                snprintf(ent, sizeof(ent), "%s%s%s %.1f %s", i ? "; " : "",
+                         reg_tpe_interp_name(e->interp),
+                         e->category == REG_TPE_CAT_SUBORDINATE ? "/sub" : "",
+                         e->values_half_db[0] / 2.0,
+                         reg_tpe_is_psd(e->interp) ? "dBm/MHz" : "dBm");
+            else
+                snprintf(ent, sizeof(ent), "%s%s%s (reserved)", i ? "; " : "",
+                         reg_tpe_interp_name(e->interp),
+                         e->category == REG_TPE_CAT_SUBORDINATE ? "/sub" : "");
+            size_t el = strlen(ent);
+            if (used + el > room || used + el >= sizeof(line)) break;
+            memcpy(line + used, ent, el + 1);
+            used += el;
+            shown++;
+        }
+        tui_normal(); TPRINT("%s", line);
+        int hidden = g->tpe_count - shown;
+        if (hidden > 0) { tui_dim(); TPRINT("%s+%d more", shown ? "; " : "", hidden); }
+        if (g->tpe_truncated) { tui_dim(); TPRINT("; more dropped"); }
+    }
+    TPRINT("\n");
+
+    /* The observed-vs-claimed power delta. Not an alert (#145 ruling):
+     * the received level depends on a distance and antenna gains the
+     * sensor does not know, so the line states the one assumption it
+     * makes — free-space loss at 1 m — and what a positive excess would
+     * mean under it. */
+    reg_power_obs_t o;
+    tui_dim(); TPRINT("  Power delta: ");
+    if (!reg_obs_power(ap, &o)) {
+        TPRINT("nothing to compare (needs a TPC Report or local EIRP TPE, "
+               "and a signal)\n");
+    } else {
+        tui_normal();
+        TPRINT("heard %d dBm vs %s %.1f dBm: apparent loss %.1f dB\n",
+               o.heard_dbm,
+               o.src == REG_PWR_SRC_TPC ? "TPC Report" : "TPE local EIRP",
+               o.claimed_dbm, o.apparent_loss_db);
+        tui_dim(); TPRINT("               ");
+        if (o.excess_db > 0) {
+            tui_heat(0.7);
+            TPRINT("%.1f dB stronger than the claim allows at 1 m",
+                   o.excess_db);
+        } else {
+            tui_normal();
+            TPRINT("consistent with the claim at 1 m or more");
+        }
+        tui_dim();
+        TPRINT(" (FSPL 1 m @ %d MHz: %.1f dB)\n",
+               o.freq_mhz, o.fspl_1m_db);
+    }
+    tui_dim();
+    TPRINT("  Assumes free-space loss and 0 dBi antennas; distance unknown, "
+           "so never an alert.\n");
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter
@@ -535,6 +714,9 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         TPRINT("  (none yet — wait for a client (re)association)\n");
     }
 
+    if (reg_obs_any(&ap->reg, &ap->reg6g) && reg_block_fits())
+        draw_detail_regulatory(ap);
+
     int stack_shown = stack_block_fits();
     if (stack_shown) draw_detail_stack_measures(ap);
 
@@ -567,14 +749,21 @@ void view_beacon_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
+    int reg_w = reg_column_width();
+    char reg_rule[REG_COL_MAX + 1];
+    memset(reg_rule, '-', (size_t)reg_w);
+    reg_rule[reg_w] = '\0';
+
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %-*s  %4s\n",
            "SSID", "BSSID", "Sig", "Ch", "Enc",
-           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %4s\n",
+           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY",
+           reg_w, "REG", "Last");
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %-*s  %4s\n",
            "----------------------", "-----------------",
            "----", "-------", "-----", "---------", "--------",
-           "----------", "---", "---------", "--------", "----");
+           "----------", "---", "---------", "--------", reg_w, reg_rule,
+           "----");
     tui_normal();
 
     if (s->beacon_count == 0) {
@@ -688,11 +877,15 @@ void view_beacon_draw(const sloth_state_t *s) {
             phy_s = phy_or_csa;
         }
 
+        char reg_buf[REG_COL_MAX + 1];
+        reg_obs_column(&ap->reg, &ap->reg6g, reg_w, reg_buf, sizeof(reg_buf));
+
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %s\n",
+            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %-*s  %s\n",
                    ssid, bssid_str(ap->bssid), sig_buf, ch_buf,
-                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s, age_buf);
+                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s,
+                   reg_w, reg_buf, age_buf);
             tui_reset();
         } else {
             /* dim hidden SSIDs */
@@ -758,6 +951,15 @@ void view_beacon_draw(const sloth_state_t *s) {
              * transient fact and the more urgent one. */
             if (ap->pending_csa_channel) tui_heat(0.8);
             TPRINT("  %-8.8s", phy_s);
+
+            /* REG (#101 slice B): what the AP claims, never a verdict.
+             * Dim when nothing was ever parsed; heat only for a
+             * malformed element, the one token that is itself a
+             * signal. */
+            if (!reg_obs_any(&ap->reg, &ap->reg6g)) tui_dim();
+            else if (strstr(reg_buf, "MAL"))         tui_heat(0.7);
+            else                                     tui_normal();
+            TPRINT("  %-*s", reg_w, reg_buf);
 
             tui_dim();
             TPRINT("  %s\n", age_buf);

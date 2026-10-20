@@ -178,6 +178,8 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
      * being the privileged destination. */
     reg_ie_t reg;
     reg_ie_reset(&reg);
+    reg_6g_t reg6g;          /* #101 slice B; published like `reg` */
+    reg_6g_reset(&reg6g);
     /* FNV-1a 32-bit, seeded with the offset basis. Used below to
      * accumulate a stable hash of every non-Microsoft tag-221 IE
      * body so two same-vendor APs (same firmware, same caps) produce
@@ -266,6 +268,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
          * not have to know which tags those are. Cheap — a switch on a
          * tag that is almost never one of the three. */
         reg_ie_element(&reg, tag, ie + 2, (int)tln);
+        reg_6g_element(&reg6g, tag, ie + 2, (int)tln);
         dot11_ie_phy_note(&phy, tag, ie + 2, (int)tln);
 
         if (tag == 0) {
@@ -753,6 +756,7 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
     }
 
     if (rsn_out) rsn_out->reg = reg;
+    if (rsn_out) rsn_out->reg6g = reg6g;
     if (reg_out) *reg_out = reg;
 
     /* Determine encryption, strongest first */
@@ -1219,6 +1223,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
                  * that omits the Country IE does not replace a stored
                  * country with "". */
                 reg_ie_merge(&g_aps[i].reg, &rsn->reg);
+                reg_6g_merge(&g_aps[i].reg6g, &rsn->reg6g);
                 /* Neighbors — merge new entries by BSSID; cap at the
                  * stored array size. */
                 for (int k = 0; k < rsn->neighbor_count; k++) {
@@ -1352,6 +1357,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
          * freshly zeroed envelope — so "absent in this frame" means
          * absent on a new entry too, not a stored zero (#101). */
         reg_ie_merge(&g_aps[slot].reg, &rsn->reg);
+        reg_6g_merge(&g_aps[slot].reg6g, &rsn->reg6g);
         int nc = rsn->neighbor_count;
         if (nc > MAX_AP_NEIGHBORS) nc = MAX_AP_NEIGHBORS;
         memcpy(g_aps[slot].neighbors, rsn->neighbors,

@@ -167,6 +167,9 @@ typedef struct {
      * call sites. The two outputs are written from the same parse, so
      * they never disagree. */
     reg_ie_t reg;
+    /* 6 GHz Regulatory Info and Transmit Power Envelope from this frame
+     * (#101 slice B), carried for beacon_record the same way. */
+    reg_6g_t reg6g;
 } beacon_rsn_t;
 
 /* RSN_SUITE_BIT, the RSN_AKM_* families and RSN_CIPHER_* live in

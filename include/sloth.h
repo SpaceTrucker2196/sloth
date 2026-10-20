@@ -9,6 +9,7 @@
  * needs only <stdint.h>, and the alternative was a second copy of
  * the type. */
 #include "reg_ie.h"
+#include "reg_6g.h"   /* beacon_ap_t embeds reg_6g_t too (#101 slice B) */
 
 /* The view and alert-type lists, each generated from its own .def
  * (#117). Re-included here so every file that took view_t or
@@ -1427,6 +1428,12 @@ typedef struct {
     uint16_t fuzz_ie_overruns;
     uint16_t fuzz_oversize_ssid;
     uint16_t fuzz_truncated_rsn;
+    /* 6 GHz regulatory claims (#101 slice B): the HE 6 GHz Operation
+     * Information's Regulatory Info subfield and the Transmit Power
+     * Envelope elements, folded in by reg_6g_merge() beside `reg` below
+     * and on the same terms — per element, sticky, *_present / count
+     * checked before any value is read. */
+    reg_6g_t reg6g;
     /* Regulatory envelope this BSSID claims (#101 slice 2) — Country
      * (tag 7), Power Constraint (32) and TPC Report (35) as
      * src/reg_ie.c read them, folded in per element by reg_ie_merge().

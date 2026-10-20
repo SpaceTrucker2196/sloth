@@ -85,6 +85,8 @@ CORE_COMMON_SRCS = \
        src/views/ssdp.c      \
        src/onvif_discovery.c \
        src/reg_ie.c          \
+       src/reg_6g.c          \
+       src/reg_obs.c         \
        src/beacon_snoop.c    \
        src/views/beacon.c    \
        src/deauth_snoop.c    \

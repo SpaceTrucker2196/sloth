@@ -387,14 +387,75 @@ follow-up (known-stack hash table, jitter threshold, verdict layer) is
 written up in
 [`attack-hardware-fingerprints.md`](../wiki/attack-hardware-fingerprints.md).
 
+## Regulatory claims — `REG` column and `REGULATORY` block (#101)
+
+What the AP *claims* about its regulatory envelope: the Country (tag 7),
+Power Constraint (32) and TPC Report (35) elements of IEEE 802.11-2020
+§9.4.2.8/13/16, and on 6 GHz the HE 6 GHz Operation Information's
+Regulatory Info subfield (802.11ax-2021 §9.4.2.249) and the Transmit
+Power Envelope (tag 195, §9.4.2.161). Retained per BSSID and sticky: a
+beacon that omits an element keeps the last one heard. Nothing here is
+a verdict on legality — that needs the regulatory table, a separate
+slice.
+
+The list's `REG` column is the compact form. Every other column is
+fixed, so `REG` takes what is left of the terminal (4 to 28 cells) and
+adds tokens in priority order while they fit:
+
+| Token | Meaning |
+|---|---|
+| `US`, `US/I`, `US/O`, `US/X`, `US/T`, `US/?` | Country code and environment: any, indoor, outdoor, non-country entity, Annex E table number, undefined octet. Bytes outside `[A-Za-z0-9]` print as `?` |
+| `--` | regulatory elements arrived, but no Country element |
+| `MAL` | some regulatory element from this BSSID was malformed (heat-coloured — the one token that is itself a signal) |
+| `6G:IN` / `6G:SP` / `6G:Rn` | 6 GHz Regulatory Info: Indoor AP, Standard Power AP, reserved value n |
+| `TPCn` | TPC Report transmit power, dBm |
+| `PCn` | Power Constraint, dB |
+| `TPEn` | n Transmit Power Envelope entries |
+| `-` | nothing regulatory ever parsed |
+
+The detail screen (Enter) adds a `REGULATORY` block below `CAPTURED
+HANDSHAKES`, drawn only for an AP that sent a regulatory element and
+only when it and the back hint fit (the screen does not scroll):
+
+```
+ ── REGULATORY (claimed by the AP; observation, not an alert) ──
+  Country:     US  indoor (0x49), 1 triplet
+  Power:       no Power Constraint   TPC Report 0 dBm
+  6 GHz info:  Regulatory Info 0 (Indoor AP)
+  TPE:         reg_client_eirp_psd -1.0 dBm/MHz
+  Power delta: heard -20 dBm vs TPC Report 0.0 dBm: apparent loss 20.0 dB
+               26.7 dB stronger than the claim allows at 1 m (FSPL 1 m @ 5180 MHz: 46.7 dB)
+  Assumes free-space loss and 0 dBi antennas; distance unknown, so never an alert.
+```
+
+**The power delta is an observation, not an alert** (owner ruling,
+plan #145). It compares the most recent signal reading with the power
+the AP claims — the TPC Report first, because §9.4.2.16 makes that the
+power the frame was sent at; else the default-category local EIRP TPE,
+which is only a ceiling. Apparent loss is claim minus reading; free-
+space loss at 1 m is `20 log10(f_MHz) - 27.55`. A positive excess means
+the AP was heard stronger than a transmitter at the claimed power
+could produce at a metre in free space. That needs antenna gain, the
+sensor within a metre, or a claim that is not true — and the sensor
+cannot tell which, because it knows neither the distance nor the
+antennas. A regulatory-client or PSD envelope is never used as the
+claim: it bounds the clients, or a per-MHz density, not the AP's own
+power.
+
+The TPE row lists each entry's first value (20 MHz for EIRP, the first
+subchannel for PSD) while it fits the terminal and ends with `+n more`;
+every value is in the `wifi_regulatory` JSONL record
+([jsonl-schema](../wiki/jsonl-schema.md)).
+
+
 ## View
 
 ```
- SSID                    BSSID               Sig   Ch  Enc    Pairwise   posture   AKM         WPS  Vendor     PHY       Last
- home_5g                 c8:0a:a9:1b:2c:3d   -42   36  WPA3   CCMP       REQ       SAE         -    Apple      Wi-Fi 6   2s
- corp-wifi               00:11:22:33:44:55   -55    6  WPA3   CCMP       WPA2+3    SAE,PSK     -    Cisco      Wi-Fi 6   1s
- legacy-net              de:ad:be:ef:00:01   -60   11  WPA2   CCMP       WPA1+RSN  PSK         ON   ?          Wi-Fi 4   4s
- (hidden)                d8:5d:4c:5e:6f:70   -71    6  WPA2   CCMP       cap       PSK         -    ?          Wi-Fi 5   9s
+ SSID                    BSSID               Sig   Ch  Enc    Pairwise   posture   AKM         WPS  Vendor     PHY       REG             Last
+ home_5g                 c8:0a:a9:1b:2c:3d   -42   36  WPA3   CCMP       REQ       SAE         -    Apple      Wi-Fi 6   US/I TPC17 PC3  2s
+ corp-wifi               00:11:22:33:44:55   -55    6  WPA3   CCMP       WPA2+3    SAE,PSK     -    Cisco      Wi-Fi 6   US              1s
+ legacy-net              de:ad:be:ef:00:01   -60   11  WPA2   CCMP       WPA1+RSN  PSK         ON   ?          Wi-Fi 4   -               4s
+ (hidden)                d8:5d:4c:5e:6f:70   -71    6  WPA2   CCMP       cap       PSK         -    ?          Wi-Fi 5   -               9s
 ```
 
 SSID names are coloured via the same hash-palette as Probe — same SSID

@@ -74,6 +74,8 @@ void run_beacon_snoop_tests(void);
 void run_reg_ie_tests(void);
 void run_reg_table_tests(void);
 void run_reg_rules_tests(void);
+void run_reg_6g_tests(void);              /* tests/test_reg_6g.c (#101 slice B) */
+void run_reg_obs_tests(void);             /* tests/test_reg_obs.c (#101 slice B) */
 void run_ble_snoop_tests(void);           /* tests/test_ble_snoop.c (#144 slice 1) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
@@ -258,6 +260,8 @@ int main(void) {
     run_reg_ie_tests();
     run_reg_table_tests();
     run_reg_rules_tests();
+    run_reg_6g_tests();
+    run_reg_obs_tests();
     run_deauth_snoop_tests();
     run_flood_window_tests();
     run_clock_seam_tests();
