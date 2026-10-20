@@ -393,6 +393,30 @@ jobs:
 
           exit "$fail"
 
+      # #100, closed won't-do 2026-10-19: the data socket carries no
+      # encryption by owner decision (docs/wiki/data-socket-exposure.md),
+      # so no TLS library may ever be linked. A NEEDED entry for one is
+      # the failure; tunnelling (ssh -L, stunnel, examples/forwarder)
+      # stays the answer for remote consumers.
+      - name: Verify no TLS library is linked (default and embedded)
+        run: |
+          set -e
+          fail=0
+          tls='lib(ssl|crypto|mbedtls|mbedx509|mbedcrypto|gnutls|wolfssl|nss3|bearssl)[.-]'
+          # ldd, not readelf NEEDED: a TLS library pulled in through
+          # another dependency (libcurl-style) is linked all the same.
+          check() {
+            if ldd sloth | grep -Eq "$tls"; then
+              echo "FAIL: $1 build links a TLS library:" >&2
+              ldd sloth | grep -E "$tls" >&2
+              fail=1
+            fi
+          }
+          check default
+          make clean && make embedded
+          check embedded
+          exit "$fail"
+
   # Software bill of materials (#142, owner approved 2026-10-15). Syft via
   # anchore/sbom-action, CycloneDX JSON, kept as a build artifact. The
   # in-tree `make sbom` is the fallback for hosts without CI; it names
