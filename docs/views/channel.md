@@ -36,8 +36,24 @@ A known, accepted gap: `channel_summary_t` rows are still keyed by
 channel *number* alone, so a 5 GHz AP and a 6 GHz AP that happen to
 share a number are one row, not two — `ap_count` and `Top SSID` mix
 both, and the row's band is whichever source won promotion (6 GHz wins
-if either AP reported it). That is a data-model change bigger than this
-fix, not swept in here.
+if either AP reported it). Fixing that honestly needs either a positive
+per-AP band signal sloth does not parse today, or accepting that an
+unsourced AP merges with whatever already holds the number — both
+bigger than this fix, not swept in here (#149's tracking note).
+
+**The health half does not share that gap (#149).** `src/rf_quality.c`
+keys its internal counters by `(channel, band)`, with `band` read from
+the frame's own radiotap frequency — a fact about the radio, never a
+guess from an IE that may or may not be present. Before this, a single
+shared counter and ageing window meant a 6 GHz network's retry ratio
+could be diluted by an unrelated 5 GHz network sharing the channel
+number, and worse: a band that went quiet never rolled to "not enough
+to say" if the *other* band kept the shared window artificially fresh.
+Each band now ages out on its own schedule. The `retry` / `ctrl` cell
+shown against a channel-number row is still the **sum** across every
+band sloth has measured there, because the row itself stays one per
+number — but that sum is no longer corrupted by one band's staleness
+riding on the other's traffic.
 
 ## What sloth captures
 

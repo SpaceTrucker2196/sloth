@@ -277,6 +277,29 @@ static void test_freq_to_channel_unmapped_is_zero(void) {
     ASSERT_EQ(radiotap_freq_to_channel(9000), 0);
 }
 
+/* Same boundaries as test_freq_to_channel_all_bands, read as a band.
+ * 5745 MHz (channel 149) and 6175 MHz (also channel 149, 6 GHz) prove
+ * the point #149 is about: the frequency tells the two apart even
+ * though radiotap_freq_to_channel() maps them to the same number. */
+static void test_freq_to_band_all_bands(void) {
+    ASSERT_EQ(radiotap_freq_to_band(2412), RT_BAND_2GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(2472), RT_BAND_2GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(2484), RT_BAND_2GHZ);   /* Japan ch 14 */
+    ASSERT_EQ(radiotap_freq_to_band(5180), RT_BAND_5GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(5745), RT_BAND_5GHZ);   /* ch 149, 5 GHz */
+    ASSERT_EQ(radiotap_freq_to_band(5955), RT_BAND_6GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(6175), RT_BAND_6GHZ);   /* ch 149, 6 GHz */
+    ASSERT_EQ(radiotap_freq_to_band(7115), RT_BAND_6GHZ);
+}
+
+static void test_freq_to_band_unmapped_is_unknown(void) {
+    ASSERT_EQ(radiotap_freq_to_band(0),    RT_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(900),  RT_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(2400), RT_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(5000), RT_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(9000), RT_BAND_UNKNOWN);
+}
+
 void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: field decoding");
     RUN_TEST(test_signal_only);
@@ -300,4 +323,6 @@ void run_radiotap_tests(void) {
     TEST_SUITE("radiotap: frequency mapping");
     RUN_TEST(test_freq_to_channel_all_bands);
     RUN_TEST(test_freq_to_channel_unmapped_is_zero);
+    RUN_TEST(test_freq_to_band_all_bands);
+    RUN_TEST(test_freq_to_band_unmapped_is_unknown);
 }

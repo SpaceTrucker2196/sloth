@@ -62,4 +62,18 @@ int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out);
  * about what channel an AP is on. Returns 0 for anything unmapped. */
 int radiotap_freq_to_channel(int mhz);
 
+/* Which band a frequency falls in. A channel NUMBER alone cannot say
+ * this — 5 GHz and 6 GHz channel numbers overlap (see sloth.h's
+ * ap_band_label comment) — but the radio frequency radiotap reports
+ * never does, so this is the one place band is unambiguous rather
+ * than a heuristic over an IE that may or may not be present (#149). */
+typedef enum {
+    RT_BAND_UNKNOWN = 0,
+    RT_BAND_2GHZ    = 1,
+    RT_BAND_5GHZ    = 2,
+    RT_BAND_6GHZ    = 3,
+} radiotap_band_t;
+
+radiotap_band_t radiotap_freq_to_band(int mhz);
+
 #endif /* SLOTH_RADIOTAP_H */

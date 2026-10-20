@@ -330,6 +330,9 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     }
     int8_t signal  = rt.signal_dbm;
     int    channel = rt.channel;
+    /* Band from the radio's own frequency, never from a channel number
+     * alone (#149: 5 GHz and 6 GHz channel numbers overlap). */
+    const radiotap_band_t band = radiotap_freq_to_band(rt.freq_mhz);
 
     /* ── One clock for this frame (#92) ──────────────────────────
      *
@@ -401,7 +404,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
      * channel health is about the air, not about what the frame said —
      * and a frame that failed its FCS is still evidence the channel is
      * struggling even though its contents are untrustworthy. */
-    rf_quality_observe(channel, fr.retry ? 1 : 0, rt.bad_fcs, fts);
+    rf_quality_observe(channel, band, fr.retry ? 1 : 0, rt.bad_fcs, fts);
 
     /* Log every frame for the monitor packets band, before the per-type
      * dispatch. The view hands out addr2 only where the frame has one —

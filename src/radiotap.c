@@ -14,6 +14,15 @@ int radiotap_freq_to_channel(int mhz) {
     return 0;
 }
 
+/* Same ranges as radiotap_freq_to_channel, read as a band rather than a
+ * number, so the two can never disagree about where a frequency sits. */
+radiotap_band_t radiotap_freq_to_band(int mhz) {
+    if ((mhz >= 2412 && mhz <= 2472) || mhz == 2484) return RT_BAND_2GHZ;
+    if (mhz >= 5160 && mhz <= 5895)                  return RT_BAND_5GHZ;
+    if (mhz >= 5955 && mhz <= 7115)                  return RT_BAND_6GHZ;
+    return RT_BAND_UNKNOWN;
+}
+
 int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out) {
     if (!out) return 0;
     memset(out, 0, sizeof(*out));

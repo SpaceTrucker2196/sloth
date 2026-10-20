@@ -7,12 +7,13 @@
 #include "sensor_health.h"
 
 typedef struct {
-    int      channel;
-    uint32_t frames;
-    uint32_t retries;
-    uint32_t bad_fcs;
-    time_t   window_start;   /* when the current counting window opened */
-    time_t   last_seen;
+    int             channel;
+    radiotap_band_t band;     /* #149: part of the key, see rf_quality.h */
+    uint32_t        frames;
+    uint32_t        retries;
+    uint32_t        bad_fcs;
+    time_t          window_start;   /* when the current counting window opened */
+    time_t          last_seen;
 } rf_chan_t;
 
 /* The probe thread observes (probe.c, per monitor-mode frame) while the
@@ -25,9 +26,9 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static rf_chan_t       g_ch[MAX_RF_CHANNELS];
 static int             g_n;
 
-static rf_chan_t *find(int channel) {
+static rf_chan_t *find(int channel, radiotap_band_t band) {
     for (int i = 0; i < g_n; i++)
-        if (g_ch[i].channel == channel) return &g_ch[i];
+        if (g_ch[i].channel == channel && g_ch[i].band == band) return &g_ch[i];
     return NULL;
 }
 
@@ -45,19 +46,21 @@ static void roll_if_stale(rf_chan_t *c, time_t now) {
     }
 }
 
-void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now) {
+void rf_quality_observe(int channel, radiotap_band_t band,
+                        int retry, int bad_fcs, time_t now) {
     if (channel <= 0) return;             /* unmapped frequency */
 
     /* Set under the lock, reported after it. See the eviction branch. */
     int evicted = 0;
 
     pthread_mutex_lock(&g_mu);
-    rf_chan_t *c = find(channel);
+    rf_chan_t *c = find(channel, band);
     if (!c) {
         if (g_n < MAX_RF_CHANNELS) {
             c = &g_ch[g_n++];
             memset(c, 0, sizeof(*c));
             c->channel      = channel;
+            c->band         = band;
             c->window_start = now;
         } else {
             /* Table full: evict the stalest channel. A hop list longer
@@ -86,6 +89,7 @@ void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now) {
             c = &g_ch[oldest];
             memset(c, 0, sizeof(*c));
             c->channel      = channel;
+            c->band         = band;
             c->window_start = now;
         }
     }
@@ -110,40 +114,62 @@ static int pct_locked(rf_chan_t *c, time_t now, int want_fcs) {
     return (int)((hits * 100u) / c->frames);
 }
 
-static int pct_of(int channel, time_t now, int want_fcs) {
+static int pct_of(int channel, radiotap_band_t band, time_t now, int want_fcs) {
     pthread_mutex_lock(&g_mu);
-    int pct = pct_locked(find(channel), now, want_fcs);
+    int pct = pct_locked(find(channel, band), now, want_fcs);
     pthread_mutex_unlock(&g_mu);
     return pct;
 }
 
-int rf_quality_retry_pct(int channel, time_t now)  { return pct_of(channel, now, 0); }
-int rf_quality_badfcs_pct(int channel, time_t now) { return pct_of(channel, now, 1); }
+int rf_quality_retry_pct(int channel, radiotap_band_t band, time_t now) {
+    return pct_of(channel, band, now, 0);
+}
+int rf_quality_badfcs_pct(int channel, radiotap_band_t band, time_t now) {
+    return pct_of(channel, band, now, 1);
+}
 
-int rf_quality_is_degraded(int channel, time_t now) {
-    int pct = rf_quality_retry_pct(channel, now);
+int rf_quality_is_degraded(int channel, radiotap_band_t band, time_t now) {
+    int pct = rf_quality_retry_pct(channel, band, now);
     return pct >= RF_RETRY_DEGRADED_PCT;   /* -1 (unknown) is not degraded */
 }
 
 /* One lock hold for the whole pass, so a row's frame count and both
  * ratios describe the same instant instead of three reads the probe
- * thread can interleave with. */
+ * thread can interleave with.
+ *
+ * Sums every band bucket sharing the row's channel NUMBER (#149):
+ * channel_summary_t has one row per number, not per band (see the
+ * contract in rf_quality.h), so this reproduces exactly what a single
+ * shared bucket used to report when only one band was ever seen on a
+ * number, and correctly drops a band's contribution once ITS OWN
+ * window rolls rather than keeping it alive on an unrelated band's
+ * traffic. */
 void rf_quality_snapshot(sloth_state_t *s, time_t now) {
     if (!s) return;
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < s->channel_count; i++) {
         channel_summary_t *row = &s->channels[i];
-        rf_chan_t *c = find(row->channel);
-        if (!c) {
+        uint32_t frames = 0, retries = 0, bad_fcs = 0;
+        int      seen = 0;
+        for (int j = 0; j < g_n; j++) {
+            if (g_ch[j].channel != row->channel) continue;
+            roll_if_stale(&g_ch[j], now);
+            frames  += g_ch[j].frames;
+            retries += g_ch[j].retries;
+            bad_fcs += g_ch[j].bad_fcs;
+            seen = 1;
+        }
+        if (!seen) {
             row->frames     = 0;
             row->retry_pct  = -1;
             row->badfcs_pct = -1;
             continue;
         }
-        roll_if_stale(c, now);
-        row->frames     = c->frames;
-        row->retry_pct  = pct_locked(c, now, 0);
-        row->badfcs_pct = pct_locked(c, now, 1);
+        row->frames     = frames;
+        row->retry_pct  = frames >= RF_MIN_FRAMES
+                         ? (int)((retries * 100u) / frames) : -1;
+        row->badfcs_pct = frames >= RF_MIN_FRAMES
+                         ? (int)((bad_fcs * 100u) / frames) : -1;
     }
     pthread_mutex_unlock(&g_mu);
 }

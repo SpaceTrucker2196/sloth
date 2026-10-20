@@ -24,6 +24,7 @@
 #define SLOTH_RF_QUALITY_H
 
 #include "sloth.h"
+#include "radiotap.h"   /* radiotap_band_t */
 
 /* Channels tracked concurrently. 2.4 GHz has 14, 5 GHz ~25 usable,
  * 6 GHz 59 — but a single radio only ever visits a hop list, so this
@@ -43,26 +44,49 @@
  * a channel that recovers stops being reported as degraded. */
 #define RF_WINDOW_SECS 300
 
-/* Record one observed frame on `channel`. `retry` is the 802.11 Frame
- * Control retry bit; `bad_fcs` the radiotap FCS-failed flag. A frame
- * with a failed FCS still counts as a frame — it is evidence about the
- * channel even though its contents are untrustworthy. */
-void rf_quality_observe(int channel, int retry, int bad_fcs, time_t now);
+/* Record one observed frame on `channel`/`band`. `retry` is the 802.11
+ * Frame Control retry bit; `bad_fcs` the radiotap FCS-failed flag. A
+ * frame with a failed FCS still counts as a frame — it is evidence
+ * about the channel even though its contents are untrustworthy.
+ *
+ * `band`, keyed alongside `channel` (#149): 5 GHz and 6 GHz channel
+ * numbers overlap (37, 149, 165, …), so a bare channel number pools
+ * two physically different radio channels into one counter and one
+ * ageing window — a degraded 6 GHz network's retry ratio diluted by an
+ * unrelated healthy 5 GHz one sharing the number, and worse, a stale
+ * window kept artificially "live" by the other band's unrelated
+ * traffic rather than rolling to unknown on its own schedule. `band`
+ * comes from radiotap_freq_to_band() at the one call site that has a
+ * real frequency (capture/probe.c) — it is a fact about the radio, not
+ * a guess from an IE that may or may not be present. */
+void rf_quality_observe(int channel, radiotap_band_t band,
+                        int retry, int bad_fcs, time_t now);
 
-/* Retry percentage for `channel` over the window, or -1 when fewer
- * than RF_MIN_FRAMES have been seen (i.e. "not enough to say"). */
-int rf_quality_retry_pct(int channel, time_t now);
+/* Retry percentage for `channel`/`band` over the window, or -1 when
+ * fewer than RF_MIN_FRAMES have been seen (i.e. "not enough to say"). */
+int rf_quality_retry_pct(int channel, radiotap_band_t band, time_t now);
 
 /* FCS-failure percentage, same contract. */
-int rf_quality_badfcs_pct(int channel, time_t now);
+int rf_quality_badfcs_pct(int channel, radiotap_band_t band, time_t now);
 
-/* True when the channel has enough traffic to judge and its retry
+/* True when channel/band has enough traffic to judge and its retry
  * ratio is at or above RF_RETRY_DEGRADED_PCT. */
-int rf_quality_is_degraded(int channel, time_t now);
+int rf_quality_is_degraded(int channel, radiotap_band_t band, time_t now);
 
 /* Merge the live counters into `s->channels[]`, which the [m] Channel
  * view renders. Rows for channels with no beacon are not created —
- * this annotates the existing summary rather than owning it. */
+ * this annotates the existing summary rather than owning it.
+ *
+ * channel_summary_t has one row per channel NUMBER, not per band
+ * (channel.c's own band-identification question is a separate,
+ * harder problem — see #149's tracking comment — because a beacon's
+ * channel_source IE is sometimes absent even on the band it would
+ * have named, where a frame's radiotap frequency never is). So this
+ * sums every band this module has measured under that number into the
+ * row's frames/retry_pct/badfcs_pct, which is exactly what it already
+ * read before bands were tracked separately — the fix below is that
+ * each band now ages out of that sum on its own schedule instead of
+ * being kept alive by an unrelated band's traffic. */
 void rf_quality_snapshot(sloth_state_t *s, time_t now);
 
 /* Drop everything — tests, and channel-view clears. */

@@ -13,10 +13,22 @@
 
 #define T0 1700000000L
 
+/* Every pre-#149 test feeds and reads a single band consistently, so
+ * using RT_BAND_UNKNOWN throughout reproduces exactly the old
+ * single-bucket-per-channel behaviour; only the band-separation tests
+ * below mix bands on one channel number. */
+#define B RT_BAND_UNKNOWN
+
 /* Feed `n` frames, of which `retries` carry the retry bit. */
 static void feed(int ch, int n, int retries, int badfcs, time_t at) {
     for (int i = 0; i < n; i++)
-        rf_quality_observe(ch, i < retries, i < badfcs, at);
+        rf_quality_observe(ch, B, i < retries, i < badfcs, at);
+}
+
+static void feed_band(int ch, radiotap_band_t band, int n, int retries,
+                       int badfcs, time_t at) {
+    for (int i = 0; i < n; i++)
+        rf_quality_observe(ch, band, i < retries, i < badfcs, at);
 }
 
 /* ── ratios ──────────────────────────────────────────────── */
@@ -24,14 +36,14 @@ static void feed(int ch, int n, int retries, int badfcs, time_t at) {
 static void test_retry_ratio(void) {
     rf_quality_clear();
     feed(6, 200, 50, 0, T0);              /* 25% retries */
-    ASSERT_EQ(rf_quality_retry_pct(6, T0), 25);
-    ASSERT_EQ(rf_quality_badfcs_pct(6, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0), 25);
+    ASSERT_EQ(rf_quality_badfcs_pct(6, B, T0), 0);
 }
 
 static void test_badfcs_ratio(void) {
     rf_quality_clear();
     feed(36, 400, 0, 40, T0);             /* 10% bad FCS */
-    ASSERT_EQ(rf_quality_badfcs_pct(36, T0), 10);
+    ASSERT_EQ(rf_quality_badfcs_pct(36, B, T0), 10);
 }
 
 /* Below the sample floor the answer is "don't know" (-1), which is a
@@ -41,21 +53,21 @@ static void test_badfcs_ratio(void) {
 static void test_below_sample_floor_is_unknown_not_zero(void) {
     rf_quality_clear();
     feed(11, 3, 1, 0, T0);
-    ASSERT_EQ(rf_quality_retry_pct(11, T0), -1);
-    ASSERT_NE(rf_quality_retry_pct(11, T0), 33);
-    ASSERT_EQ(rf_quality_is_degraded(11, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(11, B, T0), -1);
+    ASSERT_NE(rf_quality_retry_pct(11, B, T0), 33);
+    ASSERT_EQ(rf_quality_is_degraded(11, B, T0), 0);
 
     /* Exactly at the floor it becomes a measurement. */
     rf_quality_clear();
     feed(11, RF_MIN_FRAMES, RF_MIN_FRAMES, 0, T0);
-    ASSERT_EQ(rf_quality_retry_pct(11, T0), 100);
+    ASSERT_EQ(rf_quality_retry_pct(11, B, T0), 100);
 }
 
 static void test_unknown_channel_is_unknown(void) {
     rf_quality_clear();
-    ASSERT_EQ(rf_quality_retry_pct(6, T0), -1);
-    ASSERT_EQ(rf_quality_badfcs_pct(6, T0), -1);
-    ASSERT_EQ(rf_quality_is_degraded(6, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0), -1);
+    ASSERT_EQ(rf_quality_badfcs_pct(6, B, T0), -1);
+    ASSERT_EQ(rf_quality_is_degraded(6, B, T0), 0);
 }
 
 /* Channel 0 is an unmapped frequency, not a channel — counting it would
@@ -63,7 +75,7 @@ static void test_unknown_channel_is_unknown(void) {
 static void test_channel_zero_is_ignored(void) {
     rf_quality_clear();
     feed(0, 500, 400, 0, T0);
-    ASSERT_EQ(rf_quality_retry_pct(0, T0), -1);
+    ASSERT_EQ(rf_quality_retry_pct(0, B, T0), -1);
 }
 
 /* ── degradation ─────────────────────────────────────────── */
@@ -71,12 +83,12 @@ static void test_channel_zero_is_ignored(void) {
 static void test_degraded_threshold(void) {
     rf_quality_clear();
     feed(1, 200, 78, 0, T0);              /* 39% — under */
-    ASSERT_EQ(rf_quality_is_degraded(1, T0), 0);
+    ASSERT_EQ(rf_quality_is_degraded(1, B, T0), 0);
 
     rf_quality_clear();
     feed(1, 200, 80, 0, T0);              /* 40% — at the threshold */
-    ASSERT_EQ(rf_quality_retry_pct(1, T0), RF_RETRY_DEGRADED_PCT);
-    ASSERT_EQ(rf_quality_is_degraded(1, T0), 1);
+    ASSERT_EQ(rf_quality_retry_pct(1, B, T0), RF_RETRY_DEGRADED_PCT);
+    ASSERT_EQ(rf_quality_is_degraded(1, B, T0), 1);
 }
 
 /* A quiet channel is not a clean one: no traffic must never read as
@@ -84,8 +96,8 @@ static void test_degraded_threshold(void) {
 static void test_quiet_channel_is_not_degraded_but_is_unknown(void) {
     rf_quality_clear();
     feed(44, 10, 10, 0, T0);              /* 100% retries, tiny sample */
-    ASSERT_EQ(rf_quality_is_degraded(44, T0), 0);
-    ASSERT_EQ(rf_quality_retry_pct(44, T0), -1);
+    ASSERT_EQ(rf_quality_is_degraded(44, B, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(44, B, T0), -1);
 }
 
 /* ── windowing ───────────────────────────────────────────── */
@@ -96,13 +108,13 @@ static void test_quiet_channel_is_not_degraded_but_is_unknown(void) {
 static void test_window_rolls_and_clears_history(void) {
     rf_quality_clear();
     feed(6, 200, 160, 0, T0);
-    ASSERT_EQ(rf_quality_is_degraded(6, T0), 1);
+    ASSERT_EQ(rf_quality_is_degraded(6, B, T0), 1);
 
     /* Well past the window, with clean traffic. */
     time_t later = T0 + RF_WINDOW_SECS + 60;
     feed(6, 200, 0, 0, later);
-    ASSERT_EQ(rf_quality_retry_pct(6, later), 0);
-    ASSERT_EQ(rf_quality_is_degraded(6, later), 0);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, later), 0);
+    ASSERT_EQ(rf_quality_is_degraded(6, B, later), 0);
 }
 
 /* Reading the ratio after the window has expired, with no new traffic,
@@ -110,14 +122,14 @@ static void test_window_rolls_and_clears_history(void) {
 static void test_stale_window_read_reports_unknown(void) {
     rf_quality_clear();
     feed(6, 200, 160, 0, T0);
-    ASSERT_EQ(rf_quality_is_degraded(6, T0), 1);
-    ASSERT_EQ(rf_quality_retry_pct(6, T0 + RF_WINDOW_SECS + 60), -1);
+    ASSERT_EQ(rf_quality_is_degraded(6, B, T0), 1);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0 + RF_WINDOW_SECS + 60), -1);
 }
 
 static void test_backwards_clock_is_safe(void) {
     rf_quality_clear();
     feed(6, 200, 100, 0, T0);
-    ASSERT_EQ(rf_quality_retry_pct(6, T0 - 10000), 50);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0 - 10000), 50);
 }
 
 /* ── channels are independent ────────────────────────────── */
@@ -126,9 +138,9 @@ static void test_channels_tracked_separately(void) {
     rf_quality_clear();
     feed(1,  200, 180, 0, T0);
     feed(11, 200,   4, 0, T0);
-    ASSERT_EQ(rf_quality_is_degraded(1,  T0), 1);
-    ASSERT_EQ(rf_quality_is_degraded(11, T0), 0);
-    ASSERT_EQ(rf_quality_retry_pct(11, T0), 2);
+    ASSERT_EQ(rf_quality_is_degraded(1,  B, T0), 1);
+    ASSERT_EQ(rf_quality_is_degraded(11, B, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(11, B, T0), 2);
 }
 
 /* A hop list longer than the table must not lock out the channel the
@@ -139,7 +151,7 @@ static void test_table_full_evicts_stalest(void) {
         feed(i, 1, 0, 0, T0);
     /* A new channel arrives later than everything else. */
     feed(999, RF_MIN_FRAMES, RF_MIN_FRAMES, 0, T0 + 10);
-    ASSERT_EQ(rf_quality_retry_pct(999, T0 + 10), 100);
+    ASSERT_EQ(rf_quality_retry_pct(999, B, T0 + 10), 100);
 }
 
 /* #91: the eviction is a lost measurement — the displaced channel's
@@ -180,6 +192,62 @@ static void test_table_full_eviction_is_counted(void) {
     rf_quality_clear();
 }
 
+/* ── band separation (#149) ──────────────────────────────── */
+
+/* 149 is a valid channel NUMBER in both 5 GHz and 6 GHz (sloth.h's
+ * ap_band_label comment). Before this fix, a single rf_chan_t bucket
+ * was keyed on the number alone, so these two bands' retry ratios
+ * would have been pooled into one misleading figure instead of each
+ * reading its own. */
+static void test_same_channel_number_different_bands_tracked_separately(void) {
+    rf_quality_clear();
+    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);   /* 90% retries */
+    feed_band(149, RT_BAND_6GHZ, 200,   0, 0, T0);   /*  0% retries */
+
+    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_5GHZ, T0), 90);
+    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_6GHZ, T0), 0);
+    ASSERT_EQ(rf_quality_is_degraded(149, RT_BAND_5GHZ, T0), 1);
+    ASSERT_EQ(rf_quality_is_degraded(149, RT_BAND_6GHZ, T0), 0);
+}
+
+/* The harder bug #149 named: a shared bucket's window was kept
+ * perpetually "live" by whichever band happened to have fresh traffic,
+ * so a band that actually went quiet never rolled to unknown — its
+ * stale ratio rode along on an unrelated band's activity indefinitely.
+ * Each band must age out on its own schedule. */
+static void test_one_bands_window_rolling_does_not_touch_the_other(void) {
+    rf_quality_clear();
+    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);   /* degraded, then silent */
+
+    time_t later = T0 + RF_WINDOW_SECS + 60;
+    feed_band(149, RT_BAND_6GHZ, RF_MIN_FRAMES, 0, 0, later);  /* unrelated, fresh */
+
+    /* The 5 GHz bucket's own window has aged out: unknown, not the
+     * stale 90%, and never refreshed by the 6 GHz feed above. */
+    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_5GHZ, later), -1);
+    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_6GHZ, later), 0);
+}
+
+/* The channel view keys by channel NUMBER only (channel.c's own,
+ * harder band-identification question is out of this slice's scope —
+ * see #149's tracking note), so the snapshot sums every band this
+ * module has measured under that number rather than requiring the
+ * view to resolve which band is which. */
+static void test_snapshot_sums_every_band_sharing_a_channel_number(void) {
+    rf_quality_clear();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.channels[0].channel = 149;
+    s.channel_count = 1;
+
+    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);
+    feed_band(149, RT_BAND_6GHZ, 200,   0, 0, T0);
+    rf_quality_snapshot(&s, T0);
+
+    ASSERT_EQ((int)s.channels[0].frames, 400);
+    ASSERT_EQ(s.channels[0].retry_pct, 45);     /* (180+0)/400 */
+    ASSERT_EQ(s.channels[0].badfcs_pct, 0);
+}
+
 /* ── snapshot into the channel view ──────────────────────── */
 
 static void test_snapshot_annotates_existing_rows(void) {
@@ -213,15 +281,15 @@ static void test_snapshot_creates_no_rows(void) {
 static void test_snapshot_null_state_is_safe(void) {
     rf_quality_clear();
     rf_quality_snapshot(NULL, T0);
-    ASSERT_EQ(rf_quality_retry_pct(6, T0), -1);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0), -1);
 }
 
 static void test_clear_empties_everything(void) {
     rf_quality_clear();
     feed(6, 200, 100, 0, T0);
-    ASSERT_EQ(rf_quality_retry_pct(6, T0), 50);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0), 50);
     rf_quality_clear();
-    ASSERT_EQ(rf_quality_retry_pct(6, T0), -1);
+    ASSERT_EQ(rf_quality_retry_pct(6, B, T0), -1);
 }
 
 /* ── concurrency (#95) ───────────────────────────────────── */
@@ -254,7 +322,7 @@ static void *rf_race_observer(void *p) {
         int ch = a->id == 0 ? 1 + (i % 8)                       /* 1..8 */
                             : 100 + (i % (MAX_RF_CHANNELS + 32));
         int bad = (ch % 2 == 0);
-        rf_quality_observe(ch, bad, bad, (time_t)(T0 + i / 64));
+        rf_quality_observe(ch, B, bad, bad, (time_t)(T0 + i / 64));
         a->ops++;
     }
     return NULL;
@@ -284,9 +352,9 @@ static void *rf_race_reader(void *p) {
                 a->torn++;
         }
         int ch  = rows[i % nrows];
-        int pct = rf_quality_retry_pct(ch, now);
+        int pct = rf_quality_retry_pct(ch, B, now);
         if (pct != -1 && pct != rf_race_expected(ch)) a->torn++;
-        int deg = rf_quality_is_degraded(ch, now);
+        int deg = rf_quality_is_degraded(ch, B, now);
         if (deg && rf_race_expected(ch) == 0) a->torn++;
         if (i % 4096 == 4095) rf_quality_clear();
         a->ops++;
@@ -316,9 +384,9 @@ static void test_concurrent_observe_snapshot(void) {
     for (int ch = 1; ch <= MAX_RF_CHANNELS; ch++)
         feed(ch, RF_MIN_FRAMES, RF_MIN_FRAMES, 0, T0 + ch);
     feed(MAX_RF_CHANNELS + 1, RF_MIN_FRAMES, 0, 0, T0 + MAX_RF_CHANNELS + 1);
-    ASSERT_EQ(rf_quality_retry_pct(1, T0 + MAX_RF_CHANNELS + 1), -1);
-    ASSERT_EQ(rf_quality_retry_pct(2, T0 + MAX_RF_CHANNELS + 1), 100);
-    ASSERT_EQ(rf_quality_retry_pct(MAX_RF_CHANNELS + 1,
+    ASSERT_EQ(rf_quality_retry_pct(1, B, T0 + MAX_RF_CHANNELS + 1), -1);
+    ASSERT_EQ(rf_quality_retry_pct(2, B, T0 + MAX_RF_CHANNELS + 1), 100);
+    ASSERT_EQ(rf_quality_retry_pct(MAX_RF_CHANNELS + 1, B,
                                    T0 + MAX_RF_CHANNELS + 1), 0);
     rf_quality_clear();
 }
@@ -344,6 +412,11 @@ void run_rf_quality_tests(void) {
     RUN_TEST(test_channels_tracked_separately);
     RUN_TEST(test_table_full_evicts_stalest);
     RUN_TEST(test_table_full_eviction_is_counted);
+
+    TEST_SUITE("rf quality: band separation (#149)");
+    RUN_TEST(test_same_channel_number_different_bands_tracked_separately);
+    RUN_TEST(test_one_bands_window_rolling_does_not_touch_the_other);
+    RUN_TEST(test_snapshot_sums_every_band_sharing_a_channel_number);
 
     TEST_SUITE("rf quality: snapshot");
     RUN_TEST(test_snapshot_annotates_existing_rows);

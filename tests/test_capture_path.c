@@ -1508,7 +1508,7 @@ static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, ts, N), N);
     ASSERT_EQ(mon_delta(m0), N);
     ASSERT_EQ((long long)(evidence_ring_last_id() - e0), N);
-    ASSERT_EQ(rf_quality_badfcs_pct(6, (time_t)1600000000), 100);
+    ASSERT_EQ(rf_quality_badfcs_pct(6, RT_BAND_2GHZ, (time_t)1600000000), 100);
     rf_quality_clear();
     evidence_ring_shutdown();
 }
