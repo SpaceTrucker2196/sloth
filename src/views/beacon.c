@@ -179,14 +179,37 @@ static void draw_wps_sessions(const beacon_ap_t *ap) {
  *     "not enough beacons yet", which a bare 0 would misstate as a
  *     perfectly scheduled AP.
  *
+ * `resets` counts every discarded baseline - a TSF that ran backwards,
+ * a changed Beacon Interval, or a gap past BEACON_AGE_SECS - so it is
+ * labelled by all three causes. A hopping capture radio or an AP at the
+ * edge of range builds up gap rebases, and calling those "TSF resets"
+ * would read as a timer restart the AP never made.
+ *
  * Measurement only. No threshold or verdict is drawn: the jitter has no
  * sourced number to compare against and the order hash has no
  * known-stack table (both wait on rig captures; see
  * docs/wiki/attack-hardware-fingerprints.md). Kept in its own function
  * so the #82 timeline work on this screen does not interleave with it. */
+#define STACK_BLOCK_ROWS 4   /* blank, header, IE order, TBTT jitter */
+#define DETAIL_FOOTER_ROWS 2 /* blank, back hint */
+
+/* The detail screen does not scroll, so a row drawn past the bottom is
+ * dropped. The block is drawn after CAPTURED HANDSHAKES and only when it
+ * and the footer both still fit: being measurement-only, it is the part
+ * that gives way, never the handshake counts or the back hint. The ANSI
+ * fallback has no screen height and always draws it. */
+static int stack_block_fits(void) {
+#ifdef WITH_NCURSES
+    return LINES - getcury(stdscr) >= STACK_BLOCK_ROWS + DETAIL_FOOTER_ROWS;
+#else
+    return 1;
+#endif
+}
+
 static void draw_detail_stack_measures(const beacon_ap_t *ap) {
     tui_dim();
-    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 STACK MEASUREMENTS \xe2\x94\x80\xe2\x94\x80\n");
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 STACK MEASUREMENTS (no threshold "
+           "until a capture backs one) \xe2\x94\x80\xe2\x94\x80\n");
 
     tui_dim(); TPRINT("  IE order:    ");
     if (ap->fp.ie_order_hash) {
@@ -212,19 +235,21 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
         tui_dim();
         TPRINT(" stddev over %u samples", (unsigned)ap->tbtt.samples);
     } else {
+        /* Every beacon carries a Timestamp (802.11-2020 §9.4.1.10);
+         * what keeps the count low is managed-mode capture (an IE blob
+         * with no frame) or too few consecutive beacons. */
         tui_dim();
-        TPRINT("not measured (%u/%d samples; needs beacons carrying the "
-               "AP's TSF)", (unsigned)ap->tbtt.samples,
+        TPRINT("not measured (%u/%d samples; monitor mode only, needs "
+               "consecutive beacons)", (unsigned)ap->tbtt.samples,
                TBTT_JITTER_MIN_SAMPLES);
     }
     if (ap->tbtt.resets) {
         tui_dim();
-        TPRINT("  %u TSF reset%s", (unsigned)ap->tbtt.resets,
+        TPRINT("  %u baseline reset%s (TSF back / BI change / gap)",
+               (unsigned)ap->tbtt.resets,
                ap->tbtt.resets == 1 ? "" : "s");
     }
     TPRINT("\n");
-    tui_dim();
-    TPRINT("  (measurements only: no threshold until a capture backs one)\n");
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter
@@ -283,8 +308,6 @@ static void draw_beacon_detail(const sloth_state_t *s) {
     tui_dim(); TPRINT("  Vendor:      ");
     if (ap->vendor[0]) tui_bright(); else tui_dim();
     TPRINT("%s\n", ap->vendor[0] ? ap->vendor : "?");
-
-    draw_detail_stack_measures(ap);
 
     /* Security */
     tui_dim();
@@ -506,7 +529,12 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         TPRINT("  (none yet — wait for a client (re)association)\n");
     }
 
-    tui_dim(); TPRINT("\n [Enter / Esc] back to beacons list\n");
+    int stack_shown = stack_block_fits();
+    if (stack_shown) draw_detail_stack_measures(ap);
+
+    tui_dim(); TPRINT("\n [Enter / Esc] back to beacons list");
+    if (!stack_shown) TPRINT("  (taller terminal shows stack measurements)");
+    TPRINT("\n");
     tui_normal();
 }
 

@@ -4287,3 +4287,16 @@ Model Name / Model Number / Serial Number attributes from M1/M2 into
 [[attack-hardware-fingerprints]] documents both and carries the refile
 text for the capture-gated remainder (known-stack table, two-radio
 Pineapple pattern, verdict layer, jitter threshold).
+
+## 2026-10-20 — #77 review: stack block moved below the handshakes, resets relabelled
+
+The `STACK MEASUREMENTS` block on the `[b]` detail screen moves from
+under `RADIO` to below `CAPTURED HANDSHAKES`, its note folds into the
+header, and it is drawn only when it and the back hint both fit. The
+screen does not scroll, and the block had been pushing the handshake
+counts and the back hint off the bottom. The reset clause now reads
+`baseline reset(s) (TSF back / BI change / gap)`, since the counter
+includes gap and Beacon Interval rebases. The unsourced "probably not
+one AP" sentence is removed from [[attack-hardware-fingerprints]]. The
+not-measured hint now names monitor mode and consecutive beacons rather
+than the TSF, which every beacon carries (802.11-2020 §9.4.1.10).

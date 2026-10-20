@@ -78,6 +78,11 @@ static void test_stack_block_jitter_below_minimum_is_not_measured(void) {
         snprintf(want, sizeof(want), "not measured (%u/%d samples",
                  (unsigned)n, TBTT_JITTER_MIN_SAMPLES);
         ASSERT(strstr(g_out, want) != NULL);
+        /* Every beacon carries a Timestamp (§9.4.1.10); the hint names
+         * what is actually missing. */
+        ASSERT(strstr(g_out, "monitor mode only, needs consecutive "
+                             "beacons") != NULL);
+        ASSERT(strstr(g_out, "AP's TSF") == NULL);
         ASSERT(strstr(g_out, " us stddev") == NULL);
     }
 }
@@ -100,13 +105,85 @@ static void test_stack_block_jitter_value_and_resets(void) {
     g_s.beacon_aps[0].tbtt.resets   = 3;
     draw(&g_s, g_out, sizeof(g_out));
     ASSERT(strstr(g_out, "300 us stddev over 2 samples") != NULL);
-    ASSERT(strstr(g_out, "3 TSF resets") != NULL);
+    /* Every discarded baseline counts, not only a TSF that ran back. */
+    ASSERT(strstr(g_out, "3 baseline resets (TSF back / BI change / gap)")
+           != NULL);
+    ASSERT(strstr(g_out, "TSF reset") == NULL);
     ASSERT(strstr(g_out, "no threshold") != NULL);
 
-    /* No resets: the reset clause is absent rather than "0 TSF resets". */
+    /* No resets: the clause is absent rather than "0 baseline resets". */
     g_s.beacon_aps[0].tbtt.resets = 0;
     draw(&g_s, g_out, sizeof(g_out));
-    ASSERT(strstr(g_out, "TSF reset") == NULL);
+    ASSERT(strstr(g_out, "baseline reset") == NULL);
+}
+
+/* The detail screen does not scroll: a row drawn past the bottom is
+ * dropped. The stack block is measurement-only, so it is drawn after
+ * CAPTURED HANDSHAKES and only when it and the footer both fit; it is
+ * the part that gives way, never the handshake counts or the back hint.
+ *
+ * Measured at 100 columns the tab bar wraps to six rows plus the rule,
+ * so the view starts on row 7. An empty-state AP takes 29 view rows
+ * without the block (36 lines in all), the block adds 4, so 40 is the
+ * shortest screen that holds everything and 39 the tallest that must
+ * drop the block. */
+static void draw_detail_at(int rows) {
+    seed(&g_s);
+    g_s.active_view = VIEW_BEACON;
+    g_s.beacon_aps[0].fp.ie_order_hash  = 0x1a2b3c4du;
+    g_s.beacon_aps[0].fp.ie_order_count = 14;
+    g_s.beacon_aps[0].tbtt.samples      = 4;
+    g_s.beacon_aps[0].tbtt.resets       = 2;
+    ASSERT_EQ(tui_init_offscreen(rows, 100), 0);
+    sloth_clock_test_set(NULL, fixed_wall);
+    tui_test_erase();
+    tui_draw(&g_s);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_stack_block_drawn_when_it_fits(void) {
+    draw_detail_at(40);
+    int miss = runner_screen_find("STACK MEASUREMENTS") < 0 ||
+               runner_screen_find("[Enter / Esc]") < 0;
+    ASSERT_SCREEN_HAS("(none yet");
+    ASSERT_SCREEN_HAS("STACK MEASUREMENTS (no threshold");
+    ASSERT_SCREEN_HAS("TBTT jitter: 0 us stddev over 4 samples");
+    ASSERT_SCREEN_HAS("[Enter / Esc] back to beacons list");
+    ASSERT_SCREEN_LACKS("taller terminal");
+    /* Below the handshakes, not above them. */
+    ASSERT(runner_screen_find("STACK MEASUREMENTS") >
+           runner_screen_find("CAPTURED HANDSHAKES"));
+    if (miss) tui_test_dump(stderr);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* Seen to fail twice: with the block moved back to its first position
+ * under RADIO (the back hint went off the bottom, and the 40-row case
+ * caught the block drawn above the handshakes), and with
+ * stack_block_fits() forced to 1 (the back hint went off). */
+static void test_stack_block_gives_way_to_handshakes_and_footer(void) {
+    draw_detail_at(39);
+    int miss = runner_screen_find("(none yet") < 0 ||
+               runner_screen_find("[Enter / Esc]") < 0;
+    ASSERT_SCREEN_HAS("CAPTURED HANDSHAKES");
+    ASSERT_SCREEN_HAS("(none yet");
+    ASSERT_SCREEN_HAS("[Enter / Esc] back to beacons list  (taller "
+                      "terminal shows stack measurements)");
+    ASSERT_SCREEN_LACKS("STACK MEASUREMENTS");
+    ASSERT_SCREEN_LACKS("TBTT jitter");
+    if (miss) tui_test_dump(stderr);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* At 100x33 the screen already ran out before this block existed (29
+ * view rows into 26), so the most this slice can promise there is that
+ * the block adds nothing: it is not drawn at all. */
+static void test_stack_block_absent_at_100x33(void) {
+    draw_detail_at(33);
+    ASSERT_SCREEN_HAS("AP DETAIL");
+    ASSERT_SCREEN_LACKS("STACK MEASUREMENTS");
+    ASSERT_SCREEN_LACKS("IE order:");
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
 void run_beacon_stack_detail_tests(void) {
@@ -116,4 +193,7 @@ void run_beacon_stack_detail_tests(void) {
     RUN_TEST(test_stack_block_jitter_below_minimum_is_not_measured);
     RUN_TEST(test_stack_block_jitter_real_zero_is_a_reading);
     RUN_TEST(test_stack_block_jitter_value_and_resets);
+    RUN_TEST(test_stack_block_drawn_when_it_fits);
+    RUN_TEST(test_stack_block_gives_way_to_handshakes_and_footer);
+    RUN_TEST(test_stack_block_absent_at_100x33);
 }

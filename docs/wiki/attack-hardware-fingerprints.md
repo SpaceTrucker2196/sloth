@@ -35,30 +35,36 @@ hand-built frames. None is a verdict and none raises an alert.
 
 ### On the `[b]` detail screen
 
-The `STACK MEASUREMENTS` block sits under `RADIO`. It never prints a
-bare `0` for either field, because a zero means a different thing for
-each:
+The `STACK MEASUREMENTS` block sits below `CAPTURED HANDSHAKES`, just
+above the back hint. The screen does not scroll, so the block is drawn
+only when it and the footer both fit; on a shorter terminal it is
+dropped and the footer says `(taller terminal shows stack
+measurements)`, rather than the block pushing the handshake counts off
+the bottom. It never prints a bare `0` for either field, because a zero
+means a different thing for each:
 
 ```
- ── STACK MEASUREMENTS ──
+ ── STACK MEASUREMENTS (no threshold until a capture backs one) ──
   IE order:    0x1a2b3c4d  (14 elements; JSONL ie_order_hash 439041101)
-  TBTT jitter: 312 us stddev over 48 samples  2 TSF resets
-  (measurements only: no threshold until a capture backs one)
+  TBTT jitter: 312 us stddev over 48 samples  2 baseline resets (TSF back / BI change / gap)
 ```
 
-and for an AP heard once, or only through the managed-mode scan, which
-carries no TSF:
+and for an AP heard twice (the first beacon only sets the baseline, so
+an AP heard once reads `0/2`), or seen only through the managed-mode
+scan, which is handed an IE blob with no frame and so no Timestamp:
 
 ```
   IE order:    not decoded (no elements, or the frame overran)
-  TBTT jitter: not measured (1/2 samples; needs beacons carrying the AP's TSF)
+  TBTT jitter: not measured (1/2 samples; monitor mode only, needs consecutive beacons)
 ```
 
 The hash is shown in hex and in the decimal form the JSONL record uses,
 so an operator can grep a log for the value on screen. The reset clause
-only appears when a TSF reset has happened. A BSSID whose timer keeps
-restarting is probably not one AP, so the count matters even with no
-threshold behind it.
+only appears when a baseline has been discarded, and it counts every
+cause: a TSF that ran backwards, a changed Beacon Interval, or a gap
+past `BEACON_AGE_SECS`. A hopping capture radio or an AP at the edge of
+range builds up gap rebases on its own, so the count says nothing about
+the AP by itself and carries no verdict.
 
 ### WSC M1/M2 vendor strings
 

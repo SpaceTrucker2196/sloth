@@ -357,23 +357,29 @@ new column bumps the schema and invalidates every prior database file.
 ### On the detail screen
 
 Both measurements render on the `[b]` detail screen (Enter on a row),
-in a `STACK MEASUREMENTS` block under `RADIO`. Neither ever prints a
-bare `0`, because a zero means something different for each:
+in a `STACK MEASUREMENTS` block below `CAPTURED HANDSHAKES`. The screen
+does not scroll, so the block is drawn only when it and the back hint
+both fit; otherwise it is dropped and the hint gains `(taller terminal
+shows stack measurements)`. Neither field ever prints a bare `0`,
+because a zero means something different for each:
 
 ```
- ── STACK MEASUREMENTS ──
+ ── STACK MEASUREMENTS (no threshold until a capture backs one) ──
   IE order:    0x1a2b3c4d  (14 elements; JSONL ie_order_hash 439041101)
-  TBTT jitter: 312 us stddev over 48 samples  2 TSF resets
-  (measurements only: no threshold until a capture backs one)
+  TBTT jitter: 312 us stddev over 48 samples  2 baseline resets (TSF back / BI change / gap)
 ```
 
 - `ie_order_hash` `0` renders as `not decoded (no elements, or the
   frame overran)`. The decimal form beside the hex is the value the
   JSONL record carries, so the screen and a log can be matched.
 - With fewer than `TBTT_JITTER_MIN_SAMPLES` (2) residuals the jitter
-  renders as `not measured (n/2 samples; …)`. With two or more, `0 us`
-  is printed and is a real reading.
-- The reset clause appears only when `tbtt_jitter_resets` is non-zero.
+  renders as `not measured (n/2 samples; monitor mode only, needs
+  consecutive beacons)`. The first beacon only sets the baseline, so an
+  AP heard once reads `0/2`. With two or more residuals, `0 us` is
+  printed and is a real reading.
+- The reset clause appears only when `tbtt_jitter_resets` is non-zero,
+  and is labelled `baseline reset(s) (TSF back / BI change / gap)`
+  because it counts all three causes, not only a TSF restart.
 
 The block draws no verdict and no colour heat. The capture-gated
 follow-up (known-stack hash table, jitter threshold, verdict layer) is
