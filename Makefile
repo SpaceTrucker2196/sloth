@@ -586,12 +586,15 @@ test-capture-path: test
 # -O0 test build. Deliberately not a `make test` dependency: it reports a
 # time and a slow runner is not a defect. It does fail when a table is
 # short of capacity. The recorded figure lives in docs/wiki/ring-buffers.md.
+# The binary lives under $(OBJDIR) like the objects it links: a shared
+# build/bench/ would let `make bench` in one configuration see its own
+# objects older than a binary last linked by another, and run that one.
 BENCH_SRCS  = $(wildcard tests/bench/bench_*.c)
-BENCH_BINS  = $(BENCH_SRCS:tests/bench/%.c=build/bench/%)
+BENCH_BINS  = $(BENCH_SRCS:tests/bench/%.c=$(OBJDIR)/bench/%)
 BENCH_ITERS ?= 50
 BENCH_OBJS  = $(filter-out $(OBJDIR)/src/main.o,$(APP_OBJS))
 
-build/bench/%: tests/bench/%.c $(BENCH_OBJS) $(CORE_LIB) $(OBJDIR)/.flags
+$(OBJDIR)/bench/%: tests/bench/%.c $(BENCH_OBJS) $(CORE_LIB) $(OBJDIR)/.flags
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -Iinclude -Isrc -Iresearch -o $@ $< \
 	      $(BENCH_OBJS) $(CORE_LIB) $(LDFLAGS)

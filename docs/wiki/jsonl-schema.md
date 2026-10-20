@@ -763,8 +763,9 @@ the common case exact.
 **Cadence.** Change-only, on the same cache as the entity snapshots: a
 healthy sensor emits one line per 300 s heartbeat, and any degradation
 emits immediately. The signature covers liveness, exit reasons,
-whether the channel pair agrees (`chan_confirmed_ok`), whether any
-retune has failed and its `chan_retune_reason`, the cumulative
+which `--hop` rotation slots have ever refused a retune, whether any
+retune has ever been acknowledged, whether any has failed and its
+`chan_retune_reason`, the cumulative
 drop/ifdrop counters and
 the eviction total and the five `scope*` state fields, `scope_dropped`
 included — a scope boundary starting to refuse frames is exactly the
@@ -792,9 +793,20 @@ With `--hop` on, the hopper moves both channel numbers every dwell —
 every poll at the default 250 ms — so a healthy hopping sensor emitted
 this record once a second; and a radio refusing every retune (EPERM
 without `CAP_NET_ADMIN`) failed once per retry, with the same result.
-What is news is the pair starting or stopping to agree, the first
-failure, and a change of reason; those are signed, and the numbers ride
-every emitted line and the heartbeat.
+The pair's agreement (`chan_confirmed_ok`) left it in #91's review,
+for the same reason in a less obvious shape: a `--hop` list holding one
+channel the regdomain or driver will not take (`EINVAL`) is normal, and
+each rotation then goes acknowledged, refused, acknowledged again on the
+next channel — the bit flips twice a rotation, and signing over it
+emitted 97 lines a minute in the test that now pins this. What is news
+is a channel that had not refused before starting to (the set of
+refusing rotation slots, sticky), the first failure, a change of reason,
+and the first acknowledgement ever; those are signed, and the numbers,
+`chan_confirmed_ok` and the count ride every emitted line and the
+heartbeat. The trade, named: a radio that refused for a while and then
+recovered reports the recovery on the next heartbeat, not at once —
+"recovered" and "the next channel in a rotation with one bad one" are
+the same instantaneous state, and only the second is common.
 
 ```json
 {"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"chan_retune_last_errno":16,"chan_retune_reason":"EBUSY","hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4"}

@@ -1868,7 +1868,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     struct {
         int      cap_open, cap_run, cap_exit;
         int      mon_open, mon_run, mon_exit;
-        int      retune_fail_any, chan_ok, retune_errno;
+        int      retune_fail_any, chan_ever_confirmed, retune_errno;
+        uint32_t chan_refused_mask;
         uint64_t cap_drop, cap_ifdrop, mon_drop, mon_ifdrop, evicted;
         int      storage_fail;
         int      scope_state, scope_req, scope_enf;
@@ -1899,23 +1900,33 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.mon_open    = s->mon_health.open;
     sig.mon_run     = s->mon_health.running;
     sig.mon_exit    = s->mon_health.exit_reason;
-    /* #91: the channel PAIR, not the channel numbers. With --hop on,
-     * chanhop is the only writer of both and moves them every dwell -
-     * every poll at the default 250 ms - so signing over the numbers
-     * made a healthy hopping sensor emit this record once a second, and
-     * a refusing one too, since the rotation still moves the request.
-     * Whether they agree (chan_ok) is the transition; the numbers ride
-     * every emitted line and the heartbeat. */
+    /* #91: neither the channel numbers nor whether they agree. With
+     * --hop on, chanhop is the only writer of both numbers and moves
+     * them every dwell - every poll at the default 250 ms - so signing
+     * over them made a healthy hopping sensor emit this record once a
+     * second. Their agreement (chan_confirmed_ok) is no better: with one
+     * channel in the rotation that the regdomain or driver always
+     * refuses (EINVAL for a --hop list entry it will not take - the
+     * normal case, not an edge), each rotation goes agree, refuse,
+     * agree again on the next channel, so the bit flips twice a
+     * rotation for the life of the run. What is stable under a
+     * persistent pattern and still moves on news: which rotation slots
+     * have ever refused (a new refusing channel), the reason (a new
+     * cause), whether any retune has failed, and whether any has ever
+     * been acknowledged (a radio that never got anywhere vs one that
+     * did). The numbers, the agreement bit and the count ride every
+     * emitted line and the 300 s heartbeat. The trade, named: a radio
+     * that refused for a while and then recovered says so on the next
+     * heartbeat, not immediately. */
     /* #91: the failure COUNT is an event counter. A radio that refuses
      * every retune (EPERM without CAP_NET_ADMIN is the common case)
      * fails once per retry, so signing over the count emitted this
-     * record on every retry for the life of the run. Two-state band plus
-     * the reason instead: the first failure is news, so is a change of
-     * reason, and the count itself rides every emitted line. A failure
-     * after a recovery still re-emits through chan_ok. */
-    sig.retune_fail_any = s->chan_retune_failures > 0;
-    sig.retune_errno    = s->chan_retune_last_errno;
-    sig.chan_ok     = chan_ok;
+     * record on every retry for the life of the run. Two-state band
+     * instead; the count itself rides every emitted line. */
+    sig.retune_fail_any     = s->chan_retune_failures > 0;
+    sig.retune_errno        = s->chan_retune_last_errno;
+    sig.chan_ever_confirmed = s->chan_confirmed != 0;
+    sig.chan_refused_mask   = s->chan_refused_mask;
     sig.cap_drop    = s->cap_health.ps_drop;
     sig.cap_ifdrop  = s->cap_health.ps_ifdrop;
     sig.mon_drop    = s->mon_health.ps_drop;

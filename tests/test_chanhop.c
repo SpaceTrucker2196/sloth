@@ -613,6 +613,45 @@ static void test_service_missing_set_channel_is_eopnotsupp(void) {
     ASSERT_EQ(g_hs.chan_retune_failures, 1);
 }
 
+/* The vtable contract is 0 or a negative errno. A positive return is a
+ * broken backend, and reading it as success would credit a channel the
+ * radio may never have reached - the exact misattribution #91 removed. */
+static void test_service_positive_rc_is_eio_not_success(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6 };
+    service_setup(&h, chans, 2);
+    g_fake_net.set_channel_rc = 1;
+    chanhop_service(&h, &g_hs, 0, 5);
+    chanhop_service(&h, &g_hs, 50, 5);   /* still pending-free; no retry yet */
+    ASSERT_EQ(g_hs.chan_retune_last_errno, EIO);
+    ASSERT_EQ(g_hs.chan_retune_failures, 1);
+    ASSERT_EQ(g_hs.chan_confirmed, 0);
+    ASSERT_EQ((long long)h.slots[0].visits, 0);
+    ASSERT_EQ((long long)h.slots[0].refusals, 1);
+    ASSERT_EQ((long long)g_hs.hop_activity.visits, 0);
+    ASSERT_EQ((long long)g_hs.hop_activity.frames, 0);
+    ASSERT_EQ(g_hs.scan_cur_idx, -1);
+}
+
+/* The refused-slot mask the sensor_health signature keys on: exactly
+ * the slots that refused, and sticky once set. */
+static void test_service_refused_mask_names_only_refusing_slot(void) {
+    chanhop_t h;
+    int chans[] = { 1, 6, 11 };
+    service_setup(&h, chans, 3);
+    ASSERT_EQ((long long)g_hs.chan_refused_mask, 0);
+    g_fake_net.refuse_freq_mhz = 2437;
+    g_fake_net.refuse_rc       = -EBUSY;
+    for (uint64_t t = 0; t <= 3000; t += 50)
+        chanhop_service(&h, &g_hs, t, 1);
+    ASSERT_EQ((long long)g_hs.chan_refused_mask, 1LL << 1);
+    g_fake_net.refuse_freq_mhz = 0;               /* driver relents */
+    for (uint64_t t = 3050; t <= 6000; t += 50)
+        chanhop_service(&h, &g_hs, t, 1);
+    ASSERT(h.slots[1].visits > 0);
+    ASSERT_EQ((long long)g_hs.chan_refused_mask, 1LL << 1);
+}
+
 static void test_service_success_confirms_and_marks(void) {
     chanhop_t h;
     int chans[] = { 1, 6 };
@@ -716,6 +755,8 @@ void run_chanhop_tests(void) {
     RUN_TEST(test_service_refused_channel_never_attributed);
     RUN_TEST(test_service_persistent_refusal_retries_at_bounded_rate);
     RUN_TEST(test_service_missing_set_channel_is_eopnotsupp);
+    RUN_TEST(test_service_positive_rc_is_eio_not_success);
+    RUN_TEST(test_service_refused_mask_names_only_refusing_slot);
     RUN_TEST(test_service_success_confirms_and_marks);
 #if defined(PLATFORM_LINUX) && defined(WITH_WIFI)
     RUN_TEST(test_ack_result_carries_kernel_errno);

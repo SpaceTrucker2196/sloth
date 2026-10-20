@@ -2706,6 +2706,14 @@ typedef struct {
      * successes so it names the cause of the count above. 0 = never
      * failed. chanhop_retune_reason() buckets it for display. */
     int            chan_retune_last_errno;
+    /* Rotation slots (chanhop index, CHANHOP_MAX <= 32) that have ever
+     * refused a retune, published by chanhop_service(). Sticky, so it
+     * is stable under the normal persistent case - one channel in a
+     * --hop list the regdomain or driver will not take - where the
+     * instantaneous requested/confirmed agreement flips twice per
+     * rotation. That stability is what lets the sensor_health
+     * change-only signature carry it (#91). */
+    uint32_t       chan_refused_mask;
     char           probe_err[80];   /* last probe open/set error, "" = ok */
 
     /* Capture-worker liveness and drop accounting (#91 slice 2).

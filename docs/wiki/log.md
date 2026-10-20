@@ -4128,3 +4128,18 @@ count, which made a hopping or refusing sensor emit every poll. `make
 bench` times seqnum correlation and the PNL union at full occupancy;
 the figures are in [[ring-buffers]] § Max-occupancy bench. Hop defaults
 unchanged.
+
+## 2026-10-20 — #91 review: `sensor_health` stops churning on one refused hop channel
+
+The close-out kept `chan_confirmed_ok` in the `sensor_health`
+change-only signature. With one `--hop` channel the driver always
+refuses (`EINVAL`), that bit flips twice a rotation, so the record went
+out on most polls for the life of the run. The signature now carries the
+sticky set of refusing rotation slots (`chan_refused_mask` on the state,
+published by `chanhop_service()`) and whether any retune was ever
+acknowledged, instead of the agreement bit; the emitted fields are
+unchanged ([[jsonl-schema]] § Cadence). A test drives
+`chanhop_service()` and the emitter together for 60 s and counts lines
+from the file, not from the 16 KiB `slurp()` window. A positive
+`set_channel()` return is now covered as `EIO`. `make bench` binaries
+moved under the per-config `build/<cfg>/bench/`.

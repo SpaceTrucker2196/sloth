@@ -250,6 +250,12 @@ void chanhop_service(chanhop_t *h, sloth_state_t *s, uint64_t now_ms,
                                   &s->chan_confirmed, &s->chan_retune_failures,
                                   &s->chan_retune_last_errno);
     }
+    /* Which slots have ever refused. Recomputed rather than OR-ed in on
+     * each refusal so the mask cannot drift from the per-slot tally. */
+    uint32_t refused = 0;
+    for (int i = 0; i < h->count && i < 32; i++)
+        if (h->slots[i].refusals) refused |= 1u << i;
+    s->chan_refused_mask = refused;
     /* Surface the scan state for the interface view's channel bar. */
     s->scan_chan_count = chanhop_export(h, s->scan_chans,
                                         (int)(sizeof(s->scan_chans) / sizeof(s->scan_chans[0])),

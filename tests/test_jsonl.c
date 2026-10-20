@@ -21,6 +21,8 @@
 #include "ntp_log.h"
 #include "icmp_log.h"
 #include "sloth_clock.h"
+#include "wifi_chanhop.h"
+#include "fake_platform.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
@@ -59,6 +61,19 @@ static int contains(const char *hay, const char *needle) {
 static int count_lines(const char *body) {
     int n = 0;
     for (const char *p = body; *p; p++) if (*p == '\n') n++;
+    return n;
+}
+
+/* Lines in the file itself, not in slurp()'s 16 KiB window. A
+ * sensor_health record is ~3.3 KB, so count_lines(slurp()) tops out at
+ * about five: enough to see that a change-only test failed, not how
+ * badly, and any `<= N` bound with N >= 5 would pass vacuously. */
+static int count_file_lines(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return -1;
+    int n = 0, c;
+    while ((c = fgetc(fp)) != EOF) if (c == '\n') n++;
+    fclose(fp);
     return n;
 }
 
@@ -1256,7 +1271,7 @@ static void test_sensor_health_persistent_retune_failure_does_not_churn(void) {
     ASSERT(body != NULL);
     /* One line: the first failure. Neither the climbing count nor the
      * rotation's moving request is news while the cause is unchanged. */
-    ASSERT_EQ(count_lines(body), 1);
+    ASSERT_EQ(count_file_lines(tmp_path), 1);
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -1276,7 +1291,7 @@ static void test_sensor_health_healthy_hopping_does_not_re_emit(void) {
     jsonl_close();
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
-    ASSERT_EQ(count_lines(body), 1);
+    ASSERT_EQ(count_file_lines(tmp_path), 1);
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -1294,7 +1309,7 @@ static void test_sensor_health_retune_count_alone_does_not_re_emit(void) {
     jsonl_close();
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
-    ASSERT_EQ(count_lines(body), 1);
+    ASSERT_EQ(count_file_lines(tmp_path), 1);
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -1313,8 +1328,98 @@ static void test_sensor_health_first_failure_and_new_reason_re_emit(void) {
     jsonl_close();
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
-    ASSERT_EQ(count_lines(body), 3);
+    ASSERT_EQ(count_file_lines(tmp_path), 3);
     ASSERT(contains(body, "\"chan_retune_reason\":\"EINVAL\""));
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* #91 review: the persistent case the pure-state tests above miss. A
+ * --hop list holding one channel the regdomain or driver will not take
+ * (EINVAL) is normal, and each rotation then goes ack, refusal, ack -
+ * so requested/confirmed agreement flips twice a rotation. Signing over
+ * that bit emitted 160 lines in 60 s here. Driven through the real
+ * hopper and the fake platform rather than hand-set fields, because the
+ * flip only exists in the interleaving chanhop_service() produces. */
+static time_t g_hop_wall;
+static time_t hop_wall(void) { return g_hop_wall; }
+
+static void test_sensor_health_one_refused_hop_channel_does_not_churn(void) {
+    g_hop_wall = 1700000000;
+    sloth_clock_test_set(NULL, hop_wall);
+    open_fresh();
+    fake_net_reset();
+    sloth_state_t s; seed_health(&s);
+    chanhop_t h;
+    static const int chans[] = { 1, 6, 11 };
+    ASSERT_EQ(chanhop_init(&h, chans, 3), 3);
+    g_fake_net.refuse_freq_mhz = 2462;           /* channel 11 */
+    g_fake_net.refuse_rc       = -EINVAL;
+    int flips = 0, last_ok = -1;
+    /* 60 s at the default 250 ms poll; the wall clock follows so the
+     * run is real time, but stays inside one 300 s heartbeat. */
+    for (uint64_t t = 0; t < 60000; t += 250) {
+        g_hop_wall = 1700000000 + (time_t)(t / 1000);
+        chanhop_service(&h, &s, t, 2);
+        int ok = s.chan_requested == s.chan_confirmed;
+        if (last_ok >= 0 && ok != last_ok) flips++;
+        last_ok = ok;
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    /* The scenario really is the churning one: many refusals, and the
+     * agreement bit flipping on every one of them. */
+    ASSERT(s.chan_retune_failures >= 40);
+    ASSERT(flips >= 80);
+    ASSERT_EQ(s.chan_retune_last_errno, EINVAL);
+    ASSERT_EQ((long long)s.chan_refused_mask, 1LL << 2);
+    /* Two lines: the first acknowledgement, and the first refusal of
+     * channel 11 (new slot, new reason). Every later refusal of the
+     * same channel for the same reason is not news. */
+    ASSERT_EQ(count_file_lines(tmp_path), 2);
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"chan_retune_reason\":\"EINVAL\""));
+    ASSERT(contains(body, "\"chan_confirmed_ok\":"));
+    fake_net_reset();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The other side of the bound: a SECOND channel starting to refuse is
+ * news even when the reason is the same, and the line goes out at once. */
+static void test_sensor_health_new_refusing_channel_re_emits(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested = 1; s.chan_confirmed = 1;
+    s.chan_retune_failures = 1; s.chan_retune_last_errno = EINVAL;
+    s.chan_refused_mask = 1u << 2;
+    jsonl_emit_sensor_health(&s);
+    s.chan_retune_failures = 2;
+    jsonl_emit_sensor_health(&s);                 /* same slot: quiet */
+    s.chan_refused_mask |= 1u << 1;
+    s.chan_retune_failures = 3;
+    jsonl_emit_sensor_health(&s);                 /* new slot: news */
+    jsonl_close();
+    ASSERT_EQ(count_file_lines(tmp_path), 2);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A radio that has refused everything since start (EBUSY: something
+ * else holds it) and then gets its first acknowledgement is news - the
+ * difference between "never got anywhere" and "is hopping" - even
+ * though the failure flag, reason and refused slots did not move. */
+static void test_sensor_health_first_ever_ack_re_emits(void) {
+    sloth_clock_test_set(NULL, retune_fixed_wall);
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.chan_requested = 1; s.chan_confirmed = 0;
+    s.chan_retune_failures = 3; s.chan_retune_last_errno = EBUSY;
+    s.chan_refused_mask = 1u << 0;
+    jsonl_emit_sensor_health(&s);
+    s.chan_requested = 6; s.chan_confirmed = 6;   /* first ack */
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    ASSERT_EQ(count_file_lines(tmp_path), 2);
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -2493,6 +2598,9 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_sensor_health_persistent_retune_failure_does_not_churn);
     RUN_TEST(test_sensor_health_retune_count_alone_does_not_re_emit);
     RUN_TEST(test_sensor_health_healthy_hopping_does_not_re_emit);
+    RUN_TEST(test_sensor_health_one_refused_hop_channel_does_not_churn);
+    RUN_TEST(test_sensor_health_new_refusing_channel_re_emits);
+    RUN_TEST(test_sensor_health_first_ever_ack_re_emits);
     RUN_TEST(test_sensor_health_first_failure_and_new_reason_re_emit);
     RUN_TEST(test_emit_sensor_health_worker_exit_and_drops);
     RUN_TEST(test_emit_sensor_health_eviction_tally);
