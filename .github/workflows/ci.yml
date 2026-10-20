@@ -123,30 +123,25 @@ jobs:
       # `embedded` too, because it reaches the same rule through a
       # sub-make — the path by which a $(MAKE) recursion could drop flags.
       #
-      # -Werror is dropped for this step alone (the job-level EXTRA_CFLAGS
-      # is replaced, not extended). Three gcc diagnostics fire only under
+      # -Werror is back on these three steps (#95, 2026-10-19). Until
+      # then it was dropped here: three gcc diagnostics fired only under
       # ASan instrumentation, which perturbs inlining and value-range
-      # propagation enough that gcc loses the bounds it otherwise proves:
-      #   - -Wstringop-truncation, src/dns_snoop.c:122 and :134 — strncpy
-      #     of sizeof-1 followed by an explicit NUL on the next line
-      #   - -Warray-bounds, memcpy inlined into deauth_parse at
-      #     src/deauth_snoop.c:57 — "bounds [0, 0]" for a uint8_t[6] field,
-      #     behind a len >= 24 guard
-      #   - -Wstringop-overread, the a->enc strcmp at src/wifi_assess.c:112
-      # All three are diagnostic artifacts of the instrumentation, not link
-      # failures, and none appears in any of the six advertised
-      # configurations — every one of those stays -Werror clean in the
-      # `test` job. Making them red here would fail this step for something
-      # it does not assert. Whether they are worth silencing at the source
-      # is a separate question and a separate slice.
+      # propagation enough that gcc loses bounds it otherwise proves —
+      # -Wstringop-truncation on the two first_ip strncpy sites in
+      # src/dns_snoop.c, -Warray-bounds on the address memcpys inlined into
+      # deauth_parse_frame in src/deauth_snoop.c, and -Wstringop-overread on
+      # strcmp(a->pairwise, "TKIP") in src/wifi_assess.c. Each is fixed at
+      # the source (strlen-capped memcpy; build into a local and store once;
+      # memcmp over sizeof("TKIP")), so the instrumented builds are held to
+      # the same -Werror as every other job.
       - name: Build sloth under ASan + UBSan (link check)
         env:
-          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          EXTRA_CFLAGS: -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
         run: make clean && make
 
       - name: Build embedded under ASan + UBSan (link check)
         env:
-          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          EXTRA_CFLAGS: -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
         run: make clean && make embedded
 
       # The shipped binary, executed (#119): `sloth --replay` over the
@@ -155,10 +150,10 @@ jobs:
       # flags as the link check plus -fno-sanitize-recover=all, so a UBSan
       # report aborts the run; the job's ASAN_OPTIONS keep leak detection
       # on, which makes sloth's shutdown path part of what is checked.
-      # -Werror is dropped for the reason given on the link check above.
+      # Held to -Werror like the link check above.
       - name: Replay under ASan + UBSan
         env:
-          EXTRA_CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+          EXTRA_CFLAGS: -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
         run: make clean && make replay-check REPLAY_DIR="$RUNNER_TEMP/replay"
 
   # Headless replay integration (#119, owner approved 2026-10-15). The one
