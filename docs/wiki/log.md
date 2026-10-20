@@ -4382,3 +4382,17 @@ so the provenance check runs on hosts without ieee-data. [[alerts]]
 says "one alert per identity" and spells out the per-service-instance
 mDNS keying; the Ubiquiti departure from #106 Case B is marked as
 awaiting an owner ruling.
+## 2026-10-20 — #106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE
+
+New passive observer `src/rtsp_snoop.c` reads RTSP/1.0 (RFC 2326) and
+RTSP/2.0 (RFC 7826) on TCP 554 and 8554 and pairs each DESCRIBE with its
+response by CSeq, per connection (RFC 7826 §18.20). A 200 to a DESCRIBE
+that carried no `Authorization` header, on a connection with no earlier
+401, is recorded as anonymous for that (server, port, path); the new
+`CAM_RTSP_UNAUTH` rule raises one WARN per server IP with the
+distinct-path count. It corroborates and does not confirm. No credential
+is read, stored or compared: an `Authorization` header is presence-only
+and a Request-URI with userinfo or a `user=` / `password=` parameter is
+not tracked. Two eviction kinds, `rtsp_exchange` and `rtsp_stream`,
+join the `sensor_health` breakout. Basis: `research/rfc/2326-7826-rtsp.md`;
+see [[alerts]].

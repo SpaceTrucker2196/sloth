@@ -1258,3 +1258,62 @@ void rule_beaconing(const sloth_state_t *s, time_t now) {
     struct beacon_cb bc = { .now = now };
     bd_each(beacon_cb_fire, &bc);
 }
+
+/* ── CAM_RTSP_UNAUTH (#106 slice B) ─────────────────────────
+ *
+ * An RTSP server answered DESCRIBE 200 to a request that carried no
+ * Authorization header, on a connection where it had not answered 401
+ * first. DESCRIBE's 200 is the stream description (RFC 7826 §13.2) and
+ * 401 + WWW-Authenticate is how RTSP asks for a credential (§17.4.2,
+ * §19.1), so this is a stream handed out with no authentication step on
+ * the wire. src/rtsp_snoop.c reads it from someone else's request;
+ * sloth sent nothing and never looked at a credential.
+ *
+ * One incident per server IP, however many paths: the detail carries
+ * the count of distinct anonymous paths, which only moves when a new
+ * path is seen, so the incident's observations rise with the evidence
+ * and not with every repeat DESCRIBE.
+ *
+ * WARN, the same level as CAM_WS_DISCOVERY. It corroborates anonymous
+ * stream access, it does not confirm it: the server may authenticate
+ * SETUP or PLAY instead, or admit only the requesting address, and the
+ * device need not be a camera — RTSP is also served by NVRs, encoders
+ * and media servers. The detail says "RTSP server", not "camera".
+ *
+ * Basis: RFC 2326 / RFC 7826 — see research/rfc/2326-7826-rtsp.md. */
+void rule_cam_rtsp_unauth(const sloth_state_t *s, time_t now) {
+    int n = s->rtsp_stream_count < MAX_RTSP_STREAMS
+          ? s->rtsp_stream_count : MAX_RTSP_STREAMS;
+    for (int i = 0; i < n; i++) {
+        const rtsp_stream_t *r = &s->rtsp_streams[i];
+        if (!r->anon_ok) continue;
+        int first = 1;
+        for (int j = 0; j < i && first; j++)
+            if (s->rtsp_streams[j].anon_ok &&
+                strcmp(s->rtsp_streams[j].server, r->server) == 0)
+                first = 0;
+        if (!first) continue;
+
+        int paths = 0;
+        for (int j = i; j < n; j++)
+            if (s->rtsp_streams[j].anon_ok &&
+                strcmp(s->rtsp_streams[j].server, r->server) == 0)
+                paths++;
+
+        char key[ALERT_KEY_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "cam-rtsp");
+        akey_ip(&k, r->server);
+        if (!akey_end(&k)[0]) continue;
+
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "RTSP server %.45s:%u answered DESCRIBE with no"
+                 " authentication challenge on %d path%s (e.g. %.64s)"
+                 " - anonymous stream access corroborated, not confirmed",
+                 r->server, (unsigned)r->port, paths, paths == 1 ? "" : "s",
+                 r->path);
+        fire(ALERT_TYPE_CAM_RTSP_UNAUTH, ALERT_SEV_WARN,
+             "CAM_RTSP_UNAUTH", detail, key, r->server, r->port, now);
+    }
+}

@@ -70,6 +70,7 @@ void run_dhcp_snoop_tests(void);
 void run_quic_snoop_tests(void);
 void run_ssdp_snoop_tests(void);
 void run_onvif_discovery_tests(void);
+void run_rtsp_snoop_tests(void);
 void run_beacon_snoop_tests(void);
 void run_reg_ie_tests(void);
 void run_reg_table_tests(void);
@@ -257,6 +258,7 @@ int main(void) {
     run_quic_snoop_tests();
     run_ssdp_snoop_tests();
     run_onvif_discovery_tests();
+    run_rtsp_snoop_tests();
     run_beacon_snoop_tests();
     run_reg_ie_tests();
     run_reg_table_tests();

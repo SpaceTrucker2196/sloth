@@ -126,6 +126,9 @@ typedef enum {
      * counted. */
     SH_EVICT_DEAUTH_OBS,    /* src/deauth_snoop.c — least-recently-heard (BSSID,TA,RA,subtype) stream dropped */
     SH_EVICT_DEAUTH_VICTIM, /* src/deauth_snoop.c — least-recently-hit (BSSID,victim) aggregate dropped */
+    /* #106 slice B: the RTSP observer's two tables, appended. */
+    SH_EVICT_RTSP_EXCHANGE, /* src/rtsp_snoop.c — least-recently-seen RTSP connection with DESCRIBEs in flight dropped */
+    SH_EVICT_RTSP_STREAM,   /* src/rtsp_snoop.c — least-recently-answered (server, port, path) stream row dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -169,7 +172,7 @@ uint64_t sh_evict_total_tables(void);
  * "mdns_service", "nbns_name", "arp_hist", "frag_bss", "frag_sta",
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
- * "deauth_obs", "deauth_victim".
+ * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

@@ -521,6 +521,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include "icmp_log.h"
 #include "ssdp_snoop.h"
 #include "onvif_discovery.h"
+#include "rtsp_snoop.h"
 #include "sensor_health.h"     /* SH_PF_FRAME_EDGE (#141), SH_PF_IP_* (#132) */
 #include "http_snoop.h"
 #include "ftp_snoop.h"
@@ -712,6 +713,15 @@ static void try_mqtt(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
         snprintf(pkt->info, sizeof(pkt->info), "MQTT");
 }
 
+/* RTSP on TCP/554 or the registered alternative 8554 (RFC 7826 §10.2).
+ * Requests and responses both: the observer pairs them by CSeq. The
+ * shortest message it reads is a 12-byte status line. */
+static void try_rtsp(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
+    if (pay_len < 12) return;
+    rtsp_snoop_observe(pkt->src, pkt->src_port, pkt->dst, pkt->dst_port,
+                       pay, pay_len, pkt->info, (int)sizeof(pkt->info));
+}
+
 /* SSH banner on TCP/22. Matches the cleartext "SSH-protoversion-..."
  * exchange that precedes the encrypted key exchange. */
 static void try_ssh(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
@@ -773,6 +783,7 @@ static void decode_tcp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (port_is(pkt, 22))                        try_ssh(pay, pay_len, pkt);
     if (port_is(pkt, 3389))                      try_rdp(pay, pay_len, pkt);
     if (port_is(pkt, 1883))                      try_mqtt(pay, pay_len, pkt);
+    if (port_is(pkt, 554) || port_is(pkt, 8554)) try_rtsp(pay, pay_len, pkt);
 }
 
 /* UDP (RFC 768). The one UDP dispatch for both IP versions: until #132

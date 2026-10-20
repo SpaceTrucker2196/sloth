@@ -102,6 +102,7 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_beaconing),
     R(rule_country_absent),
     R(rule_dfs_masking),
+    R(rule_cam_rtsp_unauth),
 };
 
 #undef R

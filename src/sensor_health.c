@@ -136,6 +136,8 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_EAPOL_PENDING: return "eapol_pending";
     case SH_EVICT_DEAUTH_OBS:    return "deauth_obs";
     case SH_EVICT_DEAUTH_VICTIM: return "deauth_victim";
+    case SH_EVICT_RTSP_EXCHANGE: return "rtsp_exchange";
+    case SH_EVICT_RTSP_STREAM:   return "rtsp_stream";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

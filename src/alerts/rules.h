@@ -39,6 +39,7 @@ void rule_icmp_tunnel(const sloth_state_t *s, time_t now);
 void rule_cam_ws_discovery(const sloth_state_t *s, time_t now);
 void rule_surv_cloud_sni(const sloth_state_t *s, time_t now);
 void rule_surv_dns(const sloth_state_t *s, time_t now);
+void rule_cam_rtsp_unauth(const sloth_state_t *s, time_t now);
 void rule_rogue_dhcp(const sloth_state_t *s, time_t now);
 void rule_rogue_ra(const sloth_state_t *s, time_t now);
 void rule_smb1_use(const sloth_state_t *s, time_t now);

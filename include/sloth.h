@@ -210,6 +210,33 @@ typedef struct {
     time_t last_seen;
 } onvif_device_t;
 
+/* ── RTSP stream exposure (#106 slice B) ─────────────────
+ * One row per (server IP, server port, Request-URI path) whose
+ * DESCRIBE sloth saw answered (RFC 2326 §10.2, RFC 7826 §13.2).
+ * Counts only: no Authorization value, no URL userinfo and no
+ * credential-shaped query is ever copied into a row — a request
+ * carrying any of those is either counted as authenticated (header
+ * present) or not tracked at all (credential in the URL). The
+ * cleartext_creds.h guardrail applies here unchanged. */
+#define MAX_RTSP_STREAMS 32
+#define RTSP_PATH_LEN    128
+
+typedef struct {
+    char     server[46];       /* responder IP                           */
+    uint16_t port;             /* responder TCP port (554, 8554)         */
+    char     path[RTSP_PATH_LEN]; /* abs_path, query/fragment stripped   */
+    char     client[46];       /* last requester whose DESCRIBE was answered */
+    uint32_t anon_ok;          /* 200 to a DESCRIBE with no Authorization,
+                                * on a connection that had no 401 before */
+    uint32_t auth_ok;          /* 200 to a DESCRIBE that carried one, or
+                                * followed a 401 on the same connection  */
+    uint32_t challenged;       /* 401 to a DESCRIBE                      */
+    char     auth_scheme[16];  /* first token of the last WWW-Authenticate */
+    uint8_t  sdp;              /* a 200 named Content-Type application/sdp */
+    time_t   first_seen;
+    time_t   last_seen;
+} rtsp_stream_t;
+
 /* ── Live DHCP snoop events ─────────────────────────────── */
 #define MAX_DHCP_EVENTS 128
 
@@ -2981,6 +3008,10 @@ typedef struct {
     /* ── WS-Discovery / ONVIF devices (#106) ──────────────── */
     onvif_device_t onvif_devices[MAX_ONVIF_DEVICES];
     int            onvif_count;
+
+    /* ── RTSP DESCRIBE outcomes (#106 slice B) ─────────────── */
+    rtsp_stream_t  rtsp_streams[MAX_RTSP_STREAMS];
+    int            rtsp_stream_count;
 
     /* ── Session stats baseline ─────────────────────────── */
     time_t   stats_start;                    /* time of last reset */

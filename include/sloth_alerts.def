@@ -272,3 +272,15 @@ X(CAM_MDNS_SERVICE, "") /* exposure, not adversary technique (#106 slice A) */
 X(CAM_SSDP_DEVICE, "") /* exposure, not adversary technique (#106 slice A) */
 /* beaconing BSSID in a camera vendor's IEEE MA-L block, U/L bit masked — IEEE RA registry, IEEE 802-2014 §8.2 (#106 slice A) */
 X(CAM_SETUP_OUI, "") /* exposure, not adversary technique (#106 slice A) */
+/* Same position as CAM_WS_DISCOVERY and CAM_SETUP_SSID: what fires is
+ * an RTSP server's own exposure — it handed a stream description to a
+ * client that presented no credential and had not been challenged —
+ * not anything an adversary did. T1078.001 (Default Accounts) needs an
+ * account, and there was none to use; T1046 and T1595 describe an
+ * attacker enumerating, which sloth did not do and cannot attribute to
+ * whoever sent the DESCRIBE. The basis is cited — RFC 2326 and RFC 7826
+ * (DESCRIBE, CSeq pairing, 401 + WWW-Authenticate), see
+ * research/rfc/2326-7826-rtsp.md — it is simply not an ATT&CK
+ * technique. */
+/* RTSP DESCRIBE answered 200 with no Authorization and no prior 401 on the connection — RFC 2326 §10.2 / RFC 7826 §13.2, §17.4.2 (#106 slice B) */
+X(CAM_RTSP_UNAUTH, "") /* exposure, not adversary technique (#106 slice B) */

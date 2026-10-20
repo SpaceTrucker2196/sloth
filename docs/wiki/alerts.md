@@ -11,6 +11,7 @@ type: reference
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
+**Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
 ---
 
@@ -555,6 +556,27 @@ considered and left out (Ubiquiti, TP-Link, Wyze; unregistered mDNS
 types), in `research/papers/camera-vendor-identity.md`. Leaving Ubiquiti
 out means #106's Case B (`B6:FB:E4` expected to fire as `ubiquiti`)
 does not fire by design; that deviation awaits an owner ruling on #106.
+### Anonymous RTSP — `CAM_RTSP_UNAUTH` (#106 slice B)
+
+`src/rtsp_snoop.c` reads RTSP on TCP 554 and 8554 (RFC 2326, RFC 7826
+§10.2) and pairs each `DESCRIBE` with its response by CSeq, per
+connection (RFC 7826 §18.20). A `200` to a `DESCRIBE` that carried no
+`Authorization` header, on a connection with no earlier `401`, is
+recorded as anonymous for that (server, port, path); the rule raises one
+WARN per server IP with the distinct-path count in the detail. It
+corroborates anonymous stream access and does not confirm it: SETUP or
+PLAY may still be authenticated, the server may filter by address, and
+the device need not be a camera.
+
+What it never does: read an `Authorization` value, keep URL userinfo or
+a `user=` / `password=` parameter (such a request is not tracked), or
+compare anything against a default-credential list — the issue's
+`camera_default_creds.csv` was dropped by the #145 ruling and the
+`src/cleartext_creds.h` guardrail stands. Same exposure position as
+`CAM_WS_DISCOVERY`: no ATT&CK technique, a cited basis
+(`research/rfc/2326-7826-rtsp.md`), named on the list in
+`test_uncitable_kinds_with_a_real_basis_are_still_cited`. Full row in
+[`docs/views/alerts.md`](../views/alerts.md).
 
 ### Tunable thresholds (#82)
 

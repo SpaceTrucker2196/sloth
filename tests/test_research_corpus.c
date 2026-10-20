@@ -281,6 +281,11 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
         "ALERT_TYPE_CAM_MDNS_SERVICE",
         "ALERT_TYPE_CAM_SSDP_DEVICE",
         "ALERT_TYPE_CAM_SETUP_OUI",
+        /* #106 slice B. An RTSP server handing a stream description to
+         * an unchallenged client is the server's exposure; T1078.001
+         * needs an account and there was none. RFC 2326 / RFC 7826 are
+         * what it detects from. */
+        "ALERT_TYPE_CAM_RTSP_UNAUTH",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

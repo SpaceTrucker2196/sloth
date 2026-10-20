@@ -79,6 +79,7 @@
     X(rdp_snoop_clear) \
     X(rf_quality_clear) \
     X(rrm_clear) \
+    X(rtsp_snoop_clear) \
     X(saq_clear) \
     X(seqnum_clear) \
     X(sh_evict_reset) \

@@ -39,6 +39,7 @@
 #include "mqtt_snoop.h"
 #include "ssdp_snoop.h"
 #include "onvif_discovery.h"
+#include "rtsp_snoop.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "http_log.h"
@@ -151,6 +152,7 @@ static void st_wired_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mqtt_snoop_snapshot(s);
     ssdp_snapshot(s);
     onvif_snapshot(s);
+    rtsp_snoop_snapshot(s);
     http_log_snapshot(s);
     tls_log_snapshot(s);
     quic_log_snapshot(s);
