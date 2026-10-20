@@ -31,6 +31,7 @@
 #include "assoc_track.h"
 #include "auth_track.h"
 #include "action_snoop.h"
+#include "worker_thread.h"        /* signal-blocked worker creation (#95) */
 #include "ctrl_frames.h"
 #include "mle.h"
 
@@ -872,7 +873,7 @@ void probe_run(void) {
     g_exit_detail[0] = '\0';
     pthread_mutex_unlock(&g_mu);
     capture_run_flag_set(&g_running, 1);
-    if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
+    if (worker_thread_create(&g_thread, probe_thread, NULL) != 0)
         capture_run_flag_set(&g_running, 0);
 }
 
@@ -1024,7 +1025,7 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     /* A failed create must clear the flag, or probe_stop() would join a
      * pthread_t that was never initialised — same guard as probe_run(). */
     capture_run_flag_set(&g_running, 1);
-    if (pthread_create(&g_thread, NULL, probe_thread, NULL) != 0)
+    if (worker_thread_create(&g_thread, probe_thread, NULL) != 0)
         capture_run_flag_set(&g_running, 0);
 }
 

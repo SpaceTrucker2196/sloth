@@ -500,6 +500,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include <net/if.h>       /* if_indextoname — issue #17 SLL2 lookup */
 
 #include "sloth.h"
+#include "worker_thread.h"     /* signal-blocked worker creation (#95) */
 #include "dns_snoop.h"
 #include "sni_snoop.h"
 #include "mdns_snoop.h"
@@ -1527,7 +1528,7 @@ void capture_run(void) {
     g_exit_detail[0] = '\0';
     pthread_mutex_unlock(&g_mu);
     capture_run_flag_set(&g_running, 1);
-    if (pthread_create(&g_thread, NULL, capture_thread, NULL) != 0)
+    if (worker_thread_create(&g_thread, capture_thread, NULL) != 0)
         capture_run_flag_set(&g_running, 0);
 }
 

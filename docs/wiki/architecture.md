@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#118, #141, #132, #130, #109)
+**Last updated**: 2026-10-19 (#95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -263,6 +263,97 @@ and the main-thread `*_snapshot()` copies write. Nothing on a capture
 thread writes `sloth_state_t` directly: each capture-fed module keeps
 its own table behind its own mutex and main copies it out once per
 poll.
+
+## Threads, signals and locks (#95)
+
+### Threads
+
+| Thread | Started by | Exists when |
+|---|---|---|
+| main | — | always: CLI, poll loop, `alerts_update()`, every `*_snapshot()`, rendering, JSONL / SQLite sinks |
+| capture worker | `capture_run()` (`src/capture/capture.c`) | a libpcap handle is open on the capture interface(s) |
+| probe worker | `probe_run()` and the `[m]` retarget in `probe_set_iface()` (`src/capture/probe.c`) | a monitor-mode radio is open |
+| DNS worker | `dns_init()` (`src/dns.c`) | only under `--allow-active`; never under the default or `--strict` policy |
+
+Every one of them is created through `worker_thread_create()`
+(`src/worker_thread.c`), which blocks SIGINT and SIGTERM in the creating
+thread around `pthread_create()` so the new thread inherits them blocked
+and then restores the creator's mask. POSIX delivers a process-directed
+signal to any thread that does not block it; with the workers blocking
+both, `on_signal()` can only run on the main thread, which is the thread
+that acts on `g_quit`, and a Ctrl-C can no longer land on the capture
+worker inside `pcap_dispatch()`. SIGHUP is not handled — it keeps its
+default action — so it is not in the set.
+
+`tests/test_worker_thread.c` holds this three ways: the helper's thread
+starts with both signals blocked and the creator's mask comes back
+exactly; a live DNS worker's mask, read from the kernel at
+`/proc/self/task/<tid>/status`, is exactly {SIGINT, SIGTERM}; and no
+`.c` under `src/` other than the helper calls `pthread_create()`, which
+is what covers the capture and probe workers that a unit test cannot
+start without a pcap handle.
+
+### Locks
+
+Every mutex is a file-scope `static` in the module that owns the data;
+no header exports one. `stab_t` tables (`src/stab.h`) can carry a mutex
+pointer, but all 23 are declared with it `NULL`, so they are guarded by
+the owning module's lock and `stab.c` takes none of its own. Within a
+file, two of its own mutexes are never held at once.
+
+| Mutex | Guards | Takes, while held |
+|---|---|---|
+| `sensor_health.c` `g_mu` | eviction tallies (`sh_evict_note`) | nothing (leaf) |
+| `sensor_health.c` `g_pf_mu` | parse-fault tallies (`sh_parse_fault_note`) | nothing (leaf) |
+| `dns.c` `g_mu` (+ `g_cv`) | resolver cache, request queue, worker running flag | nothing (leaf) |
+| `cleartext_creds.c` `g_mu` | cleartext credential ring | nothing (leaf) |
+| `alerts/engine.c` `g_taint_mu` | evil-twin BSSID taint table | nothing (leaf) |
+| `rf_quality.c` `g_mu` | per-channel retry / bad-FCS counters | nothing (leaf) |
+| `beacon_snoop.c` `g_mu` | beacon AP table | `sensor_health` `g_mu` (eviction in `beacon_record`) |
+| `assoc_track.c` `g_mu` | association pair table | `beacon_snoop` `g_mu` (`beacon_find_ssid` in `assoc_observe` / `assoc_snapshot`); `sensor_health` `g_mu` |
+| `assoc_track.c` `g_req_mu`, `g_ring_mu` | assoc-request flood table; request event ring | `g_req_mu`: `sensor_health` `g_mu` |
+| `eapol_log.c` `g_mu` | EAPOL event ring, pending-handshake table, 22000 / pcap export state | `assoc_track` `g_mu` (`assoc_observe`), `beacon_snoop` `g_mu`, `engine` `g_taint_mu` (via `append_22000_line_for_bssid`), `sensor_health` `g_mu` |
+| `fragattack.c` `g_mu` | the five FragAttacks tables | `eapol_log` `g_mu` (`eapol_key_generation`), `sensor_health` `g_mu` |
+| `pm_forge.c` `g_mu` | PM-forge per-station table | `beacon_snoop` `g_mu` (`beacon_find_interval_ms`), `sensor_health` `g_mu` |
+| `dhcp_snoop.c`, `mdns_snoop.c` `g_mu` | DHCP event table; mDNS host table | `dns` `g_mu` (`dns_set_resolved`), `sensor_health` `g_mu` |
+| `smtp_snoop.c` `g_mu` | SMTP flow table | `cleartext_creds` `g_mu`, `sensor_health` `g_mu` |
+| `evidence_ring.c` `g_mu` | raw-frame evidence arena and metadata ring | `sensor_health` `g_mu` (eviction) |
+| `capture/probe.c` `g_mu` | probe-client table | `sensor_health` `g_mu` (`record_probe` eviction) |
+| `bgp`, `kerb`, `ldap`, `mqtt`, `nbns`, `ndp`, `onvif_discovery`, `rdp`, `smb`, `snmp`, `ssdp`, `ssh` `_snoop.c` `g_mu`; `eap_track.c`, `wps_track.c`, `queue_evict.c`, `probe_pnl.c`, `seqnum_track.c` `g_mu`; `dns_log`, `http_log`, `quic_log`, `tls_log` `g_mu`, `icmp_log` `icmp_mu`, `ntp_log` `ntp_mu` | that module's flow / session / event table or ring | `sensor_health` `g_mu` only (bounded-table eviction) |
+| `action_snoop.c` `g_mu`, `g_btm_mu`, `g_ring_mu`, `g_saq_mu`, `g_mfpv_mu`, `g_csa_mu`, `g_rrm_mu` | protected-action counter; BTM steer pairs; BTM event ring; SA Query pairs; MFP violations; CSA events; RRM pairs | nothing |
+| `capture/capture.c` `g_mu` | worker exit reason / detail, per-stream freshness, allow-list valid bits | nothing |
+| `capture/probe.c` `g_frame_mu` | frame totals, bad-clock and radiotap-reject counters, last frame time | nothing |
+| `capture_run_flag_t.mu` (`capture.h`) | one worker's running / stop flag | nothing |
+| `http_log.c` `g_flow_mu` | request→response flow pairing | nothing |
+| `auth_track`, `captive_portal`, `ctrl_frames`, `deauth_snoop`, `host_cache`, `mle`, `observe`, `jsonl`, `data_socket`, `updater` `g_mu` | that module's ring / table / file handle / client list / policy | nothing |
+
+**The order.** Read the third column as edges; together they are acyclic,
+and the longest chain is
+
+    fragattack → eapol_log → assoc_track → beacon_snoop → sensor_health
+
+The rule new code follows is therefore *acquire downward only*: while
+holding a lock, call only into modules whose locks sit below it in this
+table, and never call anything from a leaf's critical section. A call
+that would add an edge pointing back up — for instance `beacon_snoop`
+asking `eapol_log` anything under its lock — would close a cycle and is
+a deadlock waiting to happen between whichever two threads take the
+pair in opposite orders (the probe worker records, main snapshots).
+
+**What this replaces.** #95 asked for the stronger rule *no module takes
+another module's lock while holding its own*. Checked against the code
+on 2026-10-19 it does not hold: the table above is the measured set of
+cross-module edges — 34 into `sensor_health` `g_mu` and 9 others — found
+by walking every lock region and the direct calls it reaches (calls
+through function pointers are not followed; the only ones under a lock
+are the `stab_t` key comparators, which take nothing) and then
+confirming each edge by reading the function. They are recorded,
+not removed — none forms a cycle, and the `sensor_health` ones are a
+counter increment taken only when a bounded table is full. Whether the
+non-trivial ones (`eapol_log` holding its lock across `assoc_observe()`
+and file writes, `fragattack` across `eapol_key_generation()`) should
+be restructured to drop the lock first is an open question for the
+owner, not something this page decides.
 
 ## Test discipline
 

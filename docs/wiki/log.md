@@ -3950,3 +3950,18 @@ The last eight non-reentrant time call sites in `src/` (`posture.c`
 now use `gmtime_r`/`localtime_r` into a local `struct tm`, and their
 `tests/cppcheck.supp` entries are gone. [[threat-model]] X1 row
 updated: no non-reentrant time call remains.
+
+## 2026-10-19 — #95 close-out: worker signal masks and the lock table
+
+Every worker thread (capture, probe, DNS) is now created through
+`worker_thread_create()` (`src/worker_thread.c`), which starts it with
+SIGINT and SIGTERM blocked so `on_signal()` only ever runs on the main
+thread; `tests/test_worker_thread.c` checks the helper, a live DNS
+worker's kernel-reported mask, and that no other `src/` file calls
+`pthread_create()`. [[architecture]] gains *Threads, signals and locks*:
+the thread list and a table of every module mutex, what it guards and
+what it takes while held. The issue's proposed rule (no module takes
+another's lock while holding its own) was checked and does not hold —
+43 cross-module edges, all acyclic — so the page records the measured
+order and an acquire-downward rule instead, and corrects the
+`src/fragattack.c` comment that called `eapol_log`'s mutex a leaf.

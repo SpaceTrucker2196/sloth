@@ -19,9 +19,11 @@
  * The public entry points take g_mu and call a *_locked() body; the
  * static helpers below assume it is held and never take it themselves,
  * so there is exactly one place per entry point where the lock is
- * visible. eapol_key_generation() is called with g_mu held: eapol_log's
- * own mutex is a leaf (eapol_log.c never calls back into this file), so
- * the order frag -> eapol is the only one that exists. */
+ * visible. eapol_key_generation() is called with g_mu held. eapol_log's
+ * mutex is not a leaf - eapol_observe_frame() holds it across
+ * assoc_observe() and the evil-twin taint lookup - but nothing below it
+ * calls back into this file, so frag -> eapol stays acyclic. The whole
+ * order is the lock table in docs/wiki/architecture.md (#95). */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* The five tables are stab_t since #110, every one STAB_OLDEST with its

@@ -28,6 +28,7 @@ WITH_SQLITE  ?= 1
 # and `make`, `make test` and `make fuzz` all pick it up.
 CORE_COMMON_SRCS = \
        src/view_route.c    \
+       src/worker_thread.c \
        src/view_labels.c   \
        src/tui_palette.c   \
        src/ownership.c     \

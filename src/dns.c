@@ -9,6 +9,7 @@
 #include "dns.h"
 #include "sloth_clock.h"
 #include "observe.h"
+#include "worker_thread.h"   /* signal-blocked worker creation (#95) */
 #include "services.h"
 #include "netstr.h"
 
@@ -213,7 +214,7 @@ void dns_init(void) {
 
     /* A failed create must clear the flag again, or dns_cleanup() would
      * join a pthread_t that was never initialised. */
-    if (start && pthread_create(&g_thread, NULL, dns_worker, NULL) != 0) {
+    if (start && worker_thread_create(&g_thread, dns_worker, NULL) != 0) {
         pthread_mutex_lock(&g_mu);
         g_running = 0;
         pthread_mutex_unlock(&g_mu);
