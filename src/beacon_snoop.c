@@ -373,21 +373,32 @@ int beacon_parse_ies(const uint8_t *ies, int ies_len, int privacy,
                     }
                 }
             }
-            if (ext == 107 && rsn_out && !rsn_out->mle_body &&
+            if (ext == 107 && rsn_out &&
                 tln >= 3 && (ie[3] & 0x07) == MLE_TYPE_BASIC) {
                 /* Multi-Link Element (#67). The body is handed on so
                  * the capture path can take the MLD identity out of it;
                  * parsing an identity is not a shared-parser concern.
                  *
-                 * The FIRST Basic-variant one only (#104 slice 6). A
-                 * frame can carry several MLEs: hostapd's
-                 * hostapd_eid_eht_ml_beacon() follows the Basic MLE with
-                 * a Reconfiguration MLE while an affiliated AP is being
-                 * removed. Until this slice the last ext-107 element won,
-                 * so during exactly that window the Basic MLE was
-                 * replaced by one mle_parse() refuses and the AP MLD
-                 * dropped out of the roster. Type is Multi-Link Control
-                 * bits 0-2, at ie[3]. */
+                 * The LAST Basic-variant one (#104 slice 6). A frame can
+                 * carry several MLEs: hostapd's hostapd_eid_eht_ml_beacon()
+                 * follows the Basic MLE with a Reconfiguration MLE while
+                 * an affiliated AP is being removed. Before this slice
+                 * the last ext-107 element of ANY type won, so during
+                 * exactly that window the Basic MLE was replaced by one
+                 * mle_parse() refuses and the AP MLD dropped out of the
+                 * roster — hence the type filter. Type is Multi-Link
+                 * Control bits 0-2, at ie[3].
+                 *
+                 * Last, not first, among the Basic ones: hostapd's
+                 * ieee802_11_parse_mle() (src/common/ieee802_11_common.c)
+                 * overwrites elems->basic_mle on every Basic MLE, so the
+                 * last is the one hostapd_process_ml_assoc_req() acts on.
+                 * This parser also feeds the (Re)Association Request
+                 * path (src/assoc_track.c), the CVE-2026-58374 vector;
+                 * reading the first would let a benign Basic MLE stand in
+                 * front of the malformed one for the structural rules.
+                 * It is also hostapd's own ML Probe Response order: the
+                 * AP-MLD-ID Basic MLE first, the BSS's own last. */
                 rsn_out->mle_body = ie + 2;
                 rsn_out->mle_len  = tln;
             }

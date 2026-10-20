@@ -388,7 +388,7 @@ the headline rules per tier:
 | Kind | Sev | Fires on |
 |---|---|---|
 | `MLE_RECONFIG_NO_MLO` | WARN | a Reconfiguration Multi-Link element in a Beacon or Probe Response from a BSSID that has never sent a Basic Multi-Link element, the frame itself included |
-| `MLE_PR_BEACON_DIFF` | WARN | a Probe Response whose own Basic MLE names a different MLD MAC or own Link ID than the same BSSID's newest Beacon within 30 s |
+| `MLE_PR_BEACON_DIFF` | WARN | a Probe Response whose own Basic MLE names a different MLD MAC or own Link ID than the same BSSID's newest Beacon within 30 s. Not compared, so not caught: a Probe Response whose every Basic MLE carries an AP MLD ID, and the Link ID when either frame omits Link ID Info |
 
 The five earlier MLE rules key on the MLD MAC an element asserts
 (`sloth_mld_t`); these two need the BSSID that sent the frame, so they

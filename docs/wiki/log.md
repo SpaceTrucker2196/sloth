@@ -4201,7 +4201,10 @@ frame types carry are compared, so hostapd's multi-link Probe Response
 (Per-STA Profiles, a leading AP-MLD-ID Basic MLE for another MLD) stays
 quiet. Also fixed: `beacon_parse_ies()` kept the last ext-107 element,
 so a Beacon carrying Basic then Reconfiguration MLE dropped the AP MLD
-from the roster; it now keeps the first Basic one. Citation
+from the roster; it now keeps the last *Basic* one (type-filtered, and
+last-wins like hostapd's `ieee802_11_parse_mle()`, so an Association
+Request's malformed trailing Basic MLE is the one the structural rules
+see). Citation
 `research/ieee/802.11be-2024-9.4.2.322-bss-mle-consistency.md`
 (hostapd, Wireshark, mac80211; the paywalled clause itself not read).
 `MLE_SWITCH_RATE` is dropped per the #145 ruling; #104 closes on this

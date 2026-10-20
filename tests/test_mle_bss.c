@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 #include "runner.h"
 #include "sloth.h"
@@ -7,6 +8,7 @@
 #include "dot11_frame.h"
 #include "sloth_clock.h"
 #include "frame_build.h"
+#include "assoc_track.h"
 
 /*
  * Per-BSSID Multi-Link advertisement — #104 slice 6:
@@ -279,6 +281,186 @@ static void test_other_subtypes_are_ignored(void) {
     ASSERT_EQ(mle_bss_count(), 0);
 }
 
+/* ── mle_frame_scan bounds and validity guards ──────────────────────
+ *
+ * Each case below was seen to go red under the mutation named above it
+ * (applied, built, run, inverse-edited). The Basic MLEs are written out
+ * byte by byte because put_basic_mle() only emits well-formed ones:
+ *   ExtID 107 | Control(2) | Common Info Length(1) | MLD MAC(6) | ...
+ * (IEEE 802.11be-2024 §9.4.2.322.2; hostapd ieee802_11_defs.h bits). */
+
+/* Observe a frame from an exactly-sized heap copy, so a read one octet
+ * past the last element is outside the allocation and ASan reports it,
+ * instead of landing in the unused tail of a stack buffer. */
+static void observe_exact(const fb_t *b, time_t now) {
+    ASSERT(fb_ok(b));
+    uint8_t *copy = malloc((size_t)b->len);
+    ASSERT(copy != NULL);
+    if (!copy) return;
+    memcpy(copy, b->buf, (size_t)b->len);
+    dot11_frame_t f;
+    dot11_frame_decode(copy, b->len, NULL, &f);
+    mle_bss_observe_frame(&f, now);
+    free(copy);
+}
+
+/* A Beacon whose only element after the SSID is a Basic MLE built from
+ * `ctl`, `cil`, `mac`, then `tail` octets of `tail_bytes`. */
+static void raw_basic_beacon(fb_t *b, const uint8_t bssid[6], uint16_t ctl,
+                             uint8_t cil, const uint8_t mac[6],
+                             const uint8_t *tail_bytes, int tail) {
+    uint8_t e[32];
+    int n = 0;
+    e[n++] = (uint8_t)(ctl & 0xff);
+    e[n++] = (uint8_t)(ctl >> 8);
+    e[n++] = cil;
+    memcpy(e + n, mac, 6); n += 6;
+    for (int i = 0; i < tail && n < (int)sizeof e; i++) e[n++] = tail_bytes[i];
+    put_head(b, 8, bssid);
+    fb_ie_ext(b, MLE_EXT_ID, e, n);
+}
+
+/* Mutation: drop `cil >= 8` from the Link ID read. Link ID Info Present
+ * with Common Info Length 7 means the octet is not there; the element
+ * ends at the MLD MAC and is last in the frame, so e[10] is one past it. */
+static void test_scan_takes_no_link_id_when_common_info_cannot_hold_it(void) {
+    mle_clear();
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BSSID, MLE_BASIC_PRES_LINK_ID, 7, MLD_A, NULL, 0);
+    observe_exact(&b, T0);
+    const sloth_mle_bss_t *r = row(BSSID);
+    ASSERT(r != NULL);
+    if (!r) return;
+    ASSERT_EQ((int)r->beacon_ident, 1);
+    ASSERT_EQ(memcmp(r->beacon_mld_mac, MLD_A, 6), 0);
+    ASSERT_EQ((int)r->beacon_has_link_id, 0);
+}
+
+/* Mutation: drop `cil < 7`. A length that cannot cover itself plus the
+ * MLD MAC is MLE_COMMON_INFO_LEN_BAD's finding, not an identity. The
+ * octet after the MAC keeps the element at the 10-octet floor. */
+static void test_scan_takes_no_identity_from_a_short_common_info(void) {
+    mle_clear();
+    static const uint8_t pad[1] = { 0x00 };
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BSSID, 0x0000, 6, MLD_A, pad, 1);
+    observe_exact(&b, T0);
+    const sloth_mle_bss_t *r = row(BSSID);
+    ASSERT(r != NULL);
+    if (!r) return;
+    ASSERT_EQ((int)r->basic_mle_seen, 1);
+    ASSERT_EQ((int)r->beacon_ident, 0);
+}
+
+/* Mutation: drop `3 + cil > tln`. Common Info claiming 20 octets in a
+ * 10-octet element. */
+static void test_scan_takes_no_identity_from_an_overlong_common_info(void) {
+    mle_clear();
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BSSID, 0x0000, 20, MLD_A, NULL, 0);
+    observe_exact(&b, T0);
+    const sloth_mle_bss_t *r = row(BSSID);
+    ASSERT(r != NULL);
+    if (!r) return;
+    ASSERT_EQ((int)r->basic_mle_seen, 1);
+    ASSERT_EQ((int)r->beacon_ident, 0);
+}
+
+/* Mutation: drop mac_is_usable() on the MLD MAC. */
+static void test_scan_takes_no_identity_from_an_all_zero_mld_mac(void) {
+    mle_clear();
+    static const uint8_t zero[6] = { 0 };
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BSSID, 0x0000, 7, zero, NULL, 0);
+    observe_exact(&b, T0);
+    const sloth_mle_bss_t *r = row(BSSID);
+    ASSERT(r != NULL);
+    if (!r) return;
+    ASSERT_EQ((int)r->beacon_ident, 0);
+}
+
+/* Mutation: drop mac_is_usable() on the BSSID. A group BSSID is no
+ * BSS's identity and would key a row every forged frame could share. */
+static void test_scan_ignores_a_broadcast_bssid(void) {
+    mle_clear();
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BCAST, 0x0000, 7, MLD_A, NULL, 0);
+    observe_exact(&b, T0);
+    ASSERT_EQ(mle_bss_count(), 0);
+}
+
+/* Mutation: drop `& 0x0f`. Link ID is bits 0-3 of Link ID Info; bits
+ * 4-7 are reserved (hostapd masks the same way), so 0xf3 is link 3. */
+static void test_scan_masks_the_link_id_to_four_bits(void) {
+    mle_clear();
+    static const uint8_t lid[1] = { 0xf3 };
+    uint8_t buf[128]; fb_t b; fb_init(&b, buf, sizeof buf);
+    raw_basic_beacon(&b, BSSID, MLE_BASIC_PRES_LINK_ID, 8, MLD_A, lid, 1);
+    observe_exact(&b, T0);
+    const sloth_mle_bss_t *r = row(BSSID);
+    ASSERT(r != NULL);
+    if (!r) return;
+    ASSERT_EQ((int)r->beacon_has_link_id, 1);
+    ASSERT_EQ((int)r->beacon_link_id, 3);
+}
+
+/* Mutation: drop the `proto != 0 || type != 0` filter. The same bytes
+ * decoded as anything but a protocol-0 management frame are not a
+ * Beacon, whatever their subtype number says (type 2 subtype 8 is QoS
+ * Data). The decoded view is relabelled rather than re-encoded so the
+ * body offset, and therefore the element walk, is identical. */
+static void test_scan_ignores_non_management_frames(void) {
+    uint8_t buf[256]; fb_t b; fb_init(&b, buf, sizeof buf);
+    put_head(&b, 8, BSSID);
+    put_basic_mle(&b, MLD_A, 1, -1, 3, NULL, NULL, 0);
+    ASSERT(fb_ok(&b));
+    dot11_frame_t f;
+
+    mle_clear();
+    dot11_frame_decode(b.buf, b.len, NULL, &f);
+    f.type = 2;
+    mle_bss_observe_frame(&f, T0);
+    ASSERT_EQ(mle_bss_count(), 0);
+
+    mle_clear();
+    dot11_frame_decode(b.buf, b.len, NULL, &f);
+    f.proto = 1;
+    mle_bss_observe_frame(&f, T0);
+    ASSERT_EQ(mle_bss_count(), 0);
+
+    /* Control: the unmodified decode does create the row. */
+    mle_clear();
+    dot11_frame_decode(b.buf, b.len, NULL, &f);
+    mle_bss_observe_frame(&f, T0);
+    ASSERT_EQ(mle_bss_count(), 1);
+    mle_clear();
+}
+
+/* Mutation: replace the least-recently-heard search with slot 0. The
+ * stalest row is deliberately NOT slot 0 — slot 0 is refreshed last —
+ * so evicting slot 0 is distinguishable from evicting the right row. */
+static void test_bss_table_evicts_the_least_recently_heard_row(void) {
+    mle_clear();
+    uint8_t ids[SLOTH_MLE_BSS_MAX + 1][6];
+    for (int i = 0; i <= SLOTH_MLE_BSS_MAX; i++) {
+        memcpy(ids[i], BSSID, 6);
+        ids[i][4] = (uint8_t)(0x10 + (i >> 8));
+        ids[i][5] = (uint8_t)i;
+    }
+    for (int i = 0; i < SLOTH_MLE_BSS_MAX; i++)
+        beacon_basic(ids[i], MLD_A, 1, T0 + i, 0);
+    beacon_basic(ids[0], MLD_A, 1, T0 + 100, 0);     /* slot 0 freshest */
+    ASSERT_EQ(mle_bss_count(), SLOTH_MLE_BSS_MAX);
+
+    beacon_basic(ids[SLOTH_MLE_BSS_MAX], MLD_A, 1, T0 + 101, 0);
+    ASSERT_EQ(mle_bss_count(), SLOTH_MLE_BSS_MAX);
+    ASSERT(row(ids[SLOTH_MLE_BSS_MAX]) != NULL);
+    ASSERT(row(ids[0]) != NULL);
+    ASSERT(row(ids[1]) == NULL);                     /* T0 + 1: stalest */
+    ASSERT(row(ids[2]) != NULL);
+    mle_clear();
+}
+
 /* ── MLE_PR_BEACON_DIFF ──────────────────────────────────────────── */
 
 /* Probe Response from the hostapd ML probe path with `mld`/`link_id`
@@ -468,7 +650,7 @@ static void test_newest_beacon_is_the_baseline(void) {
 
 /* ── the Beacon roster keeps its Basic MLE beside a Reconfiguration MLE ─ */
 
-/* Before this slice beacon_parse_ies() kept the LAST ext-107 element, so
+/* Before this slice beacon_parse_ies() kept the LAST ext-107 element of any type, so
  * in hostapd's removal-window Beacon (Basic, then Reconfiguration) it
  * handed mle_parse() the Reconfiguration MLE, which mle_parse() refuses,
  * and the AP MLD fell out of the roster. Seen to fail by restoring the
@@ -506,6 +688,84 @@ static void run_engine(void) {
     mle_snapshot(&g_s);
     alerts_update(&g_s);
     sloth_clock_test_set(NULL, NULL);
+}
+
+/* A Reconfiguration MLE ahead of the Basic one. Seen to fail with the
+ * Type filter removed and first-wins restored together: the
+ * Reconfiguration MLE is then the one handed on and mle_parse() refuses
+ * it. */
+static void test_beacon_parse_takes_the_basic_mle_after_a_reconfig(void) {
+    uint8_t buf[256]; fb_t b; fb_init(&b, buf, sizeof buf);
+    put_head(&b, 8, BSSID);
+    put_reconf_mle(&b, 2, 50);
+    put_basic_mle(&b, MLD_A, 1, -1, 3, NULL, NULL, 0);
+    ASSERT(fb_ok(&b));
+    char ssid[33], enc[10]; uint8_t bssid[6]; int ch; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(buf, b.len, -40, ssid, bssid, &ch, enc, &bms,
+                           &rsn), 1);
+    ASSERT(rsn.mle_body != NULL);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(rsn.mle_body, rsn.mle_len, &m), 1);
+    ASSERT_EQ(memcmp(m.mld_mac, MLD_A, 6), 0);
+}
+
+/* Two Basic MLEs: the last is handed on, as hostapd's
+ * ieee802_11_parse_mle() keeps it. Seen to fail with first-wins
+ * (`!rsn_out->mle_body`) restored. */
+static void test_beacon_parse_takes_the_last_of_two_basic_mles(void) {
+    uint8_t buf[256]; fb_t b; fb_init(&b, buf, sizeof buf);
+    put_head(&b, 8, BSSID);
+    put_basic_mle(&b, MLD_A, 1, -1, 3, NULL, NULL, 0);
+    put_basic_mle(&b, MLD_B, 1, -1, 3, NULL, NULL, 0);
+    ASSERT(fb_ok(&b));
+    char ssid[33], enc[10]; uint8_t bssid[6]; int ch; uint16_t bms;
+    beacon_rsn_t rsn;
+    ASSERT_EQ(beacon_parse(buf, b.len, -40, ssid, bssid, &ch, enc, &bms,
+                           &rsn), 1);
+    ASSERT(rsn.mle_body != NULL);
+    sloth_mld_t m;
+    ASSERT_EQ(mle_parse(rsn.mle_body, rsn.mle_len, &m), 1);
+    ASSERT_EQ(memcmp(m.mld_mac, MLD_B, 6), 0);
+}
+
+/* The CVE-2026-58374 vector: a (Re)Association Request whose benign
+ * Basic MLE is followed by a malformed one. hostapd processes the last
+ * (ieee802_11_parse_mle() overwrites elems->basic_mle), so the
+ * structural rules must see the last too. The malformed element is a
+ * client-shape Basic MLE (empty Presence Bitmap) whose Common Info
+ * Length of 3 cannot hold the MLD MAC it is followed by.
+ *
+ * Association Request (IEEE 802.11-2020 §9.3.3.6): header, then
+ * Capability(2) Listen Interval(2), then elements. Seen to fail with
+ * first-wins (`!rsn_out->mle_body`) restored. */
+static void test_assoc_request_malformed_basic_mle_after_a_good_one_fires(void) {
+    alerts_clear(); mle_clear(); assoc_clear(); assoc_flood_clear();
+    memset(&g_s, 0, sizeof g_s);
+    uint8_t buf[256]; fb_t b; fb_init(&b, buf, sizeof buf);
+    fb_mgmt(&b, 0, 0, BSSID, STA, BSSID, 0x0010, 0);
+    fb_le16(&b, 0x0011);
+    fb_le16(&b, 10);
+    fb_ssid(&b, "mlo-lab");
+    put_basic_mle(&b, MLD_A, -1, -1, 0, NULL, NULL, 0);
+    uint8_t bad[9] = { 0x00, 0x00, 3 };
+    memcpy(bad + 3, MLD_X, 6);
+    fb_ie_ext(&b, MLE_EXT_ID, bad, (int)sizeof bad);
+    ASSERT(fb_ok(&b));
+
+    assoc_req_t req;
+    ASSERT_EQ(assoc_request_parse(buf, b.len, &req), 1);
+    g_wall = T0;
+    sloth_clock_test_set(NULL, pinned_wall);
+    assoc_request_observe(&req, -40, 36);
+    sloth_clock_test_set(NULL, NULL);
+
+    run_engine();
+    int i = find_alert(ALERT_TYPE_MLE_COMMON_INFO_LEN_BAD);
+    ASSERT(i >= 0);
+    if (i >= 0)
+        ASSERT(strstr(g_s.alerts[i].detail, "02:aa:00:00:00:77") != NULL);
+    alerts_clear(); mle_clear(); assoc_clear(); assoc_flood_clear();
 }
 
 static void test_reconfig_no_mlo_fires_warn_with_its_frame_cited(void) {
@@ -600,6 +860,16 @@ void run_mle_bss_tests(void) {
     RUN_TEST(test_a_legacy_beacon_creates_no_row);
     RUN_TEST(test_other_subtypes_are_ignored);
 
+    TEST_SUITE("MLE per-BSSID scan guards (#104 slice 6)");
+    RUN_TEST(test_scan_takes_no_link_id_when_common_info_cannot_hold_it);
+    RUN_TEST(test_scan_takes_no_identity_from_a_short_common_info);
+    RUN_TEST(test_scan_takes_no_identity_from_an_overlong_common_info);
+    RUN_TEST(test_scan_takes_no_identity_from_an_all_zero_mld_mac);
+    RUN_TEST(test_scan_ignores_a_broadcast_bssid);
+    RUN_TEST(test_scan_masks_the_link_id_to_four_bits);
+    RUN_TEST(test_scan_ignores_non_management_frames);
+    RUN_TEST(test_bss_table_evicts_the_least_recently_heard_row);
+
     TEST_SUITE("MLE_PR_BEACON_DIFF (#104 slice 6)");
     RUN_TEST(test_probe_response_naming_another_mld_is_flagged);
     RUN_TEST(test_probe_response_naming_another_link_id_is_flagged);
@@ -614,6 +884,9 @@ void run_mle_bss_tests(void) {
 
     TEST_SUITE("Beacon MLE selection beside a Reconfiguration MLE (#104 slice 6)");
     RUN_TEST(test_beacon_parse_keeps_the_basic_mle_before_a_reconfig);
+    RUN_TEST(test_beacon_parse_takes_the_basic_mle_after_a_reconfig);
+    RUN_TEST(test_beacon_parse_takes_the_last_of_two_basic_mles);
+    RUN_TEST(test_assoc_request_malformed_basic_mle_after_a_good_one_fires);
 
     TEST_SUITE("MLE per-BSSID rules through the engine (#104 slice 6)");
     RUN_TEST(test_reconfig_no_mlo_fires_warn_with_its_frame_cited);
