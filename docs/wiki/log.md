@@ -3965,3 +3965,14 @@ another's lock while holding its own) was checked and does not hold —
 43 cross-module edges, all acyclic — so the page records the measured
 order and an acquire-downward rule instead, and corrects the
 `src/fragattack.c` comment that called `eapol_log`'s mutex a leaf.
+
+## 2026-10-19 — #95 close-out: compiler and architecture coverage
+
+Added [[compiler-coverage]]: CI builds on gcc (Ubuntu 24.04's default)
+and clang for fuzzing, x86-64 only, with no 32-bit, big-endian, musl or
+BSD job. Records that wire parsing goes through `src/bytes.h` byte
+assembly and `memcpy`, never casts, and lists the host assumptions that
+do exist — in-place netlink attribute casts (4-octet aligned, including
+64-bit reads), `long` timestamps, no `time_t` width assertion, `int`
+lengths, unaudited `char` signedness in the text-protocol scanners.
+Linked from [[index]].

@@ -99,6 +99,9 @@ the Wi-Fi it watches:
 
 - [[ip-palette]] — colour conventions and TUI rules.
 - [[platform-vtable]] — the kernel seam (`platform_ops_t`).
+- [[compiler-coverage]] — the one compiler / architecture CI builds on,
+  and the alignment, byte-order and integer-width assumptions the
+  parsers and platform code make.
 - [[version-checkin]] — periodic release checks and the safe boundary
   between version awareness and self-update.
 - [[manifest-format]] — JSON schema `--check-manifest FILE` reads.
