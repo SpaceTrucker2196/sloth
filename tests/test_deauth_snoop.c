@@ -12,6 +12,7 @@
 #include "sloth_clock.h"
 #include "views/deauth.h"
 #include "tune.h"
+#include "sensor_health.h"
 
 /*
  * Frames here are built byte by byte from IEEE 802.11-2020, never from
@@ -1124,7 +1125,7 @@ static void test_two_snapshots_cite_the_same_ids(void) {
 }
 
 /* A NEW aggregate starts with no citations. Weak on its own — a slot
-   never used before is zero whatever vic_find_or_add() does — so it is
+   never used before is zero whatever vic_get() does — so it is
    the companion to the eviction case below, which is the one that
    actually exercises the memset. */
 static void test_a_fresh_aggregate_inherits_no_ids(void) {
@@ -1146,14 +1147,15 @@ static void test_a_fresh_aggregate_inherits_no_ids(void) {
  *
  * This is the case the test above was believed to cover and does not:
  * review preserved ids/id_count/id_head across the `memset(v, 0,
- * sizeof(*v))` in vic_find_or_add() — the exact "one network's frames
+ * sizeof(*v))` in vic_find_or_add() (since #143, the memset in
+ * stab_get()) — the exact "one network's frames
  * attributed to another's incident" bug the comment warns about — and
  * the whole suite stayed green, because every existing case takes a
  * fresh slot and a fresh slot reads zero either way.
  *
  * Reaching the reuse path means filling the table: MAX_DEAUTH_VICTIMS
  * distinct (BSSID, victim) pairs, each stamped with a citation, then
- * one more pair to force evict_vic(). The survivor is read back by
+ * one more pair to force an eviction. The survivor is read back by
  * identity rather than by slot, since which slot was evicted is the
  * eviction policy's business and not this test's. */
 static void test_an_evicted_slot_passes_on_no_ids(void) {
@@ -1185,6 +1187,112 @@ static void test_an_evicted_slot_passes_on_no_ids(void) {
         ASSERT_EQ(v->evidence_id_count, 0);
         ASSERT_EQ((long long)v->evidence_ids[0], 0LL);
     }
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* ── #143: both tables on stab_t, losses tallied ─────────────
+ *
+ * Stream i is a deauth from the AP (BSSID_A) to station 02:00:00:01:hi:lo,
+ * so it creates exactly one observation row and one (BSSID, victim)
+ * aggregate: filling MAX_DEAUTH_ENTRIES streams fills both tables
+ * (MAX_DEAUTH_VICTIMS is the same size). */
+
+static void stream_mac(int i, uint8_t out[6]) {
+    out[0] = 0x02; out[1] = 0x00; out[2] = 0x00; out[3] = 0x01;
+    out[4] = (uint8_t)(i >> 8); out[5] = (uint8_t)(i & 0xff);
+}
+
+static void feed_stream(int i, uint16_t seq) {
+    uint8_t sta[6]; stream_mac(i, sta);
+    feed(12, 0, sta, BSSID_A, BSSID_A, seq, 7);
+}
+
+static int has_stream(const sloth_state_t *s, int i) {
+    uint8_t sta[6]; stream_mac(i, sta);
+    int obs = 0;
+    for (int k = 0; k < s->deauth_count; k++)
+        if (memcmp(s->deauth_events[k].dst, sta, 6) == 0) obs = 1;
+    return obs && find_victim(s, BSSID_A, sta) != NULL;
+}
+
+/* A full table is not a loss; the identity that pushes a row out is
+ * one, in each table. */
+static void test_full_tables_tally_their_evictions(void) {
+    clock_reset(); deauth_clear(); sh_evict_reset();
+    for (int i = 0; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(i, (uint16_t)(100 + i));
+        tick_ms(10);
+    }
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_count, MAX_DEAUTH_ENTRIES);
+    ASSERT_EQ(s.deauth_victim_count, MAX_DEAUTH_VICTIMS);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 0);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_VICTIM), 0);
+
+    feed_stream(MAX_DEAUTH_ENTRIES, 999);
+    snap(&s);
+    ASSERT_EQ(s.deauth_count, MAX_DEAUTH_ENTRIES);
+    ASSERT_EQ(s.deauth_victim_count, MAX_DEAUTH_VICTIMS);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_VICTIM), 1);
+    ASSERT(has_stream(&s, MAX_DEAUTH_ENTRIES));
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Rows aged out after DEAUTH_AGE_SECS of silence are retired, not lost:
+ * refilling both tables afterwards must evict nothing. The last step
+ * proves the refill really did fill them, so the zero above it is not
+ * a table with room to spare. Seen red with the age-out condition in
+ * deauth_snapshot() forced false: the refill then pushes stale rows out
+ * and both zero-tally assertions fail. */
+static void test_aged_out_rows_are_not_evictions(void) {
+    clock_reset(); deauth_clear(); sh_evict_reset();
+    for (int i = 0; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(i, (uint16_t)(100 + i));
+        tick_ms(10);
+    }
+    tick_ms(DEAUTH_AGE_SECS * 1000 + 1000);
+    sloth_state_t s; snap(&s);
+    ASSERT_EQ(s.deauth_count, 0);
+    ASSERT_EQ(s.deauth_victim_count, 0);
+
+    for (int i = 0; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(1000 + i, (uint16_t)(400 + i));
+        tick_ms(10);
+    }
+    snap(&s);
+    ASSERT_EQ(s.deauth_count, MAX_DEAUTH_ENTRIES);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 0);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_VICTIM), 0);
+
+    feed_stream(5000, 999);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_OBS), 1);
+    ASSERT_EQ((int)sh_evict_count(SH_EVICT_DEAUTH_VICTIM), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Eviction orders by the monotonic millisecond stamp, not by wall
+ * seconds. Every row here is created inside one wall second; stream 0
+ * is then heard again, so stream 1 is the least recent by 1 ms. A
+ * second-granular stamp would tie them all and evict slot 0 — stream
+ * 0, the one just heard. Seen red with every stamp in deauth_snoop.c
+ * truncated to the whole second (now_ms / 1000 * 1000). */
+static void test_eviction_is_least_recent_by_monotonic_ms(void) {
+    clock_reset(); deauth_clear(); sh_evict_reset();
+    time_t w0 = g_wall;
+    for (int i = 0; i < MAX_DEAUTH_ENTRIES; i++) {
+        feed_stream(i, (uint16_t)(100 + i));
+        tick_ms(1);
+    }
+    feed_stream(0, 900);        /* a new frame, not a retransmission */
+    tick_ms(1);
+    ASSERT(g_wall == w0);       /* the premise: one wall second */
+    feed_stream(MAX_DEAUTH_ENTRIES, 901);
+    sloth_state_t s; snap(&s);
+    ASSERT(has_stream(&s, 0));
+    ASSERT(!has_stream(&s, 1));
+    ASSERT(has_stream(&s, 2));
+    ASSERT(has_stream(&s, MAX_DEAUTH_ENTRIES));
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -1296,6 +1404,9 @@ void run_deauth_snoop_tests(void) {
     RUN_TEST(test_two_snapshots_cite_the_same_ids);
     RUN_TEST(test_a_fresh_aggregate_inherits_no_ids);
     RUN_TEST(test_an_evicted_slot_passes_on_no_ids);
+    RUN_TEST(test_full_tables_tally_their_evictions);
+    RUN_TEST(test_aged_out_rows_are_not_evictions);
+    RUN_TEST(test_eviction_is_least_recent_by_monotonic_ms);
     sloth_clock_test_set(NULL, NULL);
     RUN_TEST(test_deauth_flood_threshold_is_tunable);
     RUN_TEST(test_deauth_flood_window_is_tunable);

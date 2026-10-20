@@ -3824,3 +3824,16 @@ sequence-number randomisation is now the common case on current phones
 `docs/views/seqnum.md`, replacing the "rare; custom firmware" wording.
 Five researcher/fact-checker pairs (99 claims kept, 36 dropped) and five
 review lenses (51 findings, all applied) preceded the commit.
+
+## 2026-10-19 — deauth tables on `stab_t`; two evict fields (#143)
+
+`src/deauth_snoop.c`'s observation and (BSSID, victim) tables, the
+last hand-written find-or-add pair that the #110 close-out grep
+missed, are now `stab_t` STAB_OLDEST. `sensor_health` gains two
+appended fields, `evict_deauth_obs` and `evict_deauth_victim`; rows
+aged out after 60 s of silence are retired, not counted. Recency stays
+monotonic milliseconds, held in the row's `time_t` stamp. Detector
+behaviour, eviction victim and snapshot order are unchanged; the replay
+golden differs only by the two keys. Updated [[jsonl-schema]] (field
+list, example, counted list, meaning) and [[ring-buffers]] (the
+"still hand-written" list).

@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-19 (#110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138
+**Last updated**: 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138
 
 ---
 
@@ -695,7 +695,7 @@ does not know the type ignores it, as it would any other.
 | `hop_dwells_completed` | dwells that have ended; the denominator behind the means, and 0 while the first is still in flight |
 | `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
 | `evictions` | total observations discarded by a full bounded table, lifetime |
-| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending` | the same total broken out per table, in `sh_evict_t` order |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending`, `evict_deauth_obs`, `evict_deauth_victim` | the same total broken out per table, in `sh_evict_t` order |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export |
 | `pcap_dir_free_mb` | MB free on the filesystem holding `--pcap-dir`, or **-1 for not measured** (no `--pcap-dir`, or `fstatvfs` failed). -1 rather than 0 on purpose: 0 free would read as a full filesystem on every sensor that exports no pcaps, which is most of them (#96) |
@@ -768,7 +768,7 @@ them reads `-1` for "not measured", never `0`.
 it could never be the change worth a line.
 
 ```json
-{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4"}
+{"type":"sensor_health","ts":1700000000,"capture_iface":"any","monitor_iface":"alfa0","monitor_err":"","chan_requested":11,"chan_confirmed":6,"chan_confirmed_ok":0,"chan_retune_failures":2,"hop_channels":3,"hop_visits":41,"hop_frames":9022,"hop_silent_channels":0,"hop_cur_visits":14,"hop_cur_frames":311,"hop_dwell_planned_ms":250,"hop_dwell_measured_ms":1000,"hop_dwell_last_planned_ms":250,"hop_dwell_last_measured_ms":1000,"hop_dwell_worst_overshoot_ms":750,"hop_dwells_completed":40,"capture_open":1,"capture_running":1,"capture_exit":"none","capture_exit_detail":"","capture_stats_valid":1,"capture_recv":184320,"capture_drop":12,"capture_ifdrop":0,"capture_recv_delta":903,"capture_drop_delta":4,"capture_ifdrop_delta":0,"monitor_open":1,"monitor_running":0,"monitor_exit":"iface_gone","monitor_exit_detail":"The interface went down","monitor_stats_valid":1,"monitor_recv":51201,"monitor_drop":0,"monitor_ifdrop":3,"monitor_recv_delta":0,"monitor_drop_delta":0,"monitor_ifdrop_delta":0,"evictions":917,"evict_alert":1,"evict_top_host":0,"evict_pnl_client":0,"evict_pnl_ssid":4,"evict_dhcp_event":0,"evict_eap_session":0,"evict_device":0,"evict_beacon_ap":0,"evict_seqnum_client":0,"evict_assoc_pair":0,"evict_assoc_req":0,"evict_wps_session":0,"evict_evidence_frame":0,"evict_probe_client":0,"evict_pm_forge":0,"evict_queue_evict":0,"evict_dns_log":912,"evict_tls_log":0,"evict_quic_log":0,"evict_http_log":0,"evict_ntp_log":0,"evict_icmp_log":0,"evict_rf_channel":0,"evict_http_flow":0,"evict_pcap_cooldown":0,"evict_bgp_session":0,"evict_ldap_event":0,"evict_kerb_event":0,"evict_smb_session":0,"evict_ssh_flow":0,"evict_rdp_flow":0,"evict_snmp_flow":0,"evict_mqtt_flow":0,"evict_mdns_service":0,"evict_nbns_name":0,"evict_arp_hist":0,"evict_frag_bss":0,"evict_frag_sta":0,"evict_frag_session":0,"evict_frag_assoc":0,"evict_frag_mpdu":0,"evict_ndp_ra":0,"evict_rogue_radius":0,"evict_ssdp_device":0,"evict_onvif_device":0,"evict_smtp_flow":0,"evict_eapol_pending":0,"evict_deauth_obs":0,"evict_deauth_victim":0,"storage_failures":0,"storage_jsonl_failures":0,"storage_pcap_failures":0,"storage_eapol_failures":0,"pcap_dir_free_mb":273408,"pcap_dir_free_inodes":13138050,"scope":"degraded","scope_not_enforced":1,"scope_requested":1,"scope_enforced":0,"scope_generation":1,"scope_dropped":37,"tuned_count":1,"tuned":"ssh.brute_force=25","socket_peer_refused":0,"socket_clients":1,"parse_faults":5,"parse_fault_radiotap_bad":3,"parse_fault_dot11_runt":2,"parse_fault_ie_overrun":0,"parse_fault_rsn_malformed":0,"parse_fault_mle_malformed":0,"parse_fault_ip_truncated":0,"parse_fault_ip_fragment":0,"parse_fault_dns_name_bad":0,"parse_fault_tls_malformed":0,"parse_fault_frame_edge":0,"rss_kb":48580,"rss_hwm_kb":49124,"sqlite_mem_kb":1310,"sqlite_mem_hwm_kb":1702,"malloc_kb":2911,"fd_count":16,"resolver_calls":0,"libs":"pcap: libpcap version 1.10.6 (with TPACKET_V3); sqlite: 3.53.4"}
 ```
 
 **Capture scope (#85).** The `scope*` fields were appended later; every
@@ -782,7 +782,7 @@ tick. A replugged adapter is not followed: restart to re-pin. A
 consumer should alert on `scope_not_enforced` becoming `1`.
 
 **What the eviction tally does and does not cover.** Counted — one
-`evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`. The
+`evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`. The
 device table refuses a new entry rather than evicting an old one —
 different mechanism, same meaning. The 802.11 tables (`beacon_ap`,
 `seqnum_client`, the two `assoc_*`, `wps_session`) joined after the
@@ -798,8 +798,9 @@ tables with #110 on 2026-10-14 — the eight protocol snoopers
 FragAttacks tables (`frag_bss`, `frag_sta`, `frag_session`,
 `frag_assoc`, `frag_mpdu`, after #111 gave them a lock) and the last
 hand-written find-or-allocate tables (`ndp_ra`, `rogue_radius`,
-`ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`); the list
-above is kept in
+`ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`), and
+with #143 the two deauth tables (`deauth_obs`, `deauth_victim`); the
+list above is kept in
 step with the build by `tests/test_sensor_health.c ::
 test_schema_doc_lists_every_counted_table`.
 
@@ -833,6 +834,16 @@ same shape of cost: an evicted station has lost its witnessed key
 install, so its later plaintext frames read as an open network's and
 are not reported until it is seen encrypting again.
 
+**`deauth_obs` and `deauth_victim` count pushed-out rows, not aged
+ones** (#143). A stream or (BSSID, victim) aggregate silent for
+`DEAUTH_AGE_SECS` (60 s of monotonic time) is retired at the next
+snapshot and is not counted. What the fields count is a row still
+inside that minute pushed out by the 129th distinct identity: its
+flood window, duplicate-detection state and cited evidence IDs go
+with it, so a flood that rotates through more than 128 transmitter or
+victim addresses inside a minute is judged on partial windows. A
+non-zero value is that shape on the air, not a sensor fault.
+
 **`arp_hist` has a consequence beyond the count.** The ARP-spoof
 baseline is `STAB_OLDEST` keyed by IP (previously it too refused new
 IPs forever once 256 had been seen). An eviction there forgets the
@@ -864,7 +875,7 @@ fields; the total is still the right trigger for "look at this sensor".
 **Not** counted: the remaining bounded tables, which LRU-evict or
 refuse on full with no field of their own — at least one in each
 module named here, and five in `src/action_snoop.c` alone: the
-cleartext-credential table, the two deauth tables, the transit
+cleartext-credential table, the transit
 tracker, the DNS reverse cache, the
 beacon-cadence tracker, the action-frame tables, bandwidth, twins
 and sensors. That is a list of examples, not an enumeration, and

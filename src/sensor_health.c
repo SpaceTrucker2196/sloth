@@ -134,6 +134,8 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_ONVIF_DEVICE: return "onvif_device";
     case SH_EVICT_SMTP_FLOW:    return "smtp_flow";
     case SH_EVICT_EAPOL_PENDING: return "eapol_pending";
+    case SH_EVICT_DEAUTH_OBS:    return "deauth_obs";
+    case SH_EVICT_DEAUTH_VICTIM: return "deauth_victim";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

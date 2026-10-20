@@ -7,6 +7,7 @@
 #include "sloth_clock.h"
 #include "dot11_frame.h"
 #include "tune.h"
+#include "stab.h"
 
 /* deauth.flood_thresh / deauth.flood_window_s (#120). Read per frame:
  * tune_val() is an array index. */
@@ -21,7 +22,7 @@
 typedef struct {
     deauth_event_t ev;
     flood_window_t win;
-    uint64_t       last_ms;     /* monotonic, drives ageing */
+    time_t         last_ms;     /* monotonic ms (see below), drives ageing and eviction */
     uint16_t       last_seq;
 } obs_t;
 
@@ -41,17 +42,59 @@ typedef struct {
 typedef struct {
     deauth_victim_t v;
     flood_window_t  win;
-    uint64_t        last_ms;
+    time_t          last_ms;    /* monotonic ms, as obs_t */
     uint64_t        ids[DEAUTH_EVIDENCE_IDS];
     int             id_count;   /* stored, saturating at the array size */
     int             id_head;    /* next slot to write */
 } vic_t;
 
-static obs_t           g_obs[MAX_DEAUTH_ENTRIES];
-static int             g_count = 0;
-static vic_t           g_vic[MAX_DEAUTH_VICTIMS];
-static int             g_vcount = 0;
-static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
+/* Both tables are stab_t STAB_OLDEST (#143), so a full table's loss
+ * reaches sensor_health as evict_deauth_obs / evict_deauth_victim
+ * instead of going unmeasured.
+ *
+ * Recency here is the monotonic millisecond clock, not wall seconds:
+ * the flood windows are sub-second, and a wall-clock step must neither
+ * age out a live row nor pick it for eviction. stab_t's stamp is a
+ * time_t, so `last_ms` is declared time_t and carries the monotonic ms
+ * count — stab_t only orders and subtracts the stamp, it never reads it
+ * as a calendar time. That needs a time_t at least as wide as the
+ * uint64_t clock, or the ordering would wrap after 24.8 days of uptime
+ * on a 32-bit time_t; the typedef below fails the build there rather
+ * than let it. Least-recent-first by strict `<`, lowest slot on a tie:
+ * the same victim the hand-written evict_obs()/evict_vic() chose. */
+typedef char deauth_ms_fits_time_t[sizeof(time_t) >= sizeof(uint64_t) ? 1 : -1];
+
+typedef struct {
+    const uint8_t *bssid, *src, *dst;
+    uint8_t        subtype;
+} obs_key_t;
+
+typedef struct {
+    const uint8_t *bssid, *victim;
+} vic_key_t;
+
+static int obs_eq(const void *row, const void *key) {
+    const deauth_event_t *e = &((const obs_t *)row)->ev;
+    const obs_key_t      *k = key;
+    return e->subtype == k->subtype &&
+           memcmp(e->bssid, k->bssid, 6) == 0 &&
+           memcmp(e->src,   k->src,   6) == 0 &&
+           memcmp(e->dst,   k->dst,   6) == 0;
+}
+
+static int vic_eq(const void *row, const void *key) {
+    const deauth_victim_t *v = &((const vic_t *)row)->v;
+    const vic_key_t       *k = key;
+    return memcmp(v->bssid,  k->bssid,  6) == 0 &&
+           memcmp(v->victim, k->victim, 6) == 0;
+}
+
+/* mu NULL: g_mu is held across every get-and-update below. */
+STAB_DECL(g_obs, obs_t, MAX_DEAUTH_ENTRIES, last_ms, STAB_OLDEST,
+          SH_EVICT_DEAUTH_OBS, NULL, obs_eq);
+STAB_DECL(g_vic, vic_t, MAX_DEAUTH_VICTIMS, last_ms, STAB_OLDEST,
+          SH_EVICT_DEAUTH_VICTIM, NULL, vic_eq);
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── 802.11 frame parser ─────────────────────────────────── */
 
@@ -116,56 +159,32 @@ static const uint8_t *victim_of(const uint8_t src[6], const uint8_t dst[6],
     return memcmp(dst, bssid, 6) == 0 ? src : dst;
 }
 
-/* Least recently active slot, by monotonic time. */
-static int evict_obs(void) {
-    int slot = 0;
-    for (int i = 1; i < g_count; i++)
-        if (g_obs[i].last_ms < g_obs[slot].last_ms) slot = i;
-    return slot;
-}
-
-static int evict_vic(void) {
-    int slot = 0;
-    for (int i = 1; i < g_vcount; i++)
-        if (g_vic[i].last_ms < g_vic[slot].last_ms) slot = i;
-    return slot;
-}
-
-static obs_t *obs_find_or_add(const deauth_frame_t *f, time_t wall, int *fresh) {
-    for (int i = 0; i < g_count; i++) {
-        deauth_event_t *e = &g_obs[i].ev;
-        if (e->subtype == f->subtype &&
-            memcmp(e->bssid, f->bssid, 6) == 0 &&
-            memcmp(e->src,   f->src,   6) == 0 &&
-            memcmp(e->dst,   f->dst,   6) == 0) {
-            *fresh = 0;
-            return &g_obs[i];
-        }
+/* stab_get() zeroes a new row and stamps last_ms; the key fields and
+ * first_seen are this module's to fill. */
+static obs_t *obs_get(const deauth_frame_t *f, uint64_t now_ms, time_t wall,
+                      int *fresh) {
+    obs_key_t k = { f->bssid, f->src, f->dst, f->subtype };
+    obs_t *o = stab_get(&g_obs, &k, (time_t)now_ms, fresh);
+    if (*fresh) {
+        memcpy(o->ev.src,   f->src,   6);
+        memcpy(o->ev.dst,   f->dst,   6);
+        memcpy(o->ev.bssid, f->bssid, 6);
+        o->ev.subtype    = f->subtype;
+        o->ev.first_seen = wall;
     }
-    int slot = g_count < MAX_DEAUTH_ENTRIES ? g_count++ : evict_obs();
-    obs_t *o = &g_obs[slot];
-    memset(o, 0, sizeof(*o));
-    memcpy(o->ev.src,   f->src,   6);
-    memcpy(o->ev.dst,   f->dst,   6);
-    memcpy(o->ev.bssid, f->bssid, 6);
-    o->ev.subtype    = f->subtype;
-    o->ev.first_seen = wall;
-    *fresh = 1;
     return o;
 }
 
-static vic_t *vic_find_or_add(const uint8_t bssid[6], const uint8_t victim[6],
-                              time_t wall) {
-    for (int i = 0; i < g_vcount; i++)
-        if (memcmp(g_vic[i].v.bssid,  bssid,  6) == 0 &&
-            memcmp(g_vic[i].v.victim, victim, 6) == 0)
-            return &g_vic[i];
-    int slot = g_vcount < MAX_DEAUTH_VICTIMS ? g_vcount++ : evict_vic();
-    vic_t *v = &g_vic[slot];
-    memset(v, 0, sizeof(*v));
-    memcpy(v->v.bssid,  bssid,  6);
-    memcpy(v->v.victim, victim, 6);
-    v->v.first_seen = wall;
+static vic_t *vic_get(const uint8_t bssid[6], const uint8_t victim[6],
+                      uint64_t now_ms, time_t wall) {
+    vic_key_t k = { bssid, victim };
+    int fresh;
+    vic_t *v = stab_get(&g_vic, &k, (time_t)now_ms, &fresh);
+    if (fresh) {
+        memcpy(v->v.bssid,  bssid,  6);
+        memcpy(v->v.victim, victim, 6);
+        v->v.first_seen = wall;
+    }
     return v;
 }
 
@@ -178,7 +197,8 @@ void deauth_record(const deauth_frame_t *f)
     pthread_mutex_lock(&g_mu);
 
     int fresh;
-    obs_t *o = obs_find_or_add(f, wall, &fresh);
+    /* STAB_OLDEST never refuses, so neither getter returns NULL. */
+    obs_t *o = obs_get(f, now_ms, wall, &fresh);
     deauth_event_t *e = &o->ev;
 
     /* Retry=1 repeating this stream's previous sequence number is the
@@ -194,7 +214,7 @@ void deauth_record(const deauth_frame_t *f)
     e->reason       = f->reason;
     e->reason_valid = f->reason_valid;
     e->last_seen    = wall;
-    o->last_ms      = now_ms;
+    o->last_ms      = (time_t)now_ms;
     o->last_seq     = f->seq;
 
     if (dup) { pthread_mutex_unlock(&g_mu); return; }
@@ -202,14 +222,14 @@ void deauth_record(const deauth_frame_t *f)
     if (flood_window_note(&o->win, now_ms, THRESH, WIN_MS))
         e->flood_last = wall;
 
-    vic_t *v = vic_find_or_add(f->bssid, victim_of(f->src, f->dst, f->bssid), wall);
+    vic_t *v = vic_get(f->bssid, victim_of(f->src, f->dst, f->bssid), now_ms, wall);
     v->v.frames++;
     if (f->protected_) v->v.protected_count++;
     /* A protected or truncated frame says nothing about the reason; it
      * must not overwrite one that a cleartext frame did state. */
     if (f->reason_valid) { v->v.reason = f->reason; v->v.reason_valid = 1; }
     v->v.last_seen = wall;
-    v->last_ms     = now_ms;
+    v->last_ms     = (time_t)now_ms;
     if (flood_window_note(&v->win, now_ms, THRESH, WIN_MS))
         v->v.flood_last = wall;
     int in_win = flood_window_count(&v->win, now_ms, WIN_MS);
@@ -228,8 +248,8 @@ void deauth_record(const deauth_frame_t *f)
     pthread_mutex_unlock(&g_mu);
 }
 
-static uint64_t idle_ms(uint64_t now_ms, uint64_t last_ms) {
-    return now_ms > last_ms ? now_ms - last_ms : 0;
+static uint64_t idle_ms(uint64_t now_ms, time_t last_ms) {
+    return now_ms > (uint64_t)last_ms ? now_ms - (uint64_t)last_ms : 0;
 }
 
 void deauth_snapshot(sloth_state_t *s)
@@ -238,23 +258,33 @@ void deauth_snapshot(sloth_state_t *s)
     pthread_mutex_lock(&g_mu);
 
     /* Age out on monotonic idle time: a wall-clock step must neither
-     * drop a live row nor keep a dead one. */
+     * drop a live row nor keep a dead one. A row aged out is retired,
+     * not lost — nothing has been heard from it for DEAUTH_AGE_SECS —
+     * so stab_del(), which does not tally.
+     *
+     * Walked upward, re-examining slot i after each removal, rather than
+     * with stab_expire()'s downward walk: stab_del() moves the last row
+     * into the hole exactly as the hand-written loop did, and walking
+     * the same direction keeps the surviving rows in the same slots, so
+     * the view and the snapshot order are unchanged. */
     int i = 0;
-    while (i < g_count) {
-        if (idle_ms(now_ms, g_obs[i].last_ms) > AGE_MS) g_obs[i] = g_obs[--g_count];
+    while (i < stab_count(&g_obs)) {
+        obs_t *o = stab_at(&g_obs, i);
+        if (idle_ms(now_ms, o->last_ms) > AGE_MS) stab_del(&g_obs, o);
         else i++;
     }
     i = 0;
-    while (i < g_vcount) {
-        if (idle_ms(now_ms, g_vic[i].last_ms) > AGE_MS) g_vic[i] = g_vic[--g_vcount];
+    while (i < stab_count(&g_vic)) {
+        vic_t *v = stab_at(&g_vic, i);
+        if (idle_ms(now_ms, v->last_ms) > AGE_MS) stab_del(&g_vic, v);
         else i++;
     }
 
     /* Flood status is recomputed against now, so it decays with no
      * further frame needed. */
-    int n = g_count;
+    int n = stab_count(&g_obs);
     for (i = 0; i < n; i++) {
-        obs_t *o = &g_obs[i];
+        obs_t *o = stab_at(&g_obs, i);
         o->ev.flood     = flood_window_active(&o->win, now_ms, HOLD_MS);
         o->ev.win_count = flood_window_count(&o->win, now_ms, WIN_MS);
         s->deauth_events[i] = o->ev;
@@ -263,14 +293,14 @@ void deauth_snapshot(sloth_state_t *s)
     if (s->deauth_sel >= n) s->deauth_sel = n > 0 ? n - 1 : 0;
 
     int flood = 0;
-    int vn = g_vcount;
+    int vn = stab_count(&g_vic);
     for (i = 0; i < vn; i++) {
-        vic_t *v = &g_vic[i];
+        vic_t *v = stab_at(&g_vic, i);
         v->v.flood     = flood_window_active(&v->win, now_ms, HOLD_MS);
         v->v.win_count = flood_window_count(&v->win, now_ms, WIN_MS);
         v->v.streams   = 0;
-        for (int k = 0; k < g_count; k++) {
-            const deauth_event_t *e = &g_obs[k].ev;
+        for (int k = 0; k < n; k++) {
+            const deauth_event_t *e = &((obs_t *)stab_at(&g_obs, k))->ev;
             if (memcmp(e->bssid, v->v.bssid, 6) == 0 &&
                 memcmp(victim_of(e->src, e->dst, e->bssid), v->v.victim, 6) == 0)
                 v->v.streams++;
@@ -299,7 +329,7 @@ void deauth_snapshot(sloth_state_t *s)
 void deauth_clear(void)
 {
     pthread_mutex_lock(&g_mu);
-    g_count  = 0;
-    g_vcount = 0;
+    stab_clear(&g_obs);
+    stab_clear(&g_vic);
     pthread_mutex_unlock(&g_mu);
 }

@@ -297,7 +297,7 @@ slot order is its eviction order.
 pass). After the FragAttacks tables and the six remaining
 `find_or_alloc` / `find_or_create` tables moved, a grep for those
 names finds only thin `stab_get()` wrappers (`mdns_snoop.c`,
-`nbns_snoop.c`) and three bodies that are deliberately not `stab_t`:
+`nbns_snoop.c`) and two bodies that are deliberately not `stab_t`:
 
 - `src/bandwidth.c :: bw_get_or_create` — a mark-and-sweep mirror of
   the connection table, not a cache. Every row not matched this poll
@@ -305,13 +305,22 @@ names finds only thin `stab_get()` wrappers (`mdns_snoop.c`,
   `MAX_CONNS` like the table it mirrors, and it has no `last_seen` to
   evict by. A NULL return is at most one poll of lag during total
   connection churn, not a lost observation.
-- `src/deauth_snoop.c :: obs_find_or_add` / `vic_find_or_add` —
-  recency is a monotonic millisecond clock (`uint64_t last_ms`), which
-  `stab_t`'s `time_t` stamp cannot express without discarding the
-  sub-second ordering the flood windows depend on. Still uncounted.
 - `src/views/channel.c :: find_or_alloc` — a per-draw aggregation over
   a caller's stack array, rebuilt every frame and never full by
   construction (one row per channel). Not module state at all.
+
+`src/deauth_snoop.c`'s `obs_find_or_add` / `vic_find_or_add` were a
+third entry here, on the grounds that their recency is a monotonic
+millisecond clock and the `stab_t` stamp is a `time_t`. That did not
+hold up (#143, 2026-10-19): `stab_t` only orders and subtracts the
+stamp, so the rows now declare `time_t last_ms` and store the
+monotonic ms count in it, with a build-time check that `time_t` is at
+least as wide as the `uint64_t` clock. Both tables are STAB_OLDEST,
+counted as `evict_deauth_obs` / `evict_deauth_victim`, and evict the
+same row the hand-written loop did (strict `<`, lowest slot on a
+tie). The 60 s age-out walks upward with `stab_del()` instead of
+calling `stab_expire()`, whose downward walk would leave the survivors
+in a different slot order and so reorder the view.
 
 Other keyed tables with different function names (for example
 `eap_track.c`'s TLS-in-EAP `session_for`, which reuses resolved slots

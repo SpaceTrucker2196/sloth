@@ -25,7 +25,7 @@
  * have is the same failure wearing a better hat. Further bounded
  * tables still LRU-evict or refuse on full with no field — at least
  * one in each of these modules, and five in action_snoop alone:
- * cleartext_creds, the two deauth tables, transit, the dns.c reverse
+ * cleartext_creds, transit, the dns.c reverse
  * cache, beacon_detect, action_snoop, bandwidth, twins and sensors.
  * The rule to read the tally by is therefore mechanical: a table
  * either has an `evict_<name>` field or its loss is unmeasured.
@@ -120,6 +120,12 @@ typedef enum {
     SH_EVICT_ONVIF_DEVICE,  /* src/onvif_discovery.c — least-recently-seen WS-Discovery device dropped */
     SH_EVICT_SMTP_FLOW,     /* src/smtp_snoop.c — least-recently-seen AUTH LOGIN flow dropped */
     SH_EVICT_EAPOL_PENDING, /* src/eapol_log.c  — least-recently-heard in-flight 4-way handshake dropped */
+    /* #143: the two deauth tables, the last hand-written find-or-add
+     * pair. Appended after EAPOL_PENDING for the same reason as above.
+     * Rows aged out after DEAUTH_AGE_SECS of silence are retired, not
+     * counted. */
+    SH_EVICT_DEAUTH_OBS,    /* src/deauth_snoop.c — least-recently-heard (BSSID,TA,RA,subtype) stream dropped */
+    SH_EVICT_DEAUTH_VICTIM, /* src/deauth_snoop.c — least-recently-hit (BSSID,victim) aggregate dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -162,7 +168,8 @@ uint64_t sh_evict_total_tables(void);
  * "smb_session", "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow",
  * "mdns_service", "nbns_name", "arp_hist", "frag_bss", "frag_sta",
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
- * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending".
+ * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
+ * "deauth_obs", "deauth_victim".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

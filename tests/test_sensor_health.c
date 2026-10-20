@@ -133,6 +133,10 @@ static void test_evict_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_evict_name(SH_EVICT_ONVIF_DEVICE), "onvif_device");
     ASSERT_STR(sh_evict_name(SH_EVICT_SMTP_FLOW),    "smtp_flow");
     ASSERT_STR(sh_evict_name(SH_EVICT_EAPOL_PENDING), "eapol_pending");
+    ASSERT_STR(sh_evict_name(SH_EVICT_DEAUTH_OBS),    "deauth_obs");
+    ASSERT_STR(sh_evict_name(SH_EVICT_DEAUTH_VICTIM), "deauth_victim");
+    /* #143's pair appended after the #110 set, same rule. */
+    ASSERT_EQ((int)SH_EVICT_DEAUTH_OBS, (int)SH_EVICT_EAPOL_PENDING + 1);
     /* Appended, never inserted: the first new kind sits right after the
      * last one the previous slice published, so every earlier evict_*
      * field keeps its position in the record. */
