@@ -302,6 +302,101 @@ static void test_stats_reset_clears_counters_and_limiter(void) {
     linux_wifi_scan_trigger_reset();
 }
 
+/* ── Strict stops sloth asking, not reading ──────────────── */
+
+/* Check one GET_SCAN dump request, field by field, against nl80211's
+ * documented shape: genl header with cmd NL80211_CMD_GET_SCAN, a dump
+ * (NLM_F_REQUEST | NLM_F_DUMP), and exactly one u32 IFINDEX attribute. */
+static void assert_get_scan_request(const uint8_t *buf, size_t len,
+                                    unsigned ifidx) {
+    ASSERT_EQ(TRIGGER_MSG_LEN, (unsigned)len);
+    if (len != TRIGGER_MSG_LEN) return;   /* nothing built to inspect */
+    const struct nlmsghdr *nlh = (const struct nlmsghdr *)buf;
+    ASSERT_EQ(TRIGGER_MSG_LEN, nlh->nlmsg_len);
+    ASSERT_EQ((unsigned)TEST_FAMILY, (unsigned)nlh->nlmsg_type);
+    ASSERT_EQ((unsigned)(NLM_F_REQUEST | NLM_F_DUMP),
+              (unsigned)nlh->nlmsg_flags);
+    const struct genlmsghdr *gh =
+        (const struct genlmsghdr *)(buf + NLMSG_HDRLEN);
+    ASSERT_EQ((unsigned)NL80211_CMD_GET_SCAN, (unsigned)gh->cmd);
+    const struct nlattr *na =
+        (const struct nlattr *)(buf + NLMSG_HDRLEN + GENL_HDRLEN);
+    ASSERT_EQ((unsigned)NL80211_ATTR_IFINDEX, (unsigned)na->nla_type);
+    ASSERT_EQ(8u, (unsigned)na->nla_len);
+    ASSERT_EQ(ifidx, *(const uint32_t *)((const char *)na + 4));
+}
+
+/* The owner's 2026-09-30 wording on #84: under strict there is "no
+ * NL80211_CMD_TRIGGER_SCAN (read cached scan results only)". The
+ * trigger half is pinned above; this pins the other half, at the
+ * per-interface pass linux_wifi_scan() actually calls, so tightening
+ * strict into "no WiFi reads at all" — which would blank the WiFi view
+ * on every strict run — fails here rather than reading as a fix. */
+static void test_strict_refuses_trigger_but_still_builds_get_scan(void) {
+    observe_reset_policy();
+    observe_lock_strict();
+    linux_wifi_scan_trigger_reset();
+
+    uint8_t get[64];
+    memset(get, 0xAA, sizeof(get));
+    size_t len = linux_wifi_prepare_scan_pass(get, sizeof(get),
+                                              TEST_FAMILY, IFIDX_MON);
+    assert_get_scan_request(get, len, IFIDX_MON);
+
+    /* The same pass did offer the trigger, and the policy refused it:
+     * the read was built after a real refusal, not because the pass
+     * never got as far as asking. */
+    wifi_scan_trigger_stats_t st = snap();
+    ASSERT_EQ(1u, (unsigned)st.considered);
+    ASSERT_EQ(1u, (unsigned)st.suppressed_policy);
+    ASSERT_EQ(0u, (unsigned)st.requests_built);
+
+    /* The builder on its own, for the second interface. */
+    memset(get, 0xAA, sizeof(get));
+    len = linux_wifi_prepare_get_scan(get, sizeof(get),
+                                      TEST_FAMILY, IFIDX_UPLINK);
+    assert_get_scan_request(get, len, IFIDX_UPLINK);
+    /* ...and a read is not a trigger: the trigger counters did not move. */
+    st = snap();
+    ASSERT_EQ(1u, (unsigned)st.considered);
+    ASSERT_EQ(0u, (unsigned)st.requests_built);
+
+    observe_reset_policy();
+    linux_wifi_scan_trigger_reset();
+}
+
+/* The shipped default (no flags) is strict too, so the same holds. */
+static void test_default_profile_still_builds_get_scan(void) {
+    observe_reset_policy();
+    linux_wifi_scan_trigger_reset();
+
+    uint8_t get[64];
+    memset(get, 0xAA, sizeof(get));
+    size_t len = linux_wifi_prepare_scan_pass(get, sizeof(get),
+                                              TEST_FAMILY, IFIDX_MON);
+    assert_get_scan_request(get, len, IFIDX_MON);
+    wifi_scan_trigger_stats_t st = snap();
+    ASSERT_EQ(0u, (unsigned)st.requests_built);
+    ASSERT_EQ(1u, (unsigned)st.suppressed_policy);
+
+    linux_wifi_scan_trigger_reset();
+}
+
+static void test_get_scan_bad_args_build_nothing(void) {
+    observe_reset_policy();
+    uint8_t buf[64];
+    memset(buf, 0xAA, sizeof(buf));
+    ASSERT_EQ(0u, linux_wifi_prepare_get_scan(NULL, sizeof(buf),
+                                              TEST_FAMILY, IFIDX_MON));
+    ASSERT_EQ(0u, linux_wifi_prepare_get_scan(buf, TRIGGER_MSG_LEN - 1,
+                                              TEST_FAMILY, IFIDX_MON));
+    ASSERT_EQ(0u, linux_wifi_prepare_get_scan(buf, sizeof(buf),
+                                              TEST_FAMILY, 0));
+    ASSERT_EQ(0u, linux_wifi_prepare_get_scan(buf, sizeof(buf),
+                                              -1, IFIDX_MON));
+    for (size_t i = 0; i < sizeof(buf); i++) ASSERT_EQ(0xAA, buf[i]);
+}
+
 void run_wifi_scan_trigger_tests(void) {
     TEST_SUITE("nl80211 scan-trigger policy + limiter (#84)");
     RUN_TEST(test_strict_builds_zero_scan_triggers);
@@ -314,6 +409,9 @@ void run_wifi_scan_trigger_tests(void) {
     RUN_TEST(test_scan_trigger_request_layout);
     RUN_TEST(test_bad_args_build_nothing_and_are_not_policy_events);
     RUN_TEST(test_stats_reset_clears_counters_and_limiter);
+    RUN_TEST(test_strict_refuses_trigger_but_still_builds_get_scan);
+    RUN_TEST(test_default_profile_still_builds_get_scan);
+    RUN_TEST(test_get_scan_bad_args_build_nothing);
 }
 
 #else   /* not Linux, or built without WITH_WIFI */

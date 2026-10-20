@@ -86,4 +86,22 @@ void linux_wifi_scan_trigger_stats(wifi_scan_trigger_stats_t *out);
 /* Clear the counters and the per-interface limiter state (for testing). */
 void linux_wifi_scan_trigger_reset(void);
 
+/* ── Cached-scan read (#84) ──
+ *
+ * Build the NL80211_CMD_GET_SCAN dump request for `ifidx` into `buf`.
+ * Returns its length, or 0 for bad arguments only. Not policy-gated, by
+ * design: the dump reads the kernel's cached BSS table, and --strict
+ * stops sloth asking for a scan, not reading what is already cached. */
+size_t linux_wifi_prepare_get_scan(uint8_t *buf, size_t sz, int family,
+                                   unsigned ifidx);
+
+/* One interface's turn in linux_wifi_scan(): offer the (policy-gated,
+ * rate-limited) scan trigger, then build the GET_SCAN read into
+ * `get_buf`. Returns the read's length. This is the exact composition
+ * linux_wifi_scan() sends, split out so a test can prove a strict run
+ * still reads the cache while building no trigger. The trigger, if one
+ * is built, is sent on its own disposable socket inside this call. */
+size_t linux_wifi_prepare_scan_pass(uint8_t *get_buf, size_t get_sz,
+                                    int family, unsigned ifidx);
+
 #endif /* LINUX_WIFI_H */

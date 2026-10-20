@@ -376,6 +376,43 @@ static void trigger_scan_async(int family, unsigned ifidx) {
     close(tfd);
 }
 
+size_t linux_wifi_prepare_get_scan(uint8_t *buf, size_t sz, int family,
+                                   unsigned ifidx) {
+    const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN
+                        + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
+
+    if (!buf || sz < msg_sz || ifidx == 0 || family < 0) return 0;
+
+    /* Deliberately NOT consulting observe_active_allowed(): a GET_SCAN
+     * dump reads the kernel's cached BSS table and changes nothing, and
+     * that cache is all a strict run has for the WiFi view. Strict stops
+     * sloth asking the kernel to scan, not reading what it already holds. */
+    memset(buf, 0, msg_sz);
+
+    struct nlmsghdr  *nlh = (struct nlmsghdr *)buf;
+    struct genlmsghdr *gh = (struct genlmsghdr *)NLMSG_DATA(nlh);
+    struct nlattr     *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
+
+    nlh->nlmsg_len   = (uint32_t)msg_sz;
+    nlh->nlmsg_type  = (uint16_t)family;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    nlh->nlmsg_seq   = 2;
+    gh->cmd          = NL80211_CMD_GET_SCAN;
+    na->nla_type     = NL80211_ATTR_IFINDEX;
+    na->nla_len      = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
+    *(uint32_t *)NA_DATA(na) = ifidx;
+
+    return msg_sz;
+}
+
+size_t linux_wifi_prepare_scan_pass(uint8_t *get_buf, size_t get_sz,
+                                    int family, unsigned ifidx) {
+    /* kick a background scan so the cache reflects all visible APs —
+     * only when --allow-active permitted it (see the trigger builder) */
+    trigger_scan_async(family, ifidx);
+    return linux_wifi_prepare_get_scan(get_buf, get_sz, family, ifidx);
+}
+
 int linux_wifi_scan(wifi_ap_t *out, int max) {
     char ifaces[8][16];
     int nifaces = find_wlan_ifaces(ifaces, 8);
@@ -393,27 +430,11 @@ int linux_wifi_scan(wifi_ap_t *out, int max) {
         unsigned ifidx = if_nametoindex(ifaces[ii]);
         if (ifidx == 0) continue;
 
-        /* kick a background scan so the cache reflects all visible APs */
-        trigger_scan_async(family, ifidx);
-
-        /* build NL80211_CMD_GET_SCAN dump request */
-        const size_t msg_sz = NLMSG_HDRLEN + GENL_HDRLEN
-                            + NA_ALIGN(NA_HDRLEN + sizeof(uint32_t));
+        /* Ask (policy-gated, may build nothing), then read (never gated). */
         uint8_t sbuf[64];
-        memset(sbuf, 0, sizeof(sbuf));
-
-        struct nlmsghdr  *nlh = (struct nlmsghdr *)sbuf;
-        struct genlmsghdr *gh = (struct genlmsghdr *)NLMSG_DATA(nlh);
-        struct nlattr     *na = (struct nlattr *)((char *)gh + GENL_HDRLEN);
-
-        nlh->nlmsg_len   = (uint32_t)msg_sz;
-        nlh->nlmsg_type  = (uint16_t)family;
-        nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-        nlh->nlmsg_seq   = 2;
-        gh->cmd          = NL80211_CMD_GET_SCAN;
-        na->nla_type     = NL80211_ATTR_IFINDEX;
-        na->nla_len      = (uint16_t)(NA_HDRLEN + sizeof(uint32_t));
-        *(uint32_t *)NA_DATA(na) = ifidx;
+        size_t msg_sz = linux_wifi_prepare_scan_pass(sbuf, sizeof(sbuf),
+                                                     family, ifidx);
+        if (msg_sz == 0) continue;
 
         struct sockaddr_nl sa;
         memset(&sa, 0, sizeof(sa));
