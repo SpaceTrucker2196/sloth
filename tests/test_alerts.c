@@ -7466,6 +7466,221 @@ static void test_surv_cloud_sni_has_no_attack_technique(void) {
     ASSERT_EQ((int)strlen(t), 0);
 }
 
+/* ── SURV_DNS (#105 family B close-out) ──────────────────
+ *
+ * State-seeded dns_log rows, the shape dns_log_parse() leaves behind;
+ * the parser's own RFC 1035 byte-array tests live in
+ * tests/test_dns_log.c. The wall clock is pinned through the #88 seam
+ * so the rows' timestamps and the engine's `now` agree exactly. */
+
+static time_t g_surv_wall;
+static time_t surv_wall(void) { return g_surv_wall; }
+
+static void surv_dns_begin(sloth_state_t *s) {
+    alerts_clear();
+    g_surv_wall = (time_t)1700000000;
+    sloth_clock_test_set(NULL, surv_wall);
+    seed_state(s);
+}
+
+static void surv_dns_end(void) {
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void add_surv_dns(sloth_state_t *s, const char *src,
+                         const char *qname, int is_resp) {
+    if (s->dns_log_count >= MAX_DNS_LOG) return;
+    dns_log_entry_t *e = &s->dns_log[s->dns_log_count++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->src,   sizeof(e->src),   "%s", src);
+    snprintf(e->qname, sizeof(e->qname), "%s", qname);
+    snprintf(e->qtype, sizeof(e->qtype), "A");
+    if (is_resp) snprintf(e->answer, sizeof(e->answer), "203.0.113.30");
+    e->is_resp = is_resp;
+    e->ts      = g_surv_wall;
+}
+
+static int surv_dns_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int k = 0; k < s->alert_count; k++)
+        if (s->alerts[k].type == ALERT_TYPE_SURV_DNS) n++;
+    return n;
+}
+
+static void test_surv_dns_fires_on_verkada_query(void) {
+    sloth_state_t s; surv_dns_begin(&s);
+    /* A hostname from Verkada's own US-region allowlist table. */
+    add_surv_dns(&s, "10.0.0.5", "relay.prod-us-ohio.control.verkada.com", 0);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT_STR(s.alerts[i].key, "surv-dns:verkada:10.0.0.5");
+        /* match_ip is the asking host on 53: there is no vendor
+           endpoint in a query, and the pcap worth having is that
+           host's DNS. */
+        ASSERT_STR(s.alerts[i].match_ip, "10.0.0.5");
+        ASSERT_EQ((int)s.alerts[i].match_port, 53);
+        ASSERT(strstr(s.alerts[i].detail, "10.0.0.5") != NULL);
+        ASSERT(strstr(s.alerts[i].detail,
+                      "relay.prod-us-ohio.control.verkada.com") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "verkada") != NULL);
+        /* In full, and a family string that shares no substring with
+           the qname, so the hostname cannot satisfy it. */
+        ASSERT(strstr(s.alerts[i].detail, "camera-cloud") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "not distinguishable") != NULL);
+    }
+    surv_dns_end();
+}
+
+static void test_surv_dns_quiet_on_response(void) {
+    /* A response's src is the resolver. Keying on it would fold every
+       client behind the resolver into one alert naming the resolver,
+       so responses are skipped. Seen red by deleting `e->is_resp ||`
+       from the rule's guard. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.1", "api.control.verkada.com", 1);
+    add_surv_dns(&s, "10.0.0.1", "evidence.com", 1);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 0);
+    surv_dns_end();
+}
+
+static void test_surv_dns_quiet_on_lookalike_and_unrelated(void) {
+    /* The label-boundary cases driven through the rule. Seen red by
+       replacing the boundary check in domain_suffix_match() with
+       `return 1;`, which makes the first two rows fire. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.5", "notevidence.com", 0);
+    add_surv_dns(&s, "10.0.0.5", "xcontrol.verkada.com", 0);
+    add_surv_dns(&s, "10.0.0.5", "evidence.com.attacker.example", 0);
+    add_surv_dns(&s, "10.0.0.5", "www.verkada.com", 0);
+    add_surv_dns(&s, "10.0.0.5", "news.example", 0);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 0);
+    surv_dns_end();
+}
+
+static void test_surv_dns_one_alert_per_local_host(void) {
+    /* Vendor + local host, not qname: one camera resolving several
+       allowlisted names is one incident with a rising count. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.5", "api.control.verkada.com", 0);
+    add_surv_dns(&s, "10.0.0.5", "firmware.control.verkada.com", 0);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 1);
+    int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, 2);
+    surv_dns_end();
+}
+
+static void test_surv_dns_separates_two_local_hosts(void) {
+    /* Vendor and qname held constant; only the asking host varies. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.5", "evidence.com", 0);
+    add_surv_dns(&s, "10.0.0.6", "evidence.com", 0);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 2);
+    surv_dns_end();
+}
+
+static void test_surv_dns_separates_two_vendors(void) {
+    /* Host held constant; only the vendor varies. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.5", "evidence.com", 0);
+    add_surv_dns(&s, "10.0.0.5", "flocksafety.com", 0);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 2);
+    surv_dns_end();
+}
+
+static void test_surv_dns_qname_churn_does_not_fill_the_engine(void) {
+    /* The qname is remote-influenced (a vendor's per-session names, or
+       anything a page makes a browser resolve) and nothing bounds how
+       many there are. Keyed on it, this would be the 127-incident
+       engine fill SURV_CLOUD_SNI's review measured. */
+    sloth_state_t s; surv_dns_begin(&s);
+    char q[DNS_NAME_LEN];
+    for (int n = 0; n < 200; n++) {
+        snprintf(q, sizeof(q), "s%d.vstream.vnetcap.control.verkada.com", n);
+        add_surv_dns(&s, "10.0.0.5", q, 0);
+    }
+    const int rows = s.dns_log_count;
+    ASSERT(rows > 1);
+    alerts_update(&s);
+    ASSERT_EQ(surv_dns_count(&s), 1);
+    int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ(s.alerts[i].count, rows);
+    ASSERT(s.alert_count < 16);
+    surv_dns_end();
+}
+
+static void test_surv_dns_and_sni_are_separate_findings(void) {
+    /* Corroboration, not merger: a lookup followed by the session is
+       two findings at two tiers for one host and vendor, so a reader
+       sees both pieces of evidence rather than one that hides which
+       signal it came from. */
+    sloth_state_t s; surv_dns_begin(&s);
+    add_surv_dns(&s, "10.0.0.5", "api.control.verkada.com", 0);
+    add_tls(&s, "10.0.0.5", "203.0.113.30", "api.control.verkada.com",
+            "TLS 1.3");
+    s.tls_log[s.tls_log_count - 1].ts = g_surv_wall;
+    alerts_update(&s);
+    int d = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    int t = find_alert(&s, ALERT_TYPE_SURV_CLOUD_SNI);
+    ASSERT(d >= 0);
+    ASSERT(t >= 0);
+    if (d >= 0) ASSERT_EQ((int)s.alerts[d].sev, (int)ALERT_SEV_LOW);
+    if (t >= 0) ASSERT_EQ((int)s.alerts[t].sev, (int)ALERT_SEV_WARN);
+    surv_dns_end();
+}
+
+static void test_surv_dns_ipv6_local_host_is_not_truncated(void) {
+    sloth_state_t s; surv_dns_begin(&s);
+    const char *v6 = "2001:db8:85a3:8d3:1319:8a2e:370:7348";
+    add_surv_dns(&s, v6, "evidence.com", 0);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, v6) != NULL);
+        ASSERT_STR(s.alerts[i].match_ip, v6);
+    }
+    surv_dns_end();
+}
+
+static void test_surv_dns_longest_qname_survives_in_detail(void) {
+    /* A 63-byte qname (the dns_log ceiling) next to a 45-byte IPv6
+       source and the longest vendor/family must still fit the detail
+       whole, or the finding loses the name it is about. */
+    sloth_state_t s; surv_dns_begin(&s);
+    const char *v6 = "2001:db8:85a3:8d3:1319:8a2e:370:7348";
+    char q[DNS_NAME_LEN];
+    const char *suffix = ".control.verkada.com";
+    size_t pad = (size_t)(DNS_NAME_LEN - 1) - strlen(suffix);
+    memset(q, 'a', pad);
+    memcpy(q + pad, suffix, strlen(suffix) + 1);
+    ASSERT_EQ((int)strlen(q), DNS_NAME_LEN - 1);
+    add_surv_dns(&s, v6, q, 0);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_SURV_DNS);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, q) != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "not distinguishable") != NULL);
+    }
+    surv_dns_end();
+}
+
+static void test_surv_dns_has_no_attack_technique(void) {
+    const char *t = alert_technique(ALERT_TYPE_SURV_DNS);
+    ASSERT(t != NULL);
+    ASSERT_EQ((int)strlen(t), 0);
+}
+
 /* ── WPS threshold rules (#82 wave 8) ─────────────────────
  *
  * Seeded state, no pcap fixtures (agents/AGENTS.md). Two of the three
@@ -10296,6 +10511,17 @@ void run_alerts_tests(void) {
     RUN_TEST(test_surv_cloud_sni_names_the_product_family);
     RUN_TEST(test_surv_cloud_sni_ipv6_local_host_is_not_truncated);
     RUN_TEST(test_surv_cloud_sni_has_no_attack_technique);
+    RUN_TEST(test_surv_dns_fires_on_verkada_query);
+    RUN_TEST(test_surv_dns_quiet_on_response);
+    RUN_TEST(test_surv_dns_quiet_on_lookalike_and_unrelated);
+    RUN_TEST(test_surv_dns_one_alert_per_local_host);
+    RUN_TEST(test_surv_dns_separates_two_local_hosts);
+    RUN_TEST(test_surv_dns_separates_two_vendors);
+    RUN_TEST(test_surv_dns_qname_churn_does_not_fill_the_engine);
+    RUN_TEST(test_surv_dns_and_sni_are_separate_findings);
+    RUN_TEST(test_surv_dns_ipv6_local_host_is_not_truncated);
+    RUN_TEST(test_surv_dns_longest_qname_survives_in_detail);
+    RUN_TEST(test_surv_dns_has_no_attack_technique);
 
     TEST_SUITE("alerts: WPS PIN brute force (#82 wave 8)");
     RUN_TEST(test_wps_pin_brute_fires_at_threshold);

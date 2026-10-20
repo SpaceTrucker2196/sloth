@@ -229,3 +229,12 @@ X(QUEUE_EVICT, "T1557") /* AiTM — buffered frames released across a session ch
 X(MLE_RECONFIG_NO_MLO, "T1669") /* Wi-Fi Networks — a forged AP-MLD reconfiguration announcement from a BSS that is not part of one */
 /* Probe Response's own Basic MLE names a different MLD MAC or Link ID than the same BSSID's Beacon — IEEE 802.11be-2024 9.4.2.322 (#104 slice 6) */
 X(MLE_PR_BEACON_DIFF, "T1669") /* Wi-Fi Networks — a second transmitter answering probes for one BSSID under another MLD identity */
+/* Same position as SURV_CLOUD_SNI, for the same reason: a host on the
+ * monitored segment looking up a surveillance vendor's service domain
+ * is that system working as designed, not an adversary's step. T1071.004
+ * (Application Layer Protocol: DNS) describes C2 riding DNS and would
+ * claim exactly what this cannot see. The basis is cited — the vendors'
+ * own network-requirement docs, see
+ * research/papers/surveillance-vendor-endpoints.md. */
+/* DNS query on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
+X(SURV_DNS, "") /* exposure, not adversary technique (#105) */

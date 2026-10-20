@@ -1,8 +1,8 @@
 ---
 source_url: https://www.axon.com/resources/axon-cloud-customer-faq
 retrieved: 2026-10-13
-topics: [surveillance, body-worn-camera, alpr, sni, tls, cloud-endpoint, vendor]
-alert_kinds: [ALERT_TYPE_SURV_CLOUD_SNI]
+topics: [surveillance, body-worn-camera, alpr, sni, tls, dns, cloud-endpoint, vendor]
+alert_kinds: [ALERT_TYPE_SURV_CLOUD_SNI, ALERT_TYPE_SURV_DNS]
 citation: Axon Enterprise, "Axon Cloud Customer FAQ" (evidence.com to axon.com transition) and "Axon VR — network allowed lists", axon.com/help; Flock Safety, "Transparency Portal", flocksafety.com/articles/transparency-portal; Verkada, "Camera Network Settings", help.verkada.com
 ---
 # Surveillance-vendor cloud endpoints — what a TLS SNI can and cannot say
@@ -100,6 +100,30 @@ DNS and its ClientHellos reach the wire unmodified.
 
 Retrieved 2026-10-20.
 
+## The second signal: DNS (`ALERT_TYPE_SURV_DNS`)
+
+The same table is read a second way. Before a device opens TLS to a
+watchlist domain it resolves the name, and sloth already logs DNS
+queries it overhears (`s->dns_log`). `ALERT_TYPE_SURV_DNS` fires when a
+**query** (not a response — a response's source is the resolver)
+names a watchlist domain, keyed on vendor plus the asking local host,
+exactly as the SNI rule is.
+
+What it adds over the SNI rule is coverage, not certainty. The name
+crosses the wire in DNS in cases where no parseable ClientHello
+follows: an upload over QUIC, a ClientHello using Encrypted Client
+Hello, a TLS path the capture does not see. For Verkada the vendor
+says so directly — its devices *"do not support"* DNS over HTTPS and
+resolve over UDP port 53 (Required Network Settings, above) — so a
+Verkada device's lookups are plaintext by the vendor's own design.
+
+What it costs is strength. A lookup is weaker evidence than a TLS
+session: link previews, prefetching browsers and filtering resolvers
+all resolve names that nothing then connects to. So it fires at LOW,
+one tier under the SNI rule's WARN, and when both fire for one host
+and vendor they corroborate each other. Neither confirms a device; the
+limits below apply to both rules unchanged.
+
 ## What the detector does not establish
 
 Three limits, all of which the alert text states rather than leaving to
@@ -191,6 +215,12 @@ uploading to its own vendor's evidence platform is the system working
 exactly as designed. Tagging it as exfiltration would be the
 evidence-overstatement defect #90 is open about. The basis is cited —
 it is just not an ATT&CK ID.
+
+`ALERT_TYPE_SURV_DNS` returns `""` for the same reason and sits on the
+same named list. Its nearest candidate, T1071.004 (Application Layer
+Protocol: DNS), describes command-and-control carried inside DNS — a
+claim about the payload of the lookup that a vendor-name match cannot
+make.
 
 ## Sources
 

@@ -572,11 +572,11 @@ void rule_cam_ws_discovery(const sloth_state_t *s, time_t now) {
  * this rule adds no new capture surface at all — it is a watchlist
  * lookup over s->tls_log.
  *
- * Why only this one of #105's signal families: the issue's OUI, SSID
- * and DNS-glob families need owner answers that do not exist yet (the
- * MISSION.md §2.4 reading on third-party street-side devices, and
- * whether the medium/low confidence tiers fire at all). An endpoint on
- * a network the operator already monitors needs neither.
+ * Family B only: #105's OUI and SSID family (A) is out of scope until
+ * the owner rules on passive reception of third-party street-side
+ * devices under MISSION.md §2.4 (#145). An endpoint on a network the
+ * operator already monitors needs no such ruling. The DNS half of
+ * family B is rule_surv_dns below, over the same table.
  *
  * What the alert claims is narrower than #105's framing. The issue's
  * success criterion is "is there a Flock on my street right now"; a
@@ -647,6 +647,65 @@ void rule_surv_cloud_sni(const sloth_state_t *s, time_t now) {
          * same conversation on purpose. */
         fire(ALERT_TYPE_SURV_CLOUD_SNI, ALERT_SEV_WARN,
              "SURV_CLOUD_SNI", detail, key, e->dst, 443, now);
+    }
+}
+
+/* Surveillance-vendor lookup (#105 family B, second signal): a DNS
+ * query from a host on the monitored segment names a domain in the
+ * same embedded watchlist SURV_CLOUD_SNI reads. Same table, same
+ * label-boundary suffix match, so the two rules can never disagree
+ * about what is on the list.
+ *
+ * Why a second rule and not just the SNI one: the name reaches DNS in
+ * cases where no ClientHello sloth can parse follows — a QUIC upload,
+ * a ClientHello with ECH, a TLS session on a path sloth's capture does
+ * not see. Verkada's own network page says its devices do not support
+ * DNS over HTTPS, so for that vendor plaintext DNS is the one place
+ * the name is guaranteed to cross the wire.
+ *
+ * Queries only (is_resp == 0). In a query, src is the host asking; in
+ * a response it is the resolver, and keying on the resolver would fold
+ * every client behind it into one alert — the merge the SNI rule's
+ * re-key was made to stop.
+ *
+ * LOW, one tier under SURV_CLOUD_SNI's WARN, because a lookup is
+ * weaker evidence than a session: link previews, prefetching browsers
+ * and filtering resolvers all resolve names nobody then connects to.
+ * The two rules corroborate each other when both fire for one host and
+ * vendor; neither confirms a device. The detail says so.
+ *
+ * Basis: the vendors' own network-requirement documents — see
+ * research/papers/surveillance-vendor-endpoints.md. */
+void rule_surv_dns(const sloth_state_t *s, time_t now) {
+    for (int i = 0; i < s->dns_log_count; i++) {
+        const dns_log_entry_t *e = &s->dns_log[i];
+        if (e->is_resp || !e->qname[0]) continue;
+        const char *vendor = NULL, *family = NULL;
+        if (!vendor_watchlist_match_domain(e->qname, &vendor, &family))
+            continue;
+
+        /* Vendor + LOCAL host, the SNI rule's key and for its reasons:
+         * not the qname, because a vendor hands out per-region and
+         * per-session names (relay.prod-us-ohio., *.vstream.vnetcap.)
+         * and one camera would otherwise be many alerts; and the local
+         * host bounds fan-out to the operator's own segment. */
+        char key[ALERT_KEY_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "surv-dns");
+        akey_tok(&k, vendor);
+        akey_ip(&k, e->src[0] ? e->src : "?");
+        if (!akey_end(&k)[0]) continue;
+
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "%.45s looked up %.63s: %s %s"
+                 " (DNS lookup only; device or portal use not distinguishable)",
+                 e->src[0] ? e->src : "?", e->qname, vendor, family);
+        /* match_ip is the asking host and 53, the THREAT_DOMAIN shape:
+         * a DNS query has no vendor endpoint to filter on, and the
+         * per-alert pcap worth having is that host's DNS traffic. */
+        fire(ALERT_TYPE_SURV_DNS, ALERT_SEV_LOW,
+             "SURV_DNS", detail, key, e->src, 53, now);
     }
 }
 

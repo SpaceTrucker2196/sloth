@@ -49,6 +49,7 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_cam_setup_ssid),
     R(rule_cam_ws_discovery),
     R(rule_surv_cloud_sni),
+    R(rule_surv_dns),
     R(rule_wps_pin_brute),
     R(rule_wps_lockout_cycling),
     R(rule_wps_pbc_race),

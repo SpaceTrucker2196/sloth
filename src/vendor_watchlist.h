@@ -12,6 +12,10 @@
  * are embedded in-tree, no runtime CSV or SIGHUP path), so this ships
  * the table the way src/wifi_oui_attacker.c ships its OUI tables.
  *
+ * Two rules read it: SURV_CLOUD_SNI (a TLS SNI from s->tls_log) and
+ * SURV_DNS (a DNS query name from s->dns_log). Same table, same
+ * suffix semantics, so a domain added here is watched on both.
+ *
  * Every row is a domain a primary vendor source names as a service
  * address — see research/papers/surveillance-vendor-endpoints.md. No
  * row is guessed. A domain nobody publishes does not belong here: an
@@ -22,8 +26,9 @@
  * (the caller must not free them).
  *
  * What a match means and does not mean is the whole care of this
- * module: it says a host on the monitored segment opened TLS to a
- * surveillance vendor's cloud. It cannot say which end is the device.
+ * module: it says a host on the monitored segment named a surveillance
+ * vendor's cloud, in a ClientHello or in a DNS query. It cannot say
+ * which end is the device.
  * A docked body camera uploading and an analyst's browser tab on the
  * vendor's portal are the same observation here. */
 

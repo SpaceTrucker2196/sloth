@@ -4209,3 +4209,21 @@ see). Citation
 (hostapd, Wireshark, mac80211; the paywalled clause itself not read).
 `MLE_SWITCH_RATE` is dropped per the #145 ruling; #104 closes on this
 slice.
+## 2026-10-20 — #105 family B close-out: `SURV_DNS` and a Verkada row
+
+[[alerts]]. The surveillance-vendor watchlist in `src/vendor_watchlist.c`
+gains one row, `control.verkada.com` (Verkada's camera control plane,
+cited to its *Camera Network Settings* firewall allowlist), under the
+#145 ruling-2 bar: a row only for a vendor that publishes its own
+network-requirements or allow-list document, one row per document. Ring
+was checked and failed it (its ports page names no domains); the other
+scope-extension vendors had no such document this pass could locate.
+`research/papers/surveillance-vendor-endpoints.md` records each verdict.
+
+New `ALERT_TYPE_SURV_DNS` (LOW, alert count 75 → 76): a DNS query from
+a host on the segment naming a watchlist domain, keyed
+`surv-dns:<vendor>:<local-host>` like `SURV_CLOUD_SNI`. Queries only —
+a response's source is the resolver. LOW because a lookup is weaker
+than a session; the two rules corroborate each other and neither
+confirms a device. No ATT&CK technique, on the named list in
+`tests/test_research_corpus.c`.

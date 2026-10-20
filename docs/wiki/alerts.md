@@ -376,7 +376,7 @@ Three tiers, yellow → orange → red, with cross-panel coloring (see
 The full table lives in [`docs/views/alerts.md`](../views/alerts.md);
 the headline rules per tier:
 
-- **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`
+- **LOW**: `PORT_SCAN`, `NXDOMAIN_BURST`, `PROBE_FLOOD`, `SURV_DNS`
 - **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`,
   `SURV_CLOUD_SNI`
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
@@ -442,6 +442,19 @@ a hit:
   publishes is a guess with a vendor's name attached, which is the
   overstatement #90 is open about.
 
+`SURV_DNS` reads the same table from the other end of the exchange: a
+DNS **query** from a host on the segment naming a watchlist domain,
+keyed on vendor plus that local host like the SNI rule. It covers the
+cases where no parseable ClientHello follows the lookup (QUIC, ECH, a
+TLS path the capture misses), and Verkada documents that its devices
+do not use DNS over HTTPS, so their lookups are plaintext. It is LOW,
+one tier under `SURV_CLOUD_SNI`, because a lookup is weaker than a
+session — prefetching browsers and link previews resolve names nobody
+connects to. Both firing for one host and vendor corroborate each
+other; neither confirms a device. Responses are skipped: their source
+is the resolver, which would fold every client behind it into one
+alert.
+
 Embedded, not a file: same choice as the IOC list (MISSION.md §3), so
 behaviour stays reproducible from the commit. #105 asked for a
 SIGHUP-reloaded CSV; the owner ruled for the embedded table (#145
@@ -460,7 +473,7 @@ announcing itself over unauthenticated multicast, a camera still in
 setup mode. **Nobody has to be present for any of them to fire**, so
 assigning T1046, T1669 or T1557 would claim an adversary step sloth did
 not observe. They are not the whole set of cited-but-techniqueless
-kinds: `SURV_CLOUD_SNI` (#105, above) and `TPC_ABSENT_HIGH_BAND` (#101,
+kinds: `SURV_CLOUD_SNI` and `SURV_DNS` (#105, above) and `TPC_ABSENT_HIGH_BAND` (#101,
 [[wifi-sigint]]) are on the same list for a posture rather than an
 exposure, and that list in the test named below is the authority — this
 page said "three" while it held five.
