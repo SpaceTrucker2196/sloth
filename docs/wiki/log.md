@@ -3922,3 +3922,13 @@ first, then the tool label, keeping the `/conf? provisional` tail whole.
 The second legend line was 108 columns and is shortened to 97. Detail in
 `docs/views/karma.md` (*Fit at the 100x33 minimum*); see [[alerts]] for
 the `KARMA_AP` rule it mirrors.
+
+## 2026-10-19 — #90: sloth corroborates, never confirms
+
+Recorded the owner ruling of 2026-10-19 (#145 ruling 2) in
+[[jsonl-schema]] and the `KARMA_AP` row of `docs/views/alerts.md`: there is no
+`CONFIRMED_ATTACK` state and no tier above CRIT, which for `KARMA_AP`
+means *corroborated*. `signature_version` and the boolean `validated`
+stay as shipped. `tests/test_alerts.c ::
+test_karma_pmkid_harvest_noted` now pins that a PMKID alone leaves the
+candidate at WARN.

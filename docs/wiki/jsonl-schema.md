@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85
+**Last updated**: 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90
 
 ---
 
@@ -335,6 +335,21 @@ asserting a negative sloth never checked; render it as unknown. The
 `EVIL_TWIN` detail string carries a literal `wired=?` for the same
 reason — a human reading "impostor" with no attachment field will fill
 the gap themselves, usually with the alarming reading.
+
+**There is no "confirmed" state, and none is coming** (#90; owner
+ruling 2026-10-19, recorded in #145 as ruling 2). A passive sensor
+corroborates but never confirms: it can show that independent
+observations agree, never that an attack happened. So no record carries
+a `CONFIRMED_ATTACK` value, `sev` has no tier above CRIT, and the
+strongest thing a finding can claim is *corroborated*. `KARMA_AP`'s CRIT
+is exactly that — one station's PNL, a shared-victim deauth chain, or a
+capture-backed signature agreeing with the SSID count — and a PMKID from
+the BSSID never lifts it on its own. The signature provenance fields
+stay as shipped: `signature_version` a string, `validated` a plain JSON
+boolean. A consumer wanting a three-state verdict
+(unverified / validated / confirmed) should not wait for one; `validated`
+says only whether a capture backs the *signature row*, never that the
+finding is true.
 
 **Dedup keys for paired findings are canonical** (#89). Where a finding
 is about a *pair* of BSSIDs rather than one host, the key is
