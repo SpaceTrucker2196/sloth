@@ -14,6 +14,9 @@
  * WPS_LOCKOUT_CYCLING threshold and window, so the detail screen
  * renders the rule's own numbers rather than a second opinion. */
 #include "../alerts.h"
+#include "wps_track.h"   /* WPS SESSIONS block (#82) */
+#include "eap_parse.h"   /* WSC_OP_* and wsc_msg_name() */
+#include "tune.h"        /* wps.pixie_silence_s */
 
 #define BEACON_PAGE 30
 
@@ -35,6 +38,134 @@ static void fmt_age(time_t ts, char *buf, int sz) {
     if      (age <   60) snprintf(buf, sz, "%lds", age);
     else if (age < 3600) snprintf(buf, sz, "%ldm", age / 60);
     else                 snprintf(buf, sz, "%ldh", age / 3600);
+}
+
+/* ── WPS registration sessions on the AP detail screen (#82) ──────
+ *
+ * WPS_PIN_BRUTE, WPS_PBC_RACE and the two Pixie-Dust rules all read
+ * the wps_track session table, and until this block nothing in the TUI
+ * showed it: each alert named a count or a sequence with no frames
+ * behind it on screen. The table is not on sloth_state_t, so this reads
+ * a copy through wps_track_for_bssid() — the same copy-under-the-lock
+ * the rules take — rather than the live table.
+ *
+ * Bounded on both axes so a hostile enrollee spraying sessions cannot
+ * push the rest of the detail screen off the terminal: at most
+ * WPS_DETAIL_SESSIONS sessions and WPS_DETAIL_EVENTS frames each, with
+ * the remainder counted rather than dropped silently. */
+#define WPS_DETAIL_SESSIONS 4
+#define WPS_DETAIL_EVENTS   8
+
+static const char *wps_op_name(int op) {
+    switch (op) {
+    case WSC_OP_START:    return "Start";
+    case WSC_OP_ACK:      return "ACK";
+    case WSC_OP_NACK:     return "NACK";
+    case WSC_OP_MSG:      return "MSG";
+    case WSC_OP_DONE:     return "Done";
+    case WSC_OP_FRAG_ACK: return "FragACK";
+    default:              return "?";
+    }
+}
+
+static const char *wps_state_name(int st) {
+    switch (st) {
+    case WPS_S_IDLE:    return "idle";
+    case WPS_S_M1_SEEN: return "M1";
+    case WPS_S_M3_SEEN: return "M3";
+    case WPS_S_NACKED:  return "NACKed";
+    case WPS_S_DONE:    return "done";
+    default:            return "?";
+    }
+}
+
+static void draw_wps_sessions(const beacon_ap_t *ap) {
+    wps_session_t sess[MAX_WPS_SESSIONS];
+    int n = wps_track_for_bssid(ap->bssid, sess, MAX_WPS_SESSIONS);
+    if (n == 0 && !ap->has_wps) return;
+
+    const time_t now     = sloth_wall();
+    const int    silence = (int)tune_val(TUNE_WPS_PIXIE_SILENCE_S);
+
+    tui_dim();
+    TPRINT("\n \xe2\x94\x80\xe2\x94\x80 WPS SESSIONS (%d) \xe2\x94\x80\xe2\x94\x80\n", n);
+    if (ap->wps_probe_resp_n > 0) {
+        tui_dim();
+        TPRINT("  WSC element also read from %d probe response%s\n",
+               ap->wps_probe_resp_n, ap->wps_probe_resp_n == 1 ? "" : "s");
+    }
+    if (n == 0) {
+        tui_dim();
+        TPRINT("  (no EAP-WSC registration heard for this AP)\n");
+        return;
+    }
+
+    int shown = n < WPS_DETAIL_SESSIONS ? n : WPS_DETAIL_SESSIONS;
+    for (int i = 0; i < shown; i++) {
+        const wps_session_t *w = &sess[i];
+        char sta[18], age[8];
+        snprintf(sta, sizeof(sta), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 w->sta[0], w->sta[1], w->sta[2],
+                 w->sta[3], w->sta[4], w->sta[5]);
+        fmt_age(w->last_seen, age, sizeof(age));
+        tui_normal(); TPRINT("  %s", sta);
+        tui_dim();    TPRINT("  state ");
+        tui_normal(); TPRINT("%s", wps_state_name(w->state));
+        tui_dim();    TPRINT("  msgs ");
+        /* The lifetime M1..M8 strip, so a run that never got past M3
+         * reads as a gap at M4 at a glance. */
+        for (int m = 1; m <= 8; m++) {
+            if (w->msg_bits & (1u << m)) { tui_normal(); TPRINT("%d", m); }
+            else                         { tui_dim();    TPRINT("."); }
+        }
+        tui_dim();    TPRINT("  cycles ");
+        tui_normal(); TPRINT("%d", w->cycle_count);
+        tui_dim();    TPRINT("  last %s ago\n", age);
+
+        time_t m3 = 0;
+        int quiet = 0;
+        if (wps_track_m3_abandon(w, now, &m3, &quiet)) {
+            /* Heat only at the rule's own floor, as the lock block does:
+             * the colour means "this is what WPS_PIXIE_PROBE reads". */
+            if (quiet >= silence) tui_heat(1.0); else tui_normal();
+            TPRINT("    stopped after M3, no M4: quiet %ds/%ds", quiet, silence);
+            tui_dim();
+            TPRINT("  (Pixie-Dust shape, WPS_PIXIE_PROBE)\n");
+        }
+        if (w->cred_ts) {
+            char cage[8];
+            fmt_age(w->cred_ts, cage, sizeof(cage));
+            tui_heat(0.7);
+            TPRINT("    reached the credentials (M7/M8/Done) %s ago\n", cage);
+        }
+
+        wps_evt_t ev[WPS_EVT_RING];
+        int en = wps_track_events(w, ev, WPS_EVT_RING);
+        int skip = en > WPS_DETAIL_EVENTS ? en - WPS_DETAIL_EVENTS : 0;
+        int older = w->ev_n - en + skip;
+        if (older > 0) {
+            tui_dim();
+            TPRINT("    (%d earlier frame%s not shown)\n",
+                   older, older == 1 ? "" : "s");
+        }
+        for (int j = skip; j < en; j++) {
+            char eage[8];
+            fmt_age(ev[j].ts, eage, sizeof(eage));
+            tui_dim();    TPRINT("    %5s ago  ", eage);
+            tui_normal(); TPRINT("%s", wps_op_name(ev[j].op));
+            /* Only a MSG frame's Message Type names an M-message; on a
+             * NACK or Done op it just repeats the op. */
+            if (ev[j].op == WSC_OP_MSG && ev[j].msg >= 0) {
+                tui_dim(); TPRINT(" %s", wsc_msg_name(ev[j].msg));
+            }
+            TPRINT("\n");
+        }
+    }
+    if (n > shown) {
+        tui_dim();
+        TPRINT("  ... and %d more session%s\n",
+               n - shown, n - shown == 1 ? "" : "s");
+    }
 }
 
 /* Full-screen detail panel for the selected AP. Triggered by Enter
@@ -216,6 +347,8 @@ static void draw_beacon_detail(const sloth_state_t *s) {
             }
         }
     }
+
+    draw_wps_sessions(ap);
 
     /* Associated clients we've observed. */
     int my_assocs[MAX_ASSOC_ENTRIES];

@@ -95,6 +95,8 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now);
 void rule_wps_pin_brute(const sloth_state_t *s, time_t now);
 void rule_wps_lockout_cycling(const sloth_state_t *s, time_t now);
 void rule_wps_pbc_race(const sloth_state_t *s, time_t now);
+void rule_wps_pixie_probe(const sloth_state_t *s, time_t now);
+void rule_wps_pixie_likely_success(const sloth_state_t *s, time_t now);
 void rule_rogue_radius(const sloth_state_t *s, time_t now);
 void rule_peap_no_server_cert(const sloth_state_t *s, time_t now);
 

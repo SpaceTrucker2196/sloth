@@ -130,6 +130,11 @@ typedef enum {
     TUNE_PRESENCE_MIN_SAMPLES,
     TUNE_SEQNUM_CORR_SEQ_WINDOW,
     TUNE_SEQNUM_CORR_DT_MAX_S,
+    /* #82, 2026-10-19 ruling: the two Pixie-Dust windows. Windows, not
+       counts — unlike the three WPS rows above, the owner put these on
+       the registry explicitly. See src/wps_track.h. */
+    TUNE_WPS_PIXIE_SILENCE_S,
+    TUNE_WPS_PIXIE_SUCCESS_WINDOW_S,
     TUNE_COUNT
 } tune_id_t;
 

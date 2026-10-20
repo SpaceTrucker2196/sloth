@@ -1,6 +1,7 @@
 /* Enterprise-authentication rules: a rogue RADIUS server, PEAP with no
- * server certificate, and the three WPS attack verdicts (PIN brute
- * force, lockout cycling, PBC race) with their --tune accessors.
+ * server certificate, and the WPS attack verdicts (PIN brute force,
+ * lockout cycling, PBC race, and the two Pixie-Dust rules) with their
+ * --tune accessors.
  *
  * Moved out of src/alerts.c unchanged (#118) bar linkage: each rule is
  * reached through g_alert_rules[], so it is no longer static. */
@@ -249,6 +250,129 @@ void rule_wps_pbc_race(const sloth_state_t *s, time_t now) {
                  WPS_PBC_WALK_TIME_S, mine ? " - YOUR network" : "");
         fire(ALERT_TYPE_WPS_PBC_RACE, ALERT_SEV_CRIT,
              "WPS_PBC_RACE", detail, key, NULL, 0, now);
+    }
+}
+
+/* ── Pixie-Dust (#82, owner ruling 2026-10-19) ───────────────
+ *
+ * Bongard, "Offline bruteforce attack on WiFi Protected Setup"
+ * (Hack.lu 2014; research/papers/bongard-pixie-dust-2014.md). The
+ * attack, in the slides' own steps: "Do the WPS protocol up to message
+ * M3 / Get the Nonce from M1 / Bruteforce the state of the PRNG /
+ * Compute E-S1 and E-S2 from the state / Bruteforce PSK1 / PSK2 from
+ * E-Hash1 / E-Hash2 / Do the full WPS protocol to get the credentials".
+ *
+ * Two of those steps are on the air and the rest are offline, so there
+ * are two rules. Neither can see the PRNG — whether this AP's nonces
+ * were weak is exactly what a passive sensor cannot know — so both
+ * report a sequence that corroborates the attack, never one that
+ * confirms it (owner standard, #145 ruling 2). */
+
+/* "Up to message M3", then stop. M4 is the registrar's next message
+ * and carries R-Hash1, which an online brute force has to send — it is
+ * the guess. A registrar that took M3 and sent no M4 wanted
+ * E-Hash1/E-Hash2 and nothing else. The silence window (--tune
+ * wps.pixie_silence_s) is what separates "left" from "slow". WARN: a
+ * channel-hopping receiver that missed every frame after M3 produces
+ * the same shape, which is why it is not CRIT. */
+void rule_wps_pixie_probe(const sloth_state_t *s, time_t now) {
+    (void)s;
+    wps_session_t sess[MAX_WPS_SESSIONS];
+    int n = wps_track_snapshot(sess, MAX_WPS_SESSIONS);
+    if (n <= 0) return;
+    const int silence = (int)tune_val(TUNE_WPS_PIXIE_SILENCE_S);
+
+    for (int i = 0; i < n; i++) {
+        time_t m3 = 0;
+        int quiet = 0;
+        if (!wps_track_m3_abandon(&sess[i], now, &m3, &quiet)) continue;
+        if (quiet < silence) continue;
+
+        char bss[20], sta[20];
+        mac_to_str(sess[i].bssid, bss, sizeof(bss));
+        mac_to_str(sess[i].sta,   sta, sizeof(sta));
+        int mine = ownership_is_my_bssid(sess[i].bssid);
+
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "wpspixie");
+        akey_mac(&k, sess[i].bssid);
+        akey_mac(&k, sess[i].sta);
+        if (!akey_end(&k)[0]) continue;
+        /* The threshold, not the live silence, goes in the detail: the
+         * detail signature is what makes a re-evaluation an observation,
+         * and a figure that ticks every second would make every tick
+         * one. */
+        snprintf(detail, sizeof(detail),
+                 "WPS run %s -> %s stopped after M3 (E-Hash1/E-Hash2 sent, "
+                 "no M4) and stayed silent >= %ds - Pixie-Dust offline-PIN "
+                 "shape, Bongard 2014; corroborates, does not confirm%s",
+                 sta, bss, silence, mine ? " - YOUR network" : "");
+        fire(ALERT_TYPE_WPS_PIXIE_PROBE, ALERT_SEV_WARN,
+             "WPS_PIXIE_PROBE", detail, key, NULL, 0, now);
+    }
+}
+
+/* "Do the full WPS protocol to get the credentials." A registration at
+ * the same AP that reached M7 (the enrollee's second commitment and the
+ * network credentials, per the slides' "E -> R M7"), M8 or Done, within
+ * --tune wps.pixie_success_window_s after a run that stopped at M3.
+ *
+ * Deliberately reads the abandoned *shape*, not the WPS_PIXIE_PROBE
+ * verdict: the silence window does not apply here. pixiewps recovers a
+ * weak-PRNG PIN in seconds, and a tool that reruns with it at once
+ * leaves no minute of silence — so gating on the probe rule would miss
+ * the most direct form of the attack, where the completion itself is
+ * the corroboration. Any station counts as the completer, because the
+ * rerun need not use the MAC that probed.
+ *
+ * CRIT — the ruling's "HIGH"; sloth's scale tops out at CRIT. If it is
+ * right, the PSK is gone and changing it is the only remedy; if it is
+ * wrong, it is a legitimate enrolment that followed a receiver gap, and
+ * the detail names both runs so an operator can tell which. */
+void rule_wps_pixie_likely_success(const sloth_state_t *s, time_t now) {
+    (void)s;
+    wps_session_t sess[MAX_WPS_SESSIONS];
+    int n = wps_track_snapshot(sess, MAX_WPS_SESSIONS);
+    if (n <= 0) return;
+    const long window = tune_val(TUNE_WPS_PIXIE_SUCCESS_WINDOW_S);
+
+    for (int c = 0; c < n; c++) {
+        if (!sess[c].cred_ts) continue;
+        int probe = -1;
+        time_t probe_m3 = 0;
+        for (int p = 0; p < n; p++) {
+            if (memcmp(sess[p].bssid, sess[c].bssid, 6) != 0) continue;
+            time_t m3 = 0;
+            if (!wps_track_m3_abandon(&sess[p], now, &m3, NULL)) continue;
+            if (m3 >= sess[c].cred_ts) continue;       /* came after */
+            if ((long)(sess[c].cred_ts - m3) > window) continue;
+            /* The newest qualifying run is the one the detail names. */
+            if (probe < 0 || m3 > probe_m3) { probe = p; probe_m3 = m3; }
+        }
+        if (probe < 0) continue;
+
+        char bss[20], sta[20], psta[20];
+        mac_to_str(sess[c].bssid,     bss,  sizeof(bss));
+        mac_to_str(sess[c].sta,       sta,  sizeof(sta));
+        mac_to_str(sess[probe].sta,   psta, sizeof(psta));
+        int mine = ownership_is_my_bssid(sess[c].bssid);
+
+        char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "wpspixieok");
+        akey_mac(&k, sess[c].bssid);
+        akey_mac(&k, sess[c].sta);
+        if (!akey_end(&k)[0]) continue;
+        snprintf(detail, sizeof(detail),
+                 "WPS registration %s -> %s reached the credentials "
+                 "(M7/M8/Done) %lds after a run from %s stopped at M3 - "
+                 "Pixie-Dust likely succeeded, Bongard 2014; corroborated "
+                 "by sequence, not confirmed: treat the PSK as exposed%s",
+                 sta, bss, (long)(sess[c].cred_ts - probe_m3), psta,
+                 mine ? " - YOUR network" : "");
+        fire(ALERT_TYPE_WPS_PIXIE_LIKELY_SUCCESS, ALERT_SEV_CRIT,
+             "WPS_PIXIE_SUCCESS", detail, key, NULL, 0, now);
     }
 }
 

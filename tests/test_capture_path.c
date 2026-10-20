@@ -3465,6 +3465,62 @@ static void test_ipv6_udp_snmp_reaches_snmp_snoop(void) {
     snmp_snoop_clear();
 }
 
+/* The probe-response WSC element reaches the beacon table (#82).
+ *
+ * Until #82 the probe-response branch of on_probe_frame() read only the
+ * SSID. This pins the wiring the parser-level tests in
+ * tests/test_wps_pixie.c cannot: that a probe response off the monitor
+ * stream gets its body from the right offset (12 fixed octets after a
+ * 24-octet header, IEEE 802.11-2020 §9.3.3.10) and that its WSC
+ * element is merged into the AP a beacon already put on file. Seen red
+ * by deleting the beacon_note_probe_resp_ies() call in probe.c. */
+static void test_probe_response_wsc_reaches_the_beacon_table(void) {
+    static const uint8_t bss[6] = { 0x3c, 0x84, 0x6a, 0x10, 0x20, 0x30 };
+    static const uint8_t sta[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x77 };
+    memset(&g_s, 0, sizeof(g_s));
+    beacon_clear();
+    beacon_rsn_t rsn;
+    memset(&rsn, 0, sizeof(rsn));
+    rsn.has_wps = 1;
+    beacon_record(bss, "wpsx", -50, 6, "WPA2", 100, &rsn);
+
+    uint8_t f[RT_HDR + 24 + 12 + 32];
+    memset(f, 0, sizeof(f));
+    f[2] = (uint8_t)RT_HDR;                 /* it_len, it_present = 0 */
+    uint8_t *d = f + RT_HDR;
+    d[0] = 0x50;                            /* probe response */
+    memcpy(d + 4,  sta, 6);                 /* addr1 = DA, the STA */
+    memcpy(d + 10, bss, 6);                 /* addr2 = SA */
+    memcpy(d + 16, bss, 6);                 /* addr3 = BSSID */
+    uint8_t *b = d + 24;
+    b[8] = 0x64;                            /* beacon interval 100 TU */
+    b[10] = 0x11; b[11] = 0x04;             /* ESS | Privacy, short slot */
+    uint8_t *ie = b + 12;
+    int o = 0;
+    ie[o++] = 0xDD;                         /* WSC vendor element */
+    ie[o++] = 4 + 5 + 8;
+    ie[o++] = 0x00; ie[o++] = 0x50; ie[o++] = 0xF2; ie[o++] = 0x04;
+    ie[o++] = 0x10; ie[o++] = 0x4A; ie[o++] = 0x00; ie[o++] = 0x01;
+    ie[o++] = 0x10;                         /* Version 1.0 */
+    ie[o++] = 0x10; ie[o++] = 0x21; ie[o++] = 0x00; ie[o++] = 0x04;
+    ie[o++] = 'A'; ie[o++] = 'c'; ie[o++] = 'm'; ie[o++] = 'e';
+    int n = RT_HDR + 24 + 12 + o;
+
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    beacon_snapshot(&g_s);
+    int hit = -1;
+    for (int i = 0; i < g_s.beacon_count; i++)
+        if (memcmp(g_s.beacon_aps[i].bssid, bss, 6) == 0) hit = i;
+    ASSERT(hit >= 0);
+    if (hit >= 0) {
+        ASSERT_EQ(g_s.beacon_aps[hit].wps_probe_resp_n, 1);
+        ASSERT_STR(g_s.beacon_aps[hit].wps_manufacturer, "Acme");
+    }
+    beacon_clear();
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -3494,6 +3550,7 @@ void run_capture_path_tests(void) {
     TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);
     RUN_TEST(test_monitor_seam_counts_each_admitted_frame);
+    RUN_TEST(test_probe_response_wsc_reaches_the_beacon_table);
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
     RUN_TEST(test_assoc_response_element_overrun_is_tallied);

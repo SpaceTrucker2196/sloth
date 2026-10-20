@@ -110,8 +110,23 @@ The lockout-cycling and PBC thresholds this section once listed as
 "left open for want of a citable basis" shipped in `d652502`, on the
 owner's written decision of 2026-09-30 and against
 `research/cert/vu-723755.md`: `WPS_LOCKOUT_CYCLING`, `WPS_PIN_BRUTE`
-and `WPS_PBC_RACE` all fire today. What is still open is the weak-RNG
-vendor watchlist, which has no captured provenance here.
+and `WPS_PBC_RACE` all fire today, and since 2026-10-20 so do
+`WPS_PIXIE_PROBE` and `WPS_PIXIE_LIKELY_SUCCESS` (Bongard 2014). The
+weak-RNG vendor watchlist is struck, not open: its only candidate
+source names no on-air identifier for any flawed generator, so no row
+has a primary source (#145 ruling 2; reasoning in
+`research/papers/bongard-pixie-dust-2014.md`).
+
+**Probe responses.** The WSC element of a probe response is now walked
+by the same parser as a beacon's (`beacon_note_probe_resp_ies()`), and
+merged into the beaconing AP's entry: WPS State, AP Setup Locked (as a
+lock transition, through the same ring), the all-zero UUID-E flag and
+the Manufacturer / Model / Serial strings that many APs put only in
+probe responses. Config Methods and Device Password ID stay
+beacon-owned, so a unicast reply between beacons cannot open or close
+the live PBC window `WPS_PBC_RACE` reads, and a probe response from a
+BSSID with no beacon on file is ignored. The detail screen says how
+many probe responses contributed.
 
 ## WPS lockout sawtooth (#82)
 
@@ -177,6 +192,58 @@ network you own. Benign explanations exist (a guest fat-fingering the
 PIN twice in an afternoon; firmware that locks on any failure and
 releases in seconds), which is why the rule's threshold is a floor and
 the raw timeline is on screen for the operator to judge.
+
+## WPS registration sessions — Pixie Dust (#82)
+
+`WPS_PIN_BRUTE`, `WPS_PBC_RACE`, `WPS_PIXIE_PROBE` and
+`WPS_PIXIE_LIKELY_SUCCESS` all read the EAP-WSC session table in
+`src/wps_track.c` (one entry per BSSID/station pair). The **WPS
+SESSIONS** block on the detail screen is that table for the selected
+AP, read through `wps_track_for_bssid()` — a copy taken under the
+table's lock, newest activity first:
+
+```
+ ── WPS SESSIONS (2) ──
+  WSC element also read from 3 probe responses
+  02:be:ef:00:00:02  state done  msgs 12345678  cycles 0  last 14s ago
+    reached the credentials (M7/M8/Done) 16s ago
+    (1 earlier frame not shown)
+      22s ago  MSG M2
+      21s ago  MSG M3
+      ...
+      14s ago  Done
+  02:be:ef:00:00:01  state M3  msgs 123.....  cycles 0  last 2h ago
+    stopped after M3, no M4: quiet 7199s/60s  (Pixie-Dust shape, WPS_PIXIE_PROBE)
+       2h ago  MSG M1
+       2h ago  MSG M2
+       2h ago  MSG M3
+```
+
+The `msgs` strip is the session's lifetime M1..M8 union, so a run that
+never got past M3 reads as a gap at position 4. The "stopped after M3"
+line is `wps_track_m3_abandon()` — the same function both Pixie rules
+call — with the live silence against `wps.pixie_silence_s`, heat-coloured
+only at or above it. The timeline is the last eight EAP-WSC frames
+(op-code, and the Message Type for MSG frames), oldest first; older
+frames are counted, not dropped silently. At most four sessions are
+listed and the rest counted, so a station spraying sessions cannot push
+the rest of the screen off the terminal.
+
+The block appears when the AP advertises WPS or any session exists for
+it — an EAP-WSC exchange is evidence of WPS whatever the latest beacon
+said.
+
+**What's normal:** no block on an AP without WPS; `(no EAP-WSC
+registration heard for this AP)` on most WPS APs; an occasional full
+`12345678` run marked "reached the credentials" when a device is
+enrolled.
+
+**What's suspicious:** a `123.....` run quiet past the threshold
+(`WPS_PIXIE_PROBE`), and worse, a completed run after one
+(`WPS_PIXIE_LIKELY_SUCCESS`) — on your own network, rotate the PSK and
+turn WPS off. A channel-hopping receiver that left after M3 of a real
+enrolment produces the same picture, which is why the rows are on
+screen for the operator to judge rather than summarised away.
 
 ## IE-ordering fingerprint (#77)
 

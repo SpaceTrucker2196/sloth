@@ -4242,3 +4242,19 @@ the vendor across the ring, so two names under one key no longer emit
 an `alert.update` per minute for unchanged evidence. And the docs now
 say that a forwarding resolver on the segment is its own asking host
 for `SURV_DNS`.
+## 2026-10-20 — Pixie Dust: two rules, probe-response WSC, WPS sessions on [b] (#82)
+
+`WPS_PIXIE_PROBE` (WARN, T1110.002) fires on a WPS run that reached M1
+and M3 and never M4..M8/Done, then stayed silent for
+`wps.pixie_silence_s` (60 s); `WPS_PIXIE_LIKELY_SUCCESS` (CRIT,
+T1110.002) on a registration at the same AP that reached M7/M8/Done
+within `wps.pixie_success_window_s` (24 h) after such a run. Source:
+Bongard, Hack.lu 2014 (`research/papers/bongard-pixie-dust-2014.md`,
+retrieved and quoted). `src/wps_track.c` gains a per-attempt view and a
+16-frame opcode ring per session; the Beacons detail screen gains a
+**WPS SESSIONS** block; the probe-response path now walks the WSC
+element through `beacon_parse_ies()` and merges it into the beaconing
+AP; `tests/fuzz/fuzz_eap_wsc_parse.c` fuzzes `eap_wsc_parse()` and the
+session machine behind it. The weak-RNG chipset watchlist is struck:
+the source maps no observable identifier to any flawed generator, so no
+row has a primary source (#145 ruling 2).

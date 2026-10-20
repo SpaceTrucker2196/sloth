@@ -1366,6 +1366,13 @@ typedef struct {
     char     wps_model_name[33];
     char     wps_model_number[33];
     char     wps_serial[33];
+    /* Probe responses whose WSC element was merged into this entry
+     * (#82). The WSC IE in a probe response is the full one — WSC 2.0
+     * puts Manufacturer, Model, Serial and UUID-E there, where many APs'
+     * beacons carry only Version / State / Locked — so a non-zero count
+     * says the fields above may have come from the probe-response path
+     * rather than from a beacon. See beacon_note_probe_resp_ies(). */
+    int      wps_probe_resp_n;
     /* Max PHY tier advertised by the AP — same scheme as pnl_client_t.phy. */
     char     phy[10];
     /* 1 if this beacon was originally hidden (empty SSID in the beacon

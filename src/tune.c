@@ -19,6 +19,7 @@
 #include "queue_evict.h"
 #include "seqnum_track.h"
 #include "transit.h"
+#include "wps_track.h"
 
 /* Indexed by tune_id_t — the order here must match the enum, which
  * g_specs_match_enum_order in tests/test_tune.c pins by name so a
@@ -209,6 +210,14 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "presence.min_samples",       PRESENCE_MIN_SAMPLES, 3, RSSI_WIN_SAMPLES, "RSSI samples before a trajectory claim" },
     { "seqnum.corr_seq_window",     SEQNUM_CORR_SEQ_WINDOW, 1, 4095, "forward sequence-number advance across a MAC change" },
     { "seqnum.corr_dt_max_s",       SEQNUM_CORR_DT_MAX_S, 1, 3600, "seconds between the two trails" },
+    /* #82 Pixie-Dust. The silence floor is 1, not 0: zero would call an
+     * attempt abandoned in the same second its M3 arrived, before M4
+     * could. The success window floor is the silence ceiling, so the
+     * look-back can always cover at least one abandoned attempt; a week
+     * is the ceiling because the session table's LRU, not this knob,
+     * is what bounds memory. */
+    { "wps.pixie_silence_s",        WPS_PIXIE_SILENCE_S, 1, 3600, "seconds of silence after M3 with no M4" },
+    { "wps.pixie_success_window_s", WPS_PIXIE_SUCCESS_WINDOW_S, 3600, 604800, "seconds an abandoned M3 run is correlated with a completed registration" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

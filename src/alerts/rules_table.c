@@ -53,6 +53,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_wps_pin_brute),
     R(rule_wps_lockout_cycling),
     R(rule_wps_pbc_race),
+    R(rule_wps_pixie_probe),
+    R(rule_wps_pixie_likely_success),
     R(rule_pm_forge),
     R(rule_queue_evict),
     R(rule_mle_invalid_link_id),

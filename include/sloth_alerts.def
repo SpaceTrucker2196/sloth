@@ -238,3 +238,7 @@ X(MLE_PR_BEACON_DIFF, "T1669") /* Wi-Fi Networks — a second transmitter answer
  * research/papers/surveillance-vendor-endpoints.md. */
 /* DNS query on the monitored segment names a surveillance-vendor cloud endpoint — vendor network docs (#105 family B) */
 X(SURV_DNS, "") /* exposure, not adversary technique (#105) */
+/* WPS run stopped after M3 (no M4) then silent — Bongard 2014, Pixie Dust (#82) */
+X(WPS_PIXIE_PROBE, "T1110.002") /* Password Cracking — the PIN is recovered offline from M1/M3 */
+/* completed WPS registration after an M3-abandoned run at the same AP — Bongard 2014 (#82) */
+X(WPS_PIXIE_LIKELY_SUCCESS, "T1110.002") /* the cracked PIN, used: the full run Bongard's last step describes */

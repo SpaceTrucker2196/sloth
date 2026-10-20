@@ -159,6 +159,7 @@ void run_stab_tests(void);
 void run_evidence_ring_tests(void);
 void run_persist_health_tests(void);
 void run_wps_track_tests(void);
+void run_wps_pixie_tests(void);
 void run_pm_forge_tests(void);
 void run_evidence_cite_tests(void);
 void run_queue_evict_tests(void);
@@ -337,6 +338,7 @@ int main(void) {
     run_evidence_ring_tests();
     run_persist_health_tests();
     run_wps_track_tests();
+    run_wps_pixie_tests();
     run_pm_forge_tests();
     run_evidence_cite_tests();
     run_queue_evict_tests();

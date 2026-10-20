@@ -1439,6 +1439,49 @@ void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid)
     pthread_mutex_unlock(&g_mu);
 }
 
+int beacon_note_probe_resp_ies(const uint8_t *bssid, const uint8_t *ies,
+                               int ies_len, int privacy, time_t now)
+{
+    if (!bssid || !ies || ies_len <= 0) return 0;
+    /* Automatic, like the beacon path's own rsn in on_probe_frame():
+     * nothing here assumes there is only one monitor thread. */
+    beacon_rsn_t rsn;
+    char ssid[33], enc[10];
+    int  ch = 0;
+    beacon_parse_ies(ies, ies_len, privacy, 0, ssid, &ch, enc, &rsn, NULL);
+    if (!rsn.has_wps) return 0;
+
+    int merged = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_count; i++) {
+        beacon_ap_t *a = &g_aps[i];
+        if (memcmp(a->bssid, bssid, 6) != 0) continue;
+        a->has_wps = 1;
+        if (rsn.wps_state) a->wps_state = rsn.wps_state;
+        wps_lock_note(a, rsn.wps_locked, now);
+        if (rsn.wps_locked) a->wps_locked = rsn.wps_locked;
+        if (rsn.fp.flags & AP_FP_FLAG_WPS_UUID_ZERO)
+            a->fp.flags |= AP_FP_FLAG_WPS_UUID_ZERO;
+        if (rsn.wps_manufacturer[0])
+            snprintf(a->wps_manufacturer, sizeof(a->wps_manufacturer),
+                     "%s", rsn.wps_manufacturer);
+        if (rsn.wps_model_name[0])
+            snprintf(a->wps_model_name, sizeof(a->wps_model_name),
+                     "%s", rsn.wps_model_name);
+        if (rsn.wps_model_number[0])
+            snprintf(a->wps_model_number, sizeof(a->wps_model_number),
+                     "%s", rsn.wps_model_number);
+        if (rsn.wps_serial[0])
+            snprintf(a->wps_serial, sizeof(a->wps_serial),
+                     "%s", rsn.wps_serial);
+        a->wps_probe_resp_n++;
+        merged = 1;
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return merged;
+}
+
 static int cmp_signal_desc(const void *a, const void *b) {
     const beacon_ap_t *x = (const beacon_ap_t *)a;
     const beacon_ap_t *y = (const beacon_ap_t *)b;

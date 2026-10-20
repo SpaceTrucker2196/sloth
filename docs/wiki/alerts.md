@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-20.
+**Last updated**: 2026-10-20 (#82: the two Pixie-Dust rules).
 
 ---
 
@@ -381,7 +381,8 @@ the headline rules per tier:
   `SURV_CLOUD_SNI`
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
-  `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`
+  `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,
+  `WPS_PIXIE_LIKELY_SUCCESS`
 
 ### Multi-Link rules keyed by BSSID (#104)
 
@@ -526,6 +527,8 @@ one.
 | `WPS_PIN_BRUTE` | 5 cycles / 60 s | `--wps-pin-brute-cycles N` |
 | `WPS_LOCKOUT_CYCLING` | 2 cycles / 1 h | `--wps-lockout-cycles N` |
 | `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
+| `WPS_PIXIE_PROBE` | 60 s of silence after M3 with no M4 | `--tune wps.pixie_silence_s=N` |
+| `WPS_PIXIE_LIKELY_SUCCESS` | 24 h look-back from a completed run | `--tune wps.pixie_success_window_s=N` |
 
 `WPS_LOCKOUT_CYCLING`'s evidence is readable: the **WPS ACTIVITY**
 block on the Beacons detail screen (`b`, then Enter on the AP) shows
@@ -535,11 +538,56 @@ age per transition. The screen and the rule call the same counter, so
 the figure in the WARN and the figure on screen are one number. See
 [beacons.md](../views/beacons.md).
 
-Only the **counts** are tunable. The windows are not operator policy:
-60 s is the rate the brute-force threshold is defined over, one hour is
-the period the lockout sawtooth is stated in, and 120 s is the PBC walk
-time the WSC protocol fixes. A knob that moved the walk time would be
-measuring something the protocol does not do.
+For those three only the **counts** are tunable. The windows are not
+operator policy: 60 s is the rate the brute-force threshold is defined
+over, one hour is the period the lockout sawtooth is stated in, and
+120 s is the PBC walk time the WSC protocol fixes. A knob that moved the
+walk time would be measuring something the protocol does not do.
+
+The two Pixie-Dust rules are the other way round, by owner ruling
+(2026-10-19): they have no count, and their *windows* are the knobs —
+how long a run must stay quiet after M3 before it is called abandoned,
+and how far back a completed registration looks for one.
+
+### Pixie Dust (#82)
+
+Source: Bongard, *Offline bruteforce attack on WiFi Protected Setup*
+(Hack.lu 2014), `research/papers/bongard-pixie-dust-2014.md`. The
+attack has two on-air steps and everything between them is offline;
+sloth reads the two steps.
+
+- **`WPS_PIXIE_PROBE`** (WARN) — an attempt that reached M1 and M3 and
+  never M4, M5..M8 or Done, then went silent. M4 is the registrar's
+  next message and carries R-Hash1, the online guess; a registrar that
+  took M3 (E-Hash1/E-Hash2) and sent no M4 wanted only what an offline
+  crack needs.
+- **`WPS_PIXIE_LIKELY_SUCCESS`** (CRIT) — a registration at the same AP
+  that reached M7/M8/Done, from any station, after such a run. Not
+  gated on the silence: the cracked PIN is usually used within
+  seconds.
+
+`src/wps_track.c` keeps the per-attempt view this needs: the Mn bits of
+the current attempt (M1 to the next M1), when its M3 arrived, the newest
+closed attempt that was abandoned after M3 and the silence that followed
+it, and when an attempt first reached the credentials. Both rules
+**corroborate, never confirm** (#145 ruling 2): a passive sensor cannot
+see whether the AP's nonce generator is weak, and a receiver gap after
+M3 of a legitimate enrolment produces the same shape.
+
+**No weak-RNG chipset watchlist ships.** #82 proposed one, conditional
+on the pixiewps/Bongard list counting as a primary source. The slides
+name chipset vendors only in passing and map no observable identifier
+(OUI, WPS Manufacturer/Model, firmware) to any flawed generator — and
+say outright that brands reskin chipset reference code and mix
+chipsets — so no row has a primary source and the watchlist is struck
+under #145 ruling 2. The research document records the reasoning.
+
+The session behind both rules is readable on the Beacons detail screen:
+the **WPS SESSIONS** block lists each station's state, the M1..M8 strip,
+whether the newest run is in the abandoned-after-M3 shape and how long
+it has been quiet against the threshold, when the credentials were
+reached, and the last eight EAP-WSC frames. See
+[beacons.md](../views/beacons.md).
 
 Every threshold is a **floor** — the rule fires at or above the count —
 so raising one can only quiet sloth and can never invent a finding. A

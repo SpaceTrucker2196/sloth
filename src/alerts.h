@@ -302,6 +302,10 @@ const char  *twin_class_label(twin_class_t c);
  * something the protocol does not do. Counts are what a noisy estate
  * needs to move; windows are what the protocol is.
  *
+ * The two Pixie-Dust rules (2026-10-19 ruling) are the exception the
+ * other way: they have no count, and their two windows are --tune rows
+ * — see WPS_PIXIE_SILENCE_S in src/wps_track.h.
+ *
  * Every threshold is a *floor*: the rule fires at or above the count,
  * so raising one only ever quiets sloth and can never invent a
  * finding. */

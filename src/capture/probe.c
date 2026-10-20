@@ -583,6 +583,15 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         char ssid[33];
         dot11_ie_ssid(body + fixed, blen - fixed, ssid, NULL);
         if (ssid[0]) beacon_reveal_hidden_ssid(bssid_p, ssid);
+        /* The WSC element (#82). A probe response carries the full one —
+         * the vendor strings and UUID-E many beacons omit — and until
+         * this line only its SSID was read. Parsing lives in
+         * beacon_snoop.c for the testability reason given above. The
+         * capability field is fixed-body octets 10..11 (§9.3.3.10);
+         * Privacy is bit 4. */
+        if (sub == 5)
+            beacon_note_probe_resp_ies(bssid_p, body + fixed, blen - fixed,
+                                       (body[10] & 0x10) ? 1 : 0, fts);
         if (status_ok && (sub == 1 || sub == 3)) {
             int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
             assoc_observe(bssid_p, sta_p, ssid[0] ? ssid : NULL,

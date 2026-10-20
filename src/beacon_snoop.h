@@ -269,6 +269,25 @@ void beacon_snapshot(sloth_state_t *s);
  * known. */
 void beacon_reveal_hidden_ssid(const uint8_t *bssid, const char *ssid);
 
+/* The WSC element of a probe response (#82). `ies` is the element list
+ * after the 12-octet fixed body; `privacy` is the capability Privacy
+ * bit. Walked by beacon_parse_ies() — the same walk a beacon gets, so
+ * the two frame types cannot disagree about what a WPS attribute means
+ * — and merged into the existing entry for `bssid`: has_wps, WPS State,
+ * AP Setup Locked (as a lock transition, through the same ring the
+ * beacon path feeds), the zero-UUID-E flag and the vendor strings.
+ * Returns 1 when a WSC element was merged, 0 otherwise.
+ *
+ * Two things a probe response does NOT move. Config Methods and Device
+ * Password ID stay beacon-owned: they are the live "PBC window open
+ * now" signal WPS_PBC_RACE reads, and a unicast reply to one station
+ * landing between beacons would make that flag flicker. And no entry
+ * is created — the table is the beaconing APs, exactly as
+ * beacon_reveal_hidden_ssid() treats it — so a probe response from a
+ * BSSID with no beacon on file is a NOP. */
+int beacon_note_probe_resp_ies(const uint8_t *bssid, const uint8_t *ies,
+                               int ies_len, int privacy, time_t now);
+
 /* Look up the SSID we've observed for `bssid`. Copies into `ssid_out`
  * (NUL-terminated, up to 33 chars) and returns 1 on hit, 0 on miss.
  * Used by the EAPOL module to label captured handshakes with the

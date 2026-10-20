@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-20 (#92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-20 (#82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -105,6 +105,13 @@ Defaults are the shipped values; ranges are inclusive and a value outside one ex
 | `presence.swing_dbm` / `presence.min_samples` | 8 / 3 | 1..100 / 3..16 | transit-shaped RSSI trajectory |
 | `presence.transient_max_s` / `presence.visitor_min_s` / `presence.resident_min_s` | 120 / 120 / 900 | 1..86400 / 1..86400 / 1..604800 | presence dwell classes |
 | `seqnum.corr_seq_window` / `seqnum.corr_dt_max_s` | 64 / 30 | 1..4095 / 1..3600 | seqnum correlation seam |
+
+#### Knobs added by #82 (Pixie Dust)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `wps.pixie_silence_s` | 60 | 1..3600 | seconds a WPS run must stay quiet after M3, with no M4, before `WPS_PIXIE_PROBE` calls it abandoned |
+| `wps.pixie_success_window_s` | 86400 | 3600..604800 | seconds `WPS_PIXIE_LIKELY_SUCCESS` looks back from a completed registration for an abandoned-after-M3 run at the same AP |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
