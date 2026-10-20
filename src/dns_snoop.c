@@ -8,6 +8,18 @@
 #include "dns_wire.h"
 #include "bytes.h"
 
+/* An explicit-length copy rather than strncpy(dst, src, size - 1) plus a
+ * terminator. The two are equivalent here, but gcc under ASan + UBSan
+ * cannot see that and reported -Wstringop-truncation on both call sites,
+ * which is what kept the sanitizer CI job off -Werror (#95). */
+static void copy_ip(char *dst, size_t dst_sz, const char *src)
+{
+    size_t n = strlen(src);
+    if (n >= dst_sz) n = dst_sz - 1;
+    memcpy(dst, src, n);
+    dst[n] = '\0';
+}
+
 /* ── Public API ──────────────────────────────────────────── */
 
 int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
@@ -67,10 +79,8 @@ int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
             inet_ntop(AF_INET, &a, ip, sizeof(ip));
             dns_set_resolved(ip, qname[0] ? qname : rname);
             ip_count++;
-            if (!first_ip[0]) {
-                strncpy(first_ip, ip, sizeof(first_ip) - 1);
-                first_ip[sizeof(first_ip) - 1] = '\0';
-            }
+            if (!first_ip[0])
+                copy_ip(first_ip, sizeof(first_ip), ip);
         } else if (type == 28 && rdlen == 16) {
             /* AAAA record */
             struct in6_addr a6;
@@ -79,10 +89,8 @@ int dns_snoop(const uint8_t *msg, int len, char *info, int info_sz) {
             inet_ntop(AF_INET6, &a6, ip, sizeof(ip));
             dns_set_resolved(ip, qname[0] ? qname : rname);
             ip_count++;
-            if (!first_ip[0]) {
-                strncpy(first_ip, ip, sizeof(first_ip) - 1);
-                first_ip[sizeof(first_ip) - 1] = '\0';
-            }
+            if (!first_ip[0])
+                copy_ip(first_ip, sizeof(first_ip), ip);
         }
         /* CNAME / MX / NS etc. — skip without injection */
 

@@ -109,7 +109,13 @@ int wifi_assess(const sloth_state_t *s, wifi_finding_t *out, int max) {
         else if (strcmp(a->enc, "WEP") == 0)
             add(out, &n, max, "HIGH", "Deprecated WEP encryption", ssid, bss,
                 "WEP — trivially crackable");
-        else if (strcmp(a->enc, "WPA") == 0 || strcmp(a->pairwise, "TKIP") == 0)
+        /* pairwise is char[12], so comparing the 5 bytes of "TKIP\0" is
+         * in bounds and equal to strcmp() == 0. The strcmp() form drew
+         * -Wstringop-overread ("region of size 0", "source object is
+         * likely at address zero") from gcc under ASan + UBSan only;
+         * the explicit length gives it a bound it cannot lose (#95). */
+        else if (strcmp(a->enc, "WPA") == 0 ||
+                 memcmp(a->pairwise, "TKIP", sizeof("TKIP")) == 0)
             add(out, &n, max, "MED", "Legacy WPA / TKIP cipher", ssid, bss,
                 "WPA1/TKIP — deprecated, KRACK-adjacent");
 

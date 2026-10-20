@@ -137,26 +137,40 @@ int deauth_parse_frame(const dot11_frame_t *f, deauth_frame_t *out)
     int hdr = f->hdr_len;
     if (hdr < 0) return 0;
 
-    memset(out, 0, sizeof(*out));
-    memcpy(out->dst,   f->da,    6);     /* addr1 */
-    memcpy(out->src,   f->sa,    6);     /* addr2 */
-    memcpy(out->bssid, f->bssid, 6);     /* addr3 (§9.3.3.1) */
-    out->subtype    = f->subtype;
-    out->fc_flags   = f->fc1;
-    out->retry      = f->retry;
-    out->protected_ = f->protected_;
-    out->frag = (uint8_t)f->frag_num;
-    out->seq  = (uint16_t)f->seq_num;
+    /* Built in a local and stored through `out` once (#95). Copying the
+     * addresses field by field into `*out` drew -Warray-bounds ("offset
+     * [0, 5] is out of the bounds [0, 0]") from gcc under ASan + UBSan
+     * instrumentation only: the instrumented build loses the object size
+     * behind `out` that the plain build keeps. Into a local whose size
+     * gcc can see, the same three 6-byte copies are clean in every
+     * build. The observable result is identical, and the `return 0`
+     * paths above still leave `*out` untouched. */
+    deauth_frame_t o;
+    memset(&o, 0, sizeof(o));
+    memcpy(o.dst,   f->da,    6);     /* addr1 */
+    memcpy(o.src,   f->sa,    6);     /* addr2 */
+    memcpy(o.bssid, f->bssid, 6);     /* addr3 (§9.3.3.1) */
+    o.subtype    = f->subtype;
+    o.fc_flags   = f->fc1;
+    o.retry      = f->retry;
+    o.protected_ = f->protected_;
+    o.frag = (uint8_t)f->frag_num;
+    o.seq  = (uint16_t)f->seq_num;
 
     /* Protected Frame first. On a PMF link an individually addressed
      * deauth/disassoc body is CCMP/GCMP ciphertext (12.5.3): the two
      * octets after the header are the low packet-number bytes, not a
      * reason. Group-addressed ones use BIP, leave the reason in clear
      * and do not set this bit. */
-    if (out->protected_) return 1;
-    if (f->len < hdr + 2) { out->truncated = 1; return 1; }
-    out->reason       = (uint16_t)(f->p[hdr] | ((uint16_t)f->p[hdr + 1] << 8));
-    out->reason_valid = 1;
+    if (!o.protected_) {
+        if (f->len < hdr + 2) {
+            o.truncated = 1;
+        } else {
+            o.reason       = (uint16_t)(f->p[hdr] | ((uint16_t)f->p[hdr + 1] << 8));
+            o.reason_valid = 1;
+        }
+    }
+    *out = o;
     return 1;
 }
 
