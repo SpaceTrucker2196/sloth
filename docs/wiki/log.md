@@ -3883,3 +3883,21 @@ a replugged adapter stays failed closed until restart, and an
 unresolvable `--iface` name stays a stderr notice plus `degraded`. The
 consumer example's comment no longer claims fail-closed means nothing
 out of scope was collected.
+
+## 2026-10-19 — README and site pages follow the applied MISSION §2 (#84)
+
+README's "Strict observation" table said sloth had "exactly two"
+behaviours beyond observation; MISSION §2 rule 1 (rewritten 2026-10-14)
+lists five. The table now carries reverse DNS, the scan trigger,
+`--hop`, a routable `--data-socket` and promiscuous mode, each with its
+default, opt-in and what `--strict` does to it. The WiFi SIGINT section
+no longer calls `--strict --hop` an open owner decision (ruled
+2026-09-30: `--hop` stays allowed under `--strict`), and the stale
+"§2.1", "first carve-out" and "sole carve-out" references are gone.
+`docs/index.html` and `docs/philosophy.html` dropped "never scans, never
+modifies kernel state". The `--strict` help text stopped saying a
+routable socket still binds under it (refused since 2026-10-06), and
+[[cli-reference]]'s `--hop` row stopped counting kernel-state writes.
+`tests/test_docs_consistency.c` now pins MISSION §2's flags to the ones
+`src/main.c` parses, both ways, for `--allow-active`, `--strict` and
+`--hop`.

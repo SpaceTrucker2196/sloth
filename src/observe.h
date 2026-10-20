@@ -41,7 +41,7 @@ void observe_set_active_allowed(int allowed);
 int  observe_active_allowed(void);
 
 /* May sloth publish the Avahi service file for a routable data socket
- * (MISSION.md §2.1's second, opt-out carve-out)?
+ * (MISSION.md §2 rule 1: an opt-in, announced network-using service)?
  *
  * This deliberately tracks the strict LOCK, not active_allowed. The
  * plain default leaves the carve-out alone: discovery already requires
@@ -140,8 +140,8 @@ typedef struct {
  * socket is a configuration consequence. Both exit 2.
  *
  * hop_enabled is req->hop unconditionally. --strict does not refuse
- * --hop; that is the owner's explicit carve-out, recorded as an open
- * decision in README's WiFi SIGINT section, not an oversight here. */
+ * --hop; that is the owner's ruling of 2026-09-30 on #84 ("--hop
+ * remains allowed under strict"), not an oversight here. */
 void observe_resolve_profile(const observe_profile_req_t *req,
                              observe_profile_t *out);
 

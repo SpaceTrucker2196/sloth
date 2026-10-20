@@ -9,8 +9,8 @@
  * host's mDNS responder advertises `_sloth._tcp` — letting the sloth-ios
  * client discover it by name instead of typing host:port.
  *
- * This is the ONE place sloth's presence touches the network, so it is
- * gated behind MISSION §2's second opt-in carve-out and disabled with
+ * It is one of the opt-in network-using services MISSION §2 rule 1
+ * permits (alongside --allow-active's PTR query), and is disabled with
  * `--no-discovery`. sloth itself transmits nothing: it writes a config
  * file that a separate daemon (avahi-daemon) may use to announce. For
  * loopback / unix data sockets — or no data socket — nothing is

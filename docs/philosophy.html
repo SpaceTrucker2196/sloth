@@ -57,12 +57,28 @@
       </div>
       <div class="split-body">
         <p>
-          Sloth never injects packets, never sends probes, never
-          deauthenticates, never beacons, never ARP-poisons, never
-          port-scans, never resolves hosts it didn't already see, and
-          never modifies kernel state &mdash; no <code>iw set</code>, no
-          <code>ip link set</code>, no <code>iptables</code>, no monitor-mode
-          toggling. <strong>It reads. It never writes to the wire.</strong>
+          Sloth never crafts and sends a frame onto a network it is
+          monitoring &mdash; no injected packets, no probe requests, no
+          deauthentication, no beacons, no ARP poisoning, no port scans.
+          That is the one absolute: no flag, build option or deployment
+          mode turns it off. <strong>What it observes, it observes
+          passively.</strong>
+        </p>
+        <p>
+          What it <em>offers</em>, it may offer over the network, opt-in
+          and announced. Nothing below is on by default:
+          <code>--allow-active</code> sends a reverse-DNS query for an
+          address it already saw and asks the kernel for a passive scan;
+          <code>--hop</code> retunes sloth's own monitor interface; a
+          routable <code>--data-socket</code> serves observations to
+          whoever connects and is advertised over mDNS.
+          <code>--strict</code> locks the first and last of those off for
+          the run. One write is neither opt-in nor announced, because it
+          is inherent to capturing at all: libpcap sets promiscuous mode
+          when the handle opens, which changes what sloth's own NIC
+          accepts and never what the segment carries.
+          <a href="https://github.com/SpaceTrucker2196/sloth/blob/main/MISSION.md">MISSION.md</a>
+          &sect;2 is the authority.
         </p>
         <p>
           Monitor-mode interfaces must be set up <em>externally</em> by

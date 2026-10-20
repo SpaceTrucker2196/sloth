@@ -443,13 +443,13 @@ static void print_usage(const char *argv0) {
             "  --hop              passive channel-hopping: retune sloth's own\n"
             "                     monitor interface across a 2.4/5 GHz list,\n"
             "                     dwelling longer where activity is seen. Off by\n"
-            "                     default, and one of two kernel-state writes\n"
-            "                     sloth can make on a radio — the other is the\n"
-            "                     nl80211 scan trigger, opt-in under\n"
-            "                     --allow-active. Neither is on by default, but\n"
-            "                     they are separately gated: --strict locks the\n"
-            "                     scan trigger out for the run and does NOT\n"
-            "                     refuse --hop. Needs monitor mode +\n"
+            "                     default. A kernel-state write on sloth's own\n"
+            "                     radio; the nl80211 scan trigger, opt-in under\n"
+            "                     --allow-active, is another (MISSION.md §2\n"
+            "                     lists them all). They are separately gated:\n"
+            "                     --strict locks the scan trigger out for the\n"
+            "                     run and does NOT refuse --hop (owner ruling,\n"
+            "                     2026-09-30). Needs monitor mode +\n"
             "                     CAP_NET_ADMIN (Linux). No frame is transmitted.\n"
             "  --strict           near-no-op: strict observation is already the\n"
             "                     default. What it adds is a LOCK — any later\n"
@@ -457,12 +457,12 @@ static void print_usage(const char *argv0) {
             "                     is refused, so --strict --allow-active exits\n"
             "                     non-zero instead of quietly resolving in favour\n"
             "                     of one of them. It also suppresses the mDNS\n"
-            "                     advertisement (see --no-discovery) — but it\n"
-            "                     does NOT close every path to the network: a\n"
-            "                     routable --data-socket opted in with\n"
-            "                     --data-socket-allow-remote still binds and\n"
-            "                     serves every observation under --strict, and\n"
-            "                     --hop still retunes the monitor interface.\n"
+            "                     advertisement (see --no-discovery) and refuses\n"
+            "                     a routable --data-socket (exit 2, even with\n"
+            "                     --data-socket-allow-remote; loopback and unix:\n"
+            "                     still work). It does NOT refuse --hop, which\n"
+            "                     still retunes the monitor interface, and it\n"
+            "                     does not change promiscuous mode.\n"
             "                     Worth passing because it puts the operator's\n"
             "                     intent where ps(1) and an audit log can see it.\n"
             "  --tune NAME=VALUE  move one detector threshold. Repeatable.\n"
@@ -1350,8 +1350,8 @@ int main(int argc, char **argv) {
          * discover it by name — but only when it's bound to a routable
          * address (loopback/unix publish nothing) and the operator hasn't
          * opted out. sloth writes an Avahi service file; avahi-daemon does
-         * the announcing. This is the one place sloth's presence touches
-         * the network — gated by MISSION §2's discovery carve-out. */
+         * the announcing. An opt-in network-using service under MISSION
+         * §2 rule 1; --strict refuses the routable socket before here. */
         if (!no_discovery)
             discovery_publish(data_socket, NULL);
     }

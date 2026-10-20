@@ -1745,6 +1745,158 @@ static void test_wiki_reference_documents_no_dead_flag(void) {
     free(ref);
 }
 
+/*
+ * MISSION.md §2 vs the argv parser — #84 close-out.
+ *
+ * Rule 1 of §2 (rewritten 2026-10-14) names the flags that let sloth do
+ * anything beyond watching — `--hop`, `--allow-active`, a routable
+ * `--data-socket` — and the `--strict` lock over them. The README table
+ * that summarised them said "exactly two" for weeks after the charter
+ * listed more, which is the drift this pins in both directions:
+ *
+ *   - every flag §2 names is one src/main.c actually parses, so the
+ *     charter cannot cite a flag that was renamed or removed;
+ *   - each of the three flags the charter's opt-in/lock story turns on
+ *     (--allow-active, --strict, --hop) is parsed AND named in §2, so a
+ *     new spelling, or a §2 edit that drops one, is red rather than a
+ *     silent gap between what is promised and what is shipped.
+ *
+ * Only MISSION.md §2 is read — the other sections mention flags for
+ * other reasons — and a flag there is any `--name` in prose, backticked
+ * or not, since the charter is read by people, not a table parser.
+ */
+#define DC_CHARTER_MIN_FLAGS 3
+
+/* Copy the body of the `## <num>.` section of a Markdown text: from the
+ * heading line to the next `## ` heading (exclusive). 1 when found. */
+static int dc_md_section(const char *t, const char *num,
+                         char *out, size_t sz) {
+    char head[16];
+    snprintf(head, sizeof(head), "## %s.", num);
+    const char *p = NULL;
+    for (const char *line = t; line && *line; ) {
+        if (!strncmp(line, head, strlen(head))) { p = line; break; }
+        const char *eol = strchr(line, '\n');
+        line = eol ? eol + 1 : NULL;
+    }
+    if (!p || sz == 0) return 0;
+    const char *end = strstr(p + 1, "\n## ");
+    size_t len = end ? (size_t)(end - p) : strlen(p);
+    if (len >= sz) len = sz - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return 1;
+}
+
+/* Every `--name` in prose: two dashes not preceded by a dash or an
+ * option character, then a letter. A Markdown rule (`---`), a `--`
+ * standing in for a dash, and `a--b` are not options. */
+static int dc_scan_prose_opts(const char *t,
+                              char out[DC_MAX_OPTS][DC_OPT_LEN]) {
+    int n = 0;
+    for (const char *p = t; (p = strstr(p, "--")) != NULL; ) {
+        const char *name = p + 2;
+        int lead_ok = !(p > t && (p[-1] == '-' ||
+                                  dc_opt_char((unsigned char)p[-1])));
+        int letter  = (*name >= 'a' && *name <= 'z') ||
+                      (*name >= 'A' && *name <= 'Z');
+        size_t len = 0;
+        while (dc_opt_char((unsigned char)name[len])) len++;
+        if (lead_ok && letter) n = dc_opt_push(out, n, name, len);
+        p = name + len;
+    }
+    return n;
+}
+
+static int dc_opt_in(char opts[DC_MAX_OPTS][DC_OPT_LEN], int n,
+                     const char *name) {
+    for (int i = 0; i < n; i++) if (!strcmp(opts[i], name)) return 1;
+    return 0;
+}
+
+static void test_charter_section_and_flag_extractor(void) {
+    static const char doc[] =
+        "# Title\n"
+        "## 1. Mission\n"
+        "Mentions --not-in-two here.\n"
+        "## 2. Rules\n"
+        "`--hop` retunes; --strict locks, a routable `--data-socket`.\n"
+        "Again `--hop`. A rule:\n---\nand a dash -- in prose, a--b.\n"
+        "## 3. After\n"
+        "--also-not-in-two\n";
+    char sec[512];
+    ASSERT_EQ(dc_md_section(doc, "2", sec, sizeof(sec)), 1);
+    ASSERT(strstr(sec, "## 2. Rules") == sec);
+    ASSERT(strstr(sec, "not-in-two") == NULL);
+    ASSERT(strstr(sec, "## 3.") == NULL);
+
+    char opts[DC_MAX_OPTS][DC_OPT_LEN];
+    ASSERT_EQ(dc_scan_prose_opts(sec, opts), 3);
+    ASSERT_STR(opts[0], "hop");
+    ASSERT_STR(opts[1], "strict");
+    ASSERT_STR(opts[2], "data-socket");
+
+    /* A missing section is reported, not read as an empty one. */
+    ASSERT_EQ(dc_md_section(doc, "7", sec, sizeof(sec)), 0);
+}
+
+/* Load MISSION.md §2's flags and main.c's parsed flags. 1 on success. */
+static int dc_charter_flags(char sec_opts[DC_MAX_OPTS][DC_OPT_LEN], int *n_sec,
+                            char argv_opts[DC_MAX_OPTS][DC_OPT_LEN],
+                            int *n_argv) {
+    static char sec[32768];
+    char *mission = slurp("MISSION.md");
+    char *src     = slurp("src/main.c");
+    ASSERT(mission != NULL);
+    ASSERT(src != NULL);
+    int ok = mission && src && dc_md_section(mission, "2", sec, sizeof(sec));
+    ASSERT(ok);
+    if (ok) {
+        *n_sec  = dc_scan_prose_opts(sec, sec_opts);
+        *n_argv = dc_scan_argv_opts(src, argv_opts);
+    }
+    free(mission);
+    free(src);
+    return ok;
+}
+
+static void test_every_charter_flag_is_parsed(void) {
+    char sec_opts[DC_MAX_OPTS][DC_OPT_LEN], argv_opts[DC_MAX_OPTS][DC_OPT_LEN];
+    int n_sec = 0, n_argv = 0;
+    if (!dc_charter_flags(sec_opts, &n_sec, argv_opts, &n_argv)) return;
+    /* Floors: §2 names at least the three this guard is about, so a
+     * section the extractor stopped reading cannot pass as clean. */
+    ASSERT_GE(n_sec, DC_CHARTER_MIN_FLAGS);
+    ASSERT_GE(n_argv, DC_MIN_LONG_OPTS);
+    int unparsed = 0;
+    for (int i = 0; i < n_sec; i++) {
+        if (dc_opt_in(argv_opts, n_argv, sec_opts[i])) continue;
+        unparsed++;
+        fprintf(stderr, "    MISSION.md §2 names --%s; src/main.c parses "
+                        "no such option\n", sec_opts[i]);
+    }
+    ASSERT_EQ(unparsed, 0);
+}
+
+static void test_charter_gate_flags_are_parsed_and_named(void) {
+    static const char *const gate[] = { "allow-active", "strict", "hop" };
+    char sec_opts[DC_MAX_OPTS][DC_OPT_LEN], argv_opts[DC_MAX_OPTS][DC_OPT_LEN];
+    int n_sec = 0, n_argv = 0;
+    if (!dc_charter_flags(sec_opts, &n_sec, argv_opts, &n_argv)) return;
+    for (size_t i = 0; i < sizeof(gate) / sizeof(gate[0]); i++) {
+        int parsed = dc_opt_in(argv_opts, n_argv, gate[i]);
+        int named  = dc_opt_in(sec_opts, n_sec, gate[i]);
+        if (!parsed)
+            fprintf(stderr, "    src/main.c no longer parses --%s, which "
+                            "MISSION.md §2 relies on\n", gate[i]);
+        if (!named)
+            fprintf(stderr, "    MISSION.md §2 no longer names --%s, which "
+                            "src/main.c parses\n", gate[i]);
+        ASSERT(parsed);
+        ASSERT(named);
+    }
+}
+
 #define DC_MAX_KEYS      64
 /* Measured: the view list binds 34 alphanumeric keys (ten digits plus
  * 24 letters), and the keybinding tables backtick all 34. */
@@ -2221,6 +2373,9 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_cli_opt_extractor);
     RUN_TEST(test_every_cli_flag_is_in_wiki_reference);
     RUN_TEST(test_wiki_reference_documents_no_dead_flag);
+    RUN_TEST(test_charter_section_and_flag_extractor);
+    RUN_TEST(test_every_charter_flag_is_parsed);
+    RUN_TEST(test_charter_gate_flags_are_parsed_and_named);
     RUN_TEST(test_data_socket_default_documented);
     RUN_TEST(test_main_assigns_no_tcp_default);
     RUN_TEST(test_view_key_extractor);
