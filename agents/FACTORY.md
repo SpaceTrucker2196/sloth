@@ -379,6 +379,13 @@ Branching, commit format, push cadence, and destructive-op rules:
 CI gates merge: `make` + `make test`. If either fails, the commit
 doesn't go in.
 
+**Version bumps.** A change to `SLOTH_VERSION` in `include/sloth.h`
+updates `SECURITY.md` in the *same* commit: the supported-version line
+there is checked strictly against the header by
+`tests/test_docs_consistency.c` since 8931549 (#96), so a bump without
+it turns the suite red. Tag signing stays a manual owner step
+(`git tag -s`, #142); CI holds no key.
+
 ---
 
 ## 13. Cold-start sanity loop
