@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <pcap.h>            /* DLT_* — this binary links libpcap by design */
 #include <netinet/in.h>      /* IPPROTO_TCP */
+#include <net/if.h>          /* if_nametoindex: pin "lo" for the scope-poll case */
 #include "runner.h"
 #include "sloth.h"
 #include "capture/capture.h"
@@ -438,18 +439,15 @@ static void test_scope_refuses_a_datalink_without_an_ifindex(void) {
 
 static void test_scope_refuses_a_deselected_pinned_interface(void) {
     /* A pinned, still-valid interface the operator has since switched
-       off with [y]. The frame is refused, which is correct.
-
-       It also *counts* toward out_of_scope_dropped, which is worth
-       asserting explicitly because the counter's header says the
-       runtime deselect "does not bump this counter". Both are true as
-       written: tests/test_capture.c pins the documented case on an
-       unrestricted stream, where the deselect arm returns without
-       counting; under an allow-list the deselect is folded into the
-       same `admit` test as attribution and does count. Reported on #85
-       — if the counter is meant to mean "authorization failure" only,
-       this frame should not be in it, and this assertion names itself
-       when that changes. */
+       off with [y]. The frame is refused, which is correct -- and it is
+       NOT counted toward out_of_scope_dropped. That counter means
+       authorization failures only (owner ruling on #85, 2026-10-19):
+       the interface is inside the scope, and the toggle is the
+       operator's own. Before that ruling the deselect shared one
+       `admit` test with attribution under an allow-list and was
+       counted; tests/test_capture.c pins the same answer on the
+       predicate, and the second half below pins that a real
+       attribution failure in the same deselected state still counts. */
     scope_setup(7, "wlan1", 1);
     capture_policy_t pol;
     memset(&pol, 0, sizeof(pol));
@@ -465,6 +463,15 @@ static void test_scope_refuses_a_deselected_pinned_interface(void) {
     int n = sll2_ipv4_tcp(f, 7, 8);
     const uint8_t *fs[1] = { f };
     int ls[1] = { n };
+    ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
+    assert_no_side_effects();
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+
+    /* The other direction, in the same deselected state: a frame from
+       an index no pin names is still an authorization failure, so the
+       deselect has not switched the counter off wholesale. */
+    n = sll2_ipv4_tcp(f, 99, 8);
+    ls[0] = n;
     ASSERT_EQ(dispatch(DLT_LINUX_SLL2, fs, ls, 1), 1);
     assert_no_side_effects();
     ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
@@ -485,6 +492,77 @@ static void test_no_allow_list_admits_any_ifindex(void) {
     ASSERT_EQ((long long)g_s.pkt_total, 1);
     ASSERT_STR(g_s.packets[0].src, "192.168.1.10");
     ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+}
+
+/* A dead worker enforces nothing (#85 close-out).
+
+   capture_scope_poll() used to derive no_capture from "a handle is
+   open". A worker that died -- PERM_LOST after a capability was
+   revoked, IFACE_GONE, any exit -- keeps its handle until
+   capture_stop(), so the scope read `enforced` for the rest of the run
+   while nothing at all was being collected. The scope state now keys
+   on the same liveness capture_health_poll() reports as `running`.
+
+   No thread and no device: capture_test_set_worker() installs a
+   pcap_open_dead() handle (no packet source) and writes the worker
+   bookkeeping directly. The allow-list is "lo" pinned at its real
+   index, because capture_scope_poll() revalidates every pin against
+   the live ifindex table -- a made-up name would fail closed and read
+   `degraded` rather than `enforced`, and the live control below would
+   then prove less. Resolving a name opens nothing (MISSION §2). */
+static void scope_poll_case(int open, int running, int reason) {
+    capture_test_set_worker(open, running, reason);
+    capture_scope_poll(&g_s);
+}
+
+static void test_scope_poll_reads_a_dead_worker_as_no_capture(void) {
+    unsigned lo = if_nametoindex("lo");
+    memset(&g_s, 0, sizeof(g_s));
+    memcpy(g_s.iface_allowed[0], "lo", 3);
+    g_s.iface_allowed_count = 1;
+    capture_policy_t pol;
+    memset(&pol, 0, sizeof(pol));
+    pol.count = 1;
+    pol.pins[0].ifindex = lo;
+    memcpy(pol.pins[0].name, "lo", 3);
+    pol.pins[0].valid = lo != 0;
+    capture_test_set_policy(&pol);
+
+    /* Control: handle open, run flag set, no exit recorded. Without it
+       every assertion below could pass on a poll that reads no_capture
+       unconditionally. */
+    scope_poll_case(1, 1, CAPTURE_EXIT_NONE);
+    if (lo)
+        ASSERT_EQ(g_s.scope_health.state, CAPTURE_SCOPE_STATE_ENFORCED);
+    else
+        ASSERT(g_s.scope_health.state != CAPTURE_SCOPE_STATE_NO_CAPTURE);
+
+    /* The case in #85: the worker broke out on its own, so the run flag
+       is still set and the handle is still open. */
+    static const int dead[] = { CAPTURE_EXIT_PERM_LOST,
+                                CAPTURE_EXIT_IFACE_GONE,
+                                CAPTURE_EXIT_NOT_ACTIVATED,
+                                CAPTURE_EXIT_ERROR };
+    for (size_t i = 0; i < sizeof(dead) / sizeof(dead[0]); i++) {
+        scope_poll_case(1, 1, dead[i]);
+        ASSERT_EQ(g_s.scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);
+        ASSERT_EQ(capture_scope_not_enforced(
+                      (capture_scope_state_t)g_s.scope_health.state), 1);
+        /* And the other half of the same record agrees. */
+        capture_health_t h;
+        memset(&h, 0, sizeof(h));
+        capture_health_poll(&h);
+        ASSERT_EQ(h.open, 1);
+        ASSERT_EQ(h.running, 0);
+    }
+
+    /* Asked to stop, handle not yet closed. */
+    scope_poll_case(1, 0, CAPTURE_EXIT_STOPPED);
+    ASSERT_EQ(g_s.scope_health.state, CAPTURE_SCOPE_STATE_NO_CAPTURE);
+
+    /* Unwind: no thread exists for capture_stop() to join. */
+    capture_test_set_worker(0, 0, CAPTURE_EXIT_NONE);
+    capture_test_set_policy(NULL);
 }
 
 /* -- [m] retarget vs. the allow-list - issue #85 -------------
@@ -3153,6 +3231,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_scope_refuses_a_datalink_without_an_ifindex);
     RUN_TEST(test_scope_refuses_a_deselected_pinned_interface);
     RUN_TEST(test_no_allow_list_admits_any_ifindex);
+    RUN_TEST(test_scope_poll_reads_a_dead_worker_as_no_capture);
 
     TEST_SUITE("monitor dispatch seam: real on_probe_frame (#92)");
     RUN_TEST(test_monitor_seam_admits_a_wellformed_frame);

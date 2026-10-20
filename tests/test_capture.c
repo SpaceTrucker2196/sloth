@@ -350,6 +350,25 @@ static void test_scope_dropped_ignores_runtime_deselect(void) {
     ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
 }
 
+static void test_scope_dropped_ignores_deselect_under_allow_list(void) {
+    /* Owner ruling on #85 (2026-10-19): scope_dropped counts
+       authorization failures only. wlan1 is allow-listed, pinned and
+       still valid; [y] switching it off refuses its frames but is not
+       an authorization failure, so the count stays at zero. */
+    sloth_state_t *s = scope_state("wlan1");
+    memcpy(s->iface_deselected[0], "wlan1", 6);
+    s->iface_deselected_count = 1;
+    capture_policy_sync_deselect(&g_scope_policy, s);
+    uint8_t f[64]; int n = sll2_frame(f, 3);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 0);
+    /* Same deselected state, an index outside the pinned set: still an
+       authorization failure, still counted. */
+    n = sll2_frame(f, 99);
+    ASSERT_EQ(IN_SCOPE(s, D_LINUX_SLL2, f, n, fake_resolve), 0);
+    ASSERT_EQ((long long)capture_out_of_scope_dropped(), 1);
+}
+
 static void test_scope_dropped_reset_zeroes(void) {
     sloth_state_t *s = scope_state("wlan1");
     uint8_t f[64]; int n = sll2_frame(f, 99);
@@ -1203,6 +1222,7 @@ void run_capture_tests(void) {
     RUN_TEST(test_scope_dropped_ignores_admitted_frames);
     RUN_TEST(test_scope_dropped_ignores_unrestricted_short_frame);
     RUN_TEST(test_scope_dropped_ignores_runtime_deselect);
+    RUN_TEST(test_scope_dropped_ignores_deselect_under_allow_list);
     RUN_TEST(test_scope_dropped_reset_zeroes);
     RUN_TEST(test_ifname_failure_not_cached);
     RUN_TEST(test_ifname_empty_not_cached);

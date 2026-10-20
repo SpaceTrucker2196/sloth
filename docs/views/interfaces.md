@@ -257,9 +257,11 @@ never as all loss.
 scope is not being fully served: one of the two requested interfaces
 was absent at start or has failed closed since (unplug, rename, index
 reuse; see *Headless scoping* below). `scope no-capture` means a scope
-was requested but no data-stream handle exists. Neither ever means
-out-of-scope traffic is being collected. Both mean in-scope traffic is
-not. An enforced scope and an unscoped run add nothing to the line.
+was requested but no live data-stream worker exists — no handle, or the
+capture thread has died behind a still-open one (`cap down <reason>` on
+the same line names why). Until 2026-10-19 a dead worker with its handle
+still open read as enforced. Neither ever means out-of-scope traffic is
+being collected on the IP stream. Both mean in-scope traffic is not. An enforced scope and an unscoped run add nothing to the line.
 
 The same state feeds the `sensor_health` JSONL record — see
 [`../wiki/jsonl-schema.md`](../wiki/jsonl-schema.md).
@@ -368,9 +370,11 @@ The one window this leaves is between an index being reused and the
 next tick. Linux hands out interface indices in increasing order, so
 closing it within one poll interval would need the counter to wrap.
 
-Staying failed closed after a replug is deliberate but reversible.
-Following a replugged adapter is a policy choice for the owner: the
-alternative re-pins by name mid-run.
+Staying failed closed after a replug is an owner decision (2026-10-19,
+#85 close-out): the alternative, re-pinning by name mid-run, was
+considered and declined. So is the unresolved-name case above staying
+a stderr notice plus `degraded` rather than a startup refusal (same
+date).
 
 **Excluded marker.** Interfaces present on the box but absent from a
 non-empty allow-list carry an `x` prefix and a dim `(excluded)`

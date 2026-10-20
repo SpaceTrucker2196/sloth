@@ -3866,3 +3866,20 @@ epoch move. Updated [[ring-buffers]], `docs/views/deauth.md` (128-row
 tables, the two evict counters) and [[mutation-testing]] (`LC_ALL=C`
 on the views command, since the sample depends on glob order, and 43
 min as the cost of a re-run).
+
+## 2026-10-19 — #85 close-out: dead-worker scope, `scope_dropped` contract
+
+`capture_scope_poll()` derived `no_capture` from "a handle is open", so
+a capture thread that died (`perm_lost`, `iface_gone`, any exit) kept
+its handle and the scope read `enforced` while nothing was collected.
+The scope state now uses the same liveness as `capture_running`
+(`capture_worker_live()`), so a dead worker reads `no_capture`.
+`scope_dropped` no longer counts a `[y]` deselect of a pinned,
+still-valid interface under an allow-list — authorization failures
+only, as [[jsonl-schema]] already said (owner decision 2026-10-19: the
+code follows the doc). Owner decisions of the same date recorded in
+[[jsonl-schema]], [[cli-reference]] and `docs/views/interfaces.md`:
+a replugged adapter stays failed closed until restart, and an
+unresolvable `--iface` name stays a stderr notice plus `degraded`. The
+consumer example's comment no longer claims fail-closed means nothing
+out of scope was collected.

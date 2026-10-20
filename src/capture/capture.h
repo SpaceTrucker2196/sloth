@@ -195,9 +195,15 @@ uint64_t    capture_out_of_scope_dropped(void);
 void        capture_out_of_scope_dropped_reset(void);
 
 /* Runtime scope state from the policy's end state (#85 slice 2):
-   no request → NONE; no data-stream handle → NO_CAPTURE; fewer valid
-   pins than requested names → DEGRADED; else ENFORCED. Pure. */
-capture_scope_state_t capture_scope_state(int requested, int capture_open,
+   no request → NONE; no live data-stream worker → NO_CAPTURE; fewer
+   valid pins than requested names → DEGRADED; else ENFORCED. Pure.
+
+   `capture_live` is capture_worker_live(), not "a handle is open": a
+   worker that died with PERM_LOST, IFACE_GONE or any other exit keeps
+   its handle until capture_stop(), and a dead worker enforces nothing
+   -- it collects nothing at all -- so it must not read ENFORCED (#85
+   close-out, 2026-10-19). */
+capture_scope_state_t capture_scope_state(int requested, int capture_live,
                                           int enforced);
 /* "none", "enforced", "no_capture", "degraded". JSONL contract.
    Unknown values read "degraded" — an unrecognised state is not a
@@ -332,6 +338,17 @@ typedef struct {
 int  capture_run_flag_get(capture_run_flag_t *f);
 void capture_run_flag_set(capture_run_flag_t *f, int v);
 int  capture_run_flag_take(capture_run_flag_t *f);
+
+/* Whether the data-stream worker is serving the stream right now: a
+ * handle is open, the run flag is set, and the worker has recorded no
+ * terminal exit reason (#91 slice 2, #85). A worker that dies on its own
+ * leaves the run flag set -- it broke out of its loop rather than being
+ * asked to stop -- and leaves the handle open until capture_stop(), so
+ * neither of those alone is liveness. One definition, read by both
+ * capture_health_poll() (`running`) and capture_scope_poll() (the scope
+ * state), so the two halves of the sensor_health record cannot disagree
+ * about a dead worker. Pure; above the WITH_PCAP guard. */
+int  capture_worker_live(int handle_open, int run_flag, int exit_reason);
 
 /* Stable lower-case name for a capture_exit_t: "none", "stopped",
  * "iface_gone", "perm_lost", "not_activated", "error". Part of the JSONL
@@ -469,6 +486,17 @@ int capture_dispatch_frames(sloth_state_t *s, int dlt,
    is only meaningful through the real callback. Pair it with
    s->iface_allowed_count, which is what makes an allow-list active. */
 void capture_test_set_policy(const capture_policy_t *p);
+
+/* Put the module's worker bookkeeping into a chosen shape without a
+   worker thread or a device (#85): `open` installs a pcap_open_dead()
+   handle (no packet source, no interface -- MISSION §2) or closes it,
+   `running` sets the run flag, `exit_reason` is what a dying worker
+   would have recorded. This is how a test reaches "handle still open,
+   worker dead" -- the state capture_scope_poll() used to read as
+   enforced. No thread exists, so the caller must finish with
+   (0, 0, CAPTURE_EXIT_NONE), or a later capture_stop() would try to
+   join a thread that was never created. */
+void capture_test_set_worker(int open, int running, int exit_reason);
 
 /* Build an in-memory libpcap savefile image (same format both dispatch
    seams read). ts_secs NULL = synthetic increasing timestamps;

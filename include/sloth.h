@@ -2377,14 +2377,16 @@ typedef struct {
  * one closed, for the rest of the run, the moment its index stops naming
  * the same interface (unplug, rename, index reuse, lookup failure).
  *
- * Fail-closed means nothing outside the scope is collected in any state.
- * What NO_CAPTURE and DEGRADED report is the other direction: part or
- * all of what the operator asked for is not being observed. Names are
- * part of the JSONL contract — see capture_scope_state_name(). */
+ * Fail-closed means nothing outside the scope is collected on the IP
+ * capture stream in any state; the 802.11 monitor stream sits outside
+ * the allow-list (owner decision, 2026-10-04). What NO_CAPTURE and
+ * DEGRADED report is the other direction: part or all of what the
+ * operator asked for is not being observed. Names are part of the JSONL
+ * contract — see capture_scope_state_name(). */
 typedef enum {
     CAPTURE_SCOPE_STATE_NONE = 0,   /* no restriction requested */
     CAPTURE_SCOPE_STATE_ENFORCED,   /* every requested iface pinned and still valid */
-    CAPTURE_SCOPE_STATE_NO_CAPTURE, /* restriction requested, no data-stream handle */
+    CAPTURE_SCOPE_STATE_NO_CAPTURE, /* restriction requested, no live data-stream worker */
     CAPTURE_SCOPE_STATE_DEGRADED    /* >=1 requested iface failed closed */
 } capture_scope_state_t;
 

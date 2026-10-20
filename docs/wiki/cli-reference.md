@@ -116,7 +116,9 @@ interfaces once on stderr: `none of the requested interfaces could be
 resolved (<names>)` when nothing pinned, `requested interfaces not
 resolved (<names>)` when only part of the list did. This is a
 diagnostic, **not** a refusal — it does not change the exit code, and a
-run that prints it still collects on whatever did pin. Nothing is
+run that prints it still collects on whatever did pin. That is an owner
+decision (2026-10-19, #85 close-out), as is a replugged adapter staying
+failed closed until restart. Nothing is
 printed when capture could not be opened at all; that case already has
 its own warning, and no name could have pinned either way. The claim is
 scoped to the IP capture stream: the monitor radio sits outside the

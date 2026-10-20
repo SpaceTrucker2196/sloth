@@ -313,9 +313,14 @@ def fmt_sensor_health(r, c):
                        and k != "storage_failures" and v)
         tail.append(f"storage_fail={r['storage_failures']} [{per}]")
     if r.get("scope_not_enforced"):
-        # #85: fail-closed means nothing out of scope was collected; this
-        # says requested interfaces are NOT being observed (unplug,
-        # rename, index reuse, or never present). Restart re-pins.
+        # #85: requested interfaces are NOT being observed (unplug,
+        # rename, index reuse, never present, or the capture worker
+        # died). It does not say nothing out of scope was collected: the
+        # allow-list governs the IP capture stream only, and the 802.11
+        # monitor radio sits outside it (owner decision 2026-10-04), so
+        # 802.11 frames keep arriving whatever this flag says -- see
+        # docs/wiki/jsonl-schema.md, `scope_not_enforced`. Restart
+        # re-pins; a replugged adapter is not followed mid-run.
         tail.append(f"scope={r.get('scope')} "
                     f"{r.get('scope_enforced', 0)}/{r.get('scope_requested', 0)}")
     if r.get("scope_dropped"):

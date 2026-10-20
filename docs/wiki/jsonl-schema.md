@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138
+**Last updated**: 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85
 
 ---
 
@@ -700,12 +700,12 @@ does not know the type ignores it, as it would any other.
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export |
 | `pcap_dir_free_mb` | MB free on the filesystem holding `--pcap-dir`, or **-1 for not measured** (no `--pcap-dir`, or `fstatvfs` failed). -1 rather than 0 on purpose: 0 free would read as a full filesystem on every sensor that exports no pcaps, which is most of them (#96) |
 | `pcap_dir_free_inodes` | free inodes on that same filesystem, or **-1 for not measured** — which here also covers a filesystem with no fixed inode table (btrfs and most network filesystems report `f_files == 0`, which is not the same as "none left"). **Read this before `pcap_dir_free_mb`, not after.** `--pcap-dir` is the only operator-named sink with no cap and no sweep: `alert_pcap_dump()` writes one file per firing and never removes one. It therefore exhausts *inodes* long before bytes, and inode exhaustion surfaces as `ENOSPC` with free space still showing. Measured on the author's own monitor host, 2026-10-13: 15,919,490 alert pcaps, 77 GB, ~93% of the filesystem's inodes consumed — while `df -h` read 39% used the whole time. A consumer alerting on the MB figure alone would have called that sensor healthy (#96) |
-| `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no data-stream handle), `degraded` (at least one requested interface failed closed) |
+| `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no live data-stream worker: no handle, or the capture thread has exited — `capture_exit` says why; before 2026-10-19 a worker that died behind a still-open handle read `enforced`), `degraded` (at least one requested interface failed closed) |
 | `scope_not_enforced` | `1` when a scope was requested and `scope` is not `enforced`. This flag means in-scope traffic is not being observed. **It does not mean nothing out of scope was collected.** The allow-list governs the **IP capture stream only**; the 802.11 monitor stream is deliberately outside it (owner decision, 2026-10-04), so `probe_open()` opens whatever monitor radio it discovers at startup regardless of `--iface`, and 802.11 frames from that radio are collected and exported whatever this flag says. The one place the allow-list does reach the radio is an interactive `[m]` retarget, which is refused for an interface outside a non-empty list (#85). A consumer that needs "only these interfaces" must therefore scope the monitor radio out of band — `--monitor-only`, or no monitor-capable adapter present |
 | `scope_requested` | allow-list entries (`--iface` names plus the `--monitor-only` radio) |
 | `scope_enforced` | of those, how many are still admitting frames |
 | `scope_generation` | bumps each time a pinned interface fails closed; a consumer can tell a second failure from a repeat of the first |
-| `scope_dropped` | lifetime count of frames refused by the scope boundary itself — an allow-list active but the frame couldn't be attributed to a still-valid pinned interface (#85 wave 8). Distinct from the runtime `[y]` deselect, an operator toggle that doesn't bump this counter; a value that keeps climbing on an `enforced` scope means traffic is arriving on an interface the operator did not authorise, not just that some is missing |
+| `scope_dropped` | lifetime count of frames refused by the scope boundary itself — an allow-list active but the frame couldn't be attributed to a still-valid pinned interface (#85 wave 8). Authorization failures only (owner decision, 2026-10-19). Distinct from the runtime `[y]` deselect, an operator toggle that doesn't bump this counter with or without an allow-list — a `[y]` on a pinned, still-valid interface refuses its frames uncounted (until 2026-10-19 that case was counted under an allow-list, contrary to this row); a value that keeps climbing on an `enforced` scope means traffic is arriving on an interface the operator did not authorise, not just that some is missing |
 | `tuned_count` | how many `--tune` registry knobs are off their shipped default, `0` on a stock run (#82). Since #120 the registry also holds the remaining compile-time detector thresholds and the retention/cadence values behind `--correlate-retain`, `--handshake-retention` and `--db-*`, so those count here too — **additive**: no field changed, more names can appear |
 | `mon_bad_clock` | lifetime count of 802.11 frames whose capture timestamp was `<= 0` — the epoch or before it, which no live kernel produces (#92). Nothing is substituted when it happens: every record is stamped from the frame's own capture timestamp, so a broken capture clock produces records carrying that clock rather than a silently corrected one. A climbing value means the timestamps in this stream cannot be trusted for correlation, which is otherwise indistinguishable from a quiet radio |
 | `tuned` | the knobs themselves, comma-joined `name=value` in registry order, `""` on a stock run. The count alone would not say *which* rule went quiet, and a raised threshold is indistinguishable from a quiet segment without it. Truncates cleanly if it would exceed the field; see `--tune-list` for the full registry |
@@ -778,8 +778,25 @@ capture thread starts, and frames are admitted by index. Once per tick
 sloth checks that each pinned index still names the same interface. On
 unplug, rename, index reuse or a failed lookup, that pin fails closed
 for the rest of the run and `scope` goes to `degraded` on the same
-tick. A replugged adapter is not followed: restart to re-pin. A
-consumer should alert on `scope_not_enforced` becoming `1`.
+tick. A consumer should alert on `scope_not_enforced` becoming `1`.
+
+Owner decisions recorded 2026-10-19 (#85 close-out, plan in #145):
+
+- **Replug stays failed closed.** An adapter that is unplugged and
+  returns under the same name on a new ifindex is not followed; its pin
+  stays failed closed until restart. Re-pinning by name mid-run was
+  considered and declined.
+- **An unresolvable `--iface` name stays a notice.** A name that does
+  not resolve at launch is never pinned; sloth names it once on stderr
+  and reads `degraded` (or `no_capture`), but startup is not refused
+  and the exit code is unchanged.
+- **`scope_dropped` counts authorization failures only** — see its row
+  above. The code was changed to match the documented contract, not
+  the other way round.
+- **A dead worker is not enforcing anything.** `scope` follows the same
+  liveness as `capture_running`: a capture thread that has exited
+  (`perm_lost`, `iface_gone`, any `capture_exit`) reads `no_capture`
+  even while its handle is still open.
 
 **What the eviction tally does and does not cover.** Counted — one
 `evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`. The

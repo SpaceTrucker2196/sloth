@@ -240,7 +240,8 @@ int capture_policy_deselected(const capture_policy_t *p, const char *name) {
 /* Lifetime count of frames refused specifically by the launch-time
  * --iface/--monitor-only allow-list (#85's authorization boundary) — not
  * the unrelated runtime [y] deselect, which is an operator toggle that
- * predates #85 and isn't an authorization failure. Bumped inside
+ * predates #85 and isn't an authorization failure, with or without an
+ * allow-list in force. Bumped inside
  * capture_frame_in_scope() itself, below, so it's testable with
  * hand-built frames and needs no live capture. Read by jsonl.c's
  * sensor_health emitter (#85 wave 8). */
@@ -268,19 +269,28 @@ int capture_frame_in_scope(const sloth_state_t *s, const capture_policy_t *p,
         /* The pinned set is the authority, not whatever name the index
          * resolves to today. */
         const capture_pin_t *pin = capture_policy_match(p, ifi);
-        int admit = pin && !capture_policy_deselected(p, pin->name);
-        if (!admit) g_out_of_scope_dropped++;
-        return admit;
+        /* Only an attribution failure is counted. A pinned, still-valid
+         * interface the operator switched off with [y] is refused too,
+         * but that is the operator's own toggle on an authorised
+         * interface, not traffic from outside the scope -- counting it
+         * made an idle deselect read as an authorization violation on
+         * an `enforced` scope (#85; owner ruling 2026-10-19: the code
+         * follows the documented contract). */
+        if (!pin) {
+            g_out_of_scope_dropped++;
+            return 0;
+        }
+        return !capture_policy_deselected(p, pin->name);
     }
     const char *name = capture_ifname_lookup(ifi, resolve);
     if (!name) return 1;
     return !capture_policy_deselected(p, name);
 }
 
-capture_scope_state_t capture_scope_state(int requested, int capture_open,
+capture_scope_state_t capture_scope_state(int requested, int capture_live,
                                           int enforced) {
     if (requested <= 0)        return CAPTURE_SCOPE_STATE_NONE;
-    if (!capture_open)         return CAPTURE_SCOPE_STATE_NO_CAPTURE;
+    if (!capture_live)         return CAPTURE_SCOPE_STATE_NO_CAPTURE;
     if (enforced < requested)  return CAPTURE_SCOPE_STATE_DEGRADED;
     return CAPTURE_SCOPE_STATE_ENFORCED;
 }
@@ -395,6 +405,10 @@ const char *capture_exit_name(capture_exit_t r) {
     case CAPTURE_EXIT_ERROR:         break;
     }
     return "error";
+}
+
+int capture_worker_live(int handle_open, int run_flag, int exit_reason) {
+    return handle_open && run_flag && exit_reason == CAPTURE_EXIT_NONE;
 }
 
 void capture_stats_accumulate(capture_health_t *h,
@@ -1371,8 +1385,10 @@ void capture_health_poll(capture_health_t *h) {
     /* A dead worker leaves g_running set — it broke out of the loop
      * rather than being asked to stop — so liveness is the run flag AND
      * the absence of a terminal reason. That conjunction is the whole
-     * point: the handle staying open is what made the failure invisible. */
-    h->running = capture_run_flag_get(&g_running) && reason == CAPTURE_EXIT_NONE;
+     * point: the handle staying open is what made the failure invisible.
+     * capture_scope_poll() reads the same helper. */
+    h->running = capture_worker_live(g_handle != NULL,
+                                     capture_run_flag_get(&g_running), reason);
     pthread_mutex_lock(&g_mu);
     time_t fts = g_last_frame_ts, fwall = g_last_frame_wall;
     pthread_mutex_unlock(&g_mu);
@@ -1409,8 +1425,34 @@ void capture_scope_poll(sloth_state_t *s) {
     h->enforced  = capture_policy_valid_count(&g_policy);
     /* Main thread is the only writer of generation; no lock to read. */
     h->generation = g_policy.generation;
-    h->state = (int)capture_scope_state(h->requested, g_handle != NULL,
-                                        h->enforced);
+    /* Liveness, not the handle: a worker that died (PERM_LOST,
+     * IFACE_GONE, ...) keeps g_handle until capture_stop(), and keying on
+     * the handle read that run as `enforced` while nothing was being
+     * collected at all (#85). The run flag is read outside g_mu -- its
+     * mutex is a leaf and is never taken under another lock. */
+    pthread_mutex_lock(&g_mu);
+    int reason = g_exit_reason;
+    pthread_mutex_unlock(&g_mu);
+    int live = capture_worker_live(g_handle != NULL,
+                                   capture_run_flag_get(&g_running), reason);
+    h->state = (int)capture_scope_state(h->requested, live, h->enforced);
+}
+
+/* Test seam, contract in capture.h. Here rather than beside
+ * capture_test_set_policy() because it writes the worker's exit
+ * bookkeeping, which is declared just above capture_thread(). */
+void capture_test_set_worker(int open, int running, int exit_reason) {
+    if (open && !g_handle)
+        g_handle = pcap_open_dead(MY_DLT_LINUX_SLL2, 65535);
+    else if (!open && g_handle) {
+        pcap_close(g_handle);
+        g_handle = NULL;
+    }
+    capture_run_flag_set(&g_running, running ? 1 : 0);
+    pthread_mutex_lock(&g_mu);
+    g_exit_reason    = exit_reason;
+    g_exit_detail[0] = '\0';
+    pthread_mutex_unlock(&g_mu);
 }
 
 /* ── Public API ───────────────────────────────────────────── */
