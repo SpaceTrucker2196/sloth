@@ -54,15 +54,19 @@
  * Bumped to 6 on 2026-10-20: devices gained the camera identity columns
  * (#106 round 2, ordered by the issue's 2026-10-19 plan).
  *
- * Migration: exactly one step, v5 -> v6, and only because it is purely
- * additive — ALTER TABLE ... ADD COLUMN with defaults, no existing
- * value rewritten (db_schema_migrate_v5_sql()). Every other mismatch is
- * still refused with the "use a separate file" message: a file from a
- * newer build, and anything older than v5, whose differences were never
- * additive-only. The rule that held before stands for the next bump:
- * rewriting a forensic database in place is not something db_open()
- * does, so a bump that is not additive is a breaking change for every
- * existing file and an owner decision. */
+ * Migration path, by design (owner ruling 2026-10-21, replacing the
+ * earlier "no migration path by design"): every schema bump ships its
+ * migration from the previous version in the same change, and the steps
+ * chain, so a file of any supported age is brought forward one version
+ * at a time inside db_open(). A migration preserves forensic values: it
+ * adds columns or tables with defaults, and where a change would alter
+ * the meaning of stored data it keeps the old column or table and adds
+ * the new one beside it - it never rewrites a recorded value in place.
+ * Each step runs in one BEGIN IMMEDIATE transaction and is tested on a
+ * file built at the previous version, including the failure case that
+ * leaves the file unchanged. Only a file from a NEWER build is refused.
+ * Today the chain is v5 -> v6 (db_schema_migrate_v5_sql()); v1..v4
+ * files are still refused until their steps are written (#145). */
 #define DB_SCHEMA_VERSION 6
 
 /* ── AKM regression (#74 Detector B, temporal half) ──────────────────

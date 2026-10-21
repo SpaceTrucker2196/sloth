@@ -170,6 +170,14 @@ Single binary `sloth`. Test binary `sloth_test`.
   stack overflow that ASan will fail the suite for, and it is the test
   that is wrong, not the gate.
 
+- **Every schema bump ships its migration** (owner ruling 2026-10-21).
+  A `DB_SCHEMA_VERSION` change carries, in the same commit, the step from
+  the previous version: additive (columns or tables with defaults), never
+  rewriting a recorded value in place, one `BEGIN IMMEDIATE` transaction,
+  and a test on a file built at the previous version including the
+  failure that leaves it unchanged. Only a file from a newer build is
+  refused. See `src/db.h` and `docs/wiki/sqlite-schema.md`.
+
 - **Change-only emission must bucket its continuous values.** The JSONL
   writer suppresses a record whose signature is unchanged, so putting a
   raw monotonically-moving value — a seconds-since counter, a byte

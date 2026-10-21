@@ -156,10 +156,20 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-A file older than v5 or newer than v6 is still refused. The rule for the
-next bump is unchanged: rewriting a forensic database in place is not
-something `db_open()` does, so a bump that is not purely additive is a
-break for every existing file and an owner decision. `src/db.c` carries
+A file newer than v6 is refused; one older than v5 is refused until its
+steps exist.
+
+**Migration path, by design** (owner ruling 2026-10-21, replacing the
+earlier "no migration path by design"). Every schema bump ships its
+migration from the previous version in the same change, and the steps
+chain, so `db_open()` brings a file of any supported age forward one
+version at a time. A migration preserves forensic values: it adds
+columns or tables with defaults, and where a change would alter what
+stored data means it keeps the old column or table and adds the new one
+beside it, never rewriting a recorded value in place. Each step is one
+`BEGIN IMMEDIATE` transaction, tested on a file built at the previous
+version, including the failure that leaves the file unchanged. Only a
+file from a newer build is refused. `src/db.c` carries
 an `#error` that fires when `DB_SCHEMA_VERSION` moves, so the next bump
 has to decide this rather than inherit a stale step.
 
