@@ -4618,3 +4618,7 @@ address per run, now stated as a gap. `ble_device` signs a sticky
 manufacturer pair; `ble_alert` signs the last closed window, not the one
 in progress, and gains `fresh_addrs`. The HID rotation form's first
 window is per sensor.
+
+## 2026-10-21 — slothweb spec committed
+
+`docs/web-ui-spec.md` is the #102 spec (2026-09-30 draft) with a header recording the rulings made since: localhost-only allow-list first, read-only, no active reverse DNS, SQL box behind a default-off flag, system fonts, generated OUI table, in-tree `web/`. Milestones become child issues; #102 is the tracker.
