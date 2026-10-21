@@ -249,7 +249,14 @@ static void draw_device_detail(const sloth_state_t *s) {
         dl(&b, 0, "  Score    %d (class from behaviour needs >= %d with"
            " rtsp_sdp, on a mixed-vendor block)", d->cam_score,
            CAM_CLASS_MIN_SCORE);
-    if (d->camera_vendor[0] || d->camera_model[0])
+    /* A mixed-vendor block names the maker of routers and plugs as
+     * much as cameras (#155), so on a record no class calls a camera
+     * the name is not shown as a camera vendor. */
+    if (d->camera_vendor[0] && !device_class_is_camera(d->device_class) &&
+        (d->cam_evidence & CAM_EV_MIXED_OUI))
+        dl(&b, 0, "  Vendor   %s (mixed-vendor block; not a camera claim)",
+           d->camera_vendor);
+    else if (d->camera_vendor[0] || d->camera_model[0])
         dl(&b, 0, "  Camera   vendor %s   model %s",
            d->camera_vendor[0] ? d->camera_vendor : "-",
            d->camera_model[0]  ? d->camera_model  : "-");

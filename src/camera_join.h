@@ -105,7 +105,11 @@ int device_class_is_camera(device_class_t c);
  *
  * Every IP-keyed row is held to the join's own key rule (cam_lan_state:
  * fresh, unambiguous); an RA carrying an SLLA option is keyed on the
- * MAC instead. */
+ * MAC instead.
+ *
+ * CAM_CLASS_MIN_SCORE is implied by the two required bits (MIXED_OUI
+ * +1, RTSP_SDP +2 = 3), so it is a floor stated for the reader and
+ * guarded against a weight change, not a tunable gate. */
 #define CAM_CLASS_MIN_SCORE 3
 
 /* One evidence or veto line for a record: which CAM_EV_* / CAM_VETO_*

@@ -548,6 +548,83 @@ static void test_ra_by_ip_and_stale_vetoes(void) {
     ASSERT_EQ(d6->cam_vetoes, 0);
 }
 
+/* A camera-vendor block is not a mixed one: a Hikvision NVR that also
+ * hands out leases gets no mixed_oui prior, so the DHCP-server veto is
+ * shown and decides nothing (only a mixed block opens the question).
+ * Seen to fail with `&& mx` dropped from camera_reasons()'s OUI test
+ * (the record gains mixed_oui and reads not-camera). */
+static void test_camera_vendor_block_is_not_mixed(void) {
+    sloth_state_t *s = fresh();
+    static const uint8_t HIK[6] = { 0x44, 0x19, 0xb6, 0x10, 0x20, 0x30 };
+    add_arp(s, "192.168.1.64", HIK);
+    add_role(s, "192.168.1.64", LAN_ROLE_DHCP_REPLY, 0, T0);
+    devices_update(s);
+    const device_t *d = by_mac(s, HIK);
+    ASSERT(d != NULL);
+    if (!d) return;
+    ASSERT_EQ(d->cam_evidence & CAM_EV_MIXED_OUI, 0);
+    ASSERT_EQ(d->cam_vetoes, CAM_VETO_DHCP_SERVER);
+    ASSERT(d->device_class != DEV_CLASS_NOT_CAMERA);
+    ASSERT_EQ(d->cam_conflict, 0);
+}
+
+/* RTSP SDP rows are IP-keyed and held to cam_lan_state(): a row older
+ * than camera.join_fresh_secs, or at an IP two records hold, is no
+ * rtsp_sdp evidence and no camera-vendor class. Both seen to fail with
+ * the cam_lan_state() term removed from camera_reasons()'s RTSP loop
+ * (each record gains rtsp_sdp and reads camera-vendor). The rows are
+ * challenged-only (no anon_ok), so the join's RTSP_UNAUTH fold never
+ * touches them and only the classifier's key rule is under test. */
+static void test_rtsp_sdp_held_to_key_rule(void) {
+    sloth_state_t *s = fresh();
+    uint8_t m1[6]; memcpy(m1, TPL_CAM, 6); m1[5] = 0x11;
+    uint8_t m2[6]; memcpy(m2, TPL_CAM, 6); m2[5] = 0x12;
+    uint8_t m3[6]; memcpy(m3, TPL_CAM, 6); m3[5] = 0x13;
+    add_arp(s, "192.168.1.70", m1);
+    add_rtsp(s, "192.168.1.70", 1, 0, 1, T0 - CAM_JOIN_FRESH_SECS - 1);
+    add_arp(s, "192.168.1.71", m2);          /* the lease's old holder */
+    add_arp(s, "192.168.1.71", m3);          /* and its new one */
+    add_rtsp(s, "192.168.1.71", 1, 0, 1, T0);
+    devices_update(s);
+    const uint8_t *m[3] = { m1, m2, m3 };
+    for (int i = 0; i < 3; i++) {
+        const device_t *d = by_mac(s, m[i]);
+        ASSERT(d != NULL);
+        if (!d) continue;
+        ASSERT_EQ(d->cam_evidence, CAM_EV_MIXED_OUI);
+        ASSERT_EQ(d->cam_score, 1);
+        ASSERT_EQ((int)d->device_class, (int)DEV_CLASS_UNKNOWN);
+    }
+}
+
+/* An RA with no SLLA option is keyed on its source address, so it is
+ * held to cam_lan_state() too. Ambiguous: two records on fd00::7 and
+ * neither is vetoed; seen to fail with the cam_lan_state() term removed
+ * from the RA by-IP test (both read not-camera with sends_ra). Stale:
+ * asserted but not isolated - the RA loop's own is_fresh() skip runs
+ * first on the same last_seen, so removing either guard alone stays
+ * green. */
+static void test_ra_by_ip_held_to_key_rule(void) {
+    sloth_state_t *s = fresh();
+    uint8_t m7[6]; memcpy(m7, UBNT, 6); m7[5] = 0x07;
+    uint8_t m8[6]; memcpy(m8, UBNT, 6); m8[5] = 0x08;
+    uint8_t m9[6]; memcpy(m9, UBNT, 6); m9[5] = 0x09;
+    add_arp(s, "fd00::7", m7);
+    add_arp(s, "fd00::7", m8);
+    add_ra(s, "fd00::7", NULL, 1800, T0);
+    add_arp(s, "fd00::9", m9);
+    add_ra(s, "fd00::9", NULL, 1800, T0 - CAM_JOIN_FRESH_SECS - 1);
+    devices_update(s);
+    const uint8_t *m[3] = { m7, m8, m9 };
+    for (int i = 0; i < 3; i++) {
+        const device_t *d = by_mac(s, m[i]);
+        ASSERT(d != NULL);
+        if (!d) continue;
+        ASSERT_EQ(d->cam_vetoes, 0);
+        ASSERT_EQ((int)d->device_class, (int)DEV_CLASS_UNKNOWN);
+    }
+}
+
 /* A veto on a record with no mixed OUI is shown and decides nothing:
  * only the mixed block made the class an open question. Seen to fail
  * with `(ev & CAM_EV_MIXED_OUI)` dropped from the not-camera branch
@@ -650,6 +727,28 @@ static void test_dhcp_options_on_record_unscored(void) {
     ASSERT_EQ(d->cam_score, 1);           /* the OUI's prior, nothing else */
 }
 
+/* Options are matched to the record by chaddr: another client's PRL
+ * and VCI never land on a neighbour. Seen to fail with the chaddr
+ * strcmp removed (the camera shows the plug's options). */
+static void test_dhcp_options_only_on_their_client(void) {
+    sloth_state_t *s = fresh();
+    add_arp(s, "192.168.1.40", TPL_PLUG);
+    add_arp(s, "192.168.1.41", TPL_CAM);
+    dhcp_event_t *e = &s->dhcp_events[s->dhcp_event_count++];
+    snprintf(e->mac, sizeof(e->mac), "50:c7:bf:00:56:39");
+    snprintf(e->prl, sizeof(e->prl), "1,3,6");
+    snprintf(e->vci, sizeof(e->vci), "udhcp 1.31.1");
+    e->last_seen = T0;
+    devices_update(s);
+    const device_t *p = by_mac(s, TPL_PLUG);
+    const device_t *c = by_mac(s, TPL_CAM);
+    ASSERT(p && c);
+    if (!p || !c) return;
+    ASSERT_STR(p->dhcp_prl, "1,3,6");
+    ASSERT_STR(c->dhcp_prl, "");
+    ASSERT_STR(c->dhcp_vci, "");
+}
+
 static void test_slug_lists(void) {
     char b[128];
     cam_evidence_list(CAM_EV_MIXED_OUI | CAM_EV_RTSP_SDP, b, sizeof(b));
@@ -731,6 +830,26 @@ static void test_view_detail_lists_evidence_vetoes_and_conflict(void) {
     s->device_detail = 0;
 }
 
+/* A mixed-vendor block names the maker, not a camera: the detail of an
+ * unclassified TP-Link plug says so, and a scored camera-vendor record
+ * keeps the camera line. Seen to fail with the mixed-vendor branch in
+ * draw_device_detail() removed (the plug reads "Camera   vendor"). */
+static void test_view_detail_mixed_vendor_is_not_camera_claim(void) {
+    sloth_state_t *s = fresh();
+    add_arp(s, "192.168.1.40", TPL_PLUG);
+    add_arp(s, "192.168.1.41", TPL_CAM);
+    add_rtsp(s, "192.168.1.41", 1, 1, 0, T0);
+    devices_update(s);
+    detail(s, TPL_PLUG);
+    ASSERT_SCREEN_HAS("Vendor   TP-Link (mixed-vendor block; not a camera claim)");
+    ASSERT_SCREEN_LACKS("Camera   vendor");
+    s->device_detail = 0;
+    detail(s, TPL_CAM);
+    ASSERT_SCREEN_HAS("Camera   vendor TP-Link");
+    ASSERT_SCREEN_LACKS("not a camera claim");
+    s->device_detail = 0;
+}
+
 static void test_view_detail_not_camera(void) {
     sloth_state_t *s = fresh();
     add_arp(s, "192.168.1.2", UBNT);
@@ -739,6 +858,8 @@ static void test_view_detail_not_camera(void) {
     detail(s, UBNT);
     ASSERT_SCREEN_HAS("not-camera - mixed-vendor block seen in a router role");
     ASSERT_SCREEN_HAS("SLLA is this MAC");
+    ASSERT_SCREEN_HAS("Vendor   Ubiquiti (mixed-vendor block; not a camera claim)");
+    ASSERT_SCREEN_LACKS("Camera   vendor");
     ASSERT_SCREEN_LACKS("CONFLICT");
     ASSERT_SCREEN_LACKS("DHCP OPTIONS");
     s->device_detail = 0;
@@ -809,14 +930,19 @@ void run_camera_class_tests(void) {
     RUN_TEST(test_each_veto_makes_mixed_not_camera);
     RUN_TEST(test_non_vetoes);
     RUN_TEST(test_ra_by_ip_and_stale_vetoes);
+    RUN_TEST(test_camera_vendor_block_is_not_mixed);
+    RUN_TEST(test_rtsp_sdp_held_to_key_rule);
+    RUN_TEST(test_ra_by_ip_held_to_key_rule);
     RUN_TEST(test_veto_without_mixed_oui_decides_nothing);
     RUN_TEST(test_scored_camera_with_veto_is_conflict);
     RUN_TEST(test_self_declared_camera_with_veto_keeps_class);
     RUN_TEST(test_mixed_bssid_needs_setup_ssid);
     RUN_TEST(test_dhcp_options_on_record_unscored);
+    RUN_TEST(test_dhcp_options_only_on_their_client);
     RUN_TEST(test_slug_lists);
     RUN_TEST(test_view_list_cells);
     RUN_TEST(test_view_detail_lists_evidence_vetoes_and_conflict);
+    RUN_TEST(test_view_detail_mixed_vendor_is_not_camera_claim);
     RUN_TEST(test_view_detail_not_camera);
 #ifdef WITH_PCAP
     RUN_TEST(test_capture_path_records_both_roles);

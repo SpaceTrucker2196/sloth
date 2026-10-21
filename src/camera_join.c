@@ -550,6 +550,10 @@ static void classify(const sloth_state_t *s, join_t *j, int idx,
      * record NOT_CAMERA; on any other record it is shown and decides
      * nothing, because only the mixed OUI made the question open. */
     int claim  = device_class_is_camera(d->device_class);
+    /* The score term never binds today: MIXED_OUI (+1) and RTSP_SDP
+     * (+2) are both required and already sum to CAM_CLASS_MIN_SCORE.
+     * It is kept so a weight change cannot quietly lower the bar; it
+     * is not a tunable gate. */
     int scored = (ev & CAM_EV_MIXED_OUI) && (ev & CAM_EV_RTSP_SDP) &&
                  score >= CAM_CLASS_MIN_SCORE;
     if (veto && (claim || scored)) {

@@ -20,7 +20,9 @@ credential.
 `research/papers/camera-vendor-identity.md`,
 `research/rfc/2326-7826-rtsp.md`, issue #106, issue #145, issue #155.
 
-**Last updated**: 2026-10-21 (#155: mixed-vendor OUI rows for Ubiquiti,
+**Last updated**: 2026-10-21 (#155 review: forged-veto limit, the
+mixed-vendor name is not a camera claim, the implied score floor, the
+uplink statements). 2026-10-21 (#155: mixed-vendor OUI rows for Ubiquiti,
 TP-Link and Wyze; behavioural score with RTSP_SDP as the one deciding
 signal; router-role vetoes and `not-camera`; conflicts shown; DHCP
 options 55 / 60 as display-only evidence; schema v7). 2026-10-20 (#106
@@ -192,6 +194,18 @@ applied to them, because a weak prior resting on 22 coinciding bits is
 no prior. The registry digest in `tests/test_camera_vendor.c` covers the
 new rows and does not read the host's `oui.csv`.
 
+**The vendor name is not a camera claim.** The issue's design has a
+mixed match set the vendor, and it does: `camera_vendor` reads
+`TP-Link` on a TP-Link plug and `Ubiquiti` on a UniFi AP. The field
+keeps its name for the JSONL and `--db` contract, but on a mixed block
+it names the maker, not a camera, so it is read beside `device_class`
+and `cam_evidence`: a record whose class is not `camera` /
+`camera-vendor` and whose evidence holds `mixed_oui` is a vendor guess
+and nothing more. The Devices detail prints that case as
+`Vendor   TP-Link (mixed-vendor block; not a camera claim)` instead of
+the `Camera   vendor` line, so the presentation does not recreate the
+"every UniFi AP is a camera" reading #106 kept out of the class.
+
 **The rule.**
 
 | Input | Effect |
@@ -209,9 +223,13 @@ new rows and does not read the host's `oui.csv`.
 | camera evidence (a self-declaration, or the scored rule) **and** a veto | **conflict**: `cam_conflict` 1, shown as `CONFL!` in the list and a `CONFLICT` line in the detail. A scored-only record stays unclassified; a self-declared one keeps `camera`. Never resolved silently. |
 
 The two weaker signals cannot decide: the rule requires `rtsp_sdp`, and
-the prior plus `rtsp_sdp` already reaches 3. A veto on a record with no
+the prior plus `rtsp_sdp` already reaches 3 — so the score floor
+(`CAM_CLASS_MIN_SCORE`) is implied by the two required bits and never
+binds on its own; it is a stated floor kept against a weight change,
+not a tunable gate. A veto on a record with no
 mixed OUI is listed and decides nothing — only the mixed block made the
-class an open question. Every IP-keyed veto row is held to the join's own
+class an open question. Every IP-keyed evidence and veto row (RTSP, mDNS, the
+DHCP and DNS roles, an RA without SLLA) is held to the join's own
 key rule (fresh within `camera.join_fresh_secs`, one record at the IP);
 an RA carrying a Source Link-Layer Address option is keyed on that MAC.
 
@@ -240,7 +258,11 @@ and VoIP genuinely send RTP); an uplink-ratio score (no citable basis
 for a threshold — sloth also keeps no per-device byte counters for hosts
 other than itself, so there is nothing to display either); and an "acts
 as an AP" veto, which would need a BSSID-to-LAN-MAC join that sloth
-forbids (above).
+forbids (above). The issue says the uplink ratio is "displayed only,
+never scored" in its design and "stays a +1 corroborator flagged as
+uncited" in its Must-not list; the two disagree, and with no
+per-device byte counters this build does neither — uplink is neither
+scored nor displayed, pending the owner's confirmation on #155.
 
 **Nothing is solicited.** No RTSP OPTIONS or DESCRIBE, no ONVIF probe,
 no SSDP M-SEARCH, no mDNS query, no DHCP request, no scan of 554, 2020
@@ -294,6 +316,18 @@ stored as `cam_conflict` 1. See [[sqlite-schema]].
   behavioural signal that decides is an RTSP SDP answer (#155).
   `SURV_CLOUD_SNI` (#105) is a separate rule about the destination, not
   the device.
+- **`not-camera` is not evidence of absence.** The router-role vetoes
+  rest on frames any host on the segment can forge: one broadcast
+  DHCPREQUEST naming a camera's IP in option 54, a BOOTREPLY sent from
+  UDP 67 with that source, or an RA whose SLLA option is the camera's
+  MAC. That makes a mixed-vendor record with no camera evidence read
+  `not-camera`, and turns a scored `camera-vendor` record into a
+  conflict with the class left unknown, for the whole
+  `camera.join_fresh_secs` window — enough to hide a TP-Link or Wyze
+  camera from this view. Option 54 from a client REQUEST and a
+  BOOTREPLY from UDP 67 weigh the same today. Read `not-camera` as "a
+  router role was claimed at this address", the same caution the mDNS
+  and A-record paragraph above applies to camera claims.
 - **Mixed-vendor blocks mostly read unclassified on a switched port**
   (#155, above): the deciding signal and two of the three vetoes are
   unicast.

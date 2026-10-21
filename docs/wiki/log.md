@@ -4494,3 +4494,17 @@ fact-check: an RTP-source signal, an uplink-ratio score, an AP veto. On a
 switched port most mixed-vendor devices read unclassified; the page says
 why. New `lan_role` table (`evict_lan_role`); JSONL `device` gains six
 fields; `--db` schema v7 with a v6 → v7 step, and the steps now chain.
+
+## 2026-10-21 — #155 review: limits and presentation
+
+**Updated pages**: [camera-detection.md](camera-detection.md),
+[jsonl-schema.md](jsonl-schema.md); source doc `docs/views/devices.md`.
+
+`not-camera` is documented as resting on router-role frames any LAN host
+can forge (an option-54 REQUEST, a BOOTREPLY from UDP 67, an RA with a
+chosen SLLA), so it is not evidence of absence. On a mixed-vendor record
+that no class calls a camera the Devices detail prints `Vendor ...
+(mixed-vendor block; not a camera claim)` instead of `Camera vendor`;
+`camera_vendor` in JSONL and `--db` keeps its name and is read beside
+`device_class`. The score floor is noted as implied by the two required
+bits, and the issue's two uplink statements as unresolved.

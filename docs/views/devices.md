@@ -145,7 +145,7 @@ an SDP is also seen handing out leases and sending RAs:
   Class    -
   CONFLICT camera evidence and a router-role veto both stand; not resolved - see EVIDENCE
   Score    3 (class from behaviour needs >= 3 with rtsp_sdp, on a mixed-vendor block)
-  Camera   vendor TP-Link   model -
+  Vendor   TP-Link (mixed-vendor block; not a camera claim)
   Signals  - - - - - RTSP
  ── EVIDENCE / VETOES ──
   KIND          PTS  SEEN      WHAT
@@ -164,6 +164,14 @@ an SDP is also seen handing out leases and sending RAs:
 `PTS` is the evidence weight, or `veto`. `rtsp_server` (+1, a
 `DESCRIBE` answered with no SDP seen) and `mdns_rtsp` (+1, an `_rtsp`
 advertisement) are shown but cannot decide: the rule needs `rtsp_sdp`.
+The `Vendor` line replaces `Camera   vendor` on a record whose class is
+not a camera and whose evidence holds `mixed_oui`: a mixed-vendor block
+names a maker of routers and plugs as much as cameras, so the name is
+not shown as a camera claim. A `not-camera` verdict rests on router-role
+frames any LAN host can forge (see the limits in
+[camera-detection](../wiki/camera-detection.md)), so it
+is not proof that no camera is there.
+
 DHCP options 55 (Parameter Request List) and 60 (Vendor Class
 Identifier) are the client's own, from its BOOTREQUESTs, and are only
 shown: no table maps them to a class, and sloth never looks them up
