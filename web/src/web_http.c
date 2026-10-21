@@ -1,5 +1,6 @@
 #include "web_http.h"
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -27,6 +28,13 @@ static int line_clean(const char *s, size_t n) {
 static void keep_path(web_req_t *rq, const char *t, size_t n) {
     if (n > 7 && !strncasecmp(t, "http://", 7)) {
         const char *slash = memchr(t + 7, '/', n - 7);
+        size_t al = slash ? (size_t)(slash - (t + 7)) : n - 7;
+        rq->target_abs = 1;
+        if (al >= sizeof(rq->target_host)) rq->target_host_long = 1;
+        else {
+            memcpy(rq->target_host, t + 7, al);
+            rq->target_host[al] = '\0';
+        }
         if (!slash) { t = "/"; n = 1; }
         else { n -= (size_t)(slash - t); t = slash; }
     }
@@ -93,6 +101,62 @@ static void keep_inm(web_req_t *rq, const char *s, size_t n) {
     rq->inm[have + sep + vl] = '\0';
 }
 
+/* RFC 9110 §7.2. Only the count and the value are kept; whether the
+ * value is acceptable is the router's decision (web_http_host_ok). */
+static void keep_host(web_req_t *rq, const char *s, size_t n) {
+    static const char name[] = "host:";
+    size_t nl = sizeof(name) - 1;
+    if (n < nl || strncasecmp(s, name, nl) != 0) return;
+    const char *v = s + nl;
+    size_t vl = n - nl;
+    while (vl && (*v == ' ' || *v == '\t')) { v++; vl--; }
+    while (vl && (v[vl - 1] == ' ' || v[vl - 1] == '\t')) vl--;
+    if (rq->host_count++ > 0) return;
+    if (vl >= sizeof(rq->host)) { rq->host_long = 1; return; }
+    memcpy(rq->host, v, vl);
+    rq->host[vl] = '\0';
+}
+
+/* An optional ":" port of at most five digits, up to 65535; an empty
+ * port is allowed (RFC 3986 §3.2.3). */
+static int port_ok(const char *p) {
+    if (!*p) return 1;
+    if (*p++ != ':') return 0;
+    size_t n = strlen(p);
+    if (n > 5) return 0;
+    long v = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') return 0;
+        v = v * 10 + (p[i] - '0');
+    }
+    return v <= 65535;
+}
+
+int web_http_host_ok(const char *host) {
+    char lit[INET6_ADDRSTRLEN + 1];
+    unsigned char a[16];
+    const char *end;
+    size_t n;
+    if (host[0] == '[') {
+        end = strchr(host, ']');
+        if (!end) return 0;
+        n = (size_t)(end - (host + 1));
+        if (n == 0 || n >= sizeof(lit)) return 0;
+        memcpy(lit, host + 1, n);
+        lit[n] = '\0';
+        return inet_pton(AF_INET6, lit, a) == 1 && port_ok(end + 1);
+    }
+    end = strchr(host, ':');
+    n = end ? (size_t)(end - host) : strlen(host);
+    if (!end) end = host + n;
+    if (n == 0 || n >= sizeof(lit)) return 0;
+    memcpy(lit, host, n);
+    lit[n] = '\0';
+    if (strcasecmp(lit, "localhost") != 0 && inet_pton(AF_INET, lit, a) != 1)
+        return 0;
+    return port_ok(end);
+}
+
 int web_http_inm_matches(const char *inm, const char *etag) {
     size_t el = strlen(etag);
     const char *p = inm;
@@ -140,7 +204,10 @@ int web_http_parse(const char *buf, size_t len, web_req_t *rq) {
             rq->is_head = 0;
             return 400;
         }
-        if (status == WEB_HTTP_ROUTE) keep_inm(rq, line, n);
+        if (status == WEB_HTTP_ROUTE) {
+            keep_inm(rq, line, n);
+            keep_host(rq, line, n);
+        }
     }
 }
 
@@ -159,6 +226,7 @@ const char *web_http_reason(int status) {
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 408: return "Request Timeout";
+    case 421: return "Misdirected Request";
     case 431: return "Request Header Fields Too Large";
     case 503: return "Service Unavailable";
     case 505: return "HTTP Version Not Supported";
@@ -172,6 +240,7 @@ static const char *body_for(int status) {
     case 404: return "not found\n";
     case 405: return "method not allowed\n";
     case 408: return "request timeout\n";
+    case 421: return "misdirected request\n";
     case 431: return "request header fields too large\n";
     case 503: return "service unavailable\n";
     case 505: return "http version not supported\n";

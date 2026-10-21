@@ -286,7 +286,79 @@ static void test_responses(void) {
     (void)n;
 }
 
+/* RFC 9110 §7.2: the Host value is kept trimmed, every Host line is
+ * counted (the router 400s anything but one), an oversize value is
+ * flagged rather than truncated, and an absolute-form target's
+ * authority is kept separately. */
+static void test_host_collected(void) {
+    web_req_t rq;
+    WT_EQ(parse("GET / HTTP/1.1\r\nhOsT: \t 127.0.0.1:8770 \r\n\r\n", &rq),
+          WEB_HTTP_ROUTE);
+    WT_EQ(rq.host_count, 1);
+    WT_ASSERT(!strcmp(rq.host, "127.0.0.1:8770"));
+    WT_EQ(rq.target_abs, 0);
+
+    WT_EQ(parse("GET / HTTP/1.1\r\n\r\n", &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.host_count, 0);
+
+    WT_EQ(parse("GET / HTTP/1.1\r\nHost: localhost\r\n"
+                "Host: attacker.example\r\n\r\n", &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.host_count, 2);
+    WT_ASSERT(!strcmp(rq.host, "localhost"));
+
+    /* Not a Host line, only a name that starts like one. */
+    WT_EQ(parse("GET / HTTP/1.1\r\nHostname: x\r\nX-Host: y\r\n\r\n", &rq),
+          WEB_HTTP_ROUTE);
+    WT_EQ(rq.host_count, 0);
+
+    WT_EQ(parse("GET http://attacker.example:8770/api/health HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n\r\n", &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.target_abs, 1);
+    WT_ASSERT(!strcmp(rq.target_host, "attacker.example:8770"));
+    WT_ASSERT(!strcmp(rq.path, "/api/health"));
+
+    char *req = malloc(WEB_HOST_MAX + 64);
+    memcpy(req, "GET / HTTP/1.1\r\nHost: ", 22);
+    memset(req + 22, 'a', WEB_HOST_MAX);
+    strcpy(req + 22 + WEB_HOST_MAX, "\r\n\r\n");
+    WT_EQ(parse(req, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.host_count, 1);
+    WT_EQ(rq.host_long, 1);
+    WT_EQ(rq.host[0], '\0');
+    free(req);
+
+    /* A writing method still stops at 405 whatever its Host says. */
+    WT_EQ(parse("POST / HTTP/1.1\r\nHost: attacker.example\r\n\r\n", &rq),
+          405);
+}
+
+static void test_host_ok(void) {
+    static const char *const ok[] = {
+        "127.0.0.1", "127.0.0.1:8770", "127.0.0.1:", "localhost",
+        "LOCALHOST:8770", "[::1]", "[::1]:8770", "[::1]:", "192.168.1.5:8770",
+        "0.0.0.0:8770", "[fe80::1]:65535",
+    };
+    static const char *const bad[] = {
+        "", "x", "attacker.example", "attacker.example:8770",
+        "127.0.0.1.attacker.example", "localhost.attacker.example",
+        "evil.localhost", "localhost.", "::1", "[::1", "[]", "[::1]x",
+        "127.0.0.1:65536", "127.0.0.1:123456", "127.0.0.1:80a",
+        "127.1", "0x7f.0.0.1", "127.0.0.1:8770:1", "user@127.0.0.1",
+        "[127.0.0.1]", "2130706433",
+    };
+    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+        if (!web_http_host_ok(ok[i])) fprintf(stderr, "    refused %s\n", ok[i]);
+        WT_ASSERT(web_http_host_ok(ok[i]));
+    }
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        if (web_http_host_ok(bad[i])) fprintf(stderr, "    allowed %s\n", bad[i]);
+        WT_ASSERT(!web_http_host_ok(bad[i]));
+    }
+}
+
 void run_http_tests(void) {
+    WT_RUN(test_host_collected);
+    WT_RUN(test_host_ok);
     WT_RUN(test_get_and_head_are_routed);
     WT_RUN(test_path_kept_without_query);
     WT_RUN(test_if_none_match_collected);

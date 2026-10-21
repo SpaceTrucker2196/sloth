@@ -16,6 +16,8 @@ static void req(web_req_t *rq, const char *path, int is_head) {
     memset(rq, 0, sizeof(*rq));
     rq->is_head = is_head;
     snprintf(rq->path, sizeof(rq->path), "%s", path);
+    snprintf(rq->host, sizeof(rq->host), "127.0.0.1:8770");
+    rq->host_count = 1;
 }
 
 static void inm(web_req_t *rq, const char *v) {
@@ -474,6 +476,102 @@ static void test_routes_are_still_405_for_writes(void) {
         }
 }
 
+/* DNS rebinding: a page on attacker.example whose name now resolves to
+ * 127.0.0.1 is admitted by the allow list (the peer is loopback) and is
+ * same-origin with slothweb in the browser. Its requests carry its own
+ * name in Host, and get nothing: not the page, not the health JSON, not
+ * a stream, and not even a 404 that would tell it which paths exist.
+ * Seen red (200, 200, 200, 404) with the web_http_host_ok() test
+ * removed from web_route(). */
+static void test_foreign_host_is_421(void) {
+    static const char *const paths[] = { "/", "/api/health", "/events", "/x" };
+    static const char *const hosts[] = {
+        "attacker.example", "attacker.example:8770", "127.0.0.1.nip.io",
+    };
+    for (size_t p = 0; p < 4; p++)
+        for (size_t h = 0; h < 3; h++)
+            for (int is_head = 0; is_head < 2; is_head++) {
+                web_req_t rq;
+                web_resp_t r;
+                char out[4096];
+                req(&rq, paths[p], is_head);
+                snprintf(rq.host, sizeof(rq.host), "%s", hosts[h]);
+                WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+                out[r.out_len] = '\0';
+                WT_EQ(r.status, 421);
+                WT_EQ(r.kind, WEB_R_ONESHOT);
+                WT_ASSERT(r.body == NULL);
+                WT_HAS(out, "HTTP/1.1 421 Misdirected Request\r\n");
+                WT_LACKS(out, "slothweb");
+                WT_LACKS(out, "Access-Control");
+            }
+
+    /* An absolute-form authority replaces Host (RFC 9112 §3.2.2), in
+     * both directions. Seen red (200) with web_route() checking rq->host
+     * only. */
+    web_req_t rq;
+    web_resp_t r;
+    char out[4096];
+    req(&rq, "/api/health", 0);
+    rq.target_abs = 1;
+    snprintf(rq.target_host, sizeof(rq.target_host), "attacker.example");
+    WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+    WT_EQ(r.status, 421);
+    req(&rq, "/api/health", 0);
+    snprintf(rq.host, sizeof(rq.host), "attacker.example");
+    rq.target_abs = 1;
+    snprintf(rq.target_host, sizeof(rq.target_host), "[::1]:8770");
+    WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+    WT_EQ(r.status, 200);
+
+    /* A value too long to keep is refused, not judged on a prefix.
+     * Seen red (200) with the host_long test removed. */
+    req(&rq, "/", 0);
+    rq.host_long = 1;
+    WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+    WT_EQ(r.status, 421);
+    req(&rq, "/", 0);
+    rq.target_abs = 1;
+    rq.target_host_long = 1;
+    WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+    WT_EQ(r.status, 421);
+}
+
+/* What the operator's browser sends is answered: the default bind, a
+ * forwarded port, the name localhost, the v6 loopback and a remote
+ * bind's own address. */
+static void test_local_hosts_are_served(void) {
+    static const char *const hosts[] = {
+        "127.0.0.1:8770", "127.0.0.1:18770", "localhost:8770", "localhost",
+        "[::1]:8770", "192.168.1.5:8770",
+    };
+    for (size_t h = 0; h < sizeof(hosts) / sizeof(hosts[0]); h++) {
+        web_req_t rq;
+        web_resp_t r;
+        char out[4096];
+        req(&rq, "/api/health", 0);
+        snprintf(rq.host, sizeof(rq.host), "%s", hosts[h]);
+        WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+        WT_EQ(r.status, 200);
+    }
+}
+
+/* RFC 9112 §3.2: no Host, or more than one, is 400. Seen red (200)
+ * with the host_count test removed from web_route(). */
+static void test_host_count_must_be_one(void) {
+    for (int count = 0; count <= 2; count += 2) {
+        web_req_t rq;
+        web_resp_t r;
+        char out[4096];
+        req(&rq, "/", 0);
+        rq.host_count = count;
+        WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), 0);
+        out[r.out_len] = '\0';
+        WT_EQ(r.status, 400);
+        WT_HAS(out, "HTTP/1.1 400 Bad Request\r\n");
+    }
+}
+
 static void test_small_buffer_is_an_error(void) {
     web_req_t rq;
     web_resp_t r;
@@ -498,5 +596,8 @@ void run_routes_tests(void) {
     WT_RUN(test_event_formats);
     WT_RUN(test_unknown_paths_are_404);
     WT_RUN(test_routes_are_still_405_for_writes);
+    WT_RUN(test_foreign_host_is_421);
+    WT_RUN(test_local_hosts_are_served);
+    WT_RUN(test_host_count_must_be_one);
     WT_RUN(test_small_buffer_is_an_error);
 }

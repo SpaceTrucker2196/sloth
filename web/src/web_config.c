@@ -159,8 +159,10 @@ void web_usage(FILE *out) {
         "                        even with --web-allow-remote.\n"
         "  --help                this text.\n"
         "\n"
-        "This build serves no routes: every GET and HEAD is 404, every other\n"
-        "method is 405, a header block over 8 KB is 431.\n");
+        "Routes (GET and HEAD): / (the page), /api/health (JSON), /events\n"
+        "(Server-Sent Events). Any other path is 404; any other method is\n"
+        "405; a Host that is not localhost or an IP literal is 421; a\n"
+        "header block over 8 KB is 431.\n");
 }
 
 int web_config_parse(web_config_t *c, int argc, char **argv,

@@ -89,6 +89,8 @@ protect. W0 is that slice and nothing else.
 
 | Request | Answer |
 |---|---|
+| `GET` / `HEAD` with no `Host`, or two | `400` (RFC 9112 §3.2) |
+| `GET` / `HEAD` whose `Host` is not `localhost` or an IP literal | `421`, before the route table |
 | `GET` / `HEAD` of a route (M0, below) | the route's answer (`HEAD` without the body) |
 | `GET` / `HEAD`, any other path | `404` (`HEAD` without the body) |
 | any other method, any path | `405` with `Allow: GET, HEAD`, permanently |
@@ -106,6 +108,26 @@ some stacks, and on real links, a reset can discard a response the
 client has not read yet. Linux loopback cannot show that loss (the
 response is queued before the RST arrives and is still delivered), so
 the test asserts only the FIN, not a rescued response.
+
+### Host, and DNS rebinding
+
+The allow list judges the TCP peer, and a browser on the operator's own
+machine is a loopback peer whatever page it is showing. A site that
+points its own name at `127.0.0.1` (DNS rebinding) makes the browser
+treat slothweb as same-origin with that site, and its script could then
+read `/api/health` and `/events`; "no CORS headers" does not stop a
+request the browser thinks is same-origin. What such a request cannot
+hide is its `Host`, which carries the attacker's name. So a routed
+request is answered only when `Host` (or an absolute-form target's
+authority) is `localhost`, a literal IPv4 address or a bracketed IPv6
+literal, each with an optional port; anything else is `421 Misdirected
+Request`, before the route table, so the page cannot even learn which
+paths exist. An IP literal cannot be rebound, which is why any literal
+is accepted rather than only the bind address: `ssh -L` forwards and a
+`0.0.0.0` bind reached by the host's LAN address both work, and no name
+is resolved to decide. Reaching a remote bind by DNS name is therefore
+refused; use its address. `405` for writing methods comes first and is
+unaffected.
 
 ### Timeouts and limits
 
@@ -170,7 +192,9 @@ timer, so there is still one thread and one lock.
 
 A client that stops reading is dropped once 64 KB is waiting for it
 (spec §10.2), with its socket send buffer capped at 16 KB so a stalled
-peer also pins little kernel memory. At most 24 streams are held; the
+peer also pins little kernel memory. Every accepted socket has
+`TCP_NODELAY` (spec §10.2), so a tick is not held behind the previous
+one's ACK. At most 24 streams are held; the
 25th `GET /events` is `503`, which keeps 8 of the 32 slots for the page
 and the API.
 
@@ -201,6 +225,10 @@ of #157 maps to it as follows.
 | slow-client drop | `test_slow_events_client_dropped` |
 | design tokens per §8.1 | `test_design_tokens_match_spec` |
 | `405` unchanged for writing methods | `test_routes_are_still_405_for_writes`, `test_routes_405_for_writes_over_socket` |
+| first tick at once; stream socket options (`TCP_NODELAY`, `SO_SNDBUF`) | `test_events_first_tick_at_once` |
+| stream client leaving noticed on the read path | `test_events_client_eof_noticed_on_read` |
+| drop at the 64 KB threshold, not past it | `test_slow_events_client_dropped` (`sse_drop_backlog`) |
+| foreign `Host` refused (DNS rebinding) | `test_foreign_host_is_421`, `test_foreign_host_refused_over_socket`, `test_host_ok`, `test_host_count_must_be_one` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

@@ -20,6 +20,10 @@
  * 200 where a 304 would have done. */
 #define WEB_PATH_MAX 1024
 #define WEB_INM_MAX  512
+/* A Host value (or an absolute-form authority) longer than this is not
+ * kept: the longest acceptable one, a bracketed IPv6 literal with a
+ * port, is 47 bytes. */
+#define WEB_HOST_MAX 256
 
 /* Not an HTTP status: "well-formed GET or HEAD, route it". */
 #define WEB_HTTP_ROUTE 200
@@ -30,6 +34,12 @@ typedef struct {
     int  path_long;
     char inm[WEB_INM_MAX];    /* every If-None-Match line, comma-joined */
     int  inm_present, inm_long;
+    char host[WEB_HOST_MAX];  /* the Host value, OWS trimmed */
+    int  host_count, host_long;
+    /* An absolute-form target's authority, which RFC 9112 §3.2.2 says
+     * replaces Host for routing. */
+    char target_host[WEB_HOST_MAX];
+    int  target_abs, target_host_long;
 } web_req_t;
 
 /* Parse the bytes received so far. Returns 0 when more are needed,
@@ -39,6 +49,14 @@ int    web_http_parse(const char *buf, size_t len, web_req_t *rq);
 /* RFC 9110 §13.1.2: does an If-None-Match value match etag (quoted)?
  * Weak comparison, "*" matches anything. */
 int    web_http_inm_matches(const char *inm, const char *etag);
+
+/* Is host (a Host value or an absolute-form authority) one slothweb
+ * answers to? "localhost", a literal IPv4 address or a bracketed
+ * literal IPv6 address, each with an optional :port. A name other than
+ * localhost is refused: an attacker who points their own name at
+ * 127.0.0.1 (DNS rebinding) makes the browser send that name, and an IP
+ * literal cannot be rebound. No name is ever resolved here. */
+int    web_http_host_ok(const char *host);
 
 /* web_http_parse() without the request fields: 0, WEB_HTTP_ROUTE or an
  * error status; *is_head is set when the answer must carry no body.

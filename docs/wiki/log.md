@@ -4652,3 +4652,16 @@ a 24-stream cap (`503`) and a drop at 64 KB unsent. The page's CSP is
 inline script, the font is the system monospace stack, and a test checks
 the served bytes for any URL or external font, style or script
 reference. `405` for every writing method is unchanged on every route.
+
+## 2026-10-21 — slothweb M0 (#158): Host check, stream tests
+
+**Updated pages**: [slothweb.md](slothweb.md). Updated `web/README.md`.
+
+Review of M0. A routed request whose `Host` is not `localhost` or an IP
+literal is now `421`, closing DNS rebinding before M1 puts sensor data on
+the stream; no `Host`, or two, is `400`. Accepted sockets get
+`TCP_NODELAY` (spec §10.2). New tests pin the stream behaviour that was
+claimed but unguarded: the first tick at once, a departing client seen
+on the read path, the drop at exactly the 64 KB backlog, and the
+`SO_SNDBUF` cap; a compile-time check keeps the output buffer at least
+as large as the drop threshold. `--help` no longer describes W0.

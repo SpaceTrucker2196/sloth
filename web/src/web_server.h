@@ -22,7 +22,9 @@
  * rest stay free for the page and the API. */
 #define WEB_MAX_SSE   24
 /* A stream client that has not taken this much is dropped (spec §10.2).
- * It is also the size of every connection's output buffer. */
+ * It is also the size of every connection's output buffer, which
+ * sse_queue() relies on: web_server.c fails to compile if out[] is ever
+ * made smaller. */
 #define WEB_SSE_MAX_UNSENT 65536
 /* SO_SNDBUF asked for on a stream socket, so a stalled client holds a
  * bounded amount of kernel memory as well as of ours. */
@@ -39,10 +41,11 @@ typedef struct {
     unsigned long timeouts;   /* header or write budget exhausted */
     unsigned long accept_paused; /* accept() out of fds/memory: back-off */
     unsigned long status_404, status_405, status_431, status_400;
-    unsigned long status_200, status_304, status_503;
+    unsigned long status_200, status_304, status_503, status_421;
     unsigned long sse_opened;     /* /events streams started */
     unsigned long sse_closed;     /* ended by the client */
     unsigned long sse_dropped;    /* ended by us: WEB_SSE_MAX_UNSENT behind */
+    unsigned long sse_drop_backlog; /* bytes still unsent at the last drop */
     unsigned long ticks;          /* tick events generated (not per client) */
 } web_stats_t;
 

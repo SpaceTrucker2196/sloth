@@ -124,6 +124,24 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
               char *out, size_t outsz, web_resp_t *r) {
     memset(r, 0, sizeof(*r));
     r->kind = WEB_R_ONESHOT;
+    /* RFC 9112 §3.2: an HTTP/1.1 request with no Host, or more than
+     * one, is a 400. */
+    if (rq->host_count != 1) {
+        r->status = 400;
+        r->out_len = web_http_response(400, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    /* DNS rebinding: the peer is loopback, so the allow list admits it,
+     * but the page that sent the request may be another site's whose
+     * name now resolves here. Its Host is that name. Refused before the
+     * table, so such a page cannot even tell which paths exist. */
+    const char *host = rq->target_abs ? rq->target_host : rq->host;
+    int host_long = rq->target_abs ? rq->target_host_long : rq->host_long;
+    if (host_long || !web_http_host_ok(host)) {
+        r->status = 421;
+        r->out_len = web_http_response(421, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
     if (!rq->path_long) {
         if (!strcmp(rq->path, "/"))
             return route_page(rq, out, outsz, r);

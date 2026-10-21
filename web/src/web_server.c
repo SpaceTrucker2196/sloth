@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,13 @@
 #include "web_routes.h"
 
 enum { C_FREE = 0, C_READ, C_WRITE, C_LINGER, C_SSE };
+
+/* sse_queue() admits up to WEB_SSE_MAX_UNSENT unsent bytes and then
+ * copies them into out[]; an out[] smaller than that would be written
+ * past its end into the next slot, inside web_server_t where ASan does
+ * not look. C99 has no static_assert, so a negative array size. */
+typedef char web_out_holds_sse_backlog
+    [sizeof(((web_conn_t *)0)->out) >= WEB_SSE_MAX_UNSENT ? 1 : -1];
 
 static long long now_ms(void) {
     struct timespec ts;
@@ -138,6 +146,7 @@ static void count_status(web_server_t *s, int status) {
     case 200: s->stats.status_200++; break;
     case 304: s->stats.status_304++; break;
     case 503: s->stats.status_503++; break;
+    case 421: s->stats.status_421++; break;
     case 404: s->stats.status_404++; break;
     case 405: s->stats.status_405++; break;
     case 431: s->stats.status_431++; break;
@@ -191,7 +200,10 @@ static void sse_queue(web_server_t *s, web_conn_t *c, const char *ev,
     size_t unsent = c->out_len - c->out_off;
     if (unsent + n > WEB_SSE_MAX_UNSENT) {
         conn_close(s, c);
-        STAT_INC(s, sse_dropped);
+        pthread_mutex_lock(&s->mu);
+        s->stats.sse_dropped++;
+        s->stats.sse_drop_backlog = unsent;
+        pthread_mutex_unlock(&s->mu);
         return;
     }
     if (c->out_len + n > sizeof(c->out)) {
@@ -306,6 +318,12 @@ static void accept_ready(web_server_t *s) {
             STAT_INC(s, busy);
             continue;
         }
+        /* Spec §10.2. Every answer is written in as few send()s as it
+         * takes and events are small; Nagle would only hold a tick back
+         * behind the previous one's ACK. Best effort: without it the
+         * cost is latency, not correctness. */
+        int one = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         c->fd = fd;
         c->state = C_READ;
         c->len = 0;

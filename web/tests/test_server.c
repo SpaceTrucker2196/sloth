@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -73,10 +74,16 @@ static int start(running_t *r, const web_config_t *cfg) {
     return 0;
 }
 
-static void stop(running_t *r, web_stats_t *st) {
+/* Stop the loop and join its thread, leaving every connection open:
+ * after this the test may read the server's sockets without racing it. */
+static void halt(running_t *r) {
     web_server_stop(r->s);
     pthread_join(r->th, NULL);
     WT_EQ(r->rc, 0);
+}
+
+static void stop(running_t *r, web_stats_t *st) {
+    halt(r);
     web_server_stats(r->s, st);
     web_server_close(r->s);
     free(r->s);
@@ -212,13 +219,13 @@ static void test_get_head_404_over_socket(void) {
     uint16_t port = web_server_port(r.s);
     char out[4096];
 
-    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     size_t n = exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
     WT_ASSERT(n > 0);
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
     WT_ASSERT(n >= 10 && !strcmp(out + n - 10, "not found\n"));
 
-    static const char head[] = "HEAD /nope HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char head[] = "HEAD /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     n = exchange(AF_INET, port, head, sizeof(head) - 1, out, sizeof(out));
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
     WT_ASSERT(n >= 4 && !strcmp(out + n - 4, "\r\n\r\n"));
@@ -243,7 +250,7 @@ static void test_write_methods_405_over_socket(void) {
     for (size_t i = 0; i < 4; i++) {
         char req[256], out[4096];
         int rl = snprintf(req, sizeof(req),
-            "%s /api/query HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\n"
+            "%s /api/query HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 11\r\n"
             "\r\n{\"sql\":\"x\"}", methods[i]);
         exchange(AF_INET, port, req, (size_t)rl, out, sizeof(out));
         WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\n");
@@ -275,7 +282,7 @@ static void test_unread_body_ends_with_fin_not_reset(void) {
     if (!r.s) return;
     enum { BODY = 64 * 1024 };
     static const char head[] =
-        "POST /api/query HTTP/1.1\r\nHost: x\r\nContent-Length: 65536\r\n\r\n";
+        "POST /api/query HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 65536\r\n\r\n";
     size_t rl = sizeof(head) - 1 + BODY;
     char *req = malloc(rl);
     memcpy(req, head, sizeof(head) - 1);
@@ -380,7 +387,7 @@ static void test_accept_emfile_backs_off(void) {
     WT_ASSERT(used < 100.0);
 
     if (fd >= 0) {
-        static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
+        static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
         send_all(fd, get, sizeof(get) - 1);
         char out[4096];
         read_all(fd, out, sizeof(out));
@@ -402,7 +409,7 @@ static void test_oversize_header_431_over_socket(void) {
 
     size_t big = 3 * WEB_HDR_MAX;
     char *req = malloc(big);
-    static const char head[] = "GET /nope HTTP/1.1\r\nX: ";
+    static const char head[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\nX: ";
     memcpy(req, head, sizeof(head) - 1);
     memset(req + sizeof(head) - 1, 'a', big - (sizeof(head) - 1));
     char out[4096];
@@ -440,7 +447,7 @@ static void refused_case(int family, const char *only) {
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     char out[4096];
-    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     size_t n = exchange(family, web_server_port(r.s), get, sizeof(get) - 1,
                         out, sizeof(out));
     WT_EQ(n, 0);
@@ -472,7 +479,7 @@ static void test_admitted_peer_v6(void) {
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     char out[4096];
-    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     exchange(AF_INET6, web_server_port(r.s), get, sizeof(get) - 1,
              out, sizeof(out));
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
@@ -558,7 +565,7 @@ static void test_slots_exhausted(void) {
     struct timespec ts = { 0, 100 * 1000 * 1000 };
     nanosleep(&ts, NULL);
     char out[1024];
-    static const char get[] = "GET /nope HTTP/1.1\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     size_t n = exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
     WT_EQ(n, 0);
     for (int i = 0; i < WEB_MAX_CONNS; i++) if (fds[i] >= 0) close(fds[i]);
@@ -622,7 +629,7 @@ static int one_dropped(const web_stats_t *st) { return st->sse_dropped >= 1; }
 static void get(uint16_t port, const char *path, const char *extra,
                 char *out, size_t cap) {
     char req[512];
-    int n = snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n%s\r\n",
+    int n = snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: 127.0.0.1\r\n%s\r\n",
                      path, extra);
     exchange(AF_INET, port, req, (size_t)n, out, cap);
 }
@@ -660,7 +667,7 @@ static void test_page_over_socket(void) {
     body = strstr(out, "\r\n\r\n");
     WT_ASSERT(body && body[4] == '\0');
 
-    static const char head[] = "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char head[] = "HEAD / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     size_t n = exchange(AF_INET, port, head, sizeof(head) - 1, out, cap);
     WT_HAS(out, "HTTP/1.1 200 OK\r\n");
     WT_ASSERT(n >= 4 && !strcmp(out + n - 4, "\r\n\r\n"));
@@ -726,7 +733,7 @@ static void test_events_stream_ticks_and_pings(void) {
     int fd = dial(AF_INET, port);
     WT_ASSERT(fd >= 0);
     if (fd < 0) { web_stats_t st; stop(&r, &st); return; }
-    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n"
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                              "Accept: text/event-stream\r\n\r\n";
     send_all(fd, ev, sizeof(ev) - 1);
     static char buf[65536];
@@ -789,11 +796,23 @@ static void test_slow_events_client_dropped(void) {
     a.sin_port = htons(port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     WT_EQ(connect(fd, (struct sockaddr *)&a, sizeof(a)), 0);
-    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     send_all(fd, ev, sizeof(ev) - 1);
 
     web_stats_t st;
     WT_ASSERT(wait_stats(r.s, one_dropped, 20000, &st));
+    /* The drop happens at the threshold, not somewhere past it: what was
+     * waiting is within one event (well under 256 bytes) of
+     * WEB_SSE_MAX_UNSENT and not over it. Seen red (a backlog of
+     * ~262000) with the threshold in sse_queue() raised to four times
+     * WEB_SSE_MAX_UNSENT, a mutant that also writes past out[] into the
+     * next slot unseen by ASan; the typedef in web_server.c is what
+     * stops out[] shrinking below the threshold (seen: a compile error
+     * with out[] halved). */
+    if (st.sse_drop_backlog > WEB_SSE_MAX_UNSENT)
+        fprintf(stderr, "    dropped with %lu unsent\n", st.sse_drop_backlog);
+    WT_ASSERT(st.sse_drop_backlog <= WEB_SSE_MAX_UNSENT);
+    WT_ASSERT(st.sse_drop_backlog > WEB_SSE_MAX_UNSENT - 256);
 
     char out[4096];
     get(port, "/api/health", "", out, sizeof(out));
@@ -806,6 +825,144 @@ static void test_slow_events_client_dropped(void) {
     WT_EQ(st.sse_closed, 0);
 }
 
+/* Open a stream with tick and ping a minute away, so nothing the loop
+ * does on a timer can be mistaken for what is being tested. Returns the
+ * client fd with the stream's first bytes in buf, or -1. */
+static int open_quiet_stream(running_t *r, char *buf, size_t cap,
+                             size_t *len) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    c.tick_ms = 60000;
+    c.ping_ms = 60000;
+    if (start(r, &c) != 0 || !r->s) return -1;
+    int fd = dial(AF_INET, web_server_port(r->s));
+    if (fd < 0) return -1;
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    send_all(fd, ev, sizeof(ev) - 1);
+    *len = 0;
+    if (!wait_for(fd, buf, cap, len, "retry: 3000\n\n", 2000)) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* A new stream gets the current tick at once rather than a minute
+ * later. Seen red (no tick in the window) with the initial
+ * sse_queue() removed from conn_route(). The stream's socket also
+ * carries the options the server sets: TCP_NODELAY (seen red, 0, with
+ * its setsockopt removed from accept_ready()) and the capped SO_SNDBUF,
+ * compared against what this kernel grants for the same request,
+ * because Linux doubles the value it is given (seen red, the kernel's
+ * default instead, with that setsockopt removed from conn_route()). */
+static void test_events_first_tick_at_once(void) {
+    running_t r;
+    char buf[4096];
+    size_t len;
+    int fd = open_quiet_stream(&r, buf, sizeof(buf), &len);
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) { if (r.s) { web_stats_t st; stop(&r, &st); } return; }
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, "event: tick\n", 500));
+    WT_HAS(buf, "retry: 3000\n\nid: 0\nevent: tick\n");
+
+    halt(&r);
+    int sfd = -1, nopen = 0;
+    for (int i = 0; i < WEB_MAX_CONNS; i++)
+        if (r.s->conns[i].fd >= 0) { sfd = r.s->conns[i].fd; nopen++; }
+    WT_EQ(nopen, 1);
+    if (sfd >= 0) {
+        int v = -1;
+        socklen_t vl = sizeof(v);
+        WT_EQ(getsockopt(sfd, IPPROTO_TCP, TCP_NODELAY, &v, &vl), 0);
+        WT_ASSERT(v != 0);
+
+        int probe = socket(AF_INET, SOCK_STREAM, 0);
+        int want = WEB_SSE_SNDBUF, granted = -1, got = -2;
+        setsockopt(probe, SOL_SOCKET, SO_SNDBUF, &want, sizeof(want));
+        vl = sizeof(granted);
+        getsockopt(probe, SOL_SOCKET, SO_SNDBUF, &granted, &vl);
+        close(probe);
+        vl = sizeof(got);
+        WT_EQ(getsockopt(sfd, SOL_SOCKET, SO_SNDBUF, &got, &vl), 0);
+        WT_EQ(got, granted);
+    }
+    web_stats_t st;
+    web_server_stats(r.s, &st);
+    web_server_close(r.s);
+    free(r.s);
+    close(fd);
+    WT_EQ(st.sse_opened, 1);
+    WT_EQ(st.ticks, 0);
+}
+
+/* A stream client that leaves is noticed on the read side, at once,
+ * not when the next event fails to send. With no event due for a
+ * minute, only the read path can see it. Seen red (sse_closed 0 at the
+ * deadline) with conn_close() removed from conn_read()'s stream EOF
+ * branch; that mutant also spins, the closed socket staying readable. */
+static void test_events_client_eof_noticed_on_read(void) {
+    running_t r;
+    char buf[4096];
+    size_t len;
+    int fd = open_quiet_stream(&r, buf, sizeof(buf), &len);
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) { if (r.s) { web_stats_t st; stop(&r, &st); } return; }
+    close(fd);
+    web_stats_t st;
+    WT_ASSERT(wait_stats(r.s, one_closed, 1000, &st));
+    char out[4096];
+    get(web_server_port(r.s), "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "\"sse_clients\":0,");
+    stop(&r, &st);
+    WT_EQ(st.sse_closed, 1);
+    WT_EQ(st.sse_dropped, 0);
+    WT_EQ(st.ticks, 0);
+}
+
+/* DNS rebinding over a real connection: what curl -H 'Host:
+ * attacker.example' -H 'Origin: http://attacker.example' got before the
+ * Host check (a 200 with the health JSON) is now a 421 with nothing of
+ * slothweb's in it, on every route, while a writing method is still
+ * the same 405. Seen red with the web_http_host_ok() test removed from
+ * web_route(). */
+static void test_foreign_host_refused_over_socket(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+    static const char *const paths[] = { "/", "/api/health", "/events" };
+    for (size_t i = 0; i < 3; i++) {
+        char req[256], out[4096];
+        int rl = snprintf(req, sizeof(req),
+            "GET %s HTTP/1.1\r\nHost: attacker.example:%u\r\n"
+            "Origin: http://attacker.example:%u\r\n\r\n",
+            paths[i], (unsigned)port, (unsigned)port);
+        exchange(AF_INET, port, req, (size_t)rl, out, sizeof(out));
+        WT_HAS(out, "HTTP/1.1 421 Misdirected Request\r\n");
+        WT_LACKS(out, "slothweb");
+        WT_LACKS(out, "event:");
+        WT_LACKS(out, "Access-Control");
+    }
+    char out[4096];
+    static const char post[] = "POST /api/health HTTP/1.1\r\n"
+                               "Host: attacker.example\r\n\r\n";
+    exchange(AF_INET, port, post, sizeof(post) - 1, out, sizeof(out));
+    WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\n");
+    static const char nohost[] = "GET /api/health HTTP/1.1\r\n\r\n";
+    exchange(AF_INET, port, nohost, sizeof(nohost) - 1, out, sizeof(out));
+    WT_HAS(out, "HTTP/1.1 400 Bad Request\r\n");
+
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_421, 3);
+    WT_EQ(st.status_405, 1);
+    WT_EQ(st.status_400, 1);
+    WT_EQ(st.status_200, 0);
+    WT_EQ(st.sse_opened, 0);
+}
+
 /* Streams may hold WEB_MAX_SSE slots, not all of them: the next stream
  * is refused 503 while the page can still be loaded. */
 static void test_events_slots_capped(void) {
@@ -815,7 +972,7 @@ static void test_events_slots_capped(void) {
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     uint16_t port = web_server_port(r.s);
-    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     int fds[WEB_MAX_SSE];
     int opened = 0;
     for (int i = 0; i < WEB_MAX_SSE; i++) {
@@ -856,7 +1013,7 @@ static void test_routes_405_for_writes_over_socket(void) {
     for (size_t i = 0; i < 3; i++) {
         char req[256], out[4096];
         int rl = snprintf(req, sizeof(req),
-            "POST %s HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}",
+            "POST %s HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}",
             paths[i]);
         exchange(AF_INET, port, req, (size_t)rl, out, sizeof(out));
         WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\n");
@@ -888,6 +1045,9 @@ void run_server_tests(void) {
     WT_RUN(test_health_over_socket);
     WT_RUN(test_events_stream_ticks_and_pings);
     WT_RUN(test_slow_events_client_dropped);
+    WT_RUN(test_events_first_tick_at_once);
+    WT_RUN(test_events_client_eof_noticed_on_read);
+    WT_RUN(test_foreign_host_refused_over_socket);
     WT_RUN(test_events_slots_capped);
     WT_RUN(test_routes_405_for_writes_over_socket);
 }

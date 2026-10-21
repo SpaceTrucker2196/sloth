@@ -203,7 +203,10 @@ static void test_usage_and_unknown(void) {
     parse(&p, help);
     WT_EQ(p.rc, 1);
     WT_HAS(p.out, "--web-allow-remote");
-    WT_HAS(p.out, "every GET and HEAD is 404");
+    WT_HAS(p.out, "/api/health");
+    WT_HAS(p.out, "/events");
+    WT_HAS(p.out, "405");
+    WT_LACKS(p.out, "serves no routes");
     done(&p);
     parse(&p, unk);
     WT_EQ(p.rc, -1);

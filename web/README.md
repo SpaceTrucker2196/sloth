@@ -60,6 +60,8 @@ on a usage error or a policy refusal.
 
    | Request | Answer |
    |---|---|
+   | `GET`/`HEAD` with no `Host`, or two | `400` |
+   | `GET`/`HEAD` whose `Host` is not `localhost` or an IP literal | `421`, before any route (below) |
    | `GET /` | the page, `200`, `ETag`, `Cache-Control: no-cache` |
    | `GET /` with a matching `If-None-Match` | `304`, no body |
    | `GET /api/health` | `200` JSON, `Cache-Control: no-store` |
@@ -74,6 +76,20 @@ on a usage error or a policy refusal.
    | no complete header block within 10 s of accept() | `408`, best effort |
 
    Methods are case-sensitive (RFC 9110 §9.1): `get` is `405`.
+
+   **Host.** The allow list judges the TCP peer, and the operator's
+   browser is a loopback peer whatever page it shows. A site that
+   points its own name at `127.0.0.1` (DNS rebinding) is same-origin
+   with slothweb in that browser, so its script could read
+   `/api/health` and `/events`; sending no CORS headers does not stop
+   that. Its requests carry its name in `Host`, so a routed request is
+   answered only when `Host` (or an absolute-form target's authority)
+   is `localhost`, a literal IPv4 address or a bracketed IPv6 literal,
+   each with an optional `:port`. An IP literal cannot be rebound, so
+   any literal is accepted, which keeps `ssh -L` forwards and a
+   `0.0.0.0` bind reached by the host's address working; no name is
+   resolved to decide. A remote bind reached by DNS name is refused:
+   use the address. Writing methods are `405` before this check.
 4. **Timeouts are absolute from accept()**, not reset per byte: a client
    trickling one byte at a time is cut off on the same schedule as one
    that sends nothing. The response has its own 10 s budget. After it, a
@@ -137,7 +153,9 @@ one tick, not a burst. Anything the client sends on the stream is read
 and discarded, which is also how its departure is noticed. A client
 that stops reading is dropped once 64 KB is waiting for it (its socket
 send buffer is capped at 16 KB as well), and its browser reconnects on
-its own after the `retry` delay. At most 24 streams are held, so 8 of
+its own after the `retry` delay. Every accepted socket has
+`TCP_NODELAY` (spec §10.2): events are small and should not wait for
+the previous one's ACK. At most 24 streams are held, so 8 of
 the 32 connection slots stay free for the page and the API.
 
 ## What it never does
@@ -166,9 +184,9 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 |---|---|
 | `test_acl.c` | the list on hand-built sockaddrs: loopback default, non-loopback v4/v6 refused, prefix boundaries, v4-mapped folding, CIDR parse errors |
 | `test_config.c` | default bind, remote bind refused without the flag and announced with it, remote `--web-allow` needs the flag, `--strict` |
-| `test_http.c` | hand-written request bytes: GET/HEAD routed, 405 for every other method, split reads, 400/505, the 8 KB boundary, path and query, `If-None-Match` collection and weak comparison |
-| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route |
-| `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, a non-reading stream client dropped, the stream cap |
+| `test_http.c` | hand-written request bytes: GET/HEAD routed, 405 for every other method, split reads, 400/505, the 8 KB boundary, path and query, `If-None-Match` collection and weak comparison, `Host` collection and which values are accepted |
+| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two |
+| `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example` |
 
 A test cannot originate from a non-loopback address, so the refused-peer
 socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)

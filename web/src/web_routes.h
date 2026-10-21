@@ -7,6 +7,9 @@
  *   /events       Server-Sent Events: tick, ping
  *   anything else 404
  *
+ * Before the table: no Host, or two, is 400; a Host (or absolute-form
+ * authority) that is not localhost or an IP literal is 421.
+ *
  * Only GET and HEAD reach the router; web_http.c has already answered
  * every other method 405. */
 #ifndef SLOTHWEB_ROUTES_H
