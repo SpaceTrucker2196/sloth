@@ -34,6 +34,12 @@ jobs:
       - name: Test
         run: make test
 
+      # slothweb (#157, #158): its own binary and suite under web/, not in
+      # `make` or `make embedded`. Built and tested with the workflow's
+      # -Werror like everything else, and again under each sanitizer job.
+      - name: Build and test slothweb
+        run: make web && make web-test
+
       # The capture path is not in `make test`: sloth_test is built
       # without WITH_PCAP, so on_packet() and every parser it reaches
       # were untested and unsanitised until #95 added this binary.
@@ -107,6 +113,9 @@ jobs:
       # libpcap's own reader rather than a seeded struct.
       - name: Test the capture path under ASan + UBSan
         run: make test-capture-path
+
+      - name: Test slothweb under ASan + UBSan
+        run: make web-test
 
       # The shipped binary, not only the suite (#95). Until the link rule
       # was fixed this step could not have existed: `$(TARGET)` linked with
@@ -209,6 +218,9 @@ jobs:
 
       - name: Test the capture path under ThreadSanitizer
         run: make test-capture-path
+
+      - name: Test slothweb under ThreadSanitizer
+        run: make web-test
 
   # Static analysis (#95): cppcheck over everything the default build and
   # the research tools compile. Fails on any finding not listed, with its
