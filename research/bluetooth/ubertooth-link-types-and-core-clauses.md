@@ -38,14 +38,18 @@ rules on it are #144 slice 4.
   Access Code Offenses, Payload Transport Rate, Corrected Header Bits,
   Corrected Payload Bits (2), LAP (3 + reserved), Reference LAP (3),
   Reference UAP (1), packet header (4), Flags (2). Reference LAP and UAP
-  are what was **configured into the capture tool**. Flags: 0x0001
+  are the **capture tool's reference** for the piconet it tracks:
+  configured (`ubertooth-rx -l`, `-u`) or derived by libbtbb itself
+  (upstream `host/libubertooth/src/ubertooth_callback.c` passes
+  `btbb_piconet_get_lap()` / `btbb_piconet_get_uap()` whenever the
+  piconet marks them valid). Flags: 0x0001
   de-whitened, 0x0002 signal valid, 0x0004 noise valid, 0x0008
   decrypted, 0x0010 reference LAP valid, 0x0020 payload present, 0x0040
   channel aliased, **0x0080 reference UAP valid for HEC and CRC
   checking**, 0x0100/0x0200 HEC checked/passed, 0x0400/0x0800 CRC
   checked/passed, 0x1000/0x2000 MIC checked/passed. The 0x0080 bit
-  therefore says the operator's UAP was used, never that a UAP was
-  observed, and `src/bredr_bb.c` labels it that way.
+  therefore says the tool's reference UAP was used, never that sloth
+  observed a UAP, and `src/bredr_bb.c` labels it that way.
 
 The classic savefile container around them is libpcap's
 (`pcap-savefile(5)`; IETF draft-ietf-opsawg-pcap): magic 0xA1B2C3D4

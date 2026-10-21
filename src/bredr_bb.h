@@ -31,11 +31,14 @@
  * that could be read as a BD_ADDR, and no vendor is looked up from it —
  * an OUI is the NAP and UAP, which a LAP does not contain.
  *
- * The Reference UAP field is what the OPERATOR configured into the
- * capture tool (ubertooth-rx -u). Flag 0x0080 means that configured
- * value was used for HEC and CRC checking — not that it was heard. It
- * is surfaced only as `ref_uap_configured` / `ref_uap`, never as an
- * observed UAP. */
+ * The Reference UAP field is the capture TOOL's reference: the UAP of
+ * the piconet ubertooth-rx is tracking, which is either what the
+ * operator configured (-u) or what libbtbb itself worked out over many
+ * packets (ubertooth_callback.c passes btbb_piconet_get_uap() whenever
+ * the piconet's BTBB_UAP_VALID is set, however it got set). Flag 0x0080
+ * means that value was used for HEC and CRC checking — not that this
+ * record carried it, and not that sloth observed it. It is surfaced
+ * only as `ref_uap_tool` / `ref_uap`, never as an observed UAP. */
 
 #define BREDR_DLT_BB          255
 #define BREDR_BB_HDR_LEN      22
@@ -63,9 +66,9 @@ typedef struct {
     uint32_t lap;                 /* 24 bits, observed */
     uint8_t  iac;                 /* LAP is an inquiry access code */
     uint8_t  ref_lap_valid;       /* flag 0x0010 */
-    uint32_t ref_lap;             /* operator-configured, 24 bits */
-    uint8_t  ref_uap_configured;  /* flag 0x0080: the operator's UAP was used */
-    uint8_t  ref_uap;             /* operator-configured, NOT observed */
+    uint32_t ref_lap;             /* the tool's reference, 24 bits */
+    uint8_t  ref_uap_tool;        /* flag 0x0080: the tool's reference UAP was used */
+    uint8_t  ref_uap;             /* tool reference (-u or tool-derived), NOT observed */
     uint16_t flags;
     uint8_t  payload_present;     /* flag 0x0020; never read */
 } bredr_bb_t;

@@ -119,11 +119,15 @@ payload (paging and inquiry response), which sloth never reads. So:
   one only as `LAP 123456`;
 - **no full BD_ADDR and no OUI vendor is ever derived** — an OUI is the
   NAP and UAP, which a LAP does not contain;
-- the **Reference UAP** in a DLT 255 record is the UAP the operator
-  configured into `ubertooth-rx` (`-u`). Flag 0x0080 means that
-  configured value was used for HEC and CRC checking — **not that it was
-  heard**. sloth stores it as `ref_uap_configured` / `ref_uap`, only on
-  the row whose LAP is the reference LAP, and never as an observed UAP;
+- the **Reference UAP** in a DLT 255 record is the *tool reference
+  UAP*: the UAP of the piconet `ubertooth-rx` is tracking, which is
+  either what the operator configured (`-u`) or what libbtbb worked out
+  itself over many packets — `ubertooth_callback.c` passes
+  `btbb_piconet_get_uap()` whenever the piconet's UAP is marked valid,
+  however it became valid. Flag 0x0080 means that value was used for
+  HEC and CRC checking — **not that sloth heard it**. sloth stores it as
+  `ref_uap_tool` / `ref_uap`, only on the row whose LAP is the
+  reference LAP, and never as an observed UAP;
 - an inquiry access code (LAP 0x9E8B00–0x9E8B3F, GIAC 0x9E8B33, Vol 2
   Part B §1.2.1) names no piconet: it is counted in `btcap_bredr_iac`
   (someone near the dongle is inquiring) and takes no row.
@@ -153,7 +157,7 @@ reads:
 | `ubertooth-btle -p -q FIFO` | promiscuous: sniff connections already running |
 | `ubertooth-btle -n -c FIFO` | as `-n -q`, written as PPI around DLT 251 |
 | `ubertooth-rx -q FIFO` | BR/EDR, all LAPs, on one channel (DLT 255) |
-| `ubertooth-rx -l LAP -u UAP -q FIFO` | the same for one piconet; `-u` becomes the record's *configured* reference UAP |
+| `ubertooth-rx -l LAP -u UAP -q FIFO` | the same for one piconet; `-u` seeds the record's tool reference UAP |
 
 `-U N` (which dongle) is fine with any of them. Flags not listed here
 are not vetted; read the tool's usage text before adding one.
@@ -186,7 +190,7 @@ MISSION §2 forbids on every medium:
 | `ubertooth-util -e` | repeater mode |
 | `ubertooth-util -n` | range test (transmits) |
 | `ubertooth-util -a` | sets the power amplifier level |
-| the `bluetooth_rxtx` **btbr** firmware | a BR/EDR firmware that transmits |
+| the **btbr** firmware | a separate image from `bluetooth_rxtx` (`firmware/btbr/` upstream); a BR/EDR firmware that transmits |
 | `ubertooth-ducky`, `ubertooth-tx` | transmit tools |
 | `ubertooth-ego -i` | interference mode |
 

@@ -4569,7 +4569,7 @@ message. `src/btle_ll.c` decodes the advertising PDUs, SCAN_REQ and
 CONNECT_IND against a trusted length (the claim bounded by the record
 and the Ubertooth's 50-octet capture limit), parses AD only inside it
 and never claims a CRC; `src/bredr_bb.c` keeps the LAP only, labels the
-0x0080 reference UAP as the operator's configured value, and derives no
+0x0080 reference UAP as the tool's reference (configured or tool-derived), and derives no
 BD_ADDR or vendor. Advertisers join the BLE device table, now keyed by
 sensor too (`sensor_iface` `ubertooth`), as a second `ble` sensor;
 counts are labelled samples of one channel. `sensor_health` gains the

@@ -28,10 +28,10 @@ int bredr_bb_parse(const uint8_t *rec, size_t len, bredr_bb_t *out) {
     out->payload_present = (out->flags & BREDR_F_PAYLOAD) != 0;
     out->ref_lap_valid   = (out->flags & BREDR_F_REF_LAP_VALID) != 0;
     if (out->ref_lap_valid) out->ref_lap = le24(rec + 12);
-    /* The configured UAP is kept only when the flag says the tool was
-     * given one; without it octet 15 means nothing. */
-    out->ref_uap_configured = (out->flags & BREDR_F_REF_UAP_VALID) != 0;
-    if (out->ref_uap_configured) out->ref_uap = rec[15];
+    /* The tool's reference UAP is kept only when the flag says the tool
+     * had one; without it octet 15 means nothing. */
+    out->ref_uap_tool = (out->flags & BREDR_F_REF_UAP_VALID) != 0;
+    if (out->ref_uap_tool) out->ref_uap = rec[15];
     return 0;
 }
 

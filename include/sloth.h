@@ -2843,9 +2843,10 @@ typedef struct {
  * of the access code. The UAP and NAP are not in the access code or the
  * packet header (only an FHS payload carries them, and it is never
  * read), so no BD_ADDR and no vendor is ever derived from this row.
- * `ref_uap` is NOT an observation: it is the UAP the operator configured
- * into ubertooth-rx (-u), echoed in DLT 255's Reference UAP field when
- * flag 0x0080 is set, and it is kept only under that name. */
+ * `ref_uap` is NOT sloth's observation: it is ubertooth-rx's reference
+ * UAP for the piconet it tracks - configured with -u, or derived by
+ * libbtbb itself - echoed in DLT 255's Reference UAP field when flag
+ * 0x0080 is set, and it is kept only under that name. */
 #define MAX_BREDR_LAPS 64
 typedef struct {
     uint32_t lap;                /* 24-bit lower address part */
@@ -2853,8 +2854,8 @@ typedef struct {
     uint8_t  has_rssi;
     int8_t   rssi, rssi_best;    /* dBm */
     int8_t   channel;            /* RF channel 0..78 last heard on */
-    uint8_t  ref_uap_configured; /* flag 0x0080 seen with this LAP as reference */
-    uint8_t  ref_uap;            /* the operator's configured UAP, never observed */
+    uint8_t  ref_uap_tool;       /* flag 0x0080 seen with this LAP as reference */
+    uint8_t  ref_uap;            /* tool reference (-u or tool-derived), never observed */
     time_t   first_seen, last_seen;   /* frame clock */
     uint64_t count;              /* packets heard on the sampled channel */
 } bredr_lap_t;

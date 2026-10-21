@@ -344,6 +344,61 @@ static void test_truncated_before_adva_gives_no_report(void) {
     ASSERT_EQ(btle_adv_report(&p, &r), 0);
 }
 
+/* Each two-address PDU and CONNECT_IND reads a field only when the
+ * trusted length covers it. The backing array always holds the whole
+ * packet; only `len` is cut, so a field read past the trusted length
+ * would decode real bytes and an address sanitizer could not see it.
+ *
+ * Seen to fail, each with its guard in btle_ll_parse() lowered:
+ * CONNECT_IND `trust >= 34` to `>= 12` sets has_conn; SCAN_REQ AdvA
+ * `>= 12` to `>= 6` sets has_adva; ADV_DIRECT_IND TargetA `>= 12` to
+ * `>= 6` sets has_peer. */
+static void test_truncated_two_address_pdus_read_only_trusted_fields(void) {
+    uint8_t d[34], b[48];
+    btle_pkt_t p;
+    memcpy(d, PEER, 6);
+    memcpy(d + 6, ADVA, 6);
+    memset(d + 12, 0x77, 22);           /* LLData, all present in the array */
+
+    /* CONNECT_IND cut inside LLData: both addresses, no LLData. */
+    le_pkt(b, BTLE_ADV_AA, BTLE_CONNECT_IND, 0, 1, 34, d, 34, 1);
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 20, &p), (int)BTLE_V_CONNECT_IND);
+    ASSERT_EQ(p.len_trusted, 20);
+    ASSERT_EQ(p.truncated, 1);
+    ASSERT_EQ(p.has_peer, 1);
+    ASSERT_EQ(p.has_adva, 1);
+    ASSERT_EQ(p.has_conn, 0);
+    ASSERT_EQ(p.conn.aa, 0u);
+    /* One octet short of LLData's end is still short. */
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 33, &p), (int)BTLE_V_CONNECT_IND);
+    ASSERT_EQ(p.has_conn, 0);
+    /* CONNECT_IND cut inside AdvA: InitA only. */
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 8, &p), (int)BTLE_V_CONNECT_IND);
+    ASSERT_EQ(p.has_peer, 1);
+    ASSERT_EQ(p.has_adva, 0);
+    ASSERT_EQ(p.has_conn, 0);
+
+    /* SCAN_REQ cut inside AdvA: ScanA only. */
+    le_pkt(b, BTLE_ADV_AA, BTLE_SCAN_REQ, 1, 0, 12, d, 12, 1);
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 8, &p), (int)BTLE_V_SCAN_REQ);
+    ASSERT_EQ(p.truncated, 1);
+    ASSERT_EQ(p.has_peer, 1);
+    ASSERT_EQ(p.has_adva, 0);
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 11, &p), (int)BTLE_V_SCAN_REQ);
+    ASSERT_EQ(p.has_adva, 0);
+
+    /* ADV_DIRECT_IND cut inside TargetA: AdvA only. */
+    memcpy(d, ADVA, 6);
+    memcpy(d + 6, PEER, 6);
+    le_pkt(b, BTLE_ADV_AA, BTLE_ADV_DIRECT_IND, 0, 0, 12, d, 12, 1);
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 8, &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.truncated, 1);
+    ASSERT_EQ(p.has_adva, 1);
+    ASSERT_EQ(p.has_peer, 0);
+    ASSERT_EQ((int)btle_ll_parse(b, 6 + 11, &p), (int)BTLE_V_ADV);
+    ASSERT_EQ(p.has_peer, 0);
+}
+
 /* The Ubertooth delivers at most UBT_LE_PACKET_MAX octets from the AA,
  * so a longer claim is never trusted past it even when the record
  * carries more. Seen to fail: with the BTLE_PAYLOAD_TRUST_MAX bound
@@ -436,7 +491,7 @@ static void test_bredr_header_decodes_lap_and_labels_reference_uap(void) {
     ASSERT_EQ(x.iac, 0);
     ASSERT_EQ(x.ref_lap_valid, 1);
     ASSERT_EQ(x.ref_lap, 0x123456u);
-    ASSERT_EQ(x.ref_uap_configured, 1);
+    ASSERT_EQ(x.ref_uap_tool, 1);
     ASSERT_EQ(x.ref_uap, 0x5A);
 }
 
@@ -447,7 +502,7 @@ static void test_bredr_reference_uap_ignored_without_its_flag(void) {
     int n = bredr_rec(b, 0, 0, 0x123456, 0x123456, 0x5A, BREDR_F_REF_LAP_VALID);
     bredr_bb_t x;
     ASSERT_EQ(bredr_bb_parse(b, (size_t)n, &x), 0);
-    ASSERT_EQ(x.ref_uap_configured, 0);
+    ASSERT_EQ(x.ref_uap_tool, 0);
     ASSERT_EQ(x.ref_uap, 0);
 }
 
@@ -749,10 +804,41 @@ static void test_host_and_ubertooth_sightings_do_not_merge(void) {
     }
 }
 
+/* Same iface, different sensor kind: two rows. Every real source today
+ * has its own iface, so only a direct observation isolates the kind
+ * half of the key. Seen to fail: with `d->sensor_kind == k->kind`
+ * removed from dev_key_eq(), the two sightings share one row. */
+static void test_sensor_kind_is_part_of_the_device_key(void) {
+    ble_clear();
+    uint8_t r[64];
+    int rn = rec_adv_ind(r, 0, 0, 0);
+    btle_pkt_t p;
+    ASSERT_EQ((int)btle_phdr_record_parse(r, (size_t)rn, &p), (int)BTLE_V_ADV);
+    ble_adv_report_t rep;
+    ASSERT_EQ(btle_adv_report(&p, &rep), 1);
+    ble_obs_t a = { &rep, SENSOR_BLE,    BT_CAPTURE_IFACE, 0, 37, 1, TS };
+    ble_obs_t z = { &rep, SENSOR_ZIGBEE, BT_CAPTURE_IFACE, 0, 37, 1, TS };
+    ble_dev_observe(&a);
+    ble_dev_observe(&z);
+    ble_dev_observe(&a);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 2);
+    int ble = -1, zb = -1;
+    for (int i = 0; i < g_s.ble_device_count; i++) {
+        if (g_s.ble_devices[i].sensor_kind == SENSOR_BLE)    ble = i;
+        if (g_s.ble_devices[i].sensor_kind == SENSOR_ZIGBEE) zb = i;
+    }
+    ASSERT(ble >= 0);
+    ASSERT(zb >= 0);
+    if (ble >= 0) ASSERT_EQ((int)g_s.ble_devices[ble].adv_count, 2);
+    if (zb >= 0)  ASSERT_EQ((int)g_s.ble_devices[zb].adv_count, 1);
+    ble_clear();
+}
+
 /* Seen to fail, twice: with the inquiry-access-code test dropped from
  * bt_stream_record() the GIAC gets a row (count 3); with the
  * reference-LAP match dropped from lap_observe_locked() the second
- * piconet is credited the configured UAP. */
+ * piconet is credited the tool reference UAP. */
 static void test_bredr_stream_fills_the_lap_table(void) {
     bt_stream_configure();
     bt_stream_init(&g_st);
@@ -764,7 +850,7 @@ static void test_bredr_stream_fills_the_lap_table(void) {
     n += file_rec(g_file + n, TS, r, (uint32_t)rn, (uint32_t)rn);
     n += file_rec(g_file + n, TS + 1, r, (uint32_t)rn, (uint32_t)rn);
     /* Another piconet while the tool's reference is still 0x123456: the
-     * configured UAP does not belong to it. */
+     * tool reference UAP does not belong to it. */
     rn = bredr_rec(r, 39, -60, 0xABCDEF, 0x123456, 0x5A,
                    BREDR_F_REF_LAP_VALID | BREDR_F_REF_UAP_VALID);
     n += file_rec(g_file + n, TS + 2, r, (uint32_t)rn, (uint32_t)rn);
@@ -788,11 +874,11 @@ static void test_bredr_stream_fills_the_lap_table(void) {
         ASSERT_EQ((int)a->count, 2);
         ASSERT_EQ(a->channel, 39);
         ASSERT_EQ(a->rssi_best, -50);
-        ASSERT_EQ(a->ref_uap_configured, 1);
+        ASSERT_EQ(a->ref_uap_tool, 1);
         ASSERT_EQ(a->ref_uap, 0x5A);
     }
     if (o) {
-        ASSERT_EQ(o->ref_uap_configured, 0);
+        ASSERT_EQ(o->ref_uap_tool, 0);
         ASSERT_EQ(o->ref_uap, 0);
         ASSERT_EQ(o->has_rssi, 0);
     }
@@ -801,6 +887,26 @@ static void test_bredr_stream_fills_the_lap_table(void) {
      * remove, so this pins that none is added rather than a guard. */
     ble_snapshot(&g_s);
     ASSERT_EQ(g_s.ble_device_count, 0);
+}
+
+/* A record whose reference LAP is this LAP but whose reference UAP is
+ * not flagged valid: the row gets no UAP. bredr_bb_parse() already
+ * zeroes octet 15 without the flag, so what this pins is the stream's
+ * own guard. Seen to fail: with `b->ref_uap_tool &&` removed from
+ * lap_observe_locked(), the row claims ref_uap_tool with UAP 0x00. */
+static void test_lap_row_takes_no_uap_without_its_flag(void) {
+    bt_stream_configure();
+    uint8_t r[32];
+    int rn = bredr_rec(r, 12, 0, 0x2468AC, 0x2468AC, 0x5A,
+                       BREDR_F_REF_LAP_VALID);
+    bt_stream_record(255, r, (size_t)rn, TS, 1);
+    bt_stream_snapshot(&g_s);
+    ASSERT_EQ(g_s.bredr_lap_count, 1);
+    if (g_s.bredr_lap_count == 1) {
+        ASSERT_EQ(g_s.bredr_laps[0].lap, 0x2468ACu);
+        ASSERT_EQ(g_s.bredr_laps[0].ref_uap_tool, 0);
+        ASSERT_EQ(g_s.bredr_laps[0].ref_uap, 0);
+    }
 }
 
 static void test_lap_table_evicts_and_tallies(void) {
@@ -871,10 +977,14 @@ static void snap_emit(void) {
 
 /* The stream block, and its signature: a further record (recv moves)
  * is not a line, the first drop and the first truncation are, a second
- * of either is not.
+ * of either is not; staleness is a line only when it crosses its
+ * bucket, not for each second inside one.
  *
- * Seen to fail: with `sig.btcap_drop_any` set from the raw drop count,
- * the second drop below writes a fifth line. */
+ * Seen to fail, three ways, each writing a fifth line or more: with
+ * `sig.btcap_drop_any` set from the raw drop count (the second drop);
+ * with `sig.btcap_truncated_any` set from the raw truncated count (the
+ * second truncation); with `sig.btcap_stale_state` set from raw
+ * stale_secs (30 s fresh, then 150 s stale). */
 static void test_sensor_health_carries_the_stream_bucketed(void) {
     g_wall = 1800000000;
     sloth_clock_test_set(NULL, pinned_wall);
@@ -899,8 +1009,15 @@ static void test_sensor_health_carries_the_stream_bucketed(void) {
     n = file_rec(g_file, TS + 3, r, (uint32_t)rn - 4, (uint32_t)rn);
     bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
     snap_emit();                                            /* 3: truncated */
-    g_wall += 120;
+    n = file_rec(g_file, TS + 4, r, (uint32_t)rn - 4, (uint32_t)rn);
+    bt_stream_feed(&g_st, g_file, (size_t)n, g_wall);
+    snap_emit();                                            /* suppressed: truncated 2 */
+    g_wall += 30;
+    snap_emit();                                            /* suppressed: 30 s, fresh */
+    g_wall += 90;
     snap_emit();                                            /* 4: fresh -> stale */
+    g_wall += 30;
+    snap_emit();                                            /* suppressed: 150 s, stale */
     jsonl_close();
     char *b = slurp_tmp();
     ASSERT(b != NULL);
@@ -1006,7 +1123,10 @@ static void test_configure_refuses_missing_and_wrong_types(void) {
 
 /* A FIFO nobody writes to yet: run() returns at once and the stream
  * waits; a writer that comes later is read from the same descriptor;
- * its close is the end of the stream. */
+ * its close is the end of the stream. The "read once" half - one
+ * open(), never a reopen - is not observable from outside when the
+ * reopen comes straight after the first open, so it is pinned by the
+ * source scan test_bt_capture_opens_its_path_exactly_once below. */
 static void test_fifo_without_writer_does_not_block_and_is_read_once(void) {
     ASSERT(mkdtemp(g_dir) != NULL);
     char path[300], err[256];
@@ -1040,6 +1160,31 @@ static void test_fifo_without_writer_does_not_block_and_is_read_once(void) {
     }
     bt_capture_stop();
     unlink(path);
+    rmdir(g_dir);
+    memcpy(g_dir + strlen(g_dir) - 6, "XXXXXX", 6);
+}
+
+static int cond_error(void) { return g_s.btcap.state == BT_CAP_ERROR; }
+
+/* The path passes the startup stat() as a FIFO and is a directory by
+ * the time the worker opens it. open(O_RDONLY) succeeds on a directory,
+ * so only the fstat() recheck names it; without the recheck the worker
+ * fails later in read() with EISDIR and a different message. Seen to
+ * fail: with `|| !type_ok(sb.st_mode)` removed from the worker, err
+ * reads "read: Is a directory". */
+static void test_path_swapped_after_configure_is_refused_by_the_worker(void) {
+    ASSERT(mkdtemp(g_dir) != NULL);
+    char path[300], err[256];
+    snprintf(path, sizeof(path), "%s/ubt.fifo", g_dir);
+    ASSERT_EQ(mkfifo(path, 0600), 0);
+    ASSERT_EQ(bt_capture_configure(path, err, sizeof(err)), 0);
+    unlink(path);
+    ASSERT_EQ(mkdir(path, 0700), 0);
+    bt_capture_run();
+    ASSERT(wait_for(cond_error, 3000));
+    ASSERT(strstr(g_s.btcap.err, "not a regular file or FIFO") != NULL);
+    bt_capture_stop();
+    rmdir(path);
     rmdir(g_dir);
     memcpy(g_dir + strlen(g_dir) - 6, "XXXXXX", 6);
 }
@@ -1176,6 +1321,37 @@ static void test_ubertooth_files_never_send_or_spawn(void) {
     }
 }
 
+/* One open, never open-close-reopen: a reopened FIFO loses what the
+ * writer already queued and can wait for a writer that has gone. A
+ * source scan, named as such: it counts every call that could open the
+ * path in the worker's file. Seen to fail: a second
+ * `fd = open(g_path, ...)` after the first turns it red. */
+static int count_calls(const char *src, const char *name) {
+    int n = 0;
+    size_t len = strlen(name);
+    for (const char *q = strstr(src, name); q; q = strstr(q + 1, name)) {
+        char before = q == src ? ' ' : q[-1];
+        if ((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
+            (before >= '0' && before <= '9') || before == '_')
+            continue;
+        if (q[len] == '(') n++;
+    }
+    return n;
+}
+
+static void test_bt_capture_opens_its_path_exactly_once(void) {
+    char *src = slurp_file("src/capture/bt_capture.c");
+    ASSERT(src != NULL);
+    if (!src) return;
+    ASSERT_EQ(count_calls(src, "open"), 1);
+    ASSERT_EQ(count_calls(src, "openat"), 0);
+    ASSERT_EQ(count_calls(src, "fopen"), 0);
+    ASSERT_EQ(count_calls(src, "freopen"), 0);
+    ASSERT_EQ(count_calls(src, "dup2"), 0);
+    ASSERT_EQ(count_calls(src, "dup3"), 0);
+    free(src);
+}
+
 /* Every test here reaches bt_stream_snapshot(), which reads the wall
  * clock for stale_secs, so every test runs with it pinned: the default
  * setUp first, then the pin. The worker tests rely on the pin being set
@@ -1200,6 +1376,7 @@ void run_ubertooth_tests(void) {
     RUN_TEST(test_lengths_outside_the_type_range_are_malformed);
     RUN_TEST(test_claim_past_the_record_is_truncated_not_read);
     RUN_TEST(test_truncated_before_adva_gives_no_report);
+    RUN_TEST(test_truncated_two_address_pdus_read_only_trusted_fields);
     RUN_TEST(test_ubertooth_capture_limit_bounds_the_trusted_length);
     RUN_TEST(test_data_channel_and_other_pdus_are_not_decoded);
     RUN_TEST(test_ppi_wrapped_le_ll_decodes_without_channel);
@@ -1215,7 +1392,9 @@ void run_ubertooth_tests(void) {
     RUN_TEST(test_stream_records_pass_the_edge_gate);
     RUN_TEST(test_stream_buckets_sum_to_recv);
     RUN_TEST(test_host_and_ubertooth_sightings_do_not_merge);
+    RUN_TEST(test_sensor_kind_is_part_of_the_device_key);
     RUN_TEST(test_bredr_stream_fills_the_lap_table);
+    RUN_TEST(test_lap_row_takes_no_uap_without_its_flag);
     RUN_TEST(test_lap_table_evicts_and_tallies);
     RUN_TEST(test_state_names);
     RUN_TEST(test_sensor_health_carries_the_stream_bucketed);
@@ -1223,11 +1402,13 @@ void run_ubertooth_tests(void) {
 #ifdef WITH_PCAP
     RUN_TEST(test_configure_refuses_missing_and_wrong_types);
     RUN_TEST(test_fifo_without_writer_does_not_block_and_is_read_once);
+    RUN_TEST(test_path_swapped_after_configure_is_refused_by_the_worker);
     RUN_TEST(test_stop_returns_with_no_writer_ever);
     RUN_TEST(test_stop_returns_with_a_silent_writer);
     RUN_TEST(test_regular_files_read_to_end_or_refused);
 #endif
     RUN_TEST(test_ubertooth_files_never_send_or_spawn);
+    RUN_TEST(test_bt_capture_opens_its_path_exactly_once);
     g_test_setup = g_prev_setup;
     sloth_clock_test_set(NULL, NULL);
 }

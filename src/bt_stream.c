@@ -101,11 +101,11 @@ static void lap_observe_locked(const bredr_bb_t *b, time_t ts) {
         r->rssi     = b->signal_dbm;
         if (b->signal_dbm > r->rssi_best) r->rssi_best = b->signal_dbm;
     }
-    /* The configured reference names this LAP only when the tool was
-     * told this LAP too; a reference UAP for some other piconet says
+    /* The tool's reference names this LAP only when its reference LAP
+     * is this LAP too; a reference UAP for some other piconet says
      * nothing about this one. */
-    if (b->ref_uap_configured && b->ref_lap_valid && b->ref_lap == b->lap) {
-        r->ref_uap_configured = 1;
+    if (b->ref_uap_tool && b->ref_lap_valid && b->ref_lap == b->lap) {
+        r->ref_uap_tool = 1;
         r->ref_uap            = b->ref_uap;
     }
 }

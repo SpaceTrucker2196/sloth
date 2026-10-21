@@ -14,12 +14,12 @@
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     bredr_bb_t b;
     if (bredr_bb_parse(data, size, &b) != 0) {
-        if (b.lap || b.ref_uap || b.ref_uap_configured) abort();
+        if (b.lap || b.ref_uap || b.ref_uap_tool) abort();
         return 0;
     }
     if (b.lap > 0xFFFFFFu || b.ref_lap > 0xFFFFFFu) abort();
     if (b.rf_channel >= BREDR_RF_CHANNELS) abort();
-    if (!b.ref_uap_configured && b.ref_uap) abort();
+    if (!b.ref_uap_tool && b.ref_uap) abort();
     if (b.iac != bredr_lap_is_iac(b.lap)) abort();
     char buf[16];
     bredr_lap_format(b.lap, buf, sizeof(buf));
