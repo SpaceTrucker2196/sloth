@@ -56,6 +56,23 @@ int cam_vendor_server(const char *server, const char **vendor);
 int cam_mdns_service(const char *service, const char **label,
                      int *camera_specific);
 
+/* Camera vendors' documented setup-SoftAP SSID prefixes
+ * (CAM_SETUP_SSID, #106 slice 2; moved here in round 2 so the Devices
+ * join reads the same rows the rule fires on). ASCII case-insensitive
+ * prefix match. Sets *label (rendered into the alert detail, e.g.
+ * "Hikvision camera") and *brand (short vendor name for the device
+ * record). The open-hotspot guardrail is the caller's: it runs before
+ * this, in both callers. Sources: research/papers/camera-setup-softap.md. */
+int cam_setup_ssid(const char *ssid, const char **label, const char **brand);
+
+/* CAM_SSDP_DEVICE's row test, shared with the Devices join: a NOTIFY
+ * (not an M-SEARCH, whose ST is what the asker wants) for UPnP
+ * DigitalSecurityCamera:1 (*dsc = 1), or Basic:1 whose SERVER names a
+ * camera vendor (*vendor set). For a DSC row *vendor is set too when
+ * SERVER happens to name one, and NULL otherwise. */
+int cam_ssdp_row(const char *type, const char *nts, const char *server,
+                 int *dsc, const char **vendor);
+
 /* Table sizes, for the provenance tests. */
 int cam_vendor_oui_count(void);
 void cam_vendor_oui_at(int i, uint8_t oui[3], const char **vendor,

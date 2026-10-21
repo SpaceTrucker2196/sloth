@@ -55,6 +55,12 @@ void rule_threat_domain(const sloth_state_t *s, time_t now);
 void rule_threat_ip(const sloth_state_t *s, time_t now);
 void rule_beaconing(const sloth_state_t *s, time_t now);
 
+/* src/alerts/rules_twin.c. The open-hotspot guardrail OPEN_SETUP_AP and
+ * CAM_SETUP_SSID both check before their pattern tables; exported so
+ * src/camera_join.c applies it in the same place and the Devices view
+ * never marks a setup SSID the rule itself stays quiet on. */
+int ssid_is_public_hotspot(const char *ssid);
+
 /* src/alerts/rules_camera.c (#106 slice A) */
 void rule_cam_mdns_service(const sloth_state_t *s, time_t now);
 void rule_cam_ssdp_device(const sloth_state_t *s, time_t now);

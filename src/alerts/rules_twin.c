@@ -31,6 +31,7 @@
 #include "inventory.h"
 #include "wired_attach.h"
 #include "alert_key.h"
+#include "camera_vendor.h"
 #include "rules.h"
 #include "engine_internal.h"
 #include "ev_cite.h"
@@ -972,7 +973,7 @@ static const char *const g_open_hotspot_ssids[] = {
     "@Reyee",           /* Reyee / Ruijie mesh guest SSID */
 };
 
-static int ssid_is_public_hotspot(const char *ssid) {
+int ssid_is_public_hotspot(const char *ssid) {
     for (size_t i = 0;
          i < sizeof(g_open_hotspot_ssids) / sizeof(g_open_hotspot_ssids[0]);
          i++)
@@ -1087,29 +1088,9 @@ void rule_open_setup_ap(const sloth_state_t *s, time_t now) {
  * not be sourced to a vendor document were left out rather than
  * guessed; see that document's "considered and not shipped" section.
  */
-typedef struct {
-    const char *prefix;
-    const char *vendor;    /* rendered into the alert detail */
-} cam_setup_ssid_pat_t;
-
-static const cam_setup_ssid_pat_t g_camera_setup_ssid_pats[] = {
-    /* "Hikvision Access Point". SSID is HAP_ + the verification code
-     * from the device label; the AP key is the last 8 characters of
-     * the serial number, also on the label. */
-    { "HAP_",      "Hikvision camera" },
-    /* "Dahua Access Point", DAP-<serial fragment>. Amcrest is a Dahua
-     * OEM and uses the same prefix (DAP-AMC...), so one row covers
-     * both brands — which is why the label says the OEM, not Amcrest. */
-    { "DAP-",      "Dahua/Amcrest camera" },
-    /* EZVIZ is Hikvision's consumer brand; AP mode broadcasts
-     * EZVIZ_<9-digit serial>, keyed on the label's verification code. */
-    { "EZVIZ_",    "EZVIZ camera" },
-    /* TP-Link Tapo camera setup SoftAP: Tapo_Cam_<last 4 of MAC>.
-     * Prefix includes the trailing underscore so it cannot collide
-     * with a Tapo plug or bulb, which are not cameras. */
-    { "Tapo_Cam_", "TP-Link Tapo camera" },
-};
-
+/* The prefix table moved to src/camera_vendor.c (#106 round 2) so the
+ * Devices view's camera join reads the same rows this rule fires on;
+ * each row still cites the vendor's onboarding document there. */
 void rule_cam_setup_ssid(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -1140,15 +1121,7 @@ void rule_cam_setup_ssid(const sloth_state_t *s, time_t now) {
         if (ssid_is_public_hotspot(a->ssid)) continue;
 
         const char *vendor = NULL;
-        for (size_t p = 0;
-             p < sizeof(g_camera_setup_ssid_pats) /
-                 sizeof(g_camera_setup_ssid_pats[0]);
-             p++)
-            if (ascii_iprefix(a->ssid, g_camera_setup_ssid_pats[p].prefix)) {
-                vendor = g_camera_setup_ssid_pats[p].vendor;
-                break;
-            }
-        if (!vendor) continue;
+        if (!cam_setup_ssid(a->ssid, &vendor, NULL)) continue;
 
         char bssid_str[20];
         mac_to_str(a->bssid, bssid_str, sizeof(bssid_str));

@@ -18,7 +18,6 @@
  * rules. */
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 #include <time.h>
 #include "camera_vendor.h"
 #include "alert_key.h"
@@ -85,9 +84,6 @@ void rule_cam_mdns_service(const sloth_state_t *s, time_t now) {
  *
  * An M-SEARCH row ("search") is skipped: its ST is what the *asker*
  * wants, so a control point searching for cameras is not one. */
-#define UPNP_DSC1   "urn:schemas-upnp-org:device:DigitalSecurityCamera:1"
-#define UPNP_BASIC1 "urn:schemas-upnp-org:device:Basic:1"
-
 /* UDA 1.0 §1.1.4: USN is "uuid:device-UUID" optionally followed by
  * "::" and the type. The UUID part is the device; the rest varies per
  * NOTIFY, so keying on the whole USN would split one camera's
@@ -101,15 +97,13 @@ static void usn_device(const char *usn, char *out, size_t n) {
 }
 
 /* Does this row qualify, and as which shape? *vendor is set for a
- * Basic:1 row (the SERVER match) and left NULL for a DSC row. */
+ * Basic:1 row (the SERVER match) and left NULL for a DSC row. The
+ * predicate is src/camera_vendor.c's, shared with the Devices join. */
 static int ssdp_cam_row(const ssdp_device_t *d, int *dsc,
                         const char **vendor) {
-    *vendor = NULL;
-    *dsc = 0;
-    if (strcmp(d->nts, "search") == 0) return 0;
-    if (strcasecmp(d->type, UPNP_DSC1) == 0) { *dsc = 1; return 1; }
-    if (strcasecmp(d->type, UPNP_BASIC1) != 0) return 0;
-    return cam_vendor_server(d->server, vendor);
+    int ok = cam_ssdp_row(d->type, d->nts, d->server, dsc, vendor);
+    if (ok && *dsc) *vendor = NULL;
+    return ok;
 }
 
 /* Same device: the same USN UUID, or with no UUID the same address. */

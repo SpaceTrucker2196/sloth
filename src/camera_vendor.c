@@ -309,3 +309,78 @@ int cam_mdns_service(const char *service, const char **label,
     }
     return 0;
 }
+
+/* ── Setup-SoftAP SSID prefixes (CAM_SETUP_SSID) ───────────
+ *
+ * Moved from src/alerts/rules_twin.c unchanged (#106 round 2). Every
+ * row cites the vendor's own onboarding documentation — see
+ * research/papers/camera-setup-softap.md. Rows whose SSID shape could
+ * not be sourced to a vendor document were left out rather than
+ * guessed; see that document's "considered and not shipped" section. */
+typedef struct {
+    const char *prefix;
+    const char *label;     /* rendered into the alert detail */
+    const char *brand;     /* device record's camera_vendor   */
+} cam_setup_ssid_pat_t;
+
+static const cam_setup_ssid_pat_t g_camera_setup_ssid_pats[] = {
+    /* "Hikvision Access Point". SSID is HAP_ + the verification code
+     * from the device label; the AP key is the last 8 characters of
+     * the serial number, also on the label. */
+    { "HAP_",      "Hikvision camera",     "Hikvision" },
+    /* "Dahua Access Point", DAP-<serial fragment>. Amcrest is a Dahua
+     * OEM and uses the same prefix (DAP-AMC...), so one row covers
+     * both brands — which is why the label says the OEM, not Amcrest. */
+    { "DAP-",      "Dahua/Amcrest camera", "Dahua" },
+    /* EZVIZ is Hikvision's consumer brand; AP mode broadcasts
+     * EZVIZ_<9-digit serial>, keyed on the label's verification code. */
+    { "EZVIZ_",    "EZVIZ camera",         "EZVIZ" },
+    /* TP-Link Tapo camera setup SoftAP: Tapo_Cam_<last 4 of MAC>.
+     * Prefix includes the trailing underscore so it cannot collide
+     * with a Tapo plug or bulb, which are not cameras. */
+    { "Tapo_Cam_", "TP-Link Tapo camera",  "TP-Link Tapo" },
+};
+
+/* SSIDs are bytes, not text: fold ASCII only, never by locale. */
+static int ssid_ascii_iprefix(const char *hay, const char *prefix) {
+    for (int i = 0; prefix[i]; i++) {
+        unsigned char h = (unsigned char)hay[i], p = (unsigned char)prefix[i];
+        if (h >= 'A' && h <= 'Z') h = (unsigned char)(h - 'A' + 'a');
+        if (p >= 'A' && p <= 'Z') p = (unsigned char)(p - 'A' + 'a');
+        if (h != p) return 0;   /* also stops at hay's NUL */
+    }
+    return 1;
+}
+
+int cam_setup_ssid(const char *ssid, const char **label, const char **brand) {
+    if (!ssid || !ssid[0]) return 0;
+    for (size_t i = 0; i < sizeof(g_camera_setup_ssid_pats) /
+                           sizeof(g_camera_setup_ssid_pats[0]); i++) {
+        const cam_setup_ssid_pat_t *r = &g_camera_setup_ssid_pats[i];
+        if (!ssid_ascii_iprefix(ssid, r->prefix)) continue;
+        if (label) *label = r->label;
+        if (brand) *brand = r->brand;
+        return 1;
+    }
+    return 0;
+}
+
+/* ── SSDP camera row (CAM_SSDP_DEVICE) ─────────────────────── */
+
+#define UPNP_DSC1   "urn:schemas-upnp-org:device:DigitalSecurityCamera:1"
+#define UPNP_BASIC1 "urn:schemas-upnp-org:device:Basic:1"
+
+int cam_ssdp_row(const char *type, const char *nts, const char *server,
+                 int *dsc, const char **vendor) {
+    const char *v = NULL;
+    int d = 0, ok = 0;
+    if (type && nts && strcmp(nts, "search") != 0) {
+        int named = server ? cam_vendor_server(server, &v) : 0;
+        if (strcasecmp(type, UPNP_DSC1) == 0)        { d = 1; ok = 1; }
+        else if (strcasecmp(type, UPNP_BASIC1) == 0) ok = named;
+        if (!named) v = NULL;
+    }
+    if (dsc)    *dsc    = ok ? d : 0;
+    if (vendor) *vendor = ok ? v : NULL;
+    return ok;
+}
